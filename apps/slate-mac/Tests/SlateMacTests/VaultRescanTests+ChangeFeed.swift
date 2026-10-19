@@ -365,6 +365,12 @@ extension VaultRescanTests {
         _ = try other.createExclusive(path: "one.md", content: "# One\n")
 
         let run = try XCTUnwrap(h.state.requestRescan(.explicit))
+        // Bounded: a run that never reaches the tree's publication fails
+        // here instead of waiting for ever.
+        await h.until("the run's tree publication, parked", timeout: 15) {
+            tree.refetches.value > 0
+        }
+        guard tree.refetches.value > 0 else { return }
         await gate.untilParked()
         _ = try other.createExclusive(path: "two.md", content: "# Two\n")
         await gate.release()
@@ -567,6 +573,41 @@ extension VaultRescanTests {
         XCTAssertEqual(h.state.workspace.model.tab(otherTab)?.item, .markdown(path: "old.md"))
         XCTAssertEqual(h.state.loadedFilePath, "old.md")
         XCTAssertEqual(h.state.currentNoteText, "other note\n", "the note now at the name keeps its tab")
+    }
+
+    /// The owner's decision Q3 for a tab not loaded since it opened (a
+    /// restored tab never shown, or one whose clean document was dropped): it
+    /// holds no baseline of its own and shows whatever is at its path when it
+    /// loads. So it follows another session's rename when nothing is at the
+    /// old path at the window's target, and stays when something is there
+    /// again, since it may be the note now at that path.
+    func testATabNeverLoadedFollowsARenameOnlyWhenItsOldPathIsGone() async throws {
+        let h = try await open([
+            "gone.md": "gone note\n", "taken.md": "taken note\n", "front.md": "front\n",
+        ])
+        let goneTab = try await h.openNote("gone.md")
+        let takenTab = try await h.openNoteInNewTab("taken.md")
+        _ = try await h.openNoteInNewTab("front.md")
+        h.state.workspace.invalidateParkedDocuments(tabIDs: [goneTab, takenTab])
+        XCTAssertNil(h.state.workspace.document(for: goneTab), "never loaded, as after a restore")
+        XCTAssertNil(h.state.workspace.document(for: takenTab))
+        let other = try h.anotherSession()
+        _ = try other.renameFile(path: "gone.md", newName: "gone-renamed.md")
+        _ = try other.renameFile(path: "taken.md", newName: "taken-renamed.md")
+        _ = try other.createExclusive(path: "taken.md", content: "a new note at the old name\n")
+
+        try await h.refresh()
+
+        XCTAssertEqual(h.spoken.lines, ["Files refreshed. 3 new or changed, 1 removed."])
+        XCTAssertEqual(
+            h.state.workspace.model.tab(goneTab)?.item, .markdown(path: "gone-renamed.md"),
+            "nothing is at its old name: it follows the rename")
+        XCTAssertEqual(
+            h.state.workspace.model.tab(takenTab)?.item, .markdown(path: "taken.md"),
+            "a note is at its old name again: it stays")
+        h.state.selectTab(id: goneTab)
+        await h.state.noteLoadTask?.value
+        XCTAssertEqual(h.state.currentNoteText, "gone note\n", "and loads the renamed note")
     }
 
     // MARK: - Acknowledgment, cancellation and the retry set
