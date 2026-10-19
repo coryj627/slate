@@ -8813,6 +8813,11 @@ final class AppState: ObservableObject {
     /// core's vault watcher, reported on the open's worker.
     var vaultWatchArmObserver: (@Sendable (Bool) -> Void)?
 
+    /// Plan 43 PR 21c test seam: what the open's `registerChangeFeed()`
+    /// returned (the feed's head), or nil when it failed, reported on the
+    /// open's worker.
+    var changeFeedRegisterObserver: (@Sendable (UInt64?) -> Void)?
+
     /// Test seam: every progress event of a `loadFiles` scan, on the scanner
     /// thread, before it hops to the main actor (a fact acts inside the open
     /// scan: after its walk, or with it parked).
@@ -10828,8 +10833,9 @@ final class AppState: ObservableObject {
             scanTask?.cancel()
             scanTask = Task { [weak self] in
                 // Plan 43 PR 20c (#1267): the open scan arms core's vault
-                // watcher right before its walk.
-                await self?.loadFiles(armingVaultWatch: true)
+                // watcher right before its walk; plan 43 PR 21c (#1293)
+                // registers the change feed's cursor right after it.
+                await self?.loadFiles(armingVaultWatch: true, registeringChangeFeed: true)
                 guard !Task.isCancelled else { return }
                 self?.refreshBaseQueries()
                 // M-3 (#534): sync diagnostics, once per vault open —
@@ -12420,7 +12426,16 @@ final class AppState: ObservableObject {
     /// is either seen by its walk or arrives as a burst. No watch is a
     /// diagnostic in the unified log, never spoken; Refresh and the
     /// foreground rescan stay the baseline either way (design §4.6).
-    func loadFiles(armingVaultWatch: Bool = false) async {
+    ///
+    /// `registeringChangeFeed` (plan 43 PR 21c, #1293; the open funnel's
+    /// call only): register this session's change-feed cursor at the feed's
+    /// head right after the scan and before the listing (design §4.2, §6),
+    /// so the open scan's own changes, which `VaultScanFinished` speaks, stay
+    /// out of the first window, and a change another session commits while
+    /// this vault loads its first view is in it. Speaks nothing. A failure is
+    /// a notice in the unified log: the first rescan's window is then a gap,
+    /// whose full re-sync re-creates the cursor.
+    func loadFiles(armingVaultWatch: Bool = false, registeringChangeFeed: Bool = false) async {
         guard let session = currentSession else { return }
         isScanning = true
         scanError = nil
@@ -12458,6 +12473,7 @@ final class AppState: ObservableObject {
             }
         }
         let armObserver = armingVaultWatch ? vaultWatchArmObserver : nil
+        let registerObserver = registeringChangeFeed ? changeFeedRegisterObserver : nil
 
         do {
             let loaded: [FileSummary] = try await withTaskCancellationHandler {
@@ -12477,6 +12493,13 @@ final class AppState: ObservableObject {
                         cancel: cancel,
                         listener: adapter
                     )
+                    if registeringChangeFeed {
+                        // Plan 43 PR 21c (#1293, design §6): after the open
+                        // scan, before the initial reads.
+                        let head = try? session.registerChangeFeed()
+                        registerObserver?(head)
+                        if head == nil { Self.logChangeFeedUnregistered() }
+                    }
                     var all: [FileSummary] = []
                     var cursor: String? = nil
                     repeat {
@@ -12571,6 +12594,45 @@ final class AppState: ObservableObject {
         let pathsChanged = sorted.map(\.path) != files.map(\.path)
         if sorted != files { files = sorted }
         return pathsChanged
+    }
+
+    /// Plan 43 PR 21c (#1293, design §4.3): a change-feed window's records
+    /// applied to the inventory by path, in ONE pass over it, never a copy of
+    /// the whole list per record (§4.8): `removals` leave it, `upserts` (the
+    /// window's openable `Present` files, with their summaries as of the
+    /// window's target) replace their row or join it, sorted as the open scan
+    /// sorts it. Publishes only when something changed. Whether it did.
+    @discardableResult
+    func applyChangeFeedInventory(
+        upserts: [RescanPathKey: FileSummary], removals: Set<RescanPathKey>
+    ) -> Bool {
+        guard !upserts.isEmpty || !removals.isEmpty else { return false }
+        var pending = upserts
+        var next: [FileSummary] = []
+        next.reserveCapacity(files.count + upserts.count)
+        var changed = false
+        for file in files {
+            let key = RescanPathKey(file.path)
+            if removals.contains(key) {
+                changed = true
+                continue
+            }
+            if let replacement = pending.removeValue(forKey: key) {
+                if replacement != file { changed = true }
+                next.append(replacement)
+            } else {
+                next.append(file)
+            }
+        }
+        if !pending.isEmpty {
+            changed = true
+            next.append(contentsOf: pending.values)
+            next.sort {
+                $0.path.localizedCaseInsensitiveCompare($1.path) == .orderedAscending
+            }
+        }
+        if changed { files = next }
+        return changed
     }
 
     /// Import-owned authoritative scan. Unlike `loadFiles`, errors and
@@ -15433,7 +15495,9 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func publishSidebarFileSummaries(_ summaries: [FileSummary]) {
+    /// Plan 43 PR 21c: also a change-feed window's `Present` summaries
+    /// (`AppState+Rescan.swift`), applied in place to rows the tree shows.
+    func publishSidebarFileSummaries(_ summaries: [FileSummary]) {
         let sorted = summaries.sorted(by: { $0.path < $1.path })
         // `files` is the flat openable-document inventory used for counts,
         // quick-open, and create-name collision checks. None of those consumers
@@ -23299,6 +23363,74 @@ final class AppState: ObservableObject {
             defer { isActivatingTab = false }
             selectedFilePath = new
         }
+    }
+
+    /// Plan 43 PR 21c (#1293, design §4.3; the owner's decision Q3, AR-8
+    /// amended): a change-feed `Renamed` record, another Slate session's
+    /// rename or move of the file at `old` to `new`, moves the Markdown tabs
+    /// that held that file by a rename's steps, buffers kept, dirty or not.
+    /// A loaded tab moves when its saved baseline is `fromHash` (the active
+    /// note's content hash, or its parked document's): a tab whose baseline
+    /// differs stays, as a note the user has since put at that path does,
+    /// and the run's tab comparison then decides it from the index. A tab
+    /// not loaded since it opened (a restored tab never shown) has no
+    /// baseline of its own and shows whatever is at its path when it loads,
+    /// so it moves only when nothing is at `old` at the window's target
+    /// (`oldIsGone`); otherwise it may be the note now there and stays.
+    /// Returns the moved tabs.
+    @discardableResult
+    func retargetTabsForFeedRename(
+        from old: String, to new: String, fromHash: String?, oldIsGone: Bool
+    ) -> [TabID] {
+        guard !BaseExactIdentity.matches(old, new) else { return [] }
+        let activeID = workspace.model.activeGroup.activeTabID
+        var atOld = 0
+        var moving: Set<TabID> = []
+        for tab in workspace.model.allTabs {
+            guard case .markdown(let path) = tab.item, BaseExactIdentity.matches(path, old) else {
+                continue
+            }
+            atOld += 1
+            let baseline: String?
+            let loaded: Bool
+            if tab.id == activeID {
+                loaded = BaseExactIdentity.matches(loadedFilePath, old) && currentNoteText != nil
+                baseline = currentNoteContentHash
+            } else if let document = workspace.document(for: tab.id), document.hasLoaded {
+                loaded = true
+                baseline = document.contentHash
+            } else {
+                loaded = false
+                baseline = nil
+            }
+            if loaded {
+                if let fromHash, let baseline, BaseExactIdentity.matches(baseline, fromHash) {
+                    moving.insert(tab.id)
+                }
+            } else if oldIsGone {
+                moving.insert(tab.id)
+            }
+        }
+        guard !moving.isEmpty else { return [] }
+        // The path's drafts and recovery follow only when every tab on it
+        // moved; a tab left behind keeps them with the path it shows.
+        if moving.count == atOld {
+            rekeyNoteRecoveryPaths([
+                NoteRecoveryPathRetarget(oldPath: old, newPath: new, includesDescendants: false)
+            ])
+        }
+        let changed = workspace.retargetMarkdownTabs(moving, old: old, new: new)
+        guard let activeID, changed.contains(activeID) else { return changed }
+        if BaseExactIdentity.matches(loadedFilePath, old) {
+            rebindActiveIfRetargeted(changed, to: new)
+        } else if !BaseExactIdentity.matches(selectedFilePath, new) {
+            // The latch `activateTab` uses for the same mirror, as the
+            // re-seat's retarget does.
+            isActivatingTab = true
+            defer { isActivatingTab = false }
+            selectedFilePath = new
+        }
+        return changed
     }
 
     /// A missing tab that holds a buffer was just retargeted to the spelling

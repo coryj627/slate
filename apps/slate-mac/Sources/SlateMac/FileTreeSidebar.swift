@@ -4904,7 +4904,10 @@ struct FileTreeSidebar: View {
         .onChange(of: tree.expanded) { _, _ in
             Self.mirrorExpandedPaths(tree: tree, appState: appState)
         }
-        .modifier(FileTreeRescanRegistration(appState: appState) { await refreshTreeForRescan() })
+        .modifier(
+            FileTreeRescanRegistration(
+                appState: appState, showsFailure: { tree.showsFailedLevelForRescan }
+            ) { await refreshTreeForRescan() })
         .onChange(of: appState.isScanning) { _, scanning in
             // Announce once the scan finishes — at that point `files` has been
             // populated and N items is the count VoiceOver should hear.
@@ -8954,6 +8957,12 @@ extension FileTreeViewModel {
         }
     }
 
+    /// Plan 43 PR 21c (#1293, design §4.3, the owner's decision Q8): the
+    /// tree shows a level it could not list (its Retry row), so an explicit
+    /// Refresh's recovery set re-checks it even when the change feed's window
+    /// is empty.
+    var showsFailedLevelForRescan: Bool { failedLevelCountForRescan > 0 }
+
     /// The refetched levels that failed: the root, and each expanded folder
     /// whose listing failed.
     private var failedLevelCountForRescan: UInt64 {
@@ -9035,9 +9044,11 @@ extension FileTreeSidebar {
 
 /// Registers the mounted tree's rescan refetch with AppState's run while the
 /// sidebar is on screen (plan 43 PR 19): a run with no tree mounted has none
-/// to await.
+/// to await. Since plan 43 PR 21c, with the probe an explicit Refresh's
+/// recovery set reads: whether the tree shows a level it could not list.
 struct FileTreeRescanRegistration: ViewModifier {
     let appState: AppState
+    let showsFailure: @MainActor () -> Bool
     let refresh: @MainActor () async -> UInt64
     @State private var registration: UUID?
 
@@ -9045,7 +9056,8 @@ struct FileTreeRescanRegistration: ViewModifier {
         content
             .onAppear {
                 if let registration { appState.rescanRun.unregisterTreeRefresher(registration) }
-                registration = appState.rescanRun.registerTreeRefresher(refresh)
+                registration = appState.rescanRun.registerTreeRefresher(
+                    showsFailure: showsFailure, refresh)
             }
             .onDisappear {
                 if let registration { appState.rescanRun.unregisterTreeRefresher(registration) }
