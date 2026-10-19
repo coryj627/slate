@@ -49,10 +49,10 @@
 //! [`PinnedRoot::end`] and the same refusal, then derives the path it hands
 //! the system Trash from that parent's descriptor (`trash_handoff`).
 //!
-//! PR 22's design (#1441) gives the session an `FsRoot` that holds the root
-//! descriptor for the session's lifetime. Until it lands, the provider opens
-//! one [`PinnedRoot`] per rename, save or creation; `FsRoot` adopts this type
-//! by handing it the descriptor it already holds.
+//! Plan 43 PR 22a (#940) gives a filesystem session an `FsRoot` that holds
+//! the root descriptor for the session's lifetime, and its provider adopts
+//! that descriptor here ([`PinnedRoot::adopt`]); a provider built by path
+//! still opens one [`PinnedRoot`] per rename, save or creation.
 
 use std::ffi::{CStr, CString};
 use std::os::unix::ffi::OsStrExt as _;
@@ -108,6 +108,20 @@ impl PinnedRoot {
             .open(root)
             .map_err(VaultError::Io)?;
         Ok(Self { dir })
+    }
+
+    /// Adopt the root a session holds open (plan 43 PR 22a, #940; design
+    /// §7's sharing with option H): a duplicate of `FsRoot`'s descriptor, so
+    /// this operation resolves beneath the root the session anchored, not
+    /// whatever the root's pathname names now.
+    #[cfg(all(
+        any(target_os = "macos", target_os = "linux"),
+        target_pointer_width = "64"
+    ))]
+    pub(super) fn adopt(held: &fs::File) -> Result<Self, VaultError> {
+        Ok(Self {
+            dir: held.try_clone().map_err(VaultError::Io)?,
+        })
     }
 
     /// The root descriptor itself: the Trash handoff takes the vault root's

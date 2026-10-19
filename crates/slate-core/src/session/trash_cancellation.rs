@@ -4,8 +4,10 @@
 //! Cooperative waits used only before a Trash provider call. Once physical
 //! mutation starts, ordinary waits finish its bookkeeping and recovery.
 
-use super::{CancelToken, VaultError, VaultStructuralLock, db, process_structural_locks};
-use std::path::Path;
+use super::{
+    CacheDir, CancelToken, StructuralLockKey, VaultError, VaultStructuralLock, db,
+    process_structural_locks,
+};
 use std::sync::{Mutex, MutexGuard, TryLockError};
 use std::time::{Duration, Instant};
 
@@ -36,14 +38,14 @@ pub(super) fn lock_cancellable<'a, T>(
 
 impl VaultStructuralLock {
     pub(super) fn acquire_cancellable(
-        cache_dir: &Path,
+        cache: &CacheDir,
         cancel: &CancelToken,
     ) -> Result<Self, VaultError> {
         cancel.check()?;
-        let lock_path = std::fs::canonicalize(cache_dir)?.join("structural.lock");
+        let key = StructuralLockKey::of(cache)?;
         let registry = process_structural_locks();
         let mut held = lock_cancellable(&registry.held, cancel)?;
-        while held.contains(&lock_path) {
+        while held.contains(&key) {
             cancel.check()?;
             held = registry
                 .available
@@ -52,22 +54,14 @@ impl VaultStructuralLock {
                 .0;
         }
         cancel.check()?;
-        held.insert(lock_path.clone());
+        held.insert(key.clone());
         drop(held);
 
         // Own the registry slot before fallible work, so cancellation and real
         // I/O errors both release it through the existing Drop implementation.
-        let mut guard = Self {
-            file: None,
-            lock_path,
-        };
+        let mut guard = Self { file: None, key };
         cancel.check()?;
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(&guard.lock_path)?;
+        let file = guard.key.open_file(cache)?;
         loop {
             cancel.check()?;
             match file.try_lock() {

@@ -404,8 +404,8 @@ pub enum WatchEnd {
 pub struct WatchHandle {
     /// The platform watch (notify's watcher). Dropping it stops delivery.
     backend: Option<Box<dyn std::any::Any + Send>>,
-    /// What this watch is anchored to — the seam PR 22 replaces with the
-    /// session's held root descriptor (`super::watch::RootAnchor`).
+    /// What this watch is anchored to: the session's held root descriptor on
+    /// macOS and Linux (plan 43 PR 22a, `super::watch::RootAnchor`).
     anchor: super::watch::RootAnchor,
 }
 
@@ -437,9 +437,27 @@ impl WatchHandle {
     }
 
     /// Whether the root path still names the anchored directory (design §4.4
-    /// step 2), asked before every callback.
+    /// step 2).
+    #[cfg(test)]
     pub(crate) fn root_still_anchored(&self) -> bool {
         self.anchor.still_anchored()
+    }
+
+    /// Where the anchored root is against the watched path (plan 43 PR 22a,
+    /// #940; design §4.3), asked before every callback and when the platform
+    /// reports the root changed.
+    pub(crate) fn relocation(&self) -> super::watch::Relocation {
+        self.anchor.relocation()
+    }
+
+    /// A new watch on the same held root, armed at `at` (design §4.3: once,
+    /// after a legitimate rename of the vault folder).
+    pub(crate) fn rearm(
+        &self,
+        at: &std::path::Path,
+        sink: Arc<dyn FileEventSink>,
+    ) -> Result<WatchHandle, VaultError> {
+        self.anchor.rearm(at, sink)
     }
 }
 

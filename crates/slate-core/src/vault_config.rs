@@ -72,6 +72,22 @@ pub(crate) fn read_root_vault_config(vault_root: &Path) -> RootVaultConfig {
     parse_root_vault_config(&contents, &path.display().to_string()).unwrap_or_default()
 }
 
+/// [`read_root_vault_config`] beneath the session's held root (plan 43 PR
+/// 22a, #940): `slate.json` is opened relative to the root descriptor
+/// without following a link, so the config a session applies is its own
+/// vault's. A linked `slate.json` degrades to the default config, as any
+/// unreadable one does.
+pub(crate) fn read_root_vault_config_in(root: &crate::vault::fs_root::FsRoot) -> RootVaultConfig {
+    let path = root.opened_as().join("slate.json");
+    let Ok(contents) = root.read_root_file("slate.json").map(String::from_utf8) else {
+        return RootVaultConfig::default();
+    };
+    let Ok(contents) = contents else {
+        return RootVaultConfig::default();
+    };
+    parse_root_vault_config(&contents, &path.display().to_string()).unwrap_or_default()
+}
+
 /// Parse a `slate.json` document. Split from the read for tests.
 pub(crate) fn parse_root_vault_config(
     contents: &str,

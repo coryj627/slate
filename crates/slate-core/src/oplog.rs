@@ -116,11 +116,33 @@
 //! previously committed entry and treats the trailing junk as if it
 //! were never written.
 
-use std::fs::{self, OpenOptions};
+use std::fs;
+#[cfg(test)]
+use std::fs::OpenOptions;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use crate::vault::content_hash;
+use crate::vault::fs_root::{FileOptions, InteriorDir};
+
+/// The op-log's folder inside the cache directory.
+pub(crate) const OPLOG_DIR: &str = "oplog";
+
+/// `oplog/<log_name>.oplog`, relative to the cache directory.
+pub(crate) fn log_relative(log_name: &str) -> String {
+    format!("{OPLOG_DIR}/{log_name}.oplog")
+}
+
+/// `oplog/<log_name>.oplog.lock`, the log's sidecar lock.
+pub(crate) fn sidecar_relative(log_name: &str) -> String {
+    format!("{OPLOG_DIR}/{log_name}.oplog.lock")
+}
+
+/// The log's path as messages and logs spell it: the cache directory's
+/// configured spelling, never resolved again (plan 43 PR 22a, #940).
+fn display_log_path<D: InteriorDir + ?Sized>(dir: &D, log_name: &str) -> PathBuf {
+    oplog_path_for_name(&dir.display_dir(), log_name)
+}
 
 const MAGIC: [u8; 4] = *b"YOLG";
 const FORMAT_VERSION_V1: u8 = 1;
@@ -800,21 +822,32 @@ pub(crate) fn v2_header_block(created_path: &str, generation: u32) -> Vec<u8> {
 /// `blake3(path ‖ now_ms ‖ counter)`), so the lock is cheap insurance,
 /// not a hot path.
 pub fn try_create_log(cache_dir: &Path, log_name: &str, created_path: &str) -> io::Result<bool> {
-    let dir = oplog_dir(cache_dir);
-    fs::create_dir_all(&dir)?;
-    let lock_file = fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(dir.join(".dir.lock"))?;
+    try_create_log_in(cache_dir, log_name, created_path)
+}
+
+/// [`try_create_log`] in the session's cache directory: beneath the held
+/// `.slate` on macOS and Linux (plan 43 PR 22a, #940), where `oplog/` is made
+/// with `mkdirat` and nothing is ever recreated at a path the vault left.
+pub(crate) fn try_create_log_in<D: InteriorDir + ?Sized>(
+    dir: &D,
+    log_name: &str,
+    created_path: &str,
+) -> io::Result<bool> {
+    dir.ensure_child_dir(OPLOG_DIR)?;
+    let lock_file = dir.open_file(
+        &format!("{OPLOG_DIR}/.dir.lock"),
+        FileOptions::new().create(true).write(true),
+    )?;
     lock_file.lock()?;
 
-    let path = oplog_path_for_name(cache_dir, log_name);
-    match OpenOptions::new().create_new(true).write(true).open(&path) {
+    match dir.open_file(
+        &log_relative(log_name),
+        FileOptions::new().create_new(true).write(true),
+    ) {
         Ok(mut file) => {
             file.write_all(&v2_header_block(created_path, 0))?;
             file.sync_data()?;
-            let _ = fsync_dir(&dir);
+            let _ = dir.sync_child_dir(OPLOG_DIR);
             Ok(true)
         }
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(false),
@@ -901,6 +934,7 @@ pub(crate) fn read_header(file: &mut fs::File, path: &Path) -> io::Result<Option
 /// The per-log **sidecar lock file**: `<stem>.oplog.lock`, next to the
 /// log. The `.lock` suffix keeps it out of every `.oplog` enumeration
 /// (`reconcile_oplogs` strips exactly `".oplog"`).
+#[cfg(test)]
 pub(crate) fn sidecar_lock_path(log_path: &Path) -> std::path::PathBuf {
     let mut name = log_path.file_name().unwrap_or_default().to_os_string();
     name.push(".lock");
@@ -942,8 +976,11 @@ pub(crate) struct OplogLock(#[allow(dead_code)] fs::File);
 /// for the compact-a-never-created-log case). The sidecar is created
 /// once and never deleted while its log lives; reclamation removes it
 /// best-effort together with the log.
-pub(crate) fn lock_oplog(log_path: &Path) -> io::Result<OplogLock> {
-    let sidecar = open_sidecar(log_path)?;
+pub(crate) fn lock_oplog<D: InteriorDir + ?Sized>(
+    dir: &D,
+    log_name: &str,
+) -> io::Result<OplogLock> {
+    let sidecar = open_sidecar(dir, log_name)?;
     sidecar.lock()?;
     Ok(OplogLock(sidecar))
 }
@@ -957,8 +994,11 @@ pub(crate) fn lock_oplog(log_path: &Path) -> io::Result<OplogLock> {
 /// tx. A try-acquire can't deadlock: contention means some mutator is
 /// live on that log, which is exactly when reclamation should stand
 /// down anyway (the log is reconsidered next open).
-pub(crate) fn try_lock_oplog(log_path: &Path) -> io::Result<Option<OplogLock>> {
-    let sidecar = open_sidecar(log_path)?;
+pub(crate) fn try_lock_oplog<D: InteriorDir + ?Sized>(
+    dir: &D,
+    log_name: &str,
+) -> io::Result<Option<OplogLock>> {
+    let sidecar = open_sidecar(dir, log_name)?;
     match sidecar.try_lock() {
         Ok(()) => Ok(Some(OplogLock(sidecar))),
         Err(fs::TryLockError::WouldBlock) => Ok(None),
@@ -966,15 +1006,12 @@ pub(crate) fn try_lock_oplog(log_path: &Path) -> io::Result<Option<OplogLock>> {
     }
 }
 
-fn open_sidecar(log_path: &Path) -> io::Result<fs::File> {
-    if let Some(dir) = log_path.parent() {
-        fs::create_dir_all(dir)?;
-    }
-    fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(sidecar_lock_path(log_path))
+fn open_sidecar<D: InteriorDir + ?Sized>(dir: &D, log_name: &str) -> io::Result<fs::File> {
+    dir.ensure_child_dir(OPLOG_DIR)?;
+    dir.open_file(
+        &sidecar_relative(log_name),
+        FileOptions::new().create(true).write(true),
+    )
 }
 
 /// Append a single entry to `<cache_dir>/oplog/<log_name>.oplog`.
@@ -991,12 +1028,21 @@ pub fn append_entry(
     created_path: &str,
     entry: &OpLogEntry,
 ) -> io::Result<u64> {
-    let path = oplog_path_for_name(cache_dir, log_name);
+    append_entry_in(cache_dir, log_name, created_path, entry)
+}
+
+/// [`append_entry`] in the session's cache directory (plan 43 PR 22a, #940).
+pub(crate) fn append_entry_in<D: InteriorDir + ?Sized>(
+    dir: &D,
+    log_name: &str,
+    created_path: &str,
+    entry: &OpLogEntry,
+) -> io::Result<u64> {
     // Hold the sidecar lock across first-file header creation and append.
     // This prevents both a header/body first-write race and a compaction
     // rename swapping the path before this handle opens.
-    let lock = lock_oplog(&path)?;
-    append_entry_with_lock(cache_dir, log_name, created_path, entry, &lock)
+    let lock = lock_oplog(dir, log_name)?;
+    append_entry_with_lock(dir, log_name, created_path, entry, &lock)
 }
 
 /// Append using a caller-held lock for this log.
@@ -1005,21 +1051,19 @@ pub fn append_entry(
 /// write and the matching derived-index transaction. Passing a guard for a
 /// different log violates the serialization contract; all call sites derive
 /// both from the same `cache_dir` + `log_name` pair.
-pub(crate) fn append_entry_with_lock(
-    cache_dir: &Path,
+pub(crate) fn append_entry_with_lock<D: InteriorDir + ?Sized>(
+    dir: &D,
     log_name: &str,
     created_path: &str,
     entry: &OpLogEntry,
     _lock: &OplogLock,
 ) -> io::Result<u64> {
-    let dir = oplog_dir(cache_dir);
-    fs::create_dir_all(&dir)?;
-    let path = oplog_path_for_name(cache_dir, log_name);
-    let mut file = OpenOptions::new()
-        .create(true)
-        .read(true)
-        .append(true)
-        .open(&path)?;
+    dir.ensure_child_dir(OPLOG_DIR)?;
+    let path = display_log_path(dir, log_name);
+    let mut file = dir.open_file(
+        &log_relative(log_name),
+        FileOptions::new().create(true).read(true).append(true),
+    )?;
 
     let len = file.metadata()?.len();
     let is_new_file = len == 0;
@@ -1064,7 +1108,7 @@ pub(crate) fn append_entry_with_lock(
     // pages flushed (the dirent is already durable from this first
     // pass).
     if is_new_file {
-        let _ = fsync_dir(&dir);
+        let _ = dir.sync_child_dir(OPLOG_DIR);
     }
     Ok(post_append_len)
 }
@@ -1117,11 +1161,27 @@ pub fn append_path_changed_marker(
     user_actor_id: &str,
     timestamp_ms: i64,
 ) -> io::Result<Option<u64>> {
-    let path = oplog_path_for_name(cache_dir, log_name);
+    append_path_changed_marker_in(cache_dir, log_name, from, to, user_actor_id, timestamp_ms)
+}
+
+/// [`append_path_changed_marker`] in the session's cache directory (plan 43
+/// PR 22a, #940).
+pub(crate) fn append_path_changed_marker_in<D: InteriorDir + ?Sized>(
+    dir: &D,
+    log_name: &str,
+    from: &str,
+    to: &str,
+    user_actor_id: &str,
+    timestamp_ms: i64,
+) -> io::Result<Option<u64>> {
+    let path = display_log_path(dir, log_name);
     // Sidecar mutation lock first, then open (#928) — a missing log
     // stays "nothing to re-path", it just surfaces from the open now.
-    let _lock = lock_oplog(&path)?;
-    let mut file = match OpenOptions::new().read(true).append(true).open(&path) {
+    let _lock = lock_oplog(dir, log_name)?;
+    let mut file = match dir.open_file(
+        &log_relative(log_name),
+        FileOptions::new().read(true).append(true),
+    ) {
         Ok(f) => f,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e),
@@ -1159,25 +1219,6 @@ pub fn append_path_changed_marker(
     Ok(Some(len + framed.len() as u64))
 }
 
-/// Best-effort directory fsync. On Unix, opening the directory as a
-/// file and calling `sync_all` makes the directory's metadata
-/// (including just-added dirents) durable. On non-Unix targets the
-/// equivalent semantics don't apply (NTFS commits dirents via its
-/// filesystem journal; sandboxed iOS doesn't expose a directory fsync
-/// anyway), so we no-op there. Errors are returned via the call site,
-/// which currently ignores them — a failed dir-sync still leaves the
-/// data durable; the worst case is the file disappears on power loss
-/// before the next save_text re-creates it.
-#[cfg(unix)]
-pub(crate) fn fsync_dir(dir: &Path) -> io::Result<()> {
-    fs::File::open(dir)?.sync_all()
-}
-
-#[cfg(not(unix))]
-pub(crate) fn fsync_dir(_dir: &Path) -> io::Result<()> {
-    Ok(())
-}
-
 /// Read all well-formed entries from `<cache_dir>/oplog/<log_name>.oplog`.
 ///
 /// A missing file is normal — it just means no save has been recorded
@@ -1185,7 +1226,15 @@ pub(crate) fn fsync_dir(_dir: &Path) -> io::Result<()> {
 /// [`read_oplog_with_header`] for the header-carrying variant and the
 /// full degradation contract.
 pub fn read_oplog(cache_dir: &Path, log_name: &str) -> io::Result<Vec<OpLogEntry>> {
-    read_oplog_with_header(cache_dir, log_name).map(|(_, entries)| entries)
+    read_oplog_in(cache_dir, log_name)
+}
+
+/// [`read_oplog`] in the session's cache directory (plan 43 PR 22a, #940).
+pub(crate) fn read_oplog_in<D: InteriorDir + ?Sized>(
+    dir: &D,
+    log_name: &str,
+) -> io::Result<Vec<OpLogEntry>> {
+    read_oplog_with_header_in(dir, log_name).map(|(_, entries)| entries)
 }
 
 /// Read the header plus all well-formed entries from
@@ -1208,13 +1257,22 @@ pub fn read_oplog_with_header(
     cache_dir: &Path,
     log_name: &str,
 ) -> io::Result<(OplogHeader, Vec<OpLogEntry>)> {
+    read_oplog_with_header_in(cache_dir, log_name)
+}
+
+/// [`read_oplog_with_header`] in the session's cache directory (plan 43 PR
+/// 22a, #940).
+pub(crate) fn read_oplog_with_header_in<D: InteriorDir + ?Sized>(
+    dir: &D,
+    log_name: &str,
+) -> io::Result<(OplogHeader, Vec<OpLogEntry>)> {
     let empty_header = || OplogHeader {
         version: FORMAT_VERSION_V1,
         created_path: None,
         generation: 0,
     };
-    let path = oplog_path_for_name(cache_dir, log_name);
-    let mut file = match fs::File::open(&path) {
+    let path = display_log_path(dir, log_name);
+    let mut file = match dir.open_file(&log_relative(log_name), FileOptions::new().read(true)) {
         Ok(f) => f,
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
             return Ok((empty_header(), Vec::new()));

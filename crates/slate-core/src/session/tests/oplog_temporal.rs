@@ -1842,8 +1842,7 @@ fn contended_event_rebuild_rolls_back_rows_and_markers_then_retries() {
         .unwrap()
     };
     let rows_before = events_for(&session, "n.md");
-    let log_path = crate::oplog::oplog_path_for_name(&cache_dir, &stem);
-    let held = crate::oplog::lock_oplog(&log_path).unwrap();
+    let held = crate::oplog::lock_oplog(&cache_dir, &stem).unwrap();
 
     let rebuild = {
         let mut conn = session.conn.lock().unwrap();

@@ -23,7 +23,7 @@
 //! for tests or sandbox layouts.
 
 use std::borrow::Cow;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -32,6 +32,7 @@ use rusqlite::{Connection, OptionalExtension};
 
 use crate::VaultError;
 use crate::db;
+use crate::vault::fs_root::{CacheDir, FileOptions, FsRoot, InteriorDir};
 use crate::vault::{EntryKind, FsVaultProvider, VaultProvider, content_hash};
 
 mod trash_cancellation;
@@ -56,15 +57,57 @@ fn next_directory_cursor_nonce() -> u64 {
     time ^ sequence.rotate_left(23)
 }
 
+/// What the process-local half of the structural writer gate keys a vault
+/// by (plan 43 PR 22a, #940; design §6, owner decision Q5).
+///
+/// Where the interior is held (macOS and Linux) the key is the held cache
+/// directory's `(device, inode)`: the canonical lock pathname is the same
+/// string before and after a root swap (design §3.2 probe (b)), so a
+/// pathname key would hand one vault's slot to the vault swapped in at its
+/// path, and hold two sessions on one vault, opened through two spellings
+/// that a rename made distinct, in two slots. Elsewhere (Windows until 22W)
+/// it is the canonical lock path, as before.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum StructuralLockKey {
+    Identity { device: u64, inode: u64 },
+    Path(PathBuf),
+}
+
+impl StructuralLockKey {
+    fn of(cache: &CacheDir) -> std::io::Result<Self> {
+        Ok(match cache.identity() {
+            Some((device, inode)) => Self::Identity { device, inode },
+            None => Self::Path(std::fs::canonicalize(cache.display())?.join("structural.lock")),
+        })
+    }
+
+    /// `structural.lock`: beneath the held cache directory, never through a
+    /// link, or by its canonical path where the interior is not held.
+    fn open_file(&self, cache: &CacheDir) -> std::io::Result<std::fs::File> {
+        match self {
+            Self::Identity { .. } => cache.open_file(
+                "structural.lock",
+                FileOptions::new().read(true).write(true).create(true),
+            ),
+            Self::Path(lock_path) => std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(lock_path),
+        }
+    }
+}
+
 /// Process-local half of the vault structural writer gate.
 ///
 /// BSD `flock` ownership semantics vary enough across platforms that two
 /// independently-opened descriptors in one process are not a portable mutex.
-/// Keep an explicit per-lock-path registry as well as the OS sidecar lock so
-/// separate `VaultSession`s in this process and separate processes obey the
-/// same serialization boundary.
+/// Keep an explicit per-vault registry ([`StructuralLockKey`]) as well as the
+/// OS sidecar lock so separate `VaultSession`s in this process and separate
+/// processes obey the same serialization boundary.
 struct ProcessStructuralLocks {
-    held: Mutex<std::collections::HashSet<PathBuf>>,
+    held: Mutex<std::collections::HashSet<StructuralLockKey>>,
     available: Condvar,
 }
 
@@ -84,34 +127,28 @@ fn process_structural_locks() -> &'static ProcessStructuralLocks {
 /// structural endpoint.
 struct VaultStructuralLock {
     file: Option<std::fs::File>,
-    lock_path: PathBuf,
+    key: StructuralLockKey,
 }
 
 impl VaultStructuralLock {
-    fn acquire(cache_dir: &Path) -> std::io::Result<Self> {
-        let canonical_cache = std::fs::canonicalize(cache_dir)?;
-        let lock_path = canonical_cache.join("structural.lock");
+    fn acquire(cache: &CacheDir) -> std::io::Result<Self> {
+        let key = StructuralLockKey::of(cache)?;
         let registry = process_structural_locks();
         let mut held = registry
             .held
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        while held.contains(&lock_path) {
+        while held.contains(&key) {
             held = registry
                 .available
                 .wait(held)
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
-        held.insert(lock_path.clone());
+        held.insert(key.clone());
         drop(held);
 
         let acquired = (|| {
-            let file = std::fs::OpenOptions::new()
-                .create(true)
-                .truncate(false)
-                .read(true)
-                .write(true)
-                .open(&lock_path)?;
+            let file = key.open_file(cache)?;
             file.lock()?;
             Ok(file)
         })();
@@ -119,14 +156,14 @@ impl VaultStructuralLock {
         match acquired {
             Ok(file) => Ok(Self {
                 file: Some(file),
-                lock_path,
+                key,
             }),
             Err(error) => {
                 let mut held = registry
                     .held
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                held.remove(&lock_path);
+                held.remove(&key);
                 registry.available.notify_all();
                 Err(error)
             }
@@ -145,7 +182,7 @@ impl Drop for VaultStructuralLock {
             .held
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        held.remove(&self.lock_path);
+        held.remove(&self.key);
         registry.available.notify_all();
     }
 }
@@ -1077,34 +1114,6 @@ fn observe_root_identity(_root: &std::path::Path) -> Option<VaultRootIdentity> {
     None
 }
 
-/// FL-06 round-28: pin the root as an open descriptor and derive the
-/// identity anchor by `fstat` on THAT descriptor — not a pathname
-/// sample. The returned handle is held across the whole filesystem
-/// open so the anchored inode stays alive, and the caller re-verifies
-/// the pathname against the anchor after the interior open completes.
-#[cfg(unix)]
-fn pin_root_identity(root: &std::path::Path) -> (Option<std::fs::File>, Option<VaultRootIdentity>) {
-    use std::os::unix::fs::MetadataExt;
-    let Ok(pinned) = std::fs::File::open(root) else {
-        return (None, None);
-    };
-    let Ok(meta) = pinned.metadata() else {
-        return (None, None);
-    };
-    let identity = VaultRootIdentity {
-        device: meta.dev(),
-        inode: meta.ino(),
-    };
-    (Some(pinned), Some(identity))
-}
-
-#[cfg(not(unix))]
-fn pin_root_identity(
-    _root: &std::path::Path,
-) -> (Option<std::fs::File>, Option<VaultRootIdentity>) {
-    (None, None)
-}
-
 /// Plan 43 PR 22a (#940; design `22_descriptor_relative_session_design.md`
 /// §4.4): where the deterministic A→B→A seam fires inside an open. A fact
 /// installs a callback on its own thread ([`install_open_swap_seam`]) and
@@ -1430,6 +1439,16 @@ pub struct VaultSession {
     /// (`start_watching`). Its coalescer thread holds `Arc`s to the
     /// provider and `event_listeners`, never to the session.
     watch: Mutex<watch::WatchSeat>,
+    /// Plan 43 PR 22a (#940): the vault root this session holds open, when
+    /// it was opened from the filesystem — its display path
+    /// (`root_display_path`) and the anchor its watch is verified against.
+    held_root: Option<Arc<FsRoot>>,
+    /// Plan 43 PR 22a (#940): the cache directory, held open for the
+    /// session's lifetime; the structural lock, the op-log, the prefs writer
+    /// and every SQLite connection resolve beneath it. Declared last so it
+    /// drops after `conn` (fields drop in declaration order): closing the
+    /// connection still resolves its WAL through the held directory.
+    interior: CacheDir,
 }
 
 /// One annotation on a version row (O-3 #541): `kind` is the stable
@@ -1573,8 +1592,10 @@ struct OpenBaseState {
 /// recoverable log contents, and temporal queries must agree). WAL +
 /// busy_timeout make a second connection safe; the schema already
 /// exists (no migrations here).
-fn open_worker_connection(cache_dir: &std::path::Path) -> Result<Connection, rusqlite::Error> {
-    let conn = Connection::open(crate::db::sqlite_open_path(&cache_dir.join("cache.sqlite")))?;
+fn open_worker_connection(cache_dir: &CacheDir) -> Result<Connection, VaultError> {
+    // Through the session's own anchor, the same held `.slate` (plan 43 PR
+    // 22a, #940), never the cache directory's pathname.
+    let conn = crate::db::open_connection(&cache_dir.sqlite_path("cache.sqlite")?)?;
     crate::db::register_connection_functions(&conn)?;
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
@@ -1587,7 +1608,7 @@ fn open_worker_connection(cache_dir: &std::path::Path) -> Result<Connection, rus
 /// markers (a pending save/adoption obligation must survive).
 fn regen_events_after_compaction(
     conn: &mut Connection,
-    cache_dir: &std::path::Path,
+    cache_dir: &CacheDir,
     file_id: i64,
     log_name: &str,
     marker_rowid: Option<i64>,
@@ -1609,8 +1630,7 @@ fn regen_events_after_compaction(
     // aborts (the marker stays, the scan heals); the existence check
     // runs under the lock, so no rename or reclamation can swap the
     // answer before the read.
-    let log_path = crate::oplog::oplog_path_for_name(cache_dir, log_name);
-    match std::fs::metadata(&log_path) {
+    match cache_dir.file_len(&crate::oplog::log_relative(log_name)) {
         Ok(_) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return Err(VaultError::Trash {
@@ -1619,7 +1639,7 @@ fn regen_events_after_compaction(
         }
         Err(e) => return Err(VaultError::Io(e)),
     }
-    let entries = crate::oplog::read_oplog(cache_dir, log_name).map_err(VaultError::Io)?;
+    let entries = crate::oplog::read_oplog_in(cache_dir, log_name).map_err(VaultError::Io)?;
     let events = crate::oplog_events::derive_events_for_log(&entries);
     let tx = db::begin_fenced(conn)?;
     tx.execute(
@@ -1646,7 +1666,7 @@ fn regen_events_after_compaction(
 fn compaction_worker_loop(
     rx: std::sync::mpsc::Receiver<CompactionJob>,
     tx: std::sync::mpsc::Sender<CompactionJob>,
-    cache_dir: PathBuf,
+    cache_dir: CacheDir,
     threshold_bytes: u64,
     threshold_entries: u64,
     retention_days: Arc<std::sync::atomic::AtomicU32>,
@@ -1707,9 +1727,8 @@ fn compaction_worker_loop(
             // rolls back rather than clearing a marker for a rewrite that has
             // not happened yet. This guard spans marker → rewrite → event
             // regeneration.
-            let log_path = crate::oplog::oplog_path_for_name(&cache_dir, &log_name);
             let mut lock_error = None;
-            let pass_lock = match crate::oplog::lock_oplog(&log_path) {
+            let pass_lock = match crate::oplog::lock_oplog(&cache_dir, &log_name) {
                 Ok(lock) => Some(lock),
                 Err(e) => {
                     lock_error = Some(e);
@@ -2578,18 +2597,37 @@ impl VaultSession {
     /// database under it, and applies all pending schema migrations.
     // (graph payload helpers live below as free fns: `file_mtimes`,
     // `graph_node_payload`, `snapshot_summary_counts`.)
+    ///
+    /// Plan 43 PR 22a (#940): `config.cache_dir` is made if missing, then held
+    /// open for the session's lifetime; the structural lock, SQLite and the
+    /// op-log resolve beneath that one descriptor on macOS and Linux, so a
+    /// swap of the cache directory's path after this point cannot move them.
     pub fn open(
         provider: Arc<dyn VaultProvider>,
         config: SessionConfig,
     ) -> Result<Self, VaultError> {
-        std::fs::create_dir_all(&config.cache_dir)?;
+        let interior = CacheDir::configured(&config.cache_dir)?;
+        Self::open_in(provider, config, interior, None)
+    }
+
+    /// [`Self::open`] against an interior already held: the filesystem open
+    /// hands its `FsRoot`'s `.slate` here.
+    fn open_in(
+        provider: Arc<dyn VaultProvider>,
+        config: SessionConfig,
+        interior: CacheDir,
+        held_root: Option<Arc<FsRoot>>,
+    ) -> Result<Self, VaultError> {
+        // A pathname interior (Windows until 22W) makes its folder here, as
+        // `open` always has; a held one exists already.
+        interior.ensure_self()?;
         #[cfg(test)]
         fire_open_swap_seam(OpenSwapPoint::CacheDirAnchored);
         // Reopen recovery and every live structural writer share this exact
         // sidecar. Acquire it before SQLite so a second process cannot plan
         // against a half-renamed vault or race migration/recovery.
-        let vault_structural_lock = VaultStructuralLock::acquire(&config.cache_dir)?;
-        let db_path = config.cache_dir.join("cache.sqlite");
+        let vault_structural_lock = VaultStructuralLock::acquire(&interior)?;
+        let db_path = interior.sqlite_path("cache.sqlite")?;
 
         let mut conn = db::open_database(&db_path, config.max_db_cache_pages)?;
         // Whether this open CREATED the cache (schema version 0 before
@@ -2638,7 +2676,7 @@ impl VaultSession {
         let (compaction_tx, compaction_rx) = std::sync::mpsc::channel::<CompactionJob>();
         let worker_tx = compaction_tx.clone();
         let compaction_join = {
-            let cache_dir = config.cache_dir.clone();
+            let cache_dir = interior.clone();
             let threshold_bytes = config.oplog_compaction_threshold_bytes as u64;
             let threshold_entries = config.oplog_compaction_threshold_entries as u64;
             let retention = Arc::clone(&retention_days);
@@ -2710,6 +2748,8 @@ impl VaultSession {
             trash_stage_generation: AtomicU64::new(0),
             root_identity: None,
             watch: Mutex::new(watch::WatchSeat::default()),
+            held_root,
+            interior,
         };
         session.recover_structural_batch_inflight_on_open()?;
         drop(vault_structural_lock);
@@ -3052,7 +3092,7 @@ impl VaultSession {
             return Ok(0);
         };
         let entries =
-            crate::oplog::read_oplog(&self.config.cache_dir, &log_name).map_err(VaultError::Io)?;
+            crate::oplog::read_oplog_in(&self.interior, &log_name).map_err(VaultError::Io)?;
         Ok(entries
             .into_iter()
             .filter_map(|entry| {
@@ -3080,6 +3120,17 @@ impl VaultSession {
     /// that cannot prove they share it (FL-06 round-27).
     pub fn root_identity(&self) -> Option<VaultRootIdentity> {
         self.root_identity
+    }
+
+    /// Plan 43 PR 22a (#940; design §4.2, owner decision Q4): the vault
+    /// root's one display spelling — the held root's current path, accepted
+    /// only while that path still names the held root (`fstat` of the
+    /// descriptor against `stat` of the path), else the spelling the session
+    /// opened. A host that wants to say "the vault moved to …" reads this;
+    /// `None` for a session no filesystem root backs. Display only: nothing
+    /// resolves through it.
+    pub fn root_display_path(&self) -> Option<PathBuf> {
+        self.held_root.as_ref().map(|root| root.display_path())
     }
 
     /// Convenience: open a vault rooted at `root` using `FsVaultProvider`.
@@ -3125,15 +3176,17 @@ impl VaultSession {
                 reason: "vault root does not exist or is not a directory".into(),
             });
         }
-        // FL-06 rounds 27–28: pin the root as an open descriptor for the
-        // duration of this constructor and anchor the identity by fstat on
-        // that descriptor. The interior reads and the cache open below
-        // still resolve by pathname (descriptor-relative interior
-        // resolution is tracked separately — see the round-28 audit
-        // issue), so after the interior open completes the pathname is
-        // re-verified against the anchor and any divergence fails the
-        // open: a root swapped during the open cannot yield a session.
-        let (pinned_root, root_identity) = pin_root_identity(&root);
+        // Plan 43 PR 22a (#940): hold the root and its `.slate` open for the
+        // session's lifetime. The anchor is `fstat` of the held root, and
+        // every interior read and open below — `slate.json`, the templates
+        // folder, `.slate/prefs.json`, the structural lock, SQLite, the
+        // op-log, the provider's mutations and its staging folder — resolves
+        // beneath those descriptors, so a root swapped after this point
+        // cannot hand the session another vault's interior.
+        let held_root = Arc::new(FsRoot::open(&root)?);
+        let root_identity = held_root
+            .identity()
+            .map(|(device, inode)| VaultRootIdentity { device, inode });
         #[cfg(test)]
         fire_open_swap_seam(OpenSwapPoint::RootAnchored);
         let root_for_reverify = root.clone();
@@ -3142,7 +3195,7 @@ impl VaultSession {
         config.user_actor_id = user_actor_id.to_string();
         // Obsidian-convention auto-detect. Callers wanting a different
         // layout can mutate `templates_dir` and call `open` directly.
-        if root.join("Templates").is_dir() {
+        if held_root.is_dir("Templates") {
             config.templates_dir = Some("Templates".to_string());
         }
         // Vault-shipped config (#411): a root `slate.json` may pin the
@@ -3150,7 +3203,7 @@ impl VaultSession {
         // beats the convention auto-detect above. Only honored when
         // the named directory actually exists, so a stale config
         // can't silently point templates at nothing.
-        let root_cfg = crate::vault_config::read_root_vault_config(&root);
+        let root_cfg = crate::vault_config::read_root_vault_config_in(&held_root);
         if let Some(dir) = root_cfg.templates_directory.as_ref().filter(|d| {
             // Red-team L1: only honor clean vault-relative paths.
             // `root.join` would happily accept `..` segments and
@@ -3162,7 +3215,7 @@ impl VaultSession {
             p.is_relative()
                 && p.components()
                     .all(|c| matches!(c, std::path::Component::Normal(_)))
-                && root.join(d.as_str()).is_dir()
+                && held_root.is_dir(d)
         }) {
             config.templates_dir = Some(dir.clone());
         }
@@ -3171,31 +3224,29 @@ impl VaultSession {
         // root `slate.json` fills in otherwise. Missing files are
         // fine (default-empty prefs); a malformed file surfaces as
         // `VaultError::PrefsUnreadable`.
-        config.citations_prefs = crate::citations::prefs::read_citations_prefs(&root)?;
+        config.citations_prefs = crate::citations::prefs::read_citations_prefs_in(&held_root)?;
         // History prefs (O-5 #543): the `.slate/prefs.json` `history`
         // section overrides the default retention window; absence
         // keeps the default. Malformed prefs fail the open loudly —
         // the citations policy, applied consistently.
-        if let Some(prefs) =
-            crate::history_prefs::read_history_prefs(&root.join(".slate").join("prefs.json"))?
-        {
+        if let Some(prefs) = crate::history_prefs::read_history_prefs_in(held_root.cache_dir())? {
             config.oplog_retention_days = prefs.retention_days;
         }
-        let provider = Arc::new(FsVaultProvider::new(root));
-        let mut session = Self::open(provider, config)?;
+        let interior = held_root.cache_dir().clone();
+        let provider = Arc::new(FsVaultProvider::held(root, Arc::clone(&held_root)));
+        let mut session = Self::open_in(provider, config, interior, Some(held_root))?;
         #[cfg(test)]
         fire_open_swap_seam(OpenSwapPoint::InteriorOpened);
-        // Round-28: the interior open resolved paths while the anchor was
-        // pinned — require the pathname to STILL resolve to the anchored
-        // root, so a swap-and-stay during the open fails loudly instead
-        // of yielding a session whose cache belongs to another vault.
+        // The pathname re-verification stays (design §7: redundant now, and
+        // kept). The interior is bound to the held root whatever the path
+        // names; a root left swapped at the end of the open still fails it,
+        // so no host is handed a session whose path names another vault.
         if root_identity.is_some() && observe_root_identity(&root_for_reverify) != root_identity {
             return Err(VaultError::InvalidPath {
                 path: root_for_reverify.display().to_string(),
                 reason: "vault root changed while the session was opening".into(),
             });
         }
-        drop(pinned_root);
         session.root_identity = root_identity;
         Ok(session)
     }
@@ -3442,9 +3493,10 @@ impl VaultSession {
         let entry_estimate_floor = (self.config.oplog_compaction_threshold_entries as u64)
             .saturating_mul(min_avg_entry_bytes);
         for (file_id, log_name, path) in rows {
-            let log_path = crate::oplog::oplog_path_for_name(&self.config.cache_dir, &log_name);
-            if let Ok(meta) = std::fs::metadata(&log_path)
-                && (meta.len() > threshold || meta.len() > entry_estimate_floor)
+            if let Ok(len) = self
+                .interior
+                .file_len(&crate::oplog::log_relative(&log_name))
+                && (len > threshold || len > entry_estimate_floor)
             {
                 // Respect an in-session futility verdict (a giant
                 // single-entry log doesn't shrink until it grows).
@@ -3524,8 +3576,9 @@ impl VaultSession {
         tx.execute("DELETE FROM oplog_events", [])?;
         tx.execute("DELETE FROM oplog_events_stale", [])?;
         for (file_id, log_name) in bound {
-            let log_path = crate::oplog::oplog_path_for_name(&self.config.cache_dir, &log_name);
-            let _log_lock = match crate::oplog::try_lock_oplog(&log_path).map_err(VaultError::Io)? {
+            let _log_lock = match crate::oplog::try_lock_oplog(&self.interior, &log_name)
+                .map_err(VaultError::Io)?
+            {
                 Some(lock) => lock,
                 None => {
                     return Err(VaultError::Trash {
@@ -3537,8 +3590,8 @@ impl VaultSession {
             // log or readable prefix. A fatal header/I/O error is different:
             // abort so the transaction restores every prior row and marker,
             // preserving the durable repair obligation for a later retry.
-            let entries = crate::oplog::read_oplog(&self.config.cache_dir, &log_name)
-                .map_err(VaultError::Io)?;
+            let entries =
+                crate::oplog::read_oplog_in(&self.interior, &log_name).map_err(VaultError::Io)?;
             let events = crate::oplog_events::derive_events_for_log(&entries);
             insert_oplog_events(&tx, file_id, &events, cutoff_ms)?;
         }
@@ -3611,9 +3664,8 @@ impl VaultSession {
     /// Accepted: that requires a mutator racing an unbound,
     /// retention-expired log — double-anomalous — and it degrades to
     /// the pre-#928 state (no serialization), never worse.
-    fn reclaim_log_and_sidecar(cache_dir: &std::path::Path, stem: &str) {
-        let log_path = crate::oplog::oplog_path_for_name(cache_dir, stem);
-        let _guard = match crate::oplog::try_lock_oplog(&log_path) {
+    fn reclaim_log_and_sidecar<D: InteriorDir + ?Sized>(cache_dir: &D, stem: &str) {
+        let _guard = match crate::oplog::try_lock_oplog(cache_dir, stem) {
             Ok(Some(guard)) => guard,
             Ok(None) => {
                 log::warn!("oplog reclamation skipped for {stem}: mutation lock contended");
@@ -3625,12 +3677,12 @@ impl VaultSession {
                 return;
             }
         };
-        match std::fs::remove_file(&log_path) {
+        match cache_dir.remove_file(&crate::oplog::log_relative(stem)) {
             // The log is gone; its sidecar has nothing left to guard.
             // Best-effort — a leftover sidecar has the same junk
             // profile as a crashed `.oplog.tmp`.
             Ok(()) => {
-                let _ = std::fs::remove_file(crate::oplog::sidecar_lock_path(&log_path));
+                let _ = cache_dir.remove_file(&crate::oplog::sidecar_relative(stem));
             }
             Err(e) => {
                 log::warn!("oplog reclamation failed for {stem}: {}", e.kind());
@@ -3640,16 +3692,13 @@ impl VaultSession {
     }
 
     fn reconcile_oplogs_inner(&self, conn: &mut Connection) -> Result<Vec<RemnantLog>, VaultError> {
-        let dir = crate::oplog::oplog_dir(&self.config.cache_dir);
-        let read_dir = match std::fs::read_dir(&dir) {
-            Ok(rd) => rd,
+        let names = match self.interior.read_child_dir(crate::oplog::OPLOG_DIR) {
+            Ok(names) => names,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(e) => return Err(VaultError::Io(e)),
         };
         let mut stems: Vec<String> = Vec::new();
-        for entry in read_dir {
-            let Ok(entry) = entry else { continue };
-            let name = entry.file_name();
+        for name in names {
             let Some(name) = name.to_str() else { continue };
             if let Some(stem) = name.strip_suffix(".oplog") {
                 stems.push(stem.to_string());
@@ -3700,7 +3749,7 @@ impl VaultSession {
                 continue; // fast path — already bound, no log IO
             }
             let (header, entries) =
-                match crate::oplog::read_oplog_with_header(&self.config.cache_dir, stem) {
+                match crate::oplog::read_oplog_with_header_in(&self.interior, stem) {
                     Ok(pair) => pair,
                     Err(e) => {
                         log::warn!("oplog reconcile: unreadable log {stem}: {}", e.kind());
@@ -3751,7 +3800,7 @@ impl VaultSession {
                             .max()
                             .is_some_and(|ts| ts <= cutoff)
                     {
-                        Self::reclaim_log_and_sidecar(&self.config.cache_dir, stem);
+                        Self::reclaim_log_and_sidecar(&self.interior, stem);
                     }
                 }
                 continue;
@@ -3801,7 +3850,7 @@ impl VaultSession {
             let newest_ts = entries.iter().map(|e| e.timestamp_ms).max();
             match (effective_path, entries.last()) {
                 (_, Some(_)) if newest_ts.is_some_and(|ts| ts <= cutoff) => {
-                    Self::reclaim_log_and_sidecar(&self.config.cache_dir, stem);
+                    Self::reclaim_log_and_sidecar(&self.interior, stem);
                 }
                 (Some(eff), Some(tail)) => remnants.push(RemnantLog {
                     stem: stem.clone(),
@@ -4576,7 +4625,7 @@ impl VaultSession {
             stem_input.extend_from_slice(&salt.to_le_bytes());
             // First 16 bytes of the blake3 = first 32 lowercase hex chars.
             let stem = crate::vault::content_hash(&stem_input)[..32].to_string();
-            match crate::oplog::try_create_log(&self.config.cache_dir, &stem, path) {
+            match crate::oplog::try_create_log_in(&self.interior, &stem, path) {
                 Ok(true) => {
                     // Guarded UPDATE: never overwrite a binding that
                     // appeared since the lookup (a racing writer in
@@ -4771,10 +4820,7 @@ impl VaultSession {
                 message: "history retention_days must be at least 1".into(),
             });
         }
-        crate::history_prefs::write_history_prefs(
-            &self.config.cache_dir.join("prefs.json"),
-            &prefs,
-        )?;
+        crate::history_prefs::write_history_prefs_in(&self.interior, &prefs)?;
         self.set_retention_days(prefs.retention_days);
         Ok(())
     }
@@ -5118,8 +5164,7 @@ impl VaultSession {
         // mutation, or fail closed while this guard protects both. Publishing
         // the marker first would let a rebuild clear it against the old log
         // before this save acquired the lock and appended.
-        let log_path = crate::oplog::oplog_path_for_name(&self.config.cache_dir, log_name);
-        let oplog_lock = match crate::oplog::lock_oplog(&log_path) {
+        let oplog_lock = match crate::oplog::lock_oplog(&self.interior, log_name) {
             Ok(lock) => lock,
             Err(e) => {
                 log::warn!(
@@ -5185,7 +5230,7 @@ impl VaultSession {
         };
 
         let post_append_len = match crate::oplog::append_entry_with_lock(
-            &self.config.cache_dir,
+            &self.interior,
             log_name,
             path,
             &entry,
@@ -5311,7 +5356,7 @@ impl VaultSession {
             // saved through Slate (no binding, no log).
             return Ok(Vec::new());
         };
-        crate::oplog::read_oplog(&self.config.cache_dir, &log_name).map_err(VaultError::Io)
+        crate::oplog::read_oplog_in(&self.interior, &log_name).map_err(VaultError::Io)
     }
 
     /// Page through `path`'s version history, newest first (O-3 #541).
@@ -5336,9 +5381,8 @@ impl VaultSession {
                 total_filtered: 0,
             });
         };
-        let (header, entries) =
-            crate::oplog::read_oplog_with_header(&self.config.cache_dir, &log_name)
-                .map_err(VaultError::Io)?;
+        let (header, entries) = crate::oplog::read_oplog_with_header_in(&self.interior, &log_name)
+            .map_err(VaultError::Io)?;
 
         let start_position: usize = match paging.cursor.as_deref() {
             None => 0,
@@ -5396,7 +5440,7 @@ impl VaultSession {
                 message: format!("no such version: {path:?} has no history"),
             })?;
         let entries =
-            crate::oplog::read_oplog(&self.config.cache_dir, &log_name).map_err(VaultError::Io)?;
+            crate::oplog::read_oplog_in(&self.interior, &log_name).map_err(VaultError::Io)?;
         if !entries.iter().any(|e| e.content_hash_after == version_hash) {
             return Err(VaultError::InvalidArgument {
                 message: "no such version".into(),
@@ -5648,7 +5692,7 @@ impl VaultSession {
             .into_values()
             .map(|remnant| {
                 // Recoverability = the tail reconstructs AND verifies.
-                let reconstructed = crate::oplog::read_oplog(&self.config.cache_dir, &remnant.stem)
+                let reconstructed = crate::oplog::read_oplog_in(&self.interior, &remnant.stem)
                     .ok()
                     .and_then(|entries| crate::oplog::reconstruct_at_tail(&entries).ok())
                     .filter(|content| {
@@ -5753,8 +5797,8 @@ impl VaultSession {
         remnant: RemnantLog,
         destination: &str,
     ) -> Result<SaveReport, VaultError> {
-        let entries = crate::oplog::read_oplog(&self.config.cache_dir, &remnant.stem)
-            .map_err(VaultError::Io)?;
+        let entries =
+            crate::oplog::read_oplog_in(&self.interior, &remnant.stem).map_err(VaultError::Io)?;
         let content = crate::oplog::reconstruct_at_tail(&entries).map_err(|e| {
             VaultError::HistoryUnavailable {
                 path: destination.to_string(),
@@ -6024,7 +6068,7 @@ impl VaultSession {
             // visible to the temporal operators, not deferred to the
             // next cache rebuild. Best-effort: a failure sets the
             // staleness marker and the next scan's rebuild heals.
-            let repopulated = crate::oplog::read_oplog(&self.config.cache_dir, stem)
+            let repopulated = crate::oplog::read_oplog_in(&self.interior, stem)
                 .map_err(VaultError::Io)
                 .and_then(|entries| {
                     let events = crate::oplog_events::derive_events_for_log(&entries);
@@ -7184,7 +7228,7 @@ impl VaultSession {
             |row| row.get(0),
         )?;
         let _move_guard = if path_has_held_marker {
-            match Self::try_acquire_structural_guard(&self.config.cache_dir) {
+            match Self::try_acquire_structural_guard(&self.interior) {
                 Some(guard) => Some(guard),
                 None => return Ok(TaskIndexRepairOutcome::Declined),
             }
@@ -7623,17 +7667,16 @@ impl VaultSession {
     /// claiming probe could collide with the claimant it is trying
     /// to observe.
     #[cfg(test)]
-    fn structural_lock_is_free(cache_dir: &Path) -> bool {
-        let Ok(canonical_cache) = std::fs::canonicalize(cache_dir) else {
+    fn structural_lock_is_free(cache: &CacheDir) -> bool {
+        let Ok(key) = StructuralLockKey::of(cache) else {
             return false;
         };
-        let lock_path = canonical_cache.join("structural.lock");
         let registry = process_structural_locks();
         let held = registry
             .held
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        !held.contains(&lock_path)
+        !held.contains(&key)
     }
 
     /// Nonblocking claim of the vault structural lock (adversarial
@@ -7650,9 +7693,8 @@ impl VaultSession {
     /// (connection mutex already held here; movers take the
     /// structural lock FIRST) cannot deadlock: an unavailable lock
     /// just skips this sweep's orphans.
-    fn try_acquire_structural_guard(cache_dir: &Path) -> Option<VaultStructuralLock> {
-        let canonical_cache = std::fs::canonicalize(cache_dir).ok()?;
-        let lock_path = canonical_cache.join("structural.lock");
+    fn try_acquire_structural_guard(cache: &CacheDir) -> Option<VaultStructuralLock> {
+        let key = StructuralLockKey::of(cache).ok()?;
         {
             // In-process holders first — the same registry
             // VaultStructuralLock::acquire consults. Claim our slot
@@ -7662,18 +7704,13 @@ impl VaultSession {
                 .held
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if held.contains(&lock_path) {
+            if held.contains(&key) {
                 return None;
             }
-            held.insert(lock_path.clone());
+            held.insert(key.clone());
         }
         let acquired = (|| {
-            let file = std::fs::OpenOptions::new()
-                .create(true)
-                .truncate(false)
-                .read(true)
-                .write(true)
-                .open(&lock_path)?;
+            let file = key.open_file(cache)?;
             file.try_lock()
                 .map_err(|_| std::io::Error::other("structural lock is busy"))?;
             Ok::<_, std::io::Error>(file)
@@ -7681,7 +7718,7 @@ impl VaultSession {
         match acquired {
             Ok(file) => Some(VaultStructuralLock {
                 file: Some(file),
-                lock_path,
+                key,
             }),
             Err(_) => {
                 let registry = process_structural_locks();
@@ -7689,7 +7726,7 @@ impl VaultSession {
                     .held
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                held.remove(&lock_path);
+                held.remove(&key);
                 registry.available.notify_all();
                 None
             }
@@ -7777,9 +7814,7 @@ impl VaultSession {
                 let path_needs_guard = held_paths.contains(path.as_str());
                 let guard_claimed = if path_needs_guard {
                     orphan_guard
-                        .get_or_insert_with(|| {
-                            Self::try_acquire_structural_guard(&self.config.cache_dir)
-                        })
+                        .get_or_insert_with(|| Self::try_acquire_structural_guard(&self.interior))
                         .is_some()
                 } else {
                     true
@@ -13014,7 +13049,7 @@ impl VaultSession {
             generation
         };
         cancel.check()?;
-        let _vault_lock = VaultStructuralLock::acquire_cancellable(&self.config.cache_dir, cancel)?;
+        let _vault_lock = VaultStructuralLock::acquire_cancellable(&self.interior, cancel)?;
         let _operation = lock_cancellable(&self.structural_operation, cancel)?;
         if request.items.is_empty() || request.items.len() > crate::MAX_STRUCTURAL_BATCH_ITEMS {
             return Err(crate::trash_confirmation::stale());
@@ -13112,7 +13147,7 @@ impl VaultSession {
         faults: &dyn StructuralBatchFaultHook,
     ) -> Result<crate::structural_batch::BatchMoveReport, VaultError> {
         use crate::structural_batch::{BatchFailureStage, BatchMoveState};
-        let vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
+        let vault_structural_lock = VaultStructuralLock::acquire(&self.interior)?;
         let structural_operation = self.structural_operation_guard()?;
 
         if request.items.is_empty() || request.items.len() > crate::MAX_STRUCTURAL_BATCH_ITEMS {
@@ -14004,7 +14039,7 @@ impl VaultSession {
     ) -> Result<crate::BatchMoveReport, VaultError> {
         use crate::structural_batch::{BatchFailureStage, BatchMoveState};
 
-        let vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
+        let vault_structural_lock = VaultStructuralLock::acquire(&self.interior)?;
         let structural_operation = self.structural_operation_guard()?;
 
         if !self
@@ -14751,7 +14786,7 @@ impl VaultSession {
             .transpose()?;
         cancel.check()?;
         let vault_structural_lock =
-            VaultStructuralLock::acquire_cancellable(&self.config.cache_dir, cancel)?;
+            VaultStructuralLock::acquire_cancellable(&self.interior, cancel)?;
         let structural_operation = lock_cancellable(&self.structural_operation, cancel)?;
         if let Some(confirmation) = &confirmation {
             confirmation.validate_cancellable(self.provider.as_ref(), &request, cancel)?;
@@ -15380,7 +15415,7 @@ impl VaultSession {
         &self,
         path: &str,
     ) -> Result<crate::structural::StructuralReport, VaultError> {
-        let _vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
+        let _vault_structural_lock = VaultStructuralLock::acquire(&self.interior)?;
         let _structural_operation = self.structural_operation_guard()?;
         validate_save_path(path)?;
         validate_leaf_component(leaf_name(path))?;
@@ -15421,7 +15456,7 @@ impl VaultSession {
     /// intentionally does not append an independently undoable
     /// `CreateFolder` structural-journal entry.
     pub fn create_folder_exclusive(&self, path: &str) -> Result<(), VaultError> {
-        let _vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
+        let _vault_structural_lock = VaultStructuralLock::acquire(&self.interior)?;
         let _structural_operation = self.structural_operation_guard()?;
         validate_save_path(path)?;
         validate_leaf_component(leaf_name(path))?;
@@ -15444,7 +15479,7 @@ impl VaultSession {
         path: &str,
         new_name: &str,
     ) -> Result<crate::structural::StructuralReport, VaultError> {
-        let vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
+        let vault_structural_lock = VaultStructuralLock::acquire(&self.interior)?;
         let structural_operation = self.structural_operation_guard()?;
         let new_path = sibling_path(path, new_name)?;
         let report = self.structural_move_folder(
@@ -15502,7 +15537,7 @@ impl VaultSession {
         new_name: &str,
         expected: Option<&crate::StructuralIdentity>,
     ) -> Result<crate::structural::StructuralReport, VaultError> {
-        let vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
+        let vault_structural_lock = VaultStructuralLock::acquire(&self.interior)?;
         let structural_operation = self.structural_operation_guard()?;
         let new_path = sibling_path(path, new_name)?;
         let old_leaf = leaf_name(path).to_string();
@@ -15748,7 +15783,7 @@ impl VaultSession {
         new_parent: &str,
         expected_identity: Option<&str>,
     ) -> Result<crate::structural::StructuralReport, VaultError> {
-        let vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
+        let vault_structural_lock = VaultStructuralLock::acquire(&self.interior)?;
         let structural_operation = self.structural_operation_guard()?;
         let new_path = child_path(new_parent, leaf_name(path))?;
         let report = self.structural_move_folder(
@@ -15788,7 +15823,7 @@ impl VaultSession {
         new_name: &str,
         expected_identity: Option<&str>,
     ) -> Result<crate::structural::StructuralReport, VaultError> {
-        let vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
+        let vault_structural_lock = VaultStructuralLock::acquire(&self.interior)?;
         let structural_operation = self.structural_operation_guard()?;
         let new_path = sibling_path(path, new_name)?;
         let report = self.structural_move_file(
@@ -15828,7 +15863,7 @@ impl VaultSession {
         new_parent: &str,
         expected_identity: Option<&str>,
     ) -> Result<crate::structural::StructuralReport, VaultError> {
-        let vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
+        let vault_structural_lock = VaultStructuralLock::acquire(&self.interior)?;
         let structural_operation = self.structural_operation_guard()?;
         let new_path = child_path(new_parent, leaf_name(path))?;
         let report = self.structural_move_file(
@@ -15874,7 +15909,7 @@ impl VaultSession {
             .transpose()?;
         cancel.check()?;
         let vault_structural_lock =
-            VaultStructuralLock::acquire_cancellable(&self.config.cache_dir, cancel)?;
+            VaultStructuralLock::acquire_cancellable(&self.interior, cancel)?;
         let structural_operation = lock_cancellable(&self.structural_operation, cancel)?;
         validate_save_path(path)?;
         // #1077 (I2/I3): the row that goes is the stored spelling's.
@@ -16026,7 +16061,7 @@ impl VaultSession {
             .transpose()?;
         cancel.check()?;
         let vault_structural_lock =
-            VaultStructuralLock::acquire_cancellable(&self.config.cache_dir, cancel)?;
+            VaultStructuralLock::acquire_cancellable(&self.interior, cancel)?;
         let structural_operation = lock_cancellable(&self.structural_operation, cancel)?;
         validate_save_path(path)?;
         // #1077 (I2/I3): the subtree that goes is the stored spelling's.
@@ -16160,7 +16195,7 @@ impl VaultSession {
         op_id: i64,
     ) -> Result<crate::structural::StructuralReport, VaultError> {
         use crate::structural::{StructuralOpKind, StructuralOpPayload};
-        let vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
+        let vault_structural_lock = VaultStructuralLock::acquire(&self.interior)?;
         let structural_operation = self.structural_operation_guard()?;
         if !self
             .structural_history_valid
@@ -16343,7 +16378,7 @@ impl VaultSession {
         include_folder_note: bool,
     ) -> Result<crate::StructuralIdentity, VaultError> {
         validate_save_path(path)?;
-        let _vault_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
+        let _vault_lock = VaultStructuralLock::acquire(&self.interior)?;
         let _operation = self.structural_operation_guard()?;
         if !self
             .structural_history_valid
@@ -16380,7 +16415,7 @@ impl VaultSession {
         &self,
         items: Vec<crate::StructuralBatchItem>,
     ) -> Result<std::collections::HashMap<String, String>, VaultError> {
-        let _vault_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
+        let _vault_lock = VaultStructuralLock::acquire(&self.interior)?;
         let _operation = self.structural_operation_guard()?;
         if !self
             .structural_history_valid
@@ -16428,7 +16463,7 @@ impl VaultSession {
         if identities.is_empty() || identities.len() > crate::MAX_STRUCTURAL_BATCH_ITEMS {
             return Ok(false);
         }
-        let _vault_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
+        let _vault_lock = VaultStructuralLock::acquire(&self.interior)?;
         let _operation = self.structural_operation_guard()?;
         if !self
             .structural_history_valid
@@ -16945,8 +16980,8 @@ impl VaultSession {
             return Ok(()); // unindexed, or never saved through Slate — no log
         };
 
-        crate::oplog::append_path_changed_marker(
-            &self.config.cache_dir,
+        crate::oplog::append_path_changed_marker_in(
+            &self.interior,
             &log_name,
             from,
             to,
@@ -17427,7 +17462,7 @@ impl VaultSession {
     ) -> Result<(), VaultError> {
         let log_name = self.append_oplog_snapshot_anchor(conn, path, contents, content_hash)?;
         let entries =
-            crate::oplog::read_oplog(&self.config.cache_dir, &log_name).map_err(VaultError::Io)?;
+            crate::oplog::read_oplog_in(&self.interior, &log_name).map_err(VaultError::Io)?;
         let reconstructed =
             crate::oplog::reconstruct_at_hash(&entries, content_hash).ok_or_else(|| {
                 VaultError::InvalidArgument {
@@ -17474,7 +17509,7 @@ impl VaultSession {
             content_hash_after: content_hash.to_string(),
             payload_bytes: contents.as_bytes().to_vec(),
         };
-        crate::oplog::append_entry(&self.config.cache_dir, &log_name, path, &entry)
+        crate::oplog::append_entry_in(&self.interior, &log_name, path, &entry)
             .map_err(VaultError::Io)?;
         let mut state = self.oplog_state.lock().expect("oplog state mutex");
         state.insert(
@@ -17630,7 +17665,7 @@ impl VaultSession {
         };
         let entries = match log_name {
             Some(name) => {
-                crate::oplog::read_oplog(&self.config.cache_dir, &name).map_err(VaultError::Io)?
+                crate::oplog::read_oplog_in(&self.interior, &name).map_err(VaultError::Io)?
             }
             None => Vec::new(),
         };
@@ -21639,8 +21674,7 @@ impl VaultSession {
         };
         let append_result = match log_name.as_deref() {
             Some(name) => {
-                crate::oplog::append_entry(&self.config.cache_dir, name, &state.path, &entry)
-                    .map(|_| ())
+                crate::oplog::append_entry_in(&self.interior, name, &state.path, &entry).map(|_| ())
             }
             // Save append was skipped (no binding — allocation failed);
             // treat the journal entry the same way, loudly.

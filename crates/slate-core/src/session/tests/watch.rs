@@ -418,6 +418,71 @@ fn a_root_change_event_ends_the_watch() {
     );
 }
 
+/// Plan 43 PR 22a (#940; design §4.3, owner decision Q3): a legitimate rename
+/// of the vault folder — the held root intact, nothing left at the old path —
+/// re-arms the watch once at the held root's verified current path. One
+/// catch-up callback covers the moments no stream saw; then a write in the
+/// renamed folder calls back with its vault-relative path, and nothing is
+/// recreated at the old path.
+#[cfg(unix)]
+#[test]
+fn a_legitimate_root_rename_rearms_at_the_new_path() {
+    use std::os::unix::fs::MetadataExt as _;
+    let (outer, root, live) = live_in_a_movable_folder();
+    let moved = outer.path().join("moved");
+    std::fs::rename(&root, &moved).unwrap();
+
+    let rearmed = |decisions: &[WatchDecision]| {
+        decisions.iter().find_map(|decision| match decision {
+            WatchDecision::Rearmed { at } => Some(at.clone()),
+            _ => None,
+        })
+    };
+    assert!(
+        eventually(DELIVERY, || rearmed(
+            &live.session.watch_decisions_for_tests()
+        )
+        .is_some()),
+        "{:?}",
+        live.session.watch_decisions_for_tests()
+    );
+    let at = rearmed(&live.session.watch_decisions_for_tests()).unwrap();
+    let identity = |path: &std::path::Path| {
+        std::fs::metadata(path)
+            .map(|meta| (meta.dev(), meta.ino()))
+            .ok()
+    };
+    assert_eq!(identity(&at), identity(&moved), "re-armed at {at:?}");
+    assert!(
+        eventually(DELIVERY, || live.recorder.count() >= 1),
+        "the catch-up callback: {:?}",
+        live.session.watch_decisions_for_tests()
+    );
+    assert!(live.session.watch_is_live_for_tests());
+
+    assert!(eventually(DELIVERY, || live
+        .session
+        .watch_is_idle_for_tests()));
+    live.recorder.reset();
+    live.session.reset_watch_decisions_for_tests();
+    write(&moved, "after.md", "# Written in the renamed folder\n");
+    assert!(
+        eventually(DELIVERY, || live.recorder.count() >= 1),
+        "{:?}",
+        live.session.watch_decisions_for_tests()
+    );
+    assert!(
+        live.session
+            .watch_decisions_for_tests()
+            .iter()
+            .any(|decision| matches!(decision,
+                WatchDecision::CalledBack { paths, .. } if paths.iter().any(|path| path == "after.md"))),
+        "{:?}",
+        live.session.watch_decisions_for_tests()
+    );
+    assert!(!root.exists(), "nothing recreated the old path");
+}
+
 // --- The fake clock and a scripted event source ----------------------------
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -984,8 +1049,10 @@ fn a_root_mismatch_at_burst_close_ends_the_watch_without_a_callback() {
     assert_eq!(s.after(Duration::from_secs(60)), 0);
 }
 
-/// §4.4: a root-change event ends the watch at once, with no callback for
-/// the burst it interrupts.
+/// §4.4: a root-change event ends the watch, with no callback for the burst
+/// it interrupts. On macOS and Linux the end is decided when that burst
+/// closes, against the held root (plan 43 PR 22a): this root never moved, so
+/// the change alone ends the watch, as PR 20 decided.
 #[test]
 fn a_root_change_event_ends_the_watch_without_a_callback() {
     let s = scripted(&[]);

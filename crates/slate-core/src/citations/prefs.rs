@@ -44,7 +44,32 @@ pub struct CitationsPrefs {
 /// keys are silently ignored for forward compatibility.
 pub fn read_citations_prefs(vault_root: &Path) -> Result<CitationsPrefs, VaultError> {
     let path = vault_root.join(".slate").join("prefs.json");
-    match std::fs::read_to_string(&path) {
+    citations_prefs_from(std::fs::read_to_string(&path), &path, || {
+        crate::vault_config::read_root_vault_config(vault_root)
+    })
+}
+
+/// [`read_citations_prefs`] beneath the session's held root (plan 43 PR 22a,
+/// #940): `.slate/prefs.json` through the held `.slate` and `slate.json`
+/// through the held root, neither following a link.
+pub(crate) fn read_citations_prefs_in(
+    root: &crate::vault::fs_root::FsRoot,
+) -> Result<CitationsPrefs, VaultError> {
+    let cache = root.cache_dir();
+    let path = cache.display().join("prefs.json");
+    citations_prefs_from(
+        crate::vault::fs_root::read_to_string_in(cache, "prefs.json"),
+        &path,
+        || crate::vault_config::read_root_vault_config_in(root),
+    )
+}
+
+fn citations_prefs_from(
+    read: std::io::Result<String>,
+    path: &Path,
+    root_config: impl FnOnce() -> crate::vault_config::RootVaultConfig,
+) -> Result<CitationsPrefs, VaultError> {
+    match read {
         Ok(contents) => {
             if let Some(prefs) = parse_citations_prefs_opt(&contents, &path.display().to_string())?
             {
@@ -62,9 +87,7 @@ pub fn read_citations_prefs(vault_root: &Path) -> Result<CitationsPrefs, VaultEr
             });
         }
     }
-    Ok(crate::vault_config::read_root_vault_config(vault_root)
-        .citations
-        .unwrap_or_default())
+    Ok(root_config().citations.unwrap_or_default())
 }
 
 /// Parse a JSON string into [`CitationsPrefs`]. Public for tests

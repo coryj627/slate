@@ -230,7 +230,7 @@ pub(super) fn pinned_path(
 
 /// Does `path` resolve to the object `descriptor` is open on right now?
 #[cfg(unix)]
-fn names(path: &Path, descriptor: &fs::File) -> bool {
+pub(super) fn names(path: &Path, descriptor: &fs::File) -> bool {
     use std::os::unix::fs::MetadataExt as _;
     match (fs::metadata(path), descriptor.metadata()) {
         (Ok(at_path), Ok(pinned)) => at_path.dev() == pinned.dev() && at_path.ino() == pinned.ino(),
@@ -241,7 +241,7 @@ fn names(path: &Path, descriptor: &fs::File) -> bool {
 /// The current absolute path of the directory `descriptor` is open on, from
 /// the kernel (`F_GETPATH`), not from the spelling that opened it.
 #[cfg(target_vendor = "apple")]
-fn current_path(descriptor: &fs::File) -> io::Result<PathBuf> {
+pub(super) fn current_path(descriptor: &fs::File) -> io::Result<PathBuf> {
     use std::os::fd::AsRawFd as _;
     use std::os::unix::ffi::OsStringExt as _;
 
@@ -262,7 +262,7 @@ fn current_path(descriptor: &fs::File) -> io::Result<PathBuf> {
 /// Linux reports a descriptor's path through `/proc/self/fd`; without
 /// `/proc` the handoff refuses rather than trusting the spelling.
 #[cfg(any(target_os = "linux", target_os = "android"))]
-fn current_path(descriptor: &fs::File) -> io::Result<PathBuf> {
+pub(super) fn current_path(descriptor: &fs::File) -> io::Result<PathBuf> {
     use std::os::fd::AsRawFd as _;
     let path = fs::read_link(format!("/proc/self/fd/{}", descriptor.as_raw_fd()))?;
     if !path.is_absolute() {
@@ -276,7 +276,7 @@ fn current_path(descriptor: &fs::File) -> io::Result<PathBuf> {
     not(target_vendor = "apple"),
     not(any(target_os = "linux", target_os = "android"))
 ))]
-fn current_path(_descriptor: &fs::File) -> io::Result<PathBuf> {
+pub(super) fn current_path(_descriptor: &fs::File) -> io::Result<PathBuf> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "this platform cannot report a descriptor's path",

@@ -795,7 +795,7 @@ fn reclamation_skips_contended_log_and_deletes_when_free() {
     let log_path = crate::oplog::oplog_path_for_name(cache, "expired");
     let sidecar = crate::oplog::sidecar_lock_path(&log_path);
 
-    let guard = crate::oplog::lock_oplog(&log_path).unwrap();
+    let guard = crate::oplog::lock_oplog(cache, "expired").unwrap();
     VaultSession::reclaim_log_and_sidecar(cache, "expired");
     assert!(
         log_path.exists(),
