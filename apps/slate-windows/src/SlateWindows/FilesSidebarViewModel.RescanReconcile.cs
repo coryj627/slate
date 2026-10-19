@@ -34,6 +34,15 @@ namespace SlateWindows;
 /// before. When no root row is kept, the publication replaces the tree as it
 /// always did.
 /// </para>
+/// <para>
+/// A publication that changes or removes the selected row — the reader's —
+/// also replaces the tree as before. The restore that then lands the keys
+/// (the selection's reconcile and the window's restore) finds them on a row
+/// no window shows, which a replaced tree's rows are at once and a row
+/// removed in place is not: on the Windows lane the keys fell to the first
+/// row instead of the next survivor or the selected row's new one (the
+/// scratch run of 2026-10-19).
+/// </para>
 /// </remarks>
 internal sealed partial class FilesSidebarViewModel
 {
@@ -45,9 +54,8 @@ internal sealed partial class FilesSidebarViewModel
     /// keeping every row it did not change (see the remarks).</summary>
     private void PublishKeepingUnchangedRows(ObservableCollection<FileTreeNodeViewModel> fresh)
     {
-        ObservableCollection<FileTreeNodeViewModel> published = RootNodes;
         var byPath = new Dictionary<string, FileTreeNodeViewModel>(StringComparer.Ordinal);
-        foreach (FileTreeNodeViewModel row in published)
+        foreach (FileTreeNodeViewModel row in RootNodes)
         {
             if (row is { IsPlaceholder: false, IsGroupHeader: false })
             {
@@ -55,14 +63,15 @@ internal sealed partial class FilesSidebarViewModel
             }
         }
 
+        // Decided before anything moves: the replacing path must find the
+        // published tree as it was.
         var desired = new List<FileTreeNodeViewModel>(fresh.Count);
-        var kept = new HashSet<FileTreeNodeViewModel>(ReferenceEqualityComparer.Instance);
+        var kept = new Dictionary<FileTreeNodeViewModel, FileTreeNodeViewModel>(ReferenceEqualityComparer.Instance);
         foreach (FileTreeNodeViewModel candidate in fresh)
         {
             if (byPath.Remove(candidate.Path, out FileTreeNodeViewModel? row) && CanKeep(row, candidate))
             {
-                Keep(row, candidate);
-                _ = kept.Add(row);
+                kept[row] = candidate;
                 desired.Add(row);
             }
             else
@@ -71,18 +80,25 @@ internal sealed partial class FilesSidebarViewModel
             }
         }
 
-        if (kept.Count == 0)
+        if (kept.Count == 0
+            || (SelectedNode is { } selected
+                && !kept.Keys.Any(row => Flatten([row]).Any(node => ReferenceEquals(node, selected)))))
         {
             RootNodes = fresh;
             return;
         }
 
-        for (int index = published.Count - 1; index >= 0; index--)
+        foreach ((FileTreeNodeViewModel row, FileTreeNodeViewModel candidate) in kept)
         {
-            FileTreeNodeViewModel row = published[index];
-            if (!kept.Contains(row))
+            Keep(row, candidate);
+        }
+
+        for (int index = RootNodes.Count - 1; index >= 0; index--)
+        {
+            FileTreeNodeViewModel row = RootNodes[index];
+            if (!kept.ContainsKey(row))
             {
-                published.RemoveAt(index);
+                RootNodes.RemoveAt(index);
                 row.AttachToTree(ReleasedRow);
             }
         }
@@ -90,21 +106,21 @@ internal sealed partial class FilesSidebarViewModel
         for (int index = 0; index < desired.Count; index++)
         {
             FileTreeNodeViewModel row = desired[index];
-            if (index < published.Count && ReferenceEquals(published[index], row))
+            if (index < RootNodes.Count && ReferenceEquals(RootNodes[index], row))
             {
                 continue;
             }
 
-            if (kept.Contains(row))
+            if (kept.ContainsKey(row))
             {
                 // A kept row further down: the fresh listing ordered it
                 // earlier (a pin, a sort key).
-                published.Move(IndexOf(published, row, index + 1), index);
+                RootNodes.Move(IndexOf(RootNodes, row, index + 1), index);
             }
             else
             {
-                row.AttachToTree(published);
-                published.Insert(index, row);
+                row.AttachToTree(RootNodes);
+                RootNodes.Insert(index, row);
             }
         }
     }
