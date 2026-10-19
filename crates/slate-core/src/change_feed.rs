@@ -778,7 +778,7 @@ fn gap_of(start: &WindowStart, after: Option<u64>) -> Result<Option<ChangeFeedGa
         && after < cursor
     {
         return Err(invalid(
-            "a change feed window starts at or after the session's cursor",
+            "a change feed window must start at or after the session's cursor",
         ));
     }
     let from = after.unwrap_or(cursor);
@@ -1100,7 +1100,9 @@ fn materialize(
 
 /// `change_feed_page`'s body (design §4.3): at most `limit` records of the
 /// session's current window, by keyset on (phase, rename seq, path, entry).
-/// The caller validated `limit`.
+/// `limit` is 1 to [`MAX_CHANGE_FEED_PAGE_LIMIT`]:
+/// `VaultSession::change_feed_page` refuses any other before it takes the
+/// connection lock, so a zero limit can never end the paging early here.
 pub(crate) fn page(
     conn: &Connection,
     seat: &ChangeFeedSeat,
@@ -1109,6 +1111,10 @@ pub(crate) fn page(
     limit: u32,
     cancel: &CancelToken,
 ) -> Result<ChangeFeedPage, VaultError> {
+    debug_assert!(
+        (1..=MAX_CHANGE_FEED_PAGE_LIMIT).contains(&limit),
+        "change_feed_page validates the page limit"
+    );
     let token = seat.current_window(window)?;
     let after = cursor.map(PageCursor::decode).transpose()?;
     if after

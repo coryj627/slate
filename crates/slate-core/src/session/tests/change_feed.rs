@@ -1039,10 +1039,13 @@ fn a_window_never_starts_before_the_cursor() {
     b.create_exclusive("x.md", "x\n").unwrap();
     let w = window(&a);
     ack(&a, &w);
-    assert!(matches!(
-        a.change_feed_window(Some(0), &CancelToken::new()),
-        Err(VaultError::InvalidArgument { .. })
-    ));
+    match a.change_feed_window(Some(0), &CancelToken::new()) {
+        Err(VaultError::InvalidArgument { message }) => assert_eq!(
+            message,
+            "a change feed window must start at or after the session's cursor"
+        ),
+        other => panic!("expected a refusal, got {other:?}"),
+    }
 }
 
 // --- Acknowledgment ---------------------------------------------------------------
