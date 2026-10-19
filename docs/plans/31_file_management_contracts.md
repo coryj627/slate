@@ -669,6 +669,14 @@ enforced by construction, not by review.
   (FR-10's Linux moment). The staging folder `.slate/tmp` is reached by path,
   like the rest of `.slate` (#940, PR 22's `FsRoot`). Reads still resolve by
   path.
+  *Amended by plan 43 PR 22a (#940, 2026-10-18):* on macOS and Linux a
+  filesystem session's provider starts every walk at the root the session
+  holds open, stages in `.slate/tmp` beneath the held `.slate` (`mkdirat`,
+  `openat(O_CREAT | O_EXCL | O_NOFOLLOW)`) and publishes from it by
+  descriptor, so neither end of the publish is named by path and no save
+  recreates a folder at a path the vault left (#1474). A linked `.slate/tmp`
+  refuses the save. A provider built by path stages by path as before; reads
+  still resolve by path (#1513).
   *Amended by #1451 (2026-10-18):* Windows saves and creates beneath the
   vault root too, with FR-10's #1451 handle walk. `write_file` (saves, link
   rewrites, task toggles, property edits), `write_file_if_absent`,
@@ -691,8 +699,9 @@ enforced by construction, not by review.
   contract's words (`"sub" is a junction, not a folder in this vault, so
   nothing was saved`; "so nothing was created"; "so no folder was
   created"). A vault whose root is a junction still saves and creates.
-  **Residual:** as on Unix, the final component is still a name and the
-  staged file is named by its path in `.slate/tmp` (#940).
+  **Residual:** as on Unix before plan 43 PR 22a, the final component is
+  still a name and the staged file is named by its path in `.slate/tmp`
+  (#940; Windows' body is 22W, Milestone W).
 
 ## Phase plan
 

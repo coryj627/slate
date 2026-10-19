@@ -13,9 +13,23 @@
 //! exists but doesn't parse is NEVER clobbered — the write fails with
 //! the same typed error the readers use.
 
+use std::io::Write as _;
 use std::path::Path;
 
 use crate::VaultError;
+use crate::vault::fs_root::{FileOptions, InteriorDir, read_to_string_in};
+
+/// The prefs file's name in the cache directory.
+const PREFS_JSON: &str = "prefs.json";
+
+/// `leaf` with its extension replaced, as `Path::with_extension` spells it
+/// (`prefs.json` → `prefs.json.lock`).
+fn sibling(leaf: &str, extension: &str) -> String {
+    Path::new(leaf)
+        .with_extension(extension)
+        .to_string_lossy()
+        .into_owned()
+}
 
 /// Cross-process, cross-language write serialization (adversarial
 /// review): every prefs.json mutation — this module AND the Mac app's
@@ -29,22 +43,29 @@ struct PrefsLock {
 }
 
 impl PrefsLock {
-    fn acquire(prefs_path: &Path) -> std::io::Result<Self> {
-        let lock_path = prefs_path.with_extension("json.lock");
-        if let Some(parent) = lock_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&lock_path)?;
+    fn acquire<D: InteriorDir + ?Sized>(dir: &D, leaf: &str) -> std::io::Result<Self> {
+        dir.ensure_self()?;
+        let file = dir.open_file(
+            &sibling(leaf, "json.lock"),
+            FileOptions::new().create(true).write(true),
+        )?;
         // Blocking exclusive lock; released on close (Drop). On Apple
         // targets `File::lock` is the same `flock(LOCK_EX)` the Mac
         // app's `PrefsJsonStore` takes on this file — that
         // cross-language pairing must survive any future change here.
         file.lock()?;
         Ok(Self { _file: file })
+    }
+}
+
+/// The directory and leaf of a prefs path a caller names directly.
+fn split_prefs_path(prefs_path: &Path) -> Result<(&Path, String), VaultError> {
+    match (prefs_path.parent(), prefs_path.file_name()) {
+        (Some(parent), Some(leaf)) => Ok((parent, leaf.to_string_lossy().into_owned())),
+        _ => Err(VaultError::PrefsUnreadable {
+            path: prefs_path.display().to_string(),
+            reason: "the prefs path names no file".into(),
+        }),
     }
 }
 
@@ -71,7 +92,24 @@ impl Default for HistoryPrefs {
 /// an invalid `retention_days`, is a typed error (the prefs.json
 /// policy: config must fail loudly, not half-apply).
 pub fn read_history_prefs(prefs_path: &Path) -> Result<Option<HistoryPrefs>, VaultError> {
-    let contents = match std::fs::read_to_string(prefs_path) {
+    history_prefs_from(std::fs::read_to_string(prefs_path), prefs_path)
+}
+
+/// [`read_history_prefs`] for the session's cache directory: beneath the held
+/// `.slate` on macOS and Linux (plan 43 PR 22a, #940), never following a
+/// link, so the retention a session applies is its own vault's.
+pub(crate) fn read_history_prefs_in<D: InteriorDir + ?Sized>(
+    dir: &D,
+) -> Result<Option<HistoryPrefs>, VaultError> {
+    let path = dir.display_dir().join(PREFS_JSON);
+    history_prefs_from(read_to_string_in(dir, PREFS_JSON), &path)
+}
+
+fn history_prefs_from(
+    read: std::io::Result<String>,
+    prefs_path: &Path,
+) -> Result<Option<HistoryPrefs>, VaultError> {
+    let contents = match read {
         Ok(contents) => contents,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => {
@@ -107,12 +145,35 @@ pub fn read_history_prefs(prefs_path: &Path) -> Result<Option<HistoryPrefs>, Vau
 /// the parent directory is created if missing (a fresh vault may not
 /// have written `.slate/prefs.json` yet).
 pub fn write_history_prefs(prefs_path: &Path, prefs: &HistoryPrefs) -> Result<(), VaultError> {
+    let (dir, leaf) = split_prefs_path(prefs_path)?;
+    write_history_prefs_at(dir, &leaf, prefs)
+}
+
+/// [`write_history_prefs`] for the session's cache directory: the lock, the
+/// read, the staged file and the rename all beneath the held `.slate` on
+/// macOS and Linux (plan 43 PR 22a, #940), so a retention change after the
+/// vault folder moved lands in the vault that moved and never recreates the
+/// old path (#1474's history-prefs row).
+pub(crate) fn write_history_prefs_in<D: InteriorDir + ?Sized>(
+    dir: &D,
+    prefs: &HistoryPrefs,
+) -> Result<(), VaultError> {
+    write_history_prefs_at(dir, PREFS_JSON, prefs)
+}
+
+fn write_history_prefs_at<D: InteriorDir + ?Sized>(
+    dir: &D,
+    leaf: &str,
+    prefs: &HistoryPrefs,
+) -> Result<(), VaultError> {
+    let prefs_path = dir.display_dir().join(leaf);
+    let prefs_path = prefs_path.as_path();
     // Exclusive cross-writer lock for the whole read-modify-write.
-    let _lock = PrefsLock::acquire(prefs_path).map_err(|e| VaultError::PrefsUnreadable {
+    let _lock = PrefsLock::acquire(dir, leaf).map_err(|e| VaultError::PrefsUnreadable {
         path: prefs_path.display().to_string(),
         reason: format!("prefs lock unavailable: {e}"),
     })?;
-    let mut root: serde_json::Value = match std::fs::read_to_string(prefs_path) {
+    let mut root: serde_json::Value = match read_to_string_in(dir, leaf) {
         Ok(contents) => {
             serde_json::from_str(&contents).map_err(|e| VaultError::PrefsUnreadable {
                 path: prefs_path.display().to_string(),
@@ -143,20 +204,25 @@ pub fn write_history_prefs(prefs_path: &Path, prefs: &HistoryPrefs) -> Result<()
     let serialized = serde_json::to_string_pretty(&root).map_err(|e| VaultError::Trash {
         message: format!("prefs serialization failed: {e}"),
     })?;
-    if let Some(parent) = prefs_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
+    dir.ensure_self()?;
     // Unique temp name: concurrent writers (already serialized by the
     // lock, but belt-and-braces for lock-bypassing readers/tools)
     // never share a staging file.
     static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let tmp = prefs_path.with_extension(format!(
-        "json.tmp.{}.{}",
-        std::process::id(),
-        TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    ));
-    std::fs::write(&tmp, serialized.as_bytes())?;
-    std::fs::rename(&tmp, prefs_path)?;
+    let tmp = sibling(
+        leaf,
+        &format!(
+            "json.tmp.{}.{}",
+            std::process::id(),
+            TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ),
+    );
+    dir.open_file(
+        &tmp,
+        FileOptions::new().write(true).create(true).truncate(true),
+    )?
+    .write_all(serialized.as_bytes())?;
+    dir.rename_file(&tmp, leaf)?;
     Ok(())
 }
 

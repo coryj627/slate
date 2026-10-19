@@ -62,15 +62,17 @@
 //! else the log is corrupt and compaction refuses loudly — wrong bytes
 //! are never anchored.
 
-use std::fs::{self, OpenOptions};
+#[cfg(test)]
+use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
 
 use crate::oplog::{
-    OpLogEntry, frame_entry, fsync_dir, oplog_dir, oplog_path_for_name, read_entries_stream,
-    read_header, v2_header_block,
+    OPLOG_DIR, OpLogEntry, frame_entry, oplog_path_for_name, read_entries_stream, read_header,
+    v2_header_block,
 };
 use crate::vault::content_hash;
+use crate::vault::fs_root::{FileOptions, InteriorDir};
 
 /// Thresholds + retention for one compaction run (a snapshot of the
 /// session config; retention is runtime-mutable via the session's
@@ -207,8 +209,7 @@ pub fn compact_log(
     limits: &CompactionLimits,
     now_ms: i64,
 ) -> io::Result<CompactionOutcome> {
-    let path = oplog_path_for_name(cache_dir, log_name);
-    let lock = crate::oplog::lock_oplog(&path)?;
+    let lock = crate::oplog::lock_oplog(cache_dir, log_name)?;
     compact_log_with_lock(cache_dir, log_name, current_path, limits, now_ms, &lock)
 }
 
@@ -218,18 +219,20 @@ pub fn compact_log(
 /// marker and retains it through post-rewrite event regeneration. This closes
 /// the window where a scan rebuild could clear a marker against the old log
 /// before the worker acquired the lock and published the rewrite.
-pub(crate) fn compact_log_with_lock(
-    cache_dir: &Path,
+pub(crate) fn compact_log_with_lock<D: InteriorDir + ?Sized>(
+    cache_dir: &D,
     log_name: &str,
     current_path: &str,
     limits: &CompactionLimits,
     now_ms: i64,
     _lock: &crate::oplog::OplogLock,
 ) -> io::Result<CompactionOutcome> {
-    let path = oplog_path_for_name(cache_dir, log_name);
+    let display = cache_dir.display_dir();
+    let path = oplog_path_for_name(&display, log_name);
+    let log = format!("{OPLOG_DIR}/{log_name}.oplog");
     // Read-only: the rewrite goes through the tmp file, never this
     // handle. A missing log is a no-op run.
-    let mut file = match OpenOptions::new().read(true).open(&path) {
+    let mut file = match cache_dir.open_file(&log, FileOptions::new().read(true)) {
         Ok(f) => f,
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
             return Ok(CompactionOutcome::Missing);
@@ -243,7 +246,7 @@ pub(crate) fn compact_log_with_lock(
             .lock()
             .unwrap()
             .as_ref()
-            .filter(|(dir, _)| dir == cache_dir)
+            .filter(|(dir, _)| dir.as_path() == &*display)
             .map(|(_, ms)| *ms);
         if let Some(ms) = hold {
             std::thread::sleep(std::time::Duration::from_millis(ms));
@@ -303,14 +306,14 @@ pub(crate) fn compact_log_with_lock(
     #[cfg(test)]
     {
         let mut fail_for = FAIL_NEXT_COMPACTION_FOR.lock().unwrap();
-        if fail_for.as_deref() == Some(cache_dir) {
+        if fail_for.as_deref() == Some(&*display) {
             *fail_for = None;
             return Err(io::Error::other("injected compaction fault (test hook)"));
         }
     }
 
     // Rewrite: tmp + rename-over, all while holding the sidecar lock.
-    let tmp_path = oplog_dir(cache_dir).join(format!("{log_name}.oplog.tmp"));
+    let tmp = format!("{OPLOG_DIR}/{log_name}.oplog.tmp");
     let mut out = Vec::with_capacity(file_len as usize / 2);
     out.extend_from_slice(&v2_header_block(
         current_path,
@@ -322,15 +325,18 @@ pub(crate) fn compact_log_with_lock(
     }
     let post_len = out.len() as u64;
     let write_result = (|| -> io::Result<()> {
-        let mut tmp = fs::File::create(&tmp_path)?;
-        tmp.write_all(&out)?;
-        tmp.sync_data()?;
-        fs::rename(&tmp_path, &path)?;
-        let _ = fsync_dir(&oplog_dir(cache_dir));
+        let mut staged = cache_dir.open_file(
+            &tmp,
+            FileOptions::new().write(true).create(true).truncate(true),
+        )?;
+        staged.write_all(&out)?;
+        staged.sync_data()?;
+        cache_dir.rename_file(&tmp, &log)?;
+        let _ = cache_dir.sync_child_dir(OPLOG_DIR);
         Ok(())
     })();
     if let Err(e) = write_result {
-        let _ = fs::remove_file(&tmp_path); // best-effort cleanup
+        let _ = cache_dir.remove_file(&tmp); // best-effort cleanup
         return Err(e);
     }
 

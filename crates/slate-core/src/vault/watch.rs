@@ -29,13 +29,21 @@
 //!   inotify's `IN_Q_OVERFLOW`) becomes `FileEvent::Rescan`; a backend error
 //!   becomes `FileEvent::Ended { cause: Failed }`, which makes one catch-up
 //!   callback before the watch ends.
-//! - **The root (§4.4).** An event on the root itself that removes or renames
-//!   it, or FSEvents' "root changed", ends the watch without a callback
-//!   (`FileEvent::Ended { cause: RootChanged }`). Right after arming, the root
-//!   path's identity is observed into the handle's [`RootAnchor`]; the session
-//!   compares it with its own anchor, and the coalescer re-verifies it before
-//!   every callback. Events never carry content: they only ask the host to
-//!   rescan through the session's provider.
+//! - **The root (§4.4; plan 43 PR 22a's §4.3).** An event on the root itself
+//!   that removes or renames it, or FSEvents' "root changed", is
+//!   `FileEvent::Ended { cause: RootChanged }`. On macOS and Linux the
+//!   handle's [`RootAnchor`] is the root descriptor the session holds open
+//!   (`FsRoot`, #940): right after arming, what the watched path names is
+//!   observed for the session's arm-time check, and the coalescer compares
+//!   the descriptor with the watched path before every callback
+//!   ([`RootAnchor::relocation`]). A root whose descriptor is intact but
+//!   whose path moved — the user renamed the vault folder — is re-armed once
+//!   at the descriptor's verified current path ([`RootAnchor::rearm`]);
+//!   another folder at the path, a root that cannot be found, or a root that
+//!   changed and came back still ends the watch without a callback, as PR 20
+//!   decided. Windows keeps PR 20's path anchor until 22W. Events never carry
+//!   content: they only ask the host to rescan through the session's
+//!   provider.
 //!
 //! notify's thread runs [`translate`] and the sink and nothing else: the sink
 //! only inserts into the coalescer's bounded burst set (§4.3), so this thread
@@ -44,6 +52,11 @@
 
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux"),
+    target_pointer_width = "64"
+))]
+use std::{fs, io};
 
 use notify::event::{EventKindMask, ModifyKind};
 use notify::{EventKind, RecursiveMode, Watcher};
@@ -70,16 +83,51 @@ impl RootIdentity {
     }
 }
 
-/// What a watch is anchored to (design §4.4): today the root path and its
-/// identity observed right after arming. **The seam for PR 22** (#940, 22a):
-/// the session's held root descriptor (`FsRoot`) replaces this, verification
-/// becomes `fstat` of the descriptor against `stat` of the path, and 22a
-/// decides whether a legitimate rename re-arms the stream instead of ending
-/// the watch (`session/watch.rs` `WatchCoalescer::deliver` is that one policy
-/// point). PR 22 keeps PR 20's root facts green.
+/// Where the held root is, against the path its watch is armed at (plan 43
+/// PR 22a, #940; design §4.3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Relocation {
+    /// The watched path still names the held root.
+    Intact,
+    /// Nothing is at the watched path any more, and the held root's verified
+    /// current path is this one: the vault folder was renamed.
+    Moved(PathBuf),
+    /// Something else is at the watched path: a swap.
+    Swapped,
+    /// The held root's current path cannot be verified: it was removed, or
+    /// the path its descriptor reports names another object (§3.6(a)).
+    Lost,
+}
+
+/// What a watch is anchored to (design §4.4; plan 43 PR 22a, #940, §4.3).
+/// On macOS and Linux it is the root descriptor the session holds open
+/// (`FsRoot`): verification is `fstat` of that descriptor against `stat` of
+/// the watched path. A legitimate rename can re-arm at the descriptor's
+/// verified current path; `session/watch.rs` `WatchCoalescer::relocate` is
+/// the one policy point, and the re-arm is off until #1513
+/// (`WATCH_REARM_ENABLED`). Windows keeps the root path and its arm-time
+/// identity until 22W.
 #[derive(Debug, Clone)]
 pub(crate) enum RootAnchor {
+    /// The held root descriptor and the path the watch is armed at.
+    #[cfg(all(
+        any(target_os = "macos", target_os = "linux"),
+        target_pointer_width = "64"
+    ))]
+    Held {
+        watched: PathBuf,
+        root: Arc<fs::File>,
+        /// `fstat` of `root`: the session's anchor.
+        identity: RootIdentity,
+        /// What `watched` named right after arming, for the session's
+        /// arm-time check (§4.4 step 1).
+        armed: Option<RootIdentity>,
+    },
     /// A directory on disk, by the exact path the session opened.
+    #[cfg(not(all(
+        any(target_os = "macos", target_os = "linux"),
+        target_pointer_width = "64"
+    )))]
     Directory {
         path: PathBuf,
         identity: RootIdentity,
@@ -96,6 +144,10 @@ pub(crate) enum RootAnchor {
 impl RootAnchor {
     /// Observe `path` now and anchor to it; `None` when it cannot be
     /// observed or is not a directory.
+    #[cfg(not(all(
+        any(target_os = "macos", target_os = "linux"),
+        target_pointer_width = "64"
+    )))]
     pub(crate) fn observe(path: &Path) -> Option<Self> {
         Some(Self::Directory {
             path: path.to_path_buf(),
@@ -103,32 +155,122 @@ impl RootAnchor {
         })
     }
 
-    /// The identity observed at arm time, for the session's arm-time check
-    /// against its own anchor (§4.4 step 1).
+    /// The identity the watched path named at arm time, for the session's
+    /// arm-time check against its own anchor (§4.4 step 1).
     pub(crate) fn identity(&self) -> Option<RootIdentity> {
         match self {
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux"),
+                target_pointer_width = "64"
+            ))]
+            Self::Held { armed, .. } => *armed,
+            #[cfg(not(all(
+                any(target_os = "macos", target_os = "linux"),
+                target_pointer_width = "64"
+            )))]
             Self::Directory { identity, .. } => Some(*identity),
             #[cfg(test)]
             Self::Scripted { identity, .. } => *identity,
         }
     }
 
-    /// Whether the root path still names the anchored directory (§4.4 step
-    /// 2). A failed observation is a mismatch.
+    /// Whether the watched path still names the anchored directory (§4.4
+    /// step 2). A failed observation is a mismatch.
+    #[cfg(test)]
     pub(crate) fn still_anchored(&self) -> bool {
+        self.relocation() == Relocation::Intact
+    }
+
+    /// Where the anchored root is against the watched path (§4.3): the
+    /// descriptor's `fstat` against the path's `stat`, and, when nothing is
+    /// at the path any more, the descriptor's verified current path.
+    pub(crate) fn relocation(&self) -> Relocation {
         match self {
-            Self::Directory { path, identity } => observe_identity(path) == Some(*identity),
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux"),
+                target_pointer_width = "64"
+            ))]
+            Self::Held {
+                watched,
+                root,
+                identity,
+                ..
+            } => match std::fs::metadata(watched) {
+                Ok(meta) if identity_of_metadata(&meta) == Some(*identity) => Relocation::Intact,
+                Ok(_) => Relocation::Swapped,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    match super::fs_root::verified_current_path(root) {
+                        Some(now) => Relocation::Moved(now),
+                        None => Relocation::Lost,
+                    }
+                }
+                Err(_) => Relocation::Swapped,
+            },
+            #[cfg(not(all(
+                any(target_os = "macos", target_os = "linux"),
+                target_pointer_width = "64"
+            )))]
+            Self::Directory { path, identity } => {
+                if observe_identity(path) == Some(*identity) {
+                    Relocation::Intact
+                } else {
+                    Relocation::Swapped
+                }
+            }
             #[cfg(test)]
-            Self::Scripted { intact, .. } => intact.load(std::sync::atomic::Ordering::SeqCst),
+            Self::Scripted { intact, .. } => {
+                if intact.load(std::sync::atomic::Ordering::SeqCst) {
+                    Relocation::Intact
+                } else {
+                    Relocation::Swapped
+                }
+            }
         }
     }
+
+    /// A new watch on the same held root, armed at `at` (its verified
+    /// current path after a legitimate rename, §4.3). Only a held anchor can
+    /// re-arm.
+    pub(crate) fn rearm(
+        &self,
+        at: &Path,
+        sink: Arc<dyn FileEventSink>,
+    ) -> Result<WatchHandle, VaultError> {
+        match self {
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux"),
+                target_pointer_width = "64"
+            ))]
+            Self::Held { root, .. } => arm_held(at, Arc::clone(root), sink),
+            #[allow(unreachable_patterns)]
+            _ => {
+                let _ = (at, sink);
+                Err(VaultError::Io(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "this watch cannot follow its root",
+                )))
+            }
+        }
+    }
+}
+
+/// A directory's identity from metadata already read; `None` when it is not
+/// a directory.
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux"),
+    target_pointer_width = "64"
+))]
+fn identity_of_metadata(meta: &std::fs::Metadata) -> Option<RootIdentity> {
+    use std::os::unix::fs::MetadataExt;
+    meta.is_dir()
+        .then(|| RootIdentity::from_device_inode(meta.dev(), meta.ino()))
 }
 
 #[cfg(unix)]
 fn observe_identity(path: &Path) -> Option<RootIdentity> {
     use std::os::unix::fs::MetadataExt;
-    // Follows a symlinked root, as the session's own anchor does
-    // (`pin_root_identity` opens the root path).
+    // Follows a symlinked root, as the session's own anchor does (`FsRoot`
+    // opens the root path, following the root itself).
     let meta = std::fs::metadata(path).ok()?;
     meta.is_dir()
         .then(|| RootIdentity::from_device_inode(meta.dev(), meta.ino()))
@@ -170,28 +312,39 @@ fn observe_identity(_path: &Path) -> Option<RootIdentity> {
 }
 
 /// Arm one recursive watch on `root` (design §4.1) and anchor it (§4.4 step
-/// 1). `Ok(None)` on a target without one of the three chosen backends; an
-/// error when the backend refuses (an inotify watch limit, an unsupported
-/// network redirector) or the root cannot be observed right after arming.
+/// 1). On macOS and Linux the anchor is `held`, the root the session holds
+/// open (plan 43 PR 22a, #940), or for a provider that holds none, the root
+/// opened right after arming. `Ok(None)` on a target without one of the
+/// three chosen backends; an error when the backend refuses (an inotify
+/// watch limit, an unsupported network redirector) or the root cannot be
+/// observed right after arming.
 pub(super) fn watch_root(
     root: &Path,
+    held: Option<&Arc<super::fs_root::FsRoot>>,
     sink: Arc<dyn FileEventSink>,
 ) -> Result<Option<WatchHandle>, VaultError> {
-    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    #[cfg(all(
+        any(target_os = "macos", target_os = "linux"),
+        target_pointer_width = "64"
+    ))]
     {
-        let handler_root = root.to_path_buf();
-        let handler = move |result: notify::Result<notify::Event>| {
-            for event in translate(&handler_root, result) {
-                sink.on_event(event);
+        let descriptor = match held {
+            Some(held) => held.descriptor().try_clone().map_err(VaultError::Io)?,
+            None => {
+                use std::os::unix::fs::OpenOptionsExt as _;
+                fs::OpenOptions::new()
+                    .read(true)
+                    .custom_flags(super::fs::directory_open_flags(false))
+                    .open(root)
+                    .map_err(VaultError::Io)?
             }
         };
-        let config = notify::Config::default()
-            .with_follow_symlinks(false)
-            .with_event_kinds(EventKindMask::CORE);
-        let mut watcher = notify::RecommendedWatcher::new(handler, config).map_err(watch_error)?;
-        watcher
-            .watch(root, RecursiveMode::Recursive)
-            .map_err(watch_error)?;
+        arm_held(root, Arc::new(descriptor), sink).map(Some)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = held;
+        let watcher = arm(root, sink)?;
         let anchor = RootAnchor::observe(root).ok_or_else(|| {
             VaultError::Io(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
@@ -200,11 +353,73 @@ pub(super) fn watch_root(
         })?;
         Ok(Some(WatchHandle::new(Box::new(watcher), anchor)))
     }
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    #[cfg(not(any(
+        target_os = "windows",
+        all(
+            any(target_os = "macos", target_os = "linux"),
+            target_pointer_width = "64"
+        )
+    )))]
     {
-        let _ = (root, sink);
+        let _ = (root, held, sink);
         Ok(None)
     }
+}
+
+/// One recursive notify watch on `root`, its events translated against the
+/// exact spelling it is armed at.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+fn arm(
+    root: &Path,
+    sink: Arc<dyn FileEventSink>,
+) -> Result<notify::RecommendedWatcher, VaultError> {
+    let handler_root = root.to_path_buf();
+    let handler = move |result: notify::Result<notify::Event>| {
+        for event in translate(&handler_root, result) {
+            sink.on_event(event);
+        }
+    };
+    let config = notify::Config::default()
+        .with_follow_symlinks(false)
+        .with_event_kinds(EventKindMask::CORE);
+    let mut watcher = notify::RecommendedWatcher::new(handler, config).map_err(watch_error)?;
+    watcher
+        .watch(root, RecursiveMode::Recursive)
+        .map_err(watch_error)?;
+    Ok(watcher)
+}
+
+/// Arm at `watched`, anchored to the held `root` (plan 43 PR 22a): the
+/// arm-time observation of the path, and the descriptor's own identity.
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux"),
+    target_pointer_width = "64"
+))]
+fn arm_held(
+    watched: &Path,
+    root: Arc<fs::File>,
+    sink: Arc<dyn FileEventSink>,
+) -> Result<WatchHandle, VaultError> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = root.metadata().map_err(VaultError::Io)?;
+    let identity = RootIdentity::from_device_inode(meta.dev(), meta.ino());
+    let watcher = arm(watched, sink)?;
+    let armed = observe_identity(watched);
+    if armed.is_none() {
+        return Err(VaultError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "the vault root could not be observed after its watch was armed",
+        )));
+    }
+    Ok(WatchHandle::new(
+        Box::new(watcher),
+        RootAnchor::Held {
+            watched: watched.to_path_buf(),
+            root,
+            identity,
+            armed,
+        },
+    ))
 }
 
 /// A backend refusal as a `VaultError`, keeping the I/O error where there is
@@ -802,7 +1017,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         seed(tmp.path());
         let sink = Arc::new(RecordingSink::default());
-        let handle = watch_root(tmp.path(), sink.clone())
+        let handle = watch_root(tmp.path(), None, sink.clone())
             .expect("the platform watch arms")
             .expect("a live handle on a local vault");
         (tmp, sink, handle)
@@ -1016,7 +1231,7 @@ mod tests {
         let root = outer.path().join("vault");
         std::fs::create_dir(&root).unwrap();
         let sink = Arc::new(RecordingSink::default());
-        let handle = watch_root(&root, sink).unwrap().unwrap();
+        let handle = watch_root(&root, None, sink).unwrap().unwrap();
         let identity = observe_identity(&root).unwrap();
         assert_eq!(handle.arm_identity(), Some(identity));
         assert!(handle.root_still_anchored());

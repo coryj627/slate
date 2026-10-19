@@ -26,6 +26,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::Connection;
 use thiserror::Error;
 
+/// Plan 43 PR 22a (#940): SQLite through the held `.slate` descriptor (the
+/// unix VFS system-call hook).
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux"),
+    target_pointer_width = "64"
+))]
+pub(crate) mod anchored;
+
 /// Errors produced by the database layer.
 #[derive(Debug, Error)]
 pub enum DbError {
@@ -232,10 +240,43 @@ const MIGRATIONS: &[Migration] = &[
 /// `cache_size_pages` sets the SQLite page cache; per `SessionConfig` defaults
 /// this is 4096 on desktop and 512 on mobile (see `docs/plans/05` §9.3.5).
 pub fn open_database(path: &Path, cache_size_pages: u32) -> Result<Connection, DbError> {
-    let conn = Connection::open(sqlite_open_path(path))?;
+    let conn = open_connection(path).inspect_err(|error| {
+        // A session's cache opens by its synthetic anchored path; the
+        // diagnostic names the cache a person would recognise (plan 43 PR
+        // 22a, design §4.2), and only at `debug` (the #507 privacy rule).
+        #[cfg(all(
+            any(target_os = "macos", target_os = "linux"),
+            target_pointer_width = "64"
+        ))]
+        let path = anchored::display_path(path);
+        log::debug!(
+            "the cache database at {} did not open: {error}",
+            path.display()
+        );
+    })?;
     register_connection_functions(&conn)?;
     apply_pragmas(&conn, cache_size_pages)?;
     Ok(conn)
+}
+
+/// A bare connection to `path`, with the VFS the path needs (plan 43 PR 22a,
+/// #940): a session's anchored cache path (`/.slate-fd/<token>/...`, from
+/// `CacheDir::sqlite_path`) opens through the unix VFS variant the
+/// descriptor hook expects (`anchored::VFS`); every other path through the
+/// default, as before. The compaction worker's connection and the facts'
+/// second connections open here too, so every connection to an anchored
+/// cache resolves through the held `.slate`.
+pub(crate) fn open_connection(path: &Path) -> rusqlite::Result<Connection> {
+    #[cfg(all(
+        any(target_os = "macos", target_os = "linux"),
+        target_pointer_width = "64"
+    ))]
+    if let Some(vfs) = anchored::VFS
+        && anchored::is_synthetic(path)
+    {
+        return Connection::open_with_flags_and_vfs(path, rusqlite::OpenFlags::default(), vfs);
+    }
+    Connection::open(sqlite_open_path(path))
 }
 
 /// The spelling SQLite opens `path` by.

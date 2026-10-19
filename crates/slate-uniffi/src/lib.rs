@@ -776,6 +776,19 @@ impl VaultSession {
         })
     }
 
+    /// Plan 43 PR 22a (#940; owner decision Q4): the vault folder's display
+    /// path. On macOS and Linux it is the current path of the root this
+    /// session holds open, accepted only while that path still names it, so
+    /// a vault folder renamed while open shows its new path; otherwise, and
+    /// on Windows until Milestone W, the path the session opened. Nil when
+    /// no filesystem root backs the session. For display only: hosts never
+    /// resolve a file through it.
+    pub fn root_display_path(&self) -> Option<String> {
+        self.inner
+            .root_display_path()
+            .map(|path| path.to_string_lossy().into_owned())
+    }
+
     /// Walk the vault and index every file into the metadata cache.
     /// Synchronous; callers should dispatch off the UI thread.
     ///
@@ -6833,6 +6846,16 @@ impl From<core::ChangeFeedPage> for ChangeFeedPage {
 #[uniffi::export]
 pub fn watcher_sentence_spacing_ms() -> u64 {
     core::WATCHER_SENTENCE_SPACING_MS
+}
+
+/// Plan 43 PR 22a (#940; design §4.3): whether core's vault watch re-arms
+/// after a legitimate rename of the vault folder. It is off until #1513 (the
+/// owner's decision on #1518): a renamed vault folder ends the watch, as PR
+/// 20 decided, and Refresh and the foreground rescan remain. This is core's
+/// one switch, so the hosts' re-arm witnesses follow it.
+#[uniffi::export]
+pub fn vault_watch_rearm_enabled() -> bool {
+    core::WATCH_REARM_ENABLED
 }
 
 // =====================================================================
@@ -17278,6 +17301,40 @@ mod tests {
                 .unwrap_or_else(|e| {
                     panic!("expected {ch:?} to be accepted by the allowlist; got {e:?}")
                 });
+        }
+    }
+
+    /// Plan 43 PR 22a (#940, owner decision Q4): the display path crosses
+    /// the FFI. It names the vault folder the session opened, and on macOS
+    /// and Linux, where the session holds its root open, it follows a rename
+    /// of that folder; elsewhere it is the opened spelling.
+    #[test]
+    fn root_display_path_follows_a_renamed_vault_folder_across_the_ffi() {
+        let outer = tempfile::tempdir().expect("tempdir");
+        let vault = outer.path().join("vault");
+        std::fs::create_dir(&vault).unwrap();
+        let session = VaultSession::open_filesystem(vault.to_string_lossy().into_owned())
+            .expect("open vault");
+        let shown = session
+            .root_display_path()
+            .expect("a filesystem session has a root");
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        assert_eq!(shown, vault.to_string_lossy());
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            let identity = |path: &std::path::Path| {
+                std::fs::metadata(path)
+                    .map(|meta| (meta.dev(), meta.ino()))
+                    .ok()
+            };
+            let anchor = identity(&vault);
+            assert_eq!(identity(std::path::Path::new(&shown)), anchor, "{shown}");
+            let moved = outer.path().join("moved");
+            std::fs::rename(&vault, &moved).unwrap();
+            let shown = session.root_display_path().unwrap();
+            assert!(shown.ends_with("moved"), "{shown}");
+            assert_eq!(identity(std::path::Path::new(&shown)), anchor);
         }
     }
 

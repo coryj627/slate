@@ -29,6 +29,14 @@ mod pinned_root;
 #[derive(Debug)]
 pub struct FsVaultProvider {
     root: PathBuf,
+    /// Plan 43 PR 22a (#940): the root a filesystem session holds open for
+    /// its lifetime. With it, every mutation resolves beneath the held root
+    /// descriptor (renames, saves, creations, Move to Trash, `#1449`'s pin),
+    /// saves and creates stage in the held `.slate/tmp`, `canonical_path`
+    /// walks beneath it, and the watch is anchored to it. Without it (a
+    /// provider built by path), each operation opens the root by path, as
+    /// before. Reads still resolve by path either way.
+    held: Option<Arc<super::fs_root::FsRoot>>,
     /// The system Trash call `delete` hands the pinned path to (#1450).
     trash: Arc<dyn SystemTrash>,
     /// What this provider's own mutations left behind, for the vault
@@ -132,9 +140,56 @@ impl FsVaultProvider {
         let root = windows_extended_path(&root);
         Self {
             root,
+            held: None,
             trash: super::trash_handoff::default_trash(),
             echo: Mutex::new(EchoLedger::default()),
         }
+    }
+
+    /// The provider of a filesystem session (plan 43 PR 22a, #940): `root`
+    /// is the spelling the session opened, and `held` the root it holds
+    /// open, which every mutation, the staging folder, `canonical_path` and
+    /// the watch resolve beneath.
+    pub(crate) fn held(root: PathBuf, held: Arc<super::fs_root::FsRoot>) -> Self {
+        Self {
+            held: Some(held),
+            ..Self::new(root)
+        }
+    }
+
+    /// The vault root for one rename, save, creation or Trash inventory
+    /// (#1449, #1452): the held root descriptor when the session holds one
+    /// (`FsRoot` adopts `pinned_root`, design §7's sharing with option H),
+    /// else the root opened by path for this operation.
+    #[cfg(unix)]
+    fn pinned_root(&self) -> Result<pinned_root::PinnedRoot, VaultError> {
+        #[cfg(all(
+            any(target_os = "macos", target_os = "linux"),
+            target_pointer_width = "64"
+        ))]
+        if let Some(held) = &self.held {
+            return pinned_root::PinnedRoot::adopt(held.descriptor());
+        }
+        pinned_root::PinnedRoot::open(&self.root)
+    }
+
+    /// Where saves and creates stage their bytes (#940): the held `.slate`'s
+    /// `tmp`, made with `mkdirat` and opened without following a link, when
+    /// the session holds the root; else `.slate/tmp` by path, made with
+    /// `create_dir_all`, as before.
+    fn staging(&self) -> io::Result<Staging> {
+        #[cfg(all(
+            any(target_os = "macos", target_os = "linux"),
+            target_pointer_width = "64"
+        ))]
+        if let Some(held) = &self.held {
+            let slate = held.cache_dir().descriptor();
+            super::fs_root::sys::ensure_dir_at(slate, c"tmp")?;
+            return Ok(Staging::Held(open_directory_at(slate, c"tmp")?));
+        }
+        let tmp_dir = self.tmp_dir();
+        fs::create_dir_all(&tmp_dir)?;
+        Ok(Staging::Path(tmp_dir))
     }
 
     /// A provider whose Trash handoff goes to `trash`: a `ScratchTrash` a
@@ -268,8 +323,12 @@ impl FsVaultProvider {
                         path: relative.to_string(),
                         reason: "mutation destination is not beneath the vault root".into(),
                     })?;
+            #[cfg(unix)]
+            let root = self.pinned_root()?;
+            #[cfg(windows)]
+            let root = self.root.as_path();
             PinnedMutationTarget::open(
-                &self.root,
+                &root,
                 vault_relative,
                 relative,
                 create_missing_parents,
@@ -313,7 +372,7 @@ impl FsVaultProvider {
         to_path: &Path,
         before_kernel_rename: impl FnOnce() -> io::Result<()>,
     ) -> Result<(), VaultError> {
-        let root = pinned_root::PinnedRoot::open(&self.root)?;
+        let root = self.pinned_root()?;
         let missing_source = || {
             VaultError::Io(io::Error::new(
                 io::ErrorKind::NotFound,
@@ -585,8 +644,9 @@ impl FsVaultProvider {
     /// `write_file_if_absent_with_staging`). Lives under the vault's hidden
     /// `.slate/` subtree so a crash-leak doesn't surface as a visible entry
     /// and concurrent `list_dir` callers can't see half-written files
-    /// alongside their targets. It is reached by path, like the rest of
-    /// `.slate` (#940): the publish into the vault is what is pinned.
+    /// alongside their targets. This is its pathname, for a provider that
+    /// holds no root; a session's provider stages beneath the held `.slate`
+    /// instead (`staging`, plan 43 PR 22a, #940).
     fn tmp_dir(&self) -> PathBuf {
         self.root.join(".slate").join("tmp")
     }
@@ -646,24 +706,20 @@ impl FsVaultProvider {
     where
         WriteContents: FnOnce(&mut fs::File, &[u8]) -> io::Result<()>,
         SyncContents: FnOnce(&fs::File) -> io::Result<()>,
-        Publish: FnOnce(&Path, &PinnedMutationTarget) -> io::Result<()>,
+        Publish: FnOnce(&Staged, &PinnedMutationTarget) -> io::Result<()>,
     {
         // Pin first, so a refused path stages nothing (#1452).
         let destination = self.pin_mutation_target(relative, true, Mutation::Create)?;
-        let tmp_dir = self.tmp_dir();
-        fs::create_dir_all(&tmp_dir).map_err(VaultError::Io)?;
+        let staging = self.staging().map_err(VaultError::Io)?;
 
         // A managed temp path is the failure guard: every exit before publish,
         // including partial writes and sync failures, still unlinks the staged
         // bytes. Keep the `create-` prefix so leaked-file diagnostics remain
         // recognizable if the filesystem itself refuses cleanup.
-        let mut temp = tempfile::Builder::new()
-            .prefix("create-")
-            .tempfile_in(&tmp_dir)
-            .map_err(VaultError::Io)?;
+        let mut temp = staging.create_temp("create-").map_err(VaultError::Io)?;
 
-        let staged = write_contents(temp.as_file_mut(), contents)
-            .and_then(|()| sync_contents(temp.as_file()));
+        let staged =
+            write_contents(temp.file_mut(), contents).and_then(|()| sync_contents(temp.file()));
         if let Err(stage_error) = staged {
             return match normalize_create_temp_cleanup(temp.close()) {
                 Ok(()) => Err(VaultError::Io(stage_error)),
@@ -680,12 +736,9 @@ impl FsVaultProvider {
         // Disarm `TempPath` cleanup explicitly: after the move, a new external
         // file could race into the old random name and must not be deleted by
         // the guard's destructor.
-        match publish(temp.path(), &destination) {
+        match publish(&temp, &destination) {
             Ok(()) => {
-                let (file, mut path_guard) = temp.into_parts();
-                path_guard.disable_cleanup(true);
-                drop(path_guard);
-                drop(file);
+                temp.published();
                 Ok(())
             }
             Err(publish_error) => {
@@ -733,18 +786,15 @@ impl FsVaultProvider {
         before_publish: impl FnOnce() -> io::Result<()>,
     ) -> Result<(), VaultError> {
         let target = self.pin_mutation_target(relative, true, Mutation::Save)?;
-        let tmp_dir = self.tmp_dir();
-        fs::create_dir_all(&tmp_dir)?;
-        let staged = stage_contents(&tmp_dir, contents, target.existing_permissions())?;
+        let staged = self
+            .staging()?
+            .stage(contents, target.existing_permissions())?;
         before_publish()?;
         // A failed publish drops `staged`, which removes the staged file.
-        target.publish_staged_replacing(staged.path())?;
+        target.publish_staged_replacing(&staged)?;
         // The staged name is consumed: disarm its cleanup, so a new file that
         // races into the old random name is never removed by the guard.
-        let (file, mut path_guard) = staged.into_parts();
-        path_guard.disable_cleanup(true);
-        drop(path_guard);
-        drop(file);
+        staged.published();
         // Best effort, as before: the published bytes stand either way.
         let _ = target.sync_parent();
         Ok(())
@@ -763,7 +813,7 @@ impl FsVaultProvider {
         before_create: impl FnOnce() -> io::Result<()>,
     ) -> Result<(), VaultError> {
         let path = self.resolve_for_mutation(relative)?;
-        pinned_root::PinnedRoot::open(&self.root)?.create_folder(
+        self.pinned_root()?.create_folder(
             self.vault_relative(&path, relative)?,
             relative,
             before_create,
@@ -790,23 +840,18 @@ impl FsVaultProvider {
         before_publish: impl FnOnce() -> io::Result<()>,
     ) -> Result<(), VaultError> {
         let target = self.pin_mutation_target(relative, true, Mutation::Save)?;
-        let tmp_dir = self.tmp_dir();
-        fs::create_dir_all(&tmp_dir)?;
         // No permissions are carried over: `persist` reset the attributes of
         // every Windows save to FILE_ATTRIBUTE_NORMAL, so the replaced file's
         // read-only bit never survived, and the publish does the same.
-        let staged = stage_contents(&tmp_dir, contents, None)?;
+        let staged = self.staging()?.stage(contents, None)?;
         before_publish()?;
         // A failed publish drops `staged`, which removes the staged file.
         target
-            .publish_staged_replacing(staged.path())
+            .publish_staged_replacing(&staged)
             .map_err(|error| target.failure(error))?;
         // The staged name is consumed: disarm its cleanup, so a new file that
         // races into the old random name is never removed by the guard.
-        let (file, mut path_guard) = staged.into_parts();
-        path_guard.disable_cleanup(true);
-        drop(path_guard);
-        drop(file);
+        staged.published();
         // Windows has no directory handle sync through std; NTFS metadata
         // journaling orders the rename with the synced file data, as before
         // (recorded in the protocol's accepted-risk register).
@@ -850,18 +895,14 @@ impl PinnedMutationTarget {
     /// is `mutation`'s typed refusal rather than the kernel's untyped
     /// `ENOTDIR`.
     fn open(
-        root: &Path,
+        root: &pinned_root::PinnedRoot,
         vault_relative: &Path,
         original: &str,
         create_missing_parents: bool,
         mutation: Mutation,
     ) -> Result<Self, VaultError> {
-        let (parent, leaf) = pinned_root::PinnedRoot::open(root)?.parent_and_leaf(
-            vault_relative,
-            original,
-            create_missing_parents,
-            mutation,
-        )?;
+        let (parent, leaf) =
+            root.parent_and_leaf(vault_relative, original, create_missing_parents, mutation)?;
         Ok(Self { parent, leaf })
     }
 
@@ -876,29 +917,31 @@ impl PinnedMutationTarget {
         VaultError::Io(error)
     }
 
-    fn publish_staged_no_replace(&self, staged: &Path) -> io::Result<()> {
+    fn publish_staged_no_replace(&self, staged: &Staged) -> io::Result<()> {
         use std::os::fd::AsRawFd as _;
-        use std::os::unix::ffi::OsStrExt as _;
 
-        let staged_c = std::ffi::CString::new(staged.as_os_str().as_bytes())
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+        let (from_dir, from_name) = staged.source()?;
 
+        // SAFETY: `from_dir` is `AT_FDCWD` or an open directory, both names
+        // are NUL-terminated and outlive the call, and `parent` is an open
+        // directory descriptor.
         #[cfg(target_os = "macos")]
         let result = unsafe {
             libc::renameatx_np(
-                libc::AT_FDCWD,
-                staged_c.as_ptr(),
+                from_dir,
+                from_name.as_ptr(),
                 self.parent.as_raw_fd(),
                 self.leaf.as_ptr(),
                 libc::RENAME_EXCL,
             )
         };
 
+        // SAFETY: as above.
         #[cfg(all(target_os = "linux", target_env = "gnu"))]
         let result = unsafe {
             libc::renameat2(
-                libc::AT_FDCWD,
-                staged_c.as_ptr(),
+                from_dir,
+                from_name.as_ptr(),
                 self.parent.as_raw_fd(),
                 self.leaf.as_ptr(),
                 libc::RENAME_NOREPLACE,
@@ -911,8 +954,8 @@ impl PinnedMutationTarget {
             // but the destination is still descriptor-relative and therefore
             // cannot be redirected by a swapped pathname ancestor.
             libc::renameat(
-                libc::AT_FDCWD,
-                staged_c.as_ptr(),
+                from_dir,
+                from_name.as_ptr(),
                 self.parent.as_raw_fd(),
                 self.leaf.as_ptr(),
             )
@@ -928,24 +971,22 @@ impl PinnedMutationTarget {
     /// the pinned folder, replacing what is there, as `rename(2)` always has
     /// for a save. A leaf that is a symbolic link is replaced, never followed.
     ///
-    /// The source is still named by its path (`AT_FDCWD`), under the random
-    /// name `tempfile` gave it in `.slate/tmp` a moment before. A swap there,
-    /// between the staging and this call, can change which bytes arrive or
-    /// fail the rename, never where they land: the destination is the pinned
-    /// folder. `.slate` itself is reached by path throughout, which is #940's
-    /// descriptor-relative interior (PR 22's `FsRoot`).
-    fn publish_staged_replacing(&self, staged: &Path) -> io::Result<()> {
+    /// For a session's provider the source is named beneath the held
+    /// `.slate/tmp` descriptor (plan 43 PR 22a, #940), so neither end is
+    /// resolved by path; a provider that holds no root names it by its path
+    /// (`AT_FDCWD`), under the random name it was staged with a moment
+    /// before. Either way the destination is the pinned folder.
+    fn publish_staged_replacing(&self, staged: &Staged) -> io::Result<()> {
         use std::os::fd::AsRawFd as _;
-        use std::os::unix::ffi::OsStrExt as _;
 
-        let staged_c = std::ffi::CString::new(staged.as_os_str().as_bytes())
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-        // SAFETY: the staged path and the leaf are NUL-terminated and outlive
-        // the call, and `parent` is an open directory descriptor.
+        let (from_dir, from_name) = staged.source()?;
+        // SAFETY: `from_dir` is `AT_FDCWD` or an open directory, both names
+        // are NUL-terminated and outlive the call, and `parent` is an open
+        // directory descriptor.
         let result = unsafe {
             libc::renameat(
-                libc::AT_FDCWD,
-                staged_c.as_ptr(),
+                from_dir,
+                from_name.as_ptr(),
                 self.parent.as_raw_fd(),
                 self.leaf.as_ptr(),
             )
@@ -1086,8 +1127,8 @@ impl PinnedMutationTarget {
         }
     }
 
-    fn publish_staged_no_replace(&self, staged: &Path) -> io::Result<()> {
-        self.publish_staged(staged, false)
+    fn publish_staged_no_replace(&self, staged: &Staged) -> io::Result<()> {
+        self.publish_staged(staged.path(), false)
     }
 
     /// A save's publish (#1451): the staged file renamed onto the leaf inside
@@ -1102,7 +1143,8 @@ impl PinnedMutationTarget {
     /// "Access is denied. (os error 5)" from an otherwise healthy toggle). So
     /// retry briefly with backoff; a persistent refusal is a real permissions
     /// problem and still surfaces.
-    fn publish_staged_replacing(&self, staged: &Path) -> io::Result<()> {
+    fn publish_staged_replacing(&self, staged: &Staged) -> io::Result<()> {
+        let staged = staged.path();
         let mut delay = std::time::Duration::from_millis(5);
         let mut attempts = 0u32;
         loop {
@@ -1181,8 +1223,8 @@ impl PinnedMutationTarget {
         fs::create_dir(&self.path)
     }
 
-    fn publish_staged_no_replace(&self, staged: &Path) -> io::Result<()> {
-        rename_no_replace(staged, &self.path)
+    fn publish_staged_no_replace(&self, staged: &Staged) -> io::Result<()> {
+        rename_no_replace(staged.path(), &self.path)
     }
 
     fn failure(&self, error: io::Error) -> VaultError {
@@ -1190,8 +1232,61 @@ impl PinnedMutationTarget {
     }
 }
 
+/// The name the volume stores for `name` in `dir`, without following a
+/// link (`getattrlistat(ATTR_CMN_NAME, FSOPT_NOFOLLOW)`): on a case- or
+/// normalization-insensitive volume, the spelling it keeps.
+#[cfg(target_os = "macos")]
+fn stored_name_at(dir: &fs::File, name: &std::ffi::CStr) -> io::Result<Vec<u8>> {
+    use std::os::fd::AsRawFd as _;
+
+    /// `getattrlist`'s reply for `ATTR_CMN_NAME`: its length, then the name's
+    /// reference, then the bytes it points into.
+    #[repr(C)]
+    struct NameReply {
+        length: u32,
+        name: libc::attrreference_t,
+        bytes: [u8; 1024],
+    }
+
+    // SAFETY: `attrlist` is plain integers; zero is its empty request.
+    let mut request: libc::attrlist = unsafe { std::mem::zeroed() };
+    request.bitmapcount = libc::ATTR_BIT_MAP_COUNT;
+    request.commonattr = libc::ATTR_CMN_NAME;
+    let mut reply = std::mem::MaybeUninit::<NameReply>::zeroed();
+    // SAFETY: `dir` is an open directory, `name` is NUL-terminated, and
+    // `request` and `reply` are live, writable and of the sizes passed.
+    let result = unsafe {
+        libc::getattrlistat(
+            dir.as_raw_fd(),
+            name.as_ptr(),
+            (&mut request as *mut libc::attrlist).cast(),
+            reply.as_mut_ptr().cast(),
+            std::mem::size_of::<NameReply>(),
+            libc::FSOPT_NOFOLLOW as libc::c_ulong,
+        )
+    };
+    if result != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: zero-initialized, then filled by a successful call.
+    let reply = unsafe { reply.assume_init() };
+    // The name's offset is relative to its `attrreference_t`; its length
+    // counts the terminating NUL.
+    let reference = std::mem::offset_of!(NameReply, name);
+    let bytes_start = std::mem::offset_of!(NameReply, bytes);
+    let start = (reference as i64 + i64::from(reply.name.attr_dataoffset)) - bytes_start as i64;
+    let length = reply.name.attr_length as usize;
+    let malformed = || io::Error::other("getattrlistat returned a malformed name");
+    let start = usize::try_from(start).map_err(|_| malformed())?;
+    let end = start
+        .checked_add(length.checked_sub(1).ok_or_else(malformed)?)
+        .filter(|end| *end <= reply.bytes.len())
+        .ok_or_else(malformed)?;
+    Ok(reply.bytes[start..end].to_vec())
+}
+
 #[cfg(unix)]
-fn open_directory_at(parent: &fs::File, name: &std::ffi::CStr) -> io::Result<fs::File> {
+pub(super) fn open_directory_at(parent: &fs::File, name: &std::ffi::CStr) -> io::Result<fs::File> {
     use std::os::fd::{AsRawFd as _, FromRawFd as _};
 
     // SAFETY: `name` is NUL-terminated and `parent` remains open throughout
@@ -1211,12 +1306,12 @@ fn open_directory_at(parent: &fs::File, name: &std::ffi::CStr) -> io::Result<fs:
 }
 
 #[cfg(target_os = "macos")]
-fn directory_open_flags(no_follow: bool) -> libc::c_int {
+pub(super) fn directory_open_flags(no_follow: bool) -> libc::c_int {
     libc::O_SEARCH | libc::O_CLOEXEC | if no_follow { libc::O_NOFOLLOW } else { 0 }
 }
 
 #[cfg(target_os = "linux")]
-fn directory_open_flags(no_follow: bool) -> libc::c_int {
+pub(super) fn directory_open_flags(no_follow: bool) -> libc::c_int {
     libc::O_PATH
         | libc::O_DIRECTORY
         | libc::O_CLOEXEC
@@ -1224,7 +1319,7 @@ fn directory_open_flags(no_follow: bool) -> libc::c_int {
 }
 
 #[cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))]
-fn directory_open_flags(no_follow: bool) -> libc::c_int {
+pub(super) fn directory_open_flags(no_follow: bool) -> libc::c_int {
     libc::O_RDONLY
         | libc::O_DIRECTORY
         | libc::O_CLOEXEC
@@ -1232,7 +1327,7 @@ fn directory_open_flags(no_follow: bool) -> libc::c_int {
 }
 
 #[cfg(unix)]
-fn create_directory_at(parent: &fs::File, name: &std::ffi::CStr) -> io::Result<()> {
+pub(super) fn create_directory_at(parent: &fs::File, name: &std::ffi::CStr) -> io::Result<()> {
     use std::os::fd::AsRawFd as _;
 
     // SAFETY: `name` is NUL-terminated and `parent` remains open throughout
@@ -1244,8 +1339,247 @@ fn create_directory_at(parent: &fs::File, name: &std::ffi::CStr) -> io::Result<(
     Ok(())
 }
 
-fn publish_staged_no_replace(staged: &Path, destination: &PinnedMutationTarget) -> io::Result<()> {
+fn publish_staged_no_replace(
+    staged: &Staged,
+    destination: &PinnedMutationTarget,
+) -> io::Result<()> {
     destination.publish_staged_no_replace(staged)
+}
+
+/// Where a save or a create stages its bytes (`FsVaultProvider::staging`).
+enum Staging {
+    /// `.slate/tmp` by path, staged with `tempfile`.
+    Path(PathBuf),
+    /// The held `.slate/tmp` (plan 43 PR 22a, #940).
+    #[cfg(all(
+        any(target_os = "macos", target_os = "linux"),
+        target_pointer_width = "64"
+    ))]
+    Held(fs::File),
+}
+
+impl Staging {
+    /// A new, empty staged file whose name starts with `prefix`.
+    fn create_temp(&self, prefix: &str) -> io::Result<Staged> {
+        match self {
+            Self::Path(dir) => tempfile::Builder::new()
+                .prefix(prefix)
+                .tempfile_in(dir)
+                .map(Staged::Path),
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux"),
+                target_pointer_width = "64"
+            ))]
+            Self::Held(dir) => HeldStaged::create(dir, prefix).map(Staged::Held),
+        }
+    }
+
+    /// A save's staged bytes, synced, carrying the permissions of what it
+    /// replaces where there was one (see [`stage_contents`]).
+    fn stage(
+        &self,
+        contents: &[u8],
+        existing_perms: Option<fs::Permissions>,
+    ) -> io::Result<Staged> {
+        let mut staged = self.create_temp(".tmp")?;
+        staged.file_mut().write_all(contents)?;
+        staged.file().sync_data()?;
+        if let Some(perms) = existing_perms {
+            // Ignore failure: a successful overwrite with the temp's mode
+            // is still better than aborting the write on a perms snag.
+            let _ = staged.file().set_permissions(perms);
+        }
+        Ok(staged)
+    }
+}
+
+/// A save's or a create's staged bytes, removed when dropped unless
+/// [`Staged::published`] says the publish consumed the name.
+enum Staged {
+    Path(tempfile::NamedTempFile),
+    #[cfg(all(
+        any(target_os = "macos", target_os = "linux"),
+        target_pointer_width = "64"
+    ))]
+    Held(HeldStaged),
+}
+
+impl Staged {
+    fn file(&self) -> &fs::File {
+        match self {
+            Self::Path(temp) => temp.as_file(),
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux"),
+                target_pointer_width = "64"
+            ))]
+            Self::Held(held) => &held.file,
+        }
+    }
+
+    fn file_mut(&mut self) -> &mut fs::File {
+        match self {
+            Self::Path(temp) => temp.as_file_mut(),
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux"),
+                target_pointer_width = "64"
+            ))]
+            Self::Held(held) => &mut held.file,
+        }
+    }
+
+    /// A path-staged file's path (only Unix stages beneath a descriptor).
+    #[cfg(not(unix))]
+    fn path(&self) -> &Path {
+        match self {
+            Self::Path(temp) => temp.path(),
+        }
+    }
+
+    /// A path-staged file's path, for the facts that reach its folder.
+    #[cfg(all(unix, test))]
+    fn staged_path(&self) -> Option<&Path> {
+        match self {
+            Self::Path(temp) => Some(temp.path()),
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux"),
+                target_pointer_width = "64"
+            ))]
+            Self::Held(_) => None,
+        }
+    }
+
+    /// The publish rename's source: the folder it is named in (`AT_FDCWD`
+    /// for a path) and its name there.
+    #[cfg(unix)]
+    fn source(&self) -> io::Result<(libc::c_int, std::borrow::Cow<'_, std::ffi::CStr>)> {
+        match self {
+            Self::Path(temp) => {
+                use std::os::unix::ffi::OsStrExt as _;
+                let path = std::ffi::CString::new(temp.path().as_os_str().as_bytes())
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+                Ok((libc::AT_FDCWD, std::borrow::Cow::Owned(path)))
+            }
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux"),
+                target_pointer_width = "64"
+            ))]
+            Self::Held(held) => {
+                use std::os::fd::AsRawFd as _;
+                Ok((
+                    held.dir.as_raw_fd(),
+                    std::borrow::Cow::Borrowed(held.name.as_c_str()),
+                ))
+            }
+        }
+    }
+
+    /// Remove the staged file now, reporting a failure (a create's cleanup).
+    fn close(self) -> io::Result<()> {
+        match self {
+            Self::Path(temp) => temp.close(),
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux"),
+                target_pointer_width = "64"
+            ))]
+            Self::Held(held) => held.close(),
+        }
+    }
+
+    /// The publish consumed the staged name: never remove it, so a new file
+    /// that races into the old random name is never removed by the guard.
+    fn published(self) {
+        match self {
+            Self::Path(temp) => {
+                let (file, mut path_guard) = temp.into_parts();
+                path_guard.disable_cleanup(true);
+                drop(path_guard);
+                drop(file);
+            }
+            #[cfg(all(
+                any(target_os = "macos", target_os = "linux"),
+                target_pointer_width = "64"
+            ))]
+            Self::Held(mut held) => held.armed = false,
+        }
+    }
+}
+
+/// A file staged in the held `.slate/tmp` (plan 43 PR 22a, #940): made with
+/// `openat(O_CREAT | O_EXCL | O_NOFOLLOW)` under a random name, as
+/// `tempfile` names its files, and unlinked beneath the same descriptor.
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux"),
+    target_pointer_width = "64"
+))]
+struct HeldStaged {
+    dir: fs::File,
+    name: std::ffi::CString,
+    file: fs::File,
+    armed: bool,
+}
+
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux"),
+    target_pointer_width = "64"
+))]
+impl HeldStaged {
+    fn create(dir: &fs::File, prefix: &str) -> io::Result<Self> {
+        static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let dir = dir.try_clone()?;
+        for _ in 0..64 {
+            let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let nanos = std::time::SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_nanos())
+                .unwrap_or_default();
+            let seed = format!("{}:{nanos}:{sequence}", std::process::id());
+            let suffix = &blake3::hash(seed.as_bytes()).to_hex()[..12];
+            let name = std::ffi::CString::new(format!("{prefix}{suffix}"))
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+            match super::fs_root::sys::open_at(
+                &dir,
+                &name,
+                libc::O_WRONLY
+                    | libc::O_CREAT
+                    | libc::O_EXCL
+                    | super::fs_root::sys::NO_FOLLOW
+                    | libc::O_CLOEXEC,
+                0o600,
+            ) {
+                Ok(file) => {
+                    return Ok(Self {
+                        dir,
+                        name,
+                        file,
+                        armed: true,
+                    });
+                }
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "could not name a staging file in .slate/tmp",
+        ))
+    }
+
+    fn close(mut self) -> io::Result<()> {
+        self.armed = false;
+        super::fs_root::sys::unlink_at(&self.dir, &self.name)
+    }
+}
+
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux"),
+    target_pointer_width = "64"
+))]
+impl Drop for HeldStaged {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = super::fs_root::sys::unlink_at(&self.dir, &self.name);
+        }
+    }
 }
 
 fn normalize_create_temp_cleanup(result: io::Result<()>) -> io::Result<()> {
@@ -1600,7 +1934,7 @@ impl VaultProvider for FsVaultProvider {
         // resolve through folders the walk has just seen as real.
         #[cfg(unix)]
         {
-            let root = pinned_root::PinnedRoot::open(&self.root)?;
+            let root = self.pinned_root()?;
             root.end(self.vault_relative(&from_path, from)?, from, false)?;
             root.end(self.vault_relative(&to_path, to)?, to, false)?;
         }
@@ -1664,7 +1998,9 @@ impl VaultProvider for FsVaultProvider {
     ///
     /// Windows and macOS are the aliasing platforms (case-insensitive
     /// NTFS/APFS; APFS also normalization-insensitive); everything else
-    /// keeps the trait's identity default (divergence ID-1). The shape
+    /// keeps the trait's identity default (divergence ID-1). macOS walks
+    /// beneath the root descriptor (plan 43 PR 22a, below); on Windows, until
+    /// 22W, the shape
     /// is the `read_in_vault_with_cap` precedent — `fs::canonicalize`
     /// on BOTH the entry and the root, so a symlinked vault root and an
     /// 8.3 short-name temp directory (the CI runner's `RUNNER~1`) strip
@@ -1677,7 +2013,7 @@ impl VaultProvider for FsVaultProvider {
     ///   point that leads outside the vault leaves the entry with no
     ///   in-vault identity to bind to; refusing beats binding to a
     ///   spelling that is not this vault's.
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(windows)]
     fn canonical_path(&self, relative: &str) -> Result<Option<String>, VaultError> {
         let path = self.resolve(relative)?;
         match path.symlink_metadata() {
@@ -1719,6 +2055,91 @@ impl VaultProvider for FsVaultProvider {
         Ok(Some(spelling))
     }
 
+    /// #1077 contract I1 on macOS, computed under the root descriptor (plan
+    /// 43 PR 22a, #940; design §4.2): the stored spelling, one component at a
+    /// time.
+    ///
+    /// The walk starts at the root the session holds open (a provider built
+    /// by path opens the root once for the call) and descends one folder at
+    /// a time with `O_NOFOLLOW`; each component's stored spelling is
+    /// `getattrlistat(ATTR_CMN_NAME)` in its parent, which answers with the
+    /// name the volume keeps (`notes` → `Notes`, an NFD spelling → the stored
+    /// NFC one). "Beneath the vault" is the walk staying beneath the held
+    /// descriptor, not a `strip_prefix` of two canonicalized pathnames that a
+    /// swap of the root could move:
+    ///
+    /// - **A link keeps its own spelling.** Identity never follows a link
+    ///   (the W1 anchored-vault discipline): a link at the end answers with
+    ///   its own stored name.
+    /// - **A folder on the way that is a link is not this vault's (I7).** The
+    ///   walk never follows it, so nothing beneath the held root is at that
+    ///   spelling: `None`, and the mutation that follows refuses the link in
+    ///   its own words (#1449, #1452), as it does on Linux. Pathname
+    ///   canonicalization followed such a link, binding an in-vault target's
+    ///   spelling and refusing an outside one; the scanner never indexes
+    ///   through a link either way.
+    /// - A missing entry is `None`; a file where a folder should be is the
+    ///   `ENOTDIR` it always was.
+    #[cfg(target_os = "macos")]
+    fn canonical_path(&self, relative: &str) -> Result<Option<String>, VaultError> {
+        use std::os::unix::ffi::OsStrExt as _;
+
+        let path = self.resolve(relative)?;
+        let rest = path
+            .strip_prefix(&self.root)
+            .map_err(|_| VaultError::InvalidPath {
+                path: relative.to_string(),
+                reason: "the path is not beneath the vault root".into(),
+            })?;
+        let names: Vec<&std::ffi::OsStr> = rest
+            .components()
+            .filter_map(|component| match component {
+                Component::Normal(name) => Some(name),
+                _ => None,
+            })
+            .collect();
+        let root = self.pinned_root()?;
+        let mut dir = root.descriptor().try_clone().map_err(VaultError::Io)?;
+        let mut spelling = String::new();
+        for (index, name) in names.iter().enumerate() {
+            let c_name =
+                std::ffi::CString::new(name.as_bytes()).map_err(|_| VaultError::InvalidPath {
+                    path: relative.to_string(),
+                    reason: "the path contains an embedded NUL".into(),
+                })?;
+            let mode = match super::fs_root::sys::stat_at(&dir, &c_name, libc::AT_SYMLINK_NOFOLLOW)
+            {
+                Ok(stat) => stat.st_mode & libc::S_IFMT,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+                Err(error) => return Err(VaultError::Io(error)),
+            };
+            let stored = match stored_name_at(&dir, &c_name) {
+                Ok(stored) => stored,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+                Err(error) => return Err(VaultError::Io(error)),
+            };
+            let stored = String::from_utf8(stored).map_err(|_| VaultError::InvalidPath {
+                path: relative.to_string(),
+                reason: "canonical path is not valid UTF-8".into(),
+            })?;
+            if !spelling.is_empty() {
+                spelling.push('/');
+            }
+            spelling.push_str(&stored);
+            if index + 1 == names.len() {
+                break;
+            }
+            match mode {
+                libc::S_IFDIR => {
+                    dir = open_directory_at(&dir, &c_name).map_err(VaultError::Io)?;
+                }
+                libc::S_IFLNK => return Ok(None),
+                _ => return Err(VaultError::Io(io::Error::from_raw_os_error(libc::ENOTDIR))),
+            }
+        }
+        Ok(Some(spelling))
+    }
+
     fn stat(&self, relative: &str) -> Result<FileStat, VaultError> {
         let path = self.resolve(relative)?;
         // `metadata()` follows symlinks; the indexer wants the target's
@@ -1752,7 +2173,7 @@ impl VaultProvider for FsVaultProvider {
     /// filtered by the scanner's hidden-path rule and anchored to the root's
     /// identity (`super::watch`).
     fn watch(&self, sink: Arc<dyn FileEventSink>) -> Result<Option<WatchHandle>, VaultError> {
-        super::watch::watch_root(&self.root, sink)
+        super::watch::watch_root(&self.root, self.held.as_ref(), sink)
     }
 
     /// Plan 43 PR 20a (design §4.2): `relative` is an echo when its current
@@ -1847,7 +2268,7 @@ impl FsVaultProvider {
             let path = self.resolve_for_mutation(relative)?;
             // The structural rename's pinned walk (#1449): a link or a
             // non-folder among the item's ancestors is its typed refusal.
-            let root = pinned_root::PinnedRoot::open(&self.root)?;
+            let root = self.pinned_root()?;
             let item = root.end(self.vault_relative(&path, relative)?, relative, false)?;
 
             // Every entry goes to the Trash, and a symbolic link goes as the
@@ -2081,6 +2502,7 @@ fn birthtime_ms_of(meta: &fs::Metadata) -> i64 {
 /// If the target already exists, its filesystem permissions are copied to
 /// the temp before rename so a 0644 file isn't silently downgraded to
 /// the temp's stricter default. New files keep the temp's permissions.
+#[cfg(not(any(unix, windows)))]
 fn stage_contents(
     tmp_dir: &Path,
     contents: &[u8],
@@ -2921,7 +3343,10 @@ mod tests {
                 // unlink the old staging name now fails. A successful atomic
                 // move must nevertheless remain a successful create.
                 fs::set_permissions(
-                    staged.parent().expect("staging parent"),
+                    staged
+                        .staged_path()
+                        .and_then(Path::parent)
+                        .expect("staging parent"),
                     fs::Permissions::from_mode(0o000),
                 )?;
                 Ok(())
@@ -2954,7 +3379,10 @@ mod tests {
                 fs::File::sync_data,
                 |staged, _destination| {
                     fs::set_permissions(
-                        staged.parent().expect("staging parent"),
+                        staged
+                            .staged_path()
+                            .and_then(Path::parent)
+                            .expect("staging parent"),
                         fs::Permissions::from_mode(0o000),
                     )?;
                     Err(io::Error::new(

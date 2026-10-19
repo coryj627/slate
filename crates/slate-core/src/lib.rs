@@ -181,8 +181,8 @@ pub use session::{
 };
 pub use session::{
     MARKDOWN_DOCUMENT_EXTENSIONS, MAX_INDEXED_HASH_PATHS, OPENABLE_DOCUMENT_EXTENSIONS,
-    SCAN_ERROR_SAMPLES, SkippedFile, TagCount, TagEditReport, WATCHER_SENTENCE_SPACING_MS,
-    is_openable_document,
+    SCAN_ERROR_SAMPLES, SkippedFile, TagCount, TagEditReport, WATCH_REARM_ENABLED,
+    WATCHER_SENTENCE_SPACING_MS, is_openable_document,
 };
 pub use sidebar_filter::{
     FilterParseError, SidebarFilterDateWindow, SidebarFilterNamedWindow, SidebarFilterQueryTerm,

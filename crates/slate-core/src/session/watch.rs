@@ -54,7 +54,9 @@ use std::sync::Weak;
 
 use super::{VaultEventListener, VaultSession};
 use crate::VaultError;
-use crate::vault::{FileEvent, FileEventSink, RootIdentity, VaultProvider, WatchEnd, WatchHandle};
+use crate::vault::{
+    FileEvent, FileEventSink, Relocation, RootIdentity, VaultProvider, WatchEnd, WatchHandle,
+};
 
 /// A burst closes this long after its last event: the quiet window (§4.1).
 pub(crate) const WATCH_QUIET: Duration = Duration::from_secs(1);
@@ -76,6 +78,34 @@ pub(crate) const WATCH_DUTY_FACTOR: u32 = 2;
 /// echo test (§4.1). With the echo ledger's bound it keeps the watcher's
 /// memory fixed whatever a sync client does (locked 05 §4 principle 4).
 pub(crate) const WATCH_TOUCHED_PATH_BOUND: usize = 4096;
+
+/// A session re-arms its watch after a legitimate rename of the vault folder
+/// at most this many times (plan 43 PR 22a, #940; design §4.3), so a storm
+/// of renames cannot loop the watcher; the next one ends the watch. It
+/// counts only while [`WATCH_REARM_ENABLED`] is on.
+pub(crate) const WATCH_REARM_BOUND: u32 = 4;
+
+/// Whether the watch re-arms after a legitimate rename of the vault folder
+/// (plan 43 PR 22a, #940; design §4.3, owner decision Q3). The re-arm is
+/// built, and the owner's decision on #1518 (2026-10-19) keeps it off until
+/// #1513 moves the provider's reads beneath the held root. Until then every
+/// rescan a re-armed watch started would read the vault by the path it was
+/// opened at and fail, and the host would say "Files refreshed with errors"
+/// once a minute for no gain.
+///
+/// While it is off, a renamed vault folder ends the watch, as PR 20 decided
+/// (§4.4), on every platform:
+/// - the root-change event ends it at once;
+/// - a root found moved when a burst closes ends it with no callback;
+/// - Refresh and the foreground rescan remain.
+///
+/// This is the one switch. Turning it on with #1513 brings back:
+/// - the burst-close decision (`WatchCoalescer::relocate`);
+/// - the re-arm;
+/// - `a_legitimate_root_rename_rearms_at_the_new_path`;
+/// - mac's `testARenamedVaultFolderRearmsTheWatcherAtItsNewPath`, which reads
+///   the switch through the FFI (`vault_watch_rearm_enabled`).
+pub const WATCH_REARM_ENABLED: bool = false;
 
 /// At most one watcher sentence per this many milliseconds per vault (§4.5,
 /// owner decision Q2: one leading sentence a minute). The hosts' speech
@@ -189,6 +219,9 @@ pub(crate) enum WatchDecision {
     RootMismatch,
     /// The watch ended on the platform's word.
     Ended(WatchEnd),
+    /// The vault folder was renamed and the watch re-armed at the held
+    /// root's verified current path (plan 43 PR 22a, design §4.3).
+    Rearmed { at: std::path::PathBuf },
 }
 
 type ListenerRegistry = Arc<Mutex<HashMap<u64, Arc<dyn VaultEventListener>>>>;
@@ -202,6 +235,11 @@ struct Burst {
     /// The path set is incomplete (the platform dropped events, a path could
     /// not be named, or the bound was passed): the echo test is skipped.
     overflowed: bool,
+    /// The platform said the root changed during this burst (plan 43 PR
+    /// 22a): when it closes, the held root decides between a re-arm and the
+    /// end of the watch (`WatchCoalescer::relocate`). Set only while the
+    /// watch follows a renamed root ([`WatchCoalescer::follows_a_renamed_root`]).
+    root_changed: bool,
 }
 
 impl Burst {
@@ -211,6 +249,7 @@ impl Burst {
             last: at,
             paths: BTreeSet::new(),
             overflowed: false,
+            root_changed: false,
         }
     }
 
@@ -239,6 +278,7 @@ impl Burst {
     fn absorb(&mut self, other: Burst, bound: usize) {
         self.first = self.first.min(other.first);
         self.last = self.last.max(other.last);
+        self.root_changed |= other.root_changed;
         if other.overflowed {
             self.overflow();
             return;
@@ -255,8 +295,9 @@ impl Burst {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
     Live,
-    /// The watch ended itself (root changed or swapped, a backend error after
-    /// its catch-up). Not re-armed in PR 20.
+    /// The watch ended itself (a root swapped, lost or changed and back, a
+    /// backend error after its catch-up). An ended watch is final for the
+    /// session; only a live one re-arms after a rename (plan 43 PR 22a).
     Ended(WatchEnd),
     /// The host stopped it, or the session closed.
     Stopped,
@@ -298,6 +339,8 @@ struct Delivery {
 
 enum Step {
     Deliver(Delivery),
+    /// A closed burst saw the root change: decide its fate first.
+    Relocate,
     Wait(Option<Instant>),
     Exit,
 }
@@ -308,6 +351,9 @@ pub(crate) struct WatchCoalescer {
     clock: Arc<dyn WatchClock>,
     provider: Arc<dyn VaultProvider>,
     listeners: ListenerRegistry,
+    /// The session's re-arms so far (shared across its watches, design §4.3's
+    /// bound of [`WATCH_REARM_BOUND`] per session).
+    rearms: Arc<std::sync::atomic::AtomicU32>,
     /// The platform watch and its root anchor; released (and the platform
     /// watch stopped) when the watch ends or stops, never under `state`.
     handle: Mutex<Option<WatchHandle>>,
@@ -342,12 +388,14 @@ impl WatchCoalescer {
         clock: Arc<dyn WatchClock>,
         provider: Arc<dyn VaultProvider>,
         listeners: ListenerRegistry,
+        rearms: Arc<std::sync::atomic::AtomicU32>,
     ) -> Arc<Self> {
         Arc::new(Self {
             timing,
             clock,
             provider,
             listeners,
+            rearms,
             handle: Mutex::new(None),
             state: Mutex::new(State {
                 phase: Phase::Live,
@@ -381,6 +429,14 @@ impl WatchCoalescer {
         matches!(self.lock_state().phase, Phase::Ended(_))
     }
 
+    /// Whether a root change waits for its burst to close, so the held root
+    /// can decide between a re-arm and the end of the watch (plan 43 PR 22a,
+    /// §4.3). It needs an anchored target and [`WATCH_REARM_ENABLED`]. When it
+    /// is false, a root change ends the watch as PR 20 decided (§4.4).
+    fn follows_a_renamed_root() -> bool {
+        crate::vault::fs_root::ANCHORED && WATCH_REARM_ENABLED
+    }
+
     /// The platform's thread: record and return (§4.3 step 1).
     fn accept(&self, event: FileEvent) {
         let mut state = self.lock_state();
@@ -401,9 +457,23 @@ impl WatchCoalescer {
             FileEvent::Rescan { .. } => state.touch(now, None, bound),
             FileEvent::Ended {
                 cause: WatchEnd::RootChanged,
+            } if Self::follows_a_renamed_root() => {
+                // Plan 43 PR 22a (§4.3): the root was renamed, removed or
+                // replaced. Whether this is the session's own vault folder
+                // moving (re-arm) or another folder at its path (end) is
+                // decided against the held root once the burst closes, on
+                // the coalescer's thread, never here.
+                state.touch(now, None, bound);
+                if let Some(open) = state.open.as_mut() {
+                    open.root_changed = true;
+                }
+            }
+            FileEvent::Ended {
+                cause: WatchEnd::RootChanged,
             } => {
                 // §4.4: a root that moved or was replaced is no longer the
-                // session's; end without a callback.
+                // session's; end without a callback. This is Windows until
+                // 22W, and macOS and Linux while the re-arm is off.
                 state.phase = Phase::Ended(WatchEnd::RootChanged);
                 state.open = None;
                 state.pending = None;
@@ -496,6 +566,15 @@ impl WatchCoalescer {
             }
         }
         let open_closes = state.open.as_ref().map(|open| open.closes_at(&self.timing));
+        if state
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.root_changed)
+        {
+            // The root's fate comes first: neither a running scan nor the
+            // spacing delays a re-arm or the end of the watch.
+            return Step::Relocate;
+        }
         if state.pending.is_some() {
             if state.scan_started.is_some() {
                 // A scan holds the connection: its end decides (it may have
@@ -523,9 +602,102 @@ impl WatchCoalescer {
         Step::Wait(open_closes)
     }
 
+    /// The coalescer's thread, with no lock held: a burst that saw the root
+    /// change re-arms at the held root's verified current path, when the
+    /// vault folder was renamed, or ends the watch (plan 43 PR 22a, design
+    /// §4.3). The pending burst then carries one catch-up callback: events
+    /// in the moved folder between the rename and the re-arm reached no
+    /// stream. Reached only while the watch follows a renamed root
+    /// ([`Self::follows_a_renamed_root`]); otherwise the root-change event
+    /// has already ended the watch.
+    fn relocate(self: &Arc<Self>) {
+        let relocation = {
+            let handle = self.handle.lock().unwrap_or_else(PoisonError::into_inner);
+            match handle.as_ref() {
+                // Released: the watch stopped meanwhile.
+                None => return,
+                Some(handle) => handle.relocation(),
+            }
+        };
+        let relocation = match relocation {
+            Relocation::Moved(at) if Self::follows_a_renamed_root() => match self.rearm(&at) {
+                Ok(()) => return,
+                Err(relocation) => relocation,
+            },
+            other => other,
+        };
+        #[cfg(test)]
+        self.lock_state()
+            .decisions
+            .push(if relocation == Relocation::Intact {
+                WatchDecision::Ended(WatchEnd::RootChanged)
+            } else {
+                WatchDecision::RootMismatch
+            });
+        #[cfg(not(test))]
+        let _ = relocation;
+        log::warn!(
+            "vault watch ended: the vault root was removed, replaced, or changed and changed \
+             back; Refresh and the foreground rescan remain"
+        );
+        self.end(WatchEnd::RootChanged);
+    }
+
+    /// Re-arm at `at`, the held root's verified current path, within the
+    /// session's bound. The old platform watch is dropped outside every
+    /// coalescer lock (FSEvents joins its thread, which may be in the sink).
+    /// `Err` carries why the watch must end instead.
+    fn rearm(self: &Arc<Self>, at: &std::path::Path) -> Result<(), Relocation> {
+        use std::sync::atomic::Ordering;
+        if self.rearms.load(Ordering::SeqCst) >= WATCH_REARM_BOUND {
+            log::warn!("vault watch re-arm bound reached");
+            return Err(Relocation::Lost);
+        }
+        let rearmed = {
+            let handle = self.handle.lock().unwrap_or_else(PoisonError::into_inner);
+            match handle.as_ref() {
+                None => return Ok(()),
+                Some(handle) => handle.rearm(at, self.sink()),
+            }
+        };
+        let rearmed = match rearmed {
+            Ok(rearmed) => rearmed,
+            Err(error) => {
+                log::warn!(
+                    "vault watch could not re-arm after the vault folder moved ({})",
+                    error_kind(&error)
+                );
+                log::debug!("vault watch re-arm failure detail: {error}");
+                return Err(Relocation::Lost);
+            }
+        };
+        let previous = self
+            .handle
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .replace(rearmed);
+        drop(previous);
+        self.rearms.fetch_add(1, Ordering::SeqCst);
+        {
+            let mut state = self.lock_state();
+            if let Some(pending) = state.pending.as_mut() {
+                pending.root_changed = false;
+                pending.overflow();
+            }
+            #[cfg(test)]
+            state.decisions.push(WatchDecision::Rearmed {
+                at: at.to_path_buf(),
+            });
+        }
+        log::info!("vault watch re-armed: the vault folder was renamed");
+        log::debug!("vault watch re-armed at {}", at.display());
+        self.wake.notify_all();
+        Ok(())
+    }
+
     /// The coalescer's thread, with no lock held: the echo test, the root
     /// check, then one call per listener (§4.2, §4.3, §4.4).
-    fn deliver(&self, delivery: Delivery) {
+    fn deliver(self: &Arc<Self>, delivery: Delivery) {
         let Delivery {
             mut paths,
             overflowed,
@@ -546,15 +718,22 @@ impl WatchCoalescer {
             }
         }
         // §4.4 step 2: the root still names the anchored folder, or the
-        // watch ends with no callback. PR 22 (22a) decides here whether a
-        // legitimate rename re-arms instead.
-        let anchored = {
+        // watch ends with no callback. While the watch follows a renamed
+        // root (plan 43 PR 22a, §4.3), a vault folder renamed meanwhile
+        // re-arms at the held root's verified current path first, and the
+        // burst is still delivered. Off, a renamed root ends it here too.
+        let relocation = {
             let handle = self.handle.lock().unwrap_or_else(PoisonError::into_inner);
             match handle.as_ref() {
                 // Released: the watch stopped meanwhile.
                 None => return,
-                Some(handle) => handle.root_still_anchored(),
+                Some(handle) => handle.relocation(),
             }
+        };
+        let anchored = match relocation {
+            Relocation::Intact => true,
+            Relocation::Moved(at) if Self::follows_a_renamed_root() => self.rearm(&at).is_ok(),
+            Relocation::Moved(_) | Relocation::Swapped | Relocation::Lost => false,
         };
         if !anchored {
             #[cfg(test)]
@@ -661,6 +840,11 @@ impl WatchCoalescer {
                     self.deliver(delivery);
                     state = self.lock_state();
                 }
+                Step::Relocate => {
+                    drop(state);
+                    self.relocate();
+                    state = self.lock_state();
+                }
                 Step::Wait(deadline) => {
                     state = match deadline {
                         Some(at) => {
@@ -683,7 +867,7 @@ impl WatchCoalescer {
 
     /// A fact's step: run until the coalescer would wait; its next deadline.
     #[cfg(test)]
-    pub(crate) fn drive(&self) -> Option<Instant> {
+    pub(crate) fn drive(self: &Arc<Self>) -> Option<Instant> {
         loop {
             let mut state = self.lock_state();
             let now = self.clock.now();
@@ -696,6 +880,10 @@ impl WatchCoalescer {
                 Step::Deliver(delivery) => {
                     drop(state);
                     self.deliver(delivery);
+                }
+                Step::Relocate => {
+                    drop(state);
+                    self.relocate();
                 }
                 Step::Wait(deadline) => return deadline,
             }
@@ -728,8 +916,11 @@ impl ActiveWatch {
 #[derive(Default)]
 pub(crate) struct WatchSeat {
     active: Option<ActiveWatch>,
-    /// The watch ended itself; PR 20 does not re-arm it in this session.
+    /// The watch ended itself; it is not restarted in this session.
     ended: bool,
+    /// Re-arms after a rename of the vault folder, across the session's
+    /// watches (plan 43 PR 22a, bounded by [`WATCH_REARM_BOUND`]).
+    rearms: Arc<std::sync::atomic::AtomicU32>,
 }
 
 /// The watcher's view of one scan (§4.3): its start once it holds the
@@ -781,7 +972,11 @@ impl VaultSession {
     /// listener's `on_external_change` — at most once per coalesced burst,
     /// with no session lock held — and the host answers with a Watcher-reason
     /// rescan (`RescanReason::Watcher`). Slate's own writes through this
-    /// session's provider are echoes and call nothing.
+    /// session's provider are echoes and call nothing. A rename of the vault
+    /// folder ends the watch, as any root change does (§4.4). Plan 43 PR 22a
+    /// (#940) built a re-arm on macOS and Linux: at the held root's verified
+    /// current path, up to [`WATCH_REARM_BOUND`] times a session. It sits
+    /// behind [`WATCH_REARM_ENABLED`], which is off until #1513.
     ///
     /// Hosts call it on their open worker right before the initial scan
     /// (the arm-then-probe rule of #638: a change during that scan is either
@@ -791,7 +986,7 @@ impl VaultSession {
     /// watch (`Ok(None)`: host providers), the platform refuses one (an
     /// inotify limit, an unsupported redirector), the root no longer names
     /// the folder this session opened, a watch of this session already ended
-    /// itself (PR 20 does not re-arm), or `SLATE_TEST_DISABLE_VAULT_WATCHER`
+    /// itself (an ended watch is not restarted), or `SLATE_TEST_DISABLE_VAULT_WATCHER`
     /// is set. Refresh and the foreground rescan stay the baseline whether or
     /// not a watch is live (design §4.6).
     pub fn start_watching(&self) -> bool {
@@ -819,8 +1014,8 @@ impl VaultSession {
             if active.coalescer.is_live() {
                 return true;
             }
-            // The watch ended itself (root changed or swapped, a backend
-            // error after its catch-up): PR 20 does not re-arm it.
+            // The watch ended itself (a root swapped, lost or changed and
+            // back, a backend error after its catch-up): it is final.
             let ended = seat.active.take().expect("the active watch was just seen");
             seat.ended = true;
             drop(seat);
@@ -836,6 +1031,7 @@ impl VaultSession {
             clock,
             Arc::clone(&self.provider),
             Arc::clone(&self.event_listeners),
+            Arc::clone(&seat.rearms),
         );
         let handle = match self.provider.watch(coalescer.sink()) {
             Ok(Some(handle)) => handle,

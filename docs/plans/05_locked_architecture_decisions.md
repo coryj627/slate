@@ -164,6 +164,7 @@ Roughly **21 months to cross-platform core editing**; **2.5–3 years to the ful
 The API is designed around five principles:
 
 1. **Opaque handles, not raw paths.** Mobile platforms don't grant arbitrary path access; the API accepts resource handles produced by the host.
+   *Note (plan 43 PR 22a, #940, 2026-10-18):* on the desktop, where `FsVaultProvider` takes a path, a filesystem session now holds its vault root and its `.slate` open for its lifetime (`FsRoot`). On macOS and Linux its interior — the structural lock, `slate.json`, `.slate/prefs.json`, the op-log and the SQLite cache — and every provider mutation resolve beneath those descriptors, never by re-walking the path, so an open binds the root it anchored. The provider's reads still resolve by path (#1513), and Windows follows under Milestone W (22W).
 2. **Sync API with explicit threading expectations.** Callers dispatch off the UI thread. No `async` across the FFI boundary (UniFFI's async support is improving but still rough).
 3. **Long operations are cancellable.** Every method that scans, indexes, or queries the vault accepts a `CancelToken`.
 4. **Memory-bounded.** No "load entire vault into memory" operations. Streaming and paged queries throughout.

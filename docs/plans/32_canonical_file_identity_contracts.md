@@ -245,6 +245,18 @@ guess. A canonicalization that fails with an IO error fails the
 mutation rather than silently proceeding on the unresolved spelling —
 proceeding is precisely how the second index row appears.
 
+*Plan 43 PR 22a (#940):* on macOS `canonical_path` is computed beneath the
+root the session holds open (design `43_mac_backlog_delivery/22_descriptor_relative_session_design.md`
+§4.2): one component at a time, `O_NOFOLLOW`, each stored spelling from
+`getattrlistat(ATTR_CMN_NAME)` in its parent, so a root swapped after the
+open cannot answer. A folder on the way that is a link is not the vault's:
+the answer is `None`, and the mutation that follows refuses the link in
+#1449's and #1452's words, as on Linux. Pathname canonicalization had
+followed such a link, binding an in-vault target's spelling and refusing an
+outside one with its own reason. A link at the end keeps its own stored
+spelling. Linux keeps the identity default; Windows keeps its pathname form
+until 22W.
+
 *Mac half (#1147):* the re-seat fails closed too. A stored-spelling probe
 that throws leaves the tab missing and untouched, never reloaded on a guess
 that the requested spelling still holds, and a nil answer leaves it missing
@@ -423,6 +435,9 @@ from the Windows side — core's `canonical_path` is already on the FFI.
 - **Descriptor-relative session interior** (the A→B→A root swap) —
   that is #940, which shares the "resolve by handle, not by name"
   direction but addresses the vault ROOT rather than entries within it.
+  Designed in `43_mac_backlog_delivery/22_descriptor_relative_session_design.md`
+  and delivered for macOS and Linux by plan 43 PR 22a, which also moves
+  `canonical_path` beneath the held root on macOS (I7's note above).
 - **Link resolution semantics.** Wikilink matching has its own
   case rules; this document changes which spelling the INDEX stores,
   not how a link resolves to it.

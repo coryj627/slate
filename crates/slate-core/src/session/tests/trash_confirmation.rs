@@ -78,7 +78,7 @@ fn cancellable_trash_waits_stop_without_releasing_the_blocker() {
             (blocker == "operation").then(|| session.structural_operation.lock().unwrap());
         let connection = (blocker == "connection").then(|| session.conn.lock().unwrap());
         let registry = (blocker == "registry")
-            .then(|| VaultStructuralLock::acquire(&session.config.cache_dir).unwrap());
+            .then(|| VaultStructuralLock::acquire(&session.interior).unwrap());
         // A separately opened OS handle bypasses the process registry, exercising
         // the second half of the lock protocol, not another local registry wait.
         let os_lock = (blocker == "os_lock").then(|| {
@@ -103,7 +103,7 @@ fn cancellable_trash_waits_stop_without_releasing_the_blocker() {
             started_rx.recv_timeout(Duration::from_secs(30)).unwrap();
             if blocker != "registry" {
                 let deadline = Instant::now() + Duration::from_secs(30);
-                while VaultSession::structural_lock_is_free(&session.config.cache_dir) {
+                while VaultSession::structural_lock_is_free(&session.interior) {
                     assert!(
                         Instant::now() < deadline,
                         "worker did not claim registry: {blocker}"
@@ -120,9 +120,7 @@ fn cancellable_trash_waits_stop_without_releasing_the_blocker() {
             worker.join().unwrap();
         });
         drop((operation, connection, registry, os_lock));
-        assert!(VaultSession::structural_lock_is_free(
-            &session.config.cache_dir
-        ));
+        assert!(VaultSession::structural_lock_is_free(&session.interior));
         assert!(session.stage_trash(request("empty", true)).is_ok());
     }
 }

@@ -1476,7 +1476,7 @@ fn held_move_markers_are_fenced_by_the_structural_lock() {
     // With the structural lock held (an active move), even a
     // zero-threshold sweep must leave the markers alone — the
     // pre-move snapshot keeps serving.
-    let lock = VaultStructuralLock::acquire(&session.config.cache_dir).unwrap();
+    let lock = VaultStructuralLock::acquire(&session.interior).unwrap();
     unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "36.md") };
     let page = session
         .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
@@ -2025,7 +2025,7 @@ fn aged_save_tokens_defer_while_a_move_owns_the_path() {
     }
 
     // The move is ACTIVE: its lock is held.
-    let lock = VaultStructuralLock::acquire(&session.config.cache_dir).unwrap();
+    let lock = VaultStructuralLock::acquire(&session.interior).unwrap();
     unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "moving43") };
     let page = session
         .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
@@ -2187,7 +2187,7 @@ fn held_orphan_sweeps_hold_the_structural_lock_through_repair() {
         // would block exactly here.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while std::time::Instant::now() < deadline {
-            if !VaultSession::structural_lock_is_free(&session.config.cache_dir) {
+            if !VaultSession::structural_lock_is_free(&session.interior) {
                 observed_held.store(true, std::sync::atomic::Ordering::SeqCst);
                 break;
             }
@@ -2205,7 +2205,7 @@ fn held_orphan_sweeps_hold_the_structural_lock_through_repair() {
         "the orphan sweep must hold the structural lock through its repair"
     );
     assert!(
-        VaultSession::structural_lock_is_free(&session.config.cache_dir),
+        VaultSession::structural_lock_is_free(&session.interior),
         "the guard releases once the sweep and its read complete"
     );
     {

@@ -70,6 +70,7 @@
 
 mod echo_ledger;
 mod fs;
+pub(crate) mod fs_root;
 mod provider;
 mod trash_handoff;
 mod trash_snapshot;
@@ -89,7 +90,7 @@ pub use provider::{
 };
 #[cfg(test)]
 pub(crate) use watch::RootAnchor;
-pub(crate) use watch::RootIdentity;
+pub(crate) use watch::{Relocation, RootIdentity};
 #[cfg(all(test, windows))]
 pub(crate) use watch::{report_evidence_for_tests, short_name_for_tests};
 

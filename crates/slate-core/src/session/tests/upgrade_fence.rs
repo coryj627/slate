@@ -126,8 +126,7 @@ fn open_waits_for_an_in_flight_structural_operation() {
         provider.write_file("note.md", b"n\n").unwrap();
     });
     session.scan_initial(&CancelToken::new()).unwrap();
-    let cache_dir = tmp.path().join(".slate");
-    let held = VaultStructuralLock::acquire(&cache_dir).expect("hold the structural lock");
+    let held = VaultStructuralLock::acquire(&session.interior).expect("hold the structural lock");
 
     let root = tmp.path().to_path_buf();
     let (opened_tx, opened_rx) = mpsc::channel();

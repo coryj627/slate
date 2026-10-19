@@ -110,7 +110,7 @@ pub(crate) fn tasks_for_file(conn: &Connection, path: &str) -> Result<Vec<TaskIt
     if std::env::var_os("SLATE_TEST_TORN_FILE_TASKS")
         .is_some_and(|trigger| path.contains(trigger.to_string_lossy().as_ref()))
         && let Some(db_path) = conn.path()
-        && let Ok(other) = Connection::open(db_path)
+        && let Ok(other) = crate::db::open_connection(std::path::Path::new(db_path))
     {
         let _ = other.execute(
             "UPDATE tasks SET text = 'torn-by-second-connection', completed = 1
@@ -188,7 +188,7 @@ pub(crate) fn note_tasks_bounded(
     };
     if torn_probe.is_some()
         && let Some(db_path) = conn.path()
-        && let Ok(other) = Connection::open(db_path)
+        && let Ok(other) = crate::db::open_connection(std::path::Path::new(db_path))
     {
         // Plan 43 PR 21a (design §3.5): migration 040's change-feed
         // triggers call Slate's feed functions, so a connection without
