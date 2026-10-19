@@ -176,7 +176,7 @@ expected inside a wave because many touch `AppState.swift`).
 | 18 | `specs/pr18_save_resolves_own_links.md` | #1295 | S–M | rust, swift, windows | — | any |
 | 19 | `specs/pr19_mac_rescan_baseline.md` | #1333 | M–L | swift, a11y, windows | 10, 12 | 18, 23, 24 |
 | 20 | `specs/pr20_vault_watcher.md`; split by its design (`20_vault_watcher_design.md` §7) into 20.0 (core link pass, #1429, delivered), 20a (core watcher and FFI, delivered), 20b (Windows host) and 20c (mac host, delivered) | #1267 | L (design first) | rust, swift, windows | 19 | 24 |
-| 21 | `specs/pr21_change_feed.md` | #1293 | L (design first) | rust, swift, windows | 20 | 24 |
+| 21 | `specs/pr21_change_feed.md`; split by its design (`21_change_feed_design.md` §7) into 21a (core and FFI, delivered), 21b (Windows, after 20b) and 21c (mac, after PR 19 and 20c) | #1293 | L (design first) | rust, swift, windows | 20 | 24 |
 | 22 | `specs/pr22_descriptor_relative_session.md` | #940 | L (design first) | rust, swift, windows | 20 | — |
 | 23 | `specs/pr23_durable_sidebar_journal.md` | #944 | M–L | swift, a11y, windows | 15b | 18, 19, 24 |
 | 24 | `specs/pr24_structural_identity_tracks.md` | #1125 | docs S, then sized | windows (docs) | — | any |

@@ -1,7 +1,11 @@
 # PR 21 — A core change feed for exact cross-session rescan counts: design
 
-Status: design for owner review, 2026-10-17. Nothing here is
-implemented. Issue #1293 (contract 40 AR-30, AR-31). Spec:
+Status: design, 2026-10-17, with the owner's decisions of 2026-10-17
+in §11. PR 21a (§7, the core feed and its FFI) is delivered, on
+migration 040 as designed, against `main` at 55c72798: PRs 19, 20.0 and
+20a had moved many of the lines cited below, so it worked from the
+function names they cite. PRs 21b and 21c, the hosts, are not
+delivered. Issue #1293 (contract 40 AR-30, AR-31). Spec:
 `specs/pr21_change_feed.md`. Baseline: `main` at 71231296; every
 file:line reference below was read at that commit (PRs 13, 16 and 17
 merged since beed82e1, where this design started, and moved only the mac
@@ -1145,7 +1149,7 @@ gated off while no cursor exists). 21a also corrects the stale
 
 | PR | Scope | Size | Lanes | After |
 |---|---|---|---|---|
-| 21a | Core: migration 040, the feed functions and origin scopes, `change_feed.rs` (register, the window's state machine and materialization, pages, head, acknowledge, trim, reap, the gap's re-registration), the uncounted variant with its corpus rows and golden, the FFI records, methods and constants, both bindings regenerated, the torn-read seam, the census and the §4.9 core facts | L (about 2,000 to 2,600 lines with facts) | rust, swift, windows | 20a |
+| 21a | Core: migration 040, the feed functions and origin scopes, `change_feed.rs` (register, the window's state machine and materialization, pages, head, acknowledge, trim, reap, the gap's re-registration), the uncounted variant with its corpus rows and golden, the FFI records, methods and constants, both bindings regenerated, the torn-read seam, the census and the §4.9 core facts. **Delivered 2026-10-18:** `migrations/040_change_feed.sql`, `change_feed.rs` (the functions, the origin scope, cursors, the window's state machine and per-path derivation, the TEMP materialization, pages, the trim), the five `VaultSession` methods and their FFI twins with `max_change_feed_page_limit()` and `change_feed_max_passes()`, `VaultRescanFinishedUncounted` with four corpus rows; facts in `session/tests/change_feed.rs`, `change_feed.rs`, `db.rs`, `a11y.rs`, `session/tests/tasks.rs`, slate-cli `tests/write.rs` and slate-uniffi; contract 40 AR-30 retired, AR-31 narrowed, AR-76 to AR-83 for §9 (AR-75 is PR 20b's) | L (about 2,000 to 2,600 lines with facts) | rust, swift, windows | 20a |
 | 21b | Windows: open registration, the run-long journal, the retry set, the record path, passes, recovery set, acknowledgment, sentence, the rewritten AR-30 witness, facts, FlaUI journey | M–L (about 1,200 to 1,600) | windows | 21a, 20b |
 | 21c | Mac: the same on PR 19's rescan, facts, VoiceOver check | M–L (about 1,000 to 1,400) | swift, a11y, windows | 21a, PR 19, 20c |
 
@@ -1175,6 +1179,12 @@ Interlocks:
   a session bound to its own `.slate` descriptor is what the writer id
   and the cursor row already assume (#1441 §7 calls the two independent).
   22a's identity-keyed structural-lock registry does not touch the feed.
+  **As built by 21a:** the one call site is `change_feed.install(&conn)`
+  in `VaultSession::open`, right after `db::migrate` (which, like
+  `open_database` and the compaction worker's `open_worker_connection`,
+  installs the defaults through `db::register_connection_functions`). 22a
+  keeps that call right after whatever connection its anchored open
+  returns.
 - In `00_program.md` §5, PR 21's row becomes 21a, 21b and 21c as above.
 
 ## 8. Documents and registers the implementing PRs change
