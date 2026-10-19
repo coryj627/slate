@@ -133,10 +133,11 @@ public sealed partial class FilesRegionLandingTests
     /// ONCE between them. The restore lands them on a live row before WPF
     /// re-evaluates the removed one. The guard, finding them on a live row,
     /// adds no second landing and declines nothing. The keys stay on the
-    /// reader's row, which the reconcile kept (plan 43 PR 20b), so neither
-    /// moves them; the reader's note edited outside Slate is a new row, which
-    /// they reach in one move at most; or they move once, to the nearest
-    /// survivor unselected or to the emptied FilesTree, the region's stop.
+    /// reader's row, which the reconcile kept (plan 43 PR 20b) — and kept,
+    /// updated in place, when the reader's note was edited outside Slate
+    /// (#1515; it was a new row the keys reached in one move) — so neither
+    /// moves them; or they move once, to the nearest survivor unselected or
+    /// to the emptied FilesTree, the region's stop.
     /// </summary>
     [Theory]
     [InlineData("kept")]
@@ -177,14 +178,13 @@ public sealed partial class FilesRegionLandingTests
         if (arm is "kept" or "edited")
         {
             Assert.True(
-                host.FocusChanges.Count <= (arm == "kept" ? 0 : 1),
+                host.FocusChanges.Count == 0,
                 $"the keys moved {host.FocusChanges.Count} times: "
                 + string.Join(" → ", host.FocusChanges.Select(focus => focus.GetType().Name)));
             Assert.True(
                 Keyboard.FocusedElement is TreeViewItem { IsSelected: true, DataContext: FileTreeNodeViewModel row }
-                    && row.Path == readerPath
-                    && ReferenceEquals(row, reader) == (arm == "kept"),
-                $"the keys are on {Keyboard.FocusedElement}, not on {readerPath}'s {(arm == "kept" ? "kept" : "new")} row");
+                    && ReferenceEquals(row, reader),
+                $"the keys are on {Keyboard.FocusedElement}, not on {readerPath}'s kept row");
             Assert.Empty(opened);
             Assert.Empty(host.Announced);
             host.AssertKeysNeverOnAWindow();
@@ -211,12 +211,16 @@ public sealed partial class FilesRegionLandingTests
         host.AssertKeysNeverOnAWindow();
     });
 
-    /// <summary>Select <paramref name="path"/>'s row, land the keys on it, then
-    /// forget the setup's focus changes and announcements and start counting
-    /// opens.</summary>
-    private static FileTreeNodeViewModel LandOnSelected(Host host, string path, List<string> opened)
+    /// <summary>Select the root row <paramref name="path"/>, land the keys on
+    /// it, then forget the setup's focus changes and announcements and start
+    /// counting opens.</summary>
+    private static FileTreeNodeViewModel LandOnSelected(Host host, string path, List<string> opened) =>
+        LandOnRow(host, host.Sidebar.RootNodes.Single(node => node.Path == path), opened);
+
+    /// <summary><see cref="LandOnSelected"/> for a row at any level the tree
+    /// shows (#1515: the reader inside an open folder).</summary>
+    private static FileTreeNodeViewModel LandOnRow(Host host, FileTreeNodeViewModel reader, List<string> opened)
     {
-        FileTreeNodeViewModel reader = host.Sidebar.RootNodes.Single(node => node.Path == path);
         host.Sidebar.SelectedNode = reader;
         host.Pane.UpdateLayout();
         PumpedDispatcher.Drain();

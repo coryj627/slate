@@ -104,7 +104,7 @@ internal sealed class FileTreeNodeViewModel : BindableBase
     public bool IsBatchSelectable => !IsPlaceholder && !IsGroupHeader;
     public int Level { get; }
     public bool HasFolderNote { get; private set; }
-    public FileSummary? Summary { get; }
+    public FileSummary? Summary { get; private set; }
     public ObservableCollection<FileTreeNodeViewModel> Children => _children;
     internal FileTreeChildLoadState ChildLoadState => _childLoadState;
     internal bool IsAttachedToTree(object treeIdentity) =>
@@ -293,6 +293,60 @@ internal sealed class FileTreeNodeViewModel : BindableBase
             child.AttachToTree(treeIdentity);
         }
     }
+
+    /// <summary>#1515: a rescan's reconcile keeps this row for
+    /// <paramref name="fresh"/>, its row in the fresh listing — the same
+    /// path, name, kind and level — and gives it what that listing says of
+    /// the file now: its summary and its folder-note state. Each property
+    /// that reads them and now reads otherwise says so, so the row, its
+    /// container and its UI Automation element stay, and show and name the
+    /// file as it is: a note edited outside Slate keeps its row.</summary>
+    internal void TakeRowStateOf(FileTreeNodeViewModel fresh)
+    {
+        bool summaryChanged = !Equals(Summary, fresh.Summary);
+        bool folderNoteChanged = HasFolderNote != fresh.HasFolderNote;
+        if (!summaryChanged && !folderNoteChanged)
+        {
+            return;
+        }
+
+        string displayName = DisplayName;
+        string metadataText = MetadataText;
+        string automationName = AutomationName;
+        Summary = fresh.Summary;
+        HasFolderNote = fresh.HasFolderNote;
+        if (summaryChanged)
+        {
+            OnPropertyChanged(nameof(Summary));
+        }
+
+        if (folderNoteChanged)
+        {
+            OnPropertyChanged(nameof(HasFolderNote));
+        }
+
+        if (DisplayName != displayName)
+        {
+            OnPropertyChanged(nameof(DisplayName));
+        }
+
+        if (MetadataText != metadataText)
+        {
+            OnPropertyChanged(nameof(MetadataText));
+        }
+
+        if (AutomationName != automationName)
+        {
+            OnPropertyChanged(nameof(AutomationName));
+        }
+    }
+
+    /// <summary>#1515: a kept OPEN folder whose rows the reconcile listed
+    /// again in place takes <paramref name="fresh"/>'s load state with
+    /// them — loaded, so a failed or cancelled load's error row, which the
+    /// fresh rows replaced, is not what it reports.</summary>
+    internal void TakeChildLoadStateOf(FileTreeNodeViewModel fresh) =>
+        _childLoadState = fresh._childLoadState;
 
     /// <summary>Plan 43 PR 20b (#1267): a rescan's reconcile keeps this
     /// COLLAPSED folder's row and gives it <paramref name="fresh"/>'s
