@@ -115,6 +115,14 @@ internal sealed class FileTreeNodeViewModel : BindableBase
     public string AutomationName => IsPlaceholder
         ? Name
         : $"{DisplayName}, {KindLabel}{(HasFolderNote ? ", has folder note" : string.Empty)}";
+
+    /// <summary>Plan 43 PR 20b (#1267): what a name that falls back to the
+    /// item reads — the row's own name, never this type's (the shortcut
+    /// slot's rule, below). UI Automation names a row the tree has let go of
+    /// through its item: the shell gate's scan, holding a row a watcher run's
+    /// publication removed, read "SlateWindows.FileTreeNodeViewModel".</summary>
+    public override string ToString() => AutomationName;
+
     public string MetadataText
     {
         get
@@ -284,6 +292,32 @@ internal sealed class FileTreeNodeViewModel : BindableBase
         {
             child.AttachToTree(treeIdentity);
         }
+    }
+
+    /// <summary>Plan 43 PR 20b (#1267): a rescan's reconcile keeps this
+    /// COLLAPSED folder's row and gives it <paramref name="fresh"/>'s
+    /// listing state — what the replaced row would have had: its next
+    /// expansion lists the folder as it is now, not as it was when it was
+    /// last open. Nothing is shown below a collapsed row, so nothing the
+    /// reader is on goes; the rows it held join
+    /// <paramref name="releasedIdentity"/>, so none of them loads again.</summary>
+    internal void AdoptChildStateOf(FileTreeNodeViewModel fresh, object releasedIdentity)
+    {
+        foreach (FileTreeNodeViewModel child in _children)
+        {
+            child.AttachToTree(releasedIdentity);
+        }
+
+        _childLoadState = fresh._childLoadState;
+        if (_treeIdentity is object treeIdentity)
+        {
+            foreach (FileTreeNodeViewModel child in fresh._children)
+            {
+                child.AttachToTree(treeIdentity);
+            }
+        }
+
+        ReplaceChildrenCore(fresh._children);
     }
 
     internal void ReplaceChildren(IEnumerable<FileTreeNodeViewModel> children)

@@ -601,9 +601,18 @@ internal sealed partial class FilesSidebarViewModel
         // W7-7 PR 7 (codex's merge-delta check, finding 1): the tree being
         // replaced, where a selected row this publication removes had its
         // neighbours — and an earlier removal's landing nobody took is stale.
-        ObservableCollection<FileTreeNodeViewModel> previousRoots = RootNodes;
+        // A copy (plan 43 PR 20b): a rescan's publication — silent — keeps
+        // the rows it did not change, reconciling the root level in place.
+        List<FileTreeNodeViewModel> previousRoots = [.. RootNodes];
         _ = TakeVanishedSelection();
-        RootNodes = outcome.RootNodes;
+        if (silent)
+        {
+            PublishKeepingUnchangedRows(outcome.RootNodes);
+        }
+        else
+        {
+            RootNodes = outcome.RootNodes;
+        }
         if (outcome.TagGeneration == _tagGeneration)
         {
             ApplyTags(outcome.Tags, announce: !silent);

@@ -357,6 +357,9 @@ internal sealed partial class FilesSidebarViewModel
             || SessionShutdownStarted
             || generation != _treeGeneration
             || !ReferenceEquals(rootNodes, RootNodes)
+            // Plan 43 PR 20b: a rescan's reconcile keeps the published
+            // collection and lets go of the rows it replaced.
+            || !node.IsAttachedToTree(RootNodes)
             || !node.IsExpanded)
         {
             return false;
