@@ -1210,9 +1210,14 @@ impl DiagramCompletedCache {
 pub struct VaultSession {
     provider: Arc<dyn VaultProvider>,
     conn: Mutex<Connection>,
-    /// Ephemeral process/session binding for opaque directory cursors —
-    /// and, since W7-7 PR 7, for scan-delta cursors too.
+    /// Ephemeral process/session binding for opaque directory cursors and,
+    /// since plan 43 PR 21a, for the change feed's writer id and window
+    /// tokens.
     directory_cursor_nonce: u64,
+    /// Plan 43 PR 21a (#1293): this session's change-feed writer id, the
+    /// origin cell its own write scopes set, and its window state. The
+    /// connection functions the feed's triggers call read the cell.
+    change_feed: crate::change_feed::ChangeFeedSeat,
     config: SessionConfig,
     /// Per-file op-log append state (#378). See [`OplogAppendState`].
     /// `Arc` so the compaction worker can mark futility (O-2).
@@ -1841,6 +1846,10 @@ impl Drop for VaultSession {
         // then its coalescer, signalled and joined — so no
         // `on_external_change` runs once the session is gone.
         self.stop_watching();
+        // Plan 43 PR 21a (design §4.2): a closing session deletes its
+        // change-feed cursor, best-effort, so it holds no rows from being
+        // trimmed. A failure leaves the cursor to be reaped after 24 hours.
+        self.drop_change_feed_cursor();
         // Stop the compaction worker: flag first (checked between
         // files), then a wake-up message, then join — a mid-file
         // compaction completes, everything queued behind it is
@@ -2530,6 +2539,15 @@ impl VaultSession {
         // to prevent. Only a rebuild legitimately orphans bindings.
         let cache_created_this_open = db::current_version(&conn)? == 0;
         db::migrate(&mut conn)?;
+        // Plan 43 PR 21a (design §4.1, §7): the ONE place a session's
+        // change-feed functions are registered — its writer id and origin
+        // cell override the defaults `open_database` and `migrate`
+        // installed. PR 22a's descriptor-relative open keeps this call
+        // right after whatever connection its open returns.
+        let directory_cursor_nonce = next_directory_cursor_nonce();
+        let change_feed =
+            crate::change_feed::ChangeFeedSeat::new(&config.user_actor_id, directory_cursor_nonce);
+        change_feed.install(&conn)?;
 
         let math_prefs = Mutex::new(config.math_prefs);
         let diagram_cache = Mutex::new(DiagramCompletedCache::default());
@@ -2598,7 +2616,8 @@ impl VaultSession {
         let session = Self {
             provider,
             conn: Mutex::new(conn),
-            directory_cursor_nonce: next_directory_cursor_nonce(),
+            directory_cursor_nonce,
+            change_feed,
             config,
             oplog_state,
             next_oplog_stem_salt: AtomicU64::new(0),
@@ -3209,6 +3228,144 @@ impl VaultSession {
             );
         }
         Ok(hashes)
+    }
+
+    // ----- the change feed (plan 43 PR 21a, #1293; design 21 §4.2–§4.6) -----
+
+    /// Register this session's change-feed cursor at the feed's head and
+    /// return the head. A host calls it right after its open scan and
+    /// before its initial reads, so the open scan's own changes (which
+    /// `VaultScanFinished` already spoke) stay out of the first window.
+    /// While no session holds a cursor the feed writes nothing. Speaks
+    /// nothing; reaps cursors silent for 24 hours. `slate-cli` never
+    /// registers.
+    pub fn register_change_feed(&self) -> Result<u64, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        let tx = db::begin_fenced(&conn)?;
+        let head = crate::change_feed::register(&tx, &self.change_feed)?;
+        tx.commit()?;
+        crate::change_feed::registered(&self.change_feed);
+        Ok(head)
+    }
+
+    /// Open a window of the change feed from `after` (this session's
+    /// cursor when `None`; a run's later pass passes the previous window's
+    /// `to_seq`) to the head, in one read snapshot. An exact window carries
+    /// per-path records (read with [`Self::change_feed_page`]) and counts
+    /// from the cursor; a gap or an oversized window carries neither, and
+    /// the host runs its full re-sync. Replaces the session's previous
+    /// window. Honours `cancel` (checked first and polled inside SQLite).
+    pub fn change_feed_window(
+        &self,
+        after: Option<u64>,
+        cancel: &CancelToken,
+    ) -> Result<crate::ChangeFeedWindow, VaultError> {
+        cancel.check()?;
+        let conn = self.conn.lock().expect("session connection mutex");
+        let opened = directory_page::with_sqlite_cancellation(&conn, cancel, || {
+            crate::change_feed::open_window(&conn, &self.change_feed, after, cancel)
+        })?;
+        match opened {
+            crate::change_feed::OpenedWindow::Window(window) => Ok(window),
+            crate::change_feed::OpenedWindow::Gap(pending) => {
+                // The gap re-creates this session's cursor at the head in a
+                // fenced write (design §4.3), so the triggers stay on during
+                // the host's full re-sync.
+                let tx = begin_fenced_cancellable(&conn, cancel)?;
+                let head = crate::change_feed::record_gap(&tx, &self.change_feed)?;
+                tx.commit()?;
+                Ok(crate::change_feed::gap_window(
+                    &self.change_feed,
+                    &pending,
+                    head,
+                ))
+            }
+        }
+    }
+
+    /// One bounded page of the session's current window: at most `limit`
+    /// records (1 to [`crate::MAX_CHANGE_FEED_PAGE_LIMIT`], refused
+    /// otherwise), renames first, then removals, then the rest, resumed by
+    /// keyset from `cursor`. A replaced window's token is refused ("change
+    /// feed window is stale"). Honours `cancel`.
+    pub fn change_feed_page(
+        &self,
+        window: &str,
+        cursor: Option<String>,
+        limit: u32,
+        cancel: &CancelToken,
+    ) -> Result<crate::ChangeFeedPage, VaultError> {
+        validate_page_limit(limit, crate::MAX_CHANGE_FEED_PAGE_LIMIT, "change feed")?;
+        cancel.check()?;
+        let conn = self.conn.lock().expect("session connection mutex");
+        directory_page::with_sqlite_cancellation(&conn, cancel, || {
+            crate::change_feed::page(
+                &conn,
+                &self.change_feed,
+                window,
+                cursor.as_deref(),
+                limit,
+                cancel,
+            )
+        })
+    }
+
+    /// The feed's head: one read, the cross-session version clock of
+    /// `files` and `dirs`. A run reads it after its last publication; a
+    /// head past the window's target means another session committed
+    /// meanwhile (AR-31, design §4.6).
+    pub fn change_feed_head(&self, cancel: &CancelToken) -> Result<u64, VaultError> {
+        cancel.check()?;
+        let conn = self.conn.lock().expect("session connection mutex");
+        Ok(crate::change_feed::head(&conn)?)
+    }
+
+    /// Acknowledge the session's current window when its run completes:
+    /// the cursor moves to the window's target, a pending re-sync mark
+    /// clears, the heartbeat is written, and the feed is trimmed below every
+    /// live cursor and to its cap — one fenced transaction. A cancelled
+    /// acknowledgment changes nothing; a failed one leaves the window to be
+    /// read again by the next run.
+    pub fn acknowledge_change_feed(
+        &self,
+        window: &str,
+        cancel: &CancelToken,
+    ) -> Result<(), VaultError> {
+        cancel.check()?;
+        let conn = self.conn.lock().expect("session connection mutex");
+        let window = crate::change_feed::acknowledged_window(&self.change_feed, window)?;
+        let tx = begin_fenced_cancellable(&conn, cancel)?;
+        directory_page::with_sqlite_cancellation(&conn, cancel, || {
+            crate::change_feed::acknowledge(&tx, &self.change_feed, &window, cancel)
+        })?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// `Drop`'s best-effort cursor deletion (design §4.2).
+    fn drop_change_feed_cursor(&mut self) {
+        if !self.change_feed.registered() {
+            return;
+        }
+        let writer = self.change_feed.writer().to_string();
+        let conn = self
+            .conn
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _ = conn.busy_timeout(std::time::Duration::from_millis(250));
+        let deleted = db::begin_fenced(conn)
+            .map_err(VaultError::from)
+            .and_then(|tx| {
+                tx.execute(
+                    "DELETE FROM change_feed_cursors WHERE writer = ?1",
+                    rusqlite::params![writer],
+                )?;
+                tx.commit()?;
+                Ok(())
+            });
+        if deleted.is_err() {
+            log::warn!("a closing session could not delete its change feed cursor");
+        }
     }
 
     fn scan_session(
@@ -4357,8 +4514,11 @@ impl VaultSession {
 
         let now = now_ms();
         let mut graph_sink = self.graph_sink();
-        let file_id = self
-            .index_saved_file(
+        let indexed = {
+            // Plan 43 PR 21a (design §4.1): this save's index rows are its
+            // own announced write — the notify below tells the host.
+            let _feed = self.change_feed.write_scope(&tx);
+            self.index_saved_file(
                 &tx,
                 path,
                 contents,
@@ -4368,10 +4528,11 @@ impl VaultSession {
                 existed,
                 &mut graph_sink,
             )
-            .map_err(|e| VaultError::SavedButUnindexed {
-                new_content_hash: new_hash.clone(),
-                detail: e.to_string(),
-            })?;
+        };
+        let file_id = indexed.map_err(|e| VaultError::SavedButUnindexed {
+            new_content_hash: new_hash.clone(),
+            detail: e.to_string(),
+        })?;
         // Resolve (allocating on first save) the file's op-log name
         // inside the index transaction, so the binding column commits
         // atomically with the save it serves (O-1 #539). Best-effort:
@@ -5894,8 +6055,11 @@ impl VaultSession {
         let mut graph_sink = self.graph_sink();
         // `existed = false` by construction: the case-insensitive index
         // gate above already rejected any pre-existing row.
-        let file_id = self
-            .index_saved_file(
+        let indexed = {
+            // Plan 43 PR 21a (design §4.1): the create is its own announced
+            // write.
+            let _feed = self.change_feed.write_scope(&tx);
+            self.index_saved_file(
                 &tx,
                 path,
                 index_contents,
@@ -5905,7 +6069,8 @@ impl VaultSession {
                 false,
                 &mut graph_sink,
             )
-            .map_err(&published)?;
+        };
+        let file_id = indexed.map_err(&published)?;
         // A materialised file heals the ghost rows that named it (W6-2
         // PR B, #746 — the Connections leaf's journey found it): the
         // links table's unresolved rows re-resolve against the inventory
@@ -8031,6 +8196,9 @@ impl VaultSession {
         let (name, _, _) = classify_path(path);
         let mut graph_sink = self.graph_sink();
         let mut converged_to_deletion = false;
+        // Plan 43 PR 21a (design §4.1): the repair is announced (the notify
+        // below), so its rows are this session's own writes.
+        let feed = self.change_feed.write_scope(&tx);
         match index_file(
             &tx,
             self.provider.as_ref(),
@@ -8063,6 +8231,7 @@ impl VaultSession {
             }
             Err(other) => return Err(other),
         }
+        drop(feed);
         // A successful repair converges the index to disk truth for
         // this path — including "the truth is that it's deleted" —
         // so the durable suspicion marker clears with it (round 21),
@@ -13164,6 +13333,9 @@ impl VaultSession {
                     is_markdown: classify_path(new).2,
                 });
             }
+            // Plan 43 PR 21a (design §4.1): the batch move and its undo are
+            // announced, so their renamed rows are this session's own writes.
+            let feed = self.change_feed.write_scope(&tx);
             for plan in &plans {
                 if plan.item.is_directory {
                     validate_batch_directory_index_source(&tx, plan, true)?;
@@ -13188,6 +13360,7 @@ impl VaultSession {
                     clear_index_epoch_for_moved_path(&tx, &plan.destination)?;
                 }
             }
+            drop(feed);
             {
                 let mut stmt =
                     tx.prepare("UPDATE links SET target_path = ?1 WHERE target_path = ?2")?;
@@ -13700,12 +13873,18 @@ impl VaultSession {
             let reconciled = (|| -> Result<(), VaultError> {
                 faults.check(BatchFaultPoint::MoveReconciliation)?;
                 let tx = db::begin_fenced(conn)?;
-                apply_batch_move_index_direction(
-                    &tx,
-                    self.provider.as_ref(),
-                    reconciliation_plans,
-                    reconciliation_forward,
-                )?;
+                {
+                    // Plan 43 PR 21a (design §4.1): the recovery's index
+                    // rows are this session's own writes; the moves that
+                    // stand are announced by `publish_batch_move_recovery`.
+                    let _feed = self.change_feed.write_scope(&tx);
+                    apply_batch_move_index_direction(
+                        &tx,
+                        self.provider.as_ref(),
+                        reconciliation_plans,
+                        reconciliation_forward,
+                    )?;
+                }
                 tx.commit()?;
                 Ok(())
             })();
@@ -14115,6 +14294,9 @@ impl VaultSession {
                     is_markdown: classify_path(new).2,
                 });
             }
+            // Plan 43 PR 21a (design §4.1): the batch move and its undo are
+            // announced, so their renamed rows are this session's own writes.
+            let feed = self.change_feed.write_scope(&tx);
             for plan in &plans {
                 if plan.item.is_directory {
                     validate_batch_directory_index_source(&tx, plan, true)?;
@@ -14139,6 +14321,7 @@ impl VaultSession {
                     clear_index_epoch_for_moved_path(&tx, &plan.destination)?;
                 }
             }
+            drop(feed);
             {
                 let mut stmt =
                     tx.prepare("UPDATE links SET target_path = ?1 WHERE target_path = ?2")?;
@@ -15139,6 +15322,10 @@ impl VaultSession {
         let mut graph_sink = self.graph_sink();
         let result = (|| -> Result<(), VaultError> {
             let tx = db::begin_fenced(conn)?;
+            // Plan 43 PR 21a (design §4.1): the batch Trash is announced (one
+            // Deleted per file), so its deleted rows are this session's own
+            // writes.
+            let feed = self.change_feed.write_scope(&tx);
             for plan in plans {
                 for file in &plan.deleted_files {
                     graph_sink.stage_with(|| {
@@ -15184,6 +15371,7 @@ impl VaultSession {
                     }
                 }
             }
+            drop(feed);
             tx.commit()?;
             Ok(())
         })();
@@ -16691,7 +16879,13 @@ impl VaultSession {
                     is_markdown: classify_path(new).2,
                 });
             }
-            update_index(&tx, &mut graph_sink)?;
+            {
+                // Plan 43 PR 21a (design §4.1): the move is announced (its
+                // callers notify each moved file), so its renamed rows are
+                // this session's own writes.
+                let _feed = self.change_feed.write_scope(&tx);
+                update_index(&tx, &mut graph_sink)?;
+            }
             {
                 // Bulk inbound repoint: in-graph edges follow the
                 // renamed node's identity, so FileRenamed above
@@ -17418,6 +17612,10 @@ impl VaultSession {
     /// held through `graph_apply`, otherwise a concurrent
     /// `graph_snapshot` can acquire conn+graph in the gap and read a
     /// stale index against the already-committed database.
+    ///
+    /// Plan 43 PR 21a (design §4.1): every caller is a Slate-owned
+    /// structural write — folder creation, the deletes, `undo_structural` —
+    /// so `body`'s index rows are this session's own writes.
     fn with_structural_tx_cancellable<T>(
         &self,
         conn: &mut Connection,
@@ -17425,7 +17623,10 @@ impl VaultSession {
         body: impl FnOnce(&rusqlite::Transaction) -> Result<T, VaultError>,
     ) -> Result<T, VaultError> {
         let tx = begin_fenced_cancellable(conn, cancel)?;
-        let out = body(&tx)?;
+        let out = {
+            let _feed = self.change_feed.write_scope(&tx);
+            body(&tx)?
+        };
         tx.commit()?;
         Ok(out)
     }
@@ -17436,7 +17637,10 @@ impl VaultSession {
         body: impl FnOnce(&rusqlite::Transaction) -> Result<T, VaultError>,
     ) -> Result<T, VaultError> {
         let tx = db::begin_fenced(conn)?;
-        let out = body(&tx)?;
+        let out = {
+            let _feed = self.change_feed.write_scope(&tx);
+            body(&tx)?
+        };
         tx.commit()?;
         Ok(out)
     }
@@ -21982,6 +22186,8 @@ mod tests {
     mod graph;
 
     mod watch;
+
+    mod change_feed;
 }
 
 /// FL5-3a: one refused file in a batch tag edit — deliberate skips

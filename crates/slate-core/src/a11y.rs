@@ -726,6 +726,17 @@ pub enum A11yEvent {
         changed: u64,
         removed: u64,
     },
+    /// A rescan whose change-feed window could not be counted (plan 43 PR
+    /// 21a, #1293; design 21 §4.7): a gap (a cursor reaped or trimmed, a
+    /// rebuilt or restored cache) or more than 10,000 rows since the last
+    /// run, so the host ran today's full re-sync. The counts are this
+    /// rescan's own scan's; the sentence says other sessions' changes were
+    /// not counted (owner decision Q1 of 2026-10-17).
+    VaultRescanFinishedUncounted {
+        reason: RescanReason,
+        changed: u64,
+        removed: u64,
+    },
     /// A rescan that was partial — the walk, a per-file stat / read /
     /// index, a step of the host's re-sync from the index, or the scan
     /// call itself failed — with an honest error count. Never "No
@@ -2026,6 +2037,20 @@ impl A11yEvent {
                     "Files refreshed. No changes.".to_owned()
                 } else {
                     format!("Files refreshed. {changed} new or changed, {removed} removed.")
+                }
+            }
+            VaultRescanFinishedUncounted {
+                changed, removed, ..
+            } => {
+                if *changed == 0 && *removed == 0 {
+                    "Files refreshed. No changes found; changes from other Slate sessions \
+                     were not counted."
+                        .to_owned()
+                } else {
+                    format!(
+                        "Files refreshed. {changed} new or changed, {removed} removed; \
+                         changes from other Slate sessions were not counted."
+                    )
                 }
             }
             VaultRescanIncomplete { errors } => format!(
@@ -4097,6 +4122,26 @@ pub fn corpus() -> Vec<A11yEvent> {
             removed: 0,
         },
         VaultRescanFinished {
+            reason: RescanReason::Watcher,
+            changed: 0,
+            removed: 2,
+        },
+        VaultRescanFinishedUncounted {
+            reason: RescanReason::Explicit,
+            changed: 1,
+            removed: 0,
+        },
+        VaultRescanFinishedUncounted {
+            reason: RescanReason::Explicit,
+            changed: 0,
+            removed: 0,
+        },
+        VaultRescanFinishedUncounted {
+            reason: RescanReason::Foreground,
+            changed: 2,
+            removed: 1,
+        },
+        VaultRescanFinishedUncounted {
             reason: RescanReason::Watcher,
             changed: 0,
             removed: 2,
@@ -6729,6 +6774,47 @@ mod tests {
         }
     }
 
+    /// Plan 43 PR 21a (#1293; design 21 §4.7, owner decision Q1): a rescan
+    /// whose change-feed window was a gap, too large or uncounted speaks its
+    /// own scan's counts and says other sessions' changes were not counted —
+    /// the same for every reason, at its siblings' tier, and never "No
+    /// changes." alone.
+    #[test]
+    fn an_uncounted_rescan_says_other_sessions_were_not_counted() {
+        for reason in [
+            RescanReason::Explicit,
+            RescanReason::Foreground,
+            RescanReason::Watcher,
+        ] {
+            let uncounted = |changed, removed| A11yEvent::VaultRescanFinishedUncounted {
+                reason,
+                changed,
+                removed,
+            };
+            for (event, expected) in [
+                (
+                    uncounted(0, 0),
+                    "Files refreshed. No changes found; changes from other Slate sessions \
+                     were not counted.",
+                ),
+                (
+                    uncounted(1, 0),
+                    "Files refreshed. 1 new or changed, 0 removed; changes from other Slate \
+                     sessions were not counted.",
+                ),
+                (
+                    uncounted(0, 3),
+                    "Files refreshed. 0 new or changed, 3 removed; changes from other Slate \
+                     sessions were not counted.",
+                ),
+            ] {
+                assert_eq!(event.priority(), Medium, "{event:?}");
+                assert_eq!(event.render(), expected, "{event:?}");
+                assert_ne!(event.render(), "Files refreshed. No changes.");
+            }
+        }
+    }
+
     /// The full corpus golden: every representative event's exact
     /// (priority, text). THIS TABLE IS THE CONTRACT — a wording change
     /// here is a product decision (and a §W-D parity change), never a
@@ -6796,6 +6882,22 @@ mod tests {
             (Medium, "Files refreshed. 2 new or changed, 1 removed."),
             (Medium, "Files refreshed. 1 new or changed, 0 removed."),
             (Medium, "Files refreshed. 0 new or changed, 2 removed."),
+            (
+                Medium,
+                "Files refreshed. 1 new or changed, 0 removed; changes from other Slate sessions were not counted.",
+            ),
+            (
+                Medium,
+                "Files refreshed. No changes found; changes from other Slate sessions were not counted.",
+            ),
+            (
+                Medium,
+                "Files refreshed. 2 new or changed, 1 removed; changes from other Slate sessions were not counted.",
+            ),
+            (
+                Medium,
+                "Files refreshed. 0 new or changed, 2 removed; changes from other Slate sessions were not counted.",
+            ),
             (
                 Medium,
                 "Files refreshed with errors. 1 error; results may be incomplete.",
@@ -8276,8 +8378,10 @@ mod tests {
             // landed-but-unindexed create caveat,
             // CreatePublishedUnindexed, 218; plan 43 #1431 the editor's
             // activate-at-cursor refusal, NothingToActivateAtCursor, and its
-            // task outcomes, TaskToggled and TaskToggleFailed, 221.
-            221,
+            // task outcomes, TaskToggled and TaskToggleFailed, 221; plan 43
+            // PR 21a (#1293) the change feed's uncounted rescan sentence,
+            // VaultRescanFinishedUncounted, 222.
+            222,
             "A11yEvent's top-level variant count moved; uniffi caps an enum at 256"
         );
     }

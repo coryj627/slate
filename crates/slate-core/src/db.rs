@@ -221,6 +221,10 @@ const MIGRATIONS: &[Migration] = &[
         description: "files: Unicode fold index on names for the embed resolver (#1279)",
         sql: include_str!("../migrations/039_file_name_fold_index.sql"),
     },
+    Migration {
+        description: "change_feed: cross-session index change feed (plan 43 PR 21a, #1293)",
+        sql: include_str!("../migrations/040_change_feed.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with Slate's standard PRAGMAs.
@@ -266,7 +270,7 @@ pub fn open_in_memory(cache_size_pages: u32) -> Result<Connection, DbError> {
     Ok(conn)
 }
 
-/// Register deterministic SQL helpers shared by every Slate-owned connection.
+/// Register the SQL helpers shared by every Slate-owned connection.
 ///
 /// Directory paging must apply the exact Rust NFC/full-Unicode-lowercase key
 /// before SQL LIMIT/OFFSET. Keeping the function here makes file-backed,
@@ -274,9 +278,16 @@ pub fn open_in_memory(cache_size_pages: u32) -> Result<Connection, DbError> {
 /// a weaker ASCII-only approximation. Migration 033 persists this function in
 /// expression indexes; changing its Unicode/casefold semantics requires an
 /// explicit schema migration that rebuilds those indexes.
+///
+/// Plan 43 PR 21a (#1293): migration 040's change-feed triggers call
+/// `slate_feed_writer()` and `slate_feed_origin()`, so every Slate connection
+/// gets them here with their defaults ("unattributed", reconcile). A
+/// session's own connection overrides both right after its open
+/// ([`crate::change_feed::ChangeFeedSeat::install`]).
 pub(crate) fn register_connection_functions(conn: &Connection) -> rusqlite::Result<()> {
     use rusqlite::functions::FunctionFlags;
 
+    crate::change_feed::register_default_feed_functions(conn)?;
     conn.create_scalar_function(
         "slate_effective_name_key",
         4,
@@ -408,6 +419,13 @@ fn is_busy_or_locked(e: &rusqlite::Error) -> bool {
 /// migration rolls the whole run back instead of leaving a prefix
 /// applied.
 pub fn migrate(conn: &mut Connection) -> Result<u32, DbError> {
+    migrate_with(conn, &[])
+}
+
+/// [`migrate`] over this build's migrations followed by `extra` — empty in
+/// production; a test appends a stand-in for a later migration (plan 43
+/// PR 21a: `a_later_migration_clears_every_cursor_and_row`).
+fn migrate_with(conn: &mut Connection, extra: &[Migration]) -> Result<u32, DbError> {
     // Public callers may supply a raw rusqlite connection. Migration 033
     // persists the deterministic tree-key UDF in expression indexes, so the
     // migration boundary itself must establish every required function.
@@ -415,7 +433,7 @@ pub fn migrate(conn: &mut Connection) -> Result<u32, DbError> {
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     ensure_version_table(&tx)?;
     let current = current_version(&tx)?;
-    let runner_max = MIGRATIONS.len() as u32;
+    let runner_max = (MIGRATIONS.len() + extra.len()) as u32;
 
     if current > runner_max {
         return Err(DbError::UnsupportedVersion {
@@ -424,7 +442,7 @@ pub fn migrate(conn: &mut Connection) -> Result<u32, DbError> {
         });
     }
 
-    for (i, migration) in MIGRATIONS.iter().enumerate() {
+    for (i, migration) in MIGRATIONS.iter().chain(extra).enumerate() {
         let target_version = (i + 1) as u32;
         if target_version > current {
             apply_migration(&tx, target_version, migration)?;
@@ -432,8 +450,33 @@ pub fn migrate(conn: &mut Connection) -> Result<u32, DbError> {
     }
 
     let final_version = current_version(&tx)?;
+    // Plan 43 PR 21a (design §4.2): a migration fences every session opened
+    // at the older schema out of writing (`begin_fenced`), so their cursors
+    // could never be acknowledged again. Any migration applied over the
+    // change feed therefore clears every cursor and every row, in this same
+    // transaction, and records the head as trimmed; the sessions that
+    // restart register at the head.
+    if final_version > current && final_version >= crate::change_feed::FEED_MIGRATION_VERSION {
+        crate::change_feed::clear_after_migration(&tx)?;
+    }
     tx.commit()?;
     Ok(final_version)
+}
+
+/// Test-only: [`migrate`] with one migration appended after this build's
+/// last, standing in for a later build's (plan 43 PR 21a).
+#[cfg(test)]
+pub(crate) fn migrate_with_later_migration_for_tests(
+    conn: &mut Connection,
+    sql: &'static str,
+) -> Result<u32, DbError> {
+    migrate_with(
+        conn,
+        &[Migration {
+            description: "test: a later migration",
+            sql,
+        }],
+    )
 }
 
 /// Test-only: apply pending migrations through `version` —
@@ -986,6 +1029,130 @@ mod tests {
             )
             .unwrap();
         assert_eq!(fresh, None);
+    }
+
+    /// Plan 43 PR 21a (#1293): migration 040 creates the feed's three
+    /// tables and its six triggers, with the trim floor at 0, and replays
+    /// safely (`IF NOT EXISTS`, the migration 035 precedent).
+    #[test]
+    fn migration_040_creates_the_feed_and_replays_idempotently() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("cache.sqlite");
+        let mut conn = open_database(&path, 512).unwrap();
+        assert_eq!(migrate(&mut conn).unwrap(), MIGRATIONS.len() as u32);
+        assert_eq!(
+            MIGRATIONS[crate::change_feed::FEED_MIGRATION_VERSION as usize - 1].sql,
+            include_str!("../migrations/040_change_feed.sql")
+        );
+        let names = |conn: &Connection, kind: &str| -> Vec<String> {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT name FROM sqlite_master WHERE type = ?1 AND name LIKE '%feed%'
+                     ORDER BY name",
+                )
+                .unwrap();
+            stmt.query_map([kind], |row| row.get(0))
+                .unwrap()
+                .map(|row| row.unwrap())
+                .collect()
+        };
+        let tables = ["change_feed", "change_feed_cursors", "change_feed_meta"];
+        let triggers = [
+            "dirs_ad_feed",
+            "dirs_ai_feed",
+            "dirs_au_feed",
+            "files_ad_feed",
+            "files_ai_feed",
+            "files_au_feed",
+        ];
+        assert_eq!(names(&conn, "table"), tables);
+        assert_eq!(names(&conn, "trigger"), triggers);
+        let floor = |conn: &Connection| -> i64 {
+            conn.query_row(
+                "SELECT trimmed_through FROM change_feed_meta WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(floor(&conn), 0);
+        assert_eq!(crate::change_feed::head(&conn).unwrap(), 0);
+
+        conn.execute("DELETE FROM schema_version WHERE version >= 40", [])
+            .unwrap();
+        assert_eq!(
+            migrate(&mut conn).expect("migration 040 replays"),
+            MIGRATIONS.len() as u32,
+            "a restored schema-version table replays 040"
+        );
+        assert_eq!(names(&conn, "table"), tables);
+        assert_eq!(names(&conn, "trigger"), triggers);
+        assert_eq!(floor(&conn), 0);
+    }
+
+    /// Plan 43 PR 21a (design §4.2): any migration applied over the feed
+    /// clears every cursor and every row in the same transaction and records
+    /// the head as trimmed — the sessions it fences out restart and register
+    /// at the head. A test-only migration stands in for a later build's 041.
+    #[test]
+    fn a_later_migration_clears_every_cursor_and_row() {
+        let mut conn = fresh_db();
+        migrate(&mut conn).unwrap();
+        conn.execute(
+            "INSERT INTO change_feed_cursors (writer, seq, heartbeat_ms) VALUES ('a', 0, 0), ('b', 0, 0)",
+            [],
+        )
+        .unwrap();
+        for path in ["one.md", "two.md", "three.md"] {
+            conn.execute(
+                "INSERT INTO files (path, name, size_bytes, mtime_ms, content_hash, parser_version, indexed_at_ms)
+                 VALUES (?1, ?1, 0, 0, 'h', 1, 0)",
+                [path],
+            )
+            .unwrap();
+        }
+        let count = |conn: &Connection, table: &str| -> i64 {
+            conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap()
+        };
+        assert_eq!(count(&conn, "change_feed"), 3, "the gate was open");
+        assert_eq!(crate::change_feed::head(&conn).unwrap(), 3);
+
+        let later = MIGRATIONS.len() as u32 + 1;
+        assert_eq!(
+            migrate_with_later_migration_for_tests(&mut conn, "CREATE TABLE later (x)").unwrap(),
+            later
+        );
+        assert_eq!(count(&conn, "change_feed_cursors"), 0);
+        assert_eq!(count(&conn, "change_feed"), 0);
+        let floor: i64 = conn
+            .query_row(
+                "SELECT trimmed_through FROM change_feed_meta WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(floor, 3, "the head is recorded as trimmed");
+        assert_eq!(
+            crate::change_feed::head(&conn).unwrap(),
+            3,
+            "the head stays"
+        );
+
+        // Running this build's migrations again applies nothing and keeps
+        // whatever a session wrote since.
+        conn.execute(
+            "INSERT INTO change_feed_cursors (writer, seq, heartbeat_ms) VALUES ('c', 3, 0)",
+            [],
+        )
+        .unwrap();
+        assert_eq!(
+            migrate_with_later_migration_for_tests(&mut conn, "CREATE TABLE later (x)").unwrap(),
+            later
+        );
+        assert_eq!(count(&conn, "change_feed_cursors"), 1);
     }
 
     #[test]
