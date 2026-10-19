@@ -343,7 +343,10 @@ per-file for folder operations — canvas apply, deleted-file recovery;
 restores ride the save seam). External edits never surface as
 file-change events: the filesystem watcher only asks the host to
 reconcile (`on_external_change`), and the reconciliation is the
-rescan. Events are emitted after the write and index commit; callbacks
+rescan. Changes this session did not announce (another session's
+writes, and every session's scans) reach a host through the change
+feed, a paged, cancellable read it opens after a rescan; they never
+arrive as file-change events. Events are emitted after the write and index commit; callbacks
 may arrive with session locks held (the `ScanProgressListener`
 discipline) — listeners marshal, never reenter synchronously. All enums
 additive-only; hosts tolerate unknown variants. First non-error
@@ -362,6 +365,16 @@ writes are filtered by the provider's echo ledger. §4.1's fallback
 promise stands: with no watch, or a watch that overflows or ends,
 Refresh and the foreground rescan reconcile, as they also do while a
 watch is live.
+
+*Amendment (2026-10-18, plan 43 PR 21a, #1293):* the sentence on
+changes this session did not announce is PR 21's, on the owner's call
+of 2026-10-17 (`43_mac_backlog_delivery/21_change_feed_design.md` §8,
+§11 Q6, approved together with PR 20's). The feed is core's
+`register_change_feed`, `change_feed_window`, `change_feed_page`,
+`change_feed_head` and `acknowledge_change_feed` (§4.5 lists its
+tables); `FileChangeEvent` does not change, and a session's own
+announced writes are excluded from its own window. Hosts consume it
+with PRs 21b (Windows) and 21c (mac).
 
 ### 4.5 SQLite schema (V0)
 
@@ -474,7 +487,41 @@ CREATE INDEX idx_specialized_blocks_kind ON specialized_blocks(kind);
 CREATE VIRTUAL TABLE files_fts USING fts5(
   path UNINDEXED, body, content='', tokenize='unicode61'
 );
+
+-- Change feed (plan 43 PR 21a, #1293; migration 040): one row per
+-- changed path of `files` or `dirs`, written inside the mutating
+-- statement by persistent triggers while any session holds a cursor.
+CREATE TABLE change_feed (
+  seq           INTEGER PRIMARY KEY AUTOINCREMENT,  -- the head is its high-water mark
+  kind          INTEGER NOT NULL,   -- 1 created, 2 modified, 3 deleted, 4 renamed
+  entry         INTEGER NOT NULL,   -- 0 file, 1 directory
+  path          TEXT NOT NULL,
+  previous_path TEXT,               -- renamed only
+  hash_before   TEXT,
+  hash_after    TEXT,
+  writer        TEXT NOT NULL,      -- "<actor>:<pid>:<session nonce>"
+  origin        INTEGER NOT NULL,   -- 0 reconcile, 1 Slate-owned (announced) write
+  written_ms    INTEGER NOT NULL
+);
+CREATE TABLE change_feed_cursors (  -- one per consuming session
+  writer         TEXT PRIMARY KEY,
+  seq            INTEGER NOT NULL,
+  heartbeat_ms   INTEGER NOT NULL,  -- reaped after 24 hours
+  resync_pending INTEGER NOT NULL DEFAULT 0
+) WITHOUT ROWID;
+CREATE TABLE change_feed_meta (
+  id              INTEGER PRIMARY KEY CHECK (id = 1),
+  trimmed_through INTEGER NOT NULL  -- a cursor below it is a gap
+);
 ```
+
+*Amendment (2026-10-18, plan 43 PR 21a, #1293; §11 Q6 of
+`43_mac_backlog_delivery/21_change_feed_design.md`):* the three feed
+tables join the schema. Every acknowledgment trims the rows at or below
+every live cursor and keeps at most 100,000; any later migration clears
+every cursor and row. A connection without Slate's SQL functions
+(`slate_feed_writer`, `slate_feed_origin`) cannot change a watched
+column of `files` or `dirs`.
 
 ---
 

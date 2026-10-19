@@ -2484,6 +2484,13 @@ fn note_task_pages_read_one_snapshot() {
     );
     assert_eq!(page.total, 2, "totals agree with the snapshot too");
     assert_eq!(page.open_total, 1);
+    // Plan 43 PR 21a (design §3.5): the racing commit really landed — the
+    // next read, after the snapshot, sees it. Without Slate's SQL functions
+    // the seam's hash rewrite would fail under migration 040's triggers and
+    // this fact would pass with no race at all.
+    let after = session.note_tasks("notes/torn-read.md", 10).unwrap();
+    assert_eq!(after.content_hash, "torn-by-second-connection");
+    assert_eq!(after.total, 0);
 }
 
 #[test]

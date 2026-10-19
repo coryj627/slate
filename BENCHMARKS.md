@@ -1293,3 +1293,78 @@ time. With a second session open in the process, the older one's rescans
 lose their SQLite page cache and run about 1.8× slower (#1484), so a
 comparison of two open vaults would read 0.67 or 1.89 depending on which
 opened first.
+
+## Plan 43 PR 21a — the change feed's trigger cost (#1293)
+
+Migration 040's six triggers write one `change_feed` row per changed path of
+`files` and `dirs`, inside the mutating statement, while any session holds a
+cursor; with no cursor each mutation pays one gate check
+(`EXISTS (SELECT 1 FROM change_feed_cursors)`). Measured the way design 21
+§3.3's spike did, at 10,000 notes.
+
+Recorded 2026-10-18 on the Mac Studio (Apple M5 Max, 18 cores, 36 GB, macOS
+27.0.1) with rustc 1.97.1, release profile without LTO, at a load average of
+4.6 to 8.3 on a shared machine. The harness is a scratch binary depending on
+slate-core by path. "No feed" is the schema before this PR: migrations
+001–039 for the statement shapes, and for the end-to-end runs a cache whose
+six feed triggers were dropped after the open. "Gate off" is migration 040
+with no cursor, which is every vault until a host registers (PRs 21b and 21c)
+and every `slate-cli` session. "Gate on" is migration 040 with a cursor
+registered by another session. The variants ran interleaved, the order
+rotated each round; each cell gives two runs' medians.
+
+**Statement shapes** (core's SQL against a file-backed cache with Slate's
+pragmas and live FTS triggers, 1 KiB Markdown bodies; 9 rounds):
+
+| | No feed | Gate off | Gate on |
+|---|---:|---:|---:|
+| Cold insert of 10,000 rows, one transaction | 188.7, 187.3 ms | 191.0, 190.3 ms | 201.0, 199.9 ms |
+| 10,000 hash-only updates, one transaction | 2.48, 2.47 µs each | 3.10, 3.10 µs each | 4.06, 4.04 µs each |
+| One save, an upsert in its own IMMEDIATE transaction | 0.052, 0.052 ms | 0.052, 0.052 ms | 0.059, 0.058 ms |
+| Fast path over 10,000 rows | 28.8, 28.6 ms | 28.8, 28.7 ms | 28.7, 28.6 ms |
+
+**End to end** (`VaultSession`, 10,000 notes of about 1 KiB with
+frontmatter across 50 folders, no links; 5 rounds): a cold open and scan; the
+median of 41 compare-and-swap saves of one note; the median of 7 no-change
+rescans.
+
+| | No feed | Gate off | Gate on |
+|---|---:|---:|---:|
+| Cold open and scan | 0.858, 0.848 s | 0.861, 0.857 s | 0.873, 0.862 s |
+| Save p50 | 10.99, 10.98 ms | 11.02, 11.02 ms | 11.07, 10.99 ms |
+| No-change rescan p50 | 99.2, 99.1 ms | 99.8, 99.0 ms | 99.5, 99.2 ms |
+| Feed rows the cold scan wrote | 0 | 0 | 10,050 |
+
+- **A feed row costs about 1 µs** here (gate on against gate off: 0.95 µs per
+  hash-only update, 1.0 µs per cold-inserted row), and **the gate check about
+  0.6 µs** per hash-only update (0.2 to 0.3 µs per cold insert). The spike's
+  2.5 to 4 µs and 0.5 to 2.1 µs were taken at a load average of 10 to 33.
+- **Nothing for the fast path:** an unchanged rescan updates no watched
+  column and fires no trigger, so its cost is unchanged within noise.
+- **A cold scan another session watches** costs about 1.7% more than no
+  feed (10,050 rows: one per note and folder); with the gate off, 0.3 to
+  1.1%. A save gains about 0.007 ms in its transaction, lost in a save's
+  11 ms.
+
+**The window** (design §3.3's second table, on the same 10,000-file index):
+another writer's mixed rows — 40% modified, 20% created, 20% deleted, 20%
+renamed — read by a registered host: `change_feed_window` (the median of five
+openings: the derivation, the `list_files` summary of every present file and
+the TEMP materialization, in one read transaction), every page at 10,000, then
+one acknowledgment with its trim.
+
+| Rows in the window | Window | All pages | Acknowledge and trim | Records |
+|---:|---:|---:|---:|---:|
+| 10 | 0.06 ms | 0.02 ms | 0.05 ms | 14 |
+| 1,000 | 4.2 ms | 0.45 ms | 0.38 ms | 1,400 |
+| 10,000 | 46.3 ms | 4.9 ms | 2.2 ms | 14,000 |
+
+The counts came out exact at every size (for 10,000 rows: 8,000 new or
+changed, 4,000 removed; a rename counts one each way). The window at the
+10,000-row limit holds the session's connection lock for about 46 ms, more
+than the spike's 26 ms because it also reads the summaries of 8,000 present
+files; past the limit a window is `TooLarge` and reads nothing.
+
+**No guard.** Design §4.8 names no perf guard, so this PR adds none; the
+facts pin the bounds instead (`a_window_over_the_row_limit_is_too_large_and_reads_nothing`,
+`pages_are_bounded_removal_first_and_resume_by_keyset`).

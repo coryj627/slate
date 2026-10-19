@@ -1421,6 +1421,74 @@ impl VaultSession {
         self.inner.stop_watching();
     }
 
+    /// Plan 43 PR 21a (#1293): register this session's change-feed cursor
+    /// at the feed's head and return the head. Call it on the open worker
+    /// right after the open scan and before the initial reads, so the open
+    /// scan's own changes (which `VaultScanFinished` speaks) stay out of the
+    /// first window. Speaks nothing. While no session holds a cursor the
+    /// feed writes nothing.
+    pub fn register_change_feed(&self) -> Result<u64, VaultError> {
+        Ok(self.inner.register_change_feed()?)
+    }
+
+    /// Plan 43 PR 21a (#1293): open a window of the change feed from
+    /// `after` (this session's cursor when nil; a run's later pass passes
+    /// the previous window's `to_seq`) to the head, in one read snapshot.
+    /// `Exact` carries records (read with `change_feed_page`) and counts
+    /// from the cursor; `TooLarge` and `Gap` carry neither, and the host
+    /// runs its full re-sync with the uncounted sentence. Replaces the
+    /// session's previous window. Honours `cancel`; call it on the rescan
+    /// worker with the run's token.
+    pub fn change_feed_window(
+        &self,
+        after: Option<u64>,
+        cancel: Arc<CancelToken>,
+    ) -> Result<ChangeFeedWindow, VaultError> {
+        Ok(self.inner.change_feed_window(after, &cancel.inner)?.into())
+    }
+
+    /// Plan 43 PR 21a (#1293): one bounded page of the session's current
+    /// window — at most `limit` records (1 to
+    /// `max_change_feed_page_limit()`, refused otherwise): renames first in
+    /// `seq` order, then removals by path, then the rest by path, resumed
+    /// from `cursor`. A replaced window's token is refused. Honours
+    /// `cancel`.
+    pub fn change_feed_page(
+        &self,
+        window: String,
+        cursor: Option<String>,
+        limit: u32,
+        cancel: Arc<CancelToken>,
+    ) -> Result<ChangeFeedPage, VaultError> {
+        Ok(self
+            .inner
+            .change_feed_page(&window, cursor, limit, &cancel.inner)?
+            .into())
+    }
+
+    /// Plan 43 PR 21a (#1293): the feed's head, one read. A run reads it
+    /// after its last publication: a head past the window's `to_seq` means
+    /// another session committed meanwhile, and the run opens a further
+    /// window from that target, at most `change_feed_max_passes()` passes
+    /// in all (AR-31).
+    pub fn change_feed_head(&self, cancel: Arc<CancelToken>) -> Result<u64, VaultError> {
+        Ok(self.inner.change_feed_head(&cancel.inner)?)
+    }
+
+    /// Plan 43 PR 21a (#1293): acknowledge the session's current (last)
+    /// window when its run completes, including a run whose re-sync
+    /// operations failed (the host's retry set owns those). Not when the
+    /// run was cancelled or a feed read failed: the next run then reads the
+    /// same window again. A cancelled acknowledgment changes nothing; a
+    /// failed one is one error for the run.
+    pub fn acknowledge_change_feed(
+        &self,
+        window: String,
+        cancel: Arc<CancelToken>,
+    ) -> Result<(), VaultError> {
+        Ok(self.inner.acknowledge_change_feed(&window, &cancel.inner)?)
+    }
+
     /// Register a session-event listener (O-2 #540). Returns an opaque
     /// token for `unregister_event_listener`. Events arrive on
     /// background worker threads — marshal to the main actor inside
@@ -6565,6 +6633,211 @@ pub fn max_indexed_hash_paths() -> u32 {
     core::MAX_INDEXED_HASH_PATHS as u32
 }
 
+/// Plan 43 PR 21a (#1293, design §4.3, Q5): the most records one
+/// `change_feed_page` call returns. Core's one number, so both hosts page
+/// alike.
+#[uniffi::export]
+pub fn max_change_feed_page_limit() -> u32 {
+    core::MAX_CHANGE_FEED_PAGE_LIMIT
+}
+
+/// Plan 43 PR 21a (#1293, design §4.6, Q5): the most change-feed passes one
+/// rescan makes. After its last window's publications a run reads the head;
+/// while it moved, the run opens a further window from that window's target,
+/// up to this many windows in all.
+#[uniffi::export]
+pub fn change_feed_max_passes() -> u32 {
+    core::CHANGE_FEED_MAX_PASSES
+}
+
+// --- The change feed (plan 43 PR 21a, #1293) ---
+
+/// Why a change-feed window could not be read exactly — 1:1 mirror of
+/// `slate_core::ChangeFeedGap`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum ChangeFeedGap {
+    /// This session holds no cursor (never registered, reaped after 24
+    /// hours, or the cache was rebuilt or migrated under it).
+    NoCursor,
+    /// Rows the window needs were trimmed (the 100,000-row cap).
+    Trimmed,
+    /// The window starts above the head (a cache restored from a backup).
+    Reset,
+    /// The full re-sync a gap started has not been acknowledged yet.
+    ResyncPending,
+}
+
+impl From<core::ChangeFeedGap> for ChangeFeedGap {
+    fn from(gap: core::ChangeFeedGap) -> Self {
+        match gap {
+            core::ChangeFeedGap::NoCursor => Self::NoCursor,
+            core::ChangeFeedGap::Trimmed => Self::Trimmed,
+            core::ChangeFeedGap::Reset => Self::Reset,
+            core::ChangeFeedGap::ResyncPending => Self::ResyncPending,
+        }
+    }
+}
+
+/// What a change-feed window is — 1:1 mirror of
+/// `slate_core::ChangeFeedStatus`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum ChangeFeedStatus {
+    /// Its records and counts are exact.
+    Exact,
+    /// More than 10,000 rows not all this session's own: nothing was read;
+    /// the host runs its full re-sync.
+    TooLarge,
+    /// The feed cannot answer: the host runs its full re-sync.
+    Gap { reason: ChangeFeedGap },
+}
+
+impl From<core::ChangeFeedStatus> for ChangeFeedStatus {
+    fn from(status: core::ChangeFeedStatus) -> Self {
+        match status {
+            core::ChangeFeedStatus::Exact => Self::Exact,
+            core::ChangeFeedStatus::TooLarge => Self::TooLarge,
+            core::ChangeFeedStatus::Gap(reason) => Self::Gap {
+                reason: reason.into(),
+            },
+        }
+    }
+}
+
+/// One opened change-feed window (plan 43 PR 21a, design §4.3). The run
+/// speaks its last window's counts when it says `counted`, and the
+/// uncounted sentence otherwise; under the owner's decision Q2 the counts
+/// are spoken only on an explicit Refresh.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ChangeFeedWindow {
+    /// Opaque; pass it to `change_feed_page` and `acknowledge_change_feed`.
+    pub token: String,
+    pub from_seq: u64,
+    /// The window's target; a later pass starts after it.
+    pub to_seq: u64,
+    pub status: ChangeFeedStatus,
+    pub counted: bool,
+    /// New or changed files from the session's cursor (the run's
+    /// cumulative count).
+    pub changed: u64,
+    /// Removed files from the session's cursor.
+    pub removed: u64,
+    pub record_count: u64,
+}
+
+impl From<core::ChangeFeedWindow> for ChangeFeedWindow {
+    fn from(window: core::ChangeFeedWindow) -> Self {
+        Self {
+            token: window.token,
+            from_seq: window.from_seq,
+            to_seq: window.to_seq,
+            status: window.status.into(),
+            counted: window.counted,
+            changed: window.changed,
+            removed: window.removed,
+            record_count: window.record_count,
+        }
+    }
+}
+
+/// What a change record names — 1:1 mirror of `slate_core::ChangeEntry`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum ChangeEntry {
+    File,
+    Directory,
+}
+
+/// What a change record asks the host to do — 1:1 mirror of
+/// `slate_core::ChangeEffect`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum ChangeEffect {
+    /// Move the open tabs at `renamed_from` whose saved baseline equals
+    /// `from_hash` to `path`; a dirty one keeps its buffer.
+    Renamed,
+    /// `path` is absent from the index at the window's target.
+    Removed,
+    /// `path` is present at the target, with `content_hash` and `summary`.
+    Present,
+}
+
+/// How a record's path counts from the session's cursor — 1:1 mirror of
+/// `slate_core::ChangeCount`. Directories are never counted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum ChangeCount {
+    Created,
+    Modified,
+    Removed,
+    Uncounted,
+}
+
+/// One per-path record of a change-feed window (plan 43 PR 21a, design
+/// §4.3), applied through the rescan's per-path primitives.
+#[derive(uniffi::Record)]
+pub struct ChangeRecord {
+    /// Vault-relative.
+    pub path: String,
+    pub entry: ChangeEntry,
+    pub effect: ChangeEffect,
+    /// `Renamed` only: the origin path.
+    pub renamed_from: Option<String>,
+    /// `Renamed` only: the baseline the host's tabs at the origin hold.
+    pub from_hash: Option<String>,
+    pub counted: ChangeCount,
+    /// `Present` files: the content hash at the window's target.
+    pub content_hash: Option<String>,
+    /// `Present` files: the `list_files` row as of the target.
+    pub summary: Option<FileSummary>,
+    /// Core's openable-document classification of `path`.
+    pub openable: bool,
+    /// The path's last row in the window, for diagnostics.
+    pub seq: u64,
+}
+
+impl From<core::ChangeRecord> for ChangeRecord {
+    fn from(record: core::ChangeRecord) -> Self {
+        Self {
+            path: record.path,
+            entry: match record.entry {
+                core::ChangeEntry::File => ChangeEntry::File,
+                core::ChangeEntry::Directory => ChangeEntry::Directory,
+            },
+            effect: match record.effect {
+                core::ChangeEffect::Renamed => ChangeEffect::Renamed,
+                core::ChangeEffect::Removed => ChangeEffect::Removed,
+                core::ChangeEffect::Present => ChangeEffect::Present,
+            },
+            renamed_from: record.renamed_from,
+            from_hash: record.from_hash,
+            counted: match record.counted {
+                core::ChangeCount::Created => ChangeCount::Created,
+                core::ChangeCount::Modified => ChangeCount::Modified,
+                core::ChangeCount::Removed => ChangeCount::Removed,
+                core::ChangeCount::Uncounted => ChangeCount::Uncounted,
+            },
+            content_hash: record.content_hash,
+            summary: record.summary.map(Into::into),
+            openable: record.openable,
+            seq: record.seq,
+        }
+    }
+}
+
+/// One bounded page of a change-feed window's records.
+#[derive(uniffi::Record)]
+pub struct ChangeFeedPage {
+    pub records: Vec<ChangeRecord>,
+    /// Pass back to read the next page; nil on the last.
+    pub next_cursor: Option<String>,
+}
+
+impl From<core::ChangeFeedPage> for ChangeFeedPage {
+    fn from(page: core::ChangeFeedPage) -> Self {
+        Self {
+            records: page.records.into_iter().map(Into::into).collect(),
+            next_cursor: page.next_cursor,
+        }
+    }
+}
+
 /// Plan 43 PR 20 (#1267, design §4.5; owner decision Q2): at most one
 /// watcher sentence per this many milliseconds per vault. A Watcher run
 /// whose sentence would fall inside the window posts nothing, and its
@@ -8773,6 +9046,11 @@ pub enum A11yEvent {
         changed: u64,
         removed: u64,
     },
+    VaultRescanFinishedUncounted {
+        reason: RescanReason,
+        changed: u64,
+        removed: u64,
+    },
     VaultRescanIncomplete {
         errors: u64,
     },
@@ -10685,6 +10963,15 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
                 changed,
                 removed,
             } => C::VaultRescanFinished {
+                reason: reason.into(),
+                changed,
+                removed,
+            },
+            F::VaultRescanFinishedUncounted {
+                reason,
+                changed,
+                removed,
+            } => C::VaultRescanFinishedUncounted {
                 reason: reason.into(),
                 changed,
                 removed,
@@ -13681,6 +13968,144 @@ mod tests {
         assert_eq!(
             watcher.text,
             "Files refreshed. 1 new or changed, 0 removed."
+        );
+    }
+
+    /// Plan 43 PR 21a (#1293): the change feed across the FFI. Two sessions
+    /// on one vault stand for two windows: B's create, edit and rename reach
+    /// A's window counted, with a summary and the renamed record's hash; the
+    /// pages are bounded and resume by keyset; the head and the
+    /// acknowledgment work; a gap is a gap; the constants are core's; and the
+    /// uncounted sentence renders the approved copy.
+    #[test]
+    fn the_change_feed_crosses_the_ffi() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("edit.md"), "# Edit me\n").unwrap();
+        std::fs::write(tmp.path().join("move.md"), "# Move me\n").unwrap();
+        let root = tmp.path().to_string_lossy().into_owned();
+        let a = VaultSession::open_filesystem(root.clone()).expect("open A");
+        a.scan_initial(CancelToken::new()).unwrap();
+        assert_eq!(a.register_change_feed().unwrap(), 0);
+        let b = VaultSession::open_filesystem(root).expect("open B");
+        b.scan_initial(CancelToken::new()).unwrap();
+        b.register_change_feed().unwrap();
+
+        b.create_exclusive("new.md".into(), "# New\n".into())
+            .unwrap();
+        let before = b.get_file_metadata("edit.md".into()).unwrap().unwrap();
+        b.save_text(
+            "edit.md".into(),
+            "# Edited by B\n".into(),
+            Some(before.content_hash),
+        )
+        .unwrap();
+        let moved_hash = b
+            .get_file_metadata("move.md".into())
+            .unwrap()
+            .unwrap()
+            .content_hash;
+        b.rename_file("move.md".into(), "moved.md".into()).unwrap();
+
+        let window = a.change_feed_window(None, CancelToken::new()).unwrap();
+        assert_eq!(window.status, ChangeFeedStatus::Exact);
+        assert!(window.counted);
+        assert_eq!((window.changed, window.removed), (3, 1));
+        assert_eq!(window.record_count, 5);
+        assert_eq!(
+            a.change_feed_head(CancelToken::new()).unwrap(),
+            window.to_seq
+        );
+
+        for limit in [0, max_change_feed_page_limit() + 1] {
+            assert!(matches!(
+                a.change_feed_page(window.token.clone(), None, limit, CancelToken::new()),
+                Err(VaultError::InvalidArgument { .. })
+            ));
+        }
+        let mut records = Vec::new();
+        let mut cursor = None;
+        loop {
+            let page = a
+                .change_feed_page(window.token.clone(), cursor.take(), 2, CancelToken::new())
+                .unwrap();
+            assert!(page.records.len() <= 2);
+            records.extend(page.records);
+            match page.next_cursor {
+                Some(next) => cursor = Some(next),
+                None => break,
+            }
+        }
+        let shape: Vec<(ChangeEffect, &str, ChangeCount)> = records
+            .iter()
+            .map(|record| (record.effect, record.path.as_str(), record.counted))
+            .collect();
+        assert_eq!(
+            shape,
+            [
+                (ChangeEffect::Renamed, "moved.md", ChangeCount::Uncounted),
+                (ChangeEffect::Removed, "move.md", ChangeCount::Removed),
+                (ChangeEffect::Present, "edit.md", ChangeCount::Modified),
+                (ChangeEffect::Present, "moved.md", ChangeCount::Created),
+                (ChangeEffect::Present, "new.md", ChangeCount::Created),
+            ]
+        );
+        assert_eq!(records[0].renamed_from.as_deref(), Some("move.md"));
+        assert_eq!(records[0].from_hash.as_deref(), Some(moved_hash.as_str()));
+        let new = records
+            .iter()
+            .find(|record| record.path == "new.md")
+            .unwrap();
+        assert_eq!(new.entry, ChangeEntry::File);
+        assert!(new.openable);
+        assert_eq!(
+            new.summary.as_ref().map(|s| s.name.as_str()),
+            Some("new.md")
+        );
+        assert!(new.content_hash.is_some());
+
+        a.acknowledge_change_feed(window.token.clone(), CancelToken::new())
+            .unwrap();
+        let next = a.change_feed_window(None, CancelToken::new()).unwrap();
+        assert_eq!(next.from_seq, window.to_seq);
+        assert_eq!((next.record_count, next.changed, next.removed), (0, 0, 0));
+        assert!(matches!(
+            a.acknowledge_change_feed(window.token, CancelToken::new()),
+            Err(VaultError::InvalidArgument { .. })
+        ));
+
+        // A third session that never registered has no cursor: a gap.
+        let unregistered =
+            VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned()).unwrap();
+        let gap = unregistered
+            .change_feed_window(None, CancelToken::new())
+            .unwrap();
+        assert_eq!(
+            gap.status,
+            ChangeFeedStatus::Gap {
+                reason: ChangeFeedGap::NoCursor
+            }
+        );
+        assert!(!gap.counted);
+
+        assert_eq!(max_change_feed_page_limit(), 10_000);
+        assert_eq!(change_feed_max_passes(), 3);
+        let uncounted = a11y_render(A11yEvent::VaultRescanFinishedUncounted {
+            reason: RescanReason::Explicit,
+            changed: 1,
+            removed: 0,
+        });
+        assert_eq!(
+            uncounted.text,
+            "Files refreshed. 1 new or changed, 0 removed; changes from other Slate sessions were not counted."
+        );
+        let none = a11y_render(A11yEvent::VaultRescanFinishedUncounted {
+            reason: RescanReason::Foreground,
+            changed: 0,
+            removed: 0,
+        });
+        assert_eq!(
+            none.text,
+            "Files refreshed. No changes found; changes from other Slate sessions were not counted."
         );
     }
 
