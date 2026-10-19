@@ -94,7 +94,18 @@ both, on the same policy and with the same words, from
 `AppState+Rescan.swift` (Files Sidebar Refresh, `slate.sidebar.refresh`,
 and the foreground rescan when the app becomes active after at least two
 seconds away), and never speaks this family for a rescan either; the two
-designations are retired and the ledger names the mac sites.
+designations are retired and the ledger names the mac sites. Amended by
+plan 43 PR 21c (#1293; contract 40's change feed on mac): mac also posts
+VaultRescanFinishedUncounted(reason, changed, removed) — Files refreshed.
+C new or changed, R removed; changes from other Slate sessions were not
+counted. / Files refreshed. No changes found; changes from other Slate
+sessions were not counted. — with its own scan's counts when the change
+feed's window is a gap or over its row limit, always for an explicit
+Refresh and otherwise only when those counts are not zero; an explicit
+Refresh's VaultRescanFinished counts include other Slate sessions'
+changes, a foreground or watcher run's only its own scan's (the owner's
+decision Q2). The mac designation is retired and the ledger names the
+mac site.
 
 **D-4 — Host timing remains host timing.** The injected-clock minimum
 interval suppresses only progress. Start/finish always fire and advance the
@@ -905,7 +916,7 @@ Canvas and Graph retain their separate structural-key and journey censuses.
 | `VaultClosedChangesDiscarded` | posted | `AppState.swift#resolveVaultCloseDiscardAll@1` | `VaultLifecycleViewModel.cs#VaultLifecycleViewModel.AnnounceTeardown@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `VaultOpened` | posted | `AppState.swift#announceDirectVaultSwitch@1`; `MainSplitView.swift#splitViewWithSheets@1` | `VaultLifecycleViewModel.cs#VaultLifecycleViewModel.OpenVaultAsync@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `VaultRescanFinished` | posted | `AppState+Rescan.swift#runOneRescan@1` | `VaultLifecycleViewModel.Rescan.cs#VaultLifecycleViewModel.RunOneRescanAsync@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
-| `VaultRescanFinishedUncounted` | posted | — | — | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | Mac recorded: Plan 43 PR 21a (#1293, AR-76): core's uncounted rescan sentence ships with the change feed and no mac rescan speaks it yet; PR 21c posts it from the mac rescan when its change-feed window is a gap or too large. [40_nvda_matrix_remediation_contracts](../../docs/plans/40_nvda_matrix_remediation_contracts.md); Windows recorded: Plan 43 PR 21a (#1293, AR-76): core's uncounted rescan sentence ships with the change feed and no Windows rescan speaks it yet; PR 21b posts it from the Windows rescan when its change-feed window is a gap or too large. [40_nvda_matrix_remediation_contracts](../../docs/plans/40_nvda_matrix_remediation_contracts.md) |
+| `VaultRescanFinishedUncounted` | posted | `AppState+Rescan.swift#runOneRescan@1` | — | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | Windows recorded: Plan 43 PR 21a (#1293, AR-76): core's uncounted rescan sentence ships with the change feed and no Windows rescan speaks it yet; PR 21b posts it from the Windows rescan when its change-feed window is a gap or too large. [40_nvda_matrix_remediation_contracts](../../docs/plans/40_nvda_matrix_remediation_contracts.md) |
 | `VaultRescanIncomplete` | posted | `AppState+Rescan.swift#runOneRescan@1`; `AppState+Rescan.swift#runOneRescan@2` | `VaultLifecycleViewModel.Rescan.cs#VaultLifecycleViewModel.PostRescanIncomplete@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `VaultScanFinished` | posted | `AppState.swift#handleScanProgress@1` | `ScanAnnouncementGate.cs#ScanAnnouncementGate.Finished@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |
 | `VaultScanProgress` | posted | `AppState.swift#handleScanProgress@1` | `ScanAnnouncementGate.cs#ScanAnnouncementGate.FileIndexed@1` | `Censuses/A11yCorpusCensus.cs#EveryCorpusEventRendersTheCommittedIdentityTextAndPriority` | unit-observed: `AccessibilityNotificationDispatcherTests.cs#EveryCorpusEventReachesTheNativeBoundaryWithItsGoldenTextAndPriority` | — |

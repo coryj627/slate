@@ -4,8 +4,8 @@ Status: design, 2026-10-17, with the owner's decisions of 2026-10-17
 in §11. PR 21a (§7, the core feed and its FFI) is delivered, on
 migration 040 as designed, against `main` at 55c72798: PRs 19, 20.0 and
 20a had moved many of the lines cited below, so it worked from the
-function names they cite. PRs 21b and 21c, the hosts, are not
-delivered. Issue #1293 (contract 40 AR-30, AR-31). Spec:
+function names they cite. PR 21c (§7, the mac host) is delivered, on
+`main` at 981904d4; PR 21b, the Windows host, is not. Issue #1293 (contract 40 AR-30, AR-31). Spec:
 `specs/pr21_change_feed.md`. Baseline: `main` at 71231296; every
 file:line reference below was read at that commit (PRs 13, 16 and 17
 merged since beed82e1, where this design started, and moved only the mac
@@ -1151,7 +1151,7 @@ gated off while no cursor exists). 21a also corrects the stale
 |---|---|---|---|---|
 | 21a | Core: migration 040, the feed functions and origin scopes, `change_feed.rs` (register, the window's state machine and materialization, pages, head, acknowledge, trim, reap, the gap's re-registration), the uncounted variant with its corpus rows and golden, the FFI records, methods and constants, both bindings regenerated, the torn-read seam, the census and the §4.9 core facts. **Delivered 2026-10-18:** `migrations/040_change_feed.sql`, `change_feed.rs` (the functions, the origin scope, cursors, the window's state machine and per-path derivation, the TEMP materialization, pages, the trim), the five `VaultSession` methods and their FFI twins with `max_change_feed_page_limit()` and `change_feed_max_passes()`, `VaultRescanFinishedUncounted` with four corpus rows; facts in `session/tests/change_feed.rs`, `change_feed.rs`, `db.rs`, `a11y.rs`, `session/tests/tasks.rs`, slate-cli `tests/write.rs` and slate-uniffi; contract 40 AR-30 retired, AR-31 narrowed, AR-76 to AR-83 for §9 (AR-75 is PR 20b's) | L (about 2,000 to 2,600 lines with facts) | rust, swift, windows | 20a |
 | 21b | Windows: open registration, the run-long journal, the retry set, the record path, passes, recovery set, acknowledgment, sentence, the rewritten AR-30 witness, facts, FlaUI journey | M–L (about 1,200 to 1,600) | windows | 21a, 20b |
-| 21c | Mac: the same on PR 19's rescan, facts, VoiceOver check | M–L (about 1,000 to 1,400) | swift, a11y, windows | 21a, PR 19, 20c |
+| 21c | Mac: the same on PR 19's rescan, facts, VoiceOver check. **Delivered 2026-10-18:** `registerChangeFeed()` in the open's `loadFiles`, between its scan and its listing; `consumeChangeFeed` in `AppState+Rescan.swift`: the retry set, and an explicit Refresh's recovery set, before the window; an exact window through `applyChangeFeedWindow` (pages of 1,000, the inventory in one pass, the tree's summaries in place and one silent refetch for a structural record, `retargetTabsForFeedRename` for the tabs a rename moves, every open tab compared, the leaves narrowed to the window's paths); a gap or an oversized window through PR 19's `resyncFromIndex`; the Slate-write journal re-read after each window and at the end; the head and up to three passes; the acknowledgment; the sentence under Q2. 22 facts in `VaultRescanTests+ChangeFeed.swift`, the AR-30 witness first; contract 40's change feed on mac, AR-8 on mac and AR-30 on mac; the trigger ledger's mac site; the runbook's §A step 7 | M–L (about 1,000 to 1,400) | swift, a11y, windows | 21a, PR 19, 20c |
 
 Facts by PR: 21a takes §4.9's core list; 21b the Windows list; 21c the
 mac list.
