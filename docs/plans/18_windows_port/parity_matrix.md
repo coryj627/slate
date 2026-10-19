@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-10-17 at `74edc839` (the head the run stood on; the commit carrying this file is its child, and after a squash merge the head is a branch commit outside main — `--check` holds the body, not this line) by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-10-18 at `05dd5723` (the head the run stood on; the commit carrying this file is its child, and after a squash merge the head is a branch commit outside main — `--check` holds the body, not this line) by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 
@@ -260,10 +260,10 @@ What `WorkspaceStore` round-trips — a **separate** inventory from the right-pa
 
 | surface | source | consuming W issue | status |
 |---|---|---|---|
-| App shell, window chrome, vault lifecycle | `SlateMacApp.swift` | #720 (W1-1) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
-| Files sidebar (tree CRUD, filter, tags, pins, shortcuts, folder notes) | `FileTreeSidebar.swift` + FL program | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| App shell, window chrome, vault lifecycle | `SlateMacApp.swift` | #720 (W1-1) | implemented; local gates green 2026-07-20; interactive CI + human AT pending; plan 43 PR 20b (#1267): on Windows, changes made outside Slate reach it through core's vault watcher, with no Refresh (mac: PR 20c) |
+| Files sidebar (tree CRUD, filter, tags, pins, shortcuts, folder notes) | `FileTreeSidebar.swift` + FL program | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending; plan 43 PR 20b (#1267): on Windows, changes made outside Slate reach it through core's vault watcher, with no Refresh (mac: PR 20c) |
 | Workspace: tabs, splits, leaves, persistence, focus routing | `Workspace/` | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
-| Quick switcher | `QuickSwitcherModel.swift` (core ranking, W0.5-2) | #723 (W1-4) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| Quick switcher | `QuickSwitcherModel.swift` (core ranking, W0.5-2) | #723 (W1-4) | implemented; local gates green 2026-07-20; interactive CI + human AT pending; plan 43 PR 20b (#1267): on Windows, changes made outside Slate reach it through core's vault watcher, with no Refresh (mac: PR 20c) |
 | Editor host (AvalonEdit ⇄ DocumentBuffer, undo, save, IME) | `NoteEditorView.swift` | #724 (W2-1) | implemented; local gates green 2026-07-23; interactive CI + human AT pending |
 | Editor canonical spans | #381 span API consumers | #381 (W2-2) | implemented; local gates green 2026-07-23; interactive CI + human AT pending |
 | In-editor interactions (links, tags, citations, embeds, checkboxes) | `NoteEditorView.swift` | #725 (W2-3) | implemented; local gates green 2026-07-23; interactive CI + human AT pending |

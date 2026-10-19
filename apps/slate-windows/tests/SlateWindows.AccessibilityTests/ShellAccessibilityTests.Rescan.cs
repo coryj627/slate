@@ -3,6 +3,7 @@
 
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Definitions;
 using FlaUI.Core.Input;
@@ -63,6 +64,12 @@ public sealed partial class ShellAccessibilityTests
             // The announcement dispatcher's R-1 diagnostics, for the listener's
             // failure message and the evidence artifact.
             startInfo.Environment["SLATE_UIA_DIAGNOSTICS"] = "1";
+            // Plan 43 PR 20b (#1267, design §4.7): this journey counts what
+            // each Refresh found, so core's vault watcher stays off — a
+            // Watcher run could index the file first and leave the Refresh
+            // saying "No changes". ExternalFiles_AppearWithoutRefresh runs
+            // the real watcher.
+            startInfo.Environment[VaultWatcherSwitch] = "1";
             process = Process.Start(startInfo)
                 ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
             if (!HasInteractiveDesktop(process, "external-files"))
@@ -166,6 +173,212 @@ public sealed partial class ShellAccessibilityTests
             catch (UnauthorizedAccessException)
             {
             }
+        }
+    }
+
+    /// <summary>
+    /// Plan 43 PR 20b (#1267, design §4.7): core's vault watcher, end to end —
+    /// ReadDirectoryChangesW, core's coalescer, the listener, the lifecycle's
+    /// Watcher run. With the main window active and no Refresh, a file created
+    /// outside Slate appears in the tree and in Quick Open, heard as exactly
+    /// one line, core's rendering of a Watcher run's
+    /// <c>VaultRescanFinished</c> (the shared "Files refreshed. 1 new or
+    /// changed, 0 removed."), and the app's log names the run's route. The
+    /// run's reconcile keeps every row it did not change — the note's row,
+    /// held since before the change, is still one the tree shows — and the
+    /// window scans clean right after it. Then the open note changed outside
+    /// Slate shows its new content, and nothing is said: a second watcher
+    /// sentence inside the minute is silent.
+    /// </summary>
+    /// <remarks>
+    /// The window is brought forward once, at the start, and never again
+    /// before the changes are shown: a watcher request while it is away waits
+    /// for the next activation (§4.5), and that activation's foreground rescan
+    /// would find the changes too — which is why the log must name a Watcher
+    /// run.
+    /// </remarks>
+    [Fact]
+    public void ExternalFiles_AppearWithoutRefresh()
+    {
+        string testRoot = Path.Combine(
+            Path.GetTempPath(), $"slate-watched-files-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Watched Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        string notePath = Path.Combine(vaultRoot, "note.md");
+        string latePath = Path.Combine(vaultRoot, "late.md");
+        File.WriteAllText(notePath, "# Note\n\nOriginal body.\n");
+
+        string logFile = Path.Combine(logDirectory, "slate-windows.log");
+        var heard = new ConcurrentQueue<ReceivedNotification>();
+        RenderedAnnouncement watcherLine = SlateUniffiMethods.A11yRender(
+            new A11yEvent.VaultRescanFinished(RescanReason.Watcher, 1, 0));
+
+        Process? process = null;
+        // #1326: the evidence records what happened, never a capture that did not.
+        string registered = NotRegistered;
+        ListenerOutcome outcome = ListenerOutcome.Aborted;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe()) { UseShellExecute = false };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
+                $"slate-watched-files-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            // The dispatcher's R-1 diagnostics and the rescan's route line.
+            startInfo.Environment["SLATE_UIA_DIAGNOSTICS"] = "1";
+            // The real watcher, whatever the runner's environment holds.
+            _ = startInfo.Environment.Remove(VaultWatcherSwitch);
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+            if (!HasInteractiveDesktop(process, "watched-files"))
+            {
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process,
+                automation,
+                logFile,
+                TimeSpan.FromSeconds(30));
+            using DesktopNotificationListener listener = ListenOnTheDesktop(automation, heard);
+            (registered, outcome) = (RegisteredAfterTheWindow, ListenerOutcome.Failed);
+            window.SetForeground();
+            WaitForVaultOpen(window);
+            AutomationElement filesTree = WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(10));
+            AutomationElement noteRow = SelectTreeItem(window, automation, "note");
+            _ = WaitForEditor(window, automation, "note.md editor", TimeSpan.FromSeconds(10));
+            WaitForEditorText(window, automation, "note.md editor", "Original body.");
+            string noteRowName = noteRow.Name;
+
+            // --- leg 1: a file created outside Slate, and no Refresh ----------
+            int leg1 = LaunchSettledMark(heard, process.Id, logFile);
+            File.WriteAllText(latePath, "# Late\n");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => TreeListedItemStartingWith(filesTree, automation, "late"),
+                    TimeSpan.FromSeconds(30)),
+                "late.md never reached the files tree without a Refresh. Rescans: "
+                + string.Join(" | ", DiagnosticLines(logFile, "VaultRescanStarted")));
+            AwaitHeardSince(heard, process.Id, leg1, [watcherLine], TimeSpan.FromSeconds(15), logFile);
+            string[] runs = DiagnosticLines(logFile, "VaultRescanStarted");
+            Assert.True(
+                runs.Contains("SlateWindows.VaultRescanStarted (Watcher)") && !runs.Any(run => run.EndsWith("(Explicit)", StringComparison.Ordinal)),
+                "the file must arrive through a Watcher run, with no Refresh; the log names: " + string.Join(" | ", runs));
+            // Plan 43 PR 20b (the shell gate, 2026-10-18): the reconcile kept
+            // the note's row — a reconcile that replaced it left this element
+            // dark, as the Templates journey's scan and the shell journey's
+            // SetFocus met it — and right after the reconcile the window scans
+            // clean, the item-name census (W7-7 PR 3, R-4) included.
+            AssertHeldRowStillShown(noteRow, noteRowName);
+            AssertAxeClean(process, "rescan-watcher-files");
+            AssertQuickOpenFinds(window, automation, "late", "late");
+
+            // --- leg 2: the OPEN note changed outside Slate, inside the minute -
+            int leg2 = QuietMark(heard, process.Id);
+            DateTime before = File.GetLastWriteTimeUtc(notePath);
+            File.WriteAllText(notePath, "# Note\n\nChanged outside Slate.\n");
+            File.SetLastWriteTimeUtc(notePath, before.AddSeconds(5));
+            WaitForEditorText(window, automation, "note.md editor", "Changed outside Slate.");
+            Assert.True(
+                QuietMark(heard, process.Id) == leg2,
+                "a second watcher run inside the sentence window spoke: "
+                + string.Join(" | ", HeardFrom(heard, process.Id).Skip(leg2).Select(line => line.DisplayString)));
+            runs = DiagnosticLines(logFile, "VaultRescanStarted");
+            Assert.True(
+                runs.Count(run => run == "SlateWindows.VaultRescanStarted (Watcher)") >= 2
+                    && !runs.Any(run => run.EndsWith("(Explicit)", StringComparison.Ordinal)),
+                "the open note's change must arrive through a second Watcher run; the log names: "
+                + string.Join(" | ", runs));
+            outcome = ListenerOutcome.Completed;
+        }
+        finally
+        {
+            int slateId = process?.Id ?? -1;
+            WriteAnnouncementEvidence(
+                "rescan-watcher",
+                registered,
+                outcome,
+                HeardFrom(heard, slateId),
+                heard.Count(notification => notification.ProcessId != slateId),
+                AnnouncementDiagnostics(logFile));
+            if (process is not null && !process.HasExited)
+            {
+                process.CloseMainWindow();
+                if (!process.WaitForExit(5_000))
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    /// <summary>Plan 43 PR 20b: core's test switch for the vault watcher
+    /// (<c>SLATE_TEST_DISABLE_VAULT_WATCHER</c>), which a journey that counts
+    /// a Refresh's findings sets and the watcher's journey clears.</summary>
+    /// <remarks>
+    /// Only the Refresh journey (<see cref="ExternalFiles_AppearAfterRefresh"/>)
+    /// sets it: it is the one journey that counts what a rescan found (design
+    /// §4.7). Every other journey runs the real watcher, decided on 2026-10-18
+    /// from what they do: only two others change the vault outside Slate
+    /// after the launch — this one, and the Templates journey's template file,
+    /// whose Watcher run reconciles the tree under its open picker — and none
+    /// counts a rescan's findings, while a reconcile under a journey's rows is
+    /// exactly what the watcher makes ordinary.
+    /// </remarks>
+    private const string VaultWatcherSwitch = "SLATE_TEST_DISABLE_VAULT_WATCHER";
+
+    /// <summary>A Files row held since before a Watcher run is still a row
+    /// the tree shows: on screen, with a rectangle and the same name. A row a
+    /// publication let go of answers UIA_E_ELEMENTNOTAVAILABLE
+    /// (0x80040201) instead — the shell journey's SetFocus on its held note
+    /// row, 2026-10-18.</summary>
+    private static void AssertHeldRowStillShown(AutomationElement row, string name)
+    {
+        try
+        {
+            Assert.False(row.Properties.IsOffscreen.Value, $"the held row '{name}' reads off-screen after the Watcher run");
+            Assert.False(
+                row.Properties.BoundingRectangle.Value.IsEmpty,
+                $"the held row '{name}' has no rectangle after the Watcher run");
+            Assert.Equal(name, row.Properties.Name.Value);
+        }
+        catch (Exception exception) when (exception is COMException or FlaUI.Core.Exceptions.ElementNotAvailableException)
+        {
+            Assert.Fail(
+                $"the Watcher run's reconcile let go of the held row '{name}': "
+                + $"{exception.GetType().Name} 0x{exception.HResult:X8}");
+        }
+    }
+
+    /// <summary>Whether the tree lists a row starting with
+    /// <paramref name="prefix"/> now; a transient UIA fault reads as not
+    /// yet.</summary>
+    private static bool TreeListedItemStartingWith(
+        AutomationElement tree, UIA3Automation automation, string prefix)
+    {
+        try
+        {
+            return tree
+                .FindAllDescendants(automation.ConditionFactory.ByControlType(ControlType.TreeItem))
+                .Any(item => (item.Properties.Name.ValueOrDefault ?? string.Empty)
+                    .StartsWith(prefix, StringComparison.Ordinal));
+        }
+        catch (Exception exception) when (IsTransientUiaFault(exception))
+        {
+            return false;
         }
     }
 
