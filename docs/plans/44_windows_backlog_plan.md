@@ -14,17 +14,29 @@ numbers are the current ones where the issue's had drifted.
 
 ## 1. Scope
 
-**In:** 68 open issues with no feature milestone, in three kinds:
+**In:** 65 open issues with no feature milestone, in three kinds:
 
 | Kind | Count | Issues |
 |---|---|---|
-| Windows host (`apps/slate-windows`) | 45 | #1522 #1515 #1508 #1505 #1312 #1475 #1467 #1465 #1422 #1415 #1397 #1389 #1330 #1329 #1266 #1281 #1277 #1261 #1260 #1259 #1314 #1288 #1051 #1331 #1321 #1316 #1315 #1313 #1308 #1306 #1285 #1323 #1301 #1307 #1384 #1381 #1325 #1322 #1320 #1319 #1317 #1311 #1305 #1296 #1112 |
-| Core, host-neutral or Windows-cfg (`crates/`) | 17 | #1516 #1519 #1499 #1492 #1480 #1294 #1486 #1485 #1427 #1426 #1484 #1481 #1395 #1510 #1290 #1370 #1526 |
+| Windows host (`apps/slate-windows`) | 44 | #1522 #1515 #1508 #1505 #1312 #1475 #1467 #1465 #1422 #1415 #1397 #1389 #1330 #1329 #1266 #1281 #1277 #1261 #1260 #1259 #1314 #1288 #1331 #1321 #1316 #1315 #1313 #1308 #1306 #1285 #1323 #1301 #1307 #1384 #1381 #1325 #1322 #1320 #1319 #1317 #1311 #1305 #1296 #1112 |
+| Core, host-neutral or Windows-cfg (`crates/`) | 15 | #1516 #1519 #1499 #1492 #1480 #1294 #1486 #1485 #1427 #1426 #1484 #1481 #1510 #1290 #1526 |
 | Two-host, whose Windows or core half stands alone | 6 | #1293 (21b) #1525 #1468 #1376 #1386 #1390 |
 
 **Out, and why:**
 
 - **Mac-only issues**, all in plan 43 §11.4.
+- **Two-host issues the owner decided land in one PR on both hosts, or
+  whose change is heard on mac and so needs a VoiceOver pass:** they stay
+  in plan 43, and their Windows edits arrive from there. This plan names
+  them so the Windows queue sees them coming and sequences around them:
+
+  | Issue | Plan 43 PR | Decision | Windows files it will touch | Interlock here |
+  |---|---|---|---|---|
+  | #1370 (file-card hint by target) | 32 | RD7: core-owned hint, both hosts consume in the same PR | `Canvas/CanvasOutlineView.cs:30`, `CanvasDocumentViewModel.cs:5467-5475`, `CanvasDocumentTests.cs` | WB-13 edits `CanvasOutlineView.cs` for #1260; whichever lands second rebases |
+  | #1395 (the unindexed caveats' punctuation) | 39 | changes a sentence both hosts speak; mac VoiceOver pass owed | Windows `CreateOutcomeTests` pin a prefix and keep passing | none |
+  | #1382 (the palette field hint) | 30 | RD7: core-owned hint copy | `MainWindow.xaml:2980` (HelpText) | none |
+  | #1398 (a `.base` whose YAML does not parse) | 35 | RD5: core-owned failed-state copy on both hosts | the Windows base failed state (`BaseDocumentViewModel.cs`, `BaseSurfaceView.cs`) | WB-14 (#1397) touches the same failed state: WB-14 first, PR 35 rebases, or PR 35 first and WB-14 adopts its copy |
+  | #1466 (⌘-click / Ctrl+click setting) | 53 | RD13: a setting honoured by Windows' Ctrl+click too | `EditorInteractions.cs` (pointer origin), settings menu, `ChordTable.cs` | after WB-21 and WB-22 (both edit `ChordTable.cs` and `EditorInteractions.cs`) |
 - **Core work that needs a Mac to verify:** #1513 (22c; the held root is
   `#[cfg(any(macos, linux))]`, `fs_root.rs:536-540`, and its facts are
   `cfg(unix)`), the macOS probe halves of #1434 and #1470 (`hdiutil`,
@@ -37,6 +49,8 @@ numbers are the current ones where the issue's had drifted.
   stay the milestone's own wave. §9 says what this plan hands them.
 - **Feature milestones** E, PD, XD, X, V, PS, EX and CV: not fixes.
 - **Blocked upstream** (watch list, §8): #1493, #480, #998; #1457 is dated.
+- **Milestone W's W8-2 palette pass:** #1051 (accent on raised at Lc 74.46;
+  no surface uses the pair today), per WD19.
 - **No action:** #642 (l10n umbrella).
 
 **Fixed already, close after a verification fact (§2.1):** #1320, #1261.
@@ -97,7 +111,16 @@ numbers are the current ones where the issue's had drifted.
   host fix on its own.
 - **#1370's core row has no target.** `CanvasOutlineRow`
   (`session.rs:20839-20854`) carries `kind` only, so the core-owned hint
-  RD7 asked for is a new record field, not a new `A11yEvent`.
+  RD7 asked for is a new record field, not a new `A11yEvent`; it adds a
+  field to the Swift record literal in
+  `PreparedFailureRecoveryTests.swift:268`. Recorded here for plan 43's
+  PR 32, which keeps the issue (§1).
+- **#1526's "all tokens" cannot mean semantic spans.** `CodeBlock` has
+  separate `tokens: Vec<SyntaxToken>` (byte ranges with a `TokenKind`)
+  and `semantic_spans` (`code.rs:84-90`), and `capture_semantic`
+  records declaration names only (`:387-412`), so an expression or a
+  JSON block can have no semantic span at all. A verbosity mode is
+  defined over the syntax-token stream or the whole source (WD13).
 - **#1288 must not add an `EmbedResolution` variant.** Mac's
   `EmbedView.swift:52-63` and `:240-249` switch over it exhaustively with
   no default; a core free function (`embed_target_kind(path)`) keeps mac
@@ -128,20 +151,23 @@ takes them, and plan 43 §11.4 gets a pointer per row on adoption
 | Plan 43 PR | What moves here | Chunk |
 |---|---|---|
 | 21b | Windows host of the change feed (#1293) | WB-10 |
+| 31 | #1519 (core only; no host change). PR 31's slot is retired on adoption | WB-10a |
 | 22c | #1510's doc sentence (the code stays mac/Linux) | WB-17 |
-| 32 | #1370's core field and Windows consumer (the mac consumer stays in 32) | WB-13 |
 | 37 | #1481 (host-neutral test fix; #1479 stays, it needs the mac lane) | WB-18 |
-| 39 | #1395's core punctuation (the mac host part, #1394, stays in 39) | WB-8 |
 | 44, 45 | #1427 #1485 #1486; #1426 (pure Rust) | WB-18, WB-19 |
 | 46 | #1390's text edit (its code twins #1393 #1388 stay in 46) | WB-17 |
 | 47 | #1376 #1386 (needs the C# binding, which only a Windows checkout has) | WB-17 |
-| 52 | #1389's Windows half (file-disjoint from the mac half) | WB-21 |
+| 52 | #1389's Windows half (file-disjoint from the mac half; the issue closes with 52) | WB-21 |
 | 29 | #1525's Windows half, after the shared design | WB-29 |
-| 34, 41 | #1468's core and Windows half; #1469 stays mac-driven, its core identity primitive is shared | WB-30 |
+| 41 | #1468's core and Windows half (its mac host half stays in 41). PR 34 (#1469) stays mac-driven; its shared core identity primitive is WB-30's prerequisite | WB-30 |
 | 38 | the Windows proof of #1434/#1470 (38W) | WB-27 |
 | 22W | the Windows body of #940, with #1475's identity half | WB-28 |
 
-## 3. Decisions for the owner (WD1 to WD20)
+Not moved, on purpose: #1370 (PR 32), #1395 (PR 39), #1382 (PR 30),
+#1398 (PR 35), #1466 (PR 53) — the §1 table says why and what each will
+touch on Windows.
+
+## 3. Decisions for the owner (WD1 to WD21)
 
 Each has a recommended answer; only WD1 blocks adoption. The rest are
 needed by the wave named.
@@ -156,18 +182,19 @@ needed by the wave named.
 | WD6 | #1505 | Mirror mac's lazy stale-pin prune, or record "no Windows twin"? | Mirror it: prune on a complete level fetch, once per folder per session, skipped while the store is read-only, through the sidebar write journal. | W4 (WB-12) |
 | WD7 | #1475 | Fix the `GraphConfigStore` write now and leave identity to 22W? | Yes; and 22W is WB-28 here, not a parked milestone item. | W4 (WB-12), W10 |
 | WD8 | #1397 | Contract 25 C4 records the no-views wording as a banner above content; mac now shows a failed-state group with an Edit button. Which row? | Mac's group (heading, core message, repair sentence, Edit), recorded as C4's amendment; Windows and mac then match. | W5 (WB-14) |
-| WD9 | #1307 | Should contract 28 I3 (the input seal) extend to windows the shell owns, such as the Reading table? Does UIA pattern invocation fall under it? | Probe both with hosted facts first; extend I3 to shell-owned windows if the probe shows a bypass; record the UIA outcome either way. | W5 (WB-15) |
+| WD9 | #1307 | Should contract 28 I3 (the input seal) extend to windows the shell owns, such as the Reading table? Does UIA pattern invocation (Invoke, SelectionItem.Select, ExpandCollapse, Value.SetValue) fall under it? | Probe both with hosted facts first. A demonstrated bypass through a shell-owned window extends I3 to it. A demonstrated UIA-pattern bypass is guarded: the pattern providers of sealed surfaces refuse while the seal holds, with hosted facts, unless the owner records an explicit I3 exclusion in contract 28 — that portion of #1307 does not close on a recorded probe alone. | W5 (WB-15) |
 | WD10 | #1314 | Drop a parked Ctrl+Shift+J when its note closes, even on a quick A→B→A? | Yes, drop at B: deterministic, and "a question nobody asked" never pops. | W8 (WB-23) |
 | WD11 | #1317 | Does the first partial reading projection (text and math, diagrams pending) count as "applied" for R-10's held landings? What does a late diagram say? | Yes, it is applied (the reader can read); a late diagram arrives silently and its placeholder is named "Diagram, rendering" until then. | W7 (WB-20) |
 | WD12 | #1112 | Chord collision disposition for Ctrl+F; regex and replace? | Disposition 1 via `SharedCommandChords` (scope-keyed: Bases quick filter in a Base, find-in-note in a note); replace yes (mac has it), regex no (mac has none; parity). | W8 (WB-22) |
-| WD13 | #1526 | What do "+ first line" and "+ all tokens" speak? | First line: the first non-blank source line verbatim after the preamble. All tokens: every semantic span's text in order, punctuation spans skipped. Both rendered by core. | W7 (WB-21) |
-| WD14 | #1480 #1499 #1492 | Which lane can attach a scratch VHD, and may the Recycle Bin and OneDrive probes run on the owner's machines? | Developer-run first on a throwaway Hyper-V VM (the home pool's images already exist); make the facts `#[ignore]`+env-gated; decide a CI lane after the first green run. The OneDrive probe needs a Files On-Demand vault the owner provides. | W8 (WB-24) |
+| WD13 | #1526 | What do "+ first line" and "+ all tokens" speak? | Both over `CodeBlock.source` and `tokens` (the `SyntaxToken` stream), never `semantic_spans` (§2.2). First line: the source's first line verbatim (blank or not — the setting's original label says "first line"; a leading blank line is spoken as "blank line"). All tokens: the whole source, read token by token in `TokenKind` order with punctuation tokens spoken as their characters, so an expression or JSON block with no declarations still reads in full; an unknown language has one `Text` token per line. Core renders both; the spec carries examples with no declarations. | W8 (WB-21b) |
+| WD14 | #1480 #1499 #1492 | Which lane runs the scratch-volume Recycle Bin fact, and may the Recycle Bin and OneDrive probes run on the owner's machines? | Developer-run first on a throwaway Hyper-V VM from the home pool's image, with a VHD attached and `SLATE_TRASH_PROBE_VOLUME` set, `cargo test -p slate-core -- --ignored real_trash`; the guard refuses the system drive and any volume but the probe's. WB-24 is not complete until a lane runs that invocation: the recommended lane is a `home-only` job on the self-hosted pool (its VMs are throwaway, so the VHD is provisioned in the job and discarded with it); if the pool cannot attach a VHD, the fact stays owner-run and WB-30 records each run's result in its PR body before it merges. The OneDrive probe needs a Files On-Demand vault the owner provides. | W8 (WB-24) |
 | WD15 | #1492 | If the probe confirms it: relax the identity and undo walks to #1491's `NotLinks` rule for cloud placeholders, and the Trash walk too? | Relax identity and undo (a placeholder is a file, not a link); keep Trash fail-closed unless the probe shows `IFileOperation` is not redirected through the placeholder, and word the refusal truthfully either way. | W8 (WB-24) |
 | WD16 | #1468 | Decouple the Windows T2 (Trash verification) from the Mac `~/.Trash` read check, and do the COM in Rust or in the host? | Decouple: the Mac check gates only macOS. COM in Rust (`windows-rs`), beside the existing trash-rs path, so core keeps owning the outcome. | W10 (WB-30) |
 | WD17 | #1290 | Keep `switcher_rank_top` and `tag_tree` until mac migrates? | Yes; add the indexed and paged siblings, file a mac follow-up, retire the old entry points when both hosts are off them. | W9 (WB-25) |
 | WD18 | #1457 | Renew the zip exception's date, or admit a Git patch to MathCAT `main` now? | Renew once (to 2026-12-17) and watch for a release; if none by 2026-11-30, admit the Git patch under the citationberg admission pattern. | before 2026-11-17 |
 | WD19 | #1051 | Retune the accent now, or rule "accent never on raised" and leave it to W8-2? | Leave it to W8-2's palette pass as the issue suggests; this plan only records the pair as a known gap. | — |
-| WD20 | #1525 | Who writes the hot-exit design, and does it fix the store schema before either host starts? | One design for both hosts, written as plan 43's PR 29 design (it already has the slot); the Windows half (WB-29) starts only once the store schema and the restore rule are fixed. | W10 |
+| WD20 | #1525 | Who writes the hot-exit design, and does it fix the store schema before either host starts? | One design for both hosts, written as plan 43's PR 29 design (it already has the slot); the Windows half (WB-29) starts only once the store schema and the restore rule are fixed, and the design names which program implements the core store (recommended: plan 43's PR 29 series, since mac goes first; WB-29 consumes it). | W10 |
+| WD21 | #1484 | After WB-31's bench: unset SQLite's `ENABLE_MEMORY_MANAGEMENT`, size `cache_size` for a shared LRU, or release an idle session's cache? | Conditional: if the bench proves the shared LRU, release the idle session's cache (`sqlite3_db_release_memory` on idle) — it keeps the bundled build and the hosts' one-session case untouched; if the bench refutes it, close #1484 with the numbers. Implementation waits for this answer. | after WB-31's bench |
 
 ## 4. Rules (every chunk)
 
@@ -194,10 +221,15 @@ combined head). Added for this plan:
    `cfg(unix)` compiles.
 4. **Field passes are NVDA first, Narrator for the reading view,**
    with the SendInput plus `nvda.log` recipe from
-   `18_windows_port/reports/nvda_agent_matrix_pass_2026-09-22.md`;
-   back up `%LOCALAPPDATA%\Slate` first (WB-1 removes the need). A PR
-   whose feature changes what the reader hears stays a draft until its
-   pass is recorded in the PR body.
+   `18_windows_port/reports/nvda_agent_matrix_pass_2026-09-22.md`. Until
+   WB-1 lands, back up `%LOCALAPPDATA%\Slate` first; after it, launch the
+   app under test with `SLATE_LOCAL_APP_DATA` pointing at a seeded
+   temporary root (WB-1 ships `scripts/windows/launch-for-field-pass.ps1`
+   that does so), because an ordinary launch still writes the owner's
+   real recents and preferences by design (#1331). A PR whose feature
+   changes what the reader hears — a new sentence, a removed one, or a
+   changed name or hint — stays a draft until its pass is recorded in the
+   PR body.
 5. **Codex adversarial review per `24_red_team_protocol.md`** for every
    chunk of size M or larger, with the merge-delta check before merge
    when `main` moved under it.
@@ -217,44 +249,61 @@ Windows lane; "AT" marks a required field pass.
 
 | Chunk | Title | Issues | Size | Lanes | AT | Decision |
 |---|---|---|---|---|---|---|
-| WB-0 | Close-outs and housekeeping: verify-and-close #1320 and #1261; renew the zip date; file the mac follow-ups this plan names | #1320 #1261 (#1457) | S | windows, rust | — | WD18 |
-| WB-1 | The test suites stop writing the developer's `%LOCALAPPDATA%\Slate`: one `SlateDeviceState.Root` honouring `SLATE_LOCAL_APP_DATA`, six stores and `HostLog` on it, the shell gate on a per-run temp root, the four bare constructions, snapshot guard facts | #1331 | M | windows | — | — |
+| WB-0 | Close-outs and housekeeping: verify-and-close #1320 and #1261; renew the zip date; file the mac follow-ups this plan names (#1526's mac consumer; #1290's mac migration off `switcher_rank_top` and `tag_tree`); add the §2.3 pointers to plan 43 §11.4 and retire PR 31's slot | #1320 #1261 (Refs #1457) | S | windows, rust | — | WD1 WD18 |
+| WB-1 | The test suites stop writing the developer's `%LOCALAPPDATA%\Slate`: one `SlateDeviceState.Root` honouring `SLATE_LOCAL_APP_DATA`, six stores and `HostLog` on it, the shell gate on a per-run temp root, the four bare constructions, snapshot guard facts; a field-pass launch script that seeds a temporary root (§4 rule 4) | #1331 | M | windows | — | — |
 | WB-2 | Save-chain admission: History restore, template reloads and property writes join an admitted save of the same note instead of replacing the tab under it | #1322 #1325 | S–M | windows | — | WD2 |
 | WB-3 | Core-owned task and activation speech: post `TaskToggled` / `TaskToggleFailed` and `NothingToActivateAtCursor`; retire the residue rows and `proposed` designations; regenerate the trigger ledger | #1467 #1465 | S–M | windows (docs census) | spot | — |
 | WB-4 | Citation async facts: land 21cfc8e's hold, confirm 50× on Windows, replace the three "has not landed yet" bets with holds (one `FilesCitingViewModel` seam) | #1316 #1285 #1315 | S–M | windows | — | — |
 | WB-5 | Keys never leak past a modal surface: the editor popover joins `ModalSurfaceState` so F6 is a no-op; the sheet fence refuses Undo, Redo, Cut, Paste, Delete and the editing commands, and guards the palette, search and Quick Open fields too; contract 40 R-6 note | #1281 #1259 | S–M | windows | — | — |
-| WB-6 | Tree publication keeps every reader's element: date groups keyed by (parent, label) and reconciled in place; organic publications take the keep path; the selected row's removal moves selection to the nearest survivor before the publication | #1522 #1515 | M | windows + FlaUI | spot | WD3 |
+| WB-6 | Tree publication keeps every reader's element: date groups keyed by (parent, label) and reconciled in place; organic publications take the keep path; when the selected row vanishes, the selection is disarmed and the keys land on the nearest survivor *without selecting it* (R-5's focus-without-select, as `ReconcileSelectionAfterPublication` already does, `FileManagement.cs:644-673`), with WPF's automatic first-row selection suppressed during the reconcile — a hosted fact proves no note opens and no selection announcement fires | #1522 #1515 | M | windows + FlaUI | spot | WD3 |
 | WB-7 | Flake sweep: condition waits for the eleven Windows items of #1323 (clipboard seam for the code-copy fact, `WaitForTreeItems` for `OpenCanvasFromTree`, `ReleaseProjection` on the specific projection, graph probes behind a publication gate, budgets to ratios or benchmark-tagged), `CanonicalHighlightCensus` pumps until the refresh lands, `StaThread.TimedOut` so a timed-out body unwinds and the wedge message names the root fact; `structural_batch.rs`'s negative waits become deterministic rendezvous with diagnostics | #1306 #1321 #1294 #1323 (Windows items; then retitle per RD17) | M–L | windows, rust | — | — |
-| WB-8 | Core words the failure: `A11yEvent::NoteOpenFailed` replaces `VaultException.Message` in the tab's load failure (census row added); a core `embed_target_kind` makes Ctrl+E title a `.base` embed as a base on both Windows surfaces; the unindexed create and save caveats close their sentence | #1266 #1288 #1395 | S–M | rust, windows, swift (mirror entry) | — | — |
+| WB-8 | Core words the failure: `A11yEvent::NoteOpenFailed` replaces `VaultException.Message` in the tab's load failure (census row added; Windows is its only consumer, mac gains a corpus-mirror entry); a core `embed_target_kind` makes Ctrl+E title a `.base` embed as a base on both Windows surfaces | #1266 #1288 | S | rust, windows, swift (mirror entry) | NVDA spot (the two new Windows sentences) | — |
 | WB-9 | Open, handoff and landing lifecycle: a second launch or jump-list open parks behind a modal loop and runs when it ends; the welcome view holds the keys with an "Opening vault…" status until `WorkspaceReady`; a held reading landing is carried over to the projection a rescan's reload installs instead of being dropped (the pinning fact flips; contract 40 R-9/R-10 records) | #1296 #1319 #1312 | M | windows | NVDA | WD4 |
 | WB-10a | Core: a change-feed window carrying another writer's file record drops the link graph so the hosts' generation probes rebuild it | #1519 | S–M | rust, windows, swift (compile) | — | — |
 | WB-10 | 21b, the Windows host of the change feed, per `21_change_feed_design.md` §6–§7 and Q1–Q8: register after the open scan, window with the journal held, the record path (renames by baseline hash, Quick Open `ApplyRecordsAsync`, narrowed dependents), the explicit-Refresh-only counting sentence, up to three passes, acknowledge; the retired fact rewritten first; FlaUI `AnotherSession_ChangesCountedOnRefresh`; close #1293 by hand | #1293 | L | windows + FlaUI | NVDA | — |
 | WB-11 | Reading-view list semantics and cost: authored list markers rendered and read; item peers cached, names lazy, positions indexed once, `CensusDiag` gated, measured with a timed UIA probe; Ctrl+A raises `TextSelectionChanged` through one cached text provider | #1422 #1329 #1330 | M | windows + FlaUI | NVDA timing, Narrator | — |
-| WB-12 | Watcher noise and the vault-root stores: a folder's own Modify is dropped in `translate`; an in-vault Bases export writes through core; `GraphConfigStore` writes through `AnchoredVaultStore`; stale pins are pruned lazily | #1516 #1508 #1475 (bullet 1) #1505 | M | rust, windows | — | WD5 WD6 WD7 |
-| WB-13 | Canvas outline: deleting the focused card seats the next row; the file-card hint is chosen by core from the target (new `CanvasOutlineRow.activation_hint`), consumed on Windows now and by plan 43 PR 32 on mac | #1260 #1370 | S–M | rust, windows, swift (literal) | spot | — |
+| WB-12 | Watcher noise and the vault-root stores: a folder's own Modify is dropped in `translate`; an in-vault Bases export writes through core; `GraphConfigStore` writes through `AnchoredVaultStore`; stale pins are pruned lazily | #1516 #1508 #1505; Refs #1475 (its identity half closes in WB-28) | M | rust, windows | NVDA spot (the export's single sentence; a pruned pin's silence) | WD5 WD6 WD7 |
+| WB-13 | Canvas outline: deleting the focused card seats the next row in reading order (else the previous, else the surface root) and marks `TryMarkFocusReturned`; the "Deleted … Ctrl+Z to undo" sentence is unchanged | #1260 | S–M | windows | NVDA spot | — |
 | WB-14 | Bases repair on Windows: a no-view definition loads as failed with core's wording, stays editable, "Save to View" emits `BaseEdit::AddView`, and the failed state renders mac's group with an Edit button; six twin facts of `BaseContainerRecoveryTests.swift` | #1397 | M | windows | NVDA | WD8 |
-| WB-15 | Shell-seal witnesses: `Transition`/`OnTransition` call-graph census, request-creation census, `AddHook` inventory, method-group prompt detection, `MainWindow` input-override detector, `PressPointer` models WPF routing; probes for shell-owned windows and UIA invocation | #1313 #1308 #1307 #1301 (AR-54 to AR-58) | M | windows | — | WD9 |
+| WB-15 | Shell-seal witnesses: `Transition`/`OnTransition` call-graph census, request-creation census, `AddHook` inventory, method-group prompt detection, `MainWindow` input-override detector, `PressPointer` models WPF routing; probes for shell-owned windows and UIA invocation, and the guards or the recorded exclusion WD9 calls for | #1313 #1308 #1307 | M | windows | — | WD9 |
 | WB-16 | Spoken names: unresolved citation rows keyed; the pane line composed after the invalidation; saved-query create, update and rename through `SavedQuerySpokenName`; dashboard names in the census; shortcut slots spoken; the recent-vault distinguisher is the shortest distinguishing ancestor; the rail coalesces its workspace write and defers History and Queries until the arrows settle | #1301 #1311 #1305 | M | windows | NVDA spot | — |
 | WB-17 | Docs and registers back in step, checked in CI: the chord table's SD-1 and PD-1 reasons, `chords.json` regenerated, the two Swift citations, contract 38's AR-23 row and designation, contract 34 and 35 reconciliation tables with `--check` in the Windows lane, the `on_external_change` doc sentence | #1384 #1381 #1390 #1376 #1386 #1510 | S | windows, rust (doc) | — | — |
 | WB-18 | Core: a poison-proof `ENV_FAULT_GUARD`, then bounded link resolution everywhere (`reindex_path_locked`, `PreMoveIndex::offer_candidates`, Bases and DQL through `FoldedNameLookup` with an error channel) | #1481 #1427 #1485 #1486 | M | rust | — | — |
 | WB-19 | Core: the create heal reads only the links its path could resolve (a folded `target_raw` index; schema bump) | #1426 | M | rust, windows, swift (compile) | — | — |
 | WB-20 | Progressive reading projection: text, code, math and embeds publish first with named diagram placeholders; diagrams re-project in place keeping caret, focused link and held landings; SVG decoded off the dispatcher | #1317 | M–L | windows + FlaUI | NVDA | WD11 |
-| WB-21 | Graph verbosity palette rows registered; the dead preamble modes removed on Windows (RD6); then core's `code_block_preamble_with_verbosity` and the modes back, Windows consuming | #1415 #1389 (Windows half) → #1526 | S, then M | windows; then rust, windows | NVDA per mode | WD13 |
+| WB-21 | Graph verbosity palette rows registered; the dead preamble modes removed on Windows (RD6) | #1415; Refs #1389 (closes with plan 43 PR 52's mac half) | S | windows | — | — |
+| WB-21b | Core's `code_block_preamble_with_verbosity` (a sibling function; `code_block_preamble` unchanged) over the token stream per WD13, Windows consuming with the two modes back in its menu | Refs #1526 (closes with its mac follow-up, filed by WB-0 as "mac: consume `code_block_preamble_with_verbosity`, Settings samples through core, VoiceOver pass per mode") | M | rust, windows, swift (compile) | NVDA per mode | WD13 |
 | WB-22 | Find in note (Ctrl+F): `FindInNoteViewModel` over AvalonEdit's search strategies, a landmark bar beside the editor, "N of M" as a pinned residue, wrap, case, whole word, replace, fall-through to vault search, chord row and Edit menu item, `SharedCommandChords` entry, §W-C row, axe and FlaUI journey | #1112 | L | windows + FlaUI | NVDA, Narrator | WD12 |
 | WB-23 | A parked citation summary is dropped when its note changes | #1314 | S | windows | — | WD10 |
-| WB-24 | Trash on Windows: a gated real Recycle Bin fact on a scratch volume; the dangling-link probe, then trash-as-link or truthful host wording; the OneDrive Files On-Demand probe, then the walks' line | #1480 #1499 #1492 | M | rust (Windows cfg), windows | — | WD14 WD15 |
+| WB-24 | Trash on Windows: a gated real Recycle Bin fact on a scratch volume, run by the lane WD14 names before the chunk is complete; the dangling-link probe, then trash-as-link or truthful host wording; the OneDrive Files On-Demand probe, then the walks' line and a truthful refusal where Trash stays fail-closed | #1480 #1499 #1492 | M | rust (Windows cfg), windows | NVDA spot (any changed Trash or refusal sentence) | WD14 WD15 |
 | WB-25 | Bounded FFI lists: a paged, cancellable tag tree, then an index-backed `switcher_rank_top_indexed`; Windows drops `_files`; the old entry points stay for mac | #1290 | L (S–M, then L) | rust, windows, swift (compile) | — | WD17 |
 | WB-26 | Canvas board edge peers per contract 34 D3–D5: `CanvasEdgeAutomationPeer` named by core's traversal phrase, materialized with the edge placements, Invoke total over the end-style table; live UIA-tree facts | #1277 | L (design first) | windows + FlaUI | NVDA | — |
 | WB-27 | 38W: the Windows no-replace rename proven on FAT32, exFAT and an SMB share (env-gated facts over a mounted VHD and `\\localhost` share: an occupied name refuses, a free one lands, case-only renames keep identity); capability-matrix rows | #1434 #1470 (Windows arm; Refs) | S | rust (Windows cfg) | — | — |
 | WB-28 | 22W: the descriptor-relative session on Windows — `FsRoot` holds the root and `.slate` as handles, `NtCreateFile` with `RootDirectory` for the interior, the SQLite VFS hook's Windows twin, `root_identity()` from `FileIdInfo`, `verified_current_path` by handle, the provider's reads relative; `descriptor_interior.rs` lifted off `cfg(unix)` behind a Windows seam; #1475's identity half | #1475 (identity) #940 (Refs; Milestone W) | L (design first: `22_descriptor_relative_session_design.md` §7 row 22W) | rust, windows | — | WD7 |
 | WB-29 | Hot exit, Windows half: unsaved buffers written as you type to the core store outside the vault, closing never asks, restore after `WorkspaceReady` before the layout seats tabs, disk-changed buffers restored dirty into the save-time conflict machinery | #1525 (Windows half) | L | rust (store, if core-owned), windows | NVDA | WD20 |
-| WB-30 | Trash verification T2, core and Windows: `IFileOperation` with a progress sink returns the recycled item, re-observed by volume serial and file id against the confirmed inventory; `TrashOutcome` reports a mismatch or "verified by name and metadata only" | #1468 (core + Windows) | L | rust, windows, swift (compile) | NVDA | WD16 |
-| WB-31 | Core: two sessions in one process — a bench that reproduces or refutes the shared page cache, then the chosen remedy | #1484 | M (diagnose first) | rust | — | (its own, after the bench) |
+| WB-30 | Trash verification T2, core and Windows: `IFileOperation` with a progress sink returns the recycled item, re-observed by volume serial and file id against the confirmed inventory; `TrashOutcome` reports a mismatch or "verified by name and metadata only". Prerequisites: the shared core identity primitive from plan 43 PR 34 (#1469) merged with green combined-head CI, WB-24's recorded real-Recycle-Bin results, and WB-28 | Refs #1468 (its mac host half, plan 43 PR 41, closes it) | L | rust, windows, swift (compile) | NVDA | WD16 |
+| WB-31 | Core: two sessions in one process — a bench that reproduces or refutes the shared page cache; the remedy waits for WD21 | #1484 | M (diagnose first) | rust | — | WD21 |
 | WB-32 | uniffi 0.32 spike: build the C# generator from NordSecurity/uniffi-bindgen-cs#176, bump, regenerate, build and test `apps/slate-windows`; report, ship only on a tag | #998 (Refs) | S | windows (local) | — | — |
 
-Issue counts: 68 in scope; WB-0 closes 2; WB-1 to WB-32 close 59 and
-carry 7 as references (#1434 #1470 #940 #998, and the core-only halves
-of #1370 #1525 #1468 whose mac halves close them).
+### Closure matrix
+
+An issue closes in exactly one PR; a chunk that delivers part of an
+issue writes `Refs #N`, never a closing keyword, and §10's PR-body rule
+names what the chunk left. 65 in scope: WB-0 closes 2 (#1320, #1261);
+54 close in the one chunk that lists them; nine close elsewhere or on a
+gate:
+
+| Issue | Delivered here by | Closes in | Gate |
+|---|---|---|---|
+| #1475 | WB-12 (the `GraphConfigStore` write) | WB-28 (the identity half) | — |
+| #1389 | WB-21 (Windows half) | plan 43 PR 52 (mac half) | — |
+| #1526 | WB-21b (core and Windows) | the mac follow-up WB-0 files | VoiceOver pass per mode on mac |
+| #1323 | WB-7 (the eleven Windows items) | WB-7's PR, but only after plan 43 PRs 28 and 37 have landed its mac and Rust items (RD17); until then WB-7 retitles it to the Windows list and references it | PRs 28 and 37 merged |
+| #1525 | WB-29 (Windows half) | plan 43 PR 29 (mac half) | the shared design (WD20) |
+| #1468 | WB-30 (core and Windows) | plan 43 PR 41 (mac host half) | PR 34's identity primitive |
+| #1434 #1470 | WB-27 (the Windows proof) | plan 43 PR 38 | — |
+| #940 | WB-28 (22W) | by hand after 22b and 22W, per RD15 | — |
+| #998 | WB-32 (the spike) | the dependency bump when a tag exists | upstream |
 
 ## 6. Delivery order
 
@@ -272,11 +321,17 @@ is expected inside a wave.
 | W4 | WB-10a, then WB-10 | WB-11 | WB-12 | WD5 WD6 WD7 |
 | W5 | WB-10 continues | WB-13, then WB-14 | WB-15 | WD8 WD9 |
 | W6 | WB-16 | WB-17 | WB-18 | — |
-| W7 | WB-19 | WB-20 | WB-21 | WD11 WD13 |
-| W8 | WB-22 | WB-23, then WB-24 | WB-25 (tag tree) | WD10 WD12 WD14 WD15 WD17 |
+| W7 | WB-19 | WB-20 | WB-21 | WD11 |
+| W8 | WB-22 | WB-23, then WB-24 | WB-21b (after WB-20), then WB-25 (tag tree) | WD10 WD12 WD13 WD14 WD15 WD17 |
 | W9 | WB-25 (switcher) | WB-26 | WB-27 | — |
-| W10 | WB-28 | WB-29 (after the shared design) | WB-30 | WD16 WD20; 22c's `FsRoot` names |
+| W10 | WB-28 | WB-29 (after the shared design) | — | WD16 WD20; 22c's `FsRoot` names agreed |
+| W11 | WB-30 (after WB-28, WB-24's results and PR 34's primitive) | — | — | combined-head CI green on `main` |
 | any | WB-31, WB-32 take a free slot | | | |
+
+No wave runs two chunks that the sequencing table below orders; where a
+chunk's prerequisite is in another program (PR 34 for WB-30, PR 29's
+design for WB-29), the wave does not start until that merge is on `main`
+and `main`'s own CI is green on the combined head.
 
 Why this order:
 
@@ -296,19 +351,25 @@ Sequenced on purpose, because they share files:
 
 | Shared code | Order |
 |---|---|
-| `Reading/ReadingSurface.cs`, `ReadingDocumentBuilder.cs` | WB-11, then WB-20, then WB-21's #1526 |
+| `Reading/ReadingSurface.cs`, `ReadingDocumentBuilder.cs` | WB-11, then WB-20, then WB-21b |
 | `WorkspaceViewModel.Rescan.cs`, `EditorLandingSlot.cs`, `QuickSwitcherViewModel.cs` | WB-9, then WB-10, then WB-25 |
 | `FilesSidebarViewModel*.cs` | WB-6, then WB-12, then WB-16 |
-| `Canvas/CanvasOutlineView.cs`, `CanvasRendererView.cs` | WB-13, then WB-26 |
-| `EditorInteractions.cs` | WB-3, then WB-8, then WB-21 |
-| `ChordTable.cs`, `chords.json` | WB-17, then WB-21, then WB-22 |
+| `Canvas/CanvasOutlineView.cs`, `CanvasRendererView.cs` | WB-13, then plan 43 PR 32 (#1370) or the reverse, then WB-26 |
+| `EditorInteractions.cs` | WB-3, then WB-8, then WB-21, then plan 43 PR 53 (#1466) |
+| `ChordTable.cs`, `chords.json` | WB-17, then WB-21, then WB-22, then plan 43 PR 53 |
+| Bases failed state (`BaseDocumentViewModel.cs`, `BaseSurfaceView.cs`) | WB-14, then plan 43 PR 35 (#1398), or the reverse with WB-14 adopting its copy |
 | `vault/fs.rs`, `windows_entry.rs`, trash files | WB-24, then WB-27, then WB-28, then WB-30 |
 | `links_db.rs`, `session.rs` link paths | WB-18, then WB-19 |
 | Contract 38's generated ledger | WB-3 and WB-17 kept apart |
-| Core `a11y.rs` corpus | WB-8 and WB-13 take independent variants; WB-30 after both |
+| Core `a11y.rs` corpus | WB-8 alone in its wave; WB-30 after it |
+| Core store and FFI in W10 | WB-29 consumes the hot-exit store the PR 29 series implements (WD20); WB-28 and WB-29 share no core module |
 
 Field passes run one at a time on the owner's desktop with NVDA (and
-Narrator for WB-11 and WB-22). W4 has three; plan them back to back.
+Narrator for WB-11 and WB-22), launched per §4 rule 4. Counting the AT
+column of §5: full passes WB-9, WB-10, WB-11, WB-14, WB-20, WB-21b,
+WB-22, WB-26, WB-29, WB-30 (ten), and spot checks WB-3, WB-6, WB-8,
+WB-12, WB-13, WB-16, WB-24 (seven). W4 carries two full passes and one
+spot check; no wave carries more than two full passes.
 
 ## 7. Verification lanes and the local loop
 
@@ -371,9 +432,16 @@ WB-29 open with a design section reviewed before code.
 
 ## 11. Risks
 
-- **Field-pass time is the bottleneck,** not agent time: eight chunks
-  need the owner's NVDA or Narrator session. The waves place at most
-  three per wave; W4 has three.
+- **Field-pass time is the bottleneck,** not agent time: ten chunks
+  need a full NVDA or Narrator pass and seven a spot check (§6). No wave
+  carries more than two full passes.
+- **Hardware the probes need may be unavailable** (a VHD the pool cannot
+  attach, no SMB share, no Files On-Demand vault). Then the probe's
+  facts stay `#[ignore]` and unrun, the issue stays open with a comment
+  saying so, and the chunk is not complete; nothing is merged on an
+  assumption. A demonstrated unsupported rename (WB-27) is answered
+  with a truthful fail-closed refusal, never by weakening the no-replace
+  assertion.
 - **WB-10 is the largest host chunk** (the design estimates 1,200 to
   1,600 lines; 21a and 20a ran 1.5 to 2× their estimates). It takes a
   full slot for two waves.
@@ -384,9 +452,11 @@ WB-29 open with a design section reviewed before code.
   link (then WB-24 makes the host's wording truthful instead), and
   OneDrive may redirect a placeholder path (then Trash stays fail-closed
   with a better reason).
-- **Five chunks regenerate the C# binding from new FFI** (WB-8, WB-13,
-  WB-21, WB-25, WB-30): never a dylib with mismatched bindings; the
-  Swift lane compiles each.
-- **Two chunks edit mac test files blind** (WB-8's corpus mirror entry,
-  WB-13's record literal); the mac lane is the only check, so those PRs
-  wait for it green before merge.
+- **Four chunks regenerate the C# binding from new FFI** (WB-8, WB-21b,
+  WB-25, WB-30): never a dylib with mismatched bindings; the Swift lane
+  compiles each.
+- **One chunk edits a mac test file blind** (WB-8's corpus mirror
+  entry); the mac lane is the only check, so that PR waits for it green
+  before merge. No chunk here changes a sentence mac speaks: the two
+  that would have (#1370, #1395) stay in plan 43 with their VoiceOver
+  passes (§1).
