@@ -14,7 +14,7 @@ DQL query that resolves a link each read only the candidate rows their own
 targets name, never a snapshot of every `files` row — the rule #1295 gave
 saves and creates and #1429 gave scans. A Bases lookup that fails is the
 query's error, not an unresolved link. And a fact that panics while holding
-`ENV_FAULT_GUARD` fails alone: the guard cannot be poisoned, and the
+the fault guard fails alone: the guard cannot be poisoned, and the
 fault-seam variables it protects are cleared when the holder unwinds, so
 one real failure never reads as twenty-four.
 
@@ -48,10 +48,16 @@ guard sites is one short).
   does the same at `:5129`.
 - **#1485.** `link_rewrite.rs:86-99` `PreMoveIndex { post, mapping }`
   implements only `VaultIndex::all_paths` (`:92-98`, mapping each post
-  path back through `MoveMapping::old_path_of`), so it takes
-  `VaultIndex::offer_candidates`'s default (`link_resolver.rs:67-71`:
-  every path, in index order). `InMemoryVaultIndex::offer_candidates`
-  (`:181-185`) looks candidates up in a `CandidateTable`.
+  path back through `MoveMapping::old_path_of`, **preserving the post
+  index's interleaving**), so it takes `VaultIndex::offer_candidates`'s
+  default (`link_resolver.rs:67-71`: every path, in index order).
+  `InMemoryVaultIndex::offer_candidates` (`:181-185`) looks candidates up
+  in a `CandidateTable`, whose `offer` (`:133-151`) walks the probe's keys
+  in hash order and, within one key, positions ascending — so two paths
+  under *different* keys are not offered in index order relative to each
+  other. The tie rule: `LinkCandidateSelector::offer` keeps the first
+  equal-ranked exact match (`:553-558`, "Strictly better only").
+  `LinkCandidateSelector` is a concrete struct (`:505-566`), not a trait.
   `plan_rewrites_for_source` (`:118`) builds the `PreMoveIndex` at
   `:126-129`.
 - **#1486.** `bases/engine.rs:3564-3575` `SqlVaultLookup` holds
@@ -96,28 +102,33 @@ paths, and "a link whose candidates could not be read is never dropped,
 and never written unresolved". Locked decision 05 §4 and §9.3.1
 (`docs/plans/05_locked_architecture_decisions.md:1556`: every list-like
 operation is paged or streamed). The #1295 row-counter fact shape is the
-template for every new fact here.
+template for every new fact here. The tie rule to preserve: the
+pre-move winner must be the one `all_paths()`'s mapped post-order
+interleaving gives today (`link_rewrite.rs:92-98`).
 
 ## Design
 
 Four commits, in this order (each a green tree):
 
-1. **The guard (#1481).** `common.rs` gains `pub(super) struct FaultGuard`
-   (new) holding the `MutexGuard<'static, ()>` and a `Vec<&'static str>` of
-   variable names, with `ENV_FAULT_GUARD.lock()` taken as
-   `.unwrap_or_else(PoisonError::into_inner)`. `pub(super) fn fault_guard()
-   -> FaultGuard` (new) acquires it and, on acquisition, removes every
-   variable in a `FAULT_VARIABLES: &[&str]` list (the fifteen names above),
-   so a stale trigger from an unwound holder is cleared before the next
-   fact runs. `FaultGuard::set(&mut self, name: &'static str, value: &str)`
-   records the name and sets it; `Drop` removes every recorded variable
-   (unwinding runs it). All 42 `ENV_FAULT_GUARD.lock().unwrap()` sites
-   become `let _env = fault_guard();` and their paired `set_var` /
+1. **The guard (#1481).** `common.rs`: the mutex becomes a private
+   `static FAULT_MUTEX: Mutex<()>` (no `pub(super)`; the old name goes, so
+   every unmigrated `super::common::ENV_FAULT_GUARD` site is a compile
+   error, which is the enforcement). `pub(super) struct FaultGuard`
+   (new) holds the `MutexGuard<'static, ()>` and a `Vec<&'static str>` of
+   the variable names it set. `pub(super) fn fault_guard() -> FaultGuard`
+   (new) takes the lock with `.lock().unwrap_or_else(PoisonError::into_inner)`
+   and, on acquisition, removes every name in `const FAULT_VARIABLES:
+   &[&str]` (the fifteen names above), so a stale trigger from an unwound
+   holder is cleared before the next fact runs.
+   `FaultGuard::set(&mut self, name: &'static str, value: &str)` records
+   the name and sets it; `impl Drop` removes every recorded name
+   (unwinding runs it). All 42 sites become `let mut _env = fault_guard();`
+   (mutable: `set` takes `&mut self`) and their paired `set_var` /
    `remove_var` become `_env.set(…)` (the explicit `remove_var` lines go,
-   except where a fact clears mid-body to prove the fault is off, which
-   stays). The static stays `pub(super)` so an unmigrated `.lock().unwrap()`
-   is a compile-visible leftover; a census fact greps the tests tree for
-   `ENV_FAULT_GUARD.lock()` outside `common.rs` and expects zero.
+   except where a fact clears a variable mid-body to prove the fault is
+   off, which stays as `_env.clear(name)` (new)). A census fact greps the
+   tests tree for `set_var("SLATE_TEST_` outside `common.rs` and expects
+   zero, so a future fact cannot set a trigger without the guard.
 2. **The repair (#1427).** `reindex_path_locked`: delete `:8306-8308`, pass
    `&crate::links_db::FoldedNameLookup` to `index_file` as
    `ensure_open_base_indexed` does. The `UPDATE files SET mtime_ms = -1 …`
@@ -126,22 +137,29 @@ Four commits, in this order (each a green tree):
    `index_file`'s own upsert precedes link resolution, so the lookup sees
    it. Nothing else changes; the deletion-convergence arm (`:8319-8338`) is
    untouched.
-3. **Rename planning (#1485).** `impl VaultIndex for PreMoveIndex` gains
-   `fn offer_candidates(&self, selector: &mut LinkCandidateSelector)`: run
-   the probe against `self.post` through a forwarding selector that maps
-   each offered post path with `self.mapping.old_path_of(path)` and offers
-   only paths the mapping did not change (so the post-move candidates whose
-   pre-move name is the same); then, for each `(old, new)` in
-   `self.mapping` (`MoveMapping::forward`), offer `old` if the selector's
-   probe keys name it (an exact key equal to `old.to_lowercase()`, or a
-   basename key matching its final component under `basename_matches`),
-   in the post index's order of `new`. The winner must equal what
-   `all_paths()` gives today: a fact proves it over the census fixtures
-   for every mapping shape (rename, move, folder move, case-only). The
-   default `all_paths` stays for the planner's other uses. New helper on
-   `LinkCandidateSelector` if needed: `pub fn probe_names(&self, path: &str)
-   -> bool` (new) — whether this path could match the probe — so the
-   mapping walk does not duplicate the matching rules.
+3. **Rename planning (#1485).** `VaultIndex` gains
+   `fn candidate_paths(&self, probe: &CandidateProbe) -> Vec<&str>` (new;
+   default: every path from `all_paths()` whose lowercase path or final
+   component matches a key, in index order; `InMemoryVaultIndex`
+   implements it from the `CandidateTable` by collecting the matched
+   positions for every key and **sorting the positions**, so the union is
+   in index order, not key-hash order). `PreMoveIndex::offer_candidates`
+   then: (a) take `selector.probe()` (pre-move keys); (b) build the
+   post-move probe: the same keys plus, for each `(old, new)` in
+   `self.mapping.forward`, the post key that `old` would have answered
+   (`Exact`: if `old.to_lowercase()` is in the keys, add
+   `new.to_lowercase()`; `Names`: if `old`'s final component matches a
+   key under `basename_matches`, add `new`'s final component), through a
+   new `LinkCandidateSelector::probe_names(&self, path: &str) -> bool`
+   (new; the probe-side twin of `offer`'s matching, so the mapping walk
+   reuses the selector's rules); (c) `self.post.candidate_paths(&post_probe)`
+   — in post index order — mapped each through `old_path_of` and offered
+   to the selector in that order, which filters with its own rules. The
+   first-offered-wins tie is then identical to `all_paths()`'s mapped
+   interleaving: with `Foo.md` moved to `A.md` and an unchanged `foo.md`,
+   post order `A.md, foo.md` maps to `Foo.md, foo.md`, the same sequence
+   today's default offers. The default `all_paths` stays for the planner's
+   other uses.
 4. **Bases and DQL (#1486).** `VaultLookup::resolve_link` becomes
    `fn resolve_link(&self, target: &str) -> Result<Option<String>, EvalError>`
    (default `Ok(None)`); `EvalError` gains `LinkLookupFailed { message:
@@ -149,15 +167,18 @@ Four commits, in this order (each a green tree):
    callers propagate with `?` (`eval.rs:1214`, `:2251`, `:4791`,
    `engine.rs:538`; at `:4791` the `.or_else(|| link.resolved_path.clone())`
    applies to the `Ok` value). `SqlVaultLookup` drops `link_index`; its
-   `resolve_link_from` keeps the `link_resolutions` memo and resolves
-   through `crate::links_db::resolve_remembered`-style code over
-   `FoldedNameLookup::offer_to(self.conn, &mut selector)` on the query's
-   connection, with a `?` from `VaultError` into
-   `EvalError::LinkLookupFailed { message: error.to_string() }`. The query
-   result then carries the error the way other `EvalError`s already reach
-   the host (no new FFI; the Bases failed state and DQL error rows already
-   render `EvalError` text). `tests/bases_eval.rs:1226` updates its
-   signature.
+   `resolve_link_from` keeps the `link_resolutions` memo and resolves by
+   building a `LinkCandidateSelector::new(target, source_path)`, calling
+   `FoldedNameLookup.offer_to(self.conn, &mut selector)` on the query's
+   connection and taking `into_winner()`, with a `?` from `VaultError`
+   into `EvalError::LinkLookupFailed { message: error.to_string() }`.
+   (`resolve_link`'s normalisation — anchors, external targets — is reused
+   through `links_db::resolve_remembered` (`:235`) where its signature
+   fits; otherwise the selector path above, which is what `resolve_link`
+   itself does.) The query result then carries the error the way other
+   `EvalError`s already reach the host (no new FFI; the Bases failed state
+   and DQL error rows already render `EvalError` text).
+   `tests/bases_eval.rs:1226` updates its signature.
 
 Deliberately not changed: `re_resolve_unresolved_links_under`'s snapshot
 (WB-19 owns it); the scan's and rename's `InMemoryVaultIndex` snapshots
@@ -171,13 +192,15 @@ code (the mutation column says how it fails again if the fix regresses).
 
 | Fact | Asserts | Mutation that fails it |
 |---|---|---|
-| `session/tests/common.rs` → new `fault_guard.rs`: `a_panic_under_the_fault_guard_poisons_nothing_for_the_next_fact` | a thread takes `fault_guard()`, sets `SLATE_TEST_FAULT_AFTER_WRITE`, panics; the next `fault_guard()` succeeds and the variable is unset | restore `.unwrap()`, or drop the `Drop` impl |
+| `session/tests/fault_guard.rs` (new): `a_panic_under_the_fault_guard_poisons_nothing_for_the_next_fact` | a thread takes `fault_guard()`, sets `SLATE_TEST_FAULT_AFTER_WRITE`, panics (joined, result asserted `Err`); the next `fault_guard()` succeeds and the variable is unset | restore `.unwrap()`, or drop the `Drop` impl |
 | `the_fault_guard_clears_every_fault_variable_on_acquisition` | set each `FAULT_VARIABLES` name by hand, acquire, all absent | remove a name from the list |
-| `no_test_takes_the_fault_mutex_directly` (census) | zero `ENV_FAULT_GUARD.lock()` matches outside `common.rs` | add one back |
+| `no_test_sets_a_fault_variable_outside_the_guard` (census) | zero `set_var("SLATE_TEST_` matches outside `common.rs` | add one back |
 | `save_link_lookup.rs`: `a_repair_through_reindex_path_reads_no_snapshot_of_the_vault` | after `reindex_path` on a note with the census targets, `snapshot_paths() == 0`, `PATH_ORDER_SNAPSHOT_PATHS == 0`, `resolution_rows_visited()` ≤ the note's own candidate rows | restore `:8306-8308` |
 | `a_repair_writes_the_links_a_scan_writes` | `link_rows` after repair equal `link_rows` after a full scan over `census_vault` | offer a wrong key set |
-| `link_rewrite.rs` tests: `the_pre_move_index_offers_the_same_winner_as_every_path` | for each census mapping shape and every `INDEXED_PATHS` target, `offer_candidates` and the `all_paths` default pick one winner | drop the moved-paths arm |
-| `session/tests/structural_batch.rs` (or a new `rename_planning.rs`): `a_rename_plans_its_rewrites_from_candidate_rows_only` | row counter: `PATHS_OFFERED` after renaming a note linked by N sources ≤ sources × their distinct targets' candidates, not × files | restore the default |
+| `link_resolver.rs` tests: `candidate_paths_returns_the_union_in_index_order` | for a probe with two keys whose matches interleave, positions ascending | return in key order |
+| `link_rewrite.rs` tests: `the_pre_move_index_offers_the_same_winner_as_every_path` | for each mapping shape (rename, move, folder move, case-only) and every `INDEXED_PATHS` target, `offer_candidates` and the `all_paths` default pick one winner | drop the moved-paths arm |
+| `a_case_colliding_rename_keeps_todays_tie_winner` | index `[A.md, foo.md]` with mapping `Foo.md → A.md`, target `foo` from `notes/x.md`: the pre-move winner is `Foo.md` (post order), for a rename and for a folder move (`sub/Foo.md → other/A.md`) | offer unmoved paths first |
+| `session/tests/rename_planning.rs` (new): `a_rename_plans_its_rewrites_from_candidate_rows_only` | row counter: `PATHS_OFFERED` after renaming a note linked by N sources ≤ sources × their distinct targets' candidates, not × files | restore the default |
 | `tests/bases_eval.rs` + `session/tests/bases.rs`: `a_query_that_resolves_links_materializes_no_snapshot` | a Bases query with `link()` over a 200-note vault: `snapshot_paths() == 0` and `CANDIDATE_TABLES_BUILT == 0` | restore `link_index` |
 | `a_failed_link_lookup_fails_the_query_instead_of_reading_as_unresolved` | with `LOOKUP_FAULT` set, the query returns `Err(EvalError::LinkLookupFailed)`, no row shows an unresolved link | restore `.ok()?` |
 | `a_dql_inline_link_field_resolves_through_the_lookup` | the `:2251` arm resolves a basename target to the census answer | break the probe mapping |
@@ -196,16 +219,30 @@ No FlaUI journey; no census row beyond the fault-guard census.
 
 ## Verification
 
+PowerShell, repo root. Every `cargo test` line must select at least one
+test: run it once with `-- --list` and require a nonzero count
+(`… -- --list | Select-String ': test$' | Measure-Object | Select-Object -ExpandProperty Count`).
+
 ```
 $env:CARGO_TARGET_DIR='C:\dev\slate\target-wb18'
 cargo test -p slate-core --locked fault_guard
 cargo test -p slate-core --locked save_link_lookup
+cargo test -p slate-core --locked link_resolver
 cargo test -p slate-core --locked link_rewrite
+cargo test -p slate-core --locked rename_planning
 cargo test -p slate-core --locked bases
-cargo test -p slate-core --locked --no-fail-fast          # the whole suite, once
-cargo test -p slate-core --locked -- --skip census_ --skip perf_guard_   # what the Windows lane runs (windows.yml:337-341)
-make ci                                                   # fmt, clippy, bench-check, licence headers (Makefile:74)
+cargo test -p slate-core --locked --no-fail-fast                                   # the whole suite, once
+cargo test -p slate-core --locked -- --skip census_ --skip perf_guard_root_listing_under_100ms_on_10k_files --skip perf_guard_unresolved_link_rescan_within_twice_the_link_free_one   # what windows.yml:337-341 runs
+# the gates make ci runs, as CONTRIBUTING.md:93-96 says to run them on Windows:
+cargo fmt --all -- --check
+cargo clippy --all-targets --workspace -- -D warnings
+cargo test --workspace --locked
+cargo bench --workspace --no-run
+bash scripts/check-license-headers.sh
 ```
+
+Mutation run: apply each row's mutation locally, run the named fact, see
+it fail, revert (the #1517 recipe; no probe PR).
 
 CI: `windows.yml` rust-tests (always on) plus `rust.yml` (Linux proves
 `cfg(unix)` and runs the two perf guards isolated, `rust.yml:269-290`).
@@ -213,13 +250,13 @@ AT pass: none — no speech changes.
 
 ## Acceptance
 
-- [ ] The ten facts above exist, were seen failing, and pass.
-- [ ] `ENV_FAULT_GUARD.lock()` appears only in `common.rs`.
+- [ ] The twelve facts above exist, were seen failing, and pass.
+- [ ] `FAULT_MUTEX` is private; no `set_var("SLATE_TEST_` outside
+      `common.rs`.
 - [ ] `reindex_path_locked`, `PreMoveIndex` and `SqlVaultLookup` read no
-      `files` snapshot (the counters prove it).
-- [ ] `VaultLookup::resolve_link` returns `Result`; the mac Swift lane is
-      unaffected (no FFI change; confirm `swift-tests.yml` is not triggered
-      or is green).
+      `files` snapshot (the counters prove it); the case-collision facts
+      pin today's tie winner.
+- [ ] `VaultLookup::resolve_link` returns `Result`; no FFI change.
 - [ ] `BENCHMARKS.md` entry; PR body `Closes #1481`, `Closes #1427`,
       `Closes #1485`, `Closes #1486`.
 - [ ] Not delivered: the whole-`links` read in `collect_rewrite_candidates`
@@ -229,16 +266,46 @@ AT pass: none — no speech changes.
 ## Brief
 
 Make every remaining link resolution in core read its own candidate rows,
-and make the test fault guard poison-proof. Read `links_db.rs:85-235`
-(counters, `LinkCandidates`, `FoldedNameLookup`), `session.rs:8258-8345`
-(`reindex_path_locked`) beside `:18729-18770` (the model),
-`link_rewrite.rs:60-130` and `link_resolver.rs:50-75`, `:505-600`
-(`PreMoveIndex`, `VaultIndex`, the probe), `bases/engine.rs:3564-3672` and
-`bases/eval.rs:336-352`, `:481-500`, and `session/tests/common.rs:1-40`
-with `save_link_lookup.rs:93-135`. Build the `FaultGuard` first and migrate
-the 42 sites; then the three resolution changes in the order above, each
-with its row-counter and whole-index-equivalence facts (names in Tests),
-seen failing first. Registers: a `BENCHMARKS.md` entry. Done when the
-suite passes locally and on the Windows and rust lanes, the counters read
-zero snapshots, and the four issues close. Commit:
+and make the test fault guard poison-proof. No owner decision is pending.
+Read `links_db.rs:85-235` (counters, `LinkCandidates`, `FoldedNameLookup`),
+`session.rs:8258-8345` (`reindex_path_locked`) beside `:18729-18770` (the
+model) and `:10803-10815` (`index_file`), `link_rewrite.rs:60-130`
+(`PreMoveIndex`), `link_resolver.rs:50-75`, `:130-160`, `:505-600`
+(`VaultIndex`, `CandidateTable::offer`, the selector and probe),
+`bases/engine.rs:3564-3672`, `bases/eval.rs:336-352`, `:481-500`,
+`:1208-1222`, `:2246-2258`, `:4783-4800`, `tests/bases_eval.rs:1226`, and
+`session/tests/common.rs:1-40` with `save_link_lookup.rs:93-135`.
+Build, in order: (1) `common.rs`'s private `FAULT_MUTEX`, `FaultGuard`
+(`set`, `clear`, `Drop` removing every recorded variable),
+`fault_guard()` clearing `FAULT_VARIABLES` on acquisition, and migrate the
+42 sites to `let mut _env = fault_guard();` / `_env.set(…)`; (2)
+`reindex_path_locked` passing `&FoldedNameLookup` to `index_file` instead
+of a snapshot; (3) `VaultIndex::candidate_paths` (index-order union of a
+probe's matches; `InMemoryVaultIndex` sorts positions),
+`LinkCandidateSelector::probe_names`, and `PreMoveIndex::offer_candidates`
+that offers the post index's candidates for the pre keys plus the moved
+files' post keys, mapped back through `old_path_of`, in post index order;
+(4) `VaultLookup::resolve_link -> Result<Option<String>, EvalError>`,
+`EvalError::LinkLookupFailed`, and `SqlVaultLookup` resolving through
+`FoldedNameLookup` on the query's connection. Facts, each seen failing
+first: `a_panic_under_the_fault_guard_poisons_nothing_for_the_next_fact`
+(a panicking holder leaves the next acquisition clean);
+`the_fault_guard_clears_every_fault_variable_on_acquisition`;
+`no_test_sets_a_fault_variable_outside_the_guard` (census);
+`a_repair_through_reindex_path_reads_no_snapshot_of_the_vault` (counters
+zero); `a_repair_writes_the_links_a_scan_writes`;
+`candidate_paths_returns_the_union_in_index_order`;
+`the_pre_move_index_offers_the_same_winner_as_every_path` (census
+fixtures × mapping shapes); `a_case_colliding_rename_keeps_todays_tie_winner`
+(`Foo.md → A.md` beside `foo.md`: winner `Foo.md`);
+`a_rename_plans_its_rewrites_from_candidate_rows_only` (`PATHS_OFFERED`
+bound); `a_query_that_resolves_links_materializes_no_snapshot`;
+`a_failed_link_lookup_fails_the_query_instead_of_reading_as_unresolved`;
+`a_dql_inline_link_field_resolves_through_the_lookup`. Registers:
+`BENCHMARKS.md` (a WB-18 entry with the row counts). Not delivered: the
+whole-`links` read in `collect_rewrite_candidates`. Done when the suite
+passes locally (`cargo test -p slate-core --locked --no-fail-fast`), the
+fmt/clippy/workspace-test/bench-compile/licence gates pass in PowerShell,
+the Windows and rust lanes are green, each fact's mutation was run
+locally, and the four issues close with `Closes`. Commit:
 `fix(core): every link resolution reads its own candidate rows and a panicking fault fact poisons no guard`.

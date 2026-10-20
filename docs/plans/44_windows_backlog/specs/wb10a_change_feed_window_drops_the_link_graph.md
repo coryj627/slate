@@ -58,10 +58,16 @@ No Windows or mac test change: the host probes are already pinned (`ConnectionsL
 ## Verification
 
 ```powershell
-$env:CARGO_TARGET_DIR='C:\dev\slate\target-wb10a'
+$env:CARGO_TARGET_DIR = 'C:\dev\slate\target-wb10a'
+cargo test -p slate-core change_feed -- --list | Select-String 'drops_the_graph|drops_this_sessions_graph|leaves_the_graph_alone|moves_the_generation' | Measure-Object -Line   # 7
 cargo test -p slate-core change_feed            # the new facts fail first, then pass
 cargo test -p slate-core --no-fail-fast          # every target (the deferred-tx and lock-order traps)
-make ci                                          # fmt, clippy, licence gates
+# `make ci` = fmt-check + clippy + test + bench-check + check-license-headers (Makefile:60-73); no make here, so per CONTRIBUTING.md:95-98:
+cargo fmt --all --check
+cargo clippy --all-targets --workspace -- -D warnings
+cargo test --workspace
+cargo bench --workspace --no-run
+bash scripts/check-license-headers.sh      # Git Bash; the script has no PowerShell twin
 ```
 
 Lanes: `rust.yml` and `windows.yml` (its `rust-tests` job runs `cargo test -p slate-core` on Windows, `windows.yml:228`); `swift-tests.yml` only if `lib.rs` changes (it should not). AT: none — no sentence changes; the graph views update silently as R-9 (d) already specifies.
@@ -72,9 +78,9 @@ Lanes: `rust.yml` and `windows.yml` (its `rust-tests` job runs `cargo test -p sl
 - [ ] `change_feed_window` invalidates the graph on records, `TooLarge` and `Gap`, in LOCK ORDER, and never on an own-writes-only `Exact` window.
 - [ ] No FFI or host change; both bindings unchanged.
 - [ ] Contract 40 addendum and the design §4.3 pointer appended.
-- [ ] `cargo test -p slate-core --no-fail-fast` and `make ci` green locally; `rust.yml` and `windows.yml` green.
+- [ ] `cargo test -p slate-core --no-fail-fast`, `cargo fmt --all --check`, `cargo clippy --all-targets --workspace -- -D warnings`, `cargo test --workspace`, `cargo bench --workspace --no-run` and `bash scripts/check-license-headers.sh` green locally; `rust.yml` and `windows.yml` green.
 - [ ] PR body: `Closes #1519`; names WB-10 as the Windows consumer whose Refresh now shows another session's link in Connections.
 
 ## Brief
 
-Read `session.rs:2014-2040` (`graph_drop_locked`), `:2086-2110` (`graph_apply`), `:2160-2200` (`graph_generation` and its LOCK ORDER notes), `:3372-3470` (the five change-feed methods), `change_feed.rs:95-170` (the public records), and `session/tests/change_feed.rs:26-233` (the harness and the first fact). Build: in `change_feed_window`, after `open_window`, drop the graph index (or bump the floor when none is built) when the window has any record, is `TooLarge`, or is a `Gap`; leave an own-writes-only `Exact` window alone. Facts: the seven snake_case facts above in `session/tests/change_feed.rs`, each seen failing first. Registers: contract 40 R-9 (d) addendum; design §4.3 pointer. Done when the Rust lanes are green on Linux and Windows and #1519 closes. Commit: `fix(core): a change-feed window carrying another session's change drops the link graph so the hosts rebuild it`.
+Read `crates/slate-core/src/session.rs:2014-2040` (`graph_drop_locked`), `:2086-2110` (`graph_apply`), `:2160-2200` (`graph_generation` and its LOCK ORDER notes), `:3372-3470` (the five change-feed methods), `crates/slate-core/src/change_feed.rs:95-170` (the public records), and `crates/slate-core/src/session/tests/change_feed.rs:26-233` (the `two_hosts` harness and the first fact). Build, in `VaultSession::change_feed_window`: after `open_window` returns and with `conn` still held, a new private `graph_invalidate_locked_conn(&self)` that locks `graph` (LOCK ORDER conn → graph → graph_metrics) and calls `graph_drop_locked` when an index is built or bumps `graph_generation_floor` when none is; call it when the window is `Exact` with `record_count > 0` (any record — file or directory; this is the same "any foreign record" trigger WB-10's Windows host probes on), `TooLarge`, or a `Gap` (after `record_gap` commits); never on an own-writes-only `Exact` window. No FFI or host change. Facts in `session/tests/change_feed.rs`, each seen failing first: `a_foreign_link_change_in_an_exact_window_drops_this_sessions_graph` (B saves `[[b]]`; A's generation moves and `graph_neighborhood("b.md")` has one edge), `a_foreign_folder_rename_in_an_exact_window_drops_the_graph` (a directory-only record moves the generation), `an_exact_window_of_own_writes_only_leaves_the_graph_alone` (generation equals what `graph_apply` set; metrics cache intact), `a_trimmed_cursor_window_drops_the_graph`, `a_window_with_no_cursor_drops_the_graph`, `an_oversized_window_drops_the_graph` (each `Gap`/`TooLarge` variant moves the generation), `a_drop_with_no_built_index_still_moves_the_generation` (floor 0 → 1 → 2 across two foreign changes with no query between). Registers: append the dated sentence under R-9 (d) and under the mac change-feed paragraph in `docs/plans/40_nvda_matrix_remediation_contracts.md` (`:23`, `:27`); one pointer sentence in `docs/plans/43_mac_backlog_delivery/21_change_feed_design.md` §4.3's graph-probe bullet (`:652-657`). No decision is pending for this chunk. Not delivered: nothing. Done when the seven facts are listed by `cargo test -- --list`, `cargo test -p slate-core --no-fail-fast`, `cargo fmt --all --check`, `cargo clippy --all-targets --workspace -- -D warnings`, `cargo test --workspace`, `cargo bench --workspace --no-run` and `bash scripts/check-license-headers.sh` pass locally, `rust.yml` and `windows.yml` are green, and #1519 closes. Commit: `fix(core): a change-feed window carrying another session's change drops the link graph so the hosts rebuild it`.

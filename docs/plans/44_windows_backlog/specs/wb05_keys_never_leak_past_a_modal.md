@@ -159,13 +159,28 @@ Not changed: TR-7's shell-chord swallow; `ModalSurfaceDescriptor.OwnsTextField`.
 
 ## Verification
 
-```
+```powershell
 $env:CARGO_TARGET_DIR='C:\dev\slate\target-wb05'; ./apps/slate-windows/generate-bindings.ps1 -Locked
-dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release
-dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --filter "FullyQualifiedName~ShellRegionCycleTests|FullyQualifiedName~ModalSurfaceTests|FullyQualifiedName~SheetKeyboardFenceTests|FullyQualifiedName~SheetFenceCensus|FullyQualifiedName~CommandPaletteTests"
-dotnet test apps/slate-windows/tests/SlateWindows.AccessibilityTests/SlateWindows.AccessibilityTests.csproj --filter "FullyQualifiedName~SheetFence"   # desktop free, NVDA closed
-dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include apps/slate-windows/src/SlateWindows/ModalSurfaces.cs apps/slate-windows/src/SlateWindows/MainWindow.Palette.cs apps/slate-windows/src/SlateWindows/SheetKeyboardFence.cs <test files>
+dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release   # Error(s)=0 before reading counts
+$filter = "FullyQualifiedName~ShellRegionCycleTests|FullyQualifiedName~ModalSurfaceTests|FullyQualifiedName~SheetKeyboardFenceTests|FullyQualifiedName~SheetFenceCensus|FullyQualifiedName~CommandPaletteTests"
+dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --no-build --configuration Release --list-tests --filter $filter | Select-String "ThePopoverIsAModalSurfaceForTheRing|UndoRedoCutPasteAndDeleteInsideASheetNeverReachTheEditor|ASheetFieldWithItsOwnUndoStillUndoesInside|ThePaletteSearchAndQuickOpenBoxesFenceTheEditingCommandsToo|ExecutingAFencedEditingCommandDirectlyInsideASheetLeavesTheEditorAlone" | Measure-Object | ForEach-Object { if ($_.Count -lt 5) { throw "new facts not discovered: $($_.Count)" } }
+dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --no-build --configuration Release --filter $filter
+# desktop free, NVDA closed:
+dotnet test apps/slate-windows/tests/SlateWindows.AccessibilityTests/SlateWindows.AccessibilityTests.csproj --no-build --configuration Release --filter "FullyQualifiedName~Templates_PromptUndoLeavesTheNoteAlone|FullyQualifiedName~Templates_PromptTabTraversalStaysInTheSheet"
+$files = @(
+  'apps/slate-windows/src/SlateWindows/ModalSurfaces.cs',
+  'apps/slate-windows/src/SlateWindows/MainWindow.Palette.cs',
+  'apps/slate-windows/src/SlateWindows/SheetKeyboardFence.cs',
+  'apps/slate-windows/tests/SlateWindows.Tests/ModalSurfaceTests.cs',
+  'apps/slate-windows/tests/SlateWindows.Tests/ShellRegionCycleTests.cs',
+  'apps/slate-windows/tests/SlateWindows.Tests/SheetKeyboardFenceTests.cs',
+  'apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.SheetFence.cs')
+dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $files
 ```
+
+(All five class names above are real top-level classes; the FlaUI facts
+live in the partial class `ShellAccessibilityTests`, so they are selected
+by method name.)
 
 CI: Windows lane plus the FlaUI shell gate. AT: NVDA spot — Ctrl+E on an
 embed, F6, Shift+F6: NVDA says nothing and focus stays on "Close"; in the
@@ -184,14 +199,47 @@ is unchanged on close. Recorded in the PR body per §4 rule 4.
 
 Read `ModalSurfaces.cs:38-158` and `:179-330`, `MainWindow.Palette.cs:82-117`,
 `MainWindow.ShellRegions.cs:19-20`, `MainWindow.xaml.cs:140-152`,
-`WorkspaceViewModel.Layout.cs:952-1050`, `SheetKeyboardFence.cs` whole,
+`WorkspaceViewModel.Layout.cs:952-1050`, `WorkspaceTemplates.xaml:488-497`,
+`EditorInteractions.cs:641`, `:3373-3420`, `SheetKeyboardFence.cs` whole,
 `ModalSurfaceTests.cs:220-600`, `SheetKeyboardFenceTests.cs:47-335`,
-`ShellRegionCycleTests.cs:226-243`. Add `EditorPopover` first in the
-enum and the state, keep the three `Decide*` admissions at today's
-behaviour with explicit arms, extend the four censuses; widen the fence's
-edge to the editing-command set (Copy excepted) by reflection and make
-the direct-`Execute` guard use the same set. Write the facts above
-failing first; run the FlaUI journey with the desktop free. Append the
-R-6 and §4 notes. Done when the lanes are green and the NVDA spot check
-is in the PR body. Commit: `fix(windows): f6 is a no-op over the editor
-popover and a sheet refuses the editing commands it cannot answer`.
+`ShellRegionCycleTests.cs:226-243`, `Censuses/SheetFenceCensus.cs:22-80`.
+No owner decision is pending. Build: a `ModalSurface.EditorPopover`
+member declared first and an `EditorPopover: bool` field on
+`ModalSurfaceState`, read in `CurrentModalSurfaceState` as
+`workspace?.ActiveGroup.ActiveTab?.EditorInteractions?.IsPopoverOpen == true`
+and pinned in `OverlayStateExpressions`; an `IsOpen` arm; explicit
+`ModalSurface.EditorPopover => PaletteOpenDecision.Open` arms in
+`DecidePaletteOpen`, `DecideSearchOpen`, `DecideQuickOpenOpen` (today's
+admission kept); the ordering census taught a per-row XAML file
+(`WorkspaceTemplates.xaml` for the popover, id `EditorInteractionPopover`)
+and the decision, menu-disable and presentation-observer censuses given
+their popover row; `SheetKeyboardFence.Edge` widened from the two Tab
+refusals to `ApplicationCommands.Undo/Redo/Cut/Paste/Delete/SelectAll`
+plus every static `RoutedUICommand` on `EditingCommands` except `Copy`,
+enumerated by reflection, with the direct-`Execute` guard
+(`IsFencedCommand`) over the same set. Facts, failing first:
+`ShellRegionCycleTests.ThePopoverIsAModalSurfaceForTheRing` (hosted
+shell, Ctrl+E on an embed, F6 and Shift+F6: focus stays on
+`EditorPopoverClose`, nothing announced); the extended `ModalSurfaceTests`
+censuses with a negative assertion that the popover id is absent from
+`MainWindow.xaml`; `SheetKeyboardFenceTests.UndoRedoCutPasteAndDeleteInsideASheetNeverReachTheEditor`
+(Theory over the five chords from an editable and a read-only sheet
+field: note text and undo stack unchanged, tab clean),
+`ASheetFieldWithItsOwnUndoStillUndoesInside`,
+`ThePaletteSearchAndQuickOpenBoxesFenceTheEditingCommandsToo`,
+`ExecutingAFencedEditingCommandDirectlyInsideASheetLeavesTheEditorAlone`;
+FlaUI `ShellAccessibilityTests.Templates_PromptUndoLeavesTheNoteAlone`
+(desktop free, NVDA closed). Mutations to run locally: drop
+`EditorPopover` from `CurrentModalSurfaceState`; remove one command from
+the edge; remove the fence attribute from one of the three overlays.
+Registers: append an R-6 note and a W7-6 §4 note to
+`docs/plans/40_nvda_matrix_remediation_contracts.md`; update the editor
+popover row's notification cell in `docs/plans/18_windows_port/w_c_matrix.md`.
+Done when the Windows lane and the FlaUI gate are green, `dotnet format
+--include` over the seven files is clean, and the NVDA spot check (F6
+and Shift+F6 over the popover say nothing; Ctrl+Z in the template
+prompt's Topic field changes nothing behind it) is in the PR body. PR
+body: `Closes #1281`, `Closes #1259`, the admission-and-rescan
+consequences named; nothing deferred. Commit: `fix(windows): f6 is a
+no-op over the editor popover and a sheet refuses the editing commands
+it cannot answer`.

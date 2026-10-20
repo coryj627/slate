@@ -150,12 +150,18 @@ Facts fail first; xUnit, STA via `RunSta`, in the OutlineLanding partial.
 
 ## Verification
 
-```
+```powershell
 $env:CARGO_TARGET_DIR='C:\dev\slate\target-wb13'; ./apps/slate-windows/generate-bindings.ps1 -Locked
 dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release
-dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --filter "FullyQualifiedName~CanvasNavigatorTests|FullyQualifiedName~CanvasOperationEffectsTests|FullyQualifiedName~CanvasDocumentTests|FullyQualifiedName~CanvasScenarioCensus|FullyQualifiedName~CanvasEnablementCensus"
-dotnet test apps/slate-windows/tests/SlateWindows.AccessibilityTests/SlateWindows.AccessibilityTests.csproj --filter "FullyQualifiedName~CanvasMarks_ToggleListJumpDeleteAndUndo_AreReachable"   # NVDA closed
-dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include apps/slate-windows/src/SlateWindows/Canvas/CanvasOutlineView.cs apps/slate-windows/src/SlateWindows/Canvas/CanvasDocumentViewModel.cs <tests>
+$tests = 'apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj'
+$filter = 'FullyQualifiedName~SlateWindows.Tests.CanvasNavigatorTests|FullyQualifiedName~SlateWindows.Tests.CanvasOperationEffectsTests|FullyQualifiedName~SlateWindows.Tests.CanvasDocumentTests|FullyQualifiedName~SlateWindows.Tests.Censuses.CanvasScenarioCensus|FullyQualifiedName~SlateWindows.Tests.Censuses.CanvasEnablementCensus'
+dotnet test $tests --no-build --configuration Release --list-tests --filter $filter | Select-String 'DeletingTheFocusedRowSeatsTheNextRowInReadingOrder|DeletingTheLastRowSeatsThePreviousOne|DeletingTheOnlyRowLandsOnTheTree|ADeleteFromThePaletteSeatsTheSuccessorToo|TheDeleteSpeaksOnceAndTheLandingIsSilent|UndoFromTheSeatedRowRestoresTheCard|ADeleteMarksItsFocusReturnOnce'   # seven lines, else the filter is wrong (CanvasNavigatorTests is one partial class across its .OutlineLanding.cs file)
+dotnet test $tests --no-build --configuration Release --filter $filter
+$at = 'apps/slate-windows/tests/SlateWindows.AccessibilityTests/SlateWindows.AccessibilityTests.csproj'
+dotnet test $at --no-build --configuration Release --list-tests --filter 'FullyQualifiedName~ShellAccessibilityTests.CanvasMarks_ToggleListJumpDeleteAndUndo_AreReachable' | Select-String 'CanvasMarks_'   # one line
+dotnet test $at --no-build --configuration Release --filter 'FullyQualifiedName~ShellAccessibilityTests.CanvasMarks_ToggleListJumpDeleteAndUndo_AreReachable'   # NVDA closed
+$cs = @(git diff --name-only origin/main -- '*.cs') + @(git ls-files --others --exclude-standard -- '*.cs')   # Canvas/CanvasOutlineView.cs, Canvas/CanvasDocumentViewModel.cs, CanvasNavigatorTests.OutlineLanding.cs, CanvasOperationEffectsTests.cs, ShellAccessibilityTests.cs
+dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $cs
 ```
 
 `CanvasOutlineView.cs` has 0 CRs. CI: Windows lane with the shell gate.
@@ -179,13 +185,41 @@ Read `Canvas/CanvasOutlineView.cs:440-500, 555-600, 699, 738-856, 893-964`,
 `CanvasOperationEffects.cs:20-40, 107-123`, `CanvasMutationFunnel.cs:572-593`,
 `CanvasPopulation.cs:139, 220`, the precedent at
 `FilesSidebarViewModel.FileManagement.cs:644-673`, and the facts at
-`CanvasNavigatorTests.OutlineLanding.cs:61, 80`. Write the six OutlineLanding
-facts and the effects fact first; see the focus land on the window. In
-`Rebuild`, capture the focused row and the previous reading order before
-the clear, and after `ApplySelection` deliver focus to the next survivor
-(else previous, else the tree) through `DeliverFocus`; carry the mutation's
-receipt on `OutlinePublished` and mark `TryMarkFocusReturned` once. Extend
-the FlaUI marks journey. Append the `w_c_matrix.md` sentence and the
-contract 34 note. Done when the lane is green and the NVDA spot is in the
-PR body. Commit: `fix(windows): deleting the focused canvas card seats the
-next outline row instead of dropping focus to the window`.
+`CanvasNavigatorTests.OutlineLanding.cs:61, 80`. Build: in
+`CanvasOutlineView.Rebuild`, capture `FocusedRow()?.Id` (when
+`HasKeyboardFocus`) and the previous reading order (`_lastOrder`, the ids
+of the last `population.Outline`) before the clear; after
+`ApplySelection`, when that id is gone and `_selectedRow` is null,
+`DeliverFocus` the first later id in `_lastOrder` still in `_byNode`,
+else the last earlier one, else `SelectorFocus.FocusSelectedOrFirstRow(_tree)`;
+add `CanvasOutlinePublishedEventArgs { CanvasOperationCompletion? Receipt }`
+to `CanvasDocumentViewModel.OutlinePublished` (set from the funnel's
+republish, null for loads and filters) and call
+`Receipt?.TryMarkFocusReturned()` once on delivery. Facts, written first
+and seen failing (the focus lands on the window today):
+`CanvasNavigatorTests.OutlineLanding.DeletingTheFocusedRowSeatsTheNextRowInReadingOrder`
+(A B C, focus B, delete → focus and seat C, `Keyboard.FocusedElement` a
+`CanvasOutlineItem`); `…DeletingTheLastRowSeatsThePreviousOne` (focus C →
+B); `…DeletingTheOnlyRowLandsOnTheTree` (tree has focus, no seat, no
+exception); `…ADeleteFromThePaletteSeatsTheSuccessorToo` (no menu, same
+landing); `…TheDeleteSpeaksOnceAndTheLandingIsSilent` (exactly one
+`CanvasA11yEvent`, `CanvasDeleted` ending "— Ctrl+Z to undo", no
+`CanvasMovedTo`); `…UndoFromTheSeatedRowRestoresTheCard` (Ctrl+Z works
+without F6); `CanvasOperationEffectsTests.ADeleteMarksItsFocusReturnOnce`
+(the receipt is consumed once, false after). Mutations: drop the
+successor delivery; previous-first; deliver through `SelectNode`
+(second utterance). Extend FlaUI
+`ShellAccessibilityTests.CanvasMarks_ToggleListJumpDeleteAndUndo_AreReachable`
+(`ShellAccessibilityTests.cs:7577`): after Delete the focused element is
+an outline TreeItem, then Ctrl+Z restores. Registers: a sentence on
+`docs/plans/18_windows_port/w_c_matrix.md:57` (next row in reading order,
+silently, #1260) and an appended note under §E of
+`docs/plans/34_canvas_contracts.md` (never rewriting D-rows). No owner
+decision. Interlock: plan 43 PR 32 (#1370) edits
+`CanvasOutlineView.cs:53`; whichever lands second rebases. Not delivered:
+nothing. Done when the Windows lane with the shell gate is green, the
+format gate is clean, the mutation run is recorded, and the NVDA spot
+("Deleted …— Ctrl+Z to undo" then the next row's name, no "Slate, window";
+from the menu and from the palette) is in the PR body with `Closes #1260`.
+Commit: `fix(windows): deleting the focused canvas card seats the next
+outline row instead of dropping focus to the window`.

@@ -108,8 +108,14 @@ caches its structural list per applied `FlowDocument` identity and
 invalidates it in the `:712-719` path before `ResetChildrenCache`;
 (5) `CensusDiag` formatting is gated: `ReadingSurface.CensusDiagEnabled`
 (from the existing switch `:732` reads) is checked before the
-interpolated string is built. Not changed: the hierarchy itself (W3-1's
-measured reason for it, `:945-948`).
+interpolated string is built. (6) One explicit invalidation entry for
+later chunks: `internal void ReadingSurface.InvalidateStructuralPeers()`
+(new) drops the surface peer's cached children list, every list peer's
+item table and the cached names, and runs the `:712-719` reset; the merge
+path calls it, and WB-20's in-place diagram completion calls it only when
+it changes the block set (a name or content change inside one element
+does not). Not changed: the hierarchy itself (W3-1's measured reason for
+it, `:945-948`).
 
 **#1330 — one provider, one event.** `ReadingSurfacePeer` holds one
 `HeadingStyleTextProvider` per inner provider (`GetPattern` `:966-969`
@@ -181,12 +187,19 @@ Facts fail first.
 
 ## Verification
 
-```
+```powershell
 $env:CARGO_TARGET_DIR='C:\dev\slate\target-wb11'; ./apps/slate-windows/generate-bindings.ps1 -Locked
 dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release
-dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --filter "FullyQualifiedName~ReadingViewTests|FullyQualifiedName~ReadingDoctrineCensusTests|FullyQualifiedName~ReadingFocusTests"
-dotnet test apps/slate-windows/tests/SlateWindows.AccessibilityTests/SlateWindows.AccessibilityTests.csproj --filter "FullyQualifiedName~ReadingList_|FullyQualifiedName~ReadingSelectAll_|FullyQualifiedName~ReadingTextPattern_|FullyQualifiedName~ReadingView_IsTheEditorStop"   # NVDA closed, desktop free
-dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include apps/slate-windows/src/SlateWindows/Reading/ReadingSurface.cs apps/slate-windows/src/SlateWindows/Reading/ReadingDocumentBuilder.cs apps/slate-windows/src/SlateWindows/Reading/ReadingSemantics.cs apps/slate-windows/src/SlateWindows/Reading/HeadingStyleText.cs <tests>
+$tests = 'apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj'
+$filter = 'FullyQualifiedName~SlateWindows.Tests.ReadingViewTests|FullyQualifiedName~SlateWindows.Tests.ReadingDoctrineCensusTests|FullyQualifiedName~SlateWindows.Tests.ReadingFocusTests'
+dotnet test $tests --no-build --configuration Release --list-tests --filter $filter | Select-String 'AnOrderedListRendersAndReadsItsAuthoredMarkers|ListItemPeersAreStableAcrossQueries|PositionInSetOnTheLastOf2000ItemsIsIndexed|SurfaceChildrenAreCachedUntilTheNextMerge|TheTextPatternProviderIsOnePerPeer'   # five lines, else the filter is wrong
+dotnet test $tests --no-build --configuration Release --filter $filter
+$at = 'apps/slate-windows/tests/SlateWindows.AccessibilityTests/SlateWindows.AccessibilityTests.csproj'
+$atFilter = 'FullyQualifiedName~ShellAccessibilityTests.ReadingList_ArrowingThroughTheBlockCapIsBounded|FullyQualifiedName~ShellAccessibilityTests.ReadingSelectAll_RaisesTextSelectionChangedAndReturnsTheNote|FullyQualifiedName~ShellAccessibilityTests.ReadingTextPattern_RangeFromChildResolvesEveryCustomPeer|FullyQualifiedName~ShellAccessibilityTests.ReadingView_IsTheEditorStop'
+dotnet test $at --no-build --configuration Release --list-tests --filter $atFilter | Select-String 'ReadingList_|ReadingSelectAll_'   # two lines
+dotnet test $at --no-build --configuration Release --filter $atFilter   # NVDA closed, desktop free
+$cs = @(git diff --name-only origin/main -- '*.cs') + @(git ls-files --others --exclude-standard -- '*.cs')   # Reading/ReadingSurface.cs, Reading/ReadingDocumentBuilder.cs, Reading/ReadingSemantics.cs, Reading/HeadingStyleText.cs, ReadingViewTests.cs, ShellAccessibilityTests.ReadingList.cs (new)
+dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $cs
 ```
 
 `ReadingSurface.cs` has 7 CRs (mixed endings) — check before and after.
@@ -213,14 +226,53 @@ Read `ReadingDocumentBuilder.cs:245-275`, `ReadingSurface.cs:700-720,
 945-1000, 1131-1200`, `HeadingStyleText.cs:36-80`, `ReadingSemantics.cs:82-90`,
 core `reading.rs:785-793`, mac `Reading/ReadingView.swift:702`, the pins at
 `ReadingViewTests.cs:681, 730, 2330-2365`, and the FlaUI reading journeys at
-`ShellAccessibilityTests.cs:1381, 1720`. Write the timed FlaUI probe and the
-Ctrl+A probe first and watch them fail. Then: render the authored marker as
-a leading run on `MarkerStyle.None` ordered lists; cache item peers
-(`ConditionalWeakTable`), index positions once per list, cache names until
-the next merge, cache the surface's structural children and gate
-`CensusDiag`; keep one `HeadingStyleTextProvider` per peer and raise
-`TextPatternOnTextSelectionChanged` from `SelectionChanged` if WPF does not.
-Amend `w_c_matrix.md:20`, add the parity row, run the NVDA timing and the
-Narrator read-back and record them. Done when the shell gate is green and
-both AT tables are in the PR body. Commit: `fix(windows): reading lists keep
-their authored markers, cost nothing per arrow, and say so on select all`.
+`ShellAccessibilityTests.cs:1381, 1720`. Build, in that order: (1) in
+`ReadingDocumentBuilder.AppendListItem`, ordered lists get
+`MarkerStyle = TextMarkerStyle.None` and each item a leading `Run` of
+`inline.ListMarker ?? "1."` marked by a new
+`ReadingSemantics.MarkListMarker(run)`, the level-change test keyed on an
+`Ordered` bool in the stack tuple; (2) `ReadingListPeer` keeps a
+`ConditionalWeakTable<ListItem, ReadingListItemPeer>`, a `ListItem → int`
+index built once per `ListItems` snapshot for `GetPositionInSetCore`, and
+`ReadingListItemPeer` caches its trimmed name; `ReadingSurfacePeer`
+caches its structural children per applied `FlowDocument`;
+`ReadingSurface.CensusDiag` formats only when enabled; a new
+`ReadingSurface.InvalidateStructuralPeers()` drops every cache and is
+called from the merge path; (3) `ReadingSurfacePeer.GetPattern` returns
+one `HeadingStyleTextProvider` per peer, and `ReadingSurface` raises
+`AutomationEvents.TextPatternOnTextSelectionChanged` from its
+`SelectionChanged` if the probe shows WPF does not. Facts, written first
+and seen failing: `ReadingViewTests.AnOrderedListRendersAndReadsItsAuthoredMarkers`
+(`3. 4. 5.` reads "3. Third"…, `1. 1. 1.` and `12)` kept, `MarkerStyle`
+None, positions unchanged); `NestedListsKeepTheirAuthoredDepthAndMarkers`
+(`:2364` pin → None + marker run);
+`ReadingViewTests.ListItemPeersAreStableAcrossQueries` (two
+`GetChildren()` calls return reference-equal item peers);
+`ReadingViewTests.PositionInSetOnTheLastOf2000ItemsIsIndexed` (100
+queries on item 2000 stay under an allocation bound and one walk);
+`ReadingViewTests.SurfaceChildrenAreCachedUntilTheNextMerge` (one rebuild
+per merge); `ReadingViewTests.TheTextPatternProviderIsOnePerPeer` (same
+provider object twice); FlaUI
+`ShellAccessibilityTests.ReadingList_ArrowingThroughTheBlockCapIsBounded`
+(the issue's `big-list.md`: Ctrl+End and three Ups with a UIA client
+subscribed, each move at most 5× a five-line note's and under 1 s;
+benchmark-tagged) and
+`ShellAccessibilityTests.ReadingSelectAll_RaisesTextSelectionChangedAndReturnsTheNote`
+(`trailing.md`, Ctrl+A: `TextSelectionChanged` within 2 s and
+`GetSelection()[0].GetText(-1)` is the whole note). Mutations:
+`StartIndex` from the first item; `new` peer per call; the linear walk
+back; drop the `:712` invalidation; `new` provider per call. Registers:
+amend `docs/plans/18_windows_port/w_c_matrix.md:20` (authored ordinal,
+cached peers, Ctrl+A event); add a "reading list marker" row to
+`docs/plans/18_windows_port/parity_matrix.md`; file the NVDA timing table
+and the Narrator read-back as a dated report under
+`docs/plans/18_windows_port/reports/` (the `_at_pass_template.md` shape).
+No owner decision. Not delivered: a Narrator pass of Ctrl+A in the editor
+view; no scaling study past the 2,000-block cap. Done when the Windows
+lane with the shell gate is green, the format gate is clean with
+`ReadingSurface.cs`'s CR count unchanged, the mutation run is recorded,
+and the NVDA timing table (under 1 s per move, no watchdog freeze) and the
+Narrator read-back (Ctrl+A announced, Narrator+Shift+Down reads "body …
+blank") are in the PR body with `Closes #1422`, `Closes #1329`, `Closes
+#1330`. Commit: `fix(windows): reading lists keep their authored markers,
+cost nothing per arrow, and say so on select all`.

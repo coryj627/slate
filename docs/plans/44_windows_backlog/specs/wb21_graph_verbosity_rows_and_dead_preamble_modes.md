@@ -125,14 +125,14 @@ plan 43 PR 52 decides the mac Settings picker). Not changed:
   runs one through the shipped registry.
 - `ChordTableTests.ChordsJson_IsExactlyTheTablesProjection` regenerated.
 - `ReadingViewTests` `:3544-3552` rewritten as
-  `EditorPreferencesTests.AStoredFirstLineVerbosityFallsBackToPreambleOnlySilently`
+  `W2EditorInteractionTests.AStoredFirstLineVerbosityFallsBackToPreambleOnlySilently`
   (store `preambleFirstLine`, construct: `IsCodeVerbosityPreambleOnly`
   true, nothing announced) and
   `ThePreambleVerbosityCommandRejectsTheRemovedKeys` (`Execute("preambleAllTokens")`
   changes nothing, announces nothing). `CheckItemGroupsTests.cs:114` and
   `CommandDriftTests.cs:349` updated to the one-item group.
-- `ItemNameCensusTests` / `MenuAutomationIdCensus` (whichever pins menu
-  ids) loses the two ids.
+- `ItemNameCensusTests` (`SlateWindows.AccessibilityTests`) and any census
+  pinning the two menu AutomationIds lose them.
 
 ## Docs and registers
 
@@ -149,14 +149,31 @@ plan 43 PR 52 decides the mac Settings picker). Not changed:
 
 ## Verification
 
-```
+```powershell
 $env:CARGO_TARGET_DIR='C:\dev\slate\target-wb21'; ./apps/slate-windows/generate-bindings.ps1 -Locked
-dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release
-$env:SLATE_CHORDS_UPDATE='1'; dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --filter "FullyQualifiedName~ChordsJson_IsExactlyTheTablesProjection"; Remove-Item Env:SLATE_CHORDS_UPDATE
-dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --filter "FullyQualifiedName~GraphPreferencesTests|FullyQualifiedName~ChordTableTests|FullyQualifiedName~CommandRegistrationTests|FullyQualifiedName~CommandPaletteTests|FullyQualifiedName~EditorPreferencesTests|FullyQualifiedName~CheckItemGroupsTests|FullyQualifiedName~CommandDriftTests|FullyQualifiedName~ReadingViewTests"
+dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release   # Error(s)=0 before reading counts
+$env:SLATE_CHORDS_UPDATE='1'; dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --no-build --configuration Release --filter "FullyQualifiedName~ChordTableTests.ChordsJson_IsExactlyTheTablesProjection"; Remove-Item Env:SLATE_CHORDS_UPDATE
+$filter = "FullyQualifiedName~GraphPreferencesTests|FullyQualifiedName~ChordTableTests|FullyQualifiedName~CommandRegistrationTests|FullyQualifiedName~CommandPaletteTests|FullyQualifiedName~W2EditorInteractionTests|FullyQualifiedName~CheckItemGroupsTests|FullyQualifiedName~CommandDriftTests|FullyQualifiedName~ReadingViewTests"
+dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --no-build --configuration Release --list-tests --filter $filter | Select-String "TheThreeVerbosityRowsAreRegisteredChordlessWithMacsLabelsAndHints|EachVerbosityRowSetsItsLevelAndReassertsOnTheSameOne|TypingGraphVerbosityListsTheThreeRowsAndEnterSetsTheLevel|AStoredFirstLineVerbosityFallsBackToPreambleOnlySilently|ThePreambleVerbosityCommandRejectsTheRemovedKeys" | Measure-Object | ForEach-Object { if ($_.Count -lt 5) { throw "new facts not discovered: $($_.Count)" } }
+dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --no-build --configuration Release --filter $filter
 python -I scripts/generate-parity-matrix.py; python -I scripts/generate-parity-matrix.py --check
-dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include apps/slate-windows/src/SlateWindows/Commands/ChordTable.cs apps/slate-windows/src/SlateWindows/Commands/SlateCommandRegistrar.cs apps/slate-windows/src/SlateWindows/Graph/GraphPreferencesViewModel.cs apps/slate-windows/src/SlateWindows/WorkspaceViewModel.cs apps/slate-windows/src/SlateWindows/EditorInteractions.cs <test files>
+$files = @(
+  'apps/slate-windows/src/SlateWindows/Commands/ChordTable.cs',
+  'apps/slate-windows/src/SlateWindows/Commands/SlateCommandRegistrar.cs',
+  'apps/slate-windows/src/SlateWindows/Graph/GraphPreferencesViewModel.cs',
+  'apps/slate-windows/src/SlateWindows/WorkspaceViewModel.cs',
+  'apps/slate-windows/src/SlateWindows/EditorInteractions.cs',
+  'apps/slate-windows/tests/SlateWindows.Tests/GraphPreferencesTests.cs',
+  'apps/slate-windows/tests/SlateWindows.Tests/CommandPaletteTests.Shell.cs',
+  'apps/slate-windows/tests/SlateWindows.Tests/W2EditorInteractionTests.cs',
+  'apps/slate-windows/tests/SlateWindows.Tests/ReadingViewTests.cs',
+  'apps/slate-windows/tests/SlateWindows.Tests/CheckItemGroupsTests.cs',
+  'apps/slate-windows/tests/SlateWindows.Tests/CommandDriftTests.cs')
+dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $files
 ```
+
+(Every class in the filter is a real top-level class; `CommandPaletteTests`
+is a partial class across `CommandPaletteTests*.cs`.)
 
 CI: Windows lane (the parity `--check` runs there). AT: NVDA spot —
 Ctrl+K, type "verbosity": three rows read "Graph Verbosity: Terse",
@@ -180,12 +197,48 @@ Read `Commands/ChordTable.cs:617-690`, `:1077-1137`, `:860-872`,
 `:125-140`, `:185-205`, `:370-400`, `MainWindow.xaml:537-556`,
 `GraphPreferencesTests.cs:238-255`, `ReadingViewTests.cs:3540-3556`,
 `CheckItemGroupsTests.cs:108-120`, `CommandDriftTests.cs:344-354`,
-`scripts/generate-parity-matrix.py:90-110` and mac's
-`SlateCommands.swift:1672-1696`. Register the three rows with mac's
-labels and hints, resolve them to three new parameterless commands on
-`GraphPreferencesViewModel` through a new `WorkspaceViewModel.GraphPreferences`
-property; remove the two dead code-verbosity menu items and keys; write
-the facts failing first; regenerate `chords.json` and the parity matrix.
-Done when the Windows lane is green and the NVDA spot is recorded.
-Commit: `feat(windows): the palette registers the three graph verbosity
-rows and the code preamble menu drops the two modes that did nothing`.
+`ChordTableTests.cs:24-36` and `:233-270`, `scripts/generate-parity-matrix.py:90-110`
+and mac's `SlateCommands.swift:1672-1696`. No owner decision is pending
+(RD6 is recorded on #1389, 2026-10-19). Build: three `Reg` rows
+`slate.graph.setVerbosityTerse|Standard|Verbose` (labels "Graph
+Verbosity: Terse|Standard|Verbose", hints "Set the graph announcement
+verbosity to Terse|Standard|Verbose for this vault.", `CommandSection.Graph`,
+chordless) replacing the three `Unreg` rows and `GraphVerbosityReason`;
+three parameterless `RelayCommand`s `SetVerbosityTerseCommand`,
+`SetVerbosityStandardCommand`, `SetVerbosityVerboseCommand` on
+`GraphPreferencesViewModel` calling `SetVerbosity(level)`; a new
+`internal GraphPreferencesViewModel GraphPreferences => _graphPreferences;`
+on `WorkspaceViewModel`; registrar entries
+`[Ids.GraphSetVerbosity…] = host => host.Workspace?.GraphPreferences.SetVerbosity…Command`;
+removal of the "Preamble + First Line" and "Preamble + All Tokens"
+`CheckMenuItem`s (`MainWindow.xaml:544-556`) and of the two keys in
+`CodeVerbosityNames`, the submenu kept. Facts, failing first:
+`GraphPreferencesTests.TheThreeVerbosityRowsAreRegisteredChordlessWithMacsLabelsAndHints`
+(one `Reg` row per core level, mac's label and hint, no chord either
+side), `GraphPreferencesTests.EachVerbosityRowSetsItsLevelAndReassertsOnTheSameOne`
+(`Verbosity` changes and `VerbosityChanged` fires once; the current level
+re-asserts silently), `CommandPaletteTests.TypingGraphVerbosityListsTheThreeRowsAndEnterSetsTheLevel`
+(hosted registry), `W2EditorInteractionTests.AStoredFirstLineVerbosityFallsBackToPreambleOnlySilently`
+(a stored `preambleFirstLine` constructs as Preamble only with nothing
+announced), `W2EditorInteractionTests.ThePreambleVerbosityCommandRejectsTheRemovedKeys`
+(`Execute("preambleAllTokens")` changes and announces nothing);
+`ReadingViewTests.cs:3544-3552`, `CheckItemGroupsTests.cs:114` and
+`CommandDriftTests.cs:349` rewritten to the one-item group;
+`ChordTableTests.ChordsJson_IsExactlyTheTablesProjection` regenerated
+with `SLATE_CHORDS_UPDATE=1`. Mutations to run locally: keep one `Unreg`
+row; wire two rows to one level; leave a removed key in
+`CodeVerbosityNames`. Registers: `apps/slate-windows/chords.json`
+(regenerated; `deliveryEvidence.commands` gains the three ids → `graph`),
+`scripts/generate-parity-matrix.py` (drop the three overrides) and
+`docs/plans/18_windows_port/parity_matrix.md` (regenerated, `--check`
+green), a C-9 note appended to `docs/plans/35_graph_contracts.md`, the
+`docs/plans/18_windows_port/w_c_matrix.md` cells for the Editor menu and
+the graph rows. Done when the Windows lane is green, `dotnet format
+--include` over the eleven files is clean, and the NVDA spot (Ctrl+K
+"verbosity" lists the three rows and Enter speaks the level line;
+Editor ▸ Code Preamble Verbosity lists one item; a stored
+`preambleFirstLine` launches silent) is in the PR body. Not delivered:
+the mac half of #1389 (plan 43 PR 52). PR body: `Closes #1415`,
+`Refs #1389`. Commit: `feat(windows): the palette registers the three
+graph verbosity rows and the code preamble menu drops the two modes that
+did nothing`.

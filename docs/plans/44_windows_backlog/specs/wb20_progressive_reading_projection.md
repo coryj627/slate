@@ -99,15 +99,29 @@ Swift compile) and the chunk grows by WB-8's shape.
   — `Freezable.Freeze()` — before it crosses to the dispatcher), under the
   same per-diagram and projection-wide budgets (`:918-927`, `:259`'s pool
   fact).
-- **Re-projection in place.** New `ReadingSurface.ReplaceDiagramBlocks(IReadOnlyList<(Paragraph pending, Paragraph rendered)>)`:
-  swaps each pending paragraph for its rendered twin at the same index in
-  its parent `Blocks`, so the caret, the focused link run and every other
-  block keep their identity — no `ApplyBuiltDocument`, no caret
-  restoration by offset, no `StructureChanged` storm (one
-  `StructureChanged` after the batch, as `:712-719` does). A failed render
-  swaps in the existing failure paragraph (`:899-912` headers, reason,
-  source). The memo (`_memo`) gains the diagram digest when stage 2 lands
-  so a later rebind memo-hits the complete projection.
+- **Completion in place — the placeholder element is the final element.**
+  The placeholder `ReadingDiagramElement` is focusable (`:23-27`) and may
+  hold keyboard focus, the caret or a selection anchor when the render
+  lands, so nothing is swapped: the same element and the same `Paragraph`
+  stay in the document. New `ReadingDiagramElement.Complete(string
+  description, ImageSource visual)` sets `Content = new ReadingDiagramImage`,
+  updates `Description`, `AutomationProperties.Name` and the HelpText, and
+  raises the peer's `RaisePropertyChangedEvent(AutomationElementIdentifiers.NameProperty, …)`;
+  `ReadingDiagramElement.Fail(string header, string reason)` renders the
+  existing failure shape (`:899-912`: header, reason, source-in-range)
+  inside the same element. `ReadingSurface.CompleteDiagrams(IReadOnlyList<(string key,
+  DiagramOutcome outcome)>)` (new) finds each pending element by its key
+  (`ReadingSemantics.MarkDiagramPending`) and calls `Complete`/`Fail` —
+  no block insertion or removal, so the caret, the focused element, the
+  selection, the list peers' tables and WB-11's structural-children cache
+  are untouched (`InvalidateStructuralPeers()` is NOT called: the block
+  set did not change; only the element's name and content did). A
+  `ReadingDiagramElement` that holds focus keeps it through `Complete`;
+  the peer object is the same, so a UIA client's held reference stays
+  valid. One `StructureChanged` is not raised either; the name
+  property-change is the only event. The memo (`_memo`) gains the diagram
+  digest when stage 2 lands so a later rebind memo-hits the complete
+  projection.
 - **Readiness (WD11).** Stage 1's `FinishPublish` marks the projection
   complete and `RefreshInFlight` false: a held landing seats on the partial
   projection (`:506`). Stage 2 is not a refresh: it does not bump the
@@ -132,12 +146,24 @@ Facts fail first.
   paragraphs and the math element, no `ReadingLoadingNotice`, the diagram
   paragraph is a group named "Diagram, rendering", `IsLoading` false.
   Mutation: restore the single-stage fetch → fails on the loading notice.
-- `ReadingDiagramTests.TheDiagramReplacesItsPlaceholderWithoutMovingTheReader`
-  — caret parked two paragraphs below, a link focused; release the gate:
-  the rendered image is at the placeholder's index, the caret offset and
-  `Keyboard.FocusedElement` are unchanged, `ApplyBuiltDocument` ran once
-  (`ApplyProbeForTests`). Mutation: re-apply the whole document → the
-  probe counts two → fails.
+- `ReadingDiagramTests.TheDiagramCompletesItsPlaceholderWithoutMovingTheReader`
+  — caret parked two paragraphs below, a link focused; release the gate
+  (`DiagramStageGateForTests.Set()` in `finally`; the fact asserts the
+  stage's `Wait(10 s)` returned true): the rendered image is inside the
+  SAME `ReadingDiagramElement` instance at the same block index, the caret
+  offset and `Keyboard.FocusedElement` are unchanged, `ApplyBuiltDocument`
+  ran once (`ApplyProbeForTests`). Mutation: re-apply the whole document →
+  the probe counts two → fails.
+- `ReadingDiagramTests.ADiagramLandingWhileTheReaderIsOnThePlaceholderKeepsFocus`
+  — Tab onto the placeholder element (it has focus) and hold a reference
+  to its automation peer; release the gate: the same element still has
+  focus, its `Name` is now the description, the held peer is the same
+  object and a `NameProperty` property-change was raised. Mutation: swap
+  the paragraph for a new one → focus drops to the surface → fails.
+- `ReadingDiagramTests.ADiagramLandingUnderASelectionKeepsTheSelection`
+  — a selection anchored before the placeholder and extended into it;
+  release the gate: `Selection.Start`/`End` offsets unchanged, the
+  selected text still spans the diagram block.
 - `ReadingDiagramTests.AFailedDiagramRenderLeavesTheRestReadableAndNamesTheFailure`
   — a `RenderFailed` status: the placeholder becomes "Diagram could not
   be rendered" + reason + source; every other block intact.
@@ -171,12 +197,21 @@ Facts fail first.
 
 ## Verification
 
-```
+```powershell
 $env:CARGO_TARGET_DIR='C:\dev\slate\target-wb20'; ./apps/slate-windows/generate-bindings.ps1 -Locked
 dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release
-dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --filter "FullyQualifiedName~ReadingDiagramTests|FullyQualifiedName~ReadingFocusTests|FullyQualifiedName~ReadingViewTests|FullyQualifiedName~ReadingMathTests|FullyQualifiedName~RescanTests.ReadingLanding|FullyQualifiedName~ReadingDoctrineCensusTests"
-dotnet test apps/slate-windows/tests/SlateWindows.AccessibilityTests/SlateWindows.AccessibilityTests.csproj --filter "FullyQualifiedName~ReadingDiagram_|FullyQualifiedName~ReadingIdentityContract_|FullyQualifiedName~ReadingTextPattern_|FullyQualifiedName~ReadingView_IsTheEditorStop"   # NVDA closed
-dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include apps/slate-windows/src/SlateWindows/Reading/ReadingContentViewModel.cs apps/slate-windows/src/SlateWindows/Reading/ReadingDocumentBuilder.cs apps/slate-windows/src/SlateWindows/Reading/ReadingSurface.cs apps/slate-windows/src/SlateWindows/Reading/ReadingSemantics.cs <tests>
+$tests = 'apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj'
+# RescanTests is ONE partial class (RescanTests.ReadingLanding.cs:27 declares `partial class RescanTests`); filter the class, not the file suffix
+$filter = 'FullyQualifiedName~SlateWindows.Tests.ReadingDiagramTests|FullyQualifiedName~SlateWindows.Tests.ReadingFocusTests|FullyQualifiedName~SlateWindows.Tests.ReadingViewTests|FullyQualifiedName~SlateWindows.Tests.ReadingMathTests|FullyQualifiedName~SlateWindows.Tests.RescanTests|FullyQualifiedName~SlateWindows.Tests.ReadingDoctrineCensusTests'
+dotnet test $tests --no-build --configuration Release --list-tests --filter $filter | Select-String 'TextAndMathAreReadableWhileADiagramRenderIsParked|TheDiagramCompletesItsPlaceholderWithoutMovingTheReader|ADiagramLandingWhileTheReaderIsOnThePlaceholderKeepsFocus|ADiagramLandingUnderASelectionKeepsTheSelection|AFailedDiagramRenderLeavesTheRestReadableAndNamesTheFailure|ALateDiagramIsSilent|ASupersededDiagramStageTouchesNothing|SvgIsDecodedOffTheDispatcher|AHeldLandingSeatsOnThePartialProjection'   # nine lines, else the filter is wrong
+dotnet test $tests --no-build --configuration Release --list-tests --filter 'FullyQualifiedName~SlateWindows.Tests.RescanTests' | Select-String 'Landing'   # the reading-landing regressions of RescanTests.ReadingLanding.cs must be listed (nonzero)
+dotnet test $tests --no-build --configuration Release --filter $filter
+$at = 'apps/slate-windows/tests/SlateWindows.AccessibilityTests/SlateWindows.AccessibilityTests.csproj'
+$atFilter = 'FullyQualifiedName~ShellAccessibilityTests.ReadingDiagram_TextIsReadableBeforeTheDiagramRenders|FullyQualifiedName~ShellAccessibilityTests.ReadingIdentityContract_ExeWindowAndSurfaceIds_AreStable|FullyQualifiedName~ShellAccessibilityTests.ReadingTextPattern_RangeFromChildResolvesEveryCustomPeer|FullyQualifiedName~ShellAccessibilityTests.ReadingView_IsTheEditorStop'
+dotnet test $at --no-build --configuration Release --list-tests --filter $atFilter | Select-String 'ReadingDiagram_'   # one line
+dotnet test $at --no-build --configuration Release --filter $atFilter   # NVDA closed
+$cs = @(git diff --name-only origin/main -- '*.cs') + @(git ls-files --others --exclude-standard -- '*.cs')   # Reading/ReadingContentViewModel.cs, Reading/ReadingDocumentBuilder.cs, Reading/ReadingSurface.cs, Reading/ReadingSemantics.cs, Reading/ReadingDiagramElement.cs, ReadingDiagramTests.cs, ReadingFocusTests.cs, ShellAccessibilityTests.ReadingDiagram.cs (new)
+dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $cs
 ```
 
 `ReadingSurface.cs` has 7 CRs — check before and after. CI: Windows lane
@@ -190,7 +225,7 @@ surface without waiting for the diagram.
 
 ## Acceptance
 
-- [ ] Seven new facts pass, seen failing first; adapted facts green; mutations run.
+- [ ] Nine new facts pass, seen failing first (every gate wait's result asserted, released in `finally`); adapted facts green; mutations run.
 - [ ] New FlaUI journey green; the text waits shortened.
 - [ ] Contract 40 R-10/AR-60 records appended; `w_c_matrix.md:23` and the parity note updated.
 - [ ] Windows lane green; codex review done; format gate clean.
@@ -203,14 +238,67 @@ Read `Reading/ReadingContentViewModel.cs:52, 225, 912-968, 1156,
 1517-1620, 1757-1790`, `Reading/ReadingDocumentBuilder.cs:893-1000`,
 `Reading/ReadingSurface.cs:312-330, 378-420, 500-535, 700-720`,
 `Reading/ReadingDiagramElement.cs:21-100`, `ReadingSemantics.cs:228-234`,
-`EditorLandingSlot.cs:102-111, 354-410`, contract 40 R-10 (`:33`) and the
-facts at `ReadingDiagramTests.cs:26-382`, `ReadingFocusTests.cs:93, 780,
-892, 1286`. Write the seven facts and the FlaUI journey first (a gated
-diagram stage) and see them fail. Split the fetch into a stage without
-diagrams that publishes with "Diagram, rendering" placeholders, and a
-diagram stage on the worker that decodes SVGs there and replaces the
-placeholders in place through `ReadingSurface.ReplaceDiagramBlocks`,
-honouring AR-60 and leaving held landings seated (WD11). Append the
-contract and matrix records, run the NVDA pass. Done when the shell gate
-is green and the pass is recorded. Commit: `feat(windows): the reading
-view projects text first and lets diagrams arrive in place`.
+`EditorLandingSlot.cs:102-111, 354-410`, contract 40 R-10
+(`docs/plans/40_nvda_matrix_remediation_contracts.md:33`) and the facts at
+`ReadingDiagramTests.cs:26-382`, `ReadingFocusTests.cs:93, 780, 892, 1286`.
+Pending decision WD11 (recommended: the partial projection is applied, a
+late diagram is silent, the placeholder is named "Diagram, rendering";
+under the other answers: a held landing waits through the diagram stage
+with `RefreshInFlight` kept true, and an announced late diagram needs a
+new core `A11yEvent` with corpus, mirrors and the Swift lane). Build: in
+`ReadingContentViewModel`, split the fetch — stage 1 (code, math, blocks,
+inlines, embeds; `FetchResult` loses its diagram fields) publishes through
+`Publish`/`FinishPublish` as today with `RefreshInFlight` false
+afterwards; stage 2 on the same worker, under stage 1's generation and
+cancel token, calls `GetDiagramBlocks`, decodes each SVG there
+(`DecodeImage`, result `Freeze()`d, under the existing budgets) and posts
+`ReadingSurface.CompleteDiagrams(IReadOnlyList<(string key, DiagramOutcome outcome)>)`
+(new), dropping its result if retired (AR-60). In
+`ReadingDocumentBuilder`, a Mermaid fence with no artifact emits a
+placeholder `ReadingDiagramElement("Diagram, rendering", source)` marked
+by a new `ReadingSemantics.MarkDiagramPending(paragraph, key)`. In
+`ReadingDiagramElement`, add `Complete(description, visual)` (content,
+`Description`, Name, HelpText, a `NameProperty` property-change on the
+same peer) and `Fail(header, reason)` (the `:899-912` failure shape);
+the element and its paragraph are never swapped, so focus, caret,
+selection and WB-11's caches survive untouched. Facts, written first and
+seen failing (a `DiagramStageGateForTests` whose `Wait(10 s)` result is
+asserted and which is `Set()` in `finally`):
+`ReadingDiagramTests.TextAndMathAreReadableWhileADiagramRenderIsParked`
+(gate held: paragraphs and math present, no `ReadingLoadingNotice`,
+placeholder group named "Diagram, rendering", `IsLoading` false);
+`ReadingDiagramTests.TheDiagramCompletesItsPlaceholderWithoutMovingTheReader`
+(same element instance, same index, caret and focused link unchanged,
+one `ApplyBuiltDocument`);
+`ReadingDiagramTests.ADiagramLandingWhileTheReaderIsOnThePlaceholderKeepsFocus`
+(focus on the placeholder stays, same peer object, Name changed with a
+property-change event);
+`ReadingDiagramTests.ADiagramLandingUnderASelectionKeepsTheSelection`
+(selection offsets unchanged);
+`ReadingDiagramTests.AFailedDiagramRenderLeavesTheRestReadableAndNamesTheFailure`
+(failure header, reason and source in the placeholder, other blocks
+intact); `ReadingDiagramTests.ALateDiagramIsSilent` (no `A11yEvent`);
+`ReadingDiagramTests.ASupersededDiagramStageTouchesNothing` (a refresh
+during the gate retires the stage); `ReadingDiagramTests.SvgIsDecodedOffTheDispatcher`
+(`DiagramRenderProbeForTests` sees a non-dispatcher thread);
+`ReadingFocusTests.AHeldLandingSeatsOnThePartialProjection` (seats before
+the gate releases); FlaUI
+`ShellAccessibilityTests.ReadingDiagram_TextIsReadableBeforeTheDiagramRenders`
+(a cold Mermaid note: math and first paragraph appear before any diagram
+image; placeholder named; image within 300 s); the existing
+`ReadingDiagramTests.cs:26, 73, 215, 259, 328` adapted, and the text waits
+at `ShellAccessibilityTests.cs:1483, 1813, 1832` shortened. Mutations:
+single-stage fetch back; re-apply the whole document; swap the paragraph;
+decode in `Build`. Registers: append the R-10 record and an AR-60 note to
+`docs/plans/40_nvda_matrix_remediation_contracts.md`; amend
+`docs/plans/18_windows_port/w_c_matrix.md:23`; note progressive
+projection on `docs/plans/18_windows_port/parity_matrix.md:272`. Not
+delivered: a progressive math stage; an announcement for late diagrams.
+Done when the Windows lane with the shell gate is green, the codex
+review (size M–L) is done, the format gate is clean with
+`ReadingSurface.cs`'s CR count unchanged, the mutation run is recorded,
+and the NVDA pass (text readable at once; "Diagram, rendering, group";
+description read after the render with nothing announced in between; a
+broken fence reads "Diagram could not be rendered …"; F6 lands without
+waiting) is in the PR body with `Closes #1317`. Commit: `feat(windows):
+the reading view projects text first and lets diagrams arrive in place`.

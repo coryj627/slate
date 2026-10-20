@@ -1,6 +1,6 @@
 # WB-26 — Labelled canvas edges are UIA peers on the visual board: named by core's traversal phrase, windowed like cards, Invoke total over the end-style table
 
-Issues: Closes #1277. Size L (design first). Lanes: windows + FlaUI (shell gate); rust + swift (compile) only if design choice D-A below adds a core field. AT: NVDA (full pass). Wave: W9. Depends on: WB-13 (last on `Canvas/CanvasRendererView.cs` and `CanvasOutlineView.cs`, after plan 43 PR 32, §6). Parallel with: WB-25, WB-27. Decision: none in the plan; the design section below carries two choices for the reviewer.
+Issues: Closes #1277. Size L (design first). Lanes: windows + FlaUI (shell gate), rust, swift (compile) — all three under EITHER D-A answer, as plan §5 lists them: the recommended answer changes an FFI record (Swift literals edited), the alternative exports a new core function (both bindings regenerated, the Swift binding compiles unchanged). AT: NVDA (full pass). Wave: W9. Depends on: WB-13 (last on `Canvas/CanvasRendererView.cs` and `CanvasOutlineView.cs`, after plan 43 PR 32, §6). Parallel with: WB-25, WB-27. Decision: none in the plan; the design section below carries two choices for the reviewer.
 
 ## Goal
 
@@ -102,8 +102,11 @@ another.
   `CanvasSceneEdge(` under `apps/slate-mac/Tests` before coding and name
   the files in the PR body); the Swift lane compiles it; rust lane runs.
 - *Alternative:* a core free function `canvas_edge_name(from_kind,
-  from_title, direction, to_kind, to_title, label) -> String` (new, no
-  record change, no Swift edit), with the host running the skip-occupied
+  from_title, direction, to_kind, to_title, label) -> String` (new in
+  `a11y.rs` beside `resolved_embed_title`, exported with
+  `#[uniffi::export]` in `lib.rs` — a core and FFI change: `rust.yml`
+  runs, both bindings regenerate, the Swift binding compiles unchanged
+  with no literal edits), with the host running the skip-occupied
   ordinal loop over cards' `SpeakableName`s plus edge names at install.
   Cheaper, but the uniqueness loop lives in the host — D5 says "core's
   own naming uses", so this needs the reviewer to accept a host loop that
@@ -204,21 +207,34 @@ Facts fail first; hosted STA facts in a new `CanvasRendererPeerTests`
 
 ## Verification
 
-```
+```powershell
 $env:CARGO_TARGET_DIR='C:\dev\slate\target-wb26'
-cargo test -p slate-core canvas::            # D-A recommended
+cargo test -p slate-core canvas::            # both D-A answers (the naming fact, or the free fn's fact)
+cargo test -p slate-uniffi crosses_the_ffi
 ./apps/slate-windows/generate-bindings.ps1 -Locked
 dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release
-dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --filter "FullyQualifiedName~CanvasRendererPeerTests|FullyQualifiedName~CanvasPeerTopologyTests|FullyQualifiedName~CanvasAutomationPropertyCensus|FullyQualifiedName~CanvasLabelClassCensus|FullyQualifiedName~CanvasTriggerParityCensus|FullyQualifiedName~CanvasDocumentTests"
-dotnet test apps/slate-windows/tests/SlateWindows.AccessibilityTests/SlateWindows.AccessibilityTests.csproj --filter "FullyQualifiedName~CanvasSurfaces_VisualBoardPeersAndZoom_AreClean"   # NVDA closed
+$tests = 'apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj'
+$filter = 'FullyQualifiedName~SlateWindows.Tests.CanvasRendererPeerTests|FullyQualifiedName~SlateWindows.Tests.CanvasPeerTopologyTests|FullyQualifiedName~SlateWindows.Tests.Censuses.CanvasAutomationPropertyCensus|FullyQualifiedName~SlateWindows.Tests.Censuses.CanvasLabelClassCensus|FullyQualifiedName~SlateWindows.Tests.Censuses.CanvasTriggerParityCensus|FullyQualifiedName~SlateWindows.Tests.Censuses.CanvasAnnouncerCensus|FullyQualifiedName~SlateWindows.Tests.CanvasDocumentTests'
+dotnet test $tests --no-build --configuration Release --list-tests --filter $filter | Select-String 'ALabelledEdgeInTheWindowIsAChildOfTheBoard|AnEdgeIsAPlaceholderOffWindowAndPromotesOnRealize|InvokeSelectsTheEndpointTheEndStyleTableNames|TheSameEdgePeerIsReturnedWhileAnythingHoldsIt|FindItemByNameResolvesAnEdge|AStructureChangeRaisesChildrenInvalidatedOncePerInstall'   # six names (the Theory lists four rows), else the filter is wrong
+dotnet test $tests --no-build --configuration Release --filter $filter
+$at = 'apps/slate-windows/tests/SlateWindows.AccessibilityTests/SlateWindows.AccessibilityTests.csproj'
+dotnet test $at --no-build --configuration Release --list-tests --filter 'FullyQualifiedName~ShellAccessibilityTests.CanvasSurfaces_VisualBoardPeersAndZoom_AreClean' | Select-String 'CanvasSurfaces_VisualBoard'   # one line
+dotnet test $at --no-build --configuration Release --filter 'FullyQualifiedName~ShellAccessibilityTests.CanvasSurfaces_VisualBoardPeersAndZoom_AreClean'   # NVDA closed
 python -I scripts/canvas_reconciliation.py --check
-dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include apps/slate-windows/src/SlateWindows/Canvas/CanvasRendererView.cs apps/slate-windows/src/SlateWindows/Canvas/CanvasRendererPeers.cs apps/slate-windows/src/SlateWindows/Canvas/CanvasPeerTopology.cs <tests>
-make ci                                       # D-A recommended
+$cs = @(git diff --name-only origin/main -- '*.cs') + @(git ls-files --others --exclude-standard -- '*.cs')   # Canvas/CanvasRendererView.cs, Canvas/CanvasRendererPeers.cs, Canvas/CanvasPeerTopology.cs, CanvasRendererPeerTests.cs (new), CanvasPeerTopologyTests.cs, ShellAccessibilityTests.cs
+dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $cs
+# the Rust gates `make ci` would run (CONTRIBUTING.md:76-98; no make on this machine):
+cargo fmt --all --check
+cargo clippy --all-targets --workspace -- -D warnings
+cargo test --workspace
+cargo bench --workspace --no-run
+git ls-files '*.rs' '*.swift' '*.cs' | Where-Object { -not (Select-String -Path $_ -Pattern 'SPDX-License-Identifier' -SimpleMatch -Quiet) }   # prints nothing
 ```
 
-CI: Windows lane with the shell gate; `rust.yml` and `swift-tests.yml`
-under D-A recommended (the Swift literal edits are blind — the PR waits
-for that lane). Codex adversarial review (size L). AT: NVDA full pass:
+CI: Windows lane with the shell gate, `rust.yml` and `swift-tests.yml`
+under either D-A answer (under the recommended answer the Swift literal
+edits are blind — the PR waits for that lane; under the alternative the
+lane proves the regenerated Swift binding compiles). Codex adversarial review (size L). AT: NVDA full pass:
 on the board, object navigation reaches "connection, <phrase>" between
 cards; Enter (Invoke) on an arrow-headed edge lands on the head card with
 its `CanvasMovedTo` sentence; an undirected edge lands on the to-node; an
@@ -240,12 +256,65 @@ Read `Canvas/CanvasRendererView.cs:520-600`, `Canvas/CanvasRendererPeers.cs:20-6
 141-250`, `Canvas/CanvasPeerTopology.cs:16-20, 160-190`,
 `CanvasDocumentViewModel.cs:4371-4380`, `CanvasPeerTopologyTests.cs:60-100`,
 core `a11y.rs:1548-1553, 2717-2731`, `canvas/model.rs:620-640`,
-`lib.rs:13272-13295`, and contract 34 `:6390-6470`. Get D-A and D-B answered
-first. Then write the hosted facts and the Rust fact and see them fail;
-add the edge name to the population (D-A), the abstract board peer and
-`CanvasEdgeAutomationPeer` with the D5 Invoke table and D3's placeholder
-behaviour, enumerate materialized labelled edges after the cards, extend
-the descriptor index, extend the FlaUI board journey, append the contract
-record and the matrix rows, run the NVDA pass. Done when every lane is
-green and the pass is recorded. Commit: `feat(windows): labelled canvas
-edges are board peers named by core's traversal phrase`.
+`lib.rs:13272-13295`, and `docs/plans/34_canvas_contracts.md:6390-6470`
+(D3, D4, D5 and the end-style table at `:6465-6470`). Two design choices
+are pending with the reviewer and must be recorded in this spec before
+code: D-A (recommended: core allocates `speakable_name` on
+`CanvasSceneEdge` in the population's skip-occupied naming loop — an FFI
+record change, so `git grep CanvasSceneEdge apps/slate-mac` names every
+Swift literal to edit in the same PR; alternative: a core free fn
+`canvas_edge_name(...)` exported through uniffi with a host-side ordinal
+loop pinned against card names) and D-B (recommended: `Custom` control
+type, localized "connection", Invoke + VirtualizedItem, no SelectionItem;
+alternative: `Hyperlink`). Build: an abstract `CanvasBoardAutomationPeer`
+base for `CanvasCardAutomationPeer` and a new `CanvasEdgeAutomationPeer`
+(name = the edge's speakable name; screen rect from the placement's union
+rect on every pan/zoom/resize; `IVirtualizedItemProvider.Realize` →
+`_view.Realize(Key)` panning to contain the rect; `IInvokeProvider.Invoke`
+→ `_view.SelectAnnounced(target)` with target = `ToNode` for
+`(false,true)`, `FromNode` for `(true,false)`, `ToNode` for `(false,false)`
+and `(true,true)`; placeholder cell refuses action patterns with
+`ElementNotAvailableException`); `_peers` retyped to the base;
+`PeerFor` mints an edge peer for a labelled `SceneEdges` id;
+`MaterializedPeers` appends materialized labelled edges after the cards
+in document order; the installed state's descriptor index gains edge
+descriptors; unlabelled edges never become peers (DD-2). Facts, written
+first and seen failing: Rust
+`canvas::tests::edge_speakable_names_join_the_card_namespace` (two
+same-label edges to two destinations differ; a collision with a card title
+takes the next free ordinal) under D-A recommended;
+`CanvasRendererPeerTests.ALabelledEdgeInTheWindowIsAChildOfTheBoard`
+(an edge peer named by core's phrase among the board's children; an
+unlabelled edge yields none);
+`CanvasRendererPeerTests.AnEdgeIsAPlaceholderOffWindowAndPromotesOnRealize`
+(VirtualizedItem reported, Invoke refused, after `Realize()` the viewport
+contains the rect and Invoke works);
+`CanvasRendererPeerTests.InvokeSelectsTheEndpointTheEndStyleTableNames`
+(a `[Theory]` over the four cells, selected node and one announcement);
+`CanvasRendererPeerTests.TheSameEdgePeerIsReturnedWhileAnythingHoldsIt`
+(identity per key per renderer; a second pane holds its own);
+`CanvasRendererPeerTests.FindItemByNameResolvesAnEdge` (descriptor index,
+no materialization);
+`CanvasRendererPeerTests.AStructureChangeRaisesChildrenInvalidatedOncePerInstall`
+(one `StructureChanged` when an edge is added); FlaUI
+`ShellAccessibilityTests.CanvasSurfaces_VisualBoardPeersAndZoom_AreClean`
+(`ShellAccessibilityTests.cs:9316`) extended: a custom child named by the
+edge phrase whose Invoke selects and announces the to-node. Mutations:
+restore the `IsEdge` null at `CanvasRendererView.cs:576`; swap one
+end-style cell; skip edges in the naming loop. Registers: append a
+delivery record under D5 in `docs/plans/34_canvas_contracts.md`;
+amend `docs/plans/18_windows_port/w_c_matrix.md:53`; add a "canvas board
+edge elements" row to `docs/plans/18_windows_port/parity_matrix.md`
+(Windows implemented; mac unverified, not shipped here);
+`python -I scripts/canvas_reconciliation.py --check` clean. Not
+delivered: edge selection on the board (no SelectionItem) and the mac
+board's edge elements. Done when `windows.yml` (with the shell gate),
+`rust.yml` and `swift-tests.yml` are green under the recorded D-A answer,
+the five Rust gates and the format gate are clean, the codex review
+(size L) is done, the mutation run is recorded, and the NVDA pass
+(object navigation reaches "connection, <phrase>"; Invoke lands on the
+head card with its `CanvasMovedTo` sentence; an undirected edge lands on
+the to-node; an off-window edge is found by name and pans into view; an
+unlabelled edge is never announced) is in the PR body with `Closes #1277`.
+Commit: `feat(windows): labelled canvas edges are board peers named by
+core's traversal phrase`.

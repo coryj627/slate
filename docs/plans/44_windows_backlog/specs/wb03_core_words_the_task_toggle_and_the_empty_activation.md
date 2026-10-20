@@ -163,12 +163,16 @@ Facts fail first (§4 rule 1).
 
 ## Verification
 
-```
+```powershell
 $env:CARGO_TARGET_DIR='C:\dev\slate\target-wb03'; ./apps/slate-windows/generate-bindings.ps1 -Locked
 dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release   # Error(s)=0
-dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --filter "FullyQualifiedName~TasksPanelTests|FullyQualifiedName~TasksReviewTests|FullyQualifiedName~W2EditorInteractionTests|FullyQualifiedName~A11yTriggerParityCensus|FullyQualifiedName~A11yCorpusCensus"
+$tests = 'apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj'
+$filter = 'FullyQualifiedName~SlateWindows.Tests.TasksPanelTests|FullyQualifiedName~SlateWindows.Tests.TasksReviewTests|FullyQualifiedName~SlateWindows.Tests.W2EditorInteractionTests|FullyQualifiedName~SlateWindows.Tests.Censuses.A11yTriggerParityCensus|FullyQualifiedName~SlateWindows.Tests.Censuses.A11yCorpusCensus'
+dotnet test $tests --no-build --configuration Release --list-tests --filter $filter | Select-String 'CtrlEnterWithNothingUnderTheCaretSaysSo|ACtrlClickOnPlainProseStaysSilent|AToggledTaskSpeaksCoresTaskToggledEvent|AFailedToggleSpeaksCoresDetailWithAClosingPeriod|AReviewToggleSpeaksCoresEvents|ATabToggleSpeaksCoresEvents'   # six lines, else the filter is wrong
+dotnet test $tests --no-build --configuration Release --filter $filter
 python -I scripts/a11y_trigger_ledger.py --write ; python -I scripts/a11y_trigger_ledger.py --check
-dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include apps/slate-windows/src/SlateWindows/WorkspaceViewModel.cs apps/slate-windows/src/SlateWindows/EditorInteractions.cs apps/slate-windows/src/SlateWindows/Panels/TasksReviewViewModel.cs <test files>
+$cs = @(git diff --name-only origin/main -- '*.cs') + @(git ls-files --others --exclude-standard -- '*.cs')   # WorkspaceViewModel.cs, EditorInteractions.cs, Panels/TasksReviewViewModel.cs, TasksPanelTests.cs, TasksReviewTests.cs, W2EditorInteractionTests.cs, W1WorkspaceTests.cs
+dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $cs
 ```
 
 `WorkspaceViewModel.cs` has 9 CRs today (mixed endings): check the count
@@ -191,15 +195,42 @@ in the editor → "Task completed." / "Task reopened."; a forced failure
 Read `WorkspaceViewModel.cs:1483-1547` and `:3395-3435`,
 `Panels/TasksReviewViewModel.cs:700-815`, `EditorInteractions.cs:802-880`
 and `:1954-1980`, core `a11y.rs:791, 880-887, 2086, 2134-2139`, and
-`a11y_trigger_designations.json:189-203, 478-486, 623-671`. Replace the
-three host-composed task sentences with `A11yEvent.TaskToggled` /
-`TaskToggleFailed` (detail through `SlateUniffiMethods.VaultErrorDetail`,
-status text through `A11yRender`), and post `NothingToActivateAtCursor` from
-`ActivateAt`'s three `false` arms for the `Keyboard` origin only (thread
-`origin` into `ActivateCanonicalSpan`). Write the facts named in Tests
-first and watch them fail; update the text pins in `TasksPanelTests` and
-`TasksReviewTests` to typed matches. Remove the `proposed` designations and
-the residue entries, regenerate the ledger, run the two parity-census facts.
-Done when the Windows lane is green and the NVDA spot (three phrases) is in
-the PR body. Commit: `fix(windows): task toggles and an empty ctrl+enter
-speak core's events instead of host-composed text`.
+`a11y_trigger_designations.json:189-203, 478-486, 623-671`. Build: in
+`WorkspaceTabViewModel.PublishTaskToggleThroughTab`,
+`WorkspaceViewModel.TaskToggleCompletion` and
+`TasksReviewViewModel.ToggleTask`, replace the host-composed task sentences
+with `A11yEvent.TaskToggled(Completed: !task.Completed)` and
+`A11yEvent.TaskToggleFailed(detail)` (detail =
+`SlateUniffiMethods.VaultErrorDetail(vaultException)`, else the
+non-vault exception's own message; `Status = A11yRender(event).Text`); in
+`EditorInteractionCoordinator.ActivateAt`, post
+`A11yEvent.NothingToActivateAtCursor` before each of the three `return
+false` arms (math region, no task at the caret, bare `#`) when `origin is
+EditorInteractionOrigin.Keyboard`, threading `origin` into
+`ActivateCanonicalSpan`; `ActivateSpan` keeps silent. Facts, written first
+and seen failing: `TasksPanelTests.AToggledTaskSpeaksCoresTaskToggledEvent`
+(the panel toggle's announcement is a typed `TaskToggled(true)`);
+`TasksPanelTests.AFailedToggleSpeaksCoresDetailWithAClosingPeriod` (a
+faulted write renders "Task could not be toggled: <detail>." with no
+`@message=`); `TasksReviewTests.AReviewToggleSpeaksCoresEvents` (success
+and failure typed; `:622`'s pin gains its period);
+`W1WorkspaceTests.ATabToggleSpeaksCoresEvents` (tab route; `Status` equals
+the rendered text); `W2EditorInteractionTests.CtrlEnterWithNothingUnderTheCaretSaysSo`
+(prose, display math, bare `#` each post exactly one
+`NothingToActivateAtCursor`, `ActivateAt` still false);
+`W2EditorInteractionTests.ACtrlClickOnPlainProseStaysSilent` (`Pointer`
+origin posts nothing). Mutations: post `HostComposed` text instead; pass
+`error.Message`; drop one arm's post; post regardless of origin — each
+fails its fact. Registers: delete the three `proposed` designations
+(`a11y_trigger_designations.json:189-203`) and the residue entries for
+`PublishTaskToggleThroughTab@1/@4` (renumber @2/@3 → @1/@2),
+`TaskToggleCompletion@1/@2`, `TasksReviewViewModel.ToggleTask@1/@2`; run
+`python -I scripts/a11y_trigger_ledger.py --write` so
+`38_notification_dispatcher_contracts.md:711-1060` regenerates; both
+`A11yTriggerParityCensus` coverage facts green. No owner decision. Not
+delivered: the two "Task toggled on disk, but …" sentences stay
+`HostComposed`. Done when the Windows lane is green, the format gate is
+clean with `WorkspaceViewModel.cs`'s CR count unchanged, the mutation run
+is recorded, and the NVDA spot (three phrases) is in the PR body with
+`Closes #1467`, `Closes #1465`. Commit: `fix(windows): task toggles and an
+empty ctrl+enter speak core's events instead of host-composed text`.

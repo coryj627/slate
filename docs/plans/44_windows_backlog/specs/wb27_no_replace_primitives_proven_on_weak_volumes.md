@@ -5,9 +5,9 @@ PR 38 after this merges, §5 closure matrix). Size S–M. Lanes: rust
 (Windows cfg). AT: none. Wave: W9, slot 3. Depends on: WB-24 (shares
 `vault/fs.rs` and `windows_entry.rs`; §6 sequencing "WB-24, then WB-27,
 then WB-28, then WB-30"). Parallel with: WB-25 (switcher), WB-26.
-Decision: none here (RD9 in plan 43 decided "probe, then refuse
-truthfully, never a replacing fallback"; this chunk supplies the Windows
-probe).
+Decision: none pending here (plan 43's RD9 is recorded on #1434 and
+#1470: "probe, then refuse truthfully, never a replacing fallback"; this
+chunk supplies the Windows probe).
 
 ## Goal
 
@@ -46,8 +46,9 @@ Verified against the worktree; the plan's lines hold.
   `ReplaceIfExists = replace` (`:521-522`); the doc at `:493-496`: "a save
   replaces its target, every other rename refuses an occupied name
   (`AlreadyExists`)". The structural rename is `windows_entry::rename`
-  (`:637`) → `rename_opened` (`:676`); identity by
-  `FILE_ID_INFO` (`:612-631`: volume serial + 128-bit id).
+  (`:637`) → `rename_opened` (`:676`); identity by `FILE_ID_INFO`
+  (`:612-631`: volume serial + 128-bit id); `rename_if_identity`
+  (`fs.rs:1918`).
 - **Existing NTFS facts.** `windows_entry_tests.rs:8`
   `conditional_rename_rejects_replacements_and_collisions`, `:23`
   `conditional_rename_handles_case_only_inverse_and_directory_moves`,
@@ -56,27 +57,23 @@ Verified against the worktree; the plan's lines hold.
 - **The matrix.** `24_structural_identity_capability_matrix.md` §3.3
   (`:147-151`) is Windows "(reference)": one row for
   `NtSetInformationFile(FileRenameInformation)` from source; §5 (`:173-187`)
-  lists APFS, HFS+, FAT32 (`:180`: EXCL honoured via `EEXIST`/success
-  though the capability bit is unreported; IDs reused at once), exFAT
-  (`:181`: `ENOTSUP` for a free target), SMB (`:183`: not probed, by
-  source). §6 (`:189-220`) case-only renames: FAT32 succeeded, exFAT
-  `ENOTSUP`. All macOS.
+  lists APFS, HFS+, FAT32 (`:180`), exFAT (`:181`), SMB (`:183`, not
+  probed, by source). §6 (`:189-220`) case-only renames. All macOS.
 - **The gate pattern to reuse.** `trash_handoff.rs:86`
   `SLATE_TRASH_PROBE_VOLUME` and the `#[ignore = "needs a scratch volume
   …"]` facts (`trash_handoff_tests.rs:783-787`); WB-24 adds the Windows
   gated facts and the `home-only` lane job this chunk extends.
 - **The issues' Windows content is nil:** both are macOS findings
   (`renameatx_np`, `renamex_np`, `hdiutil`, FSKit, `VOL_CAP_INT_RENAME_EXCL`);
-  their comments assign the mac probe to PR 38. Nothing in them is wrong
-  about Windows; nothing in them is about Windows. The Windows behavioural
+  their comments assign the mac probe to PR 38. The Windows behavioural
   spec is this file.
 
 ## Reference
 
 The matrix (§3.3, §5, §6) defines the rows; PR 38's mac probe is the twin
-("probe a real exFAT image first, and SMB if one is available", RD9 on
-#1434). Windows documentation points of record (cite in the matrix rows,
-verify by the probe): `FILE_RENAME_INFORMATION.ReplaceIfExists` is
+(RD9 on #1434: "probe a real exFAT image first, and SMB if one is
+available"). Windows documentation points of record (cite in the matrix
+rows, verify by the probe): `FILE_RENAME_INFORMATION.ReplaceIfExists` is
 honoured by the file system driver — FastFAT and exFAT implement
 `FileRenameInformation` and return `STATUS_OBJECT_NAME_COLLISION` for an
 occupied name when `ReplaceIfExists` is false; over SMB the request maps
@@ -88,55 +85,66 @@ not persistent across mounts (the matrix's "no persistent IDs" row).
 
 No production code changes unless a probe fails. Facts first:
 
-1. **A volume gate.** `vault/windows_entry_tests.rs` (or a new
-   `vault/weak_volume_tests.rs`, `#![cfg(windows)]`) reads
+1. **A volume gate.** New `vault/weak_volume_tests.rs` (`#![cfg(windows)]`,
+   registered in `vault/mod.rs` beside `windows_entry_tests`) reads
    `SLATE_WEAK_VOLUME_FAT32`, `SLATE_WEAK_VOLUME_EXFAT`,
-   `SLATE_WEAK_VOLUME_SMB` (new env names; each a directory on that
-   volume, e.g. `F:\probe`, `E:\probe`, `\\localhost\slate-probe`). Each
-   fact is `#[ignore = "needs SLATE_WEAK_VOLUME_* set to a mounted scratch
-   volume"]` and iterates the volumes that are set; a helper
-   `weak_volumes() -> Vec<(VolumeKind, PathBuf)>` (new) also records
-   `GetVolumeInformationW`'s file-system name so the fact asserts it
-   really is FAT32 / exFAT / an SMB redirector (`FileSystemName` `FAT32`,
-   `exFAT`, `NTFS` with a UNC root).
+   `SLATE_WEAK_VOLUME_SMB` (new env names; each an existing scratch
+   directory on that volume). Each fact is `#[ignore = "needs
+   SLATE_WEAK_VOLUME_* set to a scratch directory on a mounted volume"]`
+   and iterates the volumes that are set; `weak_volumes() ->
+   Vec<(VolumeKind, PathBuf)>` (new) records `GetVolumeInformationW`'s
+   file-system name and asserts it is `FAT32`, `exFAT`, or (for SMB) that
+   the root is a UNC path and `GetDriveTypeW` reports `DRIVE_REMOTE`.
 2. **Provider-level facts** (each builds an `FsVaultProvider` rooted in a
    fresh subfolder of the volume):
    - create via `write_file_if_absent` to a free name lands with the bytes;
      to an occupied name returns `DestinationExists`, the occupant's bytes
      unchanged, `.slate/tmp` empty afterwards;
-   - `rename` to a free name lands; to an occupied name refuses with
+   - `rename` to a free name lands; to an occupied name refuses with the
      `AlreadyExists`-derived `VaultError`, both entries unchanged; a move
      into a subfolder likewise;
    - case-only rename (`Note.md` → `note.md`) keeps `FILE_ID_INFO`
-     (NTFS, SMB with server IDs) or, on FAT, keeps the entry (listing shows
-     the new spelling only) — the fact asserts identity where the volume
-     reports persistent ids and the listing otherwise, recording which;
-   - `rename_if_identity` (`fs.rs:1918`) with a stale expected identity
-     refuses on NTFS/SMB; on FAT32/exFAT the fact records whether the
-     synthesised id survives the rename (it is expected to: the driver
-     keys it on the directory entry) and *does not* assert it — the row
-     says what was observed.
-3. **If a primitive fails on a volume** (an `STATUS_NOT_SUPPORTED` or a
+     (NTFS, SMB with server IDs) or, on FAT, keeps the entry (listing
+     shows the new spelling only) — identity asserted where the volume
+     reports persistent ids, the listing otherwise, recording which;
+   - `rename_if_identity` with a stale expected identity refuses on
+     NTFS/SMB; on FAT32/exFAT the fact records whether the synthesised id
+     survives the rename and does not assert it — the row says what was
+     observed.
+3. **If a primitive fails on a volume** (`STATUS_NOT_SUPPORTED` or a
    replacing rename — the §11 risk): the provider gains a truthful
    refusal, never a fallback: `VaultError::InvalidPath { reason }` with
    core-owned text naming the volume's file system ("this volume (exFAT)
    cannot rename without replacing, so nothing was moved"), surfaced
    through `vault_error_detail` as every refusal is. The fact for that
    volume then asserts the refusal. A replacing rename observed anywhere
-   is a blocking finding for PR 38 and this chunk (the §11 rule).
-4. **The lane.** WB-24's `home-only` job gains two more VHDs
-   (`Format-Volume -FileSystem FAT32` needs a ≤ 32 GB partition;
-   `-FileSystem exFAT`) and `New-SmbShare -Name slate-probe -Path
-   <ntfs dir> -FullAccess $env:USERNAME` (needs elevation, which the pool
-   VMs' runner user has), exports the three variables, and runs
-   `cargo test -p slate-core --locked -- --ignored weak_volume
-   --test-threads=1`. If the pool cannot (no `Mount-VHD`, or SMB disabled
-   on the image), the facts stay owner-run and the results go in the PR
-   body and the matrix rows, as WD14's fallback does for WB-24.
+   is a blocking finding for PR 38 and this chunk.
+4. **The lane.** WB-24's `home-only` job gains the two VHDs and the share
+   from the procedure below and runs the gated facts by name; if the pool
+   cannot (no `Mount-VHD`, or SMB disabled on the image), the facts stay
+   owner-run and the results go in the PR body and the matrix rows.
 
 Deliberately not changed: `rename_into`'s signature; the save path's
-`replace = true` (a save replaces its own file by design); nothing on
-macOS or Linux (PR 38).
+`replace = true`; nothing on macOS or Linux (PR 38).
+
+### The volume procedure (elevated PowerShell; objects captured, never a guessed letter)
+
+```
+New-Item -ItemType Directory C:\probe -Force | Out-Null
+$fat   = New-VHD -Path C:\probe\fat32.vhdx -SizeBytes 1GB -Dynamic | Mount-VHD -Passthru | Initialize-Disk -PassThru | New-Partition -AssignDriveLetter -UseMaximumSize | Format-Volume -FileSystem FAT32 -NewFileSystemLabel SlateFat
+$exfat = New-VHD -Path C:\probe\exfat.vhdx -SizeBytes 1GB -Dynamic | Mount-VHD -Passthru | Initialize-Disk -PassThru | New-Partition -AssignDriveLetter -UseMaximumSize | Format-Volume -FileSystem exFAT -NewFileSystemLabel SlateExfat
+$fatRoot   = "$($fat.DriveLetter):\probe";   New-Item -ItemType Directory $fatRoot   | Out-Null
+$exfatRoot = "$($exfat.DriveLetter):\probe"; New-Item -ItemType Directory $exfatRoot | Out-Null
+New-Item -ItemType Directory C:\probe\share -Force | Out-Null
+New-SmbShare -Name slate-probe -Path C:\probe\share -FullAccess $env:USERNAME | Out-Null
+$smbRoot = '\\localhost\slate-probe'
+(Get-Volume -DriveLetter $fat.DriveLetter).FileSystemType     # FAT32
+(Get-Volume -DriveLetter $exfat.DriveLetter).FileSystemType   # exFAT
+Test-Path $smbRoot                                            # True
+$env:SLATE_WEAK_VOLUME_FAT32 = $fatRoot; $env:SLATE_WEAK_VOLUME_EXFAT = $exfatRoot; $env:SLATE_WEAK_VOLUME_SMB = $smbRoot
+# afterwards:
+Remove-SmbShare -Name slate-probe -Force; Dismount-VHD -Path C:\probe\fat32.vhdx; Dismount-VHD -Path C:\probe\exfat.vhdx
+```
 
 ## Tests
 
@@ -146,12 +154,12 @@ macOS or Linux (PR 38).
 | `weak_volume_rename_and_move_land_on_a_free_name_and_refuse_an_occupied_one` | per volume: landed; refusal; both entries unchanged | set `ReplaceIfExists` true in `rename_opened` |
 | `weak_volume_case_only_rename_keeps_the_entry` | per volume: one entry with the new spelling; identity equal where ids persist | rename through a temporary name that drops the id |
 | `weak_volume_stale_identity_refuses_where_ids_are_identities` | NTFS/SMB-with-ids: refused; FAT: observation recorded | skip the identity compare |
-| `weak_volume_gate_names_the_file_system_it_ran_on` | `GetVolumeInformationW` name matches the variable's kind | — |
-| (conditional) `a_volume_that_cannot_rename_without_replacing_refuses_truthfully` | the exact reason sentence | fall back to a replacing rename |
-| not ignored: `the_weak_volume_gate_is_quiet_when_no_volume_is_set` | with none set, every gated fact returns early (so `--ignored` runs stay green on a bare runner) | panic on unset |
+| `weak_volume_gate_names_the_file_system_it_ran_on` | the file-system name matches the variable's kind | — |
+| (conditional) `weak_volume_that_cannot_rename_without_replacing_refuses_truthfully` | the exact reason sentence | fall back to a replacing rename |
+| not ignored: `weak_volume_gate_is_quiet_when_no_volume_is_set` | with none set, every gated fact returns early (so `--ignored` runs stay green on a bare runner) | panic on unset |
 
-Rust snake_case; the facts' names share the `weak_volume` substring for
-the lane's filter.
+Rust snake_case; every name carries the `weak_volume` substring for the
+filter.
 
 ## Docs and registers
 
@@ -159,55 +167,81 @@ the lane's filter.
   a dated §3.3 Windows table with one row per volume × primitive from the
   probe, a §5 Windows block (NTFS, FAT32, exFAT, SMB over `\\localhost`:
   no-replace, case-only, id persistence, id reuse), and a §6 Windows
-  paragraph. Reference the fact names.
-- Contract 31: no row (the refusal, if any, is a reason text under
-  existing FR-10/FR-8 semantics); if a truthful refusal ships, append a
-  sentence to FR-10 naming the volume condition.
-- `BENCHMARKS.md`: none.
+  paragraph, naming the fact names.
+- Contract 31 FR-10: a sentence naming the volume condition, only if a
+  truthful refusal ships.
 - Issues: `Refs #1434`, `Refs #1470` in the PR body with the per-volume
-  table; PR 38 closes both after this merges (closure matrix).
+  table; PR 38 closes both after this merges.
 
 ## Verification
 
+PowerShell, repo root. The `--list` line must print 7 before the gated
+run (6 gated + the quiet-gate fact; the quiet fact also runs in the plain
+line).
+
 ```
 $env:CARGO_TARGET_DIR='C:\dev\slate\target-wb27'
-cargo test -p slate-core --locked weak_volume                    # the quiet gate
+cargo test -p slate-core --locked weak_volume                    # the quiet gate (1 test)
 cargo test -p slate-core --locked windows_entry
 cargo test -p slate-core --locked --no-fail-fast
-# on the probe machine (a throwaway VM, or this desktop with VHDs mounted):
-New-VHD -Path C:\probe\fat32.vhdx -SizeBytes 1GB -Dynamic | Mount-VHD -Passthru | Initialize-Disk -PassThru | New-Partition -AssignDriveLetter -UseMaximumSize | Format-Volume -FileSystem FAT32
-New-VHD -Path C:\probe\exfat.vhdx -SizeBytes 1GB -Dynamic | Mount-VHD -Passthru | Initialize-Disk -PassThru | New-Partition -AssignDriveLetter -UseMaximumSize | Format-Volume -FileSystem exFAT
-New-SmbShare -Name slate-probe -Path C:\probe\share -FullAccess $env:USERNAME   # elevated
-$env:SLATE_WEAK_VOLUME_FAT32='F:\probe'; $env:SLATE_WEAK_VOLUME_EXFAT='E:\probe'; $env:SLATE_WEAK_VOLUME_SMB='\\localhost\slate-probe'
-cargo test -p slate-core --locked -- --ignored weak_volume --test-threads=1
-make ci
+cargo fmt --all -- --check
+cargo clippy --all-targets --workspace -- -D warnings
+cargo test --workspace --locked
+cargo bench --workspace --no-run
+bash scripts/check-license-headers.sh
+# on the probe machine, after the volume procedure above has set the three variables:
+cargo test -p slate-core --locked -- --ignored --list weak_volume | Select-String ': test$' | Measure-Object | Select-Object -ExpandProperty Count   # 7
+cargo test -p slate-core --locked -- --ignored --test-threads=1 weak_volume
 ```
 
-CI: `windows.yml` rust-tests (the quiet gate) and the `home-only` job if
-the pool can mount; `rust.yml` unaffected (Windows cfg). AT: none.
+No C# changes, so no `dotnet` steps. Mutation run: each row's mutation
+applied locally against the mounted volumes, the fact seen failing,
+reverted. CI: `windows.yml` rust-tests (the quiet gate) and the
+`home-only` job if the pool can mount; `rust.yml` unaffected. AT: none.
 
 ## Acceptance
 
 - [ ] The six gated facts and the quiet-gate fact exist; the gated ones
       have run green on FAT32, exFAT and an SMB share (lane or recorded
       owner run) and their observations are in the PR body.
-- [ ] No replacing rename was observed; or, if one was, the truthful
-      refusal ships and the finding is on #1434/#1470 for PR 38.
+- [ ] No replacing rename was observed; or the truthful refusal ships and
+      the finding is on #1434/#1470 for PR 38.
 - [ ] The matrix's Windows rows appended.
 - [ ] PR body `Refs #1434`, `Refs #1470`; "not delivered": any volume the
-      hardware could not provide (then its facts stay unrun and the row
-      says "not probed").
+      hardware could not provide (its facts stay unrun; the row says
+      "not probed").
 
 ## Brief
 
-Prove the Windows no-replace create and rename on FAT32, exFAT and SMB.
-Read `fs.rs:697-770` and `:1170-1215`, `windows_entry.rs:488-553`,
-`:612-700`, `windows_entry_tests.rs:1-60`, `trash_handoff.rs:80-100` and
-`trash_handoff_tests.rs:783-790` (the gate pattern), the matrix §3.3,
-§5, §6. Add the `SLATE_WEAK_VOLUME_*` gate and the gated provider facts
-named in Tests (plus the quiet-gate fact), mount the volumes per
-Verification and run them; change production code only if a primitive
-fails, and then only to refuse truthfully. Append the matrix rows. Done
-when the gated facts have run green on all three volumes somewhere
-recorded and the lane is green. Commit:
+Prove the Windows no-replace create and rename on FAT32, exFAT and SMB;
+no owner decision is pending (RD9 is recorded on both issues). Read
+`fs.rs:697-770` and `:1170-1215`, `windows_entry.rs:488-553`, `:612-700`,
+`windows_entry_tests.rs:1-60`, `trash_handoff.rs:80-100`,
+`trash_handoff_tests.rs:783-790` (the gate pattern),
+`24_structural_identity_capability_matrix.md:147-151`, `:173-187`,
+`:189-220`. Build `vault/weak_volume_tests.rs` with `weak_volumes()`
+reading `SLATE_WEAK_VOLUME_FAT32` / `_EXFAT` / `_SMB` and checking the
+file-system name, and the facts, each seen failing first under a
+mutation: `weak_volume_create_lands_on_a_free_name_and_preserves_an_occupied_one`
+(bytes land; `DestinationExists`; occupant unchanged; stage cleaned);
+`weak_volume_rename_and_move_land_on_a_free_name_and_refuse_an_occupied_one`;
+`weak_volume_case_only_rename_keeps_the_entry` (identity where ids
+persist, listing otherwise); `weak_volume_stale_identity_refuses_where_ids_are_identities`;
+`weak_volume_gate_names_the_file_system_it_ran_on`;
+`weak_volume_gate_is_quiet_when_no_volume_is_set` (not ignored); and,
+only if a primitive fails, `weak_volume_that_cannot_rename_without_replacing_refuses_truthfully`
+with the core-owned `InvalidPath` reason. Mount the volumes with the
+captured-object PowerShell procedure (two VHDs via `New-VHD | Mount-VHD
+-Passthru | Initialize-Disk | New-Partition -AssignDriveLetter |
+Format-Volume`, directories created under the returned drive letters,
+`New-SmbShare slate-probe` over `C:\probe\share`), export the three
+variables, run `cargo test -p slate-core --locked -- --ignored
+--test-threads=1 weak_volume` after `--list` shows 7 tests. Change
+production code only if a primitive fails, and then only to refuse.
+Registers: the matrix's §3.3 / §5 / §6 Windows rows (appended); contract
+31 FR-10 only with a refusal. Not delivered: any volume the hardware
+cannot provide (row "not probed"). Done when the gated facts have run
+green on all three volumes somewhere recorded, the PowerShell gates and
+the Windows lane are green, and the PR body carries `Refs #1434`,
+`Refs #1470` with the per-volume table. Commit:
 `test(core): the windows no-replace create and rename are proven on fat32, exfat and an smb share`.

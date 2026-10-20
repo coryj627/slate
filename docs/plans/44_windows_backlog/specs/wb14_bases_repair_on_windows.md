@@ -93,13 +93,32 @@ message and the Edit command stays enabled.
   `PublishFailed(BasePhrase.NoExecutableViews)` and do not execute; the
   handle stays open (the definition was read). The `:1179-1182` arm stays
   for the summary-less execute.
-- New `string? DefinitionEditingDisabledReason` (mirrors mac `:228-232`):
-  null when `IsSavedQuery`; else null when `_handle` is present or the
-  definition can be reopened from a readable file; `BasePhrase.DefinitionUnavailable`
-  ("This Base is unavailable." — mac's `baseDocumentUnavailableDisabledReason`,
-  copy its text verbatim) when the file is missing or unreadable or
-  quarantined; the retarget-failed and reopening reasons keep their own
-  text. Exposed with `OnPropertyChanged` on every state change.
+- New `string? DefinitionEditingDisabledReason` (mirrors mac `:228-232`),
+  computed from a new `_definitionAvailability` field — never from
+  `_handle` alone, because a retained handle outlives the file: `Refresh`
+  executes the retained handle (`:996-1003`) and a failed execute keeps it
+  (`:1101-1104`), so a definition deleted after the open would otherwise
+  stay "editable". Precedence, as mac's path-reason-then-availability
+  order: (1) `IsSavedQuery` → null; (2) `State is Loading` or a rescan
+  retarget in flight → `BasePhrase.DefinitionReopening`; (3)
+  `_definitionAvailability is Unavailable(reason)` → that reason
+  (`BasePhrase.DefinitionUnavailable`, mac's
+  `baseDocumentUnavailableDisabledReason` text verbatim, for missing,
+  unreadable or quarantined; `DefinitionRetargetFailed` for a failed
+  reopen); (4) else null — the definition was read (handle present) or is
+  readable again and reopens for the edit. `_definitionAvailability` is
+  published at every terminal outcome: `Load`'s open failure
+  (`BasePhrase.OpenFailed`, `:927`) sets `Unavailable`; a successful open
+  or apply sets `Available`; and `Refresh` gains an availability probe
+  BEFORE executing the retained handle — a core read of the definition
+  (`_session.ReadNoteParts(Path)` through the FFI lock, the probe
+  `TasksReviewViewModel` already uses at `:745`; a `DefinitionReadFaultForTests`
+  seam) — whose `VaultException` closes the handle (`CloseHandleLocked`,
+  `:1444-1451`), publishes `PublishFailed(BasePhrase.OpenFailed(e))` and
+  sets `Unavailable`. The rescan's reload loop (`WorkspaceViewModel.Rescan.cs:276-290`)
+  only reloads hash-changed bases, so an explicit Refresh is the recovery
+  route for a deleted file, as on mac (`basesRefresh()`); the PR body
+  says so. Exposed with `OnPropertyChanged` on every publication.
 - `ViewEditQueryJson`: if `_handle is null` and the definition file is
   present, reopen first (mac `:2126-2128`); if `Views.Length == 0`, hand
   the continuation the empty-draft JSON (what `BaseQueryBuilderViewModel`
@@ -160,11 +179,21 @@ Facts fail first; twin names of the six mac facts, in `BasesDocumentTests`
   `views:`, `Views.Length == 1`, `State == Ready`; and a definition
   detached by the C6 rollback reopens for the edit while data verbs stay
   disabled. Mutation: drop the `AddView` → core refuses view 0 → fails.
-- `AMissingBaseFileStillDisablesEditingWithTheUnavailableReason` —
-  deleted on disk then refreshed: Failed, reason non-null, Edit refuses
-  with `BasesFiltersOpenFailed(reason)`; a detached-then-deleted
-  definition's reopen fails with its own sentence; a failed reopen keeps
-  the retarget reason.
+- `AMissingBaseFileStillDisablesEditingWithTheUnavailableReason` — the
+  document is Ready with its handle RETAINED, the file is deleted on disk,
+  then `Refresh`: the availability probe fails, the handle closes, the
+  document is Failed with `BasePhrase.OpenFailed`'s sentence, the reason
+  is non-null, Edit refuses with `BasesFiltersOpenFailed(reason)`; the same
+  with the file made unreadable (`DefinitionReadFaultForTests` throwing a
+  read `VaultException`); a detached-then-deleted definition's reopen
+  fails with its own sentence; a failed reopen keeps the retarget reason.
+  Mutation: compute the reason from `_handle is null` → the
+  deleted-with-retained-handle case stays "editable" → fails.
+- `ADetachedDefinitionReopensForTheEditWhenItsFileIsReadable` — the C6
+  rollback detach closed the handle; the file is intact: the reason is
+  null, Edit reopens the definition first (handle present again) and the
+  builder opens on view 0. Mutation: treat a null handle as unavailable
+  → fails.
 - `NoBlankSurfaceForAFailedBase` (hosted) — for empty, missing and
   unloadable documents the surface shows `BaseLoadFailedGroup` with the
   heading, a non-empty message, the sentence or the reason, and the Edit
@@ -191,11 +220,15 @@ Facts fail first; twin names of the six mac facts, in `BasesDocumentTests`
 
 ## Verification
 
-```
+```powershell
 $env:CARGO_TARGET_DIR='C:\dev\slate\target-wb14'; ./apps/slate-windows/generate-bindings.ps1 -Locked
 dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release
-dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --filter "FullyQualifiedName~BasesDocumentTests|FullyQualifiedName~BasesSurfaceRecoveryTests|FullyQualifiedName~BasesBuilderTests|FullyQualifiedName~ShellBasesLandingTests|FullyQualifiedName~CommandDriftTests|FullyQualifiedName~MenuBarCensus"
-dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include apps/slate-windows/src/SlateWindows/Bases/BaseDocumentViewModel.cs apps/slate-windows/src/SlateWindows/Bases/BaseSurfaceView.cs apps/slate-windows/src/SlateWindows/Bases/BaseQueryBuilderViewModel.cs apps/slate-windows/src/SlateWindows/WorkspaceViewModel.Bases.cs <tests>
+$tests = 'apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj'
+$filter = 'FullyQualifiedName~SlateWindows.Tests.BasesDocumentTests|FullyQualifiedName~SlateWindows.Tests.BasesSurfaceRecoveryTests|FullyQualifiedName~SlateWindows.Tests.BasesBuilderTests|FullyQualifiedName~SlateWindows.Tests.ShellBasesLandingTests|FullyQualifiedName~SlateWindows.Tests.CommandDriftTests|FullyQualifiedName~SlateWindows.Tests.Censuses.MenuBarCensus'
+dotnet test $tests --no-build --configuration Release --list-tests --filter $filter | Select-String 'ASavedEmptyBaseOpensInARecoverableStateWithEditingEnabled|AnIncompleteDefinitionShowsTheErrorAndKeepsEditingEnabled|AnUnloadableSelectedViewExplainsItselfAndKeepsEditingEnabled|EditFromTheErrorStateOpensTheBuilder|AMissingBaseFileStillDisablesEditingWithTheUnavailableReason|ADetachedDefinitionReopensForTheEditWhenItsFileIsReadable|NoBlankSurfaceForAFailedBase'   # seven lines, else the filter is wrong
+dotnet test $tests --no-build --configuration Release --filter $filter
+$cs = @(git diff --name-only origin/main -- '*.cs') + @(git ls-files --others --exclude-standard -- '*.cs')   # Bases/BaseDocumentViewModel.cs, Bases/BaseSurfaceView.cs, Bases/BaseQueryBuilderViewModel.cs, WorkspaceViewModel.Bases.cs, BasesDocumentTests.cs, BasesSurfaceRecoveryTests.cs (new)
+dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $cs
 ```
 
 CI: Windows lane. AT: NVDA full pass (§4 rule 4, the PR stays a draft
@@ -219,19 +252,76 @@ reason is spoken once.
 ## Brief
 
 Read `Bases/BaseDocumentViewModel.cs:26-32, 509-600, 604-612, 867-930,
-944-958, 1095-1110, 1172-1212, 1485-1504`, `WorkspaceViewModel.Bases.cs:127-150,
-486-520`, `Bases/BaseQueryBuilderViewModel.cs:780-892`,
+944-1004, 1095-1110, 1172-1212, 1444-1451, 1485-1504`,
+`WorkspaceViewModel.Bases.cs:127-150, 486-520`,
+`WorkspaceViewModel.Rescan.cs:276-290`,
+`Bases/BaseQueryBuilderViewModel.cs:780-892`,
 `Bases/BaseSurfaceView.cs:170-185, 665-715`, core `bases/mod.rs:207-222`
 and `session.rs:19240-19250`, mac `Bases/BaseContainerView.swift:696-745`,
 `Bases/AppState+Bases.swift:228-247, 2118-2140, 2440-2454`, and the six
-facts in `BaseContainerRecoveryTests.swift`. Write the six Windows twins
-first (five in `BasesDocumentTests`, one hosted) and see them fail. Make a
-no-view definition `PublishFailed(NoExecutableViews)` with its handle kept,
-add `DefinitionEditingDisabledReason`, let `ViewEditQueryJson` seed an
-empty draft and `ApplyBuilderEdits` accept a readable Failed definition,
-prepend `AddView("type: table")` in `SaveToView` for zero views, switch the
-Edit command to the definition predicate, and render the failed group in
-`BaseSurfaceView` (WD8). Append the C4 amendment and the register rows; run
-the NVDA pass. Done when the lane is green and the pass is recorded.
-Commit: `fix(windows): a base with no executable view loads as failed, stays
-editable, and shows the repair group`.
+facts in `BaseContainerRecoveryTests.swift:77-385`. Pending decision WD8
+(recommended: mac's failed-state group recorded as a C4 amendment; under
+the banner answer, no group is built — the chunk stops at the Failed
+classification, the availability predicate and the editing paths, and
+`NoBlankSurfaceForAFailedBase` asserts the banner carries the message with
+Edit enabled). Build: in `BaseDocumentViewModel`, `LoadBody`/`Refresh`
+call `PublishFailed(BasePhrase.NoExecutableViews)` for zero views with the
+handle kept; a `_definitionAvailability` field (`Available`,
+`Unavailable(reason)`, `Reopening`, `RetargetFailed`) published at every
+terminal outcome and probed in `Refresh` by a core read of the definition
+before the retained handle executes (`DefinitionReadFaultForTests` seam;
+a failed probe closes the handle and publishes `OpenFailed`);
+`DefinitionEditingDisabledReason` derived from it in mac's precedence
+(saved query → null; loading/reopening; unavailable or retarget-failed
+reason; else null), never from `_handle` alone; `ViewEditQueryJson`
+reopens a detached readable definition and seeds the empty-draft JSON for
+zero views; `ApplyBuilderEdits` guards on that reason instead of
+`Failed`. In `BaseQueryBuilderViewModel.SaveToView`, prepend
+`new BaseEdit.AddView("type: table")` and address view 0 when the target
+has no views. In `WorkspaceViewModel.Bases.cs`, `BasesEditViewFiltersCommand`
+enables on a null reason and announces `BasesFiltersOpenFailed(reason)`
+otherwise. In `BaseSurfaceView.RenderContent`, a `BaseLoadFailedGroup`
+(heading "This base could not be loaded" at level 2, `StateMessage`, the
+reason or "Edit the base definition to repair it.", an Edit button bound
+to the command with HelpText "Opens the base definition in the query
+builder.") replaces the collapse for Failed; the three strings are
+`BasePhrase` constants named in the PR body for plan 43 PR 35. Facts,
+written first and seen failing, in `BasesDocumentTests` and a new hosted
+`BasesSurfaceRecoveryTests`: `ASavedEmptyBaseOpensInARecoverableStateWithEditingEnabled`
+(`""` → Failed, `NoExecutableViews`, handle kept, reason null, command
+enabled); `AnIncompleteDefinitionShowsTheErrorAndKeepsEditingEnabled`
+(filters-only and truncated `views:`: same message, no "YAML", editable);
+`AnUnloadableSelectedViewExplainsItselfAndKeepsEditingEnabled` (execute
+fault on view 1: core's detail, handle kept, editable, picker usable);
+`EditFromTheErrorStateOpensTheBuilder` (builder on view 0; Save to View
+emits `AddView` first, file gains `views:`, one view, Ready; a
+C6-detached definition reopens for the edit with data verbs disabled);
+`AMissingBaseFileStillDisablesEditingWithTheUnavailableReason` (deleted
+while the handle is retained, then Refresh → Failed with `OpenFailed`,
+reason non-null, Edit refuses; unreadable file the same; detached-then-
+deleted reopen says why; failed reopen keeps the retarget reason);
+`ADetachedDefinitionReopensForTheEditWhenItsFileIsReadable` (null handle,
+intact file → reason null, reopen, builder on view 0);
+`NoBlankSurfaceForAFailedBase` (hosted: empty, missing and unloadable
+documents show the group with heading, message, sentence-or-reason and the
+Edit button; loading shows the loading line); `MissingFileFailsWithTheRecoveryPosture`
+(`:110`) gains the reason assertion. Mutations: the `ClampedViewIndex`
+execute back; drop `AddView`; reason from `_handle is null`; a null handle
+treated as unavailable; collapse the group for Failed. Registers: append a
+C4 amendment row to `docs/plans/25_bases_grid_contracts.md` (after `:55`,
+never rewriting C4); amend `docs/plans/18_windows_port/w_c_matrix.md:30`
+(the group and its AutomationIds); set the `.base` recovery row in
+`docs/plans/18_windows_port/parity_matrix.md` to implemented on both
+hosts. Interlock: if plan 43 PR 35 (#1398) landed first, adopt its core
+failed-state copy instead of the `BasePhrase` constants. Not delivered:
+core-owned failed-state copy (PR 35's); rescan-driven detection of a
+deleted base (an explicit Refresh is the recovery route, as on mac). Done
+when the Windows lane is green, the format gate is clean, the mutation run
+is recorded, and the NVDA pass ("This base could not be loaded, heading
+level 2" → "No executable base views were found." → "Edit the base
+definition to repair it." → "Edit, button, Opens the base definition in
+the query builder."; Enter → "Editing filters for <name>."; Save to View →
+"Saved builder changes to view."; a deleted base → the reason replaces the
+sentence and Edit is unavailable) is in the PR body with `Closes #1397`.
+Commit: `fix(windows): a base with no executable view loads as failed,
+stays editable, and shows the repair group`.

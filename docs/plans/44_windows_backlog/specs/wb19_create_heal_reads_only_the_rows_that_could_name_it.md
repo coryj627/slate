@@ -1,11 +1,12 @@
 # WB-19 — A create heals only the dangling links its path could resolve
 
 Issues: #1426. Size M. Lanes: rust, windows (the Windows lane's
-`cargo test -p slate-core`), swift (compile only: no FFI change, but a
-schema bump touches every cache both hosts open). AT: none. Wave: W7,
-slot 1. Depends on: WB-18 (shared `links_db.rs` and the `session.rs`
-create path; §6 sequencing "`links_db.rs`, `session.rs` link paths: WB-18,
-then WB-19"). Parallel with: WB-20, WB-21. Decision: none.
+`cargo test -p slate-core` and the app build, which opens caches), swift
+(compile only: no FFI change, but a schema bump migrates every cache the
+mac tests open). AT: none. Wave: W7, slot 1. Depends on: WB-18 (shared
+`links_db.rs` and the `session.rs` create path; §6 sequencing
+"`links_db.rs`, `session.rs` link paths: WB-18, then WB-19"). Parallel
+with: WB-20, WB-21. Decision: none.
 
 ## Goal
 
@@ -37,9 +38,9 @@ Verified against the worktree; the plan's lines hold.
   `files` row, `:490`), then `resolve_link(&target_raw, anchor,
   &source_path, &index)` per row (`:497`). Since #1429 each row resolves
   from its own candidates in the snapshot; the two whole-table reads
-  remain, as the issue's 2026 comment says. The same function serves the
-  scan (`session.rs:10558`, under the scan's token) and the rename and
-  batch paths (`:13139`, `:13485`, `:14446`, `:17013`).
+  remain, as the issue's comment says. The same function serves the scan
+  (`session.rs:10558`, under the scan's token) and the rename and batch
+  paths (`:13139`, `:13485`, `:14446`, `:17013`).
 - `links` schema: `migrations/004_links.sql:27-45`: `target_raw TEXT NOT
   NULL`, `target_path TEXT`, indexes `idx_links_source(source_file_id)`
   and `idx_links_target(target_path)`. No index on `target_raw` or a fold
@@ -158,27 +159,37 @@ No census row; no FlaUI journey.
 
 ## Verification
 
+PowerShell, repo root. Every `cargo test` / `dotnet test` line must
+select at least one test (`cargo … -- --list | Select-String ': test$' |
+Measure-Object`; `dotnet test … --list-tests`), else the step failed.
+
 ```
 $env:CARGO_TARGET_DIR='C:\dev\slate\target-wb19'
-cargo test -p slate-core --locked db::                   # migrations
+cargo test -p slate-core --locked db::                                    # migrations
 cargo test -p slate-core --locked save_link_lookup
 cargo test -p slate-core --locked link_pass
 cargo test -p slate-core --locked --no-fail-fast
-make ci
-# both hosts open an existing cache once (upgrade path), on this machine:
+cargo fmt --all -- --check
+cargo clippy --all-targets --workspace -- -D warnings
+cargo test --workspace --locked
+cargo bench --workspace --no-run
+bash scripts/check-license-headers.sh
+# the Windows host opens an existing (version-40) cache once, the upgrade path:
 ./apps/slate-windows/generate-bindings.ps1 -Locked
-dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release
-dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --filter "FullyQualifiedName~VaultLifecycle"
+dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release    # Error(s)=0 before reading test counts
+dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --configuration Release --filter "FullyQualifiedName~SlateWindows.Tests.RescanTests"
 ```
 
+No C# file changes, so no `dotnet format` step. Mutation run: each row's
+mutation applied locally, the fact seen failing, reverted.
+
 CI: `windows.yml` (rust-tests and the app build, which opens caches),
-`rust.yml`, `swift-tests.yml` for the compile (no FFI delta, but the
-cache the mac tests open migrates). AT pass: none.
+`rust.yml`, `swift-tests.yml` for the compile. AT pass: none.
 
 ## Acceptance
 
 - [ ] Migration 041 and its two partial indexes; `user_version` 41.
-- [ ] The seven facts pass, seen failing first where they are new.
+- [ ] The eight facts pass, seen failing first where they are new.
 - [ ] The create path calls the targeted heal; scans and moves unchanged.
 - [ ] `BENCHMARKS.md` entry; `Closes #1426`.
 - [ ] Not delivered: a targeted heal for the rename/move paths (they heal
@@ -186,15 +197,35 @@ cache the mac tests open migrates). AT pass: none.
 
 ## Brief
 
-Make a create heal only the dangling links that could name it. Read
-`session.rs:6107-6225`, `links_db.rs:85-235` and `:455-510`,
-`link_resolver.rs:505-600` (the probe to invert), `migrations/037…`,
-`039…` and `004_links.sql`, `db.rs:60-80`, `:328-400`, `:455-535`. Add
-migration 041 (two partial fold indexes and the `slate_link_target_name`
-UDF), `re_resolve_unresolved_links_naming`, and switch the create to it;
-leave the scan and move heals alone. Facts as in Tests (two row-counter
-facts, one equivalence fact over the census fixtures, one fault fact, two
-migration facts), failing first. Registers: `BENCHMARKS.md`. Done when
-the suite and both lanes are green and an existing cache opens on both
-hosts after the bump. Commit:
+Make a create heal only the dangling links that could name it. No owner
+decision is pending. Read `session.rs:6107-6225` (the create and its heal
+call at `:6207`), `links_db.rs:85-235` and `:455-510`,
+`link_resolver.rs:505-600` (the probe to invert), `migrations/037_path_fold_indexes.sql`,
+`039_file_name_fold_index.sql`, `004_links.sql`, `db.rs:60-80`,
+`:328-400`, `:455-535`, `change_feed.rs:75`. Build: migration
+`041_links_target_fold_index.sql` (partial indexes `idx_links_target_fold`
+on `slate_tree_sort_key(target_raw)` and `idx_links_target_name_fold` on
+`slate_tree_sort_key(slate_link_target_name(target_raw))`, both `WHERE
+target_path IS NULL AND is_external = 0`), the `slate_link_target_name`
+UDF in `register_connection_functions`, the `MIGRATIONS` entry,
+`links_db::re_resolve_unresolved_links_naming(tx, created_path)` keyed by
+the inverse of `LinkCandidateSelector::probe` and resolving through
+`FoldedNameLookup`, the `HEAL_ROWS_VISITED` test counter, and the create
+switched to it; leave the scan and move heals alone. Facts, seen failing
+first: `migration_041_adds_the_folded_target_indexes` (both indexes,
+`user_version == 41`); `migrate_from_empty_lands_at_latest_version` and
+`a_later_migration_clears_every_cursor_and_row` updated/still green;
+`a_create_heals_only_the_dangling_rows_that_could_name_it` (exactly K
+rows, counters zero, `HEAL_ROWS_VISITED == K`);
+`a_create_heals_exactly_what_the_vault_wide_heal_heals` (census fixtures,
+two vaults compared); `a_create_whose_heal_lookup_fails_is_published_but_leaves_the_rows_dangling`;
+`a_created_file_still_resolves_a_previously_unresolved_link` (existing);
+`the_folded_target_lookup_uses_its_partial_index` (`EXPLAIN QUERY PLAN`).
+Registers: `BENCHMARKS.md` (a WB-19 entry with the create cost before and
+after). Not delivered: a targeted heal for the rename and move paths.
+Done when the core suite, the PowerShell fmt/clippy/workspace-test/
+bench-compile/licence gates, the Windows lane (which opens a version-40
+cache) and the rust and swift lanes are green, each mutation was run
+locally, and `Closes #1426` is in the PR body naming the change-feed
+clear and the schema-skew refusal. Commit:
 `perf(core): a create heals only the dangling links its path could resolve, through folded target indexes`.

@@ -1,6 +1,6 @@
 # WB-22 — Ctrl+F finds in the open note: a landmark find bar beside the editor with next, previous, wrap, case, whole word, replace and a spoken count
 
-Issues: Closes #1112. Size L. Lanes: windows + FlaUI. AT: NVDA, Narrator. Wave: W8. Depends on: WB-21b (the `MainWindow.xaml` Editor menu, `§6`'s order), WB-17 and WB-21 (`ChordTable.cs`, `chords.json`). Parallel with: WB-23, WB-24. Decision: WD12 (pending; recommended as quoted below).
+Issues: Closes #1112. Size L. Lanes: windows + FlaUI. AT: NVDA, Narrator. Wave: W8. Depends on: WB-21b (the `MainWindow.xaml` Editor menu, `§6`'s order), WB-17 and WB-21 (`ChordTable.cs`, `chords.json`). Parallel with: WB-23, WB-24. Decision: WD12 (pending; recommended: disposition 1 via `SharedCommandChords`, replace in, regex out, Ctrl+G / Shift+Ctrl+G as next and previous, find-in-selection deferred; under disposition 2 the `slate.bases.quickFilter` row becomes `win: null` and the Bases menu item loses its gesture text; under "regex yes" a `SearchMode` toggle and its facts are added as a recorded Windows-only divergence).
 
 ## Goal
 
@@ -111,9 +111,27 @@ debounce after a query or option change and on every document change
 while open; wrap-around is manual (`FindNext` from the caret, else from
 0; `Previous` mirrors). `SearchMode.RegEx` is not offered (WD12).
 Revealing a hit: `editor.Select(offset, length)` then `BringCaretToView()`.
-Replace replaces the current hit's segment with `ReplaceText` through
-the document (one undo step), then steps; Replace All runs inside one
-`BeginUpdate`/`EndUpdate` so Ctrl+Z undoes it whole.
+
+**No action on stale results.** Every result set is stamped with the
+`TextDocument.Version` (`ITextSourceVersion`) it was computed against
+and a monotonically increasing options revision (query, MatchCase,
+WholeWord). `Next`, `Previous`, `Replace` and `ReplaceAll` first compare
+the stamps with the live document version and the current options
+revision; when either differs they flush the debounce and recompute
+synchronously before acting (no refusal is needed for navigation —
+recomputation is the correct answer; with zero matches after it the
+count line is spoken and nothing moves). `Replace` additionally
+re-verifies the current segment: `strategy.FindNext(document, segment.StartOffset, segment.Length)`
+must return a result at exactly that offset and length, else the
+segment is dropped, the set recomputed, and "Match changed; nothing
+replaced." spoken — the host never rewrites text the pattern no longer
+matches. `Replace` replaces through the document (one undo step), then
+steps; `ReplaceAll` runs inside one `BeginUpdate`/`EndUpdate` over the
+freshly recomputed set so Ctrl+Z undoes it whole. Opening the bar stores
+the caret and selection as `TextAnchor`s (`TextDocument.CreateAnchor`,
+`AnchorMovementType.AfterInsertion`, `SurviveDeletion = true`), so
+Close restores positions that followed every intervening edit, clamped
+to `document.TextLength`.
 
 **Rendering.** `Reading/`-free: a ~50-line `FindMatchBackgroundRenderer : IBackgroundRenderer`
 (`KnownLayer.Selection`, `BackgroundGeometryBuilder` over a
@@ -139,15 +157,23 @@ error). Not modal: no `ModalSurface` member, no `IsDialog`, no
 Query → Count → Previous → Next → Match case → Whole word → Replace
 text → Replace → Replace All → Close, then back to the editor.
 
-**Routing.** A window-level `KeyBinding` Ctrl+F → `Workspace.FindInNoteCommand`
-(new, `ChordScope.Global`): the active tab is a Markdown tab in editor
-mode → open the bar (or, open already, focus the query and select all —
-mac's `Reactivate`); a Base or Canvas tab → their own grid/canvas
-filters already handle Ctrl+F before it bubbles (`AccessibleDataGrid.cs:217`)
-and the global arm is a no-op when the active tab is not a note in
-editor mode and the surface claimed it; a reading-mode note, a non-note
-tab or no tab → `ToggleSearchCommand` (mac's fall-through; reading-mode
-find stays out of scope like mac's). Enter / Shift+Enter in the query
+**Routing.** The global command is owned by the lifecycle host, not
+the workspace, because the welcome view has no `Workspace` and Ctrl+F
+must still reach vault search there: `VaultLifecycleViewModel.FindInNoteCommand`
+(new; `VaultLifecycleViewModel` is the `ISlateCommandHost`,
+`SlateCommandRegistrar.cs:63-70`, which already owns `ToggleSearchCommand`
+at `VaultLifecycleViewModel.cs:280`). A window-level `KeyBinding`
+Ctrl+F binds it (`ChordScope.Global`); the registrar maps
+`[Ids.EditorFindInNote] = host => host.FindInNoteCommand`. Its Execute:
+`Workspace?.ActiveGroup.ActiveTab` is a Markdown tab in editor mode →
+`Workspace.OpenFindInNote()` (new; opens the bar, or, open already,
+focuses the query and selects all — mac's `Reactivate`); a Base or
+Canvas tab → their own grid/canvas filters already handle Ctrl+F before
+it bubbles (`AccessibleDataGrid.cs:217`), so the global arm does nothing
+when the surface claimed the key; a reading-mode note, a non-note tab,
+no tab, or no workspace at all (welcome view) → `ToggleSearchCommand.Execute(null)`
+(mac's fall-through; the overlay's own no-vault behaviour is unchanged;
+reading-mode find stays out of scope like mac's). Enter / Shift+Enter in the query
 → Next / Previous; Ctrl+G / Shift+Ctrl+G anywhere in the tab →
 Next / Previous (chord-table rows `slate.editor.findNext` /
 `slate.editor.findPrevious` with `mac: null` — Windows-only rows, the
@@ -160,7 +186,7 @@ the editor) — recorded in the Escape chain beside
 `SharedCommandChords["slate.bases.quickFilter | slate.editor.findInNote"] = "Ctrl+F. Disjoint by DELIVERY: the grid's KeyGesture handles it on a Base before it bubbles; the window binding acts only on a note in editor mode (WD12 disposition 1)."`;
 Editor menu item "_Find…" with `InputGestureText="{cmd:ChordText slate.editor.findInNote}"`
 and `AcceleratorKey` bound like `:437-441`. Registrar:
-`[Ids.EditorFindInNote] = host => host.Workspace?.FindInNoteCommand`.
+`[Ids.EditorFindInNote] = host => host.FindInNoteCommand` (the lifecycle host's, never `Workspace?.`).
 `chords.json` regenerated; `deliveryEvidence.commands` gains the id →
 `"editorHost"` (or a new `findInNote` group naming the view model and
 the FlaUI journey).
@@ -196,7 +222,10 @@ string pinned verbatim.
 
 Hosted (`W2EditorInteractionTests` / a new `FindInNoteBarTests` with the
 `CommandPaletteTests.ShellKeys` shell): 
-- `CtrlFInANoteFocusesTheQueryAndSelectsAll`; `CtrlFOnABaseTabReachesTheQuickFilterNotTheBar`; `CtrlFInReadingModeOrWithNoTabOpensVaultSearch` (the fall-through). Mutation: remove the fall-through arm → the overlay stays closed.
+- `CtrlFInANoteFocusesTheQueryAndSelectsAll`; `CtrlFOnABaseTabReachesTheQuickFilterNotTheBar`; `CtrlFInReadingModeOrWithNoTabOpensVaultSearch` (the fall-through); `CtrlFOnTheWelcomeViewWithNoWorkspaceReachesVaultSearch` (hosted shell, `Workspace == null`: `ToggleSearchCommand` executes; nothing throws). Mutation: remove the fall-through arm, or resolve the command through `Workspace?.` → the overlay stays closed.
+- `AnEditBeforeTheDebounceNeverReplacesStaleText` — type a query, edit the document inside the 150 ms window so the current hit no longer matches, press Replace: the document is unchanged, "Match changed; nothing replaced." spoken, the count recomputed. Mutation: skip the `FindNext` re-verification → the edited text is overwritten.
+- `AnOptionChangeBeforeReplaceRecountsFirst` — toggle Match case then Replace All within the debounce: only the case-sensitive matches are replaced (the set was recomputed synchronously). Mutation: act on the stamped set → the wrong matches change.
+- `CloseAfterAShortenedDocumentRestoresAClampedCaret` — open at offset 40, delete the tail so the document is 10 chars, Escape: caret at 10, no exception. Mutation: restore the raw captured offset → `ArgumentOutOfRangeException`.
 - `EnterAndCtrlGStepNextAndShiftStepsPrevious`.
 - `EscapeClosesClearsHighlightsAndReturnsFocusToTheEditor` (the renderer is unregistered — assert `BackgroundRenderers` count).
 - `TheBarIsASiblingOfTheEditorPeerNotAChild` — the editor's `GetChildrenCore` is unchanged (`AvalonDocumentBufferCensus` stays green) and the bar's peer hoists to the tab content.
@@ -235,15 +264,35 @@ with text typed (the #1106 lesson). Journey naming follows
 
 ## Verification
 
-```
+```powershell
 $env:CARGO_TARGET_DIR='C:\dev\slate\target-wb22'; ./apps/slate-windows/generate-bindings.ps1 -Locked
-dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release
-$env:SLATE_CHORDS_UPDATE='1'; dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --filter "FullyQualifiedName~ChordsJson_IsExactlyTheTablesProjection"; Remove-Item Env:SLATE_CHORDS_UPDATE
-dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --filter "FullyQualifiedName~FindInNote|FullyQualifiedName~ChordTableTests|FullyQualifiedName~CommandRegistrationTests|FullyQualifiedName~WcMatrixEvidenceCensus|FullyQualifiedName~ThemeTokenContrastTests|FullyQualifiedName~AvalonDocumentBufferCensus|FullyQualifiedName~A11yCorpusCensus"
-dotnet test apps/slate-windows/tests/SlateWindows.AccessibilityTests/SlateWindows.AccessibilityTests.csproj --filter "FullyQualifiedName~FindInNote"   # desktop free, NVDA closed
+dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release   # Error(s)=0 before reading counts
+$env:SLATE_CHORDS_UPDATE='1'; dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --no-build --configuration Release --filter "FullyQualifiedName~ChordTableTests.ChordsJson_IsExactlyTheTablesProjection"; Remove-Item Env:SLATE_CHORDS_UPDATE
+$filter = "FullyQualifiedName~FindInNoteViewModelTests|FullyQualifiedName~FindInNotePhraseTests|FullyQualifiedName~FindInNoteBarTests|FullyQualifiedName~ChordTableTests|FullyQualifiedName~CommandRegistrationTests|FullyQualifiedName~WcMatrixEvidenceCensus|FullyQualifiedName~ThemeTokenContrastTests|FullyQualifiedName~AvalonDocumentBufferCensus|FullyQualifiedName~A11yCorpusCensus"
+dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --no-build --configuration Release --list-tests --filter $filter | Select-String "FindInNoteViewModelTests|FindInNotePhraseTests|FindInNoteBarTests" | Measure-Object | ForEach-Object { if ($_.Count -lt 20) { throw "new facts not discovered: $($_.Count)" } }
+dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --no-build --configuration Release --filter $filter
+# desktop free, NVDA closed (the FlaUI facts live in the partial class ShellAccessibilityTests, so select by method name):
+dotnet test apps/slate-windows/tests/SlateWindows.AccessibilityTests/SlateWindows.AccessibilityTests.csproj --no-build --configuration Release --filter "FullyQualifiedName~FindInNote_TypingAnnouncesTheCountAndEnterMovesTheCaret"
 python -I scripts/generate-parity-matrix.py; python -I scripts/generate-parity-matrix.py --check
 python -I scripts/a11y_trigger_ledger.py --write
-dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include <every edited .cs>
+$files = @(
+  'apps/slate-windows/src/SlateWindows/FindInNoteViewModel.cs',
+  'apps/slate-windows/src/SlateWindows/FindInNoteBar.xaml.cs',
+  'apps/slate-windows/src/SlateWindows/FindMatchBackgroundRenderer.cs',
+  'apps/slate-windows/src/SlateWindows/Panels/FindInNotePhrase.cs',
+  'apps/slate-windows/src/SlateWindows/WorkspaceTabViewModel.cs',
+  'apps/slate-windows/src/SlateWindows/WorkspaceViewModel.cs',
+  'apps/slate-windows/src/SlateWindows/VaultLifecycleViewModel.cs',
+  'apps/slate-windows/src/SlateWindows/SlateTextEditor.cs',
+  'apps/slate-windows/src/SlateWindows/Commands/ChordTable.cs',
+  'apps/slate-windows/src/SlateWindows/Commands/SlateCommandRegistrar.cs',
+  'apps/slate-windows/tests/SlateWindows.Tests/FindInNoteViewModelTests.cs',
+  'apps/slate-windows/tests/SlateWindows.Tests/FindInNotePhraseTests.cs',
+  'apps/slate-windows/tests/SlateWindows.Tests/FindInNoteBarTests.cs',
+  'apps/slate-windows/tests/SlateWindows.Tests/ChordTableTests.cs',
+  'apps/slate-windows/tests/SlateWindows.Tests/ThemeTokenContrastTests.cs',
+  'apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.FindInNote.cs')
+dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $files
 ```
 
 CI: the Windows lane and the FlaUI shell gate. AT: NVDA full pass and
@@ -270,16 +319,100 @@ Read `SlateTextEditor.cs:215-245` and `:525-545`,
 `WorkspaceTemplates.xaml:331-345`, `:480-500`, `:585-600`,
 `Bases/BaseSurfaceView.cs:50-200`, `Grids/AccessibleDataGrid.cs:200-225`,
 `Commands/ChordTable.cs:617-690`, `:794-796`, `:915-921`, `:1850-1890`,
-`Commands/SlateCommandRegistrar.cs:413-460`, `ChordTableTests.cs:283-360`
-and `:1105-1180`, `AutomationLandmark.cs`, `Censuses/WcMatrixEvidenceCensus.cs:36-75`,
-`TaskStatusPhraseTests.cs`, `ShellAccessibilityTests.Palette.cs:43`, and
-mac's `NoteEditorView.swift:240-250`, `:1426-1432`, `AppState.swift:9490-9535`,
-`SlateCommands.swift:1895-1906`. Build `FindInNoteViewModel` over
-`SearchStrategyFactory`, the background renderer, the landmark bar in a
-new Row 2 of the tab template (status to Row 3, popover span 4), the
-window Ctrl+F route with the vault-search fall-through, Ctrl+G rows, the
-`SharedCommandChords` pair, the Editor menu item, `FindInNotePhrase` and
-its designations; write every fact and the FlaUI journey failing first;
-regenerate every register. Done when the lanes are green and both AT
-passes are in the PR body. Commit: `feat(windows): ctrl+f finds in the
-open note with a landmark find bar, replace and a spoken count`.
+`Commands/SlateCommandRegistrar.cs:40-70` and `:413-460`,
+`VaultLifecycleViewModel.cs:270-290`, `ChordTableTests.cs:283-360` and
+`:1105-1180`, `AutomationLandmark.cs`, `Censuses/WcMatrixEvidenceCensus.cs:36-75`,
+`TaskStatusPhraseTests.cs`, `ShellAccessibilityTests.Palette.cs:43`,
+`ShellAccessibilityTests.cs:69` and `:471` (`AssertAxeClean`), and mac's
+`NoteEditorView.swift:240-250`, `:1426-1432`, `AppState.swift:9490-9535`,
+`SlateCommands.swift:1895-1906`. Decision WD12 is pending (recommended:
+disposition 1 — one `SharedCommandChords` entry for
+`slate.bases.quickFilter | slate.editor.findInNote`; replace in; regex
+out; Ctrl+G / Shift+Ctrl+G as `slate.editor.findNext` /
+`slate.editor.findPrevious`, Windows-only rows; find-in-selection
+deferred and recorded in the parity matrix as "unverified on mac; not
+shipped"; under disposition 2 `slate.bases.quickFilter` becomes
+`win: null` and the Bases menu loses its gesture text; under "regex yes"
+a `SearchMode` toggle and facts are added as a recorded divergence).
+Build: `FindInNoteViewModel` per Markdown tab (Query, MatchCase,
+WholeWord, ReplaceText, IsOpen, CurrentIndex, TotalCount, Error,
+FocusRequested; Next, Previous, Replace, ReplaceAll, Close) over
+`SearchStrategyFactory.Create(pattern, ignoreCase, matchWholeWords, SearchMode.Normal)`
+with a 150 ms debounce, manual wrap, result sets stamped with
+`TextDocument.Version` and an options revision so every action
+recomputes synchronously when stale and `Replace` re-verifies its
+segment with `FindNext` before writing, `ReplaceAll` in one
+`BeginUpdate`/`EndUpdate`, caret and selection kept as `TextAnchor`s and
+restored clamped on Close; `FindMatchBackgroundRenderer : IBackgroundRenderer`
+(`KnownLayer.Selection`, theme token `Slate.FindMatchBrush` in both
+themes) registered while open; `FindInNoteBar` at a new `Grid.Row="2"`
+of `WorkspaceTabContentTemplate` (status to Row 3, popover overlay
+`RowSpan="4"`), rooted at an `AutomationLandmarkGrid` named "Find in
+note" with ids `FindInNoteQuery`, `FindInNoteCount`, `FindInNotePrevious`,
+`FindInNoteNext`, `FindInNoteMatchCase`, `FindInNoteWholeWord`,
+`FindInNoteReplaceText`, `FindInNoteReplace`, `FindInNoteReplaceAll`,
+`FindInNoteClose`, `FindInNoteError`, not modal (no `ModalSurface`
+member, no `IsDialog`, no focus scope); `VaultLifecycleViewModel.FindInNoteCommand`
+(the `ISlateCommandHost`) bound to a window-level Ctrl+F `KeyBinding`
+and to the registrar as `host => host.FindInNoteCommand`, routing a
+Markdown tab in editor mode to `Workspace.OpenFindInNote()` and
+everything else — reading mode, non-note tab, no tab, no workspace —
+to `ToggleSearchCommand`; chord rows `Reg(Ids.EditorFindInNote, "Find…", CommandSection.Editor, "Find and highlight text within the current note.", "⌘F", "Ctrl+F", ChordScope.Global)`
+plus the two Ctrl+G rows; an Editor-menu item "_Find…" (Windows has no
+Edit menu) with `InputGestureText="{cmd:ChordText slate.editor.findInNote}"`;
+`Panels/FindInNotePhrase` ("{N} of {M}", "No matches", "Wrapped to the
+top", "Wrapped to the end", "Replaced {M} matches.", "Match changed;
+nothing replaced.") spoken as HostComposed Medium after the debounce;
+the rationale comment at `SlateTextEditor.cs:538`. Facts, failing
+first — `FindInNoteViewModelTests`: `TypingFindsAllMatchesAndReportsOneOfM`,
+`NextWrapsToTheTopAndSaysSo`, `PreviousWrapsToTheEndAndSaysSo`,
+`MatchCaseAndWholeWordNarrowTheMatches`, `ReplaceReplacesTheCurrentHitAndSteps`,
+`ReplaceAllIsOneUndoStep`, `ADocumentEditWhileOpenRecountsOnTheDebounce`,
+`AnEmptyQueryClearsHighlightsAndCountsNothing`,
+`CloseRestoresTheCaretAndSelectionTheOpenCaptured`;
+`FindInNotePhraseTests` pinning every string verbatim;
+`FindInNoteBarTests` (hosted shell): `CtrlFInANoteFocusesTheQueryAndSelectsAll`,
+`CtrlFOnABaseTabReachesTheQuickFilterNotTheBar`,
+`CtrlFInReadingModeOrWithNoTabOpensVaultSearch`,
+`CtrlFOnTheWelcomeViewWithNoWorkspaceReachesVaultSearch`,
+`EnterAndCtrlGStepNextAndShiftStepsPrevious`,
+`EscapeClosesClearsHighlightsAndReturnsFocusToTheEditor`,
+`TheBarIsASiblingOfTheEditorPeerNotAChild`, `TypingAnnouncesOnlyTheFinalCount`,
+`AnEditBeforeTheDebounceNeverReplacesStaleText`,
+`AnOptionChangeBeforeReplaceRecountsFirst`,
+`CloseAfterAShortenedDocumentRestoresAClampedCaret`;
+`ThemeTokenContrastTests` for the match brush; `ChordTableTests`
+(`CommandRows_HaveNoActiveChordCollision` with the pair,
+`EveryScopeIsEitherScrapedFromProductionOrDispositioned`,
+`ChordsJson_IsExactlyTheTablesProjection` regenerated);
+`WcMatrixEvidenceCensus` with the eleven ids registered; FlaUI
+`ShellAccessibilityTests.FindInNote_TypingAnnouncesTheCountAndEnterMovesTheCaret`
+with `AssertAxeClean(process, "find-in-note")` after text is typed.
+Mutations to run locally: drop the fall-through arm; resolve the command
+through `Workspace?.`; skip the `FindNext` re-verification; act on the
+stamped set after an option change; restore the raw offset on Close;
+remove the `SharedCommandChords` pair. Registers: `apps/slate-windows/chords.json`
+(regenerated; `deliveryEvidence.commands` gains the three ids),
+`scripts/generate-parity-matrix.py` (drop the override, add the two
+Windows-only ids, the find-in-selection note) and
+`docs/plans/18_windows_port/parity_matrix.md` regenerated with `--check`
+green, a ten-cell row "Find in note (WB-22)" in
+`docs/plans/18_windows_port/w_c_matrix.md`, the ids in
+`docs/plans/18_windows_port/w_c_automation_ids.json`, the
+`FindInNotePhrase` residue entries in
+`docs/plans/18_windows_port/a11y_trigger_designations.json` and
+`python -I scripts/a11y_trigger_ledger.py --write`, notes appended to
+`docs/plans/28_palette_contracts.md` (non-modal landmark, P5 honoured)
+and `docs/plans/25_bases_grid_contracts.md` (the Bases filter keeps
+Ctrl+F on a Base), the Windows keyboard help page. Done when the Windows
+lane and the FlaUI gate are green, `dotnet format --include` over the
+sixteen files is clean, and the NVDA and Narrator passes (Ctrl+F: "Find
+in note, edit"; typing: "3 of 12"; Enter: "4 of 12"; Enter at the last
+hit: "1 of 12, wrapped to the top"; Match case check box; Replace All:
+"Replaced 12 matches."; Escape returns to the editor; Ctrl+F on the
+welcome view opens the search overlay; Ctrl+F on a Base: "Quick filter,
+edit") are in the PR body — draft until then. Not delivered: regex
+(parity), find-in-selection (unverified on mac), reading-mode find (mac
+defers it). PR body: `Closes #1112`. Commit: `feat(windows): ctrl+f
+finds in the open note with a landmark find bar, replace and a spoken
+count`.

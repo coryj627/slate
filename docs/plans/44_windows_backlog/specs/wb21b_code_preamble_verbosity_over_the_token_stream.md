@@ -1,6 +1,6 @@
 # WB-21b — Core renders the code preamble at three verbosities over the token stream, and Windows speaks the one the reader picked
 
-Issues: Refs #1526 (closes with the mac follow-up WB-0 files: "mac: consume `code_block_preamble_with_verbosity`, Settings samples through core, VoiceOver pass per mode"). Size M. Lanes: rust, windows, swift (compile). AT: NVDA per mode. Wave: W8 (after WB-20; before WB-22 on `MainWindow.xaml`). Depends on: WB-21 (the two menu items it restores), WB-20 (`ReadingDocumentBuilder.cs`). Parallel with: WB-22, WB-23. Decision: WD13 (pending; recommended as quoted below).
+Issues: Refs #1526 (closes with the mac follow-up WB-0 files: "mac: consume `code_block_preamble_with_verbosity`, Settings samples through core, VoiceOver pass per mode"). Size M. Lanes: rust, windows, swift (compile). AT: NVDA per mode. Wave: W8 (after WB-20; BEFORE WB-22 — both edit the `MainWindow.xaml` Editor menu, plan §6). Depends on: WB-21 (the two menu items it restores), WB-20 (`ReadingDocumentBuilder.cs`). Parallel with: WB-23, WB-24 only; never WB-22, which starts after this chunk merges. Decision: WD13 (pending; recommended: both modes over `source` and the `SyntaxToken` stream as quoted under Reference; under another answer — a different first-line rule, token separators, or a cap — the renderer's body rules and the facts' expected strings change, the signature does not).
 
 ## Goal
 
@@ -144,14 +144,14 @@ Rust (`code.rs` tests):
 - `all_tokens_emits_uncovered_ranges_in_place` — synthetic tokens `[2..4), [6..8)` over `abcdefghij` → body `abcdefghij`; dropping the gap emission → fails.
 - `all_tokens_unknown_language_reads_the_source` — tag `brainfuck` through `highlight_code` (one `Other` token).
 - `all_tokens_with_no_tokens_reads_the_source` and `all_tokens_clamps_overlapping_and_out_of_range_tokens` (synthetic `[0..6)`, `[4..20)` over a 10-byte source → source once).
-- `all_tokens_ignores_semantic_spans` — a rust block with a `fn` declaration renders the same with `semantic_spans` cleared (structural: the function takes none).
+- `all_tokens_renders_tokens_not_declarations` — `fn alpha() { beta() }\n` through `highlight_code` (rust; one `Function` semantic span naming `alpha`): the exact output is `Code block, rust, 1 line. fn alpha() { beta() }\n` — the declaration name appears once, in place, never alone, never appended. Mutation: render `semantic_spans` names (an implementation walking declarations would produce `… alpha`) → fails.
 Mutations: drop the gap emission; sort by `end_byte`; render `semantic_spans` names; omit the blank-line literal.
 
-Windows (`ReadingViewTests`, `EditorPreferencesTests`):
+Windows (`ReadingViewTests`, `W2EditorInteractionTests` — the class that holds the editor-preferences facts today):
 - `ReadingViewTests.ACodeBlockPeerSpeaksTheFirstLineUnderThatVerbosity` — context verbosity FirstLine: paragraph Name is core's string; the in-range preamble text is unchanged (`:3515` shape).
 - `ReadingViewTests.ACodeBlockPeerSpeaksEveryTokenUnderThatVerbosity` — Name == `CodeBlockPreamble + " " + interior` for a coherent fence; an incoherent fence (unsaved edit) still speaks the live interior (empty token list).
 - `ReadingViewTests.ChangingTheCodeVerbosityReprojectsOpenReadingViews` — set the preference; the open projection's code Name changes without a text change; nothing announced but the setting line.
-- `EditorPreferencesTests.TheThreeCodeVerbosityModesAreBackAndEachIsAnnouncedOnce` (restores `ReadingViewTests.cs:3544-3552`'s pins) and `CheckItemGroupsTests.cs:114`, `CommandDriftTests.cs:349` back to three items.
+- `W2EditorInteractionTests.TheThreeCodeVerbosityModesAreBackAndEachIsAnnouncedOnce` (restores `ReadingViewTests.cs:3544-3552`'s pins) and `CheckItemGroupsTests.cs:114`, `CommandDriftTests.cs:349` back to three items.
 - Census: no new `A11yEvent`; `A11yCorpusCensus` unchanged. The Swift lane compiles the regenerated binding (no mac test edit: no record field or event added).
 
 ## Docs and registers
@@ -163,13 +163,25 @@ Windows (`ReadingViewTests`, `EditorPreferencesTests`):
 
 ## Verification
 
-```
-cargo test -p slate-core code::   # the preamble facts, failing first
-make ci                            # fmt, clippy, licenses
-$env:CARGO_TARGET_DIR='C:\dev\slate\target-wb21b'; ./apps/slate-windows/generate-bindings.ps1 -Locked
-dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release
-dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --filter "FullyQualifiedName~ReadingViewTests|FullyQualifiedName~EditorPreferencesTests|FullyQualifiedName~CheckItemGroupsTests|FullyQualifiedName~CommandDriftTests|FullyQualifiedName~A11yCorpusCensus"
-dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include apps/slate-windows/src/SlateWindows/Reading/ReadingDocumentBuilder.cs apps/slate-windows/src/SlateWindows/Reading/ReadingContentViewModel.cs apps/slate-windows/src/SlateWindows/EditorInteractions.cs apps/slate-windows/src/SlateWindows/WorkspaceViewModel.cs <test files>
+```powershell
+$env:CARGO_TARGET_DIR='C:\dev\slate\target-wb21b'
+cargo test -p slate-core code::tests   # the ten preamble facts, failing first; the run summary must list them
+cargo fmt --all -- --check; cargo clippy --all-targets --workspace -- -D warnings; cargo test --workspace   # CONTRIBUTING.md:95-97, the `make ci` gates on PowerShell
+./apps/slate-windows/generate-bindings.ps1 -Locked
+dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release   # Error(s)=0 before reading counts
+$filter = "FullyQualifiedName~ReadingViewTests|FullyQualifiedName~W2EditorInteractionTests|FullyQualifiedName~CheckItemGroupsTests|FullyQualifiedName~CommandDriftTests|FullyQualifiedName~A11yCorpusCensus"
+dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --no-build --configuration Release --list-tests --filter $filter | Select-String "ACodeBlockPeerSpeaksTheFirstLineUnderThatVerbosity|ACodeBlockPeerSpeaksEveryTokenUnderThatVerbosity|ChangingTheCodeVerbosityReprojectsOpenReadingViews|TheThreeCodeVerbosityModesAreBackAndEachIsAnnouncedOnce" | Measure-Object | ForEach-Object { if ($_.Count -lt 4) { throw "new facts not discovered: $($_.Count)" } }
+dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --no-build --configuration Release --filter $filter
+$files = @(
+  'apps/slate-windows/src/SlateWindows/Reading/ReadingDocumentBuilder.cs',
+  'apps/slate-windows/src/SlateWindows/Reading/ReadingContentViewModel.cs',
+  'apps/slate-windows/src/SlateWindows/EditorInteractions.cs',
+  'apps/slate-windows/src/SlateWindows/WorkspaceViewModel.cs',
+  'apps/slate-windows/tests/SlateWindows.Tests/ReadingViewTests.cs',
+  'apps/slate-windows/tests/SlateWindows.Tests/W2EditorInteractionTests.cs',
+  'apps/slate-windows/tests/SlateWindows.Tests/CheckItemGroupsTests.cs',
+  'apps/slate-windows/tests/SlateWindows.Tests/CommandDriftTests.cs')
+dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $files
 ```
 
 CI: `rust.yml`, the Windows lane, `swift-tests.yml` (compile). AT: NVDA
@@ -193,16 +205,67 @@ in the PR body; the PR stays a draft until then (§4 rule 4).
 
 ## Brief
 
-Read `code.rs:28-93`, `:204-345`, `:700-740`; `lib.rs:7142-7200`,
-`:7700-7708`; `ReadingDocumentBuilder.cs:23-40`, `:121-168`, `:376-445`;
-`ReadingContentViewModel.cs:1590-1625`; `WorkspaceViewModel.cs:2149-2166`;
-`EditorInteractions.cs:43-70`, `:185-205`, `:370-400`;
-`MainWindow.xaml:537-556`. Add the core enum and sibling function with
-the rules above and the ten Rust facts; export both over uniffi;
-regenerate the bindings; thread the verbosity through
-`ReadingListBuildContext` into the paragraph Name only; restore the two
-menu items and keys; wire the change event to re-projection; write the
-Windows facts failing first. Done when `cargo test -p slate-core`, the
-Windows lane and the Swift compile are green and the NVDA pass per mode
-is in the PR body. Commit: `feat(core,windows): the code preamble
-renders at the reader's verbosity over the token stream`.
+Read `crates/slate-core/src/code.rs:28-93`, `:204-345`, `:700-740`;
+`crates/slate-uniffi/src/lib.rs:7142-7200`, `:7700-7708`;
+`apps/slate-windows/src/SlateWindows/Reading/ReadingDocumentBuilder.cs:23-40`,
+`:121-168`, `:376-445`; `Reading/ReadingContentViewModel.cs:1590-1625`;
+`WorkspaceViewModel.cs:2149-2166`; `EditorInteractions.cs:43-70`,
+`:185-205`, `:370-400`; `MainWindow.xaml:537-556`;
+`ReadingViewTests.cs:3400-3560`; `CONTRIBUTING.md:76-98`. Decision WD13
+is pending (recommended: "preamble only" = `code_block_preamble`;
+"first line" = preamble, a space, the source's first line verbatim,
+`blank line` for an empty first line, the preamble alone for an empty
+source; "all tokens" = preamble, a space, the whole source in byte order
+walked over the `SyntaxToken` stream sorted by `start_byte`, uncovered
+bytes emitted in place, tokens clamped, nothing translated, no cap —
+never `semantic_spans`; under another answer the body rules and the
+facts' expected strings change, the signature does not). Build, in core:
+`pub enum CodePreambleVerbosity { PreambleOnly, FirstLine, AllTokens }`
+and `pub fn code_block_preamble_with_verbosity(language: Option<&str>, source: &str, tokens: &[SyntaxToken], verbosity: CodePreambleVerbosity) -> String`
+in `code.rs`, `code_block_preamble` untouched; in the FFI the
+`uniffi::Enum` and `#[uniffi::export] pub fn code_block_preamble_with_verbosity(language: Option<String>, source: String, tokens: Vec<SyntaxToken>, verbosity: CodePreambleVerbosity) -> String`
+beside the old function; both bindings regenerated from one dylib. In
+Windows: `ReadingListBuildContext.CodePreambleVerbosity` (default
+PreambleOnly) consumed at `ReadingDocumentBuilder.cs:409` for the
+paragraph's `AutomationProperties.Name` only (the in-range run at `:438`
+keeps the short preamble), `ReadingContentViewModel.CodePreambleVerbosityProvider`
+read when the build context is made, `EditorPreferencesViewModel.CodePreambleVerbosityChanged`
+and `CurrentCodePreambleVerbosity`, the workspace wiring the event to
+`tab.Reading?.InvalidateForPrefsChange()` for every tab, the two keys
+back in `CodeVerbosityNames` and the two `CheckMenuItem`s back in
+`MainWindow.xaml` with their pre-WB-21 AutomationIds and parameters.
+Rust facts in `code.rs`, failing first: `preamble_only_is_code_block_preamble`,
+`first_line_is_the_first_line_verbatim` (`fn main() {\n}\n` → `Code block, rust, 2 lines. fn main() {`),
+`first_line_blank_speaks_blank_line`, `first_line_of_an_empty_source_is_the_preamble_alone`,
+`all_tokens_over_a_grammar_stream_equals_the_source` (rust, python
+expression, json: body == source), `all_tokens_keeps_comments_and_strings_verbatim`,
+`all_tokens_emits_uncovered_ranges_in_place` (synthetic gapped tokens
+over `abcdefghij` → `abcdefghij`), `all_tokens_unknown_language_reads_the_source`,
+`all_tokens_with_no_tokens_reads_the_source`, `all_tokens_clamps_overlapping_and_out_of_range_tokens`,
+`all_tokens_renders_tokens_not_declarations` (`fn alpha() { beta() }\n` →
+exactly the source after the preamble; a declaration-name renderer
+fails). Windows facts: `ReadingViewTests.ACodeBlockPeerSpeaksTheFirstLineUnderThatVerbosity`,
+`ReadingViewTests.ACodeBlockPeerSpeaksEveryTokenUnderThatVerbosity`
+(coherent fence: Name == short preamble + space + interior; incoherent
+fence: the live interior with an empty token list),
+`ReadingViewTests.ChangingTheCodeVerbosityReprojectsOpenReadingViews`,
+`W2EditorInteractionTests.TheThreeCodeVerbosityModesAreBackAndEachIsAnnouncedOnce`;
+`CheckItemGroupsTests.cs:114` and `CommandDriftTests.cs:349` back to
+three items; `A11yCorpusCensus` unchanged (no new event). Mutations to
+run locally: drop the gap emission; sort tokens by `end_byte`; render
+semantic names; omit `blank line`; put the verbose string in the
+in-range run. Registers: the Code blocks row at
+`docs/plans/18_windows_port/w_c_matrix.md:21`; a note on
+`docs/plans/07_portability_review.md`; WB-0's mac follow-up named in the
+PR body. Rust gates on PowerShell: `cargo fmt --all -- --check`,
+`cargo clippy --all-targets --workspace -- -D warnings`,
+`cargo test --workspace` (CONTRIBUTING.md:95-97). Done when those,
+`cargo test -p slate-core code::tests`, the Windows lane, `dotnet format
+--include` over the eight files and the Swift compile lane are green, and
+the NVDA pass per mode (rust, python, json, leading-blank-line and
+unknown-language fences; object navigation reads the expected Name under
+each mode; say-all hears the short preamble once) is in the PR body —
+draft until then. Not delivered: the mac consumer and the Settings
+samples (WB-0's follow-up); no cap for oversized blocks (risk recorded).
+PR body: `Refs #1526`, never `Closes`. Commit: `feat(core,windows): the
+code preamble renders at the reader's verbosity over the token stream`.
