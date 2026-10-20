@@ -117,7 +117,8 @@ app.*.symbols
 
 # OS / editor / tooling
 .DS_Store
-.claude/
+.claude/settings.local.json
+.claude/worktrees/
 
 # Rust
 target/

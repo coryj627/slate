@@ -30,6 +30,12 @@ Two rules that keep the monorepo maintainable:
    frontend generates its own language bindings from it. Change the API in one
    place; all consumers are updated in the same PR.
 
+## Working with coding agents
+
+[`AGENTS.md`](AGENTS.md) holds the commands, gotchas and PR conventions every
+agent (and human) working here follows. Claude Code reads it through
+[`CLAUDE.md`](CLAUDE.md).
+
 ## Prerequisites & build
 
 See [`README.md`](README.md#building) for prerequisites (Rust stable via
