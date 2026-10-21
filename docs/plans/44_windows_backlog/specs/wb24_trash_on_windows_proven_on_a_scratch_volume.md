@@ -342,7 +342,10 @@ read them; set all three before running anything:
   Bin refusing at least one #1499 kind (the refused-kind branch: the
   `TrashOutcome` model, `BatchTrashReport.outcomes`,
   `LinkDeletedForGood`, the Windows sentences); `$false` when it takes
-  every kind.
+  every kind. Either way the remaining single-delete session methods and
+  FFI wrappers that this branch does not change are carried to
+  `Result<TrashOutcome, VaultError>` by WB-30, so neither branch leaves a
+  delete without its outcome.
 - `$walksRelax` — `$true` under WD15's recommended answer: the identity
   walk and the inventory's three sites admit a placeholder, **and the
   host's import check `HasReparsePointInPath` adopts the name-surrogate

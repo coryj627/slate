@@ -75,7 +75,20 @@ Verified against the worktree; the plan's lines hold.
   `link_pass.rs:450` `perf_guard_unresolved_link_rescan_within_twice_the_link_free_one`
   opens one session at a time because of it; `rust.yml:279-290` runs the
   two guards isolated (`:158-159`); `windows.yml:337-341` skips both by
-  name.
+  name. The bulk test invocations in CI: `rust.yml`'s two nextest sweeps
+  (`:251-256`, censuses, `-E "test(census_) and not
+  test(${ROOT_LISTING_PERF_GUARD}) and not
+  test(${UNRESOLVED_LINK_PERF_GUARD})"`, and `:258-267`, the non-census
+  suite, `-E "not test(census_) and not test(…) and not test(…)"`) each
+  exclude the guards by the job-level names at `:158-159`, and the
+  isolated steps (`:269-290`) select each by `test(=…)` with
+  `--no-tests=fail --test-threads 1`, so a rename fails loudly;
+  `rust.yml:294`'s `cargo test --workspace --doc` runs doctests only;
+  `windows.yml:337-341` (`cargo test -p slate-core --profile ci --locked
+  -- --skip census_ --skip …`) is the Windows lane's one slate-core bulk
+  run and runs no guard in isolation (the Rust lanes cover them). A
+  fact whose name or module path contains a bulk run's filter runs in
+  that bulk run unless the run skips it.
 - **Benches.** `crates/slate-core/benches/scan_bench.rs`:
   `bench_first_open_and_scan` (`:38`), `bench_reopen_with_cache` (`:73`),
   `benches/common/mod.rs` `generate_vault(file_count)` (`:95`).
@@ -204,14 +217,36 @@ alone figure while the newer's is unchanged.
      fact asserts the ratio older-with-newer / older-alone ≤ 1.25 and that
      A's `CACHE_USED` holds between rescans.
 
-   A `perf_guard_` fact joins `windows.yml:337-341`'s `--skip` list and
-   `rust.yml:158-159`'s isolated steps only when it is enabled (the remedy
-   branch); while ignored it runs only by hand, as Verification does.
-   Enabled, it asserts A's `CACHE_USED` holds between rescans, an exact
-   reading the shared LRU makes deterministic only where nothing else
-   runs: it runs alone (by name locally, `rust.yml`'s isolated step) and
-   the local whole-suite run skips every `perf_guard_`, as `windows.yml`
-   does.
+   While ignored (the refuted branch) a `perf_guard_` fact runs only by
+   hand, as Verification does, and touches neither workflow. Enabled (the
+   remedy branch), this chunk's two guards —
+   `session::tests::two_sessions::perf_guard_two_sessions_do_not_evict_each_others_cache`
+   and
+   `session::registry::tests::perf_guard_the_only_session_in_a_process_is_not_slowed_by_the_release`
+   (in `session/registry.rs`'s test module) — time rescans and assert
+   exact `CACHE_USED` readings, which the shared LRU makes deterministic
+   only where nothing else runs, so each runs **only alone** and **every
+   bulk invocation excludes it**. Their paths contain the `two_sessions`
+   and `registry` filters, so a bare filter run would execute them beside
+   the other facts; and `cargo test --workspace` would too. Locally: the
+   `two_sessions` run, the `registry` run, the whole-core run and the
+   workspace run each pass `-- --skip perf_guard_`, and each guard runs
+   by name in its own `--release` invocation. In CI: `rust.yml`'s job
+   `env:` (`:157-159`) gains `TWO_SESSIONS_PERF_GUARD:
+   session::tests::two_sessions::perf_guard_two_sessions_do_not_evict_each_others_cache`
+   and `ONLY_SESSION_RELEASE_PERF_GUARD:
+   session::registry::tests::perf_guard_the_only_session_in_a_process_is_not_slowed_by_the_release`;
+   both nextest sweeps' filtersets (`:254-256` and `:265-267`) append
+   `and not test(${TWO_SESSIONS_PERF_GUARD}) and not
+   test(${ONLY_SESSION_RELEASE_PERF_GUARD})`; two isolated steps in the
+   `:269-290` form are added (`cargo nextest run --workspace
+   --cargo-profile ci --locked --no-tests=fail --test-threads 1 -E
+   "test(=${TWO_SESSIONS_PERF_GUARD})"`, and the same for
+   `ONLY_SESSION_RELEASE_PERF_GUARD`); and `windows.yml:337-341` gains
+   `--skip perf_guard_two_sessions_do_not_evict_each_others_cache` and
+   `--skip perf_guard_the_only_session_in_a_process_is_not_slowed_by_the_release`.
+   `rust.yml:294` (doctests) and `windows.yml:346` (`slate-cli`) run no
+   slate-core unit test and need nothing.
 4. **The remedy, conditional (WD21), with its own scheduler.** If the
    counters prove the shared LRU:
    - **One way to each connection, recording when its use ENDS.** An
@@ -333,7 +368,7 @@ alone figure while the newer's is unchanged.
 | `benches/two_sessions_bench.rs` compiles under `cargo bench --workspace --no-run` | the bench target builds | drop the `[[bench]]` entry |
 | `two_sessions.rs`: `db_cache_status_reads_this_connections_counters` | session A after a scan: `used > 0`, `miss > 0`; a repeated identical query raises A's `hit`; `worker` is `None` until the worker connection opens in the shared worker slot (through `open_worker_connection_for_tests()`) and `Some` after. Nothing here compares two connections' `used`: that check is the child's (next row), where no parallel test shares the LRU | report the main connection's counters as `worker` before it opens (`Some` too early); reading the process-wide `sqlite3_status64(SQLITE_STATUS_MEMORY_USED)` as `used` is killed by the child's untouched-connection checks |
 | `process_cache_status_reads_the_process_counters` (parent) with `process_cache_status_child` (child, new) | the parent runs the child alone in its own process through `run_alone` and asserts exit 0. The child, with sessions A and B open and nothing else in the process: readings `a0`, `b0`, `p0`; B allocates the `wb31_pad` temp table (≥ 8 MiB) → `a1.used == a0.used`, `b1.used - b0.used ≥ 8 MiB`, and both `p1.memory_used - p0.memory_used` and `p1.pagecache_overflow - p0.pagecache_overflow` ≥ `(b1.used - b0.used) / 2`; then A allocates the same → `b2.used == b1.used`, `a2.used - a1.used ≥ 8 MiB`, and both process deltas ≥ `(a2.used - a1.used) / 2` | make `process_cache_status` a per-connection reading — `sqlite3_db_status(SQLITE_DBSTATUS_CACHE_USED)` of A's main connection (the round-7 mutation), or of B's — and the step in which that connection is untouched reads a flat process value; or read `SQLITE_STATUS_PAGECACHE_USED` (the configured-buffer counter, zero here) for `pagecache_overflow`, which stays flat in both steps |
-| `perf_guard_two_sessions_do_not_evict_each_others_cache` (`#[ignore]` until the remedy; then enabled) | ratio older-with-newer / older-alone ≤ 1.25; A's `used` holds between rescans | (remedy branch) remove the release |
+| `perf_guard_two_sessions_do_not_evict_each_others_cache` (`two_sessions.rs`; `#[ignore]` until the remedy; then enabled, and run only alone: every bulk run skips `perf_guard_`) | ratio older-with-newer / older-alone ≤ 1.25; A's `used` holds between rescans | (remedy branch) remove the release |
 
 **Remedy only (they ship with the remedy, and their Verification lines
 run only when it did):**
@@ -348,7 +383,7 @@ run only when it did):**
 | `a_held_connection_is_never_released_under_its_user` (parent, `run_alone`) with `a_held_connection_is_never_released_under_its_user_child` (new; the body) | in the child: while the fact holds A's connection through `lock()` past the interval, the release skips A (`try_lock_without_activity` is `None`), and A's `used` is unchanged when the guard drops | make the release path block on `lock()` instead |
 | `a_long_operation_earns_a_full_idle_interval_after_it_releases_its_connection` (parent, `run_alone`) with `a_long_operation_earns_a_full_idle_interval_after_it_releases_its_connection_child` (new; the body) | in the child, deterministic, on the pinned clock (`set_test_clock_ms`, reset to `None` in a drop guard; no sleeps, no waits): two opted-in sessions A and B with `idle_cache_release_ms` = I = 1 000, both scanned at clock 0, A's compactor connection opened through `VaultSession::open_worker_connection_for_tests()` (step 1's seam). Three parts, each at a fresh base T (0, 10 I, 20 I), each re-warming the slot it tests with a query at T and recording its `used`. (a) Hold `A.conn.lock()` from T to T + 5 I, running a `release_pass()` at T + 3 I under the hold; after the guard drops at T + 5 I, A's main `used` still equals the recorded value; passes at T + 5 I and T + 6 I − 1 leave it unchanged, and a pass at T + 6 I drops it to at most a tenth. (b) The same through A's worker slot `lock()`, read through `db_cache_status().worker`. (c) Hold `A.conn.activity()` (no lock) from T to T + 5 I, the pass at T + 3 I under it: the same outcomes on A's main `used`. Counters are read only while the fact holds no guard (a read under its own guard would wait on itself), and reading them never moves a deadline (`cache_counters` does not stamp) | stamp only when a guard is taken (round 6's design) → (a) releases at T + 5 I, right after the drop; the worker slot's guard without the drop stamp → (b) releases at T + 5 I; `ActivityGuard` stamping only when created → (c) releases at T + 5 I; the pass ignoring `is_active()` → (c) releases at T + 3 I |
 | `only_the_release_path_locks_without_recording_activity` (census) | in `src`, `try_lock_without_activity(` appears only in `session/conn_slot.rs` (its definition) and `session/registry.rs` (its callers: `release_pass` and `release_idle_cache`'s step); every other path to either connection is a `ConnSlot` method whose guard stamps when taken and when dropped, which the private `inner` field enforces at compile time; `cache_counters` returns numbers, never a guard | call `try_lock_without_activity` from a public read |
-| `perf_guard_the_only_session_in_a_process_is_not_slowed_by_the_release` | alone-with-registry / alone ≤ 1.10 | release on every tick |
+| `registry.rs`: `perf_guard_the_only_session_in_a_process_is_not_slowed_by_the_release` (run only alone: every bulk run skips `perf_guard_`) | alone-with-registry / alone ≤ 1.10 | release on every tick |
 | uniffi: `release_idle_cache_is_additive` | the method exists on the binding and a call on an open session returns | drop the export |
 
 Each parent's child is a no-op in the ordinary suite (`is_alone_child`
@@ -371,10 +406,13 @@ facts is a bounded wait whose result is asserted, released in `finally`.
   (#1484)" entry in the PR 20.0 entry's form (`:1233-1250`), with the
   per-connection counter table and the before/after if the remedy ships;
   amend `:1292-1296` with a pointer.
-- `Cargo.toml` `[[bench]]` entry. Remedy branch only:
-  `windows.yml:337-341`'s `--skip` list and `rust.yml:158-159`,
-  `:269-290`'s isolated steps gain the two enabled guards; in the refuted
-  branch the ignored guard touches neither file.
+- `Cargo.toml` `[[bench]]` entry. Remedy branch only, for each of the
+  two enabled guards: a `rust.yml` job `env:` name beside `:158-159`
+  (`TWO_SESSIONS_PERF_GUARD`, `ONLY_SESSION_RELEASE_PERF_GUARD`), an
+  `and not test(${…})` clause in both nextest sweeps (`:254-256`,
+  `:265-267`), an isolated step in the `:269-290` form, and a `--skip`
+  by name in `windows.yml:337-341`; in the refuted branch the ignored
+  guard touches neither file.
 - FFI doc for `release_idle_cache()` if it ships (`swift-tests.yml`
   compile).
 - Issue: `Refs #1484` with the measurements; WB-0 files the mac follow-up;
@@ -406,7 +444,7 @@ $remedy = Test-Path 'crates/slate-core/src/session/registry.rs'
 
 # always on, both branches:
 Assert-Facts 'slate-core' 'two_sessions' @('db_cache_status_reads_this_connections_counters', 'process_cache_status_reads_the_process_counters', 'process_cache_status_child')
-cargo test -p slate-core --locked two_sessions; Assert-Ok 'two_sessions'   # each parent spawns its child alone in its own process (run_alone); unless SLATE_WB31_CHILD names it, a child is a no-op here
+cargo test -p slate-core --locked two_sessions -- --skip perf_guard_; Assert-Ok 'two_sessions'   # each parent spawns its child alone in its own process (run_alone); unless SLATE_WB31_CHILD names it, a child is a no-op here; the enabled guard's path contains two_sessions, so the bulk run skips it and it runs alone below
 $guard = 'perf_guard_two_sessions_do_not_evict_each_others_cache'
 if (-not $remedy) {
     # the guard is still ignored: run it by hand, record its ratio and exit code as data (not a gate; a Windows run that does not reproduce closes nothing)
@@ -419,10 +457,18 @@ if (-not $remedy) {
     Assert-Facts 'slate-core' 'two_sessions' $remedyFacts   # they ran in the two_sessions run above
     $alone = @('a_lone_session_is_never_released', 'a_direct_lock_public_read_resets_the_idle_deadline', 'a_held_connection_is_never_released_under_its_user', 'a_long_operation_earns_a_full_idle_interval_after_it_releases_its_connection')
     Assert-Facts 'slate-core' 'registry' (@('the_release_thread_starts_with_the_second_session_and_stops_with_the_last', 'only_the_release_path_locks_without_recording_activity') + $alone + @($alone | ForEach-Object { "${_}_child" }))
-    cargo test -p slate-core --locked registry; Assert-Ok 'registry'
-    foreach ($perf in $guard, 'perf_guard_the_only_session_in_a_process_is_not_slowed_by_the_release') {
+    cargo test -p slate-core --locked registry -- --skip perf_guard_; Assert-Ok 'registry'   # the second guard lives in registry.rs's tests: alone below, never in this bulk run
+    $guards = [ordered]@{ 'TWO_SESSIONS_PERF_GUARD' = $guard; 'ONLY_SESSION_RELEASE_PERF_GUARD' = 'perf_guard_the_only_session_in_a_process_is_not_slowed_by_the_release' }
+    foreach ($name in $guards.Keys) {
+        $perf = $guards[$name]
         Assert-Facts 'slate-core' $perf @($perf)
-        cargo test -p slate-core --locked --release $perf; Assert-Ok $perf
+        cargo test -p slate-core --locked --release $perf -- --test-threads=1; Assert-Ok $perf   # alone: the filter is the guard's own name
+        # CI excludes it from every bulk run and isolates it (design item 3):
+        $rust = Get-Content -Raw .github/workflows/rust.yml
+        if (-not $rust.Contains("${name}: session::")) { throw "rust.yml defines no $name" }
+        if (([regex]::Matches($rust, [regex]::Escape("and not test(`${$name})"))).Count -ne 2) { throw "rust.yml's two nextest sweeps do not both exclude $name" }
+        if (([regex]::Matches($rust, [regex]::Escape("-E `"test(=`${$name})`""))).Count -ne 1) { throw "rust.yml has no isolated step for $name" }
+        if (-not (Get-Content -Raw .github/workflows/windows.yml).Contains("--skip $perf")) { throw "windows.yml does not skip $perf" }
     }
     Assert-Facts 'slate-uniffi' 'release_idle_cache' @('release_idle_cache_is_additive')
     cargo test -p slate-uniffi --locked release_idle_cache; Assert-Ok 'uniffi release_idle_cache'
@@ -430,7 +476,7 @@ if (-not $remedy) {
 cargo test -p slate-core --locked --no-fail-fast -- --skip perf_guard_; Assert-Ok 'the whole core suite'   # every perf_guard_ runs alone (WB-31's by name above; the two existing ones in rust.yml's isolated steps; windows.yml:337-341 skips them by name), so the whole-suite run holds no timing or exact-cache reading
 cargo fmt --all -- --check; Assert-Ok 'fmt'
 cargo clippy --all-targets --workspace -- -D warnings; Assert-Ok 'clippy'
-cargo test --workspace --locked; Assert-Ok 'workspace tests'
+cargo test --workspace --locked -- --skip perf_guard_; Assert-Ok 'workspace tests'   # the workspace run re-runs every enabled guard otherwise; they ran alone above
 cargo bench --workspace --no-run; Assert-Ok 'bench compile'
 & "$env:ProgramFiles\Git\bin\bash.exe" scripts/check-license-headers.sh; Assert-Ok 'licence headers'   # Git Bash by full path: a bare `bash` in PowerShell here resolves to WSL's C:\WINDOWS\system32\bash.exe
 ```
@@ -444,7 +490,8 @@ the process its parent starts, so the whole-suite run executes each
 child as a no-op and each parent's body in a process of its own. No C#
 changes (the FFI method is additive; bindings regenerate in CI).
 Mutation run per row, locally. CI: `rust.yml` (bench-compile, tests, and
-— remedy branch — the two guards isolated), `windows.yml` rust-tests
+— remedy branch — the two guards excluded from both nextest sweeps by
+name and run in their own isolated steps), `windows.yml` rust-tests
 (the guards skipped by name once enabled); `swift-tests.yml` only if the
 FFI method ships. AT: none.
 
@@ -479,8 +526,13 @@ FFI method ships. AT: none.
       `a_held_connection_is_never_released_under_its_user`,
       `a_long_operation_earns_a_full_idle_interval_after_it_releases_its_connection`)
       runs its body in its `_child` alone through `run_alone`, both
-      halves discovered by name, and the local whole-suite run skips
-      every `perf_guard_`; WB-0 files the mac follow-up.
+      halves discovered by name; each enabled guard runs only alone —
+      every local bulk run (the `two_sessions` and `registry` filters,
+      the whole core suite, `cargo test --workspace`) passes `-- --skip
+      perf_guard_`, `rust.yml`'s two nextest sweeps exclude each by its
+      job `env:` name and an isolated step runs each, and
+      `windows.yml:337-341` skips each by name (the Verification block's
+      workflow checks pass); WB-0 files the mac follow-up.
 - [ ] If refuted: no remedy ships (no `ConnSlot`, registry or FFI); the
       guard stays ignored with its measurement; the issue stays open with
       the numbers.
@@ -617,9 +669,11 @@ Always on, both branches:
   `pagecache_overflow` stays flat; the process-wide `MEMORY_USED`
   reported as `db_cache_status`'s `used` moves the untouched
   connection's reading].
-- `perf_guard_two_sessions_do_not_evict_each_others_cache`: ignored with
-  its measured ratio until the remedy; then ratio ≤ 1.25 and A's `used`
-  held [remove the release].
+- `perf_guard_two_sessions_do_not_evict_each_others_cache`
+  (`two_sessions.rs`): ignored with its measured ratio until the remedy;
+  then ratio ≤ 1.25 and A's `used` held, run only alone — its path
+  contains `two_sessions`, so every bulk run skips `perf_guard_` [remove
+  the release].
 
 Remedy only. Each fact below that asserts an exact `used` reading is a
 parent over a child of the same path plus `_child` (new), run through
@@ -672,21 +726,36 @@ others stay in the ordinary suite.
   `registry.rs` (`release_pass` and `release_idle_cache`'s step); every
   other door is a stamping guard; `cache_counters` returns numbers
   [call it from a public read].
-- `perf_guard_the_only_session_in_a_process_is_not_slowed_by_the_release`:
-  ≤ 1.10 [release every tick].
+- `perf_guard_the_only_session_in_a_process_is_not_slowed_by_the_release`
+  (`registry.rs`'s tests, run only alone; the `registry` bulk run skips
+  `perf_guard_`): ≤ 1.10 [release every tick].
 - uniffi `release_idle_cache_is_additive` [drop the export].
 
 Registers: `BENCHMARKS.md` (the WB-31 entry with the counter table, and
-the `:1292-1296` pointer), `Cargo.toml`; in the remedy branch only,
-`windows.yml:337-341`'s skip list and `rust.yml:158-159`/`:269-290`'s
-isolated steps for the two enabled guards, and the FFI doc. Not
-delivered: the macOS measurement (WB-0's follow-up). Done when the
-Verification block runs clean in PowerShell — the `build.rs` line
-recorded, every required fact discovered by name (the process-counter
-child and, in the remedy branch, the five exact-cache children
-included), the whole core suite run with `-- --skip perf_guard_` (every
-perf guard runs alone: WB-31's by name, the existing two in `rust.yml`'s
-isolated steps), the license-header check run through Git Bash by full
+the `:1292-1296` pointer), `Cargo.toml`; in the remedy branch only, for
+each enabled guard (`perf_guard_two_sessions_do_not_evict_each_others_cache`
+in `session/tests/two_sessions.rs`,
+`perf_guard_the_only_session_in_a_process_is_not_slowed_by_the_release`
+in `session/registry.rs`'s tests): a `rust.yml` job `env:` name beside
+`:158-159` (`TWO_SESSIONS_PERF_GUARD`, `ONLY_SESSION_RELEASE_PERF_GUARD`,
+each the guard's full test path), an `and not test(${…})` clause in both
+nextest sweeps (`:254-256`, `:265-267`), an isolated step in the
+`:269-290` form (`--no-tests=fail --test-threads 1 -E "test(=${…})"`),
+and a `--skip` by name in `windows.yml:337-341`'s slate-core run
+(`rust.yml:294`'s doctests and `windows.yml:346`'s `slate-cli` run need
+nothing); and the FFI doc. Not delivered: the macOS measurement (WB-0's
+follow-up). Done when the Verification block runs clean in PowerShell —
+the `build.rs` line recorded, every required fact discovered by name
+(the process-counter child and, in the remedy branch, the five
+exact-cache children included), every bulk run — `cargo test -p
+slate-core --locked two_sessions`, (remedy) `… registry`, the whole core
+suite and `cargo test --workspace --locked` — passing `-- --skip
+perf_guard_`, because both guards' paths contain those filters and the
+workspace run reruns every enabled guard (each guard runs alone instead:
+WB-31's two by name with `--release`, the existing two in `rust.yml`'s
+isolated steps), the block's workflow checks finding each enabled guard
+excluded from both `rust.yml` sweeps, isolated once, and skipped in
+`windows.yml`, the license-header check run through Git Bash by full
 path (`& "$env:ProgramFiles\Git\bin\bash.exe"`; a bare `bash` here is
 WSL), every command's
 `$LASTEXITCODE` 0, the remedy-only lines run exactly when

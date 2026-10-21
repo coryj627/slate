@@ -127,7 +127,7 @@ Verified against the worktree; the plan's lines hold.
   TrashWriteFence)` at `:15067` fires **before** `validate_item_cancellable`
   at `:15069-15073`, so that point models a pre-validation failure, not a
   replacement after validation; `self.provider.delete(&plan.item.path)`
-  at `:15075`; buckets `trashed` / `untrashed` / `unknown` (`:15117`,
+  at `:15076`; buckets `trashed` / `untrashed` / `unknown` (`:15117`,
   `:15136`, `:15396-15421`). `BatchFaultPoint` (`session.rs:12920-12934`)
   has no point between validation and the handoff. FFI records
   (`slate-uniffi/src/lib.rs:3158-3183`): `BatchTrashState`,
@@ -135,6 +135,86 @@ Verified against the worktree; the plan's lines hold.
   trashed: Vec<StructuralBatchItem>, untrashed, unknown,
   bookkeeping_failures, requires_rescan }`; `BatchItemFailure` /
   `BatchFailureStage` (`:3108-3125`). FFI endpoints `:1083-1138`.
+- **The single-delete signatures — every one `Result<(), VaultError>` on
+  main.** Session (`session.rs`): `pub fn delete_file(&self, path: &str)`
+  (`:16073`), `pub fn delete_file_staged(&self, path: &str, token: u64)`
+  (`:16077`), `pub fn delete_file_staged_cancellable(&self, path: &str,
+  token: u64, cancel: &CancelToken)` (`:16081-16088`) and `fn
+  delete_file_checked(&self, path: &str, token: Option<u64>, cancel:
+  &CancelToken)` (`:16090-16221`; its revalidation `:16156` and
+  `provider.delete` `:16159-16161` sit inside the
+  `with_structural_tx_cancellable` closure opened at `:16154`, which
+  returns `journal_append`'s result, so anything the delete reports
+  leaves the closure through a captured local, as `recreated` does);
+  the folder twins `pub fn delete_folder(&self, path: &str)` (`:16225`),
+  `pub fn delete_folder_staged(&self, path: &str, token: u64)` (`:16229`),
+  `pub fn delete_folder_staged_cancellable(&self, path: &str, token: u64,
+  cancel: &CancelToken)` (`:16233-16240`) and `fn
+  delete_folder_checked(&self, path: &str, token: Option<u64>, cancel:
+  &CancelToken)` (`:16242-16374`; revalidation `:16284`, delete
+  `:16287-16289`). FFI (`slate-uniffi/src/lib.rs`): `pub fn
+  delete_folder(&self, path: String)` (`:1078-1080`), `pub fn
+  delete_file_staged_cancellable(&self, path: String, token: u64, cancel:
+  Arc<CancelToken>)` (`:1099-1108`), `pub fn
+  delete_folder_staged_cancellable(&self, path: String, token: u64,
+  cancel: Arc<CancelToken>)` (`:1110-1119`), `pub fn
+  delete_file_staged(&self, path: String, token: u64)` (`:1138-1140`),
+  `pub fn delete_folder_staged(&self, path: String, token: u64)`
+  (`:1142-1144`), `pub fn delete_file(&self, path: String)`
+  (`:1170-1172`). WB-24's refused-kind branch returns `TrashOutcome` from
+  `delete_file_checked` / `delete_folder_checked` and the staged FFI
+  wrappers only; its all-kinds-accepted branch changes none of the
+  fourteen and leaves the model to this chunk.
+- **Who compiles against them.** Swift production:
+  `AppState.swift:1697-1704`, the `cancellableSingleTrashRunner`, whose
+  `Task.detached` body calls `deleteFolderStagedCancellable` (`:1700`)
+  and `deleteFileStagedCancellable` (`:1702`) as statements; its type
+  `CancellableSingleTrashRunner` (`:1667-1668`) returns `Void`, and its
+  eight test overrides (`FileTreeMultiSelectTests.swift:4577`, `:4616`,
+  `:4650`, `:4685`, `:4717`, `:4730`, `VaultRescanTests+Watcher.swift:331`,
+  `VaultRescanTests.swift:904`) never call the binding. Swift tests that
+  call a wrapper as a statement: `CanvasNavigatorTests.swift:1381`,
+  `HistoryPanelTests.swift:504`, `:524`, `:956`, `:1050`, `:1140`,
+  `:1161`, `:1375`, `MutationHarnessTests.swift:322`,
+  `ScratchTrashCensusTests.swift:111`,
+  `StructuralCreationGateTests.swift:167`,
+  `StructuralUndoTests.swift:1080`,
+  `VaultRescanTests+ChangeFeed.swift:47`, `:335`; inside
+  `XCTAssertThrowsError`'s generic autoclosure:
+  `FileTreeMultiSelectTests.swift:4439`, `:4605`, `:4608`. UniFFI
+  0.31.2's Swift template (`macros.swift`'s `func_decl`) emits no
+  `@discardableResult`, so a wrapper that returns a value, called as a
+  statement, is an unused-result warning (not an error:
+  `apps/slate-mac/Package.swift` sets no `-warnings-as-errors`). C#:
+  production `FilesSidebarViewModel.cs:1846-1847` (statements in the
+  `RunTrashWorkAsync` lambda, which returns `true`) and `:1940`
+  (`DeleteFolderNote`: the unstaged `DeleteFile` through
+  `TryRunSessionWork(Action)`, then "Deleted the {name} folder note.");
+  tests `Censuses/ScratchTrashCensus.cs:79`, `FileManagementTests.cs:641`,
+  `HistoryPanelTests.cs:85`, `PumpedSaveReentrancyTests.cs:1485`,
+  `RescanTests.cs:1736`, `:2305`, and
+  `tools/ParityHarness/MutationHarness.cs:335` (`ExecuteVoid(Action)`) —
+  each a statement or an expression lambda C# accepts as an `Action`
+  whatever the call returns. Core's callers (`vault/test_trash_census.rs:145`
+  and the session tests) take `.unwrap()` or `?` and compile unchanged.
+- **No replacement window a launched app can open.**
+  `batch_trash_staged_cancellable` (`session.rs:14951-14958`), the batch
+  entry both hosts call, always passes `&NoStructuralBatchFaults` to the
+  private `batch_trash_checked`, so no `BatchFaultPoint` — a new
+  `AfterTrashValidation` included — fires outside core's own tests, and
+  the single deletes have no fault hook at all. The precedent for a seam
+  any build can trip is `session.rs:4371` and `:4386`
+  (`SLATE_TEST_SWEEP_AFTER_INTENT`, `SLATE_TEST_COMMIT_AFTER_INTENT`: an
+  environment variable read with `var_os` in every build, firing for a
+  path that contains its value), which WB-28 follows for
+  `SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED` and
+  `SLATE_TEST_ROOT_FILE_ID_UNAVAILABLE`, whose NVDA spot check sets the
+  variable in a PowerShell window and starts the Release
+  `SlateWindows.exe` from that window. WB-18 (W6, on `main` before this
+  chunk) puts every `SLATE_TEST_*` a `session/tests` fact sets behind its
+  `FaultGuard` (`fault_guard()`, then `_env.set`), and its census
+  `no_test_sets_a_fault_variable_outside_the_guard` fails on a bare
+  `set_var("SLATE_TEST_…")` there.
 - **Mac consumers of the report (why `trashed` keeps its shape).**
   Production: `AppState.swift:1209-1286` (the batch sentences over
   `report.trashed.count`), `:1357`, `:1386` (`preview.append(contentsOf:
@@ -317,7 +397,7 @@ consumes its contract, §2.3).
   `VaultProvider::delete_confirmed(&self, relative: &str, confirmed:
   &ConfirmedItem) -> Result<TrashOutcome, VaultError>` (new; the default
   body calls `delete` and returns its outcome). `delete_file_checked`,
-  `delete_folder_checked` and the batch loop (`:15075`) call it when a
+  `delete_folder_checked` and the batch loop (`:15076`) call it when a
   confirmation exists, `delete` otherwise.
 - **One shared verifier, every platform.**
   `trash_snapshot::verify_destination(dest: &Path, confirmed:
@@ -375,6 +455,69 @@ consumes its contract, §2.3).
   `every_provider_but_windows_reports_unverifiable`, this PR narrows it
   to `a_trash_that_reports_no_destination_is_unverifiable` (a `ScratchTrash`
   with destinations now confirms on every platform).
+- **The single delete returns its outcome through both bindings,
+  whatever WB-24 shipped.** The end state is fixed, and this PR changes
+  whichever of the fourteen still return `()` — all of them after WB-24's
+  all-kinds-accepted branch; the four public session wrappers and the
+  unstaged FFI `delete_file` / `delete_folder` after its refused-kind
+  branch. Every one returns `Result<TrashOutcome, VaultError>` with its
+  parameters unchanged: session `delete_file`, `delete_file_staged`,
+  `delete_file_staged_cancellable`, `delete_file_checked`,
+  `delete_folder`, `delete_folder_staged`,
+  `delete_folder_staged_cancellable`, `delete_folder_checked`; FFI
+  `delete_file`, `delete_folder`, `delete_file_staged`,
+  `delete_folder_staged`, `delete_file_staged_cancellable`,
+  `delete_folder_staged_cancellable`, each `Ok(self.inner.…(…)?.into())`
+  through the `uniffi::Enum` mirror of `TrashOutcome` (added here with
+  `TrashedOutcome` if WB-24 did not). In `*_checked`, the outcome of
+  `delete_confirmed` (staged) or `delete` (unstaged) is captured in a
+  local that the transaction closure sets, as it sets `recreated`, and is
+  returned after the commit; every error path is unchanged. Consumers:
+  the mac production runner's two calls (`AppState.swift:1700`, `:1702`)
+  become `_ = try …` — `CancellableSingleTrashRunner` stays `-> Void`
+  (mac ignores the outcome until PR 41) and its eight test overrides are
+  untouched — and the fourteen Swift test statements listed under
+  Current state become `_ = try …`, so the mac build gains no
+  unused-result warning; the three `XCTAssertThrowsError` sites compile
+  unchanged. These are blind edits, compiled and run by the mac lane's
+  `swift-tests.yml` on the combined head. Every C# call site compiles
+  unchanged, and Part 1 changes no Windows sentence; Part 2 consumes the
+  outcome at `FilesSidebarViewModel.cs:1846-1847`. The folder-note
+  delete (`:1940`) keeps "Deleted the {name} folder note.": it stages
+  nothing, so its outcome is always the unconfirmed `Unverifiable {
+  detail: "nothing was confirmed before the move" }`, the legacy rule's
+  case.
+- **A replacement window any build can open (the field pass's
+  trigger).** `SLATE_TEST_TRASH_REPLACE_AFTER_VALIDATION` (new), read with
+  `std::env::var_os` in every build — the `session.rs:4371` precedent,
+  not `#[cfg(test)]` — so a Release `SlateWindows.exe` started from a
+  PowerShell window that set it sees it. One new private helper,
+  `VaultSession::replace_after_trash_validation_for_diagnostics(&self,
+  path: &str, is_directory: bool)`, is called at exactly three places,
+  each strictly after the item's successful `validate_item_cancellable`
+  and before its handoff, inside the branch that holds a confirmation:
+  `delete_file_checked` (after `:16156`, before the delete at
+  `:16159-16161`), `delete_folder_checked` (after `:16284`, before
+  `:16287-16289`) and the batch loop (after `:15069-15073`, before
+  `:15076`, beside `faults.check(BatchFaultPoint::AfterTrashValidation)`).
+  When the variable is set, non-empty, and the item's vault-relative path
+  contains its value, the helper replaces the item: a file is rewritten
+  through `self.provider.write_file(path, …)` with its own bytes
+  (`read_file`) followed by the line `<!-- replaced after validation -->`,
+  so its length and modification time change (and its file id too, where
+  the write is an atomic replace); a folder gains the child
+  `replaced-after-validation.md`. What reaches the Trash is then not the
+  confirmed item, so a verifying provider reports `Mismatch` — the
+  single-item `TrashMismatch` sentence, or the batch's mismatch clause.
+  It is best-effort: a failed read or write is ignored, the item verifies
+  `Confirmed`, and the facts and the field step read that as a failure.
+  An unstaged delete never reaches it (nothing was validated). Slate never
+  sets the variable; unset, the helper is one `var_os` read. The
+  variable joins WB-18's `FAULT_VARIABLES` in `session/tests/common.rs`
+  and the literal list of WB-18's
+  `the_fault_guard_clears_every_fault_variable_on_acquisition`, and the
+  core fact sets it through `fault_guard()`'s `_env.set`, as WB-18's
+  census requires.
 
 ### Part 2 — the Windows back end and the Windows host's sentences
 
@@ -424,9 +567,15 @@ consumes its contract, §2.3).
   what arrived." (`LinkDeletedForGood` is WB-24's.) The Windows host
   speaks these for a single item instead of "Moved …" when the outcome is
   not `Confirmed`; the batch sentences at `FilesSidebarViewModel.cs:2285-2305`
-  append one clause per non-confirmed class with counts ("Moved 3 of 3 to
-  the Recycle Bin; 1 was not the confirmed item; 1 verified by name
-  only."). The mac host ignores `outcomes` until PR 41.
+  append one clause per non-confirmed class with counts to
+  `BatchTrashSummary`'s `Partial` sentence, whose prefix is main's
+  "Moved {k} of {n} items to the Recycle Bin" (`:2312-2313`): "Moved 3 of
+  3 items to the Recycle Bin; 1 was not the confirmed item; 1 verified by
+  name only." The single-item sentence replaces "Moved {name} to the
+  Recycle Bin." at `:1869`, chosen from the outcome that
+  `DeleteFileStagedCancellable` / `DeleteFolderStagedCancellable` return
+  at `:1846-1847` (the `RunTrashWorkAsync` lambda returns it instead of
+  `true`). The mac host ignores `outcomes` until PR 41.
 
 Deliberately not changed: the inventory token protocol; the macOS back
 end and the mac host (PR 41, which flips macOS `reports_destination` and
@@ -440,9 +589,10 @@ Where they live: the session-flow facts in
 `session/tests/trash_confirmation.rs` (filter `trash_confirmation`); the
 identity-mode unit fact in `vault/trash_snapshot.rs` (filter
 `trash_snapshot`); the platform-trash and Windows shell facts in
-`vault/trash_handoff_tests.rs` (filter `trash_handoff`); the uniffi fact
-in `slate-uniffi`. Part 1 ships every row down to the uniffi row plus
-the Swift pin, the FAT32/exFAT fact among them. Part 2 ships the Windows
+`vault/trash_handoff_tests.rs` (filter `trash_handoff`); the uniffi facts
+in `slate-uniffi`'s `mod tests` (filter `trash_outcome`). Part 1 ships
+every row down to the uniffi rows plus the Swift pin, the FAT32/exFAT
+fact and the seam fact among them. Part 2 ships the Windows
 platform and shell facts and the host rows. The FAT32/exFAT fact needs
 two `#[cfg(test)]` helpers:
 - `ScratchTrash::in_folder` (`trash_handoff.rs:518`) becomes
@@ -465,13 +615,14 @@ moves by `rename`.
 | `a_trashed_tree_that_changed_is_reported` | a child added to a folder at `AfterTrashValidation` → `Mismatch` | drop the tree re-walk |
 | `the_root_ctime_is_exempt_from_the_re_observation` | an unchanged folder whose root ctime the move changed → `Confirmed` | include the root's ctime |
 | `strong_needs_ntfs_or_refs_and_a_persistent_root_id` (`#[cfg(windows)]`, unit, `vault/trash_snapshot.rs`'s `mod tests`; WD24 amended) | `identity_mode_for_file_system(name, persistent)` is `Strong` for (`NTFS`, `true`), (`ReFS`, `true`) and (`ntfs`, `true`), and `NameAndMetadataOnly` for (`NTFS`, `false`), (`ReFS`, `false`), (`exFAT`, `true`), (`exFAT`, `false`), (`FAT32`, `true`), (`FAT`, `true`), (`ext4`, `true`) (a name a share's server may report) and (`""`, `true`); and `identity_mode_for` on a held temp directory of the lane's NTFS volume is `Strong` with `true` and `NameAndMetadataOnly` with `false` | `Strong` for every name (→ `exFAT` is `Strong`); ignore the flag (→ (`NTFS`, `false`) is `Strong`); ignore the name (→ (`exFAT`, `true`) is `Strong`); `Strong` unless the name starts with `FAT` (→ `exFAT` is `Strong`); a case-sensitive compare (→ `ntfs` is `NameAndMetadataOnly`) |
-| `a_vault_whose_root_identity_is_weak_is_verified_by_name_and_metadata_even_on_ntfs` (`#[cfg(windows)]`, not gated, `session/tests/trash_confirmation.rs`; WD24 amended) | with WB-28's `SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED` set to the vault's unique folder name (removed in a drop guard), the vault opens through `from_filesystem` with `root_identity()` `persistent == false`; `trash_identity_mode("a.md")` is `NameAndMetadataOnly`, while a sibling vault the value does not match is `Strong`; then, with `FILE_ID_UNAVAILABLE` set on the test thread after the open (cleared in a drop guard), a staged single delete of `a.md` is `VerifiedByNameAndMetadataOnly` with its bytes in the bin | choose the mode by the file system alone (→ `Strong`, and staging fails under the seam); pass `persistent = true` from `FsVaultProvider` whatever the held identity says (→ the same) |
+| `a_vault_whose_root_identity_is_weak_is_verified_by_name_and_metadata_even_on_ntfs` (`#[cfg(windows)]`, not gated, `session/tests/trash_confirmation.rs`; WD24 amended) | with WB-28's `SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED` set to the vault's unique folder name through WB-18's `fault_guard()` (`_env.set`; its `Drop` removes it — a bare `set_var("SLATE_TEST_…")` fails WB-18's census; the name joins `FAULT_VARIABLES` unless WB-28 added it), the vault opens through `from_filesystem` with `root_identity()` `persistent == false`; `trash_identity_mode("a.md")` is `NameAndMetadataOnly`, while a sibling vault the value does not match is `Strong`; then, with `FILE_ID_UNAVAILABLE` set on the test thread after the open (cleared in a drop guard), a staged single delete of `a.md` is `VerifiedByNameAndMetadataOnly` with its bytes in the bin | choose the mode by the file system alone (→ `Strong`, and staging fails under the seam); pass `persistent = true` from `FsVaultProvider` whatever the held identity says (→ the same) |
 | `a_vault_on_a_fat32_or_exfat_volume_opens_stages_and_verifies_by_name_and_metadata_without_reading_an_id` (`#[cfg(windows)] #[ignore = "needs SLATE_WEAK_VOLUME_FAT32 or SLATE_WEAK_VOLUME_EXFAT (WB-27's volume procedure)"]`, `session/tests/trash_confirmation.rs`; WD24 amended; replaces round 6's "ids unavailable end to end" fact) | see the four-step note below the table | refuse the open when `FileIdInfo` fails, as WD24 read before its amendment (→ the open fails on a volume without it); stage the strong snapshot whatever the mode (staging fails with the seam's `ERROR_INVALID_PARAMETER`); read the destination's id on the weak branch (→ `Unverifiable`) |
 | `a_weak_id_volume_is_verified_by_name_and_metadata_without_reading_ids` (gated: `SLATE_WEAK_VOLUME_FAT32`, and `SLATE_TRASH_PROBE_VOLUME` set to the **same** FAT32 volume) | `VerifiedByNameAndMetadataOnly`; and run again with `FILE_ID_UNAVAILABLE` set on the test thread from the moment the vault is open (WB-28's open reads the root's identity, by `FileIdInfo` or the file index), still that variant (no later step reads an id) | hash ids in `NameAndMetadataOnly` |
 | `a_weak_id_volume_mismatch_is_still_detected_by_name_and_metadata` (gated, same volume) | a renamed child at `AfterTrashValidation` → `Mismatch` | compare `item_count` only |
 | `an_unknown_destination_is_unverifiable_never_confirmed` | through `ScratchTrash::reporting_no_destination()`, a staged single delete's outcome is `Unverifiable { detail: "the system Trash reports no destination" }` | map `Unknown` to `Confirmed` |
 | `a_back_end_without_destinations_keeps_todays_batch_state` | a staged three-item batch through `ScratchTrash::reporting_no_destination()` (so `trash_verifies_destination()` is `false`, as macOS's and Linux's back ends are): state `Succeeded` exactly as on main, `trashed` three, `outcomes` three `Unverifiable` | drop the legacy guard (every `Unverifiable` turns the batch `Partial`) |
 | `an_unconfirmed_batch_keeps_todays_batch_state` | an unstaged three-item batch through a verifying `ScratchTrash`: state `Succeeded`, outcomes `Unverifiable { detail: "nothing was confirmed before the move" }` | apply the `Partial` rule without a confirmation |
+| `the_replace_after_validation_seam_trips_single_and_batch_deletes` (Part 1) | on the default test provider (a verifying `ScratchTrash`), holding `let mut _env = fault_guard();` with `_env.set("SLATE_TEST_TRASH_REPLACE_AFTER_VALIDATION", "wb30-seam-")`: a staged `delete_file_staged("wb30-seam-file.md", …)` returns `Mismatch { location: Some(dest), .. }` and the bytes at `dest` end with `<!-- replaced after validation -->`; a staged `delete_folder_staged("wb30-seam-folder", …)` returns `Mismatch` and the bin's folder holds `replaced-after-validation.md`; a staged batch of `plain-a.md` and `wb30-seam-batch.md` has `outcomes` `[Confirmed, Mismatch]` in `trashed` order and state `Partial`; and a staged `delete_file_staged("plain-b.md", …)` (a path the value is not in) returns `Confirmed` | drop the helper's call from `delete_file_checked` (→ the file `Confirmed`), from `delete_folder_checked` (→ the folder `Confirmed`) or from the batch loop (→ `[Confirmed, Confirmed]`); fire whatever the path (→ `plain-b.md` `Mismatch`); call it before `validate_item_cancellable` (→ the delete returns `Err`, a stale confirmation, not `Mismatch`) |
 | `a_deleted_outright_destination_is_reported_as_deleted` | through `ScratchTrash::reporting_deleted_outright()` (new, `#[cfg(test)]`: removes the item and returns `DeletedOutright`) → `DeletedOutright` | map to `Unverifiable` |
 | `every_outcome_variant_reaches_the_batch_report_in_order` | a staged mixed batch on a verifying provider, one item per variant a single vault can produce — `Confirmed`, `Mismatch`, `Unverifiable`, `DeletedOutright`, and on Windows `UnlinkedForGood` when WB-24 kept its unlink branch (a vault has one identity mode, chosen by its file system and its root identity's kind, so `VerifiedByNameAndMetadataOnly`'s batch path is the FAT32/exFAT fact's) — the `Mismatch` item replaced at `AfterTrashValidation`, the `Unverifiable` and `DeletedOutright` items through a `ScratchTrash::scripted(by_path)` (new, `#[cfg(test)]`: per-path destination kinds; it reports destinations) → `outcomes` in `trashed` order, state `Partial` | drop a variant |
 | `the_platform_trash_off_windows_reports_no_destination` (`#[cfg(not(windows))]`, `trash_handoff_tests.rs`) | `PlatformTrash.reports_destination()` is `false` on macOS and Linux, so their batch state stays main's until PR 41 / T4 | return `true` on macOS |
@@ -479,8 +630,9 @@ moves by `rename`.
 | `windows_the_shell_sink_returns_the_recycled_item` (`#[cfg(windows)] #[ignore]`, scratch volume) | `Known(path)` under `$Recycle.Bin\<SID>`, id equal | ignore the sink |
 | `windows_a_bin_disabled_volume_reports_deleted_outright` (`#[ignore]`; the volume's bin disabled by the probe through `NukeOnDelete` under `HKCU\…\Explorer\BitBucket\Volume\<guid>`, restored after) | `DeletedOutright` | treat as confirmed |
 | uniffi: `trash_outcome_and_trashed_outcome_cross_the_ffi` | the enum and record | drop a variant from the binding |
+| uniffi (Part 1, end to end): `a_single_delete_returns_its_trash_outcome_through_the_ffi` (parent) with `single_delete_trash_outcome_child` (new; a no-op unless its variables are set), in the form of `routed_trash_child` / `routing_the_trash_sends_every_later_vaults_deletions_to_the_scratch_bin` (`lib.rs:17455-17532`) | the parent makes `bin` and `vault` (holding `plain-file.md`, `plain-folder/x.md`, `unstaged-file.md`, `unstaged-folder/y.md`, `wb30-replace-file.md`, `wb30-replace-folder/z.md`, `batch-a.md`, `wb30-replace-batch.md`) in a temp dir and runs `current_exe()` with `["tests::single_delete_trash_outcome_child", "--exact", "--nocapture"]` and `SLATE_UNIFFI_OUTCOME_BIN`, `SLATE_UNIFFI_OUTCOME_VAULT` and `SLATE_TEST_TRASH_REPLACE_AFTER_VALIDATION=wb30-replace` set on the child only, asserting its exit is success. The child routes its Trash into `bin` (`route_trash_to_scratch_bin_for_tests`, a verifying `ScratchTrash`), opens `VaultSession::open_filesystem(vault)`, scans, and through the binding, each staged call with its own `stage_trash` token: `delete_file_staged("plain-file.md")` is `TrashOutcome::Confirmed`; `delete_folder_staged("plain-folder")` is `Confirmed`; `delete_file_staged_cancellable("wb30-replace-file.md")` and `delete_folder_staged_cancellable("wb30-replace-folder")` are `Mismatch { .. }`; `delete_file("unstaged-file.md")` and `delete_folder("unstaged-folder")` are `Unverifiable { detail: "nothing was confirmed before the move" }`; `batch_trash_staged` of `batch-a.md` and `wb30-replace-batch.md` has `outcomes` `[Confirmed, Mismatch]` and state `Partial`. slate-core is built here without `cfg(test)`, as in the app, so this also proves the seam reachable outside core's tests | any one wrapper returns a constant (`Unverifiable { detail: "the system Trash reports no destination" }`) instead of core's outcome (→ its assertion fails); `delete_file_checked` returns that constant instead of the captured outcome (→ the file assertions fail); read the variable only under `#[cfg(test)]` (→ the two `Mismatch` assertions and the batch's are `Confirmed`) |
 | Swift (Part 1, `BatchResultPresentationTests.swift`): `testASucceededBatchWhoseOutcomesAreUnverifiableStillSaysMovedToTrash` | a `.succeeded` report with three `trashed` and three `Unverifiable` `outcomes` announces "Moved 3 items to Trash." — main's `.succeeded` sentence (`AppState.swift:1237-1250`); the `trashReport` helper gains an `outcomes:` parameter defaulting to `[]` | announce from `outcomes`, or build the report as `.partial` |
-| Windows (Part 2) `FileManagementTests.AMismatchedTrashSpeaksCoresSentenceNotMoved`, `…ADeletedOutrightTrashSpeaksCoresSentence`, `…AnUnverifiableTrashSpeaksCoresSentence`, `…AWeakIdTrashSaysVerifiedByNameOnly` | the four events, not "Moved …" | speak "Moved …" for every outcome |
+| Windows (Part 2) `FileManagementTests.AMismatchedTrashSpeaksCoresSentenceNotMoved`, `…ADeletedOutrightTrashSpeaksCoresSentence`, `…AnUnverifiableTrashSpeaksCoresSentence`, `…AWeakIdTrashSaysVerifiedByNameOnly` | the four events, not "Moved …"; the mismatch end to end through the real core — the test process's routed scratch bin (a verifying `ScratchTrash`) and `SLATE_TEST_TRASH_REPLACE_AFTER_VALIDATION` set in-process to the fixture note's unique name (cleared in `finally`), so the staged single delete's binding returns `Mismatch` and the host speaks `TrashMismatch` from it | speak "Moved …" for every outcome; ignore the returned outcome (→ the mismatch fact hears "Moved …") |
 | `FileManagementTests.ABatchWithMixedOutcomesSaysEachClassInItsSummary` (Part 2) | the batch sentence's clauses and counts | drop a clause |
 | `A11yCorpusCensus` + mac mirror: the four new rows (Part 2) | each event's corpus row matches its sentence | drop a row |
 | FlaUI `ShellAccessibilityTests.Trash_AVerifiedMoveStillSpeaksMoved` (`ShellAccessibilityTests.Trash.cs`, new partial; Part 2) | the ordinary sentence unchanged after the back-end swap; NVDA log | speak the unverifiable sentence for `Confirmed` |
@@ -525,7 +677,13 @@ named run never passes vacuously):
   `python -I scripts/a11y_trigger_ledger.py --write`.
 - Part 1: the 14 Swift `BatchTrashReport` literals, if WB-24 did not
   already add `outcomes`; `BatchResultPresentationTests.swift`'s new pin
-  and its helper's `outcomes:` parameter.
+  and its helper's `outcomes:` parameter; the sixteen Swift single-delete
+  statements (`AppState.swift:1700`, `:1702` and the fourteen test
+  calls) as `_ = try …`; `SLATE_TEST_TRASH_REPLACE_AFTER_VALIDATION` in
+  WB-18's `FAULT_VARIABLES` (`session/tests/common.rs`) and in the
+  literal list of `the_fault_guard_clears_every_fault_variable_on_acquisition`,
+  and a line for it beside the other `SLATE_TEST_*` diagnostic seams in
+  the PR body (never set by Slate; the field pass's trigger).
 - Part 1: contract 31 FR-8 records that a back end reporting no
   destination keeps main's batch state (the legacy rule) until its host
   migrates — PR 41 for macOS.
@@ -555,7 +713,8 @@ function Assert-Facts([string]$crate, [string]$filter, [string[]]$facts, [switch
 }
 # 1. core (Part 1; Part 2 adds windows_the_platform_trash_reports_destinations)
 $required = [ordered]@{
-    'trash_confirmation' = @('an_ordinary_trash_is_confirmed', 'a_replacement_after_validation_is_reported_not_confirmed', 'an_item_moved_out_of_the_vault_and_back_is_reported', 'a_trashed_tree_that_changed_is_reported', 'the_root_ctime_is_exempt_from_the_re_observation', 'a_vault_whose_root_identity_is_weak_is_verified_by_name_and_metadata_even_on_ntfs', 'an_unknown_destination_is_unverifiable_never_confirmed', 'a_back_end_without_destinations_keeps_todays_batch_state', 'an_unconfirmed_batch_keeps_todays_batch_state', 'a_deleted_outright_destination_is_reported_as_deleted', 'every_outcome_variant_reaches_the_batch_report_in_order')
+    'trash_confirmation' = @('an_ordinary_trash_is_confirmed', 'a_replacement_after_validation_is_reported_not_confirmed', 'an_item_moved_out_of_the_vault_and_back_is_reported', 'a_trashed_tree_that_changed_is_reported', 'the_root_ctime_is_exempt_from_the_re_observation', 'a_vault_whose_root_identity_is_weak_is_verified_by_name_and_metadata_even_on_ntfs', 'an_unknown_destination_is_unverifiable_never_confirmed', 'a_back_end_without_destinations_keeps_todays_batch_state', 'an_unconfirmed_batch_keeps_todays_batch_state', 'a_deleted_outright_destination_is_reported_as_deleted', 'every_outcome_variant_reaches_the_batch_report_in_order', 'the_replace_after_validation_seam_trips_single_and_batch_deletes')
+    'fault_guard'        = @('the_fault_guard_clears_every_fault_variable_on_acquisition', 'no_test_sets_a_fault_variable_outside_the_guard')   # WB-18's guard facts: the new variable is in FAULT_VARIABLES and no fact here sets a SLATE_TEST_* outside the guard
     'trash_handoff'      = @()   # Part 2: 'windows_the_platform_trash_reports_destinations'
 }
 foreach ($filter in $required.Keys) {
@@ -566,8 +725,8 @@ Assert-Facts 'slate-core' 'trash_snapshot' @('strong_needs_ntfs_or_refs_and_a_pe
 cargo test -p slate-core --locked trash_snapshot; Assert-Ok 'trash_snapshot'
 cargo test -p slate-core --locked structural_batch; Assert-Ok 'structural_batch'
 cargo test -p slate-core --locked --no-fail-fast; Assert-Ok 'the whole core suite'
-Assert-Facts 'slate-uniffi' 'trash_outcome' @('trash_outcome_and_trashed_outcome_cross_the_ffi')
-cargo test -p slate-uniffi --locked trash_outcome; Assert-Ok 'uniffi trash_outcome'
+Assert-Facts 'slate-uniffi' 'trash_outcome' @('trash_outcome_and_trashed_outcome_cross_the_ffi', 'a_single_delete_returns_its_trash_outcome_through_the_ffi', 'single_delete_trash_outcome_child')
+cargo test -p slate-uniffi --locked trash_outcome; Assert-Ok 'uniffi trash_outcome'   # the parent runs the child in its own process, where the seam variable is set
 cargo fmt --all -- --check; Assert-Ok 'fmt'
 cargo clippy --all-targets --workspace -- -D warnings; Assert-Ok 'clippy'
 cargo test --workspace --locked; Assert-Ok 'workspace tests'
@@ -626,16 +785,42 @@ foreach ($fact in 'a_weak_id_volume_is_verified_by_name_and_metadata_without_rea
 
 The mac half runs on CI: `swift-tests.yml` compiles the record change
 and runs `BatchResultPresentationTests` (the new pin among them) on the
-combined head. Mutation run per row, locally (the Swift pin's mutation on
-the mac lane's PR run). CI: `windows.yml` (all), `rust.yml` (the
-portable facts and `the_platform_trash_off_windows_reports_no_destination`
+combined head, and compiles Part 1's `_ = try …` edits at the Swift
+single-delete call sites. Mutation run per row, locally (the Swift pin's
+mutation on the mac lane's PR run). CI: `windows.yml` (all), `rust.yml`
+(the portable facts and `the_platform_trash_off_windows_reports_no_destination`
 on Linux), `swift-tests.yml` (green before merge). AT: NVDA full pass per
-§4 rule 4, on Part 2's PR: (1) ordinary single delete — "Moved note to the
-Recycle Bin." unchanged; (2) a batch of three — the summary unchanged;
-(3) the mismatch, provoked with `AfterTrashValidation` in a test build
-launched for the pass — the exact `TrashMismatch` phrase; (4) on the FAT32
-VHD vault — the `TrashVerifiedByNameOnly` phrase; (5) on a bin-disabled
-volume — the `TrashDeletedOutright` phrase. Recorded in the PR body;
+§4 rule 4, on Part 2's PR, with the Release build and NVDA running.
+Launch, once, from one PowerShell window at the repo root, so the app
+inherits the seam variable (`AfterTrashValidation` is a test-only fault
+point that no launched app reaches; the variable is the app-reachable
+seam, read in every build):
+
+```powershell
+dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release; if ($LASTEXITCODE -ne 0) { throw 'build failed' }
+$vault = Join-Path $env:TEMP ("wb30-field-pass-" + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+New-Item -ItemType Directory -Path $vault | Out-Null
+foreach ($name in 'note', 'plain-a', 'plain-b', 'plain-c', 'plain-d', 'plain-e', 'wb30-replace-me', 'wb30-replace-me-in-a-batch') {
+    Set-Content -LiteralPath (Join-Path $vault "$name.md") -Value "# $name"
+}
+$env:SLATE_TEST_TRASH_REPLACE_AFTER_VALIDATION = 'wb30-replace-me'
+& apps/slate-windows/src/SlateWindows/bin/Release/net10.0-windows/SlateWindows.exe $vault
+# after the pass: close Slate, then
+Remove-Item Env:SLATE_TEST_TRASH_REPLACE_AFTER_VALIDATION
+```
+
+In the tree, each selection deleted with Delete (a file takes no prompt): (1)
+`note` alone — "Moved note to the Recycle Bin." unchanged; (2) `plain-a`,
+`plain-b`, `plain-c` together — main's summary unchanged, "Moved 3 items
+to the Recycle Bin."; (3a) the single-item mismatch: `wb30-replace-me`
+alone — "Moved wb30-replace-me to the Recycle Bin, but it was not the
+confirmed item; it is at {location}.", where {location} is the
+`$Recycle.Bin` path the sink reported (recorded verbatim); (3b) the batch
+mismatch: `wb30-replace-me-in-a-batch`, `plain-d` and `plain-e` together
+— "Moved 3 of 3 items to the Recycle Bin; 1 was not the confirmed
+item."; (4) on the FAT32 VHD vault — the `TrashVerifiedByNameOnly`
+phrase; (5) on a bin-disabled volume — the `TrashDeletedOutright`
+phrase. Recorded in the PR body (the NVDA log excerpt per scenario);
 draft until then. Part 1 changes no Windows or mac sentence, so it needs
 no AT pass; its mac state is pinned by the Swift fact and
 `a_back_end_without_destinations_keeps_todays_batch_state`.
@@ -659,9 +844,16 @@ no AT pass; its mac state is pinned by the Swift fact and
       `trash_snapshot_in_mode_cancellable`, `ConfirmedItem` (no strong
       field on the weak variant), `delete_confirmed`, the shared
       `verify_destination` on Unix and Windows, `AfterTrashValidation`,
-      and the legacy batch-state rule; the Swift literals edited if not
-      already, the Swift pin added; mac lane green with mac's successful
-      batch still `Succeeded` and still "Moved {n} to Trash."
+      and the legacy batch-state rule; the fourteen single-delete
+      signatures (eight session methods, six FFI wrappers) returning
+      `Result<TrashOutcome, VaultError>` whatever WB-24 shipped, proven
+      end to end through the binding by the uniffi parent and child; the
+      diagnostic seam `SLATE_TEST_TRASH_REPLACE_AFTER_VALIDATION` at its
+      three call sites, read in every build, in WB-18's
+      `FAULT_VARIABLES`; the Swift literals edited if not already, the
+      Swift single-delete statements `_ = try …`, the Swift pin added;
+      mac lane green with mac's successful batch still `Succeeded` and
+      still "Moved {n} to Trash."
 - [ ] A vault on a FAT32 and on an exFAT volume opens (WB-28's identity
       read, by the file-index fallback where the volume answers no
       `FileIdInfo`) and is staged, revalidated, moved and verified by
@@ -680,7 +872,10 @@ no AT pass; its mac state is pinned by the Swift fact and
       events on both bindings and the Windows host's single and batch
       sentences.
 - [ ] The facts in the Tests table pass, seen failing first, each
-      discovered by name under its filter; NVDA pass recorded on Part 2.
+      discovered by name under its filter; NVDA pass recorded on Part 2,
+      its mismatch scenarios run from one PowerShell window with the seam
+      variable set and the Release app started from it, single and batch
+      phrases recorded.
 - [ ] Registers appended; `Refs #1468`; "not delivered": the macOS Rust
       half, the mac host and flipping macOS's `reports_destination` (PR
       41, with its VoiceOver pass); Linux (T4 deferred).
@@ -716,10 +911,34 @@ renames into its bin at `:580`; `default_trash` `:610`; the host routing
 `:121-141`); `trash_snapshot.rs:1-80` (the Unix `snapshot_at` `:53`);
 `trash_snapshot/windows.rs:20-70`, `:95-133`, `:210-275` (`stamp` fails
 the whole snapshot when `FileIdInfo` fails, `:262`); `provider.rs:95-135`;
-`fs.rs:1745-1760`, `:1905-1915`, `:2268-2320`; `session.rs:12920-12934`,
-`:15040-15140`, `:15396-15425`, `:16073-16110`, `:16225-16240`;
-`windows_entry.rs:612-635`; `uniffi lib.rs:1083-1140`, `:3100-3185`;
-`FilesSidebarViewModel.cs:1840-1872`, `:2280-2306`; `Cargo.toml:112-120`;
+`fs.rs:1745-1760`, `:1905-1915`, `:2268-2320`; `session.rs:4365-4400`
+(the `SLATE_TEST_*` seams any build can trip: `var_os`, path contains the
+value), `:12920-12934`, `:14951-14958` (the hosts' batch entry always
+passes `NoStructuralBatchFaults`, so no fault point reaches a launched
+app), `:15040-15140` (validation `:15069-15073`, handoff `:15076`),
+`:15396-15425`, `:16073-16374` (the eight single-delete methods, every one
+`Result<(), VaultError>` on main: `delete_file(path)` `:16073`,
+`delete_file_staged(path, token)` `:16077`,
+`delete_file_staged_cancellable(path, token, cancel)` `:16081`,
+`delete_file_checked(path, token: Option<u64>, cancel)` `:16090-16221`
+with its revalidation `:16156` and handoff `:16159-16161` inside the
+transaction closure opened at `:16154`, and the folder twins `:16225`,
+`:16229`, `:16233`, `:16242-16374`, revalidation `:16284`, handoff
+`:16287-16289`); `windows_entry.rs:612-635`; `uniffi lib.rs:1078-1172`
+(the six FFI wrappers, every one `Result<(), VaultError>`: `delete_folder`
+`:1078`, `delete_file_staged_cancellable` `:1099`,
+`delete_folder_staged_cancellable` `:1110`, `delete_file_staged`
+`:1138`, `delete_folder_staged` `:1142`, `delete_file` `:1170`),
+`:3100-3185`, `:17455-17532` (the routed-trash child-process form);
+`FilesSidebarViewModel.cs:1818-1872` (the single delete: the staged calls
+at `:1846-1847`, "Moved …" at `:1869`), `:1926-1955` (the unstaged
+folder-note delete, `:1940`), `:2278-2330` (`BatchTrashSummary`; the
+`Partial` prefix "Moved {k} of {n} items to the Recycle Bin" at
+`:2312-2313`); `Cargo.toml:112-120`;
+`AppState.swift:1667-1668`, `:1697-1704` (the mac single-delete runner
+calling `deleteFolderStagedCancellable` / `deleteFileStagedCancellable`
+as statements); WB-18's spec (`FaultGuard`, `FAULT_VARIABLES`, its census
+of `SLATE_TEST_*` set under `session/tests`);
 `AppState.swift:1198-1270` (`.succeeded` says "Moved {n} to Trash.",
 `.partial` "Moved {k} of {n} to Trash."), `:1357`, `:1386`, `:1412`,
 `:20717-20747`, `:21476`; `BatchResultPresentationTests.swift:299-331`,
@@ -787,7 +1006,45 @@ rule: main's state unless the batch ran under a staged confirmation and
 the provider verifies destinations, only then `Partial` for an outcome
 other than `Confirmed`/`VerifiedByNameAndMetadataOnly`. If WB-24 shipped
 `every_provider_but_windows_reports_unverifiable`, narrow it to
-`a_trash_that_reports_no_destination_is_unverifiable`. Part 2: the spike
+`a_trash_that_reports_no_destination_is_unverifiable`. The single delete
+returns its outcome whatever WB-24 shipped (its all-kinds-accepted branch
+changes none of these; its refused-kind branch only `*_checked` and the
+staged FFI wrappers): the eight session methods and six FFI wrappers
+listed above all return `Result<TrashOutcome, VaultError>`, parameters
+unchanged, the FFI through the `uniffi::Enum` mirror (added here with
+`TrashedOutcome` if WB-24 did not); `*_checked` captures the outcome of
+`delete_confirmed` (staged) or `delete` (unstaged) in a local the
+transaction closure sets, as it sets `recreated`. Blind mac edits (the
+mac lane compiles them): `AppState.swift:1700` and `:1702` become `_ =
+try …` (`CancellableSingleTrashRunner` stays `-> Void`, its eight test
+overrides untouched), and so do the fourteen statement calls in
+`CanvasNavigatorTests.swift:1381`, `HistoryPanelTests.swift:504`, `:524`,
+`:956`, `:1050`, `:1140`, `:1161`, `:1375`,
+`MutationHarnessTests.swift:322`, `ScratchTrashCensusTests.swift:111`,
+`StructuralCreationGateTests.swift:167`, `StructuralUndoTests.swift:1080`,
+`VaultRescanTests+ChangeFeed.swift:47`, `:335` (UniFFI's Swift emits no
+`@discardableResult`); `FileTreeMultiSelectTests.swift:4439`, `:4605`,
+`:4608` (inside `XCTAssertThrowsError`) compile unchanged. Every C# call
+site (`FilesSidebarViewModel.cs:1846-1847`, `:1940`;
+`ScratchTrashCensus.cs:79`, `FileManagementTests.cs:641`,
+`HistoryPanelTests.cs:85`, `PumpedSaveReentrancyTests.cs:1485`,
+`RescanTests.cs:1736`, `:2305`; `ParityHarness/MutationHarness.cs:335`)
+compiles unchanged; Part 1 speaks nothing new, and the folder-note delete
+keeps "Deleted the {name} folder note." (unstaged: always the unconfirmed
+`Unverifiable`). The field pass's trigger: the new diagnostic seam
+`SLATE_TEST_TRASH_REPLACE_AFTER_VALIDATION`, read with `var_os` in every
+build (the `:4371` precedent, never `#[cfg(test)]`), through the new
+private `replace_after_trash_validation_for_diagnostics(&self, path:
+&str, is_directory: bool)`, called only after a successful
+`validate_item_cancellable` and before the handoff in
+`delete_file_checked`, `delete_folder_checked` and the batch loop: for a
+set, non-empty value that the item's path contains, a file is rewritten
+through `provider.write_file` with its own bytes plus `<!-- replaced
+after validation -->`, a folder gains `replaced-after-validation.md`, so a
+verifying provider reports `Mismatch` (best-effort; a failed write leaves
+`Confirmed`, which the facts read as failure). It joins WB-18's
+`FAULT_VARIABLES` and the literal list of
+`the_fault_guard_clears_every_fault_variable_on_acquisition`. Part 2: the spike
 pinning `windows` 0.62 with the registry-verified feature set (locked by
 `cargo update -p windows@0.62`, its resolved patch version recorded in
 the commit — never the bare `-p windows`, which cargo refuses as
@@ -799,7 +1056,12 @@ compiling `#[windows::core::implement(IFileOperationProgressSink)]` sink,
 reporting destinations), the four `A11yEvent`s (`TrashMismatch`,
 `TrashVerifiedByNameOnly`, `TrashDeletedOutright`, `TrashUnverifiable`)
 with corpus and census rows, and the Windows host's single and batch
-sentences.
+sentences — the single sentence chosen from the outcome the staged
+wrappers return at `FilesSidebarViewModel.cs:1846-1847` (the
+`RunTrashWorkAsync` lambda returns it instead of `true`), the batch
+clauses appended to `BatchTrashSummary`'s `Partial` sentence ("Moved 3 of
+3 items to the Recycle Bin; 1 was not the confirmed item; 1 verified by
+name only.").
 
 Facts (mutation in brackets), seen failing first:
 - `an_ordinary_trash_is_confirmed` (every platform, ScratchTrash through
@@ -827,7 +1089,9 @@ Facts (mutation in brackets), seen failing first:
 - `a_vault_whose_root_identity_is_weak_is_verified_by_name_and_metadata_even_on_ntfs`
   (Windows, not gated, `session/tests/trash_confirmation.rs`, Part 1):
   with WB-28's `SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED` set to the
-  vault's unique folder name (drop guard), the vault opens with
+  vault's unique folder name through WB-18's `fault_guard()` (`_env.set`,
+  removed by its `Drop`; a bare `set_var` fails WB-18's census; the name
+  joins `FAULT_VARIABLES` unless WB-28 added it), the vault opens with
   `root_identity()` `persistent == false`; `trash_identity_mode("a.md")`
   is `NameAndMetadataOnly` while a sibling vault not matching is
   `Strong`; with `FILE_ID_UNAVAILABLE` set after the open (drop guard), a
@@ -873,6 +1137,19 @@ Facts (mutation in brackets), seen failing first:
   confirmation].
 - `a_deleted_outright_destination_is_reported_as_deleted` [map to
   `Unverifiable`].
+- `the_replace_after_validation_seam_trips_single_and_batch_deletes`
+  (Part 1, `session/tests/trash_confirmation.rs`): holding `let mut _env
+  = fault_guard();` with `_env.set("SLATE_TEST_TRASH_REPLACE_AFTER_VALIDATION",
+  "wb30-seam-")`, on the default verifying `ScratchTrash`: staged
+  `delete_file_staged("wb30-seam-file.md")` → `Mismatch { location:
+  Some(dest) }`, the bytes at `dest` ending with the marker line; staged
+  `delete_folder_staged("wb30-seam-folder")` → `Mismatch`, the bin's
+  folder holding `replaced-after-validation.md`; a staged batch of
+  `plain-a.md` and `wb30-seam-batch.md` → `outcomes` `[Confirmed,
+  Mismatch]`, `Partial`; staged `delete_file_staged("plain-b.md")` →
+  `Confirmed` [drop the call from `delete_file_checked`, from
+  `delete_folder_checked` or from the batch loop; fire for every path;
+  call it before revalidation (→ `Err`, stale)].
 - `every_outcome_variant_reaches_the_batch_report_in_order`: `Confirmed`,
   `Mismatch`, `Unverifiable`, `DeletedOutright` (and `UnlinkedForGood` on
   Windows) in `trashed` order, state `Partial` [drop a variant].
@@ -886,10 +1163,44 @@ Facts (mutation in brackets), seen failing first:
   `DeletedOutright` [treat as confirmed].
 - uniffi `trash_outcome_and_trashed_outcome_cross_the_ffi` [drop a
   variant].
+- uniffi, end to end (Part 1):
+  `a_single_delete_returns_its_trash_outcome_through_the_ffi` (parent)
+  with `single_delete_trash_outcome_child` (new; a no-op unless its
+  variables are set), in `routed_trash_child`'s form
+  (`lib.rs:17455-17532`). The parent makes `bin` and `vault` (holding
+  `plain-file.md`, `plain-folder/x.md`, `unstaged-file.md`,
+  `unstaged-folder/y.md`, `wb30-replace-file.md`,
+  `wb30-replace-folder/z.md`, `batch-a.md`, `wb30-replace-batch.md`),
+  runs `current_exe()` with `["tests::single_delete_trash_outcome_child",
+  "--exact", "--nocapture"]` and, on the child only,
+  `SLATE_UNIFFI_OUTCOME_BIN`, `SLATE_UNIFFI_OUTCOME_VAULT` and
+  `SLATE_TEST_TRASH_REPLACE_AFTER_VALIDATION=wb30-replace`, and asserts
+  success. The child routes its Trash into `bin`, opens
+  `VaultSession::open_filesystem(vault)`, scans, and through the binding
+  (each staged call with its own `stage_trash` token):
+  `delete_file_staged("plain-file.md")` and
+  `delete_folder_staged("plain-folder")` → `TrashOutcome::Confirmed`;
+  `delete_file_staged_cancellable("wb30-replace-file.md")` and
+  `delete_folder_staged_cancellable("wb30-replace-folder")` → `Mismatch`;
+  `delete_file("unstaged-file.md")` and `delete_folder("unstaged-folder")`
+  → `Unverifiable { detail: "nothing was confirmed before the move" }`;
+  `batch_trash_staged` of `batch-a.md`, `wb30-replace-batch.md` →
+  `outcomes` `[Confirmed, Mismatch]`, `Partial`. slate-core is built
+  here without `cfg(test)`, as in the app, so the seam is proven
+  reachable outside core's tests [a wrapper returns a constant
+  `Unverifiable { detail: "the system Trash reports no destination" }`
+  instead of core's outcome; `delete_file_checked` returns that constant
+  instead of the captured one; the seam read only under `#[cfg(test)]`
+  (→ the `Mismatch` assertions read `Confirmed`)].
 - Swift `BatchResultPresentationTests.testASucceededBatchWhoseOutcomesAreUnverifiableStillSaysMovedToTrash`:
   a `.succeeded` report with three `Unverifiable` outcomes says "Moved 3
   items to Trash." [announce from `outcomes`].
-- Part 2 host: `FileManagementTests.AMismatchedTrashSpeaksCoresSentenceNotMoved`,
+- Part 2 host: `FileManagementTests.AMismatchedTrashSpeaksCoresSentenceNotMoved`
+  (end to end through the real core: the routed scratch bin and
+  `SLATE_TEST_TRASH_REPLACE_AFTER_VALIDATION` set in-process to the
+  fixture note's unique name, cleared in `finally`, so the staged single
+  delete's binding returns `Mismatch` and the host speaks `TrashMismatch`
+  [ignore the returned outcome → "Moved …"]),
   `.ADeletedOutrightTrashSpeaksCoresSentence`,
   `.AnUnverifiableTrashSpeaksCoresSentence`,
   `.AWeakIdTrashSaysVerifiedByNameOnly` (the events, not "Moved …"),
@@ -900,7 +1211,9 @@ Facts (mutation in brackets), seen failing first:
 Registers: contract 31 FR-8 (T2 paragraph, the legacy batch-state rule)
 and FR-10 (shared identity), appended; the Trash doc §8 note; Part 2's
 `corpus.json`, both census mirrors, the designations JSON and ledger,
-`w_c_matrix.md`; Part 1's Swift literals and the Swift pin. Not
+`w_c_matrix.md`; Part 1's Swift literals, the sixteen Swift
+single-delete statements as `_ = try …`, the Swift pin, and the seam's
+entry in WB-18's `FAULT_VARIABLES` and its guard fact's literal list. Not
 delivered: the macOS Rust half, the mac host and flipping macOS's
 `reports_destination` (PR 41, with its VoiceOver pass); Linux (T4). Done
 when, per part, the Verification block runs clean in PowerShell — every
@@ -909,7 +1222,25 @@ gated facts run by name with `SLATE_TRASH_PROBE_VOLUME` set to each fact's
 own volume, and Part 1's FAT32/exFAT fact run by name with both of
 WB-27's `SLATE_WEAK_VOLUME_*` variables set and recorded in Part 1's PR
 body — the windows, rust and swift lanes are green (mac's
-successful batch still `Succeeded`), each mutation was run locally, and
-Part 2's five-scenario NVDA pass is in its PR body with `Refs #1468`.
+successful batch still `Succeeded`; the Swift `_ = try …` edits
+compiled), each mutation was run locally, and Part 2's NVDA pass is in
+its PR body with `Refs #1468`. That pass runs from one PowerShell window
+at the repo root: `dotnet build apps/slate-windows/SlateWindows.slnx
+--configuration Release`; a fresh vault folder under `$env:TEMP`, named
+`wb30-field-pass-` and a timestamp, holding `note.md`, `plain-a.md` … `plain-e.md`, `wb30-replace-me.md` and
+`wb30-replace-me-in-a-batch.md`; `$env:SLATE_TEST_TRASH_REPLACE_AFTER_VALIDATION
+= 'wb30-replace-me'`; then
+`& apps/slate-windows/src/SlateWindows/bin/Release/net10.0-windows/SlateWindows.exe
+$vault`, which inherits the variable (removed with `Remove-Item
+Env:SLATE_TEST_TRASH_REPLACE_AFTER_VALIDATION` after Slate closes). The
+phrases, each from Delete in the tree: (1) `note` — "Moved note to the
+Recycle Bin."; (2) `plain-a`, `plain-b`, `plain-c` — "Moved 3 items to the
+Recycle Bin."; (3a) `wb30-replace-me` alone — "Moved wb30-replace-me to
+the Recycle Bin, but it was not the confirmed item; it is at
+{location}." ({location} the sink's `$Recycle.Bin` path, recorded
+verbatim); (3b) `wb30-replace-me-in-a-batch`, `plain-d`, `plain-e` —
+"Moved 3 of 3 items to the Recycle Bin; 1 was not the confirmed item.";
+(4) the FAT32 VHD vault — `TrashVerifiedByNameOnly`; (5) a bin-disabled
+volume — `TrashDeletedOutright`.
 Commit:
 `feat(core,windows): a move to the recycle bin is verified at its destination and reported truthfully`.

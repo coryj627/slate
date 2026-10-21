@@ -12,8 +12,11 @@ Four core facts of locked decision 05 §4 (the memory bound) and §9.3.1
 come true: the index repair for one path, rename planning, and a Bases or
 DQL query that resolves a link each read only the candidate rows their own
 targets name, never a snapshot of every `files` row — the rule #1295 gave
-saves and creates and #1429 gave scans. A Bases lookup that fails is the
-query's error, not an unresolved link. And a fact that panics while holding
+saves and creates and #1429 gave scans. A Bases or DQL link lookup that
+fails fails the query — the public failed result every other query
+failure already returns (`BasesResultSet.error`), whatever position the
+link sat in — never an unresolved link, a cell's error or an
+`Err(VaultError)`. And a fact that panics while holding
 the fault guard fails alone: the guard cannot be poisoned, and the
 fault-seam variables it protects are cleared when the holder unwinds, so
 one real failure never reads as twenty-four.
@@ -87,13 +90,50 @@ guard sites is one short).
   `indexed_paths_in_path_order(self.conn).ok()?` at `:3646` (the comment
   names #1486) and resolves with `crate::resolve_link(…, index.as_ref()?)`.
   `VaultLookup::resolve_link` (`bases/eval.rs:341-344`) returns
-  `Option<String>` with a defaulted `None` body. Callers: `eval.rs:1214`
-  (the `link()` function), `:2251` (DQL inline link fields), `:4791`
-  (`dql_link_page_day`), `engine.rs:538` (an extensionless `Linked`
-  source). `EvalError` (`eval.rs:481-500`) has no lookup-failure variant;
-  `exists_query` (`engine.rs:3581-3596`) maps a SQLite error to
+  `Option<String>` with a defaulted `None` body. Its callers:
+  `eval.rs:1214` (the native `link()` function), `:2251` (`dql_link`'s
+  text arm, the DQL `link()` function), `:4791` (`dql_link_page_day`),
+  `engine.rs:538` (an extensionless `Linked` source). Two more resolve
+  through `SqlVaultLookup::resolve_link_from` directly: `engine.rs:1859`
+  in `resolve_property_links` (`:1855-1883`), which returns `()` and
+  recurses through lists and objects, called once per property from
+  `assemble_row` (`:1592-1594`; `assemble_row` returns
+  `Result<RowContext, VaultError>` and is called from
+  `load_file_candidates` `:803`, `load_task_candidates` `:890` and
+  `assemble_row_for_path` `:1655`); and `engine.rs:3615` in
+  `dql_inline_value`'s `Link` arm (`:3614-3627`; the DQL inline-field
+  conversion, already `Result<Value, EvalError>`, reached through
+  `dql_inline_fields_for` `:3865-3885` and `eval.rs:2527-2541`
+  `dql_combined_properties`). `assemble_row_for_path` serves `this`
+  (`engine.rs:553-558`, `.transpose()?` into `VaultError`) and
+  `SqlVaultLookup::row_for_path` (`:3808-3810`), which swallows every
+  error with `.ok().flatten()`; `VaultLookup::row_for_path`
+  (`eval.rs:419`) returns `Option<RowContext>`, read by `eval.rs:3693`
+  `row_for_path` (falling back to an empty row) and `:3680`
+  `row_from_value` (callers `:1714`, `:1723`, `:1734`, `:1764`, `:2776`,
+  `:2822`) and directly at `:4796`. **The engine boundary:**
+  `engine::execute` (`:489-494`) returns `Result<BasesResultSet,
+  VaultError>` and has no conversion from `EvalError`; a failing query is
+  `Ok(error_result(query, ctx, construct, row_path))` (`:3336-3359`:
+  `rows` empty, `error: Some(ViewError { construct, row_path })`) — the
+  filter's `Err(error)` arm (`:612-619`, after `Cancelled` maps to
+  `Err(VaultError::Cancelled)`), `materialize_row`'s `Err(String)` (sort
+  and group-by, `:636-638`), a view error from candidate loading
+  (`:570-572`) and the sort (`:646-648`) — returned before the cache
+  insert (`:705-707`). Three sites turn an `EvalError` into data instead
+  of a failure: `eval_formulas` (`:2072-2079`, into
+  `FormulaEval.errors`, which `eval_column`'s formula branch
+  `:3211-3214` shows as a cell), `eval_column` (`:3219-3222`,
+  `CellValue::Error`) and `custom_summary` (`:2858-2860`, a `String`
+  that `compute_summaries` `:2565` shows as a summary cell). `EvalError`
+  (`eval.rs:481-500`) has no lookup-failure variant; `exists_query`
+  (`engine.rs:3581-3596`) maps a SQLite error to
   `EvalError::InvalidArgument { function, message }`. The only other
-  implementor is `tests/bases_eval.rs:1226` `impl VaultLookup for TestVault`.
+  implementor is `tests/bases_eval.rs:1226` `impl VaultLookup for TestVault`
+  (it overrides `resolve_link` and `links_for` only). The session's
+  Bases facts run `crate::bases::engine::execute` on the test thread
+  with `session.conn` (`session/tests/bases.rs:2947-2959`), so the
+  thread-local `LOOKUP_FAULT` reaches the query's lookup.
 - **The counters and seams the facts reuse.** `links_db.rs:88-114`:
   `RESOLUTION_ROWS_VISITED`, `LOOKUP_FAULT`, `SNAPSHOT_FAULT`,
   `PATH_ORDER_SNAPSHOT_PATHS`; `link_resolver.rs:161-173`:
@@ -209,30 +249,102 @@ Four commits, in this order (each a green tree):
    `sub/foo`. A bare `foo` is no witness: its basename rank breaks the tie
    by path, whatever the order. The default `all_paths` stays for the
    planner's other uses.
-4. **Bases and DQL (#1486).** `VaultLookup::resolve_link` becomes
-   `fn resolve_link(&self, target: &str) -> Result<Option<String>, EvalError>`
-   (default `Ok(None)`); `EvalError` gains `LinkLookupFailed { message:
-   String }` (new; `#[error("link lookup failed: {message}")]`). The four
-   callers propagate with `?` (`eval.rs:1214`, `:2251`, `:4791`,
-   `engine.rs:538`; at `:4791` the `.or_else(|| link.resolved_path.clone())`
-   applies to the `Ok` value). `SqlVaultLookup` drops `link_index`; its
-   `resolve_link_from` keeps the `link_resolutions` memo and resolves by
-   building a `LinkCandidateSelector::new(target, source_path)`, calling
-   `FoldedNameLookup.offer_to(self.conn, &mut selector)` on the query's
-   connection and taking `into_winner()`, with a `?` from `VaultError`
-   into `EvalError::LinkLookupFailed { message: error.to_string() }`.
-   (`resolve_link`'s normalisation — anchors, external targets — is reused
-   through `links_db::resolve_remembered` (`:235`) where its signature
-   fits; otherwise the selector path above, which is what `resolve_link`
-   itself does.) The query result then carries the error the way other
-   `EvalError`s already reach the host (no new FFI; the Bases failed state
-   and DQL error rows already render `EvalError` text).
-   `tests/bases_eval.rs:1226` updates its signature.
+4. **Bases and DQL (#1486).** A link lookup that fails is a storage
+   failure, not an expression's error: it fails the whole query, in
+   whatever position the link sat, as the public failed result —
+   `Ok(BasesResultSet { error: Some(ViewError { construct: "link lookup
+   failed: <message>", row_path }), rows: [], … })` from `error_result`,
+   the shape every other query failure already has — never
+   `Err(VaultError)`, never a cell's or a summary's error, never an
+   unresolved link, and never cached. Five layers:
+   - *The lookup.* `EvalError` gains `LinkLookupFailed { message:
+     String }` (new; `#[error("link lookup failed: {message}")]`).
+     `SqlVaultLookup` drops `link_index`; `resolve_link_from(&self,
+     target: &str, source_path: &str) -> Result<Option<String>,
+     EvalError>` (new signature) builds a `LinkCandidateSelector::new(target,
+     source_path)`, calls `FoldedNameLookup.offer_to(self.conn, &mut
+     selector)` on the query's connection, maps its `VaultError` to
+     `LinkLookupFailed { message: error.to_string() }` and takes
+     `into_winner()`. The `link_resolutions` memo keeps only answers
+     (`Ok`), so a failure is never remembered as `None`. (`resolve_link`'s
+     normalisation — anchors, external targets — is reused through
+     `links_db::resolve_remembered` (`:235`) where its signature fits;
+     otherwise the selector path above, which is what `resolve_link`
+     itself does.)
+   - *The evaluator* (`eval.rs`). `VaultLookup::resolve_link(&self,
+     target: &str) -> Result<Option<String>, EvalError>` (new signature;
+     default `Ok(None)`) and `VaultLookup::row_for_path(&self, path:
+     &str) -> Result<Option<RowContext>, EvalError>` (new signature;
+     default `Ok(None)`). The private helpers become `row_for_path(ctx,
+     path) -> Result<RowContext, EvalError>` (`:3693`) and
+     `row_from_value(value, ctx) -> Result<RowContext, EvalError>`
+     (`:3680`). Every caller takes `?` — `:1214`, `:2251`, `:4791`
+     (`ctx.vault.resolve_link(&link.target)?.or_else(||
+     link.resolved_path.clone())`), `:4796`, `:1714`, `:1723`, `:1734`,
+     `:1764`, `:2776`, `:2822` — each inside a function that already
+     returns `Result<_, EvalError>`. `tests/bases_eval.rs:1226`'s
+     `TestVault::resolve_link` returns `Ok(self.resolved.get(target).cloned())`;
+     it keeps the defaulted `row_for_path`.
+   - *The engine's own propagation* (`engine.rs`).
+     `resolve_property_links(value, owner_path, vault) -> Result<(),
+     EvalError>` (new signature) takes `?` on the lookup and on both
+     recursive arms. `assemble_row` and `assemble_row_for_path` return
+     `Result<_, RowAssemblyError>`, where `enum RowAssemblyError {
+     Vault(VaultError), LinkLookup { error: EvalError, row_path: String }
+     }` (new, private) has `From<VaultError>` and `From<DbError>`, so
+     `assemble_row`'s existing `?`s compile unchanged, and
+     `assemble_row` maps `resolve_property_links`' error to `LinkLookup`
+     with its own `file.path`. `CandidateLoadError` gains `LinkLookup {
+     error: EvalError, row_path: String }` (new) through
+     `From<RowAssemblyError>`. `SqlVaultLookup::row_for_path` returns
+     `Err(error)` for `LinkLookup` and keeps today's `Ok(None)` for
+     `Vault`. `dql_inline_value`'s `Link` arm (`:3615`) takes `?` — the
+     DQL inline-field conversion, whose caller already propagates.
+   - *Where an `EvalError` becomes data,* a `LinkLookupFailed` does not.
+     `eval_column` returns `Result<CellValue, EvalError>` (new
+     signature): `Err` for `LinkLookupFailed` only, every other error
+     still `Ok(CellValue::Error(..))`; `materialize_row`'s two calls
+     (`:2239`, `:2253`) pass it up as its `Err(String)`.
+     `custom_summary` and `compute_summary` return `Result<_,
+     SummaryError>`, where `enum SummaryError { Cell(String),
+     LinkLookup(EvalError) }` (new, private) has `From<String>`;
+     `compute_summaries` returns `Result<Vec<BasesSummaryCell>,
+     EvalError>` (new signature): `Cell` still becomes
+     `summary_error_cell`, `LinkLookup` is returned. A formula's error
+     stays in `FormulaEval.errors` (dependent formulas wrap it as today;
+     the failing formula's own entry keeps its type).
+   - *The engine boundary* (`execute`), the one place a lookup failure
+     leaves the engine, always as `Ok(error_result(query, ctx,
+     error.to_string(), row_path))`: (1) the extensionless `Linked`
+     source (`:535-546`) matches `vault.resolve_link(from_path)` —
+     `Ok(Some(path))` canonicalises as today, `Ok(None)` leaves the
+     query, `Err(error)` returns with `row_path` `""`; (2) `this`
+     (`:553-558`): `Err(RowAssemblyError::LinkLookup { error, row_path
+     })` returns with that `row_path`, `Err(Vault(e))` stays `Err(e)`;
+     (3) candidate loading (`:566-573`) gains the arm
+     `Err(CandidateLoadError::LinkLookup { error, row_path })`; (4) right
+     after `eval_formulas` (`:581-589`), before the filter, the first
+     `formulas.errors` entry that is `LinkLookupFailed` returns with the
+     candidate's path — so a formula's lookup failure fails the query
+     whether a filter, a column, a sort or nothing reads it; (5) the
+     filter's existing `Err(error)` arm (`:612-619`) and (6)
+     `materialize_row`'s existing `Err` arm (`:636-638`; sort, group-by
+     and now the columns, the construct carrying `"link lookup failed:
+     …"`, prefixed `"sort: "` or `"groupBy: "` there) already have this
+     shape; (7) both `compute_summaries` calls (`:652`, `:661-674`)
+     return with `row_path` `""`. Every one returns before the cache
+     insert (`:705-707`). No new FFI: the Bases failed state and the DQL
+     error view already render `ViewError`.
 
 Deliberately not changed: `re_resolve_unresolved_links_under`'s snapshot
 (WB-19 owns it); the scan's and rename's `InMemoryVaultIndex` snapshots
 (#1429 decided they keep theirs); `collect_rewrite_candidates`'s
-whole-`links` read (the issue excludes it); no FFI.
+whole-`links` read (the issue excludes it); `SqlVaultLookup::row_for_path`
+answering `Ok(None)` for a SQLite failure while assembling a looked-up row
+(today's `.ok().flatten()` for every error; only the link-lookup failure,
+#1486's, now propagates — the rest is a follow-up the PR body names);
+`exists_query`'s and the other lookups' errors staying expression errors;
+no FFI.
 
 ## Tests
 
@@ -254,9 +366,17 @@ The two new session test modules, `fault_guard.rs` and
 | `link_rewrite.rs` tests: `the_pre_move_index_offers_the_same_winner_as_every_path` | for each mapping shape (rename, move, folder move, case-only) and every `INDEXED_PATHS` target, `offer_candidates` and the `all_paths` default pick one winner | drop the moved-paths arm |
 | `a_case_colliding_rename_keeps_todays_tie_winner` | two order-sensitive exact fixtures, source `notes/x.md`: (a) rename — post index `[A.md, foo.md]`, mapping `Foo.md → A.md`, rooted target `/foo`; (b) folder move — post index `[other/A.md, sub/foo.md]`, mapping `sub/Foo.md → other/A.md`, qualified target `sub/foo`. Each first proves it is a witness: a fresh `LinkCandidateSelector::new(target, "notes/x.md")` offered the two pre-move paths in post order picks the moved one (`Foo.md`, `sub/Foo.md`) and offered them reversed picks the unmoved one (`foo.md`, `sub/foo.md`). Then `PreMoveIndex::offer_candidates`'s winner equals the `all_paths` default's winner and is the moved one | offer unmoved paths before moved ones (or offer in key-hash order) |
 | `session/tests/rename_planning.rs` (new): `a_rename_plans_its_rewrites_from_candidate_rows_only` | row counter: `PATHS_OFFERED` after renaming a note linked by N sources ≤ sources × their distinct targets' candidates, not × files | restore the default |
-| `session/tests/bases.rs` (the `#[cfg(test)]` counters and `LOOKUP_FAULT` are visible to the library's own tests only, so these three live there; `tests/bases_eval.rs:1226` only takes the new signature): `a_query_that_resolves_links_materializes_no_snapshot` | a Bases query with `link()` over a 200-note vault: `snapshot_paths() == 0` and `CANDIDATE_TABLES_BUILT == 0` | restore `link_index` |
-| `a_failed_link_lookup_fails_the_query_instead_of_reading_as_unresolved` | with `LOOKUP_FAULT` set, the query returns `Err(EvalError::LinkLookupFailed)`, no row shows an unresolved link | restore `.ok()?` |
-| `a_dql_inline_link_field_resolves_through_the_lookup` | the `:2251` arm resolves a basename target to the census answer | break the probe mapping |
+| `session/tests/bases.rs` (the `#[cfg(test)]` counters and `LOOKUP_FAULT` are visible to the library's own tests only, so these eleven live there; `tests/bases_eval.rs:1226` only takes the new signature): `a_query_that_resolves_links_materializes_no_snapshot` | a Bases query with `link()` over a 200-note vault, counted from after the vault's scan: `snapshot_paths() == 0` and `CANDIDATE_TABLES_BUILT == 0` | restore `link_index` |
+| `a_failed_link_lookup_fails_the_query_instead_of_reading_as_unresolved` | the failure shape, asserted by every failure fact below: `execute` returns `Ok(result)` with `result.error == Some(ViewError { construct, row_path })`, `construct.contains("link lookup failed: ")`, `result.rows.is_empty()`. Here: notes `Notes/A.md`, `Notes/B.md` (no link-valued property) and `Target.md`; a files query whose filter calls `link("Target")`; with `LOOKUP_FAULT` set (and reset after, as `save_link_lookup.rs:213` does) the failure shape with `row_path` the first candidate's path; the same query with the fault reset returns `error: None` (the control: the fault is what fails it) | map `offer_to`'s error to `Ok(None)` in `resolve_link_from` (today's `.ok()?`) → `error: None`, the rows filtered as if unresolved |
+| `a_failed_link_lookup_in_a_column_fails_the_query_not_the_cell` | the same notes, no filter, the column `link("Target")`: the failure shape, and no `CellValue::Error` anywhere | `eval_column` turns `LinkLookupFailed` into `Ok(CellValue::Error(..))` → `error: None`, each row's cell an error |
+| `a_failed_link_lookup_in_a_formula_fails_the_query` | the formula `up = link("Target")` shown only as the column `formula.up`: the failure shape with `row_path` the first candidate's path | delete the post-`eval_formulas` check → the formula's error reaches `eval_column`'s formula branch as a cell, `error: None` |
+| `a_failed_link_lookup_in_a_custom_summary_fails_the_query` | the column `file.name` with the custom summary `probe = link("Target")` (no link elsewhere, so every row materializes first): the failure shape with `row_path` `""` | `compute_summaries` turns `SummaryError::LinkLookup` into `summary_error_cell` → `error: None`, the summary cell an error |
+| `a_failed_property_link_lookup_fails_the_query_at_its_row` | `Notes/A.md` has frontmatter `up: "[[Target]]"` (a `Value::Link` with no `resolved_path`, `engine.rs:1794-1832`); a files query with the column `up`: the failure shape with `row_path == "Notes/A.md"` | `resolve_property_links` drops the lookup's error, leaving `resolved_path: None` → `error: None`, the cell an unresolved link |
+| `a_failed_property_link_lookup_of_this_fails_the_query` | `EngineCtx.this_path = Some("Notes/Here.md")`, whose `up: "[[Target]]"`; a `QuerySource::Folder("Other")` query over notes with no link-valued property: the failure shape with `row_path == "Notes/Here.md"` | map `this`'s `RowAssemblyError::LinkLookup` to `Ok(None)` (or to `Err(VaultError)`) → `error: None` (or an `Err`) |
+| `a_failed_property_link_lookup_of_a_looked_up_row_fails_the_query` | `Notes/A.md`'s body links `[[Other/B]]` (its `links` row resolved at scan), `Other/B.md` has `up: "[[Target]]"`; a `QuerySource::Folder("Notes")` query with the column `file.links[0].hasProperty("up")` (`row_from_value` → `row_for_path` assembles `Other/B.md`): the failure shape with `row_path == "Notes/A.md"` | `SqlVaultLookup::row_for_path` maps `LinkLookup` to `Ok(None)` (today's `.ok().flatten()`) → `error: None`, the cell `false` from the empty fallback row |
+| `a_failed_lookup_of_an_extensionless_linked_source_fails_the_query` | `QuerySource::Linked { from_path: "Hub", depth: 1 }` (extensionless, so `:538` resolves it) over notes with no link-valued property: the failure shape with `row_path` `""` | `vault.resolve_link(from_path).ok().flatten()` at `:538` → the query runs on the unresolved source, `error: None` |
+| `a_dql_inline_link_field_resolves_through_the_lookup` | the inline-field arm (`engine.rs:3614-3627`, not `eval.rs:2251`): a scanned vault of `link_resolver::census_fixtures::INDEXED_PATHS` (built as `save_link_lookup.rs:290` `census_vault` builds it) plus `notes/owner.md` holding the inline field `sibling:: [[shared]]`; `crate::bases::dql::parse_dql` of `TABLE WITHOUT ID sibling FROM "notes"` executed with `this_path` `a/view.base`: on `notes/owner.md`'s row the `sibling` cell is a link with `resolved_path == Some("notes/shared.md")` (the owner-relative census answer; from `a/` it would be `a/shared.md`), and `snapshot_paths() == 0` counted from after the scan | resolve the inline link from the query's `this` path instead of its owner (→ `a/shared.md`); or restore the snapshot in `resolve_link_from` (→ `snapshot_paths() > 0`) |
+| `a_failed_dql_inline_link_lookup_fails_the_query` | `Notes/A.md` holds `sibling:: [[Target]]`; the DQL `TABLE WITHOUT ID sibling FROM "Notes"` with `LOOKUP_FAULT` set: the failure shape with `row_path == "Notes/A.md"` | `dql_inline_value`'s `Link` arm maps the error to `None` → `error: None`, the cell an unresolved link |
 
 No FlaUI journey; no census row beyond the fault-guard census.
 
@@ -292,7 +412,7 @@ $required = [ordered]@{
     'link_resolver'    = @('candidate_paths_returns_the_union_in_index_order')
     'link_rewrite'     = @('the_pre_move_index_offers_the_same_winner_as_every_path', 'a_case_colliding_rename_keeps_todays_tie_winner')
     'rename_planning'  = @('a_rename_plans_its_rewrites_from_candidate_rows_only')
-    'bases'            = @('a_query_that_resolves_links_materializes_no_snapshot', 'a_failed_link_lookup_fails_the_query_instead_of_reading_as_unresolved', 'a_dql_inline_link_field_resolves_through_the_lookup')
+    'bases'            = @('a_query_that_resolves_links_materializes_no_snapshot', 'a_failed_link_lookup_fails_the_query_instead_of_reading_as_unresolved', 'a_failed_link_lookup_in_a_column_fails_the_query_not_the_cell', 'a_failed_link_lookup_in_a_formula_fails_the_query', 'a_failed_link_lookup_in_a_custom_summary_fails_the_query', 'a_failed_property_link_lookup_fails_the_query_at_its_row', 'a_failed_property_link_lookup_of_this_fails_the_query', 'a_failed_property_link_lookup_of_a_looked_up_row_fails_the_query', 'a_failed_lookup_of_an_extensionless_linked_source_fails_the_query', 'a_dql_inline_link_field_resolves_through_the_lookup', 'a_failed_dql_inline_link_lookup_fails_the_query')
 }
 foreach ($filter in $required.Keys) {
     Assert-Facts $filter $required[$filter]
@@ -318,7 +438,7 @@ AT pass: none — no speech changes.
 
 ## Acceptance
 
-- [ ] The thirteen facts above exist, were seen failing, pass, and each
+- [ ] The twenty-one facts above exist, were seen failing, pass, and each
       filter's discovery check passed (no required fact missing).
 - [ ] `FAULT_MUTEX` and `FAULT_VARIABLES` are private; no
       `set_var\(\s*"SLATE_TEST_` match outside `common.rs` but the
@@ -330,12 +450,22 @@ AT pass: none — no speech changes.
       `files` snapshot (the counters prove it); the case-collision fact
       pins today's tie winner on the exact targets `/foo` and `sub/foo`,
       whose reversed offer is shown to pick the other path.
-- [ ] `VaultLookup::resolve_link` returns `Result`; no FFI change.
+- [ ] `VaultLookup::resolve_link` and `VaultLookup::row_for_path`
+      return `Result`; `resolve_property_links`, `dql_inline_value`'s
+      `Link` arm, `assemble_row` (`RowAssemblyError`), `eval_column` and
+      the summaries (`SummaryError`) propagate a `LinkLookupFailed`; and
+      `execute` maps every one, at its seven boundary sites, to
+      `Ok(error_result(…))` with `construct` "link lookup failed: …" —
+      never `Err(VaultError)`, a cell's or a summary's error, an
+      unresolved link or a cache entry (the nine failure facts assert
+      that public shape); no FFI change.
 - [ ] `BENCHMARKS.md` entry; PR body `Closes #1481`, `Closes #1427`,
       `Closes #1485`, `Closes #1486`.
 - [ ] Not delivered: the whole-`links` read in `collect_rewrite_candidates`
       (named in #1485 as out of scope; file a follow-up if the row counter
-      shows it dominates).
+      shows it dominates); `SqlVaultLookup::row_for_path`'s `Ok(None)` for
+      a SQLite failure while assembling a looked-up row (follow-up named
+      in the PR body).
 
 ## Brief
 
@@ -348,9 +478,23 @@ model) and `:10803-10815` (`index_file`), `link_rewrite.rs:60-130`
 (`VaultIndex`, `CandidateTable::offer`, `SelectorRank`, the selector and
 probe: an exact target — `/foo`, `sub/foo` — ranks by key index, so two
 paths lowercasing to one key tie and the first offered wins; a bare `foo`
-ranks by distance then path and ignores order), `bases/engine.rs:3564-3672`,
-`bases/eval.rs:336-352`, `:481-500`, `:1208-1222`, `:2246-2258`,
-`:4783-4800`, `tests/bases_eval.rs:1226`, `session/tests/common.rs:1-40`,
+ranks by distance then path and ignores order), `bases/engine.rs:3564-3672`
+(`SqlVaultLookup`), `:489-720` (`execute`: it returns
+`Result<BasesResultSet, VaultError>` with no conversion from `EvalError`;
+a failing query is `Ok(error_result(…))`, `:3336-3359`, at `:570-572`,
+`:612-619`, `:636-638`, `:646-648`; the cache insert `:705-707`),
+`:1565-1660` (`assemble_row`, `assemble_row_for_path`), `:1855-1883`
+(`resolve_property_links`, returning `()`), `:2027-2083`
+(`eval_formulas`), `:2210-2262` (`materialize_row`), `:2533-2567`,
+`:2607-2625`, `:2816-2861` (the summaries), `:3202-3222`
+(`eval_column`), `:3598-3636` (`dql_inline_value`; its `Link` arm
+`:3614-3627`), `:3808-3810` (`row_for_path`'s `.ok().flatten()`),
+`:3865-3885`; `bases/eval.rs:336-352`, `:419-421`, `:481-500`,
+`:1208-1222`, `:1710-1770`, `:2246-2258`, `:2527-2541`, `:2770-2825`,
+`:3680-3708`, `:4783-4800`; `tests/bases_eval.rs:1226-1234`;
+`session/tests/bases.rs:2947-2959` (a query run by `engine::execute` on
+the test thread, where the thread-local `LOOKUP_FAULT` reaches it);
+`session/tests/common.rs:1-40`,
 `tasks.rs:938-939` (a `set_var` split across two lines),
 `watch.rs:1150-1163` (the watcher switch, not a fault seam: it keeps its
 own `WATCHER_SWITCH`), and `save_link_lookup.rs:93-135`. The fifteen fault
@@ -384,10 +528,39 @@ passing `&FoldedNameLookup` to `index_file` instead of a snapshot. (3)
 `InMemoryVaultIndex` sorts positions), `LinkCandidateSelector::probe_names`,
 and `PreMoveIndex::offer_candidates` that offers the post index's
 candidates for the pre keys plus the moved files' post keys, mapped back
-through `old_path_of`, in post index order. (4)
-`VaultLookup::resolve_link -> Result<Option<String>, EvalError>`,
-`EvalError::LinkLookupFailed { message: String }`, and `SqlVaultLookup`
-resolving through `FoldedNameLookup` on the query's connection.
+through `old_path_of`, in post index order. (4) A failed link lookup
+fails the query as its public failed result. New:
+`EvalError::LinkLookupFailed { message: String }` ("link lookup failed:
+{message}"); `SqlVaultLookup` without `link_index`, its
+`resolve_link_from(target, source_path) -> Result<Option<String>,
+EvalError>` resolving through `FoldedNameLookup.offer_to` on the query's
+connection, the memo keeping answers only; `VaultLookup::resolve_link ->
+Result<Option<String>, EvalError>` and `VaultLookup::row_for_path ->
+Result<Option<RowContext>, EvalError>` (defaults `Ok(None)`), with the
+eval helpers `row_for_path` and `row_from_value` returning `Result` and
+`?` at `eval.rs:1214`, `:2251`, `:4791`, `:4796`, `:1714`, `:1723`,
+`:1734`, `:1764`, `:2776`, `:2822` (`TestVault::resolve_link` returns
+`Ok(…)`); `resolve_property_links -> Result<(), EvalError>` (`?` on both
+recursive arms); private `RowAssemblyError { Vault(VaultError),
+LinkLookup { error, row_path } }` returned by `assemble_row` and
+`assemble_row_for_path` (with `From<VaultError>`, `From<DbError>`);
+`CandidateLoadError::LinkLookup { error, row_path }`;
+`SqlVaultLookup::row_for_path` passing `LinkLookup` up and keeping
+`Ok(None)` for a SQLite failure; `?` in `dql_inline_value`'s `Link` arm
+(the DQL inline-field conversion); `eval_column -> Result<CellValue,
+EvalError>` (`Err` for `LinkLookupFailed` only); private `SummaryError {
+Cell(String), LinkLookup(EvalError) }` from `custom_summary` and
+`compute_summary`, and `compute_summaries -> Result<Vec<BasesSummaryCell>,
+EvalError>`. Then `execute` maps each to `Ok(error_result(query, ctx,
+error.to_string(), row_path))` at seven sites: the extensionless
+`Linked` source (`row_path` `""`), `this` (its path), candidate loading
+(the row's path), right after `eval_formulas` for the first
+`LinkLookupFailed` formula error (the candidate's path), the filter's and
+`materialize_row`'s existing `Err` arms, and both `compute_summaries`
+calls (`""`) — never `Err(VaultError)`, never a cell or summary error,
+never cached. Not changed: `row_for_path`'s `Ok(None)` for a SQLite
+failure (a follow-up the PR body names), and every other lookup's error
+staying an expression error.
 
 Facts, each seen failing first, with the mutation that fails it again:
 - `fault_guard.rs` `a_panicking_holder_leaves_no_variable_it_set`: a
@@ -432,15 +605,63 @@ Facts, each seen failing first, with the mutation that fails it again:
   `tests/bases_eval.rs`) `a_query_that_resolves_links_materializes_no_snapshot`:
   a `link()` query over 200 notes leaves `snapshot_paths() == 0` and
   `CANDIDATE_TABLES_BUILT == 0` (restore `link_index`).
+- The failure shape every failure fact below asserts: `execute` returns
+  `Ok(result)`, `result.error == Some(ViewError { construct, row_path })`
+  with `construct.contains("link lookup failed: ")`, and
+  `result.rows.is_empty()`; `LOOKUP_FAULT` is set on the test thread
+  around the query and reset after (as `save_link_lookup.rs:213` does),
+  and the fixture's other notes hold no link-valued property, so the
+  failure surfaces where the fact puts it.
 - `a_failed_link_lookup_fails_the_query_instead_of_reading_as_unresolved`:
-  with `LOOKUP_FAULT` the query is `Err(EvalError::LinkLookupFailed)` and
-  no row reads unresolved (restore `.ok()?`).
-- `a_dql_inline_link_field_resolves_through_the_lookup`: the `:2251` arm
-  resolves a basename target to the census answer (break the probe
-  mapping).
+  a filter calling `link("Target")` over `Notes/A.md`, `Notes/B.md`,
+  `Target.md`: the failure shape, `row_path` the first candidate's; with
+  the fault reset, `error: None` (map `offer_to`'s error to
+  `Ok(None)` in `resolve_link_from`).
+- `a_failed_link_lookup_in_a_column_fails_the_query_not_the_cell`: the
+  column `link("Target")`: the failure shape and no `CellValue::Error`
+  (`eval_column` makes it a cell).
+- `a_failed_link_lookup_in_a_formula_fails_the_query`: the formula `up =
+  link("Target")` shown as `formula.up`: the failure shape, the first
+  candidate's path (delete the post-`eval_formulas` check).
+- `a_failed_link_lookup_in_a_custom_summary_fails_the_query`: column
+  `file.name` with the custom summary `probe = link("Target")`: the
+  failure shape, `row_path` `""` (`compute_summaries` makes it a summary
+  cell).
+- `a_failed_property_link_lookup_fails_the_query_at_its_row`:
+  `Notes/A.md`'s `up: "[[Target]]"`, column `up`: the failure shape,
+  `row_path == "Notes/A.md"` (`resolve_property_links` drops the error,
+  leaving the link unresolved).
+- `a_failed_property_link_lookup_of_this_fails_the_query`: `this_path`
+  `Notes/Here.md` with `up: "[[Target]]"`, source `Folder("Other")`: the
+  failure shape, `row_path == "Notes/Here.md"` (map `this`'s
+  `LinkLookup` to `Ok(None)` or to `Err(VaultError)`).
+- `a_failed_property_link_lookup_of_a_looked_up_row_fails_the_query`:
+  `Notes/A.md` links `[[Other/B]]`, `Other/B.md` has `up:
+  "[[Target]]"`, source `Folder("Notes")`, column
+  `file.links[0].hasProperty("up")`: the failure shape, `row_path ==
+  "Notes/A.md"` (`SqlVaultLookup::row_for_path` maps `LinkLookup` to
+  `Ok(None)` — the cell then reads `false`).
+- `a_failed_lookup_of_an_extensionless_linked_source_fails_the_query`:
+  `QuerySource::Linked { from_path: "Hub", depth: 1 }`: the failure
+  shape, `row_path` `""` (`.ok().flatten()` at `engine.rs:538`).
+- `a_dql_inline_link_field_resolves_through_the_lookup`: the inline-field
+  arm (`engine.rs:3614-3627`; `eval.rs:2251` is `dql_link`, the DQL
+  `link()` function): census paths plus `notes/owner.md` holding
+  `sibling:: [[shared]]`, the DQL `TABLE WITHOUT ID sibling FROM
+  "notes"` with `this_path` `a/view.base`: the owner's `sibling` cell
+  resolves to `notes/shared.md` and `snapshot_paths() == 0` after the
+  scan (resolve from the `this` path → `a/shared.md`; or restore the
+  snapshot).
+- `a_failed_dql_inline_link_lookup_fails_the_query`: `Notes/A.md` holds
+  `sibling:: [[Target]]`, DQL `TABLE WITHOUT ID sibling FROM "Notes"`:
+  the failure shape, `row_path == "Notes/A.md"` (`dql_inline_value`'s
+  `Link` arm maps the error to `None`).
 
 Registers: `BENCHMARKS.md` (a WB-18 entry with the row counts). Not
-delivered: the whole-`links` read in `collect_rewrite_candidates`. Done
+delivered: the whole-`links` read in `collect_rewrite_candidates`; a
+SQLite failure while `SqlVaultLookup::row_for_path` assembles a
+looked-up row still reads as no row (a follow-up the PR body names; only
+the link-lookup failure propagates here). Done
 when the Verification block runs clean in PowerShell — every filter's
 discovery check finds its required facts and every command's
 `$LASTEXITCODE` is 0 (the six filters, the whole core suite with

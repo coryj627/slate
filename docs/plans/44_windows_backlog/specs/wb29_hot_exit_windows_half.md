@@ -61,17 +61,57 @@ are merged.
   enum is `:44-55` (`Close`, `Switch`, `ApplicationClose`). The same core
   serves the vault switch (`OpenVaultAsync`, `:454`), Close Vault
   (`CloseVault`, `:605`) and application close (`:644`).
-- **The teardown waits on every admitted ticket.** Its round loop
-  (`:1505-1569`) first pumps `SettleSaves()` (`WorkspaceViewModel.cs:2813`
-  → `WorkspaceSaveCoordinator.SettlePumping`, `:211`, which pumps with
-  no bound until the admitted count `_pending` is zero) whenever
-  `SavesIdle` (`IsIdle`, `:42`) is false (`:1510-1516`), and accepts a
-  Discard only with `SavesIdle` true (`:1562-1566`). After a successful
-  teardown `WorkspaceViewModel.Dispose` (`:3089-3097`) calls
-  `CloseAndJoinWorkers` (`WorkspaceSaveCoordinator.cs:228`), which joins
-  every worker handed to `TrackWorker` (`:189-206`) with no bound; its
-  test seam `BeforeJoinForTests` (`:62`, invoked at `:236`) lets a fact
-  release a parked worker inside the join.
+- **The teardown waits on every admitted ticket, and disposal joins every
+  tracked worker.** Its round loop (`:1505-1569`) first pumps
+  `SettleSaves()` (`WorkspaceViewModel.cs:2813` →
+  `WorkspaceSaveCoordinator.SettlePumping`, `:211`, which pumps with no
+  bound until the admitted count `_pending` is zero) whenever `SavesIdle`
+  (`IsIdle`, `:42`) is false (`:1510-1516`), and accepts a Discard only
+  with `SavesIdle` true (`:1562-1566`); it returns a `Closed` outcome at
+  `:1530-1533` (nothing dirty) and `:1568` (Discard). After a successful
+  teardown the route disposes the workspace, then the session, through
+  `CloseSession()` (`VaultLifecycleViewModel.cs:933`; `Workspace.Dispose()`
+  `:1103`, `_session?.Dispose()` `:1124`): Close Vault at `:621`, the
+  switch at `:473`, and application close once the window has closed —
+  `Window_Closed` (`MainWindow.xaml.cs:1997-2011`) → `_viewModel.Dispose()`
+  → `DisposeCore` (`:664-667`) → `CloseSession()`.
+  `WorkspaceViewModel.Dispose` (`:3089-3097`) calls `CloseAndJoinWorkers`
+  (`WorkspaceSaveCoordinator.cs:228-249`), which joins every worker handed
+  to `TrackWorker` (`:189-206`) with `worker.Wait()` and no bound, so that
+  no save worker calls core after the session is disposed (the
+  coordinator's doc, `:18-21`). Its test seam `BeforeJoinForTests` (`:62`,
+  invoked at `:236`) lets a fact release a parked worker inside the join
+  (`PumpedSaveReentrancyTests.DisposalJoinsASaveWorkerBeforeTheSessionGoes`,
+  `:256`; the join itself is pinned by
+  `TheJoinRunsEveryTrackedWorkerToCompletion`, `:289`);
+  `SavesForTests.LiveWorkersForTests` (`WorkspaceViewModel.cs:2842`,
+  `WorkspaceSaveCoordinator.cs:48-57`) counts the tracked workers.
+- **A binding call keeps its object alive until it returns.** The
+  generated C# (`uniffi-bindgen-cs`, into the git-ignored
+  `src/SlateUniffi/generated/slate_uniffi.cs`) wraps every method in
+  `CallWithPointer`, which raises the object's call counter and clones its
+  Rust `Arc`; `Dispose` frees the object only when that counter reaches
+  zero, and a call after it throws `ObjectDisposedException`. A session
+  call still running at `session.Dispose()` therefore runs the session's
+  drop later, on that call's thread.
+- **A process-lifetime store precedent.** `SidebarWriteJournal.Shared`
+  (`SidebarWriteJournal.cs:297`), installed at launch by
+  `InstallProductionLocation()` (`:313-320`, called at `App.xaml.cs:138`),
+  is a store outside the vault whose work outlives every workspace. A
+  rename waits for its line at most `DurableWaitBudget` (5 s, `:269`),
+  without pumping, and on a miss logs `SidebarWriteJournalFailed` and
+  proceeds (`FilesSidebarViewModel.WriteJournal.cs:99-102`); `App.OnExit`
+  (`App.xaml.cs:151-160`) waits for the journal at most 2 s.
+  `HostLog.ObserverForTests` (`HostLog.cs:212`) lets a fact observe a
+  logged diagnostic.
+- **A dirty tab's own Discard.** `AdmitDirtyTab`
+  (`WorkspaceViewModel.Layout.cs:688`) accepts Discard for a dirty
+  navigation (`:260-269`, then `ReplaceTabItem(active, item)` at `:272`)
+  and for a tab close (`CloseTab` `:446`, `:459-461`, then `tab.Dispose()`
+  at `:479`); `CloseActivePane` (`:532`) approves each dirty tab's Discard
+  itself (`:593-603`) and disposes the pane's tabs at `:639`. The prompts
+  are `MainWindow.xaml.cs` `ConfirmDirtyNavigation` (`:235`) and
+  `ConfirmDirtyClose` (`:255`).
 - **Admission.** `WorkspaceSaveCoordinator.HasAdmittedSaveFor`
   (`:83-87`) only reads whether a ticket under the file's chain key is
   incomplete; it reserves nothing, so a save admitted after a caller
@@ -159,7 +199,16 @@ are merged.
    under the host-supplied device-local root, keyed by a persistent
    `VaultRootIdentity` (WB-28's lossless form; a weak one per item 7),
    bounded (per-buffer and per-vault caps, and what a write over the cap
-   returns — a typed refusal the host can act on).
+   returns — a typed refusal the host can act on). The key within a vault
+   must account for same-path peer tabs: Windows lets two tabs on one note
+   hold separate dirty buffers (`WorkspaceViewModel.cs:3444`), so a store
+   keyed one buffer per path would let one tab's clean transition or
+   Discard drop a peer's dirty buffer while that peer's writer believes its
+   generation durable. The design names either a per-tab key (and how a
+   restore maps entries back to tabs) or a per-path key with a merge rule
+   under which no tab's discard removes another tab's newer generation;
+   WB-29 adds a fact for the chosen rule (two dirty peers, one discards,
+   reopen restores the other's text).
 2. The write cadence (debounce; on every dirtiness change at least) and
    fsync policy; a write's result is durable-or-error, never fire-and-forget.
 3. The restore rule: baseline hash equal → restore dirty; file changed →
@@ -178,7 +227,9 @@ are merged.
    All of the prompt that application close and vault switch fall back to
    after a failed or timed-out flush (a timed-out flush can leave a
    `write_buffer` in flight while that prompt is open); and the
-   per-buffer `discard_buffer` on a clean transition. The store's discard
+   per-buffer `discard_buffer` on a clean transition or on a dirty tab's
+   own Discard (closing the tab, closing its pane, or replacing its
+   document, answered Discard). The store's discard
    must supersede every write issued before it, including one that
    completes after it — for example a per-vault discard epoch that
    `write_buffer` carries and the store compares, the discard advancing
@@ -219,6 +270,27 @@ are merged.
    NTFS. A third policy needs the owner and re-derives this spec's two
    weak-root facts before code. WD24's opening rule is unchanged: a FAT32
    or exFAT vault keeps opening.
+8. **The store's calls borrow no vault session.** `write_buffer`,
+   `discard_buffer`, `discard_vault` and `read_buffers` are reachable on a
+   core store handle the host opens once per process over the
+   device-local root (a store object, or free functions over that root —
+   the design names which). They take as arguments the vault's store key —
+   plain data the session hands out at open (the persistent identity, or
+   item 7 (b)'s path key with the recorded weak identity) — and item 6's
+   supersession token where the mechanism carries one. None borrows the
+   `VaultSession`: a binding call keeps its object alive until it returns
+   (`CallWithPointer`, Current state), so a session-method write still in
+   flight at `session.Dispose()` would run the session's drop later, on
+   the recovery worker — after the teardown, possibly after the same vault
+   reopened. The handle is safe to call from several threads at once (a
+   discard runs while an older write is still in flight — item 6), and a
+   call cut short by process exit leaves the store's previous durable
+   state, exactly as a crash does (item 2). Without this item a teardown
+   would have to join recovery writes before the session goes, which this
+   chunk forbids (Design, the store host); the chunk does not start. Under
+   the other WD20 answer, the Windows `HotExitStore.cs` is host file IO
+   that borrows no session by construction, and the thread-safety and
+   crash rules are its own.
 
 ## Design
 
@@ -239,8 +311,9 @@ Windows only, consuming the merged core store and WB-2's `Admit`.
   disposed, clean or fenced tab writes nothing and its Task completes;
   otherwise it snapshots `(text, SavedContentHash, ContentGeneration)` at
   that moment — so a write admitted behind a save carries the hash that
-  save published — calls `write_buffer` on a worker handed to
-  `TrackWorker` (`:189-206`), and returns a Task it completes itself (a
+  save published — calls `write_buffer` through the store host
+  (`HotExitStoreHost.Write`, below; never on a worker handed to
+  `TrackWorker`), and returns a Task it completes itself (a
   `TaskCompletionSource`) when the write's result has been published on
   the dispatcher: the durable generation recorded on success, the
   failure recorded on error. The ticket therefore completes after
@@ -249,36 +322,85 @@ Windows only, consuming the merged core store and WB-2's `Admit`.
   store receives a path's generations in order. The writer never asks
   `HasAdmittedSaveFor` — inside its own operation the answer is always
   true (its own ticket), and outside one the Boolean reserves nothing. A
-  clean transition (`IsDirty` false) discards through the fence below
-  (`FenceAndDiscard(tab)`), never a bare `discard_buffer`. The writer
-  records, per tab, the last generation durably written.
-- **A teardown never waits on a recovery write without a bound.**
-  `TryCloseWorkspace` and `TryCloseWorkspaceCore` gain a `TeardownRoute
-  route` parameter (the three callers at `:454`, `:605`, `:644` pass
-  `Switch`, `Close` and `ApplicationClose`). Immediately before the
-  round loop (`:1505`), every route calls `HotExitWriter.Quiesce()`
-  (new): it stops every debounce timer and suspends scheduling, so no
-  write is admitted on a tick while the teardown runs, then calls
-  `AbandonInFlight()` (new): every outstanding recovery operation's Task
-  is completed by the writer — its ticket releases, so `SettleSaves()`
-  and the Discard check's `SavesIdle` no longer wait on it — and is marked
-  abandoned, so its late result records no durable generation and
-  re-issues nothing; its worker stays tracked, so `CloseAndJoinWorkers`
-  still joins it before the session goes. The writer remembers each
-  abandoned worker per path and admits no new write for that path until
-  the worker has finished: a tick defers its admission until then, and
-  `FlushLatest` waits for it first, inside its own bound. A deferred
-  admission re-checks, when the worker finishes, that the writer is not
-  suspended and the tab is neither fenced nor clean; a flush that timed
-  out admits nothing afterwards. So an abandoned write never lands after
-  a newer generation, and a save never waits on an abandoned write (no
-  ticket is held while the writer waits for one). Whatever an abandoned
-  write lands later is superseded by the fenced discard of the clean
-  transition or Discard All (item 6), or overwritten by the next
-  generation's write, admitted only after it finished. Every `Refused`
-  return after `Quiesce()` calls `HotExitWriter.Resume()` (new), which
-  re-arms the timer of every dirty tab whose generation exceeds its last
-  durable generation.
+  clean transition (`IsDirty` false), and a dirty tab's own Discard,
+  discard through the fence below (`FenceAndDiscard(tab)`), never a bare
+  `discard_buffer`. The writer records, per tab, the last generation
+  durably written.
+- **The store host: recovery work outlives the workspace, and nothing
+  joins it.** A new `HotExitStoreHost` (`HotExitStoreHost.cs`, `internal
+  sealed class`) is the one owner of the core store handle (item 8) and
+  of every store call in flight. One per process, as the sidebar write
+  journal is (Current state): `internal static HotExitStoreHost Shared {
+  get; private set; }`, installed at launch over the device-local root by
+  `HotExitStoreHost.InstallProductionLocation()` (new), called beside
+  `SidebarWriteJournal.InstallProductionLocation()` (`App.xaml.cs:138`).
+  `VaultLifecycleViewModel` hands it to each `WorkspaceViewModel` it
+  constructs (a new constructor parameter `HotExitStoreHost? hotExitStore`,
+  `null` meaning `Shared`; facts pass their own over a temp store root).
+  Its members, all new: `Task<HotExitWriteOutcome> Write(HotExitWrite
+  write)` (`HotExitWrite`, new record: the session's store key, `Path`,
+  `Text`, `BaselineHash`, `Generation`, and item 6's token where the
+  design carries one) runs `write_buffer` on its own thread-pool task and
+  returns it, never faulting (a store error is a `Failed` outcome);
+  `Task InFlight(string path)` is the write still running for that file
+  — whichever workspace issued it, the path folded as the coordinator's
+  `PathKey` folds (NFC, lowercase) — or a completed task;
+  `Task<bool> DiscardBuffer(storeKey, string path)` and `Task<bool>
+  DiscardVault(storeKey)` run the discard on its own task, true once the
+  store confirmed it; `Task DiscardsSettled()` completes when every
+  discard issued so far has finished and never faults; and the test seams
+  `BeforeCallForTests` / `AfterCallForTests` (`Action<HotExitStoreCall>?`;
+  `HotExitStoreCall`, new record: the kind — write, buffer discard or
+  vault discard — the path and the generation) run on the call's own
+  task, after its arguments, the token included, are fixed and before the
+  store is called, and after the store returned. Calls are independent
+  tasks — the host serializes nothing, because item 6 orders a discard
+  against an older write still in flight. **Nothing joins the store
+  host:** a recovery write is never handed to `TrackWorker`, so
+  `CloseAndJoinWorkers` joins save workers only, exactly as on `main`
+  (the session still goes only after every save worker is joined);
+  neither a teardown nor `WorkspaceViewModel.Dispose` waits on a store
+  task, except the bounded discard wait below; and `App.OnExit` does not
+  wait for it, because a call cut short by process exit is item 8's crash
+  case. A store call borrows no session (item 8), so the session may be
+  disposed while one is in flight.
+- **A teardown never waits on a recovery write.** `TryCloseWorkspace` and
+  `TryCloseWorkspaceCore` gain a `TeardownRoute route` parameter (the
+  three callers at `:454`, `:605`, `:644` pass `Switch`, `Close` and
+  `ApplicationClose`). Immediately before the round loop (`:1505`), every
+  route calls `HotExitWriter.Quiesce()` (new): it stops every debounce
+  timer and suspends scheduling, so no write is admitted on a tick while
+  the teardown runs, then calls `AbandonInFlight()` (new): every
+  outstanding recovery operation's Task is completed by the writer — its
+  ticket releases, so `SettleSaves()` and the Discard check's `SavesIdle`
+  no longer wait on it — and is marked abandoned, so its late result
+  records no durable generation and re-issues nothing; the write itself
+  keeps running on the store host, which nothing in the teardown or the
+  disposal joins. `WorkspaceViewModel.Dispose` calls
+  `HotExitWriter.Detach()` (new) first, before `CloseAndJoinWorkers`: it
+  stops the timers, abandons whatever is still outstanding as above, and
+  marks the writer detached, so a late result publishes nothing; it waits
+  for nothing. The writer admits no new write for a path while
+  `HotExitStoreHost.InFlight(path)` is incomplete — including a write an
+  earlier workspace on the same vault abandoned: a tick defers its
+  admission until then, and `FlushLatest` waits for it first, inside its
+  own bound. A deferred admission re-checks, when that write finishes,
+  that the writer is neither suspended nor detached and the tab is
+  neither fenced nor clean; a flush that timed out admits nothing
+  afterwards. So an abandoned write never lands after a newer generation,
+  and a save never waits on an abandoned write (no ticket is held while
+  the writer waits for one). A teardown returns a `Closed` outcome with an
+  abandoned write still in flight only behind a fenced discard of its
+  path — `Flushed` waited for every abandoned write inside its bound,
+  Save All's saves make each tab clean and a clean transition discards,
+  Discard All discards the vault, and a tab closed or re-pointed with
+  Discard meanwhile discards its path — so whatever that write lands
+  after the workspace and the session are gone is superseded (item 6);
+  while the workspace lives, it is superseded the same way or overwritten
+  by the next generation's write, admitted only after it finished. Every
+  `Refused` return after `Quiesce()` calls `HotExitWriter.Resume()` (new),
+  which re-arms the timer of every dirty tab whose generation exceeds its
+  last durable generation.
 - **Closing never asks — once the latest edits are durable.** In the
   round loop, where the prompt would open, application close and the
   switch call `HotExitWriter.FlushLatest(timeout: 5 s)` (new;
@@ -299,22 +421,48 @@ Windows only, consuming the merged core store and WB-2's `Admit`.
   never discarded silently. `TeardownRoute.Close` (Close Vault) keeps the
   prompt unconditionally and flushes nothing. **Every Discard All —
   Close Vault's and the fallback prompt's on application close and
-  switch — runs `HotExitWriter.FenceAndDiscardVault()`** (new), and a
-  clean transition runs `HotExitWriter.FenceAndDiscard(tab)` (new): each
-  first fences its scope (stops the scope's debounce timers and marks it
-  fenced, so no new `write_buffer` is issued for it), then calls the
-  store's discard (`discard_vault()` / `discard_buffer(path)`) directly,
-  not through `Admit`, which per the shared design's item 6 supersedes
-  every write already in flight; a write that completes after the fence
-  is ignored by the writer (no durable generation recorded, nothing
-  re-issued). A tab's fence lasts until its next edit, whose writes are
-  issued after the discard and so are newer than it; the vault fence
-  lasts until the teardown completes. The fence is one of three locks on
-  "nothing is issued after the discard" — with `Quiesce()`'s suspension
-  (and, after the teardown, the closed coordinator) and the operation's
-  start-time re-read of a clean or fenced tab — while a write already in
-  flight is the store's to drop (item 6). A timed-out flush therefore
-  cannot bring a discarded buffer back.
+  switch — runs `HotExitWriter.FenceAndDiscardVault()`** (new) once the
+  Discard check (`:1562-1566`) has passed, immediately before
+  `ClosedChangesDiscarded` is returned (`:1568`); a clean transition runs
+  `HotExitWriter.FenceAndDiscard(tab)` (new); and so does **a dirty tab's
+  own Discard** — a tab close or a dirty navigation `AdmitDirtyTab`
+  accepted Discard for, and a tab `CloseActivePane` approved for Discard —
+  for a tab still dirty, immediately before it is disposed
+  (`Layout.cs:479`, `:639`) or its document replaced
+  (`ReplaceTabItem`, `:272`); otherwise its recovery entry, in no tab any
+  more, would reopen as a new dirty tab (restore rule, item 3). A tab
+  disposed by the workspace's own disposal discards nothing (the
+  teardown decided its buffer). Each fence first fences its scope (stops
+  the scope's debounce timers and marks it fenced, so no new
+  `write_buffer` is issued for it), then issues the store's discard
+  through the store host (`DiscardVault` / `DiscardBuffer`: its own task,
+  never on the dispatcher, not through `Admit`), which per the shared
+  design's item 6 supersedes every write already in flight; a write that
+  completes after the fence is ignored by the writer (no durable
+  generation recorded, nothing re-issued). A tab's fence lasts until its
+  next edit, whose writes are issued after the discard and so are newer
+  than it; the vault fence lasts until the writer is detached. The fence
+  is one of three locks on "nothing is issued after the discard" — with
+  `Quiesce()`'s suspension (and, after the teardown, the detached writer
+  and the closed coordinator) and the operation's start-time re-read of a
+  clean or fenced tab — while a write already in flight is the store's to
+  drop (item 6). A timed-out flush therefore cannot bring a discarded
+  buffer back. **A teardown waits on a discard only within a budget:**
+  before it returns any `Closed` outcome (`:1530-1533`, `:1568`) it calls
+  `HotExitWriter.AwaitDiscards()` (new), which waits, without pumping, at
+  most `HotExitWriter.DiscardWaitBudget` (new, 5 s, as the journal's
+  `DurableWaitBudget`) for `HotExitStoreHost.DiscardsSettled()` — every
+  discard issued so far, the clean transitions of a Save All and of
+  earlier saves included, so a quit right after a save does not cut its
+  discard. A miss, or a discard the store did not confirm, logs
+  `HostDiagnosticEvent.HotExitDiscardUnconfirmed` (new) and the teardown
+  proceeds: the reader chose Discard (or saved), and a store that cannot
+  answer does not hold the window. The discard keeps running on the store
+  host and lands when the store answers; if the process exits first, the
+  next open restores those buffers dirty under the restore rule (item 3)
+  and nothing in the vault has changed. Outside a teardown nothing waits
+  on a discard, so a clean transition never blocks the dispatcher on the
+  store.
 - **Weak roots (item 7).** The writer and the restore read
   `RootIdentity().Persistent` once per session. Under (a): the first
   write's typed refusal stops the writer issuing more for the session
@@ -325,8 +473,10 @@ Windows only, consuming the merged core store and WB-2's `Admit`.
   persistent root; the key and the admission check are core's. No
   host-side key is ever derived from the weak identity.
 - **Restoring, injected into the tabs the layout builds.**
-  `VaultLifecycleViewModel` reads `session.ReadHotExitBuffers()` (the FFI
-  name per the design) after the open scan and before `:1184`, and passes
+  `VaultLifecycleViewModel` reads the vault's recovery entries
+  (`read_buffers` on the store host's handle with the session's store
+  key, item 8; the FFI names per the design) after the open scan and
+  before `:1184`, and passes
   `IReadOnlyList<RestoredBuffer>` into the `WorkspaceViewModel`
   constructor as a new parameter. The constructor stores it and
   `Restore(_persistence.Load())` at `:2309` runs as today, but
@@ -346,31 +496,67 @@ Windows only, consuming the merged core store and WB-2's `Admit`.
   `SaveAll`/Ctrl+S runs the existing conflict path; no new conflict code.
 - Deliberately not changed: the Close Vault prompt; the save path;
   `WorkspacePersistence`; `WorkspaceSaveCoordinator` (WB-2's `Admit` is
-  used as it ships); no new core module; no Windows-only store.
+  used as it ships; `CloseAndJoinWorkers` still joins every save worker,
+  unbounded, before the session goes — only recovery work moves to the
+  store host); no new core module; no Windows-only store.
 
 ## Tests
 
 xUnit `Noun.VerbPhrase`, in `SlateWindows.Tests/HotExitTests.cs` (new
-class `HotExitTests`). Unless a row says otherwise the store is reached
-through a host write seam over the FFI that can hold a `write_buffer` in
-flight (its start observed by an asserted `Wait(2 s)`) and release it.
+class `HotExitTests`). Each fact builds its own `HotExitStoreHost` over a
+temp store root and hands it to the lifecycle. Unless a row says
+otherwise the store is the real core store, and a store call is held
+through `HotExitStoreHost.BeforeCallForTests`: the fact blocks the call's
+own task there (its start observed by an asserted `Wait(2 s)`), so a held
+call has its arguments — item 6's token included — already fixed, as a
+call stalled inside the store has, and the fact knows it is still held
+until it releases it; `AfterCallForTests` signals the call's return. (If
+the design's supersession mechanism reads its token inside core rather
+than carrying it, the hold moves to the core store seam PR 29 names, with
+the same observations.)
+
+**The hold-through rule.** A fact that runs a teardown while a recovery
+write is held keeps it held until the route's whole teardown has
+returned — Close Vault: `CloseVault()` (its `CloseSession()` disposes the
+workspace, joining save workers, then the session); vault switch:
+`OpenVaultAsync(B)` completed (its `CloseSession()` at `:473`); application
+close: `PrepareForApplicationClose()` true, then the lifecycle's
+`Dispose()` returned (what `Window_Closed` runs). It then asserts the
+write is still held, and only then releases it. A `TeardownWatchdog`
+(test helper, new) armed before the route starts is the only other
+release: if the route has not returned within 20 s — twice the longest
+wait the code under test bounds itself to, the flush's 5 s and the
+discard budget's 5 s together — it records that it fired and releases
+the hold so the runner does not hang, and every such fact asserts it
+never fired. `BeforeJoinForTests` never releases a
+recovery write; a fact sets it only to record that the join began with
+the write still held, or, in `DisposalJoinsASaveWorkerButNotARecoveryWrite`,
+to release a parked SAVE, which is what the join must wait for.
+"Reopening", in a fact, opens the vault again over the same store host —
+through a new `VaultLifecycleViewModel` after application close, as a
+relaunch would.
 
 | Fact | Asserts | Mutation |
 |---|---|---|
 | `ATypedEditIsWrittenToTheStoreAfterTheDebounce` | after an edit and the timer, the store holds the text and baseline tagged with the generation | drop the write |
-| `ACleanTabDiscardsItsBuffer` | save, or undo to clean: buffer gone | keep it |
-| `ClosingTheWindowWithDirtyTabsFlushesThenNeverAsks` | an edit made after the last debounce, and a second edit the fact types from inside the flush's pumped wait (through the write seam's hold callback); `PrepareForApplicationClose()` true, `_confirmUnsavedClose` never called, the store holds the final generation, file bytes unchanged | return `Closed` without flushing; or no re-read after the pumped wait (the second edit's generation is not in the store) |
+| `ACleanTabDiscardsItsBuffer` | save, or undo to clean: buffer gone; with that `discard_buffer` held by the seam, a dispatcher operation the fact posts after the clean transition runs before the release (asserted `Wait(2 s)`, released in `finally`) | keep it; or discard on the dispatcher (the posted operation runs only after the release) |
+| `ClosingTheWindowWithDirtyTabsFlushesThenNeverAsks` | an edit made after the last debounce, and a second edit the fact types from inside the flush's pumped wait (through the seam's hold callback); `PrepareForApplicationClose()` true, `_confirmUnsavedClose` never called; after the lifecycle's `Dispose()` the store holds the final generation, file bytes unchanged | return `Closed` without flushing; or no re-read after the pumped wait (the second edit's generation is not in the store); or discard a tab's buffer when the workspace's disposal disposes it (the store is empty) |
 | `AFailedFlushFallsBackToThePromptAndDiscardsNothing` | the store's write seam returns `Failed` (disk full) → the prompt is invoked; Cancel keeps the window and the buffer in memory | return `Closed` on failure |
 | `AFlushThatTimesOutFallsBackToThePrompt` | the write seam never completes; the flush's bounded wait reports the timeout (asserted), `AbandonInFlight()` released the ticket (`SavesIdle` true), the prompt follows; release in `finally` | treat timeout as flushed |
 | `AWriteOverTheStoresCapFallsBackToThePrompt` | the cap refusal → prompt | return `Closed` on the refusal |
-| `CloseVaultStillAsksAndDiscardAllDropsTheBuffers` | a write held in flight when Close Vault starts; the prompt is invoked while it is held (`Quiesce()` abandoned it); Discard All calls `discard_vault()` through `FenceAndDiscardVault()`; the fact releases the held write from `WorkspaceSaveCoordinator.BeforeJoinForTests`, inside the join, after `discard_vault()`; `read_buffers()` is then empty | skip the discard (the late write's buffer is restored); or a store whose `discard_vault()` does not supersede an older in-flight write (the late write re-creates the buffer) |
-| `ATimedOutFlushThenDiscardAllLeavesNothingToRestore` (Theory: application close, vault switch) | an edit after the last debounce; the route's `FlushLatest` admits its write and the store's write seam holds that `write_buffer` in flight; the flush times out (asserted) and abandons it; the fallback prompt answers Discard All; `discard_vault()` ran after the fence, and no `write_buffer` is issued after it; the held write is released from `BeforeJoinForTests` and completes late (its completion observed through an asserted `Wait(2 s)`, released in `finally`); reopening the vault over the same store root reads no buffers, builds no dirty tab and posts no `UnsavedNotesRestored` | the fallback route's Discard All without `discard_vault()` (the late write's buffer is restored); or a store whose discard does not supersede an older in-flight write (the late write re-creates the buffer); or the timeout treated as `Flushed` (no prompt is invoked) |
+| `CloseVaultStillAsksAndDiscardAllDropsTheBuffers` (hold-through) | a write held in flight when Close Vault starts; the prompt is invoked while it is held (`Quiesce()` abandoned it; `SavesIdle` true); Discard All issues `discard_vault()` through `FenceAndDiscardVault()` while it is held (the seam's call record); `CloseVault()` returns with the write still held — `BeforeJoinForTests` recorded the hold still in place and `SavesForTests.LiveWorkersForTests` 0 when the join began, the watchdog never fired, the workspace and session are gone; then the fact releases it, its return is observed (`AfterCallForTests`, asserted `Wait(2 s)`, released in `finally`), and reopening the vault over the same store host reads no buffers, builds no dirty tab and posts no `UnsavedNotesRestored` | hand the recovery write to `TrackWorker` (the join waits on the held write: the watchdog fires); or skip the discard (the late write's buffer is restored); or a store whose `discard_vault()` does not supersede an older in-flight write (the late write re-creates the buffer) |
+| `ATimedOutFlushThenDiscardAllLeavesNothingToRestore` (hold-through; Theory: application close, vault switch) | an edit after the last debounce; the route's `FlushLatest` admits its write and the seam holds that `write_buffer` in flight; the flush times out (asserted) and abandons it; the fallback prompt answers Discard All; `discard_vault()` is issued after the fence while the write is held, and no `write_buffer` is issued after it; the route's whole teardown returns with the write still held (asserted; the watchdog never fired); then the fact releases it, its late return is observed (asserted `Wait(2 s)`, released in `finally`), and reopening the vault over the same store host reads no buffers, builds no dirty tab and posts no `UnsavedNotesRestored` | hand the recovery write to `TrackWorker` (the disposal's join waits: the watchdog fires); or the fallback route's Discard All without `discard_vault()` (the late write's buffer is restored); or a store whose discard does not supersede an older in-flight write (the late write re-creates the buffer); or the timeout treated as `Flushed` (no prompt is invoked) |
 | `ALateWriteAfterACleanTransitionDoesNotResurrectTheBuffer` | a `write_buffer` held in flight; the reader undoes the tab back to its saved text (clean without a save — a save would wait behind the write's ticket), so `FenceAndDiscard(tab)` runs while the write is held; the held write is released and completes late (asserted `Wait(2 s)`, released in `finally`); reopening restores nothing for that path and the tab opens clean | the clean transition without `discard_buffer` (the late write's buffer is restored); or a store whose `discard_buffer` does not supersede an older in-flight write (the late write re-creates the buffer) |
 | `ASaveAdmittedWhileAWriteIsInFlightWaitsForItsDurableCompletion` (new) | write first, save second: a `write_buffer` held in flight; Ctrl+S on the tab; the save's `SaveWriteHookForTests` is not reached while the write is held (asserted `Wait(1 s)` false); the write is released (in `finally`); then the save writes and publishes; the recorded order is write durable → save write → save publication → `FenceAndDiscard(tab)`'s discard; reopening restores nothing | complete the operation's Task when `write_buffer` is called rather than when its result publishes (the save starts while the write is held); or the round-8 shape — a `HasAdmittedSaveFor` check and an unadmitted write (the save starts at once) |
 | `AWriteAdmittedBehindASaveWaitsForItsPublicationAndCarriesItsHash` (new; replaces `AWriteNeverInterleavesWithAnAdmittedSave`) | save first, write second: a save parked at `SaveWriteHookForTests`; an edit and the tick admit a write; no `write_buffer` is called while the save is parked (asserted); the save is released (in `finally`) and publishes; the write is then issued with the tab's new `SavedContentHash` as its baseline | snapshot the baseline at the tick rather than when the operation starts (the old hash); or write without `Admit` (the write lands while the save is parked) |
 | `TwoGenerationsOfOnePathNeverOverlap` (new) | generation N's write held in flight; an edit makes N + 1 and its tick admits a second write; the seam sees no second `write_buffer` while N is held (call count 1, asserted); N is released (in `finally`); N + 1 is issued and lands; the store holds N + 1's text and the recorded durable generation is N + 1 | issue on the tick without `Admit` (the seam completes N after N + 1 → the store holds N's text) |
-| `AnAbandonedWriteNeverLandsAfterANewerGeneration` (new) | generation N's debounce write held; application close abandons it (`Quiesce()`) and its `FlushLatest` times out waiting for it (asserted); the prompt answers Cancel (`Refused`, `Resume()`); an edit makes N + 1, and while N's abandoned worker is held its tick admits nothing — no second `write_buffer` call and `SavesIdle` true, so a Ctrl+S meanwhile reaches `SaveWriteHookForTests` at once (asserted); N is released (in `finally`); then N + 1 is admitted and lands; the store holds N + 1's text | admit the next write without waiting for the abandoned worker (the seam completes N after N + 1 → the store holds N's text) |
-| `ATeardownNeverWaitsOnARecoveryWrite` (new; Theory: Close Vault, application close, vault switch) | a debounce write held in flight when the route starts; a dispatcher timer the fact arms releases the hold after 3 s and records when; Close Vault's prompt (answered Cancel) is invoked before that release with `SavesIdle` true; application close's and switch's `FlushLatest` is entered before that release (the recorded order), admits its write only after the abandoned worker finished, and returns `Flushed` | no `Quiesce()` before the round loop (`SettleSaves()` pumps until the timer releases the write; the prompt or the flush comes after the release) |
+| `AnAbandonedWriteNeverLandsAfterANewerGeneration` (new) | generation N's debounce write held; application close abandons it (`Quiesce()`) and its `FlushLatest` times out waiting for it (asserted); the prompt answers Cancel (`Refused`, `Resume()`); an edit makes N + 1, and while N's abandoned write is still held on the store host its tick admits nothing — no second `write_buffer` call and `SavesIdle` true, so a Ctrl+S meanwhile reaches `SaveWriteHookForTests` at once (asserted); N is released (in `finally`); then N + 1 is admitted and lands; the store holds N + 1's text | admit the next write without waiting for the abandoned write (the seam completes N after N + 1 → the store holds N's text) |
+| `ATeardownNeverWaitsOnARecoveryWrite` (new; hold-through; Theory: Close Vault, application close, vault switch; the prompt answers Save All) | a debounce write on `a.md` held when the route starts and through its whole teardown; Close Vault's prompt is invoked while it is held, with `SavesIdle` true; application close's and switch's `FlushLatest` is entered while it is held, times out waiting for it (asserted) and the prompt follows; Save All's save of `a.md` reaches `SaveWriteHookForTests` while the write is still held (asserted) and lands; the clean transition's `discard_buffer` is issued while it is held; the route's whole teardown returns with the write still held (asserted; `BeforeJoinForTests` recorded the hold in place; the watchdog never fired); then the fact releases it and observes its late return (asserted `Wait(2 s)`, released in `finally`); `a.md` holds the saved bytes and reopening restores nothing | hand the recovery write to `TrackWorker` (the join waits on it: the watchdog fires); or no `Quiesce()` before the round loop (`SettleSaves()` pumps on the held write's ticket until the watchdog releases it); or the clean transition without `discard_buffer` (the late write's buffer is restored dirty and stale) |
+| `AFlushWaitsForAnAbandonedWriteWithinItsBound` (new; Theory: application close, vault switch) | generation N's debounce write on `a.md` held when the route starts, and an edit after it makes N + 1; a timer the fact arms off the dispatcher releases the hold 2 s after the route starts — inside the flush's 5 s bound, which is meant to wait for it — and records when; `FlushLatest` is entered before that release (the recorded order: the round loop did not wait on the abandoned write); the seam records no second `write_buffer` before the release; then N + 1's write is issued and lands, `FlushLatest` returns `Flushed`, no prompt is invoked, and the route returns with `InFlight(a.md)` complete; the store holds N + 1's text. (The timer is not a teardown seam: what this fact proves is the order, and nothing is in flight when the route returns.) | no `Quiesce()` (the flush is entered only after the release); or admit N + 1 without waiting for the abandoned write (a second `write_buffer` while N is held) |
+| `DisposalJoinsASaveWorkerButNotARecoveryWrite` (new) | a recovery write on `a.md` (its first) held, and a Ctrl+S on `b.md` parked at `SaveWriteHookForTests`; `BeforeJoinForTests` records that the recovery write is still held and releases the parked save; the lifecycle's `Dispose()` (the shutdown path, no teardown route) returns — the watchdog never fired — with `b.md` holding the save's bytes (the save worker was joined) and the recovery write still held (asserted); then the fact releases it: its return is observed (asserted `Wait(2 s)`, released in `finally`), no fault is logged, nothing is published (the writer is detached), and reopening restores `a.md`'s text dirty — a write the store host finished after the session was gone, with no discard after it, is a crash-shape buffer | hand the recovery write to `TrackWorker` (the watchdog fires); or skip `CloseAndJoinWorkers` (`b.md` lacks the save's bytes when disposal returns); or route `write_buffer` through the session (the released call throws `ObjectDisposedException` and the store holds nothing for `a.md`) |
+| `AReopenedVaultsWriteWaitsForTheLastSessionsAbandonedWrite` (new; hold-through) | a write on `a.md` held; Close Vault answered Discard All returns with it still held (asserted; the watchdog never fired); the vault reopens over the same store host while it is held, and an edit to `a.md` ticks: the seam sees no second `write_buffer` while the first is held (call count 1, asserted) and `SavesIdle` is true; then the fact releases the first and observes its return (asserted `Wait(2 s)`, released in `finally`); the new session's write is issued and lands; after the crash shape (the session disposed with no teardown route), reopening restores the new session's text dirty | keep the per-path in-flight record in the writer instead of the store host (the new session's write is issued while the old one is held: call count 2) |
+| `ADiscardThatCannotLandDoesNotHoldTheTeardown` (new; Theory: Close Vault, application close) | an edit durably written (asserted); application close's flush is made to fail by the seam answering the store's cap refusal, so its prompt opens at once; the prompt answers Discard All and the seam holds `discard_vault()`; the route's whole teardown returns with a `Closed` outcome (Close Vault: the vault closed; application close: `PrepareForApplicationClose()` true, then `Dispose()` returned) after `AwaitDiscards()` spent its 5 s budget, with the discard still held (asserted), `HotExitDiscardUnconfirmed` logged once (`HostLog.ObserverForTests`), and the watchdog never fired; then the fact releases the discard and observes its return (asserted `Wait(2 s)`, released in `finally`); reopening reads no buffers | wait for the discard without a budget, or issue it on the dispatcher (the route never returns: the watchdog fires); or refuse the close on a miss (the outcome is `Refused`); or never wait (nothing is logged) |
+| `ADiscardedTabsBufferIsNotRestored` (new; Theory: close the tab, close its pane, open another note into it — each answered Discard) | an edit to `a.md` durably written (asserted); the route's prompt answers Discard; `discard_buffer(a.md)` is issued before the tab is disposed or re-pointed (the recorded order); closing the vault (nothing dirty: no prompt) and reopening builds no tab for `a.md` and posts no `UnsavedNotesRestored` | skip the discard on that route (the entry reopens as a new dirty tab) |
 | `ReopeningRestoresTheBuffersIntoTheTabsTheLayoutBuilds` | the tab instances in `Groups` after construction are dirty with the text; the active tab is the restored one; exactly one landing; `WorkspaceReady` after install (order recorded by a seam) | install into pre-built tabs |
 | `ARecoveryEntryWithNoLayoutTabOpensANewDirtyTab` | a new tab in the active group, dirty | drop the entry |
 | `ABufferWhoseFileChangedOnDiskRestoresDirtyAndStale` | `IsExternallyStale`; the next save takes the conflict path | clear the flag |
@@ -383,20 +569,30 @@ flight (its start observed by an asserted `Wait(2 s)`) and release it.
 | existing open-order pins in `RescanTests` updated where the constructor gained a parameter | | |
 
 Every `Wait(timeout)` in these facts asserts its boolean result and
-releases its event in `finally`. A held write that a teardown's
-`CloseAndJoinWorkers` would join is released from
-`WorkspaceSaveCoordinator.BeforeJoinForTests`, never after the
-teardown returns (the join has no bound).
+releases its event in `finally`. No recovery write is ever joined, so no
+fact releases one from `WorkspaceSaveCoordinator.BeforeJoinForTests`: a
+recovery write held across a teardown stays held until the route's whole
+teardown has returned (the hold-through rule), and the watchdog that is
+its only other release fails the fact when it fires. The existing
+`PumpedSaveReentrancyTests.DisposalJoinsASaveWorkerBeforeTheSessionGoes`
+and `TheJoinRunsEveryTrackedWorkerToCompletion` stay as they are and run
+with these facts: ordinary save workers keep today's unbounded join.
 
 ## Docs and registers
 
 - Contract 38 D-10: append a dated amendment (closing never asks on both
   hosts once the latest edits are durable; a failed flush falls back to
   the prompt; Close Vault still asks; every Discard, the fallback
-  prompt's included, fences pending recovery writes before it discards;
-  a recovery write is an admitted operation on its file's chain until it
-  is durable, and a teardown abandons, never waits on, one still in
-  flight; a weak root follows the design's item 7).
+  prompt's included, and a dirty tab's own Discard, fences pending
+  recovery writes before it discards; a recovery write is an admitted
+  operation on its file's chain until it is durable; recovery writes and
+  discards run on the process-lifetime store host, whose calls borrow no
+  session, so no teardown waits on a recovery write — a teardown abandons
+  one still in flight, the workspace's disposal joins save workers only,
+  and the session may go while a recovery write is in flight; a teardown
+  waits for its discards at most 5 s, without pumping, and past that
+  proceeds without confirmation, logged; a weak root follows the
+  design's item 7).
 - `18_windows_port/w_c_matrix.md`: the Workspace tabs row's notification
   column gains the restore sentence; `18_windows_port/parity_matrix.md`:
   `python -I scripts/generate-parity-matrix.py --check`.
@@ -418,20 +614,21 @@ function Assert-Ok([string] $What) { if ($LASTEXITCODE -ne 0) { throw "$What exi
 ./apps/slate-windows/generate-bindings.ps1 -Locked; Assert-Ok 'generate-bindings'   # PR 29's FFI
 dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release; Assert-Ok 'dotnet build'
 $tests = 'apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj'
-$filter = 'FullyQualifiedName~SlateWindows.Tests.HotExitTests|FullyQualifiedName~SlateWindows.Tests.RescanTests|FullyQualifiedName~SlateWindows.Tests.Censuses.A11yCorpusCensus'
+$filter = 'FullyQualifiedName~SlateWindows.Tests.HotExitTests|FullyQualifiedName~SlateWindows.Tests.RescanTests|FullyQualifiedName~SlateWindows.Tests.Censuses.A11yCorpusCensus|FullyQualifiedName~SlateWindows.Tests.PumpedSaveReentrancyTests.DisposalJoinsASaveWorkerBeforeTheSessionGoes|FullyQualifiedName~SlateWindows.Tests.PumpedSaveReentrancyTests.TheJoinRunsEveryTrackedWorkerToCompletion'
 $names = @(dotnet test $tests --no-build --configuration Release --list-tests --filter $filter | Select-String '^\s{4}\S' | ForEach-Object { ($_.Line.Trim() -split '\(', 2)[0] }); Assert-Ok 'test discovery'
-$required = @('ATypedEditIsWrittenToTheStoreAfterTheDebounce', 'ACleanTabDiscardsItsBuffer', 'ClosingTheWindowWithDirtyTabsFlushesThenNeverAsks', 'AFailedFlushFallsBackToThePromptAndDiscardsNothing', 'AFlushThatTimesOutFallsBackToThePrompt', 'AWriteOverTheStoresCapFallsBackToThePrompt', 'CloseVaultStillAsksAndDiscardAllDropsTheBuffers', 'ATimedOutFlushThenDiscardAllLeavesNothingToRestore', 'ALateWriteAfterACleanTransitionDoesNotResurrectTheBuffer', 'ASaveAdmittedWhileAWriteIsInFlightWaitsForItsDurableCompletion', 'AWriteAdmittedBehindASaveWaitsForItsPublicationAndCarriesItsHash', 'TwoGenerationsOfOnePathNeverOverlap', 'AnAbandonedWriteNeverLandsAfterANewerGeneration', 'ATeardownNeverWaitsOnARecoveryWrite', 'ReopeningRestoresTheBuffersIntoTheTabsTheLayoutBuilds', 'ARecoveryEntryWithNoLayoutTabOpensANewDirtyTab', 'ABufferWhoseFileChangedOnDiskRestoresDirtyAndStale', 'ABufferWhoseFileMovedReseatsOnItsNewPath', 'ARestoreSpeaksCoresSentenceOnce', 'AWeakRootsBufferIsNeverRestoredIntoAnotherFolderAtItsPath', 'AWeakRootRenamedWhileClosedIsNotRestoredByItsIndex') | ForEach-Object { "SlateWindows.Tests.HotExitTests.$_" }
+$required = @('ATypedEditIsWrittenToTheStoreAfterTheDebounce', 'ACleanTabDiscardsItsBuffer', 'ClosingTheWindowWithDirtyTabsFlushesThenNeverAsks', 'AFailedFlushFallsBackToThePromptAndDiscardsNothing', 'AFlushThatTimesOutFallsBackToThePrompt', 'AWriteOverTheStoresCapFallsBackToThePrompt', 'CloseVaultStillAsksAndDiscardAllDropsTheBuffers', 'ATimedOutFlushThenDiscardAllLeavesNothingToRestore', 'ALateWriteAfterACleanTransitionDoesNotResurrectTheBuffer', 'ASaveAdmittedWhileAWriteIsInFlightWaitsForItsDurableCompletion', 'AWriteAdmittedBehindASaveWaitsForItsPublicationAndCarriesItsHash', 'TwoGenerationsOfOnePathNeverOverlap', 'AnAbandonedWriteNeverLandsAfterANewerGeneration', 'ATeardownNeverWaitsOnARecoveryWrite', 'AFlushWaitsForAnAbandonedWriteWithinItsBound', 'DisposalJoinsASaveWorkerButNotARecoveryWrite', 'AReopenedVaultsWriteWaitsForTheLastSessionsAbandonedWrite', 'ADiscardThatCannotLandDoesNotHoldTheTeardown', 'ADiscardedTabsBufferIsNotRestored', 'ReopeningRestoresTheBuffersIntoTheTabsTheLayoutBuilds', 'ARecoveryEntryWithNoLayoutTabOpensANewDirtyTab', 'ABufferWhoseFileChangedOnDiskRestoresDirtyAndStale', 'ABufferWhoseFileMovedReseatsOnItsNewPath', 'ARestoreSpeaksCoresSentenceOnce', 'AWeakRootsBufferIsNeverRestoredIntoAnotherFolderAtItsPath', 'AWeakRootRenamedWhileClosedIsNotRestoredByItsIndex') | ForEach-Object { "SlateWindows.Tests.HotExitTests.$_" }
+$required += @('DisposalJoinsASaveWorkerBeforeTheSessionGoes', 'TheJoinRunsEveryTrackedWorkerToCompletion') | ForEach-Object { "SlateWindows.Tests.PumpedSaveReentrancyTests.$_" }
 $missing = @($required | Where-Object { $names -notcontains $_ })
 if ($missing.Count -gt 0) { throw "the filter does not select: $($missing -join ', ')" }
 if (-not ($names | Where-Object { $_ -like 'SlateWindows.Tests.Censuses.A11yCorpusCensus.*' })) { throw 'no A11yCorpusCensus fact discovered' }
-dotnet test $tests --no-build --configuration Release --filter $filter; Assert-Ok 'HotExitTests, RescanTests, A11yCorpusCensus'
+dotnet test $tests --no-build --configuration Release --filter $filter; Assert-Ok 'HotExitTests, RescanTests, A11yCorpusCensus, the save-join pins'
 # NVDA closed, desktop free (the FlaUI facts live in the partial class ShellAccessibilityTests, so select by method name):
 $at = 'apps/slate-windows/tests/SlateWindows.AccessibilityTests/SlateWindows.AccessibilityTests.csproj'
 $atFilter = 'FullyQualifiedName~ShellAccessibilityTests.HotExit_ClosingAndReopeningKeepsAnUnsavedNote'
 $atNames = @(dotnet test $at --no-build --configuration Release --list-tests --filter $atFilter | Select-String '^\s{4}\S'); Assert-Ok 'FlaUI discovery'
 if ($atNames.Count -lt 1) { throw "the FlaUI filter selects nothing: $atFilter" }
 dotnet test $at --no-build --configuration Release --filter $atFilter; Assert-Ok 'FlaUI journey'
-$cs = @('apps/slate-windows/src/SlateWindows/MainWindow.xaml.cs','apps/slate-windows/src/SlateWindows/VaultLifecycleViewModel.cs','apps/slate-windows/src/SlateWindows/WorkspaceViewModel.cs','apps/slate-windows/src/SlateWindows/WorkspaceViewModel.Persistence.cs','apps/slate-windows/src/SlateWindows/WorkspaceViewModel.HotExit.cs','apps/slate-windows/tests/SlateWindows.Tests/HotExitTests.cs','apps/slate-windows/tests/SlateWindows.Tests/RescanTests.cs','apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.HotExit.cs')
+$cs = @('apps/slate-windows/src/SlateWindows/App.xaml.cs','apps/slate-windows/src/SlateWindows/HostLog.cs','apps/slate-windows/src/SlateWindows/HotExitStoreHost.cs','apps/slate-windows/src/SlateWindows/MainWindow.xaml.cs','apps/slate-windows/src/SlateWindows/VaultLifecycleViewModel.cs','apps/slate-windows/src/SlateWindows/WorkspaceViewModel.cs','apps/slate-windows/src/SlateWindows/WorkspaceViewModel.Layout.cs','apps/slate-windows/src/SlateWindows/WorkspaceViewModel.Persistence.cs','apps/slate-windows/src/SlateWindows/WorkspaceViewModel.HotExit.cs','apps/slate-windows/tests/SlateWindows.Tests/HotExitTests.cs','apps/slate-windows/tests/SlateWindows.Tests/RescanTests.cs','apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.HotExit.cs')
 dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $cs; Assert-Ok 'dotnet format'
 python -I scripts/generate-parity-matrix.py --check; Assert-Ok 'parity matrix check'
 python -I scripts/a11y_trigger_ledger.py --write; Assert-Ok 'trigger ledger'
@@ -461,27 +658,43 @@ PR body; the PR stays a draft until then.
 
 - [ ] WD20 recorded; PR 29's design and core store merged with green
       combined-head CI; WB-28 merged; WB-2's `Admit` on `main`.
-- [ ] The twenty-one `HotExitTests` facts, an `A11yCorpusCensus` fact
-      and the FlaUI journey pass, seen failing first.
+- [ ] The twenty-six `HotExitTests` facts, an `A11yCorpusCensus` fact
+      and the FlaUI journey pass, seen failing first; the save-join pins
+      `PumpedSaveReentrancyTests.DisposalJoinsASaveWorkerBeforeTheSessionGoes`
+      and `TheJoinRunsEveryTrackedWorkerToCompletion` pass unchanged.
 - [ ] Application close and switch flush then never prompt; a failed or
       timed-out flush falls back to the prompt; Close Vault prompts;
-      every Discard All (Close Vault's and the fallback prompt's) and every
-      clean transition discards through the fence, so a write still in
-      flight that completes after the discard restores nothing on reopen
-      (timeout → Discard → late completion → reopen, on both routes).
+      every Discard All (Close Vault's and the fallback prompt's), every
+      clean transition and every dirty tab's own Discard (tab close, pane
+      close, dirty navigation) discards through the fence, so a write
+      still in flight that completes after the discard restores nothing on
+      reopen (timeout → Discard → teardown returned → late completion →
+      reopen, on both routes).
 - [ ] Every recovery write is a WB-2 `Admit` operation whose ticket
       completes at durable completion: a save admitted after it waits
       for it, it waits for a save admitted before it and writes that
       save's hash, two generations of one path never overlap, and the
       writer never consults `HasAdmittedSaveFor`. Every teardown route
       quiesces and abandons in-flight recovery writes before its round
-      loop, so no route waits on one, and an abandoned write never lands
-      after a newer generation.
+      loop, and an abandoned write never lands after a newer generation,
+      even one a later session of the vault issues.
+- [ ] No teardown ever waits on a recovery write: recovery writes and
+      discards run on the process-lifetime `HotExitStoreHost`, never on a
+      worker `TrackWorker` sees, so `CloseAndJoinWorkers` joins save
+      workers only; each route's whole teardown (Close Vault, switch, and
+      application close through the lifecycle's `Dispose()`) returns with
+      a recovery write still held, which is released only afterwards; a
+      teardown waits for its discards at most `DiscardWaitBudget` (5 s,
+      without pumping) and past it proceeds, logging
+      `HotExitDiscardUnconfirmed`; a clean transition never waits on a
+      discard.
 - [ ] The shared design names how its discard supersedes an older
-      in-flight write (its item 6) and its weak-root key and restore
-      admission (its item 7: (a) or (b), with R1–R3); if it does not name
-      both, this chunk does not start. The two weak-root facts pass under
-      the policy it chose.
+      in-flight write (its item 6), its weak-root key and restore
+      admission (its item 7: (a) or (b), with R1–R3), and a store handle
+      whose calls borrow no vault session, are safe to call concurrently
+      and survive a cut-short call as a crash (its item 8); if it does
+      not name all three, this chunk does not start. The two weak-root
+      facts pass under the policy it chose.
 - [ ] Restore injected into `RestoreNode`'s tabs (the instances in
       `Groups` are the dirty ones); one landing; `WorkspaceReady` after.
 - [ ] Registers: contract 38 amendment, matrices, ledger; NVDA pass
@@ -496,69 +709,132 @@ WD20 (recommended: one shared design that also fixes the durable key and
 restore admission for a weak root, core-owned store, start only after
 its implementation is on `main`; else a Windows-only `HotExitStore.cs`
 mirroring the design's schema, key and weak-root policy, with a
-parity-matrix debt). Read PR 29's design and core PR first, WB-2's spec
+parity-matrix debt — host file IO that borrows no session by
+construction). Read PR 29's design and core PR first, WB-2's spec
 (`Admit`) and WB-28's design items 6 and 7 (the weak identity); then
-`MainWindow.xaml.cs:1982-1992`, `VaultLifecycleViewModel.cs:44-55`
-(`TeardownRoute`), `:76-82`, `:210-216`, `:436-460` (the switch's
-teardown at `:454`), `:598-650` (Close Vault's at `:605`, application
-close's at `:644`), `:1176-1192`, `:1272-1282`, `:1405-1575` (the round
-loop `:1505-1569`, its settle `:1510-1516`, the Discard check
-`:1562-1566`), `WorkspaceViewModel.cs:94`, `:138`, `:239-241`,
-`:430-452`, `:880-885` (the save seams), `:1827`, `:2103`, `:2302-2316`,
-`:2753`, `:2813-2840`, `:3089-3097` (`Dispose` joins the workers),
-`WorkspaceViewModel.Persistence.cs:53-108`,
-`WorkspaceViewModel.Layout.cs:54`, `WorkspaceSaveCoordinator.cs:39-62`
-(`IsIdle`, `BeforeJoinForTests`), `:83-131` (`HasAdmittedSaveFor`
-reserves nothing; `Enqueue`), `:189-240` (`TrackWorker`,
-`SettlePumping` without a bound, `CloseAndJoinWorkers`), `:323-353`
-(`PumpedWait.Until`, no timeout), `WorkspacePersistence.cs:98`,
-`:168-214`, `FileRecentsStore.cs:22-37`. Before starting, confirm the
-shared design fixed: the store (core-owned FFI `write_buffer(path, text,
-baseline_hash)` with a durable result, `read_buffers()`,
-`discard_buffer(path)`, `discard_vault()`, keyed by a persistent
-`VaultRootIdentity`, capped with a typed refusal), the cadence and fsync
-policy, the restore rule, the open-sequence ordering and core's
-`UnsavedNotesRestored` copy, the interlocks, item 6 — its discard
-supersedes every write issued before it, including one completing later
-(e.g. a durable per-vault discard epoch `write_buffer` carries) — and
-item 7: a weak root (`persistent: false`; a FAT index changes on a
-rename or move made with Slate closed and a freed slot's index can be
-taken by another folder, even one later at the same path) keys nothing
-by its weak identity, and the design names either (a) no hot exit on a
-weak root — `write_buffer` refused with a typed refusal carrying core's
-reason, nothing read back, application close and switch falling back to
-today's prompt with that reason — or (b) a path key plus a named
-restore-admission check, an entry no open admits kept and handled as the
-design states; with (R1) never restored into another folder, (R2) a
-renamed weak root never losing a promised buffer without the design
+`MainWindow.xaml.cs:1982-1992`, `:1997-2011` (`Window_Closed` disposes
+the lifecycle — application close's disposal), `:235`, `:255` (the dirty
+navigation and dirty close prompts), `VaultLifecycleViewModel.cs:44-55`
+(`TeardownRoute`), `:76-82`, `:210-216`, `:436-473` (the switch's
+teardown at `:454`, its `CloseSession()` at `:473`), `:598-667` (Close
+Vault's teardown at `:605` and `CloseSession()` at `:621`, application
+close's teardown at `:644`, `DisposeCore` `:664-667`), `:933`
+(`CloseSession`), `:1095-1125` (`Workspace.Dispose()`, then
+`_session?.Dispose()`), `:1176-1192`, `:1272-1282`, `:1405-1575` (the
+round loop `:1505-1569`, its settle `:1510-1516`, the `Closed` returns
+`:1530-1533` and `:1568`, the Discard check `:1562-1566`),
+`WorkspaceViewModel.cs:94`, `:138`, `:239-241`, `:430-452`, `:880-885`
+(the save seams), `:1827`, `:2103`, `:2302-2316`, `:2753`, `:2813-2842`
+(`SavesForTests` at `:2842`), `:3089-3097` (`Dispose` joins the save
+workers), `WorkspaceViewModel.Persistence.cs:53-108`,
+`WorkspaceViewModel.Layout.cs:54`, `:260-272` (dirty navigation, then
+`ReplaceTabItem` `:272`), `:446-479` (`CloseTab`, `tab.Dispose()` `:479`),
+`:532-646` (`CloseActivePane`, its Discard approval `:593-603`, disposal
+`:639`), `:688` (`AdmitDirtyTab`), `WorkspaceSaveCoordinator.cs:18-21`
+(why the join exists), `:39-62` (`IsIdle`, `LiveWorkersForTests`,
+`BeforeJoinForTests`), `:83-131` (`HasAdmittedSaveFor` reserves nothing;
+`Enqueue`), `:189-249` (`TrackWorker`, `SettlePumping` without a bound,
+`CloseAndJoinWorkers` — `worker.Wait()` with no bound), `:323-353`
+(`PumpedWait.Until`, no timeout), `SidebarWriteJournal.cs:269`
+(`DurableWaitBudget`), `:297` (`Shared`), `:313-320`
+(`InstallProductionLocation`), `App.xaml.cs:138`, `:151-160` (`OnExit`),
+`FilesSidebarViewModel.WriteJournal.cs:99-102` (a bounded, unpumped wait
+that logs and proceeds), `HostLog.cs:212` (`ObserverForTests`),
+`PumpedSaveReentrancyTests.cs:256`, `:289` (the save-join pins),
+`WorkspacePersistence.cs:98`, `:168-214`, `FileRecentsStore.cs:22-37`, and
+`CallWithPointer` in the generated `src/SlateUniffi/generated/slate_uniffi.cs`
+(a binding call raises its object's call counter and clones its Rust
+`Arc`; `Dispose` frees the object only at zero, so a session call still
+running at `session.Dispose()` runs the session's drop later, on that
+call's thread). Before starting, confirm the shared design fixed: the
+store (core-owned FFI `write_buffer(path, text, baseline_hash)` with a
+durable result, `read_buffers()`, `discard_buffer(path)`,
+`discard_vault()`, keyed by a persistent `VaultRootIdentity` and, within
+the vault, by a per-tab key or a per-path key with a merge rule so one
+same-path peer tab's clean transition or Discard never drops another's
+newer dirty buffer (add the two-dirty-peers fact for the chosen rule), capped with
+a typed refusal), the cadence and fsync policy, the restore rule, the
+open-sequence ordering and core's `UnsavedNotesRestored` copy, the
+interlocks, item 6 — its discard, on every Discard route (Close Vault's
+Discard All, the fallback prompt's Discard All, a clean transition, and a
+dirty tab's own Discard), supersedes every write issued before it,
+including one completing later (e.g. a durable per-vault discard epoch
+`write_buffer` carries) — item 7: a weak root (`persistent: false`; a
+FAT index changes on a rename or move made with Slate closed and a freed
+slot's index can be taken by another folder, even one later at the same
+path) keys nothing by its weak identity, and the design names either (a)
+no hot exit on a weak root — `write_buffer` refused with a typed refusal
+carrying core's reason, nothing read back, application close and switch
+falling back to today's prompt with that reason — or (b) a path key plus
+a named restore-admission check, an entry no open admits kept and handled
+as the design states; with (R1) never restored into another folder, (R2)
+a renamed weak root never losing a promised buffer without the design
 saying what happens, (R3) index reuse proven in core's facts through a
-store seam with an explicit weak identity. If either item is missing,
-stop and raise it — this chunk does not start.
+store seam with an explicit weak identity — and item 8: the store's calls
+are on a handle opened once per process over the device-local root,
+taking the vault's store key (plain data the session hands out at open)
+and item 6's token as arguments, never borrowing the `VaultSession`; the
+handle is safe to call concurrently, and a call cut short by process exit
+leaves the previous durable state, as a crash does. If any of items 6, 7
+and 8 is missing, stop and raise it — this chunk does not start.
 
-Build: `HotExitWriter` (`WorkspaceViewModel.HotExit.cs`, new partial):
-per-tab debounce; on the tick `_saves.Admit(tab.Path, ticket =>
+Build: `HotExitStoreHost` (`HotExitStoreHost.cs`, new `internal sealed
+class`), the one owner of the store handle and of every store call in
+flight, one per process like the sidebar write journal: `internal static
+HotExitStoreHost Shared { get; private set; }`, installed by
+`HotExitStoreHost.InstallProductionLocation()` (new) beside
+`SidebarWriteJournal.InstallProductionLocation()` at `App.xaml.cs:138`,
+and handed by `VaultLifecycleViewModel` to each `WorkspaceViewModel` (new
+constructor parameter `HotExitStoreHost? hotExitStore`, `null` meaning
+`Shared`). Its new members: `Task<HotExitWriteOutcome>
+Write(HotExitWrite write)` (`HotExitWrite`, new record: the store key,
+`Path`, `Text`, `BaselineHash`, `Generation`, and item 6's token where
+carried) runs `write_buffer` on its own thread-pool task, never faulting;
+`Task InFlight(string path)` is the write still running for that file
+(path folded NFC and lowercase), whichever workspace issued it, or a
+completed task; `Task<bool> DiscardBuffer(storeKey, string path)` and
+`Task<bool> DiscardVault(storeKey)` run each discard on its own task,
+true once the store confirmed it; `Task DiscardsSettled()` completes when
+every discard issued so far has finished, never faulting; the test seams
+`BeforeCallForTests` / `AfterCallForTests` (`Action<HotExitStoreCall>?`;
+`HotExitStoreCall`, new record: kind, path, generation) run on the call's
+own task after its arguments, the token included, are fixed and after the
+store returned. Nothing joins the store host: a recovery write is never
+handed to `TrackWorker`, so `CloseAndJoinWorkers` joins save workers only
+(unbounded, as on `main` — the session still goes only after every save
+worker is joined); neither a teardown nor `WorkspaceViewModel.Dispose`
+waits on a store task except the bounded discard wait below; `App.OnExit`
+does not wait for it.
+
+`HotExitWriter` (`WorkspaceViewModel.HotExit.cs`, new partial): per-tab
+debounce; on the tick `_saves.Admit(tab.Path, ticket =>
 WriteOperation(tab))` (WB-2's `Task<bool> Admit(string path,
 Func<SaveTicket, Task> operation)`), where the new private
 `WriteOperation` re-reads the tab when it starts (disposed, clean or
 fenced → nothing), snapshots `(text, SavedContentHash,
-ContentGeneration)` then, calls `write_buffer` on a worker handed to
-`TrackWorker`, and returns a `TaskCompletionSource` Task completed when
-the result is published on the dispatcher (durable generation recorded,
-or the failure) — so the ticket reserves the path until durable
-completion both ways, and a path's writes never overlap; the writer
-never calls `HasAdmittedSaveFor`. `TryCloseWorkspace(TeardownRoute
+ContentGeneration)` then, calls `write_buffer` through
+`HotExitStoreHost.Write`, and returns a `TaskCompletionSource` Task
+completed when the result is published on the dispatcher (durable
+generation recorded, or the failure) — so the ticket reserves the path
+until durable completion both ways, and a path's writes never overlap;
+the writer never calls `HasAdmittedSaveFor`. `TryCloseWorkspace(TeardownRoute
 route)` and `TryCloseWorkspaceCore(TeardownRoute route)` gain the route
 (callers `:454` Switch, `:605` Close, `:644` ApplicationClose); before
 the round loop every route calls `HotExitWriter.Quiesce()` (new: stop
 the timers, suspend scheduling, then `AbandonInFlight()` (new): complete
 each outstanding operation's Task so its ticket releases, mark it
-abandoned so its late result records nothing, keep its worker tracked
-for the join, and admit no new write on that path until that worker has
-finished — a tick defers, `FlushLatest` waits inside its bound, a
-deferred admission re-checks suspension, fence and dirtiness, and a
-timed-out flush admits nothing later — so no ticket is held while the
-writer waits and a save never waits on an abandoned write), and every
-later `Refused` return calls
+abandoned so its late result records nothing; the write keeps running
+on the store host, which nothing joins). `WorkspaceViewModel.Dispose`
+calls `HotExitWriter.Detach()` (new) before `CloseAndJoinWorkers`: stop
+the timers, abandon what is outstanding, mark the writer detached so a
+late result publishes nothing, wait for nothing. The writer admits no new
+write for a path while `HotExitStoreHost.InFlight(path)` is incomplete,
+including a write an earlier workspace on the vault abandoned — a tick
+defers, `FlushLatest` waits inside its bound, a deferred admission
+re-checks suspension, detachment, fence and dirtiness, and a timed-out
+flush admits nothing later — so no ticket is held while the writer waits,
+a save never waits on an abandoned write, and an abandoned write never
+lands after a newer generation. Every later `Refused` return calls
 `HotExitWriter.Resume()` (new: re-arm the timers of dirty tabs whose
 generation exceeds the durable one). Where the prompt would open,
 application close and switch call `FlushLatest(timeout: 5 s) ->
@@ -570,53 +846,89 @@ first): `Closed` without a prompt on `Flushed`, today's prompt with the
 reason on `Failed`; Close Vault's prompt unchanged and unflushed. The
 discard fence: every Discard All (Close Vault's, and the prompt
 application close and vault switch fall back to) runs
-`HotExitWriter.FenceAndDiscardVault()` (new) and a clean transition runs
-`HotExitWriter.FenceAndDiscard(tab)` (new): stop the scope's timers and
-mark it fenced so no new `write_buffer` is issued, then call
-`discard_vault()` / `discard_buffer(path)` directly (not admitted), and
-ignore any write that completes after the fence. Weak roots: under item
-7 (a) the first refusal stops the session's writes and `FlushLatest`
-returns `Failed` with core's reason at once; under (b) nothing
-host-side differs; no host key is ever derived from the weak identity.
-The recovery read in `VaultLifecycleViewModel` before `:1184` passed
-into the `WorkspaceViewModel` constructor; `RestoreNode` applying
+`HotExitWriter.FenceAndDiscardVault()` (new) once the Discard check
+`:1562-1566` passed, immediately before `ClosedChangesDiscarded` is
+returned at `:1568`; a clean transition runs
+`HotExitWriter.FenceAndDiscard(tab)` (new), and so does a dirty tab's
+own Discard — a tab close or dirty navigation `AdmitDirtyTab` accepted
+Discard for, a tab `CloseActivePane` approved for Discard — for a tab
+still dirty, immediately before `tab.Dispose()` (`Layout.cs:479`,
+`:639`) or `ReplaceTabItem` (`:272`); a tab the workspace's own disposal
+disposes discards nothing. Each fence stops its scope's timers and marks
+it fenced so no new `write_buffer` is issued, then issues
+`DiscardVault` / `DiscardBuffer` on the store host (never on the
+dispatcher, not admitted), and ignores any write that completes after
+the fence. Before any `Closed` outcome (`:1530-1533`, `:1568`) the
+teardown calls `HotExitWriter.AwaitDiscards()` (new): it waits, without
+pumping, at most `HotExitWriter.DiscardWaitBudget` (new, 5 s) for
+`HotExitStoreHost.DiscardsSettled()`, and on a miss or an unconfirmed
+discard logs `HostDiagnosticEvent.HotExitDiscardUnconfirmed` (new) and
+proceeds (the discard still lands when the store answers; if the process
+exits first, the next open restores those buffers dirty under the
+restore rule, nothing in the vault changed). Outside a teardown nothing
+waits on a discard. Weak roots: under item 7 (a) the first refusal stops
+the session's writes and `FlushLatest` returns `Failed` with core's
+reason at once; under (b) nothing host-side differs; no host key is ever
+derived from the weak identity. The recovery read (`read_buffers` with
+the session's store key, on the store host's handle) in
+`VaultLifecycleViewModel` before `:1184` passed into the
+`WorkspaceViewModel` constructor; `RestoreNode` applying
 `WorkspaceTabViewModel.RestoreUnsaved(text, baselineHash,
 changedOnDisk)` (new) to the tabs it constructs before attach and
 activation; leftover entries opened as new dirty tabs;
 `UnsavedNotesRestored` posted once after `WorkspaceReady`.
 
-Facts in `HotExitTests`, seen failing first (mutations in brackets):
+Facts in `HotExitTests`, seen failing first (mutations in brackets).
+Each fact builds its own `HotExitStoreHost` over a temp store root; a
+store call is held by blocking its task in `BeforeCallForTests` (start
+observed by an asserted `Wait(2 s)`) and observed returning through
+`AfterCallForTests`. The hold-through rule: a fact that runs a teardown
+while a recovery write is held keeps it held until the route's whole
+teardown has returned (Close Vault: `CloseVault()`; switch:
+`OpenVaultAsync(B)` completed; application close:
+`PrepareForApplicationClose()` true and then the lifecycle's `Dispose()`
+returned), asserts it is still held, and only then releases it; a
+`TeardownWatchdog` (new test helper) that releases it after 20 s is the
+only other release and its firing fails the fact; `BeforeJoinForTests`
+never releases a recovery write. The facts:
 `ATypedEditIsWrittenToTheStoreAfterTheDebounce` [drop the write];
-`ACleanTabDiscardsItsBuffer` [keep it];
+`ACleanTabDiscardsItsBuffer` (with the discard held, a dispatcher
+operation posted after the clean transition still runs before the
+release) [keep it; discard on the dispatcher];
 `ClosingTheWindowWithDirtyTabsFlushesThenNeverAsks` (an edit after the
 last debounce and one typed inside the flush's pumped wait are durable
-before close, no prompt) [close without flushing; no re-read after the
-frame]; `AFailedFlushFallsBackToThePromptAndDiscardsNothing` [`Closed`
-on failure]; `AFlushThatTimesOutFallsBackToThePrompt` (the timeout
-asserted, the ticket released by `AbandonInFlight()`, release in
-`finally`) [timeout as flushed]; `AWriteOverTheStoresCapFallsBackToThePrompt`
+before close, no prompt, and the store still holds them after the
+lifecycle's disposal) [close without flushing; no re-read after the
+frame; discard when the disposal disposes a tab];
+`AFailedFlushFallsBackToThePromptAndDiscardsNothing` [`Closed` on
+failure]; `AFlushThatTimesOutFallsBackToThePrompt` (the timeout asserted,
+the ticket released by `AbandonInFlight()`, release in `finally`)
+[timeout as flushed]; `AWriteOverTheStoresCapFallsBackToThePrompt`
 [`Closed` on the refusal]; `CloseVaultStillAsksAndDiscardAllDropsTheBuffers`
-(a write held when Close Vault starts; the prompt opens while it is
-held; Discard All through `FenceAndDiscardVault()`; the held write
-released from `WorkspaceSaveCoordinator.BeforeJoinForTests` inside the
-join leaves no buffer) [skip the discard; a store `discard_vault()` that
-does not supersede the older write];
-`ATimedOutFlushThenDiscardAllLeavesNothingToRestore` (a Theory over
-application close and vault switch: the flush's own write held makes
-`FlushLatest` time out, asserted, and is abandoned; the fallback
-prompt's Discard All runs `discard_vault()` after the fence and no
-`write_buffer` follows; the held write, released from
-`BeforeJoinForTests`, completes late, asserted `Wait(2 s)` released in
-`finally`; reopening reads no buffers, builds no dirty tab and speaks no
-restore) [no `discard_vault()` on the fallback route; a store discard
-that does not supersede the older write; the timeout treated as
-`Flushed`];
-`ALateWriteAfterACleanTransitionDoesNotResurrectTheBuffer` (a held write;
-the reader undoes to the saved text — a save would wait behind the
-write — so `FenceAndDiscard(tab)` runs while it is held; it completes
-late; reopening restores nothing) [the clean transition without
-`discard_buffer`; a store `discard_buffer` that does not supersede the
-older write];
+(hold-through: a write held when Close Vault starts; the prompt opens
+while it is held; Discard All issues `discard_vault()` through
+`FenceAndDiscardVault()` while it is held; `CloseVault()` returns with it
+still held — `BeforeJoinForTests` saw it held and
+`LiveWorkersForTests` 0, the watchdog never fired; released afterwards,
+its return observed; reopening reads no buffers) [the recovery write
+handed to `TrackWorker` — the watchdog fires; skip the discard; a store
+`discard_vault()` that does not supersede the older write];
+`ATimedOutFlushThenDiscardAllLeavesNothingToRestore` (hold-through; a
+Theory over application close and vault switch: the flush's own write
+held makes `FlushLatest` time out, asserted, and is abandoned; the
+fallback prompt's Discard All issues `discard_vault()` after the fence
+and no `write_buffer` follows; the route's whole teardown returns with
+the write still held; released afterwards, it completes late, asserted
+`Wait(2 s)` released in `finally`; reopening reads no buffers, builds no
+dirty tab and speaks no restore) [the recovery write handed to
+`TrackWorker`; no `discard_vault()` on the fallback route; a store
+discard that does not supersede the older write; the timeout treated as
+`Flushed`]; `ALateWriteAfterACleanTransitionDoesNotResurrectTheBuffer`
+(a held write; the reader undoes to the saved text — a save would wait
+behind the write — so `FenceAndDiscard(tab)` runs while it is held; it
+completes late; reopening restores nothing) [the clean transition
+without `discard_buffer`; a store `discard_buffer` that does not
+supersede the older write];
 `ASaveAdmittedWhileAWriteIsInFlightWaitsForItsDurableCompletion` (write
 first: Ctrl+S during a held write never reaches `SaveWriteHookForTests`
 until the write is released; order write durable → save write → save
@@ -628,20 +940,56 @@ carries the published hash) [baseline snapshotted at the tick; write
 without `Admit`]; `TwoGenerationsOfOnePathNeverOverlap` (N held, N + 1
 admitted, one call until N is released; the store ends at N + 1) [issue
 without `Admit`]; `AnAbandonedWriteNeverLandsAfterANewerGeneration` (the
-teardown abandons N and its flush times out; Cancel; while N's worker is
-held the N + 1 tick admits nothing and a Ctrl+S is not blocked; the
-store ends at N + 1) [admit without waiting for the abandoned worker];
-`ATeardownNeverWaitsOnARecoveryWrite` (a Theory over Close Vault,
-application close and vault switch: with a debounce write held, Close
-Vault's prompt opens with `SavesIdle` true, and the flush is entered,
-before a 3 s timer releases it; the flush then returns `Flushed`) [no
-`Quiesce()`];
-`ReopeningRestoresTheBuffersIntoTheTabsTheLayoutBuilds` (the `Groups`
-instances are dirty; one landing; `WorkspaceReady` after) [install into
-pre-built tabs]; `ARecoveryEntryWithNoLayoutTabOpensANewDirtyTab` [drop
-the entry]; `ABufferWhoseFileChangedOnDiskRestoresDirtyAndStale` [clear
-the flag]; `ABufferWhoseFileMovedReseatsOnItsNewPath` [seat on the old
-path]; `ARestoreSpeaksCoresSentenceOnce` [post per tab];
+teardown abandons N and its flush times out; Cancel; while N is held the
+N + 1 tick admits nothing and a Ctrl+S is not blocked; the store ends at
+N + 1) [admit without waiting for the abandoned write];
+`ATeardownNeverWaitsOnARecoveryWrite` (hold-through; a Theory over Close
+Vault, application close and vault switch, the prompt answering Save
+All: Close Vault's prompt opens with `SavesIdle` true while the write is
+held; the flush is entered while it is held and times out; Save All's
+save reaches `SaveWriteHookForTests` while it is held and lands; the
+clean transition's `discard_buffer` is issued while it is held; the
+route's whole teardown returns with it still held; released afterwards;
+the file holds the saved bytes and reopening restores nothing) [the
+recovery write handed to `TrackWorker`; no `Quiesce()`; the clean
+transition without `discard_buffer`];
+`AFlushWaitsForAnAbandonedWriteWithinItsBound` (a Theory over
+application close and vault switch: N held when the route starts, N + 1
+edited; a timer off the dispatcher releases N after 2 s, inside the
+flush's bound, which is meant to wait for it; the flush is entered before
+the release, no second `write_buffer` before it, then N + 1 lands,
+`Flushed`, no prompt, nothing in flight when the route returns) [no
+`Quiesce()`; admit N + 1 without waiting];
+`DisposalJoinsASaveWorkerButNotARecoveryWrite` (a recovery write on
+`a.md` held and a save on `b.md` parked at `SaveWriteHookForTests`;
+`BeforeJoinForTests` releases the save only; the lifecycle's `Dispose()`
+returns with `b.md` saved and the recovery write still held; released
+afterwards, it lands with no fault and nothing published, and reopening
+restores `a.md` dirty) [the recovery write handed to `TrackWorker`; skip
+`CloseAndJoinWorkers`; `write_buffer` through the disposed session];
+`AReopenedVaultsWriteWaitsForTheLastSessionsAbandonedWrite`
+(hold-through: Close Vault with Discard All returns with a write held;
+the vault reopens over the same store host and an edit's tick issues no
+second `write_buffer` while it is held, `SavesIdle` true; released, the
+new session's write lands and is what a later open restores) [the
+in-flight record kept per workspace instead of on the store host];
+`ADiscardThatCannotLandDoesNotHoldTheTeardown` (a Theory over Close
+Vault and application close, application close's flush failing on the
+cap refusal: Discard All's `discard_vault()` held; the route's whole
+teardown returns `Closed` after the 5 s budget with the discard still
+held, `HotExitDiscardUnconfirmed` logged once, the watchdog never fired;
+released afterwards; reopening reads no buffers) [an unbounded or
+dispatcher discard — the watchdog fires; refuse the close on a miss;
+never wait]; `ADiscardedTabsBufferIsNotRestored` (a Theory over closing
+the tab, closing its pane and opening another note into it, each
+answered Discard: `discard_buffer` issued before the tab is disposed or
+re-pointed; reopening builds no tab for it) [skip the discard on that
+route]; `ReopeningRestoresTheBuffersIntoTheTabsTheLayoutBuilds` (the
+`Groups` instances are dirty; one landing; `WorkspaceReady` after)
+[install into pre-built tabs]; `ARecoveryEntryWithNoLayoutTabOpensANewDirtyTab`
+[drop the entry]; `ABufferWhoseFileChangedOnDiskRestoresDirtyAndStale`
+[clear the flag]; `ABufferWhoseFileMovedReseatsOnItsNewPath` [seat on
+the old path]; `ARestoreSpeaksCoresSentenceOnce` [post per tab];
 `AWeakRootsBufferIsNeverRestoredIntoAnotherFolderAtItsPath` (real core
 store; `SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED` set in-process to the
 fixture's unique folder name, cleared in `finally`; the vault opens weak,
@@ -654,25 +1002,29 @@ renamed back, (b) restores the buffer dirty, (a) restores nothing and
 the store holds nothing) [key by the weak identity; under (b) prune an
 unadmitted entry]; the FlaUI journey
 `ShellAccessibilityTests.HotExit_ClosingAndReopeningKeepsAnUnsavedNote`.
-Every `Wait(timeout)` asserts its result and releases in `finally`; a
-held write a teardown would join is released from `BeforeJoinForTests`.
-Registers: contract 38 D-10 amendment (including the admitted recovery
-write, the teardown's abandonment and the weak-root rule),
-`w_c_matrix.md` Workspace tabs row, `parity_matrix.md` (`--check`),
+The save-join pins `PumpedSaveReentrancyTests.DisposalJoinsASaveWorkerBeforeTheSessionGoes`
+and `TheJoinRunsEveryTrackedWorkerToCompletion` run unchanged with them.
+Every `Wait(timeout)` asserts its result and releases in `finally`.
+Registers: contract 38 D-10 amendment (the admitted recovery write; the
+process-lifetime store host whose calls borrow no session, so no
+teardown waits on a recovery write and disposal joins save workers only;
+the 5 s unpumped discard budget that proceeds, logged; a dirty tab's own
+Discard as a Discard route; the weak-root rule), `w_c_matrix.md`
+Workspace tabs row, `parity_matrix.md` (`--check`),
 `docs/plans/18_windows_port/a11y_trigger_designations.json` and the
 ledger (`--write`, then `--check`). Not delivered: whatever the design
 defers. Done when the Verification block runs clean in PowerShell (the
-twenty-one `HotExitTests` facts and an `A11yCorpusCensus` fact
-discovered by name, the FlaUI journey discovered, every `$LASTEXITCODE`
-0), the Windows lanes are green, each mutation was run locally (the
-weak-root rows under the chosen policy), the six-scenario NVDA pass
-(launched with `SLATE_LOCAL_APP_DATA` on a seeded root: (1) type,
-Alt+F4 — no dialog; (2) relaunch and open — "Restored 1 unsaved note"
-after the vault-opened sentence, the dirty marker, the caret in the
-note; (3) the file changed outside Slate first — the stale notice and,
-on Ctrl+S, the conflict sentence; (4) Close Vault with a dirty tab — the
-prompt; (5) a read-only store root — the prompt with the reason in the
-status line; (6) a weak root through
+twenty-six `HotExitTests` facts, the two save-join pins and an
+`A11yCorpusCensus` fact discovered by name, the FlaUI journey
+discovered, every `$LASTEXITCODE` 0), the Windows lanes are green, each
+mutation was run locally (the weak-root rows under the chosen policy),
+the six-scenario NVDA pass (launched with `SLATE_LOCAL_APP_DATA` on a
+seeded root: (1) type, Alt+F4 — no dialog; (2) relaunch and open —
+"Restored 1 unsaved note" after the vault-opened sentence, the dirty
+marker, the caret in the note; (3) the file changed outside Slate first
+— the stale notice and, on Ctrl+S, the conflict sentence; (4) Close
+Vault with a dirty tab — the prompt; (5) a read-only store root — the
+prompt with the reason in the status line; (6) a weak root through
 `SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED` — under (a) the prompt with
 core's reason, under (b) as (1) and (2)) is in the PR body, and the
 issue reference follows the closure matrix.
