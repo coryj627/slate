@@ -434,10 +434,12 @@ jobs:
 
       # Package versions are pinned in the csproj files, so their hash fully
       # determines the package set; restore-keys still salvage the overlap
-      # after a version bump.
-      - name: Cache NuGet packages (GitHub-hosted)
+      # after a version bump. Restore only: the save after the build runs on
+      # main pushes alone, like the cargo lineages.
+      - name: Restore NuGet packages (GitHub-hosted)
+        id: nuget-cache
         if: ${{ runner.environment == 'github-hosted' }}
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6
         with:
           path: ~/.nuget/packages
           key: windows-nuget-${{ hashFiles('apps/slate-windows/**/*.csproj') }}
@@ -583,6 +585,15 @@ jobs:
 
       - name: Format gate (dotnet format --verify-no-changes)
         run: dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes
+
+      # The NuGet key is the package set itself, so an exact hit has nothing
+      # new to save (and a same-key save would be refused anyway).
+      - name: Save NuGet packages (GitHub-hosted, main pushes only)
+        if: ${{ !cancelled() && runner.environment == 'github-hosted' && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.nuget-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6
+        with:
+          path: ~/.nuget/packages
+          key: windows-nuget-${{ hashFiles('apps/slate-windows/**/*.csproj') }}
 
       # Runs on failure too (!cancelled()): the release graph is the
       # expensive artifact here, and it is valid even when a downstream

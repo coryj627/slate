@@ -67,7 +67,15 @@ Describe 'windows.yml runners: GitHub-hosted first, Namespace as the fallback' {
         ([regex]::Matches($windows, 'namespacelabs/nscloud-cache-action')).Count | Should -Be 3
     }
     It 'saves the GitHub cache only from the rust and app lanes, only on main pushes, under per-attempt keys' {
-        ([regex]::Matches($windows, '(?m)^        uses: actions/cache/save@')).Count | Should -Be 2
+        # Two cargo lineages and the app lane's NuGet entry.
+        ([regex]::Matches($windows, '(?m)^        uses: actions/cache/save@')).Count | Should -Be 3
+        foreach ($save in (Get-Steps $windows) | Where-Object { $_.Contains('uses: actions/cache/save@') }) {
+            $save | Should -Match ([regex]::Escape("if: `${{ !cancelled() && runner.environment == 'github-hosted' && github.event_name == 'push' && github.ref == 'refs/heads/main'"))
+        }
+        # The plain action saves on any miss, a pull request's included: only the uniffi-bindgen-cs binary (keyed on its pinned tag) may use it.
+        foreach ($step in (Get-Steps $windows) | Where-Object { $_ -match 'uses: actions/cache@' }) {
+            $step | Should -Match ([regex]::Escape('path: ~/.cargo/bin/uniffi-bindgen-cs.exe'))
+        }
         Get-JobBlock $windows 'windows-model-shard' | Should -Not -Match 'actions/cache/save@' -Because 'the shards only read the app lane''s entries'
         foreach ($pair in @(@('rust-tests', 'tests'), @('windows', 'app'))) {
             $block = Get-JobBlock $windows $pair[0]
