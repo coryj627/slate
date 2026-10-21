@@ -13,7 +13,9 @@ nothing else a reader hears changes — a FAT32 or exFAT vault opens as on
 main). Wave: W10, alone.
 Depends on: WB-27 (shares `fs.rs` and
 `windows_entry.rs`), plan 43 22c merged (`FsRoot` helper names agreed,
-§6 gate). Parallel with: nothing; WB-29 and WB-30 follow it. Decision:
+§6 gate), and every Open design item (Codex round 12) closed in the
+reviewed design, with its fact, before code starts. Parallel with:
+nothing; WB-29 and WB-30 follow it. Decision:
 WD7 (pending; recommended "the identity half is 22W, here"; under the
 other answer — identity parked with Milestone W — this chunk ships only
 the `FsRoot` body and the host admission stays text-based). WD22
@@ -68,6 +70,78 @@ not open when its volume keeps file ids (NTFS, ReFS, or any file system
 but FAT, FAT32 and exFAT) and `FileIdInfo` fails, or when neither read
 answers on FAT, FAT32 or exFAT, and the reader hears core's reason (WD24,
 amended 2026-10-21, as codex round 11 narrows it).
+
+## Open design items (Codex round 12, 2026-10-21)
+
+These findings were recorded, not fixed, by the owner's decision of
+2026-10-21: the chunk's design review closes each one before any code,
+and where an item contradicts the text below, the item wins until the
+design resolves it. (Line numbers into this spec are Codex's, from
+before the round-12 notes were added; each passage is also named.)
+
+1. **[high] Pinned graph writes still leak pending settings into another
+   vault.** Design item 6 pins `GraphConfigWriter.Enqueue`'s destination
+   (its "the graph writer's queued write can outlive the session"
+   passage, Codex's `:633-640`), but `GraphConfigWriter.Newest(string
+   key)` (`GraphConfigWriter.cs:114-123`) still finds the outstanding
+   aggregate by the path key alone, and `GraphPreferencesViewModel`'s
+   constructor (`GraphPreferencesViewModel.cs:94-97`) adopts that
+   aggregate as its config, writable, before it reads any store. Hold A's
+   write, close A, retarget its junction spelling to B and open B: B's
+   preferences show A's config, and B's next preference edit writes that
+   aggregate through B's anchor; `AQueuedWriteLandsInTheRootItWasEditedIn`
+   never opens B's preferences during the overlap, so it cannot see this.
+   *Codex recommends:* scope the pending reads and the generation and
+   coalescing state to a safely established root, not to path or
+   weak-identity equality alone; add overlapping A/B preference instances
+   with a held write, a retargeted spelling, aliases and a forced
+   weak-identity collision; change `Newest` and the Brief alongside
+   `Enqueue`.
+   *The design closes it with:* the scope that `Newest`, `Enqueue`'s
+   coalescing and the generation counter are keyed by, and their changed
+   signatures; how a later session of the same root is recognised as that
+   root (Term W6: a reopen during a straggling write reads what the
+   straggler will write) for a persistent identity, and what a weak root
+   does instead, since a weak identity authorizes nothing; and a
+   `GraphConfigWriterTests` fact (or `GraphPreferencesTests`, as the
+   design places it) in which A's write is held, A's session closes, the
+   junction `T\vault` is retargeted from `T\a` to `T\b`, and B's
+   `GraphPreferencesViewModel` is constructed during the hold — B's config
+   is the one B's store holds, B's edit lands only in
+   `T\b\.slate\graph.json`, and after the release `T\a` holds A's
+   aggregate — repeated with an alias spelling of A (the design's answer
+   for a same-root reopen, asserted) and with
+   `SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED` and
+   `SLATE_TEST_ROOT_FILE_INDEX_COLLIDES` forcing A and B to one weak
+   identity (B still never reads A's aggregate). Mutations: key `Newest`
+   by the path (→ B shows A's config); key it by the weak identity (→ the
+   collision row shows A's config).
+2. **[medium] Search recents keep the disposed session after a same-path
+   reopen.** Design item 6 has `Search/VaultSearchSource.cs:96` build its
+   store with `VaultRootAnchor.Of(_session())` (Codex's `:625-628`), but
+   `RecentsStore()` (`Search/VaultSearchSource.cs:86-100`) caches that
+   store and rebuilds it only when the root spelling changes (`:93-97`),
+   and the source is one app-lifetime instance (`:10`). Closing a vault
+   and reopening the same path returns the cached store, whose anchor's
+   session is disposed, so its `OpenRoot` refuses (item 6's
+   disposed-anchor rule, `AStoreRefusesOnceItsSessionIsDisposed`) and
+   search-recents reads and writes stay broken until the path changes;
+   WB-9 and WB-10 do not rebuild this source.
+   *Codex recommends:* invalidate the cached store when the session's
+   identity changes, a same-path reopen included, and clear it when no
+   session exists; add same-path reopen and same-spelling replacement
+   facts; put the lifecycle change in the Brief.
+   *The design closes it with:* what the cache is keyed by (the session
+   instance or its anchor, never the spelling) and the clear when
+   `_session()` is null; and facts in `SearchRecentsStoreTests` (which
+   already builds a `VaultSearchSource`): open V, record a query, close,
+   reopen V at the same path — `LoadRecents()` returns the query and a
+   second `RecordRecent` lands, with no refusal logged; close V, retarget
+   the junction it was opened through to a different folder V′ and open
+   it — `LoadRecents()` is V′'s, never V's, and a record lands in V′
+   only; with no vault open, `LoadRecents()` is empty and no store is
+   cached. Mutation: rebuild the store on a spelling change only (→ the
+   same-path reopen row's read and write refuse).
 
 ## Current state on main
 
@@ -1127,8 +1201,10 @@ additive exports; the mac twins of the 22a facts).
 AT, NVDA spot check on PR 1 (§4 rule 4), with the Release build and
 NVDA running. Device state is isolated through WB-1's field-pass
 launcher, `scripts/windows/launch-for-field-pass.ps1`
-(`param([string[]]$Vault, [switch]$Seed, [switch]$Keep, [string]$Exe,
-[string]$Root)`: without `-Root` it makes a fresh
+(`[CmdletBinding(PositionalBinding = $false)] param([string]$Vault,
+[switch]$Seed, [switch]$Keep, [string]$Exe, [string]$Root)`, several vaults
+joined by `|` in one `-Vault` string because `pwsh -File` cannot bind an
+array: without `-Root` it makes a fresh
 `%TEMP%\slate-field-pass-<stamp>` root, sets `SLATE_LOCAL_APP_DATA` and
 `SLATE_LOG_DIR` beneath it, with `-Seed` writes a `recent-vaults.json`
 holding the given vaults there, starts `$Exe` with the first `$Vault` as
@@ -1166,6 +1242,7 @@ then. Nothing else a reader hears changes.
 
 ## Acceptance
 
+- [ ] Every Open design item (Codex round 12) is closed in the reviewed design, with its fact, before code starts.
 - [ ] `SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED`,
       `SLATE_TEST_ROOT_FILE_ID_UNAVAILABLE`,
       `SLATE_TEST_ROOT_FILE_ID_INFO_FAILS` and
@@ -1252,6 +1329,11 @@ then. Nothing else a reader hears changes.
 - [ ] Not delivered: anything the SQLite spike forced onto the fallback.
 
 ## Brief
+
+Every Open design item (Codex round 12) is closed in the reviewed design, with its fact, before code starts.
+(They are the spec's section of that name: the graph writer's
+`Newest` and its pending state scoped by path, and the search-recents
+store cached by spelling across a same-path reopen.)
 
 Deliver 22W. Pending decisions: WD7 (recommended: the identity half is
 22W, here; under the other answer — identity parked with Milestone W —

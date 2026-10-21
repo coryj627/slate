@@ -6,7 +6,9 @@ earlier PRs write `Refs #1525`). Size L (design first, in plan 43 PR 29's
 design). Lanes: windows (the core store comes from PR 29; this chunk adds
 no core module). AT: NVDA full pass. Wave: W11, slot 2, after WB-28 and
 after PR 29's core store is on `main` with green CI; WB-2's
-`WorkspaceSaveCoordinator.Admit` (W1) is on `main` long before. Parallel
+`WorkspaceSaveCoordinator.Admit` (W1) is on `main` long before; and every
+Open design item (Codex round 12) is closed in the reviewed design, with
+its fact, before code starts. Parallel
 with: WB-30. Decision: WD20 (pending; recommended "one design for both
 hosts written as plan 43's PR 29 design, fixing the store schema, the
 restore rule, the open-sequence ordering, and the durable key and
@@ -36,11 +38,90 @@ the next explicit save. Close Vault still asks. Core owns the copy
 identity keys nothing durable, gets what the shared design's weak-root
 policy names, and never another vault's buffers.
 
+## Open design items (Codex round 12, 2026-10-21)
+
+These findings were recorded, not fixed, by the owner's decision of
+2026-10-21: the chunk's design review closes each one before any code,
+and where an item contradicts the text below, the item wins until the
+design resolves it. (Line numbers into this spec are Codex's, from
+before the round-12 notes were added; each passage is also named.)
+
+1. **[high] The suggested weak-root admission check restores into a
+   replacement.** Item 7 (b)'s example check under "What the shared
+   design must have fixed" (Codex's `:252-260`: "the recorded weak
+   identity equals the open root's and each buffer's baseline matches the
+   file at its path") admits a replacement folder made later at the same
+   path that took the freed weak index and holds the same baseline bytes
+   (a copy, a restore from a backup): every proposed check passes and the
+   earlier folder's unsaved buffer is imported, the breach R1 (Codex's
+   `:262-269`) forbids. WB-28 establishes that a weak identity authorizes
+   nothing, and neither weak-root fact requires identical baselines
+   (`AWeakRootsBufferIsNeverRestoredIntoAnotherFolderAtItsPath`'s
+   replacement "shows its own bytes"). Current state's "Within a session
+   the weak identity is sound …, which is why the stores compare it
+   there" (Codex's `:167-169`) is obsolete too: since WB-28's round 11 the
+   stores reach the vault through a duplicate of the session's held root
+   handle and compare no identity.
+   *Codex recommends:* remove the unsafe admission example; allow policy
+   (b) only with a same-path, forced-index-collision, identical-baseline
+   replacement fact, and otherwise use policy (a); correct the stale
+   store-identity explanation and mirror the requirement in the Brief.
+   *The design closes it with:* either policy (a), or a (b) admission
+   check that names what, beyond the weak identity and the baselines,
+   tells the folder that wrote the entry from a replacement; Current
+   state's sentence restated as WB-28 now has it (handle-relative stores,
+   no identity compared); and, under (b), a core-store fact and a
+   `HotExitTests` fact: with WB-28's
+   `SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED` and
+   `SLATE_TEST_ROOT_FILE_INDEX_COLLIDES` set to the fixture's unique
+   folder `T`, `T\vault` opens weak, an edit to `note.md` reaches the
+   store, then the crash shape; `T\vault` is replaced by a new folder at
+   the same path whose files are byte-identical (each baseline hash equal,
+   asserted) and whose weak identity equals the first's (asserted);
+   opening it restores nothing and the entry is handled as the design
+   states (never restored, never deleted unread). Mutation: admit on the
+   weak identity and the baselines (→ the replacement restores the
+   buffer). Under (a) the two existing weak-root facts stand.
+2. **[medium] One vault's stalled write blocks another vault's
+   recovery.** `HotExitStoreHost` is one per process (Design, "The store
+   host", Codex's `:345-351`), but `Task InFlight(string path)` takes only
+   the normalized relative path, and the writer defers a path's admission
+   while `InFlight(path)` is incomplete (Design, "A teardown never waits
+   on a recovery write", Codex's `:383-389`). After a switch abandons A's
+   `a.md` write and that write stalls, B's `a.md` cannot admit its
+   recovery write although the two vaults' stores are independent: B's
+   edits are not kept and its flush times out into the prompt.
+   `DiscardsSettled()`, which `HotExitWriter.AwaitDiscards()` waits on
+   before a teardown returns, likewise covers every vault's discards, so
+   B's teardown waits out its budget on A's.
+   *Codex recommends:* key in-flight work and deferred admissions by the
+   store key plus the normalized path, and scope discard settlement to
+   the relevant store; add a held `A/a.md` write while `B/a.md` becomes
+   durable without releasing A; update the repeated APIs and teardown
+   rules in the Brief.
+   *The design closes it with:* the changed signatures (for example
+   `Task InFlight(HotExitStoreKey storeKey, string path)` and
+   `Task DiscardsSettled(HotExitStoreKey storeKey)`, the key type being
+   item 8's store key); a store key that is equal for two sessions of one
+   vault — so `AReopenedVaultsWriteWaitsForTheLastSessionsAbandonedWrite`
+   still holds — and differs between two vaults, weak roots included; and
+   `HotExitTests` facts: A's `a.md` write held by `BeforeCallForTests`;
+   a switch to B; an edit to B's `a.md` is written and durable while A's
+   is still held (asserted), and B's application close flushes and never
+   prompts; A released in `finally` — and A's discard held while B's
+   Close Vault Discard All returns without waiting for it and logs no
+   `HotExitDiscardUnconfirmed`. Mutations: key `InFlight` by the path
+   alone (→ B's write is deferred and its flush times out); one
+   process-wide `DiscardsSettled` (→ B's teardown waits out the budget
+   and logs `HotExitDiscardUnconfirmed`).
+
 ## Current state on main
 
 Verified against the worktree; the plan's lines hold. **The shared
 design does not exist yet:** `docs/plans/43_mac_backlog_delivery/` holds
-designs 20, 21, 22 and the 24 trio only; `specs/` holds `pr22_…` only.
+the programme, designs 20, 21 and 22, the 24 trio and the 2026-10-19
+reassessment, and `specs/` holds the delivery specs `pr01_…` through
+`pr25_…` (26 files, `pr15b_…` included) — none of them PR 29's design.
 PR 29 is a row (`00_program.md:437`, "L (design first)"; RD1 as amended
 `:557`). Nothing below can start until that design and its core-store PRs
 are merged.
@@ -599,6 +680,10 @@ with these facts: ordinary save workers keep today's unbounded join.
 - `docs/plans/18_windows_port/a11y_trigger_designations.json` rows for the new events (PR 29
   adds the census rows); `python -I scripts/a11y_trigger_ledger.py --write`.
 - Help docs: if `docs/help/` names the close prompt, update the sentence.
+- `scripts/windows/launch-for-field-pass.ps1` (WB-1's): if its `-Root`
+  check does not already accept the hot-exit store's folder, add that
+  folder (PR 29's name) to the device stores it accepts, so the field
+  pass's relaunch on one root is not refused (exit 2).
 - PR body: `Refs #1525` (or `Closes #1525` if the mac half is already
   merged and field-passed), the NVDA phrases, "not delivered" items.
 
@@ -642,49 +727,80 @@ rows under the policy the design chose).
 
 CI: `windows.yml` all lanes (FlaUI journey added). AT: NVDA full pass,
 with NVDA running and the Release build, its device state isolated per
-§4 rule 4. The pass relaunches, and the relaunch must read the hot-exit
-store the first launch wrote under `SLATE_LOCAL_APP_DATA`
-(`SlateDeviceState.Root`, WB-1). WB-1's
-`scripts/windows/launch-for-field-pass.ps1` makes a fresh root on every
-call and takes no existing one, so a relaunch through it would find an
-empty store; this pass therefore sets the two variables itself, once,
-in one PowerShell window at the repo root, and starts every launch from
-that window — never from a shell without them, which would write the
-owner's real recents and device state. The vault is passed as the
-argument, so no recents seed is needed:
+§4 rule 4 through WB-1's `scripts/windows/launch-for-field-pass.ps1`,
+which every launch and relaunch of the pass goes through. The pass
+relaunches, and the relaunch must read the hot-exit store the first
+launch wrote under `SLATE_LOCAL_APP_DATA` (`SlateDeviceState.Root`,
+WB-1), so the pass makes one empty device root and hands it to every
+launch as `-Root <existing>`: the launcher reuses that folder, sets
+`SLATE_LOCAL_APP_DATA` and `SLATE_LOG_DIR` beneath it for Slate alone
+(the calling window's variables are untouched, so no shell is left
+pointing at the owner's profile or at the pass's root), never deletes a
+reused root, and returns when Slate exits. With `-Root` the launcher
+refuses, exit 2, a root holding a file outside `recent-vaults.json`, the
+device stores it knows and `logs\`; the hot-exit store is a device store
+this chunk adds after WB-1, so if the launcher's accepted set does not
+already name its folder (PR 29's design names it), this chunk adds it
+there (`scripts/windows/launch-for-field-pass.ps1` becomes a touched
+file), and scenario (2)'s relaunch proves it: a refusal exits 2 and
+`Start-Slate` throws. One vault per launch, passed as `-Vault` (the
+launcher opens it; no `-Seed`, so no recents seed). In one PowerShell
+window at the repo root:
 
 ```powershell
 dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release; if ($LASTEXITCODE -ne 0) { throw 'build failed' }
 $root = Join-Path $env:TEMP ("wb29-field-pass-" + (Get-Date -Format 'yyyyMMdd-HHmmss'))
 $vault = Join-Path $root 'vault'
 $weak = Join-Path $root 'wb29-weak-root'
-New-Item -ItemType Directory -Path $vault, $weak | Out-Null
+$device = Join-Path $root 'device-state'   # the launcher's -Root: existing and empty now, reused by every launch, never deleted by it
+New-Item -ItemType Directory -Path $vault, $weak, $device | Out-Null
 Set-Content -LiteralPath (Join-Path $vault 'note.md') -Value '# note'
 Set-Content -LiteralPath (Join-Path $weak 'note.md') -Value '# weak note'
-$env:SLATE_LOCAL_APP_DATA = Join-Path $root 'device-state'
-$env:SLATE_LOG_DIR = Join-Path $root 'logs'
-$exe = (Resolve-Path apps/slate-windows/src/SlateWindows/bin/Release/net10.0-windows/SlateWindows.exe).Path
 function Start-Slate([string]$Path) {
-    # every launch of the pass goes through here: it refuses once this window has lost the pass's device root
-    if (-not $env:SLATE_LOCAL_APP_DATA -or -not $env:SLATE_LOCAL_APP_DATA.StartsWith($root)) { throw 'SLATE_LOCAL_APP_DATA is not the pass''s root in this window' }
-    & $exe $Path
+    # every launch of the pass: the launcher sets SLATE_LOCAL_APP_DATA and SLATE_LOG_DIR beneath $device for Slate alone and returns when Slate exits
+    pwsh -NoProfile -File scripts/windows/launch-for-field-pass.ps1 -Vault $Path -Root $device
+    if ($LASTEXITCODE -ne 0) { throw "launch-for-field-pass.ps1 exited $LASTEXITCODE (2: it refused the root $device)" }
 }
-Start-Slate $vault   # scenario (1); each relaunch in (2)-(5) is this same line, typed again in this window
+Start-Slate $vault   # scenario (1); each relaunch in (2)-(4) is this same line, typed again in this window
 ```
 
-Scenario (6), last, in the same window:
+Scenario (5)'s write denial, with Slate closed after (4). The injection
+is a deny entry for the current user on the hot-exit store's folder,
+inherited by everything in it, refusing add-file (the write-data bit),
+add-subfolder (the append-data bit), delete and delete-child: every
+store create, overwrite, append, rename-over and delete fails with
+access denied, while reads and listing still answer, so the relaunch
+still reads the store and only the writes fail. It is added through
+.NET's `FileSystemAccessRule`, not `icacls /deny`, because `icacls` adds
+`SYNCHRONIZE` to every deny entry, which refuses reads and listing too;
+both behaviours were checked on a scratch folder on 2026-10-21 (create,
+overwrite, append, nested overwrite, subfolder, rename-over and delete
+refused; read and list answered; after the undo, writes answered and no
+deny entry was left). The block checks the denial before relying on it
+and the undo after it:
+
+```powershell
+$hotExit = Join-Path $device 'hot-exit'   # the store's folder under the launcher's SLATE_LOCAL_APP_DATA: use the name PR 29's design gives it
+if (-not (Test-Path -LiteralPath $hotExit -PathType Container)) { throw "no hot-exit store folder at $hotExit (scenario (1) wrote the store; use the folder name PR 29's design gives)" }
+$me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$deny = [System.Security.AccessControl.FileSystemAccessRule]::new($me, 'CreateFiles, CreateDirectories, Delete, DeleteSubdirectoriesAndFiles', 'ContainerInherit, ObjectInherit', 'None', 'Deny')
+$acl = Get-Acl -LiteralPath $hotExit; $acl.AddAccessRule($deny); Set-Acl -LiteralPath $hotExit -AclObject $acl
+$probe = Join-Path $hotExit 'wb29-deny-probe.tmp'
+$denied = $false; try { [System.IO.File]::WriteAllText($probe, 'x') } catch [System.UnauthorizedAccessException] { $denied = $true }
+if (-not $denied) { Remove-Item -LiteralPath $probe; throw 'the deny did not take: a file was created in the store folder' }
+[void][System.IO.Directory]::GetFileSystemEntries($hotExit)   # listing still answers (throws if the deny refused it)
+Start-Slate $vault   # scenario (5): type, Alt+F4 — the prompt with the reason in the status line
+icacls $hotExit /remove:d "*$($me.Value)" /T /C; if ($LASTEXITCODE -ne 0) { throw 'icacls could not remove the deny' }   # the undo, before (6)
+[System.IO.File]::WriteAllText($probe, 'x'); Remove-Item -LiteralPath $probe   # writes answer again (throws if the undo did not take)
+```
+
+Scenario (6), last, in the same window (the launcher's child inherits
+the window's `SLATE_TEST_*` variable, WB-1):
 
 ```powershell
 $env:SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED = 'wb29-weak-root'
 Start-Slate $weak   # and again for (b)'s relaunch
-```
-
-After the last scenario, with Slate closed (never earlier: a GUI launch
-returns at once, so these lines must not be pasted with the blocks
-above):
-
-```powershell
-Remove-Item Env:SLATE_LOCAL_APP_DATA, Env:SLATE_LOG_DIR, Env:SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED
+Remove-Item Env:SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED   # Start-Slate returns only when Slate exits, so this runs after the last scenario
 ```
 
 The scenarios: (1) type in a note, Alt+F4 — no dialog, the window
@@ -692,17 +808,18 @@ closes; (2) relaunch — "Restored 1 unsaved note" (core's exact phrase)
 after the vault-opened sentence, the dirty marker in the tab title, the
 caret in the restored note; (3) change the file outside Slate first,
 then relaunch — the stale notice and, on Ctrl+S, the conflict sentence;
-(4) Close Vault with a dirty tab — the prompt as today; (5) make the
-hot-exit store's folder under `$env:SLATE_LOCAL_APP_DATA` read-only (its
-name per PR 29's design), type, Alt+F4 — the prompt with the reason in
-the status line; (6) the weak root (`wb29-weak-root`, which only `$weak`'s
-path contains), type, Alt+F4 — under item 7 (a) the prompt with core's
+(4) Close Vault with a dirty tab — the prompt as today; (5) with the
+store's folder denied writes by the block above, type, Alt+F4 — the
+prompt with the reason in the status line, the deny removed afterwards;
+(6) the weak root (`wb29-weak-root`, which only `$weak`'s path
+contains), type, Alt+F4 — under item 7 (a) the prompt with core's
 weak-root reason in the status line, under (b) no dialog and the
 relaunch restores as in (2). Recorded in the PR body (the NVDA log
 excerpt per scenario); the PR stays a draft until then.
 
 ## Acceptance
 
+- [ ] Every Open design item (Codex round 12) is closed in the reviewed design, with its fact, before code starts.
 - [ ] WD20 recorded; PR 29's design and core store merged with green
       combined-head CI; WB-28 merged; WB-2's `Admit` on `main`.
 - [ ] The twenty-six `HotExitTests` facts, an `A11yCorpusCensus` fact
@@ -748,13 +865,22 @@ excerpt per scenario); the PR stays a draft until then.
 - [ ] Restore injected into `RestoreNode`'s tabs (the instances in
       `Groups` are the dirty ones); one landing; `WorkspaceReady` after.
 - [ ] Registers: contract 38 amendment, matrices, ledger; NVDA pass
-      (six scenarios, NVDA running, every launch from one window with
-      `SLATE_LOCAL_APP_DATA` and `SLATE_LOG_DIR` set to one temporary
-      root) recorded with its NVDA log excerpts; `Refs`/`Closes #1525`
-      per the closure matrix.
+      (six scenarios, NVDA running, every launch and relaunch through
+      WB-1's `launch-for-field-pass.ps1 -Root` on one existing device
+      root, which accepts the hot-exit store's folder; scenario (5)'s
+      write denial by the checked deny entry and its checked `icacls
+      /remove:d` undo) recorded with its NVDA log excerpts;
+      `Refs`/`Closes #1525` per the closure matrix.
 - [ ] Not delivered: anything the design deferred (named).
 
 ## Brief
+
+Every Open design item (Codex round 12) is closed in the reviewed design, with its fact, before code starts.
+(They are the spec's section of that name: item 7 (b)'s example
+admission check, which a same-path replacement with the same weak index
+and identical baselines passes, with Current state's obsolete "weak
+identity is sound" sentence; and the store host's `InFlight` and
+`DiscardsSettled`, scoped by path alone across vaults.)
 
 Give Windows hot exit over the core store PR 29 ships. Pending decision:
 WD20 (recommended: one shared design that also fixes the durable key and
@@ -1110,33 +1236,44 @@ twenty-six `HotExitTests` facts, the two save-join pins and an
 discovered and run with NVDA closed, every `$LASTEXITCODE` 0), the
 Windows lanes are green, each mutation was run locally (the weak-root
 rows under the chosen policy), the six-scenario NVDA pass (NVDA running,
-the Release build; device state isolated per §4 rule 4 by setting, once,
-in one PowerShell window at the repo root, `$root = Join-Path $env:TEMP
-("wb29-field-pass-" + (Get-Date -Format 'yyyyMMdd-HHmmss'))`,
-`$env:SLATE_LOCAL_APP_DATA = Join-Path $root 'device-state'` and
-`$env:SLATE_LOG_DIR = Join-Path $root 'logs'`, a vault `$vault =
-Join-Path $root 'vault'` holding `note.md` and a weak-root vault `$weak =
-Join-Path $root 'wb29-weak-root'` holding `note.md`, then starting every
-launch and relaunch from that window through a `Start-Slate $vault`
-function that throws unless `$env:SLATE_LOCAL_APP_DATA` still starts
-with `$root` and otherwise runs `& $exe $vault`, `$exe` being the
-resolved Release
-`apps/slate-windows/src/SlateWindows/bin/Release/net10.0-windows/SlateWindows.exe`
-— never from a shell without the variables, which would write the
-owner's real recents and device state; WB-1's
-`scripts/windows/launch-for-field-pass.ps1` is not used because it makes
-a fresh root on every call and the relaunch must read the store the
-first launch wrote; the variables removed with `Remove-Item` only after
-the last scenario, with Slate closed (a GUI launch returns at once):
-(1) type, Alt+F4 — no dialog; (2) relaunch —
+the Release build; device state isolated per §4 rule 4 through WB-1's
+`scripts/windows/launch-for-field-pass.ps1`, every launch and relaunch
+on one device root: in one PowerShell window at the repo root, `$root =
+Join-Path $env:TEMP ("wb29-field-pass-" + (Get-Date -Format
+'yyyyMMdd-HHmmss'))`, an empty existing `$device = Join-Path $root
+'device-state'`, a vault `$vault = Join-Path $root 'vault'` holding
+`note.md` and a weak-root vault `$weak = Join-Path $root
+'wb29-weak-root'` holding `note.md`, then every launch through a
+`Start-Slate` function that runs `pwsh -NoProfile -File
+scripts/windows/launch-for-field-pass.ps1 -Vault $Path -Root $device`
+and throws on a nonzero `$LASTEXITCODE` — the launcher reuses the root,
+sets `SLATE_LOCAL_APP_DATA` and `SLATE_LOG_DIR` beneath it for Slate
+alone, never deletes it and returns when Slate exits; its `-Root` check
+refuses (exit 2) a root holding a file outside the device stores it
+knows, so if it does not already accept the hot-exit store's folder (PR
+29's name), this chunk adds that folder to it, and scenario (2)'s
+relaunch proves it: (1) type, Alt+F4 — no dialog; (2) relaunch —
 "Restored 1 unsaved note" after the vault-opened sentence, the dirty
 marker, the caret in the note; (3) the file changed outside Slate first
 — the stale notice and, on Ctrl+S, the conflict sentence; (4) Close
-Vault with a dirty tab — the prompt; (5) the hot-exit store's folder
-under `$env:SLATE_LOCAL_APP_DATA` made read-only — the prompt with the
-reason in the status line; (6) last, `$env:SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED
+Vault with a dirty tab — the prompt; (5) with Slate closed, the store's
+folder `$hotExit = Join-Path $device 'hot-exit'` (PR 29's name; the block
+throws if it does not exist) denied writes for the current user (`$me =
+[System.Security.Principal.WindowsIdentity]::GetCurrent().User`) by a
+`FileSystemAccessRule` deny of `CreateFiles, CreateDirectories, Delete,
+DeleteSubdirectoriesAndFiles`, inherited `ContainerInherit,
+ObjectInherit`, added with `Get-Acl`/`AddAccessRule`/`Set-Acl` — not
+`icacls /deny`, which adds `SYNCHRONIZE` and so refuses reads and
+listing too (both checked on a scratch folder, 2026-10-21) — then a
+probe write into the folder must fail with `UnauthorizedAccessException`
+and a listing must answer, else the block throws; launch, type, Alt+F4 —
+the prompt with the reason in the status line; then the undo `icacls
+$hotExit /remove:d "*$($me.Value)" /T /C`, `$LASTEXITCODE` checked, and
+a probe write that must succeed; (6) last, `$env:SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED
 = 'wb29-weak-root'` and `Start-Slate $weak` — under (a) the prompt with core's
-reason, under (b) as (1) and (2)) is in the PR body with its NVDA log
-excerpts, and the issue reference follows the closure matrix.
+reason, under (b) as (1) and (2) — then `Remove-Item
+Env:SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED`) is in the PR body with
+its NVDA log excerpts, and the issue reference follows the closure
+matrix.
 Commit:
 `feat(windows): unsaved notes survive closing, quitting and a crash and come back unsaved when the vault reopens`.

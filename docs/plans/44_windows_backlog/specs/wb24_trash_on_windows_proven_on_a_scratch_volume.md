@@ -245,7 +245,11 @@ constant so the PR carries the probe's answer.
   single outcome is `UnlinkedForGood`; the batch sentences at `:2285-2305`
   count `outcomes.Count(o => o.Outcome is UnlinkedForGood)` separately:
   "Moved 2 of 3 to the Recycle Bin; 1 link deleted for good." The mac
-  host ignores `outcomes` until PR 41.
+  host ignores `outcomes` until PR 41. The recycled count is the number
+  of outcomes that are neither `UnlinkedForGood` nor `DeletedOutright`
+  (not `report.Trashed.Length`), so a later `DeletedOutright` outcome is
+  never announced as recycled; WB-30's Open design item 3 (Codex round 12)
+  settles the full summary contract for both chunks.
 
 ### OneDrive (#1492, WD15)
 

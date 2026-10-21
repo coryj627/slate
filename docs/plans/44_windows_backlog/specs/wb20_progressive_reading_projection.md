@@ -297,7 +297,18 @@ Swift compile) and the chunk grows by WB-8's shape.
   unchanged refresh memo-hits it; a stage that lands any `Unmatched`
   outcome leaves `_memo` null, so the next refresh rebuilds and its stage 1
   leaves that fence pending again (main retries a degraded diagram fetch
-  the same way: its degraded digest differs from a good one).
+  the same way: its degraded digest differs from a good one). Either memo
+  write happens only while `_memo` is still the key the stage's own
+  publication set (`ReferenceEquals(_memo, pending.PublishedMemo)`,
+  below): a memo dropped while the stage ran stays dropped. Two routes
+  drop it on purpose and keep the projection — and so its stage — in
+  place: `InvalidateForPrefsChange` (`:298`, "so the NEXT projection
+  re-renders with the new prefs"; WB-21b's code-preamble verbosity
+  reaches it too, and verbosity is not in the memo key, `:1872-1895`) and
+  `EnsureProjected` (`:271`, a rebind that must re-apply what it shows).
+  A landing that restored the memo there would let the very refresh that
+  dropped it memo-hit (`:1574-1581`) — the old preferences kept, or a
+  cleared surface left blank.
 - **Who owns the pending work.** The pending fences belong to the
   projection that shows them, not to the refresh that published it. Main
   keeps `_memo` across `Refresh` and returns early on an identical key
@@ -314,7 +325,9 @@ Swift compile) and the chunk grows by WB-8's shape.
   transferred, never restarted, across a refresh that keeps its projection:
   - New `private sealed record PendingDiagrams(FlowDocument Document,
     string Path, IReadOnlyList<PendingFence> Fences, int
-    RemainingDiagramRenderBytes)` in new field `_pendingDiagrams`, set at
+    RemainingDiagramRenderBytes, MemoKey PublishedMemo)` (`PublishedMemo`:
+    the key `FinishPublish` just stored in `_memo`, `:1784`) in new field
+    `_pendingDiagrams`, set at
     the normal end of `FinishPublish` (not its unheard-stream return,
     `:1777-1782`, whose torso the next binding rebuilds) when the build's
     `ReadingListBuildContext.PendingDiagrams` is non-empty, else null; and
@@ -336,8 +349,9 @@ Swift compile) and the chunk grows by WB-8's shape.
     lands only when `ReferenceEquals(_diagramCancel, stage)` and
     `ReferenceEquals(Document, pending.Document)`; otherwise it counts new
     `internal int DiagramStageLandingsDroppedForTests` and touches nothing
-    (AR-60). A landing records `_landedDiagrams`, sets the memo as above,
-    clears `_pendingDiagrams` and `_diagramCancel`, and raises
+    (AR-60). A landing records `_landedDiagrams`, sets the memo as above
+    (only while `ReferenceEquals(_memo, pending.PublishedMemo)`), clears
+    `_pendingDiagrams` and `_diagramCancel`, and raises
     `DiagramsCompleted(pending.Document, outcomes)`.
   - New `private void RetireDiagramStage()` cancels `_diagramCancel` and
     clears it. A stage is retired only when its projection stops being the
@@ -346,12 +360,32 @@ Swift compile) and the chunk grows by WB-8's shape.
     `PublishTerminalFailure` before the failure notice replaces it, `:827`),
     which also clears `_pendingDiagrams` (the new projection records its
     own at its `FinishPublish`); `OnSurfaceDetached` (`:328-351`, keeping
-    `_pendingDiagrams`); `InvalidateForPrefsChange` (`:292-316`, both
-    branches); `Dispose` (`:1835-1849`). `RetireFetch` (`:729-734`) does
+    `_pendingDiagrams`); `Dispose` (`:1835-1849`). `RetireFetch` (`:729-734`) does
     not retire it: a newer refresh that ends in a memo hit, a preserved
     terminal failure or a cancelled rescan re-projection leaves the stage
     running, and it lands on the projection still shown; a newer refresh
     that publishes retires it at that publication.
+  - **A preference change retires nothing.** `InvalidateForPrefsChange`
+    (`:292-316`) replaces no projection: its attached branch drops the
+    memo and starts a `Refresh` (`:298-302`), which ends in a publication
+    (retiring the stage when it replaces `Document`), a terminal failure —
+    preserved (`:810-815`: the shown projection stays, so its stage keeps
+    running and lands) or replacing (`:816-827`, which retires it) — or a
+    newer generation that ends in one of those ways; its unbound branch
+    (`:304-315`) only poisons the generation and calls `RetireFetch`, and
+    the next bind re-projects through `EnsureProjected` or resumes through
+    the fast path. No preference changes a diagram's outcome:
+    `get_diagram_blocks` keys its render on the path and the source's hash
+    (`session.rs:9637-9648`) and reads no math preference
+    (`set_math_prefs` serves `get_math_blocks`, `session.rs:9592-9619`), and WB-21b's
+    code-preamble verbosity, which reaches the same method, changes only
+    code paragraphs' names. So the stage keeps completing the projection it
+    belongs to. Retiring it here — round 11's design — stranded it: the
+    attached branch's refresh, failing with the projection preserved,
+    reaches neither `FinishPublish` nor a rebind, so nothing restarted the
+    cancelled render and the placeholder read "Diagram, rendering"
+    indefinitely (`ResumePendingDiagrams` runs only on the rebind fast
+    path).
   - The surface's rebind fast path (`ReadingSurface.cs:265-288`: its
     `_lastMerged` is still the model's complete `Document`, so nothing
     re-projects) calls new `internal void
@@ -551,6 +585,35 @@ never only a child peer's `Name`. Every fact that holds the stage sets
   placeholder still reads "Diagram, rendering" → every row fails; restart
   the stage at the memo hit instead of leaving it running →
   `DiagramStageRunsForTests == 2` → `memo-hit` fails.
+- `ReadingDiagramTests.AFailedPreferenceRefreshLeavesTheDiagramStageToLand`
+  — a bound surface (so `BlocksAppended` is subscribed and
+  `InvalidateForPrefsChange` takes its attached branch), a note with a
+  paragraph and a Mermaid fence; a `DiagramsCompleted` counter by
+  document; gate held after stage 1 (`DiagramStageRunsForTests == 1`, the
+  placeholder pending). Then `FetchFaultForTests = () => new
+  VaultException.Io("injected")` and `model.InvalidateForPrefsChange()`;
+  pump until `model.RefreshInFlight` is false: `LastRefreshFailed` is
+  true, `PublishedFailureNotice` is false, `model.Document` is still the
+  stage-1 document and its placeholder still reads "Diagram, rendering"
+  with no `Content` (the preserve branch kept the projection). Release the
+  gate (and again in `finally`); pump until `DiagramsCompleted` has fired:
+  the same `ReadingDiagramElement` instance is named by the description
+  and holds the image, the surface TextPattern no longer holds the fence's
+  source, `DiagramsCompleted` fired once and for the stage-1 document,
+  `DiagramStageRunsForTests == 1`, `DiagramStageLandingsDroppedForTests ==
+  0`, no `A11yEvent` was raised between the release and the landing, and
+  `DiagramStageGateTimedOutForTests` is false. Then the fault is cleared
+  and an unchanged `model.Refresh()` runs: it is not a memo hit (the
+  preference change dropped the memo and the landing did not restore it —
+  `ApplyProbeForTests` counts one more), and the rebuilt document holds the
+  rendered diagram from `_landedDiagrams` with no pending mark
+  (`DiagramStageRunsForTests` still 1). Mutations: retire the stage in
+  `InvalidateForPrefsChange` (round 11's design) → it stops at its
+  boundary after the gate, nothing lands and the placeholder still reads
+  "Diagram, rendering" → fails; let the landing write the memo whatever
+  `_memo` holds (drop the `ReferenceEquals(_memo, pending.PublishedMemo)`
+  guard) → the unchanged refresh memo-hits and the probe does not count →
+  fails.
 - `ReadingDiagramTests.ARebindToTheSameProjectionResumesItsPendingDiagram`
   — gate held after stage 1; `surface.Model = null` (its
   `OnSurfaceDetached` retires the stage), then `surface.Model = model`
@@ -632,9 +695,10 @@ never only a child peer's `Name`. Every fact that holds the stage sets
   never refuses it" (WD11), and a note under AR-60: "the diagram stage has
   its own token and belongs to the projection it completes — retired (its
   token cancelled, its result dropped) when that projection is replaced,
-  detached or disposed, never by a newer refresh that keeps it (a memo hit,
-  a preserved failure, a cancelled rescan re-projection), after which it
-  still lands".
+  detached or disposed, never by a preference change or a newer refresh
+  that keeps it (a memo hit, a preserved failure, a cancelled rescan
+  re-projection), after which it still lands; its landing never restores a
+  memo dropped while it ran".
 - `w_c_matrix.md:23`: the Diagram blocks row gains the pending placeholder
   (name "Diagram, rendering", type "diagram", the source as text beside it)
   and the in-place completion (the same element; failure header, reason and
@@ -671,6 +735,7 @@ Assert-Discovered $listed @(
   'SlateWindows.Tests.ReadingDiagramTests.ASupersededDiagramStageTouchesNothing',
   'SlateWindows.Tests.ReadingDiagramTests.SvgIsDecodedOffTheDispatcher',
   'SlateWindows.Tests.ReadingDiagramTests.AnUnchangedRefreshWhileTheDiagramRendersLeavesItsStageToFinish',
+  'SlateWindows.Tests.ReadingDiagramTests.AFailedPreferenceRefreshLeavesTheDiagramStageToLand',
   'SlateWindows.Tests.ReadingDiagramTests.ARebindToTheSameProjectionResumesItsPendingDiagram',
   'SlateWindows.Tests.ReadingDiagramTests.AnUnmatchedDiagramIsRetriedByTheNextRefresh',
   'SlateWindows.Tests.ReadingFocusTests.AHeldLandingSeatsOnThePartialProjection',
@@ -720,8 +785,8 @@ the surface without waiting for the diagram.
 
 ## Acceptance
 
-- [ ] Sixteen new facts pass (one a theory whose three rows are each listed), seen failing first (every gate wait's result asserted, released in `finally`); the pending source and the failure header, reason and source asserted through the surface TextPattern, not only a peer's name; an unfocused `Unmatched` removal leaves no removed element among the surface peer's children (WB-11's `InvalidateStructuralPeers()` after the removal), a text-only completion keeps the same peer; adapted facts green; mutations run.
-- [ ] The diagram stage belongs to the projection it completes: `RetireFetch` does not retire it; a memo hit, a preserved terminal failure and a cancelled rescan re-projection each leave it to land on the shown projection (`DiagramStageRunsForTests == 1`, nothing dropped); a replacing publication, a detach, a prefs change and disposal retire it; the rebind fast path resumes it; a landing that no longer owns the shown document is refused; an `Unmatched` landing leaves the memo empty so the next refresh retries the fence.
+- [ ] Seventeen new facts pass (one a theory whose three rows are each listed), seen failing first (every gate wait's result asserted, released in `finally`); the pending source and the failure header, reason and source asserted through the surface TextPattern, not only a peer's name; an unfocused `Unmatched` removal leaves no removed element among the surface peer's children (WB-11's `InvalidateStructuralPeers()` after the removal), a text-only completion keeps the same peer; adapted facts green; mutations run.
+- [ ] The diagram stage belongs to the projection it completes: `RetireFetch` does not retire it; a memo hit, a preserved terminal failure and a cancelled rescan re-projection each leave it to land on the shown projection (`DiagramStageRunsForTests == 1`, nothing dropped); a replacing publication, a detach and disposal retire it; a preference change does not — `InvalidateForPrefsChange` retires nothing, so a preference refresh that fails with the projection preserved leaves the stage to land (`AFailedPreferenceRefreshLeavesTheDiagramStageToLand`); a landing writes the memo only while `_memo` is still its own publication's key, so a memo a preference change or `EnsureProjected` dropped stays dropped; the rebind fast path resumes it; a landing that no longer owns the shown document is refused; an `Unmatched` landing leaves the memo empty so the next refresh retries the fence.
 - [ ] WB-9's six carried-landing facts and main's three held-landing facts stay green on this chunk's base (WB-9 merged first), and the carried landing seats on a reloaded partial projection that a later stage 2 leaves alone.
 - [ ] Both discovery checks find every required fact by fully qualified name (they throw otherwise) and every Verification command exits 0.
 - [ ] New FlaUI journey green (its TextPattern assertions included); the text waits shortened.
@@ -738,7 +803,10 @@ cancelled-rescan catches at 548-562 and 627-655, the token finished at 580
 and 688), 729-734 (RetireFetch), 785-829 (PublishTerminalFailure and its
 preserve branch), 841, 912-968, 1156, 1517-1620 (Publish: the memo hit at
 1574-1581), 1757-1790, 1835-1849 (Dispose), 1872-1896 (MemoKey)`,
-`CoreRequestCancellation.cs:17-47` (`Finish` disposes the token),
+`CoreRequestCancellation.cs:17-47` (`Finish` disposes the token), core
+`crates/slate-core/src/session.rs:9592-9648` (math prefs serve
+`get_math_blocks`; `get_diagram_blocks` keys on the path and the source's
+hash, so no preference changes a diagram),
 `Reading/ReadingDocumentBuilder.cs:23-70, 213-215,
 575-596, 845-1043, 1768-1773`, `Reading/ReadingSurface.cs:42, 233-303 (the
 model change and the rebind fast path at 265-288), 312-330,
@@ -805,7 +873,8 @@ rendering" forever, and restarting it per refresh would start another
 uncancellable core render (`GetDiagramBlocks` takes no token, `:932`).
 So: new `_pendingDiagrams` (new `record PendingDiagrams(FlowDocument
 Document, string Path, IReadOnlyList<PendingFence> Fences, int
-RemainingDiagramRenderBytes)`) and `_diagramCancel`
+RemainingDiagramRenderBytes, MemoKey PublishedMemo)`, the last the key
+`FinishPublish` stored, `:1784`) and `_diagramCancel`
 (`CoreRequestCancellation?`); new `StartDiagramStage(PendingDiagrams)`
 (retires any running stage, new token, counts `DiagramStageRunsForTests`;
 the worker checks the token after the gate, before `GetDiagramBlocks`,
@@ -818,9 +887,18 @@ lands only when `ReferenceEquals(_diagramCancel, stage)` and
 new `RetireDiagramStage()` runs only when the projection stops being the
 one shown — a publication replacing `Document` (`Publish` before `:1622`,
 `PublishTerminalFailure` before `:827`, both clearing `_pendingDiagrams`),
-`OnSurfaceDetached`, `InvalidateForPrefsChange`, `Dispose` — and never in
-`RetireFetch`, so a memo hit, a preserved failure or a cancelled rescan
-leaves the stage running to land on the projection still shown; the
+`OnSurfaceDetached`, `Dispose` — and never in `RetireFetch`, so a memo
+hit, a preserved failure or a cancelled rescan leaves the stage running to
+land on the projection still shown; never in `InvalidateForPrefsChange`
+either (`:292-316`, both branches): a preference change replaces no
+projection and changes no diagram's outcome (core keys the render on the
+path and the source's hash, `session.rs:9637-9648`, and reads no math
+preference; WB-21b's verbosity, reaching the same method, renames only
+code paragraphs), its attached branch's refresh (`:298-302`) retires the
+stage only by publishing a replacement, and a failure there that
+preserves the projection (`:810-815`) leaves the stage to land — retiring
+it there stranded "Diagram, rendering", because that ending reaches
+neither `FinishPublish` nor the rebind that resumes; the
 surface's rebind fast path (`ReadingSurface.cs:265-288`) calls new
 `internal void ResumePendingDiagrams()`, which restarts the stage the
 detach retired when `_pendingDiagrams` names the shown `Document`. The
@@ -828,7 +906,11 @@ memo key gains `landedDigest` (`DiagramArtifactDigest` over the
 `_landedDiagrams` the build read); a stage landing no `Unmatched` outcome
 sets it to the new landed set, so the next unchanged refresh memo-hits the
 completed document, and one landing any `Unmatched` outcome leaves `_memo`
-null, so the next refresh retries that fence. Every other early return in
+null, so the next refresh retries that fence — either write only while
+`ReferenceEquals(_memo, pending.PublishedMemo)`, so a memo that
+`InvalidateForPrefsChange` (`:298`; verbosity is not in the memo key,
+`:1872-1895`) or `EnsureProjected` (`:271`) dropped while the stage ran
+stays dropped and the refresh that dropped it rebuilds. Every other early return in
 `Publish` (superseded, `:1532-1540`; drifted, `:1549-1567`) leaves the work
 with a newer refresh that ends in one of those ways. New `abstract record DiagramOutcome` with
 `Rendered(Description, Landing, Visual)`, `Failed(Description, Landing,
@@ -931,6 +1013,18 @@ and pending; after the release the same placeholder holds the image, the
 TextPattern lacks the source, `DiagramsCompleted` fired once for the
 stage-1 document, `DiagramStageRunsForTests == 1`, nothing dropped, no
 `A11yEvent`);
+`ReadingDiagramTests.AFailedPreferenceRefreshLeavesTheDiagramStageToLand`
+(a bound surface, gate held after stage 1; `FetchFaultForTests` throwing
+and `InvalidateForPrefsChange()` — its attached refresh fails and the
+preserve branch keeps the stage-1 document: `LastRefreshFailed` true,
+`PublishedFailureNotice` false, the placeholder still pending; after the
+release the same placeholder holds the image, the TextPattern lacks the
+source, `DiagramsCompleted` fired once for the stage-1 document,
+`DiagramStageRunsForTests == 1`, nothing dropped, no `A11yEvent` between
+the release and the landing; then, the fault cleared, an unchanged
+`Refresh()` is not a memo hit — `ApplyProbeForTests` counts one more —
+and rebuilds the diagram complete from `_landedDiagrams` with no new
+stage);
 `ReadingDiagramTests.ARebindToTheSameProjectionResumesItsPendingDiagram`
 (gate held, `surface.Model = null` then the same model again — the fast
 path; after the release the same placeholder is completed,
@@ -969,7 +1063,11 @@ artifacts dropped; the memo's `landedDigest` left at stage 1's (the
 unchanged refresh after a landing rebuilds); `LandDiagramStage` without its
 ownership check (the posted stale landing applies); `RetireFetch` retiring
 the stage (every row of the unchanged-refresh theory keeps "Diagram,
-rendering"); the stage restarted at a memo hit (two runs); no
+rendering"); the stage restarted at a memo hit (two runs); the stage
+retired in `InvalidateForPrefsChange` (the failed preference refresh
+strands "Diagram, rendering"); the landing's memo write without its
+`ReferenceEquals(_memo, pending.PublishedMemo)` guard (the unchanged
+refresh after the failed preference refresh memo-hits); no
 `ResumePendingDiagrams()` on the fast path; the memo set after an
 `Unmatched` landing (no retry); decode in `Build`; `RefreshInFlight` held through stage
 2 (the carried landing has not seated at the gate); a stage-2 fault
@@ -980,8 +1078,9 @@ loop, each native command followed by a throw on a nonzero
 (`$env:CARGO_TARGET_DIR='C:\dev\slate\target-wb20'`), Release build,
 `dotnet test --list-tests` over `FullyQualifiedName~SlateWindows.Tests.ReadingDiagramTests
 | …ReadingFocusTests | …ReadingViewTests | …ReadingMathTests |
-…RescanTests | …ReadingDoctrineCensusTests` throwing unless the sixteen
-facts (and the unchanged-refresh theory's `memo-hit`, `preserved-failure`
+…RescanTests | …ReadingDoctrineCensusTests` throwing unless the seventeen
+facts (`AFailedPreferenceRefreshLeavesTheDiagramStageToLand` among them;
+and the unchanged-refresh theory's `memo-hit`, `preserved-failure`
 and `cancelled-rescan` rows), `DiagramFetchFailureDegradesToSourceInRange`,
 `UnsavedDiagramEditsNeverShowTheStaleDiagram` and the nine
 `RescanTests.ReadingLanding.cs` landing facts are listed by fully
@@ -1004,7 +1103,8 @@ silent, the placeholder's name, a rescan-carried landing seated on the
 reloaded partial projection and never refused by a stage-2 failure) and
 an AR-60 note (the stage has its own token and belongs to its projection:
 retired when that projection is replaced, detached or disposed, never by
-a newer refresh that keeps it, after which it still lands) to
+a preference change or a newer refresh that keeps it, after which it
+still lands; its landing never restores a memo dropped while it ran) to
 `docs/plans/40_nvda_matrix_remediation_contracts.md`; amend
 `docs/plans/18_windows_port/w_c_matrix.md:23` (the pending placeholder with
 its source as text beside it; in-place completion); note progressive

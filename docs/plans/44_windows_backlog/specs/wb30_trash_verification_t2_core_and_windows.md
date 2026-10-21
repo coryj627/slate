@@ -6,7 +6,9 @@ Size L. Lanes: rust, windows, swift (the FFI records change, and a Swift
 pin that mac's successful batch still speaks as today). AT: NVDA full
 pass on Part 2. Wave: W11, slot 1, after WB-28, WB-24's recorded
 real-Recycle-Bin results, and plan 43 PR 34's shared identity primitive
-merged with green combined-head CI. Parallel with: WB-29. Decision: WD16
+merged with green combined-head CI; and every Open design item (Codex
+round 12) closed in the reviewed design, with its fact, before code
+starts. Parallel with: WB-29. Decision: WD16
 (pending; recommended "decouple the Windows T2 from the mac `~/.Trash`
 read check; COM in Rust (`windows-rs`) beside the trash-rs path so core
 keeps owning the outcome"; under the other answer — COM in the host —
@@ -17,8 +19,9 @@ WB-30 waits for it). WD24 (answered 2026-10-21; amended 2026-10-21:
 FAT32 and exFAT vaults keep opening — WB-28 reads the root's identity
 with `FileIdInfo`, else with `GetFileInformationByHandle`'s volume serial
 and file index, flagged weak (`persistent: false`), and refuses only when
-neither read answers. So the mode is `Strong` only when the vault's file
-system is NTFS or ReFS **and** its root identity is the persistent
+neither read answers (superseded — see Open design item 2). So the
+mode is `Strong` only when the vault's file system is NTFS or ReFS
+**and** its root identity is the persistent
 `FileIdInfo` kind; `NameAndMetadataOnly` for FAT, FAT32, exFAT, a share
 whose server reports another file system, or a weak root identity).
 WD22 (pending, decided in WB-28; recommended "widen `VaultRootIdentity`
@@ -45,12 +48,120 @@ revalidated and verified without reading one. `Strong` needs both: an
 NTFS or ReFS volume and the persistent `FileIdInfo` root identity. FAT32
 and exFAT vaults open (WB-28's file-index fallback); only a Windows
 folder for which neither identity read answers does not open (WD24 as
-amended, WB-28). One
+amended, WB-28) (superseded — see Open design item 2). One
 verifier serves every platform, so the same check that confirms a
 Windows recycle confirms the scratch bin every test uses. A back end that
 reports no destination — macOS until PR 41, Linux — keeps today's batch
 state and sentences exactly. The macOS Rust half (`resultingItemURL`)
 and the mac host stay with PR 41.
+
+## Open design items (Codex round 12, 2026-10-21)
+
+These findings were recorded, not fixed, by the owner's decision of
+2026-10-21: the chunk's design review closes each one before any code,
+and where an item contradicts the text below, the item wins until the
+design resolves it. (Line numbers into this spec are Codex's, from
+before the round-12 notes were added; each passage is also named.)
+
+1. **[high] The root ctime exemption weakens the pre-delete
+   confirmation.** Design, "One walk per item, in the staged mode"
+   (Codex's `:372-378`), omits the root's `ChangeTime`/ctime from both
+   modes' stamps, and that one snapshot is what staging captures and
+   revalidation compares ("The confirmed observation travels with the
+   delete", Codex's `:390-396`). Main's Windows stamp
+   (`trash_snapshot/windows.rs:235-275`) hashes metadata — the identity,
+   the times, `EndOfFile` and the attributes — never contents, and
+   `validate_item_cancellable` compares only that snapshot
+   (`trash_confirmation.rs:134-139`): a staged file edited in place to
+   the same length with its last-write time set back then passes as
+   unchanged and is trashed as confirmed, because the ctime was the
+   remaining discriminator. Plan 43's T2 design exempts the root's ctime
+   only from the re-observation after the Trash move, which changes it
+   (`24_trash_handoff_feasibility.md:127-132`, `:138-139`), never from
+   the check before the deletion.
+   *Codex recommends:* keep the full pre-handoff validation and carry,
+   separately, a fingerprint comparable after the move, obtained in the
+   same walk; add a restored-mtime root-edit refusal fact and keep the
+   unchanged-move success fact; update both platform implementations,
+   the verifier and the Brief.
+   *The design closes it with:* the two fingerprints and their fields
+   (for example `TrashSnapshot` keeping today's full fingerprint, the
+   root's ctime included, plus a new field without it), which comparison
+   reads which — revalidation the full one, `verify_destination` the
+   post-move one — and both stamps (Windows `ChangeTime`, Unix
+   `st_ctime`) filling both from one walk; facts in
+   `session/tests/trash_confirmation.rs`, on Windows and on Unix, in
+   `Strong` and in `NameAndMetadataOnly`: a staged file overwritten in
+   place with the same length and its last-write time set back to the
+   staged value is refused as stale by the delete and nothing moves; and
+   `the_root_ctime_is_exempt_from_the_re_observation` stays green.
+   Mutation: revalidate with the post-move fingerprint (→ the edited file
+   is trashed as confirmed).
+2. **[medium] Superseded: an NTFS or ReFS root falling back to the file
+   index.** The current contract is WB-28's design item 6 under WD24 as
+   amended and narrowed by codex round 11 (WB-28's "The identity read,
+   and a root without a readable identity", and its facts
+   `the_file_index_fallback_is_taken_only_on_fat_fat32_and_exfat` and
+   `a_file_id_info_failure_on_a_volume_that_keeps_ids_refuses_the_open_and_never_reads_the_index`):
+   the file-index fallback is taken **only** on a volume whose file
+   system is `FAT`, `FAT32` or `exFAT`, and on NTFS, ReFS or any other
+   file system a `FileIdInfo` failure refuses the open without reading
+   the index. These passages say otherwise and are superseded, each
+   marked "(superseded — see Open design item 2)" where it stands: the
+   header's WD24 note ("refuses only when neither read answers", Codex's
+   `:17-20`), the Goal's copy, Current state's FAT32/exFAT bullet
+   (Codex's `:99-104`), Design's `identity_mode_for_file_system` bullet
+   (an NTFS or ReFS volume "whose `FileIdInfo` read failed at open, so
+   WB-28 fell back to the file index", Codex's `:331-337`), Design's
+   standalone provider (`FsVaultProvider::new`'s failed identity read
+   becoming `NameAndMetadataOnly`, Codex's `:355-359`), the Acceptance's
+   prerequisites line, and the Brief's three copies. An implementing
+   agent reading them gets two incompatible admission contracts.
+   *Codex recommends:* apply the FAT/FAT32/exFAT-only fallback
+   throughout, the standalone provider's handling and the Brief
+   included; keep defensive pure-helper cases if useful, but never use
+   them to admit a root WB-28 must refuse.
+   *The design closes it with:* each marked passage rewritten to the
+   narrowed contract; what `FsVaultProvider::new`'s standalone identity
+   read does when it fails — the refusal WB-28's open makes, so a delete
+   under a root WB-28 would refuse never proceeds in
+   `NameAndMetadataOnly` — with a fact: a standalone provider over an
+   NTFS folder with WB-28's `SLATE_TEST_ROOT_FILE_ID_INFO_FAILS` set
+   through `fault_guard()` gets an `Err` from `trash_identity_mode`, the
+   delete refuses and nothing moves (mutation: map that failure to
+   `NameAndMetadataOnly` → the delete proceeds with no id read); and
+   `identity_mode_for_file_system`'s NTFS or ReFS rows with a weak
+   identity kept only as pure-helper rows labelled defensive, which no
+   open reaches.
+3. **[medium] Batch speech counts permanent deletions as recycled.**
+   Design, the core copy (Codex's `:573-578`), appends one clause per
+   non-confirmed class to `BatchTrashSummary`'s `Partial` sentence, whose
+   prefix is "Moved {k} of {n} items to the Recycle Bin", and main
+   derives k from `report.Trashed.Length` (`FilesSidebarViewModel.cs:2313`;
+   the `Succeeded` sentence at `:2310` and the cancelled one at `:2291`
+   as well). `DeletedOutright` items stay in `report.trashed` — only
+   `outcomes` tells them apart — and WB-24's shared summary counts only
+   `UnlinkedForGood` separately (WB-24's Design, `:245-247`), so a batch
+   on a volume without a Recycle Bin announces items as moved to the
+   Recycle Bin and then says they were deleted: a false claim that they
+   can be recovered.
+   *Codex recommends:* define the recycled count separately from the
+   removed-item reconciliation, excluding both `DeletedOutright` and
+   `UnlinkedForGood`; cover mixed, zero-recycled and cancelled batches
+   with exact speech assertions; update WB-24's shared summary contract
+   and this Brief.
+   *The design closes it with:* the recycled count (`trashed` less the
+   `DeletedOutright` and `UnlinkedForGood` outcomes) that every "Moved …
+   to the Recycle Bin" prefix uses, kept apart from the removed-item
+   count the tree reconciliation uses (all of `trashed`); the sentence
+   when nothing was recycled (no "Moved 0" prefix); the matching
+   amendment to WB-24's summary contract, made in the same design; and
+   `FileManagementTests` facts asserting the exact sentence for a mixed
+   batch (recycled, `DeletedOutright` and `UnlinkedForGood` together), a
+   batch whose every item was deleted outright, and a cancelled batch
+   with a `DeletedOutright` among the items done. Mutation: count
+   `report.Trashed.Length` (→ the mixed and all-deleted sentences claim
+   recycling).
 
 ## Current state on main
 
@@ -101,7 +212,8 @@ Verified against the worktree; the plan's lines hold.
   64-bit file index, the read the watcher already makes
   (`vault/watch.rs:279-307`) — flags that fallback weak (`persistent:
   false`; a FAT index changes when its entry is renamed or moved), and
-  refuses only when neither read answers, before `.slate` is made. Its
+  refuses only when neither read answers, before `.slate` is made
+  (superseded — see Open design item 2). Its
   step 0 records, on WB-27's FAT32 and exFAT VHDs, which read each
   answers. So an open Windows vault always has a root identity, persistent
   or weak, and FAT32/exFAT vaults open; whether its ids can serve as
@@ -334,7 +446,8 @@ consumes its contract, §2.3).
     server reports another file system (WB-27's rows), an empty name, or
     any name with a weak root identity — an NTFS or ReFS volume whose
     `FileIdInfo` read failed at open, so WB-28 fell back to the file
-    index, has shown it cannot be relied on for an id read now.
+    index, has shown it cannot be relied on for an id read now
+    (superseded — see Open design item 2).
   - `trash_snapshot::identity_mode_for(root: &fs::File,
     root_id_persistent: bool) -> IdentityMode` (new). On Windows it
     reads the held root's volume name with
@@ -356,7 +469,8 @@ consumes its contract, §2.3).
   the root as its Windows arm does (`windows_entry::PinnedRoot::open`,
   `windows_entry.rs:378-398`) and reads its identity once with
   WB-28's `fs_root::sys::identity` (the same two reads a session's open
-  makes); if that read fails, the mode is `NameAndMetadataOnly`.
+  makes); if that read fails, the mode is `NameAndMetadataOnly`
+  (superseded — see Open design item 2).
 - **The no-id-read witness.** Test seam `FILE_ID_UNAVAILABLE` (new,
   `#[cfg(test)]` thread-local `Cell<bool>` in `windows_entry.rs`). While
   it is set, `query_file_id` fails with `ERROR_INVALID_PARAMETER`. It no
@@ -851,10 +965,12 @@ no AT pass; its mac state is pinned by the Swift fact and
 
 ## Acceptance
 
+- [ ] Every Open design item (Codex round 12) is closed in the reviewed design, with its fact, before code starts.
 - [ ] WD16 recorded; WD24 (answered 2026-10-21, amended 2026-10-21)
       applied; prerequisites merged: WB-28 (whose open reads the root's
       identity by `FileIdInfo`, else by the file index flagged weak, and
-      refuses only when neither answers; its step-0 probe recorded),
+      refuses only when neither answers (superseded — see Open design
+      item 2); its step-0 probe recorded),
       WB-24's results recorded, PR 34's identity primitive with green
       combined-head CI.
 - [ ] Part 1: `TrashOutcome` (WB-24's enum, unchanged), `TrashedOutcome`,
@@ -909,6 +1025,14 @@ no AT pass; its mac state is pinned by the Swift fact and
 
 ## Brief
 
+Every Open design item (Codex round 12) is closed in the reviewed design, with its fact, before code starts.
+(They are the spec's section of that name: the root ctime exemption
+applied before the deletion as well as after the move; the superseded
+NTFS/ReFS file-index fallback text — the contract is WB-28's
+FAT/FAT32/exFAT-only fallback, and every passage saying otherwise,
+including this Brief's, is marked "(superseded — see Open design item
+2)"; and batch speech counting `DeletedOutright` items as recycled.)
+
 Make the Trash outcome truthful on Windows and shared by both hosts,
 without changing any mac sentence before PR 41. Pending decision: WD16
 (recommended: decouple the Windows T2 from the mac `~/.Trash` read check
@@ -922,8 +1046,8 @@ FAT32 and exFAT generally answer no `FileIdInfo` (microsoft/STL PR 6187;
 `SidebarWriteJournal.cs:73-75`), so WB-28 reads the root's identity with
 `FileIdInfo`, else with `GetFileInformationByHandle`'s volume serial and
 64-bit file index flagged weak (`persistent: false`), and refuses only
-when neither answers; such vaults open. The mode is therefore `Strong`
-only when the file system is NTFS or ReFS **and** the root identity is
+when neither answers (superseded — see Open design item 2); such vaults
+open. The mode is therefore `Strong` only when the file system is NTFS or ReFS **and** the root identity is
 the persistent `FileIdInfo` kind, and `NameAndMetadataOnly` for FAT,
 FAT32, exFAT, a share whose server reports another file system, or a
 weak root identity. Pending in WB-28: WD22 (recommended: widen
@@ -975,7 +1099,8 @@ names; WB-28's design items 0, 1 and 6 (the step-0 probe of both reads
 on the VHDs; `VaultRootIdentity`'s `persistent` flag and
 `FsRoot::identity()`; the two-read identity, its seam
 `SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED`, and the refusal only when
-neither read answers, WD24); `vault/watch.rs:279-307` (the file-index
+neither read answers, WD24 (superseded — see Open design item 2));
+`vault/watch.rs:279-307` (the file-index
 read WB-28 falls back to); `session.rs:3160-3260` (the filesystem open;
 `FsVaultProvider::held` at `:3256`); `fs.rs:125-158` (`new` holds no
 root, `held` does); for Part 2's journey and field pass,
@@ -1023,7 +1148,7 @@ The rule sits behind `VaultProvider::trash_identity_mode`, which
 `FsVaultProvider::new` opens the root through
 `windows_entry::PinnedRoot::open` and reads its identity once with
 WB-28's `fs_root::sys::identity`, a failed read giving
-`NameAndMetadataOnly`;
+`NameAndMetadataOnly` (superseded — see Open design item 2);
 `stamp` by mode (the weak mode never queries an id), the root-ctime
 exemption, `TrashSnapshot.mode`, `trash_snapshot_in_mode_cancellable`;
 `ConfirmedItem::{Strong { identity, tree }, NameAndMetadataOnly { tree }}`

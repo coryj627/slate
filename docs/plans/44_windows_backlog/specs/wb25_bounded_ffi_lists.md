@@ -35,6 +35,40 @@ plan §2.2 records it); one correction to the plan: `report_rel.md` says
   seam is typed `(ScanReport Report, SwitcherFile[] SwitcherFiles)`
   (`:93-94`, `:190-191`), filled at `:529-542` and handed to the switcher
   at `:1220`.
+- **The listing seam's other users, and the open's remaining boundary.**
+  Production reads `SwitcherPageLoadingForTests` once more: the rescan's
+  Quick Open re-sync, `VaultLifecycleViewModel.Rescan.cs:606-648`
+  `ReSyncQuickOpenAsync`, opens a journal (`switcher.BeginReplacement()`,
+  `:616`), lists through `RunRescanCoreAsync("list", () => LoadSwitcherFiles(session, cancel, SwitcherPageLoadingForTests), cancellation)`
+  (`:619-622`) and hands the list to `ReplaceFilesAsync(files, journal, cancellation)`
+  (`:628`). In `QuickSwitcherViewModel.cs` the `ReplacementJournal`
+  (`:320-341`, `_openJournals` `:49`, `JournalChange` `:343-349`) exists
+  only to replay Slate-owned changes onto that listed set, and
+  `ReplaceFilesAsync` (`:350-399`) completes inside the silent re-rank's
+  publication through `_rescanRankWaiters` (`:44-46`). Two facts assign
+  the seam: `W1HardeningTests.cs:207-246`
+  `W1VaultCloseBarrierTests.ACancelledOpenLoadStopsInsideQuickOpensListingAndPublishesNothing`
+  — the tuple-typed `load` at `:217`, the assignment at `:224` (a
+  callback, on the load's worker before the first page, that waits for
+  the disposal to cancel the open's token and then lets the listing run
+  with it), the fact's wait on that callback at `:235`, and the
+  listing-cancellation asserts at `:240-241` — and `RescanTests.Round3.cs:106-145`
+  `RescanTests.ACloseWaitsForEveryRescanCoreCallInFlight`, whose
+  assignment at `:117` parks the rescan's listing so a close must drain
+  it, asserting `Assert.Single(… "list")` at `:140`. `W1HardeningTests.cs`
+  holds no class named `W1HardeningTests` (namespace `SlateWindows.Tests`;
+  the close-barrier facts are class `W1VaultCloseBarrierTests`, `:169`),
+  and main has no `QuickSwitcherViewModelTests` class. Without the
+  listing, the open's load makes one core call: `StartVaultWatch(activeSession)`
+  (`VaultLifecycleViewModel.cs:535`), then
+  `ScanInitialWithProgress(activeCancel, activeProgressListener)` (`:536`).
+  `CloseSession` cancels that token (`_scanCancel?.Cancel()`, `:1028`)
+  before it drains the rescan's calls (`DrainRescanCoreCalls()`, `:1038`)
+  and joins the load (`_sessionLoadCompletion.GetAwaiter().GetResult()`,
+  `:1042`, which swallows `VaultException.Cancelled`), and core's
+  `scan_vault` checks the token before it counts or walks anything
+  (`crates/slate-core/src/session.rs:10331-10333`: `Err(Cancelled)`, no
+  listener call), then per file after `Started`.
 - **Tag tree.** `lib.rs:851-853` `pub fn tag_tree(&self) -> Result<TagTree, VaultError>`
   (tokenless, unpaged); FFI records `:653-665` `TagTreeEntry { segment, full, file_count, direct_count, depth }`,
   `:669-674` `TagTree { entries, untagged_count, audio_summary }`; the
@@ -290,6 +324,32 @@ query stops inside core. `VaultLifecycleViewModel.LoadSwitcherFiles` and
 seam's tuple loses `SwitcherFiles` (`:93-94`, `:190-191`, `:529-542`,
 `:1220`); the open no longer loads the list (the §6 interlock with
 WB-9/WB-28/WB-29 on `VaultLifecycleViewModel.cs` is these deletions).
+The rescan stops listing too: `ReSyncQuickOpenAsync`
+(`VaultLifecycleViewModel.Rescan.cs:606-648`) makes no `"list"` core
+call and opens no journal; it awaits **new**
+`internal Task QuickSwitcherViewModel.ReRankForRescanAsync(CancellationToken cancellation)`,
+which is `ReplaceFilesAsync` (`QuickSwitcherViewModel.cs:350-399`)
+without its `files` and `journal` parameters and its replay, under the
+same contract — a closed switcher completes at once; an open one re-runs
+its query silently, and the task completes inside the publication of
+that rank or a later one, faults on its terminal failure, completes when
+the switcher closes, and is cancelled with the token — because the
+index the rescan's scan just committed is what the indexed rank reads.
+`ReplaceFilesAsync`, `ReplacementJournal`, `BeginReplacement`,
+`EndReplacement`, `JournalChange` and `_openJournals` go with the file
+list they replayed onto. **The open's cancellation boundary moves to its
+scan.** Without the listing, the open's load makes one core call, so the
+listing seam's role — a hook on the load's worker, handed the open's
+token, where a fact holds the load until the disposal has cancelled it —
+moves to the scan: **new** `internal Action<CancelToken>? OpenScanStartingForTests { get; set; }`
+on `VaultLifecycleViewModel` (where `SwitcherPageLoadingForTests` was,
+`:1743-1745`), read once into a local before `_runSessionLoad` (as
+`switcherPageHook` is at `:528`) and invoked on the load's worker after
+`StartVaultWatch(activeSession)` and immediately before
+`ScanInitialWithProgress(activeCancel, activeProgressListener)`, with
+`activeCancel`. Production never sets it, and `CloseSession` does not
+change: its cancel-then-join order (`:1028`, then `:1042`) is what the
+replacement fact pins.
 The census adds `SwitcherRankTop(`. Not changed: `DisplayCap`, the row
 view models, recents (`FileRecentsStore`), the Quick Open journey, mac.
 
@@ -372,10 +432,12 @@ Windows:
 - Stage 1: `SidebarTagFilterTests.TheTagTreeArrivesInPagesAndACancelledRefreshPublishesNothing` — a fake session paging 3 entries at a time; cancel after page one → no `Tags` change, `AfterTagTreeForTests` called once. Mutation: ignore the cancel between pages → the tree publishes.
 - Stage 1: `RescanTests` `:1236`, `:1258`, `:1675` keep passing (the seam fires per page; the throw fact still throws once).
 - Census, new `Censuses/BoundedFfiListCensus.cs` (class `BoundedFfiListCensus`, namespace `SlateWindows.Tests.Censuses`) with `EveryVaultListOperationTheWindowsHostCallsIsPagedOrBounded`, scraping `apps/slate-windows/src` (the `AutomationIdInventory` scrape shape): stage 1 zero `.TagTree(` call sites; stage 2 adds zero `SwitcherRankTop(` call sites. Mutation: put one call back → the census names its file and line.
-- Stage 2: `QuickSwitcherViewModelTests.AKeystrokeRanksThroughCoreWithNoHostFileList` — the seam receives `(query, recents, token)` only; `FilePathsForTests` no longer exists (compile-time).
-- Stage 2: `QuickSwitcherViewModelTests.ASupersededKeystrokeCancelsTheCoreQuery` — the first rank's token is cancelled when the second starts. Mutation: do not link the source to the core token → fails.
-- Stage 2: `QuickSwitcherRescanLandingTests.ARescansSilentReRankKeepsTheKeysOnTheReadersResult` (`:27`) rewritten without `initialFiles`, same assertions.
-- Stage 2: every `FilePathsForTests` site listed under Current state asserts through a rank (`Rows` contains / does not contain); `RescanTests.cs:2068` and `W1HardeningTests.cs:217` drop the tuple's file list; `SharedNameTests.cs:561-575`, `W1WorkspaceTests.cs:501-545` (`W1QuickSwitcherAndChordTests`) and `QuickSwitcherRankCoordinatorTests.cs` build their switchers on real fixture files or the new `rankTop` seam, same assertions.
+- Stage 2: `QuickSwitcherViewModelTests.AKeystrokeRanksThroughCoreWithNoHostFileList` (**new** class and file, `tests/SlateWindows.Tests/QuickSwitcherViewModelTests.cs`; main has none) — the seam receives `(query, recents, token)` only; `FilePathsForTests` no longer exists (compile-time).
+- Stage 2: `QuickSwitcherViewModelTests.ASupersededKeystrokeCancelsTheCoreQuery` (same new class) — the first rank's token is cancelled when the second starts. Mutation: do not link the source to the core token → fails.
+- Stage 2: `QuickSwitcherRescanLandingTests.ARescansSilentReRankKeepsTheKeysOnTheReadersResult` (`:27`) rewritten without `initialFiles`, awaiting `ReRankForRescanAsync` where it called `BeginReplacement` and `ReplaceFilesAsync` (`:42-43`), same assertions.
+- Stage 2: every `FilePathsForTests` site listed under Current state asserts through a rank (`Rows` contains / does not contain); `RescanTests.cs:2068` drops the tuple's file list (`RunOnWorker<ScanReport>`); `SharedNameTests.cs:561-575`, `W1WorkspaceTests.cs:501-545` (`W1QuickSwitcherAndChordTests`) and `QuickSwitcherRankCoordinatorTests.cs` build their switchers on real fixture files or the new `rankTop` seam, same assertions.
+- Stage 2: `W1VaultCloseBarrierTests.ACancelledOpenLoadStopsAtItsScanAndPublishesNothing` (`W1HardeningTests.cs`) — **replaces** `ACancelledOpenLoadStopsInsideQuickOpensListingAndPublishesNothing` (`:207-246`), deleted with the listing it names; its doc comment moves with it and says the open no longer lists. Boundary: the open's scan, the load's one remaining core call. A three-note `FixtureVault`; `sessionLoadWorker: work => load = Task.Run(work)` with `load` typed `Task<ScanReport>?`; `lifecycle.OpenScanStartingForTests = cancel => { scanStarting.Set(); Assert.True(SpinWait.SpinUntil(cancel.IsCancelled, TimeSpan.FromSeconds(10)), "the disposal cancelled the open's token before it joined the load"); }`; the fact asserts `scanStarting.Wait(TimeSpan.FromSeconds(10))`, runs `lifecycle.Dispose` on the pool under a 10 s `WaitAsync`, awaits the open under 10 s, then asserts `load.IsFaulted`, `load.Exception!.InnerException` is `VaultException.Cancelled` (the scan's pre-walk check answered for the token the disposal cancelled, rather than a completed scan), and `Workspace`, `FileSidebar` and `QuickSwitcher` null. Witness: the hook, the only code that sees the open's token, observes it cancelled while the disposal is still inside `CloseSession`, and the load ends in `Cancelled`. The hook holds nothing the disposal waits on except by waiting for the disposal's own cancel, which `CloseSession` issues before it joins (`:1028` before `:1042`) — so a disposal that joined first would deadlock the hook out to its bound and fail, not pass. Mutations: hand the scan a token the disposal never cancels (`ScanInitialWithProgress(new CancelToken(), …)`) → the scan completes and `load` is not faulted; move `_scanCancel?.Cancel()` after the join at `:1042` → the hook's 10 s wait expires while the disposal waits on the load, and the load faults with the hook's assertion, not `Cancelled` (or the 10 s `Dispose` bound elapses first); invoke the hook after the scan instead of before it → the scan has completed, the load is not faulted.
+- Stage 2: `RescanTests.ACloseWaitsForEveryRescanCoreCallInFlight` (`RescanTests.Round3.cs:106-145`) — **migrated**, same name and claim: the rescan makes no `"list"` call to park, so the in-flight call becomes the workspace's `"hashes"` read, parked inside its disk probe. The harness seeds `ghost.md`; the fact opens it (`h.Open("ghost.md")`), deletes the file outside Slate, and sets `h.Lifecycle.CanonicalPathForTests` (`VaultLifecycleViewModel.Rescan.cs:779`) to a probe that, on its first call for `ghost.md`, sets `parked`, waits on `release` (30 s bound) and returns `null`: the rescan's scan drops the row, so `ReadIndexedPaths` (`:746-773`) finds no hash and asks the disk through that seam (`:766`, `StoredSpelling` `:825-826`) inside the `"hashes"` core call. After `h.Context.RunUntil(() => parked.IsSet, …)`, a timer releases 800 ms later (as today) and `CloseVault()` runs; then `Assert.Single(h.CoreCallOutcomes, o => o.Operation == "hashes")` with `At <= closedAt` (the close returned only after the hash read ended), `releasedAt > 0`, a failure that is null or `VaultException.Cancelled`, no `"list"` outcome at all, and no `VaultRescanFinished` or `VaultRescanIncomplete`. The doc comment says the parked call is the hash read now that Quick Open no longer lists. Mutations: `CloseSession` without `DrainRescanCoreCalls()` (`VaultLifecycleViewModel.cs:1038`) → the close returns while the hash read is parked, `At > closedAt`; a `"list"` call left in `ReSyncQuickOpenAsync` → the no-`"list"` assertion fails.
 
 ## Docs and registers
 
@@ -462,11 +524,14 @@ Assert-RustFacts 'switcher' @(
   'bounded_rank_preserves_duplicate_recents_and_stable_canonical_ties',
   'bounded_rank_matches_full_order_and_exact_total')
 Assert-Gates
-Assert-DotnetFacts $tests 'FullyQualifiedName~SidebarTagFilterTests|FullyQualifiedName~RescanTests|FullyQualifiedName~QuickSwitcherViewModelTests|FullyQualifiedName~QuickSwitcherRescanLandingTests|FullyQualifiedName~QuickSwitcherRankCoordinatorTests|FullyQualifiedName~W1QuickSwitcherAndChordTests|FullyQualifiedName~SharedNameTests|FullyQualifiedName~W1HardeningTests|FullyQualifiedName~CommandPaletteTests|FullyQualifiedName~BoundedFfiListCensus' @(
+Assert-DotnetFacts $tests 'FullyQualifiedName~SidebarTagFilterTests|FullyQualifiedName~RescanTests|FullyQualifiedName~QuickSwitcherViewModelTests|FullyQualifiedName~QuickSwitcherRescanLandingTests|FullyQualifiedName~QuickSwitcherRankCoordinatorTests|FullyQualifiedName~W1QuickSwitcherAndChordTests|FullyQualifiedName~SharedNameTests|FullyQualifiedName~SlateWindows.Tests.W1VaultCloseBarrierTests|FullyQualifiedName~CommandPaletteTests|FullyQualifiedName~BoundedFfiListCensus' @(
   'TheTagTreeArrivesInPagesAndACancelledRefreshPublishesNothing',
-  'AKeystrokeRanksThroughCoreWithNoHostFileList',
-  'ASupersededKeystrokeCancelsTheCoreQuery',
+  'QuickSwitcherViewModelTests.AKeystrokeRanksThroughCoreWithNoHostFileList',
+  'QuickSwitcherViewModelTests.ASupersededKeystrokeCancelsTheCoreQuery',
   'ARescansSilentReRankKeepsTheKeysOnTheReadersResult',
+  'W1VaultCloseBarrierTests.ACancelledOpenLoadStopsAtItsScanAndPublishesNothing',
+  'W1VaultCloseBarrierTests.DirectDisposalJoinsActiveSessionLoadingBeforeRelease',
+  'RescanTests.ACloseWaitsForEveryRescanCoreCallInFlight',
   'EveryVaultListOperationTheWindowsHostCallsIsPagedOrBounded') 'stage2'
 # desktop free, NVDA closed (partial class ShellAccessibilityTests; select by method):
 Assert-DotnetFacts 'apps/slate-windows/tests/SlateWindows.AccessibilityTests/SlateWindows.AccessibilityTests.csproj' 'FullyQualifiedName~FluentShell_UiaPatternsKeyboardFocusAndAxe_AreClean' @(
@@ -481,7 +546,14 @@ selects the `tag_tree::tests` module and every `tag_tree_page_*` fact,
 code and on any required fact missing from the passed results; xUnit's
 TRX `testName` is the fully qualified `Namespace.Class.Method`.
 `W1QuickSwitcherAndChordTests` is the class in `W1WorkspaceTests.cs`; a
-`W1WorkspaceTests` filter selects nothing. `Assert-Format` passes every
+`W1WorkspaceTests` filter selects nothing. Likewise `W1HardeningTests.cs`
+holds no class of its name (namespace `SlateWindows.Tests`), so stage 2
+selects the close-barrier class itself, `SlateWindows.Tests.W1VaultCloseBarrierTests`
+— the replacement fact and the class's other facts over the open's load
+— and requires the replacement and the migrated
+`RescanTests.ACloseWaitsForEveryRescanCoreCallInFlight` by
+class-qualified name, so a fact left behind under its old name, or
+dropped instead of replaced, fails the check. `Assert-Format` passes every
 C# file the branch changed or added since its merge base, new test files
 included.)
 
@@ -496,6 +568,7 @@ spot check.
 - [ ] Stage 1 merged on its own PR (`Refs #1290`), stage 2 on a second (`Closes #1290`), each with its facts failing first and mutations run (the delimiter-collision, `full`-cursor, `full`-bound-count and tie-break mutations among them).
 - [ ] Stage 1's pages equal `tag_tree`'s entries byte for byte over a fixture holding `/a`, `a` and `//a`; the cursor and the descendant counts are bound from the node's key, never its `full`.
 - [ ] After stage 1 `apps/slate-windows/src` has no `.TagTree(` call, and after stage 2 no `SwitcherRankTop(` call; the census pins each as its stage lands.
+- [ ] Stage 2 deletes `SwitcherPageLoadingForTests` and `LoadSwitcherFiles` with no stranded user: the rescan's `ReSyncQuickOpenAsync` lists nothing and awaits `ReRankForRescanAsync`; `W1VaultCloseBarrierTests.ACancelledOpenLoadStopsAtItsScanAndPublishesNothing` replaces the listing fact (boundary: the open's scan; witness: new `OpenScanStartingForTests` seeing the open's token cancelled before the scan, and the load ending `Cancelled` with nothing published); `RescanTests.ACloseWaitsForEveryRescanCoreCallInFlight` parks the hash read in place of the listing; both are required by class-qualified name in the stage-2 TRX check, which selects the class `SlateWindows.Tests.W1VaultCloseBarrierTests` (never the file name `W1HardeningTests`), and each is killed by its mutations.
 - [ ] Both bindings regenerated per PR; the Swift lane compiles; mac source untouched.
 - [ ] Contract 40 note and `w_c_matrix.md` cells updated; the mac follow-up filed by WB-0 and named in the PR body.
 - [ ] Not delivered, named: the mac migration and the retirement of `tag_tree` / `switcher_rank_top` (WD17); a node identity for `full` (a leading-empty-segment node shares its `full` with a root tag on both hosts; recorded in WB-0's mac follow-up).
@@ -517,9 +590,19 @@ Read `docs/plans/05_locked_architecture_decisions.md:1554-1556`;
 `apps/slate-windows/src/SlateWindows/FilesSidebarViewModel.cs:1368-1420`,
 `:1085-1095`, `:1475-1540` (the filter, re-selection and expansion keyed
 on `Full`); `QuickSwitcherViewModel.cs:20-75`, `:240-320`, `:360-400`, `:460-500`;
-`VaultLifecycleViewModel.cs:90-95`, `:185-240`, `:525-545`, `:1215-1225`,
-`:1740-1770`; `RescanTests.cs:1200-1260`, `:1330-1350`, `:1640`,
-`:1670-1680`; `QuickSwitcherRescanLandingTests.cs:27-100`;
+`VaultLifecycleViewModel.cs:90-95`, `:185-240`, `:525-545`, `:1020-1060`
+(`CloseSession`: the open's token cancelled at `:1028`, the rescan's
+calls drained at `:1038`, the load joined at `:1042`), `:1215-1225`,
+`:1740-1770`; `VaultLifecycleViewModel.Rescan.cs:598-648`
+(`ReSyncQuickOpenAsync`, the rescan's `"list"` call at `:619-622`) and
+`:740-830` (`ReadIndexedPaths`, `CanonicalPathForTests` at `:779`);
+`QuickSwitcherViewModel.cs:40-50`, `:320-399` (the replacement journal
+and `ReplaceFilesAsync`); `crates/slate-core/src/session.rs:10325-10335`
+(the scan's pre-walk token check); `apps/slate-windows/tests/SlateWindows.Tests/W1HardeningTests.cs:169-246`
+(class `W1VaultCloseBarrierTests`; the listing fact at `:207-246`);
+`RescanTests.Round3.cs:100-146` (the close-drain fact);
+`RescanTests.cs:1200-1260`, `:1330-1350`, `:1640`,
+`:1670-1680`, `:2395-2410` (`Harness.Open`); `QuickSwitcherRescanLandingTests.cs:27-100`;
 `CONTRIBUTING.md:76-98`. Decision WD17 is pending (recommended: keep
 `tag_tree` and `switcher_rank_top` for mac, add the siblings, WB-0 files
 the mac follow-up; under "retire now" the mac call sites
@@ -625,6 +708,27 @@ turn `ApplyFileChange` / `ApplyRecordsAsync` and the rescan replay into
 the core token; delete `LoadSwitcherFiles`, `SwitcherPageLoadingForTests`
 and the `SwitcherFiles` half of the `sessionLoadWorker` tuple
 (`VaultLifecycleViewModel.cs:93-94`, `:190-191`, `:529-542`, `:1220`);
+make the rescan list nothing — `ReSyncQuickOpenAsync`
+(`VaultLifecycleViewModel.Rescan.cs:606-648`) drops its `"list"` core
+call and its journal and awaits new
+`internal Task QuickSwitcherViewModel.ReRankForRescanAsync(CancellationToken cancellation)`
+(`ReplaceFilesAsync`, `QuickSwitcherViewModel.cs:350-399`, without the
+`files` and `journal` parameters and the replay, same contract: a closed
+switcher completes at once, an open one re-ranks silently and completes
+inside that publication or a later one, faults on its terminal failure,
+completes on close, cancels with the token), and `ReplaceFilesAsync`,
+`ReplacementJournal`, `BeginReplacement`, `EndReplacement`,
+`JournalChange` and `_openJournals` go; and move the open's test seam to
+its one remaining core call — new
+`internal Action<CancelToken>? OpenScanStartingForTests { get; set; }`
+on `VaultLifecycleViewModel` (where `SwitcherPageLoadingForTests` was),
+read into a local before `_runSessionLoad` like `switcherPageHook`
+(`:528`) and invoked on the load's worker after
+`StartVaultWatch(activeSession)` and immediately before
+`ScanInitialWithProgress(activeCancel, activeProgressListener)`, with
+`activeCancel` (production never sets it; `CloseSession` keeps cancelling
+that token at `:1028` before it joins the load at `:1042`, and core's
+scan answers `Cancelled` before walking, `session.rs:10331-10333`);
 the census adds `SwitcherRankTop(`. Stage 2 facts, failing first, each
 against the oracle `switcher_rank_top` over the `list_files(OpenableDocuments)`
 pages for the same vault: `switcher_rank_top_indexed_matches_switcher_rank_top_over_the_same_files`
@@ -643,16 +747,40 @@ macOS a precomposed `\u{e9}/note.md` sibling keeps statement order; for
 `switcher_rank_top_indexed_sees_a_file_the_index_just_gained`; the
 existing `switcher.rs` facts still green;
 `QuickSwitcherViewModelTests.AKeystrokeRanksThroughCoreWithNoHostFileList`
-(the seam receives `(query, recents, token)` only),
+(new class and file `tests/SlateWindows.Tests/QuickSwitcherViewModelTests.cs`;
+the seam receives `(query, recents, token)` only),
 `QuickSwitcherViewModelTests.ASupersededKeystrokeCancelsTheCoreQuery`
 (the first rank's token cancelled when the second starts),
 `QuickSwitcherRescanLandingTests.ARescansSilentReRankKeepsTheKeysOnTheReadersResult`
-rewritten without `initialFiles`; every `FilePathsForTests` site
+rewritten without `initialFiles`, awaiting `ReRankForRescanAsync` where
+it called `BeginReplacement`/`ReplaceFilesAsync` (`:42-43`); every
+`FilePathsForTests` site
 (`RescanTests.cs:1209`, `:1335-1345`, `:1642`, `:1747-1748`, `:1782`,
 `:1791`; `RescanTests.Round3.cs:410`; `RescanTests.Round4.cs:128`;
 `RescanTests.Watcher.cs:59`, `:99-100`, `:150`) asserting through a rank;
-`RescanTests.cs:2068` and `W1HardeningTests.cs:217` without the tuple's
-file list; `SharedNameTests.cs:561-575`, `W1WorkspaceTests.cs:501-545`
+`RescanTests.cs:2068` without the tuple's file list (`RunOnWorker<ScanReport>`);
+`W1VaultCloseBarrierTests.ACancelledOpenLoadStopsAtItsScanAndPublishesNothing`,
+replacing `ACancelledOpenLoadStopsInsideQuickOpensListingAndPublishesNothing`
+(`W1HardeningTests.cs:207-246`, deleted with the listing; the boundary
+is now the open's scan): `load` typed `Task<ScanReport>?` from
+`sessionLoadWorker: work => load = Task.Run(work)`, the hook
+`OpenScanStartingForTests = cancel => { scanStarting.Set(); Assert.True(SpinWait.SpinUntil(cancel.IsCancelled, TimeSpan.FromSeconds(10)), …); }`,
+`scanStarting` waited (10 s, asserted), `lifecycle.Dispose` on the pool
+under 10 s, the open awaited under 10 s, then `load.IsFaulted` with a
+`VaultException.Cancelled` inner exception and `Workspace`,
+`FileSidebar`, `QuickSwitcher` null — the hook releases nothing the
+disposal waits on except by awaiting the disposal's own cancel, which
+`CloseSession` issues before its join; and
+`RescanTests.ACloseWaitsForEveryRescanCoreCallInFlight`
+(`RescanTests.Round3.cs:106-145`) migrated, same name and claim, with
+the workspace's `"hashes"` read parked in place of the listing: a tab on
+the harness's `ghost.md`, the file deleted outside Slate, and
+`h.Lifecycle.CanonicalPathForTests` parking its first `ghost.md` probe
+(inside the `"hashes"` call, since the rescan's scan dropped the row) on
+a `release` a timer sets 800 ms later; `CloseVault()` then returns only
+after that read ended (`Assert.Single` `"hashes"` outcome with
+`At <= closedAt`, failure null or `Cancelled`), with no `"list"` outcome
+and no `VaultRescanFinished`/`VaultRescanIncomplete`; `SharedNameTests.cs:561-575`, `W1WorkspaceTests.cs:501-545`
 (class `W1QuickSwitcherAndChordTests`) and
 `QuickSwitcherRankCoordinatorTests.cs` on real fixture files or the new
 seam; and the census (zero `.TagTree(` and `SwitcherRankTop(` under
@@ -665,7 +793,15 @@ descendants with `LIKE` (escaped: U+0000 over-counts; unescaped: `a_b`
 counts 2); a heap keyed by score then byte path; recency dropped for a
 non-empty query; byte path instead of `path_key`; ignore the cancel
 between pages; unlink the keystroke source from the core token; put a
-`.TagTree(` or `SwitcherRankTop(` call back. Registers: a note under
+`.TagTree(` or `SwitcherRankTop(` call back; hand the open's scan a
+token the disposal never cancels (the load completes, not `Cancelled`);
+move `CloseSession`'s `_scanCancel?.Cancel()` after its join of the load
+(the hook's wait expires and the load faults with its assertion, or the
+`Dispose` bound elapses); invoke `OpenScanStartingForTests` after the
+scan (the scan completes first); drop `DrainRescanCoreCalls()` from
+`CloseSession` (the close returns while the hash read is parked); leave
+a `"list"` call in `ReSyncQuickOpenAsync` (the migrated rescan fact sees
+it). Registers: a note under
 AR-63's family in `docs/plans/40_nvda_matrix_remediation_contracts.md`;
 the Files tree and Quick Open cells in `docs/plans/18_windows_port/w_c_matrix.md`;
 the mac follow-up WB-0 files, named in both PR bodies, whose text also
@@ -682,8 +818,15 @@ WSL), each exiting 0; `generate-bindings.ps1 -Locked`; `dotnet build`; `dotnet t
 (`SidebarTagFilterTests`, `RescanTests`, `BoundedFfiListCensus`, and in
 stage 2 also `QuickSwitcherViewModelTests`, `QuickSwitcherRescanLandingTests`,
 `QuickSwitcherRankCoordinatorTests`, `W1QuickSwitcherAndChordTests`,
-`SharedNameTests`, `W1HardeningTests`, `CommandPaletteTests`) with a TRX
-log and each named fact required among the passed results; in stage 2
+`SharedNameTests`, `SlateWindows.Tests.W1VaultCloseBarrierTests` — the
+close-barrier class in `W1HardeningTests.cs`, which holds no class of
+the file's name, so a `W1HardeningTests` filter selects nothing —
+`CommandPaletteTests`) with a TRX log and each named fact required among
+the passed results, in stage 2 including
+`W1VaultCloseBarrierTests.ACancelledOpenLoadStopsAtItsScanAndPublishesNothing`,
+`W1VaultCloseBarrierTests.DirectDisposalJoinsActiveSessionLoadingBeforeRelease`
+and `RescanTests.ACloseWaitsForEveryRescanCoreCallInFlight` by
+class-qualified name; in stage 2
 the FlaUI `FluentShell_UiaPatternsKeyboardFocusAndAxe_AreClean` run
 (desktop free, NVDA closed); `dotnet format --verify-no-changes
 --include` over every C# file changed or added since the merge base
