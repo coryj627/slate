@@ -33,7 +33,10 @@ holds for the tag, with one correction: the tag is read in two places
 - `apps/slate-windows/generate-bindings.ps1:30-52`: `cargo build -p slate-uniffi --release`
   (honours `CARGO_TARGET_DIR`), then `uniffi-bindgen-cs --library $dll --out-dir src/SlateUniffi/generated --config apps/slate-windows/uniffi.toml`
   (`uniffi.toml`: `access_modifier = "public"`), copies the DLL beside
-  the binding. The generated directory is git-ignored.
+  the binding, into a directory it creates but never clears
+  (`:42-43`). The generated directory is git-ignored
+  (`apps/slate-windows/.gitignore:3`), so a fresh worktree has none and
+  a reused one may hold an older generation.
 - `Cargo.toml:24` `uniffi = { version = "0.31", features = ["cli"] }`;
   `Cargo.lock` resolves `uniffi`, `uniffi_bindgen`, `uniffi_core`,
   `uniffi_internal_macros` at `0.31.2`. `crates/slate-uniffi/Cargo.toml:16-17`
@@ -64,39 +67,75 @@ bindings; §11 risk).
 
 A throwaway branch `claude/wb32-uniffi-032-spike` from `main`, never
 opened as a PR; a report file is the only artefact that lands (through
-WB-0 or a docs-only PR). Exact steps:
+WB-0 or a docs-only PR). Exact steps, in order, in one PowerShell
+session from the repo root (step 1's `CARGO_TARGET_DIR` and step 4's
+`PATH` hold for the steps after them):
 
-1. **Build the generator from the PR's head** into a private cargo
+1. **Generate both 0.31 baselines first, before any dependency or PATH
+   change.** `apps/slate-windows/src/SlateUniffi/generated` is git-ignored
+   (`apps/slate-windows/.gitignore:3`): a fresh worktree has no
+   generation to copy, and a reused one may hold a stale one, while
+   `generate-bindings.ps1` overwrites into the directory without
+   clearing it (`:42-43`). So the baseline is generated here, on the new
+   branch while its `Cargo.toml` and `Cargo.lock` are still `main`'s,
+   with the pinned generator (`~/.cargo/bin`, whose `--version` prints
+   `uniffi-bindgen 0.11.0+v0.31.0`) and the spike's private target
+   directory, into an emptied directory; only a successful run is
+   copied:
+   ```
+   $ErrorActionPreference = 'Stop'
+   $env:CARGO_TARGET_DIR = 'C:\dev\slate\target-wb32'
+   git diff --quiet main -- Cargo.toml Cargo.lock
+   if ($LASTEXITCODE -ne 0) { throw 'Cargo.toml or Cargo.lock already differs from main: take the baseline before the bump' }
+   $pinned = (Get-Content apps/slate-windows/uniffi-bindgen-cs.version -Raw).Trim().TrimStart('v')   # 0.11.0+v0.31.0
+   $v = uniffi-bindgen-cs --version
+   if ($LASTEXITCODE -ne 0) { throw "uniffi-bindgen-cs --version failed ($LASTEXITCODE)" }
+   if ($v -notmatch ([regex]::Escape($pinned) + '$')) { throw "the generator on PATH reports '$v', not the pinned $pinned" }
+   (Get-Command uniffi-bindgen-cs).Source   # record it in the report
+   $gen = 'apps/slate-windows/src/SlateUniffi/generated'
+   if (Test-Path $gen) { Remove-Item $gen -Recurse -Force }
+   ./apps/slate-windows/generate-bindings.ps1 -Locked   # throws on a failed cargo build or generation
+   if (-not (Get-ChildItem $gen -Filter *.cs)) { throw 'the 0.31 generation wrote no C#' }
+   if (-not (Test-Path (Join-Path $gen 'slate_uniffi.dll'))) { throw 'the 0.31 generation staged no DLL' }
+   if (Test-Path C:\dev\slate\tools\wb32-baseline) { Remove-Item C:\dev\slate\tools\wb32-baseline -Recurse -Force }
+   New-Item -ItemType Directory -Force C:\dev\slate\tools\wb32-baseline\swift | Out-Null
+   Copy-Item $gen C:\dev\slate\tools\wb32-baseline\csharp -Recurse
+   cargo run -p slate-uniffi --release --locked --bin uniffi-bindgen -- generate --library C:\dev\slate\target-wb32\release\slate_uniffi.dll --language swift --out-dir C:\dev\slate\tools\wb32-baseline\swift
+   if ($LASTEXITCODE -ne 0) { throw "the 0.31 Swift generation failed ($LASTEXITCODE)" }
+   ```
+   The Swift baseline comes from the same 0.31 DLL, before step 3's
+   bump rebuilds it.
+2. **Build the generator from the PR's head** into a private cargo
    home so the pinned `v0.11.0+v0.31.0` binary in `~/.cargo/bin` stays
    untouched (the lanes and every other worktree need it):
    ```
-   $env:CARGO_TARGET_DIR='C:\dev\slate\target-wb32'
    cargo install --git https://github.com/dennisameling/uniffi-bindgen-cs --rev cf0aa7a8fb59358a846708730a58a02bf206ac05 uniffi-bindgen-cs --locked --root C:\dev\slate\tools\bindgen-032
    C:\dev\slate\tools\bindgen-032\bin\uniffi-bindgen-cs.exe --version
    ```
    If `--locked` fails on the fork's lockfile, record it and retry
    without `--locked`; the report names which.
-2. **Bump** on the branch: `Cargo.toml:24` → `uniffi = { version = "0.32", features = ["cli"] }`;
+3. **Bump** on the branch: `Cargo.toml:24` → `uniffi = { version = "0.32", features = ["cli"] }`;
    `cargo update -p uniffi -p uniffi_bindgen -p uniffi_core -p uniffi_internal_macros`;
    `cargo build -p slate-uniffi --release --locked`; `cargo test -p slate-uniffi`.
    Record every compile error (the issue expects none: proc-macro only,
    no `.udl`).
-3. **Regenerate** with the spike generator on the PATH ahead of the
+4. **Regenerate** with the spike generator on the PATH ahead of the
    pinned one, through the shipped script so its arguments are the
-   lanes':
+   lanes', into an emptied directory so no 0.31 file survives into the
+   diff:
    ```
    $env:Path = "C:\dev\slate\tools\bindgen-032\bin;$env:Path"
+   if ((Get-Command uniffi-bindgen-cs).Source -ne 'C:\dev\slate\tools\bindgen-032\bin\uniffi-bindgen-cs.exe') { throw 'the spike generator is not first on PATH' }
+   Remove-Item apps/slate-windows/src/SlateUniffi/generated -Recurse -Force
    ./apps/slate-windows/generate-bindings.ps1 -Locked
    ```
-   Before the bump, on `main`, copy the 0.31 generation aside:
-   `Copy-Item apps/slate-windows/src/SlateUniffi/generated C:\dev\slate\tools\wb32-baseline\csharp -Recurse`.
-   After regenerating, diff the two directories
+   Then diff against step 1's baseline
    (`git diff --no-index C:\dev\slate\tools\wb32-baseline\csharp apps/slate-windows/src/SlateUniffi/generated`):
    count added, removed and renamed public symbols, note any signature
    change (the checksum constants will all change; that is expected),
    and record whether the Swift notes from the issue (`indirect` enums)
    have a C# analogue.
-4. **Build and test** the Windows app and every test project:
+5. **Build and test** the Windows app and every test project:
    ```
    dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release
    dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --no-build --configuration Release
@@ -108,22 +147,21 @@ WB-0 or a docs-only PR). Exact steps:
    PowerShell: `cargo fmt --all -- --check`,
    `cargo clippy --all-targets --workspace -- -D warnings`,
    `cargo test --workspace`.
-5. **Measure the mac half locally only as far as a Windows machine
+6. **Measure the mac half locally only as far as a Windows machine
    can.** No `uniffi-bindgen` executable is installed here; the workspace
-   bin (`crates/slate-uniffi/Cargo.toml:16-17`) runs through cargo. On
-   `main` first (baseline), then on the branch (spike):
+   bin (`crates/slate-uniffi/Cargo.toml:16-17`) runs through cargo. The
+   0.31 baseline came from step 1; on the bumped branch, the spike half:
    ```
-   $dll = "C:\dev\slate\target-wb32\release\slate_uniffi.dll"
-   $swiftOut = "C:\dev\slate\tools\wb32-baseline\swift"      # then C:\dev\slate\tools\wb32-spike\swift on the branch
-   New-Item -ItemType Directory -Force $swiftOut | Out-Null
-   cargo run -p slate-uniffi --release --bin uniffi-bindgen -- generate --library $dll --language swift --out-dir $swiftOut
+   New-Item -ItemType Directory -Force C:\dev\slate\tools\wb32-spike\swift | Out-Null
+   cargo run -p slate-uniffi --release --locked --bin uniffi-bindgen -- generate --library C:\dev\slate\target-wb32\release\slate_uniffi.dll --language swift --out-dir C:\dev\slate\tools\wb32-spike\swift
+   if ($LASTEXITCODE -ne 0) { throw "the 0.32 Swift generation failed ($LASTEXITCODE)" }
    git diff --no-index C:\dev\slate\tools\wb32-baseline\swift C:\dev\slate\tools\wb32-spike\swift
    ```
    to diff `slate_uniffiFFI.h` and `slate_uniffi.swift` (the issue's
    "byte-identical header" claim, re-measured; checksum lines are
    expected to differ). Whether `swift build` still succeeds is the mac
    follow-up's.
-6. **Write the report** at
+7. **Write the report** at
    `docs/plans/44_windows_backlog/reports/uniffi_032_spike_2026-MM-DD.md`
    (the run's own date in the name).
 
@@ -148,7 +186,8 @@ fact), the report names the census to extend in the real bump.
 
 ## Docs and registers
 
-- The report (above), with: the generator's exact rev and build
+- The report (above), with: the 0.31 baseline's generator path and
+  `--version` (step 1); the spike generator's exact rev and build
   command; the lockfile diff summary (crate versions before/after);
   the compile errors (if any) and their fixes; the generated-C# symbol
   diff (added/removed/renamed, checksum-only changes counted
@@ -163,17 +202,25 @@ fact), the report names the census to extend in the real bump.
 
 ## Verification
 
-The commands in Design steps 1–5, run locally with a private
-`CARGO_TARGET_DIR` and a private `--root` for the generator; CI runs
-nothing (no PR from the branch). Before deleting the branch:
-the PATH edit is per shell, so no restoration is needed, but confirm
-`uniffi-bindgen-cs --version` in a fresh shell still reports the pinned
-0.31 build, then delete `C:\dev\slate\target-wb32`,
+The commands in Design steps 1–6, in that order, run locally with a
+private `CARGO_TARGET_DIR` and a private `--root` for the generator;
+step 1's checks (`Cargo.toml` and `Cargo.lock` equal to `main`'s, the
+generator on `PATH` reporting the version file's pin, a successful
+generation into an emptied directory with C# and the DLL in it) must
+pass before anything is copied as the baseline, and nothing in steps
+2–6 runs until they have. CI runs nothing (no PR from the branch).
+Before deleting the branch: the PATH edit is per shell, so no
+restoration is needed, but confirm the pinned binary is untouched —
+`& (Join-Path $env:USERPROFILE '.cargo\bin\uniffi-bindgen-cs.exe') --version`
+still ends with the version file's pin (`0.11.0+v0.31.0`), and
+`uniffi-bindgen-cs --version` in a new terminal window reports the same
+— then delete `C:\dev\slate\target-wb32`,
 `C:\dev\slate\tools\bindgen-032`, `C:\dev\slate\tools\wb32-baseline` and
 `C:\dev\slate\tools\wb32-spike`.
 
 ## Acceptance
 
+- [ ] Both 0.31 baselines (C# and Swift) generated first — on the branch before the bump and before any PATH change, by the pinned generator whose `--version` matched `uniffi-bindgen-cs.version`, with `CARGO_TARGET_DIR=C:\dev\slate\target-wb32`, into an emptied `generated` directory — and copied only after that run succeeded; the spike's regeneration also into an emptied directory.
 - [ ] The generator built from `cf0aa7a8` (or the fork's newer head, recorded) and its `--version` captured.
 - [ ] Bump, regenerate, build and test run to completion; every outcome in the report, including failures.
 - [ ] The report lists the exact edits the real bump needs and the lane-regex question for the owner.
@@ -183,7 +230,9 @@ the PATH edit is per shell, so no restoration is needed, but confirm
 ## Brief
 
 Read `apps/slate-windows/uniffi-bindgen-cs.version`,
-`apps/slate-windows/generate-bindings.ps1:1-52`, `apps/slate-windows/uniffi.toml`,
+`apps/slate-windows/generate-bindings.ps1:1-52` (it writes into
+`src\SlateUniffi\generated` without clearing it, `:42-43`),
+`apps/slate-windows/.gitignore:1-3`, `apps/slate-windows/uniffi.toml`,
 `.github/workflows/windows.yml:489-513`, `.github/actions/windows-native-build/action.yml:40-58`,
 `Cargo.toml:24`, the `uniffi*` entries in `Cargo.lock` (0.31.2),
 `crates/slate-uniffi/Cargo.toml:16-21`, `scripts/build-mac-app.sh:60-80`,
@@ -191,18 +240,33 @@ Read `apps/slate-windows/uniffi-bindgen-cs.version`,
 (one owner question is raised by the report: whether to widen the
 version-file regex and the `--tag` install for an interim fork pin).
 On a throwaway branch `claude/wb32-uniffi-032-spike` from `main`, never
-opened as a PR: (1) `cargo install --git https://github.com/dennisameling/uniffi-bindgen-cs --rev cf0aa7a8fb59358a846708730a58a02bf206ac05 uniffi-bindgen-cs --locked --root C:\dev\slate\tools\bindgen-032`
+opened as a PR, in order and in one PowerShell session from the repo
+root: (1) FIRST, before any dependency or PATH change, generate the 0.31
+baselines, because `apps/slate-windows/src/SlateUniffi/generated` is
+git-ignored (`apps/slate-windows/.gitignore:3`) — absent in a fresh
+worktree, possibly stale in a reused one — and `generate-bindings.ps1`
+never clears it: set `$env:CARGO_TARGET_DIR = 'C:\dev\slate\target-wb32'`;
+throw unless `git diff --quiet main -- Cargo.toml Cargo.lock` exits 0;
+throw unless `uniffi-bindgen-cs --version` exits 0 and ends with the
+version file's pin with its leading `v` trimmed (`0.11.0+v0.31.0`; the
+pinned binary prints `uniffi-bindgen 0.11.0+v0.31.0`); delete
+`apps/slate-windows/src/SlateUniffi/generated` if present; run
+`./apps/slate-windows/generate-bindings.ps1 -Locked` (it throws on a
+failed build or generation); throw unless the directory now holds C#
+and `slate_uniffi.dll`; only then copy it to
+`C:\dev\slate\tools\wb32-baseline\csharp` (the baseline directory
+emptied first) and generate the Swift baseline from the same 0.31 DLL
+(`cargo run -p slate-uniffi --release --locked --bin uniffi-bindgen -- generate --library C:\dev\slate\target-wb32\release\slate_uniffi.dll --language swift --out-dir C:\dev\slate\tools\wb32-baseline\swift`,
+its exit code checked); (2) `cargo install --git https://github.com/dennisameling/uniffi-bindgen-cs --rev cf0aa7a8fb59358a846708730a58a02bf206ac05 uniffi-bindgen-cs --locked --root C:\dev\slate\tools\bindgen-032`
 (retry without `--locked` if the fork's lockfile refuses; record which)
-and capture its `--version`; (2) copy `main`'s 0.31 C# generation to
-`C:\dev\slate\tools\wb32-baseline\csharp` and its Swift generation
-(`cargo run -p slate-uniffi --release --bin uniffi-bindgen -- generate --library C:\dev\slate\target-wb32\release\slate_uniffi.dll --language swift --out-dir C:\dev\slate\tools\wb32-baseline\swift`)
-aside; (3) set `Cargo.toml:24` to `uniffi = { version = "0.32", features = ["cli"] }`,
+and capture its `--version`; (3) set `Cargo.toml:24` to `uniffi = { version = "0.32", features = ["cli"] }`,
 `cargo update -p uniffi -p uniffi_bindgen -p uniffi_core -p uniffi_internal_macros`,
 `cargo build -p slate-uniffi --release --locked`, `cargo test -p slate-uniffi`,
-recording every compile error; (4) with `C:\dev\slate\tools\bindgen-032\bin`
-first on `$env:Path` and `$env:CARGO_TARGET_DIR='C:\dev\slate\target-wb32'`,
-run `./apps/slate-windows/generate-bindings.ps1 -Locked` and
-`git diff --no-index` the generated C# and Swift against the baselines,
+recording every compile error; (4) put `C:\dev\slate\tools\bindgen-032\bin`
+first on `$env:Path` (throw unless `(Get-Command uniffi-bindgen-cs).Source`
+is that directory's exe), delete the generated directory again, run
+`./apps/slate-windows/generate-bindings.ps1 -Locked`, and
+`git diff --no-index` the generated C# against step 1's baseline,
 counting added, removed and renamed public symbols separately from
 checksum-only changes; (5) `dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release`,
 `dotnet test` of `SlateWindows.Tests` and (desktop free, NVDA closed)
@@ -211,7 +275,10 @@ checksum-only changes; (5) `dotnet build apps/slate-windows/SlateWindows.slnx --
 `cargo fmt --all -- --check`, `cargo clippy --all-targets --workspace -- -D warnings`,
 `cargo test --workspace`, recording pass/fail counts and every failure's
 name, a bump-caused failure reproduced twice before it is attributed;
-(6) write `docs/plans/44_windows_backlog/reports/uniffi_032_spike_2026-MM-DD.md`
+(6) generate the 0.32 Swift into `C:\dev\slate\tools\wb32-spike\swift`
+with the same `cargo run … --bin uniffi-bindgen` command (exit code
+checked) and `git diff --no-index` it against step 1's Swift baseline;
+(7) write `docs/plans/44_windows_backlog/reports/uniffi_032_spike_2026-MM-DD.md`
 containing: the generator's rev, build command and `--version`; the
 lockfile diff (crate versions before and after); compile errors and
 fixes; the C# symbol diff; the build and test outcome per project; the
@@ -220,9 +287,11 @@ re-read from today's `swift-tests.yml` (it no longer uses `cache: rust`);
 the lane changes the real bump needs (the version file, the regex at
 `windows.yml:495`/`:721` and `action.yml:46` if an interim fork pin is
 wanted, the cache key); an estimate for the bump PR; the §8 watch rule
-(weekly check for a `v0.x+v0.32.0` tag). No facts are added. Afterwards
-confirm `uniffi-bindgen-cs --version` in a fresh shell is the pinned
-0.31 build and delete `C:\dev\slate\target-wb32`,
+(weekly check for a `v0.x+v0.32.0` tag), and step 1's recorded
+generator path and version. No facts are added. Afterwards
+confirm `& (Join-Path $env:USERPROFILE '.cargo\bin\uniffi-bindgen-cs.exe') --version`
+and `uniffi-bindgen-cs --version` in a new terminal window both still
+end with `0.11.0+v0.31.0`, and delete `C:\dev\slate\target-wb32`,
 `C:\dev\slate\tools\bindgen-032`, `C:\dev\slate\tools\wb32-baseline`,
 `C:\dev\slate\tools\wb32-spike`. Registers: none but the report;
 a comment on #998 linking it; plan 44 §8's #998 row cites it. Done when

@@ -61,6 +61,22 @@ plan §2.2 records it); one correction to the plan: `report_rel.md` says
   order by a custom comparator. `file_tags.tag_norm` is BINARY `TEXT`
   with `idx_file_tags_tag ON file_tags(tag_norm, file_id)`
   (`migrations/019_file_tags.sql:31-36`).
+- **A node's `full` is not its identity.** `Assembly::materialize`
+  (`tag_tree.rs:56-61`) builds `full` as the bare segment whenever the
+  prefix is empty, and a leading empty segment's own `full` is empty, so
+  leading empty segments add no separator: a node's `full` is its
+  segment path joined with `/`, leading `/`s trimmed. `normalize_tag`
+  (`tags_db.rs:266-270`) keeps a leading `/`, and a frontmatter `tags:`
+  list carries it (`classify_list`, `frontmatter.rs:794-801`, strips only
+  `#`), so the tags `/a`, `a` and `//a` build five nodes in pre-order —
+  the implied `""` root, the implied `""` under it, `//a`'s leaf, `/a`'s
+  leaf, the root `a` — whose `full`s are `""`, `""`, `a`, `a`, `a`. Two
+  nodes share a `full` while their segment paths (`[""]` and `["", ""]`;
+  `["", "", "a"]`, `["", "a"]` and `["a"]`) differ. Windows keys its tag
+  filter (`FilesSidebarViewModel.cs:1089-1091`, `ApplyTagFilter(tag.Full)`),
+  re-selection (`:1496`) and expansion (`:1518`, `:1534`) on `Full`, so
+  today those three `a` rows filter, re-select and expand as one; mac
+  shows the same tree through `tag_tree`.
 - The LIKE trap: `bases/engine.rs:1460-1465` `escape_like` and the
   `(tag_norm = ? OR tag_norm LIKE ? ESCAPE '\\')` prefix arm at `:1549-1551`;
   `session/tests/search.rs:461-476` `tag_scope_like_metachars_do_not_over_match`
@@ -139,42 +155,70 @@ calls it (one flattening, shared by both entry points). Core
 (`session.rs`): new `pub fn tag_tree_page(&self, paging: Paging, cancel: &CancelToken) -> Result<TagTreePage, VaultError>`;
 `limit` validated like `MAX_LIST_FILES_PAGE_LIMIT`.
 
-Order and cursor are SEGMENT-AWARE pre-order, the order `build_tag_tree`
-produces, defined by one new pure comparator in `tag_tree.rs`:
+Every node has a KEY: its segment path joined with `/` — a real tag's
+key is its `tag_norm`, an implied ancestor's key the proper prefix of a
+tag's `split('/')` sequence joined with `/`. Keys, never `full`s, carry
+order, cursor and counts, because `full` is not a node's identity:
+`materialize` trims a node's leading empty segments out of its `full`
+(Current state), so the tags `/a`, `a` and `//a` give five nodes with
+the keys `""`, `/`, `//a`, `/a`, `a` and the `full`s `""`, `""`, `a`,
+`a`, `a`. A key is unique per node, since splitting a key on `/` gives
+the node's segment path back. The page still emits `materialize`'s
+`full`, through one new private helper in `tag_tree.rs`,
+`fn full_of_key(key: &str) -> &str` = `key.trim_start_matches('/')`.
+That helper equals `materialize`'s rule for every node: a leading run of
+k empty segments is exactly k leading `/`s in the key. The pages
+therefore equal `tag_tree`'s entries byte for byte, and mac's tree and
+today's Windows tree do not change. Nothing structural reads `full`.
+
+Order and cursor are SEGMENT-AWARE pre-order over keys, the order
+`build_tag_tree` produces, defined by one new pure comparator in
+`tag_tree.rs`:
 `pub fn cmp_segments(a: &str, b: &str) -> std::cmp::Ordering` (new) —
 `a.split('/').cmp(b.split('/'))`, the segment sequences compared
 lexicographically, each segment in `str` (byte, code-point) order and a
 sequence that is a proper prefix of another first. That is exactly
-`build_tag_tree`'s `BTreeMap` pre-order, because it splits with the same
-`tag.split('/')` (`a`, `a/z`, `a-b`; a parent before its descendants),
+`build_tag_tree`'s `BTreeMap` pre-order over keys, because it splits with
+the same `tag.split('/')` (`a`, `a/z`, `a-b`; a parent before its
+descendants; the `""` root and its `/a` subtree before the root `a`),
 and it is injective: two different strings never compare `Equal`,
 because the split sequence gives the string back when joined with `/`.
 No character is rewritten, so a tag holding U+0001, U+0000 or anything
 else below `/` can neither collide with a separator nor sort across one.
-(Round 5's key, `replace(tag_norm, '/', char(1))`, was not injective:
-`a/z` and `a<U+0001>z` shared a key, and the strict greater-than resume
-skipped whichever of them followed a page boundary.) SQLite cannot sort
-by it without a registered collation, so a page reads
+(Round 5's sort key, `replace(tag_norm, '/', char(1))`, was not
+injective: `a/z` and `a<U+0001>z` shared it, and the strict greater-than
+resume skipped whichever of them followed a page boundary.) SQLite
+cannot sort by it without a registered collation, so a page reads
 `SELECT tag_norm, COUNT(DISTINCT file_id) FROM file_tags GROUP BY tag_norm`
-— the distinct tags and their direct counts, held in core and never
-marshalled; the unpaged `tag_tree` already holds every row — under
-`with_sqlite_cancellation`, polling the token per row, and sorts them
-with `cmp_segments`. The cursor is the last emitted entry's `full`; the
-page starts at the first tag that compares `Greater` than it under
-`cmp_segments` (`partition_point`), so the ancestor stack a host keeps
-across pages is never broken and no entry is skipped or repeated. Before
-emitting a tag, the page emits, shallowest first, every proper prefix of
-its `split('/')` sequence that compares `Greater` than the last emitted
-key (the cursor, at the page's start) — an implied ancestor, a prefix
-with no rows of its own (a prefix that is a real tag sorts first and
-already came out as its own entry); an implied ancestor counts toward
-`limit` like any entry, and a page may end on one. Each entry's
-`direct_count` is its group's count (0 for an implied ancestor) and its
-`file_count` is
+— the distinct tags (each its own key) and their direct counts, held in
+core and never marshalled; the unpaged `tag_tree` already holds every
+row — under `with_sqlite_cancellation`, polling the token per row, and
+sorts them with `cmp_segments`. The cursor is the last emitted entry's
+KEY, opaque to the host, which passes `next_cursor` back unread. It is
+never the entry's `full`: a `full` cursor would repeat or skip nodes.
+Both implied `""` nodes would leave the cursor `""`, which resumes
+before the implied `""` under the root, so that node would repeat on
+every page. The `a` that `/a`'s leaf would leave compares `Equal` to the
+root `a`, so the root `a` would be skipped. The
+page starts at the first tag that compares `Greater` than the cursor
+under `cmp_segments` (`partition_point`), so the ancestor stack a host
+keeps across pages is never broken and no entry is skipped or repeated.
+Before emitting a tag, the page emits, shallowest first, every proper
+prefix of its `split('/')` sequence whose key compares `Greater` than the
+last emitted key (the cursor, at the page's start) — an implied
+ancestor, a prefix with no rows of its own (a prefix that is a real tag
+sorts first and already came out as its own entry); an implied ancestor
+counts toward `limit` like any entry, and a page may end on one. An
+entry's `segment` is its key's last `split('/')` segment, its `depth`
+the segment count less one, its `full` `full_of_key(key)`. Each entry's
+`direct_count` is its key's group count (0 for an implied ancestor) and
+its `file_count` is
 `SELECT COUNT(DISTINCT file_id) FROM file_tags WHERE tag_norm = ?1 OR (tag_norm >= ?2 AND tag_norm < ?3)`
-with `?1 = full`, `?2 = full + "/"` and `?3 = full + "0"` bound from
+with `?1 = key`, `?2 = key + "/"` and `?3 = key + "0"` bound from
 Rust (`'0'` is the byte after `'/'`, so the half-open BINARY range is
-exactly the tags under `full/`): a byte-range predicate on
+exactly the tags under `key/`; for the key `""` it is every tag that
+begins with `/`, the `""` root's legacy subtree, and for `/a`'s leaf
+`/a` and `/a/…`, never the root `a`'s): a byte-range predicate on
 `idx_file_tags_tag` that has no metacharacters to escape — `a_b` never
 counts `axb/child`, the trap `search.rs:461-476` pins for `LIKE` — and
 that compares whole byte strings where `LIKE` stops at an embedded
@@ -255,31 +299,44 @@ Rust — unit facts in `tag_tree.rs` and `switcher.rs` `mod tests`;
 session facts beside the real-vault harness in
 `crates/slate-core/tests/tag_tree_exec.rs` (`write`, `open`, `flatten`)
 and in `session/tests`. Stage 1:
+A walk below means: request pages at the given limit from no cursor,
+passing each `next_cursor` back, until it is `None`; the walk fails if it
+takes more pages than `flatten_preorder` has entries, plus one (a resume
+that repeats cannot loop forever). A segment path is rebuilt from each
+entry's `(depth, segment)` with the host's ancestor stack.
 - `cmp_segments_is_build_tag_trees_preorder_and_never_equates_two_tags`
   — over `a`, `a/`, `a//b`, `a/z`, `a\u{0}b`, `a\u{0}b/c`, `a\u{1}z`,
-  `a\u{1}z/k`, `a b`, `a-b`, `a.b/c`, `a_b/child`, `axb/child`: every
-  node `full` of `build_tag_tree` (implied ancestors included) sorted
-  with `cmp_segments` equals `flatten_preorder`'s order, and
-  `cmp_segments(x, y) == Equal` only when `x == y` for every pair.
-  Mutation: compare `x.replace('/', "\u{1}")` → `a/z` and `a\u{1}z`
-  compare `Equal` and the fact fails.
-- `tag_tree_page_with_a_tiny_limit_walks_every_entry_in_pre_order` — limit 1 and limit 2 over the fixture `a`, `a/z`, `a-b`, `p/q/r` (implied `p` and `p/q`), `a_b/child`, `axb/child`: concatenated pages equal `tag_tree::flatten_preorder(&session.tag_tree()?)` entry for entry (segment, full, depth, counts); `next_cursor` None on the last; `total_entries`, `untagged_count` and `audio_summary` identical on every page. Mutations: sort the distinct tags by their bytes (lexical full tag) → `a-b` lands between `a` and `a/z` and the fact fails; cursor by `segment` → duplicates.
+  `a\u{1}z/k`, `a b`, `a-b`, `a.b/c`, `a_b/child`, `axb/child`, `/a`,
+  `//a`: every node's key (its rebuilt segment path joined with `/`) of
+  `build_tag_tree` (implied ancestors included) sorted with
+  `cmp_segments` equals `flatten_preorder`'s order; every node's `full`
+  equals `full_of_key(key)` (`/a`'s leaf, `//a`'s leaf and the root `a`
+  all `a`); and `cmp_segments(x, y) == Equal` only when `x == y` for
+  every pair. Mutations: compare `x.replace('/', "\u{1}")` → `a/z` and
+  `a\u{1}z` compare `Equal` and the fact fails; `full_of_key` returning
+  the key → `/a`'s leaf reads `/a`, not `materialize`'s `a`.
+- `tag_tree_page_with_a_tiny_limit_walks_every_entry_in_pre_order` — limit 1 and limit 2 over the fixture `a`, `a/z`, `a-b`, `p/q/r` (implied `p` and `p/q`), `a_b/child`, `axb/child`, plus `/a` and `//a` through frontmatter `tags:` lists (implied: the `""` root and the `""` under it): walks whose concatenated pages equal `tag_tree::flatten_preorder(&session.tag_tree()?)` entry for entry (segment, full, depth, counts) — the `full`s `""`, `""`, `a`, `a`, `a` lead, in that order, while the rebuilt segment paths are pairwise distinct; `next_cursor` None on the last; `total_entries`, `untagged_count` and `audio_summary` identical on every page. Mutations: sort the distinct tags by their bytes (lexical full tag) → `a-b` lands between `a` and `a/z` and the fact fails; cursor by `segment` → duplicates; cursor by the last entry's `full` → at limit 1 the implied `""` under the root comes back on every page until the walk exceeds its page bound, and at limit 2 it repeats while `/a`'s leaf and the root `a` are skipped; counts bound from `full` instead of the key → `/a`'s leaf counts the notes tagged `a` and `a/z` (2, not 1).
 - `tag_tree_page_keeps_tags_holding_characters_below_the_separator_apart_at_every_page_boundary`
   — one note per tag, written through frontmatter `tags:` lists with
   YAML escapes: `a`, `a/z`, `"a\x01z"`, `"a\x01z/k"`, `"a\0b"`,
-  `"a\0b/c"`, `a-b`, `a.b/c` (implied `a.b`); at limits 1, 2 and 3 the
-  concatenated pages equal `flatten_preorder(&session.tag_tree()?)`
-  entry for entry (counts included), every `full` appears exactly once,
-  and both `a/z` and `a\u{1}z` are present. Mutations: the round-5 key
-  (sort and resume on `full.replace('/', "\u{1}")`) → `a/z` and
-  `a\u{1}z` share a key, so at limit 1 whichever of them a page ends on,
-  the strict greater-than resume skips the other and an entry is
-  missing; sort by the full tag's bytes → the order differs; count
-  descendants with `LIKE` → `a\u{0}b`'s `file_count` counts the note
-  tagged `a`.
-- `tag_tree_page_resumes_after_a_cursor_inside_a_subtree` — a cursor at `a` yields `a/z` first, not `a-b`; a cursor at `p/q` yields `p/q/r`.
-- `tag_tree_page_counts_match_the_unpaged_tree` (`file_count`, `direct_count` per entry over the same fixture).
-- `tag_tree_page_like_metachars_do_not_over_match` — `a_b` has `file_count` 1 (its own child only), never counting `axb/child`. Mutation: count descendants with an unescaped `LIKE full || '/%'` → 2.
+  `"a\0b/c"`, `a-b`, `a.b/c` (implied `a.b`), `"/a"`, `"//a"`; at limits
+  1, 2 and 3 the walks' concatenated pages equal
+  `flatten_preorder(&session.tag_tree()?)` entry for entry (counts
+  included), every rebuilt segment path appears exactly once, and both
+  `a/z` and `a\u{1}z` are present. Mutations: the round-5 sort key (sort
+  and resume on `key.replace('/', "\u{1}")`) → `a/z` and `a\u{1}z`
+  share it, so at limit 1 whichever of them a page ends on, the strict
+  greater-than resume skips the other and an entry is missing; sort by
+  the full tag's bytes → the order differs; count descendants with
+  `LIKE` → `a\u{0}b`'s `file_count` counts the note tagged `a`; cursor
+  by `full` → the root `a` is missing at limits 2 and 3.
+- `tag_tree_page_resumes_after_a_cursor_inside_a_subtree` — over the
+  tiny fixture: a cursor at `a` yields `a/z` first, not `a-b`; a cursor
+  at `p/q` yields `p/q/r`; a cursor at `/a` (the key `/a`'s leaf
+  leaves; its `full` is `a`) yields the root `a`; a cursor at `/` (the
+  implied `""` under the root) yields `//a`'s leaf at depth 2.
+- `tag_tree_page_counts_match_the_unpaged_tree` (`file_count`, `direct_count` per entry over the tiny fixture; the `""` root counts the two notes whose tags begin with `/`, and `/a`'s leaf counts only its own note).
+- `tag_tree_page_like_metachars_do_not_over_match` — `a_b` has `file_count` 1 (its own child only), never counting `axb/child`. Mutation: count descendants with an unescaped `LIKE key || '/%'` → 2.
 - `tag_tree_page_cancelled_mid_statement_returns_cancelled_not_a_partial_page` (the `list_files` cancellation fact's shape).
 - `tag_tree_page_rejects_a_limit_over_the_cap`.
 
@@ -324,7 +381,8 @@ Windows:
 
 - Contract 40: append a note under AR-63's family: "#1290 closed for the tag tree and Quick Open on Windows; mac stays on `tag_tree` / `switcher_rank_top` until its follow-up (WD17)".
 - `w_c_matrix.md`: the Files tree row's notification cell gains "tag tree paged under the refresh token"; the Quick Open row's evidence cell cites the new facts.
-- WB-0 files the mac follow-up ("mac: move `QuickSwitcherModel` to `switcherRankTopIndexed` and the two `tagTree()` sites to `tagTreePage`; then retire the old entry points").
+- WB-0 files the mac follow-up ("mac: move `QuickSwitcherModel` to `switcherRankTopIndexed` and the two `tagTree()` sites to `tagTreePage`; then retire the old entry points; then decide a node identity for `full` on both hosts — a node under leading empty segments shares its `full` with a root tag (`/a`, `a` and `//a` all read `a`), and Windows' tag filter, re-selection and expansion key on it").
+- Stage 1's PR body names, as not delivered, the shared `full` of leading-empty-segment nodes: the pages keep `tag_tree`'s `full` byte for byte (only the cursor and the counts use the key), because a new identity changes mac's tree too.
 - No `chords.json`, designation or sentence change.
 
 ## Verification
@@ -432,11 +490,12 @@ spot check.
 
 ## Acceptance
 
-- [ ] Stage 1 merged on its own PR (`Refs #1290`), stage 2 on a second (`Closes #1290`), each with its facts failing first and mutations run (the delimiter-collision and tie-break mutations among them).
+- [ ] Stage 1 merged on its own PR (`Refs #1290`), stage 2 on a second (`Closes #1290`), each with its facts failing first and mutations run (the delimiter-collision, `full`-cursor, `full`-bound-count and tie-break mutations among them).
+- [ ] Stage 1's pages equal `tag_tree`'s entries byte for byte over a fixture holding `/a`, `a` and `//a`; the cursor and the descendant counts are bound from the node's key, never its `full`.
 - [ ] After stage 1 `apps/slate-windows/src` has no `.TagTree(` call, and after stage 2 no `SwitcherRankTop(` call; the census pins each as its stage lands.
 - [ ] Both bindings regenerated per PR; the Swift lane compiles; mac source untouched.
 - [ ] Contract 40 note and `w_c_matrix.md` cells updated; the mac follow-up filed by WB-0 and named in the PR body.
-- [ ] Not delivered, named: the mac migration and the retirement of `tag_tree` / `switcher_rank_top` (WD17).
+- [ ] Not delivered, named: the mac migration and the retirement of `tag_tree` / `switcher_rank_top` (WD17); a node identity for `full` (a leading-empty-segment node shares its `full` with a root tag on both hosts; recorded in WB-0's mac follow-up).
 
 ## Brief
 
@@ -452,8 +511,9 @@ Read `docs/plans/05_locked_architecture_decisions.md:1554-1556`;
 `crates/slate-core/tests/tag_tree_exec.rs:1-80`;
 `crates/slate-core/src/bases/engine.rs:1455-1465`, `:1545-1552`;
 `crates/slate-core/src/session/tests/search.rs:455-480`;
-`apps/slate-windows/src/SlateWindows/FilesSidebarViewModel.cs:1368-1420`;
-`QuickSwitcherViewModel.cs:20-75`, `:240-320`, `:360-400`, `:460-500`;
+`apps/slate-windows/src/SlateWindows/FilesSidebarViewModel.cs:1368-1420`,
+`:1085-1095`, `:1475-1540` (the filter, re-selection and expansion keyed
+on `Full`); `QuickSwitcherViewModel.cs:20-75`, `:240-320`, `:360-400`, `:460-500`;
 `VaultLifecycleViewModel.cs:90-95`, `:185-240`, `:525-545`, `:1215-1225`,
 `:1740-1770`; `RescanTests.cs:1200-1260`, `:1330-1350`, `:1640`,
 `:1670-1680`; `QuickSwitcherRescanLandingTests.cs:27-100`;
@@ -464,43 +524,69 @@ the mac follow-up; under "retire now" the mac call sites
 in the same PR and the Swift lane runs its tests). Stage 1 (its own PR,
 `Refs #1290`): in `tag_tree.rs` add `TagTreePageEntry`, `TagTreePage`,
 `flatten_preorder(&TagTree) -> Vec<TagTreePageEntry>` (and make `lib.rs`'s
-`flatten_tag_tree` use it) and the new comparator
+`flatten_tag_tree` use it), the new comparator
 `pub fn cmp_segments(a: &str, b: &str) -> std::cmp::Ordering` =
-`a.split('/').cmp(b.split('/'))` — `build_tag_tree`'s pre-order, injective
-for any tag string (tags may hold U+0000, U+0001 or anything below `/`:
-`normalize_tag` forbids nothing and frontmatter YAML escapes reach the
-index); in `session.rs` add
+`a.split('/').cmp(b.split('/'))` — `build_tag_tree`'s pre-order over
+node keys, injective for any string (tags may hold U+0000, U+0001 or
+anything below `/`: `normalize_tag` forbids nothing and frontmatter YAML
+escapes reach the index) — and the new private
+`fn full_of_key(key: &str) -> &str` = `key.trim_start_matches('/')`. A
+node's KEY is its segment path joined with `/` (a real tag's key is its
+`tag_norm`; an implied ancestor's, the joined proper prefix); its `full`
+is NOT its identity, because `materialize` (`tag_tree.rs:56-61`) drops
+leading empty segments from `full`: `normalize_tag` keeps a leading `/`,
+so the tags `/a`, `a` and `//a` give the keys `""`, `/`, `//a`, `/a`, `a`
+and the `full`s `""`, `""`, `a`, `a`, `a`, and `full_of_key` reproduces
+those `full`s for every node. In `session.rs` add
 `tag_tree_page(&self, paging: Paging, cancel: &CancelToken) -> Result<TagTreePage, VaultError>`:
 read `SELECT tag_norm, COUNT(DISTINCT file_id) FROM file_tags GROUP BY tag_norm`
-under `with_sqlite_cancellation` (token per row), sort with `cmp_segments`
-(rusqlite has no collation feature; never a rewritten-string key such as
-`replace(tag_norm, '/', char(1))`, which collides `a/z` with `a<U+0001>z`),
-start after the cursor (the last emitted `full`) at the first tag
-`Greater` under `cmp_segments`, emit before each tag its proper prefixes
-that compare `Greater` than the last emitted key (implied ancestors,
-counting toward `limit`), and count descendants with
-`tag_norm = ?1 OR (tag_norm >= ?2 AND tag_norm < ?3)` bound as `full`,
-`full + "/"`, `full + "0"` (no `LIKE`: no metacharacters, and `LIKE`
-stops at U+0000); export
+under `with_sqlite_cancellation` (token per row), sort the keys with
+`cmp_segments` (rusqlite has no collation feature; never a
+rewritten-string sort key such as `replace(tag_norm, '/', char(1))`,
+which collides `a/z` with `a<U+0001>z`), start after the cursor — the
+last emitted entry's KEY, opaque to the host, never its `full` (a `full`
+cursor `""` re-emits the implied `""` under the root on every page, and
+a `full` cursor `a` left by `/a`'s leaf skips the root `a`) — at the
+first tag `Greater` under `cmp_segments`, emit before each tag its
+proper prefixes whose keys compare `Greater` than the last emitted key
+(implied ancestors, counting toward `limit`), give each entry the
+segment, depth and `full_of_key(key)` of its key and its key's group
+count as `direct_count`, and count descendants with
+`tag_norm = ?1 OR (tag_norm >= ?2 AND tag_norm < ?3)` bound as `key`,
+`key + "/"`, `key + "0"` (no `LIKE`: no metacharacters, and `LIKE`
+stops at U+0000; for the key `""` the range is every tag beginning with
+`/`, the `""` root's legacy subtree); the pages then equal `tag_tree`'s
+entries byte for byte, so mac's tree and today's Windows tree are
+unchanged; export
 `tag_tree_page(&self, paging: Paging, cancel: Arc<CancelToken>) -> Result<TagTreePage, VaultError>`
 beside `tag_tree`; regenerate both bindings; page `BuildTags` in 500-row
 pages under a `CancelToken` cancelled from the caller's token,
 `AfterTagTreeForTests` per page, nothing published on cancellation; add
-the census scraping `.TagTree(`. Stage 1 facts, failing first:
+the census scraping `.TagTree(`. Stage 1 facts, failing first (a walk
+requests pages from no cursor, passing each `next_cursor` back until
+`None`, and fails past one page more than `flatten_preorder` has
+entries; segment paths are rebuilt from each entry's depth and segment
+with an ancestor stack):
 `cmp_segments_is_build_tag_trees_preorder_and_never_equates_two_tags`
-(over tags with U+0000, U+0001, `-`, `.`, space and empty segments,
-sorting every node `full` with `cmp_segments` equals `flatten_preorder`,
-and only equal strings compare `Equal`),
+(over tags with U+0000, U+0001, `-`, `.`, space, empty segments, `/a`
+and `//a`, sorting every node's key with `cmp_segments` equals
+`flatten_preorder`, every `full` equals `full_of_key(key)`, and only
+equal strings compare `Equal`),
 `tag_tree_page_with_a_tiny_limit_walks_every_entry_in_pre_order`
-(fixture `a`, `a/z`, `a-b`, `p/q/r`, `a_b/child`, `axb/child`; pages at
-limits 1 and 2 concatenated equal `flatten_preorder`),
+(fixture `a`, `a/z`, `a-b`, `p/q/r`, `a_b/child`, `axb/child`, and the
+frontmatter tags `/a` and `//a`; walks at limits 1 and 2 concatenated
+equal `flatten_preorder` entry for entry, the `full`s `""`, `""`, `a`,
+`a`, `a` leading while the rebuilt segment paths are pairwise distinct),
 `tag_tree_page_keeps_tags_holding_characters_below_the_separator_apart_at_every_page_boundary`
 (frontmatter tags `a`, `a/z`, `"a\x01z"`, `"a\x01z/k"`, `"a\0b"`,
-`"a\0b/c"`, `a-b`, `a.b/c`; pages at limits 1, 2 and 3 concatenated
-equal `flatten_preorder` with counts, each `full` once, `a/z` and
-`a\u{1}z` both present), `tag_tree_page_resumes_after_a_cursor_inside_a_subtree`
-(cursor `a` → `a/z`; cursor `p/q` → `p/q/r`),
-`tag_tree_page_counts_match_the_unpaged_tree`,
+`"a\0b/c"`, `a-b`, `a.b/c`, `"/a"`, `"//a"`; walks at limits 1, 2 and 3
+concatenated equal `flatten_preorder` with counts, each rebuilt segment
+path once, `a/z` and `a\u{1}z` both present),
+`tag_tree_page_resumes_after_a_cursor_inside_a_subtree` (cursor `a` →
+`a/z`; cursor `p/q` → `p/q/r`; cursor `/a` → the root `a`; cursor `/` →
+`//a`'s leaf at depth 2),
+`tag_tree_page_counts_match_the_unpaged_tree` (the `""` root counts the
+two notes whose tags begin with `/`, `/a`'s leaf only its own),
 `tag_tree_page_like_metachars_do_not_over_match` (`a_b` counts 1),
 `tag_tree_page_cancelled_mid_statement_returns_cancelled_not_a_partial_page`,
 `tag_tree_page_rejects_a_limit_over_the_cap`;
@@ -568,7 +654,10 @@ file list; `SharedNameTests.cs:561-575`, `W1WorkspaceTests.cs:501-545`
 `QuickSwitcherRankCoordinatorTests.cs` on real fixture files or the new
 seam; and the census (zero `.TagTree(` and `SwitcherRankTop(` under
 `apps/slate-windows/src`). Mutations to run locally: sort tags by their
-bytes; cursor by segment; the round-5 `replace('/', U+0001)` key; count
+bytes; cursor by segment; cursor by the last entry's `full` (the implied
+`""` under the root repeats until the page bound, and the root `a` is
+skipped); counts bound from `full` (`/a`'s leaf counts 2); `full_of_key`
+returning the key; the round-5 `replace('/', U+0001)` sort key; count
 descendants with `LIKE` (escaped: U+0000 over-counts; unescaped: `a_b`
 counts 2); a heap keyed by score then byte path; recency dropped for a
 non-empty query; byte path instead of `path_key`; ignore the cancel
@@ -576,7 +665,8 @@ between pages; unlink the keystroke source from the core token; put a
 `.TagTree(` or `SwitcherRankTop(` call back. Registers: a note under
 AR-63's family in `docs/plans/40_nvda_matrix_remediation_contracts.md`;
 the Files tree and Quick Open cells in `docs/plans/18_windows_port/w_c_matrix.md`;
-the mac follow-up WB-0 files, named in both PR bodies. Gates, in
+the mac follow-up WB-0 files, named in both PR bodies, whose text also
+asks for a node identity for `full` on both hosts. Gates, in
 PowerShell with every native command's `$LASTEXITCODE` checked: per
 stage `cargo test -p slate-core tag_tree` (stage 1) or `switcher`
 (stage 2) with each named Rust fact required as `... ok` in the output;
@@ -594,7 +684,12 @@ the FlaUI `FluentShell_UiaPatternsKeyboardFocusAndAxe_AreClean` run
 with `origin/main`. Done when both PRs pass those, `rust.yml`, the
 Windows lane and the Swift compile are green, and mac source is
 untouched; no AT pass (nothing a reader hears changes). Not delivered:
-the mac migration and the retirement of the old entry points (WD17).
+the mac migration and the retirement of the old entry points (WD17); a
+node identity for `full` — a node under leading empty segments keeps
+sharing its `full` with a root tag (`/a`, `a` and `//a` all read `a`,
+and Windows' filter, re-selection and expansion key on `Full`), byte for
+byte as `tag_tree` gives it, since a new identity changes mac's tree too
+(named in stage 1's PR body).
 Commits: `feat(core,windows): the tag tree arrives in cancellable
 pages`, then `feat(core,windows): quick open ranks against the index
 and the host holds no file list`.

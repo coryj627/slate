@@ -13,7 +13,11 @@ keeps owning the outcome"; under the other answer — COM in the host —
 Part 2 moves to C# (`IFileOperation` through CsWin32 in `apps/slate-windows`)
 and the provider takes a host-supplied `SystemTrash` through a new FFI
 callback interface; and if the mac check stays a programme precondition,
-WB-30 waits for it).
+WB-30 waits for it). WD24 (answered 2026-10-21: a Windows vault whose
+root file id cannot be read does not open — WB-28 refuses it — so the
+id-free mode `NameAndMetadataOnly` is chosen by file system — FAT, FAT32,
+exFAT, or a share whose server reports another file system — never by a
+failed root-id read, which cannot occur in an open vault).
 
 ## Goal
 
@@ -26,8 +30,12 @@ and metadata only (a weak-ID volume); a mismatch, reported with where the
 item went and never as success; unverifiable; deleted outright; unlinked
 for good. On Windows the Recycle Bin call is `IFileOperation` with a
 progress sink that returns the recycled item, re-observed against the
-confirmed inventory that the session hands the provider. A volume with
-no file ids is staged, revalidated and verified without reading one. One
+confirmed inventory that the session hands the provider. A vault on a
+volume whose file system keeps no persistent file ids (FAT, FAT32,
+exFAT, or a share whose server reports another file system) is staged,
+revalidated and verified without reading one. The vault's file system
+chooses that mode, never a failed id read: a Windows folder whose root
+id cannot be read does not open at all (WD24, WB-28). One
 verifier serves every platform, so the same check that confirms a
 Windows recycle confirms the scratch bin every test uses. A back end that
 reports no destination — macOS until PR 41, Linux — keeps today's batch
@@ -69,6 +77,12 @@ Verified against the worktree; the plan's lines hold.
   revalidation (`:121-141`) both go through it — so on a volume that
   answers no file id, staging refuses before any id-free branch could
   run.
+- **After WB-28 an open vault's root always answers an id (WD24).** WB-28's
+  Windows `FsRoot::open` refuses a root whose `FILE_ID_INFO` cannot be
+  read, before `.slate` is made. FAT, FAT32 and exFAT answer one — a
+  synthesized id, not persistent across mounts (WB-27's matrix row) — so
+  such vaults open. Whether an id means anything is told by the volume's
+  file-system name, not by whether a read succeeds.
 - **Every test sees a known destination.** `ScratchTrash::trash`
   (`trash_handoff.rs:561-586`) renames the item into its bin
   (`std::fs::rename`, `:580`); core's test build gives every
@@ -192,27 +206,47 @@ consumes its contract, §2.3).
 - **Strong evidence only where the volume has file ids.**
   `pub enum IdentityMode { Strong, NameAndMetadataOnly }` (new).
   `windows_entry::query_file_id(file: &fs::File) -> io::Result<FILE_ID_INFO>`
-  (new) becomes the one place `FileIdInfo` is queried: `windows_entry::identity`
-  (`:612-631`) and `trash_snapshot/windows.rs`'s `stamp` (`:235-275`,
-  whose `FileIdInfo` failure at `:262` fails the whole snapshot today)
-  both call it. Test seam `FILE_ID_UNAVAILABLE` (new, `#[cfg(test)]`
-  thread-local `Cell<bool>` in `windows_entry.rs`): while set,
-  `query_file_id` fails with `ERROR_INVALID_PARAMETER`, as a volume that
-  answers no file id does; `windows_entry` is private to `vault`, so the
-  seam is re-exported for the session tests as
+  (new) becomes the one place the Trash and structural-identity code
+  query `FileIdInfo`: `windows_entry::identity` (`:612-631`) and
+  `trash_snapshot/windows.rs`'s `stamp` (`:235-275`, whose `FileIdInfo`
+  failure at `:262` fails the whole snapshot today) both call it, and
+  only the `Strong` branch reaches it. (WB-28's `FsRoot` reads the held
+  root's own id at open.) `IdentityMode` and `ConfirmedItem` are `pub`
+  and re-exported beside `TrashSnapshot` (`vault/mod.rs:82`), since the
+  public `VaultProvider` trait names them.
+- **The mode is chosen by file system (WD24).** Two new functions:
+  - `trash_snapshot::identity_mode_for_file_system(name: &str) ->
+    IdentityMode` (new, `#[cfg(windows)]`, pure) is `Strong` iff `name`
+    is `NTFS` or `ReFS` (ASCII case-insensitive). Every other name is
+    `NameAndMetadataOnly`: FAT, FAT32, exFAT, a share whose server
+    reports another file system (WB-27's rows; where such a volume
+    answers ids, they are synthesized and not persistent), or an empty
+    name.
+  - `trash_snapshot::identity_mode_for(root: &fs::File) -> IdentityMode`
+    (new). On Windows it reads the held root's volume name with
+    `GetVolumeInformationByHandleW` and returns
+    `identity_mode_for_file_system(name)`. A failed volume query is
+    `NameAndMetadataOnly`, because the weak mode claims no identity. On
+    Unix it is `Strong` (mac weak volumes are PR 38/41's).
+
+  `identity_mode_for` never reads a file id, and a failed id read
+  selects nothing. A root whose id cannot be read never opens (WD24,
+  WB-28's `FsRoot::open`), so that failure cannot occur in an open
+  vault. The rule is exposed as `VaultProvider::trash_identity_mode(&self,
+  relative: &str) -> Result<IdentityMode, VaultError>` (new; default
+  `Ok(Strong)`; `FsVaultProvider` asks `identity_mode_for` on the vault
+  root's handle).
+- **The no-id-read witness.** Test seam `FILE_ID_UNAVAILABLE` (new,
+  `#[cfg(test)]` thread-local `Cell<bool>` in `windows_entry.rs`). While
+  it is set, `query_file_id` fails with `ERROR_INVALID_PARAMETER`. It no
+  longer selects a mode; it proves that the weak branch reads no id.
+  Facts set it only after the vault is open (the open reads the root's
+  id, WB-28), so any id read during staging, revalidation, the move or
+  verification fails the fact. `windows_entry` is private to `vault`, so
+  the seam is re-exported for the session tests as
   `crate::vault::FILE_ID_UNAVAILABLE` (`#[cfg(all(test, windows))]
-  pub(crate) use`, beside the watcher's test seams at `vault/mod.rs:93-95`).
-  `IdentityMode` and `ConfirmedItem` are `pub` and re-exported beside
-  `TrashSnapshot` (`vault/mod.rs:82`), since the public `VaultProvider`
-  trait names them. `trash_snapshot::identity_mode_for(root:
-  &fs::File) -> IdentityMode` (new): on Windows `Strong` iff
-  `GetVolumeInformationByHandleW` names `NTFS` or `ReFS` **and**
-  `query_file_id(root)` succeeds, else `NameAndMetadataOnly` (FAT, FAT32,
-  exFAT, a share whose server reports another file system or answers no
-  id — WB-27's rows); on Unix `Strong` (mac weak volumes are PR 38/41's).
-  Exposed as `VaultProvider::trash_identity_mode(&self, relative: &str)
-  -> Result<IdentityMode, VaultError>` (new; default `Ok(Strong)`;
-  `FsVaultProvider` asks `identity_mode_for` on the vault root's handle).
+  pub(crate) use`, beside the watcher's test seams at
+  `vault/mod.rs:93-95`).
 - **One walk per item, in the staged mode.** `stamp` takes the mode:
   `Strong` is today's bytes (volume serial and 128-bit id first);
   `NameAndMetadataOnly` never calls `query_file_id` and hashes
@@ -311,9 +345,18 @@ consumes its contract, §2.3).
   registry's `Cargo.toml` for that release lists for `IFileOperation`,
   `IShellItem`, `SHCreateItemFromParsingName`, `CoInitializeEx` and
   `IFileOperationProgressSink` — expected `Win32_UI_Shell`,
-  `Win32_System_Com`, `Win32_Foundation`, `Win32_UI_Shell_Common` —
-  verified by `cargo metadata` after `cargo update -p windows`, and
-  compile a minimal `#[windows::core::implement(IFileOperationProgressSink)]`
+  `Win32_System_Com`, `Win32_Foundation`, `Win32_UI_Shell_Common`. The
+  spike locks it with `cargo update -p windows@0.62` and records the
+  resolved patch version (for example `0.62.2`) in its commit message.
+  The selector carries the version because the lock already holds
+  trash-rs's `windows` 0.56.0 (`Cargo.lock:3023-3024`), so a bare
+  `-p windows` is ambiguous beside the new 0.62 line: cargo exits 101
+  with "specification `windows` is ambiguous". The lock's two
+  `windows-core` versions (0.56.0 and 0.62.2) fail the same way today
+  for `cargo update -p windows-core`, while `-p windows-core@0.62`
+  resolves. The pin is checked without rewriting the lock:
+  `cargo metadata --format-version 1 --locked` must list `windows`
+  0.62.x. Then compile a minimal `#[windows::core::implement(IFileOperationProgressSink)]`
   sink. `implement` is a macro (`windows::core::implement`, re-exported
   by `windows-core`), not a feature. If the 0.62 line cannot coexist with
   trash-rs's `windows` 0.56 (two major versions compile side by side in
@@ -357,10 +400,23 @@ shape.
 
 Where they live: the session-flow facts in
 `session/tests/trash_confirmation.rs` (filter `trash_confirmation`); the
-platform-trash and Windows shell facts in `vault/trash_handoff_tests.rs`
-(filter `trash_handoff`); the uniffi fact in `slate-uniffi`. Part 1 ships
-every row down to the uniffi row plus the Swift pin; Part 2 ships the
-Windows platform and shell facts and the host rows.
+identity-mode unit fact in `vault/trash_snapshot.rs` (filter
+`trash_snapshot`); the platform-trash and Windows shell facts in
+`vault/trash_handoff_tests.rs` (filter `trash_handoff`); the uniffi fact
+in `slate-uniffi`. Part 1 ships every row down to the uniffi row plus
+the Swift pin, the FAT32/exFAT fact among them. Part 2 ships the Windows
+platform and shell facts and the host rows. The FAT32/exFAT fact needs
+two `#[cfg(test)]` helpers:
+- `ScratchTrash::in_folder` (`trash_handoff.rs:518`) becomes
+  `pub(crate)`.
+- `VaultSession::from_filesystem_with_trash_for_tests(root: PathBuf,
+  trash: Arc<dyn SystemTrash>) -> Result<Self, VaultError>` (new) runs
+  the filesystem open, with WB-28's `FsRoot` and its root-id read, but
+  builds the provider through `FsVaultProvider::held_with_trash(root,
+  held_root, trash)` (new, beside `held`, `session.rs:3256`).
+
+A scratch bin must sit on the vault's own volume, because `ScratchTrash`
+moves by `rename`.
 
 | Fact | Asserts | Mutation |
 |---|---|---|
@@ -369,14 +425,15 @@ Windows platform and shell facts and the host rows.
 | `an_item_moved_out_of_the_vault_and_back_is_reported` | identity differs → `Mismatch { detail: "not the confirmed item" }` | skip the identity comparison |
 | `a_trashed_tree_that_changed_is_reported` | a child added to a folder at `AfterTrashValidation` → `Mismatch` | drop the tree re-walk |
 | `the_root_ctime_is_exempt_from_the_re_observation` | an unchanged folder whose root ctime the move changed → `Confirmed` | include the root's ctime |
-| `a_volume_without_file_ids_is_staged_revalidated_and_verified_without_reading_an_id` (`#[cfg(windows)]`, ungated; NTFS temp vault) | with `FILE_ID_UNAVAILABLE` set on the test thread for the whole run (staging, revalidation, the `ScratchTrash` call and verification all run on it), a staged two-item batch: `trash_identity_mode` is `NameAndMetadataOnly`; staging succeeds; item 1's outcome is `VerifiedByNameAndMetadataOnly` with its bytes in the bin; item 2, a folder whose child is renamed at `AfterTrashValidation`, is `Mismatch`; state `Partial` | stage the strong snapshot whatever the mode (today's `stamp`: staging fails with the seam's `ERROR_INVALID_PARAMETER`); or read the destination's id on the weak branch |
-| `a_weak_id_volume_is_verified_by_name_and_metadata_without_reading_ids` (gated: `SLATE_WEAK_VOLUME_FAT32`, and `SLATE_TRASH_PROBE_VOLUME` set to the **same** FAT32 volume) | `VerifiedByNameAndMetadataOnly`; and run again with `FILE_ID_UNAVAILABLE` set on the test thread throughout, still that variant (no step reads an id) | hash ids in `NameAndMetadataOnly` |
+| `a_volume_reporting_ntfs_selects_strong_and_one_reporting_exfat_selects_name_and_metadata_only` (`#[cfg(windows)]`, unit, `vault/trash_snapshot.rs`'s `mod tests`; WD24) | `identity_mode_for_file_system` is `Strong` for `NTFS`, `ReFS` and `ntfs`, and `NameAndMetadataOnly` for `exFAT`, `FAT32`, `FAT`, `ext4` (a name a share's server may report) and `""`; and `identity_mode_for` on a held temp directory of the lane's NTFS volume is `Strong` | `Strong` for every name (→ `exFAT` is `Strong`); `Strong` unless the name starts with `FAT` (→ `exFAT` is `Strong`); a case-sensitive compare (→ `ntfs` is `NameAndMetadataOnly`) |
+| `a_vault_on_a_fat32_or_exfat_volume_opens_stages_and_verifies_by_name_and_metadata_without_reading_an_id` (`#[cfg(windows)] #[ignore = "needs SLATE_WEAK_VOLUME_FAT32 or SLATE_WEAK_VOLUME_EXFAT (WB-27's volume procedure)"]`, `session/tests/trash_confirmation.rs`; WD24; replaces round 6's "ids unavailable end to end" fact) | see the four-step note below the table | choose the mode by whether the root's id reads (the FAT/exFAT root's synthesized id reads, so `Strong`, and staging fails under the seam); stage the strong snapshot whatever the mode (staging fails with the seam's `ERROR_INVALID_PARAMETER`); read the destination's id on the weak branch (→ `Unverifiable`) |
+| `a_weak_id_volume_is_verified_by_name_and_metadata_without_reading_ids` (gated: `SLATE_WEAK_VOLUME_FAT32`, and `SLATE_TRASH_PROBE_VOLUME` set to the **same** FAT32 volume) | `VerifiedByNameAndMetadataOnly`; and run again with `FILE_ID_UNAVAILABLE` set on the test thread from the moment the vault is open (the open reads the root's synthesized id, WB-28), still that variant (no later step reads an id) | hash ids in `NameAndMetadataOnly` |
 | `a_weak_id_volume_mismatch_is_still_detected_by_name_and_metadata` (gated, same volume) | a renamed child at `AfterTrashValidation` → `Mismatch` | compare `item_count` only |
 | `an_unknown_destination_is_unverifiable_never_confirmed` | through `ScratchTrash::reporting_no_destination()`, a staged single delete's outcome is `Unverifiable { detail: "the system Trash reports no destination" }` | map `Unknown` to `Confirmed` |
 | `a_back_end_without_destinations_keeps_todays_batch_state` | a staged three-item batch through `ScratchTrash::reporting_no_destination()` (so `trash_verifies_destination()` is `false`, as macOS's and Linux's back ends are): state `Succeeded` exactly as on main, `trashed` three, `outcomes` three `Unverifiable` | drop the legacy guard (every `Unverifiable` turns the batch `Partial`) |
 | `an_unconfirmed_batch_keeps_todays_batch_state` | an unstaged three-item batch through a verifying `ScratchTrash`: state `Succeeded`, outcomes `Unverifiable { detail: "nothing was confirmed before the move" }` | apply the `Partial` rule without a confirmation |
 | `a_deleted_outright_destination_is_reported_as_deleted` | through `ScratchTrash::reporting_deleted_outright()` (new, `#[cfg(test)]`: removes the item and returns `DeletedOutright`) → `DeletedOutright` | map to `Unverifiable` |
-| `every_outcome_variant_reaches_the_batch_report_in_order` | a staged mixed batch on a verifying provider, one item per variant a single vault can produce — `Confirmed`, `Mismatch`, `Unverifiable`, `DeletedOutright`, and on Windows `UnlinkedForGood` when WB-24 kept its unlink branch (a vault has one identity mode, so `VerifiedByNameAndMetadataOnly`'s batch path is the `FILE_ID_UNAVAILABLE` fact's) — the `Mismatch` item replaced at `AfterTrashValidation`, the `Unverifiable` and `DeletedOutright` items through a `ScratchTrash::scripted(by_path)` (new, `#[cfg(test)]`: per-path destination kinds; it reports destinations) → `outcomes` in `trashed` order, state `Partial` | drop a variant |
+| `every_outcome_variant_reaches_the_batch_report_in_order` | a staged mixed batch on a verifying provider, one item per variant a single vault can produce — `Confirmed`, `Mismatch`, `Unverifiable`, `DeletedOutright`, and on Windows `UnlinkedForGood` when WB-24 kept its unlink branch (a vault has one identity mode, chosen by its file system, so `VerifiedByNameAndMetadataOnly`'s batch path is the FAT32/exFAT fact's) — the `Mismatch` item replaced at `AfterTrashValidation`, the `Unverifiable` and `DeletedOutright` items through a `ScratchTrash::scripted(by_path)` (new, `#[cfg(test)]`: per-path destination kinds; it reports destinations) → `outcomes` in `trashed` order, state `Partial` | drop a variant |
 | `the_platform_trash_off_windows_reports_no_destination` (`#[cfg(not(windows))]`, `trash_handoff_tests.rs`) | `PlatformTrash.reports_destination()` is `false` on macOS and Linux, so their batch state stays main's until PR 41 / T4 | return `true` on macOS |
 | `windows_the_platform_trash_reports_destinations` (`#[cfg(windows)]`, Part 2) | `PlatformTrash.reports_destination()` is `true` once the shell back end is in | leave it `false` |
 | `windows_the_shell_sink_returns_the_recycled_item` (`#[cfg(windows)] #[ignore]`, scratch volume) | `Known(path)` under `$Recycle.Bin\<SID>`, id equal | ignore the sink |
@@ -388,10 +445,31 @@ Windows platform and shell facts and the host rows.
 | `A11yCorpusCensus` + mac mirror: the four new rows (Part 2) | each event's corpus row matches its sentence | drop a row |
 | FlaUI `ShellAccessibilityTests.Trash_AVerifiedMoveStillSpeaksMoved` (`ShellAccessibilityTests.Trash.cs`, new partial; Part 2) | the ordinary sentence unchanged after the back-end swap; NVDA log | speak the unverifiable sentence for `Confirmed` |
 
+The FAT32/exFAT fact asserts, for each of `SLATE_WEAK_VOLUME_FAT32` and
+`SLATE_WEAK_VOLUME_EXFAT` that is set (it panics when neither is, so a
+named run never passes vacuously):
+1. The volume. Its file-system name is `FAT32` / `exFAT` respectively.
+   A fresh vault folder and a scratch bin are made on it, and the vault
+   holds `a.md`, `f/b.md` and `f/c.md`.
+2. The open. `VaultSession::from_filesystem_with_trash_for_tests(root,
+   ScratchTrash::in_folder(bin))` succeeds, and `root_identity()` is
+   `Some`: the root's synthesized id was read, so WB-28's WD24 refusal
+   did not fire. `trash_identity_mode("a.md")` is `NameAndMetadataOnly`,
+   chosen by the file-system name.
+3. Stage, delete and verify, with no id read. `FILE_ID_UNAVAILABLE` is
+   set on the test thread now, after the open, and cleared in a drop
+   guard; staging, revalidation, the move and verification all run on
+   that thread. A staged batch of `a.md` and `f` runs, with `f/c.md`
+   renamed to `f/d.md` at `AfterTrashValidation`. Staging and
+   revalidation succeed (any id read would fail under the seam).
+4. The outcomes. `a.md` is `VerifiedByNameAndMetadataOnly` with its
+   bytes in the bin; `f` is `Mismatch`; the state is `Partial`.
+
 ## Docs and registers
 
 - Contract 31 FR-8: append the T2 paragraph (outcome variants and their
-  mapping, the Windows sink, the weak-ID fingerprint, the ctime
+  mapping, the Windows sink, the weak-ID fingerprint chosen by the
+  volume's file system and never by a failed id read (WD24), the ctime
   exemption); FR-10: a sentence that the Trash re-observation uses the
   shared identity.
 - `24_trash_handoff_feasibility.md` §8: a dated note that the Windows
@@ -418,7 +496,7 @@ PowerShell, repo root, on Windows. Each filter is listed first and the
 block throws unless every required fact is discovered under it (the gated
 ones by `--ignored --list`, which lists ignored facts only); every
 command's `$LASTEXITCODE` is checked (no output grepping for "Failed").
-Part 1's PR runs block 1; Part 2's runs all three.
+Part 1's PR runs blocks 1 and 1b; Part 2's runs all four.
 
 ```powershell
 $env:CARGO_TARGET_DIR = 'C:\dev\slate\target-wb30'
@@ -432,13 +510,14 @@ function Assert-Facts([string]$crate, [string]$filter, [string[]]$facts, [switch
 }
 # 1. core (Part 1; Part 2 adds windows_the_platform_trash_reports_destinations)
 $required = [ordered]@{
-    'trash_confirmation' = @('an_ordinary_trash_is_confirmed', 'a_replacement_after_validation_is_reported_not_confirmed', 'an_item_moved_out_of_the_vault_and_back_is_reported', 'a_trashed_tree_that_changed_is_reported', 'the_root_ctime_is_exempt_from_the_re_observation', 'a_volume_without_file_ids_is_staged_revalidated_and_verified_without_reading_an_id', 'an_unknown_destination_is_unverifiable_never_confirmed', 'a_back_end_without_destinations_keeps_todays_batch_state', 'an_unconfirmed_batch_keeps_todays_batch_state', 'a_deleted_outright_destination_is_reported_as_deleted', 'every_outcome_variant_reaches_the_batch_report_in_order')
+    'trash_confirmation' = @('an_ordinary_trash_is_confirmed', 'a_replacement_after_validation_is_reported_not_confirmed', 'an_item_moved_out_of_the_vault_and_back_is_reported', 'a_trashed_tree_that_changed_is_reported', 'the_root_ctime_is_exempt_from_the_re_observation', 'an_unknown_destination_is_unverifiable_never_confirmed', 'a_back_end_without_destinations_keeps_todays_batch_state', 'an_unconfirmed_batch_keeps_todays_batch_state', 'a_deleted_outright_destination_is_reported_as_deleted', 'every_outcome_variant_reaches_the_batch_report_in_order')
     'trash_handoff'      = @()   # Part 2: 'windows_the_platform_trash_reports_destinations'
 }
 foreach ($filter in $required.Keys) {
     Assert-Facts 'slate-core' $filter $required[$filter]
     cargo test -p slate-core --locked $filter; Assert-Ok "cargo test $filter"
 }
+Assert-Facts 'slate-core' 'trash_snapshot' @('a_volume_reporting_ntfs_selects_strong_and_one_reporting_exfat_selects_name_and_metadata_only')
 cargo test -p slate-core --locked trash_snapshot; Assert-Ok 'trash_snapshot'
 cargo test -p slate-core --locked structural_batch; Assert-Ok 'structural_batch'
 cargo test -p slate-core --locked --no-fail-fast; Assert-Ok 'the whole core suite'
@@ -456,10 +535,17 @@ $n = (dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests
 if ($n -lt 1) { throw "filter selects nothing: $fm" }
 dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --no-build --configuration Release --filter $fm; Assert-Ok 'FileManagementTests (Part 1: unchanged sentences)'
 
+# 1b. gated (Part 1), in the elevated session where WB-27's volume procedure set $fatRoot and $exfatRoot (the FAT32 and exFAT VHDs):
+if (-not $fatRoot -or -not $exfatRoot) { throw 'run WB-27''s volume procedure in this session first' }
+$env:SLATE_WEAK_VOLUME_FAT32 = $fatRoot; $env:SLATE_WEAK_VOLUME_EXFAT = $exfatRoot
+$weak = 'a_vault_on_a_fat32_or_exfat_volume_opens_stages_and_verifies_by_name_and_metadata_without_reading_an_id'
+Assert-Facts 'slate-core' $weak @($weak) -Ignored
+cargo test -p slate-core --locked $weak -- --ignored --test-threads=1; Assert-Ok $weak   # runs both volumes; record the pass in Part 1's PR body
+
 # 2. the spike's pin check and the shell back end (Part 2)
-cargo update -p windows; Assert-Ok 'cargo update windows'
-$meta = cargo metadata --format-version 1; Assert-Ok 'cargo metadata'
-if (-not ($meta | Select-String '"name":"windows","version":"0\.62')) { throw 'windows 0.62 is not in the resolved graph' }
+# the pin is read, never rewritten: --locked fails if Cargo.lock does not already resolve Cargo.toml (the spike's `cargo update -p windows@0.62` wrote it; a bare `-p windows` is ambiguous beside trash-rs's windows 0.56.0)
+$meta = cargo metadata --format-version 1 --locked; Assert-Ok 'cargo metadata --locked'
+if (-not ($meta | Select-String '"name":"windows","version":"0\.62\.')) { throw 'windows 0.62 is not in the resolved graph' }
 Assert-Facts 'slate-core' 'trash_handoff' @('windows_the_platform_trash_reports_destinations')
 $tests = 'apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj'
 $filter = 'FullyQualifiedName~SlateWindows.Tests.FileManagementTests|FullyQualifiedName~SlateWindows.Tests.Censuses.A11yCorpusCensus'
@@ -511,24 +597,35 @@ no AT pass; its mac state is pinned by the Swift fact and
 
 ## Acceptance
 
-- [ ] WD16 recorded; prerequisites merged: WB-28, WB-24's results
-      recorded, PR 34's identity primitive with green combined-head CI.
+- [ ] WD16 recorded; WD24 (answered 2026-10-21) applied; prerequisites
+      merged: WB-28 (whose open refuses a root without a readable file
+      id), WB-24's results recorded, PR 34's identity primitive with
+      green combined-head CI.
 - [ ] Part 1: `TrashOutcome` (WB-24's enum, unchanged), `TrashedOutcome`,
       `outcomes` (legacy `trashed` untouched), `TrashDestination`,
       `SystemTrash::reports_destination`, `trash_verifies_destination`,
-      `IdentityMode`, `identity_mode_for`, `query_file_id` and its
-      `FILE_ID_UNAVAILABLE` seam, `trash_identity_mode`,
+      `IdentityMode`, `identity_mode_for` and
+      `identity_mode_for_file_system` (the file system's name, never an
+      id read, chooses the mode), `query_file_id` and its
+      `FILE_ID_UNAVAILABLE` no-id-read witness, `trash_identity_mode`,
       `trash_snapshot_in_mode_cancellable`, `ConfirmedItem` (no strong
       field on the weak variant), `delete_confirmed`, the shared
       `verify_destination` on Unix and Windows, `AfterTrashValidation`,
       and the legacy batch-state rule; the Swift literals edited if not
       already, the Swift pin added; mac lane green with mac's successful
       batch still `Succeeded` and still "Moved {n} to Trash."
-- [ ] An ID-less volume is staged, revalidated and verified without one
-      id read (the `FILE_ID_UNAVAILABLE` fact), and a real FAT32 volume
-      agrees (gated facts run and recorded).
-- [ ] Part 2: the Windows `IFileOperation` sink back end, spiked and
-      probed on the scratch volume (gated facts run and recorded);
+- [ ] A vault on a FAT32 and on an exFAT volume opens (its root's
+      synthesized id read, WB-28) and is staged, revalidated, moved and
+      verified by name and metadata with no id read after the open (the
+      FAT32/exFAT fact, run in Part 1 and recorded in its PR body). A
+      volume reporting NTFS selects `Strong` and one reporting exFAT
+      selects `NameAndMetadataOnly` (the unit fact). The real FAT32
+      Recycle Bin agrees (Part 2's gated facts, run and recorded).
+- [ ] Part 2: the Windows `IFileOperation` sink back end, spiked
+      (`windows` 0.62 locked by `cargo update -p windows@0.62`, never
+      the ambiguous bare `-p windows`, and listed by `cargo metadata
+      --format-version 1 --locked`) and probed on the scratch volume
+      (gated facts run and recorded);
       `PlatformTrash.reports_destination()` true on Windows; the four
       events on both bindings and the Windows host's single and batch
       sentences.
@@ -548,7 +645,11 @@ owning the outcome; under the other answer — COM in the host — Part 2
 moves to C# (`IFileOperation` through CsWin32 in `apps/slate-windows`)
 and the provider takes a host-supplied `SystemTrash` through a new FFI
 callback interface; and if the mac check stays a programme precondition,
-WB-30 waits for it). Read `24_trash_handoff_feasibility.md:125-166`,
+WB-30 waits for it). Answered: WD24 (2026-10-21) — a Windows vault whose
+root file id cannot be read does not open (WB-28 refuses it), so the
+id-free mode is chosen by file system (FAT, FAT32, exFAT, or a share
+whose server reports another file system), never by a failed root-id
+read, which cannot occur in an open vault. Read `24_trash_handoff_feasibility.md:125-166`,
 `:236-257`, `24_decision_memo.md:48-69`, `:122-137`, `:182-200`;
 `trash_handoff.rs:55-200`, `:290-345`, `:370-395`, `:490-650` (ScratchTrash
 renames into its bin at `:580`; `default_trash` `:610`; the host routing
@@ -563,7 +664,11 @@ the whole snapshot when `FileIdInfo` fails, `:262`); `provider.rs:95-135`;
 `AppState.swift:1198-1270` (`.succeeded` says "Moved {n} to Trash.",
 `.partial` "Moved {k} of {n} to Trash."), `:1357`, `:1386`, `:1412`,
 `:20717-20747`, `:21476`; `BatchResultPresentationTests.swift:299-331`,
-`:425-450`; WB-24's spec for the enum and the 14 Swift literal sites.
+`:425-450`; WB-24's spec for the enum and the 14 Swift literal sites;
+WB-27's spec for its volume procedure and the `SLATE_WEAK_VOLUME_*`
+names; WB-28's design item 6 (the open refuses a root without a
+readable file id, WD24); `session.rs:3160-3260` (the filesystem open;
+`FsVaultProvider::held` at `:3256`).
 
 Build, Part 1 (core, both bindings; no host speaks anything new):
 `TrashDestination { Known, Unknown, DeletedOutright }` and
@@ -572,11 +677,23 @@ Build, Part 1 (core, both bindings; no host speaks anything new):
 constructors `ScratchTrash::reporting_no_destination()`,
 `::reporting_deleted_outright()` and `::scripted(by_path)`;
 `VaultProvider::trash_verifies_destination()` (default `false`);
-`IdentityMode { Strong, NameAndMetadataOnly }`;
-`windows_entry::query_file_id` as the one `FileIdInfo` query, with the
-`#[cfg(test)]` thread-local seam `FILE_ID_UNAVAILABLE`;
-`trash_snapshot::identity_mode_for(root)` (`Strong` iff NTFS/ReFS and the
-root's id reads; Unix `Strong`) behind `VaultProvider::trash_identity_mode`;
+`IdentityMode { Strong, NameAndMetadataOnly }`.
+`windows_entry::query_file_id` is the one `FileIdInfo` query of the
+Trash and structural-identity code, reached only on the `Strong` branch.
+Its `#[cfg(test)]` thread-local seam `FILE_ID_UNAVAILABLE` no longer
+chooses a mode; it is the witness that the weak branch reads no id, set
+by facts only after the vault is open, because the open reads the
+root's id (WB-28). The mode, by file system (WD24):
+- the new pure `#[cfg(windows)] trash_snapshot::identity_mode_for_file_system(name)`
+  is `Strong` iff the name is `NTFS` or `ReFS` (ASCII case-insensitive),
+  else `NameAndMetadataOnly` (FAT, FAT32, exFAT, a share whose server
+  reports another file system, an empty name);
+- `trash_snapshot::identity_mode_for(root)` reads the held root's volume
+  name with `GetVolumeInformationByHandleW` and applies that function. A
+  failed volume query is `NameAndMetadataOnly`, and the function never
+  reads an id. On Unix it is `Strong`.
+
+The rule sits behind `VaultProvider::trash_identity_mode`;
 `stamp` by mode (the weak mode never queries an id), the root-ctime
 exemption, `TrashSnapshot.mode`, `trash_snapshot_in_mode_cancellable`;
 `ConfirmedItem::{Strong { identity, tree }, NameAndMetadataOnly { tree }}`
@@ -598,7 +715,12 @@ the provider verifies destinations, only then `Partial` for an outcome
 other than `Confirmed`/`VerifiedByNameAndMetadataOnly`. If WB-24 shipped
 `every_provider_but_windows_reports_unverifiable`, narrow it to
 `a_trash_that_reports_no_destination_is_unverifiable`. Part 2: the spike
-pinning `windows` 0.62 with the registry-verified feature set and a
+pinning `windows` 0.62 with the registry-verified feature set (locked by
+`cargo update -p windows@0.62`, its resolved patch version recorded in
+the commit — never the bare `-p windows`, which cargo refuses as
+ambiguous because trash-rs keeps `windows` 0.56.0 in `Cargo.lock` — and
+checked by `cargo metadata --format-version 1 --locked` listing `windows`
+0.62.x) and a
 compiling `#[windows::core::implement(IFileOperationProgressSink)]` sink,
 `vault/trash_handoff/windows_shell.rs` behind `PlatformTrash` (now
 reporting destinations), the four `A11yEvent`s (`TrashMismatch`,
@@ -619,16 +741,35 @@ Facts (mutation in brackets), seen failing first:
   `AfterTrashValidation` → `Mismatch` [drop the re-walk].
 - `the_root_ctime_is_exempt_from_the_re_observation`: an unchanged folder
   whose root ctime the move changed → `Confirmed` [include it].
-- `a_volume_without_file_ids_is_staged_revalidated_and_verified_without_reading_an_id`
-  (Windows, ungated): with `FILE_ID_UNAVAILABLE` set throughout, a staged
-  two-item batch is weak-mode, stages, verifies item 1 as
-  `VerifiedByNameAndMetadataOnly` and item 2 (child renamed at
-  `AfterTrashValidation`) as `Mismatch`, state `Partial` [stage the strong
-  snapshot regardless of mode; or read the destination's id on the weak
-  branch].
+- `a_volume_reporting_ntfs_selects_strong_and_one_reporting_exfat_selects_name_and_metadata_only`
+  (Windows unit, `vault/trash_snapshot.rs`): `identity_mode_for_file_system`
+  is `Strong` for `NTFS`, `ReFS`, `ntfs` and `NameAndMetadataOnly` for
+  `exFAT`, `FAT32`, `FAT`, `ext4`, `""`; `identity_mode_for` on a held
+  NTFS temp directory is `Strong` [`Strong` for every name; `Strong`
+  unless the name starts with `FAT`; a case-sensitive compare].
+- `a_vault_on_a_fat32_or_exfat_volume_opens_stages_and_verifies_by_name_and_metadata_without_reading_an_id`
+  (Windows, `#[ignore]`, gated on `SLATE_WEAK_VOLUME_FAT32` /
+  `SLATE_WEAK_VOLUME_EXFAT` from WB-27's VHD procedure, run in Part 1).
+  Per volume set (panicking when neither is set):
+  1. The volume reports `FAT32` / `exFAT`. A vault and a scratch bin are
+     made on it, with `a.md`, `f/b.md` and `f/c.md`.
+  2. Open through the new `#[cfg(test)]`
+     `VaultSession::from_filesystem_with_trash_for_tests(root,
+     ScratchTrash::in_folder(bin))`. It opens: `root_identity()` is
+     `Some`. `trash_identity_mode` is `NameAndMetadataOnly`.
+  3. Then, with `FILE_ID_UNAVAILABLE` set (cleared in a drop guard), a
+     staged batch of `a.md` and `f` runs, with `f/c.md` renamed at
+     `AfterTrashValidation`. Staging and revalidation succeed;
+     `a.md` → `VerifiedByNameAndMetadataOnly`, its bytes in the bin;
+     `f` → `Mismatch`; state `Partial`.
+
+  [choose the mode by whether the root's id reads (`Strong`; staging
+  fails under the seam); stage the strong snapshot regardless of mode;
+  read the destination's id on the weak branch].
 - `a_weak_id_volume_is_verified_by_name_and_metadata_without_reading_ids`
   (gated, FAT32, probe volume the same): `VerifiedByNameAndMetadataOnly`,
-  also with the seam set throughout [hash ids in the weak mode].
+  also with the seam set from the moment the vault is open [hash ids in
+  the weak mode].
 - `a_weak_id_volume_mismatch_is_still_detected_by_name_and_metadata`
   (gated): a renamed child → `Mismatch` [compare `item_count` only].
 - `an_unknown_destination_is_unverifiable_never_confirmed`: `Unknown` →
@@ -675,7 +816,9 @@ delivered: the macOS Rust half, the mac host and flipping macOS's
 when, per part, the Verification block runs clean in PowerShell — every
 required fact discovered by name, every command's `$LASTEXITCODE` 0, the
 gated facts run by name with `SLATE_TRASH_PROBE_VOLUME` set to each fact's
-own volume — the windows, rust and swift lanes are green (mac's
+own volume, and Part 1's FAT32/exFAT fact run by name with both of
+WB-27's `SLATE_WEAK_VOLUME_*` variables set and recorded in Part 1's PR
+body — the windows, rust and swift lanes are green (mac's
 successful batch still `Succeeded`), each mutation was run locally, and
 Part 2's five-scenario NVDA pass is in its PR body with `Refs #1468`.
 Commit:

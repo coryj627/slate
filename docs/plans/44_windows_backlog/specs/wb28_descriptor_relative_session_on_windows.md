@@ -4,8 +4,10 @@ Issues: #1475 (the identity half; closes here per §5's matrix — WB-12
 delivered the `GraphConfigStore` write with `Refs`), Refs #940 (closes by
 hand after 22b and 22W, RD15). Size L (design first:
 `22_descriptor_relative_session_design.md` §7 row 22W, `:796`). Lanes:
-rust (Windows cfg), windows, swift (compile: the FFI record changes).
-AT: none. Wave: W10, alone. Depends on: WB-27 (shares `fs.rs` and
+rust (Windows cfg), windows, swift (compile: the FFI record changes and
+one additive export). AT: NVDA spot check on PR 1 (the open refusal
+WD24 adds; nothing else a reader hears changes). Wave: W10, alone.
+Depends on: WB-27 (shares `fs.rs` and
 `windows_entry.rs`), plan 43 22c merged (`FsRoot` helper names agreed,
 §6 gate). Parallel with: nothing; WB-29 and WB-30 follow it. Decision:
 WD7 (pending; recommended "the identity half is 22W, here"; under the
@@ -16,7 +18,11 @@ FFI record on both bindings, migrate `FileRecentsStore`'s key on first
 open"; under the other answer — hash the 128-bit id into `inode` — the
 record keeps two fields, the fact with high bits set asserts the hash
 instead, and the recents key is unchanged; under "the owner records a
-one-time reset" the path-keyed migration step is dropped).
+one-time reset" the path-keyed migration step is dropped). WD24
+(answered 2026-10-21: a Windows vault whose root file id cannot be read
+does not open — `OpenVaultAsync` refuses a null root identity on Windows,
+with a sentence saying why; rejected: admitting an id-less root by handle
+and final path with path-keyed stores. Design item 6 applies it).
 
 ## Goal
 
@@ -29,7 +35,9 @@ the provider's reads resolve beneath the held root, and `root_identity()`
 is a real anchor read from the held handle in a form that loses no bits
 of NTFS's 128-bit file id. #1475's "different folder now at the path"
 column gets its answer: the anchored stores compare with core's identity,
-and the device-local recents key follows the vault, not its path.
+and the device-local recents key follows the vault, not its path. A
+folder whose file system gives no file id does not open, and the reader
+hears core's reason (WD24).
 
 ## Current state on main
 
@@ -123,6 +131,27 @@ the §11 helper names are not what the tree holds (said below).
   re-arm switch `session/watch.rs:108` `WATCH_REARM_ENABLED = false` (22c).
 - **The host's open sequence:** `VaultLifecycleViewModel.cs` `OpenRecentAsync`
   `:724`, the workspace construction `:1184`, `WorkspaceReady` `:1280`.
+  `OpenVaultAsync` (`:436`) calls `VaultSession.OpenFilesystem(root)`
+  (`:483`), then `AddRecentVault` and `VaultOpened` (`:517-519`). Every
+  failed open lands in `catch (VaultException exception)` (`:556-565`),
+  which speaks `$"Could not open vault: {exception.Message}"` through
+  `ReportTerminalStatus` (`:1870-1875`, a `HostComposed` event at `High`),
+  closes the session and raises `ReturnedToWelcome`. A `VaultException`'s
+  `Message` is the binding's field dump: the generated `VaultException.Io`
+  passes `"@message=" + message` to its base. Core's text for a caught
+  error is `SlateUniffiMethods.VaultErrorDetail(exception)` (uniffi
+  `lib.rs:11329`, rendered by `a11y::vault_error_detail`, `a11y.rs:3401`,
+  which gives `Io`'s message verbatim), as `WorkspaceViewModel.cs:1135`
+  already uses.
+- **The Unix open already refuses a root it cannot identify.**
+  `FsRoot::open` (`fs_root.rs:588-605`) reads `sys::identity(&held)` right
+  after the hold and before `open_or_make_slate`, and fails the open
+  with `VaultError::Io` (the OS text) when `fstat` fails — so no `.slate`
+  is made in such a folder.
+- **Release-reachable fault seams exist.** `SLATE_TEST_SWEEP_AFTER_INTENT`
+  (`session.rs:4371`) and `SLATE_TEST_COMMIT_AFTER_INTENT` (`:4386`): an
+  environment variable whose value, contained in a path, triggers the
+  fault in any build, so a host test or a launched app can provoke it.
 
 ## Reference
 
@@ -215,11 +244,65 @@ Record each answer in this file's header on adoption.
    is claimed for Windows. Their Windows obligations are carried by
    named twins in `descriptor_interior_windows.rs` and `fs_root.rs`
    (the Tests table maps each one).
-6. **The host admission.** `AnchoredVaultStore.Open` gains
-   `expectedIdentity: VaultRootIdentity?` (new) and compares `FileIdInfo`
-   of the root handle it opens with it, refusing on mismatch; the five
-   stores pass `session.RootIdentity()`; `OpenVaultAsync` refuses an open
-   whose identity is `null` on Windows after this chunk.
+6. **The admission, and a root without a file id (WD24, answered
+   2026-10-21: such a vault does not open).**
+   - *Core refuses first.* The Windows `FsRoot::open` reads the held
+     root's `FILE_ID_INFO` (`sys::identity`) right after the hold and
+     before `open_or_make_slate`, as the Unix body does with `fstat`
+     (`fs_root.rs:588-605`). If the read fails, the open fails with
+     `VaultError::Io(io::Error::new(error.kind(),
+     a11y::VAULT_ROOT_IDENTITY_UNAVAILABLE))`. The OS error is logged at
+     debug level and never spoken. The held root closes with the error,
+     and no `.slate` is made in a folder Slate cannot anchor. The held
+     `.slate`'s identity (item 4's lock key) is read the same way and
+     refuses with the same sentence. Core's copy, in `a11y.rs` (new):
+     `pub const VAULT_ROOT_IDENTITY_UNAVAILABLE: &str = "This folder's file
+     system gives Slate no file identity for it, so Slate cannot keep the
+     vault anchored to it.";`. An open Windows session therefore always
+     has a root identity — the invariant WB-30's identity-mode rule rests
+     on.
+   - *Why a `VaultError` detail, not a new `A11yEvent`.* The refusal has
+     to happen in core, before `.slate` exists and before the lock
+     registry needs `.slate`'s id. So it reaches the host as a failed
+     `OpenFilesystem`, through the host's one open-failure path. An event
+     of its own would need a typed discriminator — a new `VaultError`
+     variant on both bindings — for the host to choose it.
+     `vault_error_detail` already carries `Io`'s message verbatim across
+     the FFI. So the change needs no `corpus.json` row, no census mirror,
+     no designations or trigger-ledger row and no mac edit: APFS and HFS+
+     always answer `fstat`, and the Unix body already refuses its
+     failure. The spoken prefix "Could not open vault:" is the host's
+     existing text, unchanged.
+   - *A seam any build can trip.* `SLATE_TEST_ROOT_FILE_ID_UNAVAILABLE`
+     (new) follows the `SLATE_TEST_*` precedent (`session.rs:4371`). When
+     it is set and the opened root's path contains its value, the Windows
+     `sys::identity` of the held root fails with `ERROR_INVALID_PARAMETER`,
+     as a file system that answers no file id does. It serves the core
+     fact, the host fact and the NVDA spot check.
+   - *The host speaks core's text.* The open-failure catch
+     (`VaultLifecycleViewModel.cs:556-565`) reports `$"Could not open
+     vault: {SlateUniffiMethods.VaultErrorDetail(exception)}"`, not
+     `exception.Message` (the binding's "@message=…" dump). The refusal is
+     heard as "Could not open vault: This folder's file system gives Slate
+     no file identity for it, so Slate cannot keep the vault anchored to
+     it." Every other failed open now speaks core's detail too.
+   - *`OpenVaultAsync` refuses a null identity, fail-closed behind core.*
+     Right after `OpenFilesystem` returns, and before `AddRecentVault` and
+     `VaultOpened`, it reads the identity through a new internal seam,
+     `Func<VaultSession, VaultRootIdentity?> RootIdentityReader` (default
+     `session => session.RootIdentity()`). On Windows a null identity
+     disposes the session and reports `$"Could not open vault:
+     {SlateUniffiMethods.VaultRootIdentityUnavailableDetail()}"` through
+     the same terminal path. `vault_root_identity_unavailable_detail() ->
+     String` is a new additive `#[uniffi::export]` returning core's
+     constant, so the host never carries the copy. Either refusal leaves
+     no `VaultOpened`, no recents entry and `IsVaultOpen` false, and
+     raises `ReturnedToWelcome`, so the keys return to the welcome view
+     (WD4).
+   - *The stores.* `AnchoredVaultStore.Open` gains `expectedIdentity:
+     VaultRootIdentity?` (new) and compares `FileIdInfo` of the root handle
+     it opens with it, refusing on mismatch; the five stores pass
+     `session.RootIdentity()`.
 7. **`FileRecentsStore` migration.** Key = SHA-256 of
    `$"{identity.Volume:x16}-{identity.IdHigh:x16}{identity.IdLow:x16}"`;
    on first open, if the identity-keyed file is absent and the path-keyed
@@ -233,18 +316,25 @@ Record each answer in this file's header on adoption.
    `GetFinalPathNameByHandleW` gated by identity through
    `trash_handoff::final_path` `:328` + `names` `:233`), the host watcher,
    Reveal and ShellExecute (design §4.2).
-10. **Split.** PR 1: core (Windows `FsRoot`, `sys`, hook, identity,
-    facts) with the FFI record change and both hosts' field edits. PR 2:
-    the host admission and the recents migration. Both before WB-29 and
-    WB-30.
+10. **Split.** PR 1: core (Windows `FsRoot`, `sys`, hook, identity, the
+    WD24 refusal and its seam, facts) with the FFI record change, the
+    additive `vault_root_identity_unavailable_detail` export, both hosts'
+    field edits, and the host's open-failure catch speaking core's detail.
+    The refusal is first heard in PR 1, so PR 1 carries its host fact and
+    its NVDA spot check. PR 2: the stores' admission, `OpenVaultAsync`'s
+    fail-closed null check, and the recents migration. Both before WB-29
+    and WB-30.
 
 ## Design
 
 Per the section above once agreed. New names: `fs_root::sys` (Windows),
 `db::anchored` Windows body and `skip_install_for_tests`,
 `OpenSwapPoint::BeforeSlateHeld`, `VaultRootIdentity { volume, id_high,
-id_low }` (core and uniffi), `AnchoredVaultStore.Open(…, expectedIdentity)`,
-`FileRecentsStore` identity key v2. `descriptor_interior.rs` keeps its
+id_low }` (core and uniffi), `a11y::VAULT_ROOT_IDENTITY_UNAVAILABLE`,
+`SLATE_TEST_ROOT_FILE_ID_UNAVAILABLE`, the uniffi export
+`vault_root_identity_unavailable_detail()`,
+`VaultLifecycleViewModel.RootIdentityReader`, `AnchoredVaultStore.Open(…,
+expectedIdentity)`, `FileRecentsStore` identity key v2. `descriptor_interior.rs` keeps its
 `#![cfg(unix)]` and every fact in it; a `cfg(windows)` sibling module
 `session/tests/descriptor_interior_windows.rs` (new, registered as
 `#[cfg(windows)] mod descriptor_interior_windows;` beside
@@ -278,12 +368,15 @@ bodies; the Unix facts.
 | `an_uninstalled_hook_fails_the_anchored_open_instead_of_opening_by_path` | with `skip_install_for_tests()`, `open_in` returns `Err`, no `cache.sqlite` written by path | fall back silently |
 | `a_slate_junction_planted_before_the_hold_never_receives_the_interior` | at `BeforeSlateHeld`, `<root>\.slate` is replaced by a junction to an outside folder: the open refuses (`slate_refusal`) and the outside folder stays empty | follow the junction |
 | `root_identity_on_windows_is_the_volume_serial_and_the_whole_128_bit_file_id` | the record equals `FILE_ID_INFO` of the held root; a synthetic id with high bits set round-trips through the record and the text form | truncate to 64 bits |
+| `a_root_whose_file_id_cannot_be_read_does_not_open_and_gains_no_slate` (WD24; PR 1) | with `SLATE_TEST_ROOT_FILE_ID_UNAVAILABLE` set to the temp root's unique folder name (removed in a drop guard): `VaultSession::from_filesystem(root)` is `Err(VaultError::Io(_))` and `a11y::vault_error_detail` of it equals `VAULT_ROOT_IDENTITY_UNAVAILABLE` exactly; `root\.slate` does not exist; `std::fs::rename(root, …)` succeeds right after (nothing is held); a sibling vault in the same fact, whose path does not contain the value, opens with `root_identity()` `Some` | open with the identity `None` instead of refusing (→ `Ok`); make `.slate` before the identity read (→ `.slate` exists); pass the OS error through (→ the detail is the OS text) |
 | `the_windows_structural_lock_registry_is_keyed_by_identity` (twin of `:357`) | two sessions on two roots with one textual spelling (`outer\vault` → `A`, then `retarget(outer\vault, B)` and a second open) get distinct slots — `A`'s lock is held, `B`'s free; and a third session opened through a second spelling of `A` (`outer\other` → `A`) shares the first session's slot | key by path |
 | uniffi: `root_identity_crosses_the_ffi_losslessly` | three fields | drop a field |
+| uniffi: `the_root_identity_refusal_crosses_the_ffi_as_cores_sentence` (PR 1) | `vault_error_detail(VaultError::from(core::VaultError::Io(io::Error::new(io::ErrorKind::InvalidInput, VAULT_ROOT_IDENTITY_UNAVAILABLE))))` and `vault_root_identity_unavailable_detail()` both equal `core::a11y::VAULT_ROOT_IDENTITY_UNAVAILABLE` | render `Io` by the binding's `Display` (`"io error: …"`); return a second copy of the text from the export |
 | Windows `W1AnchoredVaultStoreTests.OpenRefusesADifferentFolderAtTheVaultsPath` | the vault opened through a junction spelling (made with `mklink /J`, which needs no privilege, as `CanvasDocumentTests.cs:4131-4134` does); the junction retargeted to a decoy folder between session open and store open — the held root cannot be renamed — and `Open(…, expectedIdentity)` refuses with the reason | compare text only |
 | `W1AnchoredVaultStoreTests.EveryStoreRefusesAfterTheRootWasReplaced` | after the same junction retarget, `WorkspacePersistence`, `SearchRecentsStore`, `SidebarSettingsStore`, `GraphConfigStore` all refuse | one store bypasses |
 | `FileRecentsStoreTests` (new class): `APathKeyedRecentsFileMigratesToTheIdentityKeyOnce`, `TheIdentityKeyIsTheLosslessIdentity` | old file read, new written, old deleted, second load no-op; key text carries the high bits | skip the delete; format `Device-Inode` |
-| `VaultOpenIdentityTests` (new class): `OpenRefusesWhenCoreReportsNoIdentity` | fail-closed | admit null |
+| `VaultOpenIdentityTests` (new class): `AFolderWhoseFileSystemGivesNoFileIdDoesNotOpenAndSaysWhy` (WD24; PR 1) | through the real core, with `SLATE_TEST_ROOT_FILE_ID_UNAVAILABLE` set in-process to the fixture vault's unique folder name (cleared in `finally`): `OpenVaultAsync(root)` raises exactly one announcement, a `HostComposed` at `High` whose text is `"Could not open vault: " + SlateUniffiMethods.VaultRootIdentityUnavailableDetail()`; no `VaultOpened`; `IsVaultOpen` false; `ReturnedToWelcome` raised once; the recents list unchanged; `root\.slate` absent | speak `exception.Message` (the text becomes "Could not open vault: @message=…"); open anyway (→ `VaultOpened`) |
+| `VaultOpenIdentityTests.OpenRefusesWhenCoreReportsNoIdentity` (PR 2) | a real vault opens in core, and `RootIdentityReader` returns `null`: the session is disposed, the same single `High` sentence is spoken, no `VaultOpened`, no recents entry, `ReturnedToWelcome` raised once | admit null (→ `VaultOpened`) |
 | `RescanTests.ARefreshAfterTheVaultsSpellingIsRetargetedListsTheHeldVault` (new; replaces the live-rename read the Windows hold makes impossible) | the vault opened through a junction, the junction retargeted to a decoy vault; Refresh's tree lists the held vault's notes and none of the decoy's | revert the provider reads to pathname-based |
 | mac: `swift-tests.yml` compiles `AppState.swift:10670-10671` | | |
 
@@ -292,7 +385,13 @@ bodies; the Unix facts.
 - Design `22_descriptor_relative_session_design.md` §7 row 22W: append a
   "Delivered …" text as 22a's did; §11 a dated note on WD22's answer.
 - Contract 31 FR-10: append a sentence that the session's root identity
-  is core-owned on Windows and shares structural identity's form.
+  is core-owned on Windows and shares structural identity's form, and
+  that a Windows root whose file id cannot be read does not open (WD24,
+  core's `VAULT_ROOT_IDENTITY_UNAVAILABLE` sentence).
+- No `corpus.json`, census, designations or trigger-ledger change: the
+  refusal is a `VaultError` detail, not an `A11yEvent` (design item 6).
+- PR 1's body: the NVDA spot check (Verification) with its NVDA log
+  excerpt.
 - `18_windows_port/parity_matrix.md`: `python -I scripts/generate-parity-matrix.py
   --check` stays green (no command rows change).
 - Plan §11's helper names: the plan author replaces `list_dir_at`,
@@ -319,7 +418,7 @@ function Assert-Facts([string]$crate, [string]$filter, [string[]]$facts) {
     }
 }
 $required = [ordered]@{
-    'descriptor_interior_windows' = @('a_held_root_refuses_a_rename_of_itself_and_of_an_ancestor_while_the_session_lives', 'no_interior_writer_follows_a_retargeted_spelling', 'wal_connections_share_the_held_cache_across_a_retarget', 'a_second_process_on_the_textual_path_shares_the_anchored_cache', 'child_of_a_second_process_on_the_textual_path', 'root_display_path_follows_the_held_root_not_its_retargeted_spelling', 'canonical_path_is_computed_under_the_held_root_handle', 'a_junctioned_interior_folder_is_refused', 'the_connection_names_the_synthetic_path_and_the_literal_path_does_not_exist', 'an_uninstalled_hook_fails_the_anchored_open_instead_of_opening_by_path', 'a_slate_junction_planted_before_the_hold_never_receives_the_interior', 'root_identity_on_windows_is_the_volume_serial_and_the_whole_128_bit_file_id', 'the_windows_structural_lock_registry_is_keyed_by_identity')
+    'descriptor_interior_windows' = @('a_held_root_refuses_a_rename_of_itself_and_of_an_ancestor_while_the_session_lives', 'no_interior_writer_follows_a_retargeted_spelling', 'wal_connections_share_the_held_cache_across_a_retarget', 'a_second_process_on_the_textual_path_shares_the_anchored_cache', 'child_of_a_second_process_on_the_textual_path', 'root_display_path_follows_the_held_root_not_its_retargeted_spelling', 'canonical_path_is_computed_under_the_held_root_handle', 'a_junctioned_interior_folder_is_refused', 'the_connection_names_the_synthetic_path_and_the_literal_path_does_not_exist', 'an_uninstalled_hook_fails_the_anchored_open_instead_of_opening_by_path', 'a_slate_junction_planted_before_the_hold_never_receives_the_interior', 'root_identity_on_windows_is_the_volume_serial_and_the_whole_128_bit_file_id', 'a_root_whose_file_id_cannot_be_read_does_not_open_and_gains_no_slate', 'the_windows_structural_lock_registry_is_keyed_by_identity')
     'fs_root' = @('both_forms_open_create_rename_list_and_remove_the_same_files', 'windows_a_held_cache_directory_refuses_a_rename_of_itself_and_of_its_parent', 'windows_a_held_cache_directory_resolves_beneath_its_handle_when_its_spelling_is_retargeted', 'windows_a_held_cache_directory_never_follows_a_junction')
 }
 foreach ($filter in $required.Keys) {
@@ -328,7 +427,7 @@ foreach ($filter in $required.Keys) {
 }
 cargo test -p slate-core --locked anchored; Assert-Ok 'anchored'
 cargo test -p slate-core --locked --no-fail-fast; Assert-Ok 'the whole core suite'
-Assert-Facts 'slate-uniffi' 'root_identity' @('root_identity_crosses_the_ffi_losslessly')
+Assert-Facts 'slate-uniffi' 'root_identity' @('root_identity_crosses_the_ffi_losslessly', 'the_root_identity_refusal_crosses_the_ffi_as_cores_sentence')
 cargo test -p slate-uniffi --locked root_identity; Assert-Ok 'uniffi root_identity'
 cargo fmt --all -- --check; Assert-Ok 'fmt'
 cargo clippy --all-targets --workspace -- -D warnings; Assert-Ok 'clippy'
@@ -340,7 +439,7 @@ dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release; Asser
 $tests = 'apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj'
 $filter = 'FullyQualifiedName~SlateWindows.Tests.W1AnchoredVaultStoreTests|FullyQualifiedName~SlateWindows.Tests.FileRecentsStoreTests|FullyQualifiedName~SlateWindows.Tests.VaultOpenIdentityTests|FullyQualifiedName~SlateWindows.Tests.RescanTests'
 $listed = dotnet test $tests --no-build --configuration Release --list-tests --filter $filter; Assert-Ok 'listing the host facts'
-foreach ($fact in 'OpenRefusesADifferentFolderAtTheVaultsPath', 'EveryStoreRefusesAfterTheRootWasReplaced', 'APathKeyedRecentsFileMigratesToTheIdentityKeyOnce', 'TheIdentityKeyIsTheLosslessIdentity', 'OpenRefusesWhenCoreReportsNoIdentity', 'ARefreshAfterTheVaultsSpellingIsRetargetedListsTheHeldVault') {
+foreach ($fact in 'OpenRefusesADifferentFolderAtTheVaultsPath', 'EveryStoreRefusesAfterTheRootWasReplaced', 'APathKeyedRecentsFileMigratesToTheIdentityKeyOnce', 'TheIdentityKeyIsTheLosslessIdentity', 'AFolderWhoseFileSystemGivesNoFileIdDoesNotOpenAndSaysWhy', 'OpenRefusesWhenCoreReportsNoIdentity', 'ARefreshAfterTheVaultsSpellingIsRetargetedListsTheHeldVault') {
     if (-not ($listed -match "\.$fact$")) { throw "the host filter does not select $fact" }
 }
 dotnet test $tests --no-build --configuration Release --filter $filter; Assert-Ok 'host facts'
@@ -350,16 +449,35 @@ python -I scripts/generate-parity-matrix.py --check; Assert-Ok 'parity matrix'
 cargo bench -p slate-core --bench scan_bench -- 'first_open_and_scan|reopen_with_cache'; Assert-Ok 'scan benches'   # one regex filter; both groups within noise of BENCHMARKS.md
 ```
 
-Mutation run per row, locally. CI: `windows.yml` (all lanes), `rust.yml`
-(the Unix facts, unchanged, on Linux), `swift-tests.yml` (the record
-change; the mac twins of the 22a facts). AT: none — no sentence changes
-(a new open-refusal sentence, if one is needed, gets a spot check
-recorded in the PR body).
+PR 1 runs the block with the host list cut to
+`AFolderWhoseFileSystemGivesNoFileIdDoesNotOpenAndSaysWhy`; the other
+host facts are PR 2's. Mutation run per row, locally. CI: `windows.yml`
+(all lanes), `rust.yml` (the Unix facts, unchanged, on Linux),
+`swift-tests.yml` (the record change and the additive export; the mac
+twins of the 22a facts).
+
+AT, NVDA spot check on PR 1 (§4 rule 4), with the Release build and
+NVDA running:
+1. Open a scratch vault folder once normally, so it is in the recents,
+   and close Slate.
+2. From a PowerShell window, set
+   `$env:SLATE_TEST_ROOT_FILE_ID_UNAVAILABLE` to that folder's name and
+   start `SlateWindows.exe` from the same window, so the app inherits it.
+3. Open the vault from the welcome view's recents. NVDA speaks once
+   "Could not open vault: This folder's file system gives Slate no file
+   identity for it, so Slate cannot keep the vault anchored to it." The
+   keys stay in the welcome view (WD4), and nothing else is spoken.
+4. In the same run, open a different vault. It opens and is announced
+   as usual.
+
+The PR body records the NVDA log excerpt, and the PR stays draft until
+then. Nothing else a reader hears changes.
 
 ## Acceptance
 
-- [ ] WD7 and WD22 recorded; the design section's ten answers recorded;
-      22c merged and its names adopted.
+- [ ] WD7 and WD22 recorded; WD24 (answered 2026-10-21) applied; the
+      design section's ten answers recorded; 22c merged and its names
+      adopted.
 - [ ] `FsRoot`, `sys`, the anchored SQLite hook (or the owner-approved
       fallback) and the provider's reads on Windows.
 - [ ] No Windows obligation rests on renaming a held object: the 22a
@@ -371,6 +489,14 @@ recorded in the PR body).
 - [ ] `VaultRootIdentity` lossless on both bindings; the high-bits fact.
 - [ ] `AnchoredVaultStore` compares core's identity; the five stores and
       `OpenVaultAsync` fail closed; `FileRecentsStore` migrated.
+- [ ] WD24: a Windows root whose file id cannot be read does not open.
+      Core refuses in `FsRoot::open` before `.slate` is made, with
+      `VAULT_ROOT_IDENTITY_UNAVAILABLE` as the `VaultError::Io` detail.
+      The host speaks core's detail on every failed open, never the
+      binding's field dump. `OpenVaultAsync` refuses a null identity with
+      the same sentence through `vault_root_identity_unavailable_detail()`.
+      The core, uniffi and host facts are green, and PR 1's NVDA spot
+      check is recorded.
 - [ ] Benches within noise; registers appended; `Closes #1475`,
       `Refs #940`.
 - [ ] Not delivered: anything the SQLite spike forced onto the fallback.
@@ -385,7 +511,11 @@ both bindings and migrate the recents key on first open; under the other
 answer the 128-bit id is hashed into `inode`, the record keeps two
 fields, the high-bits fact asserts the hash and the recents key is
 unchanged; under "the owner records a one-time reset" the path-keyed
-migration step is dropped). Read the design `:306-385`, `:639-711`,
+migration step is dropped). Answered: WD24 (2026-10-21) — a Windows
+vault whose root file id cannot be read does not open; `OpenVaultAsync`
+refuses a null root identity with a sentence saying why; admitting an
+id-less root by handle and final path with path-keyed stores is
+rejected. Read the design `:306-385`, `:639-711`,
 `:737-845`; `fs_root.rs:49-60`, `:142-170`, `:285-420`, `:536-700`,
 `:749-1018`, `:1020-1140` (its tests); `db/anchored.rs:1-60`,
 `:100-170`, `:260-280`, `:400-420`; `session.rs:1085-1120`,
@@ -400,7 +530,15 @@ the test module list `:22300-22305`; `watch.rs:104-108`;
 `:333-345`, `:434-456`; `FileRecentsStore.cs:15-110`;
 `FilesSidebarViewModel.cs:557`; `QuickSwitcherViewModel.cs:68`;
 `CanvasDocumentTests.cs:4131-4134` (`mklink /J` in a C# fixture);
-`AppState.swift:10665-10675`. Settle the ten design answers first.
+`AppState.swift:10665-10675`; for WD24: `fs_root.rs:588-605` (the Unix
+open refuses an `fstat` failure before `.slate` is made),
+`VaultLifecycleViewModel.cs:436-575` (the open, and the failure catch
+at `:556-565` that speaks `exception.Message`, the binding's "@message=…"
+dump) and `:1870-1875` (`ReportTerminalStatus`),
+`WorkspaceViewModel.cs:1130-1137` (`VaultErrorDetail` in use),
+`uniffi lib.rs:11320-11372` (`vault_error_detail`), `a11y.rs:3401-3440`,
+`session.rs:4365-4390` (the `SLATE_TEST_*` seams any build can trip).
+Settle the ten design answers first.
 
 Build: the Windows `fs_root::sys` (same names as Unix: `open_at`,
 `stat_at`, `read_dir_names`, `rename_at`, `unlink_at`, `ensure_dir_at`,
@@ -408,11 +546,40 @@ Build: the Windows `fs_root::sys` (same names as Unix: `open_at`,
 and `.slate` without `FILE_SHARE_DELETE`, `db/anchored.rs`'s win-VFS body
 plus `skip_install_for_tests()` (new), `OpenSwapPoint::BeforeSlateHeld`
 (new), the lossless `VaultRootIdentity`, provider reads through handles,
-the identity-keyed lock registry; then `AnchoredVaultStore.Open(…,
-expectedIdentity)` (new parameter), the five stores passing
-`session.RootIdentity()`, `OpenVaultAsync` fail-closed, and
-`FileRecentsStore`'s identity key v2 with the one-time path-key
-migration. Tests: `session/tests/descriptor_interior_windows.rs` (new,
+the identity-keyed lock registry. WD24, in PR 1: the Windows
+`FsRoot::open` reads the held root's `FILE_ID_INFO` right after the hold
+and before `open_or_make_slate`, and on failure refuses the open with
+`VaultError::Io(io::Error::new(kind, a11y::VAULT_ROOT_IDENTITY_UNAVAILABLE))`.
+The constant is new, core's copy: "This folder's file system gives Slate
+no file identity for it, so Slate cannot keep the vault anchored to
+it." The OS error is logged, not spoken, and no `.slate` is made. The
+held `.slate`'s identity read refuses the same way. Also new in PR 1:
+- `SLATE_TEST_ROOT_FILE_ID_UNAVAILABLE`, a seam any build can trip:
+  when the root's path contains its value, the root's identity read
+  fails with `ERROR_INVALID_PARAMETER`.
+- The additive export `vault_root_identity_unavailable_detail() ->
+  String`, which returns the constant.
+- The host's open-failure catch (`VaultLifecycleViewModel.cs:556-565`)
+  speaks `"Could not open vault: " + SlateUniffiMethods.VaultErrorDetail(exception)`
+  instead of `exception.Message`.
+
+The refusal is a `VaultError` detail, not a new `A11yEvent`. It must
+happen in core, before `.slate` and the identity-keyed lock exist, so it
+arrives as a failed `OpenFilesystem`. An event would need a new
+`VaultError` variant on both bindings. `Io`'s message already crosses
+verbatim. So there is no corpus, census, designations or ledger change,
+and no mac edit.
+
+Then in PR 2: `AnchoredVaultStore.Open(…, expectedIdentity)` (new
+parameter) and the five stores passing `session.RootIdentity()`.
+`OpenVaultAsync` refuses fail-closed: it reads the identity through the
+new internal seam `RootIdentityReader`
+(`Func<VaultSession, VaultRootIdentity?>`) before `AddRecentVault` and
+`VaultOpened`. On Windows a null identity disposes the session and
+speaks `"Could not open vault: " + SlateUniffiMethods.VaultRootIdentityUnavailableDetail()`
+through the same terminal path: no `VaultOpened`, no recents entry,
+`ReturnedToWelcome`. Last, `FileRecentsStore`'s identity key v2 with
+the one-time path-key migration. Tests: `session/tests/descriptor_interior_windows.rs` (new,
 `#[cfg(windows)] mod descriptor_interior_windows;` in the session test
 list) with helpers `retarget(link, to)` (remove the junction, recreate it
 pointing at `to`) and `tree_bytes(root)` (new).
@@ -475,11 +642,24 @@ each seen failing first under its mutation:
 - `root_identity_on_windows_is_the_volume_serial_and_the_whole_128_bit_file_id`:
   the record equals the held root's `FILE_ID_INFO`; a high-bits synthetic
   id round-trips [truncate to 64 bits].
+- `a_root_whose_file_id_cannot_be_read_does_not_open_and_gains_no_slate`
+  (WD24, PR 1): with `SLATE_TEST_ROOT_FILE_ID_UNAVAILABLE` set to the temp
+  root's unique name (removed in a drop guard), `from_filesystem` is
+  `Err(VaultError::Io)` whose `vault_error_detail` is exactly
+  `VAULT_ROOT_IDENTITY_UNAVAILABLE`, no `root\.slate` exists, the root
+  renames right after, and a sibling vault not matching the value opens
+  with an identity [open with `None`; make `.slate` before the identity
+  read; pass the OS text through].
 - `the_windows_structural_lock_registry_is_keyed_by_identity` (twin of
   `:357`): one spelling retargeted between two opens gives two slots; a
   second spelling of one vault shares its slot [key by path].
 - uniffi `root_identity_crosses_the_ffi_losslessly`: three fields [drop a
   field].
+- uniffi `the_root_identity_refusal_crosses_the_ffi_as_cores_sentence`
+  (PR 1): `vault_error_detail` of the core refusal crossed to the binding,
+  and `vault_root_identity_unavailable_detail()`, both equal core's
+  constant [render `Io` by its `Display`, "io error: …"; a second copy
+  of the text in the export].
 - `W1AnchoredVaultStoreTests.OpenRefusesADifferentFolderAtTheVaultsPath`
   and `.EveryStoreRefusesAfterTheRootWasReplaced`: the vault opened
   through an `mklink /J` spelling that is retargeted between session open
@@ -489,8 +669,17 @@ each seen failing first under its mutation:
   (old read, new written, old deleted, second load no-op) and
   `.TheIdentityKeyIsTheLosslessIdentity` (key text carries the high bits)
   [skip the delete; format `Device-Inode`].
-- `VaultOpenIdentityTests.OpenRefusesWhenCoreReportsNoIdentity`
-  [admit null].
+- `VaultOpenIdentityTests.AFolderWhoseFileSystemGivesNoFileIdDoesNotOpenAndSaysWhy`
+  (WD24, PR 1): through the real core with the seam set in-process (cleared
+  in `finally`), `OpenVaultAsync` speaks exactly one `High` `HostComposed`
+  "Could not open vault: " + `VaultRootIdentityUnavailableDetail()`, no
+  `VaultOpened`, `IsVaultOpen` false, `ReturnedToWelcome` once, recents
+  unchanged, no `.slate` [speak `exception.Message`, which reads
+  "@message=…"; open anyway].
+- `VaultOpenIdentityTests.OpenRefusesWhenCoreReportsNoIdentity` (PR 2):
+  a real vault opens in core, `RootIdentityReader` returns `null`; the
+  session is disposed and the same single sentence spoken, no
+  `VaultOpened`, no recents entry [admit null].
 - `RescanTests.ARefreshAfterTheVaultsSpellingIsRetargetedListsTheHeldVault`:
   after a junction retarget Refresh lists the held vault's notes, none of
   the decoy's [pathname reads].
@@ -498,14 +687,35 @@ each seen failing first under its mutation:
   and keeps the Unix 22a facts green.
 
 Registers: design §7 row 22W ("Delivered …") and §11 (WD22's answer),
-contract 31 FR-10, the parity matrix `--check`, the plan §11 helper names.
+contract 31 FR-10 (including WD24's refusal), the parity matrix
+`--check`, the plan §11 helper names; no corpus, census, designations or
+ledger change (the refusal is a `VaultError` detail). AT: PR 1's NVDA
+spot check with the Release build:
+1. Open a scratch vault once, so it is in the recents.
+2. Relaunch `SlateWindows.exe` from a PowerShell window where
+   `$env:SLATE_TEST_ROOT_FILE_ID_UNAVAILABLE` is that folder's name.
+3. Open the vault from the recents. NVDA speaks once "Could not open
+   vault: This folder's file system gives Slate no file identity for
+   it, so Slate cannot keep the vault anchored to it." The keys stay in
+   the welcome view, and nothing else is spoken.
+4. Another vault opens normally in the same run.
+
+The NVDA log excerpt goes in PR 1's body, and PR 1 stays draft until
+then.
+
 Not delivered: whatever the SQLite spike forces onto the recorded
-fallback. Done when the Verification block runs clean on Windows — every
-required fact discovered by name under its filter, every command's
-`$LASTEXITCODE` 0 (the two core filters, `anchored`, the whole core
-suite, uniffi, fmt, clippy, workspace tests, bench compile, licence
-headers, bindings, build, the host facts, `dotnet format`, the parity
-matrix, the two scan benches within noise) — the Unix facts are green on
-the rust and swift lanes, each mutation was run locally, and the PR
-bodies carry `Closes #1475` and `Refs #940`. Commit:
+fallback.
+
+Done when all of these hold:
+- The Verification block runs clean on Windows: every required fact is
+  discovered by name under its filter, and every command's
+  `$LASTEXITCODE` is 0 (the two core filters, `anchored`, the whole
+  core suite, uniffi, fmt, clippy, workspace tests, bench compile,
+  licence headers, bindings, build, the host facts, `dotnet format`,
+  the parity matrix, and the two scan benches within noise). PR 1 cuts
+  the host list to its one host fact.
+- The Unix facts are green on the rust and swift lanes.
+- Each mutation was run locally.
+- The NVDA spot check is recorded in PR 1's body.
+- The PR bodies carry `Closes #1475` and `Refs #940`. Commit:
 `feat(core,windows): the windows session holds its vault root, resolves its interior through handles and reports a lossless root identity`.

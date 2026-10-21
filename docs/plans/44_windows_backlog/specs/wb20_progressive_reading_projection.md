@@ -68,11 +68,34 @@ Verified in the worktree; `report_rel.md`'s lines hold.
   `ReadingFocusTests.cs:93` `TheEditorLandingIsHeldUntilTheContentArrives`,
   `:780` `AHeldLandingWaitsForTheRefreshInFlight`, `:892`
   `AHeldLandingWaitsThroughARetiredRefresh`, `:1286`
-  `ALaterChunkFailingRefusesTheHeldLanding`. FlaUI:
+  `ALaterChunkFailingRefusesTheHeldLanding`; `RescanTests.ReadingLanding.cs`
+  (`partial class RescanTests`, `:27`): `:30`
+  `AHeldReadingLandingSettlesWithTheRescansSilentReprojection`, `:67`
+  `AFailedRescanReprojectionRefusesTheHeldLandingSilently`, `:104`
+  `ACancelledRescanReprojectionStillSettlesTheHeldLanding`, and `:146`
+  `ARescanReloadOfTheReadingTabWithdrawsItsHeldLandingSilently`, which
+  WB-9 (W3, before this chunk) rewrites as
+  `ARescanReloadOfTheReadingTabCarriesItsHeldLandingToTheReloadedProjection`
+  beside five new facts — `ACarriedLandingIsCancelledByItsOriginalTokenAfterTheReload`,
+  `ACarriedLandingIsCancelledByItsOriginalTokenDuringTheReload`,
+  `AFailedRescanReloadRefusesTheCarriedLandingSilently`,
+  `AReloadThatBindsNoReplacementModelRefusesTheCarriedLandingOnce`,
+  `AReloadWhoseSurfaceLetsGoOfTheTabStillRefusesTheCarriedLandingOnce`
+  (`wb09_open_handoff_and_landing_lifecycle.md`, Tests) — so on this
+  chunk's base the `:146` name no longer exists. The fixture
+  `BackgroundReadingWorkspace(string label, string hostText = "# Host\n\n![[embedded]]\n")`
+  is `RescanTests.Round3.cs:278-306`. FlaUI:
   `ShellAccessibilityTests.cs:1381` `ReadingIdentityContract_ExeWindowAndSurfaceIds_AreStable`
   waits 300 s for the math/diagram elements (`:1483`), `:1720`
   `ReadingTextPattern_RangeFromChildResolvesEveryCustomPeer` (`:1813`,
   `:1832`).
+- `Reading/ReadingSurface.cs:685-719` `InvalidateAutomationChildren`
+  documents the stale-child problem: WPF refreshes a peer's children on
+  render-driven ticks a starved session may never run, so a UIA client
+  read a child list frozen at an earlier document state for a 90-second
+  wait; the merge therefore resets the cache, rebuilds it synchronously
+  and raises `StructureChanged`. WB-11 adds a cached child list on the
+  surface peer, dropped only by its `InvalidateStructuralPeers()`.
 - Registers: `w_c_matrix.md:23` (Diagram blocks row); `parity_matrix.md:236,
   272` (diagrams, implemented).
 
@@ -84,7 +107,8 @@ can read); a late diagram arrives silently and its placeholder is named
 'Diagram, rendering' until then." If the owner answers that the partial
 projection is NOT applied, the held landing waits for the diagram stage
 (`RefreshInFlight` stays true through it) and the FlaUI fact's "math
-before diagram" assertion keeps, but the landing fact flips; if a late
+before diagram" assertion keeps, but the two landing facts flip (the held
+landing and the rescan-carried one); if a late
 diagram is to be announced, a core `A11yEvent` is needed (corpus, mirrors,
 Swift compile) and the chunk grows by WB-8's shape.
 
@@ -196,8 +220,9 @@ Swift compile) and the chunk grows by WB-8's shape.
      C; C is removed when `E.IsKeyboardFocusWithin` is false (main's shape
      exactly, so `DiagramFetchFailureDegradesToSourceInRange` and
      `UnsavedDiagramEditsNeverShowTheStaleDiagram` keep asserting no
-     element), otherwise kept, with E renamed to the source (the landing
-     `:878` speaks) until the next projection rebuilds P. Every outcome
+     element) — a container removal, which step 4 invalidates — otherwise
+     kept, with E renamed to the source (the landing `:878` speaks) until
+     the next projection rebuilds P. Every outcome
      re-applies `MarkDiagramBlock(P, landing)` (the source for `Unmatched`)
      and clears the pending mark.
   3. *Anchors restored.* Inside the source at k: `Rendered` → C's
@@ -214,17 +239,38 @@ Swift compile) and the chunk grows by WB-8's shape.
      text when collected (`ReadingDocumentBuilder.cs:1768-1773`) and the
      landing changed; the caret's Enter path reads
      `DiagramDescriptionOf(paragraph)` live (`ReadingSurface.cs:839-851`)
-     and needs only the re-mark. WB-11's caches need nothing: P is a direct
-     child of the document (diagram blocks never sit in a list —
-     `ReadingDocumentBuilder.cs:213-215`), so no list or list-item peer
-     reads its text; the surface peer's cached structural list holds E's
-     peer, the same object; and WPF's own text-range children still hold
-     the same C. If P is ever not a direct child of the document,
-     `CompleteDiagrams` calls WB-11's `InvalidateStructuralPeers()` for that
-     completion instead. No `StructureChanged` is raised; E's `NameProperty`
-     change and whatever `TextPatternOnTextChanged` WPF's text adaptor
-     raises for the Run edit are the only automation events, and neither is
-     an `A11yEvent` (WD11: silent).
+     and needs only the re-mark. Two kinds of completion, told apart per
+     outcome while the shapes are applied:
+     - *Text-only* — `Rendered`, `Failed`, and an `Unmatched` whose
+       placeholder has focus (C kept): only P's `Run`s and E's name and
+       `Content` change. The surface peer's children are what WB-11 caches
+       — `base.GetChildrenCore()`'s embedded-element and hyperlink peers
+       plus the structural peers — and none of them changes: C and E are
+       the same objects, so E's peer is the same peer (its
+       `ReadingDiagramImage` has no peer, `ReadingDiagramElement.cs:75-78`,
+       so E's own children stay empty), the source `Run` holds no link, and
+       P is a direct child of the document (diagram blocks never sit in a
+       list — `ReadingDocumentBuilder.cs:213-215`), so no list or list-item
+       peer reads its text. No structural invalidation runs; E's
+       `NameProperty` change and whatever `TextPatternOnTextChanged` WPF's
+       text adaptor raises for the `Run` edit are the only automation
+       events.
+     - *Container removal* — an `Unmatched` whose placeholder does not have
+       focus (C removed): E's peer leaves the surface's children. WB-11's
+       cached child list still holds it, and so does WPF's own peer
+       child cache, which a starved session refreshes late or never — the
+       stale-child problem `ReadingSurface.cs:685-719` documents (a child
+       list frozen at an earlier document state for a 90-second wait). So
+       a completion that removed at least one container calls WB-11's
+       `InvalidateStructuralPeers()` once, after `EndChange()`: it bumps the
+       structural generation (dropping the cached child list) and runs the
+       merge's own reset — `UpdateLayout()`, `ResetChildrenCache()`, a
+       synchronous `GetChildren()`, `StructureChanged` and
+       `InvalidatePeer()` — so a client re-reads the children without the
+       removed element. The same call runs for a completion whose P is not
+       a direct child of the document.
+     Neither kind raises an `A11yEvent` (WD11: silent); `StructureChanged`
+     is a structure notification, not speech.
 
   `ReadingDiagramElement.Complete(string description, ImageSource? visual)`
   (new) sets `Description` (get-only today, `ReadingDiagramElement.cs:42`;
@@ -242,7 +288,34 @@ Swift compile) and the chunk grows by WB-8's shape.
   generation, does not set `IsLoading`, and a landing held or seated is
   untouched. It honours AR-60: it carries stage 1's generation and cancel
   token; a newer refresh retires it (`:1517-1530`'s rule), and a retired
-  stage drops its result without touching the document.
+  stage drops its result without touching the document. `FetchFaultForTests`
+  (`ReadingContentViewModel.cs:741`, read first in `FetchGuarded` `:767`)
+  stays stage 1's; `DiagramFaultForTests` (`:841`) moves to stage 2. A
+  stage-2 failure is the `Unmatched` outcome, never `LastRefreshFailed`, so
+  it never refuses a landing. A rescan's reading publication
+  (`WorkspaceTabViewModel.RescanReadingPublication`,
+  `WorkspaceViewModel.cs:1823-1826`, "completing at its terminal
+  publication, faulted by its failure") completes at stage 1's
+  `FinishPublish`, and stage 2 never faults it, so the rescan's failure
+  count (`WorkspaceViewModel.Rescan.cs:807-815`) never counts a diagram.
+  *WB-9's landing lifecycle (merged in W3, before this chunk).* WB-9
+  replaces main's `ARescanReloadOfTheReadingTabWithdrawsItsHeldLandingSilently`
+  with a carried landing: a rescan reload of the reading tab carries the
+  held landing, under the token the window's slot holds, to the reloaded
+  model (`ReadingReloadTransaction`, `ReadingSurface.EndCarry`) and resumes
+  it — scheduling the settle when the replacement model's refresh has
+  already ended, otherwise through the refresh's settle — or refuses it
+  once. Under WD11's recommended answer the replacement model's refresh
+  ends at its stage 1: the carried landing seats on the reloaded partial
+  projection, and its stage 2 neither re-seats, re-speaks nor refuses it;
+  a cancellation by the original token after the seat finds nothing held.
+  WB-9's cancellation and refusal facts inject before or at stage 1
+  (`FetchFaultForTests`, a throwing `ReadingCreatedForTests`, an unbind)
+  over notes with no diagram fence, so no stage 2 runs for them and they
+  pass unchanged; the new carried-landing fact below covers a reload whose
+  note has a pending fence. Under WD11's other answer (the landing waits
+  through the diagram stage) the carried landing seats only when stage 2
+  lands, and that fact flips with `AHeldLandingSeatsOnThePartialProjection`.
 - **Announcement.** None for a late diagram (WD11). The placeholder's
   name changes to the description when the image lands (property change
   only).
@@ -323,11 +396,21 @@ never only a child peer's `Name`. Every fact that holds the stage sets
   element → the TextPattern lacks them while the element's name still
   passes → fails.
 - `ReadingDiagramTests.ANoMatchCompletionRestoresTheUnmatchedShapeUnlessThePlaceholderHasFocus`
-  — `DiagramFaultForTests` throws `VaultException.Io`: unfocused, after
-  stage 2 no `ReadingDiagramElement` remains (`:215`'s assertion), the
-  TextPattern holds the source, one Diagram landmark; with the placeholder
-  focused, it stays, keeps focus and is named the source. Mutation: always
-  remove the container → the focused case loses focus → fails.
+  — `DiagramFaultForTests` throws `VaultException.Io`. Before the gate is
+  released the surface peer (`UIElementAutomationPeer.CreatePeerForElement(surface)`)
+  exists and its `GetChildren()` holds the placeholder's
+  `ReadingDiagramElementPeer` (its `Owner` is E), kept as `held`.
+  Unfocused: after stage 2 no `ReadingDiagramElement` remains (`:215`'s
+  assertion), the TextPattern holds the source, one Diagram landmark, and
+  the surface peer's `GetChildren()` holds no `ReadingDiagramElementPeer`
+  — `held` is not among them (WB-11's cached list serves until
+  `InvalidateStructuralPeers()`, so the read is deterministic). Focused: E
+  stays, keeps focus, is named the source, and `GetChildren()` still holds
+  `held`, the same object (a text-only completion invalidates nothing).
+  Mutations: always remove the container → the focused case loses focus →
+  fails; skip the `InvalidateStructuralPeers()` call after the unfocused
+  removal → the surface's children still hold `held`, a removed element
+  still exposed through UIA → fails.
 - `ReadingDiagramTests.AnUnchangedDiagramStaysCompleteAcrossARefresh` —
   after stage 2 lands, a task toggle in the same note re-projects: the
   stage-1 document already holds the rendered element with no pending mark
@@ -344,6 +427,34 @@ never only a child peer's `Name`. Every fact that holds the stage sets
   dispatcher's. Mutation: decode in `Build` → fails.
 - `ReadingFocusTests.AHeldLandingSeatsOnThePartialProjection` (WD11) —
   the landing seats before the gate is released; `:780`/`:892` keep passing.
+- `RescanTests.ACarriedLandingSeatsOnTheReloadedPartialProjectionAndTheDiagramStageLeavesIt`
+  (WD11; new `[Theory]` over `bool stageTwoFails`, in
+  `RescanTests.ReadingLanding.cs` beside WB-9's facts and on their harness:
+  `BackgroundReadingWorkspace` + `HostedReadingSurface`, the shown
+  projection's refresh parked through `FetchFaultForTests` so
+  `RequestTheLanding()` is held, `token` = `hosted.Surface.HeldFocusLanding`
+  read right after it) — `host.md` rewritten outside Slate to `# Host`,
+  `![[embedded]]`, `Changed outside Slate.` and a Mermaid fence
+  (`graph TD; A-->B`), `w.Session.Rescan`, and
+  `w.HostTab.ReadingCreatedForTests = m => { m.DiagramStageGateForTests =
+  gate; if (stageTwoFails) m.DiagramFaultForTests = () => new
+  VaultException.Io("injected diagram fault"); }` before
+  `w.ReSyncHostAsync(…)`: once the reloaded model's stage 1 has published
+  (gate held), `hosted.Surface.IsFocusLandingPending` is false,
+  `spoken() == 1`, `fellThrough() == 0`, `Keyboard.FocusedElement` is the
+  surface, `hosted.Text` holds "Changed outside Slate." and `graph TD`,
+  and `CancelFocusLanding(token)` answers false (seated: nothing is held);
+  the gate and the old model's park are released in `finally`; once the
+  new model's `DiagramStageRunsForTests == 1` and two
+  `PumpedDispatcher.Drain()` passes: `spoken()` still 1, `fellThrough()` 0,
+  `w.Announced` empty, focus on the surface, `documents.Result.Failed == 0`,
+  `LastRefreshFailed` false, `DiagramStageGateTimedOutForTests` false; with
+  `stageTwoFails` the fence is left in the unmatched shape (no
+  `ReadingDiagramElement`, the source in the TextPattern). Mutations: hold
+  `RefreshInFlight` true until stage 2 lands → at the held gate the
+  landing is still pending, `spoken() == 0` → fails; surface a stage-2
+  fault as `LastRefreshFailed` or as a fault of `RescanReadingPublication`
+  → `LastRefreshFailed` true or `Failed == 1` → fails (`stageTwoFails`).
 - Existing `ReadingDiagramTests` `:26, :73, :122, :215, :259, :328`
   adapted to the two-stage shape (`:122` and `:215` assert their final
   state after stage 2; `:259`'s pool spans both stages).
@@ -364,8 +475,10 @@ never only a child peer's `Name`. Every fact that holds the stage sets
 - Contract 40: append a record under R-10 — "a partial projection (text,
   code, math, embeds; diagrams pending) is applied; the diagram stage is
   not a refresh; a late diagram is silent; the placeholder is named
-  'Diagram, rendering'" (WD11), and a note under AR-60 that the stage
-  honours the cancellation.
+  'Diagram, rendering'; a landing a rescan reload carries (WB-9's record)
+  seats on the reloaded partial projection, and a diagram stage's failure
+  never refuses it" (WD11), and a note under AR-60 that the stage honours
+  the cancellation.
 - `w_c_matrix.md:23`: the Diagram blocks row gains the pending placeholder
   (name "Diagram, rendering", type "diagram", the source as text beside it)
   and the in-place completion (the same element; failure header, reason and
@@ -402,12 +515,22 @@ Assert-Discovered $listed @(
   'SlateWindows.Tests.ReadingDiagramTests.ASupersededDiagramStageTouchesNothing',
   'SlateWindows.Tests.ReadingDiagramTests.SvgIsDecodedOffTheDispatcher',
   'SlateWindows.Tests.ReadingFocusTests.AHeldLandingSeatsOnThePartialProjection',
+  'SlateWindows.Tests.RescanTests.ACarriedLandingSeatsOnTheReloadedPartialProjectionAndTheDiagramStageLeavesIt',
   'SlateWindows.Tests.ReadingDiagramTests.DiagramFetchFailureDegradesToSourceInRange',
   'SlateWindows.Tests.ReadingDiagramTests.UnsavedDiagramEditsNeverShowTheStaleDiagram',
+  # main's three held-landing facts, unchanged:
   'SlateWindows.Tests.RescanTests.AHeldReadingLandingSettlesWithTheRescansSilentReprojection',
   'SlateWindows.Tests.RescanTests.AFailedRescanReprojectionRefusesTheHeldLandingSilently',
   'SlateWindows.Tests.RescanTests.ACancelledRescanReprojectionStillSettlesTheHeldLanding',
-  'SlateWindows.Tests.RescanTests.ARescanReloadOfTheReadingTabWithdrawsItsHeldLandingSilently')
+  # WB-9's carried-landing facts (WB-9 replaced main's ARescanReloadOfTheReadingTabWithdrawsItsHeldLandingSilently):
+  'SlateWindows.Tests.RescanTests.ARescanReloadOfTheReadingTabCarriesItsHeldLandingToTheReloadedProjection',
+  'SlateWindows.Tests.RescanTests.ACarriedLandingIsCancelledByItsOriginalTokenAfterTheReload',
+  'SlateWindows.Tests.RescanTests.ACarriedLandingIsCancelledByItsOriginalTokenDuringTheReload',
+  'SlateWindows.Tests.RescanTests.AFailedRescanReloadRefusesTheCarriedLandingSilently',
+  'SlateWindows.Tests.RescanTests.AReloadThatBindsNoReplacementModelRefusesTheCarriedLandingOnce',
+  'SlateWindows.Tests.RescanTests.AReloadWhoseSurfaceLetsGoOfTheTabStillRefusesTheCarriedLandingOnce')
+# WB-9 must be on this chunk's base: the old pin's name must be gone, or the list above is stale
+if (($listed | ForEach-Object { ($_ -split '\(', 2)[0] }) -contains 'SlateWindows.Tests.RescanTests.ARescanReloadOfTheReadingTabWithdrawsItsHeldLandingSilently') { throw 'WB-9 is not on this base: main''s withdraw pin is still listed' }
 dotnet test $tests --no-build --configuration Release --filter $filter; Assert-Ok 'unit tests'
 $at = 'apps/slate-windows/tests/SlateWindows.AccessibilityTests/SlateWindows.AccessibilityTests.csproj'
 $atFilter = 'FullyQualifiedName~ShellAccessibilityTests.ReadingDiagram_TextIsReadableBeforeTheDiagramRenders|FullyQualifiedName~ShellAccessibilityTests.ReadingIdentityContract_ExeWindowAndSurfaceIds_AreStable|FullyQualifiedName~ShellAccessibilityTests.ReadingTextPattern_RangeFromChildResolvesEveryCustomPeer|FullyQualifiedName~ShellAccessibilityTests.ReadingView_IsTheEditorStop'
@@ -418,7 +541,7 @@ Assert-Discovered $atListed @(
   'SlateWindows.AccessibilityTests.ShellAccessibilityTests.ReadingTextPattern_RangeFromChildResolvesEveryCustomPeer',
   'SlateWindows.AccessibilityTests.ShellAccessibilityTests.ReadingView_IsTheEditorStop')
 dotnet test $at --no-build --configuration Release --filter $atFilter; Assert-Ok 'FlaUI journeys'   # NVDA closed
-$cs = @(git diff --name-only origin/main -- '*.cs') + @(git ls-files --others --exclude-standard -- '*.cs')   # Reading/ReadingContentViewModel.cs, Reading/ReadingDocumentBuilder.cs, Reading/ReadingSurface.cs, Reading/ReadingSemantics.cs, Reading/ReadingDiagramElement.cs, ReadingDiagramTests.cs, ReadingFocusTests.cs, ShellAccessibilityTests.ReadingDiagram.cs (new)
+$cs = @(git diff --name-only origin/main -- '*.cs') + @(git ls-files --others --exclude-standard -- '*.cs')   # Reading/ReadingContentViewModel.cs, Reading/ReadingDocumentBuilder.cs, Reading/ReadingSurface.cs, Reading/ReadingSemantics.cs, Reading/ReadingDiagramElement.cs, ReadingDiagramTests.cs, ReadingFocusTests.cs, RescanTests.ReadingLanding.cs, ShellAccessibilityTests.ReadingDiagram.cs (new)
 dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $cs; Assert-Ok 'dotnet format'
 ```
 
@@ -435,7 +558,8 @@ the surface without waiting for the diagram.
 
 ## Acceptance
 
-- [ ] Twelve new facts pass, seen failing first (every gate wait's result asserted, released in `finally`); the pending source and the failure header, reason and source asserted through the surface TextPattern, not only a peer's name; adapted facts green; mutations run.
+- [ ] Thirteen new facts pass, seen failing first (every gate wait's result asserted, released in `finally`); the pending source and the failure header, reason and source asserted through the surface TextPattern, not only a peer's name; an unfocused `Unmatched` removal leaves no removed element among the surface peer's children (WB-11's `InvalidateStructuralPeers()` after the removal), a text-only completion keeps the same peer; adapted facts green; mutations run.
+- [ ] WB-9's six carried-landing facts and main's three held-landing facts stay green on this chunk's base (WB-9 merged first), and the carried landing seats on a reloaded partial projection that a later stage 2 leaves alone.
 - [ ] Both discovery checks find every required fact by fully qualified name (they throw otherwise) and every Verification command exits 0.
 - [ ] New FlaUI journey green (its TextPattern assertions included); the text waits shortened.
 - [ ] Contract 40 R-10/AR-60 records appended; `w_c_matrix.md:23` and the parity note updated.
@@ -453,11 +577,19 @@ Read `Reading/ReadingContentViewModel.cs:52, 225, 841, 912-968, 1156,
 `EditorLandingSlot.cs:102-111, 354-410`, contract 40 R-10
 (`docs/plans/40_nvda_matrix_remediation_contracts.md:33`), the facts at
 `ReadingDiagramTests.cs:26-382`, `ReadingFocusTests.cs:93, 780, 892, 1286`,
-and the TextPattern read at `ReadingViewTests.cs:355-359`. Pending decision
+`RescanTests.ReadingLanding.cs:27-205` (the three held-landing facts, and
+the `:146` reload pin WB-9 replaces), `RescanTests.Round3.cs:278-306`
+(`BackgroundReadingWorkspace`, with its `hostText` argument), WB-9's spec
+(`wb09_open_handoff_and_landing_lifecycle.md`, Design #1312 and Tests: the
+carried landing and its six facts), `ReadingSurface.cs:685-719` (the
+stale-child problem a structural change must reset), and the TextPattern
+read at `ReadingViewTests.cs:355-359`. Pending decision
 WD11 (recommended: the partial projection is applied, a late diagram is
 silent, the placeholder is named "Diagram, rendering"; under the other
 answers: a held landing waits through the diagram stage with
-`RefreshInFlight` kept true, and an announced late diagram needs a new core
+`RefreshInFlight` kept true — and the two landing facts below, the held
+and the rescan-carried one, flip to seating only when stage 2 lands — and
+an announced late diagram needs a new core
 `A11yEvent` with corpus, mirrors and the Swift lane). The rule every shape
 obeys: WPF's text range excludes what an `InlineUIContainer`'s child shows
 (main's comment, `ReadingDocumentBuilder.cs:583`; codex's round-6 probe),
@@ -474,7 +606,12 @@ dispatcher decode and the caret's symbol-offset preservation stays exact;
 stage 2, only when a fence is pending, on the same worker after
 `FinishPublish`, under stage 1's generation and cancel token, waits on
 `DiagramStageGateForTests` (new `ManualResetEventSlim?`, 10 s, recording
-`DiagramStageGateTimedOutForTests`), reads `DiagramFaultForTests`, calls
+`DiagramStageGateTimedOutForTests`), reads `DiagramFaultForTests`
+(`FetchFaultForTests` stays stage 1's; a stage-2 failure is the
+`Unmatched` outcome, never `LastRefreshFailed`, and never faults the
+rescan's `RescanReadingPublication`, which completes at stage 1's
+`FinishPublish`, so it never refuses a landing nor counts as a rescan
+failure), calls
 `GetDiagramBlocks`, resolves each pending fence through new `static
 DiagramOutcome ReadingDocumentBuilder.ResolveDiagramOutcome(DiagramBlock?
 matched, string fallbackSource, ref int remainingDiagramRenderBytes)`
@@ -513,10 +650,18 @@ element has keyboard focus, else kept and renamed to the source); restore
 `Selection.Start`, `ElementEnd` for `Selection.End` when `Rendered`; offset
 k of the source `Run` when `Failed`/`Unmatched`); re-mark
 `MarkDiagramBlock` with the outcome's landing, clear the pending mark, and
-re-collect `_landmarks` (they copy their text, `:1768-1773`); WB-11's
-caches need nothing (the paragraph is a direct child of the document,
-`:213-215`; the element's peer is the same object) — call
-`InvalidateStructuralPeers()` only if the paragraph is not a direct child.
+re-collect `_landmarks` (they copy their text, `:1768-1773`). Tell the
+two kinds of completion apart: a text-only one (`Rendered`, `Failed`, a
+focused `Unmatched` — the container kept) changes no peer the surface
+exposes (the same element and peer; the paragraph a direct child of the
+document, `:213-215`) and invalidates nothing; a container removal (an
+unfocused `Unmatched`) takes the element's peer out of the surface's
+children, which WB-11's cached list and WPF's own child cache would keep
+serving (`ReadingSurface.cs:685-719`), so after `EndChange()` a completion
+that removed any container — or whose paragraph is not a direct child —
+calls WB-11's `InvalidateStructuralPeers()` once (the generation bumped,
+then the merge's reset: `UpdateLayout`, `ResetChildrenCache`, a
+synchronous `GetChildren()`, `StructureChanged`, `InvalidatePeer`).
 In `ReadingDiagramElement`, add `Complete(string description, ImageSource?
 visual)` (`Description` gains a private setter; Name; `Content` = a
 `ReadingDiagramImage` when `visual` is non-null; HelpText and tooltip
@@ -547,7 +692,12 @@ offset on `Failed`);
 (`weirdDiagram\nstuff`: the TextPattern holds "Diagram dialect not
 supported", the reason and the source; the same element named by the
 description; the paragraph equal to a fresh build);
-`ReadingDiagramTests.ANoMatchCompletionRestoresTheUnmatchedShapeUnlessThePlaceholderHasFocus`;
+`ReadingDiagramTests.ANoMatchCompletionRestoresTheUnmatchedShapeUnlessThePlaceholderHasFocus`
+(the surface peer's `GetChildren()` read before the gate holds the
+placeholder's `ReadingDiagramElementPeer`, kept as `held`; unfocused: no
+element remains, the source in the TextPattern, and `GetChildren()` holds
+no `ReadingDiagramElementPeer`, `held` among none; focused: the element
+stays focused, named the source, and `GetChildren()` still holds `held`);
 `ReadingDiagramTests.AnUnchangedDiagramStaysCompleteAcrossARefresh` (a task
 toggle re-projects with the rendered element already in stage 1, no new
 stage-2 run, the caret on the same character);
@@ -556,7 +706,18 @@ stage-2 run, the caret on the same character);
 during the gate retires the stage); `ReadingDiagramTests.SvgIsDecodedOffTheDispatcher`
 (`DiagramRenderProbeForTests` sees a non-dispatcher thread);
 `ReadingFocusTests.AHeldLandingSeatsOnThePartialProjection` (seats before
-the gate releases); FlaUI
+the gate releases);
+`RescanTests.ACarriedLandingSeatsOnTheReloadedPartialProjectionAndTheDiagramStageLeavesIt`
+(`[Theory]` over `stageTwoFails`, on WB-9's harness: a held landing, then
+`host.md` rewritten outside Slate with "Changed outside Slate." and a
+Mermaid fence, the reloaded model's `DiagramStageGateForTests` (and, when
+`stageTwoFails`, a throwing `DiagramFaultForTests`) set in
+`ReadingCreatedForTests`; with the gate held the carried landing has
+seated — `spoken() == 1`, `fellThrough() == 0`, focus on the surface,
+`CancelFocusLanding(token)` false; after the gate's release and stage 2:
+still `spoken() == 1`, `fellThrough() == 0`, nothing announced,
+`documents.Result.Failed == 0`, `LastRefreshFailed` false, the fence
+unmatched when `stageTwoFails`); FlaUI
 `ShellAccessibilityTests.ReadingDiagram_TextIsReadableBeforeTheDiagramRenders`
 (a cold Mermaid fence and an unsupported one: math and first paragraph
 appear before any diagram image; placeholder named; image within 300 s;
@@ -567,19 +728,39 @@ the text waits at `ShellAccessibilityTests.cs:1483, 1813, 1832` shortened.
 Mutations: single-stage fetch back; the source in the element's `Content`;
 re-apply the whole document; the source `Run` left after `Rendered`; a new
 paragraph; no anchor remap; failure text in a `TextBlock`; the container
-always removed; the carried artifacts dropped; decode in `Build`. Local
+always removed; no `InvalidateStructuralPeers()` after an unfocused
+removal (the removed peer stays among the surface's children); the carried
+artifacts dropped; decode in `Build`; `RefreshInFlight` held through stage
+2 (the carried landing has not seated at the gate); a stage-2 fault
+surfaced as `LastRefreshFailed` or a faulted `RescanReadingPublication`.
+Local
 loop, each native command followed by a throw on a nonzero
 `$LASTEXITCODE`: bindings regenerated
 (`$env:CARGO_TARGET_DIR='C:\dev\slate\target-wb20'`), Release build,
 `dotnet test --list-tests` over `FullyQualifiedName~SlateWindows.Tests.ReadingDiagramTests
 | …ReadingFocusTests | …ReadingViewTests | …ReadingMathTests |
-…RescanTests | …ReadingDoctrineCensusTests` throwing unless the twelve
+…RescanTests | …ReadingDoctrineCensusTests` throwing unless the thirteen
 facts, `DiagramFetchFailureDegradesToSourceInRange`,
-`UnsavedDiagramEditsNeverShowTheStaleDiagram` and the four
-`RescanTests.ReadingLanding.cs` landing facts are listed by fully qualified
-name; the run; the same for the accessibility project's four reading
-journeys (NVDA closed); the format gate over the touched `.cs` files.
-Registers: append the R-10 record and an AR-60 note to
+`UnsavedDiagramEditsNeverShowTheStaleDiagram` and the nine
+`RescanTests.ReadingLanding.cs` landing facts are listed by fully
+qualified name — main's three held-landing facts
+(`AHeldReadingLandingSettlesWithTheRescansSilentReprojection`,
+`AFailedRescanReprojectionRefusesTheHeldLandingSilently`,
+`ACancelledRescanReprojectionStillSettlesTheHeldLanding`) and WB-9's six
+(`ARescanReloadOfTheReadingTabCarriesItsHeldLandingToTheReloadedProjection`,
+`ACarriedLandingIsCancelledByItsOriginalTokenAfterTheReload`,
+`ACarriedLandingIsCancelledByItsOriginalTokenDuringTheReload`,
+`AFailedRescanReloadRefusesTheCarriedLandingSilently`,
+`AReloadThatBindsNoReplacementModelRefusesTheCarriedLandingOnce`,
+`AReloadWhoseSurfaceLetsGoOfTheTabStillRefusesTheCarriedLandingOnce`) —
+and throwing if main's replaced `ARescanReloadOfTheReadingTabWithdrawsItsHeldLandingSilently`
+is still listed (WB-9 is not on the base); the run; the same for the
+accessibility project's four reading journeys (NVDA closed); the format
+gate over the touched `.cs` files. Registers: append the R-10 record (the
+partial projection applied, the stage not a refresh, the late diagram
+silent, the placeholder's name, a rescan-carried landing seated on the
+reloaded partial projection and never refused by a stage-2 failure) and
+an AR-60 note to
 `docs/plans/40_nvda_matrix_remediation_contracts.md`; amend
 `docs/plans/18_windows_port/w_c_matrix.md:23` (the pending placeholder with
 its source as text beside it; in-place completion); note progressive

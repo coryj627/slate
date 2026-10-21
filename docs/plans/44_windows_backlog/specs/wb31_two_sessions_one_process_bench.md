@@ -4,10 +4,14 @@ Issues: Refs #1484 (closes by hand after a macOS measurement confirms
 the remedy, or the owner withdraws the macOS observation — WD21; §5
 closure matrix). Size M (diagnose first). Lanes: rust. AT: none. Wave:
 any free slot. Depends on: nothing. Parallel with: anything (touches
-`db.rs`, `session.rs`'s config, `benches/` and new test modules; the
-remedy branch also retypes `session.rs`'s `conn` field and rewrites its
-seven `lock_cancellable(&self.conn, …)` lines, leaving the 98 direct
-`self.conn.lock()` lines textually unchanged).
+`db.rs`, `session.rs`'s config, the oplog compactor's connection
+ownership — `compaction_worker_loop`'s local `worker_conn` becomes a
+session-shared slot, `:1686`, `:2695-2722` — `benches/` and new test
+modules; the remedy branch also retypes `session.rs`'s `conn` field,
+rewrites its seven `lock_cancellable(&self.conn, …)` lines and
+`finish_structural_move`'s guard parameter (`:16965`), and wraps scans in
+an activity guard, leaving the 98 direct `self.conn.lock()` lines
+textually unchanged).
 Decision: WD21 (pending; recommended "conditional: if the bench proves
 the shared LRU, release the idle session's cache; if it refutes it, the
 issue stays open with the measurements; a Windows bench that does not
@@ -41,7 +45,12 @@ Verified against the worktree; the plan's lines hold.
   "Desktop default 4096 (~32 MB); mobile 512", default `:262`, test
   `:283`). A session opens a second, worker connection lazily
   (`open_worker_connection` `:1600`, used `:1752-1753`), so two sessions
-  can hold four connections.
+  can hold four connections. It is the oplog compactor's, not the
+  scan's: `compaction_worker_loop` (`:1671`, run on the
+  `slate-oplog-compactor` thread spawned at `:2695-2722`) keeps it in a
+  local `let mut worker_conn: Option<Connection> = None;` (`:1686`, "owned
+  by the worker thread for its lifetime"), so nothing on the session can
+  read its counters or release it today.
 - **No housekeeping tick exists.** `session/watch.rs:14-22`: the
   coalescer's thread "sleeps on a condvar with a deadline (no polling)",
   is owned by the session, and exists only once watching starts; a bare
@@ -81,7 +90,10 @@ Verified against the worktree; the plan's lines hold.
   `:6877`, `:13239`, `:14999`, `:16119`, `:16271`). `lock_cancellable`
   (`session/trash_cancellation.rs:16-37`) is generic over any
   `Mutex<T>` and also guards `structural_operation`, so it is neither the
-  connection's only acquisition path nor specific to it. The session
+  connection's only acquisition path nor specific to it. One function
+  names the guard type: `finish_structural_move(&self, mut conn:
+  std::sync::MutexGuard<'_, Connection>, …)` (`:16965`); no other site
+  under `src` spells `MutexGuard<…Connection>`. The session
   tests lock `session.conn` 253 more times. `SessionConfig::new`
   (`:259`) has no `cfg(test)` defaults today; `default_trash`
   (`vault/trash_handoff.rs:610-620`) is the crate's precedent for a
@@ -117,7 +129,19 @@ alone figure while the newer's is unchanged.
    seams): `{ used, used_shared, hit, miss, write, spill }` for the main
    connection, and `worker: Option<…>` for the worker connection when
    open; `pub fn process_cache_status() -> ProcessCacheStatus { memory_used,
-   pagecache_overflow }` (new, `db.rs`).
+   pagecache_overflow }` (new, `db.rs`). To read the worker's counters at
+   all, the compactor's connection moves (both branches) out of
+   `compaction_worker_loop`'s local (`session.rs:1686`) into a new session
+   field `worker_conn: Arc<Mutex<Option<Connection>>>` that `open_in`
+   creates before spawning `slate-oplog-compactor` (`:2695-2722`) and
+   passes in as a new parameter. The compactor takes that lock per job
+   (after `rx.recv()` returns, dropped before the next `recv`), never
+   across the wait, and opens the connection into the `Option` on first
+   need, as today. `db_cache_status` reads the main connection, drops
+   it, then reads the worker slot; it never holds both. A `#[cfg(test)]`
+   seam, `VaultSession::open_worker_connection_for_tests()` (new), opens
+   the connection into that slot through `open_worker_connection`, as
+   the compactor does, so facts need not provoke a compaction.
 2. **The bench** `benches/two_sessions_bench.rs` (new; `[[bench]]` entry):
    two identical 10k vaults via `common::generate_vault`; open A, scan,
    rescan 8× (median); open B, scan; rescan A 8×; rescan B 8×; close B;
@@ -141,32 +165,59 @@ alone figure while the newer's is unchanged.
    branch); while ignored it runs only by hand, as Verification does.
 4. **The remedy, conditional (WD21), with its own scheduler.** If the
    counters prove the shared LRU:
-   - **One way to the connection, recording activity.**
-     `session/conn_slot.rs` (new): `pub(crate) struct ConnSlot { inner:
-     Mutex<Connection>, last_activity_ms: AtomicI64 }` with
-     `fn lock(&self) -> LockResult<MutexGuard<'_, Connection>>` (stamps
-     activity, then `inner.lock()` — the same return type as
-     `Mutex::lock`, so the 98 direct `self.conn.lock()` sites and the
-     253 test sites compile unchanged and are all recorded),
-     `fn lock_cancellable(&self, cancel: &CancelToken) ->
-     Result<MutexGuard<'_, Connection>, VaultError>` (stamps activity,
-     then the generic helper's loop), `pub(super) fn
-     try_lock_without_activity(&self) -> Option<MutexGuard<'_,
-     Connection>>` (the release path's only door: `None` while anyone
-     holds the connection — a held connection is in use, so the release
-     skips it rather than wait and then free a cache a long scan has
-     just warmed) and `fn idle_since_ms(&self) -> i64`. `VaultSession.conn` becomes `ConnSlot`
-     (`session.rs:1291`, `:2729`); `inner` is private to `conn_slot.rs`,
-     so the type system is the census: nothing reaches the
-     `Mutex<Connection>` except through these methods. Migration: the
-     seven `lock_cancellable(&self.conn, cancel)` sites become
+   - **One way to each connection, recording when its use ENDS.** An
+     operation that holds a connection longer than the interval must
+     not become releasable the moment it lets go: the idle interval
+     starts when a use completes, not when it began.
+     `session/conn_slot.rs` (new): `pub(crate) struct ConnSlot<C =
+     Connection> { inner: Mutex<C>, last_activity_ms: AtomicI64, active:
+     AtomicUsize }` and its guard `pub(crate) struct ConnGuard<'a, C =
+     Connection> { guard: MutexGuard<'a, C>, slot: &'a ConnSlot<C> }`
+     (new; `Deref`/`DerefMut` to `C`; its `Drop` stamps
+     `last_activity_ms` before the inner guard unlocks, so a release
+     that wins the lock next always sees the completion). Methods:
+     `fn lock(&self) -> LockResult<ConnGuard<'_, C>>` (stamps, then
+     `inner.lock()`, a poisoned lock's guard wrapped the same way — the
+     `LockResult` shape `Mutex::lock` has, so the 98 direct
+     `self.conn.lock()` sites and the 253 test sites compile unchanged
+     and are all recorded at both ends; the one function that names the
+     guard type, `finish_structural_move` at `:16965`, takes
+     `ConnGuard<'_>`), `fn lock_cancellable(&self, cancel: &CancelToken)
+     -> Result<ConnGuard<'_, C>, VaultError>` (stamps, then the generic
+     helper's loop on `inner`, wrapped), `fn activity(&self) ->
+     ActivityGuard<'_, C>` (new; increments `active` and stamps; its
+     `Drop` stamps, then decrements — an operation that is in progress
+     without holding the lock, such as a scan between its connection
+     uses), `pub(super) fn try_lock_without_activity(&self) ->
+     Option<MutexGuard<'_, C>>` (the release path's only door: `None`
+     while anyone holds the connection — a held connection is in use,
+     so the release skips it rather than wait and then free a cache a
+     long scan has just warmed), `pub(super) fn cache_counters(&self)`
+     (reads `sqlite3_db_status` under `inner` without stamping and
+     returns numbers, never a guard, so `db_cache_status` observes a slot
+     without making it look busy), `fn is_active(&self) -> bool` and
+     `fn idle_since_ms(&self) -> i64` (the last stamp). Time is
+     `conn_slot::now_ms() -> i64` (new): milliseconds since a
+     process-wide `LazyLock<Instant>`, monotonic; under `cfg(test)`,
+     `set_test_clock_ms(Option<i64>)` (new) pins it for the registry
+     facts. `VaultSession.conn` becomes `ConnSlot` (`session.rs:1291`,
+     `:2729`) and the shared worker slot from step 1 becomes
+     `Arc<ConnSlot<Option<Connection>>>`; the compactor's per-job lock
+     is therefore a `ConnGuard` too, so a long compaction pass is
+     recorded at its end. `inner` is private to `conn_slot.rs`, so the
+     type system is the census: nothing reaches either connection except
+     through these methods. Migration: the seven
+     `lock_cancellable(&self.conn, cancel)` sites become
      `self.conn.lock_cancellable(cancel)` (the generic helper stays for
-     `structural_operation`). Scan and rescan starts also stamp (the
-     worker connection is the scan's own).
+     `structural_operation`). `scan_initial` and `rescan` hold
+     `self.conn.activity()` for their whole run, so a scan whose
+     non-database phase outlasts the interval is not released mid-scan,
+     and its idle interval starts when it returns.
    - **The registry and its thread.** A process-wide `SessionRegistry`
      (new, `session/registry.rs`:
      `LazyLock<Mutex<Vec<Weak<SessionCacheHandle>>>>`, each entry a weak
-     handle to a session's `ConnSlot` and its worker connection) that
+     handle to a session's main `ConnSlot` and its worker
+     `ConnSlot<Option<Connection>>`) that
      `open_in` registers in — only when `idle_cache_release_ms` is
      nonzero — and `Drop` removes from; a single lazily started daemon
      thread `slate-cache-release` (new; parked on a condvar with a
@@ -175,18 +226,27 @@ alone figure while the newer's is unchanged.
      default 30 000 desktop, 0 = never; **0 under `cfg(test)`**, as
      `default_trash` gives core's test build its scratch bin, so only the
      facts that opt in register and the rest of the suite never shares
-     the registry) and, through `try_lock_without_activity`, calls
-     `sqlite3_db_release_memory` on the main and worker connections of
-     every session idle longer than the interval **only while two or more
-     sessions are registered** (a lone session is never released, so the
-     one-session case is untouched by construction).
+     the registry) and runs one `release_pass()` (new, `pub(super)` in
+     `registry.rs`; the facts call it directly). A pass does nothing
+     unless two or more sessions are registered (a lone session is never
+     released, so the one-session case is untouched by construction);
+     otherwise, for each main and worker slot, it takes
+     `try_lock_without_activity` and, under that guard, re-reads
+     `is_active()` and `idle_since_ms()`, and calls
+     `sqlite3_db_release_memory` only when no activity guard is alive
+     and `now_ms() - idle_since_ms() >= idle_cache_release_ms` — a slot
+     is idle a full interval after its last use ENDED.
    - **Additive FFI** `VaultSession::release_idle_cache()` (new) for a
-     host that switches vaults.
+     host that switches vaults: it runs the pass's per-session step on
+     this session's two slots without the idle and two-session tests
+     (still skipping a held slot), through `registry.rs`, so
+     `try_lock_without_activity` keeps its one file of callers.
 
-   If refuted: no remedy — no `ConnSlot`, no registry, no
-   `release_idle_cache`; the PR ships the bench, the counters, the two
-   always-on facts and the ignored guard's measurement, and the issue
-   comment says what the numbers rule out.
+   If refuted: no remedy — no `ConnSlot`, no guards, no registry, no
+   `release_idle_cache`; the PR ships the bench, the counters (with step
+   1's shared worker slot as a plain `Arc<Mutex<Option<Connection>>>`),
+   the two always-on facts and the ignored guard's measurement, and the
+   issue comment says what the numbers rule out.
 5. **Not chosen and why:** unsetting `ENABLE_MEMORY_MANAGEMENT` needs a
    libsqlite3-sys build-flag override in every consumer's build
    (`generate-bindings.ps1`, the Swift build) with no per-session control;
@@ -200,7 +260,7 @@ alone figure while the newer's is unchanged.
 | Fact | Asserts | Mutation |
 |---|---|---|
 | `benches/two_sessions_bench.rs` compiles under `cargo bench --workspace --no-run` | the bench target builds | drop the `[[bench]]` entry |
-| `two_sessions.rs`: `db_cache_status_reads_this_connections_counters` | session A after a scan: `used > 0`, `miss > 0`; a repeated identical query raises A's `hit`; a freshly opened session B in the same process reads `used` below A's (the counters are per connection); `worker` is `None` until the worker connection opens and `Some` after | read the process-wide `sqlite3_status64` for both connections (A and B then read equal) |
+| `two_sessions.rs`: `db_cache_status_reads_this_connections_counters` | session A after a scan: `used > 0`, `miss > 0`; a repeated identical query raises A's `hit`; a freshly opened session B in the same process reads `used` below A's (the counters are per connection); `worker` is `None` until the worker connection opens in the shared worker slot (through `open_worker_connection_for_tests()`) and `Some` after | read the process-wide `sqlite3_status64` for both connections (A and B then read equal) |
 | `process_cache_status_reads_the_process_counters` | `memory_used > 0` with a session open, and it rises across A's first scan | return the main connection's `used` instead |
 | `perf_guard_two_sessions_do_not_evict_each_others_cache` (`#[ignore]` until the remedy; then enabled) | ratio older-with-newer / older-alone ≤ 1.25; A's `used` holds between rescans | (remedy branch) remove the release |
 
@@ -215,14 +275,17 @@ run only when it did):**
 | `a_lone_session_is_never_released` | one opted-in session idle past the interval: `used` unchanged | release regardless |
 | `a_direct_lock_public_read_resets_the_idle_deadline` | two opted-in sessions, interval 200 ms: `idle_since_ms()` rises across a call to `indexed_content_hashes` (a direct-`self.conn.lock()` read on main, `session.rs:3347`); calling it and `change_feed_window` (`:3394`) every 50 ms for 600 ms keeps A's `used` unreleased; after the calls stop, A is released within an asserted 2 s wait | stamp activity only in `ConnSlot::lock_cancellable` (the round-5 design: direct-lock reads look idle) |
 | `a_held_connection_is_never_released_under_its_user` | while a fact holds A's connection through `lock()` past the interval, the release skips A (`try_lock_without_activity` is `None`), and A's `used` is unchanged when the guard drops | make the release path block on `lock()` instead |
-| `only_the_release_path_locks_without_recording_activity` (census) | in `src`, `try_lock_without_activity(` appears only in `session/conn_slot.rs` (its definition) and `session/registry.rs` (its one caller); every other path to the connection is a `ConnSlot` method that stamps activity, which the private `inner` field enforces at compile time | call `try_lock_without_activity` from a public read |
+| `a_long_operation_earns_a_full_idle_interval_after_it_releases_its_connection` | deterministic, on the pinned clock (`set_test_clock_ms`, reset to `None` in a drop guard; no sleeps, no waits): two opted-in sessions A and B with `idle_cache_release_ms` = I = 1 000, both scanned at clock 0, A's compactor connection opened through `VaultSession::open_worker_connection_for_tests()` (step 1's seam). Three parts, each at a fresh base T (0, 10 I, 20 I), each re-warming the slot it tests with a query at T and recording its `used`. (a) Hold `A.conn.lock()` from T to T + 5 I, running a `release_pass()` at T + 3 I under the hold; after the guard drops at T + 5 I, A's main `used` still equals the recorded value; passes at T + 5 I and T + 6 I − 1 leave it unchanged, and a pass at T + 6 I drops it to at most a tenth. (b) The same through A's worker slot `lock()`, read through `db_cache_status().worker`. (c) Hold `A.conn.activity()` (no lock) from T to T + 5 I, the pass at T + 3 I under it: the same outcomes on A's main `used`. Counters are read only while the fact holds no guard (a read under its own guard would wait on itself), and reading them never moves a deadline (`cache_counters` does not stamp) | stamp only when a guard is taken (round 6's design) → (a) releases at T + 5 I, right after the drop; the worker slot's guard without the drop stamp → (b) releases at T + 5 I; `ActivityGuard` stamping only when created → (c) releases at T + 5 I; the pass ignoring `is_active()` → (c) releases at T + 3 I |
+| `only_the_release_path_locks_without_recording_activity` (census) | in `src`, `try_lock_without_activity(` appears only in `session/conn_slot.rs` (its definition) and `session/registry.rs` (its callers: `release_pass` and `release_idle_cache`'s step); every other path to either connection is a `ConnSlot` method whose guard stamps when taken and when dropped, which the private `inner` field enforces at compile time; `cache_counters` returns numbers, never a guard | call `try_lock_without_activity` from a public read |
 | `perf_guard_the_only_session_in_a_process_is_not_slowed_by_the_release` | alone-with-registry / alone ≤ 1.10 | release on every tick |
 | uniffi: `release_idle_cache_is_additive` | the method exists on the binding and a call on an open session returns | drop the export |
 
 The registry facts serialise on a `static REGISTRY_FACTS: Mutex<()>`
-(new, in `registry.rs`'s tests), since the registry is process-wide.
-Every wait in these facts is a bounded wait whose result is asserted,
-released in `finally`.
+(new, in `registry.rs`'s tests), since the registry and the test clock
+are process-wide. The release thread may run its own passes during the
+clock-pinned fact; a pass's decisions are a function of the pinned
+clock, so the thread's passes agree with the fact's. Every wait in these
+facts is a bounded wait whose result is asserted, released in `finally`.
 
 ## Docs and registers
 
@@ -275,7 +338,7 @@ if (-not $remedy) {
 } else {
     $remedyFacts = @('release_idle_cache_drops_this_connections_cache', 'an_idle_session_releases_its_cache_and_rescans_correctly')
     Assert-Facts 'slate-core' 'two_sessions' $remedyFacts
-    Assert-Facts 'slate-core' 'registry' @('the_release_thread_starts_with_the_second_session_and_stops_with_the_last', 'a_lone_session_is_never_released', 'a_direct_lock_public_read_resets_the_idle_deadline', 'a_held_connection_is_never_released_under_its_user', 'only_the_release_path_locks_without_recording_activity')
+    Assert-Facts 'slate-core' 'registry' @('the_release_thread_starts_with_the_second_session_and_stops_with_the_last', 'a_lone_session_is_never_released', 'a_direct_lock_public_read_resets_the_idle_deadline', 'a_held_connection_is_never_released_under_its_user', 'a_long_operation_earns_a_full_idle_interval_after_it_releases_its_connection', 'only_the_release_path_locks_without_recording_activity')
     cargo test -p slate-core --locked registry; Assert-Ok 'registry'
     foreach ($perf in $guard, 'perf_guard_the_only_session_in_a_process_is_not_slowed_by_the_release') {
         Assert-Facts 'slate-core' $perf @($perf)
@@ -308,12 +371,18 @@ FFI method ships. AT: none.
       `BENCHMARKS.md`; the `build.rs` line is recorded.
 - [ ] Both branches: `db_cache_status`, `process_cache_status` and their
       two always-on facts, which release nothing, discovered and green;
-      the guard's measured ratio in its doc and the PR body.
+      the compactor's connection in the session's shared worker slot,
+      taken per job; the guard's measured ratio in its doc and the PR
+      body.
 - [ ] The mechanism is proven or refuted by the counters named in
       Reference, stated in the PR body and on #1484.
-- [ ] If proven: `ConnSlot` is the only way to the session's connection
-      (the seven `lock_cancellable` sites migrated, every direct
-      `self.conn.lock()` now recorded), the registry, the release thread,
+- [ ] If proven: `ConnSlot` is the only way to the session's main and
+      worker connections (the seven `lock_cancellable` sites migrated,
+      every direct `self.conn.lock()` and every compactor job now
+      recorded when its guard is taken and when it drops, scans held
+      under `activity()`), an operation longer than the interval is
+      released no sooner than a full interval after it lets go (the
+      clock-pinned fact), the registry, the release thread,
       `release_idle_cache`, the remedy-only facts and the enabled guards
       are green, the guards are in `windows.yml`'s skip list and
       `rust.yml`'s isolated steps; WB-0 files the mac follow-up.
@@ -335,8 +404,12 @@ commit is replaced by the build-flag override in every consumer's build
 or by a per-session `cache_size` rule, gated by the same before/after
 bench). Read `db.rs:236-260`, `:395-432`, `session.rs:198-210`,
 `:255-290`, `:1288-1295` (`conn: Mutex<Connection>`), `:1600-1610`,
-`:2624-2645`, `:2729`, `:3334-3400` (three public reads that lock
-`self.conn` directly), `:22300-22305` (the test module list),
+`:1665-1690` (`compaction_worker_loop` and its local `worker_conn`),
+`:1745-1860` (the compactor's uses of it), `:2624-2645`, `:2695-2729`
+(the compactor's spawn and the session's construction), `:3334-3400`
+(three public reads that lock `self.conn` directly), `:16960-16970`
+(`finish_structural_move`'s guard parameter), `:22300-22305` (the test
+module list),
 `session/trash_cancellation.rs:16-37` (the generic `lock_cancellable`,
 also used for `structural_operation`), `session/directory_page.rs:361`,
 `session/watch.rs:14-22` (no tick exists), `vault/trash_handoff.rs:610-620`
@@ -345,37 +418,75 @@ also used for `structural_operation`), `session/directory_page.rs:361`,
 `link_pass.rs:370-470`, `rust.yml:150-165`, `:265-292`,
 `windows.yml:335-341`, `Cargo.toml:22-30`. The connection census: 98
 direct `.conn.lock()` sites (97 in `session.rs`, one in
-`directory_page.rs`) and 7 `lock_cancellable(&self.conn, cancel)` sites.
+`directory_page.rs`) and 7 `lock_cancellable(&self.conn, cancel)` sites;
+one function names the guard type, `finish_structural_move(&self, mut
+conn: std::sync::MutexGuard<'_, Connection>, …)` (`:16965`). The worker
+connection is the oplog compactor's, a local `Option<Connection>` of
+`compaction_worker_loop` (`:1686`) on the `slate-oplog-compactor`
+thread, which no session field reaches today.
 
 Build, both branches: the counter seams `VaultSession::db_cache_status()
 -> DbCacheStatus` (new; `CACHE_USED`, `CACHE_USED_SHARED`, `CACHE_HIT`,
 `CACHE_MISS`, `CACHE_WRITE`, `CACHE_SPILL` for the main connection and
 `worker: Option<…>`) and `db::process_cache_status() ->
-ProcessCacheStatus` (new; `MEMORY_USED`, `PAGECACHE_OVERFLOW`);
-`benches/two_sessions_bench.rs` with its `[[bench]]` entry; the always-on
-facts and the ignored guard. Then, only if A's `CACHE_USED` falls and
-`CACHE_MISS` rises while B is open and the process total plateaus near
-one cache, the remedy: `session/conn_slot.rs`'s `ConnSlot` (new; private
-`inner: Mutex<Connection>` and `last_activity_ms`; `lock()` with
-`Mutex::lock`'s return type, stamping activity, so every direct site is
-recorded unchanged; `lock_cancellable(cancel)`, to which the seven sites
-migrate; `try_lock_without_activity()` for the release path alone,
-`None` while the connection is held; `idle_since_ms()`), with
-`VaultSession.conn: ConnSlot`; `session/registry.rs` (`SessionRegistry`
-of weak handles, registering only sessions whose
+ProcessCacheStatus` (new; `MEMORY_USED`, `PAGECACHE_OVERFLOW`); the
+compactor's connection moved into a new session field `worker_conn:
+Arc<Mutex<Option<Connection>>>` created before the compactor spawns and
+passed to `compaction_worker_loop` as a new parameter, locked per job
+(never across `rx.recv()`), opened into the `Option` on first need as
+today, so `db_cache_status` can read it (main first, dropped, then the
+worker; never both held), and the `#[cfg(test)]` seam
+`VaultSession::open_worker_connection_for_tests()` (new; opens it into
+the slot through `open_worker_connection`, as the compactor does);
+`benches/two_sessions_bench.rs` with its
+`[[bench]]` entry; the always-on facts and the ignored guard. Then, only
+if A's `CACHE_USED` falls and `CACHE_MISS` rises while B is open and the
+process total plateaus near one cache, the remedy, whose rule is that a
+connection's idle interval starts when a use ENDS (otherwise an
+operation longer than the interval is protected while it holds the
+connection and released on the first tick after it lets go, discarding
+the cache it just warmed): `session/conn_slot.rs`'s `ConnSlot<C =
+Connection>` (new; private `inner: Mutex<C>`, `last_activity_ms:
+AtomicI64`, `active: AtomicUsize`) and `ConnGuard<'a, C>` (new; derefs to
+`C`; its `Drop` stamps before the inner guard unlocks); `lock() ->
+LockResult<ConnGuard<'_, C>>`, stamping when taken and, through the
+guard, when dropped, so every direct site is recorded at both ends
+unchanged (`finish_structural_move` takes `ConnGuard<'_>`);
+`lock_cancellable(cancel) -> Result<ConnGuard<'_, C>, VaultError>`, to
+which the seven sites migrate; `activity() -> ActivityGuard<'_, C>`
+(new; counts as in use and stamps when created and when dropped), held
+by `scan_initial` and `rescan` for their whole run;
+`try_lock_without_activity() -> Option<MutexGuard<'_, C>>` for the
+release path alone, `None` while the connection is held;
+`cache_counters()`, numbers read without stamping, for
+`db_cache_status`; `is_active()`; `idle_since_ms()`; time from
+`conn_slot::now_ms()` (new; monotonic ms since a process-wide
+`LazyLock<Instant>`; `#[cfg(test)] set_test_clock_ms(Option<i64>)` pins
+it). `VaultSession.conn: ConnSlot` and `worker_conn:
+Arc<ConnSlot<Option<Connection>>>`, so every compactor job is a
+`ConnGuard` too. `session/registry.rs` (`SessionRegistry` of weak
+handles to both slots, registering only sessions whose
 `SessionConfig.idle_cache_release_ms` (new; 30 000 desktop, 0 = never, 0
 under `cfg(test)`) is nonzero; the `slate-cache-release` thread parked on
 a condvar, started with the second registered session and joined after
-the last, releasing only idle, unheld sessions and only while two or
-more are registered); and the additive FFI `release_idle_cache()`. If
-refuted: none of the remedy ships.
+the last, running `release_pass()` (new, `pub(super)`), which while two
+or more sessions are registered takes each slot by
+`try_lock_without_activity` and, re-reading under that guard, releases it
+only when no activity guard is alive and `now_ms() - idle_since_ms() >=
+idle_cache_release_ms`); and the additive FFI `release_idle_cache()`,
+running the pass's per-session step on this session's slots (no idle or
+two-session test, a held slot still skipped) through `registry.rs`. If
+refuted: none of the remedy ships; the shared worker slot stays a plain
+`Arc<Mutex<Option<Connection>>>`.
 
 Facts (mutation in brackets), seen failing first.
 Always on, both branches:
 - `db_cache_status_reads_this_connections_counters`: after a scan A's
   `used > 0` and `miss > 0`, a repeated query raises `hit`, a fresh B
-  reads `used` below A's, `worker` is `None` then `Some` [read the
-  process-wide status for both].
+  reads `used` below A's, `worker` is `None` until
+  `open_worker_connection_for_tests()` opens the worker connection in
+  the shared slot and `Some` after [read the process-wide status for
+  both].
 - `process_cache_status_reads_the_process_counters`: `memory_used > 0`
   and rising across A's first scan [return a connection's `used`].
 - `perf_guard_two_sessions_do_not_evict_each_others_cache`: ignored with
@@ -398,8 +509,25 @@ Remedy only:
   2 s once they stop [stamp only in `lock_cancellable`].
 - `a_held_connection_is_never_released_under_its_user` [block on `lock()`
   in the release].
+- `a_long_operation_earns_a_full_idle_interval_after_it_releases_its_connection`
+  (deterministic: the clock pinned by `set_test_clock_ms`, reset in a
+  drop guard; no sleeps): two opted-in sessions with I = 1 000 scanned at
+  clock 0, A's compactor connection opened by
+  `VaultSession::open_worker_connection_for_tests()`; at bases T = 0,
+  10 I, 20 I, re-warm the slot under test at T, record its `used`, and
+  hold (a) `A.conn.lock()`, (b) A's worker slot `lock()`, (c)
+  `A.conn.activity()` from T to T + 5 I with a `release_pass()` at
+  T + 3 I under the hold; after the drop its `used` still equals the
+  recorded value, passes at T + 5 I and T + 6 I − 1 leave it, and a pass
+  at T + 6 I drops it to at most a tenth (counters read only while the
+  fact holds no guard) [stamp only when taken → released at T + 5 I; the
+  worker guard without its drop stamp → (b) at T + 5 I; `ActivityGuard`
+  stamping only when created → (c) at T + 5 I; the pass ignoring
+  `is_active()` → (c) at T + 3 I].
 - `only_the_release_path_locks_without_recording_activity` (census):
-  `try_lock_without_activity(` only in `conn_slot.rs` and `registry.rs`
+  `try_lock_without_activity(` only in `conn_slot.rs` (definition) and
+  `registry.rs` (`release_pass` and `release_idle_cache`'s step); every
+  other door is a stamping guard; `cache_counters` returns numbers
   [call it from a public read].
 - `perf_guard_the_only_session_in_a_process_is_not_slowed_by_the_release`:
   ≤ 1.10 [release every tick].

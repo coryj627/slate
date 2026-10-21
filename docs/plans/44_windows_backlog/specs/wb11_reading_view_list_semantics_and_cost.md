@@ -51,7 +51,12 @@ hold.
   4,000). Both call sites of `InvalidateAutomationChildren()` (`:696`) —
   the merge `:439` and the streamed append `Model_BlocksAppended` `:366` —
   change the document's lists. Budget `ReadingContentViewModel.cs:52`
-  `MaximumRenderedBlocks = 2_000`. Precedent for a weak peer registry:
+  `MaximumRenderedBlocks = 2_000`, applied at `:1590-1596` to the whole
+  projection — core makes every list item its own block
+  (`reading.rs:90`), so the cap counts items, headings and paragraphs
+  alike; past it the first 2,000 render and a degraded notice ("Reading
+  view shows the first 2,000 blocks of this note…", `:1792-1804`) ends the
+  document. Precedent for a weak peer registry:
   `Canvas/CanvasRendererView.cs:525-527` (`Dictionary<CanvasPeerKey,
   WeakReference<CanvasCardAutomationPeer>>`) with `PeerFor` (`:568-595`).
 - **#1330:** `ReadingSurface.cs:30` is a read-only `RichTextBox`;
@@ -117,12 +122,19 @@ walking the collection (measured 2026-10-21 on this machine with a scratch
 WPF probe: 2,000 reads of `Count` take 88 ms on a 1,000-item list, 176 ms
 on 2,000 and 354 ms on 4,000), so a per-query count check would keep every
 query linear. The snapshot is
-dropped only by `InvalidateStructuralPeers()` (6): the document changes
-only by a merge or a streamed append, and both call it; (3) `GetNameCore`
+dropped only by `InvalidateStructuralPeers()` (6), so every change to the
+document's blocks goes through it — the merge, the streamed append and
+the model-switch clear today, WB-20's diagram-container removal later;
+(3) `GetNameCore`
 caches the trimmed text per peer and clears it in
 `InvalidateStructuralPeers()`; (4) `ReadingSurfacePeer.GetChildrenCore`
-caches its structural list per structural generation and drops it in
-`InvalidateStructuralPeers()` before `ResetChildrenCache`;
+caches its whole child list — `base.GetChildrenCore()`'s peers for
+embedded elements (`InlineUIContainer`/`BlockUIContainer` children:
+diagram, math and embed elements, check boxes) and hyperlinks, plus the
+structural peers `AppendStructural` adds — per structural generation, and
+drops it in `InvalidateStructuralPeers()` before `ResetChildrenCache`, so
+any change that adds or removes an embedded element, a hyperlink or a
+block must call that entry;
 (5) `CensusDiag` formatting is gated: `ReadingSurface.CensusDiagEnabled`
 (from the existing switch `:732` reads) is checked before the
 interpolated string is built. (6) One explicit invalidation entry:
@@ -133,13 +145,24 @@ every list peer's snapshot and the cached names) and runs today's
 today's `InvalidateAutomationChildren()` call sites — the merge
 (`ApplyBuiltDocument`, `:439`) and the streamed append
 (`Model_BlocksAppended`, `:366`, which can append items to a list opened
-in an earlier chunk, `ReadingDocumentBuilder.cs:228-231`). WB-20's in-place
-diagram completion edits Runs inside one top-level diagram paragraph and
-keeps its element: none of these caches holds that paragraph's text
+in an earlier chunk, `ReadingDocumentBuilder.cs:228-231`) — and is also
+called at the end of `ClearForModelSwitch` (`:306-334`), which on a model
+swap empties the document and installs the "Loading reading view…"
+placeholder (`:319-326`): on main that clear invalidates nothing and
+WPF's render-driven refresh catches up later, but the cached list never
+would, and would serve the previous note's list and element peers under
+the new tab until the incoming merge. WB-20's in-place diagram completion
+comes in two kinds: a text-only completion (a rendered or failed diagram,
+or an unmatched one whose placeholder keeps focus) edits `Run`s inside one
+top-level diagram paragraph and keeps its `InlineUIContainer`, element and
+peer — no cached child changes and no list reads the paragraph's text
 (diagram blocks are never inside a list — `ReadingDocumentBuilder.cs:213-215`
-clears the list stack and adds every non-list block to `document.Blocks`),
-so it does not call this entry unless the paragraph is not a direct child
-of the document. Not changed: the hierarchy itself (W3-1's measured reason
+clears the list stack and adds every non-list block to `document.Blocks`)
+— so it does not call this entry; a completion that removes the
+placeholder's container (an unmatched diagram whose placeholder does not
+have focus) changes the surface's children and calls it once, as does a
+completion whose paragraph is not a direct child of the document. Not
+changed: the hierarchy itself (W3-1's measured reason
 for it, `:945-948`).
 
 **#1330 — one provider, one event.** `ReadingSurfacePeer` holds one
@@ -168,8 +191,12 @@ Facts fail first.
 - `ReadingViewTests.ListItemPeersAreStableAcrossQueries` — two
   `GetChildren()` calls on a list peer return reference-equal item peers.
   Mutation: `new` per call → fails.
-- `ReadingViewTests.PositionInSetOnTheLastOf2000ItemsIsIndexed` — the
-  2,000-item fixture: 1,000 `GetPositionInSet` and 1,000 `GetSizeOfSet`
+- `ReadingViewTests.PositionInSetOnTheLastOf2000ItemsIsIndexed` — a
+  2,000-item list built through `BuildSource` (`ReadingViewTests.cs:4175-4186`:
+  `ReadingDocumentBuilder.Build` over core's blocks directly, so the view
+  model's `MaximumRenderedBlocks` cap does not apply and all 2,000 items
+  render; the list is the whole source, no heading or paragraph): 1,000
+  `GetPositionInSet` and 1,000 `GetSizeOfSet`
   queries on the last item and 1,000 `GetName` queries on the list peer
   allocate under a bound in the `HugeDocumentSyntheticQueriesHaveBoundedCost`
   style (`GC.GetAllocatedBytesForCurrentThread`), `WalkProbeForTests` stays
@@ -192,17 +219,36 @@ Facts fail first.
   → the stale n is served → fails.
 - `ReadingViewTests.SurfaceChildrenAreCachedUntilTheNextMerge` — repeated
   `GetChildren()` on the surface peer rebuilds once; a merge rebuilds
-  again. Mutation: drop the `InvalidateStructuralPeers()` call from
-  `ApplyBuiltDocument` → the stale list fact (the `:700-703` comment
-  records the 2026-08-01 measurement) fails.
+  again; and a model switch drops the cache too: a note with a list is
+  shown, then the surface is bound to a second note's background model
+  whose fetch is parked through `FetchFaultForTests` (the
+  `RescanTests.ReadingLanding.cs:35-41` park; the wait's result asserted,
+  the release in `finally`), so `ClearForModelSwitch` shows the loading
+  placeholder and no merge follows yet — the surface peer's
+  `GetChildren()` then holds no `ReadingListPeer` and no peer of the first
+  note's elements. Mutations: drop the `InvalidateStructuralPeers()` call
+  from `ApplyBuiltDocument` → the stale list fact (the `:700-703` comment
+  records the 2026-08-01 measurement) fails; drop it from
+  `ClearForModelSwitch` → the first note's `ReadingListPeer` is still a
+  child under the placeholder → fails.
 - FlaUI `ShellAccessibilityTests.ReadingList_ArrowingThroughTheBlockCapIsBounded`
   (new partial file `ShellAccessibilityTests.ReadingList.cs`). Fixtures:
-  the issue's `big-list.md` (`# Big list`, blank, `Intro line.`, blank,
-  `- item 1` … `- item 2000`, blank, `## After the list`, blank,
-  `Closing paragraph.`) and `small-list.md`, the same shape with three
-  items. The out-of-process UIA3 client does what NVDA does, because a
-  client that only listens for focus and selection never asks for the
-  costly peer answers:
+  `big-list.md` — the issue's shape cut to fit the cap: `# Big list`,
+  blank, `Intro line.`, blank, `- item 1` … `- item 1996`, blank, `## After
+  the list`, blank, `Closing paragraph.` — and `small-list.md`, the same
+  shape with three items. Core projects every list item as its own block
+  (`reading.rs:90`, `ReadingBlockKind::ListItem`), and the view renders at
+  most `MaximumRenderedBlocks = 2_000` blocks of the whole projection, list
+  items included (`ReadingContentViewModel.cs:52`, the cap applied at
+  `:1590-1596`; past it the last block is the degraded notice, `:1792-1804`).
+  The issue's own file (two headings, two paragraphs, 2,000 items: 2,004
+  blocks) therefore never renders `item 1999`, `item 2000`, `## After the
+  list` or `Closing paragraph.`. This one is 4 + 1,996 = 2,000 blocks:
+  exactly at the cap (`degraded` is `model.Count > renderLimit`, so 2,000
+  is not degraded), every line rendered, and the per-move cost measured on
+  the largest document the view renders. The out-of-process UIA3 client
+  does what NVDA does, because a client that only listens for focus and
+  selection never asks for the costly peer answers:
   (a) **Registrations, held for the whole journey** (NVDA's set; WPF raises
   automation events, and does the peer work that feeds them, only while a
   client listens — `AutomationPeer.ListenerExists`):
@@ -216,7 +262,9 @@ Facts fail first.
   completion, run once per move before the next key:
   (1) `text.GetSelection()[0].Clone()`, `ExpandToEnclosingUnit(TextUnit.Line)`,
   `GetText(-1)` — polled until the line is the move's expected line
-  (listed under Moves; a 30 s bound; the poll is inside the measured time);
+  (listed under Moves; a 120 s reach bound, far above main's measured
+  ~5 s per move and 28 s entry, so a slow move completes and is timed
+  rather than timing out; the poll is inside the measured time);
   (2) `line.GetAttributeValue(TextAttributeLibrary.StyleId)`;
   (3) `line.GetEnclosingElement()`, then
   `TreeWalkerFactory.GetRawViewWalker().GetParent` up to the
@@ -230,41 +278,55 @@ Facts fail first.
   `GetFirstChild`/`GetNextSibling` to the `List` element
   (`ReadingSurfacePeer.GetChildrenCore`), its `Name`
   (`ReadingListPeer.GetNameCore`), then item N by sibling steps from
-  `GetFirstChild` (N ≤ 3) or `GetLastChild` (N ≥ 1998)
+  `GetFirstChild` (N ≤ 3) or `GetLastChild` (N ≥ 1994)
   (`ReadingListPeer.GetChildrenCore`), and the item's `Name`,
   `PositionInSet` and `SizeOfSet` (`ReadingListItemPeer`).
   **Moves:** Ctrl+Shift+E (entry: until `DocumentRange.GetText(-1)` holds
   `Closing paragraph.`, then one workload run on the caret's line),
   Ctrl+Home (`Big list`), four Downs
   (`Intro line.`, `item 1`, `item 2`, `item 3`), Ctrl+End
-  (`Closing paragraph.`), four Ups (`After the list`, `item 2000`,
-  `item 1999`, `item 1998`); the same keys on `small-list.md` are the
-  baseline (its Ups land on `item 3`, `item 2`, `item 1`).
-  **Reach assertions** (so a workload that stops asking cannot pass): on
-  every list move the item's `Name` is `item N`, its `PositionInSet` is N,
-  its `SizeOfSet` is the list's item count (2,000; 3), and the list's
-  `Name` is `2000 entries` (`3 entries`).
+  (`Closing paragraph.`), four Ups (`After the list`, `item 1996`,
+  `item 1995`, `item 1994`); the same keys on `small-list.md` are the
+  baseline (its Ups land on `After the list`, `item 3`, `item 2`, `item 1`).
+  **Reach assertions** (so neither a workload that stops asking nor a
+  fixture the cap cuts can pass or fail for the wrong reason), checked
+  untimed after each move: after the entry `DocumentRange.GetText(-1)`
+  holds `Closing paragraph.` and does not hold the degraded notice's
+  `Reading view shows the first` (`ReadingContentViewModel.cs:1795`) — a
+  miss fails with "big-list.md does not fit the reading cap", never as a
+  timing failure; on every list move the item's `Name` is `item N`, its
+  `PositionInSet` is N, its `SizeOfSet` is the list's item count (1,996;
+  3), and the list's `Name` is `1996 entries` (`3 entries`).
   **Bound** (WB-7's ratio form, because the shell gate runs every FlaUI
   fact with no filter — `windows.yml:845-851` — so a `kind=benchmark`
   trait would not keep it out): every move on `big-list.md` takes at most
   max(5 × the median of the same kind of move on `small-list.md`, 250 ms),
   the kinds being the entry, a move to a non-list line, and a move to a
-  list line.
+  list line. The journey checks the bound only after every move and its
+  reach assertions have completed, and fails with one message naming each
+  move over it with its time and bound — distinct from a reach failure,
+  so a failure is either "content missing" or "too slow", never both.
   **Seen failing on main, with this workload:** before any peer change the
-  journey must fail, its per-move times recorded in the PR body (the issue
-  measured ~5.1 s per move and 28 s for the entry under NVDA). If it
-  passes on main, the workload is not yet the screen reader's: capture an
-  NVDA log at UIA debug level for one arrow on `big-list.md` (the issue's
-  second "fact wanted", the 2026-09-22 `nvda.log` recipe), add the provider
-  calls it shows to (b), and repeat until main fails; record the log
-  excerpt and the final workload in the PR body.
+  journey must fail with the bound message and every reach assertion
+  holding, its per-move times recorded in the PR body (the issue measured
+  ~5.1 s per move and 28 s for the entry under NVDA). If it passes on main,
+  the workload is not yet the screen reader's: capture an NVDA log at UIA
+  debug level for one arrow on `big-list.md` (the issue's second "fact
+  wanted", the 2026-09-22 `nvda.log` recipe), add the provider calls it
+  shows to (b), and repeat until main fails; record the log excerpt and
+  the final workload in the PR body.
   **Mutation:** restore main's `ReadingSurfacePeer`, `ReadingListPeer` and
   `ReadingListItemPeer` bodies together (from `git show
   origin/main:apps/slate-windows/src/SlateWindows/Reading/ReadingSurface.cs`)
-  → the journey fails; the PR body records which single restoration (a new
-  item peer per call, the linear `PositionInSet` walk, `ListItems.Count`
-  per query, the uncached surface children) fails it alone — the
-  deterministic per-path mutations belong to the unit facts above.
+  → the journey fails with the bound message while every reach assertion
+  holds (the same fixture renders whole either way, so the failure is the
+  peers' cost, not missing content); the PR body records which single
+  restoration (a new item peer per call, the linear `PositionInSet` walk,
+  `ListItems.Count` per query, the uncached surface children) fails it
+  alone — the deterministic per-path mutations belong to the unit facts
+  above. A fixture mutation proves the reach check: `big-list.md` with
+  2,000 items (2,004 blocks) fails with the reach message, not the bound
+  message.
 - FlaUI `ShellAccessibilityTests.ReadingSelectAll_RaisesTextSelectionChangedAndReturnsTheNote`
   — `trailing.md` (`body`, blank, `#`), Ctrl+Home, Ctrl+A: the client
   receives `TextSelectionChanged` within 2 s and
@@ -325,7 +387,7 @@ Assert-Discovered $atListed @(
   'SlateWindows.AccessibilityTests.ShellAccessibilityTests.ReadingView_IsTheEditorStop')
 # NVDA closed, desktop free; the client's own registrations stand in for NVDA's:
 dotnet test $at --no-build --configuration Release --filter $atFilter; Assert-Ok 'FlaUI journeys'
-# seen failing first: the same two commands against a build of origin/main plus only the new test files must exit nonzero, with the per-move times in the log
+# seen failing first: the same two commands against a build of origin/main plus only the new test files must exit nonzero — the timing journey with its bound message, every reach assertion holding (content reached, no degraded notice), and the per-move times in the log
 $cs = @(git diff --name-only origin/main -- '*.cs') + @(git ls-files --others --exclude-standard -- '*.cs')   # Reading/ReadingSurface.cs, Reading/ReadingDocumentBuilder.cs, Reading/ReadingSemantics.cs, Reading/HeadingStyleText.cs, ReadingViewTests.cs, ShellAccessibilityTests.ReadingList.cs (new)
 dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $cs; Assert-Ok 'dotnet format'
 ```
@@ -335,9 +397,12 @@ CI: the Windows lane with the FlaUI shell gate; the timing journey runs in
 the gate (its step at `windows.yml:845-851` has no filter), ratio-bounded
 against `small-list.md` in the same run. AT (§4 rule 4, launched
 with `SLATE_LOCAL_APP_DATA` once WB-1 is in): NVDA — the #1329 recipe,
-Release build, `big-list.md`: time Ctrl+Shift+E to first speech, Ctrl+End,
-three Ups, four Downs; expected under 1 s each and no watchdog freeze in
-`nvda.log`; an ordered list `3. 4. 5.` reads "3. Third", "4. Fourth".
+Release build, on the journey's `big-list.md` (1,996 items, 2,000 blocks:
+at the cap, so every line renders; the issue's 2,000-item file is 2,004
+blocks and ends in the degraded notice instead of its last four blocks):
+time Ctrl+Shift+E to first speech, Ctrl+End (`Closing paragraph.`), three
+Ups (`After the list`, `item 1996`, `item 1995`), four Downs; expected
+under 1 s each and no watchdog freeze in `nvda.log`; an ordered list `3. 4. 5.` reads "3. Third", "4. Fourth".
 Narrator — the #1330 recipe: Ctrl+A says the selection (Narrator's
 "selected" phrase), Narrator+Shift+Down reads "body … blank"; read back
 with Narrator+Ctrl+X. Record both tables in the PR body.
@@ -345,7 +410,7 @@ with Narrator+Ctrl+X. Record both tables in the PR body.
 ## Acceptance
 
 - [ ] Ten facts above pass, seen failing first; mutation list run; both discovery checks find every required fact by fully qualified name (they throw otherwise) and every Verification command exits 0.
-- [ ] The timing journey, with the registrations of (a) and the per-move workload of (b), seen failing on `origin/main` (per-move times recorded); its reach assertions hold on every list move; restoring main's three peer classes together fails it again; the PR body records the before/after per-move table, which single restoration fails it alone, and — if the workload had to grow — the NVDA UIA-debug log excerpt it grew from.
+- [ ] The timing journey, on the 1,996-item `big-list.md` (2,000 blocks, inside the cap), with the registrations of (a) and the per-move workload of (b), seen failing on `origin/main` with its bound message while every reach assertion holds (`Closing paragraph.` reached, no degraded notice, `item 1996` with `SizeOfSet` 1,996, `1996 entries`) (per-move times recorded); restoring main's three peer classes together fails it again with the bound message; a 2,000-item fixture fails it with the reach message; the PR body records the before/after per-move table, which single restoration fails it alone, and — if the workload had to grow — the NVDA UIA-debug log excerpt it grew from.
 - [ ] Shell gate green including the two new journeys (the timing one ratio-bounded, not benchmark-tagged: the gate step has no filter).
 - [ ] `w_c_matrix.md` row amended, `parity_matrix.md` row added, dated report filed.
 - [ ] NVDA timing table and Narrator read-back recorded in the PR body.
@@ -353,9 +418,12 @@ with Narrator+Ctrl+X. Record both tables in the PR body.
 
 ## Brief
 
-Read `ReadingDocumentBuilder.cs:213-275`, `ReadingSurface.cs:357-367,
+Read `ReadingDocumentBuilder.cs:213-275`, `ReadingSurface.cs:306-334, 357-367,
 401-440, 696-720, 945-1000, 1131-1200`, `HeadingStyleText.cs:36-80`,
-`ReadingSemantics.cs:82-90`, core `reading.rs:785-793`, mac
+`ReadingSemantics.cs:82-90`, `ReadingContentViewModel.cs:52` and
+`:1590-1596` (the 2,000-block cap over the whole projection, every list
+item a block) and `:1792-1804` (the degraded notice past it), core
+`reading.rs:90` and `:785-793`, mac
 `Reading/ReadingView.swift:702`, the pins and patterns at
 `ReadingViewTests.cs:681, 730, 2160, 2258, 2330-2365`, the FlaUI reading
 journeys at `ShellAccessibilityTests.cs:1381, 1720` and the caret-line read
@@ -383,9 +451,16 @@ generation (dropping every cache) and runs today's
 `InvalidateAutomationChildren()` reset, replacing both of its call sites —
 the merge (`ReadingSurface.cs:439`) and the streamed append
 (`Model_BlocksAppended`, `:366`, which can grow a list opened in an earlier
-chunk) — WB-20's later in-place diagram completion does not call it, since
-it edits Runs in a top-level paragraph that no cache reads (diagram blocks
-are never in a list, `ReadingDocumentBuilder.cs:213-215`); (3)
+chunk) — and also closing `ClearForModelSwitch` (`:306-334`, the
+model-swap clear that installs the loading placeholder and today
+invalidates nothing); the surface peer's cached list is its whole child
+list (`base.GetChildrenCore()`'s embedded-element and hyperlink peers plus
+the structural peers), so every change that adds or removes an embedded
+element, a hyperlink or a block calls it: WB-20's later text-only diagram
+completion does not (it edits `Run`s in a top-level paragraph and keeps
+the element and its peer; diagram blocks are never in a list,
+`ReadingDocumentBuilder.cs:213-215`), its removal of an unfocused
+unmatched placeholder's container does; (3)
 `ReadingSurfacePeer.GetPattern` returns
 one `HeadingStyleTextProvider` per peer, and `ReadingSurface` raises
 `AutomationEvents.TextPatternOnTextSelectionChanged` from its
@@ -396,7 +471,9 @@ None, positions unchanged); `NestedListsKeepTheirAuthoredDepthAndMarkers`
 (`:2364` pin → None + marker run);
 `ReadingViewTests.ListItemPeersAreStableAcrossQueries` (two
 `GetChildren()` calls return reference-equal item peers);
-`ReadingViewTests.PositionInSetOnTheLastOf2000ItemsIsIndexed` (1,000
+`ReadingViewTests.PositionInSetOnTheLastOf2000ItemsIsIndexed` (a
+2,000-item list built through `BuildSource`, `ReadingViewTests.cs:4175-4186`,
+which skips the view model's cap; 1,000
 each of `PositionInSet` and `SizeOfSet` on item 2000 and list `Name` stay
 under an allocation bound, one `WalkProbeForTests` walk, and at most 3× the
 same queries on a 20-item list, floor 20 ms);
@@ -405,41 +482,57 @@ same queries on a 20-item list, floor 20 ms);
 last item's `SizeOfSet` is some n < 30 after the first projection, then
 `PositionInSet` 30 and `SizeOfSet` 30 once the next `BlocksAppended`
 lands); `ReadingViewTests.SurfaceChildrenAreCachedUntilTheNextMerge` (one
-rebuild per merge); `ReadingViewTests.TheTextPatternProviderIsOnePerPeer`
+rebuild per merge, and a model switch's loading placeholder exposes none
+of the previous note's peers); `ReadingViewTests.TheTextPatternProviderIsOnePerPeer`
 (same provider object twice); FlaUI
 `ShellAccessibilityTests.ReadingList_ArrowingThroughTheBlockCapIsBounded`
-in a new `ShellAccessibilityTests.ReadingList.cs` — the issue's
-`big-list.md` (`# Big list`, `Intro line.`, `- item 1`…`- item 2000`,
-`## After the list`, `Closing paragraph.`) against `small-list.md` (three
-items); the UIA3 client holds NVDA's registrations for the whole journey
+in a new `ShellAccessibilityTests.ReadingList.cs` — `big-list.md`
+(`# Big list`, `Intro line.`, `- item 1`…`- item 1996`, `## After the
+list`, `Closing paragraph.`: 4 + 1,996 = 2,000 blocks, exactly the cap, so
+every line renders — the issue's 2,000-item file is 2,004 blocks and the
+cap cuts its last four) against `small-list.md` (three items); the UIA3
+client holds NVDA's registrations for the whole journey
 (`RegisterFocusChangedEvent`; on the window's subtree TextSelectionChanged,
 TextChanged, StructureChanged, and PropertyChanged for `Name`,
 `ItemStatus`, `IsEnabled`, `Value`, `ToggleState`, `ExpandCollapseState`)
 and after every key runs, timed from the press, NVDA's per-move queries:
 the caret line (`GetSelection()[0].Clone()`, `ExpandToEnclosingUnit(Line)`,
-`GetText(-1)`, polled until it is the move's expected line),
+`GetText(-1)`, polled until it is the move's expected line, a 120 s
+reach bound so a slow move is timed, not timed out),
 `GetAttributeValue(StyleId)`,
 `GetEnclosingElement()` and a raw-view `GetParent` walk to the surface
 reading `Name`, `ControlType`, `PositionInSet`, `SizeOfSet`, `Level`,
 `line.GetChildren()` with `RangeFromChild` per child, and for a line
 `item N` the list context (surface children to the `List`, its `Name`,
-item N by sibling steps from `GetFirstChild`/`GetLastChild`, and the
-item's `Name`, `PositionInSet`, `SizeOfSet`); moves are Ctrl+Shift+E,
-Ctrl+Home, four Downs, Ctrl+End, four Ups; on every list move the item is
-named `item N` with `PositionInSet` N and `SizeOfSet` 2,000 and the list is
-named `2000 entries`; every move takes at most max(5 × the small note's
-median for that kind of move — entry, non-list line, list line —, 250 ms) — a ratio, because the shell gate (`windows.yml:845-851`)
-has no filter; it must fail on `origin/main` (per-move times recorded),
-and if it does not, an NVDA UIA-debug log of one arrow supplies the calls
-to add until it does; and
+item N by sibling steps from `GetFirstChild` (N ≤ 3) or `GetLastChild`
+(N ≥ 1994), and the item's `Name`, `PositionInSet`, `SizeOfSet`); moves
+are Ctrl+Shift+E (until the document holds `Closing paragraph.`),
+Ctrl+Home, four Downs (`Intro line.`, `item 1`…`item 3`), Ctrl+End
+(`Closing paragraph.`), four Ups (`After the list`, `item 1996`,
+`item 1995`, `item 1994`); reach assertions, untimed: after the entry the
+document holds `Closing paragraph.` and not the degraded notice's
+`Reading view shows the first` (a miss fails as "big-list.md does not fit
+the reading cap"), and on every list move the item is named `item N` with
+`PositionInSet` N and `SizeOfSet` 1,996 and the list is named
+`1996 entries`; then the bound: every move takes at most max(5 × the small
+note's median for that kind of move — entry, non-list line, list line —,
+250 ms) — a ratio, because the shell gate (`windows.yml:845-851`) has no
+filter — failing with one message naming each slow move, distinct from
+the reach message; it must fail on `origin/main` with the bound message
+and every reach assertion holding (per-move times recorded), and if it
+does not, an NVDA UIA-debug log of one arrow supplies the calls to add
+until it does; and
 `ShellAccessibilityTests.ReadingSelectAll_RaisesTextSelectionChangedAndReturnsTheNote`
 (`trailing.md`, Ctrl+A: `TextSelectionChanged` within 2 s and
 `GetSelection()[0].GetText(-1)` is the whole note). Mutations:
 `StartIndex` from the first item; `new` peer per call; the linear walk
 back; `ListItems.Count` per query back; the append path's
 `InvalidateStructuralPeers()` dropped; the merge's
+`InvalidateStructuralPeers()` dropped; the model-switch clear's
 `InvalidateStructuralPeers()` dropped; `new` provider per call; main's three
-peer classes restored together (fails the timing journey). Local loop, each
+peer classes restored together (fails the timing journey on the bound,
+with every reach assertion holding); `big-list.md` with 2,000 items (fails
+it on the reach check, not the bound). Local loop, each
 native command followed by a throw on a nonzero `$LASTEXITCODE`: bindings
 regenerated (`$env:CARGO_TARGET_DIR='C:\dev\slate\target-wb11'`), Release
 build, `dotnet test --list-tests` over
@@ -461,9 +554,10 @@ view; no scaling study past the 2,000-block cap. Done when the Windows
 lane with the shell gate is green (the timing journey in it), the format
 gate is clean with `ReadingSurface.cs`'s CR count unchanged, the mutation
 run is recorded (including the timing journey failing on `origin/main` and
-again with main's three peer classes restored, and which single restoration
-fails it alone),
-and the NVDA timing table (under 1 s per move, no watchdog freeze) and the
+again with main's three peer classes restored — both on the bound, the
+content reached — and which single restoration fails it alone),
+and the NVDA timing table (the 1,996-item `big-list.md`, under 1 s per
+move, no watchdog freeze) and the
 Narrator read-back (Ctrl+A announced, Narrator+Shift+Down reads "body …
 blank") are in the PR body with `Closes #1422`, `Closes #1329`, `Closes
 #1330`. Commit: `fix(windows): reading lists keep their authored markers,

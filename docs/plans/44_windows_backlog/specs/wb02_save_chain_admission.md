@@ -1,6 +1,6 @@
 # WB-2 — A History restore, a template reload and a property write join an admitted save of the same note instead of racing it
 
-Issues: Closes #1322, Closes #1325. Size S–M. Lanes: windows. AT: none (no speech changes). Wave: W1. Depends on: nothing. Parallel with: WB-1, WB-3. Decision: WD2 (pending; recommended "wait — join the admitted save, then act — and yes, #1325 ships"; under "refuse": the three sites speak "Wait for the current save to finish." and do nothing; under "no" to #1325: its site and facts are dropped).
+Issues: Closes #1322, Closes #1325. Size S–M. Lanes: windows. AT: none (no speech changes). Wave: W1. Depends on: nothing. Parallel with: WB-1, WB-3. Decision: WD2 (answered 2026-10-21: wait; the property write waits for the header refresh).
 
 ## Goal
 
@@ -12,7 +12,8 @@ the admitted save to finish and then acts on the saved bytes: no reload
 lands over an edit made during the write, no save publication is retired
 by a reload's epoch bump ("Saved" is always spoken), and a property commit
 in a split-pane peer never produces a conflict prompt for work the reader
-did in the same window a moment apart.
+did in the same window a moment apart — it also waits for its header to
+re-read the saved bytes, so its CAS token is the saved hash.
 
 ## Current state on main
 
@@ -28,7 +29,9 @@ hold).
   the chunk reuses. `KeysFor(tab, path)` (`:68-69`) is the tab-plus-path
   key set a save uses. So while an operation admitted under the path
   runs, `HasAdmittedSaveFor(path)` is true because of that operation's
-  own ticket, or of a save queued behind it.
+  own ticket, or of a save queued behind it. `IsIdle` (`:42`) is true when
+  no admitted ticket is pending; `IsClosed` (`:45`) once teardown's
+  `CloseAndJoinWorkers` (`:228-249`) ran.
 - `WorkspaceViewModel.cs:3003-3034` `KeepsBufferOnReseat(tab, stored)`:
   the one save-aware rule (`tab.HasPendingSaves || _saves.HasAdmittedSaveFor(tab.Path) || _saves.HasAdmittedSaveFor(stored)`),
   used by the Created-event re-seat (`:2966`) and the rescan's
@@ -44,6 +47,12 @@ hold).
   nothing spoken) and publishes a clean tab's save with no write
   (`:919-925`). `ReplaceItem` (`:516-612`) bumps `_itemEpoch` (`:528`),
   so a same-item reload of a tab with a queued save retires that save.
+  A landed write's publication (`PublishSave`, `:1067-1150`) adopts the
+  written bytes (`AdoptLandedWrite`, `:1170-1193`): a buffer changed while
+  the write ran (`MarkSavedBehindEdits`) stays dirty behind the saved
+  bytes. Same-path tabs mirror one another's dirty state and saved hash
+  (`MirrorDocumentStateFrom`, `:658-692`; `ApplyPeerDocumentEvent`,
+  `:694-741`).
 - **#1322 site 1:** `WorkspaceViewModel.History.cs:255-269`
   `ReloadOpenTabFromDisk(path)`: `FindPathBackedTab(path)` and, when
   `IsDirty` is false, `tab.ReplaceItem(tab.Item)` — no admitted-save
@@ -63,23 +72,79 @@ hold).
   admitted-save check.
 - **#1325:** `WorkspaceViewModel.Properties.cs:38-50` the note-scoped
   write lease (`_propertyWritePaths`, `TryAcquirePropertyWriteLease`,
-  `WithLeaseRelease`); dispatch sites `:205-215` (add), `:244-250`
-  (retry add), `:412-421` and `:507-515` (row set/delete). Each calls
+  `WithLeaseRelease`); dispatch sites `:205-215` (add,
+  `CommitAddProperty`, `:177-216`, CAS token `intent.ContentHash`),
+  `:244-250` (Keep Mine add retry, `:237-257`), `:412-437`
+  (`DispatchRowWrite`, set/delete, CAS token `row.ContentHash` at
+  `:433-436`) and `:507-515` (Keep Mine row retry, `:498-536`). Both
+  retries pass `null` and read the disk hash on the worker (`:253`,
+  `:519`, `:528`). Each calls
   `tab.WriteProperty(expectedHash, write, completion)`
-  (`WorkspaceTabViewModel.Properties.cs:146-215`), which runs the core
-  write on `Task.Run` with a hash check — never through `_saves`. Its
-  publication re-baselines a clean tab in place (`:83-125`, no epoch
-  change). Within one tab the race is closed by the dirty refusal pinned
-  at `PropertiesLandingTests.cs:448`
-  `ADayPickedWhileItsNoteSavesWritesNothingUntilTheSavePublishes`; a
-  peer tab's save is not.
+  (`WorkspaceTabViewModel.Properties.cs:146-215`, returns `void`), which
+  runs the core write on an untracked `Task.Run` (`:153`) — never through
+  `_saves`. Its publication re-baselines a clean tab in place
+  (`:83-125`, no epoch change) and flags a dirty one stale
+  (`MarkPropertyStale`, `:127-137`: "Properties changed on disk, but the
+  editor no longer matches it. …"). The request-time gates
+  (`RefusePropertyWriteGates`, `Properties.cs:454-475`): the row's
+  `WriteInFlight` or the note's lease ("Wait for the current save to
+  finish.", `:382-387`), a dirty tab (`AnnounceDirtyTabPropertyRefusal`,
+  `:444-452`), and a stale tab or `tab.SavedContentHash != row.ContentHash`
+  → `AnnouncePropertyConflict` (`:481-492`: `PropertyEditConflict` and
+  the dialog — Keep Mine retries the same operation on a fresh hash,
+  Reload discards the draft on the row's owner header). The add's twin
+  is `AnnounceAddConflict` (`:222-233`); the sheet's collision rule is
+  ordinal against the intent's top-level keys (`Panels/AddPropertyViewModel.cs:126`).
+  A write's completion (`PropertyWriteCompletion`, `:573-608`;
+  `AddWriteCompletion`, `:259-295`) speaks `PropertyChanged`, or
+  `PropertyEditConflict` / `PropertyEditFailed`. Within one tab the race
+  is closed by the dirty refusal pinned at `PropertiesLandingTests.cs:448`
+  `ADayPickedWhileItsNoteSavesWritesNothingUntilTheSavePublishes`. A
+  peer tab is not: same-path tabs mirror dirty state, so the window is a
+  peer's save whose edit the reader took back while it wrote (both tabs
+  clean, the save still admitted) — the commit passes the request-time
+  gates and its CAS races the save's.
+- **The header refresh is not joined to the save (codex round 7).**
+  `SaveActive` (the Save command, `WorkspaceViewModel.cs:3211-3236`)
+  passes an `onSaved` that calls `RefreshPropertiesFor(tab.Path)`
+  (`:3233`; the W4-4 comment at `:3229-3232`: the header re-derives from
+  the just-saved bytes so its rows and CAS tokens are never a stale
+  generation behind the tab — contract 4). `onSaved` runs inside the
+  save's publication (`PublishSaved`, `:1155-1165`), and the save's
+  ticket completes right after, at `:995`. `RefreshPropertiesFor`
+  (`Properties.cs:704-724`) calls `NotePropertiesViewModel.RefreshProperties`
+  (`Panels/NotePropertiesViewModel.cs:185-218`) on every same-path header
+  (the first with `FailureOnly`, the rest `None`): it takes a new request
+  id (`:194`), sets `IsLoading`, and starts a worker
+  (`PanelWorkScheduler.StartWork`, `Panels/PanelWorkScheduler.cs:142-160`)
+  that reads `ReadNoteParts` (`:200`) and later `Post`s `PublishProperties`
+  (`:223-304`) to the dispatcher — a read failure is caught and posted as
+  `LoadError` (`:208-216`). Nothing joins that publish to the ticket. An
+  accepted publish rebuilds every row (`PropertyRowViewModel`, pinning
+  the read's `ContentHash`, `PropertyRowViewModel.cs:70-72`, its `Owner`,
+  `:57`, and its `CommittedBaseline`, `:98`), parks dirty drafts onto the
+  rebuilt row of the same key (`NotePropertiesViewModel.cs:252-279`), and
+  clears rows on a failed read (`:262-263`). Stale publishes (generation
+  or request id) discard silently (`:234-239`); `Load` of a new path bumps
+  the generation and clears rows (`:155-171`); `Shutdown` bumps it
+  (`:306-310`), called from the tab's `Dispose` (`WorkspaceViewModel.cs:1203`,
+  `ShutdownProperties`). Only the Save command refreshes headers: Save All
+  (`WorkspaceViewModel.cs:2779`), the close and replace gates
+  (`WorkspaceViewModel.Layout.cs:608`, `:733`) and a bare `SaveAsync`
+  start none. So a property write admitted behind a save that read its
+  hash at start would read the pre-save row hash and report exactly the
+  conflict #1325 removes. `AwaitRepublished` in `PropertiesLandingTests`
+  is a test wait, not a production join.
 - Test seams: `WorkspaceViewModel.cs:880` `SaveWriteHookForTests` (runs
   on the save worker before the core write), `:885`
   `SaveWrittenHookForTests`; used by `RescanTests.FollowUpB.cs:83-121`
   `ARescanNeverReloadsOverAnAdmittedSave` (the reader takes the edit back
   while the write is parked, so the tab is clean with `HasPendingSaves`
   true) and `:130-172` `ARescansReseatKeepsATabWithAnAdmittedSave`, the
-  twin shape for the new facts.
+  twin shape for the new facts. `NotePropertiesTests.cs:160-235` runs an
+  asynchronous header under a `QueueingSynchronizationContext` whose
+  publishes wait until the fact drains them — the shape for the header
+  facts.
 
 ## Reference
 
@@ -87,26 +152,18 @@ No mac twin (mac has no off-dispatcher save chain). Contract 38 D-10
 (`docs/plans/38_notification_dispatcher_contracts.md`): a reload must
 never retire an admitted save's publication. Contract 40 R-9's
 `KeepsBufferOnReseat` doc (`WorkspaceViewModel.cs:2978-3002`) is the rule
-being extended.
+being extended. W4-4 contract 4: the header is the single hash authority
+for property writes.
 
 ## Design
 
-WD2 recommends: "Wait (join the save's publication, then act), and yes:
-both go through `WorkspaceSaveCoordinator.HasAdmittedSaveFor`." Under
-that answer the sites join through `Admit` (item 1); `HasAdmittedSaveFor`
-stays the test of whether some save is admitted — the "refuse" answer's
-request-time check and the unadmitted reload's guard — and an admitted
-operation never asks it about the path it holds, because its own ticket
-makes it true. If the owner answers "refuse", the three sites instead speak one HostComposed
-line, "Wait for the current save to finish.", and do nothing (the
-structural commands' rescan posture) when `HasAdmittedSaveFor(path)` is
-true at request time; an operation that is not refused is still admitted
-through `Admit`, so the reverse-order facts, the admitted reload and the
-queued-save carry below hold under both answers, and the facts that start
-an operation under an admitted save keep their names and assert the
-refusal instead of the deferred action. If the owner answers "no" to
-#1325, its site and facts are dropped and the issue is closed as "won't
-fix: nothing is lost today".
+WD2 is answered (owner, 2026-10-21; plan §3.1): wait — each site joins
+the admitted save through `Admit` (item 1) and then acts on the saved
+bytes, #1325 ships, and the admitted property write also waits for the
+header refresh the save's publication started (item 4).
+`HasAdmittedSaveFor` stays the test of whether some save is admitted —
+the unadmitted reload's guard — and an admitted operation never asks it
+about the path it holds, because its own ticket makes it true.
 
 1. **New admission primitive (new):**
    `Task<bool> WorkspaceSaveCoordinator.Admit(string path, Func<SaveTicket, Task> operation)`
@@ -117,7 +174,7 @@ fix: nothing is lost today".
    When the earlier saves have settled, `operation(ticket)` runs on the
    dispatcher; the ticket completes (`ticket.Complete(true)`, or
    `ticket.Fail`) only when the Task the operation returns completes —
-   after the operation's dispatcher publication or its terminal failure,
+   after the operation's dispatcher publication or its terminal outcome,
    never when the call returns. The operation's worker Task is handed to
    `TrackWorker` (`:189-206`) so teardown joins it like a save's. A closed
    coordinator returns `false` and the operation never runs (the caller
@@ -186,20 +243,137 @@ fix: nothing is lost today".
    sweep is its successor, whose publication a bare `ReplaceItem` would
    retire (the restore's round-6 defect, here too). With no admitted save
    it runs in the same dispatcher turn as today.
-4. **Property writes** (`Properties.cs:205`, `:244`, `:412`, `:507`):
-   `DispatchRowWrite` and the add/retry dispatchers acquire the lease as
-   today, then `Admit(path, ticket => …)` an operation that calls
-   `tab.WriteProperty(expectedHash, write, completion)` with the expected
-   hash read from the tab when the operation starts (the owner header's
-   snapshot hash after the save's publication rebuilt it — `AwaitRepublished`
-   in the landing tests shows the rebuild) and completes its Task from
-   the wrapped completion (`WithLeaseRelease`, `:46-50`), so a save
-   admitted behind the property write waits for the write's publication.
-   `row.WriteInFlight` stays true across the wait so the row's gates
-   refuse a second commit meanwhile. The property publication re-baselines
-   in place (no epoch change), so it needs no queued-save carry. Not
-   changed: the hash check, the conflict prompt, the lease, the one-tab
-   dirty refusal pinned at `PropertiesLandingTests.cs:448`.
+4. **Property writes** (`Properties.cs:205`, `:244`, `:412`, `:507`) —
+   WD2's answer: the admitted write waits for the header refresh.
+   `CommitAddProperty`, `DispatchRowWrite` and the two Keep Mine retries
+   run their request-time gates and acquire the lease as today, then
+   `Admit(path, ticket => …)` an operation. The operation returns a Task
+   it completes itself (a `TaskCompletionSource`): from the wrapped
+   completion (`WithLeaseRelease`, `:46-50`) after a write, or right
+   after a terminal non-write outcome below — never earlier, so a save
+   admitted behind it waits for its publication. `WriteProperty` returns
+   its worker Task (`internal Task WriteProperty(string? expectedHash, Func<string?, SaveReport> write, Action<SaveReport?, VaultException?, string?> completion)`,
+   changed from `void`), which the operation hands to `TrackWorker`.
+   The lease is held from dispatch to the operation's end, so a second
+   commit on the note meanwhile is refused with the existing "Wait for
+   the current save to finish." line, whichever row object it comes from
+   (the header refresh replaces the committed-from row; its
+   `WriteInFlight` stays true until the operation re-targets or ends).
+   Every non-write outcome releases the lease and clears the in-flight
+   flags BEFORE it speaks or opens the conflict dialog (Keep Mine
+   re-acquires the lease and is admitted behind this operation), then
+   completes the Task; a fault inside the operation does the same before
+   the ticket fails. A closed coordinator (teardown began) counts as
+   abandoned at every step: the operation never starts a write after
+   `CloseAndJoinWorkers`.
+
+   a. **Start-time gates.** The operation re-resolves the tab
+      (`FindTabForPath(path)`): none → the abandoned outcome (c). A dirty
+      tab — a taken-back edit is an unsaved change once the save
+      published (`AdoptLandedWrite`) — gets the existing dirty-tab line
+      once (`AnnounceDirtyTabPropertyRefusal`, `:444-452`) and nothing is
+      written (an add also marks its sheet failed); the restore's
+      start-time rule.
+   b. **The header wait (new).** A row write awaits
+      `row.Owner.WhenPublished(path, tab.SavedContentHash)` (a row with
+      no `Owner` is abandoned); an add awaits it on the header new
+      `private NotePropertiesViewModel? HeaderFor(string path)` returns
+      (the header of the first open tab on `path` whose header shows
+      `path` — every same-path header reads the same bytes; none →
+      abandoned). Keep Mine retries skip the wait: admitted behind the
+      save, their worker-side disk read (`:253`, `:519`, `:528`) already
+      sees the saved bytes, and they write with no snapshot token. The
+      mechanism, in `Panels/NotePropertiesViewModel.cs`:
+      `internal Task<HeaderRefreshOutcome> WhenPublished(string path, string? savedHash)`
+      (new) and `internal enum HeaderRefreshOutcome { Published, Failed, Abandoned }`
+      (new). Called and completed on the header's owner thread (the
+      dispatcher), its Task comes from a `TaskCompletionSource` created
+      with `RunContinuationsAsynchronously`, so the operation never
+      resumes inside a publish. Rules:
+      - shut down, or `Path` is no longer `path` → `Abandoned` at once;
+      - the current publication already holds the saved bytes
+        (`LoadError` null and `ContentHash == savedHash`) → `Published`
+        at once (an idle chain stays in today's dispatcher turn);
+      - otherwise it registers a waiter whose floor is the header's
+        current request id, then, when no refresh is in flight
+        (`IsLoading` false — the save refreshed no header: Save All, a
+        close's save, a bare `SaveAsync`; or the header failed earlier),
+        requests one itself, `RefreshProperties()` with
+        `ReloadAnnounce.None` (registered first, so a synchronous
+        header's inline publish completes it). A refresh already in
+        flight — the Save command's, `FailureOnly` — is never superseded,
+        so its failure is still spoken;
+      - each ACCEPTED `PublishProperties` (a stale publish discards as
+        today and completes nothing) settles the waiters after its rebuild
+        and notifications, from a snapshot of the list that is cleared
+        first (a synchronous header's re-request publishes inline): a
+        failed read → `Failed`; `ContentHash == savedHash` → `Published`;
+        another hash from a request above the floor (requested after the
+        wait began, so it read the saved bytes or newer: the disk moved)
+        → `Published`, and the gates in (c) take it to the conflict path;
+        another hash from a request at or below the floor (a read that
+        may predate the save) → the waiter is re-armed and the header
+        requests one silent refresh, whose id is above the floor;
+      - `Load` of another path (the generation bump that discards the
+        in-flight read — the superseded refresh) and `Shutdown` (the tab
+        closed, or the workspace torn down: `ShutdownProperties` from the
+        tab's `Dispose`) complete every waiter `Abandoned`.
+      So the wait always ends: an accepted request always publishes (the
+      worker posts a read failure as `LoadError`, `:208-216`), and both
+      ways a request can be discarded abandon the waiter. Test seams
+      (new): `internal Action? RefreshReadHookForTests { get; set; }`,
+      run on the refresh worker inside the body's `try` before
+      `ReadNoteParts` (`:200`), so a hook that throws presents as a
+      failed read; `internal int PublishWaitersForTests { get; }`, the
+      registered waiters.
+   c. **After the wait** (the operation resumes on the dispatcher and
+      re-resolves the tab):
+      - `Abandoned`, or the tab gone → nothing written; a row write says
+        nothing (its header and the draft in it are gone — the row
+        seam's "finds no tab and does nothing" posture, `:366-369`); an
+        add marks its sheet failed (`MarkAddFailed`, `AddPropertyViewModel.cs:153`:
+        "The property was not added. Your draft is still here.").
+      - `Failed` → nothing written; one `PropertyEditFailed` carrying the
+        header's `LoadError` (the existing failure event, `:605-606`;
+        `"unknown failure"` if a later publication cleared it); an add
+        also marks its sheet failed. The save's own refresh, carrying
+        `FailureOnly`, has said `PropertiesReloadFailed` for the save;
+        this line is the property commit's.
+      - `Published` → the held gates on the fresh header: new
+        `private bool RefuseHeldPropertyWrite(WorkspaceTabViewModel tab, PropertyRowViewModel row, bool deleted)`
+        — `RefusePropertyWriteGates` (`:454-475`) without its in-flight
+        gate, which the operation's own lease would trip
+        (`RefusePropertyWriteGates` becomes the in-flight gate plus this).
+        For a row write, `fresh` is the owner's row with the committed
+        row's `KeyIdentity`. A dirty tab → the dirty line. No `fresh`
+        (the saved bytes removed the key) → the committed-from row's
+        pre-save hash fails the hash gate → `AnnouncePropertyConflict(tab, row, deleted)`.
+        A stale tab or `fresh.ContentHash != tab.SavedContentHash` (the
+        disk moved past the save) → `AnnouncePropertyConflict(tab, fresh, deleted)`.
+        `fresh.CommittedBaseline` not `PropertyDraft.ValueEquals` the
+        committed-from row's `CommittedBaseline` (the saved bytes changed
+        the edited key's value) → `AnnouncePropertyConflict(tab, fresh, deleted)`
+        — the existing conflict path (`PropertyEditConflict` once and the
+        dialog); the fresh row carries the user's draft, parked by key at
+        the publish. Otherwise the write dispatches: the committed-from
+        row's `WriteInFlight` cleared, `fresh.WriteInFlight` set,
+        `tab.WriteProperty(fresh.ContentHash, write, WithLeaseRelease(path, PropertyWriteCompletion(path, fresh, deleted, dispatched)))`,
+        with the draft captured at commit (`dispatched`, unchanged). For
+        an add: the gates against the header's `ContentHash` (a mismatch
+        → `AnnounceAddConflict`); the key now among the header's
+        `TopLevelKeys` (ordinal, the sheet's rule; the saved bytes added
+        it) → `AnnounceAddConflict`; otherwise
+        `WriteProperty(header.ContentHash, …)` with the add completion as
+        today.
+
+   The header stays the single hash authority (contract 4; the W4-4
+   comment at `WorkspaceViewModel.cs:3229-3232`): the operation never
+   reads a CAS token from disk and never from a header publication older
+   than the save. Not changed: the request-time gates, the hash check,
+   the conflict prompt and its resolutions, the lease, the one-tab dirty
+   refusal pinned at `PropertiesLandingTests.cs:448`, `SaveActive`'s
+   refresh. The property publication re-baselines in place (no epoch
+   change), so it needs no queued-save carry.
 
 Not changed: `KeepsBufferOnReseat`, `HasAdmittedSaveFor`, the rescan
 paths, mac, core, FFI.
@@ -210,19 +384,33 @@ paths, mac, core, FFI.
 `SaveChainAdmissionTests`; the harness of `RescanTests.FollowUpB.cs:83-121`
 — file of the partial class `RescanTests`; park the save at
 `SaveWriteHookForTests`; "takes the edit back" means setting `Text` to
-the loaded text while the write is parked, as that fact does). Every hold
-is observed: each `ManualResetEventSlim.Wait(TimeSpan)` result is
-asserted (`Assert.True(parked.Wait(TimeSpan.FromSeconds(10)), "…never parked")`;
+the loaded text while the write is parked, as that fact does; "retypes
+the edit" means setting `Text` back to the saved snapshot's text before
+release, so the save's publication adopts it and leaves the tab clean).
+Every hold is observed: each `ManualResetEventSlim.Wait(TimeSpan)` result
+is asserted (`Assert.True(parked.Wait(TimeSpan.FromSeconds(10)), "…never parked")`;
 a timeout is the fact's failure, never a silent release) and every gate
 is `Set()` in `finally`, the hook nulled there. Every save a fact
 observes is requested with `SaveAsync(announce: true)`, so its
-publication is a `NoteSaved` the fact can count.
+publication is a `NoteSaved` the fact can count — except the property
+facts' peer save, which goes through the Save command (`SaveActiveCommand`
+with tab B active, `WorkspaceViewModel.cs:3211-3236`: `SaveAsync` with
+`announce: true` and the `onSaved` whose `RefreshPropertiesFor` starts
+the header refresh). In the property facts tabs A and B show the same
+note in a split pane and only A's header is attached
+(`EnsureActiveTabProperties(synchronousForTests: false)` with A active,
+on the harness's dispatcher thread, so its publish posts to the
+dispatcher as in production; a synchronous header publishes inside the
+save's publication and would hide the race); "A commits `due`" means
+setting the `due` row's draft and calling `SetPanelProperty(row)`; the
+write's worker counter is a `PropertyWriteHookForTests` that increments
+it.
 
 - `AHistoryRestoreStartedUnderAnAdmittedSaveWaitsThenRestoresOverTheSavedBytes`
   — queue direction 1, a restore behind a save: the save parks; the
   reader takes the edit back (the tab clean, so the stage-time refusal
-  passes), confirms a restore (admitted behind the save), then types the
-  edit again; after release the save publishes first (`save.Result`
+  passes), confirms a restore (admitted behind the save), then retypes
+  the edit; after release the save publishes first (`save.Result`
   true, `NoteSaved` once) and adopts the retyped text as the baseline, so
   the tab is clean when the restore starts; the restore writes on the
   saved hash and its continuation — run while the restore's own ticket is
@@ -286,24 +474,129 @@ publication is a `NoteSaved` the fact can count.
   admission → `ItemIdentity` changes under the save; a bare `ReplaceItem`
   in the sweep → the queued save is retired (no `NoteSaved`).
 - `APropertyCommitInAPeerTabWaitsForTheOtherTabsSaveAndWritesOnce` (#1325)
-  — split pane, tab B's save parked, tab A commits a property: no write
-  until release; after it, one property write on top of the saved bytes,
-  no `PropertyEditConflict`, no conflict dialog; the file holds both the
-  edit and the property. Mutation: call `WriteProperty` directly → the
-  conflict prompt fires.
+  — B's save parked; the reader takes the edit back (both tabs clean:
+  #1325's window); A commits `due` (admitted behind the save); the reader
+  retypes the edit; no property write until release (worker counter 0);
+  after it, `NoteSaved` once, then one property write on the saved hash
+  (`PropertyChanged` once), no `PropertyEditConflict`, the conflict
+  dialog never invoked; the file holds both the edit and the new `due`.
+  Mutation: call `WriteProperty` directly → the property write lands
+  while the save is parked, and the save's CAS then fails:
+  `NoteSaveConflict` once and the file lacks the edit.
+- `AnAdmittedPropertyWriteWaitsForTheHeaderRefreshTheSavePublished`
+  (WD2's answer; codex round 7) — the previous fact's steps, with A's
+  `RefreshReadHookForTests` armed to park before release: the save
+  publishes (`NoteSaved` once, the tabs clean) and A's header read parks
+  (`Assert.True(readParked.Wait(TimeSpan.FromSeconds(10)))`); the
+  operation has started and waits (`PublishWaitersForTests == 1`, pumped
+  until true) and the write has not started (worker counter 0, no new
+  `due` in the file, `PropertyWriteInFlightFor(path)` true, no
+  `PropertyEditConflict`); after the read is released the header
+  publishes the saved hash and the write runs once: `PropertyChanged`
+  once, no `PropertyEditConflict`, the dialog never invoked, the file
+  holds the edit and the new `due`, and `HasAdmittedSaveFor(path)` is
+  false. Mutation: read the CAS token from the committed-from row at the
+  operation's start without awaiting `WhenPublished` → its pre-save hash
+  fails the gate while the read is parked: `PropertyEditConflict` once
+  and the waiter count never reaches 1.
+- `AnAdmittedPropertyWriteWhoseHeaderRefreshFailsWritesNothingAndEnds`
+  — as the previous fact to the parked read; the hook then throws, so
+  the header publishes `LoadError`: the operation ends `Failed` — worker
+  counter 0, the file holds the saved bytes without the new `due`,
+  `PropertyEditFailed` once, no `PropertyEditConflict`,
+  `PropertyWriteInFlightFor(path)` false, `HasAdmittedSaveFor(path)`
+  false — and a save requested afterwards publishes `NoteSaved` (nothing
+  hangs). Mutation: settle waiters only on a matching hash (a failed
+  publication ignored) → the operation never ends: the lease and the
+  admitted ticket stay held past a 10-second pump and the later save
+  never publishes.
+- `AnAdmittedPropertyWriteWhoseHeaderMovesToAnotherNoteWritesNothingAndEnds`
+  — the superseded refresh: as above to the parked read; A's header is
+  then pointed at `b.md` (`Load("b.md")`, the generation bump a re-pointed
+  tab's activation makes through `EnsureActiveTabProperties`,
+  `Properties.cs:328-331`), so the parked read's publish will be
+  discarded: the operation ends `Abandoned` — nothing written to `a.md`,
+  none of `PropertyChanged`, `PropertyEditConflict`, `PropertyEditFailed`
+  spoken, the lease released, the ticket completed; the parked read,
+  released afterwards, publishes nothing for `a.md`. Mutation: leave the
+  waiters registered on `Load` of another path → the lease and the
+  ticket stay held past a 10-second pump.
+- `AnAdmittedPropertyWriteWhoseKeyTheSaveChangedTakesTheConflictPath` —
+  B's edit also changes `due: 2026-09-10` to `due: 2026-09-12`; saved
+  and parked, taken back, A commits `due` = 2026-09-11 from the row whose
+  baseline is 2026-09-10, the edit retyped; after release the header
+  publishes the saved hash with `due` = 2026-09-12, so the existing
+  conflict path runs: `PropertyEditConflict` once, the dialog invoked
+  once for `due`, worker counter 0 (the file holds `due: 2026-09-12`), the
+  fresh `due` row carries A's draft (2026-09-11), the lease released, the
+  ticket completed. Mutation: drop the baseline re-validation → the write
+  lands on the saved hash: the file holds `due: 2026-09-11` and no
+  `PropertyEditConflict` is spoken.
+- `AnAdmittedPropertyWriteThatFindsItsNoteDirtyWhenItStartsRefusesAndWritesNothing`
+  — the #1325 fact without the retyping: the save's publication leaves
+  the tabs dirty (the taken-back text behind the saved bytes), so the
+  operation's start speaks the dirty-tab line ("Save the note before
+  editing properties. The editor has unsaved changes in a.md.") once and
+  writes nothing (worker counter 0); no `PropertyEditConflict`; the
+  lease released; the ticket completed. Mutation: drop the operation's
+  dirty gates (at start and in `RefuseHeldPropertyWrite`) → the property
+  is written under the dirty tab and the "Properties changed on disk, but
+  the editor no longer matches it." line is spoken.
+- `AnAdmittedPropertyAddWaitsForTheHeaderRefreshAndAddsOnTheSavedHash`
+  — the add twin: A's add sheet opened before the save (its intent pins
+  the pre-save hash), the save parked, the edit taken back, the add
+  committed (admitted), the edit retyped, A's header read parked, then
+  released: one write on the saved hash, the sheet closed, `PropertyChanged`
+  once, no `PropertyEditConflict`, the file holds the edit and the new
+  key. Mutation: write the add with `intent.ContentHash` → the held gate
+  sends it to `AnnounceAddConflict`: `PropertyEditConflict` once and the
+  sheet marked failed.
 - `ASaveStartedUnderAnAdmittedPropertyWriteWaitsForItsCompletion` (#1325)
   — the property write's worker is parked at `PropertyWriteFaultForTests`'s
   neighbour seam (a new `internal Action? PropertyWriteHookForTests { get; set; }`
   on `WorkspaceTabViewModel`, run on the worker before the core write);
-  a save of the same note requested meanwhile writes only after the
-  property completion ran; one write each, nothing lost. Mutation:
-  complete the ticket when the operation returns → the save writes
-  before the property completion.
+  the clean tab requests a save meanwhile: `save.IsCompleted` stays false
+  while the write is parked; after release `PropertyChanged` is spoken,
+  then `NoteSaved` once with `save.Result` true — the property's
+  publication re-baselined the clean tab, so the save writes nothing;
+  one write in all, the file holds the property. (A dirty tab's save
+  would take the property publication's stale flag and report
+  `NoteSaveConflict` — main's posture for a property written under a
+  dirty buffer, not this chunk's.) Mutation: complete the ticket when
+  the operation returns → `NoteSaved` before `PropertyChanged`.
 - `TeardownJoinsAnAdmittedRestoreAndPropertyWrite` — dispose the
   workspace with each operation parked: `Dispose` waits for the tracked
-  worker (contract 35 A-1) and the session is not disposed under it.
-  Mutation: skip `TrackWorker` for the operation → the join returns
-  early and the fact's "worker still running at dispose" probe fires.
+  worker (contract 35 A-1) and the session is not disposed under it; and
+  with a property operation parked in the header wait (A's read parked,
+  `PublishWaitersForTests == 1`): `Dispose` returns, the tab's
+  `ShutdownProperties` abandons the waiter, and after a drain
+  `SavesForTests.IsIdle` is true, the worker counter is 0 and no property
+  line is spoken. Mutations: skip `TrackWorker` for the operation → the
+  join returns early and the fact's "worker still running at dispose"
+  probe fires; leave waiters registered on `Shutdown` → the coordinator
+  is never idle after `Dispose`.
+- `NotePropertiesTests` (existing file and class, the asynchronous
+  header under its `QueueingSynchronizationContext`, `:160-235`; the
+  note rewritten through `session.SaveText`):
+  `WhenPublishedWaitsPastAReadOlderThanTheSaveAndAsksAgain` (on a header
+  that shows hash H0, `WhenPublished(path, H0)` is `Published` at once;
+  a refresh is requested and its worker drained, so its queued publish
+  holds H0; the note is rewritten (H1); `WhenPublished(path, H1)` is not
+  complete; draining the queue publishes H0 — still not complete, and
+  `IsLoading` is true again (the header asked for a fresh read); draining
+  again publishes H1 → `Published`; mutation: drop the floor, so any
+  other-hash publication counts as newer → the wait completes on the H0
+  publication),
+  `WhenPublishedEndsFailedWhenTheReadFails` (the note deleted on disk; a
+  wait with no refresh in flight requests one; after the drains it is
+  `Failed` and `LoadError` is set; mutation: ignore failed publications
+  → the wait is still incomplete after the drains),
+  `WhenPublishedEndsAbandonedOnShutdownAndOnAnotherNote` (a wait
+  registered while a refresh is queued ends `Abandoned` on
+  `Load("other.md")`; another ends `Abandoned` on `Shutdown()`; a wait on
+  a shut-down header, or for a path the header no longer shows, is
+  `Abandoned` at once; mutation: leave waiters registered on `Load` and
+  `Shutdown` → both waits stay incomplete).
 - `WorkspaceSaveCoordinatorTests` (new file, class
   `WorkspaceSaveCoordinatorTests`):
   `AdmitAlwaysReservesThePathEvenOnAnIdleChain` (a save enqueued right
@@ -312,19 +605,24 @@ publication is a `NoteSaved` the fact can count.
   `AdmitOnAClosedCoordinatorReturnsFalseAndRunsNothing`.
 
 Existing facts that must keep passing: `PropertiesLandingTests.cs:448`,
-`RescanTests.FollowUpB.cs:83`, `:130`, `SaveOffDispatcherTests`.
+`RescanTests.FollowUpB.cs:83`, `:130`, `SaveOffDispatcherTests`, the rest
+of `NotePropertiesTests`.
 
 ## Docs and registers
 
 - Contract 38: append a D-10 note ("D-10 extended to the History
   restore, the template reload and property writes; an admitted
   operation's own reload runs inside its ticket and carries a queued
-  save across its epoch bump; WB-2, #1322 #1325") under the plan-44
-  heading; never rewrite the frozen row.
-- No census, designation or `chords.json` change; no new sentence (the
-  restore's start-time refusal reuses the existing D-14 line) unless WD2
-  is answered "refuse" (then the refusal line is a HostComposed residue
-  designated in `a11y_trigger_designations.json`).
+  save across its epoch bump; an admitted property write waits for its
+  header to publish the saved hash (`NotePropertiesViewModel.WhenPublished`)
+  and re-validates the edited row before it writes; WB-2, WD2 answered
+  2026-10-21, #1322 #1325") under the plan-44 heading; never rewrite the
+  frozen row.
+- No census, designation or `chords.json` change; no new sentence: the
+  restore's start-time refusal reuses the existing D-14 line, and the
+  property operation's outcomes reuse the dirty-tab line,
+  `PropertyEditConflict`, `PropertyEditFailed`, `PropertyChanged` and the
+  sheet's `AddFailedDraftKept`.
 
 ## Verification
 
@@ -343,15 +641,24 @@ $required = @(
   'TheUnadmittedReloadStillKeepsATabWithAnAdmittedSave',
   'ATemplatesSamePathReloadWaitsForTheNotesAdmittedSave',
   'APropertyCommitInAPeerTabWaitsForTheOtherTabsSaveAndWritesOnce',
+  'AnAdmittedPropertyWriteWaitsForTheHeaderRefreshTheSavePublished',
+  'AnAdmittedPropertyWriteWhoseHeaderRefreshFailsWritesNothingAndEnds',
+  'AnAdmittedPropertyWriteWhoseHeaderMovesToAnotherNoteWritesNothingAndEnds',
+  'AnAdmittedPropertyWriteWhoseKeyTheSaveChangedTakesTheConflictPath',
+  'AnAdmittedPropertyWriteThatFindsItsNoteDirtyWhenItStartsRefusesAndWritesNothing',
+  'AnAdmittedPropertyAddWaitsForTheHeaderRefreshAndAddsOnTheSavedHash',
   'ASaveStartedUnderAnAdmittedPropertyWriteWaitsForItsCompletion',
   'TeardownJoinsAnAdmittedRestoreAndPropertyWrite',
+  'WhenPublishedWaitsPastAReadOlderThanTheSaveAndAsksAgain',
+  'WhenPublishedEndsFailedWhenTheReadFails',
+  'WhenPublishedEndsAbandonedOnShutdownAndOnAnotherNote',
   'AdmitAlwaysReservesThePathEvenOnAnIdleChain',
   'AdmitCompletesItsTicketOnlyWhenTheOperationsTaskCompletes',
   'AdmitOnAClosedCoordinatorReturnsFalseAndRunsNothing',
   'ADayPickedWhileItsNoteSavesWritesNothingUntilTheSavePublishes',
   'ARescanNeverReloadsOverAnAdmittedSave',
   'ARescansReseatKeepsATabWithAnAdmittedSave')
-$filter = 'FullyQualifiedName~SaveChainAdmissionTests|FullyQualifiedName~WorkspaceSaveCoordinatorTests|FullyQualifiedName~PropertiesLandingTests|FullyQualifiedName~RescanTests|FullyQualifiedName~SaveOffDispatcherTests'
+$filter = 'FullyQualifiedName~SaveChainAdmissionTests|FullyQualifiedName~WorkspaceSaveCoordinatorTests|FullyQualifiedName~NotePropertiesTests|FullyQualifiedName~PropertiesLandingTests|FullyQualifiedName~RescanTests|FullyQualifiedName~SaveOffDispatcherTests'
 $results = Join-Path $env:TEMP 'wb02-results'
 if (Test-Path $results) { Remove-Item $results -Recurse -Force }
 dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --no-build --configuration Release --filter $filter --logger 'trx;LogFileName=wb02.trx' --results-directory $results
@@ -367,8 +674,10 @@ $files = @(
   'apps/slate-windows/src/SlateWindows/WorkspaceViewModel.Templates.cs',
   'apps/slate-windows/src/SlateWindows/WorkspaceViewModel.Properties.cs',
   'apps/slate-windows/src/SlateWindows/WorkspaceTabViewModel.Properties.cs',
+  'apps/slate-windows/src/SlateWindows/Panels/NotePropertiesViewModel.cs',
   'apps/slate-windows/tests/SlateWindows.Tests/SaveChainAdmissionTests.cs',
-  'apps/slate-windows/tests/SlateWindows.Tests/WorkspaceSaveCoordinatorTests.cs')
+  'apps/slate-windows/tests/SlateWindows.Tests/WorkspaceSaveCoordinatorTests.cs',
+  'apps/slate-windows/tests/SlateWindows.Tests/NotePropertiesTests.cs')
 dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $files
 if ($LASTEXITCODE -ne 0) { throw "dotnet format reports changes ($LASTEXITCODE)" }
 ```
@@ -378,47 +687,55 @@ a file suffix and would select nothing. The TRX check proves each named
 fact was selected by the filter and passed; xUnit's `testName` is the
 fully qualified `Namespace.Class.Method`. `WorkspaceViewModel.cs` holds
 `WorkspaceTabViewModel`, where `ReloadKeepingQueuedSave` and
-`SaveBatch.Rebase` land.) CI: the always-on Windows lane. AT: none — no
-sentence changes under the recommended answer.
+`SaveBatch.Rebase` land.) CI: the always-on Windows lane. AT: none — the
+answered WD2 adds no sentence.
 
 ## Acceptance
 
-- [ ] WD2 recorded in the PR body (wait vs refuse; #1325 in or out).
-- [ ] The ten `SaveChainAdmissionTests` facts and the three coordinator facts fail first, then pass; mutations run locally per §4 rule 1 (both queue directions among them); every hold's wait result asserted.
+- [ ] WD2's answer quoted in the PR body: "answered 2026-10-21: wait; the property write waits for the header refresh" (#1325 ships).
+- [ ] The sixteen `SaveChainAdmissionTests` facts, the three `NotePropertiesTests` `WhenPublished` facts and the three coordinator facts fail first, then pass; mutations run locally per §4 rule 1 (both queue directions, the header wait, the failed and the abandoned refresh, the baseline re-validation among them); every hold's wait result asserted.
 - [ ] The restore's continuation reloads through `ReloadOpenTabFromDiskAdmitted`, and the guarded `ReloadOpenTabFromDisk` keeps its D-10 guard for unadmitted callers.
+- [ ] An admitted property write awaits `NotePropertiesViewModel.WhenPublished` before it reads its CAS token, and every outcome of the wait (published, failed, abandoned) ends the operation and its ticket.
 - [ ] `PropertiesLandingTests.cs:448` and the FollowUpB facts unchanged and green.
 - [ ] Contract 38 D-10 note appended.
-- [ ] PR body: `Closes #1322`, `Closes #1325` (or #1325 "not delivered: owner declined").
+- [ ] PR body: `Closes #1322`, `Closes #1325`.
 
 ## Brief
 
-Read `WorkspaceSaveCoordinator.cs:60-131` and `:189-206` (`Enqueue`,
-`TrackWorker`, `SaveTicket` at `:275-314`), `WorkspaceViewModel.cs:120-130`,
-`:516-612` (`ReplaceItem`), `:769-1006` (`SaveAsync`, `HasPendingSaves`,
-`SaveBatch`, `StartSave`) and `:2978-3034`,
-`WorkspaceViewModel.History.cs:113-269`,
-`WorkspaceViewModel.Templates.cs:226-287`, `WorkspaceViewModel.Properties.cs:38-50`,
-`:205-215`, `:244-250`, `:412-421`, `:507-515`,
-`WorkspaceTabViewModel.Properties.cs:74-215`, and the twin facts at
-`RescanTests.FollowUpB.cs:76-172` and `PropertiesLandingTests.cs:448-515`.
-Decision WD2 is pending (recommended: wait — join the admitted save,
-then act — and ship #1325; under "refuse", a site that finds
-`HasAdmittedSaveFor(path)` true at request time speaks one HostComposed
-line "Wait for the current save to finish." and does nothing, an
-operation not refused is still admitted, the facts that start an
-operation under a save keep their names and assert the refusal, and the
-line is designated as residue in
-`docs/plans/18_windows_port/a11y_trigger_designations.json`; under "no"
-to #1325 its site and facts are dropped and the issue closes as
-won't-fix). Build: `Task<bool> WorkspaceSaveCoordinator.Admit(string path, Func<SaveTicket, Task> operation)`
+Read `WorkspaceSaveCoordinator.cs:27-131` and `:187-314` (`IsIdle`,
+`IsClosed`, `Enqueue`, `TrackWorker`, `CloseAndJoinWorkers`,
+`SaveTicket`), `WorkspaceViewModel.cs:120-130`, `:516-612`
+(`ReplaceItem`), `:658-741` (same-path mirroring), `:769-1006`
+(`SaveAsync`, `HasPendingSaves`, `SaveBatch`, `StartSave`; the ticket
+completes at `:995`), `:1067-1193` (`PublishSave`, `PublishSaved`,
+`AdoptLandedWrite`), `:2978-3034`, `:3089-3209` (`Dispose`) and
+`:3211-3236` (`SaveActive`, whose `onSaved` calls `RefreshPropertiesFor`
+at `:3233`), `WorkspaceViewModel.History.cs:113-269`,
+`WorkspaceViewModel.Templates.cs:226-287`,
+`WorkspaceViewModel.Properties.cs:38-52`, `:177-333`, `:364-608` and
+`:704-736`, `WorkspaceTabViewModel.Properties.cs:24-215`,
+`Panels/NotePropertiesViewModel.cs:44-311` (`Load`, `RefreshProperties`
+— a worker reads `ReadNoteParts` and `Post`s `PublishProperties` later,
+unjoined to the save's ticket — `PublishProperties`, `Shutdown`),
+`Panels/PanelWorkScheduler.cs:142-176` and `:309-322`,
+`Panels/PropertyRowViewModel.cs:54-110` and `:255-266`,
+`Panels/AddPropertyViewModel.cs:19-20` and `:106-153`, and the twin facts
+at `RescanTests.FollowUpB.cs:76-172`, `PropertiesLandingTests.cs:448-515`
+and `NotePropertiesTests.cs:160-235`. Decision WD2 is answered
+(2026-10-21: wait; the property write waits for the header refresh):
+every site joins the admitted save and then acts, #1325 ships, and an
+admitted property write also waits until its header has re-read the
+saved bytes; the header stays the single hash authority (contract 4).
+Build: `Task<bool> WorkspaceSaveCoordinator.Admit(string path, Func<SaveTicket, Task> operation)`
 — always enqueues a ticket under the path key, runs the operation on the
 dispatcher after every earlier save settles (so only its own ticket and
 its queued successors can be pending while it runs), completes the
 ticket only when the operation's Task completes, tracks its worker for
-teardown. Wrap the History restore (write and continuation) in it; at the
-operation's start re-apply the stage-time rules — a tab dirty by then
-gets the existing D-14 line ("Save the note before restoring a version.
-The editor has unsaved changes in {file}.") and nothing is written,
+teardown; a closed coordinator returns `false` and runs nothing. Wrap
+the History restore (write and continuation) in it; at the operation's
+start re-apply the stage-time rules — a tab dirty by then gets the
+existing D-14 line ("Save the note before restoring a version. The
+editor has unsaved changes in {file}.") and nothing is written,
 otherwise re-read the expected hash from `SavedContentHash`. The
 continuation reloads through new
 `private void ReloadOpenTabFromDiskAdmitted(string path, WorkspaceSaveCoordinator.SaveTicket admittedBy)`,
@@ -432,15 +749,63 @@ retires the successor. The guarded `ReloadOpenTabFromDisk` keeps a D-10
 guard (`HasPendingSaves || HasAdmittedSaveFor(path)` keeps the buffer)
 for unadmitted callers (`ReloadOpenTabFromDiskForTests`). Wrap the
 template same-path sweep in `Admit` and reload each matching clean tab
-through `ReloadKeepingQueuedSave()`, never a bare `ReplaceItem`; wrap
-the four property dispatches in `Admit`, reading the expected hash when
-the operation starts; add the worker seams
-`internal Action? HistoryRestoreHookForTests` (workspace, before
-`RestoreVersion`) and `internal Action? PropertyWriteHookForTests`
-(`WorkspaceTabViewModel`, before the core property write); keep the
-lease, hash check and the one-tab dirty refusal. Facts, failing first,
-in new `SaveChainAdmissionTests.cs` (every observed save requested with
-`SaveAsync(announce: true)`):
+through `ReloadKeepingQueuedSave()`, never a bare `ReplaceItem`.
+Property writes: `CommitAddProperty`, `DispatchRowWrite` and both Keep
+Mine retries keep their request-time gates and lease, then `Admit` an
+operation whose Task (a `TaskCompletionSource`) completes from the
+wrapped completion after a write or right after a non-write outcome;
+`WriteProperty` returns its worker `Task` (changed from `void`), handed
+to `TrackWorker`. At start the operation re-resolves the tab (none →
+abandoned) and refuses a dirty one with the existing dirty-tab line
+("Save the note before editing properties. The editor has unsaved
+changes in {file}."), writing nothing. A row write then awaits
+`row.Owner.WhenPublished(path, tab.SavedContentHash)`; an add awaits it
+on new `private NotePropertiesViewModel? HeaderFor(string path)` (the
+first open same-path tab's header that shows the path); Keep Mine
+retries skip the wait (their worker reads the disk hash after
+admission). New in `Panels/NotePropertiesViewModel.cs`:
+`internal Task<HeaderRefreshOutcome> WhenPublished(string path, string? savedHash)`
+and `internal enum HeaderRefreshOutcome { Published, Failed, Abandoned }`
+— dispatcher-only, its Task from a `TaskCompletionSource` with
+`RunContinuationsAsynchronously`; `Abandoned` at once when shut down or
+re-pointed; `Published` at once when the current publication has no
+`LoadError` and `ContentHash == savedHash`; otherwise a waiter with the
+current request id as its floor, plus a silent `RefreshProperties()` when
+none is in flight (an in-flight refresh — the Save command's
+`FailureOnly` — is never superseded); each accepted `PublishProperties`
+settles waiters after its rebuild from a cleared snapshot: a failed read
+→ `Failed`, the saved hash → `Published`, another hash above the floor →
+`Published` (the disk moved; the gates conflict it), another hash at or
+below the floor → re-armed with one silent refresh; `Load` of another
+path and `Shutdown` → `Abandoned`. After the wait: `Abandoned` → nothing
+written or spoken (an add marks its sheet failed); `Failed` → nothing
+written, one `PropertyEditFailed` with the header's `LoadError` (an add
+also marks its sheet failed); `Published` → new
+`private bool RefuseHeldPropertyWrite(WorkspaceTabViewModel tab, PropertyRowViewModel row, bool deleted)`
+(`RefusePropertyWriteGates` minus the in-flight gate its own lease would
+trip) against the fresh row of the same `KeyIdentity` — dirty → the
+dirty line; no fresh row, a stale tab, or a hash that is not the saved
+hash → `AnnouncePropertyConflict`; a fresh `CommittedBaseline` that is
+not `PropertyDraft.ValueEquals` the committed-from row's →
+`AnnouncePropertyConflict(tab, fresh, deleted)`; otherwise
+`WriteProperty(fresh.ContentHash, …)` with `PropertyWriteCompletion(path, fresh, deleted, dispatched)`.
+An add checks the header's `ContentHash` and that its key is not now in
+the header's `TopLevelKeys` (ordinal), else `AnnounceAddConflict`. Every
+non-write outcome releases the lease and clears the in-flight flags
+before it speaks or opens the dialog; a closed coordinator counts as
+abandoned. Add the seams `internal Action? HistoryRestoreHookForTests`
+(workspace, before `RestoreVersion`), `internal Action? PropertyWriteHookForTests`
+(`WorkspaceTabViewModel`, before the core property write),
+`internal Action? RefreshReadHookForTests` (`NotePropertiesViewModel`,
+on the refresh worker inside the `try` before `ReadNoteParts`, so a
+throwing hook is a failed read) and `internal int PublishWaitersForTests`
+(`NotePropertiesViewModel`). Facts, failing first, in new
+`SaveChainAdmissionTests.cs` (every observed save requested with
+`SaveAsync(announce: true)`, except the property facts' peer save, which
+goes through `SaveActiveCommand` with B active so its publication starts
+the header refresh; in the property facts A and B show one note in a
+split pane, only A's header attached, asynchronously, on the harness's
+dispatcher thread):
 `AHistoryRestoreStartedUnderAnAdmittedSaveWaitsThenRestoresOverTheSavedBytes`
 (save parked, edit taken back, restore confirmed, edit retyped: the save
 publishes first, then the restore's own reload runs under its live ticket
@@ -462,9 +827,42 @@ queued: the reload still runs, then `NoteSaved` once after
 `ATemplatesSamePathReloadWaitsForTheNotesAdmittedSave` (`ItemIdentity`
 kept until release, one reload after, a save queued meanwhile still
 speaks `NoteSaved`),
-`APropertyCommitInAPeerTabWaitsForTheOtherTabsSaveAndWritesOnce` (no
-conflict, one write each), `ASaveStartedUnderAnAdmittedPropertyWriteWaitsForItsCompletion`,
-`TeardownJoinsAnAdmittedRestoreAndPropertyWrite`; and in new
+`APropertyCommitInAPeerTabWaitsForTheOtherTabsSaveAndWritesOnce` (B's
+save parked, edit taken back, A commits `due`, edit retyped: no write
+until release, then `NoteSaved`, one property write on the saved hash,
+`PropertyChanged` once, no `PropertyEditConflict`, file holds both),
+`AnAdmittedPropertyWriteWaitsForTheHeaderRefreshTheSavePublished` (A's
+header read parked after the save published: `PublishWaitersForTests`
+1, no write started, no `PropertyEditConflict`; after release one write,
+`PropertyChanged` once, no conflict, `HasAdmittedSaveFor` false),
+`AnAdmittedPropertyWriteWhoseHeaderRefreshFailsWritesNothingAndEnds`
+(the parked read throws: no write, `PropertyEditFailed` once, lease and
+ticket released, a later save publishes),
+`AnAdmittedPropertyWriteWhoseHeaderMovesToAnotherNoteWritesNothingAndEnds`
+(A's header `Load("b.md")` while its read is parked: nothing written or
+spoken, lease and ticket released),
+`AnAdmittedPropertyWriteWhoseKeyTheSaveChangedTakesTheConflictPath` (the
+save changed `due` to 2026-09-12 under A's 2026-09-11 edit:
+`PropertyEditConflict` and the dialog once, nothing written, the fresh
+row keeps A's draft),
+`AnAdmittedPropertyWriteThatFindsItsNoteDirtyWhenItStartsRefusesAndWritesNothing`
+(no retyping: the dirty-tab line once, nothing written),
+`AnAdmittedPropertyAddWaitsForTheHeaderRefreshAndAddsOnTheSavedHash`
+(the add twin: one write on the saved hash, sheet closed, no conflict),
+`ASaveStartedUnderAnAdmittedPropertyWriteWaitsForItsCompletion` (a clean
+tab's save while the property write is parked: `PropertyChanged`, then
+`NoteSaved` once, `save.Result` true, one write in all),
+`TeardownJoinsAnAdmittedRestoreAndPropertyWrite` (parked workers joined
+by `Dispose`; an operation in the header wait abandoned by the tab's
+`ShutdownProperties`, the coordinator idle, nothing written); in
+`NotePropertiesTests.cs` (existing class, queueing context):
+`WhenPublishedWaitsPastAReadOlderThanTheSaveAndAsksAgain` (`Published`
+at once on the current hash; a queued pre-save read does not complete
+it and makes the header read again; the fresh read does),
+`WhenPublishedEndsFailedWhenTheReadFails` (deleted note: `Failed`,
+`LoadError` set), `WhenPublishedEndsAbandonedOnShutdownAndOnAnotherNote`
+(`Load("other.md")` and `Shutdown()` each end a wait `Abandoned`; a wait
+on a shut-down or re-pointed header is `Abandoned` at once); and in new
 `WorkspaceSaveCoordinatorTests.cs`: `AdmitAlwaysReservesThePathEvenOnAnIdleChain`,
 `AdmitCompletesItsTicketOnlyWhenTheOperationsTaskCompletes`,
 `AdmitOnAClosedCoordinatorReturnsFalseAndRunsNothing`. Every hold
@@ -473,19 +871,28 @@ locally: drop the `Admit` wrap; complete the ticket on return instead of
 on Task completion; call the guarded `ReloadOpenTabFromDisk` from the
 restore's continuation (direction 1 fails); guard the admitted reload
 with `HasPendingSaves || HasAdmittedSaveFor` (direction 2 fails); drop
-`Rebase`; drop the start-time dirty re-check; drop the admitted reload's
-`IsDirty` check; drop the unadmitted reload's D-10 guard; a bare
-`ReplaceItem` in the template sweep; skip `TrackWorker`; call
-`WriteProperty` directly. Registers: append the D-10 note to
+`Rebase`; drop the restore's start-time dirty re-check; drop the
+admitted reload's `IsDirty` check; drop the unadmitted reload's D-10
+guard; a bare `ReplaceItem` in the template sweep; skip `TrackWorker`;
+call `WriteProperty` directly (`NoteSaveConflict`); read the row's CAS
+token at the operation's start without awaiting `WhenPublished`
+(`PropertyEditConflict` while the read is parked); ignore a failed
+publication in the waiters (the operation never ends); leave waiters
+registered on `Load` of another path, and on `Shutdown`; drop the
+`WhenPublished` floor; drop the baseline re-validation (the property
+lands over the saved value); drop the operation's dirty gates; write the
+add with `intent.ContentHash`. Registers: append the D-10 note to
 `docs/plans/38_notification_dispatcher_contracts.md`. Done when the
-thirteen new facts and `PropertiesLandingTests`, `RescanTests`,
-`SaveOffDispatcherTests` pass locally (`dotnet test --filter` by class
-name with a TRX log; the run throws on a nonzero exit code and on any
-required fact missing from the passed results), `dotnet format
---include` over the eight files (`WorkspaceSaveCoordinator.cs`,
+twenty-two new facts and `PropertiesLandingTests`, `NotePropertiesTests`,
+`RescanTests`, `SaveOffDispatcherTests` pass locally (`dotnet test
+--filter` by class name with a TRX log; the run throws on a nonzero exit
+code and on any required fact missing from the passed results), `dotnet
+format --include` over the ten files (`WorkspaceSaveCoordinator.cs`,
 `WorkspaceViewModel.cs`, `.History.cs`, `.Templates.cs`,
-`.Properties.cs`, `WorkspaceTabViewModel.Properties.cs` and the two new
-test files) is clean, and the Windows lane is green; no AT pass (no
-sentence changes under the recommended answer). PR body: `Closes #1322`,
-`Closes #1325`. Commit: `fix(windows): a history restore, a template
-reload and a property write wait for an admitted save of the same note`.
+`.Properties.cs`, `WorkspaceTabViewModel.Properties.cs`,
+`Panels/NotePropertiesViewModel.cs`, the two new test files and
+`NotePropertiesTests.cs`) is clean, and the Windows lane is green; no
+AT pass (no sentence changes). PR body: WD2's answer quoted,
+`Closes #1322`, `Closes #1325`. Commit: `fix(windows): a history
+restore, a template reload and a property write wait for an admitted
+save of the same note, and the property write for its header's re-read`.
