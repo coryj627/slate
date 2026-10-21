@@ -64,8 +64,23 @@ hold).
   is the existing seam and the only other caller. The stage-time rule
   (`RequestRestoreVersion`, `:125-169`) refuses a dirty tab with the
   D-14 line "Save the note before restoring a version. The editor has
-  unsaved changes in {file}." (`:131-141`) and takes the expected hash
-  from the tab's `SavedContentHash` (`:148-150`).
+  unsaved changes in {file}." (`:131-141`) and stages the expected hash
+  by tab kind (`:142-150`, H7/H12): a Markdown tab's `SavedContentHash`;
+  for a non-Markdown tab (`.canvas`, `.base`) or no open tab, the loaded
+  list's `History.HeadContentHash` (`Panels/HistoryViewModel.cs:218-224`,
+  the newest loaded row's hash for the path the panel shows). A
+  non-Markdown tab has no saved editor hash: `Load` returns before the
+  hash is set for any kind but Markdown (`WorkspaceViewModel.cs:1828-1842`),
+  so its `SavedContentHash` stays null. A null staged hash refuses
+  silently (`:151-154`), because core documents a null expected hash as
+  an unconditional save. `HistoryPanelTests.BaseFileRestoreIsCasGuardedWithoutAnEditorBuffer`
+  (`HistoryPanelTests.cs:683-710`) pins the non-Markdown arm: a `.base`
+  restore staged on a head hash that an external write made stale gets
+  the "Restore failed" alert and leaves the newer bytes. A non-Markdown
+  tab's save is keyed by its tab alone (`SaveAsync`,
+  `WorkspaceSaveCoordinator.KeysFor(Id, IsMarkdown ? Path : null)`,
+  `WorkspaceViewModel.cs:780-781`), so no save of a `.canvas` or `.base`
+  file is ever admitted under its path.
 - **#1322 site 2:** `WorkspaceViewModel.Templates.cs:267-277`: after the
   create, every clean same-path Markdown tab whose text differs from
   `rendered.Body` (or is missing from disk) gets `ReplaceItem` — no
@@ -190,10 +205,26 @@ about the path it holds, because its own ticket makes it true.
    later than the stage: a tab that is dirty by then (the reader's edit
    made while the save wrote stays an unsaved change behind the saved
    bytes once the save publishes) gets the existing D-14 line
-   (`:131-141`) once and nothing is written; otherwise the
-   `ExpectedContentHash` is re-read from the tab's `SavedContentHash`, so
-   a restore admitted behind a save lands on the saved bytes instead of
-   conflicting with them.
+   (`:131-141`) once and nothing is written. Otherwise the CAS basis is
+   chosen by the stage-time rule (`:142-150`), re-applied to what is live
+   now: when `FindPathBackedTab(path)` is a Markdown tab whose
+   `SavedContentHash` is not null, that hash, so a restore admitted
+   behind a save lands on the saved bytes instead of conflicting with
+   them; in every other case — a `.canvas` or `.base` tab (it has no
+   saved editor hash), no open tab, or a Markdown tab whose load left no
+   hash — the request's captured `ExpectedContentHash`, the hash staged
+   for this path (`History.HeadContentHash` for a non-Markdown or absent
+   tab), never re-read from the History panel, which may show another
+   path by then. The stage-time null refusal (`:151-154`) is unchanged,
+   so the captured hash is never null and the operation never passes a
+   null expected hash to `RestoreVersion` (core's unconditional save). A
+   non-Markdown restore therefore keeps main's CAS exactly: no save of
+   its file is ever admitted under the path (Current state), so it waits
+   behind nothing of the tab's own, and a stale head hash still takes
+   the existing "Restore failed" alert. A restore whose Markdown tab
+   closed while it waited keeps the captured hash too; if the save it
+   waited for changed the file, the CAS takes that same alert — never a
+   silent overwrite.
 
    The continuation reloads through a new admission-aware reload,
    `private void ReloadOpenTabFromDiskAdmitted(string path, WorkspaceSaveCoordinator.SaveTicket admittedBy)`
@@ -420,7 +451,11 @@ it.
   first and the ordering assertions fail; call the guarded
   `ReloadOpenTabFromDisk` from the continuation → the restore's own
   ticket keeps `HasAdmittedSaveFor` true, the reload is skipped and
-  `Text` stays the saved text.
+  `Text` stays the saved text; keep the request's captured hash for the
+  live Markdown tab (no start-time refresh) → the restore's CAS carries
+  the pre-save hash against the saved bytes: the "Restore failed" alert
+  ("The file changed after history was loaded. …"), no
+  `RestoredVersionFrom`, and `Text` stays the saved text.
 - `AHistoryRestoreNeverSilencesTheSaveItWaitedFor` — the
   `RestoredVersionFrom` line follows the save's `NoteSaved`; no save
   publication was retired (`SettleSaves()` true; `ItemIdentity`
@@ -603,10 +638,44 @@ it.
   after an idle `Admit` waits for the operation's Task),
   `AdmitCompletesItsTicketOnlyWhenTheOperationsTaskCompletes`,
   `AdmitOnAClosedCoordinatorReturnsFalseAndRunsNothing`.
+- `HistoryPanelTests` (existing file and class, `HistoryPanelTests.cs`;
+  its harness — `NewWorkspace`, `SaveVersion`, `_announced`, `_alerts` —
+  and the twin of `BaseFileRestoreIsCasGuardedWithoutAnEditorBuffer`,
+  `:683-710`): `BaseFileRestoreWithItsTabOpenKeepsTheStagedHeadHash` —
+  `Guard.base` saved twice (`name: One`, then `name: Two`);
+  `workspace.OpenPath("Guard.base")`, with the precondition asserted (the
+  active tab's `Path` is `Guard.base`, `IsMarkdown` false,
+  `SavedContentHash` null); `History.NoteChanged("Guard.base")` and the
+  oldest non-marker row taken; an external `SaveVersion` writes
+  `name: Three`, so the staged head hash is stale; `RequestRestoreVersion(oldest)`
+  → exactly one alert, starting "Restore failed: ", no
+  `RestoredVersionFrom`, and the file still holds `name: Three`. (An
+  idle chain runs `Admit`'s operation in the same dispatcher turn —
+  `Enqueue` calls `Run` at once when no earlier ticket is pending,
+  `WorkspaceSaveCoordinator.cs:115-118` — and the harness's history
+  worker is synchronous, so the fact's synchronous shape is main's.)
+  Mutation: take the start-time basis from whatever tab is open on the
+  path (`FindPathBackedTab(path) is { } open ? open.SavedContentHash : request.ExpectedContentHash`)
+  → the `.base` tab's null hash reaches `RestoreVersion` as core's
+  unconditional save: `name: One` lands, no alert, `RestoredVersionFrom`
+  spoken. The existing `:683` fact is the absent-tab witness for the
+  same rule: re-reading the basis as `FindPathBackedTab(path)?.SavedContentHash`
+  (the round-10 design's unconditional refresh) passes null with no tab
+  open, and that fact fails the same way.
 
 Existing facts that must keep passing: `PropertiesLandingTests.cs:448`,
 `RescanTests.FollowUpB.cs:83`, `:130`, `SaveOffDispatcherTests`, the rest
-of `NotePropertiesTests`.
+of `NotePropertiesTests`; every History restore fact in `HistoryPanelTests`
+(`RestoreRoundTripsThroughCoreAndReloadsTheTab`, `:362`;
+`DirtyTabRestoreRefusesWithTheSharedSentence`, `:424`;
+`RestoreConflictAlertsWithTheRecordedTitleAndReloads`, `:651`, whose open
+Markdown tab's stale saved hash still conflicts after the start-time
+refresh; `BaseFileRestoreIsCasGuardedWithoutAnEditorBuffer`, `:683`), now
+that every restore runs through `Admit`; and the two facts that drive the
+guarded reload directly, `CanvasDocumentTests.RestoringAVersionReloadsAnOpenCanvasTab`
+(`CanvasDocumentTests.cs:2909`) and `CanvasDocumentTests.TheReloadKeepsTheSharedDocumentObject`
+(`:2946`), whose clean canvas tabs have no admitted save, so the new D-10
+guard leaves their reload in place.
 
 ## Docs and registers
 
@@ -657,8 +726,15 @@ $required = @(
   'AdmitOnAClosedCoordinatorReturnsFalseAndRunsNothing',
   'ADayPickedWhileItsNoteSavesWritesNothingUntilTheSavePublishes',
   'ARescanNeverReloadsOverAnAdmittedSave',
-  'ARescansReseatKeepsATabWithAnAdmittedSave')
-$filter = 'FullyQualifiedName~SaveChainAdmissionTests|FullyQualifiedName~WorkspaceSaveCoordinatorTests|FullyQualifiedName~NotePropertiesTests|FullyQualifiedName~PropertiesLandingTests|FullyQualifiedName~RescanTests|FullyQualifiedName~SaveOffDispatcherTests'
+  'ARescansReseatKeepsATabWithAnAdmittedSave',
+  'BaseFileRestoreWithItsTabOpenKeepsTheStagedHeadHash',
+  'BaseFileRestoreIsCasGuardedWithoutAnEditorBuffer',
+  'RestoreRoundTripsThroughCoreAndReloadsTheTab',
+  'DirtyTabRestoreRefusesWithTheSharedSentence',
+  'RestoreConflictAlertsWithTheRecordedTitleAndReloads',
+  'RestoringAVersionReloadsAnOpenCanvasTab',
+  'TheReloadKeepsTheSharedDocumentObject')
+$filter = 'FullyQualifiedName~SaveChainAdmissionTests|FullyQualifiedName~WorkspaceSaveCoordinatorTests|FullyQualifiedName~NotePropertiesTests|FullyQualifiedName~PropertiesLandingTests|FullyQualifiedName~RescanTests|FullyQualifiedName~SaveOffDispatcherTests|FullyQualifiedName~HistoryPanelTests|FullyQualifiedName~CanvasDocumentTests.RestoringAVersionReloadsAnOpenCanvasTab|FullyQualifiedName~CanvasDocumentTests.TheReloadKeepsTheSharedDocumentObject'
 $results = Join-Path $env:TEMP 'wb02-results'
 if (Test-Path $results) { Remove-Item $results -Recurse -Force }
 dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --no-build --configuration Release --filter $filter --logger 'trx;LogFileName=wb02.trx' --results-directory $results
@@ -677,7 +753,8 @@ $files = @(
   'apps/slate-windows/src/SlateWindows/Panels/NotePropertiesViewModel.cs',
   'apps/slate-windows/tests/SlateWindows.Tests/SaveChainAdmissionTests.cs',
   'apps/slate-windows/tests/SlateWindows.Tests/WorkspaceSaveCoordinatorTests.cs',
-  'apps/slate-windows/tests/SlateWindows.Tests/NotePropertiesTests.cs')
+  'apps/slate-windows/tests/SlateWindows.Tests/NotePropertiesTests.cs',
+  'apps/slate-windows/tests/SlateWindows.Tests/HistoryPanelTests.cs')
 dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $files
 if ($LASTEXITCODE -ne 0) { throw "dotnet format reports changes ($LASTEXITCODE)" }
 ```
@@ -687,16 +764,23 @@ a file suffix and would select nothing. The TRX check proves each named
 fact was selected by the filter and passed; xUnit's `testName` is the
 fully qualified `Namespace.Class.Method`. `WorkspaceViewModel.cs` holds
 `WorkspaceTabViewModel`, where `ReloadKeepingQueuedSave` and
-`SaveBatch.Rebase` land.) CI: the always-on Windows lane. AT: none — the
-answered WD2 adds no sentence.
+`SaveBatch.Rebase` land. `HistoryPanelTests` is selected whole, so every
+History restore fact on main runs beside the new one; the two
+`CanvasDocumentTests` facts are selected by name, because they drive the
+guarded reload this chunk changes. Three of the touched sources carry
+mixed line endings on main — CR bytes: `WorkspaceViewModel.cs` 9,
+`.History.cs` 3, `.Properties.cs` 21 — so count them before and after
+editing; a flattened file shows up in the `dotnet format` gate.) CI: the
+always-on Windows lane. AT: none — the answered WD2 adds no sentence.
 
 ## Acceptance
 
 - [ ] WD2's answer quoted in the PR body: "answered 2026-10-21: wait; the property write waits for the header refresh" (#1325 ships).
-- [ ] The sixteen `SaveChainAdmissionTests` facts, the three `NotePropertiesTests` `WhenPublished` facts and the three coordinator facts fail first, then pass; mutations run locally per §4 rule 1 (both queue directions, the header wait, the failed and the abandoned refresh, the baseline re-validation among them); every hold's wait result asserted.
+- [ ] The sixteen `SaveChainAdmissionTests` facts, the three `NotePropertiesTests` `WhenPublished` facts and the three coordinator facts fail first, then pass; `HistoryPanelTests.BaseFileRestoreWithItsTabOpenKeepsTheStagedHeadHash` passes on main (it pins main's non-Markdown CAS basis) and fails under the unconditional-refresh mutation, as `BaseFileRestoreIsCasGuardedWithoutAnEditorBuffer` does; mutations run locally per §4 rule 1 (both queue directions, the header wait, the failed and the abandoned refresh, the baseline re-validation among them); every hold's wait result asserted.
 - [ ] The restore's continuation reloads through `ReloadOpenTabFromDiskAdmitted`, and the guarded `ReloadOpenTabFromDisk` keeps its D-10 guard for unadmitted callers.
 - [ ] An admitted property write awaits `NotePropertiesViewModel.WhenPublished` before it reads its CAS token, and every outcome of the wait (published, failed, abandoned) ends the operation and its ticket.
-- [ ] `PropertiesLandingTests.cs:448` and the FollowUpB facts unchanged and green.
+- [ ] `PropertiesLandingTests.cs:448`, the FollowUpB facts, every History restore fact in `HistoryPanelTests` (`:362`, `:424`, `:651`, `:683`) and the two canvas reload facts (`CanvasDocumentTests.cs:2909`, `:2946`) unchanged and green.
+- [ ] The restore's start-time CAS basis is a live Markdown tab's non-null `SavedContentHash`, else the request's captured, path-specific hash (main's `History.HeadContentHash` for a non-Markdown or absent tab); a null expected hash never reaches `RestoreVersion`.
 - [ ] Contract 38 D-10 note appended.
 - [ ] PR body: `Closes #1322`, `Closes #1325`.
 
@@ -719,9 +803,16 @@ at `:3233`), `WorkspaceViewModel.History.cs:113-269`,
 unjoined to the save's ticket — `PublishProperties`, `Shutdown`),
 `Panels/PanelWorkScheduler.cs:142-176` and `:309-322`,
 `Panels/PropertyRowViewModel.cs:54-110` and `:255-266`,
-`Panels/AddPropertyViewModel.cs:19-20` and `:106-153`, and the twin facts
-at `RescanTests.FollowUpB.cs:76-172`, `PropertiesLandingTests.cs:448-515`
-and `NotePropertiesTests.cs:160-235`. Decision WD2 is answered
+`Panels/AddPropertyViewModel.cs:19-20` and `:106-153`,
+`Panels/HistoryViewModel.cs:218-224` (`HeadContentHash`, the newest
+loaded row's hash), `WorkspaceViewModel.cs:780-781` (a non-Markdown
+tab's save is keyed by the tab alone) and `:1828-1842` (`Load` sets
+`SavedContentHash` only for Markdown), and the twin facts at
+`RescanTests.FollowUpB.cs:76-172`, `PropertiesLandingTests.cs:448-515`,
+`NotePropertiesTests.cs:160-235`, `HistoryPanelTests.cs:362-710` (the
+restore facts; `BaseFileRestoreIsCasGuardedWithoutAnEditorBuffer` at
+`:683` pins the non-Markdown CAS basis) and `CanvasDocumentTests.cs:2909-2963`
+(the two facts that drive the guarded reload). Decision WD2 is answered
 (2026-10-21: wait; the property write waits for the header refresh):
 every site joins the admitted save and then acts, #1325 ships, and an
 admitted property write also waits until its header has re-read the
@@ -735,8 +826,17 @@ teardown; a closed coordinator returns `false` and runs nothing. Wrap
 the History restore (write and continuation) in it; at the operation's
 start re-apply the stage-time rules — a tab dirty by then gets the
 existing D-14 line ("Save the note before restoring a version. The
-editor has unsaved changes in {file}.") and nothing is written,
-otherwise re-read the expected hash from `SavedContentHash`. The
+editor has unsaved changes in {file}.") and nothing is written;
+otherwise the CAS basis follows the stage-time kind rule (`History.cs:142-154`)
+applied to what is live: a Markdown tab on the path whose
+`SavedContentHash` is not null → that hash (so a restore behind a save
+lands on the saved bytes); a `.canvas` or `.base` tab (no saved editor
+hash: it stays null), no open tab, or a Markdown tab with no hash → the
+request's captured `ExpectedContentHash` (main staged it from
+`History.HeadContentHash` for a non-Markdown or absent tab; never re-read
+from the panel, which may show another path by then). The stage-time
+null refusal is unchanged, so the captured hash is never null and no
+restore ever sends core a null expected hash (its unconditional save). The
 continuation reloads through new
 `private void ReloadOpenTabFromDiskAdmitted(string path, WorkspaceSaveCoordinator.SaveTicket admittedBy)`,
 which consults neither `HasAdmittedSaveFor` (true because of its own
@@ -865,11 +965,26 @@ it and makes the header read again; the fresh read does),
 on a shut-down or re-pointed header is `Abandoned` at once); and in new
 `WorkspaceSaveCoordinatorTests.cs`: `AdmitAlwaysReservesThePathEvenOnAnIdleChain`,
 `AdmitCompletesItsTicketOnlyWhenTheOperationsTaskCompletes`,
-`AdmitOnAClosedCoordinatorReturnsFalseAndRunsNothing`. Every hold
-asserts its `Wait` result and releases in `finally`. Mutations to run
+`AdmitOnAClosedCoordinatorReturnsFalseAndRunsNothing`; and in
+`HistoryPanelTests.cs` (existing class and harness):
+`BaseFileRestoreWithItsTabOpenKeepsTheStagedHeadHash` (`Guard.base`
+saved as `name: One` then `name: Two`, opened as a tab — asserted
+non-Markdown with a null `SavedContentHash` — the history list loaded,
+an external save of `name: Three` making the staged head hash stale;
+`RequestRestoreVersion(oldest)` → one "Restore failed: " alert, no
+`RestoredVersionFrom`, the file still `name: Three`; it passes on main
+and guards the start-time rule). Every hold asserts its `Wait` result
+and releases in `finally`. Mutations to run
 locally: drop the `Admit` wrap; complete the ticket on return instead of
 on Task completion; call the guarded `ReloadOpenTabFromDisk` from the
-restore's continuation (direction 1 fails); guard the admitted reload
+restore's continuation (direction 1 fails); keep the captured hash for a
+live Markdown tab (direction 1's restore conflicts with the saved bytes:
+the "Restore failed" alert, no `RestoredVersionFrom`); take the basis
+from whatever tab is open on the path, or re-read it unconditionally as
+`FindPathBackedTab(path)?.SavedContentHash` (a null hash reaches core as
+an unconditional save: `BaseFileRestoreWithItsTabOpenKeepsTheStagedHeadHash`
+and `BaseFileRestoreIsCasGuardedWithoutAnEditorBuffer` see `name: One`
+land and no alert); guard the admitted reload
 with `HasPendingSaves || HasAdmittedSaveFor` (direction 2 fails); drop
 `Rebase`; drop the restore's start-time dirty re-check; drop the
 admitted reload's `IsDirty` check; drop the unadmitted reload's D-10
@@ -883,15 +998,24 @@ registered on `Load` of another path, and on `Shutdown`; drop the
 lands over the saved value); drop the operation's dirty gates; write the
 add with `intent.ContentHash`. Registers: append the D-10 note to
 `docs/plans/38_notification_dispatcher_contracts.md`. Done when the
-twenty-two new facts and `PropertiesLandingTests`, `NotePropertiesTests`,
-`RescanTests`, `SaveOffDispatcherTests` pass locally (`dotnet test
---filter` by class name with a TRX log; the run throws on a nonzero exit
-code and on any required fact missing from the passed results), `dotnet
-format --include` over the ten files (`WorkspaceSaveCoordinator.cs`,
-`WorkspaceViewModel.cs`, `.History.cs`, `.Templates.cs`,
-`.Properties.cs`, `WorkspaceTabViewModel.Properties.cs`,
-`Panels/NotePropertiesViewModel.cs`, the two new test files and
-`NotePropertiesTests.cs`) is clean, and the Windows lane is green; no
+twenty-three new facts (twenty-two seen failing first, plus the
+`HistoryPanelTests` guard fact, which passes on main) and
+`PropertiesLandingTests`, `NotePropertiesTests`, `RescanTests`,
+`SaveOffDispatcherTests`, `HistoryPanelTests` (every restore fact on
+main, `BaseFileRestoreIsCasGuardedWithoutAnEditorBuffer` among them) and
+`CanvasDocumentTests.RestoringAVersionReloadsAnOpenCanvasTab` and
+`.TheReloadKeepsTheSharedDocumentObject` pass locally (`dotnet test
+--filter` by class name — the two canvas facts by method name — with a
+TRX log; the run throws on a nonzero exit code and on any required fact
+missing from the passed results), `dotnet format --include` over the
+eleven files (`WorkspaceSaveCoordinator.cs`, `WorkspaceViewModel.cs`,
+`.History.cs`, `.Templates.cs`, `.Properties.cs`,
+`WorkspaceTabViewModel.Properties.cs`, `Panels/NotePropertiesViewModel.cs`,
+the two new test files, `NotePropertiesTests.cs` and
+`HistoryPanelTests.cs`; count the CR bytes of `WorkspaceViewModel.cs`
+(9), `.History.cs` (3) and `.Properties.cs` (21) before and after
+editing, since main's mixed endings must survive) is clean, and the
+Windows lane is green; no
 AT pass (no sentence changes). PR body: WD2's answer quoted,
 `Closes #1322`, `Closes #1325`. Commit: `fix(windows): a history
 restore, a template reload and a property write wait for an admitted

@@ -543,7 +543,7 @@ relaunch would.
 | `ClosingTheWindowWithDirtyTabsFlushesThenNeverAsks` | an edit made after the last debounce, and a second edit the fact types from inside the flush's pumped wait (through the seam's hold callback); `PrepareForApplicationClose()` true, `_confirmUnsavedClose` never called; after the lifecycle's `Dispose()` the store holds the final generation, file bytes unchanged | return `Closed` without flushing; or no re-read after the pumped wait (the second edit's generation is not in the store); or discard a tab's buffer when the workspace's disposal disposes it (the store is empty) |
 | `AFailedFlushFallsBackToThePromptAndDiscardsNothing` | the store's write seam returns `Failed` (disk full) → the prompt is invoked; Cancel keeps the window and the buffer in memory | return `Closed` on failure |
 | `AFlushThatTimesOutFallsBackToThePrompt` | the write seam never completes; the flush's bounded wait reports the timeout (asserted), `AbandonInFlight()` released the ticket (`SavesIdle` true), the prompt follows; release in `finally` | treat timeout as flushed |
-| `AWriteOverTheStoresCapFallsBackToThePrompt` | the cap refusal → prompt | return `Closed` on the refusal |
+| `AWriteOverTheStoresCapFallsBackToThePrompt` | a buffer longer than the store's per-buffer cap (the design's number), so the real store answers its `write_buffer` with the typed cap refusal → the flush returns `Failed` with the cap reason → prompt | return `Closed` on the refusal |
 | `CloseVaultStillAsksAndDiscardAllDropsTheBuffers` (hold-through) | a write held in flight when Close Vault starts; the prompt is invoked while it is held (`Quiesce()` abandoned it; `SavesIdle` true); Discard All issues `discard_vault()` through `FenceAndDiscardVault()` while it is held (the seam's call record); `CloseVault()` returns with the write still held — `BeforeJoinForTests` recorded the hold still in place and `SavesForTests.LiveWorkersForTests` 0 when the join began, the watchdog never fired, the workspace and session are gone; then the fact releases it, its return is observed (`AfterCallForTests`, asserted `Wait(2 s)`, released in `finally`), and reopening the vault over the same store host reads no buffers, builds no dirty tab and posts no `UnsavedNotesRestored` | hand the recovery write to `TrackWorker` (the join waits on the held write: the watchdog fires); or skip the discard (the late write's buffer is restored); or a store whose `discard_vault()` does not supersede an older in-flight write (the late write re-creates the buffer) |
 | `ATimedOutFlushThenDiscardAllLeavesNothingToRestore` (hold-through; Theory: application close, vault switch) | an edit after the last debounce; the route's `FlushLatest` admits its write and the seam holds that `write_buffer` in flight; the flush times out (asserted) and abandons it; the fallback prompt answers Discard All; `discard_vault()` is issued after the fence while the write is held, and no `write_buffer` is issued after it; the route's whole teardown returns with the write still held (asserted; the watchdog never fired); then the fact releases it, its late return is observed (asserted `Wait(2 s)`, released in `finally`), and reopening the vault over the same store host reads no buffers, builds no dirty tab and posts no `UnsavedNotesRestored` | hand the recovery write to `TrackWorker` (the disposal's join waits: the watchdog fires); or the fallback route's Discard All without `discard_vault()` (the late write's buffer is restored); or a store whose discard does not supersede an older in-flight write (the late write re-creates the buffer); or the timeout treated as `Flushed` (no prompt is invoked) |
 | `ALateWriteAfterACleanTransitionDoesNotResurrectTheBuffer` | a `write_buffer` held in flight; the reader undoes the tab back to its saved text (clean without a save — a save would wait behind the write's ticket), so `FenceAndDiscard(tab)` runs while the write is held; the held write is released and completes late (asserted `Wait(2 s)`, released in `finally`); reopening restores nothing for that path and the tab opens clean | the clean transition without `discard_buffer` (the late write's buffer is restored); or a store whose `discard_buffer` does not supersede an older in-flight write (the late write re-creates the buffer) |
@@ -555,7 +555,7 @@ relaunch would.
 | `AFlushWaitsForAnAbandonedWriteWithinItsBound` (new; Theory: application close, vault switch) | generation N's debounce write on `a.md` held when the route starts, and an edit after it makes N + 1; a timer the fact arms off the dispatcher releases the hold 2 s after the route starts — inside the flush's 5 s bound, which is meant to wait for it — and records when; `FlushLatest` is entered before that release (the recorded order: the round loop did not wait on the abandoned write); the seam records no second `write_buffer` before the release; then N + 1's write is issued and lands, `FlushLatest` returns `Flushed`, no prompt is invoked, and the route returns with `InFlight(a.md)` complete; the store holds N + 1's text. (The timer is not a teardown seam: what this fact proves is the order, and nothing is in flight when the route returns.) | no `Quiesce()` (the flush is entered only after the release); or admit N + 1 without waiting for the abandoned write (a second `write_buffer` while N is held) |
 | `DisposalJoinsASaveWorkerButNotARecoveryWrite` (new) | a recovery write on `a.md` (its first) held, and a Ctrl+S on `b.md` parked at `SaveWriteHookForTests`; `BeforeJoinForTests` records that the recovery write is still held and releases the parked save; the lifecycle's `Dispose()` (the shutdown path, no teardown route) returns — the watchdog never fired — with `b.md` holding the save's bytes (the save worker was joined) and the recovery write still held (asserted); then the fact releases it: its return is observed (asserted `Wait(2 s)`, released in `finally`), no fault is logged, nothing is published (the writer is detached), and reopening restores `a.md`'s text dirty — a write the store host finished after the session was gone, with no discard after it, is a crash-shape buffer | hand the recovery write to `TrackWorker` (the watchdog fires); or skip `CloseAndJoinWorkers` (`b.md` lacks the save's bytes when disposal returns); or route `write_buffer` through the session (the released call throws `ObjectDisposedException` and the store holds nothing for `a.md`) |
 | `AReopenedVaultsWriteWaitsForTheLastSessionsAbandonedWrite` (new; hold-through) | a write on `a.md` held; Close Vault answered Discard All returns with it still held (asserted; the watchdog never fired); the vault reopens over the same store host while it is held, and an edit to `a.md` ticks: the seam sees no second `write_buffer` while the first is held (call count 1, asserted) and `SavesIdle` is true; then the fact releases the first and observes its return (asserted `Wait(2 s)`, released in `finally`); the new session's write is issued and lands; after the crash shape (the session disposed with no teardown route), reopening restores the new session's text dirty | keep the per-path in-flight record in the writer instead of the store host (the new session's write is issued while the old one is held: call count 2) |
-| `ADiscardThatCannotLandDoesNotHoldTheTeardown` (new; Theory: Close Vault, application close) | an edit durably written (asserted); application close's flush is made to fail by the seam answering the store's cap refusal, so its prompt opens at once; the prompt answers Discard All and the seam holds `discard_vault()`; the route's whole teardown returns with a `Closed` outcome (Close Vault: the vault closed; application close: `PrepareForApplicationClose()` true, then `Dispose()` returned) after `AwaitDiscards()` spent its 5 s budget, with the discard still held (asserted), `HotExitDiscardUnconfirmed` logged once (`HostLog.ObserverForTests`), and the watchdog never fired; then the fact releases the discard and observes its return (asserted `Wait(2 s)`, released in `finally`); reopening reads no buffers | wait for the discard without a budget, or issue it on the dispatcher (the route never returns: the watchdog fires); or refuse the close on a miss (the outcome is `Refused`); or never wait (nothing is logged) |
+| `ADiscardThatCannotLandDoesNotHoldTheTeardown` (new; Theory: Close Vault, application close) | an edit to `a.md` durably written as generation N (asserted: the store holds N's text and the writer's last durable generation is N); then a further edit makes N + 1 — its text longer than the store's per-buffer cap — and the fact starts the route in the same dispatcher turn, so N + 1's debounce timer never fires (the route's `Quiesce()` stops it; asserted: `BeforeCallForTests` recorded no `write_buffer` for N + 1 before the route started). `FlushLatest` writes only generations newer than the last durable one, so without N + 1 there would be nothing to flush. Application close: its `FlushLatest` admits N + 1's write — `BeforeCallForTests` records a `write_buffer` for `a.md` at generation N + 1 — the real store answers it with its typed cap refusal (`AfterCallForTests` observes the return), the flush returns `Failed` with the cap reason, and the prompt opens with that reason in the status line; the recorded order is N + 1's write call, its refused return, the prompt, then `discard_vault()`. Close Vault: no `write_buffer` for N + 1 at all (it flushes nothing), and its prompt opens because the tab is dirty. Both: the prompt answers Discard All and the seam holds `discard_vault()` (its start observed, asserted `Wait(2 s)`); the route's whole teardown returns with a `Closed` outcome (Close Vault: the vault closed; application close: `PrepareForApplicationClose()` true, then `Dispose()` returned) after `AwaitDiscards()` spent its 5 s budget, with the discard still held (asserted), `HotExitDiscardUnconfirmed` logged once (`HostLog.ObserverForTests`), and the watchdog never fired; then the fact releases the discard and observes its return (asserted `Wait(2 s)`, released in `finally`); reopening reads no buffers | admit a flush write only for a tab with no durable generation yet, instead of one whose generation exceeds its durable one (N's durability satisfies the flush: no `write_buffer` for N + 1, `Flushed`, no prompt — the application-close arm fails); wait for the discard without a budget, or issue it on the dispatcher (the route never returns: the watchdog fires); or refuse the close on a miss (the outcome is `Refused`); or never wait (nothing is logged) |
 | `ADiscardedTabsBufferIsNotRestored` (new; Theory: close the tab, close its pane, open another note into it — each answered Discard) | an edit to `a.md` durably written (asserted); the route's prompt answers Discard; `discard_buffer(a.md)` is issued before the tab is disposed or re-pointed (the recorded order); closing the vault (nothing dirty: no prompt) and reopening builds no tab for `a.md` and posts no `UnsavedNotesRestored` | skip the discard on that route (the entry reopens as a new dirty tab) |
 | `ReopeningRestoresTheBuffersIntoTheTabsTheLayoutBuilds` | the tab instances in `Groups` after construction are dirty with the text; the active tab is the restored one; exactly one landing; `WorkspaceReady` after install (order recorded by a seam) | install into pre-built tabs |
 | `ARecoveryEntryWithNoLayoutTabOpensANewDirtyTab` | a new tab in the active group, dirty | drop the entry |
@@ -565,7 +565,7 @@ relaunch would.
 | `AWeakRootsBufferIsNeverRestoredIntoAnotherFolderAtItsPath` (new; item 7, R1) | through the real core store over a temp store root, with WB-28's `SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED` set in-process to the fixture's unique folder name `T` (cleared in `finally`): the vault `T\vault` opens with `RootIdentity().Persistent` false (asserted first); an edit to `Notes/a.md` reaches the store (b) or is refused with core's reason (a), observed; the session is disposed with no teardown route (the crash shape); `T\vault` is deleted and a different vault is created at the same path with its own `Notes/a.md` bytes; opening it builds no dirty tab, posts no `UnsavedNotesRestored`, and a tab on `Notes/a.md` shows the new vault's bytes | store a weak root's buffer under its path and admit it without the design's check (the buffer is restored into the other vault) |
 | `AWeakRootRenamedWhileClosedIsNotRestoredByItsIndex` (new; item 7, R2) | the same seam and store; `T\a` opens weak (asserted); an edit to `Notes/a.md`; the crash shape; `T\a` is renamed to `T\b` with Slate closed (the NTFS index survives the rename, as a FAT one may not); opening `T\b` restores nothing; then `T\b` is renamed back to `T\a` and opened: under (b) the buffer is restored dirty with its text (the visit to `T\b` did not delete it); under (a) nothing is restored and the store holds nothing for either spelling | key a weak root's buffer by its weak identity (opening `T\b` restores it); or, under (b), prune an entry the open did not admit (renamed back, nothing restores) |
 | `A11yCorpusCensus` (existing) | PR 29's events present | — |
-| FlaUI `ShellAccessibilityTests.HotExit_ClosingAndReopeningKeepsAnUnsavedNote` (new partial file `ShellAccessibilityTests.HotExit.cs`) | type, close the window, relaunch, the tab is dirty with the text; NVDA log carries the restore sentence | — |
+| FlaUI `ShellAccessibilityTests.HotExit_ClosingAndReopeningKeepsAnUnsavedNote` (new partial file `ShellAccessibilityTests.HotExit.cs`; both launches through `StartShellProcess`, which after WB-1 applies `ShellLaunch.ApplyDeviceState`, so both read and write the run's own `ShellLaunch.Root` and the relaunch finds the store the first launch wrote) | type into `note.md`; close the window (`WM_CLOSE`): no dialog — the first process exits within 15 s (asserted); relaunch on the same vault: the restored tab is dirty with the typed text. The speech witness is the shell gate's own desktop-scoped UIA listener, never NVDA (the gate runs with NVDA closed): a `DesktopNotificationListener` (`ShellAccessibilityTests.Announcements.cs:520-581`, NVDA's registration shape) registered on the desktop root before the relaunch, as `Announcements_ReachADesktopScopedListenerFromLaunch` registers it before its launch (`:57`, `:93-96`), because the restore sentence is a launch line; after `LaunchSettledMark` (`:350-376`: the launch settled `drained` or `ready-empty`, no launch line dropped or expired), the lines heard from the relaunched process (`HeardFrom`, `:307-308`) hold core's rendering of `UnsavedNotesRestored` for one note (`SlateUniffiMethods.A11yRender`, the event as PR 29 names it — never a transcription) exactly once, after the `VaultOpened` line, raised as rendered (`AssertRaisedAsRendered`, `:411-430`); nothing heard from the first process is that line | prompt on application close as today (the first process does not exit within 15 s); drop the `UnsavedNotesRestored` post (the listener never hears it); post it from the `WorkspaceViewModel` constructor, before `WorkspaceReady` (it is heard before the `VaultOpened` line) |
 | existing open-order pins in `RescanTests` updated where the constructor gained a parameter | | |
 
 Every `Wait(timeout)` in these facts asserts its boolean result and
@@ -622,7 +622,8 @@ $missing = @($required | Where-Object { $names -notcontains $_ })
 if ($missing.Count -gt 0) { throw "the filter does not select: $($missing -join ', ')" }
 if (-not ($names | Where-Object { $_ -like 'SlateWindows.Tests.Censuses.A11yCorpusCensus.*' })) { throw 'no A11yCorpusCensus fact discovered' }
 dotnet test $tests --no-build --configuration Release --filter $filter; Assert-Ok 'HotExitTests, RescanTests, A11yCorpusCensus, the save-join pins'
-# NVDA closed, desktop free (the FlaUI facts live in the partial class ShellAccessibilityTests, so select by method name):
+# NVDA closed, desktop free: the journey's speech witness is the gate's desktop-scoped UIA listener (DesktopNotificationListener), not NVDA's log.
+# The FlaUI facts live in the partial class ShellAccessibilityTests, so select by method name:
 $at = 'apps/slate-windows/tests/SlateWindows.AccessibilityTests/SlateWindows.AccessibilityTests.csproj'
 $atFilter = 'FullyQualifiedName~ShellAccessibilityTests.HotExit_ClosingAndReopeningKeepsAnUnsavedNote'
 $atNames = @(dotnet test $at --no-build --configuration Release --list-tests --filter $atFilter | Select-String '^\s{4}\S'); Assert-Ok 'FlaUI discovery'
@@ -640,26 +641,75 @@ binding regeneration. Mutation run per row, locally (the weak-root
 rows under the policy the design chose).
 
 CI: `windows.yml` all lanes (FlaUI journey added). AT: NVDA full pass,
-launched with `SLATE_LOCAL_APP_DATA` on a seeded root (§4 rule 4): (1)
-type in a note, Alt+F4 — no dialog, the window closes; (2) relaunch and
-open the vault — "Restored 1 unsaved note" (core's exact phrase) after
-the vault-opened sentence, the dirty marker in the tab title, the caret
-in the restored note; (3) change the file outside Slate first, then
-reopen — the stale notice and, on Ctrl+S, the conflict sentence; (4)
-Close Vault with a dirty tab — the prompt as today; (5) make the store
-root read-only, type, Alt+F4 — the prompt with the reason in the status
-line; (6) launched with `SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED` set
-to a scratch vault's folder name (a weak root), type, Alt+F4 — under
-item 7 (a) the prompt with core's weak-root reason in the status line,
-under (b) no dialog and the relaunch restores as in (2). Recorded in the
-PR body; the PR stays a draft until then.
+with NVDA running and the Release build, its device state isolated per
+§4 rule 4. The pass relaunches, and the relaunch must read the hot-exit
+store the first launch wrote under `SLATE_LOCAL_APP_DATA`
+(`SlateDeviceState.Root`, WB-1). WB-1's
+`scripts/windows/launch-for-field-pass.ps1` makes a fresh root on every
+call and takes no existing one, so a relaunch through it would find an
+empty store; this pass therefore sets the two variables itself, once,
+in one PowerShell window at the repo root, and starts every launch from
+that window — never from a shell without them, which would write the
+owner's real recents and device state. The vault is passed as the
+argument, so no recents seed is needed:
+
+```powershell
+dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release; if ($LASTEXITCODE -ne 0) { throw 'build failed' }
+$root = Join-Path $env:TEMP ("wb29-field-pass-" + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+$vault = Join-Path $root 'vault'
+$weak = Join-Path $root 'wb29-weak-root'
+New-Item -ItemType Directory -Path $vault, $weak | Out-Null
+Set-Content -LiteralPath (Join-Path $vault 'note.md') -Value '# note'
+Set-Content -LiteralPath (Join-Path $weak 'note.md') -Value '# weak note'
+$env:SLATE_LOCAL_APP_DATA = Join-Path $root 'device-state'
+$env:SLATE_LOG_DIR = Join-Path $root 'logs'
+$exe = (Resolve-Path apps/slate-windows/src/SlateWindows/bin/Release/net10.0-windows/SlateWindows.exe).Path
+function Start-Slate([string]$Path) {
+    # every launch of the pass goes through here: it refuses once this window has lost the pass's device root
+    if (-not $env:SLATE_LOCAL_APP_DATA -or -not $env:SLATE_LOCAL_APP_DATA.StartsWith($root)) { throw 'SLATE_LOCAL_APP_DATA is not the pass''s root in this window' }
+    & $exe $Path
+}
+Start-Slate $vault   # scenario (1); each relaunch in (2)-(5) is this same line, typed again in this window
+```
+
+Scenario (6), last, in the same window:
+
+```powershell
+$env:SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED = 'wb29-weak-root'
+Start-Slate $weak   # and again for (b)'s relaunch
+```
+
+After the last scenario, with Slate closed (never earlier: a GUI launch
+returns at once, so these lines must not be pasted with the blocks
+above):
+
+```powershell
+Remove-Item Env:SLATE_LOCAL_APP_DATA, Env:SLATE_LOG_DIR, Env:SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED
+```
+
+The scenarios: (1) type in a note, Alt+F4 — no dialog, the window
+closes; (2) relaunch — "Restored 1 unsaved note" (core's exact phrase)
+after the vault-opened sentence, the dirty marker in the tab title, the
+caret in the restored note; (3) change the file outside Slate first,
+then relaunch — the stale notice and, on Ctrl+S, the conflict sentence;
+(4) Close Vault with a dirty tab — the prompt as today; (5) make the
+hot-exit store's folder under `$env:SLATE_LOCAL_APP_DATA` read-only (its
+name per PR 29's design), type, Alt+F4 — the prompt with the reason in
+the status line; (6) the weak root (`wb29-weak-root`, which only `$weak`'s
+path contains), type, Alt+F4 — under item 7 (a) the prompt with core's
+weak-root reason in the status line, under (b) no dialog and the
+relaunch restores as in (2). Recorded in the PR body (the NVDA log
+excerpt per scenario); the PR stays a draft until then.
 
 ## Acceptance
 
 - [ ] WD20 recorded; PR 29's design and core store merged with green
       combined-head CI; WB-28 merged; WB-2's `Admit` on `main`.
 - [ ] The twenty-six `HotExitTests` facts, an `A11yCorpusCensus` fact
-      and the FlaUI journey pass, seen failing first; the save-join pins
+      and the FlaUI journey pass, seen failing first — the journey's
+      speech witness the shell gate's desktop-scoped UIA listener
+      (`DesktopNotificationListener`), run with NVDA closed, never an
+      NVDA log; the save-join pins
       `PumpedSaveReentrancyTests.DisposalJoinsASaveWorkerBeforeTheSessionGoes`
       and `TheJoinRunsEveryTrackedWorkerToCompletion` pass unchanged.
 - [ ] Application close and switch flush then never prompt; a failed or
@@ -698,8 +748,10 @@ PR body; the PR stays a draft until then.
 - [ ] Restore injected into `RestoreNode`'s tabs (the instances in
       `Groups` are the dirty ones); one landing; `WorkspaceReady` after.
 - [ ] Registers: contract 38 amendment, matrices, ledger; NVDA pass
-      (six scenarios) recorded; `Refs`/`Closes #1525` per the closure
-      matrix.
+      (six scenarios, NVDA running, every launch from one window with
+      `SLATE_LOCAL_APP_DATA` and `SLATE_LOG_DIR` set to one temporary
+      root) recorded with its NVDA log excerpts; `Refs`/`Closes #1525`
+      per the closure matrix.
 - [ ] Not delivered: anything the design deferred (named).
 
 ## Brief
@@ -741,7 +793,15 @@ workers), `WorkspaceViewModel.Persistence.cs:53-108`,
 `FilesSidebarViewModel.WriteJournal.cs:99-102` (a bounded, unpumped wait
 that logs and proceeds), `HostLog.cs:212` (`ObserverForTests`),
 `PumpedSaveReentrancyTests.cs:256`, `:289` (the save-join pins),
-`WorkspacePersistence.cs:98`, `:168-214`, `FileRecentsStore.cs:22-37`, and
+`WorkspacePersistence.cs:98`, `:168-214`, `FileRecentsStore.cs:22-37`, the
+shell gate's speech witness in
+`tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.Announcements.cs`
+(`:57-96`, a listener registered before a launch; `:221-228`
+`ListenOnTheDesktop`; `:264-402` `AwaitHeard`, `HeardFrom`, `QuietMark`,
+`LaunchSettledMark`, `AwaitHeardSince`; `:411-430`
+`AssertRaisedAsRendered`; `:520-581` `DesktopNotificationListener`) and
+`ShellAccessibilityTests.cs:117-138` (`StartShellProcess`, which WB-1
+points at the run's `ShellLaunch.Root`), and
 `CallWithPointer` in the generated `src/SlateUniffi/generated/slate_uniffi.cs`
 (a binding call raises its object's call counter and clones its Rust
 `Arc`; `Dispose` frees the object only at zero, so a session call still
@@ -903,8 +963,10 @@ frame; discard when the disposal disposes a tab];
 `AFailedFlushFallsBackToThePromptAndDiscardsNothing` [`Closed` on
 failure]; `AFlushThatTimesOutFallsBackToThePrompt` (the timeout asserted,
 the ticket released by `AbandonInFlight()`, release in `finally`)
-[timeout as flushed]; `AWriteOverTheStoresCapFallsBackToThePrompt`
-[`Closed` on the refusal]; `CloseVaultStillAsksAndDiscardAllDropsTheBuffers`
+[timeout as flushed]; `AWriteOverTheStoresCapFallsBackToThePrompt` (a
+buffer longer than the store's per-buffer cap, refused by the real
+store; the flush returns `Failed` with the cap reason) [`Closed` on the
+refusal]; `CloseVaultStillAsksAndDiscardAllDropsTheBuffers`
 (hold-through: a write held when Close Vault starts; the prompt opens
 while it is held; Discard All issues `discard_vault()` through
 `FenceAndDiscardVault()` while it is held; `CloseVault()` returns with it
@@ -974,13 +1036,24 @@ second `write_buffer` while it is held, `SavesIdle` true; released, the
 new session's write lands and is what a later open restores) [the
 in-flight record kept per workspace instead of on the store host];
 `ADiscardThatCannotLandDoesNotHoldTheTeardown` (a Theory over Close
-Vault and application close, application close's flush failing on the
-cap refusal: Discard All's `discard_vault()` held; the route's whole
-teardown returns `Closed` after the 5 s budget with the discard still
-held, `HotExitDiscardUnconfirmed` logged once, the watchdog never fired;
-released afterwards; reopening reads no buffers) [an unbounded or
-dispatcher discard — the watchdog fires; refuse the close on a miss;
-never wait]; `ADiscardedTabsBufferIsNotRestored` (a Theory over closing
+Vault and application close: an edit to `a.md` durably written as
+generation N, asserted; then a further edit makes N + 1, longer than the
+store's per-buffer cap, and the route starts in the same dispatcher turn
+so N + 1's debounce never fires — asserted: no `write_buffer` for N + 1
+before the route — because `FlushLatest` writes only generations newer
+than the last durable one; application close's flush admits N + 1's
+write, which `BeforeCallForTests` records at generation N + 1 and the
+real store refuses with its cap refusal, so the flush returns `Failed`
+and the prompt opens — that write call and its refused return recorded
+before `discard_vault()`; Close Vault issues no write for N + 1 and
+prompts because the tab is dirty; then Discard All's `discard_vault()`
+held; the route's whole teardown returns `Closed` after the 5 s budget
+with the discard still held, `HotExitDiscardUnconfirmed` logged once, the
+watchdog never fired; released afterwards; reopening reads no buffers)
+[flush only a tab with no durable generation yet — N's durability
+satisfies the flush: no write for N + 1, `Flushed`, no prompt; an
+unbounded or dispatcher discard — the watchdog fires; refuse the close
+on a miss; never wait]; `ADiscardedTabsBufferIsNotRestored` (a Theory over closing
 the tab, closing its pane and opening another note into it, each
 answered Discard: `discard_buffer` issued before the tab is disposed or
 re-pointed; reopening builds no tab for it) [skip the discard on that
@@ -1001,7 +1074,25 @@ crash shape; renamed with Slate closed, the new name restores nothing;
 renamed back, (b) restores the buffer dirty, (a) restores nothing and
 the store holds nothing) [key by the weak identity; under (b) prune an
 unadmitted entry]; the FlaUI journey
-`ShellAccessibilityTests.HotExit_ClosingAndReopeningKeepsAnUnsavedNote`.
+`ShellAccessibilityTests.HotExit_ClosingAndReopeningKeepsAnUnsavedNote`
+(new partial file `ShellAccessibilityTests.HotExit.cs`; both launches
+through `StartShellProcess`, which after WB-1 applies
+`ShellLaunch.ApplyDeviceState`, so the relaunch reads the store the first
+launch wrote under the run's `ShellLaunch.Root`: type into `note.md`,
+close the window — no dialog, the process exits within 15 s; relaunch —
+the tab is dirty with the text; the speech witness is the gate's
+desktop-scoped UIA listener, not NVDA, since the gate runs with NVDA
+closed: a `DesktopNotificationListener`
+(`ShellAccessibilityTests.Announcements.cs:520-581`) registered on the
+desktop root before the relaunch, as
+`Announcements_ReachADesktopScopedListenerFromLaunch` does (`:93-96`);
+after `LaunchSettledMark` (`:350-376`), the relaunched process's heard
+lines (`HeardFrom`, `:307-308`) hold core's `UnsavedNotesRestored`
+rendering for one note, through `SlateUniffiMethods.A11yRender`, exactly
+once, after the `VaultOpened` line, raised as rendered
+(`AssertRaisedAsRendered`, `:411-430`)) [prompt on application close —
+the first process does not exit; drop the post — never heard; post it
+from the `WorkspaceViewModel` constructor — heard before `VaultOpened`].
 The save-join pins `PumpedSaveReentrancyTests.DisposalJoinsASaveWorkerBeforeTheSessionGoes`
 and `TheJoinRunsEveryTrackedWorkerToCompletion` run unchanged with them.
 Every `Wait(timeout)` asserts its result and releases in `finally`.
@@ -1016,17 +1107,36 @@ ledger (`--write`, then `--check`). Not delivered: whatever the design
 defers. Done when the Verification block runs clean in PowerShell (the
 twenty-six `HotExitTests` facts, the two save-join pins and an
 `A11yCorpusCensus` fact discovered by name, the FlaUI journey
-discovered, every `$LASTEXITCODE` 0), the Windows lanes are green, each
-mutation was run locally (the weak-root rows under the chosen policy),
-the six-scenario NVDA pass (launched with `SLATE_LOCAL_APP_DATA` on a
-seeded root: (1) type, Alt+F4 — no dialog; (2) relaunch and open —
+discovered and run with NVDA closed, every `$LASTEXITCODE` 0), the
+Windows lanes are green, each mutation was run locally (the weak-root
+rows under the chosen policy), the six-scenario NVDA pass (NVDA running,
+the Release build; device state isolated per §4 rule 4 by setting, once,
+in one PowerShell window at the repo root, `$root = Join-Path $env:TEMP
+("wb29-field-pass-" + (Get-Date -Format 'yyyyMMdd-HHmmss'))`,
+`$env:SLATE_LOCAL_APP_DATA = Join-Path $root 'device-state'` and
+`$env:SLATE_LOG_DIR = Join-Path $root 'logs'`, a vault `$vault =
+Join-Path $root 'vault'` holding `note.md` and a weak-root vault `$weak =
+Join-Path $root 'wb29-weak-root'` holding `note.md`, then starting every
+launch and relaunch from that window through a `Start-Slate $vault`
+function that throws unless `$env:SLATE_LOCAL_APP_DATA` still starts
+with `$root` and otherwise runs `& $exe $vault`, `$exe` being the
+resolved Release
+`apps/slate-windows/src/SlateWindows/bin/Release/net10.0-windows/SlateWindows.exe`
+— never from a shell without the variables, which would write the
+owner's real recents and device state; WB-1's
+`scripts/windows/launch-for-field-pass.ps1` is not used because it makes
+a fresh root on every call and the relaunch must read the store the
+first launch wrote; the variables removed with `Remove-Item` only after
+the last scenario, with Slate closed (a GUI launch returns at once):
+(1) type, Alt+F4 — no dialog; (2) relaunch —
 "Restored 1 unsaved note" after the vault-opened sentence, the dirty
 marker, the caret in the note; (3) the file changed outside Slate first
 — the stale notice and, on Ctrl+S, the conflict sentence; (4) Close
-Vault with a dirty tab — the prompt; (5) a read-only store root — the
-prompt with the reason in the status line; (6) a weak root through
-`SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED` — under (a) the prompt with
-core's reason, under (b) as (1) and (2)) is in the PR body, and the
-issue reference follows the closure matrix.
+Vault with a dirty tab — the prompt; (5) the hot-exit store's folder
+under `$env:SLATE_LOCAL_APP_DATA` made read-only — the prompt with the
+reason in the status line; (6) last, `$env:SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED
+= 'wb29-weak-root'` and `Start-Slate $weak` — under (a) the prompt with core's
+reason, under (b) as (1) and (2)) is in the PR body with its NVDA log
+excerpts, and the issue reference follows the closure matrix.
 Commit:
 `feat(windows): unsaved notes survive closing, quitting and a crash and come back unsaved when the vault reopens`.

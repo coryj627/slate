@@ -257,14 +257,26 @@ constant so the PR carries the probe's answer.
 - Identity walk: `windows_entry::open` (`:571`) and `directory()` (`:563`)
   take a `Folders` argument; `capture` and `rename` pass `NotLinks`; a
   `NameSurrogate` ancestor keeps today's refusal.
-- Trash inventory, **all three sites**: `check_directory` (`:77`) admits a
-  `Placeholder` ancestor and refuses a `NameSurrogate`; the selected
-  item (`:58-60`) is admitted as a folder when `Placeholder` (a
-  `NameSurrogate` item stays "staged as the link"); the visit
+- Trash inventory, **all three sites**, and only the placeholder changes
+  at each: `check_directory` (`:77`) admits a `Placeholder` ancestor and
+  refuses a `NameSurrogate` ancestor as today ("Cannot stage Trash through
+  a symbolic link"); the selected item (`:58-60`) is admitted as a folder
+  when `Placeholder`, and a `NameSurrogate` selected item keeps today's
+  refusal ("Cannot stage Trash for a symbolic link"); the visit
   (`:111-116`) recurses into a `Placeholder` directory and hashes it as a
   folder, refuses an unknown `NameSurrogate` tag as today, and keeps
-  `known_link`'s two tags for links. The fingerprint of a placeholder
-  folder is its children's, like any folder, so counts are not lost.
+  `known_link`'s two tags (`0xA000_0003` junction, `0xA000_000C` symbolic
+  link) as links **nested in the selected tree**: such a link is counted
+  once (`children` counts its name), hashed by its stamp and never
+  recursed into, and its target outside is neither read nor counted —
+  main's behaviour, pinned by
+  `staged_trash_handle_enumeration_spans_buffers_and_counts_links_once`
+  (`trash_snapshot/windows_tests.rs:43-59`: 1,200 files plus a nested
+  junction to an outside folder snapshot as `item_count` 1,201). So a
+  junction is refused on the path to the selection (an ancestor) or as
+  the selection itself, and is an uncrossed leaf inside it. The
+  fingerprint of a placeholder folder is its children's, like any
+  folder, so counts are not lost.
 - Trash handoff: **stays `PlainOnly` unless the OneDrive probe shows
   `IFileOperation` on a path through a placeholder is not redirected**
   (WD15's recommendation). Either way `pinned_path`'s refusal becomes
@@ -302,7 +314,8 @@ constant so the PR carries the probe's answer.
 | `test_trash_census.rs` (existing): `only_the_gated_facts_build_a_provider_on_the_real_trash` and `the_system_trash_refuses_a_test_path_off_the_scratch_volume` | stay green with the two gated Windows facts in `GATED_REAL_TRASH_FACTS` and every Windows guard refusal naming "#1455" | leave a new gated fact out of the list; or refuse with a bare `panic!` |
 | if the model ships: `every_provider_but_windows_reports_unverifiable` (core, `vault/trash_handoff_tests.rs`; WB-30 later narrows it to `a_trash_that_reports_no_destination_is_unverifiable`, because its shared verifier makes `ScratchTrash` confirm on every platform), `a_batch_report_carries_one_outcome_per_trashed_item_in_order` (core, `session/tests/structural_batch.rs`), `FileManagementTests.ADeletedForGoodLinkIsNotReportedAsMovedToTheRecycleBin` and `FileManagementTests.ABatchCountsDeletedForGoodLinksSeparately` (Windows) | the variant / the sentences | return `Unverifiable` for the unlink |
 | `windows_entry_tests.rs` (ships with the walks): `undo_identity_is_captured_through_a_placeholder_folder_and_refused_through_a_junction` | `capture` succeeds beneath `opaque_reparse_point`; refuses beneath a junction | pass `PlainOnly` |
-| `trash_snapshot` tests (ships with the walks): `the_inventory_admits_a_placeholder_root_item_and_nested_folder_and_refuses_a_junction` | three fixtures: placeholder ancestor, placeholder as the selected item, placeholder nested inside the tree — `snapshot_cancellable` ok with the nested item counted; a junction at each position refused | revert any one of the three sites |
+| `trash_snapshot/windows_tests.rs` (ships with the walks): `the_inventory_admits_a_placeholder_anywhere_refuses_a_junction_on_the_path_and_counts_a_nested_junction_once` | six fixtures, each a fresh vault. Placeholder (`opaque_reparse_point`): as an ancestor of the selection, as the selected item, and nested inside the selected folder — `snapshot_cancellable` is `Ok` at each, the selected placeholder `is_directory`, and the nested one counted. Junction (`vault::test_support::junction` to an outside folder holding `private.md`): as an ancestor (`j\private.md` selected) — `Err` with "Cannot stage Trash through a symbolic link"; as the selected item — `Err` with "Cannot stage Trash for a symbolic link"; nested inside the selected folder `f` beside `x.md` — `Ok` with `item_count == 2` (`x.md` and the junction, counted once; `private.md` not counted), and the outside folder byte-identical afterwards | revert any one of the three placeholder sites (→ that placeholder fixture is refused); ignore the name-surrogate bit, so a junction counts as a `Placeholder` (→ the selected junction is admitted as an empty folder, and the ancestor fixture fails with a not-found error instead of the refusal); refuse every `NameSurrogate` in the visit, `known_link`'s tags included, as the round-10 text of this fact required (→ the nested-junction fixture is `Err`); recurse into a nested link by its path rather than its handle (→ `private.md` is counted: `item_count == 3`) |
+| `trash_snapshot/windows_tests.rs` (existing, kept green): `staged_trash_handle_enumeration_spans_buffers_and_counts_links_once` (`:43-59`) | 1,200 files and a nested junction snapshot as `item_count` 1,201; selecting a path through the junction is refused | — (main's fact; the visit change must not move it) |
 | `trash_handoff_tests.rs`: `a_cloud_placeholder_ancestor_refuses_with_an_actionable_reason` (or `a_cloud_placeholder_ancestor_is_admitted` if the OneDrive probe allows) | the exact sentence (or the handoff proceeds) | change the text |
 | Windows (ships with the walks, `$walksRelax` in Verification, independently of the outcome model): `FileManagementTests.ImportIntoAPlaceholderFolderIsNotRefusedAsAReparsePoint` | through the `inspect` seam, a path whose only reparse ancestor carries the Cloud Files tag `0x9000_601A` is not refused (`false`); the same ancestor with the junction tag `0xA000_0003`, the symlink tag `0xA000_000C`, or a `null` tag is refused (`true`) | revert to the attribute-only test (the placeholder case returns `true`); or read a `null` tag as a placeholder (that case returns `false`) |
 | Windows (existing, kept green): `W1ImportSafeguardTests.ReparseCheckWalksEveryAncestorUntilItFindsOne` on the new seam; `W1SidebarHardeningTests.ImportOperationStateIsOwnedByTheDedicatedPartial` still finds the member text | the walk stops at the junction ancestor; the scrape matches | rename the member |
@@ -391,10 +404,11 @@ if ($outcomeModelShips) { $handoff += 'every_provider_but_windows_reports_unveri
 $required = [ordered]@{
     'vault::trash_handoff' = $handoff
     'test_trash_census'    = @('only_the_gated_facts_build_a_provider_on_the_real_trash', 'the_system_trash_refuses_a_test_path_off_the_scratch_volume')
+    'trash_snapshot'       = @('staged_trash_handle_enumeration_spans_buffers_and_counts_links_once')   # main's nested-junction fact, required either way
 }
 if ($walksRelax) {
     $required['windows_entry'] = @('undo_identity_is_captured_through_a_placeholder_folder_and_refused_through_a_junction')
-    $required['trash_snapshot'] = @('the_inventory_admits_a_placeholder_root_item_and_nested_folder_and_refuses_a_junction')
+    $required['trash_snapshot'] += 'the_inventory_admits_a_placeholder_anywhere_refuses_a_junction_on_the_path_and_counts_a_nested_junction_once'
 }
 if ($outcomeModelShips) { $required['structural_batch'] = @('a_batch_report_carries_one_outcome_per_trashed_item_in_order') }
 foreach ($filter in $required.Keys) {
@@ -476,8 +490,13 @@ Design; recorded in the PR body.
       per kind with `TrashOutcome::UnlinkedForGood` reported on both single
       and batch paths and the 14 Swift literals edited.
 - [ ] `reparse_kind` applied at the identity walk and all three inventory
-      sites; the handoff per WD15; the Cloud Files refusal sentence
-      core-owned and actionable.
+      sites, admitting a placeholder at each; a junction is still refused
+      as an ancestor of the selection or as the selection itself, and a
+      junction nested in the selected tree is still counted once, never
+      traversed, its outside target untouched
+      (`staged_trash_handle_enumeration_spans_buffers_and_counts_links_once`
+      green beside the new inventory fact); the handoff per WD15; the
+      Cloud Files refusal sentence core-owned and actionable.
 - [ ] Facts pass, seen failing first. The Windows host block ran
       whenever the walks relaxed (WD15's recommended answer, which ships
       the import change on its own) or the outcome model shipped: every
@@ -516,6 +535,7 @@ refusal wording ships). Read `trash_handoff.rs:55-200`, `:290-345`,
 `trash_handoff_tests.rs:20-60`, `:660-830`, `fs.rs:2268-2320`,
 `:2405-2420`, `provider.rs:101`, `windows_entry.rs:40-56`, `:305-330`,
 `:555-635`, `trash_snapshot/windows.rs:50-120`, `:210-262`,
+`trash_snapshot/windows_tests.rs:43-59` (main's nested-junction fact),
 `vault/test_support.rs:92-109`, `vault/test_trash_census.rs:25-47`,
 `:152-165`, `:216-259`, `session.rs:15060-15078`, `:16073-16110`,
 `uniffi lib.rs:3158-3183`, `FilesSidebarViewModel.cs:1848-1872`,
@@ -538,7 +558,18 @@ the parallel `BatchTrashReport.outcomes: Vec<TrashedOutcome>` field
 `FileTreeMultiSelectTests.swift:257`, `MarkdownPropertyRecoveryContractTests.swift:190`,
 `StructuralUndoTests.swift:145/302`, `WorkspaceTabsTests.swift:83`) and
 `A11yEvent::LinkDeletedForGood`; `windows_entry::reparse_kind` applied at
-`open`/`directory` and the inventory's three sites; the Cloud Files
+`open`/`directory` and the inventory's three sites, where only the
+placeholder changes: `check_directory` admits a placeholder ancestor and
+still refuses a junction or link ancestor, the selected item is admitted
+as a folder when a placeholder and still refused when a junction or link,
+and the visit recurses into a placeholder, still refuses an unknown
+name-surrogate tag, and still treats `known_link`'s junction and
+symbolic-link tags nested in the selected tree as leaves — counted once,
+hashed by their stamp, never recursed into, their outside target neither
+read nor counted (main's
+`staged_trash_handle_enumeration_spans_buffers_and_counts_links_once`,
+`trash_snapshot/windows_tests.rs:43-59`, 1,200 files plus a nested
+junction → `item_count` 1,201, stays green); the Cloud Files
 refusal sentence; under WD15's recommended answer — shipping whether or
 not the outcome model does — `HasReparsePointInPath` on the
 name-surrogate test through a new seam `Func<string, (FileAttributes
@@ -559,7 +590,18 @@ the flipped or kept dangling-link fact; `every_provider_but_windows_reports_unve
 `FileManagementTests.ADeletedForGoodLinkIsNotReportedAsMovedToTheRecycleBin`;
 `FileManagementTests.ABatchCountsDeletedForGoodLinksSeparately`;
 `undo_identity_is_captured_through_a_placeholder_folder_and_refused_through_a_junction`;
-`the_inventory_admits_a_placeholder_root_item_and_nested_folder_and_refuses_a_junction`;
+`the_inventory_admits_a_placeholder_anywhere_refuses_a_junction_on_the_path_and_counts_a_nested_junction_once`
+(in `trash_snapshot/windows_tests.rs`; a placeholder as an ancestor, as
+the selection and nested inside it snapshots `Ok`; a junction to an
+outside folder holding `private.md` is refused as an ancestor — "Cannot
+stage Trash through a symbolic link" — and as the selection — "Cannot
+stage Trash for a symbolic link" — while nested beside `x.md` in the
+selected folder it snapshots `Ok` with `item_count == 2` and the outside
+folder byte-identical; mutations: revert a placeholder site; ignore the
+name-surrogate bit; refuse every name surrogate in the visit, known tags
+included; recurse into a nested link by its path), with main's
+`staged_trash_handle_enumeration_spans_buffers_and_counts_links_once`
+kept green;
 `a_cloud_placeholder_ancestor_refuses_with_an_actionable_reason` (or
 `a_cloud_placeholder_ancestor_is_admitted` if the OneDrive probe shows
 no redirection); `FileManagementTests.ImportIntoAPlaceholderFolderIsNotRefusedAsAReparsePoint`

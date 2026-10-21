@@ -210,7 +210,11 @@ Verified against the worktree; the plan's lines hold.
   `SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED` and
   `SLATE_TEST_ROOT_FILE_ID_UNAVAILABLE`, whose NVDA spot check sets the
   variable in a PowerShell window and starts the Release
-  `SlateWindows.exe` from that window. WB-18 (W6, on `main` before this
+  `SlateWindows.exe` from that window — the inheritance is the
+  precedent; a launch with no `SLATE_LOCAL_APP_DATA` is not (plan §4
+  rule 4), so this chunk's pass starts the app through WB-1's
+  `scripts/windows/launch-for-field-pass.ps1`, whose child process
+  inherits the variable too. WB-18 (W6, on `main` before this
   chunk) puts every `SLATE_TEST_*` a `session/tests` fact sets behind its
   `FaultGuard` (`fault_guard()`, then `_env.set`), and its census
   `no_test_sets_a_fault_variable_outside_the_guard` fails on a bare
@@ -635,7 +639,7 @@ moves by `rename`.
 | Windows (Part 2) `FileManagementTests.AMismatchedTrashSpeaksCoresSentenceNotMoved`, `…ADeletedOutrightTrashSpeaksCoresSentence`, `…AnUnverifiableTrashSpeaksCoresSentence`, `…AWeakIdTrashSaysVerifiedByNameOnly` | the four events, not "Moved …"; the mismatch end to end through the real core — the test process's routed scratch bin (a verifying `ScratchTrash`) and `SLATE_TEST_TRASH_REPLACE_AFTER_VALIDATION` set in-process to the fixture note's unique name (cleared in `finally`), so the staged single delete's binding returns `Mismatch` and the host speaks `TrashMismatch` from it | speak "Moved …" for every outcome; ignore the returned outcome (→ the mismatch fact hears "Moved …") |
 | `FileManagementTests.ABatchWithMixedOutcomesSaysEachClassInItsSummary` (Part 2) | the batch sentence's clauses and counts | drop a clause |
 | `A11yCorpusCensus` + mac mirror: the four new rows (Part 2) | each event's corpus row matches its sentence | drop a row |
-| FlaUI `ShellAccessibilityTests.Trash_AVerifiedMoveStillSpeaksMoved` (`ShellAccessibilityTests.Trash.cs`, new partial; Part 2) | the ordinary sentence unchanged after the back-end swap; NVDA log | speak the unverifiable sentence for `Confirmed` |
+| FlaUI `ShellAccessibilityTests.Trash_AVerifiedMoveStillSpeaksMoved` (`ShellAccessibilityTests.Trash.cs`, new partial; Part 2) | the ordinary sentence unchanged after the back-end swap. The speech witness is the shell gate's own desktop-scoped UIA listener, never NVDA (the gate runs with NVDA closed): Slate launched through `StartShellProcess` (`ShellAccessibilityTests.cs:117-138`, which WB-1 points at the run's `ShellLaunch.Root`) on a temp vault holding `note.md` and `other.md`, nothing open; once the window exists, a `DesktopNotificationListener` (`ShellAccessibilityTests.Announcements.cs:520-581`, NVDA's registration shape) registered through `ListenOnTheDesktop` (`:221-228`), as `ShellAccessibilityTests.Rescan.cs:90-109` does; the mark taken with `LaunchSettledMark` (`Announcements.cs:350-376`); `note` selected in the Files tree and Delete pressed; then `AwaitHeardSince(heard, process.Id, mark, [moved], TimeSpan.FromSeconds(15), logFile)` (`:384-402`), with `moved` = `SlateUniffiMethods.A11yRender(new A11yEvent.HostComposed("Moved note to the Recycle Bin.", A11yPriority.Medium))` — the line `ReportMutationResult` raises (`FilesSidebarViewModel.FileManagement.cs:160-167`): exactly that line since the mark, once, nothing else, raised as rendered | speak the unverifiable sentence for `Confirmed` (the listener hears it instead of "Moved note to the Recycle Bin.") |
 
 The FAT32/exFAT fact asserts, for each of `SLATE_WEAK_VOLUME_FAT32` and
 `SLATE_WEAK_VOLUME_EXFAT` that is set (it panics when neither is, so a
@@ -762,7 +766,7 @@ $gate = 'apps/slate-windows/tests/SlateWindows.AccessibilityTests/SlateWindows.A
 $journey = 'FullyQualifiedName~SlateWindows.AccessibilityTests.ShellAccessibilityTests.Trash_AVerifiedMoveStillSpeaksMoved'
 $n = (dotnet test $gate --no-build --configuration Release --list-tests --filter $journey | Select-String 'Trash_AVerifiedMoveStillSpeaksMoved').Count
 if ($n -ne 1) { throw "the journey filter selects $n tests" }
-dotnet test $gate --no-build --configuration Release --filter $journey; Assert-Ok 'FlaUI journey'   # desktop free, NVDA closed
+dotnet test $gate --no-build --configuration Release --filter $journey; Assert-Ok 'FlaUI journey'   # desktop free, NVDA closed: the journey's witness is the desktop-scoped UIA listener, not NVDA's log
 $cs = @('apps/slate-windows/src/SlateWindows/FilesSidebarViewModel.cs','apps/slate-windows/src/SlateWindows/FilesSidebarViewModel.Trash.cs','apps/slate-windows/tests/SlateWindows.Tests/FileManagementTests.cs','apps/slate-windows/tests/SlateWindows.Tests/Censuses/A11yCorpusCensus.cs','apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.Trash.cs')
 dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $cs; Assert-Ok 'dotnet format'
 python -I scripts/a11y_trigger_ledger.py --write; Assert-Ok 'ledger write'
@@ -791,23 +795,43 @@ mutation on the mac lane's PR run). CI: `windows.yml` (all), `rust.yml`
 (the portable facts and `the_platform_trash_off_windows_reports_no_destination`
 on Linux), `swift-tests.yml` (green before merge). AT: NVDA full pass per
 §4 rule 4, on Part 2's PR, with the Release build and NVDA running.
-Launch, once, from one PowerShell window at the repo root, so the app
-inherits the seam variable (`AfterTrashValidation` is a test-only fault
-point that no launched app reaches; the variable is the app-reachable
-seam, read in every build):
+Launch, once, from one PowerShell window at the repo root, through
+WB-1's field-pass launcher, so the app inherits the seam variable
+(`AfterTrashValidation` is a test-only fault point that no launched app
+reaches; the variable is the app-reachable seam, read in every build)
+and writes its device state under a temporary root, never the owner's
+`%LOCALAPPDATA%\Slate`. Started directly from a shell without
+`SLATE_LOCAL_APP_DATA`, the app would write the owner's real recents and
+device state, because WB-1 keeps the production profile paths when the
+variable is absent. The launcher
+(`scripts/windows/launch-for-field-pass.ps1`, `param([string]$Vault,
+[switch]$Seed, [switch]$Keep, [string]$Exe)`) creates
+`$env:TEMP\slate-field-pass-<yyyyMMdd-HHmmss>`, sets `SLATE_LOCAL_APP_DATA`
+and `SLATE_LOG_DIR` beneath it, with `-Seed` writes a `recent-vaults.json`
+naming `$Vault`, starts `$Exe` on `$Vault`, prints the root, and with
+`-Keep` keeps it (the app log for the PR body is under it). It runs as a
+child `pwsh`, which — like the Slate it starts — inherits this window's
+environment, the seam variable included, and leaves this window's own
+environment untouched:
 
 ```powershell
 dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release; if ($LASTEXITCODE -ne 0) { throw 'build failed' }
+if (-not (Test-Path -LiteralPath scripts/windows/launch-for-field-pass.ps1)) { throw 'WB-1''s field-pass launcher is not on this branch' }
 $vault = Join-Path $env:TEMP ("wb30-field-pass-" + (Get-Date -Format 'yyyyMMdd-HHmmss'))
 New-Item -ItemType Directory -Path $vault | Out-Null
 foreach ($name in 'note', 'plain-a', 'plain-b', 'plain-c', 'plain-d', 'plain-e', 'wb30-replace-me', 'wb30-replace-me-in-a-batch') {
     Set-Content -LiteralPath (Join-Path $vault "$name.md") -Value "# $name"
 }
+$exe = (Resolve-Path apps/slate-windows/src/SlateWindows/bin/Release/net10.0-windows/SlateWindows.exe).Path
 $env:SLATE_TEST_TRASH_REPLACE_AFTER_VALIDATION = 'wb30-replace-me'
-& apps/slate-windows/src/SlateWindows/bin/Release/net10.0-windows/SlateWindows.exe $vault
+pwsh -NoProfile -File scripts/windows/launch-for-field-pass.ps1 -Vault $vault -Seed -Keep -Exe $exe
+if ($LASTEXITCODE -ne 0) { throw "field-pass launcher failed ($LASTEXITCODE)" }   # it prints the kept root; record it
 # after the pass: close Slate, then
 Remove-Item Env:SLATE_TEST_TRASH_REPLACE_AFTER_VALIDATION
 ```
+
+Scenarios (4) and (5) open their vaults from this same running app
+(Open Vault), so they share its temporary root.
 
 In the tree, each selection deleted with Delete (a file takes no prompt): (1)
 `note` alone — "Moved note to the Recycle Bin." unchanged; (2) `plain-a`,
@@ -874,7 +898,10 @@ no AT pass; its mac state is pinned by the Swift fact and
 - [ ] The facts in the Tests table pass, seen failing first, each
       discovered by name under its filter; NVDA pass recorded on Part 2,
       its mismatch scenarios run from one PowerShell window with the seam
-      variable set and the Release app started from it, single and batch
+      variable set and the Release app started from it through WB-1's
+      `scripts/windows/launch-for-field-pass.ps1 -Vault $vault -Seed -Keep
+      -Exe $exe` (device state under the launcher's temporary root, never
+      the owner's profile), single and batch
       phrases recorded.
 - [ ] Registers appended; `Refs #1468`; "not delivered": the macOS Rust
       half, the mac host and flipping macOS's `reports_destination` (PR
@@ -951,7 +978,18 @@ on the VHDs; `VaultRootIdentity`'s `persistent` flag and
 neither read answers, WD24); `vault/watch.rs:279-307` (the file-index
 read WB-28 falls back to); `session.rs:3160-3260` (the filesystem open;
 `FsVaultProvider::held` at `:3256`); `fs.rs:125-158` (`new` holds no
-root, `held` does).
+root, `held` does); for Part 2's journey and field pass,
+`FilesSidebarViewModel.FileManagement.cs:160-167` (`ReportMutationResult`
+raises a `HostComposed` line at `Medium`), the shell gate's speech
+witness in `tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.Announcements.cs`
+(`:221-228` `ListenOnTheDesktop`, `:264-402` `AwaitHeard`, `HeardFrom`,
+`QuietMark`, `LaunchSettledMark`, `AwaitHeardSince`, `:411-430`
+`AssertRaisedAsRendered`, `:520-581` `DesktopNotificationListener`),
+`ShellAccessibilityTests.Rescan.cs:80-130` (the listener registered once
+the window exists, then a mark per step), `ShellAccessibilityTests.cs:117-138`
+(`StartShellProcess`), and WB-1's spec for
+`scripts/windows/launch-for-field-pass.ps1` (`-Vault`, `-Seed`, `-Keep`,
+`-Exe`).
 
 Build, Part 1 (core, both bindings; no host speaks anything new):
 `TrashDestination { Known, Unknown, DeletedOutright }` and
@@ -1206,7 +1244,19 @@ Facts (mutation in brackets), seen failing first:
   `.AWeakIdTrashSaysVerifiedByNameOnly` (the events, not "Moved …"),
   `.ABatchWithMixedOutcomesSaysEachClassInItsSummary` (clauses and
   counts); the four `A11yCorpusCensus` rows and the mac mirror;
-  FlaUI `ShellAccessibilityTests.Trash_AVerifiedMoveStillSpeaksMoved`.
+  FlaUI `ShellAccessibilityTests.Trash_AVerifiedMoveStillSpeaksMoved`
+  (new partial `ShellAccessibilityTests.Trash.cs`; run with NVDA closed,
+  its speech witness the shell gate's desktop-scoped UIA listener, never
+  an NVDA log: Slate launched through `StartShellProcess`
+  (`ShellAccessibilityTests.cs:117-138`) on a temp vault holding
+  `note.md` and `other.md`; a `DesktopNotificationListener`
+  (`ShellAccessibilityTests.Announcements.cs:520-581`) registered through
+  `ListenOnTheDesktop` (`:221-228`) once the window exists; the mark from
+  `LaunchSettledMark` (`:350-376`); `note` deleted with Delete in the
+  tree; `AwaitHeardSince` (`:384-402`) hears exactly
+  `SlateUniffiMethods.A11yRender(new A11yEvent.HostComposed("Moved note to the Recycle Bin.", A11yPriority.Medium))`,
+  once, raised as rendered [speak the unverifiable sentence for
+  `Confirmed` → the listener hears that instead]).
 
 Registers: contract 31 FR-8 (T2 paragraph, the legacy batch-state rule)
 and FR-10 (shared identity), appended; the Trash doc §8 note; Part 2's
@@ -1224,15 +1274,27 @@ WB-27's `SLATE_WEAK_VOLUME_*` variables set and recorded in Part 1's PR
 body — the windows, rust and swift lanes are green (mac's
 successful batch still `Succeeded`; the Swift `_ = try …` edits
 compiled), each mutation was run locally, and Part 2's NVDA pass is in
-its PR body with `Refs #1468`. That pass runs from one PowerShell window
-at the repo root: `dotnet build apps/slate-windows/SlateWindows.slnx
---configuration Release`; a fresh vault folder under `$env:TEMP`, named
-`wb30-field-pass-` and a timestamp, holding `note.md`, `plain-a.md` … `plain-e.md`, `wb30-replace-me.md` and
-`wb30-replace-me-in-a-batch.md`; `$env:SLATE_TEST_TRASH_REPLACE_AFTER_VALIDATION
-= 'wb30-replace-me'`; then
-`& apps/slate-windows/src/SlateWindows/bin/Release/net10.0-windows/SlateWindows.exe
-$vault`, which inherits the variable (removed with `Remove-Item
-Env:SLATE_TEST_TRASH_REPLACE_AFTER_VALIDATION` after Slate closes). The
+its PR body with `Refs #1468`. That pass runs with NVDA running from
+one PowerShell window at the repo root: `dotnet build
+apps/slate-windows/SlateWindows.slnx --configuration Release`; a check
+that WB-1's `scripts/windows/launch-for-field-pass.ps1` exists; a fresh
+vault folder under `$env:TEMP`, named `wb30-field-pass-` and a
+timestamp, holding `note.md`, `plain-a.md` … `plain-e.md`,
+`wb30-replace-me.md` and `wb30-replace-me-in-a-batch.md`; `$exe =
+(Resolve-Path apps/slate-windows/src/SlateWindows/bin/Release/net10.0-windows/SlateWindows.exe).Path`;
+`$env:SLATE_TEST_TRASH_REPLACE_AFTER_VALIDATION = 'wb30-replace-me'`;
+then `pwsh -NoProfile -File scripts/windows/launch-for-field-pass.ps1
+-Vault $vault -Seed -Keep -Exe $exe`, checking `$LASTEXITCODE` — never
+`SlateWindows.exe` started directly, which without `SLATE_LOCAL_APP_DATA`
+writes the owner's real recents and device state (§4 rule 4). The
+launcher (WB-1: `param([string]$Vault, [switch]$Seed, [switch]$Keep,
+[string]$Exe)`) sets `SLATE_LOCAL_APP_DATA` and `SLATE_LOG_DIR` under a
+new `$env:TEMP\slate-field-pass-<yyyyMMdd-HHmmss>` root, seeds
+`recent-vaults.json` with `$Vault`, starts `$Exe` on it, prints the root
+and keeps it; it and the app inherit the seam variable from the window,
+which is removed with `Remove-Item
+Env:SLATE_TEST_TRASH_REPLACE_AFTER_VALIDATION` after Slate closes.
+Scenarios (4) and (5) open their vaults from the same running app. The
 phrases, each from Delete in the tree: (1) `note` — "Moved note to the
 Recycle Bin."; (2) `plain-a`, `plain-b`, `plain-c` — "Moved 3 items to the
 Recycle Bin."; (3a) `wb30-replace-me` alone — "Moved wb30-replace-me to

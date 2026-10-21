@@ -7,8 +7,8 @@ two PRs: PR 1's body writes `Refs #1475`, and only PR 2's body writes
 #940 in both PR bodies (closes by hand after 22b and 22W, RD15). Size L (design first:
 `22_descriptor_relative_session_design.md` §7 row 22W, `:796`). Lanes:
 rust (Windows cfg), windows, swift (the FFI record change — one
-production read and one test read of its fields — and one additive
-export). AT: NVDA spot check on PR 1 (the open refusal WD24 adds;
+production read and one test read of its fields — and two additive
+exports, neither called from Swift). AT: NVDA spot check on PR 1 (the open refusal WD24 adds;
 nothing else a reader hears changes — a FAT32 or exFAT vault opens as on
 main). Wave: W10, alone.
 Depends on: WB-27 (shares `fs.rs` and
@@ -34,7 +34,18 @@ file index changes when its entry is renamed or moved. A Windows vault
 does not open only when neither read answers: core refuses with a
 sentence saying why, and `OpenVaultAsync` refuses a null root identity
 on Windows. Rejected: admitting an id-less root by handle and final path
-with path-keyed stores. Design items 0, 1, 4, 6 and 7 apply it).
+with path-keyed stores. Codex round 11 narrows how this spec applies
+the amendment, keeping its choice that FAT32 and exFAT vaults open on a
+weak identity: the fallback is taken only on a volume whose file system
+`GetVolumeInformationByHandleW` names `FAT`, `FAT32` or `exFAT` — the
+file systems that do not answer `FileIdInfo` — and on NTFS, ReFS or any
+other file system a `FileIdInfo` failure refuses the open, because ReFS's
+64-bit index is not unique and a failure there is not "unsupported"; and
+a weak identity authorizes nothing — the host's vault stores reach the
+vault through a duplicate of the session's held root handle, never by
+comparing identities, since two folders' weak identities can be equal.
+The plan's WD24 rows need a dated note saying so (this spec's report).
+Design items 0, 1, 4, 6, 7 and 9 apply it).
 
 ## Goal
 
@@ -46,14 +57,17 @@ SHM, `structural.lock`, `slate.json`, `.slate/prefs.json`, the op-log,
 the provider's reads resolve beneath the held root, and `root_identity()`
 is a real anchor read from the held handle in a form that loses no bits
 of NTFS's 128-bit file id. #1475's "different folder now at the path"
-column gets its answer: the anchored stores compare with core's identity,
-and, where the identity is persistent, the device-local recents key
-follows the vault, not its path. A folder on FAT32 or exFAT, which
-generally answers no `FileIdInfo`, still opens: its identity is the
-volume serial and the 64-bit file index, flagged weak, which the stores
-compare within the session but which keys nothing durable. Only a folder
-for which neither read answers does not open, and the reader hears
-core's reason (WD24, amended 2026-10-21).
+column gets its answer: the anchored stores reach the vault through a
+duplicate of the root handle the session holds, so a different folder at
+the path is never reached, and, where the identity is persistent, the
+device-local recents key follows the vault, not its path. A folder on
+FAT32 or exFAT, which generally answers no `FileIdInfo`, still opens:
+its identity is the volume serial and the 64-bit file index, flagged
+weak, which keys nothing durable and authorizes nothing. A folder does
+not open when its volume keeps file ids (NTFS, ReFS, or any file system
+but FAT, FAT32 and exFAT) and `FileIdInfo` fails, or when neither read
+answers on FAT, FAT32 or exFAT, and the reader hears core's reason (WD24,
+amended 2026-10-21, as codex round 11 narrows it).
 
 ## Current state on main
 
@@ -103,8 +117,14 @@ the §11 helper names are not what the tree holds (said below).
   reason). The repository already says so: `SidebarWriteJournal.cs:73-75`
   ("a filesystem that does not answer `FileIdInfo`, such as FAT32: then
   nothing is journaled"), and `:58` notes that the 64-bit
-  `nFileIndex` is not unique on ReFS — so the file index is a fallback
-  only, never preferred to `FileIdInfo`. The fallback read exists in
+  `nFileIndex` is not unique on ReFS — Win32's
+  `BY_HANDLE_FILE_INFORMATION` remarks say the same (ReFS has 128-bit
+  ids; read them through `FileIdInfo`, because the 64-bit identifier is
+  not guaranteed unique there) — so the file index is never an identity
+  on ReFS, and a `FileIdInfo` failure there is not evidence of a volume
+  that lacks file ids. No code on main reads a volume's file-system name
+  (`GetVolumeInformation*` appears nowhere in `crates/` or
+  `apps/slate-windows/src`). The fallback read exists in
   core: the watcher's Windows `observe_identity`
   (`vault/watch.rs:279-307`, the call at `:298`; design §4.4) reads
   `GetFileInformationByHandle` into `RootIdentity { volume:
@@ -113,7 +133,14 @@ the §11 helper names are not what the tree holds (said below).
   id comes from the containing directory's first cluster and the entry's
   byte offset in it, so renaming (to a longer name) or moving the entry
   can change it — and, by the same derivation, a freed slot can give a
-  later entry the same id.
+  later entry the same id. Two entries that exist at once in one FAT
+  volume sit in different places and so have different ids, but the
+  identity is the pair (32-bit `dwVolumeSerialNumber`, index), and the
+  serial is written in the volume's boot sector: two FAT32 or exFAT
+  volumes imaged from one another (a cloned USB stick) share the serial
+  and every entry's place, so two folders on them, mounted at once, have
+  equal weak identities. Equality of weak identities is therefore not
+  sameness, even within a session.
   Measured on this machine's NTFS (the step-0 probe's control row):
   `FILE_ID_INFO.VolumeSerialNumber` is the 64-bit serial
   (`8e885d96885d7da1`), `dwVolumeSerialNumber` its low 32 bits
@@ -140,9 +167,34 @@ the §11 helper names are not what the tree holds (said below).
   change with the record (`git grep -n "rootIdentity()" apps/slate-mac`
   lists exactly these two).
 - **`AnchoredVaultStore.cs`** opens root and `.slate` by path per
-  operation without `FILE_SHARE_DELETE` (`Open` `:58`,
-  `OpenRequiredDirectory` `:245`), compares identity as text
-  (`VerifyDirectoryIdentity` `:333-342`, `FinalPath` `:434`).
+  operation without `FILE_SHARE_DELETE` (`Open(string vaultRoot, bool
+  createDirectory, …)` `:58-120`, `OpenRequiredDirectory` `:245`,
+  `Directory.CreateDirectory` by path `:72-75`), opens each child by path
+  (`TryOpenChild` `:292-320`, `Path.Combine(_directoryPath, fileName)`),
+  and compares identity as text (`VerifyDirectoryIdentity` `:333-342`,
+  `EnsureRegularChild` `:322-331`, `FinalPath` `:434`). Because the root
+  is opened with `FILE_FLAG_OPEN_REPARSE_POINT` and `EnsureAttributes`
+  refuses a reparse point (`:249-281`, `:344-363`), a vault opened through
+  a junction spelling has no working store on main. Its callers build it
+  from a path string: `WorkspacePersistence(string vaultRoot, …)`
+  (`WorkspacePersistence.cs:92`, built at `VaultLifecycleViewModel.cs:1182`
+  and `WorkspaceViewModel.cs:2119`), `SearchRecentsStore(string)`
+  (`Search/SearchRecentsStore.cs:67`, built at `Search/VaultSearchSource.cs:96`,
+  which also holds `Func<VaultSession?>` `:36`), `SidebarSettingsStore(string,
+  …)` (`SidebarSettingsStore.cs:45`, built at `FilesSidebarViewModel.cs:556`),
+  `FileRecentsStore`'s in-vault read (`FileRecentsStore.cs:75`), and — once
+  WB-12 has moved it onto `AnchoredVaultStore` — `GraphConfigStore(string)`
+  (`Graph/GraphConfigStore.cs:40`, built at
+  `Graph/GraphPreferencesViewModel.cs:101` and by the process-wide writer's
+  `StoreFor`, `Graph/GraphConfigWriter.cs:65`, whose queued write,
+  `:132`, can run after the vault closed: nothing drains it at close).
+  Every construction site has the session in scope, and
+  `VaultLifecycleViewModel`'s close disposes the workspace before the
+  session (`:1095-1124`). The test project builds these stores from
+  temp-folder paths at about 70 sites (`new WorkspacePersistence(` 21,
+  `new SidebarSettingsStore(` 11, `new SearchRecentsStore(` 12,
+  `new GraphConfigStore(` 24, `AnchoredVaultStore.Open(` 2) and drives
+  `GraphConfigWriter.Enqueue`/`new GraphPreferencesViewModel(` at 80.
 - **The provider on Windows** pins per operation by path:
   `windows_entry::PinnedRoot::open(root: &Path)` (`:378-398`),
   `trash_handoff::pinned_path` (`:298`); reads are pathname-based
@@ -230,30 +282,35 @@ Record each answer in this file's header on adoption.
    WB-27's volume procedure set `$fatRoot` and `$exfatRoot`, the probe in
    Verification (a PowerShell `Add-Type` of the two P/Invoke reads, with
    an NTFS temp folder as the control row) opens a folder with
-   `FILE_FLAG_BACKUP_SEMANTICS` and records, per volume: whether
+   `FILE_FLAG_BACKUP_SEMANTICS` and records, per volume: the file-system
+   name `GetVolumeInformationByHandleW` reports for the handle (the name
+   item 6's fallback gate reads); whether
    `GetFileInformationByHandleEx(FileIdInfo)` answers (its value, or its
    Win32 error number); whether `GetFileInformationByHandle` answers (the
    volume serial and file index); the index read again (stable within a
    mount); a sibling folder's index (distinct); and both reads after
    renaming the folder to a longer name (recorded, not asserted). It
    throws when the NTFS control answers no `FileIdInfo` (the probe is
-   broken), when a volume answers neither read, or when a volume that
+   broken), when a volume answers neither read, when a volume that needs
+   the fallback reports a file-system name other than `FAT`, `FAT32` or
+   `exFAT` (item 6's gate would refuse its vaults), or when a volume that
    needs the fallback gives an index that is not stable and distinct
-   within the mount. Either of the last two stops the chunk for an owner
+   within the mount. Any of the last three stops the chunk for an owner
    decision: WD24's refusal would then stop that volume's vaults from
-   opening, or the weak identity could not serve even within a session.
+   opening, or the weak identity could not serve as a lock key and a
+   recents-key decision even within a session.
    The table goes into PR 1's body and, dated, into the §5 Windows block
    WB-27 appended to `24_structural_identity_capability_matrix.md`. What
    the result changes: where FAT32 or exFAT answers no `FileIdInfo`
    (expected), the fallback is the read their vaults open by, and the
    gated fact proves it on the VHD. Where one does answer `FileIdInfo`,
-   the fallback stays as a defensive path for any file system that does
+   the fallback stays as a defensive path for a FAT, FAT32 or exFAT volume that does
    not, proven by the seam fact
    `a_root_whose_file_id_info_is_unsupported_opens_with_a_weak_file_index_identity`
    alone, and the adoption note in this header says so. The gated fact
    computes its expectation from the volume and passes either way. If
    the probe records an error other than `ERROR_INVALID_PARAMETER` (87)
-   for `FileIdInfo`, the two seams of item 6 fail with the recorded code.
+   for `FileIdInfo`, the three seams of item 6 that fail `FileIdInfo` fail with the recorded code.
 1. **The record's shape (WD22; the flag is WD24 amended).**
    `VaultRootIdentity { volume: u64, id_high: u64, id_low: u64,
    persistent: bool }` (new fields, core and uniffi). `persistent` is
@@ -261,12 +318,16 @@ Record each answer in this file's header on adoption.
    `FileIdInfo` (`volume` = `FILE_ID_INFO.VolumeSerialNumber`, the
    128-bit id split into `id_high`/`id_low`) or Unix `fstat` (`volume =
    st_dev`, `id_high = 0`, `id_low = st_ino`, as today; mac weak volumes
-   are plan 43 PR 38/41's). It is `false` when Windows answered only the
-   fallback: `volume` = `dwVolumeSerialNumber` zero-extended, `id_high =
-   0`, `id_low = nFileIndexHigh << 32 | nFileIndexLow` (the watcher's
-   pair). Equality and hashing cover all four fields, so a weak identity
-   never equals a persistent one — not even on NTFS, where the two reads
-   share the low 64 bits but not the serial. `u64`s because both bindings
+   are plan 43 PR 38/41's). It is `false` when the volume is FAT, FAT32
+   or exFAT and Windows answered only the fallback (item 6's gate):
+   `volume` = `dwVolumeSerialNumber` zero-extended, `id_high = 0`,
+   `id_low = nFileIndexHigh << 32 | nFileIndexLow` (the watcher's pair).
+   Equality and hashing cover all four fields, so a weak identity never
+   equals a persistent one — not even on NTFS, where the two reads share
+   the low 64 bits but not the serial. Two weak identities that are equal
+   need not name one folder (two cloned FAT volumes mounted at once), so
+   no access decision anywhere in this chunk compares identities: what
+   reaches the vault is a handle the session holds (items 6 and 9). `u64`s because both bindings
    carry them without a byte-array convention, and
    `windows_entry::identity`'s text form derives losslessly from a
    persistent one. `FsRoot::identity()` returns
@@ -287,8 +348,9 @@ Record each answer in this file's header on adoption.
    `identity`, `open_or_make_slate`) over handles (`NtCreateFile` with
    `RootDirectory`; `GetFileInformationByHandleEx`; `NtQueryDirectoryFile`);
    the Windows `identity` returns `io::Result<VaultRootIdentity>` and is
-   item 6's two-read identity, over two new private helpers `file_id_info`
-   and `file_index`; `InteriorDir for CacheDir` compiles on Windows; 22c's
+   item 6's gated two-read identity, over three new private helpers
+   `file_id_info`, `file_system_name` and `file_index` and the pure
+   decision `identity_from_reads` (item 6); `InteriorDir for CacheDir` compiles on Windows; 22c's
    provider-read helpers get Windows bodies under their names. No
    `list_dir_at`.
 3. **SQLite.** First commit is a spike: verify in the bundled 3.53
@@ -303,13 +365,24 @@ Record each answer in this file's header on adoption.
    `open_database`) is the design's rejected shape (`:378-383`) and ships
    only on a recorded owner approval.
 4. **The structural-lock registry key:** the held `.slate`'s whole
-   `VaultRootIdentity` (volume, id and `persistent`). A weak `.slate` key
-   is sound for the registry's life: the registry lives in one process,
-   each entry is held by a session that holds `.slate` without
-   `FILE_SHARE_DELETE` (so its directory entry is neither renamed nor
-   freed while the key exists), and two directories that exist at once on
-   one volume never share a file index. Two spellings of one vault read
-   the same entry and share a slot.
+   `VaultRootIdentity` (volume, id and `persistent`). Two spellings of one
+   vault read the same entry and share a slot. A weak `.slate` key is
+   held by a session that holds `.slate` without `FILE_SHARE_DELETE`, so
+   its entry is neither renamed nor freed while the key exists — but it
+   can still **collide** with another vault's: weak identities of two
+   folders can be equal (two cloned FAT volumes mounted at once share the
+   serial and every entry's place; Current state), and nothing makes two
+   live directories' indexes distinct across volumes. (A ReFS `.slate`
+   never has a weak key: item 6 refuses a `FileIdInfo` failure there.)
+   A collision is harmless here, because the key only orders turns and
+   grants no access: two sessions whose keys collide take turns at the
+   in-process gate (`ProcessStructuralLocks`, `session.rs:109-121`,
+   acquired first in the lock order, `:124-127`, so a waiter holds nothing
+   of its own session), and each still opens and locks `structural.lock`
+   beneath its own held `.slate` (`StructuralLockKey::open_file`'s
+   identity arm, `:86-91`, `cache.open_file`), so neither session reaches
+   the other's vault. A key that collided would cost a wait, never a
+   write into the wrong vault; the colliding-index fact pins it.
 5. **Why #940's race cannot be driven on Windows, and what the facts prove
    instead.** The seam fires `RootAnchored` after `FsRoot::open`
    (`:3206-3211`); with the root held without `FILE_SHARE_DELETE`, a
@@ -363,41 +436,63 @@ Record each answer in this file's header on adoption.
    (the Tests table maps each one).
 6. **The identity read, and a root without a readable identity (WD24,
    answered 2026-10-21, amended 2026-10-21: FAT32 and exFAT vaults keep
-   opening; a vault does not open only when neither read answers).**
+   opening; codex round 11 narrows the fallback to the file systems that
+   do not answer `FileIdInfo`).**
    - *The read.* The Windows `sys::identity(file: &fs::File) ->
      io::Result<VaultRootIdentity>` calls `sys::file_id_info(file)` (new:
      `GetFileInformationByHandleEx(FileIdInfo)` → `persistent: true`).
-     When that fails — FAT32 and exFAT are expected to fail with
-     `ERROR_INVALID_PARAMETER`; step 0 records the real code — it calls
-     `sys::file_index(file)` (new: `GetFileInformationByHandle` →
-     `persistent: false`, the watcher's pair, `watch.rs:298-306`), and
-     logs the first error at debug level. Only when both fail does
-     `identity` fail, with the fallback's error. The fallback follows any
-     `FileIdInfo` failure, as the amendment words it ("only when neither
-     read works"). ReFS always answers `FileIdInfo`, so its non-unique
-     64-bit index (`SidebarWriteJournal.cs:58`) is never the identity of a
-     healthy ReFS root; were it ever, it is flagged weak and used only as
-     the weak rules below allow. Not changed: structural identity
-     (`windows_entry::identity` for undo's `capture` and `rename`) and the
-     Trash stamp stay `FileIdInfo`-only and fail closed on such volumes,
-     as on main — an index that changes on rename cannot check a rename.
-   - *Core refuses first, and only when neither read answers.* The
-     Windows `FsRoot::open` calls `sys::identity` on the held root right
-     after the hold and before `open_or_make_slate`, as the Unix body does
-     with `fstat` (`fs_root.rs:588-605`). If it fails, the open fails with
-     `VaultError::Io(io::Error::new(error.kind(),
+     When that fails it reads `sys::file_system_name(file)` (new:
+     `GetVolumeInformationByHandleW`'s file-system name for the handle's
+     volume) and takes the fallback **only when that name is `FAT`,
+     `FAT32` or `exFAT`** (compared ASCII case-insensitively): then it
+     calls `sys::file_index(file)` (new: `GetFileInformationByHandle` →
+     `persistent: false`, the watcher's pair, `watch.rs:298-306`) and logs
+     the `FileIdInfo` error at debug level. On any other name — NTFS,
+     ReFS, or a name Slate does not know, such as a share's server may
+     report — or when the name cannot be read, `identity` fails with the
+     `FileIdInfo` error and the file index is never read: a `FileIdInfo`
+     failure on a file system that keeps file ids is a fault, not
+     "unsupported", and ReFS's 64-bit index is not unique
+     (`SidebarWriteJournal.cs:58`, the `BY_HANDLE_FILE_INFORMATION`
+     remarks), so it must never stand in for the id. **This is a refusal,
+     not a retry**: core makes one attempt, the open fails with the
+     sentence below, and the reader can open the vault again; a retry
+     loop inside the open would only hide a fault on the very read the
+     session is about to rely on. On FAT, FAT32 or exFAT, `identity` fails
+     only when the fallback fails too, with the fallback's error. The
+     decision is one pure function so a fact can drive every row of it:
+     `fn identity_from_reads(file_id_info: io::Result<VaultRootIdentity>,
+     file_system_name: impl FnOnce() -> io::Result<String>, file_index:
+     impl FnOnce() -> io::Result<VaultRootIdentity>) ->
+     io::Result<VaultRootIdentity>` (new, `pub(super)` in the Windows `sys`, so `fs_root.rs`'s tests reach it;
+     `sys::identity` is it applied to the three reads). Not changed:
+     structural identity (`windows_entry::identity` for undo's `capture`
+     and `rename`) and the Trash stamp stay `FileIdInfo`-only and fail
+     closed on such volumes, as on main — an index that changes on rename
+     cannot check a rename.
+   - *Core refuses first.* The Windows `FsRoot::open` calls
+     `sys::identity` on the held root right after the hold and before
+     `open_or_make_slate`, as the Unix body does with `fstat`
+     (`fs_root.rs:588-605`). If it fails — a `FileIdInfo` failure on a
+     file system that keeps ids, an unreadable file-system name after a
+     `FileIdInfo` failure, or both reads failing on FAT, FAT32 or exFAT —
+     the open fails with `VaultError::Io(io::Error::new(error.kind(),
      a11y::VAULT_ROOT_IDENTITY_UNAVAILABLE))`. The OS error is logged at
      debug level and never spoken. The held root closes with the error,
      and no `.slate` is made in a folder Slate cannot anchor. The held
-     `.slate`'s identity (item 4's lock key) is read the same way
-     (persistent, else weak) and refuses with the same sentence only when
-     neither read answers. Core's copy, in `a11y.rs` (new): `pub const
-     VAULT_ROOT_IDENTITY_UNAVAILABLE: &str = "This folder's file system
-     gives Slate no file identity for it, so Slate cannot keep the vault
-     anchored to it.";`. An open Windows session therefore always has a
-     root identity, persistent or weak — the invariant WB-30's
+     `.slate`'s identity (item 4's lock key) is read the same way and
+     refuses with the same sentence in the same cases. Core's copy, in
+     `a11y.rs` (new): `pub const VAULT_ROOT_IDENTITY_UNAVAILABLE: &str =
+     "This folder's file system gives Slate no file identity for it, so
+     Slate cannot keep the vault anchored to it.";`. An open Windows
+     session therefore always has a root identity, persistent or weak,
+     and a weak one only on FAT, FAT32 or exFAT — the invariant WB-30's
      identity-mode rule rests on (its `Strong` mode needs NTFS or ReFS
-     **and** `persistent`).
+     **and** `persistent`). A consequence the PR body states: a share
+     whose server reports NTFS or ReFS but answers no `FileIdInfo` (an
+     older SMB server) now refuses to open rather than opening weak, as
+     it would have under the amendment's "any failure" wording; such a
+     share cannot be told from a real NTFS volume with a failing read.
    - *Why a `VaultError` detail, not a new `A11yEvent`.* The refusal has
      to happen in core, before `.slate` exists and before the lock
      registry needs `.slate`'s id. So it reaches the host as a failed
@@ -411,17 +506,35 @@ Record each answer in this file's header on adoption.
      HFS+ always answer `fstat`, and the Unix body already refuses its
      failure. The spoken prefix "Could not open vault:" is the host's
      existing text, unchanged.
-   - *Two seams any build can trip.* Both follow the `SLATE_TEST_*`
+   - *Four seams any build can trip.* All follow the `SLATE_TEST_*`
      precedent (`session.rs:4371`) and are consulted by the Windows
      `FsRoot::open` — the one caller that knows the opened path — for the
      root's and `.slate`'s reads, when the opened root's path contains the
-     variable's value. `SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED` (new)
-     makes the `FileIdInfo` read fail with `ERROR_INVALID_PARAMETER`, as
-     FAT32 and exFAT do, so the fallback answers and the session opens
-     with `persistent: false`. `SLATE_TEST_ROOT_FILE_ID_UNAVAILABLE` (new)
-     makes both reads fail with `ERROR_INVALID_PARAMETER`, as a file
-     system that answers neither would, so the open refuses. They serve
-     the core facts, the host facts and the NVDA spot check.
+     variable's value; each fakes only what `sys::identity` reads, so no
+     other code (WB-30's identity mode, which reads the volume's real
+     file-system name, included) sees a faked value.
+     `SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED` (new) presents the root as
+     a FAT32 volume does: the file-system name reads `FAT32` and the
+     `FileIdInfo` read fails with `ERROR_INVALID_PARAMETER`, so the
+     fallback answers (the real file index) and the session opens with
+     `persistent: false`. `SLATE_TEST_ROOT_FILE_ID_UNAVAILABLE` (new) is
+     the same FAT32 profile with the file-index read failing too
+     (`ERROR_INVALID_PARAMETER`), as a volume that answers neither would,
+     so the open refuses. `SLATE_TEST_ROOT_FILE_ID_INFO_FAILS` (new) makes
+     only the `FileIdInfo` read fail with `ERROR_INVALID_PARAMETER` and
+     leaves the real file-system name (NTFS on the lane): the transient
+     failure on a volume that keeps ids, so the open refuses without
+     reading the file index — and since the error code is the one FAT32
+     gives, a gate that keyed the fallback on the code rather than the
+     name would admit it. `SLATE_TEST_ROOT_FILE_INDEX_COLLIDES` (new)
+     makes the file-index read return the volume's real serial with the
+     fixed index `0x5EED_0000_5EED_0001`, so every root and `.slate`
+     beneath a folder whose path contains the value has the same weak
+     identity as every other — the synthetic collision (two cloned FAT
+     volumes) the colliding-index facts need; with it and
+     `…_FILE_ID_INFO_UNSUPPORTED` both set to one folder, two vaults in it
+     open with equal weak identities. They serve the core facts, the host
+     facts and the NVDA spot check.
    - *The host speaks core's text.* The open-failure catch
      (`VaultLifecycleViewModel.cs:556-565`) reports `$"Could not open
      vault: {SlateUniffiMethods.VaultErrorDetail(exception)}"`, not
@@ -442,24 +555,99 @@ Record each answer in this file's header on adoption.
      no `VaultOpened`, no recents entry and `IsVaultOpen` false, and
      raises `ReturnedToWelcome`, so the keys return to the welcome view
      (WD4). A weak identity is not null: its vault opens as any other.
-   - *The stores, persistent or weak.* `AnchoredVaultStore.Open` gains
-     `expectedIdentity: VaultRootIdentity?` (new). It reads the root
-     handle it opens with the read the flag names — `FileIdInfo` when
-     `expectedIdentity.Persistent`, `GetFileInformationByHandle` (the
-     volume serial and file index) when not — and refuses when that read
-     fails or any of the four fields differs; the five stores pass
-     `session.RootIdentity()`. Comparing a weak identity is safe within a
-     session: the session holds the root without `FILE_SHARE_DELETE`, so
-     Windows refuses its rename and delete for the session's lifetime and
-     its index can neither move nor be reused; and two directories that
-     exist at once on one volume never share a FAT file index (each is its
-     own directory entry). So a different folder reached at the session's
-     spelling — a retargeted junction, or another volume at the drive
-     letter — has another index or another serial and is refused, as with
-     a persistent id. What a weak identity cannot do is outlive the
-     session: with Slate closed, a rename or move of the folder can change
-     its index, and a later folder can take a freed slot's index — item 7.
-7. **`FileRecentsStore` key and migration.** A persistent identity: key =
+   - *The stores reach the vault through the session's held root, never
+     by comparing an identity.* Round 10 had `AnchoredVaultStore.Open`
+     reopen the vault by its spelling and admit it when the identity read
+     there (the file index, for a weak root) equalled
+     `session.RootIdentity()`. That admits the wrong vault whenever two
+     folders' identities are equal — two cloned FAT volumes, or a ReFS
+     index — and a retargeted junction can present exactly such a folder
+     at the spelling. So no identity, persistent or weak, and no path
+     authorizes a store; the capability is the root handle the session
+     already holds:
+     - **Core** (PR 1): `VaultSession::duplicate_root_handle(&self) ->
+       Result<std::os::windows::io::OwnedHandle, VaultError>` (new,
+       `#[cfg(windows)]`) returns `FsRoot::duplicate_root(&self) ->
+       io::Result<OwnedHandle>` (new: `OwnedHandle::try_clone` of the held
+       root — `DuplicateHandle` with `DUPLICATE_SAME_ACCESS`, not
+       inheritable — so it names the held directory object itself, with
+       the hold's sharing, whatever any spelling names now); a session no
+       filesystem root backs returns `VaultError::Unsupported`. The uniffi
+       export (new, additive, on `VaultSession`):
+       `duplicate_root_handle(&self) -> Result<u64, VaultError>` — on
+       Windows the duplicate's raw value, ownership passing to the caller;
+       elsewhere `Err(VaultError::Unsupported { feature:
+       "duplicate_root_handle" })` (Swift never calls it).
+     - **Host** (PR 2): `VaultRootAnchor` (new, `internal sealed class :
+       IDisposable`, `VaultRootAnchor.cs`): `internal static
+       VaultRootAnchor Of(VaultSession session)` — each `OpenRoot()` asks
+       core for a fresh duplicate and wraps it as `new
+       SafeFileHandle((nint)value, ownsHandle: true)`; a `VaultException`
+       or the binding's `ObjectDisposedException` (a disposed session)
+       becomes `IOException`, so a store whose session has gone refuses;
+       `internal SafeFileHandle OpenRoot()` (the caller owns the handle);
+       `internal VaultRootAnchor Pin()` — a new anchor that owns one
+       duplicate taken now (an `IOException` if none can be) and hands out
+       duplicates of it (`DuplicateHandle`, kernel32) until disposed, for
+       work queued while the vault is open that may run after it closes;
+       and `internal static VaultRootAnchor ByPathForTests(string
+       vaultRoot)` — main's by-path open of the spelling, which throws
+       `IOException("This store was given no vault session to write
+       through.")` unless `internal static bool ByPathAllowed` (new,
+       `false`) is set, which only the test assembly does, in a
+       `[ModuleInitializer]` (new, `tests/SlateWindows.Tests/TestRootAnchors.cs`).
+       So the ~70 test sites that build stores from temp folders keep
+       working, and a production site that forgot its anchor refuses
+       instead of following the spelling.
+     - `AnchoredVaultStore.Open(VaultRootAnchor root, bool
+       createDirectory, Action? afterDirectoryAnchored = null, Action?
+       beforeRename = null, Action? afterRename = null)` (changed: the
+       anchor replaces the path) takes `root.OpenRoot()` as its vault
+       handle and opens `.slate` relative to it — `NtCreateFile` with
+       `RootDirectory` = that handle, the name `.slate`, `FILE_OPEN` (or
+       `FILE_OPEN_IF` with `createDirectory`), `FILE_DIRECTORY_FILE |
+       FILE_OPEN_REPARSE_POINT`, shared for reading and writing — and every
+       child relative to the `.slate` handle the same way (`TryOpenChild`
+       loses its `Path.Combine`). `EnsureAttributes` still refuses a
+       reparse point at each, so a junction planted as `.slate` or as a
+       child is refused; `RenameAnchored` is already handle-relative. The
+       final-path text checks (`VerifyDirectoryIdentity`, the comparison
+       in `EnsureRegularChild`, `FinalPath`) are removed: nothing is
+       resolved by path any more, so they guard nothing. A vault opened
+       through a junction spelling now has working stores (main refuses
+       them, Current state).
+     - The five stores take the anchor as a new optional last parameter
+       `VaultRootAnchor? root = null` (`null` → `ByPathForTests(vaultRoot)`):
+       `WorkspacePersistence`, `SearchRecentsStore`, `SidebarSettingsStore`,
+       `GraphConfigStore` (its `Read(VaultRootAnchor? root = null)` and
+       `Write(GraphConfig config, VaultRootAnchor? root = null)`), and
+       `FileRecentsStore` for its in-vault step (item 7). Every
+       production construction site passes `VaultRootAnchor.Of(session)`:
+       `FilesSidebarViewModel.cs:556-557`, `QuickSwitcherViewModel.cs:68`,
+       `Search/VaultSearchSource.cs:96` (from `_session()`),
+       `VaultLifecycleViewModel.cs:1182`, `WorkspaceViewModel.cs:2119`, and
+       `Graph/WorkspaceViewModel.Graph.cs:224`, whose
+       `GraphPreferencesViewModel` gains the same optional parameter and
+       uses it for its `Read` and its writes. The graph writer's queued
+       write can outlive the session, so
+       `GraphConfigWriter.Enqueue(string key, GraphConfig aggregate, ulong
+       generation, VaultRootAnchor? root = null)` (changed) keeps
+       `root?.Pin()` with the admitted aggregate, the queued write passes
+       it to `StoreFor(key).Write(aggregate, pinned)`, and the pin is
+       disposed after that write, succeeded or failed (a dropped
+       aggregate disposes its pin at once): a straggler lands in the root
+       its edit was made in even after the session closed, and never in
+       whatever a later session or a retargeted spelling names.
+     The weak identity therefore decides nothing about where a store
+     writes. What it cannot do either is outlive the session as a key:
+     with Slate closed, a rename or move of the folder can change its
+     index, and a later folder can take a freed slot's index — item 7.
+7. **`FileRecentsStore` key and migration.** The constructor becomes
+   `FileRecentsStore(string vaultRoot, VaultRootIdentity? identity = null,
+   string? localAppDataRoot = null, VaultRootAnchor? root = null)` (the
+   anchor new, kept as `_root`; `null` → `VaultRootAnchor.ByPathForTests`,
+   item 6): the identity chooses the device-local key, the anchor is how
+   the in-vault step reaches the vault. A persistent identity: key =
    SHA-256 of
    `$"{identity.Volume:x16}-{identity.IdHigh:x16}{identity.IdLow:x16}"`.
    The path-keyed file (today's key, kept as a new private field
@@ -522,13 +710,14 @@ Record each answer in this file's header on adoption.
    that file, so it never has one), so entries keep their recency order —
    destination, then path-keyed, then in-vault — and it keeps running on
    every `Load` until this store instance has settled it:
-   1. The anchored read: `AnchoredVaultStore.Open(_vaultRoot,
-      createDirectory: false, expectedIdentity)` — `null` (no `.slate`
+   1. The anchored read: `AnchoredVaultStore.Open(_root,
+      createDirectory: false)` — `.slate` opened relative to a duplicate
+      of the session's held root (item 6); `null` (no `.slate`
       directory) is `Absent` — then
       `ReadAllBytesBounded(LegacyFileName, MaxPayloadBytes)` — `null` is
       `Absent` — parsed by the same private parse `TryRead` uses, into a
       `RecentsRead`; an
-      `IOException` (the store's identity refusal included),
+      `IOException` (an anchor whose session has gone included),
       `UnauthorizedAccessException` or `JsonException` is `Unreadable`.
       `Absent` → settled: nothing is written or deleted. `Unreadable` →
       stop: nothing is written or deleted, and the next `Load` retries.
@@ -573,9 +762,9 @@ Record each answer in this file's header on adoption.
    `_vaultRoot.ToUpperInvariant()`, `FileRecentsStore.cs:28-31`), so its
    `_path` is `_pathKeyedPath`, the path-key migration never runs, and no
    path-keyed file is moved or deleted. Why: a FAT index changes when the folder
-   is renamed or moved and can be reused by a later folder in a freed
-   slot, so as a key it would neither follow the vault nor keep two
-   vaults apart over time; the path key is what every Windows vault uses
+   is renamed or moved, can be reused by a later folder in a freed slot,
+   and is shared by the same folder on a cloned volume, so as a key it
+   would neither follow the vault nor keep two vaults apart; the path key is what every Windows vault uses
    on main (`RootIdentity()` is null there), so these volumes lose
    nothing — a stick reopened at another drive letter starts with an
    empty list, exactly as on main. The in-vault step runs for a weak
@@ -592,13 +781,21 @@ Record each answer in this file's header on adoption.
    `GetFinalPathNameByHandleW` gated by identity through
    `trash_handoff::final_path` `:328` + `names` `:233`; the Windows gate
    re-reads the folder at the final path with the read the held
-   identity's `persistent` flag names, so a weak root's display path is
-   verified by its file index, sound within the session as item 6 says),
-   the host watcher, Reveal and ShellExecute (design §4.2).
+   identity's `persistent` flag names), the host watcher, Reveal and
+   ShellExecute (design §4.2). The display gate authorizes nothing:
+   `root_display_path()` is display only — "nothing resolves through it"
+   (`session.rs:3146-3151`) — and the path it checks is the held root
+   handle's own final path, which names the held directory while the
+   hold lasts, so a weak index that collided with another folder's could
+   at worst accept that same path; the gate's answer is never a
+   capability. Every write the session or the host's stores make goes
+   through a held handle (items 5, 6 and 8).
 10. **Split.** PR 1: step 0's probe record, then core (Windows `FsRoot`,
-    `sys`, hook, the two-read identity with its `persistent` flag, the
-    WD24 refusal and its two seams, facts) with the FFI record change, the
-    additive `vault_root_identity_unavailable_detail` export, both hosts'
+    `sys`, hook, the gated two-read identity with its `persistent` flag,
+    the WD24 refusal and its four seams, `duplicate_root_handle`, facts)
+    with the FFI record change, the two additive exports
+    (`vault_root_identity_unavailable_detail` and
+    `VaultSession.duplicate_root_handle`), both hosts'
     field edits (`FileRecentsStore.cs:30` keeping the path key,
     `AppState.swift:10670-10671`, `SidebarOrganizationDispatchTests.swift:2478-2479`),
     and the host's open-failure catch speaking core's detail. The refusal
@@ -606,9 +803,11 @@ Record each answer in this file's header on adoption.
     spot check, and PR 1 runs
     `FileRecentsStoreTests.AWeakIdentityKeepsThePathKeyAndMigratesNothing`
     (its interim path key satisfies it). PR 1's body writes `Refs #1475` and `Refs #940` — never a
-    closing keyword, because the store admission and the recents key that
-    answer #1475's columns are PR 2's. PR 2: the stores' admission
-    (persistent and weak), `OpenVaultAsync`'s fail-closed null check, and
+    closing keyword, because the stores' held-root anchor and the recents key that
+    answer #1475's columns are PR 2's. PR 2 (host only): the stores'
+    held-root anchor (`VaultRootAnchor`, `AnchoredVaultStore.Open(root,
+    …)`, the five stores, the construction sites, the graph writer's
+    pin), `OpenVaultAsync`'s fail-closed null check, and
     the recents key (persistent: identity key with the migration; weak:
     the path key). PR 2's body writes `Closes #1475` and `Refs #940` with
     the 22W delivery comment; PR 2 merges only after PR 1 is merged and
@@ -620,16 +819,33 @@ Record each answer in this file's header on adoption.
 
 Per the section above once agreed. New names: `fs_root::sys` (Windows;
 its `identity(file) -> io::Result<VaultRootIdentity>` over the private
-`file_id_info(file)` and `file_index(file)`), `db::anchored` Windows body
-and `skip_install_for_tests`, `OpenSwapPoint::BeforeSlateHeld`,
+`file_id_info(file)`, `file_system_name(file) -> io::Result<String>`
+(`GetVolumeInformationByHandleW`) and `file_index(file)`, decided by the
+`pub(super)` pure `identity_from_reads(file_id_info, file_system_name,
+file_index)`, which takes the file index only after a `FileIdInfo`
+failure on a volume named `FAT`, `FAT32` or `exFAT`), `db::anchored`
+Windows body and `skip_install_for_tests`, `OpenSwapPoint::BeforeSlateHeld`,
 `VaultRootIdentity { volume: u64, id_high: u64, id_low: u64, persistent:
 bool }` (core and uniffi; `FsRoot::identity() ->
 Option<VaultRootIdentity>`), `a11y::VAULT_ROOT_IDENTITY_UNAVAILABLE`,
-`SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED` and
-`SLATE_TEST_ROOT_FILE_ID_UNAVAILABLE`, the uniffi export
-`vault_root_identity_unavailable_detail()`,
-`VaultLifecycleViewModel.RootIdentityReader`, `AnchoredVaultStore.Open(…,
-expectedIdentity)` (comparing by the read the flag names),
+`SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED`,
+`SLATE_TEST_ROOT_FILE_ID_UNAVAILABLE`, `SLATE_TEST_ROOT_FILE_ID_INFO_FAILS`
+and `SLATE_TEST_ROOT_FILE_INDEX_COLLIDES`, the uniffi export
+`vault_root_identity_unavailable_detail()`, core's
+`VaultSession::duplicate_root_handle() -> Result<OwnedHandle,
+VaultError>` (`#[cfg(windows)]`) over `FsRoot::duplicate_root() ->
+io::Result<OwnedHandle>` and its uniffi export
+`VaultSession.duplicate_root_handle() -> Result<u64, VaultError>`
+(`Unsupported` off Windows), `VaultLifecycleViewModel.RootIdentityReader`,
+the host's `VaultRootAnchor` (`Of(session)`, `OpenRoot()`, `Pin()`,
+`ByPathForTests(vaultRoot)`, `ByPathAllowed`) with the test assembly's
+`TestRootAnchors.cs` module initializer, `AnchoredVaultStore.Open(VaultRootAnchor
+root, bool createDirectory, …)` (`.slate` and its children opened
+relative to a duplicate of the session's held root; the final-path text
+checks removed), the five stores' optional `VaultRootAnchor? root`
+parameter, `GraphPreferencesViewModel`'s, and
+`GraphConfigWriter.Enqueue(…, VaultRootAnchor? root = null)` holding
+`root.Pin()` until its write ran (item 6),
 `FileRecentsStore` identity key v2 (persistent identities only) with its
 private `_pathKeyedPath`, `TryRead(path) -> RecentsRead` (`Absent`,
 `Read(entries)`, `Unreadable(error)`) and `TryCommit(entries) -> bool`
@@ -644,9 +860,14 @@ commit; and the step-0 probe script (Verification; not committed code). Two test
 in the new module, each reading the folder independently of `sys`, give
 the weak facts their expectations: `fn file_index_of(path: &Path) ->
 (u64, u64)` (new: `dwVolumeSerialNumber` zero-extended and
-`nFileIndexHigh << 32 | nFileIndexLow`) and `fn
+`nFileIndexHigh << 32 | nFileIndexLow`), `fn
 file_id_info_answers(path: &Path) -> bool` (new: whether
-`GetFileInformationByHandleEx(FileIdInfo)` succeeds on it).
+`GetFileInformationByHandleEx(FileIdInfo)` succeeds on it), `fn
+file_system_name_of(path: &Path) -> String` (new:
+`GetVolumeInformationW` of the path's volume root) and `fn
+file_id_info_of_handle(handle: BorrowedHandle<'_>) -> (u64, u128)` (new:
+`FILE_ID_INFO` of an open handle, to say which folder a duplicated root
+handle names).
 `descriptor_interior.rs` keeps its
 `#![cfg(unix)]` and every fact in it; a `cfg(windows)` sibling module
 `session/tests/descriptor_interior_windows.rs` (new, registered as
@@ -682,23 +903,31 @@ the new record with `persistent: true`; the Unix facts.
 | `an_uninstalled_hook_fails_the_anchored_open_instead_of_opening_by_path` | with `skip_install_for_tests()`, `open_in` returns `Err`, no `cache.sqlite` written by path | fall back silently |
 | `a_slate_junction_planted_before_the_hold_never_receives_the_interior` | at `BeforeSlateHeld`, `<root>\.slate` is replaced by a junction to an outside folder: the open refuses (`slate_refusal`) and the outside folder stays empty | follow the junction |
 | `root_identity_on_windows_is_the_volume_serial_and_the_whole_128_bit_file_id` | the record equals `FILE_ID_INFO` of the held root with `persistent == true`; a synthetic id with high bits set round-trips through the record and the text form | truncate to 64 bits; read the file index first (→ `persistent == false` on NTFS) |
-| `a_root_whose_file_id_info_is_unsupported_opens_with_a_weak_file_index_identity` (WD24 amended; PR 1) | with `SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED` set to the name of a unique temp folder `T` (set and cleared through WB-18's `fault_guard()`) that holds the vault `T\vault` and a junction `T\other` → `T\vault`, so both spellings contain it: `VaultSession::from_filesystem(T\vault)` is `Ok`; `root_identity()` is `Some` with `persistent == false`, `id_high == 0` and `(volume, id_low) == file_index_of(T\vault)` (the watcher's pair), after asserting the precondition that the lane's NTFS index has a nonzero high word (`file_index_of(T\vault).1 >> 32 != 0`); `T\vault\.slate` exists; a second session opened through `T\other` shares the first's structural-lock slot (item 4's weak key); a sibling vault outside `T` opens with `persistent == true` | refuse when `FileIdInfo` fails, as WD24 read before its amendment (→ `Err`); flag the fallback persistent (→ `persistent == true`); keep only `nFileIndexLow` (→ `id_low` differs) |
-| `a_root_whose_file_id_cannot_be_read_does_not_open_and_gains_no_slate` (WD24: neither read answers; PR 1) | with `SLATE_TEST_ROOT_FILE_ID_UNAVAILABLE` set to the temp root's unique folder name (set and cleared through WB-18's `fault_guard()`), so both reads fail: `VaultSession::from_filesystem(root)` is `Err(VaultError::Io(_))` and `a11y::vault_error_detail` of it equals `VAULT_ROOT_IDENTITY_UNAVAILABLE` exactly; `root\.slate` does not exist; `std::fs::rename(root, …)` succeeds right after (nothing is held); a sibling vault in the same fact, whose path does not contain the value, opens with `root_identity()` `Some` | open with the identity `None` instead of refusing (→ `Ok`); open with a path-derived identity when both reads fail (→ `Ok`); make `.slate` before the identity read (→ `.slate` exists); pass the OS error through (→ the detail is the OS text) |
-| `a_vault_on_a_fat32_or_exfat_volume_opens_with_the_identity_its_file_system_answers` (`#[cfg(windows)] #[ignore = "needs SLATE_WEAK_VOLUME_FAT32 or SLATE_WEAK_VOLUME_EXFAT (WB-27's volume procedure)"]`; WD24 amended; PR 1) | for each of the two variables that is set (it panics when neither is, so a named run never passes vacuously): a fresh vault folder on that volume opens through `from_filesystem`; `root_identity()` is `Some`, its `persistent` equals `file_id_info_answers(root)` (expected `false`, per step 0's record), and when `persistent` is false `(volume, id_low) == file_index_of(root)`; `root\.slate` exists; a note saved through the session reads back | refuse when `FileIdInfo` fails (→ the open fails on a volume without it); flag the fallback persistent (→ `persistent` differs from `file_id_info_answers`) |
+| `fs_root.rs` `the_file_index_fallback_is_taken_only_on_fat_fat32_and_exfat` (new, `#[cfg(windows)]`, a unit fact over `sys::identity_from_reads`; PR 1; codex round 11) | with the `FileIdInfo` read `Err(ERROR_INVALID_PARAMETER)` and a file index that answers: the names `FAT`, `FAT32`, `exFAT` and `fat32` give `Ok` with `persistent == false`; `NTFS`, `ReFS`, `""`, `ext4` (a name a share's server may report) and an unreadable name give `Err` carrying the `FileIdInfo` error, and the file-index closure was never called (a flag it sets); `FAT32` with the file index failing too gives `Err` carrying the index's error; a `FileIdInfo` read that answers gives that identity with `persistent == true`, neither closure called | fall back after any `FileIdInfo` failure, as round 10 specified (→ the `NTFS` and `ReFS` rows are `Ok`); add `ReFS` to the names (→ its row is `Ok`); key the fallback on the error code `ERROR_INVALID_PARAMETER` rather than the name (→ the `NTFS` row is `Ok`); compare names case-sensitively (→ the `fat32` row is `Err`) |
+| `a_file_id_info_failure_on_a_volume_that_keeps_ids_refuses_the_open_and_never_reads_the_index` (new; PR 1; codex round 11: the transient failure on NTFS) | with `SLATE_TEST_ROOT_FILE_ID_INFO_FAILS` set to the name of a unique temp folder `T` through WB-18's `fault_guard()`: the preconditions that `file_system_name_of(T\vault)` is `NTFS` or `ReFS` and that `file_index_of(T\vault)` answers (so a fallback would have succeeded); `VaultSession::from_filesystem(T\vault)` is `Err(VaultError::Io(_))` whose `vault_error_detail` equals `VAULT_ROOT_IDENTITY_UNAVAILABLE`; `T\vault\.slate` does not exist; `std::fs::rename(T\vault, …)` succeeds right after (nothing is held); a sibling vault outside `T` opens with `persistent == true` | fall back after any `FileIdInfo` failure (→ `Ok` with `persistent == false`); key the fallback on the seam's error code, `ERROR_INVALID_PARAMETER`, which FAT32 also gives (→ the same) |
+| `two_roots_forced_to_one_weak_index_keep_their_own_interiors` (new; PR 1; codex round 11's synthetic collision, core half) | with `SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED` and `SLATE_TEST_ROOT_FILE_INDEX_COLLIDES` both set to a unique temp folder `T`'s name through `fault_guard()`: session `a` opened through the junction `T\vault` → `T\a`, session `b` at `T\b`; the precondition `a.root_identity() == b.root_identity()`, both `persistent == false` (the collision is real); `retarget(T\vault, T\b)` with both live; `b` saves a note and `tree_bytes(T\b)` is taken; then `a`'s save, op-log append, staged create through `.slate\tmp`, structural lock (taken and dropped) and a worker connection's insert all land in `T\a`, and `tree_bytes(T\b)` is unchanged; `a.root_display_path()` is `T\a`'s final path, never `T\vault`; `b` then takes and drops its structural lock (the colliding `.slate` keys share one slot, so the two take turns) and `T\b\.slate\structural.lock` exists beside `T\a\.slate\structural.lock`; `file_id_info_of_handle` of `a.duplicate_root_handle()` is `T\a`'s and of `b`'s is `T\b`'s | derive the display path from `opened_as`, gated by the weak identity (→ `T\vault`, now naming `T\b`, passes the colliding gate); open one interior writer by the session's spelling (→ it lands in `T\b`); duplicate the root by reopening `opened_as` (→ `a`'s duplicate names `T\b`) |
+| `the_duplicated_root_handle_names_the_held_root_after_its_spelling_is_retargeted` (new; PR 1) | the vault opened through `outer\vault` → `A`; `retarget(outer\vault, B)`; `duplicate_root_handle()` is `Ok`, and `file_id_info_of_handle` of it equals the session's persistent `root_identity()` and differs from `B`'s; after the duplicate is dropped, `MoveFileExW` of `A` still fails (the session's hold is its own); a session opened with `VaultSession::open` over a test provider no filesystem root backs (as `session/tests/structural_batch.rs:976` builds one) returns `Err(VaultError::Unsupported { .. })` | duplicate by reopening `opened_as` (→ `B`'s id); hand out the held handle itself, not a duplicate (→ dropping it closes the hold: the rename of `A` succeeds) |
+| `a_root_whose_file_id_info_is_unsupported_opens_with_a_weak_file_index_identity` (WD24 amended; PR 1) | with `SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED` (the FAT32 profile: the identity read's file-system name is `FAT32` and `FileIdInfo` fails) set to the name of a unique temp folder `T` (set and cleared through WB-18's `fault_guard()`) that holds the vault `T\vault` and a junction `T\other` → `T\vault`, so both spellings contain it: `VaultSession::from_filesystem(T\vault)` is `Ok`; `root_identity()` is `Some` with `persistent == false`, `id_high == 0` and `(volume, id_low) == file_index_of(T\vault)` (the watcher's pair), after asserting the precondition that the lane's NTFS index has a nonzero high word (`file_index_of(T\vault).1 >> 32 != 0`); `T\vault\.slate` exists; a second session opened through `T\other` shares the first's structural-lock slot (item 4's weak key); a sibling vault outside `T` opens with `persistent == true` | refuse when `FileIdInfo` fails, as WD24 read before its amendment (→ `Err`); flag the fallback persistent (→ `persistent == true`); keep only `nFileIndexLow` (→ `id_low` differs); gate the fallback on the volume's real file-system name, ignoring the seam's profile (→ the lane's `NTFS` refuses: `Err`) |
+| `a_root_whose_file_id_cannot_be_read_does_not_open_and_gains_no_slate` (WD24: neither read answers; PR 1) | with `SLATE_TEST_ROOT_FILE_ID_UNAVAILABLE` set to the temp root's unique folder name (set and cleared through WB-18's `fault_guard()`) — the FAT32 profile with both reads failing, so the fallback is taken and fails too: `VaultSession::from_filesystem(root)` is `Err(VaultError::Io(_))` and `a11y::vault_error_detail` of it equals `VAULT_ROOT_IDENTITY_UNAVAILABLE` exactly; `root\.slate` does not exist; `std::fs::rename(root, …)` succeeds right after (nothing is held); a sibling vault in the same fact, whose path does not contain the value, opens with `root_identity()` `Some` | open with the identity `None` instead of refusing (→ `Ok`); open with a path-derived identity when both reads fail (→ `Ok`); make `.slate` before the identity read (→ `.slate` exists); pass the OS error through (→ the detail is the OS text) |
+| `a_vault_on_a_fat32_or_exfat_volume_opens_with_the_identity_its_file_system_answers` (`#[cfg(windows)] #[ignore = "needs SLATE_WEAK_VOLUME_FAT32 or SLATE_WEAK_VOLUME_EXFAT (WB-27's volume procedure)"]`; WD24 amended; PR 1) | for each of the two variables that is set (it panics when neither is, so a named run never passes vacuously): the precondition that `file_system_name_of(root)` is `FAT32` for the FAT32 variable and `exFAT` for the exFAT one (the names the fallback gate admits); a fresh vault folder on that volume opens through `from_filesystem`; `root_identity()` is `Some`, its `persistent` equals `file_id_info_answers(root)` (expected `false`, per step 0's record), and when `persistent` is false `(volume, id_low) == file_index_of(root)`; `root\.slate` exists; a note saved through the session reads back | refuse when `FileIdInfo` fails (→ the open fails on a volume without it); flag the fallback persistent (→ `persistent` differs from `file_id_info_answers`); admit `FAT32` alone (→ the exFAT vault refuses) |
 | `the_windows_structural_lock_registry_is_keyed_by_identity` (twin of `:357`) | two sessions on two roots with one textual spelling (`outer\vault` → `A`, then `retarget(outer\vault, B)` and a second open) get distinct slots — `A`'s lock is held, `B`'s free; and a third session opened through a second spelling of `A` (`outer\other` → `A`) shares the first session's slot | key by path |
 | uniffi: `root_identity_crosses_the_ffi_losslessly` | four fields, a high-bits id and `persistent` both `true` and `false` | drop a field; drop `persistent` |
 | uniffi: `the_root_identity_refusal_crosses_the_ffi_as_cores_sentence` (PR 1) | `vault_error_detail(VaultError::from(core::VaultError::Io(io::Error::new(io::ErrorKind::InvalidInput, VAULT_ROOT_IDENTITY_UNAVAILABLE))))` and `vault_root_identity_unavailable_detail()` both equal `core::a11y::VAULT_ROOT_IDENTITY_UNAVAILABLE` | render `Io` by the binding's `Display` (`"io error: …"`); return a second copy of the text from the export |
-| Windows `W1AnchoredVaultStoreTests.OpenRefusesADifferentFolderAtTheVaultsPath` | the vault opened through a junction spelling (made with `mklink /J`, which needs no privilege, as `CanvasDocumentTests.cs:4131-4134` does); the junction retargeted to a decoy folder between session open and store open — the held root cannot be renamed — and `Open(…, expectedIdentity)` refuses with the reason | compare text only |
-| `W1AnchoredVaultStoreTests.EveryStoreRefusesAfterTheRootWasReplaced` | after the same junction retarget, `WorkspacePersistence`, `SearchRecentsStore`, `SidebarSettingsStore`, `GraphConfigStore` all refuse | one store bypasses |
-| `W1AnchoredVaultStoreTests.AWeakIdentityIsComparedByTheFileIndex` (WD24 amended; PR 2) | with `SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED` set in-process to the fixture's unique folder name, which the junction spelling contains (cleared in `finally`): `session.RootIdentity()` has `Persistent` false; the fact first asserts that the volume's `FILE_ID_INFO` serial differs from its `dwVolumeSerialNumber` (NTFS's 64-bit serial has nonzero high bits); `Open(…, expectedIdentity)` on the same root admits; after the junction is retargeted to a decoy, it refuses | compare `FileIdInfo` whatever the flag (→ the same root refuses: the serials differ); admit a weak identity without comparing (→ the decoy is admitted) |
+| uniffi: `duplicate_root_handle_crosses_the_ffi_as_an_owned_duplicate` (PR 1) | on Windows: the returned `u64`, wrapped by the fact as an `OwnedHandle`, reads the same `FILE_ID_INFO` as `root_identity()`; after the fact drops it, a rename of the vault root still fails (core's hold is untouched); off Windows (the rust lane on Linux): `Err(VaultError::Unsupported { .. })` | return the held handle's raw value rather than a duplicate (→ after the drop the rename succeeds); return `Ok(0)` off Windows (→ the Linux arm fails) |
+| Windows `W1AnchoredVaultStoreTests.OpenReachesTheHeldRootWhenTheVaultsSpellingIsRetargeted` (PR 2; replaces round 10's `OpenRefusesADifferentFolderAtTheVaultsPath`) | the vault `T\a` opened through a junction spelling `T\vault` (made with `mklink /J`, which needs no privilege, as `CanvasDocumentTests.cs:4131-4134` does) and a decoy `T\b` with its own `.slate`; the junction retargeted to `T\b` between session open and store open (the held root cannot be renamed); `AnchoredVaultStore.Open(VaultRootAnchor.Of(session), createDirectory: true)` then `WriteAtomically("probe.json", …)` lands in `T\a\.slate\probe.json`, `ReadAllBytesBounded` reads it back, and every file under `T\b` is byte-identical | open the root by the session's spelling as main does (→ the junction is refused as a reparse point, nothing reaches `T\a`); open the spelling following its reparse point (→ `probe.json` lands in `T\b`) |
+| `W1AnchoredVaultStoreTests.EveryStoreWritesBeneathTheHeldRootAfterTheSpellingIsRetargeted` (PR 2; replaces `EveryStoreRefusesAfterTheRootWasReplaced`) | after the same retarget, `WorkspacePersistence.Save`, `SearchRecentsStore.Add`, `SidebarSettingsStore.SetOrganization` and `GraphConfigStore.Write`, each built with `VaultRootAnchor.Of(session)`, write their files into `T\a\.slate`, and `T\b` stays byte-identical | one store ignores its anchor and opens its `vaultRoot` spelling (→ that store's file is refused or lands in `T\b`) |
+| `W1AnchoredVaultStoreTests.ARootForcedToAnotherVaultsWeakIndexIsNeverReachedThroughIt` (PR 2; codex round 11's synthetic colliding-index / retargeted-root fact, host half; replaces `AWeakIdentityIsComparedByTheFileIndex`) | with `SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED` and `SLATE_TEST_ROOT_FILE_INDEX_COLLIDES` set in-process to the fixture's unique folder name `T` (cleared in `finally`): session `a` opened through the junction `T\vault` → `T\a`, session `b` at `T\b`; the precondition that `a.RootIdentity()` equals `b.RootIdentity()` with `Persistent` false; the junction retargeted to `T\b`; a store through `VaultRootAnchor.Of(a)` writes `probe.json` into `T\a\.slate` and `T\b\.slate` stays byte-identical; a store through `VaultRootAnchor.Of(b)` writes `probe.json` into `T\b\.slate` and `T\a\.slate`'s other files are unchanged | round 10's admission — reopen the session's spelling and admit when the identity read there under the flag equals `RootIdentity()` (→ `a`'s store reaches `T\vault`, which names `T\b`, and `probe.json` never reaches `T\a`); pick the root through a process-wide table of open sessions keyed by `RootIdentity()` (→ under the collision `a`'s store gets `b`'s root and writes into `T\b`) |
+| `W1AnchoredVaultStoreTests.AStoreRefusesOnceItsSessionIsDisposed` (PR 2) | the session disposed; `AnchoredVaultStore.Open(VaultRootAnchor.Of(session), createDirectory: true)` throws `IOException`, and the vault's `.slate` gains no file | fall back to the spelling when core refuses (→ the store opens and writes) |
+| `W1AnchoredVaultStoreTests.AStoreGivenNoAnchorRefusesOutsideTheTestAssembly` (PR 2; in a collection with `DisableParallelization = true`) | with `VaultRootAnchor.ByPathAllowed` set `false` (restored in `finally`), `new WorkspacePersistence(root).Save(snapshot)` throws `IOException` and nothing is written under `root\.slate`; with it `true` again (the test assembly's setting) the same call writes | let a null anchor open the spelling whatever `ByPathAllowed` says (→ the first save writes) |
+| `GraphConfigWriterTests.AQueuedWriteLandsInTheRootItWasEditedIn` (PR 2; new fact in the existing class) | a `GraphConfigWriter` of the fact's own whose `WriteGateForTests` signals `entered` and parks on `release` (a `ManualResetEventSlim`; the gate records its `Wait(TimeSpan.FromSeconds(10))` result, asserted after the write, and `release` is set in `finally`); the vault `T\a` opened through the junction `T\vault`; `Enqueue(key, aggregate, generation, VaultRootAnchor.Of(session))`; `entered.Wait(TimeSpan.FromSeconds(10))` asserted true; the session disposed and the junction retargeted to `T\b`; `release` set and the write's task awaited: `T\a\.slate\graph.json` holds the aggregate, `FailedForTests` is 0, `T\b` is byte-identical, and `T\a` can then be renamed (the pin was disposed after the write) | resolve the anchor when the write runs instead of pinning at `Enqueue` (→ the disposed session refuses: `FailedForTests` is 1 and no `graph.json`); never dispose the pin (→ the rename of `T\a` fails) |
 | `FileRecentsStoreTests` (new class): `APathKeyedRecentsFileMigratesToTheIdentityKeyOnce`, `TheIdentityKeyIsTheLosslessIdentity` (persistent identities) | old file read, new written, old deleted, second load no-op; key text carries the high bits | skip the delete; format `Device-Inode` |
 | `FileRecentsStoreTests.AFailedDestinationCommitKeepsThePathKeyedFile` (PR 2; item 7) | a persistent identity, the path-keyed file holding `[a, b]`, and a directory created at the identity-keyed file's path so `File.Move` over it fails: `Load()` returns `[a, b]`, the path-keyed file is byte-identical afterwards and no identity-keyed file exists; after the directory is removed, the next `Load()` migrates — the identity-keyed file reads `[a, b]` and the path-keyed file is gone | delete the source after a `void Save` (main's `Save`, `:127-148`) → the path-keyed file is gone and nothing holds `[a, b]` |
 | `FileRecentsStoreTests.AnUnreadablePathKeyedFileIsNeitherMigratedNorDeleted` (PR 2; item 7) | the path-keyed file `[a, b]` held open by the fact with `FileShare.None` (released in `finally`) during `Load()`: `Load()` returns an empty list, no identity-keyed file is created, and once the hold is released the path-keyed file is byte-identical; the next `Load()` migrates it | read the source through main's `Read` (`:107-125`, an error is an empty list) → an empty destination is committed and the source deleted |
 | `FileRecentsStoreTests.AnInterruptedMigrationCompletesOnALaterLoad` (PR 2; item 7) | the path-keyed file `[a, b]` held with `FileShare.None` while `Add("c")` runs (the migration stops; `Add` commits `[c]` to the identity-keyed file); the hold released (in `finally`), the next `Load()` returns `[c, a, b]`, the identity-keyed file reads `[c, a, b]` and the path-keyed file is gone | migrate only while the identity-keyed file is absent → the next `Load()` returns `[c]` and the path-keyed file stays forever |
-| `FileRecentsStoreTests.AnUnreadableInVaultRecentsFileIsNotDeleted` (PR 2; item 7, `MigrateLegacy`) | the store built with the fixture vault's own persistent `session.RootIdentity()` (the anchored read compares it); neither device file exists and the vault's `file-recents.json` (`[a]`) is held with `FileShare.None` during `Load()` (released in `finally`): `Load()` returns an empty list, no identity-keyed file is created, and the in-vault file is byte-identical after the hold; the next `Load()` migrates `[a]` and only then deletes it | main's `MigrateLegacy` (`:69-105`: a read error saves an empty destination and deletes the in-vault file) → the in-vault file is gone |
-| `FileRecentsStoreTests.AnInVaultRecentsFileUnreadableBeforeAnAddMigratesOnALaterLoad` (PR 2; item 7, the in-vault step; Theory: the fixture vault's persistent identity, and its weak one through `SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED` set in-process to the fixture's unique folder name, cleared in `finally`) | the store built with the fixture vault's own `session.RootIdentity()` (`Persistent` asserted per row); no device recents file exists and the vault's `file-recents.json` (`[a, b]`) is held with `FileShare.None` while `Load()` and `Add("c")` run: `Load()` returns an empty list, `Add("c")` returns `[c]` and creates the destination (it reads `[c]`), and the in-vault file is byte-identical; the hold released (in `finally`), the next `Load()` returns `[c, a, b]`, the destination reads `[c, a, b]`, the in-vault file is gone, and one more `Load()` leaves `LegacyProbesForTests` unchanged (settled) | run the in-vault step only while no device file exists (main's `Load` gate, `:41-44`) → the next `Load()` returns `[c]` and the in-vault file stays forever; or never settle → the last `Load()` probes the vault again |
-| `FileRecentsStoreTests.AFailedInVaultCommitIsRetriedAfterTheDestinationExists` (PR 2; item 7, the in-vault step) | the fixture vault's own persistent identity; the destination holds `[c]` with the read-only attribute set — `File.Move(…, overwrite: true)` onto a read-only file fails with access denied while the file stays readable (measured on this machine) — and the vault's `file-recents.json` holds `[a, b]`: `Load()` returns `[c, a, b]` for that call, `FileRecentsPersistFailed` is logged once (`HostLog.ObserverForTests`), and the destination (`[c]`) and the in-vault file are byte-identical; the attribute cleared (again in `finally`), the next `Load()` on the same instance commits `[c, a, b]` and only then deletes the in-vault file | delete the in-vault file after an unconfirmed commit (main's `void Save`) → the in-vault file is gone and the destination still reads `[c]`; or settle the step on a failed commit → the next `Load()` returns `[c]` and the in-vault file stays |
-| `FileRecentsStoreTests.ClearingRecentsDropsAnUnmigratedInVaultFile` (PR 2; item 7, the in-vault step) | the fixture vault's own persistent identity; the vault's `file-recents.json` (`[a]`) held with `FileShare.None` during the first `Load()` (an empty list; the step unsettled), the hold released (in `finally`), then `Clear()`: the destination reads `[]`, the in-vault file is gone, and the next `Load()` returns `[]` | `Clear` without the in-vault delete → the next `Load()` returns `[a]` |
+| `FileRecentsStoreTests.AnUnreadableInVaultRecentsFileIsNotDeleted` (PR 2; item 7, `MigrateLegacy`) | the store built with the fixture vault's own persistent `session.RootIdentity()` and `VaultRootAnchor.Of(session)`, through which the in-vault read reaches the vault; neither device file exists and the vault's `file-recents.json` (`[a]`) is held with `FileShare.None` during `Load()` (released in `finally`): `Load()` returns an empty list, no identity-keyed file is created, and the in-vault file is byte-identical after the hold; the next `Load()` migrates `[a]` and only then deletes it | main's `MigrateLegacy` (`:69-105`: a read error saves an empty destination and deletes the in-vault file) → the in-vault file is gone |
+| `FileRecentsStoreTests.AnInVaultRecentsFileUnreadableBeforeAnAddMigratesOnALaterLoad` (PR 2; item 7, the in-vault step; Theory: the fixture vault's persistent identity, and its weak one through `SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED` set in-process to the fixture's unique folder name, cleared in `finally`) | the store built with the fixture vault's own `session.RootIdentity()` (`Persistent` asserted per row) and `VaultRootAnchor.Of(session)`; no device recents file exists and the vault's `file-recents.json` (`[a, b]`) is held with `FileShare.None` while `Load()` and `Add("c")` run: `Load()` returns an empty list, `Add("c")` returns `[c]` and creates the destination (it reads `[c]`), and the in-vault file is byte-identical; the hold released (in `finally`), the next `Load()` returns `[c, a, b]`, the destination reads `[c, a, b]`, the in-vault file is gone, and one more `Load()` leaves `LegacyProbesForTests` unchanged (settled) | run the in-vault step only while no device file exists (main's `Load` gate, `:41-44`) → the next `Load()` returns `[c]` and the in-vault file stays forever; or never settle → the last `Load()` probes the vault again |
+| `FileRecentsStoreTests.AFailedInVaultCommitIsRetriedAfterTheDestinationExists` (PR 2; item 7, the in-vault step) | the fixture vault's own persistent identity and `VaultRootAnchor.Of(session)`; the destination holds `[c]` with the read-only attribute set — `File.Move(…, overwrite: true)` onto a read-only file fails with access denied while the file stays readable (measured on this machine) — and the vault's `file-recents.json` holds `[a, b]`: `Load()` returns `[c, a, b]` for that call, `FileRecentsPersistFailed` is logged once (`HostLog.ObserverForTests`), and the destination (`[c]`) and the in-vault file are byte-identical; the attribute cleared (again in `finally`), the next `Load()` on the same instance commits `[c, a, b]` and only then deletes the in-vault file | delete the in-vault file after an unconfirmed commit (main's `void Save`) → the in-vault file is gone and the destination still reads `[c]`; or settle the step on a failed commit → the next `Load()` returns `[c]` and the in-vault file stays |
+| `FileRecentsStoreTests.ClearingRecentsDropsAnUnmigratedInVaultFile` (PR 2; item 7, the in-vault step) | the fixture vault's own persistent identity and `VaultRootAnchor.Of(session)`; the vault's `file-recents.json` (`[a]`) held with `FileShare.None` during the first `Load()` (an empty list; the step unsettled), the hold released (in `finally`), then `Clear()`: the destination reads `[]`, the in-vault file is gone, and the next `Load()` returns `[]` | `Clear` without the in-vault delete → the next `Load()` returns `[a]` |
 | `FileRecentsStoreTests.AWeakIdentityKeepsThePathKeyAndMigratesNothing` (WD24 amended; PR 1, where every identity keeps the path key, and PR 2) | a store built with `new VaultRootIdentity(volume, 0, index, false)` reads and writes the same file as a store built with `identity: null` for that root; a path-keyed file present beforehand is neither moved nor deleted, and no identity-keyed file appears | key by the weak identity (→ another file); run the migration for a weak identity (→ the path-keyed file is deleted) |
 | `VaultOpenIdentityTests` (new class): `AFolderWhoseFileSystemGivesNoFileIdDoesNotOpenAndSaysWhy` (WD24; PR 1) | through the real core, with `SLATE_TEST_ROOT_FILE_ID_UNAVAILABLE` set in-process to the fixture vault's unique folder name (cleared in `finally`): `OpenVaultAsync(root)` raises exactly one announcement, a `HostComposed` at `High` whose text is `"Could not open vault: " + SlateUniffiMethods.VaultRootIdentityUnavailableDetail()`; no `VaultOpened`; `IsVaultOpen` false; `ReturnedToWelcome` raised once; the recents list unchanged; `root\.slate` absent | speak `exception.Message` (the text becomes "Could not open vault: @message=…"); open anyway (→ `VaultOpened`) |
 | `VaultOpenIdentityTests.OpenRefusesWhenCoreReportsNoIdentity` (PR 2) | a real vault opens in core, and `RootIdentityReader` returns `null`: the session is disposed, the same single `High` sentence is spoken, no `VaultOpened`, no recents entry, `ReturnedToWelcome` raised once | admit null (→ `VaultOpened`) |
@@ -712,21 +941,30 @@ the new record with `persistent: true`; the Unix facts.
   "Delivered …" text as 22a's did; §11 a dated note on WD22's answer.
 - Contract 31 FR-10: append a sentence that the session's root identity
   is core-owned on Windows and shares structural identity's form where
-  the file system answers `FileIdInfo`; that otherwise it is the volume
-  serial and 64-bit file index, flagged weak (`persistent: false`), which
-  the stores compare within a session and which keys nothing durable;
-  and that a Windows root for which neither read answers does not open
-  (WD24 as amended 2026-10-21, core's `VAULT_ROOT_IDENTITY_UNAVAILABLE`
-  sentence).
+  the file system answers `FileIdInfo`; that on a FAT, FAT32 or exFAT
+  volume (by `GetVolumeInformationByHandleW`'s name) whose `FileIdInfo`
+  read fails it is the volume serial and 64-bit file index, flagged weak
+  (`persistent: false`), which keys nothing durable and authorizes
+  nothing — equal weak identities need not be one folder (cloned
+  volumes), so the host's vault stores reach the vault through a
+  duplicate of the session's held root handle and compare no identity;
+  that on any other file system a `FileIdInfo` failure refuses the open
+  (ReFS's 64-bit index is not unique), and that a FAT, FAT32 or exFAT
+  root for which neither read answers does not open either (WD24 as
+  amended 2026-10-21 and narrowed by codex round 11, core's
+  `VAULT_ROOT_IDENTITY_UNAVAILABLE` sentence).
 - `24_structural_identity_capability_matrix.md`: append (dated, never
-  rewrite) step 0's table — NTFS control, FAT32, exFAT: which identity
+  rewrite) step 0's table — NTFS control, FAT32, exFAT: the file-system
+  name the volume reports, which identity
   read answers, the `FileIdInfo` error number, the index's stability and
   distinctness within a mount, and what a longer rename did — to the §5
   Windows block WB-27 appended.
 - No `corpus.json`, census, designations or trigger-ledger change: the
   refusal is a `VaultError` detail, not an `A11yEvent` (design item 6).
 - PR 1's body: step 0's probe table, the gated FAT32/exFAT fact's run,
-  and the NVDA spot check (Verification) with its NVDA log excerpt.
+  the NVDA spot check (Verification) with its NVDA log excerpt, and the
+  consequence of the narrowed fallback: a share whose server reports
+  NTFS or ReFS but answers no `FileIdInfo` now refuses to open.
 - `18_windows_port/parity_matrix.md`: `python -I scripts/generate-parity-matrix.py
   --check` stays green (no command rows change).
 - Plan §11's helper names: the plan author replaces `list_dir_at`,
@@ -758,6 +996,7 @@ Add-Type -TypeDefinition @'
 using System;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 using Microsoft.Win32.SafeHandles;
 public static class RootIdProbe
 {
@@ -771,7 +1010,9 @@ public static class RootIdProbe
     private static extern bool GetFileInformationByHandleEx(SafeFileHandle file, int infoClass, out FileIdInfo info, uint size);
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool GetFileInformationByHandle(SafeFileHandle file, out ByHandleFileInformation info);
-    // One folder, both reads (FileIdInfo = class 18): each its value or "error <Win32 code>".
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern bool GetVolumeInformationByHandleW(SafeFileHandle file, IntPtr volumeName, uint volumeNameSize, IntPtr serial, IntPtr maximumComponent, IntPtr flags, StringBuilder fileSystemName, uint fileSystemNameSize);
+    // One folder, both reads (FileIdInfo = class 18) and its volume's file-system name: each its value or "error <Win32 code>".
     public static string[] Probe(string path)
     {
         using SafeFileHandle file = CreateFileW(path, 0x80, 7, IntPtr.Zero, 3, 0x02000000, IntPtr.Zero);
@@ -782,7 +1023,11 @@ public static class RootIdProbe
         string index = GetFileInformationByHandle(file, out ByHandleFileInformation info)
             ? $"{info.VolumeSerialNumber:x8}-{info.IndexHigh:x8}{info.IndexLow:x8}"
             : $"error {Marshal.GetLastWin32Error()}";
-        return new[] { fileId, index };
+        var name = new StringBuilder(261);
+        string fileSystem = GetVolumeInformationByHandleW(file, IntPtr.Zero, 0, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, name, (uint)name.Capacity)
+            ? name.ToString()
+            : $"error {Marshal.GetLastWin32Error()}";
+        return new[] { fileId, index, fileSystem };
     }
 }
 '@
@@ -793,9 +1038,10 @@ $rows = foreach ($volume in @(@{ Name = 'NTFS'; Root = $ntfsRoot }, @{ Name = 'F
     $first = [RootIdProbe]::Probe($a); $again = [RootIdProbe]::Probe($a); $sibling = [RootIdProbe]::Probe($b)
     Rename-Item $a (Split-Path $longer -Leaf); $renamed = [RootIdProbe]::Probe($longer)
     Remove-Item $longer, $b -Recurse -Force
-    $row = [pscustomobject]@{ Volume = $volume.Name; FileIdInfo = $first[0]; FileIndex = $first[1]; IndexAgain = $again[1]; SiblingIndex = $sibling[1]; FileIdInfoAfterRename = $renamed[0]; IndexAfterRename = $renamed[1] }
+    $row = [pscustomobject]@{ Volume = $volume.Name; FileSystem = $first[2]; FileIdInfo = $first[0]; FileIndex = $first[1]; IndexAgain = $again[1]; SiblingIndex = $sibling[1]; FileIdInfoAfterRename = $renamed[0]; IndexAfterRename = $renamed[1] }
     if ($volume.Name -eq 'NTFS' -and $row.FileIdInfo -like 'error*') { throw 'the NTFS control answers no FileIdInfo: the probe is broken' }
     if ($row.FileIdInfo -like 'error*' -and $row.FileIndex -like 'error*') { throw "$($volume.Name) answers neither read: stop for an owner decision (WD24 would refuse its vaults)" }
+    if ($row.FileIdInfo -like 'error*' -and @('FAT', 'FAT32', 'exFAT') -notcontains $row.FileSystem) { throw "$($volume.Name) needs the fallback but reports '$($row.FileSystem)', which the fallback gate (design item 6) refuses: stop for an owner decision" }   # -notcontains is case-insensitive, as the gate is
     if ($row.FileIdInfo -like 'error*' -and ($row.IndexAgain -ne $row.FileIndex -or $row.SiblingIndex -eq $row.FileIndex)) { throw "$($volume.Name)'s file index is not stable and distinct within a mount: stop for an owner decision" }
     $row
 }
@@ -816,8 +1062,8 @@ function Assert-Facts([string]$crate, [string]$filter, [string[]]$facts, [switch
     }
 }
 $required = [ordered]@{
-    'descriptor_interior_windows' = @('a_held_root_refuses_a_rename_of_itself_and_of_an_ancestor_while_the_session_lives', 'no_interior_writer_follows_a_retargeted_spelling', 'wal_connections_share_the_held_cache_across_a_retarget', 'a_second_process_on_the_textual_path_shares_the_anchored_cache', 'child_of_a_second_process_on_the_textual_path', 'root_display_path_follows_the_held_root_not_its_retargeted_spelling', 'canonical_path_is_computed_under_the_held_root_handle', 'a_junctioned_interior_folder_is_refused', 'the_connection_names_the_synthetic_path_and_the_literal_path_does_not_exist', 'an_uninstalled_hook_fails_the_anchored_open_instead_of_opening_by_path', 'a_slate_junction_planted_before_the_hold_never_receives_the_interior', 'root_identity_on_windows_is_the_volume_serial_and_the_whole_128_bit_file_id', 'a_root_whose_file_id_info_is_unsupported_opens_with_a_weak_file_index_identity', 'a_root_whose_file_id_cannot_be_read_does_not_open_and_gains_no_slate', 'the_windows_structural_lock_registry_is_keyed_by_identity')
-    'fs_root' = @('both_forms_open_create_rename_list_and_remove_the_same_files', 'windows_a_held_cache_directory_refuses_a_rename_of_itself_and_of_its_parent', 'windows_a_held_cache_directory_resolves_beneath_its_handle_when_its_spelling_is_retargeted', 'windows_a_held_cache_directory_never_follows_a_junction')
+    'descriptor_interior_windows' = @('a_held_root_refuses_a_rename_of_itself_and_of_an_ancestor_while_the_session_lives', 'no_interior_writer_follows_a_retargeted_spelling', 'wal_connections_share_the_held_cache_across_a_retarget', 'a_second_process_on_the_textual_path_shares_the_anchored_cache', 'child_of_a_second_process_on_the_textual_path', 'root_display_path_follows_the_held_root_not_its_retargeted_spelling', 'canonical_path_is_computed_under_the_held_root_handle', 'a_junctioned_interior_folder_is_refused', 'the_connection_names_the_synthetic_path_and_the_literal_path_does_not_exist', 'an_uninstalled_hook_fails_the_anchored_open_instead_of_opening_by_path', 'a_slate_junction_planted_before_the_hold_never_receives_the_interior', 'root_identity_on_windows_is_the_volume_serial_and_the_whole_128_bit_file_id', 'a_root_whose_file_id_info_is_unsupported_opens_with_a_weak_file_index_identity', 'a_root_whose_file_id_cannot_be_read_does_not_open_and_gains_no_slate', 'a_file_id_info_failure_on_a_volume_that_keeps_ids_refuses_the_open_and_never_reads_the_index', 'two_roots_forced_to_one_weak_index_keep_their_own_interiors', 'the_duplicated_root_handle_names_the_held_root_after_its_spelling_is_retargeted', 'the_windows_structural_lock_registry_is_keyed_by_identity')
+    'fs_root' = @('both_forms_open_create_rename_list_and_remove_the_same_files', 'windows_a_held_cache_directory_refuses_a_rename_of_itself_and_of_its_parent', 'windows_a_held_cache_directory_resolves_beneath_its_handle_when_its_spelling_is_retargeted', 'windows_a_held_cache_directory_never_follows_a_junction', 'the_file_index_fallback_is_taken_only_on_fat_fat32_and_exfat')
 }
 foreach ($filter in $required.Keys) {
     Assert-Facts 'slate-core' $filter $required[$filter]
@@ -827,6 +1073,8 @@ cargo test -p slate-core --locked anchored; Assert-Ok 'anchored'
 cargo test -p slate-core --locked --no-fail-fast; Assert-Ok 'the whole core suite'
 Assert-Facts 'slate-uniffi' 'root_identity' @('root_identity_crosses_the_ffi_losslessly', 'the_root_identity_refusal_crosses_the_ffi_as_cores_sentence')
 cargo test -p slate-uniffi --locked root_identity; Assert-Ok 'uniffi root_identity'
+Assert-Facts 'slate-uniffi' 'duplicate_root_handle' @('duplicate_root_handle_crosses_the_ffi_as_an_owned_duplicate')
+cargo test -p slate-uniffi --locked duplicate_root_handle; Assert-Ok 'uniffi duplicate_root_handle'
 cargo fmt --all -- --check; Assert-Ok 'fmt'
 cargo clippy --all-targets --workspace -- -D warnings; Assert-Ok 'clippy'
 cargo test --workspace --locked; Assert-Ok 'workspace tests'
@@ -835,13 +1083,20 @@ cargo bench --workspace --no-run; Assert-Ok 'bench compile'
 ./apps/slate-windows/generate-bindings.ps1 -Locked; Assert-Ok 'bindings'
 dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release; Assert-Ok 'build'
 $tests = 'apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj'
-$filter = 'FullyQualifiedName~SlateWindows.Tests.W1AnchoredVaultStoreTests|FullyQualifiedName~SlateWindows.Tests.FileRecentsStoreTests|FullyQualifiedName~SlateWindows.Tests.VaultOpenIdentityTests|FullyQualifiedName~SlateWindows.Tests.RescanTests'
+$filter = 'FullyQualifiedName~SlateWindows.Tests.W1AnchoredVaultStoreTests|FullyQualifiedName~SlateWindows.Tests.FileRecentsStoreTests|FullyQualifiedName~SlateWindows.Tests.VaultOpenIdentityTests|FullyQualifiedName~SlateWindows.Tests.RescanTests|FullyQualifiedName~SlateWindows.Tests.GraphConfigWriterTests'
 $listed = dotnet test $tests --no-build --configuration Release --list-tests --filter $filter; Assert-Ok 'listing the host facts'
-foreach ($fact in 'OpenRefusesADifferentFolderAtTheVaultsPath', 'EveryStoreRefusesAfterTheRootWasReplaced', 'AWeakIdentityIsComparedByTheFileIndex', 'APathKeyedRecentsFileMigratesToTheIdentityKeyOnce', 'TheIdentityKeyIsTheLosslessIdentity', 'AFailedDestinationCommitKeepsThePathKeyedFile', 'AnUnreadablePathKeyedFileIsNeitherMigratedNorDeleted', 'AnInterruptedMigrationCompletesOnALaterLoad', 'AnUnreadableInVaultRecentsFileIsNotDeleted', 'AnInVaultRecentsFileUnreadableBeforeAnAddMigratesOnALaterLoad', 'AFailedInVaultCommitIsRetriedAfterTheDestinationExists', 'ClearingRecentsDropsAnUnmigratedInVaultFile', 'AWeakIdentityKeepsThePathKeyAndMigratesNothing', 'AFolderWhoseFileSystemGivesNoFileIdDoesNotOpenAndSaysWhy', 'OpenRefusesWhenCoreReportsNoIdentity', 'AFolderAnsweringOnlyTheFileIndexOpens', 'ARefreshAfterTheVaultsSpellingIsRetargetedListsTheHeldVault') {
+foreach ($fact in 'OpenReachesTheHeldRootWhenTheVaultsSpellingIsRetargeted', 'EveryStoreWritesBeneathTheHeldRootAfterTheSpellingIsRetargeted', 'ARootForcedToAnotherVaultsWeakIndexIsNeverReachedThroughIt', 'AStoreRefusesOnceItsSessionIsDisposed', 'AStoreGivenNoAnchorRefusesOutsideTheTestAssembly', 'AQueuedWriteLandsInTheRootItWasEditedIn', 'APathKeyedRecentsFileMigratesToTheIdentityKeyOnce', 'TheIdentityKeyIsTheLosslessIdentity', 'AFailedDestinationCommitKeepsThePathKeyedFile', 'AnUnreadablePathKeyedFileIsNeitherMigratedNorDeleted', 'AnInterruptedMigrationCompletesOnALaterLoad', 'AnUnreadableInVaultRecentsFileIsNotDeleted', 'AnInVaultRecentsFileUnreadableBeforeAnAddMigratesOnALaterLoad', 'AFailedInVaultCommitIsRetriedAfterTheDestinationExists', 'ClearingRecentsDropsAnUnmigratedInVaultFile', 'AWeakIdentityKeepsThePathKeyAndMigratesNothing', 'AFolderWhoseFileSystemGivesNoFileIdDoesNotOpenAndSaysWhy', 'OpenRefusesWhenCoreReportsNoIdentity', 'AFolderAnsweringOnlyTheFileIndexOpens', 'ARefreshAfterTheVaultsSpellingIsRetargetedListsTheHeldVault') {
     if (-not ($listed -match "\.$([regex]::Escape($fact))(\(.*\))?$")) { throw "the host filter does not select $fact" }   # a Theory lists as Name(row)
 }
 dotnet test $tests --no-build --configuration Release --filter $filter; Assert-Ok 'host facts'
-$cs = @('apps/slate-windows/src/SlateWindows/AnchoredVaultStore.cs','apps/slate-windows/src/SlateWindows/FileRecentsStore.cs','apps/slate-windows/src/SlateWindows/FilesSidebarViewModel.cs','apps/slate-windows/src/SlateWindows/QuickSwitcherViewModel.cs','apps/slate-windows/src/SlateWindows/VaultLifecycleViewModel.cs','apps/slate-windows/src/SlateWindows/WorkspacePersistence.cs','apps/slate-windows/src/SlateWindows/Search/SearchRecentsStore.cs','apps/slate-windows/src/SlateWindows/SidebarSettingsStore.cs','apps/slate-windows/src/SlateWindows/Graph/GraphConfigStore.cs','apps/slate-windows/tests/SlateWindows.Tests/W1AnchoredVaultStoreTests.cs','apps/slate-windows/tests/SlateWindows.Tests/FileRecentsStoreTests.cs','apps/slate-windows/tests/SlateWindows.Tests/VaultOpenIdentityTests.cs','apps/slate-windows/tests/SlateWindows.Tests/RescanTests.cs')
+# PR 2: production never enables the by-path anchor, and every store construction site passes the session's anchor (the by-path default refuses in production anyway; this names a forgotten site before a reader meets the refusal)
+$enabled = @(git grep -n -e 'ByPathAllowed = true' -e 'ByPathAllowed=true' -- 'apps/slate-windows/src'); if ($LASTEXITCODE -gt 1) { throw 'git grep failed' }
+if ($enabled.Count -gt 0) { throw "production code enables the by-path anchor: $($enabled -join '; ')" }
+$anchored = @(git grep -n 'VaultRootAnchor.Of(' -- 'apps/slate-windows/src'); Assert-Ok 'git grep VaultRootAnchor.Of'
+foreach ($site in 'FilesSidebarViewModel.cs', 'QuickSwitcherViewModel.cs', 'Search/VaultSearchSource.cs', 'VaultLifecycleViewModel.cs', 'SlateWindows/WorkspaceViewModel.cs', 'Graph/WorkspaceViewModel.Graph.cs') {
+    if (-not ($anchored -match [regex]::Escape($site))) { throw "$site builds a store without VaultRootAnchor.Of(session)" }
+}
+$cs = @('apps/slate-windows/src/SlateWindows/AnchoredVaultStore.cs','apps/slate-windows/src/SlateWindows/FileRecentsStore.cs','apps/slate-windows/src/SlateWindows/FilesSidebarViewModel.cs','apps/slate-windows/src/SlateWindows/QuickSwitcherViewModel.cs','apps/slate-windows/src/SlateWindows/VaultLifecycleViewModel.cs','apps/slate-windows/src/SlateWindows/WorkspacePersistence.cs','apps/slate-windows/src/SlateWindows/Search/SearchRecentsStore.cs','apps/slate-windows/src/SlateWindows/SidebarSettingsStore.cs','apps/slate-windows/src/SlateWindows/Graph/GraphConfigStore.cs','apps/slate-windows/src/SlateWindows/Graph/GraphConfigWriter.cs','apps/slate-windows/src/SlateWindows/Graph/GraphPreferencesViewModel.cs','apps/slate-windows/src/SlateWindows/Graph/WorkspaceViewModel.Graph.cs','apps/slate-windows/src/SlateWindows/Search/VaultSearchSource.cs','apps/slate-windows/src/SlateWindows/WorkspaceViewModel.cs','apps/slate-windows/src/SlateWindows/VaultRootAnchor.cs','apps/slate-windows/tests/SlateWindows.Tests/TestRootAnchors.cs','apps/slate-windows/tests/SlateWindows.Tests/GraphConfigWriterTests.cs','apps/slate-windows/tests/SlateWindows.Tests/W1AnchoredVaultStoreTests.cs','apps/slate-windows/tests/SlateWindows.Tests/FileRecentsStoreTests.cs','apps/slate-windows/tests/SlateWindows.Tests/VaultOpenIdentityTests.cs','apps/slate-windows/tests/SlateWindows.Tests/RescanTests.cs')
 dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $cs; Assert-Ok 'dotnet format'
 python -I scripts/generate-parity-matrix.py --check; Assert-Ok 'parity matrix'
 cargo bench -p slate-core --bench scan_bench -- 'first_open_and_scan|reopen_with_cache'; Assert-Ok 'scan benches'   # one regex filter; both groups within noise of BENCHMARKS.md
@@ -854,44 +1109,73 @@ Assert-Facts 'slate-core' $weak @($weak) -Ignored
 cargo test -p slate-core --locked $weak -- --ignored --test-threads=1; Assert-Ok $weak   # both volumes; record the pass in PR 1's body
 ```
 
-PR 1 runs step 0 first, then the block with the host list cut to
+PR 1 runs step 0 first, then the block with every core and uniffi fact
+(the four seams, the fallback gate, the colliding-index fact and
+`duplicate_root_handle` are all PR 1's), the host list cut to
 `AFolderWhoseFileSystemGivesNoFileIdDoesNotOpenAndSaysWhy` and
 `AWeakIdentityKeepsThePathKeyAndMigratesNothing` (its filter cut to
-`VaultOpenIdentityTests` and `FileRecentsStoreTests`), and the gated
-FAT32/exFAT fact; the other host facts are PR 2's. Mutation run per row,
+`VaultOpenIdentityTests` and `FileRecentsStoreTests`), the two `git grep`
+checks and the files PR 2 adds (`VaultRootAnchor.cs`,
+`TestRootAnchors.cs`) left out, and the gated FAT32/exFAT fact; the
+other host facts are PR 2's, which changes no Rust. Mutation run per row,
 locally. CI: `windows.yml`
 (all lanes), `rust.yml` (the Unix facts, unchanged, on Linux),
 `swift-tests.yml` (the record change at `AppState.swift:10670-10671`
-and `SidebarOrganizationDispatchTests.swift:2478-2479`, and the additive
-export; the mac twins of the 22a facts).
+and `SidebarOrganizationDispatchTests.swift:2478-2479`, and the two
+additive exports; the mac twins of the 22a facts).
 
 AT, NVDA spot check on PR 1 (§4 rule 4), with the Release build and
-NVDA running:
-1. Open a scratch vault folder once normally, so it is in the recents,
-   and close Slate.
-2. From a PowerShell window, set
-   `$env:SLATE_TEST_ROOT_FILE_ID_UNAVAILABLE` to that folder's name and
-   start `SlateWindows.exe` from the same window, so the app inherits it.
-3. Open the vault from the welcome view's recents. NVDA speaks once
-   "Could not open vault: This folder's file system gives Slate no file
-   identity for it, so Slate cannot keep the vault anchored to it." The
-   keys stay in the welcome view (WD4), and nothing else is spoken.
-4. In the same run, open a different vault. It opens and is announced
-   as usual.
+NVDA running. Device state is isolated through WB-1's field-pass
+launcher, `scripts/windows/launch-for-field-pass.ps1`
+(`param([string[]]$Vault, [switch]$Seed, [switch]$Keep, [string]$Exe,
+[string]$Root)`: without `-Root` it makes a fresh
+`%TEMP%\slate-field-pass-<stamp>` root, sets `SLATE_LOCAL_APP_DATA` and
+`SLATE_LOG_DIR` beneath it, with `-Seed` writes a `recent-vaults.json`
+holding the given vaults there, starts `$Exe` with the first `$Vault` as
+its argument, prints `Root: <path>` and keeps the root with `-Keep`;
+variables set in the calling window reach the app), so neither
+the open nor the recents touch the owner's profile, and the seed replaces
+opening the vault once by hand. The launcher's child inherits the
+window's environment, so the seam set first reaches the app:
+
+```powershell
+$exe = (Resolve-Path 'apps/slate-windows/src/SlateWindows/bin/Release/net10.0-windows/SlateWindows.exe').Path
+$scratch = Join-Path ([IO.Path]::GetTempPath()) "wb28-no-file-id-$PID"; New-Item -ItemType Directory (Join-Path $scratch 'Notes') -Force | Out-Null
+Set-Content (Join-Path $scratch 'Notes\a.md') '# A'
+$other = Join-Path ([IO.Path]::GetTempPath()) "wb28-other-vault-$PID"; New-Item -ItemType Directory $other -Force | Out-Null   # its path does not contain the seam's value
+$env:SLATE_TEST_ROOT_FILE_ID_UNAVAILABLE = Split-Path $scratch -Leaf
+pwsh -NoProfile -File scripts/windows/launch-for-field-pass.ps1 -Vault $scratch -Seed -Keep -Exe $exe
+if ($LASTEXITCODE -ne 0) { throw "field-pass launcher failed ($LASTEXITCODE)" }
+Remove-Item Env:SLATE_TEST_ROOT_FILE_ID_UNAVAILABLE
+```
+
+1. At launch the app opens `$scratch` (the launcher's argument): NVDA
+   speaks once "Could not open vault: This folder's file system gives
+   Slate no file identity for it, so Slate cannot keep the vault anchored
+   to it." The keys stay in the welcome view (WD4), and nothing else is
+   spoken.
+2. Open the same vault from the welcome view's recents (the seed put it
+   there): the same sentence, once, and the keys stay in the welcome
+   view.
+3. In the same run, open `$other` through Open Folder. It opens and is
+   announced as usual. Close Slate; the launcher returns and the command
+   above checks its exit code.
 
 The PR body records the NVDA log excerpt, and the PR stays draft until
 then. Nothing else a reader hears changes.
 
 ## Acceptance
 
-- [ ] `SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED` and
-      `SLATE_TEST_ROOT_FILE_ID_UNAVAILABLE` join WB-18's `FAULT_VARIABLES`
-      (`session/tests/common.rs`, the array grows by two) and its guard
-      fact's literal list in PR 1, and every core fact that sets either
-      does so through `fault_guard()`, so WB-18's
+- [ ] `SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED`,
+      `SLATE_TEST_ROOT_FILE_ID_UNAVAILABLE`,
+      `SLATE_TEST_ROOT_FILE_ID_INFO_FAILS` and
+      `SLATE_TEST_ROOT_FILE_INDEX_COLLIDES` join WB-18's `FAULT_VARIABLES`
+      (`session/tests/common.rs`, the array grows by four) and its guard
+      fact's literal list in PR 1, and every core fact that sets any of
+      them does so through `fault_guard()`, so WB-18's
       `no_test_sets_a_fault_variable_outside_the_guard` and
       `the_fault_guard_clears_every_fault_variable_on_acquisition` stay
-      green (WB-30 then finds both names present).
+      green (WB-30 then finds the two names it uses present).
 - [ ] WD7 and WD22 recorded; WD24 (answered 2026-10-21, amended
       2026-10-21) applied; step 0's probe run before any code, its table
       in PR 1's body and the matrix, and — if FAT32 or exFAT answered
@@ -910,9 +1194,24 @@ then. Nothing else a reader hears changes.
       lossless on both bindings; the high-bits fact; both Swift reads
       (`AppState.swift:10670-10671`,
       `SidebarOrganizationDispatchTests.swift:2478-2479`) changed.
-- [ ] `AnchoredVaultStore` compares core's identity by the read its
-      `persistent` flag names; the five stores and `OpenVaultAsync` fail
-      closed; `FileRecentsStore` migrated for a persistent identity and
+- [ ] No identity and no path authorizes a store (codex round 11):
+      `AnchoredVaultStore.Open(VaultRootAnchor root, …)` opens `.slate`
+      and its children relative to a duplicate of the session's held root
+      (core's `duplicate_root_handle`, PR 1), the five stores and the
+      graph writer take the anchor, every production construction site
+      passes `VaultRootAnchor.Of(session)` (the `git grep` checks), the
+      graph writer pins it at `Enqueue`, a disposed session's anchor
+      refuses, and a store given no anchor refuses outside the test
+      assembly — `OpenReachesTheHeldRootWhenTheVaultsSpellingIsRetargeted`,
+      `EveryStoreWritesBeneathTheHeldRootAfterTheSpellingIsRetargeted`,
+      `ARootForcedToAnotherVaultsWeakIndexIsNeverReachedThroughIt`,
+      `AStoreRefusesOnceItsSessionIsDisposed`,
+      `AStoreGivenNoAnchorRefusesOutsideTheTestAssembly` and
+      `GraphConfigWriterTests.AQueuedWriteLandsInTheRootItWasEditedIn`
+      green, with the core collision fact
+      `two_roots_forced_to_one_weak_index_keep_their_own_interiors`.
+- [ ] `OpenVaultAsync` fails closed on a null identity;
+      `FileRecentsStore` migrated for a persistent identity and
       path-keyed, migrating nothing, for a weak one (PR 1 keeps the path
       key for every identity); a migration source — the path-keyed file
       or the in-vault file — is deleted only after its successful read
@@ -928,13 +1227,19 @@ then. Nothing else a reader hears changes.
       `AnInVaultRecentsFileUnreadableBeforeAnAddMigratesOnALaterLoad`,
       `AFailedInVaultCommitIsRetriedAfterTheDestinationExists`,
       `ClearingRecentsDropsAnUnmigratedInVaultFile`).
-- [ ] WD24 as amended: the root's and `.slate`'s identity is
-      `FileIdInfo`, else the `GetFileInformationByHandle` file index
-      flagged weak, so FAT32 and exFAT vaults open (the seam fact on the
-      lane, the gated fact on WB-27's VHDs). A Windows root for which
-      neither read answers does not open: core refuses in `FsRoot::open`
-      before `.slate` is made, with `VAULT_ROOT_IDENTITY_UNAVAILABLE` as
-      the `VaultError::Io` detail. The host speaks core's detail on every
+- [ ] WD24 as amended, narrowed by codex round 11: the root's and
+      `.slate`'s identity is `FileIdInfo`, else — only on a volume whose
+      file system is `FAT`, `FAT32` or `exFAT` — the
+      `GetFileInformationByHandle` file index flagged weak, so FAT32 and
+      exFAT vaults open (the seam fact on the lane, the gated fact on
+      WB-27's VHDs, the decision table
+      `the_file_index_fallback_is_taken_only_on_fat_fat32_and_exfat`). A
+      `FileIdInfo` failure on NTFS, ReFS or any other file system refuses
+      the open without reading the index, one attempt and no retry
+      (`a_file_id_info_failure_on_a_volume_that_keeps_ids_refuses_the_open_and_never_reads_the_index`),
+      and a FAT-family root for which neither read answers does not open:
+      core refuses in `FsRoot::open` before `.slate` is made, with
+      `VAULT_ROOT_IDENTITY_UNAVAILABLE` as the `VaultError::Io` detail. The host speaks core's detail on every
       failed open, never the binding's field dump. `OpenVaultAsync`
       refuses a null identity with the same sentence through
       `vault_root_identity_unavailable_detail()` and admits a weak one.
@@ -967,7 +1272,18 @@ weak because a FAT index changes when its entry is renamed or moved; a
 Windows vault does not open only when neither read answers, and
 `OpenVaultAsync` refuses a null root identity with a sentence saying
 why; admitting an id-less root by handle and final path with path-keyed
-stores is rejected. Read the design `:306-385`, `:639-711`,
+stores is rejected. Codex round 11 narrows how this applies, keeping the
+owner's choice that FAT32 and exFAT vaults open weak: the fallback is
+taken only on a volume whose file system `GetVolumeInformationByHandleW`
+names `FAT`, `FAT32` or `exFAT`; on NTFS, ReFS or any other file system a
+`FileIdInfo` failure refuses the open (ReFS's 64-bit index is not unique
+— `SidebarWriteJournal.cs:58` and Win32's `BY_HANDLE_FILE_INFORMATION`
+remarks); and a weak identity authorizes nothing, because two folders'
+weak identities can be equal (two FAT volumes imaged from one another
+share the 32-bit serial and every entry's place), so the host's vault
+stores reach the vault through a duplicate of the session's held root
+handle and compare no identity. The plan's WD24 rows get a dated note.
+Read the design `:306-385`, `:639-711`,
 `:737-845`; `fs_root.rs:49-60`, `:142-170`, `:285-420`, `:536-700`,
 `:749-1018`, `:1020-1140` (its tests); `db/anchored.rs:1-60`,
 `:100-170`, `:260-280`, `:400-420`; `session.rs:1085-1120`,
@@ -984,8 +1300,25 @@ matrix block);
 (a junction vault root, the junction removed while it works);
 `uniffi lib.rs:618-630`, `:770-795`; `descriptor_interior.rs` whole
 (every fact but `:293` renames a held object; several use
-`std::os::unix`); `AnchoredVaultStore.cs:42-70`, `:245-260`,
-`:333-345`, `:434-456`; `FileRecentsStore.cs:15-171` (`Load`'s
+`std::os::unix`); `AnchoredVaultStore.cs:42-120` (`Open` by path, the
+`.slate` made by path at `:72-75`), `:245-363` (`TryOpenDirectory`
+refusing a reparse-point root, `TryOpenChild` by path, the final-path
+text checks), `:434-456`; the stores built from path strings —
+`WorkspacePersistence.cs:92` (built at `VaultLifecycleViewModel.cs:1182`,
+`WorkspaceViewModel.cs:2119`), `Search/SearchRecentsStore.cs:67` (built at
+`Search/VaultSearchSource.cs:96`, which holds `Func<VaultSession?>` at
+`:36`), `SidebarSettingsStore.cs:45` (built at
+`FilesSidebarViewModel.cs:556`), `Graph/GraphConfigStore.cs:40` (built at
+`Graph/GraphPreferencesViewModel.cs:82-101`, itself built at
+`Graph/WorkspaceViewModel.Graph.cs:224`) and the process-wide
+`Graph/GraphConfigWriter.cs:30-140` (`StoreFor` `:65`, `Enqueue`, the
+queued write `:132`, which nothing drains at close); the close order
+`VaultLifecycleViewModel.cs:1095-1124` (the workspace disposed before the
+session); `session.rs:60-170` (the structural-lock registry:
+`StructuralLockKey` `:71`, `open_file` `:86-91`, `ProcessStructuralLocks`
+`:109-121`, the lock order `:124-127`) and `:3144-3152` (`root_display_path`,
+display only); `session/tests/structural_batch.rs:976` (a session over a
+test provider no filesystem root backs); `FileRecentsStore.cs:15-171` (`Load`'s
 destination-absent gate `:41-44`, `Add` = `Load` then `Save` `:49-58`,
 `Clear` and `Replace` `:60-67`, `MigrateLegacy` `:69-105`, `Read`
 `:107-125`, the `void` `Save` that swallows its errors `:127-148`);
@@ -1003,20 +1336,24 @@ at `:556-565` that speaks `exception.Message`, the binding's "@message=…"
 dump) and `:1870-1875` (`ReportTerminalStatus`),
 `WorkspaceViewModel.cs:1130-1137` (`VaultErrorDetail` in use),
 `uniffi lib.rs:11320-11372` (`vault_error_detail`), `a11y.rs:3401-3440`,
-`session.rs:4365-4390` (the `SLATE_TEST_*` seams any build can trip).
-Settle the design answers (items 0 to 10) first.
+`session.rs:4365-4390` (the `SLATE_TEST_*` seams any build can trip);
+WB-1's spec for `scripts/windows/launch-for-field-pass.ps1` (the NVDA
+spot check's launcher). Settle the design answers (items 0 to 10) first.
 
 Step 0, before any code: in the elevated session where WB-27's volume
 procedure mounted the FAT32 and exFAT VHDs (`$fatRoot`, `$exfatRoot`),
 run the probe script in this spec's Verification (an `Add-Type` of
 `GetFileInformationByHandleEx(FileIdInfo)` and
 `GetFileInformationByHandle` over a folder opened with
-`FILE_FLAG_BACKUP_SEMANTICS`, an NTFS temp folder as control). Per
-volume it records which read answers (or its Win32 error), the index
-read twice and a sibling's index, and both reads after a longer rename.
-It throws if the NTFS control answers no `FileIdInfo`, if a volume
-answers neither read, or if a volume that needs the fallback gives an
-index that is not stable and distinct within the mount; the last two
+`FILE_FLAG_BACKUP_SEMANTICS`, plus `GetVolumeInformationByHandleW` for
+the file-system name; an NTFS temp folder as control). Per volume it
+records the file-system name, which read answers (or its Win32 error),
+the index read twice and a sibling's index, and both reads after a
+longer rename. It throws if the NTFS control answers no `FileIdInfo`, if
+a volume answers neither read, if a volume that needs the fallback
+reports a name other than `FAT`, `FAT32` or `exFAT` (the gate would
+refuse its vaults), or if a volume that needs the fallback gives an
+index that is not stable and distinct within the mount; the last three
 stop the chunk for an owner decision. The table goes into PR 1's body
 and, dated, into the §5 Windows block WB-27 appended to
 `24_structural_identity_capability_matrix.md`. If FAT32 or exFAT
@@ -1030,7 +1367,13 @@ Build: the Windows `fs_root::sys` (same names as Unix: `open_at`,
 and `.slate` without `FILE_SHARE_DELETE`, `db/anchored.rs`'s win-VFS body
 plus `skip_install_for_tests()` (new), `OpenSwapPoint::BeforeSlateHeld`
 (new), provider reads through handles, and the lock registry keyed by
-the held `.slate`'s whole identity. The record, core and uniffi:
+the held `.slate`'s whole identity — a weak key can collide with another
+vault's (cloned FAT volumes), which only makes the two sessions take
+turns at the in-process gate (`session.rs:109-127`), because each still
+opens and locks `structural.lock` beneath its own held `.slate`
+(`:86-91`); and `root_display_path()`'s identity gate stays display
+only, nothing resolving through it (`session.rs:3150-3151`), so no
+identity comparison anywhere grants access. The record, core and uniffi:
 `VaultRootIdentity { volume: u64, id_high: u64, id_low: u64,
 persistent: bool }` (new fields; equality covers all four), with
 `FsRoot::identity() -> Option<VaultRootIdentity>` (the Unix body wraps
@@ -1038,11 +1381,25 @@ persistent: bool }` (new fields; equality covers all four), with
 The Windows identity, in PR 1: `sys::identity(file) ->
 io::Result<VaultRootIdentity>` calls the new private
 `sys::file_id_info(file)` (`FileIdInfo`: the 64-bit volume serial, the
-128-bit id, `persistent: true`); on any failure it logs the error at
-debug level and calls the new private `sys::file_index(file)`
-(`GetFileInformationByHandle`: `dwVolumeSerialNumber` zero-extended,
-`id_high = 0`, `id_low = nFileIndexHigh << 32 | nFileIndexLow`,
-`persistent: false`, the watcher's pair); it fails only when both fail.
+128-bit id, `persistent: true`); when that fails it reads the new private
+`sys::file_system_name(file)` (`GetVolumeInformationByHandleW`) and,
+**only when the name is `FAT`, `FAT32` or `exFAT`** (ASCII
+case-insensitive), logs the `FileIdInfo` error at debug level and calls
+the new private `sys::file_index(file)` (`GetFileInformationByHandle`:
+`dwVolumeSerialNumber` zero-extended, `id_high = 0`, `id_low =
+nFileIndexHigh << 32 | nFileIndexLow`, `persistent: false`, the
+watcher's pair), failing only when that fails too. On any other name
+(NTFS, ReFS, a name a share's server reports) or an unreadable name it
+fails with the `FileIdInfo` error and never reads the index: a refusal,
+not a retry — one attempt, the open fails with the sentence below, and
+the reader can open again. The decision is the new `pub(super)` pure
+`sys::identity_from_reads(file_id_info: io::Result<VaultRootIdentity>,
+file_system_name: impl FnOnce() -> io::Result<String>, file_index: impl
+FnOnce() -> io::Result<VaultRootIdentity>) ->
+io::Result<VaultRootIdentity>`, which `sys::identity` applies to the
+three reads. A consequence the PR body states: a share whose server
+reports NTFS or ReFS but answers no `FileIdInfo` now refuses rather than
+opening weak.
 Structural identity (`windows_entry::identity`) and the Trash stamp stay
 `FileIdInfo`-only, as on main. WD24, in PR 1: the Windows `FsRoot::open`
 calls `sys::identity` on the held root right after the hold and before
@@ -1051,15 +1408,36 @@ calls `sys::identity` on the held root right after the hold and before
 The constant is new, core's copy: "This folder's file system gives Slate
 no file identity for it, so Slate cannot keep the vault anchored to
 it." The OS error is logged, not spoken, and no `.slate` is made. The
-held `.slate`'s identity is read the same way and refuses the same way,
-only when neither read answers. Also new in PR 1:
-- Two seams any build can trip, consulted by the Windows `FsRoot::open`
-  for the root's and `.slate`'s reads when the opened root's path
-  contains the value: `SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED` makes
-  the `FileIdInfo` read fail with `ERROR_INVALID_PARAMETER` (the
-  fallback answers; the session opens weak), and
-  `SLATE_TEST_ROOT_FILE_ID_UNAVAILABLE` makes both reads fail (the open
-  refuses).
+held `.slate`'s identity is read the same way and refuses in the same
+cases. Also new in PR 1:
+- Four seams any build can trip, consulted by the Windows
+  `FsRoot::open` for the root's and `.slate`'s reads when the opened
+  root's path contains the value, each faking only what `sys::identity`
+  reads (no other code, WB-30's identity mode included, sees a faked
+  name): `SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED` presents a FAT32
+  volume — the name reads `FAT32` and `FileIdInfo` fails with
+  `ERROR_INVALID_PARAMETER` — so the fallback answers and the session
+  opens weak; `SLATE_TEST_ROOT_FILE_ID_UNAVAILABLE` is that profile with
+  the file-index read failing too, so the open refuses;
+  `SLATE_TEST_ROOT_FILE_ID_INFO_FAILS` fails only `FileIdInfo` (with
+  `ERROR_INVALID_PARAMETER`, FAT32's own code) under the volume's real
+  name — the transient NTFS failure — so the open refuses without reading
+  the index; `SLATE_TEST_ROOT_FILE_INDEX_COLLIDES` makes the file-index
+  read return the real serial with the fixed index
+  `0x5EED_0000_5EED_0001`, so every root and `.slate` under the folder
+  named collide (with `…_FILE_ID_INFO_UNSUPPORTED` on the same folder,
+  two vaults there open with equal weak identities). All four join WB-18's
+  `FAULT_VARIABLES`.
+- `VaultSession::duplicate_root_handle(&self) -> Result<OwnedHandle,
+  VaultError>` (`#[cfg(windows)]`) over the new
+  `FsRoot::duplicate_root() -> io::Result<OwnedHandle>`
+  (`OwnedHandle::try_clone` of the held root: `DuplicateHandle` with
+  `DUPLICATE_SAME_ACCESS`, not inheritable, so it names the held directory
+  object whatever any spelling names now); a session no filesystem root
+  backs returns `VaultError::Unsupported`. Its additive uniffi export
+  `VaultSession.duplicate_root_handle() -> Result<u64, VaultError>` hands
+  the duplicate's raw value to the caller, who owns it, and returns
+  `Unsupported` off Windows (Swift never calls it).
 - The additive export `vault_root_identity_unavailable_detail() ->
   String`, which returns the constant.
 - The host's open-failure catch (`VaultLifecycleViewModel.cs:556-565`)
@@ -1080,16 +1458,47 @@ verbatim. So there is no corpus, census, designations or ledger change,
 and the refusal needs no mac edit (the record's two Swift reads above
 are the only mac lines this chunk changes).
 
-Then in PR 2: `AnchoredVaultStore.Open(…, expectedIdentity)` (new
-parameter) and the five stores passing `session.RootIdentity()`. The
-store reads the root handle it opens with the read the flag names
-(`FileIdInfo` when `Persistent`, else `GetFileInformationByHandle`) and
-refuses when the read fails or any field differs. A weak identity is
-safe to compare within a session: the held root cannot be renamed or
-deleted, so its index neither moves nor is reused, and two directories
-that exist at once on one volume never share a file index — so a folder
-reached through a retargeted junction is refused as with a persistent
-id. `OpenVaultAsync` refuses fail-closed: it reads the identity through
+Then in PR 2 (host only): no identity and no path authorizes a store;
+the capability is the root handle the session holds. New
+`VaultRootAnchor` (`internal sealed class : IDisposable`,
+`VaultRootAnchor.cs`): `Of(VaultSession session)` — each `OpenRoot()`
+asks core's `DuplicateRootHandle()` for a fresh duplicate and wraps it as
+`new SafeFileHandle((nint)value, ownsHandle: true)`, turning a
+`VaultException` or the binding's `ObjectDisposedException` into
+`IOException`; `OpenRoot() -> SafeFileHandle` (the caller owns it);
+`Pin()` — an anchor owning one duplicate taken now, handing out
+duplicates of it (kernel32 `DuplicateHandle`) until disposed;
+`ByPathForTests(string vaultRoot)` — main's by-path open, which throws
+`IOException` unless `internal static bool ByPathAllowed` (default
+`false`) is set, which only the test assembly's `[ModuleInitializer]` in
+the new `tests/SlateWindows.Tests/TestRootAnchors.cs` does.
+`AnchoredVaultStore.Open(VaultRootAnchor root, bool createDirectory,
+Action? afterDirectoryAnchored = null, Action? beforeRename = null,
+Action? afterRename = null)` replaces the path form: it takes
+`root.OpenRoot()` as the vault handle, opens `.slate` relative to it
+(`NtCreateFile`, `RootDirectory` = that handle, `FILE_OPEN` or
+`FILE_OPEN_IF`, `FILE_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT`) and every
+child relative to the `.slate` handle; `EnsureAttributes` still refuses a
+reparse point; the final-path text checks (`VerifyDirectoryIdentity`,
+`EnsureRegularChild`'s comparison, `FinalPath`) go, since nothing is
+resolved by path. The five stores (`WorkspacePersistence`,
+`SearchRecentsStore`, `SidebarSettingsStore`, `GraphConfigStore`'s `Read`
+and `Write`, `FileRecentsStore`'s in-vault step) and
+`GraphPreferencesViewModel` gain an optional last parameter
+`VaultRootAnchor? root = null` (`null` → `ByPathForTests`, which refuses
+in production), and every production site passes
+`VaultRootAnchor.Of(session)`: `FilesSidebarViewModel.cs:556-557`,
+`QuickSwitcherViewModel.cs:68`, `Search/VaultSearchSource.cs:96`,
+`VaultLifecycleViewModel.cs:1182`, `WorkspaceViewModel.cs:2119`,
+`Graph/WorkspaceViewModel.Graph.cs:224`. The graph writer's queued write
+can outlive the session, so `GraphConfigWriter.Enqueue(string key,
+GraphConfig aggregate, ulong generation, VaultRootAnchor? root = null)`
+keeps `root?.Pin()` with the admitted aggregate, the write goes through
+`StoreFor(key).Write(aggregate, pinned)`, and the pin is disposed after
+the write (or at once for a dropped aggregate): a straggler lands in the
+root it was edited in, never in what a later session or spelling names.
+A vault opened through a junction spelling gets working stores (main's
+refuse it). `OpenVaultAsync` refuses fail-closed: it reads the identity through
 the new internal seam `RootIdentityReader`
 (`Func<VaultSession, VaultRootIdentity?>`) before `AddRecentVault` and
 `VaultOpened`. On Windows a null identity disposes the session and
@@ -1100,8 +1509,9 @@ a persistent identity gets the identity key v2 (SHA-256 of
 `{Volume:x16}-{IdHigh:x16}{IdLow:x16}`) with the path-key migration; a
 weak identity keeps today's path key and moves and deletes no
 path-keyed file, because a FAT index changes on a rename or move made
-with Slate closed and a freed slot's index can be reused, so it can
-neither follow the vault nor keep two vaults apart over time, and the
+with Slate closed, a freed slot's index can be reused and a cloned
+volume repeats it, so it can neither follow the vault nor keep two
+vaults apart, and the
 path key is what every Windows vault uses on main. The migration deletes
 its source only after a successful read of it and a confirmed atomic
 commit of the destination, because on main `Save`
@@ -1128,10 +1538,12 @@ destination exists — on main it runs only while the destination is
 absent (`Load`, `:41-44`), and `Add` is `Load` then `Save` (`:49-58`), so
 an in-vault file unreadable at the first load followed by an `Add` would
 be skipped for good. It runs after the path-key migration, once that
-has no source left: the anchored read (`AnchoredVaultStore.Open(…,
-createDirectory: false, expectedIdentity)` then
-`ReadAllBytesBounded("file-recents.json", …)`; no `.slate` directory or
-no file is `Absent`, an `IOException` — the identity refusal included —
+has no source left: the anchored read (`AnchoredVaultStore.Open(_root,
+createDirectory: false)` — `_root` the store's new constructor argument
+`VaultRootAnchor? root = null`, so the read reaches the session's held
+root — then `ReadAllBytesBounded("file-recents.json", …)`; no `.slate`
+directory or no file is `Absent`, an `IOException` — an anchor whose
+session has gone included —
 `UnauthorizedAccessException` or `JsonException` is `Unreadable`), then
 `TryRead(_path)`; an `Unreadable` source or destination stops it with
 nothing written or deleted; otherwise it commits the destination's
@@ -1153,8 +1565,11 @@ file as empty, saves an empty destination and deletes the file. Tests: `session/
 `#[cfg(windows)] mod descriptor_interior_windows;` in the session test
 list) with helpers `retarget(link, to)` (remove the junction, recreate it
 pointing at `to`), `tree_bytes(root)`, `file_index_of(path)` (the
-folder's `dwVolumeSerialNumber` and 64-bit file index) and
-`file_id_info_answers(path)` (whether `FileIdInfo` succeeds), all new.
+folder's `dwVolumeSerialNumber` and 64-bit file index),
+`file_id_info_answers(path)` (whether `FileIdInfo` succeeds),
+`file_system_name_of(path)` (`GetVolumeInformationW` of the path's
+volume) and `file_id_info_of_handle(handle)` (the `FILE_ID_INFO` of an
+open handle, to say which folder a duplicated root names), all new.
 
 **The Unix live-rename facts are not Windows obligations.**
 `descriptor_interior.rs` keeps `#![cfg(unix)]` and `fs_root.rs`'s
@@ -1215,9 +1630,49 @@ each seen failing first under its mutation:
   the record equals the held root's `FILE_ID_INFO` with `persistent ==
   true`; a high-bits synthetic id round-trips [truncate to 64 bits; read
   the file index first].
+- `fs_root.rs` `the_file_index_fallback_is_taken_only_on_fat_fat32_and_exfat`
+  (`#[cfg(windows)]`, a unit fact over `sys::identity_from_reads`, PR 1):
+  with `FileIdInfo` failing (`ERROR_INVALID_PARAMETER`) and the file index
+  answering, the names `FAT`, `FAT32`, `exFAT` and `fat32` give a weak
+  identity; `NTFS`, `ReFS`, `""`, `ext4` and an unreadable name give the
+  `FileIdInfo` error with the index closure never called; `FAT32` with
+  the index failing gives the index's error; a `FileIdInfo` that answers
+  gives a persistent identity, neither closure called [fall back after
+  any failure; admit `ReFS`; key on the error code instead of the name;
+  compare case-sensitively].
+- `a_file_id_info_failure_on_a_volume_that_keeps_ids_refuses_the_open_and_never_reads_the_index`
+  (PR 1, the transient NTFS failure): with
+  `SLATE_TEST_ROOT_FILE_ID_INFO_FAILS` set to a unique temp folder `T`'s
+  name through `fault_guard()`, after asserting `file_system_name_of(T\vault)`
+  is `NTFS` or `ReFS` and `file_index_of(T\vault)` answers,
+  `from_filesystem(T\vault)` is `Err(VaultError::Io)` with detail
+  `VAULT_ROOT_IDENTITY_UNAVAILABLE`, no `.slate` is made, the folder
+  renames right after, and a sibling vault outside `T` opens persistent
+  [fall back after any failure; key the fallback on the error code].
+- `two_roots_forced_to_one_weak_index_keep_their_own_interiors` (PR 1,
+  the synthetic collision's core half): with
+  `SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED` and
+  `SLATE_TEST_ROOT_FILE_INDEX_COLLIDES` set to `T` through
+  `fault_guard()`, session `a` through the junction `T\vault` → `T\a` and
+  session `b` at `T\b` have equal weak identities (asserted); after
+  `retarget(T\vault, T\b)` and `b`'s own save, `a`'s save, op-log
+  append, staged create, structural lock and worker insert land in `T\a`
+  and `T\b`'s tree is unchanged; `a.root_display_path()` is `T\a`'s final
+  path; each session's `structural.lock` is beneath its own `.slate`
+  (they take turns at the shared slot); each `duplicate_root_handle()`
+  names its own root [display path from `opened_as` gated by the weak
+  identity; one interior writer by the spelling; duplicate by reopening
+  `opened_as`].
+- `the_duplicated_root_handle_names_the_held_root_after_its_spelling_is_retargeted`
+  (PR 1): after `retarget(outer\vault, B)` the duplicate's `FILE_ID_INFO`
+  is the session's identity, not `B`'s; dropping it leaves the hold (a
+  rename of `A` still fails); a session over a test provider no
+  filesystem root backs (`structural_batch.rs:976`) returns
+  `Unsupported` [duplicate by reopening `opened_as`; hand out the held
+  handle itself].
 - `a_root_whose_file_id_info_is_unsupported_opens_with_a_weak_file_index_identity`
   (WD24 amended, PR 1): with `SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED`
-  set to the name of a unique temp folder `T` (set and cleared through WB-18's `fault_guard()`)
+  (the FAT32 profile) set to the name of a unique temp folder `T` (set and cleared through WB-18's `fault_guard()`)
   holding the vault `T\vault` and a junction `T\other` → `T\vault`,
   `from_filesystem(T\vault)` is `Ok`; `root_identity()` has `persistent
   == false`, `id_high == 0` and `(volume, id_low) ==
@@ -1225,11 +1680,13 @@ each seen failing first under its mutation:
   nonzero); `.slate` exists; a second session through `T\other` shares
   its structural-lock slot; a sibling vault outside `T` opens with
   `persistent == true` [refuse when `FileIdInfo` fails; flag the
-  fallback persistent; keep only `nFileIndexLow`].
+  fallback persistent; keep only `nFileIndexLow`; gate on the volume's
+  real name, ignoring the seam's profile].
 - `a_root_whose_file_id_cannot_be_read_does_not_open_and_gains_no_slate`
   (WD24, neither read answers, PR 1): with
   `SLATE_TEST_ROOT_FILE_ID_UNAVAILABLE` set to the temp root's unique name
-  (set and cleared through WB-18's `fault_guard()`), so both reads fail, `from_filesystem` is
+  (set and cleared through WB-18's `fault_guard()`) — the FAT32 profile
+  with both reads failing — `from_filesystem` is
   `Err(VaultError::Io)` whose `vault_error_detail` is exactly
   `VAULT_ROOT_IDENTITY_UNAVAILABLE`, no `root\.slate` exists, the root
   renames right after, and a sibling vault not matching the value opens
@@ -1238,11 +1695,14 @@ each seen failing first under its mutation:
 - `a_vault_on_a_fat32_or_exfat_volume_opens_with_the_identity_its_file_system_answers`
   (`#[cfg(windows)] #[ignore]`, gated on `SLATE_WEAK_VOLUME_FAT32` /
   `SLATE_WEAK_VOLUME_EXFAT` from WB-27's VHD procedure, panicking when
-  neither is set; PR 1): per volume set, a fresh vault opens; its
+  neither is set; PR 1): per volume set, after asserting
+  `file_system_name_of(root)` is `FAT32` or `exFAT` to match the
+  variable, a fresh vault opens; its
   `root_identity()` has `persistent == file_id_info_answers(root)`
   (expected `false` per step 0), and when weak `(volume, id_low) ==
   file_index_of(root)`; `.slate` exists; a saved note reads back [refuse
-  when `FileIdInfo` fails; flag the fallback persistent].
+  when `FileIdInfo` fails; flag the fallback persistent; admit `FAT32`
+  alone].
 - `the_windows_structural_lock_registry_is_keyed_by_identity` (twin of
   `:357`): one spelling retargeted between two opens gives two slots; a
   second spelling of one vault shares its slot [key by path].
@@ -1254,19 +1714,52 @@ each seen failing first under its mutation:
   and `vault_root_identity_unavailable_detail()`, both equal core's
   constant [render `Io` by its `Display`, "io error: …"; a second copy
   of the text in the export].
-- `W1AnchoredVaultStoreTests.OpenRefusesADifferentFolderAtTheVaultsPath`
-  and `.EveryStoreRefusesAfterTheRootWasReplaced`: the vault opened
-  through an `mklink /J` spelling that is retargeted between session open
-  and store open; `Open(…, expectedIdentity)` and all four stores refuse
-  [compare text; one store bypasses].
-- `W1AnchoredVaultStoreTests.AWeakIdentityIsComparedByTheFileIndex`
-  (PR 2): with `SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED` set in-process
-  to the fixture's unique folder name, which the junction spelling
-  contains (cleared in `finally`), `RootIdentity().Persistent` is false;
-  after asserting the volume's `FILE_ID_INFO` serial differs from its
-  `dwVolumeSerialNumber`, `Open(…, expectedIdentity)` admits the same
-  root and refuses after the junction is retargeted to a decoy [compare
-  `FileIdInfo` whatever the flag; admit a weak identity uncompared].
+- uniffi `duplicate_root_handle_crosses_the_ffi_as_an_owned_duplicate`
+  (PR 1): on Windows the returned `u64`, wrapped as an `OwnedHandle`,
+  reads the record's `FILE_ID_INFO`, and after it is dropped the root
+  still cannot be renamed; off Windows it is `Unsupported` [return the
+  held handle's raw value; return `Ok(0)` off Windows].
+- `W1AnchoredVaultStoreTests.OpenReachesTheHeldRootWhenTheVaultsSpellingIsRetargeted`
+  (PR 2): the vault `T\a` opened through an `mklink /J` spelling `T\vault`
+  retargeted to a decoy `T\b` between session open and store open;
+  `AnchoredVaultStore.Open(VaultRootAnchor.Of(session), true)` writes
+  `probe.json` into `T\a\.slate`, reads it back, and `T\b` is
+  byte-identical [open the spelling as main does → refused as a reparse
+  point; follow the junction → `T\b`].
+- `W1AnchoredVaultStoreTests.EveryStoreWritesBeneathTheHeldRootAfterTheSpellingIsRetargeted`
+  (PR 2): after the same retarget `WorkspacePersistence.Save`,
+  `SearchRecentsStore.Add`, `SidebarSettingsStore.SetOrganization` and
+  `GraphConfigStore.Write`, each with `VaultRootAnchor.Of(session)`, land
+  in `T\a\.slate`; `T\b` unchanged [one store opens its spelling].
+- `W1AnchoredVaultStoreTests.ARootForcedToAnotherVaultsWeakIndexIsNeverReachedThroughIt`
+  (PR 2, the synthetic colliding-index / retargeted-root fact's host
+  half): with `SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED` and
+  `SLATE_TEST_ROOT_FILE_INDEX_COLLIDES` set in-process to `T` (cleared in
+  `finally`), session `a` through `T\vault` → `T\a` and session `b` at
+  `T\b` have equal weak `RootIdentity()` (asserted); after the junction
+  is retargeted to `T\b`, a store through `VaultRootAnchor.Of(a)` writes
+  into `T\a\.slate` with `T\b\.slate` unchanged, and one through
+  `VaultRootAnchor.Of(b)` writes into `T\b\.slate`, never `T\a` [round
+  10's admission by the weak identity at the spelling → nothing reaches
+  `T\a`; a table of open sessions keyed by `RootIdentity()` → `a`'s store
+  writes into `T\b`].
+- `W1AnchoredVaultStoreTests.AStoreRefusesOnceItsSessionIsDisposed`
+  (PR 2): a disposed session's anchor makes `Open` throw `IOException`
+  and nothing is written [fall back to the spelling].
+- `W1AnchoredVaultStoreTests.AStoreGivenNoAnchorRefusesOutsideTheTestAssembly`
+  (PR 2; a collection with `DisableParallelization = true`): with
+  `ByPathAllowed` false (restored in `finally`) a store built without an
+  anchor throws `IOException` on `Save` and writes nothing; with it true
+  it writes [open the spelling whatever the switch says].
+- `GraphConfigWriterTests.AQueuedWriteLandsInTheRootItWasEditedIn`
+  (PR 2): a write parked by `WriteGateForTests` on a
+  `ManualResetEventSlim` (its `Wait(TimeSpan.FromSeconds(10))` result
+  asserted; released in `finally`) after `Enqueue(…,
+  VaultRootAnchor.Of(session))`, the session disposed and the junction
+  retargeted, then released: `graph.json` lands in `T\a`,
+  `FailedForTests` is 0, `T\b` unchanged, and `T\a` renames afterwards
+  [resolve the anchor at write time → the write fails; never dispose the
+  pin → the rename fails].
 - `FileRecentsStoreTests.APathKeyedRecentsFileMigratesToTheIdentityKeyOnce`
   (old read, new written, old deleted, second load no-op) and
   `.TheIdentityKeyIsTheLosslessIdentity` (key text carries the high
@@ -1291,7 +1784,7 @@ each seen failing first under its mutation:
   kept forever].
 - `FileRecentsStoreTests.AnUnreadableInVaultRecentsFileIsNotDeleted`
   (PR 2): the store built with the fixture vault's own persistent
-  `session.RootIdentity()`; the in-vault `file-recents.json` held with
+  `session.RootIdentity()` and `VaultRootAnchor.Of(session)`; the in-vault `file-recents.json` held with
   `FileShare.None` while neither device file exists → an empty list, no
   device file, the in-vault file byte-identical; the next `Load()`
   migrates `[a]` and only then deletes it [main's `MigrateLegacy` → the
@@ -1355,22 +1848,39 @@ each seen failing first under its mutation:
   the Unix 22a facts green.
 
 Registers: design §7 row 22W ("Delivered …") and §11 (WD22's answer),
-contract 31 FR-10 (the root identity's two reads, the weak flag, and
-WD24's refusal only when neither read answers), step 0's table appended
+contract 31 FR-10 (the root identity's two reads, the fallback only on
+FAT, FAT32 and exFAT, the weak flag that keys nothing and authorizes
+nothing, the stores reaching the vault through the held root, and WD24's
+refusal: a `FileIdInfo` failure on any other file system, or neither
+read on those), step 0's table (with each volume's file-system name) appended
 (dated) to the §5 Windows block of
 `24_structural_identity_capability_matrix.md` and pasted in PR 1's body,
 the parity matrix `--check`, the plan §11 helper names; no corpus,
 census, designations or ledger change (the refusal is a `VaultError`
 detail). AT: PR 1's NVDA
-spot check with the Release build:
-1. Open a scratch vault once, so it is in the recents.
-2. Relaunch `SlateWindows.exe` from a PowerShell window where
-   `$env:SLATE_TEST_ROOT_FILE_ID_UNAVAILABLE` is that folder's name.
-3. Open the vault from the recents. NVDA speaks once "Could not open
+spot check with the Release build and NVDA running, device state isolated
+through WB-1's field-pass launcher
+(`scripts/windows/launch-for-field-pass.ps1 -Vault -Seed -Keep -Exe`: a
+fresh `%TEMP%` root with `SLATE_LOCAL_APP_DATA` and `SLATE_LOG_DIR`
+beneath it, `-Seed` writing a `recent-vaults.json` that holds the vault,
+the exe started with the vault as its argument), so nothing touches the
+owner's recents or device state (plan §4 rule 4) and the seed replaces
+opening the vault once by hand. In one PowerShell window: make a scratch
+vault `$scratch` named `wb28-no-file-id-$PID` under the temp folder (a
+`Notes\a.md` in it) and a second vault `$other` whose path does not
+contain that name; set `$env:SLATE_TEST_ROOT_FILE_ID_UNAVAILABLE = Split-Path
+$scratch -Leaf`; run `pwsh -NoProfile -File
+scripts/windows/launch-for-field-pass.ps1 -Vault $scratch -Seed -Keep
+-Exe $exe` (`$exe` the Release `SlateWindows.exe`), then `if
+($LASTEXITCODE -ne 0) { throw }`, and remove the variable. Then:
+1. At launch the app opens `$scratch`: NVDA speaks once "Could not open
    vault: This folder's file system gives Slate no file identity for
    it, so Slate cannot keep the vault anchored to it." The keys stay in
    the welcome view, and nothing else is spoken.
-4. Another vault opens normally in the same run.
+2. Open it again from the welcome view's recents (seeded): the same
+   sentence, once.
+3. Open `$other` through Open Folder: it opens and is announced as
+   usual. Close Slate; the launcher returns and its exit code is checked.
 
 The NVDA log excerpt goes in PR 1's body, and PR 1 stays draft until
 then.
@@ -1379,29 +1889,39 @@ Not delivered: whatever the SQLite spike forces onto the recorded
 fallback.
 
 Done when all of these hold:
-- `SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED` and
-  `SLATE_TEST_ROOT_FILE_ID_UNAVAILABLE` are in WB-18's `FAULT_VARIABLES`
-  (`session/tests/common.rs`) and its guard fact's literal list from PR 1
-  on, every core fact sets them only through `fault_guard()`, and WB-18's
-  two guard facts stay green.
+- `SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED`,
+  `SLATE_TEST_ROOT_FILE_ID_UNAVAILABLE`,
+  `SLATE_TEST_ROOT_FILE_ID_INFO_FAILS` and
+  `SLATE_TEST_ROOT_FILE_INDEX_COLLIDES` are in WB-18's `FAULT_VARIABLES`
+  (`session/tests/common.rs`, four more) and its guard fact's literal
+  list from PR 1 on, every core fact sets them only through
+  `fault_guard()`, and WB-18's two guard facts stay green.
 - Step 0 ran before any code and its table is in PR 1's body and the
   matrix (and, if FAT32 or exFAT answered `FileIdInfo`, the header says
   the fallback is a defensive path).
 - The Verification block runs clean on Windows: every required fact is
   discovered by name under its filter, and every command's
-  `$LASTEXITCODE` is 0 (the two core filters, `anchored`, the whole
-  core suite, uniffi, fmt, clippy, workspace tests, bench compile,
-  licence headers through Git Bash by full path, bindings, build, the
-  host facts (the seven item-7 migration facts among them, the in-vault
-  Theory discovered as rows), `dotnet format`,
+  `$LASTEXITCODE` is 0 (the two core filters with the fallback-gate,
+  NTFS-failure, colliding-index and duplicated-handle facts among them,
+  `anchored`, the whole core suite, both uniffi filters (`root_identity`
+  and `duplicate_root_handle`), fmt, clippy, workspace tests, bench
+  compile, licence headers through Git Bash by full path, bindings,
+  build, the host facts (the six held-root store facts and the seven
+  item-7 migration facts among them, the in-vault Theory discovered as
+  rows), the two `git grep` checks (no production `ByPathAllowed = true`;
+  every store construction site passes `VaultRootAnchor.Of`), `dotnet format`,
   the parity matrix, the two scan benches within noise, and — in PR 1,
   on WB-27's VHDs — the gated FAT32/exFAT fact, discovered by
   `--ignored --list`). PR 1 cuts the host list to its two host facts,
   `AFolderWhoseFileSystemGivesNoFileIdDoesNotOpenAndSaysWhy` and
-  `AWeakIdentityKeepsThePathKeyAndMigratesNothing`.
-- The Unix facts are green on the rust and swift lanes.
+  `AWeakIdentityKeepsThePathKeyAndMigratesNothing`, and leaves out the
+  `git grep` checks and the files PR 2 adds.
+- The Unix facts are green on the rust and swift lanes (the Linux arm of
+  `duplicate_root_handle_crosses_the_ffi_as_an_owned_duplicate`
+  included).
 - Each mutation was run locally.
-- The NVDA spot check is recorded in PR 1's body.
+- The NVDA spot check, launched through WB-1's field-pass launcher, is
+  recorded in PR 1's body.
 - PR 1's body carries `Refs #1475` and `Refs #940` and no closing
   keyword. PR 2's body carries `Closes #1475` and `Refs #940`, and PR 2
   merges only after PR 1 is merged and both PRs' Verification runs and
