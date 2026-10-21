@@ -164,7 +164,12 @@ Migration conventions: 037 and 039 (`migrations/`), and the test
    `tx`, its stored anchor passed through unchanged, writing `target_path`
    where it resolves and collecting affected sources as today;
    `HEAL_ROWS_VISITED` (new, `#[cfg(test)]` thread-local in `links_db.rs`)
-   counts the rows the two statements return. Within each mode the fold
+   counts the rows the two statements return. Every error propagates with
+   `?` — a failed statement or a row whose `resolve_remembered` errs is
+   never skipped and never treated as unresolved (`LinkCandidates`'s
+   contract, `links_db.rs:127-129`) — so the create maps it through
+   `published` (`session.rs:6207-6208`), reports `PublishedUnindexed`, and
+   its transaction rolls back with every heal `UPDATE` in it. Within each mode the fold
    (NFC then lowercase, `db.rs:393-396`) is a superset of the selector's
    lowercase comparison, so no row the old heal would have fixed is
    missed; the selector still decides, so no extra row is wrongly fixed;
@@ -194,7 +199,7 @@ Deliberately not changed: the vault-wide heal for scans and moves; the
 | `db.rs`: `the_target_key_functions_classify_every_target_as_the_selector_does` (new) | for every `census_fixtures::TARGETS` entry plus `missing/foo`, `/missing/foo.md`, `./foo.md`, ` foo `, `a^b` and an external URL, evaluated through SQL on a raw migrated connection: both keys are NULL iff `candidate_probe(target)` is `None`; otherwise exactly one is non-NULL — the path key iff the probe is `Paths` — and `tree_sort_key` of it equals `tree_sort_key` of the probe's first key | make `slate_link_target_name` return the final component of every target (non-NULL for `missing/foo`), or strip a `^…` suffix |
 | `save_link_lookup.rs`: `a_create_heals_only_the_dangling_rows_that_could_name_it` | created path `notes/föo.md` (NFC); K dangling rows that name it — bare `föo`, `föo.md`, the Unicode case variant `FÖO`, rooted `/notes/föo`, `./notes/föo.md`, qualified `notes/föo` and `Notes/Föo.md`; M unrelated dangling basename links (`bar_1` … `bar_M`); and Q = 200 dangling **qualified and rooted** targets that share the created file's final component but cannot name it (`missing_1/föo` … `missing_100/föo`, `/missing_101/föo.md` … `/missing_200/föo.md`). After the create: exactly K rows resolve, all Q stay dangling, `snapshot_paths() == 0`, `PATH_ORDER_SNAPSHOT_PATHS == 0`, and `HEAL_ROWS_VISITED == K` (not K + Q) | call the old heal; or make `slate_link_target_name` strip folder prefixes from every target (the round-5 design), which reads K + Q rows |
 | `a_create_heals_exactly_what_the_vault_wide_heal_heals` | with every `census_fixtures::TARGETS` entry as a dangling link (one source note each, so both modes and their shared final components are present), create every `census_fixtures::INDEXED_PATHS` path in turn in two vaults — one healed by the new function, one by `re_resolve_unresolved_links_under` — and compare `link_rows` after each step | drop the name-form keys; or drop the path-form extension inverse |
-| `a_create_whose_heal_lookup_fails_is_published_but_leaves_the_rows_dangling` | with `LOOKUP_FAULT`, the create reports `published` and the dangling rows are unchanged, no row written unresolved (the #1295 create rule, `links_db.rs:244`) | swallow the error |
+| `a_create_whose_heal_fails_is_published_unindexed_and_commits_nothing` | a fixture whose own content indexes and whose heal fails: three notes each holding a dangling `[[fresh]]`, and the create `create_exclusive_reporting("fresh.md", "# fresh\n")` — a link-free body, so the create's own resolution makes no lookup and `LOOKUP_FAULT` (`links_db.rs:98`, which fails `FoldedNameLookup::offer_to` at `:211-213`) can fire only in the heal. Control first, in a second vault built the same way without the fault: the outcome is `Committed` and the three rows resolve to `fresh.md` (so the heal reaches them). Then, with the fault set and cleared after the call: the outcome matches `Ok(CreateExclusiveOutcome::PublishedUnindexed { path, content_hash, .. })` with `path == "fresh.md"` and `content_hash == crate::vault::content_hash(b"# fresh\n")` (anything else panics, as main's `a_failed_lookup_leaves_a_create_published_but_unindexed`, `save_link_lookup.rs:243-270`, does); the file on disk holds exactly `# fresh\n`; `SELECT COUNT(*) FROM files WHERE path = 'fresh.md'` is 0; and the three rows' `target_path` are still NULL (the create's transaction, its own `files` and `links` rows and any heal `UPDATE`, rolled back — #1295's create rule, `links_db.rs:127-129`: a link whose candidates could not be read is never dropped and never written unresolved) | swallow the heal's error at either level — `re_resolve_unresolved_links_naming(&tx, path).unwrap_or_default()` at the call site, or skipping a row whose `resolve_remembered` errs inside the heal: the create then commits as `Committed` with a `files` row, and the fact fails |
 | `link_pass.rs:72` `a_created_file_still_resolves_a_previously_unresolved_link` (existing) | stays green through the new path | — |
 | `db.rs`: `the_folded_target_lookup_uses_its_partial_index` | `EXPLAIN QUERY PLAN` of each statement names `idx_links_target_path_fold` / `idx_links_target_name_fold` (as `links_db.rs:991` `the_whole_table_snapshot_reads_in_path_order` pins its plan) | drop the partial predicate from one statement's `WHERE` |
 
@@ -231,7 +236,7 @@ function Assert-Facts([string]$filter, [string[]]$facts) {
 }
 $required = [ordered]@{
     'db::'             = @('migration_041_adds_the_folded_target_indexes', 'migrate_from_empty_lands_at_latest_version', 'migrate_registers_required_functions_on_a_raw_connection', 'a_later_migration_clears_every_cursor_and_row', 'the_target_key_functions_classify_every_target_as_the_selector_does', 'the_folded_target_lookup_uses_its_partial_index')
-    'save_link_lookup' = @('a_create_heals_only_the_dangling_rows_that_could_name_it', 'a_create_heals_exactly_what_the_vault_wide_heal_heals', 'a_create_whose_heal_lookup_fails_is_published_but_leaves_the_rows_dangling')
+    'save_link_lookup' = @('a_create_heals_only_the_dangling_rows_that_could_name_it', 'a_create_heals_exactly_what_the_vault_wide_heal_heals', 'a_create_whose_heal_fails_is_published_unindexed_and_commits_nothing')
     'link_pass'        = @('a_created_file_still_resolves_a_previously_unresolved_link')
 }
 foreach ($filter in $required.Keys) {
@@ -275,6 +280,9 @@ CI: `windows.yml` (rust-tests and the app build, which opens caches),
 - [ ] A create beside Q qualified and rooted dangling targets that share
       its final component reads K rows, not K + Q.
 - [ ] The create path calls the targeted heal; scans and moves unchanged.
+- [ ] A heal that fails makes the create `PublishedUnindexed` with nothing
+      committed; swallowing the heal's error was run as a mutation and
+      failed `a_create_whose_heal_fails_is_published_unindexed_and_commits_nothing`.
 - [ ] `BENCHMARKS.md` entry; `Closes #1426`.
 - [ ] Not delivered: a targeted heal for the rename/move paths (they heal
       after a mapping, not a single path; out of #1426's scope — say so).
@@ -311,7 +319,11 @@ paths only; anything else is a basename; `basename_matches` `:611-620`),
   against the path index; the same two over `P`'s final component against
   the name index; two statements each repeating its index's predicate;
   each row resolved with `resolve_remembered` over `FoldedNameLookup`, its
-  anchor passed through; the `HEAL_ROWS_VISITED` test counter (new).
+  anchor passed through; every error propagated with `?` (never a skipped
+  row, never a row left as if unresolved), so the create's existing
+  `map_err(&published)` at `session.rs:6207-6208` turns it into
+  `PublishedUnindexed` and rolls the transaction back; the
+  `HEAL_ROWS_VISITED` test counter (new).
 - The create switched to it; the scan and move heals left alone.
 
 Facts (mutation in brackets), new ones seen failing first:
@@ -339,9 +351,25 @@ Facts (mutation in brackets), new ones seen failing first:
   `census_fixtures::TARGETS` entry dangling, every `INDEXED_PATHS` path
   created in turn in two vaults, `link_rows` equal after each step [drop
   the name-form keys, or the path-form extension inverse].
-- `a_create_whose_heal_lookup_fails_is_published_but_leaves_the_rows_dangling`:
-  under `LOOKUP_FAULT` the create is published and no row changes
-  [swallow the error].
+- `a_create_whose_heal_fails_is_published_unindexed_and_commits_nothing`:
+  a fixture whose own content indexes and whose heal fails — three notes
+  each holding a dangling `[[fresh]]`, then
+  `create_exclusive_reporting("fresh.md", "# fresh\n")`, a link-free body,
+  so `LOOKUP_FAULT` (`links_db.rs:98`, failing `FoldedNameLookup::offer_to`
+  at `:211-213`) can fire only in the heal. A control vault without the
+  fault returns `Committed` and the three rows resolve. With the fault the
+  outcome must be `Ok(CreateExclusiveOutcome::PublishedUnindexed { path,
+  content_hash, .. })` with `path == "fresh.md"` and `content_hash ==
+  crate::vault::content_hash(b"# fresh\n")` (anything else panics, as
+  main's `a_failed_lookup_leaves_a_create_published_but_unindexed`,
+  `save_link_lookup.rs:243-270`, does), the file on disk holds exactly
+  `# fresh\n`, `files` has no `fresh.md` row, and the three rows'
+  `target_path` are still NULL (the whole transaction rolled back). The
+  heal therefore propagates every error with `?`, and the create maps it
+  through `published` at `session.rs:6207-6208`. Swallowing the heal's
+  error must fail this fact [`.unwrap_or_default()` on the heal at the
+  call site, or skipping a row whose `resolve_remembered` errs: either
+  commits the create as `Committed` with a `files` row].
 - `a_created_file_still_resolves_a_previously_unresolved_link`
   (existing, `link_pass.rs:72`): green through the new path.
 - `the_folded_target_lookup_uses_its_partial_index`: `EXPLAIN QUERY

@@ -78,8 +78,14 @@ honoured by the file system driver — FastFAT and exFAT implement
 `FileRenameInformation` and return `STATUS_OBJECT_NAME_COLLISION` for an
 occupied name when `ReplaceIfExists` is false; over SMB the request maps
 to `SMB2 SET_INFO FileRenameInformation` with the same flag, and the
-server decides. `FILE_ID_INFO` on FAT is synthesised by the driver and is
-not persistent across mounts (the matrix's "no persistent IDs" row).
+server decides. FAT32 and exFAT generally answer no `FILE_ID_INFO` at
+all (microsoft/STL PR 6187 restores a `GetFileInformationByHandle`
+fallback for `std::filesystem` for this reason; `SidebarWriteJournal.cs:73-75`
+says the same of FAT32); the 64-bit file index `GetFileInformationByHandle`
+gives there is derived from where the directory entry sits, so a rename
+or move can change it, and it is not a persistent id (the matrix's "no
+persistent IDs" row). WB-28's step 0 records which of the two reads this
+chunk's VHDs answer.
 
 ## Design
 
@@ -113,9 +119,11 @@ No production code changes unless a probe fails. Facts first:
      shows the new spelling only) — identity asserted where the volume
      reports persistent ids, the listing otherwise, recording which;
    - `rename_if_identity` with a stale expected identity refuses on
-     NTFS/SMB; on FAT32/exFAT the fact records whether the synthesised id
-     survives the rename and does not assert it — the row says what was
-     observed.
+     NTFS/SMB; on FAT32/exFAT the fact records whether
+     `windows_entry::identity` (`FileIdInfo`-only, no fallback) answers
+     at all — where it does not, every identity-checked rename there
+     refuses, fail-closed — and, where it does, whether the id survives
+     the rename, asserting neither; the row says what was observed.
 3. **If a primitive fails on a volume** (`STATUS_NOT_SUPPORTED` or a
    replacing rename — the §11 risk): the provider gains a truthful
    refusal, never a fallback: `VaultError::InvalidPath { reason }` with

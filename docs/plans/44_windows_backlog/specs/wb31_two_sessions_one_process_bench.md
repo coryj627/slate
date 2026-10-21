@@ -152,7 +152,40 @@ alone figure while the newer's is unchanged.
    groups that never mix:
    - **always on, both WD21 branches** (they read counters and release
      nothing): `db_cache_status_reads_this_connections_counters` and
-     `process_cache_status_reads_the_process_counters`;
+     `process_cache_status_reads_the_process_counters`. The second is a
+     parent and a child, in the crate's child-process form
+     (`real_trash_linux_child`, `vault/trash_handoff_tests.rs:1108-1125`
+     and `:1143-1154`; that precedent is Linux-only, the form is not):
+     process-wide counters move with every connection any parallel test
+     opens or drops, and only the registry facts serialise, so the
+     reading is proven in a process that holds nothing else (and, with
+     `idle_cache_release_ms` 0 under `cfg(test)`, runs no release in the
+     remedy branch either). The parent spawns `std::env::current_exe()` with
+     `session::tests::two_sessions::process_cache_status_child --exact
+     --nocapture --test-threads=1` and `SLATE_WB31_PROCESS_CHILD=1`, and
+     asserts the child exited 0 (its stdout and stderr in the failure
+     message). The child (`process_cache_status_child`, new; returns at
+     once without that variable, so the ordinary suite runs it as a no-op)
+     opens two sessions A and B with `common::make_vault` and makes
+     **controlled allocations one connection at a time**: under the
+     connection's lock, `CREATE TEMP TABLE wb31_pad(x BLOB)` and a
+     recursive CTE inserting 1 024 rows of `zeroblob(8192)` — at least
+     8 MiB of temp pages, held in memory (`temp_store MEMORY`,
+     `db.rs:424`), which no LRU evicts and whose growth evicts nothing.
+     First B allocates while A is untouched, then A while B is untouched;
+     each step must move the process reading by at least half of the
+     allocating connection's own `used` growth while the other
+     connection's `used` stays exactly equal. So the reading is
+     process-wide: a per-connection reading of either connection is flat
+     in one of the two steps. The same untouched-connection checks pin
+     `db_cache_status` as per-connection (a process-wide reading reported
+     as `used` moves with the other connection's allocation). They live
+     in the child, not in the ordinary suite, because with
+     `SQLITE_ENABLE_MEMORY_MANAGEMENT` every purgeable cache in the
+     process shares one LRU (`pcache1`'s global group), so a parallel
+     test's connection reaching its own `cache_size` can recycle another
+     session's oldest page — an exact-equality check on `used` is only
+     deterministic where nothing else runs;
    - **the timing guard**, `perf_guard_two_sessions_do_not_evict_each_others_cache`
      — `#[ignore]` **until the remedy ships**, with the measured ratio in
      its doc (in the refuted branch it stays ignored, its doc holding the
@@ -260,8 +293,8 @@ alone figure while the newer's is unchanged.
 | Fact | Asserts | Mutation |
 |---|---|---|
 | `benches/two_sessions_bench.rs` compiles under `cargo bench --workspace --no-run` | the bench target builds | drop the `[[bench]]` entry |
-| `two_sessions.rs`: `db_cache_status_reads_this_connections_counters` | session A after a scan: `used > 0`, `miss > 0`; a repeated identical query raises A's `hit`; a freshly opened session B in the same process reads `used` below A's (the counters are per connection); `worker` is `None` until the worker connection opens in the shared worker slot (through `open_worker_connection_for_tests()`) and `Some` after | read the process-wide `sqlite3_status64` for both connections (A and B then read equal) |
-| `process_cache_status_reads_the_process_counters` | `memory_used > 0` with a session open, and it rises across A's first scan | return the main connection's `used` instead |
+| `two_sessions.rs`: `db_cache_status_reads_this_connections_counters` | session A after a scan: `used > 0`, `miss > 0`; a repeated identical query raises A's `hit`; `worker` is `None` until the worker connection opens in the shared worker slot (through `open_worker_connection_for_tests()`) and `Some` after. Nothing here compares two connections' `used`: that check is the child's (next row), where no parallel test shares the LRU | report the main connection's counters as `worker` before it opens (`Some` too early); reading the process-wide `sqlite3_status64(SQLITE_STATUS_MEMORY_USED)` as `used` is killed by the child's untouched-connection checks |
+| `process_cache_status_reads_the_process_counters` (parent) with `process_cache_status_child` (child, new) | the parent runs the child alone in its own process and asserts exit 0. The child, with sessions A and B open and nothing else in the process: readings `a0`, `b0`, `p0`; B allocates the `wb31_pad` temp table (≥ 8 MiB) → `a1.used == a0.used`, `b1.used - b0.used ≥ 8 MiB`, and both `p1.memory_used - p0.memory_used` and `p1.pagecache_overflow - p0.pagecache_overflow` ≥ `(b1.used - b0.used) / 2`; then A allocates the same → `b2.used == b1.used`, `a2.used - a1.used ≥ 8 MiB`, and both process deltas ≥ `(a2.used - a1.used) / 2` | make `process_cache_status` a per-connection reading — `sqlite3_db_status(SQLITE_DBSTATUS_CACHE_USED)` of A's main connection (the round-7 mutation), or of B's — and the step in which that connection is untouched reads a flat process value; or read `SQLITE_STATUS_PAGECACHE_USED` (the configured-buffer counter, zero here) for `pagecache_overflow`, which stays flat in both steps |
 | `perf_guard_two_sessions_do_not_evict_each_others_cache` (`#[ignore]` until the remedy; then enabled) | ratio older-with-newer / older-alone ≤ 1.25; A's `used` holds between rescans | (remedy branch) remove the release |
 
 **Remedy only (they ship with the remedy, and their Verification lines
@@ -327,8 +360,8 @@ cargo bench -p slate-core --bench two_sessions_bench; Assert-Ok 'the bench'   # 
 $remedy = Test-Path 'crates/slate-core/src/session/registry.rs'
 
 # always on, both branches:
-Assert-Facts 'slate-core' 'two_sessions' @('db_cache_status_reads_this_connections_counters', 'process_cache_status_reads_the_process_counters')
-cargo test -p slate-core --locked two_sessions; Assert-Ok 'two_sessions'
+Assert-Facts 'slate-core' 'two_sessions' @('db_cache_status_reads_this_connections_counters', 'process_cache_status_reads_the_process_counters', 'process_cache_status_child')
+cargo test -p slate-core --locked two_sessions; Assert-Ok 'two_sessions'   # the parent spawns the child alone in its own process; without SLATE_WB31_PROCESS_CHILD the child is a no-op here
 $guard = 'perf_guard_two_sessions_do_not_evict_each_others_cache'
 if (-not $remedy) {
     # the guard is still ignored: run it by hand, record its ratio and exit code as data (not a gate; a Windows run that does not reproduce closes nothing)
@@ -370,7 +403,10 @@ FFI method ships. AT: none.
       (Windows, this machine, per-connection counters) is in
       `BENCHMARKS.md`; the `build.rs` line is recorded.
 - [ ] Both branches: `db_cache_status`, `process_cache_status` and their
-      two always-on facts, which release nothing, discovered and green;
+      always-on facts (the per-connection fact, and the process-counter
+      parent with its child run alone in its own process), which release
+      nothing, discovered and green, each seen failing under its
+      per-connection or process-wide substitution;
       the compactor's connection in the session's shared worker slot,
       taken per job; the guard's measured ratio in its doc and the PR
       body.
@@ -482,13 +518,34 @@ refuted: none of the remedy ships; the shared worker slot stays a plain
 Facts (mutation in brackets), seen failing first.
 Always on, both branches:
 - `db_cache_status_reads_this_connections_counters`: after a scan A's
-  `used > 0` and `miss > 0`, a repeated query raises `hit`, a fresh B
-  reads `used` below A's, `worker` is `None` until
-  `open_worker_connection_for_tests()` opens the worker connection in
-  the shared slot and `Some` after [read the process-wide status for
-  both].
-- `process_cache_status_reads_the_process_counters`: `memory_used > 0`
-  and rising across A's first scan [return a connection's `used`].
+  `used > 0` and `miss > 0`, a repeated query raises `hit`; `worker` is
+  `None` until `open_worker_connection_for_tests()` opens the worker
+  connection in the shared slot and `Some` after [`worker` reported
+  before it opens]. It compares no two connections: with
+  `SQLITE_ENABLE_MEMORY_MANAGEMENT` all purgeable caches share one LRU,
+  so a parallel test can evict a session's page, and the exact
+  per-connection checks live in the isolated child below.
+- `process_cache_status_reads_the_process_counters` (parent) and
+  `process_cache_status_child` (child, new): process-wide counters move
+  with any parallel test's connections, so the parent spawns
+  `std::env::current_exe()` with
+  `session::tests::two_sessions::process_cache_status_child --exact
+  --nocapture --test-threads=1` and `SLATE_WB31_PROCESS_CHILD=1` (the
+  `real_trash_linux_child` form, `vault/trash_handoff_tests.rs:1108-1154`)
+  and asserts exit 0; the child (a no-op without the variable) opens A
+  and B with `common::make_vault`, then B allocates — under B's
+  connection lock, `CREATE TEMP TABLE wb31_pad(x BLOB)` and a recursive
+  CTE inserting 1 024 rows of `zeroblob(8192)`, ≥ 8 MiB of in-memory
+  temp pages (`temp_store MEMORY`, `db.rs:424`) that no LRU evicts and
+  whose growth evicts nothing — while A is untouched: A's `used` exactly
+  equal, B's up by ≥ 8 MiB, both `memory_used` and `pagecache_overflow`
+  up by at least half of B's growth; then A allocates while B is
+  untouched, symmetrically [a per-connection reading of A's main
+  connection (the round-7 mutation) or of B's fails the step in which
+  that connection is untouched; `PAGECACHE_USED` for
+  `pagecache_overflow` stays flat; the process-wide `MEMORY_USED`
+  reported as `db_cache_status`'s `used` moves the untouched
+  connection's reading].
 - `perf_guard_two_sessions_do_not_evict_each_others_cache`: ignored with
   its measured ratio until the remedy; then ratio ≤ 1.25 and A's `used`
   held [remove the release].
@@ -539,7 +596,8 @@ the `:1292-1296` pointer), `Cargo.toml`; in the remedy branch only,
 isolated steps for the two enabled guards, and the FFI doc. Not
 delivered: the macOS measurement (WB-0's follow-up). Done when the
 Verification block runs clean in PowerShell — the `build.rs` line
-recorded, every required fact discovered by name, every command's
+recorded, every required fact discovered by name (the process-counter
+child included), every command's
 `$LASTEXITCODE` 0, the remedy-only lines run exactly when
 `session/registry.rs` exists, the ignored guard's ratio recorded in the
 refuted branch — the bench's table is in `BENCHMARKS.md`, the rust and

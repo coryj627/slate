@@ -92,10 +92,24 @@ Verified against the worktree; the plan's and reports' lines hold.
   0xA000_000C` only) does not know is refused, and a reparse directory is
   never recursed into). The handoff `trash_handoff::pinned_path`
   (`:298-320`) walks with `Folders::PlainOnly` (`:314`). The host's import
-  check `HasReparsePointInPath` (`Import.cs:401`, used `:248`).
-  `test_support::opaque_reparse_point` (`test_support.rs:98-115`) makes a
-  folder that is a reparse point redirecting nothing — the #1451 facts'
-  stand-in for a placeholder (`windows_entry_tests.rs:125`).
+  check `HasReparsePointInPath(string absolutePath, Func<string,
+  FileAttributes>? getAttributes = null)` (`FilesSidebarViewModel.Import.cs:401-425`,
+  used `:248`) refuses any ancestor with `FileAttributes.ReparsePoint`;
+  two existing facts pin it: `W1ImportSafeguardTests.ReparseCheckWalksEveryAncestorUntilItFindsOne`
+  (`W1HardeningTests.cs:1856-1878`, through the `getAttributes` seam) and
+  `W1SidebarHardeningTests.ImportOperationStateIsOwnedByTheDedicatedPartial`
+  (`:1078-1111`, which scrapes the member text `internal static bool
+  HasReparsePointInPath`, `:1105`).
+  `test_support::opaque_reparse_point` (`vault/test_support.rs:92-109`)
+  makes a folder that is a reparse point redirecting nothing — the #1451
+  facts' stand-in for a placeholder (`windows_entry_tests.rs:125`).
+- **The gated-fact census.** `vault/test_trash_census.rs:31`
+  `GATED_REAL_TRASH_FACTS: [&str; 7]` lists the only facts that may call
+  `real_system_trash_provider`; `only_the_gated_facts_build_a_provider_on_the_real_trash`
+  (`:216-259`) fails on any other caller, and
+  `the_system_trash_refuses_a_test_path_off_the_scratch_volume`
+  (`:152-165`) requires every guard refusal to name "#1455" (the guard's
+  `refusal` closure, `trash_handoff.rs:99-105`, prefixes it).
 - **FFI record consumers.** `BatchTrashReport` (`slate-uniffi/src/lib.rs:
   3174-3183`). Every Swift construction on main (14): 
   `BaseBatchTrashQuarantineTests.swift:139`,
@@ -156,7 +170,10 @@ Verified against the worktree; the plan's and reports' lines hold.
 the path's volume (`GetVolumePathNameW` of the canonical path) must equal
 the probe volume's, and that volume must not be the system drive
 (`GetWindowsDirectoryW`'s root) — refuse otherwise with both volumes
-named. Everything before it stays.
+named, through the existing `refusal` closure (`:99-105`), so the
+message keeps the "#1455" prefix that
+`the_system_trash_refuses_a_test_path_off_the_scratch_volume`
+(`test_trash_census.rs:152-165`) asserts. Everything before it stays.
 
 ### The facts' shape (#1480)
 
@@ -168,7 +185,12 @@ the SID from `GetTokenInformation(TokenUser)` via `windows_sys`
 `recycled_entries` (new: pair each `$I<id>` record — version 2: original
 path as a length-prefixed UTF-16 string at offset 28 — with its `$R<id>`
 entry and compare identity by volume serial + 128-bit id, the
-`windows_entry::identity` form `:612-631`, lifted `pub(super)`).
+`windows_entry::identity` form `:612-631`, lifted `pub(super)`). The two
+gated Windows facts join `GATED_REAL_TRASH_FACTS`
+(`test_trash_census.rs:31`, `[&str; 7]` becomes `[&str; 9]`, under a
+"Windows, ignored" comment); without them
+`only_the_gated_facts_build_a_provider_on_the_real_trash` fails on
+their calls to `real_system_trash_provider`.
 
 ### The dangling link (#1499): the shared outcome model
 
@@ -253,8 +275,21 @@ constant so the PR carries the probe's answer.
   this device" and try again`; today's sentence stays for a junction or
   link. Core-owned text (`VaultError::InvalidPath { reason }`, rendered by
   `vault_error_detail`, `a11y.rs:3401-3412`).
-- Host: `HasReparsePointInPath` (`Import.cs:401`) adopts the name-surrogate
-  test, so importing into a OneDrive vault works.
+- Host (ships under WD15's recommended answer, whether or not the
+  outcome model ships): `HasReparsePointInPath`
+  (`FilesSidebarViewModel.Import.cs:401`) adopts the name-surrogate test,
+  so importing into a OneDrive vault works. Its seam becomes
+  `Func<string, (FileAttributes Attributes, uint? ReparseTag)>? inspect
+  = null` (the member text `internal static bool HasReparsePointInPath`
+  stays, for the ownership scrape at `W1HardeningTests.cs:1105`); the
+  default reads `File.GetAttributes` and, for a reparse point, the tag
+  from `FindFirstFileW`'s `WIN32_FIND_DATAW.dwReserved0` (new P/Invoke
+  in the same partial), `null` when it cannot be read. An ancestor
+  counts as a link when its tag has the name-surrogate bit `0x2000_0000`
+  set or is `null` (fail closed); a placeholder (bit clear) does not.
+  `ReparseCheckWalksEveryAncestorUntilItFindsOne` moves to the new seam,
+  its `linked` ancestor reporting the junction tag `0xA000_0003`, and
+  keeps its assertions.
 
 ## Tests
 
@@ -264,11 +299,13 @@ constant so the PR carries the probe's answer.
 | `#[ignore]` `real_trash_on_windows_takes_each_dangling_link_kind_as_the_link` | per #1499 kind: `DeleteItem` ok, `$R` is a reparse point with equal data, target untouched; prints which kinds refuse | — (this is the probe) |
 | `the_windows_guard_refuses_the_system_drive_and_any_other_volume` | with `PROBE_VOLUME` set to a temp dir on `C:`, the guard panics naming the system drive; set to the scratch volume, a path on `C:` panics | drop the system-drive check |
 | flipped or kept: `windows_a_link_whose_target_is_missing_goes_to_the_recycle_bin_as_the_link` / `…_is_still_unlinked_and_reported_so` | per the branch; the kept form asserts `TrashOutcome::UnlinkedForGood` | revert the branch |
-| if the model ships: `every_provider_but_windows_reports_unverifiable` (core; WB-30 later narrows it to `a_trash_that_reports_no_destination_is_unverifiable`, because its shared verifier makes `ScratchTrash` confirm on every platform), `a_batch_report_carries_one_outcome_per_trashed_item_in_order` (core), `FileManagementTests.ADeletedForGoodLinkIsNotReportedAsMovedToTheRecycleBin` and `FileManagementTests.ABatchCountsDeletedForGoodLinksSeparately` (Windows) | the variant / the sentences | return `Unverifiable` for the unlink |
-| `windows_entry_tests.rs`: `undo_identity_is_captured_through_a_placeholder_folder_and_refused_through_a_junction` | `capture` succeeds beneath `opaque_reparse_point`; refuses beneath a junction | pass `PlainOnly` |
-| `trash_snapshot` tests: `the_inventory_admits_a_placeholder_root_item_and_nested_folder_and_refuses_a_junction` | three fixtures: placeholder ancestor, placeholder as the selected item, placeholder nested inside the tree — `snapshot_cancellable` ok with the nested item counted; a junction at each position refused | revert any one of the three sites |
-| `trash_handoff_tests.rs`: `a_cloud_placeholder_ancestor_refuses_with_an_actionable_reason` (or `…is_admitted` if the probe allows) | the exact sentence | change the text |
-| Windows: `FileManagementTests.ImportIntoAPlaceholderFolderIsNotRefusedAsAReparsePoint` | `HasReparsePointInPath` false for an opaque reparse folder, true for a junction | revert |
+| `test_trash_census.rs` (existing): `only_the_gated_facts_build_a_provider_on_the_real_trash` and `the_system_trash_refuses_a_test_path_off_the_scratch_volume` | stay green with the two gated Windows facts in `GATED_REAL_TRASH_FACTS` and every Windows guard refusal naming "#1455" | leave a new gated fact out of the list; or refuse with a bare `panic!` |
+| if the model ships: `every_provider_but_windows_reports_unverifiable` (core, `vault/trash_handoff_tests.rs`; WB-30 later narrows it to `a_trash_that_reports_no_destination_is_unverifiable`, because its shared verifier makes `ScratchTrash` confirm on every platform), `a_batch_report_carries_one_outcome_per_trashed_item_in_order` (core, `session/tests/structural_batch.rs`), `FileManagementTests.ADeletedForGoodLinkIsNotReportedAsMovedToTheRecycleBin` and `FileManagementTests.ABatchCountsDeletedForGoodLinksSeparately` (Windows) | the variant / the sentences | return `Unverifiable` for the unlink |
+| `windows_entry_tests.rs` (ships with the walks): `undo_identity_is_captured_through_a_placeholder_folder_and_refused_through_a_junction` | `capture` succeeds beneath `opaque_reparse_point`; refuses beneath a junction | pass `PlainOnly` |
+| `trash_snapshot` tests (ships with the walks): `the_inventory_admits_a_placeholder_root_item_and_nested_folder_and_refuses_a_junction` | three fixtures: placeholder ancestor, placeholder as the selected item, placeholder nested inside the tree — `snapshot_cancellable` ok with the nested item counted; a junction at each position refused | revert any one of the three sites |
+| `trash_handoff_tests.rs`: `a_cloud_placeholder_ancestor_refuses_with_an_actionable_reason` (or `a_cloud_placeholder_ancestor_is_admitted` if the OneDrive probe allows) | the exact sentence (or the handoff proceeds) | change the text |
+| Windows (ships with the walks, `$walksRelax` in Verification, independently of the outcome model): `FileManagementTests.ImportIntoAPlaceholderFolderIsNotRefusedAsAReparsePoint` | through the `inspect` seam, a path whose only reparse ancestor carries the Cloud Files tag `0x9000_601A` is not refused (`false`); the same ancestor with the junction tag `0xA000_0003`, the symlink tag `0xA000_000C`, or a `null` tag is refused (`true`) | revert to the attribute-only test (the placeholder case returns `true`); or read a `null` tag as a placeholder (that case returns `false`) |
+| Windows (existing, kept green): `W1ImportSafeguardTests.ReparseCheckWalksEveryAncestorUntilItFindsOne` on the new seam; `W1SidebarHardeningTests.ImportOperationStateIsOwnedByTheDedicatedPartial` still finds the member text | the walk stops at the junction ancestor; the scrape matches | rename the member |
 | census: `A11yCorpusCensus` row for `LinkDeletedForGood` if it ships; `VaultErrorDetailCensus` unchanged | | |
 
 Every wait in a fact is a `Wait(timeout)` whose result is asserted, with
@@ -298,40 +335,131 @@ poll the bin with a bounded, asserted deadline).
 
 ## Verification
 
-PowerShell, repo root. The gated lines must print a selected count ≥ 1
-(the `--list` form) before the run form.
+PowerShell, repo root. Three switches say what shipped, and the blocks
+read them; set all three before running anything:
 
+- `$outcomeModelShips` — `$true` when the probe record shows the Recycle
+  Bin refusing at least one #1499 kind (the refused-kind branch: the
+  `TrashOutcome` model, `BatchTrashReport.outcomes`,
+  `LinkDeletedForGood`, the Windows sentences); `$false` when it takes
+  every kind.
+- `$walksRelax` — `$true` under WD15's recommended answer: the identity
+  walk and the inventory's three sites admit a placeholder, **and the
+  host's import check `HasReparsePointInPath` adopts the name-surrogate
+  test** (`FilesSidebarViewModel.Import.cs`, its seam fact in `W1HardeningTests.cs`, and
+  `ImportIntoAPlaceholderFolderIsNotRefusedAsAReparsePoint`); `$false`
+  under the other answer (every walk stays fail-closed, the import check
+  unchanged, only the refusal wording ships).
+- `$trashAdmitsPlaceholders` — `$true` only with `$walksRelax` and a
+  OneDrive probe showing `IFileOperation` is not redirected through a
+  placeholder (the handoff relaxes and
+  `a_cloud_placeholder_ancestor_is_admitted` replaces the refusal fact);
+  `$false` otherwise.
+
+The Windows host block runs whenever `$walksRelax` **or**
+`$outcomeModelShips` is `$true` — each one changes C# on its own (the
+import change ships even when the Recycle Bin takes every kind). Every
+filter is listed first and the block throws unless every required fact
+is selected; every command's `$LASTEXITCODE` is checked (no output
+grepping for "Failed").
+
+On the development machine:
+
+```powershell
+$outcomeModelShips = $false       # set from the probe record
+$walksRelax = $true               # set from WD15's recorded answer
+$trashAdmitsPlaceholders = $false # set from the OneDrive probe record
+$env:CARGO_TARGET_DIR = 'C:\dev\slate\target-wb24'
+function Assert-Ok([string]$step) { if ($LASTEXITCODE -ne 0) { throw "$step failed ($LASTEXITCODE)" } }
+function Assert-Facts([string]$filter, [string[]]$facts) {
+    $listed = cargo test -p slate-core --locked $filter -- --list
+    Assert-Ok "listing $filter"
+    foreach ($fact in $facts) {
+        if (-not ($listed -match "(^|::)$([regex]::Escape($fact)): test$")) { throw "filter '$filter' does not select $fact" }
+    }
+}
+# the file-link-to-a-missing-target kind's fact: exactly one form, flipped (the Recycle Bin takes that kind) or kept (it refuses it), and the old name gone
+$listedHandoff = cargo test -p slate-core --locked vault::trash_handoff -- --list; Assert-Ok 'listing the dangling-link form'
+$forms = @('windows_a_link_whose_target_is_missing_goes_to_the_recycle_bin_as_the_link', 'windows_a_link_whose_target_is_missing_is_still_unlinked_and_reported_so', 'windows_a_link_whose_target_is_missing_is_still_unlinked') | Where-Object { $listedHandoff -match "(^|::)$([regex]::Escape($_)): test$" }
+if (@($forms).Count -ne 1 -or $forms -contains 'windows_a_link_whose_target_is_missing_is_still_unlinked') { throw "exactly one new dangling-link form must exist, found: $($forms -join ', ')" }
+$placeholderFact = if ($trashAdmitsPlaceholders) { 'a_cloud_placeholder_ancestor_is_admitted' } else { 'a_cloud_placeholder_ancestor_refuses_with_an_actionable_reason' }
+$handoff = @('the_windows_guard_refuses_the_system_drive_and_any_other_volume', $placeholderFact)
+if ($outcomeModelShips) { $handoff += 'every_provider_but_windows_reports_unverifiable' }
+$required = [ordered]@{
+    'vault::trash_handoff' = $handoff
+    'test_trash_census'    = @('only_the_gated_facts_build_a_provider_on_the_real_trash', 'the_system_trash_refuses_a_test_path_off_the_scratch_volume')
+}
+if ($walksRelax) {
+    $required['windows_entry'] = @('undo_identity_is_captured_through_a_placeholder_folder_and_refused_through_a_junction')
+    $required['trash_snapshot'] = @('the_inventory_admits_a_placeholder_root_item_and_nested_folder_and_refuses_a_junction')
+}
+if ($outcomeModelShips) { $required['structural_batch'] = @('a_batch_report_carries_one_outcome_per_trashed_item_in_order') }
+foreach ($filter in $required.Keys) {
+    Assert-Facts $filter $required[$filter]
+    cargo test -p slate-core --locked $filter; Assert-Ok "cargo test $filter"
+}
+cargo test -p slate-core --locked --no-fail-fast; Assert-Ok 'the whole core suite'
+cargo fmt --all -- --check; Assert-Ok 'fmt'
+cargo clippy --all-targets --workspace -- -D warnings; Assert-Ok 'clippy'
+cargo test --workspace --locked; Assert-Ok 'workspace tests'
+cargo bench --workspace --no-run; Assert-Ok 'bench compile'
+bash scripts/check-license-headers.sh; Assert-Ok 'licence headers'
+if ($walksRelax -or $outcomeModelShips) {
+    ./apps/slate-windows/generate-bindings.ps1 -Locked; Assert-Ok 'bindings'
+    dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release; Assert-Ok 'build'
+    $tests = 'apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj'
+    $filter = 'FullyQualifiedName~SlateWindows.Tests.FileManagementTests|FullyQualifiedName~SlateWindows.Tests.W1ImportSafeguardTests|FullyQualifiedName~SlateWindows.Tests.W1SidebarHardeningTests|FullyQualifiedName~SlateWindows.Tests.Censuses.A11yCorpusCensus'
+    $csFacts = @()
+    if ($walksRelax) { $csFacts += @('SlateWindows.Tests.FileManagementTests.ImportIntoAPlaceholderFolderIsNotRefusedAsAReparsePoint', 'SlateWindows.Tests.W1ImportSafeguardTests.ReparseCheckWalksEveryAncestorUntilItFindsOne', 'SlateWindows.Tests.W1SidebarHardeningTests.ImportOperationStateIsOwnedByTheDedicatedPartial') }
+    if ($outcomeModelShips) { $csFacts += @('SlateWindows.Tests.FileManagementTests.ADeletedForGoodLinkIsNotReportedAsMovedToTheRecycleBin', 'SlateWindows.Tests.FileManagementTests.ABatchCountsDeletedForGoodLinksSeparately') }
+    $names = @(dotnet test $tests --no-build --configuration Release --list-tests --filter $filter | Select-String '^\s{4}\S' | ForEach-Object { ($_.Line.Trim() -split '\(', 2)[0] }); Assert-Ok 'test discovery'
+    $missing = @($csFacts | Where-Object { $names -notcontains $_ })
+    if ($missing.Count -gt 0) { throw "the filter does not select: $($missing -join ', ')" }
+    if ($outcomeModelShips -and -not ($names | Where-Object { $_ -like 'SlateWindows.Tests.Censuses.A11yCorpusCensus.*' })) { throw 'no A11yCorpusCensus fact discovered' }
+    dotnet test $tests --no-build --configuration Release --filter $filter; Assert-Ok 'Windows facts'
+    # every C# file the branch adds or changes, committed or not (the generated binding is gitignored):
+    $base = git merge-base origin/main HEAD; Assert-Ok 'merge base'
+    $changed = @(git diff --name-only --diff-filter=d $base -- 'apps/slate-windows/*.cs'); Assert-Ok 'changed C# files'
+    $added = @(git ls-files --others --exclude-standard -- 'apps/slate-windows/*.cs'); Assert-Ok 'new C# files'
+    $cs = @($changed + $added | Sort-Object -Unique)
+    $expected = @()
+    if ($walksRelax) { $expected += @('apps/slate-windows/src/SlateWindows/FilesSidebarViewModel.Import.cs', 'apps/slate-windows/tests/SlateWindows.Tests/FileManagementTests.cs', 'apps/slate-windows/tests/SlateWindows.Tests/W1HardeningTests.cs') }
+    if ($outcomeModelShips) { $expected += @('apps/slate-windows/src/SlateWindows/FilesSidebarViewModel.cs', 'apps/slate-windows/tests/SlateWindows.Tests/FileManagementTests.cs', 'apps/slate-windows/tests/SlateWindows.Tests/Censuses/A11yCorpusCensus.cs') }
+    $absent = @($expected | Where-Object { $cs -notcontains $_ })
+    if ($absent.Count -gt 0) { throw "a changed C# file is missing from the format list: $($absent -join ', ')" }
+    dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $cs; Assert-Ok 'dotnet format'
+}
 ```
-$env:CARGO_TARGET_DIR='C:\dev\slate\target-wb24'
-cargo test -p slate-core --locked trash_handoff
-cargo test -p slate-core --locked windows_entry
-cargo test -p slate-core --locked trash_snapshot
-cargo test -p slate-core --locked --no-fail-fast
-cargo fmt --all -- --check
-cargo clippy --all-targets --workspace -- -D warnings
-cargo test --workspace --locked
-cargo bench --workspace --no-run
-bash scripts/check-license-headers.sh
-# the gated facts, on the throwaway VM with $probe from the procedure:
+
+When neither switch is `$true` the branch changes no C# file; the PR
+body says so, and the Windows lane's app build still runs in CI.
+
+On the throwaway VM, with `$probe` from the procedure (the gated facts
+are `#[ignore]`, so they are listed and run with `--ignored`):
+
+```powershell
+$env:CARGO_TARGET_DIR = 'C:\probe\target'
+function Assert-Ok([string]$step) { if ($LASTEXITCODE -ne 0) { throw "$step failed ($LASTEXITCODE)" } }
 $env:SLATE_TRASH_PROBE_VOLUME = $probe
-cargo test -p slate-core --locked -- --ignored --list real_trash_on_windows_lands_in_the_volumes_recycle_bin_with_its_records | Select-String ': test$' | Measure-Object | Select-Object -ExpandProperty Count   # must be 1
-cargo test -p slate-core --locked -- --ignored --test-threads=1 real_trash_on_windows_lands_in_the_volumes_recycle_bin_with_its_records
-cargo test -p slate-core --locked -- --ignored --test-threads=1 real_trash_on_windows_takes_each_dangling_link_kind_as_the_link
-# Windows host (only if the outcome model ships; otherwise no C# changes):
-./apps/slate-windows/generate-bindings.ps1 -Locked
-dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release
-dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --configuration Release --filter "FullyQualifiedName~SlateWindows.Tests.FileManagementTests|FullyQualifiedName~SlateWindows.Tests.Censuses.A11yCorpusCensus"
-$cs = @('apps/slate-windows/src/SlateWindows/FilesSidebarViewModel.cs','apps/slate-windows/src/SlateWindows/FilesSidebarViewModel.Import.cs','apps/slate-windows/tests/SlateWindows.Tests/FileManagementTests.cs','apps/slate-windows/tests/SlateWindows.Tests/Censuses/A11yCorpusCensus.cs')
-dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $cs
+$gated = @('real_trash_on_windows_lands_in_the_volumes_recycle_bin_with_its_records', 'real_trash_on_windows_takes_each_dangling_link_kind_as_the_link')
+$listed = cargo test -p slate-core --locked real_trash_on_windows -- --ignored --list; Assert-Ok 'listing the gated facts'
+foreach ($fact in $gated) {
+    if (-not ($listed -match "(^|::)$([regex]::Escape($fact)): test$")) { throw "the gated filter does not select $fact" }
+}
+foreach ($fact in $gated) {
+    cargo test -p slate-core --locked $fact -- --ignored --test-threads=1 --nocapture; Assert-Ok $fact
+}
 ```
 
-Mutation run: each row's mutation applied locally, the fact seen failing,
-reverted. CI: `windows.yml` (rust-tests, app) plus the `home-only`
-real-Trash job; `rust.yml` for `cfg(unix)`; `swift-tests.yml` if the FFI
-record changes. AT: NVDA spot check of the single-delete sentence for a
-dangling link and of the OneDrive refusal, launched per §4 rule 4;
-expected phrases are the exact sentences in Design; recorded in the PR
-body.
+The second fact's printed per-kind table, the `$I` original paths and
+the manual Restore observations, pasted into the PR body, are the
+probe record. Mutation run: each row's mutation applied locally, the
+fact seen failing, reverted. CI: `windows.yml` (rust-tests, app) plus
+the `home-only` real-Trash job; `rust.yml` for `cfg(unix)`;
+`swift-tests.yml` if the FFI record changes. AT: NVDA spot check of the
+single-delete sentence for a dangling link and of the OneDrive refusal,
+launched per §4 rule 4; expected phrases are the exact sentences in
+Design; recorded in the PR body.
 
 ## Acceptance
 
@@ -347,11 +475,31 @@ body.
 - [ ] `reparse_kind` applied at the identity walk and all three inventory
       sites; the handoff per WD15; the Cloud Files refusal sentence
       core-owned and actionable.
-- [ ] Facts pass, seen failing first; format gate clean.
-- [ ] PR body: `Closes #1480`, `Closes #1499`, `Closes #1492`, the NVDA
-      spot check, and "not delivered" for any kind the hardware could not
-      probe (that kind keeps today's behaviour, its issue stays open with
-      a comment).
+- [ ] Facts pass, seen failing first. The Windows host block ran
+      whenever the walks relaxed (WD15's recommended answer, which ships
+      the import change on its own) or the outcome model shipped: every
+      required C# fact discovered and green (the import fact and the two
+      existing `W1HardeningTests` facts with the walks; the two
+      deleted-for-good facts and an `A11yCorpusCensus` fact with the
+      model), and `dotnet format --include` over every C# file the branch
+      adds or changes clean.
+- [ ] Closing keywords follow the probe record (plan §11: a chunk whose
+      hardware probe is unavailable is not complete, and nothing merges
+      on an assumption). While an issue's probe record is incomplete, the
+      PR body writes `Refs #N` for it — never `Closes` — the PR stays a
+      draft, and the issue gets a comment naming the missing probe. The
+      record per issue: #1480 — both gated Windows facts green on a
+      scratch volume (the throwaway-VM run, then the `home-only` job or,
+      under WD14's other answer, the owner-run record); #1499 — every
+      kind in #1499's list probed with its observations (the
+      `DeleteItem` result, the `$R` reparse data, the `$I` original path,
+      Restore, the target untouched) and the dangling-link branch built
+      to match; #1492 — the three OneDrive scenarios run on a Files
+      On-Demand vault with their sentences recorded and the handoff
+      chosen per that probe. Only when all three records are in the PR
+      body does it write `Closes #1480`, `Closes #1499`, `Closes #1492`
+      and leave draft; the NVDA spot check is in the body too. There is
+      no "not delivered" kind: an unprobed kind keeps the chunk open.
 
 ## Brief
 
@@ -359,18 +507,23 @@ Prove the Windows Trash back end on a scratch volume, then act on what the
 probe says. Two owner decisions are pending: WD14 (recommended: a
 throwaway VM with a VHD, then a `home-only` lane job; otherwise owner-run
 with results pasted into the PR body) and WD15 (recommended: identity
-walk and inventory admit placeholders, the handoff stays fail-closed
+walk, inventory and the host's import check admit placeholders, the handoff stays fail-closed
 unless the OneDrive probe shows no redirection; otherwise only the
 refusal wording ships). Read `trash_handoff.rs:55-200`, `:290-345`,
 `trash_handoff_tests.rs:20-60`, `:660-830`, `fs.rs:2268-2320`,
 `:2405-2420`, `provider.rs:101`, `windows_entry.rs:40-56`, `:305-330`,
 `:555-635`, `trash_snapshot/windows.rs:50-120`, `:210-262`,
-`test_support.rs:90-115`, `session.rs:15060-15078`, `:16073-16110`,
+`vault/test_support.rs:92-109`, `vault/test_trash_census.rs:25-47`,
+`:152-165`, `:216-259`, `session.rs:15060-15078`, `:16073-16110`,
 `uniffi lib.rs:3158-3183`, `FilesSidebarViewModel.cs:1848-1872`,
-`:2280-2306`, `Import.cs:395-405`, `FileManagement.cs:315-320`, contract
-31 `:420-470`, `windows.yml:228-345`. Build: the Windows guard arm
-(volume equality, never the system drive); `probe_volume_and_its_recycle_bin`
-and `recycled_entries`; the two gated Windows facts; then, per the
+`:2280-2306`, `FilesSidebarViewModel.Import.cs:395-425`,
+`FileManagement.cs:315-320`, `W1HardeningTests.cs:1078-1111` and
+`:1856-1878`, contract 31 `:420-470`, `windows.yml:228-345`. Build: the
+Windows guard arm (volume equality, never the system drive; every
+refusal through the existing `refusal` closure so it names "#1455");
+`probe_volume_and_its_recycle_bin` and `recycled_entries`; the two gated
+Windows facts, added to `GATED_REAL_TRASH_FACTS`
+(`test_trash_census.rs:31`, `[&str; 7]` to `[&str; 9]`); then, per the
 probe, either delete the unlink branch or keep it per kind and ship the
 shared `TrashOutcome` enum (`Confirmed`, `VerifiedByNameAndMetadataOnly`,
 `Mismatch { detail, location }`, `Unverifiable { detail }`,
@@ -383,8 +536,18 @@ the parallel `BatchTrashReport.outcomes: Vec<TrashedOutcome>` field
 `StructuralUndoTests.swift:145/302`, `WorkspaceTabsTests.swift:83`) and
 `A11yEvent::LinkDeletedForGood`; `windows_entry::reparse_kind` applied at
 `open`/`directory` and the inventory's three sites; the Cloud Files
-refusal sentence; `HasReparsePointInPath` on the name-surrogate test; the
-`home-only` lane job. Facts, seen failing first:
+refusal sentence; under WD15's recommended answer — shipping whether or
+not the outcome model does — `HasReparsePointInPath` on the
+name-surrogate test through a new seam `Func<string, (FileAttributes
+Attributes, uint? ReparseTag)>? inspect = null` (default:
+`File.GetAttributes`, and for a reparse point the tag from
+`FindFirstFileW`'s `WIN32_FIND_DATAW.dwReserved0`, `null` if unread; an
+ancestor is a link when the tag's `0x2000_0000` bit is set or the tag is
+`null`; the member text `internal static bool HasReparsePointInPath`
+kept for the scrape at `W1HardeningTests.cs:1105`), with
+`ReparseCheckWalksEveryAncestorUntilItFindsOne` moved to the seam (its
+`linked` ancestor reporting `0xA000_0003`); the `home-only` lane job.
+Facts, seen failing first:
 `real_trash_on_windows_lands_in_the_volumes_recycle_bin_with_its_records`
 (`$R`/`$I` identity and path); `real_trash_on_windows_takes_each_dangling_link_kind_as_the_link`
 (per kind); `the_windows_guard_refuses_the_system_drive_and_any_other_volume`;
@@ -394,14 +557,40 @@ the flipped or kept dangling-link fact; `every_provider_but_windows_reports_unve
 `FileManagementTests.ABatchCountsDeletedForGoodLinksSeparately`;
 `undo_identity_is_captured_through_a_placeholder_folder_and_refused_through_a_junction`;
 `the_inventory_admits_a_placeholder_root_item_and_nested_folder_and_refuses_a_junction`;
-`a_cloud_placeholder_ancestor_refuses_with_an_actionable_reason`;
-`FileManagementTests.ImportIntoAPlaceholderFolderIsNotRefusedAsAReparsePoint`;
-the `A11yCorpusCensus` row. Registers: contract 31 FR-8 (appended
+`a_cloud_placeholder_ancestor_refuses_with_an_actionable_reason` (or
+`a_cloud_placeholder_ancestor_is_admitted` if the OneDrive probe shows
+no redirection); `FileManagementTests.ImportIntoAPlaceholderFolderIsNotRefusedAsAReparsePoint`
+(through the seam: the Cloud Files tag `0x9000_601A` is not refused; the
+junction `0xA000_0003`, symlink `0xA000_000C` and a `null` tag are;
+mutations: the attribute-only test, or a `null` tag read as a
+placeholder); the existing `W1ImportSafeguardTests.ReparseCheckWalksEveryAncestorUntilItFindsOne`
+and `W1SidebarHardeningTests.ImportOperationStateIsOwnedByTheDedicatedPartial`
+kept green; the existing census facts
+`only_the_gated_facts_build_a_provider_on_the_real_trash` and
+`the_system_trash_refuses_a_test_path_off_the_scratch_volume` kept green
+(mutations: leave a gated fact out of the list; a bare `panic!`
+refusal); the `A11yCorpusCensus` row. Registers: contract 31 FR-8 (appended
 paragraph), `w_c_matrix.md` Files tree row, `corpus.json` and both census
-mirrors, `windows.yml`. Not delivered: any link kind the hardware could
-not probe (keeps today's behaviour, issue left open with a comment).
-Done when the gated facts have run green on a scratch volume somewhere
-recorded, the core suite and the PowerShell gates pass, the Windows,
-rust and (if the record changed) swift lanes are green, each mutation
-was run locally, and the NVDA spot check is in the PR body. Commit:
+mirrors, `windows.yml`. Verification sets three switches from the
+records — `$outcomeModelShips` (the Recycle Bin refused a kind),
+`$walksRelax` (WD15's recommended answer) and `$trashAdmitsPlaceholders`
+(the OneDrive probe showed no redirection) — and runs the Windows host
+block (bindings, Release build, discovery that throws unless every
+required C# fact is selected, the tests, `dotnet format --include` over
+every C# file the branch adds or changes, from `git diff --name-only`
+against the merge base plus untracked files) whenever `$walksRelax` or
+`$outcomeModelShips` is true, since the import change ships on its own.
+Closing keywords: while any issue's probe record is incomplete (#1480:
+both gated facts green on a scratch volume; #1499: every kind in its
+list probed and the branch built to match; #1492: the three OneDrive
+scenarios recorded and the handoff chosen per them), the PR body writes
+`Refs #N` for that issue, the PR stays a draft, the issue gets a comment
+naming the missing probe, and the chunk is not complete (plan §11);
+only with all three records does the body write `Closes #1480`,
+`Closes #1499`, `Closes #1492`. Done when all three probe records are in
+the PR body, the Verification blocks run clean in PowerShell (every
+filter's discovery check passes and every `$LASTEXITCODE` is 0), the
+Windows, rust and (if the record changed) swift lanes are green, each
+mutation was run locally, and the NVDA spot check is in the PR body.
+Commit:
 `fix(core,windows): the recycle bin back end is tested on a scratch volume, dangling links go to it as the link where it takes them, and a onedrive vault refuses truthfully`.

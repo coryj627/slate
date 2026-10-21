@@ -13,11 +13,18 @@ keeps owning the outcome"; under the other answer — COM in the host —
 Part 2 moves to C# (`IFileOperation` through CsWin32 in `apps/slate-windows`)
 and the provider takes a host-supplied `SystemTrash` through a new FFI
 callback interface; and if the mac check stays a programme precondition,
-WB-30 waits for it). WD24 (answered 2026-10-21: a Windows vault whose
-root file id cannot be read does not open — WB-28 refuses it — so the
-id-free mode `NameAndMetadataOnly` is chosen by file system — FAT, FAT32,
-exFAT, or a share whose server reports another file system — never by a
-failed root-id read, which cannot occur in an open vault).
+WB-30 waits for it). WD24 (answered 2026-10-21; amended 2026-10-21:
+FAT32 and exFAT vaults keep opening — WB-28 reads the root's identity
+with `FileIdInfo`, else with `GetFileInformationByHandle`'s volume serial
+and file index, flagged weak (`persistent: false`), and refuses only when
+neither read answers. So the mode is `Strong` only when the vault's file
+system is NTFS or ReFS **and** its root identity is the persistent
+`FileIdInfo` kind; `NameAndMetadataOnly` for FAT, FAT32, exFAT, a share
+whose server reports another file system, or a weak root identity).
+WD22 (pending, decided in WB-28; recommended "widen `VaultRootIdentity`
+losslessly"; under the other answer — the 128-bit id hashed into
+`inode` — this chunk is unchanged, because either record carries
+`persistent`, the only part of the identity it reads).
 
 ## Goal
 
@@ -32,10 +39,13 @@ for good. On Windows the Recycle Bin call is `IFileOperation` with a
 progress sink that returns the recycled item, re-observed against the
 confirmed inventory that the session hands the provider. A vault on a
 volume whose file system keeps no persistent file ids (FAT, FAT32,
-exFAT, or a share whose server reports another file system) is staged,
-revalidated and verified without reading one. The vault's file system
-chooses that mode, never a failed id read: a Windows folder whose root
-id cannot be read does not open at all (WD24, WB-28). One
+exFAT, or a share whose server reports another file system), or whose
+root identity WB-28 could read only as a weak file index, is staged,
+revalidated and verified without reading one. `Strong` needs both: an
+NTFS or ReFS volume and the persistent `FileIdInfo` root identity. FAT32
+and exFAT vaults open (WB-28's file-index fallback); only a Windows
+folder for which neither identity read answers does not open (WD24 as
+amended, WB-28). One
 verifier serves every platform, so the same check that confirms a
 Windows recycle confirms the scratch bin every test uses. A back end that
 reports no destination — macOS until PR 41, Linux — keeps today's batch
@@ -77,12 +87,26 @@ Verified against the worktree; the plan's lines hold.
   revalidation (`:121-141`) both go through it — so on a volume that
   answers no file id, staging refuses before any id-free branch could
   run.
-- **After WB-28 an open vault's root always answers an id (WD24).** WB-28's
-  Windows `FsRoot::open` refuses a root whose `FILE_ID_INFO` cannot be
-  read, before `.slate` is made. FAT, FAT32 and exFAT answer one — a
-  synthesized id, not persistent across mounts (WB-27's matrix row) — so
-  such vaults open. Whether an id means anything is told by the volume's
-  file-system name, not by whether a read succeeds.
+- **FAT32 and exFAT generally answer no `FileIdInfo`; after WB-28 they
+  open with a weak root identity (WD24 amended).** Codex round 8, citing
+  microsoft/STL PR 6187 (which restores a `GetFileInformationByHandle`
+  fallback for `std::filesystem` for this reason), and the host's own
+  `SidebarWriteJournal.cs:73-75` ("a filesystem that does not answer
+  `FileIdInfo`, such as FAT32"): FAT does not synthesize a `FILE_ID_INFO`.
+  So `windows_entry::identity` (`windows_entry.rs:612-631`) and
+  `trash_snapshot/windows.rs`'s `stamp` (`:262`), both `FileIdInfo`-only,
+  fail there. WB-28's Windows `FsRoot::open`
+  reads the held root's and `.slate`'s identity with `FileIdInfo`, else
+  with `GetFileInformationByHandle` — `dwVolumeSerialNumber` and the
+  64-bit file index, the read the watcher already makes
+  (`vault/watch.rs:279-307`) — flags that fallback weak (`persistent:
+  false`; a FAT index changes when its entry is renamed or moved), and
+  refuses only when neither read answers, before `.slate` is made. Its
+  step 0 records, on WB-27's FAT32 and exFAT VHDs, which read each
+  answers. So an open Windows vault always has a root identity, persistent
+  or weak, and FAT32/exFAT vaults open; whether its ids can serve as
+  evidence is told by the volume's file-system name **and** that
+  identity's kind.
 - **Every test sees a known destination.** `ScratchTrash::trash`
   (`trash_handoff.rs:561-586`) renames the item into its bin
   (`std::fs::rename`, `:580`); core's test build gives every
@@ -211,38 +235,52 @@ consumes its contract, §2.3).
   `trash_snapshot/windows.rs`'s `stamp` (`:235-275`, whose `FileIdInfo`
   failure at `:262` fails the whole snapshot today) both call it, and
   only the `Strong` branch reaches it. (WB-28's `FsRoot` reads the held
-  root's own id at open.) `IdentityMode` and `ConfirmedItem` are `pub`
+  root's own identity at open through its own `sys::identity` —
+  `FileIdInfo`, else the file index — not through this function.)
+  `IdentityMode` and `ConfirmedItem` are `pub`
   and re-exported beside `TrashSnapshot` (`vault/mod.rs:82`), since the
   public `VaultProvider` trait names them.
-- **The mode is chosen by file system (WD24).** Two new functions:
-  - `trash_snapshot::identity_mode_for_file_system(name: &str) ->
-    IdentityMode` (new, `#[cfg(windows)]`, pure) is `Strong` iff `name`
-    is `NTFS` or `ReFS` (ASCII case-insensitive). Every other name is
-    `NameAndMetadataOnly`: FAT, FAT32, exFAT, a share whose server
-    reports another file system (WB-27's rows; where such a volume
-    answers ids, they are synthesized and not persistent), or an empty
-    name.
-  - `trash_snapshot::identity_mode_for(root: &fs::File) -> IdentityMode`
-    (new). On Windows it reads the held root's volume name with
+- **The mode is chosen by the file system and the root identity's kind
+  (WD24, amended 2026-10-21).** Two new functions:
+  - `trash_snapshot::identity_mode_for_file_system(name: &str,
+    root_id_persistent: bool) -> IdentityMode` (new, `#[cfg(windows)]`,
+    pure) is `Strong` iff `name` is `NTFS` or `ReFS` (ASCII
+    case-insensitive) **and** `root_id_persistent` is `true`. Everything
+    else is `NameAndMetadataOnly`: FAT, FAT32, exFAT, a share whose
+    server reports another file system (WB-27's rows), an empty name, or
+    any name with a weak root identity — an NTFS or ReFS volume whose
+    `FileIdInfo` read failed at open, so WB-28 fell back to the file
+    index, has shown it cannot be relied on for an id read now.
+  - `trash_snapshot::identity_mode_for(root: &fs::File,
+    root_id_persistent: bool) -> IdentityMode` (new). On Windows it
+    reads the held root's volume name with
     `GetVolumeInformationByHandleW` and returns
-    `identity_mode_for_file_system(name)`. A failed volume query is
-    `NameAndMetadataOnly`, because the weak mode claims no identity. On
-    Unix it is `Strong` (mac weak volumes are PR 38/41's).
+    `identity_mode_for_file_system(name, root_id_persistent)`. A failed
+    volume query is `NameAndMetadataOnly`, because the weak mode claims
+    no identity. On Unix it is `Strong` (mac weak volumes are PR 38/41's).
 
-  `identity_mode_for` never reads a file id, and a failed id read
-  selects nothing. A root whose id cannot be read never opens (WD24,
-  WB-28's `FsRoot::open`), so that failure cannot occur in an open
-  vault. The rule is exposed as `VaultProvider::trash_identity_mode(&self,
-  relative: &str) -> Result<IdentityMode, VaultError>` (new; default
-  `Ok(Strong)`; `FsVaultProvider` asks `identity_mode_for` on the vault
-  root's handle).
+  `identity_mode_for` reads no file id itself: the identity's kind is the
+  one WB-28's open recorded — `persistent` when `FileIdInfo` answered,
+  weak when only the file index did. A root for which neither read
+  answers never opens (WD24, WB-28's `FsRoot::open`), so an open Windows
+  vault always has one. The rule is exposed as
+  `VaultProvider::trash_identity_mode(&self, relative: &str) ->
+  Result<IdentityMode, VaultError>` (new; default `Ok(Strong)`).
+  `FsVaultProvider` asks `identity_mode_for` on the held root's handle
+  with the held identity's `persistent` (`FsRoot::identity()`, WB-28). A
+  provider built by `FsVaultProvider::new`, which holds no root, opens
+  the root as its Windows arm does (`windows_entry::PinnedRoot::open`,
+  `windows_entry.rs:378-398`) and reads its identity once with
+  WB-28's `fs_root::sys::identity` (the same two reads a session's open
+  makes); if that read fails, the mode is `NameAndMetadataOnly`.
 - **The no-id-read witness.** Test seam `FILE_ID_UNAVAILABLE` (new,
   `#[cfg(test)]` thread-local `Cell<bool>` in `windows_entry.rs`). While
   it is set, `query_file_id` fails with `ERROR_INVALID_PARAMETER`. It no
   longer selects a mode; it proves that the weak branch reads no id.
-  Facts set it only after the vault is open (the open reads the root's
-  id, WB-28), so any id read during staging, revalidation, the move or
-  verification fails the fact. `windows_entry` is private to `vault`, so
+  Facts set it only after the vault is open (WB-28's open reads the
+  root's identity through its own `sys::identity`, with its own seams),
+  so any id read during staging, revalidation, the move or verification
+  fails the fact. `windows_entry` is private to `vault`, so
   the seam is re-exported for the session tests as
   `crate::vault::FILE_ID_UNAVAILABLE` (`#[cfg(all(test, windows))]
   pub(crate) use`, beside the watcher's test seams at
@@ -411,7 +449,8 @@ two `#[cfg(test)]` helpers:
   `pub(crate)`.
 - `VaultSession::from_filesystem_with_trash_for_tests(root: PathBuf,
   trash: Arc<dyn SystemTrash>) -> Result<Self, VaultError>` (new) runs
-  the filesystem open, with WB-28's `FsRoot` and its root-id read, but
+  the filesystem open, with WB-28's `FsRoot` and its root identity read
+  (`FileIdInfo`, else the file index flagged weak), but
   builds the provider through `FsVaultProvider::held_with_trash(root,
   held_root, trash)` (new, beside `held`, `session.rs:3256`).
 
@@ -425,15 +464,16 @@ moves by `rename`.
 | `an_item_moved_out_of_the_vault_and_back_is_reported` | identity differs → `Mismatch { detail: "not the confirmed item" }` | skip the identity comparison |
 | `a_trashed_tree_that_changed_is_reported` | a child added to a folder at `AfterTrashValidation` → `Mismatch` | drop the tree re-walk |
 | `the_root_ctime_is_exempt_from_the_re_observation` | an unchanged folder whose root ctime the move changed → `Confirmed` | include the root's ctime |
-| `a_volume_reporting_ntfs_selects_strong_and_one_reporting_exfat_selects_name_and_metadata_only` (`#[cfg(windows)]`, unit, `vault/trash_snapshot.rs`'s `mod tests`; WD24) | `identity_mode_for_file_system` is `Strong` for `NTFS`, `ReFS` and `ntfs`, and `NameAndMetadataOnly` for `exFAT`, `FAT32`, `FAT`, `ext4` (a name a share's server may report) and `""`; and `identity_mode_for` on a held temp directory of the lane's NTFS volume is `Strong` | `Strong` for every name (→ `exFAT` is `Strong`); `Strong` unless the name starts with `FAT` (→ `exFAT` is `Strong`); a case-sensitive compare (→ `ntfs` is `NameAndMetadataOnly`) |
-| `a_vault_on_a_fat32_or_exfat_volume_opens_stages_and_verifies_by_name_and_metadata_without_reading_an_id` (`#[cfg(windows)] #[ignore = "needs SLATE_WEAK_VOLUME_FAT32 or SLATE_WEAK_VOLUME_EXFAT (WB-27's volume procedure)"]`, `session/tests/trash_confirmation.rs`; WD24; replaces round 6's "ids unavailable end to end" fact) | see the four-step note below the table | choose the mode by whether the root's id reads (the FAT/exFAT root's synthesized id reads, so `Strong`, and staging fails under the seam); stage the strong snapshot whatever the mode (staging fails with the seam's `ERROR_INVALID_PARAMETER`); read the destination's id on the weak branch (→ `Unverifiable`) |
-| `a_weak_id_volume_is_verified_by_name_and_metadata_without_reading_ids` (gated: `SLATE_WEAK_VOLUME_FAT32`, and `SLATE_TRASH_PROBE_VOLUME` set to the **same** FAT32 volume) | `VerifiedByNameAndMetadataOnly`; and run again with `FILE_ID_UNAVAILABLE` set on the test thread from the moment the vault is open (the open reads the root's synthesized id, WB-28), still that variant (no later step reads an id) | hash ids in `NameAndMetadataOnly` |
+| `strong_needs_ntfs_or_refs_and_a_persistent_root_id` (`#[cfg(windows)]`, unit, `vault/trash_snapshot.rs`'s `mod tests`; WD24 amended) | `identity_mode_for_file_system(name, persistent)` is `Strong` for (`NTFS`, `true`), (`ReFS`, `true`) and (`ntfs`, `true`), and `NameAndMetadataOnly` for (`NTFS`, `false`), (`ReFS`, `false`), (`exFAT`, `true`), (`exFAT`, `false`), (`FAT32`, `true`), (`FAT`, `true`), (`ext4`, `true`) (a name a share's server may report) and (`""`, `true`); and `identity_mode_for` on a held temp directory of the lane's NTFS volume is `Strong` with `true` and `NameAndMetadataOnly` with `false` | `Strong` for every name (→ `exFAT` is `Strong`); ignore the flag (→ (`NTFS`, `false`) is `Strong`); ignore the name (→ (`exFAT`, `true`) is `Strong`); `Strong` unless the name starts with `FAT` (→ `exFAT` is `Strong`); a case-sensitive compare (→ `ntfs` is `NameAndMetadataOnly`) |
+| `a_vault_whose_root_identity_is_weak_is_verified_by_name_and_metadata_even_on_ntfs` (`#[cfg(windows)]`, not gated, `session/tests/trash_confirmation.rs`; WD24 amended) | with WB-28's `SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED` set to the vault's unique folder name (removed in a drop guard), the vault opens through `from_filesystem` with `root_identity()` `persistent == false`; `trash_identity_mode("a.md")` is `NameAndMetadataOnly`, while a sibling vault the value does not match is `Strong`; then, with `FILE_ID_UNAVAILABLE` set on the test thread after the open (cleared in a drop guard), a staged single delete of `a.md` is `VerifiedByNameAndMetadataOnly` with its bytes in the bin | choose the mode by the file system alone (→ `Strong`, and staging fails under the seam); pass `persistent = true` from `FsVaultProvider` whatever the held identity says (→ the same) |
+| `a_vault_on_a_fat32_or_exfat_volume_opens_stages_and_verifies_by_name_and_metadata_without_reading_an_id` (`#[cfg(windows)] #[ignore = "needs SLATE_WEAK_VOLUME_FAT32 or SLATE_WEAK_VOLUME_EXFAT (WB-27's volume procedure)"]`, `session/tests/trash_confirmation.rs`; WD24 amended; replaces round 6's "ids unavailable end to end" fact) | see the four-step note below the table | refuse the open when `FileIdInfo` fails, as WD24 read before its amendment (→ the open fails on a volume without it); stage the strong snapshot whatever the mode (staging fails with the seam's `ERROR_INVALID_PARAMETER`); read the destination's id on the weak branch (→ `Unverifiable`) |
+| `a_weak_id_volume_is_verified_by_name_and_metadata_without_reading_ids` (gated: `SLATE_WEAK_VOLUME_FAT32`, and `SLATE_TRASH_PROBE_VOLUME` set to the **same** FAT32 volume) | `VerifiedByNameAndMetadataOnly`; and run again with `FILE_ID_UNAVAILABLE` set on the test thread from the moment the vault is open (WB-28's open reads the root's identity, by `FileIdInfo` or the file index), still that variant (no later step reads an id) | hash ids in `NameAndMetadataOnly` |
 | `a_weak_id_volume_mismatch_is_still_detected_by_name_and_metadata` (gated, same volume) | a renamed child at `AfterTrashValidation` → `Mismatch` | compare `item_count` only |
 | `an_unknown_destination_is_unverifiable_never_confirmed` | through `ScratchTrash::reporting_no_destination()`, a staged single delete's outcome is `Unverifiable { detail: "the system Trash reports no destination" }` | map `Unknown` to `Confirmed` |
 | `a_back_end_without_destinations_keeps_todays_batch_state` | a staged three-item batch through `ScratchTrash::reporting_no_destination()` (so `trash_verifies_destination()` is `false`, as macOS's and Linux's back ends are): state `Succeeded` exactly as on main, `trashed` three, `outcomes` three `Unverifiable` | drop the legacy guard (every `Unverifiable` turns the batch `Partial`) |
 | `an_unconfirmed_batch_keeps_todays_batch_state` | an unstaged three-item batch through a verifying `ScratchTrash`: state `Succeeded`, outcomes `Unverifiable { detail: "nothing was confirmed before the move" }` | apply the `Partial` rule without a confirmation |
 | `a_deleted_outright_destination_is_reported_as_deleted` | through `ScratchTrash::reporting_deleted_outright()` (new, `#[cfg(test)]`: removes the item and returns `DeletedOutright`) → `DeletedOutright` | map to `Unverifiable` |
-| `every_outcome_variant_reaches_the_batch_report_in_order` | a staged mixed batch on a verifying provider, one item per variant a single vault can produce — `Confirmed`, `Mismatch`, `Unverifiable`, `DeletedOutright`, and on Windows `UnlinkedForGood` when WB-24 kept its unlink branch (a vault has one identity mode, chosen by its file system, so `VerifiedByNameAndMetadataOnly`'s batch path is the FAT32/exFAT fact's) — the `Mismatch` item replaced at `AfterTrashValidation`, the `Unverifiable` and `DeletedOutright` items through a `ScratchTrash::scripted(by_path)` (new, `#[cfg(test)]`: per-path destination kinds; it reports destinations) → `outcomes` in `trashed` order, state `Partial` | drop a variant |
+| `every_outcome_variant_reaches_the_batch_report_in_order` | a staged mixed batch on a verifying provider, one item per variant a single vault can produce — `Confirmed`, `Mismatch`, `Unverifiable`, `DeletedOutright`, and on Windows `UnlinkedForGood` when WB-24 kept its unlink branch (a vault has one identity mode, chosen by its file system and its root identity's kind, so `VerifiedByNameAndMetadataOnly`'s batch path is the FAT32/exFAT fact's) — the `Mismatch` item replaced at `AfterTrashValidation`, the `Unverifiable` and `DeletedOutright` items through a `ScratchTrash::scripted(by_path)` (new, `#[cfg(test)]`: per-path destination kinds; it reports destinations) → `outcomes` in `trashed` order, state `Partial` | drop a variant |
 | `the_platform_trash_off_windows_reports_no_destination` (`#[cfg(not(windows))]`, `trash_handoff_tests.rs`) | `PlatformTrash.reports_destination()` is `false` on macOS and Linux, so their batch state stays main's until PR 41 / T4 | return `true` on macOS |
 | `windows_the_platform_trash_reports_destinations` (`#[cfg(windows)]`, Part 2) | `PlatformTrash.reports_destination()` is `true` once the shell back end is in | leave it `false` |
 | `windows_the_shell_sink_returns_the_recycled_item` (`#[cfg(windows)] #[ignore]`, scratch volume) | `Known(path)` under `$Recycle.Bin\<SID>`, id equal | ignore the sink |
@@ -453,9 +493,13 @@ named run never passes vacuously):
    holds `a.md`, `f/b.md` and `f/c.md`.
 2. The open. `VaultSession::from_filesystem_with_trash_for_tests(root,
    ScratchTrash::in_folder(bin))` succeeds, and `root_identity()` is
-   `Some`: the root's synthesized id was read, so WB-28's WD24 refusal
-   did not fire. `trash_identity_mode("a.md")` is `NameAndMetadataOnly`,
-   chosen by the file-system name.
+   `Some`: WB-28's identity read answered — by the file-index fallback
+   (`persistent == false`) where the volume answers no `FileIdInfo`, as
+   WB-28's step 0 records FAT32 and exFAT generally do, else by
+   `FileIdInfo` — so the WD24 refusal (neither read answers) did not
+   fire. `trash_identity_mode("a.md")` is `NameAndMetadataOnly`, because
+   the file-system name is not NTFS or ReFS, whatever the identity's
+   kind.
 3. Stage, delete and verify, with no id read. `FILE_ID_UNAVAILABLE` is
    set on the test thread now, after the open, and cleared in a drop
    guard; staging, revalidation, the move and verification all run on
@@ -468,10 +512,11 @@ named run never passes vacuously):
 ## Docs and registers
 
 - Contract 31 FR-8: append the T2 paragraph (outcome variants and their
-  mapping, the Windows sink, the weak-ID fingerprint chosen by the
-  volume's file system and never by a failed id read (WD24), the ctime
-  exemption); FR-10: a sentence that the Trash re-observation uses the
-  shared identity.
+  mapping, the Windows sink, the weak-ID fingerprint chosen unless the
+  volume's file system is NTFS or ReFS and the root identity WB-28 read
+  is the persistent `FileIdInfo` kind (WD24 as amended 2026-10-21), the
+  ctime exemption); FR-10: a sentence that the Trash re-observation uses
+  the shared identity.
 - `24_trash_handoff_feasibility.md` §8: a dated note that the Windows
   sink was probed, with the result (append).
 - Part 2: `corpus.json`, `A11yCorpusCensus.cs:57`,
@@ -510,14 +555,14 @@ function Assert-Facts([string]$crate, [string]$filter, [string[]]$facts, [switch
 }
 # 1. core (Part 1; Part 2 adds windows_the_platform_trash_reports_destinations)
 $required = [ordered]@{
-    'trash_confirmation' = @('an_ordinary_trash_is_confirmed', 'a_replacement_after_validation_is_reported_not_confirmed', 'an_item_moved_out_of_the_vault_and_back_is_reported', 'a_trashed_tree_that_changed_is_reported', 'the_root_ctime_is_exempt_from_the_re_observation', 'an_unknown_destination_is_unverifiable_never_confirmed', 'a_back_end_without_destinations_keeps_todays_batch_state', 'an_unconfirmed_batch_keeps_todays_batch_state', 'a_deleted_outright_destination_is_reported_as_deleted', 'every_outcome_variant_reaches_the_batch_report_in_order')
+    'trash_confirmation' = @('an_ordinary_trash_is_confirmed', 'a_replacement_after_validation_is_reported_not_confirmed', 'an_item_moved_out_of_the_vault_and_back_is_reported', 'a_trashed_tree_that_changed_is_reported', 'the_root_ctime_is_exempt_from_the_re_observation', 'a_vault_whose_root_identity_is_weak_is_verified_by_name_and_metadata_even_on_ntfs', 'an_unknown_destination_is_unverifiable_never_confirmed', 'a_back_end_without_destinations_keeps_todays_batch_state', 'an_unconfirmed_batch_keeps_todays_batch_state', 'a_deleted_outright_destination_is_reported_as_deleted', 'every_outcome_variant_reaches_the_batch_report_in_order')
     'trash_handoff'      = @()   # Part 2: 'windows_the_platform_trash_reports_destinations'
 }
 foreach ($filter in $required.Keys) {
     Assert-Facts 'slate-core' $filter $required[$filter]
     cargo test -p slate-core --locked $filter; Assert-Ok "cargo test $filter"
 }
-Assert-Facts 'slate-core' 'trash_snapshot' @('a_volume_reporting_ntfs_selects_strong_and_one_reporting_exfat_selects_name_and_metadata_only')
+Assert-Facts 'slate-core' 'trash_snapshot' @('strong_needs_ntfs_or_refs_and_a_persistent_root_id')
 cargo test -p slate-core --locked trash_snapshot; Assert-Ok 'trash_snapshot'
 cargo test -p slate-core --locked structural_batch; Assert-Ok 'structural_batch'
 cargo test -p slate-core --locked --no-fail-fast; Assert-Ok 'the whole core suite'
@@ -597,16 +642,19 @@ no AT pass; its mac state is pinned by the Swift fact and
 
 ## Acceptance
 
-- [ ] WD16 recorded; WD24 (answered 2026-10-21) applied; prerequisites
-      merged: WB-28 (whose open refuses a root without a readable file
-      id), WB-24's results recorded, PR 34's identity primitive with
-      green combined-head CI.
+- [ ] WD16 recorded; WD24 (answered 2026-10-21, amended 2026-10-21)
+      applied; prerequisites merged: WB-28 (whose open reads the root's
+      identity by `FileIdInfo`, else by the file index flagged weak, and
+      refuses only when neither answers; its step-0 probe recorded),
+      WB-24's results recorded, PR 34's identity primitive with green
+      combined-head CI.
 - [ ] Part 1: `TrashOutcome` (WB-24's enum, unchanged), `TrashedOutcome`,
       `outcomes` (legacy `trashed` untouched), `TrashDestination`,
       `SystemTrash::reports_destination`, `trash_verifies_destination`,
       `IdentityMode`, `identity_mode_for` and
-      `identity_mode_for_file_system` (the file system's name, never an
-      id read, chooses the mode), `query_file_id` and its
+      `identity_mode_for_file_system` (`Strong` only for NTFS or ReFS
+      with a persistent root identity; the function reads no id),
+      `query_file_id` and its
       `FILE_ID_UNAVAILABLE` no-id-read witness, `trash_identity_mode`,
       `trash_snapshot_in_mode_cancellable`, `ConfirmedItem` (no strong
       field on the weak variant), `delete_confirmed`, the shared
@@ -614,13 +662,15 @@ no AT pass; its mac state is pinned by the Swift fact and
       and the legacy batch-state rule; the Swift literals edited if not
       already, the Swift pin added; mac lane green with mac's successful
       batch still `Succeeded` and still "Moved {n} to Trash."
-- [ ] A vault on a FAT32 and on an exFAT volume opens (its root's
-      synthesized id read, WB-28) and is staged, revalidated, moved and
-      verified by name and metadata with no id read after the open (the
-      FAT32/exFAT fact, run in Part 1 and recorded in its PR body). A
-      volume reporting NTFS selects `Strong` and one reporting exFAT
-      selects `NameAndMetadataOnly` (the unit fact). The real FAT32
-      Recycle Bin agrees (Part 2's gated facts, run and recorded).
+- [ ] A vault on a FAT32 and on an exFAT volume opens (WB-28's identity
+      read, by the file-index fallback where the volume answers no
+      `FileIdInfo`) and is staged, revalidated, moved and verified by
+      name and metadata with no id read after the open (the FAT32/exFAT
+      fact, run in Part 1 and recorded in its PR body). An NTFS vault
+      whose root identity is weak is verified the same way (the
+      non-gated NTFS fact). `Strong` needs NTFS or ReFS and a persistent
+      root identity (the unit fact). The real FAT32 Recycle Bin agrees
+      (Part 2's gated facts, run and recorded).
 - [ ] Part 2: the Windows `IFileOperation` sink back end, spiked
       (`windows` 0.62 locked by `cargo update -p windows@0.62`, never
       the ambiguous bare `-p windows`, and listed by `cargo metadata
@@ -645,11 +695,20 @@ owning the outcome; under the other answer — COM in the host — Part 2
 moves to C# (`IFileOperation` through CsWin32 in `apps/slate-windows`)
 and the provider takes a host-supplied `SystemTrash` through a new FFI
 callback interface; and if the mac check stays a programme precondition,
-WB-30 waits for it). Answered: WD24 (2026-10-21) — a Windows vault whose
-root file id cannot be read does not open (WB-28 refuses it), so the
-id-free mode is chosen by file system (FAT, FAT32, exFAT, or a share
-whose server reports another file system), never by a failed root-id
-read, which cannot occur in an open vault. Read `24_trash_handoff_feasibility.md:125-166`,
+WB-30 waits for it). Answered: WD24 (2026-10-21; amended 2026-10-21) —
+FAT32 and exFAT generally answer no `FileIdInfo` (microsoft/STL PR 6187;
+`SidebarWriteJournal.cs:73-75`), so WB-28 reads the root's identity with
+`FileIdInfo`, else with `GetFileInformationByHandle`'s volume serial and
+64-bit file index flagged weak (`persistent: false`), and refuses only
+when neither answers; such vaults open. The mode is therefore `Strong`
+only when the file system is NTFS or ReFS **and** the root identity is
+the persistent `FileIdInfo` kind, and `NameAndMetadataOnly` for FAT,
+FAT32, exFAT, a share whose server reports another file system, or a
+weak root identity. Pending in WB-28: WD22 (recommended: widen
+`VaultRootIdentity` losslessly; under the other answer — the id hashed
+into `inode` — nothing here changes, because either record carries
+`persistent`, the only part of the identity this chunk reads).
+Read `24_trash_handoff_feasibility.md:125-166`,
 `:236-257`, `24_decision_memo.md:48-69`, `:122-137`, `:182-200`;
 `trash_handoff.rs:55-200`, `:290-345`, `:370-395`, `:490-650` (ScratchTrash
 renames into its bin at `:580`; `default_trash` `:610`; the host routing
@@ -666,9 +725,14 @@ the whole snapshot when `FileIdInfo` fails, `:262`); `provider.rs:95-135`;
 `:20717-20747`, `:21476`; `BatchResultPresentationTests.swift:299-331`,
 `:425-450`; WB-24's spec for the enum and the 14 Swift literal sites;
 WB-27's spec for its volume procedure and the `SLATE_WEAK_VOLUME_*`
-names; WB-28's design item 6 (the open refuses a root without a
-readable file id, WD24); `session.rs:3160-3260` (the filesystem open;
-`FsVaultProvider::held` at `:3256`).
+names; WB-28's design items 0, 1 and 6 (the step-0 probe of both reads
+on the VHDs; `VaultRootIdentity`'s `persistent` flag and
+`FsRoot::identity()`; the two-read identity, its seam
+`SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED`, and the refusal only when
+neither read answers, WD24); `vault/watch.rs:279-307` (the file-index
+read WB-28 falls back to); `session.rs:3160-3260` (the filesystem open;
+`FsVaultProvider::held` at `:3256`); `fs.rs:125-158` (`new` holds no
+root, `held` does).
 
 Build, Part 1 (core, both bindings; no host speaks anything new):
 `TrashDestination { Known, Unknown, DeletedOutright }` and
@@ -682,18 +746,27 @@ constructors `ScratchTrash::reporting_no_destination()`,
 Trash and structural-identity code, reached only on the `Strong` branch.
 Its `#[cfg(test)]` thread-local seam `FILE_ID_UNAVAILABLE` no longer
 chooses a mode; it is the witness that the weak branch reads no id, set
-by facts only after the vault is open, because the open reads the
-root's id (WB-28). The mode, by file system (WD24):
-- the new pure `#[cfg(windows)] trash_snapshot::identity_mode_for_file_system(name)`
-  is `Strong` iff the name is `NTFS` or `ReFS` (ASCII case-insensitive),
-  else `NameAndMetadataOnly` (FAT, FAT32, exFAT, a share whose server
-  reports another file system, an empty name);
-- `trash_snapshot::identity_mode_for(root)` reads the held root's volume
-  name with `GetVolumeInformationByHandleW` and applies that function. A
-  failed volume query is `NameAndMetadataOnly`, and the function never
-  reads an id. On Unix it is `Strong`.
+by facts only after the vault is open (WB-28's open reads the root's
+identity through its own `sys::identity`). The mode, by file system and
+root identity kind (WD24 amended):
+- the new pure `#[cfg(windows)] trash_snapshot::identity_mode_for_file_system(name,
+  root_id_persistent)` is `Strong` iff the name is `NTFS` or `ReFS`
+  (ASCII case-insensitive) and `root_id_persistent` is `true`, else
+  `NameAndMetadataOnly` (FAT, FAT32, exFAT, a share whose server reports
+  another file system, an empty name, or any name with a weak root
+  identity);
+- `trash_snapshot::identity_mode_for(root, root_id_persistent)` reads
+  the held root's volume name with `GetVolumeInformationByHandleW` and
+  applies that function. A failed volume query is `NameAndMetadataOnly`,
+  and the function never reads an id. On Unix it is `Strong`.
 
-The rule sits behind `VaultProvider::trash_identity_mode`;
+The rule sits behind `VaultProvider::trash_identity_mode`, which
+`FsVaultProvider` answers with its held root's handle and
+`FsRoot::identity()`'s `persistent` (WB-28); a provider built by
+`FsVaultProvider::new` opens the root through
+`windows_entry::PinnedRoot::open` and reads its identity once with
+WB-28's `fs_root::sys::identity`, a failed read giving
+`NameAndMetadataOnly`;
 `stamp` by mode (the weak mode never queries an id), the root-ctime
 exemption, `TrashSnapshot.mode`, `trash_snapshot_in_mode_cancellable`;
 `ConfirmedItem::{Strong { identity, tree }, NameAndMetadataOnly { tree }}`
@@ -741,12 +814,26 @@ Facts (mutation in brackets), seen failing first:
   `AfterTrashValidation` → `Mismatch` [drop the re-walk].
 - `the_root_ctime_is_exempt_from_the_re_observation`: an unchanged folder
   whose root ctime the move changed → `Confirmed` [include it].
-- `a_volume_reporting_ntfs_selects_strong_and_one_reporting_exfat_selects_name_and_metadata_only`
-  (Windows unit, `vault/trash_snapshot.rs`): `identity_mode_for_file_system`
-  is `Strong` for `NTFS`, `ReFS`, `ntfs` and `NameAndMetadataOnly` for
-  `exFAT`, `FAT32`, `FAT`, `ext4`, `""`; `identity_mode_for` on a held
-  NTFS temp directory is `Strong` [`Strong` for every name; `Strong`
-  unless the name starts with `FAT`; a case-sensitive compare].
+- `strong_needs_ntfs_or_refs_and_a_persistent_root_id` (Windows unit,
+  `vault/trash_snapshot.rs`): `identity_mode_for_file_system(name,
+  persistent)` is `Strong` for (`NTFS`, `true`), (`ReFS`, `true`),
+  (`ntfs`, `true`) and `NameAndMetadataOnly` for (`NTFS`, `false`),
+  (`ReFS`, `false`), (`exFAT`, `true`), (`exFAT`, `false`), (`FAT32`,
+  `true`), (`FAT`, `true`), (`ext4`, `true`), (`""`, `true`);
+  `identity_mode_for` on a held NTFS temp directory is `Strong` with
+  `true` and `NameAndMetadataOnly` with `false` [`Strong` for every
+  name; ignore the flag; ignore the name; `Strong` unless the name
+  starts with `FAT`; a case-sensitive compare].
+- `a_vault_whose_root_identity_is_weak_is_verified_by_name_and_metadata_even_on_ntfs`
+  (Windows, not gated, `session/tests/trash_confirmation.rs`, Part 1):
+  with WB-28's `SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED` set to the
+  vault's unique folder name (drop guard), the vault opens with
+  `root_identity()` `persistent == false`; `trash_identity_mode("a.md")`
+  is `NameAndMetadataOnly` while a sibling vault not matching is
+  `Strong`; with `FILE_ID_UNAVAILABLE` set after the open (drop guard), a
+  staged single delete of `a.md` is `VerifiedByNameAndMetadataOnly`, its
+  bytes in the bin [choose by file system alone; pass `persistent =
+  true` from `FsVaultProvider` regardless].
 - `a_vault_on_a_fat32_or_exfat_volume_opens_stages_and_verifies_by_name_and_metadata_without_reading_an_id`
   (Windows, `#[ignore]`, gated on `SLATE_WEAK_VOLUME_FAT32` /
   `SLATE_WEAK_VOLUME_EXFAT` from WB-27's VHD procedure, run in Part 1).
@@ -756,20 +843,23 @@ Facts (mutation in brackets), seen failing first:
   2. Open through the new `#[cfg(test)]`
      `VaultSession::from_filesystem_with_trash_for_tests(root,
      ScratchTrash::in_folder(bin))`. It opens: `root_identity()` is
-     `Some`. `trash_identity_mode` is `NameAndMetadataOnly`.
+     `Some` — WB-28's file-index fallback (`persistent == false`) where
+     the volume answers no `FileIdInfo`, as step 0 records FAT32 and
+     exFAT generally do, else `FileIdInfo`. `trash_identity_mode` is
+     `NameAndMetadataOnly`: the name is not NTFS or ReFS.
   3. Then, with `FILE_ID_UNAVAILABLE` set (cleared in a drop guard), a
      staged batch of `a.md` and `f` runs, with `f/c.md` renamed at
      `AfterTrashValidation`. Staging and revalidation succeed;
      `a.md` → `VerifiedByNameAndMetadataOnly`, its bytes in the bin;
      `f` → `Mismatch`; state `Partial`.
 
-  [choose the mode by whether the root's id reads (`Strong`; staging
-  fails under the seam); stage the strong snapshot regardless of mode;
-  read the destination's id on the weak branch].
+  [refuse the open when `FileIdInfo` fails, as WD24 read before its
+  amendment (the open fails); stage the strong snapshot regardless of
+  mode; read the destination's id on the weak branch].
 - `a_weak_id_volume_is_verified_by_name_and_metadata_without_reading_ids`
   (gated, FAT32, probe volume the same): `VerifiedByNameAndMetadataOnly`,
-  also with the seam set from the moment the vault is open [hash ids in
-  the weak mode].
+  also with the seam set from the moment the vault is open (WB-28's open
+  has read the root's identity by then) [hash ids in the weak mode].
 - `a_weak_id_volume_mismatch_is_still_detected_by_name_and_metadata`
   (gated): a renamed child → `Mismatch` [compare `item_count` only].
 - `an_unknown_destination_is_unverifiable_never_confirmed`: `Unknown` →

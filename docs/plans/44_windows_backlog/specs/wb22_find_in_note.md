@@ -115,20 +115,62 @@ Revealing a hit: `editor.Select(offset, length)` then `BringCaretToView()`.
 **No action on stale results.** Every result set is stamped with the
 `TextDocument.Version` (`ITextSourceVersion`) it was computed against
 and a monotonically increasing options revision (query, MatchCase,
-WholeWord). `Next`, `Previous`, `Replace` and `ReplaceAll` first compare
-the stamps with the live document version and the current options
-revision; when either differs they flush the debounce and recompute
-synchronously before acting (no refusal is needed for navigation —
-recomputation is the correct answer; with zero matches after it the
-count line is spoken and nothing moves). `Replace` additionally
-re-verifies the current segment: `strategy.FindNext(document, segment.StartOffset, segment.Length)`
-must return a result at exactly that offset and length, else the
-segment is dropped, the set recomputed, and "Match changed; nothing
-replaced." spoken — the host never rewrites text the pattern no longer
-matches. `Replace` replaces through the document (one undo step), then
-steps; `ReplaceAll` runs inside one `BeginUpdate`/`EndUpdate` over the
-freshly recomputed set so Ctrl+Z undoes it whole. Opening the bar stores
-the caret and selection as `TextAnchor`s (`TextDocument.CreateAnchor`,
+WholeWord). A recompute has one of two causes, and they differ in what
+they may move: one caused by a query or option change reveals the first
+hit at or after the caret (incremental search: it selects that hit and
+makes it the tracked hit below); one caused by a document edit recounts
+and re-highlights only — it never moves the caret or the selection,
+keeps the tracked hit current when that hit still validates, and
+otherwise clears it (`CurrentIndex` 0).
+
+*The tracked hit.* Whenever a hit becomes current (a query or option
+recompute, `Next`, `Previous`, the step after a `Replace`), the view
+model keeps it as `TrackedHit` (new, a private record in
+`FindInNoteViewModel`: `TextAnchor Start` with `MovementType =
+AnchorMovementType.AfterInsertion`, `TextAnchor End` with `MovementType
+= AnchorMovementType.BeforeInsertion`, both from
+`TextDocument.CreateAnchor` with `SurviveDeletion = true` so `Offset`
+never throws; `int Length`, the hit's length when it became current).
+The anchors follow every edit, so the hit the reader heard is the hit
+`Replace` acts on, wherever an edit elsewhere moved it. It
+**validates** when both hold: `End.Offset - Start.Offset == Length`,
+and the current strategy (the live query and options) returns from
+`FindNext(document, Start.Offset, Length)` a result at exactly
+`Start.Offset` with length `Length`. An insertion or deletion inside
+the hit changes the span; a deletion across it collapses both anchors
+to one offset; an edit that rewrites the hit's text, wholly or in its
+middle (which can leave the span's length intact — a same-length
+replacement strictly inside the hit moves neither anchor), and a query
+or option change the hit no longer satisfies fail the `FindNext` check.
+Neither check alone is enough, and the facts below pin both.
+
+*Navigation and Replace All recompute; Replace validates first.* `Next`,
+`Previous` and `ReplaceAll` compare the stamps with the live document
+version and the options revision; when either differs they flush the
+debounce and recompute synchronously before acting (no refusal is
+needed for them — recomputation is the correct answer; with zero
+matches after it the count line is spoken and nothing moves).
+`ReplaceAll` runs inside one `BeginUpdate`/`EndUpdate` over the freshly
+recomputed set so Ctrl+Z undoes it whole. `Replace` never takes its
+target from a recomputation: it validates the tracked hit **before** any
+recompute, and only then:
+- valid → `document.Replace(Start.Offset, Length, ReplaceText)` (one
+  undo step), then the set is recomputed and the next hit after the
+  replacement becomes current (the step);
+- invalid → nothing is written; the tracked hit is cleared; the set is
+  recomputed for the count only (`TotalCount` the live count,
+  `CurrentIndex` 0, caret and selection unmoved); and the one line
+  spoken is "Match changed; nothing replaced." — whether another match
+  survives elsewhere in the note or none remains (never the "{N} of {M}"
+  of a different hit, never "No matches" in its place);
+- no tracked hit at all (nothing current yet, or after a refusal) →
+  `Replace` acts as `Next` — recompute if stale, reveal and speak the
+  next hit — and writes nothing, so a reader always hears a hit before a
+  `Replace` can rewrite it.
+
+So the host never rewrites any text but the hit it last revealed, and
+never text the pattern no longer matches. Opening the bar stores the
+caret and selection as `TextAnchor`s (`TextDocument.CreateAnchor`,
 `AnchorMovementType.AfterInsertion`, `SurviveDeletion = true`), so
 Close restores positions that followed every intervening edit, clamped
 to `document.TextLength`.
@@ -194,8 +236,9 @@ the FlaUI journey).
 **Speech.** The count is a host-composed §W-C golden family
 `FindInNotePhrase` (new, `Panels/`-style static class): "{N} of {M}",
 "No matches", "Wrapped to the top" / "Wrapped to the end" appended once
-on a wrap, "Replaced {M} matches." after Replace All, and the pattern
-error verbatim. Spoken through `HostComposed` at Medium, coalesced to
+on a wrap, "Replaced {M} matches." after Replace All, "Match changed;
+nothing replaced." when `Replace` refuses a tracked hit that no longer
+validates, and the pattern error verbatim. Spoken through `HostComposed` at Medium, coalesced to
 the final count after the debounce (the palette's `Palette_TypingAnnouncesOnlyTheFinalCountAndSelection`
 posture). Designated in `a11y_trigger_designations.json` as residue
 with the reason "no mac twin: AppKit's find bar announces nothing";
@@ -213,7 +256,8 @@ reading-mode find.
 - `NextWrapsToTheTopAndSaysSo` / `PreviousWrapsToTheEndAndSaysSo`.
 - `MatchCaseAndWholeWordNarrowTheMatches` (Theory).
 - `ReplaceReplacesTheCurrentHitAndSteps`; `ReplaceAllIsOneUndoStep` (Ctrl+Z restores every hit).
-- `ADocumentEditWhileOpenRecountsOnTheDebounce`.
+- `ADocumentEditWhileOpenRecountsOnTheDebounce` — an edit elsewhere recounts once the debounce runs; the recount leaves the caret and selection where the edit put them, and the still-valid tracked hit stays current with its index recomputed; an edit that breaks the hit clears it (`CurrentIndex` 0), still without moving the caret. Mutation: let a document-edit recompute reveal the first hit after the caret → the caret moves.
+- `ReplaceWithNoCurrentHitRevealsTheNextAndWritesNothing` — "a b a", query "a", the tracked hit cleared by a document-edit recount (the first "a" edited to "x", the debounce flushed); Replace with ReplaceText "q": the document is still "x b a", the surviving "a" (offset 4) is selected and "1 of 1" is spoken; a second Replace writes "x b q". Mutation: with no tracked hit, recompute and replace the first hit → the first press writes.
 - `AnEmptyQueryClearsHighlightsAndCountsNothing`.
 - `CloseRestoresTheCaretAndSelectionTheOpenCaptured`.
 
@@ -223,7 +267,8 @@ string pinned verbatim.
 Hosted (`W2EditorInteractionTests` / a new `FindInNoteBarTests` with the
 `CommandPaletteTests.ShellKeys` shell): 
 - `CtrlFInANoteFocusesTheQueryAndSelectsAll`; `CtrlFOnABaseTabReachesTheQuickFilterNotTheBar`; `CtrlFInReadingModeOrWithNoTabOpensVaultSearch` (the fall-through); `CtrlFOnTheWelcomeViewWithNoWorkspaceReachesVaultSearch` (hosted shell, `Workspace == null`: `ToggleSearchCommand` executes; nothing throws). Mutation: remove the fall-through arm, or resolve the command through `Workspace?.` → the overlay stays closed.
-- `AnEditBeforeTheDebounceNeverReplacesStaleText` — type a query, edit the document inside the 150 ms window so the current hit no longer matches, press Replace: the document is unchanged, "Match changed; nothing replaced." spoken, the count recomputed. Mutation: skip the `FindNext` re-verification → the edited text is overwritten.
+- `AnEditBeforeTheDebounceNeverReplacesStaleText` — a Theory over three cases, each with the query typed and the first hit (offset 0) revealed as the current hit, then, inside the 150 ms window, the reader's own edit, then Replace with ReplaceText "q". *Another match survives*: query "a", "a b a", edit `document.Replace(0, 1, "x")` → "x b a"; after the press the document is exactly "x b a" (the surviving "a" at offset 4 untouched), `TotalCount` 1, `CurrentIndex` 0. *No match remains*: query "a", "a b c", the same edit → "x b c"; after the press the document is exactly "x b c", `TotalCount` 0. *The hit's middle changed*: query "abc", "abc d abc", edit `document.Replace(1, 1, "x")` (strictly inside the hit, so neither anchor moves and the span keeps its length) → "axc d abc"; after the press the document is exactly "axc d abc", `TotalCount` 1. In every case the one line the press speaks is "Match changed; nothing replaced." (never "1 of 1", never "No matches") and the caret and selection are where the edit left them. Mutations: recompute before validating and act on the recomputed current hit (the round-7 design) → the first case writes "x b q", the second speaks "No matches", the third writes "axc d q"; validate by span only, dropping the `FindNext` check → the third case writes "q d abc".
+- `AnEditElsewhereBeforeTheDebounceStillReplacesTheTrackedHit` — "a b a", query "a", Next to the second "a" (offset 4, "2 of 2"); inside the 150 ms window insert "zz" at offset 0 ("zza b a"); Replace with ReplaceText "q": the document is exactly "zza b q" — the tracked hit, followed by its anchors to offset 6, is the one replaced, and no refusal is spoken. Mutation: validate at the offset captured when the hit became current instead of through the anchors → offset 4 now holds "b", the press refuses, and the fact fails.
 - `AnOptionChangeBeforeReplaceRecountsFirst` — toggle Match case then Replace All within the debounce: only the case-sensitive matches are replaced (the set was recomputed synchronously). Mutation: act on the stamped set → the wrong matches change.
 - `CloseAfterAShortenedDocumentRestoresAClampedCaret` — open at offset 40, delete the tail so the document is 10 chars, Escape: caret at 10, no exception. Mutation: restore the raw captured offset → `ArgumentOutOfRangeException`.
 - `EnterAndCtrlGStepNextAndShiftStepsPrevious`.
@@ -265,16 +310,57 @@ with text typed (the #1106 lesson). Journey naming follows
 ## Verification
 
 ```powershell
-$env:CARGO_TARGET_DIR='C:\dev\slate\target-wb22'; ./apps/slate-windows/generate-bindings.ps1 -Locked
-dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release   # Error(s)=0 before reading counts
-$env:SLATE_CHORDS_UPDATE='1'; dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --no-build --configuration Release --filter "FullyQualifiedName~ChordTableTests.ChordsJson_IsExactlyTheTablesProjection"; Remove-Item Env:SLATE_CHORDS_UPDATE
+$env:CARGO_TARGET_DIR = 'C:\dev\slate\target-wb22'
+function Assert-Ok([string] $What) { if ($LASTEXITCODE -ne 0) { throw "$What exited $LASTEXITCODE" } }
+./apps/slate-windows/generate-bindings.ps1 -Locked; Assert-Ok 'generate-bindings'
+dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release; Assert-Ok 'dotnet build'
+$tests = 'apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj'
+$env:SLATE_CHORDS_UPDATE = '1'
+dotnet test $tests --no-build --configuration Release --filter "FullyQualifiedName~SlateWindows.Tests.ChordTableTests.ChordsJson_IsExactlyTheTablesProjection"; $chords = $LASTEXITCODE
+Remove-Item Env:SLATE_CHORDS_UPDATE
+if ($chords -ne 0) { throw "chords.json regeneration exited $chords" }
 $filter = "FullyQualifiedName~FindInNoteViewModelTests|FullyQualifiedName~FindInNotePhraseTests|FullyQualifiedName~FindInNoteBarTests|FullyQualifiedName~ChordTableTests|FullyQualifiedName~CommandRegistrationTests|FullyQualifiedName~WcMatrixEvidenceCensus|FullyQualifiedName~ThemeTokenContrastTests|FullyQualifiedName~AvalonDocumentBufferCensus|FullyQualifiedName~A11yCorpusCensus"
-dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --no-build --configuration Release --list-tests --filter $filter | Select-String "FindInNoteViewModelTests|FindInNotePhraseTests|FindInNoteBarTests" | Measure-Object | ForEach-Object { if ($_.Count -lt 20) { throw "new facts not discovered: $($_.Count)" } }
-dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --no-build --configuration Release --filter $filter
+$names = @(dotnet test $tests --no-build --configuration Release --list-tests --filter $filter | Select-String '^\s{4}\S' | ForEach-Object { ($_.Line.Trim() -split '\(', 2)[0] }); Assert-Ok 'test discovery'
+$required = @(
+  'FindInNoteViewModelTests.TypingFindsAllMatchesAndReportsOneOfM',
+  'FindInNoteViewModelTests.NextWrapsToTheTopAndSaysSo',
+  'FindInNoteViewModelTests.PreviousWrapsToTheEndAndSaysSo',
+  'FindInNoteViewModelTests.MatchCaseAndWholeWordNarrowTheMatches',
+  'FindInNoteViewModelTests.ReplaceReplacesTheCurrentHitAndSteps',
+  'FindInNoteViewModelTests.ReplaceAllIsOneUndoStep',
+  'FindInNoteViewModelTests.ADocumentEditWhileOpenRecountsOnTheDebounce',
+  'FindInNoteViewModelTests.ReplaceWithNoCurrentHitRevealsTheNextAndWritesNothing',
+  'FindInNoteViewModelTests.AnEmptyQueryClearsHighlightsAndCountsNothing',
+  'FindInNoteViewModelTests.CloseRestoresTheCaretAndSelectionTheOpenCaptured',
+  'FindInNoteBarTests.CtrlFInANoteFocusesTheQueryAndSelectsAll',
+  'FindInNoteBarTests.CtrlFOnABaseTabReachesTheQuickFilterNotTheBar',
+  'FindInNoteBarTests.CtrlFInReadingModeOrWithNoTabOpensVaultSearch',
+  'FindInNoteBarTests.CtrlFOnTheWelcomeViewWithNoWorkspaceReachesVaultSearch',
+  'FindInNoteBarTests.AnEditBeforeTheDebounceNeverReplacesStaleText',
+  'FindInNoteBarTests.AnEditElsewhereBeforeTheDebounceStillReplacesTheTrackedHit',
+  'FindInNoteBarTests.AnOptionChangeBeforeReplaceRecountsFirst',
+  'FindInNoteBarTests.CloseAfterAShortenedDocumentRestoresAClampedCaret',
+  'FindInNoteBarTests.EnterAndCtrlGStepNextAndShiftStepsPrevious',
+  'FindInNoteBarTests.EscapeClosesClearsHighlightsAndReturnsFocusToTheEditor',
+  'FindInNoteBarTests.TheBarIsASiblingOfTheEditorPeerNotAChild',
+  'FindInNoteBarTests.TypingAnnouncesOnlyTheFinalCount',
+  'ChordTableTests.CommandRows_HaveNoActiveChordCollision',
+  'ChordTableTests.EveryScopeIsEitherScrapedFromProductionOrDispositioned',
+  'ChordTableTests.ChordsJson_IsExactlyTheTablesProjection')
+$missing = @($required | Where-Object { $r = ".$_"; -not ($names | Where-Object { $_.EndsWith($r) }) })
+if ($missing.Count -gt 0) { throw "the filter does not select: $($missing -join ', ')" }
+if (-not ($names | Where-Object { $_ -match '\.FindInNotePhraseTests\.' })) { throw 'no FindInNotePhraseTests fact discovered' }
+dotnet test $tests --no-build --configuration Release --filter $filter; Assert-Ok 'unit and hosted facts'
 # desktop free, NVDA closed (the FlaUI facts live in the partial class ShellAccessibilityTests, so select by method name):
-dotnet test apps/slate-windows/tests/SlateWindows.AccessibilityTests/SlateWindows.AccessibilityTests.csproj --no-build --configuration Release --filter "FullyQualifiedName~FindInNote_TypingAnnouncesTheCountAndEnterMovesTheCaret"
-python -I scripts/generate-parity-matrix.py; python -I scripts/generate-parity-matrix.py --check
-python -I scripts/a11y_trigger_ledger.py --write
+$at = 'apps/slate-windows/tests/SlateWindows.AccessibilityTests/SlateWindows.AccessibilityTests.csproj'
+$atFilter = 'FullyQualifiedName~FindInNote_TypingAnnouncesTheCountAndEnterMovesTheCaret'
+$atNames = @(dotnet test $at --no-build --configuration Release --list-tests --filter $atFilter | Select-String '^\s{4}\S'); Assert-Ok 'FlaUI discovery'
+if ($atNames.Count -lt 1) { throw "the FlaUI filter selects nothing: $atFilter" }
+dotnet test $at --no-build --configuration Release --filter $atFilter; Assert-Ok 'FlaUI journey'
+python -I scripts/generate-parity-matrix.py; Assert-Ok 'parity matrix'
+python -I scripts/generate-parity-matrix.py --check; Assert-Ok 'parity matrix check'
+python -I scripts/a11y_trigger_ledger.py --write; Assert-Ok 'trigger ledger'
+python -I scripts/a11y_trigger_ledger.py --check; Assert-Ok 'trigger ledger check'
 $files = @(
   'apps/slate-windows/src/SlateWindows/FindInNoteViewModel.cs',
   'apps/slate-windows/src/SlateWindows/FindInNoteBar.xaml.cs',
@@ -292,7 +378,7 @@ $files = @(
   'apps/slate-windows/tests/SlateWindows.Tests/ChordTableTests.cs',
   'apps/slate-windows/tests/SlateWindows.Tests/ThemeTokenContrastTests.cs',
   'apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.FindInNote.cs')
-dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $files
+dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $files; Assert-Ok 'dotnet format'
 ```
 
 CI: the Windows lane and the FlaUI shell gate. AT: NVDA full pass and
@@ -308,6 +394,7 @@ filter, edit". Recorded in the PR body; draft until then.
 
 - [ ] WD12 recorded in the PR body (disposition 1; replace in, regex out; Ctrl+G rows; find-in-selection deferred).
 - [ ] Every fact above fails first, then passes; mutations run locally; the FlaUI journey green on the hosted lane.
+- [ ] `Replace` acts only on the tracked hit it last revealed: every `AnEditBeforeTheDebounceNeverReplacesStaleText` case (another match survives, no match remains, the hit's middle changed) refuses with "Match changed; nothing replaced.", and `AnEditElsewhereBeforeTheDebounceStillReplacesTheTrackedHit` replaces the hit its anchors followed.
 - [ ] `GetChildrenCore` unchanged and its census green; the bar is a sibling.
 - [ ] `chords.json`, `parity_matrix.md`, `w_c_matrix.md`, `w_c_automation_ids.json`, the designations and the ledger regenerated; `--check` scripts green.
 - [ ] NVDA and Narrator passes recorded.
@@ -339,11 +426,29 @@ WholeWord, ReplaceText, IsOpen, CurrentIndex, TotalCount, Error,
 FocusRequested; Next, Previous, Replace, ReplaceAll, Close) over
 `SearchStrategyFactory.Create(pattern, ignoreCase, matchWholeWords, SearchMode.Normal)`
 with a 150 ms debounce, manual wrap, result sets stamped with
-`TextDocument.Version` and an options revision so every action
-recomputes synchronously when stale and `Replace` re-verifies its
-segment with `FindNext` before writing, `ReplaceAll` in one
-`BeginUpdate`/`EndUpdate`, caret and selection kept as `TextAnchor`s and
-restored clamped on Close; `FindMatchBackgroundRenderer : IBackgroundRenderer`
+`TextDocument.Version` and an options revision; a query or option
+recompute reveals the first hit at or after the caret, a document-edit
+recompute only recounts and re-highlights (never moves the caret or
+selection; keeps the tracked hit current if it still validates, else
+clears it). The current hit is kept as `TrackedHit` (new private
+record: `TextAnchor Start` with `AnchorMovementType.AfterInsertion`,
+`TextAnchor End` with `AnchorMovementType.BeforeInsertion`, both
+`SurviveDeletion = true`, from `TextDocument.CreateAnchor`; `int
+Length`), set whenever a hit becomes current (query or option
+recompute, `Next`, `Previous`, the step after `Replace`); it validates
+when `End.Offset - Start.Offset == Length` and the live strategy's
+`FindNext(document, Start.Offset, Length)` returns exactly that offset
+and length. `Next`, `Previous` and `ReplaceAll` flush and recompute
+synchronously when either stamp is stale, then act (`ReplaceAll` in one
+`BeginUpdate`/`EndUpdate` over the fresh set). `Replace` never picks its
+target from a recomputation: it validates the tracked hit first —
+valid → `document.Replace(Start.Offset, Length, ReplaceText)` (one undo
+step), recompute, step to the next hit; invalid → write nothing, clear
+the tracked hit, recompute for the count only (caret unmoved,
+`CurrentIndex` 0) and speak only "Match changed; nothing replaced.",
+whether or not another match survives; no tracked hit → act as `Next`
+and write nothing. Caret and selection are kept as `TextAnchor`s from
+the open and restored clamped on Close; `FindMatchBackgroundRenderer : IBackgroundRenderer`
 (`KnownLayer.Selection`, theme token `Slate.FindMatchBrush` in both
 themes) registered while open; `FindInNoteBar` at a new `Grid.Row="2"`
 of `WorkspaceTabContentTemplate` (status to Row 3, popover overlay
@@ -367,8 +472,13 @@ the rationale comment at `SlateTextEditor.cs:538`. Facts, failing
 first — `FindInNoteViewModelTests`: `TypingFindsAllMatchesAndReportsOneOfM`,
 `NextWrapsToTheTopAndSaysSo`, `PreviousWrapsToTheEndAndSaysSo`,
 `MatchCaseAndWholeWordNarrowTheMatches`, `ReplaceReplacesTheCurrentHitAndSteps`,
-`ReplaceAllIsOneUndoStep`, `ADocumentEditWhileOpenRecountsOnTheDebounce`,
-`AnEmptyQueryClearsHighlightsAndCountsNothing`,
+`ReplaceAllIsOneUndoStep`, `ADocumentEditWhileOpenRecountsOnTheDebounce`
+(the recount moves neither caret nor selection; a still-valid tracked
+hit stays current, a broken one is cleared),
+`ReplaceWithNoCurrentHitRevealsTheNextAndWritesNothing` ("a b a" with
+the tracked hit cleared by editing the first "a" to "x": Replace leaves
+"x b a", selects offset 4 and speaks "1 of 1"; a second Replace writes
+"x b q"), `AnEmptyQueryClearsHighlightsAndCountsNothing`,
 `CloseRestoresTheCaretAndSelectionTheOpenCaptured`;
 `FindInNotePhraseTests` pinning every string verbatim;
 `FindInNoteBarTests` (hosted shell): `CtrlFInANoteFocusesTheQueryAndSelectsAll`,
@@ -378,7 +488,18 @@ first — `FindInNoteViewModelTests`: `TypingFindsAllMatchesAndReportsOneOfM`,
 `EnterAndCtrlGStepNextAndShiftStepsPrevious`,
 `EscapeClosesClearsHighlightsAndReturnsFocusToTheEditor`,
 `TheBarIsASiblingOfTheEditorPeerNotAChild`, `TypingAnnouncesOnlyTheFinalCount`,
-`AnEditBeforeTheDebounceNeverReplacesStaleText`,
+`AnEditBeforeTheDebounceNeverReplacesStaleText` (a Theory: the first
+hit current, an edit inside the 150 ms window, then Replace with "q" —
+*another match survives*: query "a", "a b a", `document.Replace(0, 1,
+"x")`, stays exactly "x b a", `TotalCount` 1; *no match remains*: query
+"a", "a b c", the same edit, stays exactly "x b c", `TotalCount` 0;
+*the hit's middle changed*: query "abc", "abc d abc",
+`document.Replace(1, 1, "x")`, stays exactly "axc d abc"; in every case
+the one line spoken is "Match changed; nothing replaced.", never
+"1 of 1" or "No matches", and the caret is where the edit left it),
+`AnEditElsewhereBeforeTheDebounceStillReplacesTheTrackedHit` ("a b a",
+Next to offset 4, "zz" inserted at 0 inside the window, Replace with
+"q" gives exactly "zza b q", no refusal spoken),
 `AnOptionChangeBeforeReplaceRecountsFirst`,
 `CloseAfterAShortenedDocumentRestoresAClampedCaret`;
 `ThemeTokenContrastTests` for the match brush; `ChordTableTests`
@@ -389,7 +510,14 @@ first — `FindInNoteViewModelTests`: `TypingFindsAllMatchesAndReportsOneOfM`,
 `ShellAccessibilityTests.FindInNote_TypingAnnouncesTheCountAndEnterMovesTheCaret`
 with `AssertAxeClean(process, "find-in-note")` after text is typed.
 Mutations to run locally: drop the fall-through arm; resolve the command
-through `Workspace?.`; skip the `FindNext` re-verification; act on the
+through `Workspace?.`; recompute before validating and act on the
+recomputed current hit (fails every Theory case: "x b q", "No matches"
+spoken, "axc d q"); validate by span only, without the `FindNext` check
+(the middle-changed case writes "q d abc"); validate at the offset captured when the
+hit became current instead of through the anchors (the edit-elsewhere
+fact refuses); with no tracked hit, recompute and replace the first hit
+(the no-current-hit fact writes on the first press); let a
+document-edit recompute reveal a hit (the caret moves); act on the
 stamped set after an option change; restore the raw offset on Close;
 remove the `SharedCommandChords` pair. Registers: `apps/slate-windows/chords.json`
 (regenerated; `deliveryEvidence.commands` gains the three ids),
@@ -405,8 +533,12 @@ green, a ten-cell row "Find in note (WB-22)" in
 `docs/plans/28_palette_contracts.md` (non-modal landmark, P5 honoured)
 and `docs/plans/25_bases_grid_contracts.md` (the Bases filter keeps
 Ctrl+F on a Base), the Windows keyboard help page. Done when the Windows
-lane and the FlaUI gate are green, `dotnet format --include` over the
-sixteen files is clean, and the NVDA and Narrator passes (Ctrl+F: "Find
+lane and the FlaUI gate are green, the Verification block runs clean
+in PowerShell (every command's `$LASTEXITCODE` checked; the discovery
+step throws unless each of the twenty-five named facts and at least one
+`FindInNotePhraseTests` fact is selected, and the FlaUI filter selects
+its journey), `dotnet format --include` over the sixteen files is clean,
+and the NVDA and Narrator passes (Ctrl+F: "Find
 in note, edit"; typing: "3 of 12"; Enter: "4 of 12"; Enter at the last
 hit: "1 of 12, wrapped to the top"; Match case check box; Replace All:
 "Replaced 12 matches."; Escape returns to the editor; Ctrl+F on the

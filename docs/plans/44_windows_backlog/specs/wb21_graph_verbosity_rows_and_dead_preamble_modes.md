@@ -1,6 +1,6 @@
 # WB-21 — The palette has the three graph verbosity rows mac has, and the code-preamble menu offers only the mode that does something
 
-Issues: Closes #1415; Refs #1389 (its Windows half; the issue closes with whichever of WB-21 and plan 43 PR 52 merges last, per §5's closure matrix). Size S. Lanes: windows. AT: NVDA spot (the three palette rows read "Graph Verbosity: Terse/Standard/Verbose" and run; no verbosity announcement for a removed mode). Wave: W7. Depends on: WB-17 (`ChordTable.cs` / `chords.json` order). Parallel with: WB-19, WB-20. Decision: none (RD6 answered 2026-10-19).
+Issues: Closes #1415; Refs #1389 (its Windows half; the issue closes with whichever of WB-21 and plan 43 PR 52 merges last, per §5's closure matrix). Size S. Lanes: windows. AT: NVDA spot (the three palette rows read "Graph Verbosity: Terse/Standard/Verbose" and run silently — no setting is announced on either route; the Graph menu then reads the chosen level checked and the next graph row speaks at it; no verbosity announcement for a removed mode). Wave: W7. Depends on: WB-17 (`ChordTable.cs` / `chords.json` order). Parallel with: WB-19, WB-20. Decision: none (RD6 answered 2026-10-19).
 
 ## Goal
 
@@ -31,8 +31,26 @@ Verified against the worktree (`report_a11y.md`'s lines hold).
   (no-op re-assert on the same level, else store, `VerbosityChanged`,
   `ScheduleSave`); `:146` `Levels` is core's vector
   (`GraphVerbositySpec { verbosity, tag, title }`, `lib.rs:4900-4904`).
-  The workspace holds it as `_graphPreferences` (`WorkspaceViewModel.cs:2245`),
-  with no public property — the registrar needs one.
+  The workspace holds it as `_graphPreferences` (declared
+  `Graph/WorkspaceViewModel.Graph.cs:48`, assigned `WorkspaceViewModel.cs:2245`)
+  and **already exposes** `internal GraphPreferencesViewModel GraphPreferences => _graphPreferences;`
+  (`Graph/WorkspaceViewModel.Graph.cs:50`, read by `MainWindow.Graph.cs:16`)
+  — the registrar uses it as is.
+- **Nothing speaks a level change.** `SetVerbosity` (`:161-182`) updates
+  `_current`, flips each `GraphVerbosityChoice.IsSelected`, raises
+  `PropertyChanged(Verbosity)` and `VerbosityChanged`, and schedules the
+  save — no `_announce`, no event; the one subscriber,
+  `WorkspaceViewModel.cs:2246`, only calls `_graphRelay.DropPendingNavigation()`.
+  The Graph menu's check items (`Graph/GraphVerbosityMenu.cs:31-51`,
+  populated by `MainWindow.Graph.cs:15-16` into `MainWindow.xaml:714-716`)
+  bind `IsChecked` one-way to those `IsSelected` flags, so the observable
+  result of a change is the menu's check state and the level the next
+  graph row is spoken at: core's `GraphA11yEvent::GraphRow` renders the
+  row's label alone at Terse and `graph_row_copy` ("{label}, {n} links in,
+  {m} links out", `crates/slate-core/src/a11y.rs:3807-3821`) at Standard
+  and Verbose (`:3839-3842`). Palette rows carry no check state
+  (`CommandPaletteRowViewModel`, `CommandPaletteViewModel.cs:33-70`: id,
+  label, hint, hotkey hint, section).
 - `GraphPreferencesTests.cs:238-255` pins the three Unreg rows
   (`IsRegistered` false, reason contains "parameterized setter").
 - `ChordTableTests.cs:233` `ChordsJson_IsExactlyTheTablesProjection`
@@ -86,9 +104,14 @@ gains three parameterless `ICommand`s (new) `SetVerbosityTerseCommand`,
 `SetVerbosityStandardCommand`, `SetVerbosityVerboseCommand`, each
 `new RelayCommand(_ => SetVerbosity(level), _ => true)` — tag-true like
 mac; the Graph menu keeps `SetVerbosityCommand` and its check items
-unchanged. `WorkspaceViewModel` exposes `internal GraphPreferencesViewModel GraphPreferences => _graphPreferences;`
-(new) and the registrar maps the three ids to
-`host => host.Workspace?.GraphPreferences.SetVerbosity…Command`. The
+unchanged. The registrar maps the three ids to
+`host => host.Workspace?.GraphPreferences.SetVerbosity…Command` through
+the existing `WorkspaceViewModel.GraphPreferences`
+(`Graph/WorkspaceViewModel.Graph.cs:50`; no new property). **No
+announcement is added**: a palette-driven change is as silent as a
+menu-driven one today, and what a reader observes is the Graph menu's
+check state (the same `IsSelected` flags) and the next graph row spoken
+at the chosen level. The
 `VerbosityChanged` → `DropPendingNavigation` wiring (`WorkspaceViewModel.cs:2246`)
 is untouched, so a palette-driven change drops a stale row line like a
 menu-driven one. Regenerate `chords.json`; `deliveryEvidence.commands`
@@ -116,13 +139,17 @@ plan 43 PR 52 decides the mac Settings picker). Not changed:
   no chord either side. Mutation: keep one `Unreg` row → fails.
 - `GraphPreferencesTests.EachVerbosityRowSetsItsLevelAndReassertsOnTheSameOne`
   — execute each command: `Verbosity` changes, `VerbosityChanged` raised
-  once; executing the current one re-asserts the choices and raises
-  nothing. Mutation: wire two rows to the same level → fails.
+  once, and exactly the matching `Choices` entry has `IsSelected` (what the
+  Graph menu's check items bind — the AT's check-state observation);
+  executing the current one re-asserts the choices and raises nothing.
+  Mutation: wire two rows to the same level → fails.
 - `CommandRegistrationTests.RegistryHoldsExactlyTheDeclaredCatalog_BothDirections`
   (`:165`) and `RegisteredCommandCarriesTheChordTablesHotkeySectionAndHint`
   (`:194`) cover the resolver and the hint without change; a hosted
   palette fact `CommandPaletteTests.TypingGraphVerbosityListsTheThreeRowsAndEnterSetsTheLevel`
-  runs one through the shipped registry.
+  runs one through the shipped registry: the level changes, and the
+  invocation adds no announcement of its own (the palette's recorded
+  announcements are unchanged by it — no verbosity sentence is invented).
 - `ChordTableTests.ChordsJson_IsExactlyTheTablesProjection` regenerated.
 - `ReadingViewTests` `:3544-3552` rewritten as
   `W2EditorInteractionTests.AStoredFirstLineVerbosityFallsBackToPreambleOnlySilently`
@@ -150,18 +177,31 @@ plan 43 PR 52 decides the mac Settings picker). Not changed:
 ## Verification
 
 ```powershell
-$env:CARGO_TARGET_DIR='C:\dev\slate\target-wb21'; ./apps/slate-windows/generate-bindings.ps1 -Locked
-dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release   # Error(s)=0 before reading counts
-$env:SLATE_CHORDS_UPDATE='1'; dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --no-build --configuration Release --filter "FullyQualifiedName~ChordTableTests.ChordsJson_IsExactlyTheTablesProjection"; Remove-Item Env:SLATE_CHORDS_UPDATE
-$filter = "FullyQualifiedName~GraphPreferencesTests|FullyQualifiedName~ChordTableTests|FullyQualifiedName~CommandRegistrationTests|FullyQualifiedName~CommandPaletteTests|FullyQualifiedName~W2EditorInteractionTests|FullyQualifiedName~CheckItemGroupsTests|FullyQualifiedName~CommandDriftTests|FullyQualifiedName~ReadingViewTests"
-dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --no-build --configuration Release --list-tests --filter $filter | Select-String "TheThreeVerbosityRowsAreRegisteredChordlessWithMacsLabelsAndHints|EachVerbosityRowSetsItsLevelAndReassertsOnTheSameOne|TypingGraphVerbosityListsTheThreeRowsAndEnterSetsTheLevel|AStoredFirstLineVerbosityFallsBackToPreambleOnlySilently|ThePreambleVerbosityCommandRejectsTheRemovedKeys" | Measure-Object | ForEach-Object { if ($_.Count -lt 5) { throw "new facts not discovered: $($_.Count)" } }
-dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --no-build --configuration Release --filter $filter
-python -I scripts/generate-parity-matrix.py; python -I scripts/generate-parity-matrix.py --check
+$env:CARGO_TARGET_DIR = 'C:\dev\slate\target-wb21'
+function Assert-Ok([string] $What) { if ($LASTEXITCODE -ne 0) { throw "$What exited $LASTEXITCODE" } }
+./apps/slate-windows/generate-bindings.ps1 -Locked; Assert-Ok 'generate-bindings'
+dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release; Assert-Ok 'dotnet build'
+$tests = 'apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj'
+$env:SLATE_CHORDS_UPDATE = '1'
+try { dotnet test $tests --no-build --configuration Release --filter "FullyQualifiedName~SlateWindows.Tests.ChordTableTests.ChordsJson_IsExactlyTheTablesProjection"; Assert-Ok 'chords.json regeneration' }
+finally { Remove-Item Env:SLATE_CHORDS_UPDATE }
+$filter = "FullyQualifiedName~SlateWindows.Tests.GraphPreferencesTests|FullyQualifiedName~SlateWindows.Tests.ChordTableTests|FullyQualifiedName~SlateWindows.Tests.CommandRegistrationTests|FullyQualifiedName~SlateWindows.Tests.CommandPaletteTests|FullyQualifiedName~SlateWindows.Tests.W2EditorInteractionTests|FullyQualifiedName~SlateWindows.Tests.CheckItemGroupsTests|FullyQualifiedName~SlateWindows.Tests.CommandDriftTests|FullyQualifiedName~SlateWindows.Tests.ReadingViewTests"
+$listed = @(dotnet test $tests --no-build --configuration Release --list-tests --filter $filter | Select-String '^\s{4}\S' | ForEach-Object { ($_.Line.Trim() -split '\(', 2)[0] }); Assert-Ok 'discovery'
+$missing = @(@(
+  'SlateWindows.Tests.GraphPreferencesTests.TheThreeVerbosityRowsAreRegisteredChordlessWithMacsLabelsAndHints',
+  'SlateWindows.Tests.GraphPreferencesTests.EachVerbosityRowSetsItsLevelAndReassertsOnTheSameOne',
+  'SlateWindows.Tests.CommandPaletteTests.TypingGraphVerbosityListsTheThreeRowsAndEnterSetsTheLevel',
+  'SlateWindows.Tests.W2EditorInteractionTests.AStoredFirstLineVerbosityFallsBackToPreambleOnlySilently',
+  'SlateWindows.Tests.W2EditorInteractionTests.ThePreambleVerbosityCommandRejectsTheRemovedKeys',
+  'SlateWindows.Tests.ChordTableTests.ChordsJson_IsExactlyTheTablesProjection') | Where-Object { $listed -notcontains $_ })
+if ($missing.Count -gt 0) { throw "the filter does not select: $($missing -join ', ')" }
+dotnet test $tests --no-build --configuration Release --filter $filter; Assert-Ok 'facts'
+python -I scripts/generate-parity-matrix.py; Assert-Ok 'parity matrix'
+python -I scripts/generate-parity-matrix.py --check; Assert-Ok 'parity matrix --check'
 $files = @(
   'apps/slate-windows/src/SlateWindows/Commands/ChordTable.cs',
   'apps/slate-windows/src/SlateWindows/Commands/SlateCommandRegistrar.cs',
   'apps/slate-windows/src/SlateWindows/Graph/GraphPreferencesViewModel.cs',
-  'apps/slate-windows/src/SlateWindows/WorkspaceViewModel.cs',
   'apps/slate-windows/src/SlateWindows/EditorInteractions.cs',
   'apps/slate-windows/tests/SlateWindows.Tests/GraphPreferencesTests.cs',
   'apps/slate-windows/tests/SlateWindows.Tests/CommandPaletteTests.Shell.cs',
@@ -169,23 +209,30 @@ $files = @(
   'apps/slate-windows/tests/SlateWindows.Tests/ReadingViewTests.cs',
   'apps/slate-windows/tests/SlateWindows.Tests/CheckItemGroupsTests.cs',
   'apps/slate-windows/tests/SlateWindows.Tests/CommandDriftTests.cs')
-dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $files
+dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $files; Assert-Ok 'dotnet format'
 ```
 
 (Every class in the filter is a real top-level class; `CommandPaletteTests`
 is a partial class across `CommandPaletteTests*.cs`.)
 
-CI: Windows lane (the parity `--check` runs there). AT: NVDA spot —
-Ctrl+K, type "verbosity": three rows read "Graph Verbosity: Terse",
-"… Standard", "… Verbose"; Enter on one speaks the graph verbosity line
-the menu item speaks today; Editor ▸ Code Preamble Verbosity lists one
-item; a preferences file holding `preambleFirstLine` launches silent.
+CI: Windows lane (the parity `--check` runs there). AT: NVDA spot, in a
+vault with the graph open on a note with links — Ctrl+K, type
+"verbosity": three rows read "Graph Verbosity: Terse", "… Standard",
+"… Verbose"; Enter on "Graph Verbosity: Terse" closes the palette and
+speaks no setting line (none exists on either route — the setter is
+silent, the menu's too); Graph ▸ Verbosity then reads "Terse, checked"
+(the check state the row set); back in the graph, the next row move
+speaks the row's label alone; set "Graph Verbosity: Standard" the same
+way and the next row move speaks "{label}, {n} links in, {m} links out".
+Editor ▸ Code Preamble Verbosity lists one item; a preferences file
+holding `preambleFirstLine` launches silent.
 
 ## Acceptance
 
 - [ ] Facts fail first, then pass; `chords.json` and `parity_matrix.md` regenerated, `--check` green.
 - [ ] The three `windows.graph.setVerbosity*` rows and `GraphVerbosityReason` gone; the three `slate.graph.*` rows registered with mac's labels and hints.
 - [ ] The two dead menu items and keys gone; stored non-default values fall back silently (fact).
+- [ ] No announcement added for a level change (none exists on the menu route either); the AT observation is the Graph menu's check state and the next graph row's speech at the chosen level (label alone at Terse, "{label}, {n} links in, {m} links out" at Standard).
 - [ ] Contract 35 note appended; NVDA spot recorded.
 - [ ] PR body: `Closes #1415`; `Refs #1389` with "the mac half is plan 43 PR 52; the issue closes when both are merged".
 
@@ -193,7 +240,9 @@ item; a preferences file holding `preambleFirstLine` launches silent.
 
 Read `Commands/ChordTable.cs:617-690`, `:1077-1137`, `:860-872`,
 `Commands/SlateCommandRegistrar.cs:413-560`, `Graph/GraphPreferencesViewModel.cs:100-182`,
-`WorkspaceViewModel.cs:2240-2250`, `EditorInteractions.cs:43-70`,
+`WorkspaceViewModel.cs:2240-2250`, `Graph/WorkspaceViewModel.Graph.cs:44-50`,
+`Graph/GraphVerbosityMenu.cs:25-51`, `MainWindow.Graph.cs:13-22`,
+`crates/slate-core/src/a11y.rs:3807-3842`, `EditorInteractions.cs:43-70`,
 `:125-140`, `:185-205`, `:370-400`, `MainWindow.xaml:537-556`,
 `GraphPreferencesTests.cs:238-255`, `ReadingViewTests.cs:3540-3556`,
 `CheckItemGroupsTests.cs:108-120`, `CommandDriftTests.cs:344-354`,
@@ -206,19 +255,24 @@ verbosity to Terse|Standard|Verbose for this vault.", `CommandSection.Graph`,
 chordless) replacing the three `Unreg` rows and `GraphVerbosityReason`;
 three parameterless `RelayCommand`s `SetVerbosityTerseCommand`,
 `SetVerbosityStandardCommand`, `SetVerbosityVerboseCommand` on
-`GraphPreferencesViewModel` calling `SetVerbosity(level)`; a new
-`internal GraphPreferencesViewModel GraphPreferences => _graphPreferences;`
-on `WorkspaceViewModel`; registrar entries
-`[Ids.GraphSetVerbosity…] = host => host.Workspace?.GraphPreferences.SetVerbosity…Command`;
+`GraphPreferencesViewModel` calling `SetVerbosity(level)`; registrar entries
+`[Ids.GraphSetVerbosity…] = host => host.Workspace?.GraphPreferences.SetVerbosity…Command`
+through the existing `WorkspaceViewModel.GraphPreferences`
+(`Graph/WorkspaceViewModel.Graph.cs:50` — already there, add no property);
+no announcement for a level change (the setter is silent on the menu route
+and stays silent on the palette route; the only subscriber,
+`WorkspaceViewModel.cs:2246`, drops the pending row line);
 removal of the "Preamble + First Line" and "Preamble + All Tokens"
 `CheckMenuItem`s (`MainWindow.xaml:544-556`) and of the two keys in
 `CodeVerbosityNames`, the submenu kept. Facts, failing first:
 `GraphPreferencesTests.TheThreeVerbosityRowsAreRegisteredChordlessWithMacsLabelsAndHints`
 (one `Reg` row per core level, mac's label and hint, no chord either
 side), `GraphPreferencesTests.EachVerbosityRowSetsItsLevelAndReassertsOnTheSameOne`
-(`Verbosity` changes and `VerbosityChanged` fires once; the current level
-re-asserts silently), `CommandPaletteTests.TypingGraphVerbosityListsTheThreeRowsAndEnterSetsTheLevel`
-(hosted registry), `W2EditorInteractionTests.AStoredFirstLineVerbosityFallsBackToPreambleOnlySilently`
+(`Verbosity` changes, `VerbosityChanged` fires once and exactly the
+matching `Choices` entry is `IsSelected` — the Graph menu's check state;
+the current level re-asserts silently), `CommandPaletteTests.TypingGraphVerbosityListsTheThreeRowsAndEnterSetsTheLevel`
+(hosted registry; the level changes and the invocation adds no
+announcement of its own), `W2EditorInteractionTests.AStoredFirstLineVerbosityFallsBackToPreambleOnlySilently`
 (a stored `preambleFirstLine` constructs as Preamble only with nothing
 announced), `W2EditorInteractionTests.ThePreambleVerbosityCommandRejectsTheRemovedKeys`
 (`Execute("preambleAllTokens")` changes and announces nothing);
@@ -233,11 +287,17 @@ row; wire two rows to one level; leave a removed key in
 `docs/plans/18_windows_port/parity_matrix.md` (regenerated, `--check`
 green), a C-9 note appended to `docs/plans/35_graph_contracts.md`, the
 `docs/plans/18_windows_port/w_c_matrix.md` cells for the Editor menu and
-the graph rows. Done when the Windows lane is green, `dotnet format
---include` over the eleven files is clean, and the NVDA spot (Ctrl+K
-"verbosity" lists the three rows and Enter speaks the level line;
-Editor ▸ Code Preamble Verbosity lists one item; a stored
-`preambleFirstLine` launches silent) is in the PR body. Not delivered:
+the graph rows. Done when the verification block runs clean in
+PowerShell (bindings, build, `chords.json` regenerated, the discovery
+check names all six required facts, the facts pass, the parity matrix
+regenerated and `--check` clean, `dotnet format --include` over the ten
+files clean, every `$LASTEXITCODE` zero), the Windows lane is green, and
+the NVDA spot is in the PR body: Ctrl+K "verbosity" lists the three rows;
+Enter on "Graph Verbosity: Terse" speaks no setting line (none exists on
+either route); Graph ▸ Verbosity then reads "Terse, checked"; the next
+graph row move speaks the label alone, and after "Graph Verbosity:
+Standard" "{label}, {n} links in, {m} links out"; Editor ▸ Code Preamble
+Verbosity lists one item; a stored `preambleFirstLine` launches silent. Not delivered:
 the mac half of #1389 (plan 43 PR 52). PR body: `Closes #1415`,
 `Refs #1389`. Commit: `feat(windows): the palette registers the three
 graph verbosity rows and the code preamble menu drops the two modes that

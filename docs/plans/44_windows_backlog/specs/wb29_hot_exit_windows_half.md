@@ -116,6 +116,19 @@ are merged.
 5. Interlocks: the layout save on close keeps running; Close Vault's
    prompt stays and, on Discard All, `discard_vault()` runs (Discard means
    discard).
+6. **Every Discard route fences pending recovery writes before the
+   durable discard.** The routes: Close Vault's Discard All; the Discard
+   All of the prompt that application close and vault switch fall back to
+   after a failed or timed-out flush (a timed-out flush can leave a
+   `write_buffer` in flight while that prompt is open); and the
+   per-buffer `discard_buffer` on a clean transition. The store's discard
+   must supersede every write issued before it, including one that
+   completes after it — for example a per-vault discard epoch that
+   `write_buffer` carries and the store compares, the discard advancing
+   it durably before it deletes, so an older epoch's write is dropped —
+   and the design names the mechanism. Without it a late write leaves or
+   re-creates a buffer the reader discarded, and the next open restores
+   text the reader chose to throw away.
 
 ## Design
 
@@ -126,7 +139,8 @@ Windows only, consuming the merged core store.
   `HotExitWriter` (`WorkspaceViewModel.HotExit.cs`, new partial) debounces
   per tab on a dispatcher timer and calls `write_buffer(path, text,
   baselineHash)` tagged with the tab's `ContentGeneration`; a clean
-  transition (`IsDirty` false) calls `discard_buffer`. The writer
+  transition (`IsDirty` false) discards through the fence below
+  (`FenceAndDiscard(tab)`), never a bare `discard_buffer`. The writer
   serialises through the save coordinator so a save's publication and a
   buffer write never interleave on one path (`HasAdmittedSaveFor`). It
   records, per tab, the last generation durably written.
@@ -144,7 +158,19 @@ Windows only, consuming the merged core store.
   (`_confirmUnsavedClose`, Save All / Discard All / Cancel) with the
   reason in the status line (`ReportTerminalStatus`), so the only copy is
   never discarded silently. `TeardownRoute.Close` (Close Vault) keeps the
-  prompt unconditionally; its Discard All also calls `discard_vault()`.
+  prompt unconditionally. **Every Discard All — Close Vault's and the
+  fallback prompt's on application close and switch — runs
+  `HotExitWriter.FenceAndDiscardVault()`** (new), and a clean transition
+  runs `HotExitWriter.FenceAndDiscard(tab)` (new): each first fences its
+  scope (stops the scope's debounce timers and marks it fenced, so no new
+  `write_buffer` is issued for it), then calls the store's discard
+  (`discard_vault()` / `discard_buffer(path)`), which per the shared
+  design's item 6 supersedes every write already in flight; a write that
+  completes after the fence is ignored by the writer (no durable
+  generation recorded, nothing re-issued). A tab's fence lasts until its
+  next edit, whose writes are issued after the discard and so are newer
+  than it; the vault fence lasts until the teardown completes. A
+  timed-out flush therefore cannot bring a discarded buffer back.
 - **Restoring, injected into the tabs the layout builds.**
   `VaultLifecycleViewModel` reads `session.ReadHotExitBuffers()` (the FFI
   name per the design) after the open scan and before `:1184`, and passes
@@ -181,7 +207,9 @@ class `HotExitTests`):
 | `AFailedFlushFallsBackToThePromptAndDiscardsNothing` | the store's write seam returns `Failed` (disk full) → the prompt is invoked; Cancel keeps the window and the buffer in memory | return `Closed` on failure |
 | `AFlushThatTimesOutFallsBackToThePrompt` | the write seam never completes; `Wait(5 s)` result false is asserted, the prompt follows, release in `finally` | treat timeout as flushed |
 | `AWriteOverTheStoresCapFallsBackToThePrompt` | the cap refusal → prompt | — |
-| `CloseVaultStillAsksAndDiscardAllDropsTheBuffers` | prompt invoked; Discard All calls `discard_vault()` | skip the discard |
+| `CloseVaultStillAsksAndDiscardAllDropsTheBuffers` | prompt invoked; Discard All calls `discard_vault()` through `FenceAndDiscardVault()`; a write the seam held in flight across the Discard, released after it, leaves `read_buffers()` empty | skip the discard; or discard without the fence (the late write's buffer survives) |
+| `ATimedOutFlushThenDiscardAllLeavesNothingToRestore` (Theory: application close, vault switch) | the store's write seam holds one `write_buffer` in flight; the route's `FlushLatest` times out (its `Wait(5 s)` result false is asserted) and the fallback prompt answers Discard All; `discard_vault()` ran after the fence, and no `write_buffer` is issued after it; then the held write is released and completes late (its completion observed through an asserted `Wait(2 s)`, released in `finally`); reopening the vault over the same store root reads no buffers, builds no dirty tab and posts no `UnsavedNotesRestored` | the fallback route's Discard All without `discard_vault()` (the late write's buffer is restored); or the store discard before the fence (a debounce tick re-issues a write after it); or a store whose discard does not supersede an older in-flight write (the late write re-creates the buffer) |
+| `ALateWriteAfterACleanTransitionDoesNotResurrectTheBuffer` | a `write_buffer` held in flight; the tab is saved (clean), so `FenceAndDiscard(tab)` runs; the held write is released and completes late (asserted `Wait(2 s)`, released in `finally`); reopening restores nothing for that path and the tab opens clean | a bare `discard_buffer` without the fence; or the writer recording the late completion as durable and re-issuing it |
 | `ReopeningRestoresTheBuffersIntoTheTabsTheLayoutBuilds` | the tab instances in `Groups` after construction are dirty with the text; the active tab is the restored one; exactly one landing; `WorkspaceReady` after install (order recorded by a seam) | install into pre-built tabs |
 | `ARecoveryEntryWithNoLayoutTabOpensANewDirtyTab` | a new tab in the active group, dirty | drop the entry |
 | `ABufferWhoseFileChangedOnDiskRestoresDirtyAndStale` | `IsExternallyStale`; the next save takes the conflict path | clear the flag |
@@ -199,11 +227,12 @@ releases its event in `finally`.
 
 - Contract 38 D-10: append a dated amendment (closing never asks on both
   hosts once the latest edits are durable; a failed flush falls back to
-  the prompt; Close Vault still asks).
+  the prompt; Close Vault still asks; every Discard, the fallback
+  prompt's included, fences pending recovery writes before it discards).
 - `18_windows_port/w_c_matrix.md`: the Workspace tabs row's notification
   column gains the restore sentence; `18_windows_port/parity_matrix.md`:
   `python -I scripts/generate-parity-matrix.py --check`.
-- `docs/a11y_trigger_designations.json` rows for the new events (PR 29
+- `docs/plans/18_windows_port/a11y_trigger_designations.json` rows for the new events (PR 29
   adds the census rows); `python -I scripts/a11y_trigger_ledger.py --write`.
 - Help docs: if `docs/help/` names the close prompt, update the sentence.
 - PR body: `Refs #1525` (or `Closes #1525` if the mac half is already
@@ -211,20 +240,34 @@ releases its event in `finally`.
 
 ## Verification
 
-PowerShell, repo root. Each `dotnet test` line must discover ≥ 1 test
-(`--list-tests` first).
+PowerShell, repo root. Every filter is listed first and the block throws
+unless each required fact is discovered under it; every command's
+`$LASTEXITCODE` is checked (no output grepping for "Failed").
 
-```
-$env:CARGO_TARGET_DIR='C:\dev\slate\target-wb29'
-./apps/slate-windows/generate-bindings.ps1 -Locked                      # PR 29's FFI
-dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release   # Error(s)=0 first
-dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --configuration Release --list-tests --filter "FullyQualifiedName~SlateWindows.Tests.HotExitTests"
-dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --configuration Release --filter "FullyQualifiedName~SlateWindows.Tests.HotExitTests|FullyQualifiedName~SlateWindows.Tests.RescanTests|FullyQualifiedName~SlateWindows.Tests.Censuses.A11yCorpusCensus"
-dotnet test apps/slate-windows/tests/SlateWindows.AccessibilityTests/SlateWindows.AccessibilityTests.csproj --configuration Release --filter "FullyQualifiedName~ShellAccessibilityTests.HotExit_ClosingAndReopeningKeepsAnUnsavedNote"   # NVDA closed, desktop free
+```powershell
+$env:CARGO_TARGET_DIR = 'C:\dev\slate\target-wb29'
+function Assert-Ok([string] $What) { if ($LASTEXITCODE -ne 0) { throw "$What exited $LASTEXITCODE" } }
+./apps/slate-windows/generate-bindings.ps1 -Locked; Assert-Ok 'generate-bindings'   # PR 29's FFI
+dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release; Assert-Ok 'dotnet build'
+$tests = 'apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj'
+$filter = 'FullyQualifiedName~SlateWindows.Tests.HotExitTests|FullyQualifiedName~SlateWindows.Tests.RescanTests|FullyQualifiedName~SlateWindows.Tests.Censuses.A11yCorpusCensus'
+$names = @(dotnet test $tests --no-build --configuration Release --list-tests --filter $filter | Select-String '^\s{4}\S' | ForEach-Object { ($_.Line.Trim() -split '\(', 2)[0] }); Assert-Ok 'test discovery'
+$required = @('ATypedEditIsWrittenToTheStoreAfterTheDebounce', 'ACleanTabDiscardsItsBuffer', 'ClosingTheWindowWithDirtyTabsFlushesThenNeverAsks', 'AFailedFlushFallsBackToThePromptAndDiscardsNothing', 'AFlushThatTimesOutFallsBackToThePrompt', 'AWriteOverTheStoresCapFallsBackToThePrompt', 'CloseVaultStillAsksAndDiscardAllDropsTheBuffers', 'ATimedOutFlushThenDiscardAllLeavesNothingToRestore', 'ALateWriteAfterACleanTransitionDoesNotResurrectTheBuffer', 'ReopeningRestoresTheBuffersIntoTheTabsTheLayoutBuilds', 'ARecoveryEntryWithNoLayoutTabOpensANewDirtyTab', 'ABufferWhoseFileChangedOnDiskRestoresDirtyAndStale', 'ABufferWhoseFileMovedReseatsOnItsNewPath', 'ARestoreSpeaksCoresSentenceOnce', 'AWriteNeverInterleavesWithAnAdmittedSave') | ForEach-Object { "SlateWindows.Tests.HotExitTests.$_" }
+$missing = @($required | Where-Object { $names -notcontains $_ })
+if ($missing.Count -gt 0) { throw "the filter does not select: $($missing -join ', ')" }
+if (-not ($names | Where-Object { $_ -like 'SlateWindows.Tests.Censuses.A11yCorpusCensus.*' })) { throw 'no A11yCorpusCensus fact discovered' }
+dotnet test $tests --no-build --configuration Release --filter $filter; Assert-Ok 'HotExitTests, RescanTests, A11yCorpusCensus'
+# NVDA closed, desktop free (the FlaUI facts live in the partial class ShellAccessibilityTests, so select by method name):
+$at = 'apps/slate-windows/tests/SlateWindows.AccessibilityTests/SlateWindows.AccessibilityTests.csproj'
+$atFilter = 'FullyQualifiedName~ShellAccessibilityTests.HotExit_ClosingAndReopeningKeepsAnUnsavedNote'
+$atNames = @(dotnet test $at --no-build --configuration Release --list-tests --filter $atFilter | Select-String '^\s{4}\S'); Assert-Ok 'FlaUI discovery'
+if ($atNames.Count -lt 1) { throw "the FlaUI filter selects nothing: $atFilter" }
+dotnet test $at --no-build --configuration Release --filter $atFilter; Assert-Ok 'FlaUI journey'
 $cs = @('apps/slate-windows/src/SlateWindows/MainWindow.xaml.cs','apps/slate-windows/src/SlateWindows/VaultLifecycleViewModel.cs','apps/slate-windows/src/SlateWindows/WorkspaceViewModel.cs','apps/slate-windows/src/SlateWindows/WorkspaceViewModel.Persistence.cs','apps/slate-windows/src/SlateWindows/WorkspaceViewModel.HotExit.cs','apps/slate-windows/tests/SlateWindows.Tests/HotExitTests.cs','apps/slate-windows/tests/SlateWindows.Tests/RescanTests.cs','apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.HotExit.cs')
-dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $cs
-python -I scripts/generate-parity-matrix.py --check
-python -I scripts/a11y_trigger_ledger.py --write
+dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $cs; Assert-Ok 'dotnet format'
+python -I scripts/generate-parity-matrix.py --check; Assert-Ok 'parity matrix check'
+python -I scripts/a11y_trigger_ledger.py --write; Assert-Ok 'trigger ledger'
+python -I scripts/a11y_trigger_ledger.py --check; Assert-Ok 'trigger ledger check'
 ```
 
 No Rust changes here (the store is PR 29's), so no cargo gates beyond the
@@ -245,10 +288,16 @@ line. Recorded in the PR body; the PR stays a draft until then.
 
 - [ ] WD20 recorded; PR 29's design and core store merged with green
       combined-head CI; WB-28 merged.
-- [ ] The fourteen facts and the FlaUI journey pass, seen failing first.
+- [ ] The sixteen facts and the FlaUI journey pass, seen failing first.
 - [ ] Application close and switch flush then never prompt; a failed or
       timed-out flush falls back to the prompt; Close Vault prompts;
-      Discard All discards the store's buffers.
+      every Discard All (Close Vault's and the fallback prompt's) and every
+      clean transition discards through the fence, so a write still in
+      flight that completes after the discard restores nothing on reopen
+      (timeout → Discard → late completion → reopen, on both routes).
+- [ ] The shared design names how its discard supersedes an older
+      in-flight write (its item 6); if it does not, this chunk does not
+      start.
 - [ ] Restore injected into `RestoreNode`'s tabs (the instances in
       `Groups` are the dirty ones); one landing; `WorkspaceReady` after.
 - [ ] Registers: contract 38 amendment, matrices, ledger; NVDA pass
@@ -269,25 +318,51 @@ with a parity-matrix debt). Read PR 29's design and core PR first; then
 `WorkspaceSaveCoordinator.cs:80-87`, `WorkspacePersistence.cs:98`,
 `:168-214`, `FileRecentsStore.cs:32-36`. Build: `HotExitWriter`
 (`WorkspaceViewModel.HotExit.cs`: per-tab debounce, generation-tagged
-`write_buffer`, `discard_buffer` on clean, serialised behind
+`write_buffer`, a clean transition discarding through the fence below,
+serialised behind
 `HasAdmittedSaveFor`, `FlushLatest(timeout) -> FlushResult { Flushed,
 Failed(reason) }`); the route check in `TryCloseWorkspaceCore`
 (application close and switch: flush, then `Closed` without a prompt on
-`Flushed`, today's prompt with the reason on `Failed`; Close Vault
-unchanged plus `discard_vault()` on Discard All); the recovery read in
+`Flushed`, today's prompt with the reason on `Failed`; Close Vault's
+prompt unchanged; every Discard All through the fence below); the
+recovery read in
 `VaultLifecycleViewModel` before `:1184` passed into the
 `WorkspaceViewModel` constructor; `RestoreNode` applying
 `WorkspaceTabViewModel.RestoreUnsaved(text, baselineHash, changedOnDisk)`
 to the tabs it constructs before attach and activation; leftover entries
 opened as new dirty tabs; `UnsavedNotesRestored` posted once after
-`WorkspaceReady`. Facts in `HotExitTests`, seen failing first:
+`WorkspaceReady`; and the discard fence — every Discard All (Close
+Vault's, and the prompt application close and vault switch fall back to
+after a failed or timed-out flush) runs `HotExitWriter.FenceAndDiscardVault()`
+(new) and a clean transition runs `HotExitWriter.FenceAndDiscard(tab)`
+(new): stop the scope's debounce timers and mark it fenced so no new
+`write_buffer` is issued, then call `discard_vault()` /
+`discard_buffer(path)`, and ignore any write that completes after the
+fence. The shared design must already guarantee that its discard
+supersedes every write issued before it, including one that completes
+later (e.g. a durable per-vault discard epoch `write_buffer` carries);
+if it does not, stop and raise it — this chunk does not start. Facts in
+`HotExitTests`, seen failing first:
 `ATypedEditIsWrittenToTheStoreAfterTheDebounce`, `ACleanTabDiscardsItsBuffer`,
 `ClosingTheWindowWithDirtyTabsFlushesThenNeverAsks` (an edit after the
 last debounce is durable before close), `AFailedFlushFallsBackToThePromptAndDiscardsNothing`,
 `AFlushThatTimesOutFallsBackToThePrompt` (asserted `Wait` result, release
 in `finally`), `AWriteOverTheStoresCapFallsBackToThePrompt`,
-`CloseVaultStillAsksAndDiscardAllDropsTheBuffers`,
-`ReopeningRestoresTheBuffersIntoTheTabsTheLayoutBuilds` (the `Groups`
+`CloseVaultStillAsksAndDiscardAllDropsTheBuffers` (Discard All through
+`FenceAndDiscardVault()`; a write held in flight across it and released
+after leaves no buffer),
+`ATimedOutFlushThenDiscardAllLeavesNothingToRestore` (a Theory over
+application close and vault switch: a held write makes `FlushLatest`
+time out, asserted; the fallback prompt's Discard All runs
+`discard_vault()` after the fence; the held write then completes late,
+asserted `Wait(2 s)` released in `finally`; reopening reads no buffers,
+builds no dirty tab and speaks no restore — mutations: no
+`discard_vault()` on the fallback route, the discard before the fence, a
+store discard that does not supersede the older write),
+`ALateWriteAfterACleanTransitionDoesNotResurrectTheBuffer` (a held write
+completing after a save's `FenceAndDiscard(tab)` restores nothing —
+mutations: a bare `discard_buffer`, the late completion recorded as
+durable), `ReopeningRestoresTheBuffersIntoTheTabsTheLayoutBuilds` (the `Groups`
 instances are dirty; one landing; `WorkspaceReady` after),
 `ARecoveryEntryWithNoLayoutTabOpensANewDirtyTab`,
 `ABufferWhoseFileChangedOnDiskRestoresDirtyAndStale`,
@@ -295,9 +370,13 @@ instances are dirty; one landing; `WorkspaceReady` after),
 `AWriteNeverInterleavesWithAnAdmittedSave`; the FlaUI journey
 `ShellAccessibilityTests.HotExit_ClosingAndReopeningKeepsAnUnsavedNote`.
 Registers: contract 38 D-10 amendment, `w_c_matrix.md` Workspace tabs
-row, `parity_matrix.md` (`--check`), `a11y_trigger_designations.json` and
-the ledger (`--write`). Not delivered: whatever the design defers. Done
-when the Windows lanes are green, each mutation was run locally, the
+row, `parity_matrix.md` (`--check`),
+`docs/plans/18_windows_port/a11y_trigger_designations.json` and the
+ledger (`--write`, then `--check`). Not delivered: whatever the design
+defers. Done when the Verification block runs clean in PowerShell (the
+fifteen `HotExitTests` facts and an `A11yCorpusCensus` fact discovered
+by name, the FlaUI journey discovered, every `$LASTEXITCODE` 0), the
+Windows lanes are green, each mutation was run locally, the
 five-scenario NVDA pass is in the PR body, and the issue reference
 follows the closure matrix. Commit:
 `feat(windows): unsaved notes survive closing, quitting and a crash and come back unsaved when the vault reopens`.
