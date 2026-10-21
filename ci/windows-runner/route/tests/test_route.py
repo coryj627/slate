@@ -397,23 +397,6 @@ class Constants(unittest.TestCase):
             self.assertIn(host_lane, route.DURATIONS)
         self.assertIn("shell", route.DURATIONS)
 
-    def windows_yml(self):
-        path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", ".github", "workflows", "windows.yml")
-        if not os.path.exists(path):
-            self.skipTest("windows.yml is not beside this checkout")
-        with open(path, encoding="utf-8") as handle:
-            return handle.read()
-
-    def test_workflow_routes_exactly_the_lane_table(self):
-        match = re.search(r"ROUTE_LANES: ([a-z0-9,-]+)", self.windows_yml())
-        self.assertIsNotNone(match)
-        self.assertEqual(match.group(1).split(","), ["rust", "app", "model-0", "model-1"])
-        self.assertEqual(sorted(match.group(1).split(",")), sorted(route.LANES))
-
-    def test_workflow_names_the_routing_job_the_router_looks_for(self):
-        # fetch_concurrent finds earlier routers by this job name.
-        self.assertIn("name: " + route.ROUTE_JOB_NAME, self.windows_yml())
-
 
 class Reads(unittest.TestCase):
     def test_gh_api_retries_once_after_a_failure(self):

@@ -1,5 +1,24 @@
 # Self-hosted Windows runner (CDESK)
 
+**Parked 2026-10-21.** `windows.yml` and `nightly.yml` now run on
+GitHub-hosted `windows-latest` and fall back to Namespace (see
+`docs/runbooks/ci-cache-policy.md`, "Windows lanes: GitHub-hosted first").
+Nothing routes to the `slate-win-*` labels except the manual `home`
+candidate of `windows-ci-pilot.yml`. The routing job and `WINDOWS_HOME_STATE`
+have no reader any more. The code and tests stay in `ci/windows-runner/`. To
+take the host out of service:
+
+1. Disable, then stop, the loop (see "Pausing and draining"): an idle loop
+   still polls the API once every 10 seconds and publishes its state.
+2. Optionally, delete the variable the loop published:
+   `gh variable delete WINDOWS_HOME_STATE --repo coryj627/slate`.
+3. Set the mode to its new default:
+   `gh variable set WINDOWS_RUNNER_MODE --repo coryj627/slate --body github`.
+   Any value but `namespace` means GitHub-hosted. A stale `home` does too.
+
+The rest of this runbook describes the pool as it ran, and is kept for a
+return.
+
 Design: `docs/superpowers/specs/2026-10-10-self-hosted-windows-runner-design.md`.
 Code: `ci/windows-runner/`. The installed copy is `C:\slate-ci\bin`, and the
 commit it came from is in `C:\slate-ci\bin\install-commit.txt`.

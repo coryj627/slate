@@ -83,30 +83,38 @@ Retirement follows the inspection rule above: look before deleting.
 3. In the Namespace dashboard, delete the `mac-actions` and `mac-actions-pr`
    runner profiles. Nothing selects them; a leftover profile costs nothing but
    invites a stale `runs-on` to work again by accident.
-4. The Windows tags are untouched by this. They stay in use whenever
-   `WINDOWS_RUNNER_MODE` is anything but `home`, including unset (see
-   "Windows lanes on the home pool" below).
+4. The Windows tags are untouched by this. They serve the Namespace
+   fallback (see "Windows lanes: GitHub-hosted first" below).
 
-## Windows lanes on the home pool (2026-10-10)
+## Windows lanes: GitHub-hosted first (2026-10-21)
 
-While the repository variable `WINDOWS_RUNNER_MODE` is exactly `home`,
-the Windows lanes of `windows.yml` and `nightly.yml` run on the self-hosted
-pool of `docs/runbooks/self-hosted-windows-runner.md`, with no Namespace
-volume. Its per-lane VHDX parents (`rust`, `app`, `model`; the shell gate
-has none) are forked copy-on-write for every job and merged back only after
-the host verifies, from GitHub's API, that the job was a green
-push/schedule/dispatch on `main` of this repository and that the host's
-loop did not force the guest off. That decision is made by the host, never by a label a PR can
-request, so no provider policy needs establishing for it. The only GitHub
-cache those lanes still touch is the pinned `uniffi-bindgen-cs` binary in
-`windows.yml`'s app and model lanes, as on Namespace.
+The build/test lanes of `windows.yml` (rust tests, app build + test, the two
+model shards) and nightly's Windows stress job run on GitHub-hosted
+`windows-latest`. They move to Namespace when the repository variable
+`WINDOWS_RUNNER_MODE` is exactly `namespace`, or on any re-run of the run
+(`github.run_attempt` above 1). The shell gate always runs on
+`windows-latest`, because Namespace Windows sessions are non-interactive.
+The self-hosted home pool of `docs/runbooks/self-hosted-windows-runner.md`
+served these lanes from 2026-10-11 to 2026-10-21. It is now parked, and no
+workflow routes to it.
 
-1. The `slate-windows-rust`, `slate-windows-app` and `slate-windows-model`
-   volumes sit idle while the home pool serves, and keep metering their
-   requested capacity. Releasing one stops that, but makes the next
-   fallback run cold.
-2. When the variable is anything but `home` (`namespace`, or unset), those
-   tags are in use and everything in this document applies unchanged.
+1. On GitHub-hosted runners the lanes use `actions/cache`, the per-attempt
+   scheme first shipped at a5037b35 (`windows.yml`'s header has the rules).
+   Two lineages, `windows-cargo-tests-*` and `windows-cargo-app-*`, are
+   saved on main pushes only. The model shards restore the app lineage and
+   never save. `windows-nuget-*` is keyed on the csproj files. Each main push
+   that touches the lane saves about two archives of a few GB each, so the
+   repository's 10 GB cache evicts older entries, the nightly build's
+   `windows-native-*` entry among them, least-recently-used first. If the
+   nightly build goes cold every night, that is the reason.
+2. On Namespace, the `slate-windows-rust`, `slate-windows-app` and
+   `slate-windows-model` volumes serve the fallback, and everything else in
+   this document applies unchanged. Between fallbacks they sit idle and keep
+   metering their requested capacity. Releasing one stops that, but makes the
+   next fallback run cold. Nightly's fallback uses the direct label
+   `nscloud-windows-2022-amd64-8x16` with no volume.
+3. Each cache step reads `runner.environment`, so it follows the runner a
+   lane actually got. A Namespace runner reports `self-hosted`.
 
 ## Remaining operating decisions
 
