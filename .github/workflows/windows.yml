@@ -123,13 +123,23 @@ on:
       # W6-2 PR F (IPJ-5-1): the lane's censuses read the plan documents,
       # the generators read the scripts, the help catalog and the mac
       # sources — a change to any of them must run the lane. Only the plan
-      # documents the censuses read are listed: the top-level contracts,
-      # the Windows port folder, and one spec a ledger decision cites.
-      # Planning folders no Windows check reads (plan 43's design docs,
-      # for example) do not start the lane. scripts/
+      # documents the censuses read are listed, top-level ones by name:
+      # the ten contracts documents a check reads, the Windows port
+      # folder, and one spec a ledger decision cites. Every other plan
+      # document (the unread contracts, plans 43 and 44, any design or
+      # planning folder) does not start the lane. scripts/
       # check_windows_docs_trigger.py fails the lane if a check reads a
       # docs path this list misses; keep both lists identical.
-      - 'docs/plans/*.md'
+      - 'docs/plans/22_property_panel_contracts.md'
+      - 'docs/plans/23_citation_surfaces_contracts.md'
+      - 'docs/plans/25_bases_grid_contracts.md'
+      - 'docs/plans/29_search_overlay_contracts.md'
+      - 'docs/plans/34_canvas_contracts.md'
+      - 'docs/plans/35_graph_contracts.md'
+      - 'docs/plans/37_editor_peer_contracts.md'
+      - 'docs/plans/38_notification_dispatcher_contracts.md'
+      - 'docs/plans/39_at_navigation_contracts.md'
+      - 'docs/plans/40_nvda_matrix_remediation_contracts.md'
       - 'docs/plans/18_windows_port/**'
       - 'docs/plans/15_files_sidebar/specs/fl4_spec.md'
       - 'docs/help/**'
@@ -154,13 +164,23 @@ on:
       # W6-2 PR F (IPJ-5-1): the lane's censuses read the plan documents,
       # the generators read the scripts, the help catalog and the mac
       # sources — a change to any of them must run the lane. Only the plan
-      # documents the censuses read are listed: the top-level contracts,
-      # the Windows port folder, and one spec a ledger decision cites.
-      # Planning folders no Windows check reads (plan 43's design docs,
-      # for example) do not start the lane. scripts/
+      # documents the censuses read are listed, top-level ones by name:
+      # the ten contracts documents a check reads, the Windows port
+      # folder, and one spec a ledger decision cites. Every other plan
+      # document (the unread contracts, plans 43 and 44, any design or
+      # planning folder) does not start the lane. scripts/
       # check_windows_docs_trigger.py fails the lane if a check reads a
       # docs path this list misses; keep both lists identical.
-      - 'docs/plans/*.md'
+      - 'docs/plans/22_property_panel_contracts.md'
+      - 'docs/plans/23_citation_surfaces_contracts.md'
+      - 'docs/plans/25_bases_grid_contracts.md'
+      - 'docs/plans/29_search_overlay_contracts.md'
+      - 'docs/plans/34_canvas_contracts.md'
+      - 'docs/plans/35_graph_contracts.md'
+      - 'docs/plans/37_editor_peer_contracts.md'
+      - 'docs/plans/38_notification_dispatcher_contracts.md'
+      - 'docs/plans/39_at_navigation_contracts.md'
+      - 'docs/plans/40_nvda_matrix_remediation_contracts.md'
       - 'docs/plans/18_windows_port/**'
       - 'docs/plans/15_files_sidebar/specs/fl4_spec.md'
       - 'docs/help/**'

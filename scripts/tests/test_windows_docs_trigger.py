@@ -63,6 +63,21 @@ class GlobFacts(unittest.TestCase):
         self.assertTrue(trigger.covered("docs/plans/35_graph_contracts.md", ["docs/plans/*.md"]))
         self.assertFalse(trigger.covered("docs/plans/43_mac_backlog_delivery/00_program.md", ["docs/plans/*.md"]))
 
+    def test_an_exact_entry_covers_only_that_file(self):
+        exact = ["docs/plans/35_graph_contracts.md"]
+        self.assertTrue(trigger.covered("docs/plans/35_graph_contracts.md", exact))
+        self.assertFalse(trigger.covered("docs/plans/36_cancellable_file_management_contracts.md", exact))
+        self.assertFalse(trigger.covered("docs/plans/44_windows_backlog_plan.md", exact))
+
+    def test_the_lane_trigger_names_no_top_level_plan_glob(self):
+        # Top-level plan documents are listed by name, so a plan no check
+        # reads (plan 44, an unread contracts document) starts nothing.
+        lists = trigger.trigger_lists((trigger.REPO / trigger.WORKFLOW).read_text(encoding="utf-8"))
+        for event in ("pull_request", "push"):
+            self.assertNotIn("docs/plans/*.md", lists[event])
+            self.assertFalse(trigger.covered("docs/plans/44_windows_backlog_plan.md", lists[event]))
+            self.assertTrue(trigger.covered("docs/plans/35_graph_contracts.md", lists[event]))
+
     def test_a_double_star_matches_any_depth(self):
         self.assertTrue(trigger.covered("docs/plans/18_windows_port/reports/w1.md", ["docs/plans/18_windows_port/**"]))
 
