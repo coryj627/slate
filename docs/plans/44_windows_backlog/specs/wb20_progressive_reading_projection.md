@@ -1,0 +1,1121 @@
+# WB-20 — The reading view shows text, code, math and embeds first; diagrams arrive in place, silently, without moving the reader
+
+Issues: Closes #1317. Size M–L. Lanes: windows + FlaUI (shell gate). AT: NVDA (full pass). Wave: W7. Depends on: WB-11 (first on `Reading/ReadingSurface.cs` and `ReadingDocumentBuilder.cs`; WB-21b follows, §6). Parallel with: WB-19, WB-21. Decision: WD11 (pending; recommended "the first partial projection is applied; a late diagram is silent; its placeholder is named 'Diagram, rendering'").
+
+## Goal
+
+Today the reading view is all or nothing: the fetch renders every Mermaid
+diagram before it publishes anything, and the build decodes each SVG on
+the dispatcher, so a note with one diagram shows "Loading reading view…"
+until a cold render finishes — seconds, during which a screen-reader user
+has nothing to read (and #1304's journeys waited 10–30 s for a math
+element parked behind a diagram). After this chunk the projection publishes
+in two stages: text, code, math and embeds first, each diagram as its
+source text in the note plus a named placeholder element; then each diagram
+completes its placeholder in place — the same focusable element, its
+paragraph's text edited around it — decoded off the dispatcher, keeping the
+caret, the selection, the focused link and a held landing. A late diagram
+says nothing; a failed one puts its failure header, reason and source in
+the note's text (where caret reading and the TextPattern reach them) and
+the rest of the note stays readable.
+
+## Current state on main
+
+Verified in the worktree; `report_rel.md`'s lines hold.
+
+- `Reading/ReadingContentViewModel.cs:912-968` the fetch, on the worker:
+  code, then math, then `FetchStage(cancel, "diagrams")` (`:920`) and
+  `session.GetDiagramBlocks(path)` (`:931`; core renders Mermaid inside
+  it — `session.rs:9637` → `diagram.rs:389` `render_mermaid_with_validation`),
+  then blocks (`:937`), inlines (`:939-941`), embeds (`:942-944`), one
+  `FetchResult` (`:956-968`) whose digest includes the diagram artifacts
+  (`:951-954`). `DiagramFaultForTests` (`:926-929`). `FetchStage` is
+  `:1156`. `Publish` (`:1517`) builds on the dispatcher —
+  `ReadingDocumentBuilder.Build` at `:1609` (whole) and `:1757` (streamed
+  chunks; `BlocksAppended` event `:225`); `FinishPublish` (`:1762-1786`)
+  marks "the projection is complete: the refresh has landed (R-10)" and
+  sets `_projectionComplete`.
+- `Reading/ReadingDocumentBuilder.cs:893-961` the diagram arm: failure
+  headers "Diagram dialect not supported" / "Diagram could not be rendered"
+  with the reason (`:899-912`), the SVG budget (`:918-927`,
+  `MaximumRenderedDiagramSvgBytes` `:998`), `DiagramRenderProbeForTests`
+  (`:930`), `EditorInteractionCoordinator.DecodeImage(svg, "image/svg+xml")`
+  (`:931`, on the dispatcher), the `ReadingDiagramElement(description,
+  matched.Source)` (`:942`), `ReadingSemantics.MarkDiagramBlock(paragraph,
+  landing)` (`:961`; `ReadingSemantics.cs:228-234`).
+- `Reading/ReadingDiagramElement.cs:21` a focusable `ContentControl` named
+  by `AutomationProperties.SetName(this, description)` (`:27`); its peer
+  (`:87-100`) is a Group with localized type "diagram".
+- `Reading/ReadingSurface.cs:312-330` installs the "Loading reading view…"
+  placeholder (AutomationId `ReadingLoadingNotice`) and parks the caret;
+  `ApplyModel` (`:378-390`) merges a built document once per identity and
+  sets `_lastMerged`; `ApplyBuiltDocument` (`:401-`) reclaims focus and
+  preserves the caret by symbol offset (`:413-420`). A landing is held
+  while `!ShowsAppliedProjection || _model is { RefreshInFlight: true }`
+  (`:506-517`); `ShowsAppliedProjection => _lastMerged is not null`
+  (`:531`, "never the block count: the placeholder is a block").
+- `EditorLandingSlot.cs:102-111` `Held` (let go when `!IsLive()`),
+  `:216-222` `ScopeChanged`; `HeldEditorLanding` (`:354`, `IsLive :405`,
+  `StillWhereAsked :409`).
+- Contract 40 R-10 (`40_nvda_matrix_remediation_contracts.md:33`): the
+  landing is fulfilled "when its content is applied"; AR-60 (#1279) is
+  the refresh-cancellation record the diagram stage must honour.
+- Facts today: `ReadingDiagramTests.cs:26` `DiagramRendersAFocusableElementSpeakingTheDescription`,
+  `:73` `UnsupportedDiagramDegradesToSourceInRangeWithHonestHeader`,
+  `:215` `DiagramFetchFailureDegradesToSourceInRange`, `:259`
+  `ProjectionPoolBoundsAggregateDiagramDecoding`, `:328`
+  `OkStatusWithUndecodableSvgFallsBackHonestly`;
+  `ReadingFocusTests.cs:93` `TheEditorLandingIsHeldUntilTheContentArrives`,
+  `:780` `AHeldLandingWaitsForTheRefreshInFlight`, `:892`
+  `AHeldLandingWaitsThroughARetiredRefresh`, `:1286`
+  `ALaterChunkFailingRefusesTheHeldLanding`; `RescanTests.ReadingLanding.cs`
+  (`partial class RescanTests`, `:27`): `:30`
+  `AHeldReadingLandingSettlesWithTheRescansSilentReprojection`, `:67`
+  `AFailedRescanReprojectionRefusesTheHeldLandingSilently`, `:104`
+  `ACancelledRescanReprojectionStillSettlesTheHeldLanding`, and `:146`
+  `ARescanReloadOfTheReadingTabWithdrawsItsHeldLandingSilently`, which
+  WB-9 (W3, before this chunk) rewrites as
+  `ARescanReloadOfTheReadingTabCarriesItsHeldLandingToTheReloadedProjection`
+  beside five new facts — `ACarriedLandingIsCancelledByItsOriginalTokenAfterTheReload`,
+  `ACarriedLandingIsCancelledByItsOriginalTokenDuringTheReload`,
+  `AFailedRescanReloadRefusesTheCarriedLandingSilently`,
+  `AReloadThatBindsNoReplacementModelRefusesTheCarriedLandingOnce`,
+  `AReloadWhoseSurfaceLetsGoOfTheTabStillRefusesTheCarriedLandingOnce`
+  (`wb09_open_handoff_and_landing_lifecycle.md`, Tests) — so on this
+  chunk's base the `:146` name no longer exists. The fixture
+  `BackgroundReadingWorkspace(string label, string hostText = "# Host\n\n![[embedded]]\n")`
+  is `RescanTests.Round3.cs:278-306`. FlaUI:
+  `ShellAccessibilityTests.cs:1381` `ReadingIdentityContract_ExeWindowAndSurfaceIds_AreStable`
+  waits 300 s for the math/diagram elements (`:1483`), `:1720`
+  `ReadingTextPattern_RangeFromChildResolvesEveryCustomPeer` (`:1813`,
+  `:1832`).
+- `Reading/ReadingSurface.cs:685-719` `InvalidateAutomationChildren`
+  documents the stale-child problem: WPF refreshes a peer's children on
+  render-driven ticks a starved session may never run, so a UIA client
+  read a child list frozen at an earlier document state for a 90-second
+  wait; the merge therefore resets the cache, rebuilds it synchronously
+  and raises `StructureChanged`. WB-11 adds a cached child list on the
+  surface peer, dropped only by its `InvalidateStructuralPeers()`.
+- Registers: `w_c_matrix.md:23` (Diagram blocks row); `parity_matrix.md:236,
+  272` (diagrams, implemented).
+
+## Reference
+
+Windows-only pipeline; the issue's "Wanted" and "Facts wanted" lists are
+the spec. WD11 recommendation (quoted): "Yes, it is applied (the reader
+can read); a late diagram arrives silently and its placeholder is named
+'Diagram, rendering' until then." If the owner answers that the partial
+projection is NOT applied, the held landing waits for the diagram stage
+(`RefreshInFlight` stays true through it) and the FlaUI fact's "math
+before diagram" assertion keeps, but the two landing facts flip (the held
+landing and the rescan-carried one); if a late
+diagram is to be announced, a core `A11yEvent` is needed (corpus, mirrors,
+Swift compile) and the chunk grows by WB-8's shape.
+
+## Design
+
+- **Where the text lives (the constraint the shapes obey).** WPF's text
+  range does not include what an `InlineUIContainer`'s child displays: a
+  `TextBlock` inside the embedded element is absent from the parent
+  `TextRange` and from the surface's TextPattern (confirmed by a read-only
+  WPF probe in codex round 6; main's own comment: "WPF text ranges blank
+  embedded objects", `ReadingDocumentBuilder.cs:583`). Main relies on this
+  — the diagram failure shape keeps header, reason and source as paragraph
+  `Run`s beside the zero-size element (`:965-989`), the unmatched shape is
+  a source `Run` (`:871-879`), and the math coverage-gap shape is a source
+  `Run` plus a zero-size focusable element (`:575-596`). So every text a
+  reader must reach by caret or through the TextPattern — the pending
+  source, the failure header,
+  reason and source — is a `Run` in the diagram's `Paragraph`, never content
+  of `ReadingDiagramElement`; and the focusable placeholder element itself
+  is never swapped (round 5): it may hold keyboard focus, the caret or a
+  selection anchor when the render lands.
+- **Two stages.** `FetchResult` loses its diagram fields;
+  stage 1 fetches code, math, blocks, inlines and embeds as today and
+  publishes. It also carries the diagrams the last completed stage 2 landed
+  for this path — `_landedDiagrams` (new, `IReadOnlyList<LandedDiagram>`,
+  `internal sealed record LandedDiagram(DiagramBlock Artifact,
+  DiagramOutcome Outcome)`, the visual already decoded and frozen; only
+  `Rendered` and `Failed` outcomes are kept, since `Unmatched` has no
+  artifact, so an unmatched fence is retried by the next refresh) — and the
+  builder's diagram arm matches them by its existing rule (`:851-869`: byte
+  containment plus LF-normalized interior equality). A matched fence is
+  built complete, in exactly main's shape for that outcome and with no
+  decode on the dispatcher, so a re-projection over unchanged fences (a task
+  toggle, a dependency refresh, a rebind) never reverts a rendered diagram
+  to its source, and `ApplyBuiltDocument`'s caret preservation by symbol
+  offset (`ReadingSurface.cs:421-451`) stays exact, as on main. Only an
+  unmatched fence is **pending**: the arm emits main's unmatched shape —
+  `MonospaceParagraph(fallbackSource)` (`:1033-1043`, the source as one
+  in-range `Run`), `MarkDiagramBlock(paragraph, fallbackSource)` as `:878`
+  does — plus, exactly as the math coverage-gap shape (`:585-595`) adds its
+  element, the placeholder `ReadingDiagramElement("Diagram, rendering",
+  source)` (WD11) appended in its own `InlineUIContainer` with no content
+  (zero-size, as the failure shape's element is), and a new
+  `ReadingSemantics.MarkDiagramPending(Paragraph paragraph, string key)` /
+  `PendingDiagramKeyOf(Paragraph paragraph)` (key: the fence's
+  `ReadingBlock.ByteStart` in decimal, unique within one projection). The
+  builder's diagram input becomes `IReadOnlyList<LandedDiagram>` plus a new
+  `bool diagramsPending` argument that only a stage-1 build passes true;
+  the existing `Build` overloads that take `DiagramBlock`s (tests only, e.g.
+  `ReadingDiagramTests.cs:328`) resolve them through
+  `ResolveDiagramOutcome` first and pass false, so an unmatched fence there
+  keeps main's unmatched shape. Diagram fences reach the arm only as
+  top-level blocks (`NonListBlock`, called only at `:213-215`), never inside
+  a list or an embed card. The build reports each pending fence as new
+  `internal sealed record PendingFence(string Key, ReadingBlock Block,
+  string FallbackSource)` in new `ReadingListBuildContext.PendingDiagrams`
+  (`List<PendingFence>`), so a streamed chunk adds its own. Stage 2 runs on
+  its own worker, started by `FinishPublish` only when the build left a
+  fence pending, and is owned by the projection it completes, not by the
+  refresh that published it (*Who owns the pending work*, below):
+  `GetDiagramBlocks`, then for each pending fence its outcome from a new `internal static DiagramOutcome
+  ReadingDocumentBuilder.ResolveDiagramOutcome(DiagramBlock? matched,
+  string fallbackSource, ref int remainingDiagramRenderBytes)` — today's
+  status switch (`:894-938`) moved out of `DiagramBlockElement`, with
+  `EditorInteractionCoordinator.DecodeImage` called there on the worker and
+  the visual `Freeze()`d before it crosses to the dispatcher, under the same
+  per-diagram cap and the projection-wide pool (`:918-927`, `:259`'s pool
+  fact; stage 2 starts from what stage 1's build left of
+  `ReadingListBuildContext.RemainingDiagramRenderBytes`). New `internal
+  abstract record DiagramOutcome` with `Rendered(string Description, string
+  Landing, ImageSource Visual)`, `Failed(string Description, string
+  Landing, string Header, string Reason)` and `Unmatched()` (no artifact
+  matches: the live buffer drifted from the saved file, or the stage's fetch
+  degraded — `DiagramFaultForTests`, `ReadingContentViewModel.cs:841`, is
+  now read in stage 2).
+- **Shared shapes.** New `ReadingDocumentBuilder.ApplyRenderedShape(Paragraph,
+  ReadingDiagramElement, DiagramOutcome.Rendered)` and
+  `ApplyFailureShape(Paragraph, ReadingDiagramElement, DiagramOutcome.Failed,
+  string source)` produce main's two shapes (`:940-962` and `:965-989`)
+  around a given element; `DiagramBlockElement` calls them with a new
+  paragraph and element, and the in-place completion calls them with the
+  pending paragraph and its kept element, so a completed paragraph and a
+  fresh complete build cannot drift.
+- **Completion in place.** The model raises a new `event Action<FlowDocument,
+  IReadOnlyList<(string Key, DiagramOutcome Outcome)>>
+  ReadingContentViewModel.DiagramsCompleted` (the stage-1 document the
+  outcomes complete, and the outcomes) on the dispatcher and records
+  `_landedDiagrams`; a surface bound to it whose `_lastMerged` is that
+  document calls new `internal void ReadingSurface.CompleteDiagrams(IReadOnlyList<(string
+  Key, DiagramOutcome Outcome)> outcomes)`; any other surface ignores it,
+  and the model's next build uses `_landedDiagrams`. For each outcome,
+  `CompleteDiagrams` finds the pending paragraph P by `PendingDiagramKeyOf`
+  and its last inline, the `InlineUIContainer` C holding the placeholder E,
+  and inside one `BeginChange()`/`EndChange()` (`IsUndoEnabled` is already
+  false, `ReadingSurface.cs:42`):
+  1. *Anchors recorded.* For each of `CaretPosition`, `Selection.Start`
+     and `Selection.End`: before or after P (left alone — the edit is
+     confined to P and WPF's `TextPointer`s are live, so they stay on the
+     same character; only their symbol offset from `ContentStart` shifts,
+     by the edit's symbol delta, when they are after P), inside P's source
+     text at character offset k, or at C's `ElementStart`/`ElementEnd`.
+  2. *The shape.* `Rendered`: the source `Run` is removed and
+     `ApplyRenderedShape(P, E, outcome)` sets main's rendered paragraph
+     (`TextAlignment.Center`; padding, background and font family cleared)
+     and `E.Complete(description, visual)`. `Failed`:
+     `ApplyFailureShape(P, E, outcome, source)` builds main's failure shape
+     around the kept C — `Run(header)` SemiBold, `LineBreak`, then
+     `Run(reason)` and `LineBreak` when the reason is non-empty, then the
+     source `Run` with the monospace font on the run and the paragraph's own
+     font family cleared (`:968-985`; padding 8 and the raised background
+     stay) — and
+     `E.Complete(description, null)` (zero-size, named by the description,
+     as `:987-988`). `Unmatched`: P already is main's unmatched shape plus
+     C; C is removed when `E.IsKeyboardFocusWithin` is false (main's shape
+     exactly, so `DiagramFetchFailureDegradesToSourceInRange` and
+     `UnsavedDiagramEditsNeverShowTheStaleDiagram` keep asserting no
+     element) — a container removal, which step 4 invalidates — otherwise
+     kept, with E renamed to the source (the landing `:878` speaks) until
+     the next projection rebuilds P. Every outcome
+     re-applies `MarkDiagramBlock(P, landing)` (the source for `Unmatched`)
+     and clears the pending mark.
+  3. *Anchors restored.* Inside the source at k: `Rendered` → C's
+     `ElementStart` for the caret and `Selection.Start`, C's `ElementEnd`
+     for `Selection.End` (the diagram replaced the source, so a selection
+     that reached into the source now covers the diagram); `Failed` and
+     `Unmatched` → offset k of the source `Run`, the same character. At C's
+     edges: the same edge (C is the same object), or the source `Run`'s end
+     if C was removed. A collapsed selection is restored through
+     `CaretPosition`, a range through `Selection.Select(start, end)`.
+  4. *What else changes, and what does not.* `_landmarks` is re-collected
+     (`ReadingDocumentBuilder.CollectLandmarks(Document)`,
+     `_navigator?.SetLandmarks`) because each `ReadingLandmark` copies its
+     text when collected (`ReadingDocumentBuilder.cs:1768-1773`) and the
+     landing changed; the caret's Enter path reads
+     `DiagramDescriptionOf(paragraph)` live (`ReadingSurface.cs:839-851`)
+     and needs only the re-mark. Two kinds of completion, told apart per
+     outcome while the shapes are applied:
+     - *Text-only* — `Rendered`, `Failed`, and an `Unmatched` whose
+       placeholder has focus (C kept): only P's `Run`s and E's name and
+       `Content` change. The surface peer's children are what WB-11 caches
+       — `base.GetChildrenCore()`'s embedded-element and hyperlink peers
+       plus the structural peers — and none of them changes: C and E are
+       the same objects, so E's peer is the same peer (its
+       `ReadingDiagramImage` has no peer, `ReadingDiagramElement.cs:75-78`,
+       so E's own children stay empty), the source `Run` holds no link, and
+       P is a direct child of the document (diagram blocks never sit in a
+       list — `ReadingDocumentBuilder.cs:213-215`), so no list or list-item
+       peer reads its text. No structural invalidation runs; E's
+       `NameProperty` change and whatever `TextPatternOnTextChanged` WPF's
+       text adaptor raises for the `Run` edit are the only automation
+       events.
+     - *Container removal* — an `Unmatched` whose placeholder does not have
+       focus (C removed): E's peer leaves the surface's children. WB-11's
+       cached child list still holds it, and so does WPF's own peer
+       child cache, which a starved session refreshes late or never — the
+       stale-child problem `ReadingSurface.cs:685-719` documents (a child
+       list frozen at an earlier document state for a 90-second wait). So
+       a completion that removed at least one container calls WB-11's
+       `InvalidateStructuralPeers()` once, after `EndChange()`: it bumps the
+       structural generation (dropping the cached child list) and runs the
+       merge's own reset — `UpdateLayout()`, `ResetChildrenCache()`, a
+       synchronous `GetChildren()`, `StructureChanged` and
+       `InvalidatePeer()` — so a client re-reads the children without the
+       removed element. The same call runs for a completion whose P is not
+       a direct child of the document.
+     Neither kind raises an `A11yEvent` (WD11: silent); `StructureChanged`
+     is a structure notification, not speech.
+
+  `ReadingDiagramElement.Complete(string description, ImageSource? visual)`
+  (new) sets `Description` (get-only today, `ReadingDiagramElement.cs:42`;
+  it gains a private setter) and `AutomationProperties.Name`, sets `Content =
+  new ReadingDiagramImage { … }` (the `:944-955` properties) when `visual` is
+  non-null, leaves HelpText (the source) and the tooltip alone, and raises
+  `RaisePropertyChangedEvent(AutomationElementIdentifiers.NameProperty, old,
+  new)` on its peer when one exists. The element and its peer stay the same
+  objects, so focus on E survives and a UIA client's held reference stays
+  valid. The memo key says which complete diagrams its document holds:
+  `MemoKey` gains a `landedDigest` (`DiagramArtifactDigest`,
+  `ReadingContentViewModel.cs:951-954`, over the `_landedDiagrams` artifacts
+  the build read, compared in `Matches`, `:1891-1895`; computed once when a
+  stage lands and kept beside `_landedDiagrams`, so `Publish` hashes
+  nothing on the dispatcher, round 5's rule at `:948-951`). A stage that lands
+  with no `Unmatched` outcome sets the memo's `landedDigest` to the new
+  `_landedDiagrams` — the document completed in place is what a stage-1
+  build over them makes (the shared-shape differential) — so the next
+  unchanged refresh memo-hits it; a stage that lands any `Unmatched`
+  outcome leaves `_memo` null, so the next refresh rebuilds and its stage 1
+  leaves that fence pending again (main retries a degraded diagram fetch
+  the same way: its degraded digest differs from a good one). Either memo
+  write happens only while `_memo` is still the key the stage's own
+  publication set (`ReferenceEquals(_memo, pending.PublishedMemo)`,
+  below): a memo dropped while the stage ran stays dropped. Two routes
+  drop it on purpose and keep the projection — and so its stage — in
+  place: `InvalidateForPrefsChange` (`:298`, "so the NEXT projection
+  re-renders with the new prefs"; WB-21b's code-preamble verbosity
+  reaches it too, and verbosity is not in the memo key, `:1872-1895`) and
+  `EnsureProjected` (`:271`, a rebind that must re-apply what it shows).
+  A landing that restored the memo there would let the very refresh that
+  dropped it memo-hit (`:1574-1581`) — the old preferences kept, or a
+  cleared surface left blank.
+- **Who owns the pending work.** The pending fences belong to the
+  projection that shows them, not to the refresh that published it. Main
+  keeps `_memo` across `Refresh` and returns early on an identical key
+  (`ReadingContentViewModel.cs:1574-1581`) without reaching `FinishPublish`,
+  and a refresh can also end with no publication at all: a terminal
+  failure that keeps the shown projection (`PublishTerminalFailure`'s
+  preserve branch, `:810-815`) or a rescan re-projection whose run was
+  cancelled (`:548-562`, `:627-655`). If a newer refresh retired stage 2,
+  each of those endings would leave "Diagram, rendering" on screen
+  indefinitely, because none of them reaches `FinishPublish`; and
+  restarting the stage at each of them would start another core render per
+  unchanged refresh, since `GetDiagramBlocks` takes no cancel token
+  (`:932`) and a retired render runs out on its worker. So the stage is
+  transferred, never restarted, across a refresh that keeps its projection:
+  - New `private sealed record PendingDiagrams(FlowDocument Document,
+    string Path, IReadOnlyList<PendingFence> Fences, int
+    RemainingDiagramRenderBytes, MemoKey PublishedMemo)` (`PublishedMemo`:
+    the key `FinishPublish` just stored in `_memo`, `:1784`) in new field
+    `_pendingDiagrams`, set at
+    the normal end of `FinishPublish` (not its unheard-stream return,
+    `:1777-1782`, whose torso the next binding rebuilds) when the build's
+    `ReadingListBuildContext.PendingDiagrams` is non-empty, else null; and
+    new `private CoreRequestCancellation? _diagramCancel`, the running
+    stage's own token. Stage 1's token cannot serve: the fetch task
+    `Finish()`es — disposes — it in its `finally` (`:580`, `:688`;
+    `CoreRequestCancellation.cs:35-46`) before the dispatcher runs `Publish`.
+  - New `private void StartDiagramStage(PendingDiagrams pending)`
+    (dispatcher) retires any running stage, sets a new `_diagramCancel`,
+    counts `DiagramStageRunsForTests`, and runs the stage under `Task.Run`
+    tracked by `TrackRefreshWork` (so a close's `WhenRefreshWorkDrained`
+    waits for it) — also under `_synchronousForTests`, because the gated
+    facts need stage 1 published while the stage waits. The worker checks
+    its token at each boundary (after the gate, before `GetDiagramBlocks`,
+    before each decode, before posting) and stops silently when it is
+    cancelled, `Finish()`es it in `finally`, and posts new `private void
+    LandDiagramStage(PendingDiagrams pending, CoreRequestCancellation stage,
+    IReadOnlyList<(string Key, DiagramOutcome Outcome)> outcomes)`. That
+    lands only when `ReferenceEquals(_diagramCancel, stage)` and
+    `ReferenceEquals(Document, pending.Document)`; otherwise it counts new
+    `internal int DiagramStageLandingsDroppedForTests` and touches nothing
+    (AR-60). A landing records `_landedDiagrams`, sets the memo as above
+    (only while `ReferenceEquals(_memo, pending.PublishedMemo)`), clears
+    `_pendingDiagrams` and `_diagramCancel`, and raises
+    `DiagramsCompleted(pending.Document, outcomes)`.
+  - New `private void RetireDiagramStage()` cancels `_diagramCancel` and
+    clears it. A stage is retired only when its projection stops being the
+    one shown: a publication that replaces `Document` (in `Publish` just
+    before `Document = built.Document`, `:1622`, and in
+    `PublishTerminalFailure` before the failure notice replaces it, `:827`),
+    which also clears `_pendingDiagrams` (the new projection records its
+    own at its `FinishPublish`); `OnSurfaceDetached` (`:328-351`, keeping
+    `_pendingDiagrams`); `Dispose` (`:1835-1849`). `RetireFetch` (`:729-734`) does
+    not retire it: a newer refresh that ends in a memo hit, a preserved
+    terminal failure or a cancelled rescan re-projection leaves the stage
+    running, and it lands on the projection still shown; a newer refresh
+    that publishes retires it at that publication.
+  - **A preference change retires nothing.** `InvalidateForPrefsChange`
+    (`:292-316`) replaces no projection: its attached branch drops the
+    memo and starts a `Refresh` (`:298-302`), which ends in a publication
+    (retiring the stage when it replaces `Document`), a terminal failure —
+    preserved (`:810-815`: the shown projection stays, so its stage keeps
+    running and lands) or replacing (`:816-827`, which retires it) — or a
+    newer generation that ends in one of those ways; its unbound branch
+    (`:304-315`) only poisons the generation and calls `RetireFetch`, and
+    the next bind re-projects through `EnsureProjected` or resumes through
+    the fast path. No preference changes a diagram's outcome:
+    `get_diagram_blocks` keys its render on the path and the source's hash
+    (`session.rs:9637-9648`) and reads no math preference
+    (`set_math_prefs` serves `get_math_blocks`, `session.rs:9592-9619`), and WB-21b's
+    code-preamble verbosity, which reaches the same method, changes only
+    code paragraphs' names. So the stage keeps completing the projection it
+    belongs to. Retiring it here — round 11's design — stranded it: the
+    attached branch's refresh, failing with the projection preserved,
+    reaches neither `FinishPublish` nor a rebind, so nothing restarted the
+    cancelled render and the placeholder read "Diagram, rendering"
+    indefinitely (`ResumePendingDiagrams` runs only on the rebind fast
+    path).
+  - The surface's rebind fast path (`ReadingSurface.cs:265-288`: its
+    `_lastMerged` is still the model's complete `Document`, so nothing
+    re-projects) calls new `internal void
+    ReadingContentViewModel.ResumePendingDiagrams()`, which starts the stage
+    again when `_pendingDiagrams` names the shown `Document` and no stage
+    runs: the detach retired it, and without this a reading → editor →
+    reading switch made while a diagram rendered would leave it reading
+    "Diagram, rendering".
+  Every other early return in `Publish` leaves the work with a refresh
+  that still runs: a superseded publication (`:1532-1540`) belongs to the
+  newer generation, and a drifted one (`:1549-1567`) retries as a new
+  refresh, each of which ends in a publication, a memo hit, a failure or a
+  cancellation above.
+- **Readiness (WD11).** Stage 1's `FinishPublish` marks the projection
+  complete and `RefreshInFlight` false: a held landing seats on the partial
+  projection (`:506`). Stage 2 is not a refresh: it does not bump the
+  generation, does not set `IsLoading`, and a landing held or seated is
+  untouched. It honours AR-60 through its own token and the ownership rule
+  above: it is retired when the projection it completes is replaced,
+  detached or disposed, and a retired stage drops its result without
+  touching the document. `FetchFaultForTests`
+  (`ReadingContentViewModel.cs:741`, read first in `FetchGuarded` `:767`)
+  stays stage 1's; `DiagramFaultForTests` (`:841`) moves to stage 2. A
+  stage-2 failure is the `Unmatched` outcome, never `LastRefreshFailed`, so
+  it never refuses a landing. A rescan's reading publication
+  (`WorkspaceTabViewModel.RescanReadingPublication`,
+  `WorkspaceViewModel.cs:1823-1826`, "completing at its terminal
+  publication, faulted by its failure") completes at stage 1's
+  `FinishPublish`, and stage 2 never faults it, so the rescan's failure
+  count (`WorkspaceViewModel.Rescan.cs:807-815`) never counts a diagram.
+  *WB-9's landing lifecycle (merged in W3, before this chunk).* WB-9
+  replaces main's `ARescanReloadOfTheReadingTabWithdrawsItsHeldLandingSilently`
+  with a carried landing: a rescan reload of the reading tab carries the
+  held landing, under the token the window's slot holds, to the reloaded
+  model (`ReadingReloadTransaction`, `ReadingSurface.EndCarry`) and resumes
+  it — scheduling the settle when the replacement model's refresh has
+  already ended, otherwise through the refresh's settle — or refuses it
+  once. Under WD11's recommended answer the replacement model's refresh
+  ends at its stage 1: the carried landing seats on the reloaded partial
+  projection, and its stage 2 neither re-seats, re-speaks nor refuses it;
+  a cancellation by the original token after the seat finds nothing held.
+  WB-9's cancellation and refusal facts inject before or at stage 1
+  (`FetchFaultForTests`, a throwing `ReadingCreatedForTests`, an unbind)
+  over notes with no diagram fence, so no stage 2 runs for them and they
+  pass unchanged; the new carried-landing fact below covers a reload whose
+  note has a pending fence. Under WD11's other answer (the landing waits
+  through the diagram stage) the carried landing seats only when stage 2
+  lands, and that fact flips with `AHeldLandingSeatsOnThePartialProjection`.
+- **Announcement.** None for a late diagram (WD11). The placeholder's
+  name changes to the description when the image lands (property change
+  only).
+- **Test seams (new).** On `ReadingContentViewModel`: `internal
+  ManualResetEventSlim? DiagramStageGateForTests { get; set; }` (stage 2
+  waits on it, 10 s, before `GetDiagramBlocks`), `internal bool
+  DiagramStageGateTimedOutForTests { get; private set; }` (set when that
+  wait returns false; every fact asserts it false), `internal int
+  DiagramStageRunsForTests { get; private set; }` (stages started),
+  `internal int DiagramStageLandingsDroppedForTests { get; private set; }`
+  (landings `LandDiagramStage` refused), `internal ManualResetEventSlim?
+  DiagramStagePostedForTests { get; set; }` (set by the worker right after
+  it posts a landing); on `ReadingSurface`:
+  `internal static Action? ApplyProbeForTests` (invoked at the top of
+  `ApplyBuiltDocument`).
+- Not changed: `MaximumRenderedBlocks`, the streamed-chunk path's shape
+  (placeholders ride in chunks like any block), the diagram element's
+  peer and Enter-speaks-the-block (`:168`), the embeds' decode budget.
+
+## Tests
+
+Facts fail first. "The surface TextPattern" below is the in-process
+provider every reader uses: `UIElementAutomationPeer.CreatePeerForElement(surface)
+.GetPattern(PatternInterface.Text)` as `ITextProvider`, read with
+`DocumentRange.GetText(-1)` (the `ReadingViewTests.cs:355-359` pattern) —
+never only a child peer's `Name`. Every fact that holds the stage sets
+`DiagramStageGateForTests` in `finally` and asserts
+`DiagramStageGateTimedOutForTests` is false.
+
+- `ReadingDiagramTests.TextAndMathAreReadableWhileADiagramRenderIsParked`
+  — `DiagramStageGateForTests` held (a `ManualResetEventSlim`; the
+  existing `DiagramFaultForTests` stays and is read in stage 2): after
+  stage 1 the surface has the paragraphs and the math element, no
+  `ReadingLoadingNotice`, `IsLoading` false; the surface TextPattern's text
+  contains the fence's source; the diagram paragraph holds one
+  `ReadingDiagramElement` named "Diagram, rendering" with no `Content`.
+  Mutations: restore the single-stage fetch → fails on the loading
+  notice; put the source in the element's `Content` instead of a `Run` →
+  the TextPattern lacks it → fails.
+- `ReadingDiagramTests.TheDiagramCompletesItsPlaceholderWithoutMovingTheReader`
+  — caret parked on a known character two paragraphs below, a link
+  focused; release the gate: the rendered image is inside the SAME
+  `ReadingDiagramElement` instance at the same block index; the character
+  after the caret and its offset from the diagram paragraph's `ElementEnd`
+  are unchanged; `Keyboard.FocusedElement` is unchanged; `ApplyBuiltDocument`
+  ran once (`ApplyProbeForTests`); the surface TextPattern no longer
+  contains the source, and the diagram paragraph's text, inline kinds and
+  marks equal those of a fresh single-stage `ReadingDocumentBuilder.Build`
+  of the same artifact (the shared-shape differential). Mutations:
+  re-apply the whole document → the probe counts two; leave the source
+  `Run` after `Rendered` → the differential fails.
+- `ReadingDiagramTests.ADiagramLandingWhileTheReaderIsOnThePlaceholderKeepsFocus`
+  — Tab onto the placeholder element (it has focus) and hold a reference
+  to its automation peer; release the gate: the same element still has
+  focus, its `Name` is now the description, the held peer is the same
+  object and a `NameProperty` property-change was raised. Mutation: swap
+  the paragraph for a new one → focus drops to the surface → fails.
+- `ReadingDiagramTests.ADiagramLandingUnderASelectionKeepsTheSelection`
+  — a selection from the paragraph before the diagram to the paragraph
+  after it; release the gate: `Selection.Start`'s offset is unchanged,
+  `Selection.End` is on the same character, and `Selection.Text` starts
+  and ends with the same text. Mutation: rebuild the diagram paragraph as
+  a new `Paragraph` → the endpoints collapse → fails.
+- `ReadingDiagramTests.AnchorsInsideThePendingSourceAreRemapped` — three
+  cases on a held stage: (a) caret at source offset 5, `Rendered` → the
+  caret is at the container's `ElementStart`; (b) a selection from the
+  paragraph before into the source, `Rendered` → `Selection.End` is the
+  container's `ElementEnd`, so the selection covers the diagram element
+  (`Selection.Start.CompareTo(container.ElementStart) <= 0`);
+  (c) caret at source offset 5 of an unsupported-dialect fence
+  (`weirdDiagram\nstuff`, the `:73` fixture), `Failed` → the caret is at
+  offset 5 of the failure shape's source `Run` and the character after it
+  is unchanged. Mutation: skip the remap and let WPF collapse the pointers
+  → (a)–(c) land at the paragraph's start → fails.
+- `ReadingDiagramTests.AFailedDiagramRenderLeavesTheRestReadableAndNamesTheFailure`
+  — the unsupported-dialect fence: through the surface TextPattern the
+  text contains "Diagram dialect not supported", core's reason and
+  `weirdDiagram`; the same element instance is named by core's
+  description and has no `Content`; every other block is intact; the
+  paragraph equals a fresh single-stage build (the differential).
+  Mutation: render header, reason and source in a `TextBlock` inside the
+  element → the TextPattern lacks them while the element's name still
+  passes → fails.
+- `ReadingDiagramTests.ANoMatchCompletionRestoresTheUnmatchedShapeUnlessThePlaceholderHasFocus`
+  — `DiagramFaultForTests` throws `VaultException.Io`. Before the gate is
+  released the surface peer (`UIElementAutomationPeer.CreatePeerForElement(surface)`)
+  exists and its `GetChildren()` holds the placeholder's
+  `ReadingDiagramElementPeer` (its `Owner` is E), kept as `held`.
+  Unfocused: after stage 2 no `ReadingDiagramElement` remains (`:215`'s
+  assertion), the TextPattern holds the source, one Diagram landmark, and
+  the surface peer's `GetChildren()` holds no `ReadingDiagramElementPeer`
+  — `held` is not among them (WB-11's cached list serves until
+  `InvalidateStructuralPeers()`, so the read is deterministic). Focused: E
+  stays, keeps focus, is named the source, and `GetChildren()` still holds
+  `held`, the same object (a text-only completion invalidates nothing).
+  Mutations: always remove the container → the focused case loses focus →
+  fails; skip the `InvalidateStructuralPeers()` call after the unfocused
+  removal → the surface's children still hold `held`, a removed element
+  still exposed through UIA → fails.
+- `ReadingDiagramTests.AnUnchangedDiagramStaysCompleteAcrossARefresh` —
+  after stage 2 lands, a task toggle in the same note re-projects: the
+  stage-1 document already holds the rendered element with no pending mark
+  and no source `Run` in the diagram paragraph, `DiagramStageRunsForTests`
+  does not grow, and a caret after the diagram is on the same character
+  after the re-projection; and, before the toggle, an unchanged `Refresh()`
+  after the landing memo-hits — `ApplyProbeForTests` does not count and
+  `DiagramStageRunsForTests` does not grow. Mutations: drop the carried
+  `_landedDiagrams` → the stage-1 document shows the source and the caret
+  lands elsewhere → fails; leave the memo's `landedDigest` at stage 1's
+  when the stage lands → the unchanged refresh rebuilds and the probe
+  counts one more → fails.
+- `ReadingDiagramTests.ALateDiagramIsSilent` — no `A11yEvent` across stage 2.
+- `ReadingDiagramTests.ASupersededDiagramStageTouchesNothing` — a
+  `DiagramsCompleted` counter by document; `DiagramStagePostedForTests`
+  set; release the gate and wait on `DiagramStagePostedForTests` (10 s,
+  asserted) without pumping the dispatcher, so the stage's landing is
+  posted and not yet run; then edit the buffer (a paragraph added above the
+  fence) and `Refresh()` — its publication replaces the document and
+  retires the stage; then pump: the posted landing is refused
+  (`DiagramStageLandingsDroppedForTests == 1`), `DiagramsCompleted` was
+  raised only for the new document (the new projection's own stage, which
+  the released gate lets through), the replaced document's placeholder
+  still reads "Diagram, rendering" with no `Content`, and the surface
+  shows the new document's completed diagram (AR-60: no stale
+  publication). Mutation: drop the ownership check in `LandDiagramStage` →
+  the posted landing applies to the replaced projection, `DiagramsCompleted`
+  is raised for it and the dropped count is 0 → fails.
+- `ReadingDiagramTests.AnUnchangedRefreshWhileTheDiagramRendersLeavesItsStageToFinish(string ending)`
+  — a `[Theory]`, one row per way a refresh ends while keeping the shown
+  projection; a `DiagramsCompleted` counter. Gate held after stage 1, then
+  the row's refresh: `memo-hit` (`model.Refresh()` with nothing changed —
+  `ApplyProbeForTests` does not count, `RefreshInFlight` is false after
+  it), `preserved-failure` (`FetchFaultForTests = () => new
+  VaultException.Io("injected")`, then `model.Refresh()` —
+  `LastRefreshFailed` is true and `PublishTerminalFailure`'s preserve
+  branch keeps the stage-1 document), `cancelled-rescan`
+  (`model.ActivateForRescanAsync(new CancellationToken(canceled: true),
+  attachObserver: false)` — nothing publishes). Each row then asserts
+  `model.Document` is still the stage-1 document and its placeholder is
+  still pending; releases the gate; pumps until `DiagramsCompleted` has
+  fired: the same `ReadingDiagramElement` instance is named by the
+  description and holds the image, the surface TextPattern no longer holds
+  the fence's source, `DiagramsCompleted` fired once and for the stage-1
+  document, `DiagramStageRunsForTests == 1`,
+  `DiagramStageLandingsDroppedForTests == 0`, no `A11yEvent` was raised
+  between the release and the landing, and `DiagramStageGateTimedOutForTests`
+  is false. Mutations: let `RetireFetch` — a newer refresh — retire the
+  stage → it stops at its boundary after the gate, nothing lands, and the
+  placeholder still reads "Diagram, rendering" → every row fails; restart
+  the stage at the memo hit instead of leaving it running →
+  `DiagramStageRunsForTests == 2` → `memo-hit` fails.
+- `ReadingDiagramTests.AFailedPreferenceRefreshLeavesTheDiagramStageToLand`
+  — a bound surface (so `BlocksAppended` is subscribed and
+  `InvalidateForPrefsChange` takes its attached branch), a note with a
+  paragraph and a Mermaid fence; a `DiagramsCompleted` counter by
+  document; gate held after stage 1 (`DiagramStageRunsForTests == 1`, the
+  placeholder pending). Then `FetchFaultForTests = () => new
+  VaultException.Io("injected")` and `model.InvalidateForPrefsChange()`;
+  pump until `model.RefreshInFlight` is false: `LastRefreshFailed` is
+  true, `PublishedFailureNotice` is false, `model.Document` is still the
+  stage-1 document and its placeholder still reads "Diagram, rendering"
+  with no `Content` (the preserve branch kept the projection). Release the
+  gate (and again in `finally`); pump until `DiagramsCompleted` has fired:
+  the same `ReadingDiagramElement` instance is named by the description
+  and holds the image, the surface TextPattern no longer holds the fence's
+  source, `DiagramsCompleted` fired once and for the stage-1 document,
+  `DiagramStageRunsForTests == 1`, `DiagramStageLandingsDroppedForTests ==
+  0`, no `A11yEvent` was raised between the release and the landing, and
+  `DiagramStageGateTimedOutForTests` is false. Then the fault is cleared
+  and an unchanged `model.Refresh()` runs: it is not a memo hit (the
+  preference change dropped the memo and the landing did not restore it —
+  `ApplyProbeForTests` counts one more), and the rebuilt document holds the
+  rendered diagram from `_landedDiagrams` with no pending mark
+  (`DiagramStageRunsForTests` still 1). Mutations: retire the stage in
+  `InvalidateForPrefsChange` (round 11's design) → it stops at its
+  boundary after the gate, nothing lands and the placeholder still reads
+  "Diagram, rendering" → fails; let the landing write the memo whatever
+  `_memo` holds (drop the `ReferenceEquals(_memo, pending.PublishedMemo)`
+  guard) → the unchanged refresh memo-hits and the probe does not count →
+  fails.
+- `ReadingDiagramTests.ARebindToTheSameProjectionResumesItsPendingDiagram`
+  — gate held after stage 1; `surface.Model = null` (its
+  `OnSurfaceDetached` retires the stage), then `surface.Model = model`
+  (the fast path, `ReadingSurface.cs:265-288`: `_lastMerged` is still the
+  model's complete `Document`, nothing re-projects); release the gate and
+  pump until `DiagramsCompleted` fires: the same placeholder instance is
+  completed with the image, `DiagramStageRunsForTests == 2` (the retired
+  stage and the resumed one), `DiagramStageLandingsDroppedForTests == 0`
+  (the retired stage stopped at its boundary), `ApplyProbeForTests` did not
+  count. Mutation: drop the `ResumePendingDiagrams()` call from the fast
+  path → nothing lands and the placeholder still reads "Diagram, rendering"
+  → fails.
+- `ReadingDiagramTests.AnUnmatchedDiagramIsRetriedByTheNextRefresh` —
+  `DiagramFaultForTests` throws `VaultException.Io` for the first stage
+  (no focus on the placeholder: the `Unmatched` completion removes the
+  container); then the fault is cleared and an unchanged `Refresh()` runs:
+  it is not a memo hit (`ApplyProbeForTests` counts one more), its stage 1
+  leaves the fence pending again, and its stage lands `Rendered` — a
+  `ReadingDiagramElement` named by the description with the image.
+  Mutation: set the memo when a stage lands an `Unmatched` outcome → the
+  refresh memo-hits, no stage runs and the fence stays source → fails.
+- `ReadingDiagramTests.SvgIsDecodedOffTheDispatcher` —
+  `DiagramRenderProbeForTests` records a thread that is not the
+  dispatcher's. Mutation: decode in `Build` → fails.
+- `ReadingFocusTests.AHeldLandingSeatsOnThePartialProjection` (WD11) —
+  the landing seats before the gate is released; `:780`/`:892` keep passing.
+- `RescanTests.ACarriedLandingSeatsOnTheReloadedPartialProjectionAndTheDiagramStageLeavesIt`
+  (WD11; new `[Theory]` over `bool stageTwoFails`, in
+  `RescanTests.ReadingLanding.cs` beside WB-9's facts and on their harness:
+  `BackgroundReadingWorkspace` + `HostedReadingSurface`, the shown
+  projection's refresh parked through `FetchFaultForTests` so
+  `RequestTheLanding()` is held, `token` = `hosted.Surface.HeldFocusLanding`
+  read right after it) — `host.md` rewritten outside Slate to `# Host`,
+  `![[embedded]]`, `Changed outside Slate.` and a Mermaid fence
+  (`graph TD; A-->B`), `w.Session.Rescan`, and
+  `w.HostTab.ReadingCreatedForTests = m => { m.DiagramStageGateForTests =
+  gate; m.DiagramsCompleted += (_, _) => landed++; if (stageTwoFails)
+  m.DiagramFaultForTests = () => new VaultException.Io("injected diagram
+  fault"); }` before
+  `w.ReSyncHostAsync(…)`: once the reloaded model's stage 1 has published
+  (gate held), `hosted.Surface.IsFocusLandingPending` is false,
+  `spoken() == 1`, `fellThrough() == 0`, `Keyboard.FocusedElement` is the
+  surface, `hosted.Text` holds "Changed outside Slate." and `graph TD`,
+  and `CancelFocusLanding(token)` answers false (seated: nothing is held);
+  the gate and the old model's park are released in `finally`; once
+  `landed == 1` (the new model's stage has landed; its
+  `DiagramStageRunsForTests` is 1) and two `PumpedDispatcher.Drain()`
+  passes: `spoken()` still 1, `fellThrough()` 0,
+  `w.Announced` empty, focus on the surface, `documents.Result.Failed == 0`,
+  `LastRefreshFailed` false, `DiagramStageGateTimedOutForTests` false; with
+  `stageTwoFails` the fence is left in the unmatched shape (no
+  `ReadingDiagramElement`, the source in the TextPattern). Mutations: hold
+  `RefreshInFlight` true until stage 2 lands → at the held gate the
+  landing is still pending, `spoken() == 0` → fails; surface a stage-2
+  fault as `LastRefreshFailed` or as a fault of `RescanReadingPublication`
+  → `LastRefreshFailed` true or `Failed == 1` → fails (`stageTwoFails`).
+- Existing `ReadingDiagramTests` `:26, :73, :122, :215, :259, :328`
+  adapted to the two-stage shape (`:122` and `:215` assert their final
+  state after stage 2; `:259`'s pool spans both stages).
+- FlaUI `ShellAccessibilityTests.ReadingDiagram_TextIsReadableBeforeTheDiagramRenders`
+  — a note with a cold Mermaid fence and an unsupported-dialect fence
+  (`weirdDiagram\nstuff`): the math element and the first paragraph appear
+  before any diagram image; the placeholder group is named "Diagram,
+  rendering"; the image arrives within the existing 300 s; then, through
+  the cross-process TextPattern (`surface.Patterns.Text.Pattern.DocumentRange.GetText(-1)`),
+  the text contains "Diagram dialect not supported" and `weirdDiagram`,
+  no longer contains the Mermaid fence's source line, and still contains
+  the paragraph after the diagram. The `:1483`, `:1813`, `:1832` waits for
+  TEXT elements shrink to the ordinary budget (the diagram wait keeps
+  300 s).
+
+## Docs and registers
+
+- Contract 40: append a record under R-10 — "a partial projection (text,
+  code, math, embeds; diagrams pending) is applied; the diagram stage is
+  not a refresh; a late diagram is silent; the placeholder is named
+  'Diagram, rendering'; a landing a rescan reload carries (WB-9's record)
+  seats on the reloaded partial projection, and a diagram stage's failure
+  never refuses it" (WD11), and a note under AR-60: "the diagram stage has
+  its own token and belongs to the projection it completes — retired (its
+  token cancelled, its result dropped) when that projection is replaced,
+  detached or disposed, never by a preference change or a newer refresh
+  that keeps it (a memo hit, a preserved failure, a cancelled rescan
+  re-projection), after which it still lands; its landing never restores a
+  memo dropped while it ran".
+- `w_c_matrix.md:23`: the Diagram blocks row gains the pending placeholder
+  (name "Diagram, rendering", type "diagram", the source as text beside it)
+  and the in-place completion (the same element; failure header, reason and
+  source as text beside it, as today).
+- `parity_matrix.md:272`: note "Windows projects progressively (#1317);
+  mac unverified".
+
+## Verification
+
+```powershell
+$env:CARGO_TARGET_DIR = 'C:\dev\slate\target-wb20'
+function Assert-Ok([string] $What) { if ($LASTEXITCODE -ne 0) { throw "$What exited $LASTEXITCODE" } }
+function Assert-Discovered([string[]] $Listed, [string[]] $Required) {
+  $names = $Listed | ForEach-Object { ($_ -split '\(', 2)[0] }
+  $missing = @($Required | Where-Object { $names -notcontains $_ })
+  if ($missing.Count -gt 0) { throw "the filter does not select: $($missing -join ', ')" }
+}
+./apps/slate-windows/generate-bindings.ps1 -Locked; Assert-Ok 'generate-bindings'
+dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release; Assert-Ok 'dotnet build'   # and Error(s)=0
+$tests = 'apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj'
+# RescanTests is ONE partial class (RescanTests.ReadingLanding.cs:27 declares `partial class RescanTests`); filter the class, not the file suffix
+$filter = 'FullyQualifiedName~SlateWindows.Tests.ReadingDiagramTests|FullyQualifiedName~SlateWindows.Tests.ReadingFocusTests|FullyQualifiedName~SlateWindows.Tests.ReadingViewTests|FullyQualifiedName~SlateWindows.Tests.ReadingMathTests|FullyQualifiedName~SlateWindows.Tests.RescanTests|FullyQualifiedName~SlateWindows.Tests.ReadingDoctrineCensusTests'
+$listed = @(dotnet test $tests --no-build --configuration Release --list-tests --filter $filter | Select-String '^\s{4}\S' | ForEach-Object { $_.Line.Trim() }); Assert-Ok 'unit discovery'
+Assert-Discovered $listed @(
+  'SlateWindows.Tests.ReadingDiagramTests.TextAndMathAreReadableWhileADiagramRenderIsParked',
+  'SlateWindows.Tests.ReadingDiagramTests.TheDiagramCompletesItsPlaceholderWithoutMovingTheReader',
+  'SlateWindows.Tests.ReadingDiagramTests.ADiagramLandingWhileTheReaderIsOnThePlaceholderKeepsFocus',
+  'SlateWindows.Tests.ReadingDiagramTests.ADiagramLandingUnderASelectionKeepsTheSelection',
+  'SlateWindows.Tests.ReadingDiagramTests.AnchorsInsideThePendingSourceAreRemapped',
+  'SlateWindows.Tests.ReadingDiagramTests.AFailedDiagramRenderLeavesTheRestReadableAndNamesTheFailure',
+  'SlateWindows.Tests.ReadingDiagramTests.ANoMatchCompletionRestoresTheUnmatchedShapeUnlessThePlaceholderHasFocus',
+  'SlateWindows.Tests.ReadingDiagramTests.AnUnchangedDiagramStaysCompleteAcrossARefresh',
+  'SlateWindows.Tests.ReadingDiagramTests.ALateDiagramIsSilent',
+  'SlateWindows.Tests.ReadingDiagramTests.ASupersededDiagramStageTouchesNothing',
+  'SlateWindows.Tests.ReadingDiagramTests.SvgIsDecodedOffTheDispatcher',
+  'SlateWindows.Tests.ReadingDiagramTests.AnUnchangedRefreshWhileTheDiagramRendersLeavesItsStageToFinish',
+  'SlateWindows.Tests.ReadingDiagramTests.AFailedPreferenceRefreshLeavesTheDiagramStageToLand',
+  'SlateWindows.Tests.ReadingDiagramTests.ARebindToTheSameProjectionResumesItsPendingDiagram',
+  'SlateWindows.Tests.ReadingDiagramTests.AnUnmatchedDiagramIsRetriedByTheNextRefresh',
+  'SlateWindows.Tests.ReadingFocusTests.AHeldLandingSeatsOnThePartialProjection',
+  'SlateWindows.Tests.RescanTests.ACarriedLandingSeatsOnTheReloadedPartialProjectionAndTheDiagramStageLeavesIt',
+  'SlateWindows.Tests.ReadingDiagramTests.DiagramFetchFailureDegradesToSourceInRange',
+  'SlateWindows.Tests.ReadingDiagramTests.UnsavedDiagramEditsNeverShowTheStaleDiagram',
+  # main's three held-landing facts, unchanged:
+  'SlateWindows.Tests.RescanTests.AHeldReadingLandingSettlesWithTheRescansSilentReprojection',
+  'SlateWindows.Tests.RescanTests.AFailedRescanReprojectionRefusesTheHeldLandingSilently',
+  'SlateWindows.Tests.RescanTests.ACancelledRescanReprojectionStillSettlesTheHeldLanding',
+  # WB-9's carried-landing facts (WB-9 replaced main's ARescanReloadOfTheReadingTabWithdrawsItsHeldLandingSilently):
+  'SlateWindows.Tests.RescanTests.ARescanReloadOfTheReadingTabCarriesItsHeldLandingToTheReloadedProjection',
+  'SlateWindows.Tests.RescanTests.ACarriedLandingIsCancelledByItsOriginalTokenAfterTheReload',
+  'SlateWindows.Tests.RescanTests.ACarriedLandingIsCancelledByItsOriginalTokenDuringTheReload',
+  'SlateWindows.Tests.RescanTests.AFailedRescanReloadRefusesTheCarriedLandingSilently',
+  'SlateWindows.Tests.RescanTests.AReloadThatBindsNoReplacementModelRefusesTheCarriedLandingOnce',
+  'SlateWindows.Tests.RescanTests.AReloadWhoseSurfaceLetsGoOfTheTabStillRefusesTheCarriedLandingOnce')
+foreach ($ending in 'memo-hit', 'preserved-failure', 'cancelled-rescan') {
+  if (-not ($listed | Where-Object { $_ -like "SlateWindows.Tests.ReadingDiagramTests.AnUnchangedRefreshWhileTheDiagramRendersLeavesItsStageToFinish*""$ending""*" })) { throw "the unchanged-refresh theory has no $ending row" }
+}
+# WB-9 must be on this chunk's base: the old pin's name must be gone, or the list above is stale
+if (($listed | ForEach-Object { ($_ -split '\(', 2)[0] }) -contains 'SlateWindows.Tests.RescanTests.ARescanReloadOfTheReadingTabWithdrawsItsHeldLandingSilently') { throw 'WB-9 is not on this base: main''s withdraw pin is still listed' }
+dotnet test $tests --no-build --configuration Release --filter $filter; Assert-Ok 'unit tests'
+$at = 'apps/slate-windows/tests/SlateWindows.AccessibilityTests/SlateWindows.AccessibilityTests.csproj'
+$atFilter = 'FullyQualifiedName~ShellAccessibilityTests.ReadingDiagram_TextIsReadableBeforeTheDiagramRenders|FullyQualifiedName~ShellAccessibilityTests.ReadingIdentityContract_ExeWindowAndSurfaceIds_AreStable|FullyQualifiedName~ShellAccessibilityTests.ReadingTextPattern_RangeFromChildResolvesEveryCustomPeer|FullyQualifiedName~ShellAccessibilityTests.ReadingView_IsTheEditorStop'
+$atListed = @(dotnet test $at --no-build --configuration Release --list-tests --filter $atFilter | Select-String '^\s{4}\S' | ForEach-Object { $_.Line.Trim() }); Assert-Ok 'FlaUI discovery'
+Assert-Discovered $atListed @(
+  'SlateWindows.AccessibilityTests.ShellAccessibilityTests.ReadingDiagram_TextIsReadableBeforeTheDiagramRenders',
+  'SlateWindows.AccessibilityTests.ShellAccessibilityTests.ReadingIdentityContract_ExeWindowAndSurfaceIds_AreStable',
+  'SlateWindows.AccessibilityTests.ShellAccessibilityTests.ReadingTextPattern_RangeFromChildResolvesEveryCustomPeer',
+  'SlateWindows.AccessibilityTests.ShellAccessibilityTests.ReadingView_IsTheEditorStop')
+dotnet test $at --no-build --configuration Release --filter $atFilter; Assert-Ok 'FlaUI journeys'   # NVDA closed
+$cs = @(git diff --name-only origin/main -- '*.cs') + @(git ls-files --others --exclude-standard -- '*.cs')   # Reading/ReadingContentViewModel.cs, Reading/ReadingDocumentBuilder.cs, Reading/ReadingSurface.cs, Reading/ReadingSemantics.cs, Reading/ReadingDiagramElement.cs, ReadingDiagramTests.cs, ReadingFocusTests.cs, RescanTests.ReadingLanding.cs, ShellAccessibilityTests.ReadingDiagram.cs (new)
+dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $cs; Assert-Ok 'dotnet format'
+```
+
+`ReadingSurface.cs` has 7 CRs — check before and after. CI: Windows lane
+with the shell gate; codex review (size M–L, §4 rule 5). AT: NVDA full
+pass (the PR stays a draft until recorded): open a note with a cold
+diagram — the first paragraph is readable at once; arrowing over the
+pending diagram reads its source lines and reaches "Diagram, rendering,
+group"; after the render, arrowing back reads the description, and
+nothing was announced in between; a broken fence reads "Diagram could not
+be rendered …" (an unsupported one "Diagram dialect not supported …"),
+then its reason and source, line by line; Ctrl+Shift+E then F6 lands on
+the surface without waiting for the diagram.
+
+## Acceptance
+
+- [ ] Seventeen new facts pass (one a theory whose three rows are each listed), seen failing first (every gate wait's result asserted, released in `finally`); the pending source and the failure header, reason and source asserted through the surface TextPattern, not only a peer's name; an unfocused `Unmatched` removal leaves no removed element among the surface peer's children (WB-11's `InvalidateStructuralPeers()` after the removal), a text-only completion keeps the same peer; adapted facts green; mutations run.
+- [ ] The diagram stage belongs to the projection it completes: `RetireFetch` does not retire it; a memo hit, a preserved terminal failure and a cancelled rescan re-projection each leave it to land on the shown projection (`DiagramStageRunsForTests == 1`, nothing dropped); a replacing publication, a detach and disposal retire it; a preference change does not — `InvalidateForPrefsChange` retires nothing, so a preference refresh that fails with the projection preserved leaves the stage to land (`AFailedPreferenceRefreshLeavesTheDiagramStageToLand`); a landing writes the memo only while `_memo` is still its own publication's key, so a memo a preference change or `EnsureProjected` dropped stays dropped; the rebind fast path resumes it; a landing that no longer owns the shown document is refused; an `Unmatched` landing leaves the memo empty so the next refresh retries the fence.
+- [ ] WB-9's six carried-landing facts and main's three held-landing facts stay green on this chunk's base (WB-9 merged first), and the carried landing seats on a reloaded partial projection that a later stage 2 leaves alone.
+- [ ] Both discovery checks find every required fact by fully qualified name (they throw otherwise) and every Verification command exits 0.
+- [ ] New FlaUI journey green (its TextPattern assertions included); the text waits shortened.
+- [ ] Contract 40 R-10/AR-60 records appended; `w_c_matrix.md:23` and the parity note updated.
+- [ ] Windows lane green; codex review done; format gate clean.
+- [ ] NVDA pass recorded in the PR body.
+- [ ] PR body: `Closes #1317`. Not delivered: a progressive MATH stage (math still fetches before stage 1 publishes; it is core-rendered and fast) and an announcement for late diagrams (WD11: silent).
+
+## Brief
+
+Read `Reading/ReadingContentViewModel.cs:52, 225, 248-351 (EnsureProjected,
+InvalidateForPrefsChange, OnSurfaceDetached), 514-690 (Refresh: the
+cancelled-rescan catches at 548-562 and 627-655, the token finished at 580
+and 688), 729-734 (RetireFetch), 785-829 (PublishTerminalFailure and its
+preserve branch), 841, 912-968, 1156, 1517-1620 (Publish: the memo hit at
+1574-1581), 1757-1790, 1835-1849 (Dispose), 1872-1896 (MemoKey)`,
+`CoreRequestCancellation.cs:17-47` (`Finish` disposes the token), core
+`crates/slate-core/src/session.rs:9592-9648` (math prefs serve
+`get_math_blocks`; `get_diagram_blocks` keys on the path and the source's
+hash, so no preference changes a diagram),
+`Reading/ReadingDocumentBuilder.cs:23-70, 213-215,
+575-596, 845-1043, 1768-1773`, `Reading/ReadingSurface.cs:42, 233-303 (the
+model change and the rebind fast path at 265-288), 312-330,
+357-367, 378-451, 500-535, 696-720, 839-851`,
+`Reading/ReadingDiagramElement.cs:21-100`, `ReadingSemantics.cs:228-240`,
+`EditorLandingSlot.cs:102-111, 354-410`, contract 40 R-10
+(`docs/plans/40_nvda_matrix_remediation_contracts.md:33`), the facts at
+`ReadingDiagramTests.cs:26-382`, `ReadingFocusTests.cs:93, 780, 892, 1286`,
+`RescanTests.ReadingLanding.cs:27-205` (the three held-landing facts, and
+the `:146` reload pin WB-9 replaces), `RescanTests.Round3.cs:278-306`
+(`BackgroundReadingWorkspace`, with its `hostText` argument), WB-9's spec
+(`wb09_open_handoff_and_landing_lifecycle.md`, Design #1312 and Tests: the
+carried landing and its six facts), `ReadingSurface.cs:685-719` (the
+stale-child problem a structural change must reset), and the TextPattern
+read at `ReadingViewTests.cs:355-359`. Pending decision
+WD11 (recommended: the partial projection is applied, a late diagram is
+silent, the placeholder is named "Diagram, rendering"; under the other
+answers: a held landing waits through the diagram stage with
+`RefreshInFlight` kept true — and the two landing facts below, the held
+and the rescan-carried one, flip to seating only when stage 2 lands — and
+an announced late diagram needs a new core
+`A11yEvent` with corpus, mirrors and the Swift lane). The rule every shape
+obeys: WPF's text range excludes what an `InlineUIContainer`'s child shows
+(main's comment, `ReadingDocumentBuilder.cs:583`; codex's round-6 probe),
+so the pending source and the failure header, reason and source are `Run`s
+in the diagram's paragraph, never content of `ReadingDiagramElement`, and
+the focusable placeholder element is never swapped. Build: in
+`ReadingContentViewModel`, split the fetch — stage 1 (code, math, blocks,
+inlines, embeds; `FetchResult` loses its diagram fields) publishes through
+`Publish`/`FinishPublish` as today with `RefreshInFlight` false afterwards,
+carrying `_landedDiagrams` (new, `IReadOnlyList<LandedDiagram>`, `record
+LandedDiagram(DiagramBlock Artifact, DiagramOutcome Outcome)`) so a fence
+matched by the builder's existing rule (`:851-869`) builds complete with no
+dispatcher decode and the caret's symbol-offset preservation stays exact;
+stage 2, only when the build left a fence pending (each reported as new
+`record PendingFence(string Key, ReadingBlock Block, string
+FallbackSource)` in new `ReadingListBuildContext.PendingDiagrams`, chunks
+included), started at the normal end of `FinishPublish` on its own worker
+(`Task.Run` tracked by `TrackRefreshWork`, also in synchronous test mode)
+under its own token — stage 1's is `Finish()`ed (disposed) in the fetch
+task's `finally` (`:580`, `:688`) before `Publish` runs — waits on
+`DiagramStageGateForTests` (new `ManualResetEventSlim?`, 10 s, recording
+`DiagramStageGateTimedOutForTests`), reads `DiagramFaultForTests`
+(`FetchFaultForTests` stays stage 1's; a stage-2 failure is the
+`Unmatched` outcome, never `LastRefreshFailed`, and never faults the
+rescan's `RescanReadingPublication`, which completes at stage 1's
+`FinishPublish`, so it never refuses a landing nor counts as a rescan
+failure), calls
+`GetDiagramBlocks`, resolves each pending fence through new `static
+DiagramOutcome ReadingDocumentBuilder.ResolveDiagramOutcome(DiagramBlock?
+matched, string fallbackSource, ref int remainingDiagramRenderBytes)`
+(today's `:894-938` switch, `DecodeImage` on the worker, the visual
+`Freeze()`d, the per-diagram cap and the pool stage 1 left), records
+`_landedDiagrams`, and raises new `event Action<FlowDocument,
+IReadOnlyList<(string Key, DiagramOutcome Outcome)>> DiagramsCompleted`
+(the stage-1 document the outcomes complete). The stage belongs to the
+projection, not to the refresh that published it: main keeps `_memo`
+across `Refresh` and returns early on an identical key
+(`ReadingContentViewModel.cs:1574-1581`) without `FinishPublish`, and a
+refresh can end with no publication (a terminal failure that keeps the
+shown projection, `:810-815`; a cancelled rescan re-projection, `:548-562`,
+`:627-655`), so a stage a newer refresh retired would leave "Diagram,
+rendering" forever, and restarting it per refresh would start another
+uncancellable core render (`GetDiagramBlocks` takes no token, `:932`).
+So: new `_pendingDiagrams` (new `record PendingDiagrams(FlowDocument
+Document, string Path, IReadOnlyList<PendingFence> Fences, int
+RemainingDiagramRenderBytes, MemoKey PublishedMemo)`, the last the key
+`FinishPublish` stored, `:1784`) and `_diagramCancel`
+(`CoreRequestCancellation?`); new `StartDiagramStage(PendingDiagrams)`
+(retires any running stage, new token, counts `DiagramStageRunsForTests`;
+the worker checks the token after the gate, before `GetDiagramBlocks`,
+before each decode and before posting, and stops silently when cancelled);
+new `LandDiagramStage(PendingDiagrams pending, CoreRequestCancellation
+stage, IReadOnlyList<(string Key, DiagramOutcome Outcome)> outcomes)`
+lands only when `ReferenceEquals(_diagramCancel, stage)` and
+`ReferenceEquals(Document, pending.Document)`, else counts
+`DiagramStageLandingsDroppedForTests` (new) and touches nothing (AR-60);
+new `RetireDiagramStage()` runs only when the projection stops being the
+one shown — a publication replacing `Document` (`Publish` before `:1622`,
+`PublishTerminalFailure` before `:827`, both clearing `_pendingDiagrams`),
+`OnSurfaceDetached`, `Dispose` — and never in `RetireFetch`, so a memo
+hit, a preserved failure or a cancelled rescan leaves the stage running to
+land on the projection still shown; never in `InvalidateForPrefsChange`
+either (`:292-316`, both branches): a preference change replaces no
+projection and changes no diagram's outcome (core keys the render on the
+path and the source's hash, `session.rs:9637-9648`, and reads no math
+preference; WB-21b's verbosity, reaching the same method, renames only
+code paragraphs), its attached branch's refresh (`:298-302`) retires the
+stage only by publishing a replacement, and a failure there that
+preserves the projection (`:810-815`) leaves the stage to land — retiring
+it there stranded "Diagram, rendering", because that ending reaches
+neither `FinishPublish` nor the rebind that resumes; the
+surface's rebind fast path (`ReadingSurface.cs:265-288`) calls new
+`internal void ResumePendingDiagrams()`, which restarts the stage the
+detach retired when `_pendingDiagrams` names the shown `Document`. The
+memo key gains `landedDigest` (`DiagramArtifactDigest` over the
+`_landedDiagrams` the build read); a stage landing no `Unmatched` outcome
+sets it to the new landed set, so the next unchanged refresh memo-hits the
+completed document, and one landing any `Unmatched` outcome leaves `_memo`
+null, so the next refresh retries that fence — either write only while
+`ReferenceEquals(_memo, pending.PublishedMemo)`, so a memo that
+`InvalidateForPrefsChange` (`:298`; verbosity is not in the memo key,
+`:1872-1895`) or `EnsureProjected` (`:271`) dropped while the stage ran
+stays dropped and the refresh that dropped it rebuilds. Every other early return in
+`Publish` (superseded, `:1532-1540`; drifted, `:1549-1567`) leaves the work
+with a newer refresh that ends in one of those ways. New `abstract record DiagramOutcome` with
+`Rendered(Description, Landing, Visual)`, `Failed(Description, Landing,
+Header, Reason)`, `Unmatched()`. In `ReadingDocumentBuilder` (diagram
+input now `IReadOnlyList<LandedDiagram>` plus a new `bool diagramsPending`
+that only stage 1 passes true; the test-only `DiagramBlock` overloads
+resolve through `ResolveDiagramOutcome` and pass false, keeping main's
+unmatched shape), an unmatched Mermaid fence in a stage-1 build emits the
+pending shape: `MonospaceParagraph(fallbackSource)`
+with `MarkDiagramBlock(p, fallbackSource)` (main's unmatched shape,
+`:871-879`) plus, as the math coverage-gap shape adds its element
+(`:585-595`), a zero-size `ReadingDiagramElement("Diagram, rendering",
+source)` in its own `InlineUIContainer`, marked by new
+`ReadingSemantics.MarkDiagramPending(Paragraph, string key)` /
+`PendingDiagramKeyOf(Paragraph)` (key: the block's `ByteStart`); main's two
+complete shapes move into new `ApplyRenderedShape(Paragraph,
+ReadingDiagramElement, DiagramOutcome.Rendered)` and
+`ApplyFailureShape(Paragraph, ReadingDiagramElement, DiagramOutcome.Failed,
+string source)`, used by both the fresh build and the completion. In
+`ReadingSurface`, new `CompleteDiagrams(IReadOnlyList<(string Key,
+DiagramOutcome Outcome)>)`, run only when `_lastMerged` is the document
+`DiagramsCompleted` names, inside one `BeginChange()`/`EndChange()`: record the caret and
+selection ends (before/after the paragraph: left alone, live pointers;
+inside the source at offset k; at the container's edges); apply the shape
+(`Rendered`: source `Run` removed, `ApplyRenderedShape`, `E.Complete(d,
+visual)`; `Failed`: `ApplyFailureShape` around the kept container,
+`E.Complete(d, null)`; `Unmatched`: the container removed unless the
+element has keyboard focus, else kept and renamed to the source); restore
+(source offset k → the container's `ElementStart` for the caret and
+`Selection.Start`, `ElementEnd` for `Selection.End` when `Rendered`; offset
+k of the source `Run` when `Failed`/`Unmatched`); re-mark
+`MarkDiagramBlock` with the outcome's landing, clear the pending mark, and
+re-collect `_landmarks` (they copy their text, `:1768-1773`). Tell the
+two kinds of completion apart: a text-only one (`Rendered`, `Failed`, a
+focused `Unmatched` — the container kept) changes no peer the surface
+exposes (the same element and peer; the paragraph a direct child of the
+document, `:213-215`) and invalidates nothing; a container removal (an
+unfocused `Unmatched`) takes the element's peer out of the surface's
+children, which WB-11's cached list and WPF's own child cache would keep
+serving (`ReadingSurface.cs:685-719`), so after `EndChange()` a completion
+that removed any container — or whose paragraph is not a direct child —
+calls WB-11's `InvalidateStructuralPeers()` once (the generation bumped,
+then the merge's reset: `UpdateLayout`, `ResetChildrenCache`, a
+synchronous `GetChildren()`, `StructureChanged`, `InvalidatePeer`).
+In `ReadingDiagramElement`, add `Complete(string description, ImageSource?
+visual)` (`Description` gains a private setter; Name; `Content` = a
+`ReadingDiagramImage` when `visual` is non-null; HelpText and tooltip
+kept; a `NameProperty` property-change on the same peer). Seam:
+`ReadingSurface.ApplyProbeForTests` (new `static Action?`, top of
+`ApplyBuiltDocument`), `DiagramStageRunsForTests` (new, stages started),
+`DiagramStageLandingsDroppedForTests` (new), `DiagramStagePostedForTests`
+(new `ManualResetEventSlim?`, set right after the worker posts a landing).
+Facts, written
+first and seen failing, reading text through the surface TextPattern
+(`CreatePeerForElement(surface).GetPattern(PatternInterface.Text)`,
+`DocumentRange.GetText(-1)`):
+`ReadingDiagramTests.TextAndMathAreReadableWhileADiagramRenderIsParked`
+(gate held: paragraphs and math present, no `ReadingLoadingNotice`,
+`IsLoading` false, the TextPattern holds the source, the element named
+"Diagram, rendering");
+`ReadingDiagramTests.TheDiagramCompletesItsPlaceholderWithoutMovingTheReader`
+(same element instance and index, the caret on the same character, the
+focused link unchanged, one `ApplyBuiltDocument`, the source gone from the
+TextPattern, the paragraph equal to a fresh single-stage build);
+`ReadingDiagramTests.ADiagramLandingWhileTheReaderIsOnThePlaceholderKeepsFocus`
+(focus on the placeholder stays, same peer object, Name changed with a
+property-change event);
+`ReadingDiagramTests.ADiagramLandingUnderASelectionKeepsTheSelection`
+(a selection spanning the diagram keeps its start offset and its end
+character); `ReadingDiagramTests.AnchorsInsideThePendingSourceAreRemapped`
+(caret in the source → `ElementStart` on `Rendered`; a selection into the
+source → ends at `ElementEnd`; caret in the source → the same source
+offset on `Failed`);
+`ReadingDiagramTests.AFailedDiagramRenderLeavesTheRestReadableAndNamesTheFailure`
+(`weirdDiagram\nstuff`: the TextPattern holds "Diagram dialect not
+supported", the reason and the source; the same element named by the
+description; the paragraph equal to a fresh build);
+`ReadingDiagramTests.ANoMatchCompletionRestoresTheUnmatchedShapeUnlessThePlaceholderHasFocus`
+(the surface peer's `GetChildren()` read before the gate holds the
+placeholder's `ReadingDiagramElementPeer`, kept as `held`; unfocused: no
+element remains, the source in the TextPattern, and `GetChildren()` holds
+no `ReadingDiagramElementPeer`, `held` among none; focused: the element
+stays focused, named the source, and `GetChildren()` still holds `held`);
+`ReadingDiagramTests.AnUnchangedDiagramStaysCompleteAcrossARefresh` (a task
+toggle re-projects with the rendered element already in stage 1, no new
+stage-2 run, the caret on the same character; an unchanged `Refresh()`
+after the landing memo-hits);
+`ReadingDiagramTests.ALateDiagramIsSilent` (no `A11yEvent`);
+`ReadingDiagramTests.ASupersededDiagramStageTouchesNothing` (the gate
+released and the landing posted but not yet run, then an edit's refresh
+replaces the document: the posted landing is refused,
+`DiagramStageLandingsDroppedForTests == 1`, `DiagramsCompleted` raised only
+for the new document, the replaced placeholder never completed);
+`ReadingDiagramTests.AnUnchangedRefreshWhileTheDiagramRendersLeavesItsStageToFinish(string ending)`
+(a theory with rows `memo-hit` — an unchanged `Refresh()`,
+`preserved-failure` — `FetchFaultForTests` throwing so the preserve branch
+keeps the document, `cancelled-rescan` — `ActivateForRescanAsync` with a
+cancelled token; with the gate held the stage-1 document is still shown
+and pending; after the release the same placeholder holds the image, the
+TextPattern lacks the source, `DiagramsCompleted` fired once for the
+stage-1 document, `DiagramStageRunsForTests == 1`, nothing dropped, no
+`A11yEvent`);
+`ReadingDiagramTests.AFailedPreferenceRefreshLeavesTheDiagramStageToLand`
+(a bound surface, gate held after stage 1; `FetchFaultForTests` throwing
+and `InvalidateForPrefsChange()` — its attached refresh fails and the
+preserve branch keeps the stage-1 document: `LastRefreshFailed` true,
+`PublishedFailureNotice` false, the placeholder still pending; after the
+release the same placeholder holds the image, the TextPattern lacks the
+source, `DiagramsCompleted` fired once for the stage-1 document,
+`DiagramStageRunsForTests == 1`, nothing dropped, no `A11yEvent` between
+the release and the landing; then, the fault cleared, an unchanged
+`Refresh()` is not a memo hit — `ApplyProbeForTests` counts one more —
+and rebuilds the diagram complete from `_landedDiagrams` with no new
+stage);
+`ReadingDiagramTests.ARebindToTheSameProjectionResumesItsPendingDiagram`
+(gate held, `surface.Model = null` then the same model again — the fast
+path; after the release the same placeholder is completed,
+`DiagramStageRunsForTests == 2`, nothing dropped, no `ApplyBuiltDocument`);
+`ReadingDiagramTests.AnUnmatchedDiagramIsRetriedByTheNextRefresh` (a
+faulted first stage leaves the fence unmatched; with the fault cleared an
+unchanged `Refresh()` rebuilds, leaves the fence pending and lands it
+`Rendered`); `ReadingDiagramTests.SvgIsDecodedOffTheDispatcher`
+(`DiagramRenderProbeForTests` sees a non-dispatcher thread);
+`ReadingFocusTests.AHeldLandingSeatsOnThePartialProjection` (seats before
+the gate releases);
+`RescanTests.ACarriedLandingSeatsOnTheReloadedPartialProjectionAndTheDiagramStageLeavesIt`
+(`[Theory]` over `stageTwoFails`, on WB-9's harness: a held landing, then
+`host.md` rewritten outside Slate with "Changed outside Slate." and a
+Mermaid fence, the reloaded model's `DiagramStageGateForTests` (and, when
+`stageTwoFails`, a throwing `DiagramFaultForTests`) set in
+`ReadingCreatedForTests`; with the gate held the carried landing has
+seated — `spoken() == 1`, `fellThrough() == 0`, focus on the surface,
+`CancelFocusLanding(token)` false; after the gate's release and stage 2:
+still `spoken() == 1`, `fellThrough() == 0`, nothing announced,
+`documents.Result.Failed == 0`, `LastRefreshFailed` false, the fence
+unmatched when `stageTwoFails`); FlaUI
+`ShellAccessibilityTests.ReadingDiagram_TextIsReadableBeforeTheDiagramRenders`
+(a cold Mermaid fence and an unsupported one: math and first paragraph
+appear before any diagram image; placeholder named; image within 300 s;
+the cross-process TextPattern then holds the unsupported fence's header and
+source, not the Mermaid source, and still the paragraph after it); the
+existing `ReadingDiagramTests.cs:26, 73, 122, 215, 259, 328` adapted, and
+the text waits at `ShellAccessibilityTests.cs:1483, 1813, 1832` shortened.
+Mutations: single-stage fetch back; the source in the element's `Content`;
+re-apply the whole document; the source `Run` left after `Rendered`; a new
+paragraph; no anchor remap; failure text in a `TextBlock`; the container
+always removed; no `InvalidateStructuralPeers()` after an unfocused
+removal (the removed peer stays among the surface's children); the carried
+artifacts dropped; the memo's `landedDigest` left at stage 1's (the
+unchanged refresh after a landing rebuilds); `LandDiagramStage` without its
+ownership check (the posted stale landing applies); `RetireFetch` retiring
+the stage (every row of the unchanged-refresh theory keeps "Diagram,
+rendering"); the stage restarted at a memo hit (two runs); the stage
+retired in `InvalidateForPrefsChange` (the failed preference refresh
+strands "Diagram, rendering"); the landing's memo write without its
+`ReferenceEquals(_memo, pending.PublishedMemo)` guard (the unchanged
+refresh after the failed preference refresh memo-hits); no
+`ResumePendingDiagrams()` on the fast path; the memo set after an
+`Unmatched` landing (no retry); decode in `Build`; `RefreshInFlight` held through stage
+2 (the carried landing has not seated at the gate); a stage-2 fault
+surfaced as `LastRefreshFailed` or a faulted `RescanReadingPublication`.
+Local
+loop, each native command followed by a throw on a nonzero
+`$LASTEXITCODE`: bindings regenerated
+(`$env:CARGO_TARGET_DIR='C:\dev\slate\target-wb20'`), Release build,
+`dotnet test --list-tests` over `FullyQualifiedName~SlateWindows.Tests.ReadingDiagramTests
+| …ReadingFocusTests | …ReadingViewTests | …ReadingMathTests |
+…RescanTests | …ReadingDoctrineCensusTests` throwing unless the seventeen
+facts (`AFailedPreferenceRefreshLeavesTheDiagramStageToLand` among them;
+and the unchanged-refresh theory's `memo-hit`, `preserved-failure`
+and `cancelled-rescan` rows), `DiagramFetchFailureDegradesToSourceInRange`,
+`UnsavedDiagramEditsNeverShowTheStaleDiagram` and the nine
+`RescanTests.ReadingLanding.cs` landing facts are listed by fully
+qualified name — main's three held-landing facts
+(`AHeldReadingLandingSettlesWithTheRescansSilentReprojection`,
+`AFailedRescanReprojectionRefusesTheHeldLandingSilently`,
+`ACancelledRescanReprojectionStillSettlesTheHeldLanding`) and WB-9's six
+(`ARescanReloadOfTheReadingTabCarriesItsHeldLandingToTheReloadedProjection`,
+`ACarriedLandingIsCancelledByItsOriginalTokenAfterTheReload`,
+`ACarriedLandingIsCancelledByItsOriginalTokenDuringTheReload`,
+`AFailedRescanReloadRefusesTheCarriedLandingSilently`,
+`AReloadThatBindsNoReplacementModelRefusesTheCarriedLandingOnce`,
+`AReloadWhoseSurfaceLetsGoOfTheTabStillRefusesTheCarriedLandingOnce`) —
+and throwing if main's replaced `ARescanReloadOfTheReadingTabWithdrawsItsHeldLandingSilently`
+is still listed (WB-9 is not on the base); the run; the same for the
+accessibility project's four reading journeys (NVDA closed); the format
+gate over the touched `.cs` files. Registers: append the R-10 record (the
+partial projection applied, the stage not a refresh, the late diagram
+silent, the placeholder's name, a rescan-carried landing seated on the
+reloaded partial projection and never refused by a stage-2 failure) and
+an AR-60 note (the stage has its own token and belongs to its projection:
+retired when that projection is replaced, detached or disposed, never by
+a preference change or a newer refresh that keeps it, after which it
+still lands; its landing never restores a memo dropped while it ran) to
+`docs/plans/40_nvda_matrix_remediation_contracts.md`; amend
+`docs/plans/18_windows_port/w_c_matrix.md:23` (the pending placeholder with
+its source as text beside it; in-place completion); note progressive
+projection on `docs/plans/18_windows_port/parity_matrix.md:272`. Not
+delivered: a progressive math stage; an announcement for late diagrams.
+Done when the Windows lane with the shell gate is green, the codex
+review (size M–L) is done, the format gate is clean with
+`ReadingSurface.cs`'s CR count unchanged, the mutation run is recorded,
+and the NVDA pass (text readable at once; the pending source read by
+arrowing and "Diagram, rendering, group"; description read after the
+render with nothing announced in between; a broken fence reads "Diagram
+could not be rendered …" then its reason and source; F6 lands without
+waiting) is in the PR body with `Closes #1317`. Commit: `feat(windows):
+the reading view projects text first and lets diagrams arrive in place`.
