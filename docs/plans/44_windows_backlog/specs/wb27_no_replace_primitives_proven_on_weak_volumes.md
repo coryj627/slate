@@ -85,8 +85,13 @@ not persistent across mounts (the matrix's "no persistent IDs" row).
 
 No production code changes unless a probe fails. Facts first:
 
-1. **A volume gate.** New `vault/weak_volume_tests.rs` (`#![cfg(windows)]`,
-   registered in `vault/mod.rs` beside `windows_entry_tests`) reads
+1. **A volume gate.** New `vault/weak_volume_tests.rs`, registered in
+   `vault/mod.rs` as `#[cfg(all(test, windows))] mod weak_volume_tests;`
+   beside `test_support` and `test_trash_census` (`:100-104`;
+   `windows_entry_tests.rs` is not registered there but through a
+   `#[path]` `mod tests` in `windows_entry.rs:683-685`), so every fact's
+   path is `vault::weak_volume_tests::…` and the `weak_volume` filter
+   selects it. It reads
    `SLATE_WEAK_VOLUME_FAT32`, `SLATE_WEAK_VOLUME_EXFAT`,
    `SLATE_WEAK_VOLUME_SMB` (new env names; each an existing scratch
    directory on that volume). Each fact is `#[ignore = "needs
@@ -154,12 +159,16 @@ Remove-SmbShare -Name slate-probe -Force; Dismount-VHD -Path C:\probe\fat32.vhdx
 | `weak_volume_rename_and_move_land_on_a_free_name_and_refuse_an_occupied_one` | per volume: landed; refusal; both entries unchanged | set `ReplaceIfExists` true in `rename_opened` |
 | `weak_volume_case_only_rename_keeps_the_entry` | per volume: one entry with the new spelling; identity equal where ids persist | rename through a temporary name that drops the id |
 | `weak_volume_stale_identity_refuses_where_ids_are_identities` | NTFS/SMB-with-ids: refused; FAT: observation recorded | skip the identity compare |
-| `weak_volume_gate_names_the_file_system_it_ran_on` | the file-system name matches the variable's kind | — |
+| `weak_volume_gate_names_the_file_system_it_ran_on` | the file-system name matches the variable's kind | accept any file-system name in `weak_volumes()` |
 | (conditional) `weak_volume_that_cannot_rename_without_replacing_refuses_truthfully` | the exact reason sentence | fall back to a replacing rename |
 | not ignored: `weak_volume_gate_is_quiet_when_no_volume_is_set` | with none set, every gated fact returns early (so `--ignored` runs stay green on a bare runner) | panic on unset |
 
 Rust snake_case; every name carries the `weak_volume` substring for the
-filter.
+filter. The counts the Verification enforces: **five** unconditional
+`#[ignore]` facts (the first five rows); the refusal fact is a sixth
+`#[ignore]` fact **only if that branch ships** (Design step 3); the
+quiet-gate fact is not ignored, so `-- --ignored --list` never lists it
+and it is discovered by the plain `-- --list`.
 
 ## Docs and registers
 
@@ -175,23 +184,54 @@ filter.
 
 ## Verification
 
-PowerShell, repo root. The `--list` line must print 7 before the gated
-run (6 gated + the quiet-gate fact; the quiet fact also runs in the plain
-line).
+PowerShell, repo root. Discovery is checked by name and throws on a
+missing fact; every command's `$LASTEXITCODE` is checked (no output
+grepping for "Failed"). Libtest's `--ignored --list` lists ignored facts
+only, so the quiet gate is discovered by the plain listing and the gated
+facts by the ignored one.
 
-```
-$env:CARGO_TARGET_DIR='C:\dev\slate\target-wb27'
-cargo test -p slate-core --locked weak_volume                    # the quiet gate (1 test)
-cargo test -p slate-core --locked windows_entry
-cargo test -p slate-core --locked --no-fail-fast
-cargo fmt --all -- --check
-cargo clippy --all-targets --workspace -- -D warnings
-cargo test --workspace --locked
-cargo bench --workspace --no-run
-bash scripts/check-license-headers.sh
-# on the probe machine, after the volume procedure above has set the three variables:
-cargo test -p slate-core --locked -- --ignored --list weak_volume | Select-String ': test$' | Measure-Object | Select-Object -ExpandProperty Count   # 7
-cargo test -p slate-core --locked -- --ignored --test-threads=1 weak_volume
+```powershell
+$env:CARGO_TARGET_DIR = 'C:\dev\slate\target-wb27'
+function Assert-Ok([string]$step) { if ($LASTEXITCODE -ne 0) { throw "$step failed ($LASTEXITCODE)" } }
+function Assert-Listed([string[]]$listed, [string[]]$facts, [string]$what) {
+    foreach ($fact in $facts) {
+        if (-not ($listed -match "::$([regex]::Escape($fact)): test$")) { throw "$what does not list $fact" }
+    }
+}
+# the non-ignored quiet gate, on every machine:
+$plain = cargo test -p slate-core --locked weak_volume -- --list; Assert-Ok 'listing weak_volume'
+Assert-Listed $plain @('weak_volume_gate_is_quiet_when_no_volume_is_set') 'the plain listing'
+cargo test -p slate-core --locked weak_volume; Assert-Ok 'the quiet gate'
+cargo test -p slate-core --locked windows_entry; Assert-Ok 'windows_entry'
+cargo test -p slate-core --locked --no-fail-fast; Assert-Ok 'the whole core suite'
+cargo fmt --all -- --check; Assert-Ok 'fmt'
+cargo clippy --all-targets --workspace -- -D warnings; Assert-Ok 'clippy'
+cargo test --workspace --locked; Assert-Ok 'workspace tests'
+cargo bench --workspace --no-run; Assert-Ok 'bench compile'
+bash scripts/check-license-headers.sh; Assert-Ok 'licence headers'
+
+# on the probe machine, in the session where the volume procedure above set the three variables:
+$probed = @()
+foreach ($name in 'SLATE_WEAK_VOLUME_FAT32', 'SLATE_WEAK_VOLUME_EXFAT', 'SLATE_WEAK_VOLUME_SMB') {
+    $value = [Environment]::GetEnvironmentVariable($name)
+    if ($value -and -not (Test-Path $value)) { throw "$name names $value, which does not exist" }
+    if ($value) { $probed += $name } else { "$name unset: that volume is 'not probed' in the PR body and the matrix" }
+}
+if ($probed.Count -eq 0) { throw 'no SLATE_WEAK_VOLUME_* is set; run the volume procedure first' }
+$gated = @(
+    'weak_volume_create_lands_on_a_free_name_and_preserves_an_occupied_one',
+    'weak_volume_rename_and_move_land_on_a_free_name_and_refuse_an_occupied_one',
+    'weak_volume_case_only_rename_keeps_the_entry',
+    'weak_volume_stale_identity_refuses_where_ids_are_identities',
+    'weak_volume_gate_names_the_file_system_it_ran_on'
+)
+$refusal = 'weak_volume_that_cannot_rename_without_replacing_refuses_truthfully'
+if (Select-String -Path crates/slate-core/src/vault/weak_volume_tests.rs -Pattern "fn $refusal\(" -Quiet) { $gated += $refusal }   # only when the refusal branch shipped
+$ignored = cargo test -p slate-core --locked weak_volume -- --ignored --list; Assert-Ok 'listing the gated facts'
+Assert-Listed $ignored $gated 'the ignored listing'
+$count = @($ignored | Select-String ': test$').Count
+if ($count -ne $gated.Count) { throw "the ignored listing has $count facts; expected $($gated.Count)" }
+cargo test -p slate-core --locked weak_volume -- --ignored --test-threads=1; Assert-Ok 'the gated facts'
 ```
 
 No C# changes, so no `dotnet` steps. Mutation run: each row's mutation
@@ -201,11 +241,15 @@ reverted. CI: `windows.yml` rust-tests (the quiet gate) and the
 
 ## Acceptance
 
-- [ ] The six gated facts and the quiet-gate fact exist; the gated ones
-      have run green on FAT32, exFAT and an SMB share (lane or recorded
-      owner run) and their observations are in the PR body.
-- [ ] No replacing rename was observed; or the truthful refusal ships and
-      the finding is on #1434/#1470 for PR 38.
+- [ ] The five unconditional gated facts and the quiet-gate fact exist,
+      each discovered by its own listing (the quiet gate by the plain
+      `--list`, the five by `--ignored --list`); the five have run green on
+      FAT32, exFAT and an SMB share (lane or recorded owner run) and their
+      observations are in the PR body.
+- [ ] Either no replacing rename was observed and the refusal fact does
+      not exist (the ignored listing holds exactly five), or the truthful
+      refusal ships with its sixth gated fact, which runs green, and the
+      finding is on #1434/#1470 for PR 38.
 - [ ] The matrix's Windows rows appended.
 - [ ] PR body `Refs #1434`, `Refs #1470`; "not delivered": any volume the
       hardware could not provide (its facts stay unrun; the row says
@@ -217,31 +261,53 @@ Prove the Windows no-replace create and rename on FAT32, exFAT and SMB;
 no owner decision is pending (RD9 is recorded on both issues). Read
 `fs.rs:697-770` and `:1170-1215`, `windows_entry.rs:488-553`, `:612-700`,
 `windows_entry_tests.rs:1-60`, `trash_handoff.rs:80-100`,
-`trash_handoff_tests.rs:783-790` (the gate pattern),
+`trash_handoff_tests.rs:783-790` (the gate pattern), `vault/mod.rs:94-104`
+(where test modules register),
 `24_structural_identity_capability_matrix.md:147-151`, `:173-187`,
-`:189-220`. Build `vault/weak_volume_tests.rs` with `weak_volumes()`
-reading `SLATE_WEAK_VOLUME_FAT32` / `_EXFAT` / `_SMB` and checking the
-file-system name, and the facts, each seen failing first under a
-mutation: `weak_volume_create_lands_on_a_free_name_and_preserves_an_occupied_one`
-(bytes land; `DestinationExists`; occupant unchanged; stage cleaned);
-`weak_volume_rename_and_move_land_on_a_free_name_and_refuse_an_occupied_one`;
-`weak_volume_case_only_rename_keeps_the_entry` (identity where ids
-persist, listing otherwise); `weak_volume_stale_identity_refuses_where_ids_are_identities`;
-`weak_volume_gate_names_the_file_system_it_ran_on`;
-`weak_volume_gate_is_quiet_when_no_volume_is_set` (not ignored); and,
-only if a primitive fails, `weak_volume_that_cannot_rename_without_replacing_refuses_truthfully`
-with the core-owned `InvalidPath` reason. Mount the volumes with the
-captured-object PowerShell procedure (two VHDs via `New-VHD | Mount-VHD
--Passthru | Initialize-Disk | New-Partition -AssignDriveLetter |
-Format-Volume`, directories created under the returned drive letters,
-`New-SmbShare slate-probe` over `C:\probe\share`), export the three
-variables, run `cargo test -p slate-core --locked -- --ignored
---test-threads=1 weak_volume` after `--list` shows 7 tests. Change
-production code only if a primitive fails, and then only to refuse.
-Registers: the matrix's §3.3 / §5 / §6 Windows rows (appended); contract
-31 FR-10 only with a refusal. Not delivered: any volume the hardware
-cannot provide (row "not probed"). Done when the gated facts have run
-green on all three volumes somewhere recorded, the PowerShell gates and
-the Windows lane are green, and the PR body carries `Refs #1434`,
+`:189-220`. Build `vault/weak_volume_tests.rs`, registered in
+`vault/mod.rs` as `#[cfg(all(test, windows))] mod weak_volume_tests;`,
+with `weak_volumes() -> Vec<(VolumeKind, PathBuf)>` (new) reading
+`SLATE_WEAK_VOLUME_FAT32` / `_EXFAT` / `_SMB` and checking the file-system
+name (`GetVolumeInformationW`; UNC and `DRIVE_REMOTE` for SMB), and the
+facts, each seen failing first under its mutation:
+- five unconditional `#[ignore]` facts —
+  `weak_volume_create_lands_on_a_free_name_and_preserves_an_occupied_one`
+  (bytes land; `DestinationExists`; occupant unchanged; stage cleaned —
+  pass `replace = true` at `fs.rs:1210`);
+  `weak_volume_rename_and_move_land_on_a_free_name_and_refuse_an_occupied_one`
+  (landed; refusal; both entries unchanged — `ReplaceIfExists` true in
+  `rename_opened`); `weak_volume_case_only_rename_keeps_the_entry` (one
+  entry with the new spelling; identity equal where ids persist, listing
+  otherwise — rename through a temporary name);
+  `weak_volume_stale_identity_refuses_where_ids_are_identities` (refused
+  on NTFS/SMB with ids; FAT observation recorded — skip the identity
+  compare); `weak_volume_gate_names_the_file_system_it_ran_on` (the
+  file-system name matches the variable's kind — accept any name);
+- one non-ignored fact, `weak_volume_gate_is_quiet_when_no_volume_is_set`
+  (with none set every gated body returns early — panic on unset);
+- only if a primitive fails, a sixth `#[ignore]` fact,
+  `weak_volume_that_cannot_rename_without_replacing_refuses_truthfully`
+  (the exact core-owned `InvalidPath` reason — fall back to a replacing
+  rename).
+
+Mount the volumes with the captured-object PowerShell procedure (two VHDs
+via `New-VHD | Mount-VHD -Passthru | Initialize-Disk | New-Partition
+-AssignDriveLetter | Format-Volume`, directories created under the
+returned drive letters, `New-SmbShare slate-probe` over
+`C:\probe\share`) and export the three variables. Discovery: the plain
+`cargo test -p slate-core --locked weak_volume -- --list` must list the
+quiet gate (`--ignored --list` never lists a non-ignored fact); the
+`-- --ignored --list` listing must hold exactly the five gated names, or
+six when the refusal fact exists in the source; then
+`cargo test -p slate-core --locked weak_volume -- --ignored --test-threads=1`.
+Each command's `$LASTEXITCODE` is checked and a missing fact throws.
+Change production code only if a primitive fails, and then only to
+refuse. Registers: the matrix's §3.3 / §5 / §6 Windows rows (appended);
+contract 31 FR-10 only with a refusal. Not delivered: any volume the
+hardware cannot provide (row "not probed"). Done when the five gated
+facts (six with a refusal) have run green on all three volumes somewhere
+recorded, the quiet gate and the PowerShell gates (whole core suite,
+fmt, clippy, workspace tests, bench compile, licence headers) pass, the
+Windows lane is green, and the PR body carries `Refs #1434`,
 `Refs #1470` with the per-volume table. Commit:
 `test(core): the windows no-replace create and rename are proven on fat32, exfat and an smb share`.

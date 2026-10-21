@@ -134,9 +134,24 @@ Facts fail first (§4 rule 1).
 - `TasksReviewTests.AReviewToggleSpeaksCoresEvents` — success and failure
   through `TasksReviewViewModel.ToggleTask`; `:622`'s pin becomes
   "Task could not be toggled: index commit failed." (period).
-- `W1WorkspaceTests.ATabToggleSpeaksCoresEvents` (or in `TasksPanelTests`
-  beside the tab-published cases) — `PublishTaskToggleThroughTab` success
-  and failure; `Status` equals the rendered text.
+- `TasksPanelTests.ATabToggleSpeaksCoresEvents` — beside the tab-route
+  cases `PanelToggleWritesThroughTheGuardedTabPath` (`TasksPanelTests.cs:244`)
+  and `RealPreCommitFailuresRepairTheIndexOnTheTabRoute` (`:819`), so the
+  Verification filter's `TasksPanelTests` class selects it (`W1WorkspaceTests.cs`
+  has no class `W1WorkspaceTests`; its classes are `W1WorkspacePersistenceTests`,
+  `W1WorkspaceModelTests`, …). Success: `todo.md` open in a tab, the panel
+  toggles its first open task through the tab route
+  (`PublishTaskToggleThroughTab`; pumped with `PumpDispatcherUntil` until
+  the announcement lands, as `:819` does): the tab's `Status` equals
+  `A11yRender(new A11yEvent.TaskToggled(true)).Text` and exactly one
+  `TaskToggled { Completed: true }` is announced, no `HostComposed`.
+  Failure: under `EnvFaultLock` with `SLATE_TEST_FAULT_AFTER_WRITE` set to
+  the note's stem (the `:819` seam, cleared in `finally`), the tab's
+  `Status`, read inside the announcer callback when the single
+  `TaskToggleFailed` arrives (the later repair may post its own sentence,
+  as `:819` shows), equals `A11yRender` of that event, ends with ".", and
+  contains no `@message=`. Mutation: restore either
+  `HostComposed` arm in `PublishTaskToggleThroughTab` → fails.
 - `W2EditorInteractionTests.CtrlEnterWithNothingUnderTheCaretSaysSo` —
   Ctrl+Enter on plain prose, inside display math, and on a bare `#` each
   post exactly one `NothingToActivateAtCursor`; `ActivateAt` still returns
@@ -164,15 +179,30 @@ Facts fail first (§4 rule 1).
 ## Verification
 
 ```powershell
-$env:CARGO_TARGET_DIR='C:\dev\slate\target-wb03'; ./apps/slate-windows/generate-bindings.ps1 -Locked
-dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release   # Error(s)=0
+$env:CARGO_TARGET_DIR = 'C:\dev\slate\target-wb03'
+function Assert-Ok([string] $What) { if ($LASTEXITCODE -ne 0) { throw "$What exited $LASTEXITCODE" } }
+./apps/slate-windows/generate-bindings.ps1 -Locked; Assert-Ok 'generate-bindings'
+dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release; Assert-Ok 'dotnet build'   # and Error(s)=0
 $tests = 'apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj'
+# every required fact lives in a class this filter selects (the tab-route fact is in TasksPanelTests; W1WorkspaceTests.cs has no class of that name)
 $filter = 'FullyQualifiedName~SlateWindows.Tests.TasksPanelTests|FullyQualifiedName~SlateWindows.Tests.TasksReviewTests|FullyQualifiedName~SlateWindows.Tests.W2EditorInteractionTests|FullyQualifiedName~SlateWindows.Tests.Censuses.A11yTriggerParityCensus|FullyQualifiedName~SlateWindows.Tests.Censuses.A11yCorpusCensus'
-dotnet test $tests --no-build --configuration Release --list-tests --filter $filter | Select-String 'CtrlEnterWithNothingUnderTheCaretSaysSo|ACtrlClickOnPlainProseStaysSilent|AToggledTaskSpeaksCoresTaskToggledEvent|AFailedToggleSpeaksCoresDetailWithAClosingPeriod|AReviewToggleSpeaksCoresEvents|ATabToggleSpeaksCoresEvents'   # six lines, else the filter is wrong
-dotnet test $tests --no-build --configuration Release --filter $filter
-python -I scripts/a11y_trigger_ledger.py --write ; python -I scripts/a11y_trigger_ledger.py --check
-$cs = @(git diff --name-only origin/main -- '*.cs') + @(git ls-files --others --exclude-standard -- '*.cs')   # WorkspaceViewModel.cs, EditorInteractions.cs, Panels/TasksReviewViewModel.cs, TasksPanelTests.cs, TasksReviewTests.cs, W2EditorInteractionTests.cs, W1WorkspaceTests.cs
-dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $cs
+$names = @(dotnet test $tests --no-build --configuration Release --list-tests --filter $filter | Select-String '^\s{4}\S' | ForEach-Object { ($_.Line.Trim() -split '\(', 2)[0] }); Assert-Ok 'test discovery'
+$required = @(
+  'SlateWindows.Tests.TasksPanelTests.AToggledTaskSpeaksCoresTaskToggledEvent',
+  'SlateWindows.Tests.TasksPanelTests.AFailedToggleSpeaksCoresDetailWithAClosingPeriod',
+  'SlateWindows.Tests.TasksPanelTests.ATabToggleSpeaksCoresEvents',
+  'SlateWindows.Tests.TasksReviewTests.AReviewToggleSpeaksCoresEvents',
+  'SlateWindows.Tests.W2EditorInteractionTests.CtrlEnterWithNothingUnderTheCaretSaysSo',
+  'SlateWindows.Tests.W2EditorInteractionTests.ACtrlClickOnPlainProseStaysSilent',
+  'SlateWindows.Tests.Censuses.A11yTriggerParityCensus.EveryBindingKeyAndEveryConstructionIsCoveredInBothDirections',
+  'SlateWindows.Tests.Censuses.A11yTriggerParityCensus.EveryResidueConstructionHasItsOwnNamedEngineAndNoStaleWaivers')
+$missing = @($required | Where-Object { $names -notcontains $_ })
+if ($missing.Count -gt 0) { throw "the filter does not select: $($missing -join ', ')" }
+dotnet test $tests --no-build --configuration Release --filter $filter; Assert-Ok 'dotnet test'
+python -I scripts/a11y_trigger_ledger.py --write; Assert-Ok 'ledger --write'
+python -I scripts/a11y_trigger_ledger.py --check; Assert-Ok 'ledger --check'
+$cs = @(git diff --name-only origin/main -- '*.cs') + @(git ls-files --others --exclude-standard -- '*.cs')   # WorkspaceViewModel.cs, EditorInteractions.cs, Panels/TasksReviewViewModel.cs, TasksPanelTests.cs, TasksReviewTests.cs, W2EditorInteractionTests.cs
+dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $cs; Assert-Ok 'dotnet format'
 ```
 
 `WorkspaceViewModel.cs` has 9 CRs today (mixed endings): check the count
@@ -184,7 +214,7 @@ in the editor → "Task completed." / "Task reopened."; a forced failure
 
 ## Acceptance
 
-- [ ] Six facts above pass, each seen failing first; mutation list run.
+- [ ] Six facts above pass, each seen failing first; mutation list run; the Verification discovery check finds all six plus the two parity-census facts by fully qualified name (it throws otherwise), and every Verification command exits 0.
 - [ ] Three designations and six residue entries removed; ledger regenerated; `--check` clean; both parity-census facts green.
 - [ ] Windows lane green; format gate clean; CR count of `WorkspaceViewModel.cs` unchanged.
 - [ ] NVDA spot recorded in the PR body (three phrases).
@@ -214,8 +244,17 @@ and seen failing: `TasksPanelTests.AToggledTaskSpeaksCoresTaskToggledEvent`
 faulted write renders "Task could not be toggled: <detail>." with no
 `@message=`); `TasksReviewTests.AReviewToggleSpeaksCoresEvents` (success
 and failure typed; `:622`'s pin gains its period);
-`W1WorkspaceTests.ATabToggleSpeaksCoresEvents` (tab route; `Status` equals
-the rendered text); `W2EditorInteractionTests.CtrlEnterWithNothingUnderTheCaretSaysSo`
+`TasksPanelTests.ATabToggleSpeaksCoresEvents` (beside the tab-route facts
+`PanelToggleWritesThroughTheGuardedTabPath` `TasksPanelTests.cs:244` and
+`RealPreCommitFailuresRepairTheIndexOnTheTabRoute` `:819` — not in
+`W1WorkspaceTests.cs`, which has no class of that name and which the filter
+does not select; `todo.md` open in a tab, a panel toggle publishes through
+`PublishTaskToggleThroughTab`: the tab's `Status` equals the rendered
+`TaskToggled(true)` and exactly one typed `TaskToggled` is announced; under
+`EnvFaultLock` with `SLATE_TEST_FAULT_AFTER_WRITE` cleared in `finally`,
+`Status` read in the announcer callback when the single `TaskToggleFailed`
+arrives equals its rendering, with its period and no `@message=`);
+`W2EditorInteractionTests.CtrlEnterWithNothingUnderTheCaretSaysSo`
 (prose, display math, bare `#` each post exactly one
 `NothingToActivateAtCursor`, `ActivateAt` still false);
 `W2EditorInteractionTests.ACtrlClickOnPlainProseStaysSilent` (`Pointer`
@@ -227,7 +266,19 @@ fails its fact. Registers: delete the three `proposed` designations
 `TaskToggleCompletion@1/@2`, `TasksReviewViewModel.ToggleTask@1/@2`; run
 `python -I scripts/a11y_trigger_ledger.py --write` so
 `38_notification_dispatcher_contracts.md:711-1060` regenerates; both
-`A11yTriggerParityCensus` coverage facts green. No owner decision. Not
+`A11yTriggerParityCensus` coverage facts green. Local loop, each native
+command followed by a check that throws on a nonzero `$LASTEXITCODE`:
+regenerate bindings (`$env:CARGO_TARGET_DIR='C:\dev\slate\target-wb03'`),
+Release build, then `dotnet test --list-tests` over the filter
+`FullyQualifiedName~SlateWindows.Tests.TasksPanelTests |
+…TasksReviewTests | …W2EditorInteractionTests |
+…Censuses.A11yTriggerParityCensus | …Censuses.A11yCorpusCensus`, throwing
+unless all six facts above and the two parity-census facts
+(`EveryBindingKeyAndEveryConstructionIsCoveredInBothDirections`,
+`EveryResidueConstructionHasItsOwnNamedEngineAndNoStaleWaivers`) are
+listed by their fully qualified names; the run; the ledger `--write` and
+`--check`; `dotnet format --verify-no-changes --include` over the six
+touched `.cs` files. No owner decision. Not
 delivered: the two "Task toggled on disk, but …" sentences stay
 `HostComposed`. Done when the Windows lane is green, the format gate is
 clean with `WorkspaceViewModel.cs`'s CR count unchanged, the mutation run

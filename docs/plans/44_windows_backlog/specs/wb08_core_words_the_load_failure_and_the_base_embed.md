@@ -1,6 +1,6 @@
 # WB-8 — Core words the failure: a tab that cannot load speaks core's sentence, and Ctrl+E titles a `.base` embed as a base
 
-Issues: Closes #1266, Closes #1288. Size S. Lanes: rust, windows (`embed_target_kind` is a core export either way); swift (compile) only under WD23's new-event answer. AT: NVDA spot (the two Windows sentences). Wave: W3. Depends on: nothing (WB-8 is alone in its wave on core's `a11y.rs` corpus, §6). Parallel with: WB-7, WB-9. Decision: WD23 (pending; recommended "reuse `FileReopenFailed`"; under the other answer — a new `NoteOpenFailed` — the corpus, the three mirrors, the artifact and the Swift lane join the chunk, as the alternative design below says).
+Issues: Closes #1266, Closes #1288. Size S. Lanes: rust, windows, swift (compile) — all three under either WD23 answer, because `embed_target_kind` / `EmbedTargetKind` is a new FFI export under both and the generated Swift binding must compile it (`swift-tests.yml:23-27` runs on any `crates/slate-core/**` or `crates/slate-uniffi/**` change; plan §7: a binding change adds `swift-tests.yml`); only the `A11yEvent` mirror arms, the corpus rows, the blind mac mirror entry and the mac designation are conditional on WD23's new-event answer. AT: NVDA spot (the two Windows sentences). Wave: W3. Depends on: nothing (WB-8 is alone in its wave on core's `a11y.rs` corpus, §6). Parallel with: WB-7, WB-9. Decision: WD23 (pending; recommended "reuse `FileReopenFailed`"; under the other answer — a new `NoteOpenFailed` — the corpus, the three mirrors (the mac one a blind edit), the artifact and the mac designation join the chunk, as the alternative design below says; the Swift lane is required either way).
 
 ## Goal
 
@@ -85,7 +85,10 @@ Verified in the worktree; the plan's and `report_a11y.md`'s lines hold.
   "Reuse `FileReopenFailed`: the sentence is truthful for a first open
   too, and it removes the corpus change, the blind mac mirror edit and the
   Swift lane from WB-8. Add `NoteOpenFailed` only if the owner wants
-  'open' and 'reopen' to differ."
+  'open' and 'reopen' to differ." The quote's "and the Swift lane" is
+  wrong and is reported for the plan: reuse removes the event's mirror
+  and corpus edits, not the Swift compile of the independent
+  `embed_target_kind` export (#1288), which both answers add.
 - #1288: mac's `BaseEmbedDocument` rule (`Bases/AppState+Bases.swift:351`):
   a `.base` embed is a base, never a note. Core's `ResolvedEmbed::Base`
   (`a11y.rs:3305`) is the card data both hosts already render from.
@@ -104,10 +107,11 @@ load has no announcer in scope (it is a constructor-time load), post
 through the tab's existing announcement route and say in the PR body where
 it lands; the status text is the rendered sentence either way.
 `VaultErrorDetailCensus.Sites()` gains the load site: `{ "WorkspaceViewModel.cs",
-"<the load method's name>", "A11yEvent.FileReopenFailed", "Detail", 1,
-true }` plus the `LoadFailure` assignment (extend the walker if it reads
-only constructions). No core change, no corpus change, no mac edit for
-#1266.
+"Load", "A11yEvent.FileReopenFailed", "Detail", 1, true }`
+(`WorkspaceTabViewModel.Load`, `WorkspaceViewModel.cs:1828`, the file's
+only method named `Load`, so `CSharpSource.Method("Load")` is unambiguous)
+plus the `LoadFailure` assignment (extend the walker if it reads only
+constructions). No core change, no corpus change, no mac edit for #1266.
 
 **#1266, WD23 alternative (new event).** New `A11yEvent::NoteOpenFailed {
 name, detail }` beside `NoteSaveBlocked` (`a11y.rs:902`), rendered "Could
@@ -132,7 +136,13 @@ pattern at `:204`). The Windows site posts `NoteOpenFailed` instead.
 - FFI: `#[uniffi::export] pub fn embed_target_kind(target_path: String)
   -> EmbedTargetKind` beside `resolved_embed_title` (`lib.rs:11387`); a
   `crosses_the_ffi` fact (the pattern at `:14480`). Both bindings
-  regenerate; the Swift binding compiles unchanged (no consumer).
+  regenerate. The generated Swift binding gains the enum
+  `EmbedTargetKind` and the free function `embedTargetKind(targetPath:)`
+  (UniFFI's Swift names) with no mac consumer and no name clash
+  (`git grep -i -e EmbedTargetKind -e embed_target_kind` is empty on
+  main), so no mac source changes — but the binding is new Swift code,
+  so `swift-tests.yml` must be green under BOTH WD23 answers (it
+  triggers on this PR's `crates/` paths, `swift-tests.yml:23-27`).
 - `ResolvedEmbeds.Of`: `EmbedResolution.FullNote full when
   SlateUniffiMethods.EmbedTargetKind(full.TargetPath) is EmbedTargetKind.Base
   => new ResolvedEmbed.Base(full.TargetPath)` ahead of the `Note` arm. That
@@ -155,8 +165,11 @@ Facts fail first.
   `base.md`, `x.base.md` → Note. Mutation: compare the raw suffix
   case-sensitively → `PROJECTS.BASE` fails.
 - `lib.rs` `embed_target_kind_crosses_the_ffi`.
-- `W1WorkspaceTests.ATabThatCannotLoadSpeaksCoresSentence` — a tab over a
-  non-UTF-8 (or unreadable) note: `Status` equals
+- `W1WorkspaceModelTests.ATabThatCannotLoadSpeaksCoresSentence` (in
+  `W1WorkspaceTests.cs`, whose classes are `W1WorkspacePersistenceTests`,
+  `W1WorkspaceModelTests` `:124`, `W1SidebarAndRecentsTests`, … — there is
+  no class `W1WorkspaceTests`, so a filter on that name selects nothing)
+  — a tab over a non-UTF-8 (or unreadable) note: `Status` equals
   `A11yRender(FileReopenFailed(name, VaultErrorDetail(e))).Text`
   ("Could not reopen <name>: <detail>"), `LoadFailure` contains no
   `@message=`, and the announcement is typed `FileReopenFailed`. Mutation:
@@ -191,30 +204,51 @@ Facts fail first.
 ## Verification
 
 ```powershell
-$env:CARGO_TARGET_DIR='C:\dev\slate\target-wb08'
-cargo test -p slate-core a11y::
-cargo test -p slate-uniffi crosses_the_ffi
-# new-event answer only:
-# $env:SLATE_REGENERATE_FIXTURES='1'; cargo test -p slate-core committed_corpus_artifact_matches_the_vocabulary; Remove-Item Env:SLATE_REGENERATE_FIXTURES
-./apps/slate-windows/generate-bindings.ps1 -Locked
-dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release
+$env:CARGO_TARGET_DIR = 'C:\dev\slate\target-wb08'
+function Assert-Ok([string] $What) { if ($LASTEXITCODE -ne 0) { throw "$What exited $LASTEXITCODE" } }
+# Rust facts exist (cargo takes ONE positional filter; `-- --list` prints `path: test`):
+$core = @(cargo test -p slate-core embed_target_kind -- --list); Assert-Ok 'slate-core --list'
+if (-not ($core -match '^a11y::tests::embed_target_kind_is_base_only_for_the_base_extension: test$')) { throw 'embed_target_kind_is_base_only_for_the_base_extension is not discovered' }
+$ffi = @(cargo test -p slate-uniffi embed_target_kind -- --list); Assert-Ok 'slate-uniffi --list'
+if (-not ($ffi -match 'embed_target_kind_crosses_the_ffi: test$')) { throw 'embed_target_kind_crosses_the_ffi is not discovered' }
+cargo test -p slate-core a11y::; Assert-Ok 'slate-core a11y tests'
+cargo test -p slate-uniffi crosses_the_ffi; Assert-Ok 'slate-uniffi crosses_the_ffi tests'
+# new-event answer only (run these three as well):
+# $env:SLATE_REGENERATE_FIXTURES = '1'; cargo test -p slate-core committed_corpus_artifact_matches_the_vocabulary; Assert-Ok 'corpus regeneration'; Remove-Item Env:SLATE_REGENERATE_FIXTURES
+# $n = @(cargo test -p slate-core note_open_failed -- --list); Assert-Ok 'slate-core --list'; if (-not ($n -match 'note_open_failed_renders_core_detail_with_a_period: test$')) { throw 'note_open_failed fact missing' }
+# $n = @(cargo test -p slate-uniffi note_open_failed -- --list); Assert-Ok 'slate-uniffi --list'; if (-not ($n -match 'note_open_failed_crosses_the_ffi_as_core_renders_it: test$')) { throw 'note_open_failed FFI fact missing' }
+./apps/slate-windows/generate-bindings.ps1 -Locked; Assert-Ok 'generate-bindings'
+dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release; Assert-Ok 'dotnet build'   # and Error(s)=0
 $tests = 'apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj'
-$filter = 'FullyQualifiedName~SlateWindows.Tests.W1WorkspaceTests|FullyQualifiedName~SlateWindows.Tests.W2EditorInteractionTests|FullyQualifiedName~SlateWindows.Tests.EmbedTitleRealizedSurfaceTests|FullyQualifiedName~SlateWindows.Tests.Censuses.VaultErrorDetailCensus|FullyQualifiedName~SlateWindows.Tests.Censuses.A11yCorpusCensus|FullyQualifiedName~SlateWindows.Tests.AccessibilityNotificationDispatcherTests|FullyQualifiedName~SlateWindows.Tests.Censuses.EmbedPreviewTitleCensus|FullyQualifiedName~SlateWindows.Tests.ReadingEmbedTests'
-dotnet test $tests --no-build --configuration Release --list-tests --filter $filter | Select-String 'ATabThatCannotLoadSpeaksCoresSentence|CtrlEOnABaseEmbedTitlesItAsABase|ACaughtFailureIsAnnouncedInCoresWords'   # three lines, else the filter is wrong
-dotnet test $tests --no-build --configuration Release --filter $filter
-python -I scripts/a11y_trigger_ledger.py --write
+# W1WorkspaceTests.cs declares no class W1WorkspaceTests: the fact lives in W1WorkspaceModelTests (:124)
+$filter = 'FullyQualifiedName~SlateWindows.Tests.W1WorkspaceModelTests|FullyQualifiedName~SlateWindows.Tests.W2EditorInteractionTests|FullyQualifiedName~SlateWindows.Tests.EmbedTitleRealizedSurfaceTests|FullyQualifiedName~SlateWindows.Tests.Censuses.VaultErrorDetailCensus|FullyQualifiedName~SlateWindows.Tests.Censuses.A11yCorpusCensus|FullyQualifiedName~SlateWindows.Tests.AccessibilityNotificationDispatcherTests|FullyQualifiedName~SlateWindows.Tests.Censuses.EmbedPreviewTitleCensus|FullyQualifiedName~SlateWindows.Tests.ReadingEmbedTests'
+$raw = @(dotnet test $tests --no-build --configuration Release --list-tests --filter $filter | Select-String '^\s{4}\S' | ForEach-Object { $_.Line.Trim() }); Assert-Ok 'test discovery'
+$names = $raw | ForEach-Object { ($_ -split '\(', 2)[0] }
+foreach ($must in 'SlateWindows.Tests.W1WorkspaceModelTests.ATabThatCannotLoadSpeaksCoresSentence', 'SlateWindows.Tests.W2EditorInteractionTests.CtrlEOnABaseEmbedTitlesItAsABase', 'SlateWindows.Tests.Censuses.VaultErrorDetailCensus.ACaughtFailureIsAnnouncedInCoresWords', 'SlateWindows.Tests.EmbedTitleRealizedSurfaceTests.EveryResolvedKindReadsAsCoresTitleOnEveryRealizedSurface') {
+  if ($names -notcontains $must) { throw "the filter does not select $must" }
+}
+# the census theory lists one row per site; the load row must be among them (A11yEvent.NoteOpenFailed under the new-event answer):
+if (-not ($raw -like '*ACaughtFailureIsAnnouncedInCoresWords(file: "WorkspaceViewModel.cs", method: "Load", construct: "A11yEvent.FileReopenFailed"*')) { throw 'VaultErrorDetailCensus has no Load row' }
+dotnet test $tests --no-build --configuration Release --filter $filter; Assert-Ok 'dotnet test'
+python -I scripts/a11y_trigger_ledger.py --write; Assert-Ok 'ledger --write'
+python -I scripts/a11y_trigger_ledger.py --check; Assert-Ok 'ledger --check'
 $cs = @(git diff --name-only origin/main -- '*.cs') + @(git ls-files --others --exclude-standard -- '*.cs')   # WorkspaceViewModel.cs, ResolvedEmbeds.cs, Reading/ReadingContentViewModel.cs, Censuses/VaultErrorDetailCensus.cs, W1WorkspaceTests.cs, W2EditorInteractionTests.cs, EmbedTitleRealizedSurfaceTests.cs (+ Censuses/A11yCorpusCensus.cs under the new-event answer)
-dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $cs
-# the Rust gates `make ci` would run (CONTRIBUTING.md:76-98; no make here):
-cargo fmt --all --check
-cargo clippy --all-targets --workspace -- -D warnings
-cargo test --workspace
-cargo bench --workspace --no-run
-git ls-files '*.rs' '*.swift' '*.cs' | Where-Object { -not (Select-String -Path $_ -Pattern 'SPDX-License-Identifier' -SimpleMatch -Quiet) }   # prints nothing
+dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $cs; Assert-Ok 'dotnet format'
+# the Rust gates of plan §4 rule 3 (CONTRIBUTING.md:76-98; no make here):
+cargo fmt --all -- --check; Assert-Ok 'cargo fmt'
+cargo clippy --all-targets --workspace -- -D warnings; Assert-Ok 'cargo clippy'
+cargo test --workspace; Assert-Ok 'cargo test'
+cargo bench --workspace --no-run; Assert-Ok 'bench compile'
+# after `git add` of any new file; plain `bash` in PowerShell here is WSL's, so name Git Bash:
+& "$env:ProgramFiles\Git\bin\bash.exe" scripts/check-license-headers.sh; Assert-Ok 'license headers'
 ```
 
-CI: `windows.yml`, `rust.yml`; `swift-tests.yml` under the new-event
-answer (the blind mirror entry — the PR waits for it green, §11). AT: NVDA
+CI: `windows.yml`, `rust.yml` and `swift-tests.yml` under BOTH WD23
+answers — the generated Swift binding gains `EmbedTargetKind` and
+`embedTargetKind(targetPath:)` either way and only the mac lane compiles
+it (plan §7: a binding change adds `swift-tests.yml`); under the new-event
+answer the same lane also compiles the blind mirror entry. The PR waits for
+all three green (§11). AT: NVDA
 spot — open a note with invalid UTF-8: "Could not reopen <name>:
 <detail>" (new-event answer: "Could not open <name>: <detail>."); Ctrl+E on
 a `.base` embed: "Embedded base: <name>". Record both in the PR body.
@@ -222,11 +256,11 @@ a `.base` embed: "Embedded base: <name>". Record both in the PR body.
 ## Acceptance
 
 - [ ] WD23's recorded answer named in the PR body; the design branch followed matches it.
-- [ ] `embed_target_kind` in core and both bindings; `cargo test -p slate-core` and the five Rust gates green.
+- [ ] `embed_target_kind` in core and both bindings; `cargo test -p slate-core`, the four Rust gates of plan §4 rule 3 and the license-header check green.
 - [ ] Facts above pass, seen failing first; mutations run.
 - [ ] `VaultErrorDetailCensus` row added; `EmbedTitleRealizedSurfaceTests` base row true.
 - [ ] Ledger regenerated (and, new-event answer only: corpus, three mirrors, artifact, mac designation).
-- [ ] Windows and Rust lanes green (Swift lane too under the new-event answer); format gate clean.
+- [ ] Windows, Rust and Swift (`swift-tests.yml`) lanes green under either WD23 answer — the Swift lane compiles the new `EmbedTargetKind` binding, and under the new-event answer also the blind mirror entry; format gate clean; every Verification command exits 0 and both discovery checks pass.
 - [ ] NVDA spot (two sentences) in the PR body.
 - [ ] PR body: `Closes #1266`, `Closes #1288`; "not delivered: a base summary card in the popover body".
 
@@ -243,30 +277,56 @@ the other answer adds `A11yEvent::NoteOpenFailed { name, detail }` with
 corpus rows after `a11y.rs:4344`, mirror entries after
 `A11yCorpusCensus.cs:164` and `A11yCorpusCensusTests.swift:157`, FFI arms
 at `lib.rs:9164`/`:11041`, a regenerated `tests/fixtures/a11y/corpus.json`,
-and the Swift lane). Build: in the tab's load catch, post
+a `recorded` mac designation in `a11y_trigger_designations.json`, and the
+Rust facts `note_open_failed_renders_core_detail_with_a_period` and
+`note_open_failed_crosses_the_ffi_as_core_renders_it`; the Swift lane is
+required under BOTH answers, because the `embed_target_kind` export below
+is new Swift binding code either way). Build: in the tab's load catch
+(`WorkspaceTabViewModel.Load`, `WorkspaceViewModel.cs:1828`), post
 `A11yEvent.FileReopenFailed(Path.GetFileName(Path), SlateUniffiMethods.VaultErrorDetail(exception))`
-and set `Status`/`LoadFailure` from core's rendering; add the site to
-`VaultErrorDetailCensus.Sites()`; in core add `embed_target_kind(&str) ->
+and set `Status`/`LoadFailure` from core's rendering; add the row
+`{ "WorkspaceViewModel.cs", "Load", "A11yEvent.FileReopenFailed", "Detail", 1, true }`
+to `VaultErrorDetailCensus.Sites()`; in core add `embed_target_kind(&str) ->
 EmbedTargetKind { Note, Base }` beside `resolved_embed_title`, export it
-beside `lib.rs:11387`, regenerate both bindings; add the
+beside `lib.rs:11387` (`#[uniffi::export] pub fn embed_target_kind(target_path:
+String) -> EmbedTargetKind`, new), regenerate both bindings (the Swift one
+gains `EmbedTargetKind` and `embedTargetKind(targetPath:)` with no mac
+consumer, so no mac source changes); add the
 `FullNote`-is-a-base arm to `ResolvedEmbeds.Of` guarded by
 `SlateUniffiMethods.EmbedTargetKind`; swap the reading view's
 `EndsWith(".base")` for the core call. Facts first, seen failing:
 `a11y::tests::embed_target_kind_is_base_only_for_the_base_extension`
 (`.base` any case → Base, everything else Note);
 `embed_target_kind_crosses_the_ffi`;
-`W1WorkspaceTests.ATabThatCannotLoadSpeaksCoresSentence` (status is core's
-rendered sentence, no `@message=`, typed announcement);
-`VaultErrorDetailCensus.ACaughtFailureIsAnnouncedInCoresWords` (new row
-refuses a `.Message` read);
+`W1WorkspaceModelTests.ATabThatCannotLoadSpeaksCoresSentence` (in
+`W1WorkspaceTests.cs`, which has no class `W1WorkspaceTests`; status is
+core's rendered sentence, no `@message=`, typed announcement);
+`VaultErrorDetailCensus.ACaughtFailureIsAnnouncedInCoresWords` (new `Load`
+row refuses a `.Message` read);
 `W2EditorInteractionTests.CtrlEOnABaseEmbedTitlesItAsABase` (title, UIA
 name and `EmbedPreviewShown` all carry `ResolvedEmbed.Base`);
 `EmbedTitleRealizedSurfaceTests` base row → `OnPopoverAndLeaf: true`.
 Mutations: `exception.Message` back; the `Note` arm back; case-sensitive
-suffix. Registers: `python -I scripts/a11y_trigger_ledger.py --write`.
+suffix. Local loop (every native command followed by a `$LASTEXITCODE`
+check that throws): `cargo test -p slate-core embed_target_kind -- --list`
+and `cargo test -p slate-uniffi embed_target_kind -- --list` must list the
+two Rust facts; `cargo test -p slate-core a11y::`; `cargo test -p
+slate-uniffi crosses_the_ffi`; bindings regenerated and the Release build;
+`dotnet test --list-tests` over the filter `W1WorkspaceModelTests |
+W2EditorInteractionTests | EmbedTitleRealizedSurfaceTests |
+Censuses.VaultErrorDetailCensus | Censuses.A11yCorpusCensus |
+AccessibilityNotificationDispatcherTests | Censuses.EmbedPreviewTitleCensus
+| ReadingEmbedTests` (each `FullyQualifiedName~SlateWindows.Tests.…`) must
+list the three named facts, the embed-title theory and the census's `Load`
+row, else throw; then the run, the ledger `--write`/`--check`, the format
+gate over the touched `.cs` files, the four Rust gates, and
+`scripts/check-license-headers.sh` under Git Bash. Registers:
+`python -I scripts/a11y_trigger_ledger.py --write`.
 Not delivered: a base summary card in the popover body. Done when
-`windows.yml` and `rust.yml` are green (plus `swift-tests.yml` under the
-new-event answer), the five Rust gates and the format gate are clean, the
+`windows.yml`, `rust.yml` and `swift-tests.yml` are all green under either
+WD23 answer (the Swift lane compiles the new export; under the new-event
+answer it also compiles the blind mirror entry), the four Rust gates, the
+license-header check and the format gate are clean, the
 mutation run is recorded, and the NVDA spot (the load sentence, "Embedded
 base: <name>") is in the PR body with `Closes #1266`, `Closes #1288`.
 Commit: `fix(core,windows): a tab's load failure and a .base embed's
@@ -279,5 +339,9 @@ preview title are core's words`.
   contract C10"); the issue and the plan reverse that. The row flips to
   `true` in this chunk.
 - Plan §5's WB-8 lane cell says "rust, windows (+ swift mirror entry only
-  under WD23's new-event answer)": right, and `embed_target_kind` keeps
-  the rust lane in both answers.
+  under WD23's new-event answer)", and plan §2 (`:153`) and the WD23 row
+  (`:257`) say reuse removes "the Swift lane": wrong. `embed_target_kind`
+  is a new FFI export under both answers, so the Swift compile lane is
+  required either way (the WB-26 row's "all three under either design
+  answer, since the free-function alternative is a core export too" is
+  the same case); only the mirror entry is conditional.

@@ -45,18 +45,37 @@ No FlaUI journey (the sheet's hosted facts are the witness; the gate's citation 
 
 ## Verification
 
+PowerShell, repo root. Discovery is checked once, separately, and throws unless every required fact is listed; every command — each of the fifty runs included — is judged by its own `$LASTEXITCODE`, never by grepping the output (a passing VSTest summary prints "Failed: 0", and a build or host failure may print no summary at all).
+
 ```powershell
 $env:CARGO_TARGET_DIR = 'C:\dev\slate\target-wb23'
-./apps/slate-windows/generate-bindings.ps1 -Locked
-dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release
+function Assert-Ok([string]$step) { if ($LASTEXITCODE -ne 0) { throw "$step failed ($LASTEXITCODE)" } }
+./apps/slate-windows/generate-bindings.ps1 -Locked; Assert-Ok 'bindings'
+dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release; Assert-Ok 'build'
 $tests = 'apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj'
 $filter = 'FullyQualifiedName~SlateWindows.Tests.CitationAsyncInterleavingTests'
-dotnet test $tests --configuration Release --no-build --list-tests --filter $filter | Select-String 'IsDroppedWhenItsNoteCloses|SwitchesToABoardAndBack|QuickSwitchAwayAndBack|LeavesNoHandlerSubscribed'   # all four must appear
-dotnet test $tests --configuration Release --no-build --filter $filter
-1..50 | ForEach-Object { dotnet test $tests --configuration Release --no-build --filter $filter | Select-String 'Failed:' }   # must print nothing (this file has a flake history: #1285, #1316)
+$required = @(
+    'ADeferredSummaryIsDroppedWhenItsNoteCloses',
+    'ADeferredSummaryIsDroppedWhenTheReaderSwitchesToABoardAndBack',
+    'ADeferredSummaryIsDroppedOnAQuickSwitchAwayAndBack',
+    'ADroppedParkLeavesNoHandlerSubscribed',
+    'ADeferredSummaryStillAnswersForTheNoteItWasAskedAbout',
+    'ADeferredSummaryDoesNotAnswerForADifferentNote')
+$listed = @(dotnet test $tests --configuration Release --no-build --list-tests --filter $filter); Assert-Ok 'list-tests'
+foreach ($fact in $required) {
+    if (-not ($listed -match "\.$([regex]::Escape($fact))(\(|\s*$)")) { throw "the filter does not select $fact" }
+}
+dotnet test $tests --configuration Release --no-build --filter $filter; Assert-Ok 'the citation facts'
+# fifty consecutive runs (this file has a flake history: #1285, #1316); the first nonzero exit stops the loop
+foreach ($run in 1..50) {
+    dotnet test $tests --configuration Release --no-build --filter $filter | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "run $run of 50 failed ($LASTEXITCODE)" }
+}
+'50 of 50 runs passed'
 git add -N .
 $changed = @(git diff --name-only origin/main -- 'apps/slate-windows/*.cs')
-dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $changed
+if ($changed.Count -eq 0) { throw 'no C# change found' }
+dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $changed; Assert-Ok 'dotnet format'
 ```
 
 `$changed` is expected to hold exactly: `apps/slate-windows/src/SlateWindows/WorkspaceViewModel.cs`, `apps/slate-windows/src/SlateWindows/WorkspaceViewModel.Citations.cs`, `apps/slate-windows/src/SlateWindows/Panels/CitationsPanelViewModel.cs`, `apps/slate-windows/tests/SlateWindows.Tests/CitationAsyncInterleavingTests.cs`. Lanes: `windows.yml` only. NVDA spot check (§4 rule 4): open a cited note at startup (citations gated on the bibliography seed), press Ctrl+Shift+J at once, Ctrl+W before the leaf publishes, reopen the note from the tree: nothing is spoken but the note's own open, no sheet; then on the open note press Ctrl+Shift+J after the leaf loaded: "This note has N citations referencing M unique sources" as today.
@@ -64,7 +83,7 @@ dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include
 ## Acceptance
 
 - [ ] WD10 answered (default: drop at B).
-- [ ] The four new facts exist, failed first (the first one fails on its last assertion with the sheet open on `cited.md`'s counts); the subscription mutation and the drop mutation recorded; the two existing facts green; 50× local run clean.
+- [ ] The four new facts exist, failed first (the first one fails on its last assertion with the sheet open on `cited.md`'s counts); the subscription mutation and the drop mutation recorded; the two existing facts green; the discovery check lists all six; the fifty-run loop ends with "50 of 50 runs passed" (no run's `$LASTEXITCODE` nonzero).
 - [ ] `SyncPanels` drops the park when the citations leaf's note differs from the asked one; the handler's identity check kept; the subscriber-count seam exists.
 - [ ] Contract 40 R-8 addendum and the `w_c_matrix.md` note appended.
 - [ ] NVDA spot check in the PR body.
@@ -72,4 +91,4 @@ dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include
 
 ## Brief
 
-Read `apps/slate-windows/src/SlateWindows/WorkspaceViewModel.Citations.cs:250-300` and `:380-405`, `apps/slate-windows/src/SlateWindows/Panels/CitationsPanelViewModel.cs:110-150`, `apps/slate-windows/src/SlateWindows/WorkspaceViewModel.cs:2437-2452`, and `apps/slate-windows/tests/SlateWindows.Tests/CitationAsyncInterleavingTests.cs:60-120`, `:405-470`. Build: `WorkspaceViewModel.DropParkedSummaryIfNoteChanged()` in `WorkspaceViewModel.Citations.cs`, called from `SyncPanels` right after `Citations.NoteChanged`, that unsubscribes `OpenSummaryWhenPublished` from `Citations.RowsPublished` and clears `_summaryParked`/`_parkedSummaryPath` when `Citations.Path` differs ordinally from the asked path; `CitationsPanelViewModel.RowsPublishedSubscriberCountForTests` (the event's invocation-list length) and a `OpenSummaryWhenPublishedInvokedForTests` counter at the top of the handler. Facts in class `CitationAsyncInterleavingTests`, each failing first, every hold's `Wait` asserted and released in `finally`: `ADeferredSummaryIsDroppedWhenItsNoteCloses` (park, close, release, reopen: no sheet, no `CitationSummaryShown`; it fails on `main` on its last assertion), `ADeferredSummaryIsDroppedWhenTheReaderSwitchesToABoardAndBack` (same through a `.canvas` tab), `ADeferredSummaryIsDroppedOnAQuickSwitchAwayAndBack` (A→B→A before any publish: no sheet), `ADroppedParkLeavesNoHandlerSubscribed` (subscriber count back to the pre-press value and the handler counter unchanged by the reopen's publish; the required mutation deletes only the `-=` line); `ADeferredSummaryStillAnswersForTheNoteItWasAskedAbout` and `ADeferredSummaryDoesNotAnswerForADifferentNote` stay green. Registers: the R-8 addendum in `docs/plans/40_nvda_matrix_remediation_contracts.md:21` and the citations row of `docs/plans/18_windows_port/w_c_matrix.md`. Decision WD10 is pending (recommended drop at B); under "keep through A→B→A", drop only when the new note is null, flip the A→B→A fact to "still answers" and record the Markdown-switch race as accepted in contract 40. Not delivered: nothing. Done when `windows.yml` is green, `--list-tests` shows the four facts, the 50× local loop prints no failure, both mutations are in the PR body, and the NVDA spot check is recorded. Commit: `fix(windows): a parked citation summary is dropped when its note changes, so a reopened note never opens the sheet unasked`.
+Read `apps/slate-windows/src/SlateWindows/WorkspaceViewModel.Citations.cs:250-300` and `:380-405`, `apps/slate-windows/src/SlateWindows/Panels/CitationsPanelViewModel.cs:110-150`, `apps/slate-windows/src/SlateWindows/WorkspaceViewModel.cs:2437-2452`, and `apps/slate-windows/tests/SlateWindows.Tests/CitationAsyncInterleavingTests.cs:60-120`, `:405-470`. Build: `WorkspaceViewModel.DropParkedSummaryIfNoteChanged()` in `WorkspaceViewModel.Citations.cs`, called from `SyncPanels` right after `Citations.NoteChanged`, that unsubscribes `OpenSummaryWhenPublished` from `Citations.RowsPublished` and clears `_summaryParked`/`_parkedSummaryPath` when `Citations.Path` differs ordinally from the asked path; `CitationsPanelViewModel.RowsPublishedSubscriberCountForTests` (the event's invocation-list length) and a `OpenSummaryWhenPublishedInvokedForTests` counter at the top of the handler. Facts in class `CitationAsyncInterleavingTests`, each failing first, every hold's `Wait` asserted and released in `finally`: `ADeferredSummaryIsDroppedWhenItsNoteCloses` (park, close, release, reopen: no sheet, no `CitationSummaryShown`; it fails on `main` on its last assertion), `ADeferredSummaryIsDroppedWhenTheReaderSwitchesToABoardAndBack` (same through a `.canvas` tab), `ADeferredSummaryIsDroppedOnAQuickSwitchAwayAndBack` (A→B→A before any publish: no sheet), `ADroppedParkLeavesNoHandlerSubscribed` (subscriber count back to the pre-press value and the handler counter unchanged by the reopen's publish; the required mutation deletes only the `-=` line); `ADeferredSummaryStillAnswersForTheNoteItWasAskedAbout` and `ADeferredSummaryDoesNotAnswerForADifferentNote` stay green. Registers: the R-8 addendum in `docs/plans/40_nvda_matrix_remediation_contracts.md:21` and the citations row of `docs/plans/18_windows_port/w_c_matrix.md`. Decision WD10 is pending (recommended drop at B); under "keep through A→B→A", drop only when the new note is null, flip the A→B→A fact to "still answers" and record the Markdown-switch race as accepted in contract 40. Not delivered: nothing. Done when `windows.yml` is green; locally, in PowerShell with `$tests = 'apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj'` and `$filter = 'FullyQualifiedName~SlateWindows.Tests.CitationAsyncInterleavingTests'`, the bindings, the Release build and every `dotnet test` exit zero (each followed by a `$LASTEXITCODE` check that throws), `dotnet test $tests --configuration Release --no-build --list-tests --filter $filter` lists all six facts named above (a separate check that throws on a missing name), and fifty consecutive `dotnet test $tests --configuration Release --no-build --filter $filter` runs each exit zero — the loop throws on the first nonzero `$LASTEXITCODE`, never greps for "Failed:" (a passing summary prints "Failed: 0"); both mutations are in the PR body, and the NVDA spot check is recorded. Commit: `fix(windows): a parked citation summary is dropped when its note changes, so a reopened note never opens the sheet unasked`.
