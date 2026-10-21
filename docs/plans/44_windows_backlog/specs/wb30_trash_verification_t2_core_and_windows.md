@@ -531,7 +531,7 @@ named run never passes vacuously):
   migrates — PR 41 for macOS.
 - `w_c_matrix.md` Files tree row: the four sentences.
 - `Cargo.toml` / `Cargo.lock`: the `windows` crate (licence headers are
-  per source file; `bash scripts/check-license-headers.sh`).
+  per source file; `& "$env:ProgramFiles\Git\bin\bash.exe" scripts/check-license-headers.sh`).
 - PR bodies: `Refs #1468` on both parts; WB-24's real-Recycle-Bin run
   result pasted per WD14's other answer if the lane cannot run it.
 
@@ -572,7 +572,7 @@ cargo fmt --all -- --check; Assert-Ok 'fmt'
 cargo clippy --all-targets --workspace -- -D warnings; Assert-Ok 'clippy'
 cargo test --workspace --locked; Assert-Ok 'workspace tests'
 cargo bench --workspace --no-run; Assert-Ok 'bench compile'
-bash scripts/check-license-headers.sh; Assert-Ok 'licence headers'
+& "$env:ProgramFiles\Git\bin\bash.exe" scripts/check-license-headers.sh; Assert-Ok 'licence headers'
 ./apps/slate-windows/generate-bindings.ps1 -Locked; Assert-Ok 'bindings'
 dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release; Assert-Ok 'build'
 $fm = 'FullyQualifiedName~SlateWindows.Tests.FileManagementTests'

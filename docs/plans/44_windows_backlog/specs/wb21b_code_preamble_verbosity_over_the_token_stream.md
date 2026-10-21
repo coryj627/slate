@@ -163,15 +163,33 @@ Windows (`ReadingViewTests`, `W2EditorInteractionTests` — the class that holds
 
 ## Verification
 
+PowerShell, repo root. Each filter is listed first and the block throws
+unless every required fact is discovered under it; every command's
+`$LASTEXITCODE` is checked (no output grepping for "Failed").
+
 ```powershell
-$env:CARGO_TARGET_DIR='C:\dev\slate\target-wb21b'
-cargo test -p slate-core code::tests   # the ten preamble facts, failing first; the run summary must list them
-cargo fmt --all -- --check; cargo clippy --all-targets --workspace -- -D warnings; cargo test --workspace   # CONTRIBUTING.md:95-97, the `make ci` gates on PowerShell
-./apps/slate-windows/generate-bindings.ps1 -Locked
-dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release   # Error(s)=0 before reading counts
-$filter = "FullyQualifiedName~ReadingViewTests|FullyQualifiedName~W2EditorInteractionTests|FullyQualifiedName~CheckItemGroupsTests|FullyQualifiedName~CommandDriftTests|FullyQualifiedName~A11yCorpusCensus"
-dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --no-build --configuration Release --list-tests --filter $filter | Select-String "ACodeBlockPeerSpeaksTheFirstLineUnderThatVerbosity|ACodeBlockPeerSpeaksEveryTokenUnderThatVerbosity|ChangingTheCodeVerbosityReprojectsOpenReadingViews|TheThreeCodeVerbosityModesAreBackAndEachIsAnnouncedOnce" | Measure-Object | ForEach-Object { if ($_.Count -lt 4) { throw "new facts not discovered: $($_.Count)" } }
-dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --no-build --configuration Release --filter $filter
+$env:CARGO_TARGET_DIR = 'C:\dev\slate\target-wb21b'
+function Assert-Ok([string]$step) { if ($LASTEXITCODE -ne 0) { throw "$step failed ($LASTEXITCODE)" } }
+$rustFacts = @('preamble_only_is_code_block_preamble', 'first_line_is_the_first_line_verbatim', 'first_line_blank_speaks_blank_line', 'first_line_of_an_empty_source_is_the_preamble_alone', 'all_tokens_over_a_grammar_stream_equals_the_source', 'all_tokens_keeps_comments_and_strings_verbatim', 'all_tokens_emits_uncovered_ranges_in_place', 'all_tokens_unknown_language_reads_the_source', 'all_tokens_with_no_tokens_reads_the_source', 'all_tokens_clamps_overlapping_and_out_of_range_tokens', 'all_tokens_renders_tokens_not_declarations')
+$listed = cargo test -p slate-core --locked code::tests -- --list; Assert-Ok 'listing code::tests'
+$missing = @($rustFacts | Where-Object { -not ($listed -match "(^|::)$([regex]::Escape($_)): test$") })
+if ($missing.Count -gt 0) { throw "code::tests does not select: $($missing -join ', ')" }
+cargo test -p slate-core --locked code::tests; Assert-Ok 'code::tests'   # the eleven preamble facts, each seen failing first
+# the Rust gates (plan §4 rule 3; CONTRIBUTING.md:76-98 — no make on this machine):
+cargo fmt --all -- --check; Assert-Ok 'cargo fmt'
+cargo clippy --all-targets --workspace -- -D warnings; Assert-Ok 'cargo clippy'
+cargo test --workspace --locked; Assert-Ok 'cargo test --workspace'
+cargo bench --workspace --no-run; Assert-Ok 'cargo bench --workspace --no-run'   # the bench compile
+& "$env:ProgramFiles\Git\bin\bash.exe" scripts/check-license-headers.sh; Assert-Ok 'license headers'   # Git Bash by full path: a bare `bash` in PowerShell here resolves to WSL
+./apps/slate-windows/generate-bindings.ps1 -Locked; Assert-Ok 'generate-bindings'
+dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release; Assert-Ok 'dotnet build'
+$tests = 'apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj'
+$filter = 'FullyQualifiedName~SlateWindows.Tests.ReadingViewTests|FullyQualifiedName~SlateWindows.Tests.W2EditorInteractionTests|FullyQualifiedName~SlateWindows.Tests.CheckItemGroupsTests|FullyQualifiedName~SlateWindows.Tests.CommandDriftTests|FullyQualifiedName~A11yCorpusCensus'
+$names = dotnet test $tests --no-build --configuration Release --list-tests --filter $filter; Assert-Ok 'test discovery'
+$missing = @('ReadingViewTests.ACodeBlockPeerSpeaksTheFirstLineUnderThatVerbosity', 'ReadingViewTests.ACodeBlockPeerSpeaksEveryTokenUnderThatVerbosity', 'ReadingViewTests.ChangingTheCodeVerbosityReprojectsOpenReadingViews', 'W2EditorInteractionTests.TheThreeCodeVerbosityModesAreBackAndEachIsAnnouncedOnce') | Where-Object { -not ($names -match "\.$([regex]::Escape($_))\s*$") }
+if (@($missing).Count -gt 0) { throw "the filter does not select: $($missing -join ', ')" }
+if (-not ($names -match 'A11yCorpusCensus\.')) { throw 'no A11yCorpusCensus fact discovered' }
+dotnet test $tests --no-build --configuration Release --filter $filter; Assert-Ok 'the Windows facts'
 $files = @(
   'apps/slate-windows/src/SlateWindows/Reading/ReadingDocumentBuilder.cs',
   'apps/slate-windows/src/SlateWindows/Reading/ReadingContentViewModel.cs',
@@ -181,7 +199,7 @@ $files = @(
   'apps/slate-windows/tests/SlateWindows.Tests/W2EditorInteractionTests.cs',
   'apps/slate-windows/tests/SlateWindows.Tests/CheckItemGroupsTests.cs',
   'apps/slate-windows/tests/SlateWindows.Tests/CommandDriftTests.cs')
-dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $files
+dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $files; Assert-Ok 'dotnet format'
 ```
 
 CI: `rust.yml`, the Windows lane, `swift-tests.yml` (compile). AT: NVDA
@@ -196,6 +214,7 @@ in the PR body; the PR stays a draft until then (§4 rule 4).
 ## Acceptance
 
 - [ ] Rust facts and Windows facts fail first, then pass; mutations run.
+- [ ] The Verification block runs clean in PowerShell: the eleven Rust facts and the four Windows facts discovered by name, and every command's `$LASTEXITCODE` 0 — the Rust gates of plan §4 rule 3 included (`cargo fmt`, `cargo clippy`, `cargo test --workspace`, `cargo bench --workspace --no-run`, the license-header check under Git Bash).
 - [ ] `code_block_preamble`'s signature unchanged; mac builds in the Swift lane with no mac source edit.
 - [ ] Both bindings regenerated from the same dylib (never mismatched).
 - [ ] Menu items and keys restored; the setting re-projects open reading views.
@@ -257,11 +276,19 @@ semantic names; omit `blank line`; put the verbose string in the
 in-range run. Registers: the Code blocks row at
 `docs/plans/18_windows_port/w_c_matrix.md:21`; a note on
 `docs/plans/07_portability_review.md`; WB-0's mac follow-up named in the
-PR body. Rust gates on PowerShell: `cargo fmt --all -- --check`,
+PR body. Rust gates on PowerShell (plan §4 rule 3; CONTRIBUTING.md:76-98),
+each followed by a `$LASTEXITCODE` check that throws: `cargo fmt --all -- --check`,
 `cargo clippy --all-targets --workspace -- -D warnings`,
-`cargo test --workspace` (CONTRIBUTING.md:95-97). Done when those,
-`cargo test -p slate-core code::tests`, the Windows lane, `dotnet format
---include` over the eight files and the Swift compile lane are green, and
+`cargo test --workspace --locked`, `cargo bench --workspace --no-run`
+(the bench compile) and `& "$env:ProgramFiles\Git\bin\bash.exe"
+scripts/check-license-headers.sh` (Git Bash by full path; a bare `bash`
+in PowerShell here resolves to WSL). Done when those exit 0, the eleven
+Rust facts are listed by `cargo test -p slate-core --locked code::tests
+-- --list` (the block throws on a missing one) and pass, the four
+Windows facts and an `A11yCorpusCensus` fact are discovered by
+`--list-tests` under the filter (throwing on a missing one) and pass,
+the Windows lane, `dotnet format --include` over the eight files and the
+Swift compile lane are green, and
 the NVDA pass per mode (rust, python, json, leading-blank-line and
 unknown-language fences; object navigation reads the expected Name under
 each mode; say-all hears the short preamble once) is in the PR body —

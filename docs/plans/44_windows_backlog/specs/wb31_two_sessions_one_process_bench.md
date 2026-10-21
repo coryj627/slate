@@ -6,8 +6,9 @@ closure matrix). Size M (diagnose first). Lanes: rust. AT: none. Wave:
 any free slot. Depends on: nothing. Parallel with: anything (touches
 `db.rs`, `session.rs`'s config, the oplog compactor's connection
 ownership — `compaction_worker_loop`'s local `worker_conn` becomes a
-session-shared slot, `:1686`, `:2695-2722` — `benches/` and new test
-modules; the remedy branch also retypes `session.rs`'s `conn` field,
+session-shared slot, `:1686`, `:2695-2722` — `benches/`, new test
+modules and the `#[cfg(test)]` child-process harness `run_alone` /
+`is_alone_child` in `session.rs`; the remedy branch also retypes `session.rs`'s `conn` field,
 rewrites its seven `lock_cancellable(&self.conn, …)` lines and
 `finish_structural_move`'s guard parameter (`:16965`), and wraps scans in
 an activity guard, leaving the 98 direct `self.conn.lock()` lines
@@ -160,12 +161,22 @@ alone figure while the newer's is unchanged.
      opens or drops, and only the registry facts serialise, so the
      reading is proven in a process that holds nothing else (and, with
      `idle_cache_release_ms` 0 under `cfg(test)`, runs no release in the
-     remedy branch either). The parent spawns `std::env::current_exe()` with
-     `session::tests::two_sessions::process_cache_status_child --exact
-     --nocapture --test-threads=1` and `SLATE_WB31_PROCESS_CHILD=1`, and
-     asserts the child exited 0 (its stdout and stderr in the failure
-     message). The child (`process_cache_status_child`, new; returns at
-     once without that variable, so the ordinary suite runs it as a no-op)
+     remedy branch either). The parent calls `run_alone(
+     "session::tests::two_sessions::process_cache_status_child")` — the
+     child-process harness every exact-cache fact of this chunk uses
+     (new, `#[cfg(test)] pub(crate)` in `session.rs` beside its other
+     test seams, so both `session::tests::two_sessions` and the remedy's
+     `session::registry::tests` reach it): `pub(crate) fn run_alone(child:
+     &str)` spawns `std::env::current_exe()` with `[child, "--exact",
+     "--nocapture", "--test-threads=1"]` and the environment variable
+     `SLATE_WB31_CHILD` set to `child`, waits, and asserts the exit status
+     is success with the child's stdout and stderr in the failure
+     message; `pub(crate) fn is_alone_child(child: &str) -> bool` is true
+     only when `SLATE_WB31_CHILD` equals `child`. Every child's first line
+     is `if !is_alone_child("<its own full path>") { return; }`, so the
+     ordinary suite runs each child as a no-op and a child process runs
+     exactly the one test it names, alone. The child
+     (`process_cache_status_child`, new)
      opens two sessions A and B with `common::make_vault` and makes
      **controlled allocations one connection at a time**: under the
      connection's lock, `CREATE TEMP TABLE wb31_pad(x BLOB)` and a
@@ -196,6 +207,11 @@ alone figure while the newer's is unchanged.
    A `perf_guard_` fact joins `windows.yml:337-341`'s `--skip` list and
    `rust.yml:158-159`'s isolated steps only when it is enabled (the remedy
    branch); while ignored it runs only by hand, as Verification does.
+   Enabled, it asserts A's `CACHE_USED` holds between rescans, an exact
+   reading the shared LRU makes deterministic only where nothing else
+   runs: it runs alone (by name locally, `rust.yml`'s isolated step) and
+   the local whole-suite run skips every `perf_guard_`, as `windows.yml`
+   does.
 4. **The remedy, conditional (WD21), with its own scheduler.** If the
    counters prove the shared LRU:
    - **One way to each connection, recording when its use ENDS.** An
@@ -274,6 +290,28 @@ alone figure while the newer's is unchanged.
      this session's two slots without the idle and two-session tests
      (still skipping a held slot), through `registry.rs`, so
      `try_lock_without_activity` keeps its one file of callers.
+   - **Its exact-cache facts run alone.** A remedy fact that asserts a
+     connection's `used` stays exactly where it was — B's after A's
+     release, A's under a held or active slot, a lone session's past the
+     interval, A's while public reads keep it busy — shares the
+     process-wide `pcache1` LRU with every core test running beside it
+     (item 3's reason: a parallel test's connection reaching its own
+     `cache_size` can recycle the page the fact counts), and only the
+     registry facts serialise. So each such fact is a parent over a child
+     through item 3's `run_alone`: `release_idle_cache_drops_this_connections_cache`,
+     `a_lone_session_is_never_released`,
+     `a_direct_lock_public_read_resets_the_idle_deadline`,
+     `a_held_connection_is_never_released_under_its_user` and
+     `a_long_operation_earns_a_full_idle_interval_after_it_releases_its_connection`
+     each run `<the same path>_child` (new), which carries the fact's
+     whole body — its assertions and its mutations unchanged — in a
+     process holding nothing else (its own registry, release thread and
+     pinned clock included). The remedy facts that assert no exact
+     reading stay in the ordinary suite:
+     `an_idle_session_releases_its_cache_and_rescans_correctly` (counts
+     and `ScanReport`), `the_release_thread_starts_with_the_second_session_and_stops_with_the_last`
+     (the thread's life) and the census. The two enabled `perf_guard_`
+     facts run alone by name.
 
    If refuted: no remedy — no `ConnSlot`, no guards, no registry, no
    `release_idle_cache`; the PR ships the bench, the counters (with step
@@ -294,7 +332,7 @@ alone figure while the newer's is unchanged.
 |---|---|---|
 | `benches/two_sessions_bench.rs` compiles under `cargo bench --workspace --no-run` | the bench target builds | drop the `[[bench]]` entry |
 | `two_sessions.rs`: `db_cache_status_reads_this_connections_counters` | session A after a scan: `used > 0`, `miss > 0`; a repeated identical query raises A's `hit`; `worker` is `None` until the worker connection opens in the shared worker slot (through `open_worker_connection_for_tests()`) and `Some` after. Nothing here compares two connections' `used`: that check is the child's (next row), where no parallel test shares the LRU | report the main connection's counters as `worker` before it opens (`Some` too early); reading the process-wide `sqlite3_status64(SQLITE_STATUS_MEMORY_USED)` as `used` is killed by the child's untouched-connection checks |
-| `process_cache_status_reads_the_process_counters` (parent) with `process_cache_status_child` (child, new) | the parent runs the child alone in its own process and asserts exit 0. The child, with sessions A and B open and nothing else in the process: readings `a0`, `b0`, `p0`; B allocates the `wb31_pad` temp table (≥ 8 MiB) → `a1.used == a0.used`, `b1.used - b0.used ≥ 8 MiB`, and both `p1.memory_used - p0.memory_used` and `p1.pagecache_overflow - p0.pagecache_overflow` ≥ `(b1.used - b0.used) / 2`; then A allocates the same → `b2.used == b1.used`, `a2.used - a1.used ≥ 8 MiB`, and both process deltas ≥ `(a2.used - a1.used) / 2` | make `process_cache_status` a per-connection reading — `sqlite3_db_status(SQLITE_DBSTATUS_CACHE_USED)` of A's main connection (the round-7 mutation), or of B's — and the step in which that connection is untouched reads a flat process value; or read `SQLITE_STATUS_PAGECACHE_USED` (the configured-buffer counter, zero here) for `pagecache_overflow`, which stays flat in both steps |
+| `process_cache_status_reads_the_process_counters` (parent) with `process_cache_status_child` (child, new) | the parent runs the child alone in its own process through `run_alone` and asserts exit 0. The child, with sessions A and B open and nothing else in the process: readings `a0`, `b0`, `p0`; B allocates the `wb31_pad` temp table (≥ 8 MiB) → `a1.used == a0.used`, `b1.used - b0.used ≥ 8 MiB`, and both `p1.memory_used - p0.memory_used` and `p1.pagecache_overflow - p0.pagecache_overflow` ≥ `(b1.used - b0.used) / 2`; then A allocates the same → `b2.used == b1.used`, `a2.used - a1.used ≥ 8 MiB`, and both process deltas ≥ `(a2.used - a1.used) / 2` | make `process_cache_status` a per-connection reading — `sqlite3_db_status(SQLITE_DBSTATUS_CACHE_USED)` of A's main connection (the round-7 mutation), or of B's — and the step in which that connection is untouched reads a flat process value; or read `SQLITE_STATUS_PAGECACHE_USED` (the configured-buffer counter, zero here) for `pagecache_overflow`, which stays flat in both steps |
 | `perf_guard_two_sessions_do_not_evict_each_others_cache` (`#[ignore]` until the remedy; then enabled) | ratio older-with-newer / older-alone ≤ 1.25; A's `used` holds between rescans | (remedy branch) remove the release |
 
 **Remedy only (they ship with the remedy, and their Verification lines
@@ -302,21 +340,28 @@ run only when it did):**
 
 | Fact | Asserts | Mutation |
 |---|---|---|
-| `two_sessions.rs`: `release_idle_cache_drops_this_connections_cache` | after A's scan, `release_idle_cache()` drops A's `used` to at most a tenth of its value, and B's `used` is unchanged | release through the process-wide `sqlite3_release_memory(i32::MAX)` (B's drops too) |
+| `two_sessions.rs`: `release_idle_cache_drops_this_connections_cache` (parent; runs `session::tests::two_sessions::release_idle_cache_drops_this_connections_cache_child` alone through `run_alone` and asserts exit 0) with `release_idle_cache_drops_this_connections_cache_child` (new; the body) | in the child, after A's scan, `release_idle_cache()` drops A's `used` to at most a tenth of its value, and B's `used` is unchanged | release through the process-wide `sqlite3_release_memory(i32::MAX)` (B's drops too) |
 | `an_idle_session_releases_its_cache_and_rescans_correctly` | row counts and `ScanReport` equal before and after the release | release by closing and reopening the main connection without `register_connection_functions` (the rescan's `slate_tree_sort_key` queries then fail) |
 | `registry.rs`: `the_release_thread_starts_with_the_second_session_and_stops_with_the_last` | with `idle_cache_release_ms` opted in: thread absent with one session; present with two; joined after both drop (observed through a test seam with an asserted `Wait(2 s)`, released in `finally`) | leak the thread |
-| `a_lone_session_is_never_released` | one opted-in session idle past the interval: `used` unchanged | release regardless |
-| `a_direct_lock_public_read_resets_the_idle_deadline` | two opted-in sessions, interval 200 ms: `idle_since_ms()` rises across a call to `indexed_content_hashes` (a direct-`self.conn.lock()` read on main, `session.rs:3347`); calling it and `change_feed_window` (`:3394`) every 50 ms for 600 ms keeps A's `used` unreleased; after the calls stop, A is released within an asserted 2 s wait | stamp activity only in `ConnSlot::lock_cancellable` (the round-5 design: direct-lock reads look idle) |
-| `a_held_connection_is_never_released_under_its_user` | while a fact holds A's connection through `lock()` past the interval, the release skips A (`try_lock_without_activity` is `None`), and A's `used` is unchanged when the guard drops | make the release path block on `lock()` instead |
-| `a_long_operation_earns_a_full_idle_interval_after_it_releases_its_connection` | deterministic, on the pinned clock (`set_test_clock_ms`, reset to `None` in a drop guard; no sleeps, no waits): two opted-in sessions A and B with `idle_cache_release_ms` = I = 1 000, both scanned at clock 0, A's compactor connection opened through `VaultSession::open_worker_connection_for_tests()` (step 1's seam). Three parts, each at a fresh base T (0, 10 I, 20 I), each re-warming the slot it tests with a query at T and recording its `used`. (a) Hold `A.conn.lock()` from T to T + 5 I, running a `release_pass()` at T + 3 I under the hold; after the guard drops at T + 5 I, A's main `used` still equals the recorded value; passes at T + 5 I and T + 6 I − 1 leave it unchanged, and a pass at T + 6 I drops it to at most a tenth. (b) The same through A's worker slot `lock()`, read through `db_cache_status().worker`. (c) Hold `A.conn.activity()` (no lock) from T to T + 5 I, the pass at T + 3 I under it: the same outcomes on A's main `used`. Counters are read only while the fact holds no guard (a read under its own guard would wait on itself), and reading them never moves a deadline (`cache_counters` does not stamp) | stamp only when a guard is taken (round 6's design) → (a) releases at T + 5 I, right after the drop; the worker slot's guard without the drop stamp → (b) releases at T + 5 I; `ActivityGuard` stamping only when created → (c) releases at T + 5 I; the pass ignoring `is_active()` → (c) releases at T + 3 I |
+| `a_lone_session_is_never_released` (parent, `run_alone`) with `a_lone_session_is_never_released_child` (new; the body) | in the child: one opted-in session idle past the interval: `used` unchanged | release regardless |
+| `a_direct_lock_public_read_resets_the_idle_deadline` (parent, `run_alone`) with `a_direct_lock_public_read_resets_the_idle_deadline_child` (new; the body) | in the child: two opted-in sessions, interval 200 ms: `idle_since_ms()` rises across a call to `indexed_content_hashes` (a direct-`self.conn.lock()` read on main, `session.rs:3347`); calling it and `change_feed_window` (`:3394`) every 50 ms for 600 ms keeps A's `used` unreleased; after the calls stop, A is released within an asserted 2 s wait | stamp activity only in `ConnSlot::lock_cancellable` (the round-5 design: direct-lock reads look idle) |
+| `a_held_connection_is_never_released_under_its_user` (parent, `run_alone`) with `a_held_connection_is_never_released_under_its_user_child` (new; the body) | in the child: while the fact holds A's connection through `lock()` past the interval, the release skips A (`try_lock_without_activity` is `None`), and A's `used` is unchanged when the guard drops | make the release path block on `lock()` instead |
+| `a_long_operation_earns_a_full_idle_interval_after_it_releases_its_connection` (parent, `run_alone`) with `a_long_operation_earns_a_full_idle_interval_after_it_releases_its_connection_child` (new; the body) | in the child, deterministic, on the pinned clock (`set_test_clock_ms`, reset to `None` in a drop guard; no sleeps, no waits): two opted-in sessions A and B with `idle_cache_release_ms` = I = 1 000, both scanned at clock 0, A's compactor connection opened through `VaultSession::open_worker_connection_for_tests()` (step 1's seam). Three parts, each at a fresh base T (0, 10 I, 20 I), each re-warming the slot it tests with a query at T and recording its `used`. (a) Hold `A.conn.lock()` from T to T + 5 I, running a `release_pass()` at T + 3 I under the hold; after the guard drops at T + 5 I, A's main `used` still equals the recorded value; passes at T + 5 I and T + 6 I − 1 leave it unchanged, and a pass at T + 6 I drops it to at most a tenth. (b) The same through A's worker slot `lock()`, read through `db_cache_status().worker`. (c) Hold `A.conn.activity()` (no lock) from T to T + 5 I, the pass at T + 3 I under it: the same outcomes on A's main `used`. Counters are read only while the fact holds no guard (a read under its own guard would wait on itself), and reading them never moves a deadline (`cache_counters` does not stamp) | stamp only when a guard is taken (round 6's design) → (a) releases at T + 5 I, right after the drop; the worker slot's guard without the drop stamp → (b) releases at T + 5 I; `ActivityGuard` stamping only when created → (c) releases at T + 5 I; the pass ignoring `is_active()` → (c) releases at T + 3 I |
 | `only_the_release_path_locks_without_recording_activity` (census) | in `src`, `try_lock_without_activity(` appears only in `session/conn_slot.rs` (its definition) and `session/registry.rs` (its callers: `release_pass` and `release_idle_cache`'s step); every other path to either connection is a `ConnSlot` method whose guard stamps when taken and when dropped, which the private `inner` field enforces at compile time; `cache_counters` returns numbers, never a guard | call `try_lock_without_activity` from a public read |
 | `perf_guard_the_only_session_in_a_process_is_not_slowed_by_the_release` | alone-with-registry / alone ≤ 1.10 | release on every tick |
 | uniffi: `release_idle_cache_is_additive` | the method exists on the binding and a call on an open session returns | drop the export |
 
-The registry facts serialise on a `static REGISTRY_FACTS: Mutex<()>`
+Each parent's child is a no-op in the ordinary suite (`is_alone_child`
+is false there) and runs its body only in the process `run_alone` starts
+for it, where nothing else opens a connection — so every exact
+`used` reading above is taken where no other connection can recycle its
+pages, and each mutation still fails its child, which fails its parent
+(the child's exit status is asserted). The registry facts that stay in
+the ordinary suite serialise on a `static REGISTRY_FACTS: Mutex<()>`
 (new, in `registry.rs`'s tests), since the registry and the test clock
-are process-wide. The release thread may run its own passes during the
-clock-pinned fact; a pass's decisions are a function of the pinned
+are process-wide; a child has the process to itself and takes it too,
+harmlessly. The release thread may run its own passes during the
+clock-pinned child; a pass's decisions are a function of the pinned
 clock, so the thread's passes agree with the fact's. Every wait in these
 facts is a bounded wait whose result is asserted, released in `finally`.
 
@@ -361,7 +406,7 @@ $remedy = Test-Path 'crates/slate-core/src/session/registry.rs'
 
 # always on, both branches:
 Assert-Facts 'slate-core' 'two_sessions' @('db_cache_status_reads_this_connections_counters', 'process_cache_status_reads_the_process_counters', 'process_cache_status_child')
-cargo test -p slate-core --locked two_sessions; Assert-Ok 'two_sessions'   # the parent spawns the child alone in its own process; without SLATE_WB31_PROCESS_CHILD the child is a no-op here
+cargo test -p slate-core --locked two_sessions; Assert-Ok 'two_sessions'   # each parent spawns its child alone in its own process (run_alone); unless SLATE_WB31_CHILD names it, a child is a no-op here
 $guard = 'perf_guard_two_sessions_do_not_evict_each_others_cache'
 if (-not $remedy) {
     # the guard is still ignored: run it by hand, record its ratio and exit code as data (not a gate; a Windows run that does not reproduce closes nothing)
@@ -369,9 +414,11 @@ if (-not $remedy) {
     cargo test -p slate-core --locked --release $guard -- --ignored --nocapture
     "the ignored guard exited $LASTEXITCODE; record it and the printed ratio"
 } else {
-    $remedyFacts = @('release_idle_cache_drops_this_connections_cache', 'an_idle_session_releases_its_cache_and_rescans_correctly')
-    Assert-Facts 'slate-core' 'two_sessions' $remedyFacts
-    Assert-Facts 'slate-core' 'registry' @('the_release_thread_starts_with_the_second_session_and_stops_with_the_last', 'a_lone_session_is_never_released', 'a_direct_lock_public_read_resets_the_idle_deadline', 'a_held_connection_is_never_released_under_its_user', 'a_long_operation_earns_a_full_idle_interval_after_it_releases_its_connection', 'only_the_release_path_locks_without_recording_activity')
+    # the exact-cache remedy facts are parents whose bodies run alone in a child process (design item 4); list both halves
+    $remedyFacts = @('release_idle_cache_drops_this_connections_cache', 'release_idle_cache_drops_this_connections_cache_child', 'an_idle_session_releases_its_cache_and_rescans_correctly')
+    Assert-Facts 'slate-core' 'two_sessions' $remedyFacts   # they ran in the two_sessions run above
+    $alone = @('a_lone_session_is_never_released', 'a_direct_lock_public_read_resets_the_idle_deadline', 'a_held_connection_is_never_released_under_its_user', 'a_long_operation_earns_a_full_idle_interval_after_it_releases_its_connection')
+    Assert-Facts 'slate-core' 'registry' (@('the_release_thread_starts_with_the_second_session_and_stops_with_the_last', 'only_the_release_path_locks_without_recording_activity') + $alone + @($alone | ForEach-Object { "${_}_child" }))
     cargo test -p slate-core --locked registry; Assert-Ok 'registry'
     foreach ($perf in $guard, 'perf_guard_the_only_session_in_a_process_is_not_slowed_by_the_release') {
         Assert-Facts 'slate-core' $perf @($perf)
@@ -380,17 +427,21 @@ if (-not $remedy) {
     Assert-Facts 'slate-uniffi' 'release_idle_cache' @('release_idle_cache_is_additive')
     cargo test -p slate-uniffi --locked release_idle_cache; Assert-Ok 'uniffi release_idle_cache'
 }
-cargo test -p slate-core --locked --no-fail-fast; Assert-Ok 'the whole core suite'
+cargo test -p slate-core --locked --no-fail-fast -- --skip perf_guard_; Assert-Ok 'the whole core suite'   # every perf_guard_ runs alone (WB-31's by name above; the two existing ones in rust.yml's isolated steps; windows.yml:337-341 skips them by name), so the whole-suite run holds no timing or exact-cache reading
 cargo fmt --all -- --check; Assert-Ok 'fmt'
 cargo clippy --all-targets --workspace -- -D warnings; Assert-Ok 'clippy'
 cargo test --workspace --locked; Assert-Ok 'workspace tests'
 cargo bench --workspace --no-run; Assert-Ok 'bench compile'
-bash scripts/check-license-headers.sh; Assert-Ok 'licence headers'
+& "$env:ProgramFiles\Git\bin\bash.exe" scripts/check-license-headers.sh; Assert-Ok 'licence headers'   # Git Bash by full path: a bare `bash` in PowerShell here resolves to WSL's C:\WINDOWS\system32\bash.exe
 ```
 
 The registry facts sit in `session/registry.rs`'s test module (the
 `registry` filter); the two-session facts in `session/tests/two_sessions.rs`
-(registered in `session.rs`'s test module list, `:22300-22305`). No C#
+(registered in `session.rs`'s test module list, `:22300-22305`). Each
+exact-cache parent and its `_child` sit in the same module, so one
+filter discovers and runs both halves; the child runs its body only in
+the process its parent starts, so the whole-suite run executes each
+child as a no-op and each parent's body in a process of its own. No C#
 changes (the FFI method is additive; bindings regenerate in CI).
 Mutation run per row, locally. CI: `rust.yml` (bench-compile, tests, and
 — remedy branch — the two guards isolated), `windows.yml` rust-tests
@@ -421,7 +472,15 @@ FFI method ships. AT: none.
       clock-pinned fact), the registry, the release thread,
       `release_idle_cache`, the remedy-only facts and the enabled guards
       are green, the guards are in `windows.yml`'s skip list and
-      `rust.yml`'s isolated steps; WB-0 files the mac follow-up.
+      `rust.yml`'s isolated steps; every remedy fact that asserts an
+      exact cache reading (`release_idle_cache_drops_this_connections_cache`,
+      `a_lone_session_is_never_released`,
+      `a_direct_lock_public_read_resets_the_idle_deadline`,
+      `a_held_connection_is_never_released_under_its_user`,
+      `a_long_operation_earns_a_full_idle_interval_after_it_releases_its_connection`)
+      runs its body in its `_child` alone through `run_alone`, both
+      halves discovered by name, and the local whole-suite run skips
+      every `perf_guard_`; WB-0 files the mac follow-up.
 - [ ] If refuted: no remedy ships (no `ConnSlot`, registry or FFI); the
       guard stays ignored with its measurement; the issue stays open with
       the numbers.
@@ -475,7 +534,11 @@ worker; never both held), and the `#[cfg(test)]` seam
 `VaultSession::open_worker_connection_for_tests()` (new; opens it into
 the slot through `open_worker_connection`, as the compactor does);
 `benches/two_sessions_bench.rs` with its
-`[[bench]]` entry; the always-on facts and the ignored guard. Then, only
+`[[bench]]` entry; the child-process harness `run_alone(child)` and
+`is_alone_child(child)` (new, `#[cfg(test)] pub(crate)` in `session.rs`;
+described with the facts below), through which every fact asserting an
+exact cache or process reading runs its body alone; the always-on facts
+and the ignored guard. Then, only
 if A's `CACHE_USED` falls and `CACHE_MISS` rises while B is open and the
 process total plateaus near one cache, the remedy, whose rule is that a
 connection's idle interval starts when a use ENDS (otherwise an
@@ -525,14 +588,22 @@ Always on, both branches:
   `SQLITE_ENABLE_MEMORY_MANAGEMENT` all purgeable caches share one LRU,
   so a parallel test can evict a session's page, and the exact
   per-connection checks live in the isolated child below.
+- The child-process harness (new, `#[cfg(test)] pub(crate)` in
+  `session.rs`, reachable from `session::tests::two_sessions` and
+  `session::registry::tests`): `run_alone(child: &str)` spawns
+  `std::env::current_exe()` with `[child, "--exact", "--nocapture",
+  "--test-threads=1"]` and `SLATE_WB31_CHILD` set to `child`, and
+  asserts a successful exit with the child's stdout and stderr in the
+  failure message (the `real_trash_linux_child` form,
+  `vault/trash_handoff_tests.rs:1108-1154`); `is_alone_child(child: &str)
+  -> bool` is true only when `SLATE_WB31_CHILD` equals `child`, and each
+  child opens with `if !is_alone_child("<its own full path>") { return; }`,
+  so the ordinary suite runs every child as a no-op.
 - `process_cache_status_reads_the_process_counters` (parent) and
   `process_cache_status_child` (child, new): process-wide counters move
-  with any parallel test's connections, so the parent spawns
-  `std::env::current_exe()` with
-  `session::tests::two_sessions::process_cache_status_child --exact
-  --nocapture --test-threads=1` and `SLATE_WB31_PROCESS_CHILD=1` (the
-  `real_trash_linux_child` form, `vault/trash_handoff_tests.rs:1108-1154`)
-  and asserts exit 0; the child (a no-op without the variable) opens A
+  with any parallel test's connections, so the parent calls
+  `run_alone("session::tests::two_sessions::process_cache_status_child")`
+  and asserts exit 0; the child opens A
   and B with `common::make_vault`, then B allocates — under B's
   connection lock, `CREATE TEMP TABLE wb31_pad(x BLOB)` and a recursive
   CTE inserting 1 024 rows of `zeroblob(8192)`, ≥ 8 MiB of in-memory
@@ -550,25 +621,40 @@ Always on, both branches:
   its measured ratio until the remedy; then ratio ≤ 1.25 and A's `used`
   held [remove the release].
 
-Remedy only:
-- `release_idle_cache_drops_this_connections_cache`: A's `used` drops to
-  at most a tenth, B's unchanged [process-wide `sqlite3_release_memory`].
+Remedy only. Each fact below that asserts an exact `used` reading is a
+parent over a child of the same path plus `_child` (new), run through
+`run_alone`: the child carries the whole body, assertions and mutations
+unchanged, in a process where no other test's connection can recycle
+its pages through the shared `pcache1` LRU (only the registry facts
+serialise, and other core tests open connections beside them). The
+others stay in the ordinary suite.
+- `release_idle_cache_drops_this_connections_cache` (parent) with
+  `release_idle_cache_drops_this_connections_cache_child`: A's `used`
+  drops to at most a tenth, B's unchanged [process-wide
+  `sqlite3_release_memory`].
 - `an_idle_session_releases_its_cache_and_rescans_correctly`: counts and
   `ScanReport` equal across the release [reopen without UDFs].
 - `the_release_thread_starts_with_the_second_session_and_stops_with_the_last`:
   absent with one, present with two, joined after both drop (asserted
   `Wait(2 s)`, released in `finally`) [leak the thread].
-- `a_lone_session_is_never_released` [release regardless].
-- `a_direct_lock_public_read_resets_the_idle_deadline`:
+- `a_lone_session_is_never_released` (parent) with
+  `a_lone_session_is_never_released_child`: one opted-in session idle
+  past the interval keeps its `used` [release regardless].
+- `a_direct_lock_public_read_resets_the_idle_deadline` (parent) with
+  `a_direct_lock_public_read_resets_the_idle_deadline_child`:
   `indexed_content_hashes` (direct lock, `session.rs:3347`) raises
   `idle_since_ms()`; calls to it and `change_feed_window` every 50 ms keep
   A unreleased past a 200 ms interval; A is released within an asserted
   2 s once they stop [stamp only in `lock_cancellable`].
-- `a_held_connection_is_never_released_under_its_user` [block on `lock()`
-  in the release].
+- `a_held_connection_is_never_released_under_its_user` (parent) with
+  `a_held_connection_is_never_released_under_its_user_child`: a pass while
+  the child holds A's `lock()` skips A, whose `used` is unchanged when the
+  guard drops [block on `lock()` in the release].
 - `a_long_operation_earns_a_full_idle_interval_after_it_releases_its_connection`
-  (deterministic: the clock pinned by `set_test_clock_ms`, reset in a
-  drop guard; no sleeps): two opted-in sessions with I = 1 000 scanned at
+  (parent) with
+  `a_long_operation_earns_a_full_idle_interval_after_it_releases_its_connection_child`
+  (the body; deterministic: the clock pinned by `set_test_clock_ms`,
+  reset in a drop guard; no sleeps): two opted-in sessions with I = 1 000 scanned at
   clock 0, A's compactor connection opened by
   `VaultSession::open_worker_connection_for_tests()`; at bases T = 0,
   10 I, 20 I, re-warm the slot under test at T, record its `used`, and
@@ -597,10 +683,16 @@ isolated steps for the two enabled guards, and the FFI doc. Not
 delivered: the macOS measurement (WB-0's follow-up). Done when the
 Verification block runs clean in PowerShell — the `build.rs` line
 recorded, every required fact discovered by name (the process-counter
-child included), every command's
+child and, in the remedy branch, the five exact-cache children
+included), the whole core suite run with `-- --skip perf_guard_` (every
+perf guard runs alone: WB-31's by name, the existing two in `rust.yml`'s
+isolated steps), the license-header check run through Git Bash by full
+path (`& "$env:ProgramFiles\Git\bin\bash.exe"`; a bare `bash` here is
+WSL), every command's
 `$LASTEXITCODE` 0, the remedy-only lines run exactly when
 `session/registry.rs` exists, the ignored guard's ratio recorded in the
 refuted branch — the bench's table is in `BENCHMARKS.md`, the rust and
-Windows lanes are green, each mutation was run locally, and #1484
+Windows lanes are green, each mutation was run locally (each mutation
+of a child fact fails its child, and so its parent), and #1484
 carries the Windows verdict with `Refs`. Commit:
 `perf(core): a two-session bench reads sqlite's per-connection cache counters and an idle session releases its page cache when the shared lru is proven`.

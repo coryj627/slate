@@ -129,7 +129,7 @@ cargo test --workspace
 if ($LASTEXITCODE -ne 0) { throw "cargo test ($LASTEXITCODE)" }
 cargo bench --workspace --no-run
 if ($LASTEXITCODE -ne 0) { throw "cargo bench --no-run ($LASTEXITCODE)" }
-bash scripts/check-license-headers.sh   # the Makefile's check-license-headers target (Makefile:71-72); Git Bash runs it
+& "$env:ProgramFiles\Git\bin\bash.exe" scripts/check-license-headers.sh   # the Makefile's check-license-headers target (Makefile:71-72); Git Bash runs it
 if ($LASTEXITCODE -ne 0) { throw "license headers ($LASTEXITCODE)" }
 dotnet test apps/slate-windows/tests/SlateWindows.AccessibilityTests/SlateWindows.AccessibilityTests.csproj -c Release --no-build --filter "FullyQualifiedName~Canvas"   # NVDA closed, desktop free
 if ($LASTEXITCODE -ne 0) { throw "the Canvas gate facts failed ($LASTEXITCODE)" }

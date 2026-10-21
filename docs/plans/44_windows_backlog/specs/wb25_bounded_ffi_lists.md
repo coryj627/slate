@@ -412,6 +412,9 @@ function Assert-Gates {
   cargo fmt --all -- --check; if ($LASTEXITCODE -ne 0) { throw "cargo fmt ($LASTEXITCODE)" }
   cargo clippy --all-targets --workspace -- -D warnings; if ($LASTEXITCODE -ne 0) { throw "cargo clippy ($LASTEXITCODE)" }
   cargo test --workspace; if ($LASTEXITCODE -ne 0) { throw "cargo test --workspace ($LASTEXITCODE)" }
+  cargo bench --workspace --no-run; if ($LASTEXITCODE -ne 0) { throw "cargo bench --workspace --no-run ($LASTEXITCODE)" }   # plan §4 rule 3: the bench compile
+  # plan §4 rule 3: the license-header check under Git Bash, by full path (a bare `bash` in PowerShell here resolves to WSL's C:\WINDOWS\system32\bash.exe)
+  & "$env:ProgramFiles\Git\bin\bash.exe" scripts/check-license-headers.sh; if ($LASTEXITCODE -ne 0) { throw "scripts/check-license-headers.sh ($LASTEXITCODE)" }
   ./apps/slate-windows/generate-bindings.ps1 -Locked   # throws on failure
   dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release
   if ($LASTEXITCODE -ne 0) { throw "dotnet build failed ($LASTEXITCODE)" }
@@ -671,8 +674,11 @@ PowerShell with every native command's `$LASTEXITCODE` checked: per
 stage `cargo test -p slate-core tag_tree` (stage 1) or `switcher`
 (stage 2) with each named Rust fact required as `... ok` in the output;
 `cargo fmt --all -- --check`, `cargo clippy --all-targets --workspace
--- -D warnings`, `cargo test --workspace`; `generate-bindings.ps1
--Locked`; `dotnet build`; `dotnet test` by real class names
+-- -D warnings`, `cargo test --workspace`, `cargo bench --workspace
+--no-run` (the bench compile, plan §4 rule 3) and the license-header
+check `& "$env:ProgramFiles\Git\bin\bash.exe" scripts/check-license-headers.sh`
+(Git Bash by full path — a bare `bash` in PowerShell here resolves to
+WSL), each exiting 0; `generate-bindings.ps1 -Locked`; `dotnet build`; `dotnet test` by real class names
 (`SidebarTagFilterTests`, `RescanTests`, `BoundedFfiListCensus`, and in
 stage 2 also `QuickSwitcherViewModelTests`, `QuickSwitcherRescanLandingTests`,
 `QuickSwitcherRankCoordinatorTests`, `W1QuickSwitcherAndChordTests`,

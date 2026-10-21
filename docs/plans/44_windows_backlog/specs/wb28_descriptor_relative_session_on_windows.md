@@ -121,7 +121,9 @@ the §11 helper names are not what the tree holds (said below).
 - **Hosts' consumers of the record.** Windows: `FileRecentsStore.cs:22-37`
   (the parameter `:24`, key `:27-30` reading `identity.Device` and
   `identity.Inode` at `:30`, hash `:31`, file `:32-36`); `MigrateLegacy`
-  (`:65-103`); constructed at `FilesSidebarViewModel.cs:557` and
+  (`:69-105`), `Read` (`:107-125`, a read error becomes an empty list)
+  and `Save` (`:127-148`, `void`; it logs and swallows `IOException` and
+  `UnauthorizedAccessException`); constructed at `FilesSidebarViewModel.cs:557` and
   `QuickSwitcherViewModel.cs:68`. (`SidebarWriteJournal.cs:64` keys the
   sidebar journal by its own host-read `SidebarJournalIdentity`, not the
   FFI record, and is not changed.) Mac: no Swift code constructs the FFI
@@ -457,20 +459,72 @@ Record each answer in this file's header on adoption.
      its index, and a later folder can take a freed slot's index — item 7.
 7. **`FileRecentsStore` key and migration.** A persistent identity: key =
    SHA-256 of
-   `$"{identity.Volume:x16}-{identity.IdHigh:x16}{identity.IdLow:x16}"`;
-   on first open, if the identity-keyed file is absent and the path-keyed
-   file exists, `Load` reads it, saves under the new key and deletes the
-   old file. A weak identity (`Persistent` false) keys nothing durable:
+   `$"{identity.Volume:x16}-{identity.IdHigh:x16}{identity.IdLow:x16}"`.
+   The path-keyed file (today's key, kept as a new private field
+   `_pathKeyedPath`) migrates into it, and **the source is deleted only
+   after a successful read of it and a confirmed atomic commit of the
+   destination**. On main neither half can be observed: `Save`
+   (`FileRecentsStore.cs:127-148`) returns `void` and swallows
+   `IOException` and `UnauthorizedAccessException` after logging
+   `FileRecentsPersistFailed`, and `Read` (`:107-125`) turns every read
+   error into an empty list — so "read, save, delete" would delete the
+   only valid file after a failed write, or migrate an unreadable file as
+   empty and then delete it. Two private helpers (new) make both halves
+   observable:
+   - `private RecentsRead TryRead(string path)` (new; `RecentsRead` is a
+     new private record: `Absent`, `Read(IReadOnlyList<string> Entries)`
+     or `Unreadable(Exception Error)`) — the bounded read and parse of
+     `Read`, with an `IOException`, `UnauthorizedAccessException` or
+     `JsonException` reported as `Unreadable`, not as an empty list.
+     `Read` keeps its contract (an empty list for `Absent` and
+     `Unreadable`) for the live file.
+   - `private bool TryCommit(IReadOnlyList<string> entries)` (new) — the
+     temporary file in the destination's directory is written through a
+     `FileStream` and flushed with `Flush(flushToDisk: true)`, moved over
+     the destination with `File.Move(temporary, _path, overwrite: true)`
+     (one rename), and the destination is read back through `TryRead`;
+     it returns `true` only when that read-back is `Read` with exactly
+     `entries`. Any failure logs `FileRecentsPersistFailed` as today,
+     deletes the temporary file and returns `false`. `Save` becomes
+     `_ = TryCommit(Sanitize(paths))`, so every other caller keeps its
+     behaviour.
+
+   The migration runs in `Load` whenever `_pathKeyedPath` exists and
+   differs from `_path` — not only when the destination is absent, so an
+   interrupted migration is retried on the next load even after an `Add`
+   has created the destination meanwhile:
+   1. `TryRead(_pathKeyedPath)`: `Unreadable` → stop; nothing is written
+      and nothing deleted, and the source is retried on the next load.
+   2. `TryRead(_path)`: `Unreadable` → stop the same way (an unreadable
+      destination is never overwritten); `Absent` → no entries.
+   3. `merged = Sanitize(destination entries, then source entries)` —
+      the destination's entries are the newer, so they lead and win the
+      cap of 50.
+   4. `TryCommit(merged)`: `false` → stop; the source stays, and `Load`
+      returns `merged` for this session only.
+   5. `true` → `SafeFile.TryDelete(_pathKeyedPath)`. A delete that fails
+      leaves a source the next load merges again, which changes nothing
+      (`Sanitize` drops the duplicates).
+
+   `MigrateLegacy` (the old in-vault file) runs, as on main, only when
+   neither file exists, and goes through the same two helpers: its
+   in-vault file is deleted only after its read succeeded (or found no
+   file) and `TryCommit` confirmed the destination. On main
+   (`:69-105`) an unreadable in-vault file is read as empty, an empty
+   destination is saved, and the in-vault file is deleted.
+
+   A weak identity (`Persistent` false) keys nothing durable:
    the store keeps today's path key (SHA-256 of
-   `_vaultRoot.ToUpperInvariant()`, `FileRecentsStore.cs:28-31`), migrates
-   nothing and deletes nothing. Why: a FAT index changes when the folder
+   `_vaultRoot.ToUpperInvariant()`, `FileRecentsStore.cs:28-31`), so its
+   `_path` is `_pathKeyedPath`, the path-key migration never runs, and no
+   path-keyed file is moved or deleted. Why: a FAT index changes when the folder
    is renamed or moved and can be reused by a later folder in a freed
    slot, so as a key it would neither follow the vault nor keep two
    vaults apart over time; the path key is what every Windows vault uses
    on main (`RootIdentity()` is null there), so these volumes lose
    nothing — a stick reopened at another drive letter starts with an
    empty list, exactly as on main. `MigrateLegacy` keeps reading only the
-   old in-vault file. PR 1 (before this item lands in PR 2) edits
+   old in-vault file, under the read-then-confirmed-commit rule above. PR 1 (before this item lands in PR 2) edits
    `FileRecentsStore.cs:30` only to stop reading the removed
    `Device`/`Inode` fields and keys every identity by the path, so no
    recents file is orphaned between the two PRs.
@@ -520,8 +574,13 @@ Option<VaultRootIdentity>`), `a11y::VAULT_ROOT_IDENTITY_UNAVAILABLE`,
 `vault_root_identity_unavailable_detail()`,
 `VaultLifecycleViewModel.RootIdentityReader`, `AnchoredVaultStore.Open(…,
 expectedIdentity)` (comparing by the read the flag names),
-`FileRecentsStore` identity key v2 (persistent identities only), and the
-step-0 probe script (Verification; not committed code). Two test helpers
+`FileRecentsStore` identity key v2 (persistent identities only) with its
+private `_pathKeyedPath`, `TryRead(path) -> RecentsRead` (`Absent`,
+`Read(entries)`, `Unreadable(error)`) and `TryCommit(entries) -> bool`
+(a flushed temporary file, one `File.Move` over the destination, a
+read-back equal to `entries`), so a migration source is deleted only
+after its successful read and a confirmed destination commit (item 7),
+and the step-0 probe script (Verification; not committed code). Two test helpers
 in the new module, each reading the folder independently of `sys`, give
 the weak facts their expectations: `fn file_index_of(path: &Path) ->
 (u64, u64)` (new: `dwVolumeSerialNumber` zero-extended and
@@ -573,6 +632,10 @@ the new record with `persistent: true`; the Unix facts.
 | `W1AnchoredVaultStoreTests.EveryStoreRefusesAfterTheRootWasReplaced` | after the same junction retarget, `WorkspacePersistence`, `SearchRecentsStore`, `SidebarSettingsStore`, `GraphConfigStore` all refuse | one store bypasses |
 | `W1AnchoredVaultStoreTests.AWeakIdentityIsComparedByTheFileIndex` (WD24 amended; PR 2) | with `SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED` set in-process to the fixture's unique folder name, which the junction spelling contains (cleared in `finally`): `session.RootIdentity()` has `Persistent` false; the fact first asserts that the volume's `FILE_ID_INFO` serial differs from its `dwVolumeSerialNumber` (NTFS's 64-bit serial has nonzero high bits); `Open(…, expectedIdentity)` on the same root admits; after the junction is retargeted to a decoy, it refuses | compare `FileIdInfo` whatever the flag (→ the same root refuses: the serials differ); admit a weak identity without comparing (→ the decoy is admitted) |
 | `FileRecentsStoreTests` (new class): `APathKeyedRecentsFileMigratesToTheIdentityKeyOnce`, `TheIdentityKeyIsTheLosslessIdentity` (persistent identities) | old file read, new written, old deleted, second load no-op; key text carries the high bits | skip the delete; format `Device-Inode` |
+| `FileRecentsStoreTests.AFailedDestinationCommitKeepsThePathKeyedFile` (PR 2; item 7) | a persistent identity, the path-keyed file holding `[a, b]`, and a directory created at the identity-keyed file's path so `File.Move` over it fails: `Load()` returns `[a, b]`, the path-keyed file is byte-identical afterwards and no identity-keyed file exists; after the directory is removed, the next `Load()` migrates — the identity-keyed file reads `[a, b]` and the path-keyed file is gone | delete the source after a `void Save` (main's `Save`, `:127-148`) → the path-keyed file is gone and nothing holds `[a, b]` |
+| `FileRecentsStoreTests.AnUnreadablePathKeyedFileIsNeitherMigratedNorDeleted` (PR 2; item 7) | the path-keyed file `[a, b]` held open by the fact with `FileShare.None` (released in `finally`) during `Load()`: `Load()` returns an empty list, no identity-keyed file is created, and once the hold is released the path-keyed file is byte-identical; the next `Load()` migrates it | read the source through main's `Read` (`:107-125`, an error is an empty list) → an empty destination is committed and the source deleted |
+| `FileRecentsStoreTests.AnInterruptedMigrationCompletesOnALaterLoad` (PR 2; item 7) | the path-keyed file `[a, b]` held with `FileShare.None` while `Add("c")` runs (the migration stops; `Add` commits `[c]` to the identity-keyed file); the hold released (in `finally`), the next `Load()` returns `[c, a, b]`, the identity-keyed file reads `[c, a, b]` and the path-keyed file is gone | migrate only while the identity-keyed file is absent → the next `Load()` returns `[c]` and the path-keyed file stays forever |
+| `FileRecentsStoreTests.AnUnreadableInVaultRecentsFileIsNotDeleted` (PR 2; item 7, `MigrateLegacy`) | neither device file exists and the vault's `file-recents.json` (`[a]`) is held with `FileShare.None` during `Load()` (released in `finally`): `Load()` returns an empty list, no identity-keyed file is created, and the in-vault file is byte-identical after the hold; the next `Load()` migrates `[a]` and only then deletes it | main's `MigrateLegacy` (`:69-105`: a read error saves an empty destination and deletes the in-vault file) → the in-vault file is gone |
 | `FileRecentsStoreTests.AWeakIdentityKeepsThePathKeyAndMigratesNothing` (WD24 amended; PR 1, where every identity keeps the path key, and PR 2) | a store built with `new VaultRootIdentity(volume, 0, index, false)` reads and writes the same file as a store built with `identity: null` for that root; a path-keyed file present beforehand is neither moved nor deleted, and no identity-keyed file appears | key by the weak identity (→ another file); run the migration for a weak identity (→ the path-keyed file is deleted) |
 | `VaultOpenIdentityTests` (new class): `AFolderWhoseFileSystemGivesNoFileIdDoesNotOpenAndSaysWhy` (WD24; PR 1) | through the real core, with `SLATE_TEST_ROOT_FILE_ID_UNAVAILABLE` set in-process to the fixture vault's unique folder name (cleared in `finally`): `OpenVaultAsync(root)` raises exactly one announcement, a `HostComposed` at `High` whose text is `"Could not open vault: " + SlateUniffiMethods.VaultRootIdentityUnavailableDetail()`; no `VaultOpened`; `IsVaultOpen` false; `ReturnedToWelcome` raised once; the recents list unchanged; `root\.slate` absent | speak `exception.Message` (the text becomes "Could not open vault: @message=…"); open anyway (→ `VaultOpened`) |
 | `VaultOpenIdentityTests.OpenRefusesWhenCoreReportsNoIdentity` (PR 2) | a real vault opens in core, and `RootIdentityReader` returns `null`: the session is disposed, the same single `High` sentence is spoken, no `VaultOpened`, no recents entry, `ReturnedToWelcome` raised once | admit null (→ `VaultOpened`) |
@@ -705,13 +768,13 @@ cargo fmt --all -- --check; Assert-Ok 'fmt'
 cargo clippy --all-targets --workspace -- -D warnings; Assert-Ok 'clippy'
 cargo test --workspace --locked; Assert-Ok 'workspace tests'
 cargo bench --workspace --no-run; Assert-Ok 'bench compile'
-bash scripts/check-license-headers.sh; Assert-Ok 'licence headers'
+& "$env:ProgramFiles\Git\bin\bash.exe" scripts/check-license-headers.sh; Assert-Ok 'licence headers'   # Git Bash by full path: a bare `bash` in PowerShell here resolves to WSL's C:\WINDOWS\system32\bash.exe
 ./apps/slate-windows/generate-bindings.ps1 -Locked; Assert-Ok 'bindings'
 dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release; Assert-Ok 'build'
 $tests = 'apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj'
 $filter = 'FullyQualifiedName~SlateWindows.Tests.W1AnchoredVaultStoreTests|FullyQualifiedName~SlateWindows.Tests.FileRecentsStoreTests|FullyQualifiedName~SlateWindows.Tests.VaultOpenIdentityTests|FullyQualifiedName~SlateWindows.Tests.RescanTests'
 $listed = dotnet test $tests --no-build --configuration Release --list-tests --filter $filter; Assert-Ok 'listing the host facts'
-foreach ($fact in 'OpenRefusesADifferentFolderAtTheVaultsPath', 'EveryStoreRefusesAfterTheRootWasReplaced', 'AWeakIdentityIsComparedByTheFileIndex', 'APathKeyedRecentsFileMigratesToTheIdentityKeyOnce', 'TheIdentityKeyIsTheLosslessIdentity', 'AWeakIdentityKeepsThePathKeyAndMigratesNothing', 'AFolderWhoseFileSystemGivesNoFileIdDoesNotOpenAndSaysWhy', 'OpenRefusesWhenCoreReportsNoIdentity', 'AFolderAnsweringOnlyTheFileIndexOpens', 'ARefreshAfterTheVaultsSpellingIsRetargetedListsTheHeldVault') {
+foreach ($fact in 'OpenRefusesADifferentFolderAtTheVaultsPath', 'EveryStoreRefusesAfterTheRootWasReplaced', 'AWeakIdentityIsComparedByTheFileIndex', 'APathKeyedRecentsFileMigratesToTheIdentityKeyOnce', 'TheIdentityKeyIsTheLosslessIdentity', 'AFailedDestinationCommitKeepsThePathKeyedFile', 'AnUnreadablePathKeyedFileIsNeitherMigratedNorDeleted', 'AnInterruptedMigrationCompletesOnALaterLoad', 'AnUnreadableInVaultRecentsFileIsNotDeleted', 'AWeakIdentityKeepsThePathKeyAndMigratesNothing', 'AFolderWhoseFileSystemGivesNoFileIdDoesNotOpenAndSaysWhy', 'OpenRefusesWhenCoreReportsNoIdentity', 'AFolderAnsweringOnlyTheFileIndexOpens', 'ARefreshAfterTheVaultsSpellingIsRetargetedListsTheHeldVault') {
     if (-not ($listed -match "\.$fact$")) { throw "the host filter does not select $fact" }
 }
 dotnet test $tests --no-build --configuration Release --filter $filter; Assert-Ok 'host facts'
@@ -780,7 +843,10 @@ then. Nothing else a reader hears changes.
       `persistent` flag names; the five stores and `OpenVaultAsync` fail
       closed; `FileRecentsStore` migrated for a persistent identity and
       path-keyed, migrating nothing, for a weak one (PR 1 keeps the path
-      key for every identity).
+      key for every identity); a migration source — the path-keyed file
+      or the in-vault file — is deleted only after its successful read
+      and `TryCommit`'s confirmed destination commit, and an interrupted
+      migration completes on a later load (the four item-7 facts).
 - [ ] WD24 as amended: the root's and `.slate`'s identity is
       `FileIdInfo`, else the `GetFileInformationByHandle` file index
       flagged weak, so FAT32 and exFAT vaults open (the seam fact on the
@@ -838,7 +904,9 @@ matrix block);
 `uniffi lib.rs:618-630`, `:770-795`; `descriptor_interior.rs` whole
 (every fact but `:293` renames a held object; several use
 `std::os::unix`); `AnchoredVaultStore.cs:42-70`, `:245-260`,
-`:333-345`, `:434-456`; `FileRecentsStore.cs:15-110`;
+`:333-345`, `:434-456`; `FileRecentsStore.cs:15-171` (`MigrateLegacy`
+`:69-105`, `Read` `:107-125`, the `void` `Save` that swallows its
+errors `:127-148`);
 `FilesSidebarViewModel.cs:557`; `QuickSwitcherViewModel.cs:68`;
 `CanvasDocumentTests.cs:4131-4134` (`mklink /J` in a C# fixture);
 `AppState.swift:10665-10675` and
@@ -945,12 +1013,34 @@ speaks `"Could not open vault: " + SlateUniffiMethods.VaultRootIdentityUnavailab
 through the same terminal path: no `VaultOpened`, no recents entry,
 `ReturnedToWelcome`; a weak identity opens. Last, `FileRecentsStore`:
 a persistent identity gets the identity key v2 (SHA-256 of
-`{Volume:x16}-{IdHigh:x16}{IdLow:x16}`) with the one-time path-key
-migration; a weak identity keeps today's path key and migrates and
+`{Volume:x16}-{IdHigh:x16}{IdLow:x16}`) with the path-key migration; a
+weak identity keeps today's path key and migrates and
 deletes nothing, because a FAT index changes on a rename or move made
 with Slate closed and a freed slot's index can be reused, so it can
 neither follow the vault nor keep two vaults apart over time, and the
-path key is what every Windows vault uses on main. Tests: `session/tests/descriptor_interior_windows.rs` (new,
+path key is what every Windows vault uses on main. The migration deletes
+its source only after a successful read of it and a confirmed atomic
+commit of the destination, because on main `Save`
+(`FileRecentsStore.cs:127-148`) returns `void` and swallows
+`IOException`/`UnauthorizedAccessException`, and `Read` (`:107-125`)
+turns a read error into an empty list. New private helpers:
+`TryRead(path) -> RecentsRead` (`Absent`, `Read(entries)`,
+`Unreadable(error)`; `Read` keeps its empty-list contract for the live
+file) and `TryCommit(entries) -> bool` (a temporary file flushed with
+`Flush(flushToDisk: true)`, one `File.Move(temporary, _path, overwrite:
+true)`, then a read-back that must equal `entries`; failures log
+`FileRecentsPersistFailed` and return `false`; `Save` becomes `_ =
+TryCommit(Sanitize(paths))`). `Load` migrates whenever the path-keyed
+file (`_pathKeyedPath`, new field) exists and differs from `_path`: an
+`Unreadable` source or destination stops it with nothing written or
+deleted; otherwise it commits the destination's entries followed by the
+source's (`Sanitize`, cap 50) and deletes the source only when
+`TryCommit` returned `true` — a failed commit keeps the source and
+returns the merged list for this session, and the next load retries,
+even after an `Add` created the destination meanwhile. `MigrateLegacy`
+(the in-vault file, run only when neither device file exists) uses the
+same helpers, so its file too is deleted only after a successful read
+and a confirmed commit (main deletes it after a failed read). Tests: `session/tests/descriptor_interior_windows.rs` (new,
 `#[cfg(windows)] mod descriptor_interior_windows;` in the session test
 list) with helpers `retarget(link, to)` (remove the junction, recreate it
 pointing at `to`), `tree_bytes(root)`, `file_index_of(path)` (the
@@ -1073,6 +1163,28 @@ each seen failing first under its mutation:
   `.TheIdentityKeyIsTheLosslessIdentity` (key text carries the high
   bits), both for a persistent identity [skip the delete; format
   `Device-Inode`].
+- `FileRecentsStoreTests.AFailedDestinationCommitKeepsThePathKeyedFile`
+  (PR 2): a directory at the identity-keyed file's path makes the
+  `File.Move` fail; `Load()` returns the path-keyed `[a, b]`, the
+  path-keyed file is byte-identical and no identity-keyed file exists;
+  with the directory removed the next `Load()` migrates and deletes the
+  source [delete after main's `void Save` → `[a, b]` lost].
+- `FileRecentsStoreTests.AnUnreadablePathKeyedFileIsNeitherMigratedNorDeleted`
+  (PR 2): the source held with `FileShare.None` (released in `finally`)
+  during `Load()` → an empty list, no identity-keyed file, the source
+  byte-identical; the next `Load()` migrates [read through main's `Read`,
+  an error as an empty list → an empty destination committed and the
+  source deleted].
+- `FileRecentsStoreTests.AnInterruptedMigrationCompletesOnALaterLoad`
+  (PR 2): the source held while `Add("c")` commits `[c]`; after release
+  the next `Load()` returns and stores `[c, a, b]` and the source is gone
+  [migrate only while the destination is absent → `[c]`, the source
+  kept forever].
+- `FileRecentsStoreTests.AnUnreadableInVaultRecentsFileIsNotDeleted`
+  (PR 2): the in-vault `file-recents.json` held with `FileShare.None`
+  while neither device file exists → an empty list, no device file, the
+  in-vault file byte-identical; the next `Load()` migrates `[a]` and only
+  then deletes it [main's `MigrateLegacy` → the in-vault file deleted].
 - `FileRecentsStoreTests.AWeakIdentityKeepsThePathKeyAndMigratesNothing`
   (PR 1, where every identity keeps the path key, and PR 2): a store
   built with `new VaultRootIdentity(volume, 0, index, false)` uses the
@@ -1138,7 +1250,8 @@ Done when all of these hold:
   discovered by name under its filter, and every command's
   `$LASTEXITCODE` is 0 (the two core filters, `anchored`, the whole
   core suite, uniffi, fmt, clippy, workspace tests, bench compile,
-  licence headers, bindings, build, the host facts, `dotnet format`,
+  licence headers through Git Bash by full path, bindings, build, the
+  host facts (the four item-7 migration facts among them), `dotnet format`,
   the parity matrix, the two scan benches within noise, and — in PR 1,
   on WB-27's VHDs — the gated FAT32/exFAT fact, discovered by
   `--ignored --list`). PR 1 cuts the host list to its two host facts,

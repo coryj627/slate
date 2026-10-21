@@ -306,7 +306,7 @@ cargo fmt --all -- --check; Assert-Ok 'fmt'
 cargo clippy --all-targets --workspace -- -D warnings; Assert-Ok 'clippy'
 cargo test --workspace --locked; Assert-Ok 'workspace tests'
 cargo bench --workspace --no-run; Assert-Ok 'bench compile'
-bash scripts/check-license-headers.sh; Assert-Ok 'licence headers'
+& "$env:ProgramFiles\Git\bin\bash.exe" scripts/check-license-headers.sh; Assert-Ok 'licence headers'
 ```
 
 Mutation run: apply each row's mutation locally, run the named fact, see

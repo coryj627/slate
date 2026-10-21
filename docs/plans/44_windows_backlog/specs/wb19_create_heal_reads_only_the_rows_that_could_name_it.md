@@ -248,7 +248,7 @@ cargo fmt --all -- --check; Assert-Ok 'fmt'
 cargo clippy --all-targets --workspace -- -D warnings; Assert-Ok 'clippy'
 cargo test --workspace --locked; Assert-Ok 'workspace tests'
 cargo bench --workspace --no-run; Assert-Ok 'bench compile'
-bash scripts/check-license-headers.sh; Assert-Ok 'licence headers'
+& "$env:ProgramFiles\Git\bin\bash.exe" scripts/check-license-headers.sh; Assert-Ok 'licence headers'
 # the Windows host opens an existing (version-40) cache once, the upgrade path:
 ./apps/slate-windows/generate-bindings.ps1 -Locked; Assert-Ok 'bindings'
 dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release; Assert-Ok 'build'

@@ -28,6 +28,14 @@ is `Canvas/CanvasRendererView.cs:541-561` (issue: 461–479), `PeerFor`
   `CanvasPeerKey.Card(node.NodeId)` only, adding a peer when the placement
   cell is `Materialized`; `:568-595` `PeerFor` mints `CanvasCardAutomationPeer`
   and returns null for `key.IsEdge` or an unknown node.
+- `CanvasRendererView.cs:653-664` `Realize(key)` looks the key up in
+  `population.SceneByNode` only (an edge key returns at once), commits it
+  retained and calls `PanToContain(v, node)`; `:666-691` `PanToContain`
+  keeps `viewport.Zoom` and only pans, so it can contain a rect no wider
+  and no taller than the view at the current zoom — for a larger rect it
+  brings one edge into view (the left or top edge when the rect starts
+  left of or above the view, else the right or bottom edge). `FindByName`
+  (`:611-633`) walks `SceneNodes` only.
 - `Canvas/CanvasRendererPeers.cs:20-24` `CanvasRendererAutomationPeer :
   IValueProvider, ISelectionProvider, IItemContainerProvider`; `:39`
   name `CanvasPhrase.VisualBoardName`; `:55-57` `GetChildrenCore` →
@@ -137,13 +145,37 @@ The rest, given D-A recommended and D-B recommended:
   card peer): `GetNameCore` = the edge's `SpeakableName`; bounding
   rectangle = the placement rect transformed to screen on every pan,
   zoom and resize (as the card peer does); `IVirtualizedItemProvider.Realize`
-  → `_view.Realize(Key)`, which for an edge pans to contain the union rect
-  (D4) and installs the next window; `IInvokeProvider.Invoke` →
-  `_view.SelectAnnounced(target)` where `target` is the D5 table over
+  → `_view.Realize(Key)`, which for an edge pans to a **bounded
+  realization target** (below) and installs the next window;
+  `IInvokeProvider.Invoke` → `_view.SelectAnnounced(target)` where
+  `target` is the edge's **designated endpoint**, the D5 table over
   `(FromArrow, ToArrow)`: `(false,true)` → `ToNode`, `(true,false)` →
-  `FromNode`, else `ToNode`. Placeholder cell: identifying properties from
-  the descriptor index, action patterns refused until realization
-  (`ElementNotAvailableException`, the card's rule).
+  `FromNode`, else `ToNode` — one private helper,
+  `CanvasRendererView.DesignatedEndpoint(CanvasSceneEdge edge) -> string`
+  (new), serves both Invoke and realization. Placeholder cell:
+  identifying properties from the descriptor index, action patterns
+  refused until realization (`ElementNotAvailableException`, the card's
+  rule).
+- **The bounded realization target (D3/D4).** An edge's union rect can be
+  wider or taller than the view — two cards far apart — and
+  `PanToContain` (`:666-691`) only pans, at the current zoom, so no pan
+  can contain such a union; a realization that zooms to fit would change
+  the reader's zoom as a side effect of a UIA call. D3 only needs an
+  endpoint in the window for the edge to materialize, and D4's "pans to
+  contain it" is satisfiable for a card. So `Realize(key)` for an edge
+  key looks the edge up in `population.SceneEdges` (a missing or
+  unlabelled edge returns, as a missing card does) and pans to contain:
+  the union rect when its width and height at the current zoom are each
+  at most the view's (`width * zoom <= ViewWidth` and `height * zoom <=
+  ViewHeight`) — the whole edge comes into view; otherwise the
+  designated endpoint's card rect — the card Invoke will select comes
+  into view, the edge's placement (whose union now intersects the
+  window) is `Materialized`, and the same peer object is promoted.
+  `PanToContain` gains a rect overload, `private static
+  CanvasViewportState PanToContain(CanvasViewportState viewport, double
+  x, double y, double width, double height)` (new), which the node
+  overload calls with the node's rect; neither ever changes `Zoom`. A
+  card's realization is unchanged.
 - **Descriptor index.** The installed state's descriptor index (D3) gains
   edge descriptors (id, name, endpoints, rect) so a first-touch
   find-by-name answers without mutation.
@@ -163,14 +195,40 @@ Facts fail first; hosted STA facts in a new `CanvasRendererPeerTests`
   destinations differ by name; an edge whose phrase collides with a card
   title takes the next free ordinal. Mutation: skip edges in the loop →
   fails.
+- Under the D-A alternative instead: Rust
+  `a11y::tests::canvas_edge_name_renders_both_endpoints_and_the_label` —
+  for each `EdgeDirection` the phrase names both endpoints' kind and
+  title in core's traversal grammar and ends `, labelled "…"`. Mutation:
+  drop the other endpoint → fails.
 - `CanvasRendererPeerTests.ALabelledEdgeInTheWindowIsAChildOfTheBoard` —
   a canvas with a visible "supports" edge: the renderer peer's children
   include an edge peer named by core's phrase; an unlabelled edge yields
   none (DD-2). Mutation: restore the `IsEdge` null at `:576` → fails.
-- `…AnEdgeIsAPlaceholderOffWindowAndPromotesOnRealize` — far endpoints:
-  the retained edge peer reports VirtualizedItem, refuses Invoke, and
-  after `Realize()` the viewport contains the union rect and Invoke works
-  (D3/D4).
+- `…AnEdgeIsAPlaceholderOffWindowAndPromotesOnRealize` — an edge whose
+  two cards lie together beyond the window, its union smaller than the
+  view at the current zoom (asserted as a precondition): the retained
+  edge peer reports VirtualizedItem and refuses Invoke; after `Realize()`
+  the viewport contains the whole union rect, `Zoom` equals its value
+  before, the edge's placement is `Materialized`, the peer returned is
+  the same object and is no longer a placeholder, and Invoke works
+  (D3/D4). Mutation: realize an edge key through the card path
+  (`SceneByNode` misses, nothing pans) → the placement stays a
+  placeholder.
+- `…AnEdgeLongerThanTheViewportRealizesOnItsDesignatedEndpoint` (new;
+  a `[Theory]` over `(false,true)` with the to-node as the left card and
+  `(true,false)` with the from-node as the left card) — two cards far
+  apart, both beyond the view's right edge, so the union's width at the
+  current zoom exceeds `ViewWidth` (asserted as a precondition) and the
+  designated endpoint is the left card: after `Realize()`, `Zoom` equals
+  its value before, the designated endpoint's card rect lies wholly
+  inside the viewport, the edge's placement is `Materialized` and the
+  same peer object is promoted (no longer a placeholder); Invoke then
+  selects that endpoint with one announcement and moves the viewport no
+  further. Mutations: pan to contain the union (`PanToContain` brings
+  the union's right edge, the other card, into view → the designated
+  card is outside); fit the union by changing `Zoom` (→ the zoom
+  assertion fails); pan to the endpoint the D5 table does not name (→
+  the `(true,false)` row fails).
 - `…InvokeSelectsTheEndpointTheEndStyleTableNames` — a `[Theory]` over
   the four `(fromArrow, toArrow)` cells asserting the selected node and
   one announcement. Mutation: swap a cell → that row fails.
@@ -193,7 +251,11 @@ Facts fail first; hosted STA facts in a new `CanvasRendererPeerTests`
 ## Docs and registers
 
 - Contract 34: append a delivery record under D5 ("edge peers delivered:
-  #1277, design choices D-A/D-B as answered"), never rewriting D3–D5.
+  #1277, design choices D-A/D-B as answered; an edge's realization pans,
+  at the current zoom, to contain its union rect when that fits the view
+  and otherwise its designated endpoint — the card D5's table names for
+  Invoke — so D4's never-dead-end holds for an edge longer than the view
+  and realization never changes the zoom"), never rewriting D3–D5.
 - `w_c_matrix.md:53`: the Canvas visual row gains "one Custom
   'connection' peer per materialized labelled edge, named by core's
   traversal phrase, Invoke per D5's table".
@@ -207,28 +269,45 @@ Facts fail first; hosted STA facts in a new `CanvasRendererPeerTests`
 
 ## Verification
 
+PowerShell, repo root. Each filter is listed first and the block throws
+unless every required fact is discovered under it; every command's
+`$LASTEXITCODE` is checked (no output grepping for "Failed").
+
 ```powershell
-$env:CARGO_TARGET_DIR='C:\dev\slate\target-wb26'
-cargo test -p slate-core canvas::            # both D-A answers (the naming fact, or the free fn's fact)
-cargo test -p slate-uniffi crosses_the_ffi
-./apps/slate-windows/generate-bindings.ps1 -Locked
-dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release
+$env:CARGO_TARGET_DIR = 'C:\dev\slate\target-wb26'
+function Assert-Ok([string]$step) { if ($LASTEXITCODE -ne 0) { throw "$step failed ($LASTEXITCODE)" } }
+$daAnswer = 'recommended'   # the D-A answer recorded in this spec's header before code: 'recommended' or 'alternative'
+$rustFilter, $rustFact = if ($daAnswer -eq 'recommended') { 'canvas::', 'edge_speakable_names_join_the_card_namespace' } else { 'canvas_edge_name', 'canvas_edge_name_renders_both_endpoints_and_the_label' }
+$rust = cargo test -p slate-core --locked $rustFilter -- --list; Assert-Ok "listing $rustFilter"
+if (-not ($rust -match "(^|::)$([regex]::Escape($rustFact)): test$")) { throw "$rustFilter does not select $rustFact" }
+cargo test -p slate-core --locked $rustFilter; Assert-Ok "cargo test $rustFilter"
+cargo test -p slate-uniffi --locked crosses_the_ffi; Assert-Ok 'uniffi crosses_the_ffi'
+./apps/slate-windows/generate-bindings.ps1 -Locked; Assert-Ok 'generate-bindings'
+dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release; Assert-Ok 'dotnet build'
 $tests = 'apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj'
 $filter = 'FullyQualifiedName~SlateWindows.Tests.CanvasRendererPeerTests|FullyQualifiedName~SlateWindows.Tests.CanvasPeerTopologyTests|FullyQualifiedName~SlateWindows.Tests.Censuses.CanvasAutomationPropertyCensus|FullyQualifiedName~SlateWindows.Tests.Censuses.CanvasLabelClassCensus|FullyQualifiedName~SlateWindows.Tests.Censuses.CanvasTriggerParityCensus|FullyQualifiedName~SlateWindows.Tests.Censuses.CanvasAnnouncerCensus|FullyQualifiedName~SlateWindows.Tests.CanvasDocumentTests'
-dotnet test $tests --no-build --configuration Release --list-tests --filter $filter | Select-String 'ALabelledEdgeInTheWindowIsAChildOfTheBoard|AnEdgeIsAPlaceholderOffWindowAndPromotesOnRealize|InvokeSelectsTheEndpointTheEndStyleTableNames|TheSameEdgePeerIsReturnedWhileAnythingHoldsIt|FindItemByNameResolvesAnEdge|AStructureChangeRaisesChildrenInvalidatedOncePerInstall'   # six names (the Theory lists four rows), else the filter is wrong
-dotnet test $tests --no-build --configuration Release --filter $filter
+$names = dotnet test $tests --no-build --configuration Release --list-tests --filter $filter; Assert-Ok 'test discovery'
+$required = @('ALabelledEdgeInTheWindowIsAChildOfTheBoard', 'AnEdgeIsAPlaceholderOffWindowAndPromotesOnRealize', 'AnEdgeLongerThanTheViewportRealizesOnItsDesignatedEndpoint', 'InvokeSelectsTheEndpointTheEndStyleTableNames', 'TheSameEdgePeerIsReturnedWhileAnythingHoldsIt', 'FindItemByNameResolvesAnEdge', 'AStructureChangeRaisesChildrenInvalidatedOncePerInstall')
+$missing = @($required | Where-Object { -not ($names -match "CanvasRendererPeerTests\.$([regex]::Escape($_))(\(|\s*$)") })   # a Theory lists its rows as Name(...)
+if ($missing.Count -gt 0) { throw "the filter does not select: $($missing -join ', ')" }
+dotnet test $tests --no-build --configuration Release --filter $filter; Assert-Ok 'the hosted facts and censuses'
+# NVDA closed, desktop free (ShellAccessibilityTests is a partial class: select by method name)
 $at = 'apps/slate-windows/tests/SlateWindows.AccessibilityTests/SlateWindows.AccessibilityTests.csproj'
-dotnet test $at --no-build --configuration Release --list-tests --filter 'FullyQualifiedName~ShellAccessibilityTests.CanvasSurfaces_VisualBoardPeersAndZoom_AreClean' | Select-String 'CanvasSurfaces_VisualBoard'   # one line
-dotnet test $at --no-build --configuration Release --filter 'FullyQualifiedName~ShellAccessibilityTests.CanvasSurfaces_VisualBoardPeersAndZoom_AreClean'   # NVDA closed
-python -I scripts/canvas_reconciliation.py --check
-$cs = @(git diff --name-only origin/main -- '*.cs') + @(git ls-files --others --exclude-standard -- '*.cs')   # Canvas/CanvasRendererView.cs, Canvas/CanvasRendererPeers.cs, Canvas/CanvasPeerTopology.cs, CanvasRendererPeerTests.cs (new), CanvasPeerTopologyTests.cs, ShellAccessibilityTests.cs
-dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $cs
-# the Rust gates `make ci` would run (CONTRIBUTING.md:76-98; no make on this machine):
-cargo fmt --all --check
-cargo clippy --all-targets --workspace -- -D warnings
-cargo test --workspace
-cargo bench --workspace --no-run
-git ls-files '*.rs' '*.swift' '*.cs' | Where-Object { -not (Select-String -Path $_ -Pattern 'SPDX-License-Identifier' -SimpleMatch -Quiet) }   # prints nothing
+$atFilter = 'FullyQualifiedName~ShellAccessibilityTests.CanvasSurfaces_VisualBoardPeersAndZoom_AreClean'
+$atNames = @(dotnet test $at --no-build --configuration Release --list-tests --filter $atFilter | Select-String 'CanvasSurfaces_VisualBoardPeersAndZoom_AreClean'); Assert-Ok 'FlaUI discovery'
+if ($atNames.Count -lt 1) { throw "the FlaUI filter selects nothing: $atFilter" }
+dotnet test $at --no-build --configuration Release --filter $atFilter; Assert-Ok 'FlaUI journey'
+python -I scripts/canvas_reconciliation.py --check; Assert-Ok 'canvas reconciliation'
+$base = git merge-base origin/main HEAD; Assert-Ok 'merge-base'
+$cs = @(git diff --name-only $base -- '*.cs') + @(git ls-files --others --exclude-standard -- '*.cs')   # Canvas/CanvasRendererView.cs, Canvas/CanvasRendererPeers.cs, Canvas/CanvasPeerTopology.cs, CanvasRendererPeerTests.cs (new), CanvasPeerTopologyTests.cs, ShellAccessibilityTests.cs
+if ($cs.Count -eq 0) { throw 'no C# changes found' }
+dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include $cs; Assert-Ok 'dotnet format'
+# the Rust gates (plan §4 rule 3; CONTRIBUTING.md:76-98 — no make on this machine):
+cargo fmt --all -- --check; Assert-Ok 'cargo fmt'
+cargo clippy --all-targets --workspace -- -D warnings; Assert-Ok 'cargo clippy'
+cargo test --workspace --locked; Assert-Ok 'cargo test --workspace'
+cargo bench --workspace --no-run; Assert-Ok 'cargo bench --workspace --no-run'
+& "$env:ProgramFiles\Git\bin\bash.exe" scripts/check-license-headers.sh; Assert-Ok 'license headers'   # Git Bash by full path: a bare `bash` in PowerShell here resolves to WSL
 ```
 
 CI: Windows lane with the shell gate, `rust.yml` and `swift-tests.yml`
@@ -238,13 +317,17 @@ lane proves the regenerated Swift binding compiles). Codex adversarial review (s
 on the board, object navigation reaches "connection, <phrase>" between
 cards; Enter (Invoke) on an arrow-headed edge lands on the head card with
 its `CanvasMovedTo` sentence; an undirected edge lands on the to-node; an
-off-window edge is reachable by NVDA's find-by-name and pans into view;
-an unlabelled edge is not announced anywhere.
+off-window edge is reachable by NVDA's find-by-name and its realization
+pans the whole edge into view when it fits, else the card Invoke would
+select, with the zoom unchanged; an unlabelled edge is not announced
+anywhere.
 
 ## Acceptance
 
 - [ ] D-A and D-B answered by the reviewer and recorded in the spec before code.
-- [ ] Seven hosted facts (and the Rust fact under D-A) pass, seen failing first; mutations run; the extended journey green.
+- [ ] Seven hosted facts (`ALabelledEdgeInTheWindowIsAChildOfTheBoard`, `AnEdgeIsAPlaceholderOffWindowAndPromotesOnRealize`, `AnEdgeLongerThanTheViewportRealizesOnItsDesignatedEndpoint`, `InvokeSelectsTheEndpointTheEndStyleTableNames`, `TheSameEdgePeerIsReturnedWhileAnythingHoldsIt`, `FindItemByNameResolvesAnEdge`, `AStructureChangeRaisesChildrenInvalidatedOncePerInstall`) and the Rust fact of the recorded D-A answer pass, seen failing first and discovered by name; mutations run; the extended journey green.
+- [ ] An edge's realization never changes the zoom: it contains the union when that fits the view, otherwise the designated endpoint (D5's Invoke target), and the edge peer is promoted either way.
+- [ ] The Verification block runs clean in PowerShell: every command's `$LASTEXITCODE` 0, the Rust gates of plan §4 rule 3 included (`cargo bench --workspace --no-run`, the license-header check under Git Bash).
 - [ ] Contract 34 record appended; `w_c_matrix.md:53` and the parity row updated; `canvas_reconciliation.py --check` clean.
 - [ ] All lanes green; codex review done; format gate clean.
 - [ ] NVDA pass recorded in the PR body.
@@ -252,7 +335,10 @@ an unlabelled edge is not announced anywhere.
 
 ## Brief
 
-Read `Canvas/CanvasRendererView.cs:520-600`, `Canvas/CanvasRendererPeers.cs:20-60,
+Read `Canvas/CanvasRendererView.cs:520-700` (the registry, `PeerFor`,
+`FindByName` `:611-633`, `Realize` `:653-664` — card keys only — and
+`PanToContain` `:666-691`, which keeps the zoom and so cannot contain a
+rect larger than the view), `Canvas/CanvasRendererPeers.cs:20-60,
 141-250`, `Canvas/CanvasPeerTopology.cs:16-20, 160-190`,
 `CanvasDocumentViewModel.cs:4371-4380`, `CanvasPeerTopologyTests.cs:60-100`,
 core `a11y.rs:1548-1553, 2717-2731`, `canvas/model.rs:620-640`,
@@ -270,11 +356,21 @@ alternative: `Hyperlink`). Build: an abstract `CanvasBoardAutomationPeer`
 base for `CanvasCardAutomationPeer` and a new `CanvasEdgeAutomationPeer`
 (name = the edge's speakable name; screen rect from the placement's union
 rect on every pan/zoom/resize; `IVirtualizedItemProvider.Realize` →
-`_view.Realize(Key)` panning to contain the rect; `IInvokeProvider.Invoke`
-→ `_view.SelectAnnounced(target)` with target = `ToNode` for
-`(false,true)`, `FromNode` for `(true,false)`, `ToNode` for `(false,false)`
-and `(true,true)`; placeholder cell refuses action patterns with
-`ElementNotAvailableException`); `_peers` retyped to the base;
+`_view.Realize(Key)`; `IInvokeProvider.Invoke` →
+`_view.SelectAnnounced(target)` with target = the designated endpoint
+from the new private `CanvasRendererView.DesignatedEndpoint(CanvasSceneEdge
+edge) -> string`: `ToNode` for `(false,true)`, `FromNode` for
+`(true,false)`, `ToNode` for `(false,false)` and `(true,true)`;
+placeholder cell refuses action patterns with
+`ElementNotAvailableException`); `Realize(key)` for an edge key looks
+the edge up in `SceneEdges` and pans, at the current zoom, to a bounded
+target — the union rect when its width and height at the current zoom
+fit the view, otherwise the designated endpoint's card rect — through a
+new rect overload `private static CanvasViewportState
+PanToContain(CanvasViewportState viewport, double x, double y, double
+width, double height)` that the node overload calls; realization never
+changes `Zoom` (an edge can span more than the view, and D3 needs only
+an endpoint in the window to materialize it); `_peers` retyped to the base;
 `PeerFor` mints an edge peer for a labelled `SceneEdges` id;
 `MaterializedPeers` appends materialized labelled edges after the cards
 in document order; the installed state's descriptor index gains edge
@@ -287,8 +383,21 @@ takes the next free ordinal) under D-A recommended;
 (an edge peer named by core's phrase among the board's children; an
 unlabelled edge yields none);
 `CanvasRendererPeerTests.AnEdgeIsAPlaceholderOffWindowAndPromotesOnRealize`
-(VirtualizedItem reported, Invoke refused, after `Realize()` the viewport
-contains the rect and Invoke works);
+(an off-window edge whose union fits the view, asserted first:
+VirtualizedItem reported, Invoke refused; after `Realize()` the viewport
+contains the union, `Zoom` unchanged, the placement `Materialized`, the
+same peer promoted and Invoke works — mutation: realize through the card
+path, nothing pans);
+`CanvasRendererPeerTests.AnEdgeLongerThanTheViewportRealizesOnItsDesignatedEndpoint`
+(new; a `[Theory]` over `(false,true)` with the to-node as the left card
+and `(true,false)` with the from-node as the left card, both cards
+beyond the view's right edge and the union wider than the view, asserted
+first: after `Realize()` `Zoom` is unchanged, the designated endpoint's
+card lies wholly in the viewport, the placement is `Materialized`, the
+same peer is promoted, and Invoke selects that card with one
+announcement and no further pan — mutations: pan to contain the union
+(the other card comes into view), fit the union by zooming, pan to the
+endpoint the table does not name);
 `CanvasRendererPeerTests.InvokeSelectsTheEndpointTheEndStyleTableNames`
 (a `[Theory]` over the four cells, selected node and one announcement);
 `CanvasRendererPeerTests.TheSameEdgePeerIsReturnedWhileAnythingHoldsIt`
@@ -301,8 +410,14 @@ no materialization);
 (`ShellAccessibilityTests.cs:9316`) extended: a custom child named by the
 edge phrase whose Invoke selects and announces the to-node. Mutations:
 restore the `IsEdge` null at `CanvasRendererView.cs:576`; swap one
-end-style cell; skip edges in the naming loop. Registers: append a
-delivery record under D5 in `docs/plans/34_canvas_contracts.md`;
+end-style cell; skip edges in the naming loop; the three realization
+mutations above. Under the D-A alternative the Rust fact is
+`a11y::tests::canvas_edge_name_renders_both_endpoints_and_the_label`
+(each `EdgeDirection` names both endpoints and ends `, labelled "…"`;
+mutation: drop the other endpoint). Registers: append a
+delivery record under D5 in `docs/plans/34_canvas_contracts.md` (it
+also records the bounded realization target: the union when it fits at
+the current zoom, else the designated endpoint, never a zoom change);
 amend `docs/plans/18_windows_port/w_c_matrix.md:53`; add a "canvas board
 edge elements" row to `docs/plans/18_windows_port/parity_matrix.md`
 (Windows implemented; mac unverified, not shipped here);
@@ -310,11 +425,21 @@ edge elements" row to `docs/plans/18_windows_port/parity_matrix.md`
 delivered: edge selection on the board (no SelectionItem) and the mac
 board's edge elements. Done when `windows.yml` (with the shell gate),
 `rust.yml` and `swift-tests.yml` are green under the recorded D-A answer,
-the five Rust gates and the format gate are clean, the codex review
+the Verification block runs clean in PowerShell (the Rust fact of the
+recorded D-A answer listed by `cargo test -- --list` and the seven hosted
+facts and the FlaUI journey listed by `--list-tests`, each throwing when
+missing; every command's `$LASTEXITCODE` 0 — the five Rust gates
+`cargo fmt --all -- --check`, `cargo clippy --all-targets --workspace --
+-D warnings`, `cargo test --workspace --locked`, `cargo bench --workspace
+--no-run` and `& "$env:ProgramFiles\Git\bin\bash.exe"
+scripts/check-license-headers.sh` (Git Bash by full path; a bare `bash`
+here is WSL), and the format gate), the codex review
 (size L) is done, the mutation run is recorded, and the NVDA pass
 (object navigation reaches "connection, <phrase>"; Invoke lands on the
 head card with its `CanvasMovedTo` sentence; an undirected edge lands on
-the to-node; an off-window edge is found by name and pans into view; an
-unlabelled edge is never announced) is in the PR body with `Closes #1277`.
+the to-node; an off-window edge is found by name and its realization
+pans the whole edge into view when it fits, else the card Invoke would
+select, with the zoom unchanged; an unlabelled edge is never announced)
+is in the PR body with `Closes #1277`.
 Commit: `feat(windows): labelled canvas edges are board peers named by
 core's traversal phrase`.
