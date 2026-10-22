@@ -4,7 +4,8 @@
 //! #1559: the MathML, speech and braille slate-core produces for math,
 //! pinned.
 //!
-//! Every math block in the demo vault, and each expression in
+//! Every math block in the demo vault and in the field-pass fixture note
+//! `fixtures/math_golden/MathCAT field pass.md`, and each expression in
 //! `fixtures/math_golden/extra-expressions.txt`, renders through the real
 //! pipeline (`render_math`) under all twelve user-selectable combinations
 //! of speech style, verbosity and braille code. The result must match
@@ -25,6 +26,8 @@ use slate_core::math::{
 };
 
 const UPDATE: &str = "SLATE_MATH_GOLDEN_UPDATE";
+
+const FIELD_PASS_NOTE: &str = "MathCAT field pass.md";
 
 const SPEECH_STYLES: [(MathSpeechStyle, &str); 2] = [
     (MathSpeechStyle::ClearSpeak, "ClearSpeak"),
@@ -66,7 +69,8 @@ fn one_line(text: &str) -> String {
 }
 
 /// The corpus in a stable order: the demo vault's notes by path, each
-/// note's blocks in order, then the extra expressions in file order.
+/// note's blocks in order, then the field-pass fixture note's blocks, then
+/// the extra expressions in file order.
 /// Hidden folders (`.obsidian`, a local `.slate` cache) are not notes.
 fn corpus() -> Vec<(String, String, MathDisplayStyle)> {
     let vault = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -109,6 +113,17 @@ fn corpus() -> Vec<(String, String, MathDisplayStyle)> {
                 block.display_style,
             ));
         }
+    }
+    // The fixture note of the VoiceOver and NVDA field passes (#1561,
+    // #1562), so every phrase they record has a golden line to match.
+    let field_pass = std::fs::read_to_string(fixture_dir().join(FIELD_PASS_NOTE))
+        .expect("read the field-pass fixture note");
+    for (index, block) in extract_math_blocks(&field_pass).into_iter().enumerate() {
+        entries.push((
+            format!("{FIELD_PASS_NOTE} #{}", index + 1),
+            block.source,
+            block.display_style,
+        ));
     }
     let extra = std::fs::read_to_string(fixture_dir().join("extra-expressions.txt"))
         .expect("read extra-expressions.txt");

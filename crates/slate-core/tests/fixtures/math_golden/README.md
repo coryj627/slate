@@ -2,11 +2,17 @@
 
 `expected.txt` pins what slate-core speaks and brailles for math, and the
 MathML it produces, which Windows exposes to screen readers through UI
-Automation. Every math block in the demo vault, and each expression in
-`extra-expressions.txt`, renders through the real pipeline (`render_math`)
-under all twelve user-selectable combinations: ClearSpeak or SimpleSpeak,
-Terse, Medium or Verbose, and Nemeth or UEB. `tests/math_golden.rs` fails if
-any of it changes.
+Automation. The corpus:
+- every math block in the demo vault;
+- the blocks of `MathCAT field pass.md`, the fixture note of the VoiceOver
+  and NVDA field passes (#1561, #1562), so each phrase a pass records can be
+  compared with its `MathCAT field pass.md #N` entry here;
+- each expression in `extra-expressions.txt`.
+
+Each one renders through the real pipeline (`render_math`) under all twelve
+user-selectable combinations: ClearSpeak or SimpleSpeak, Terse, Medium or
+Verbose, and Nemeth or UEB. `tests/math_golden.rs` fails if any of it
+changes.
 
 Each entry lists:
 - its source;

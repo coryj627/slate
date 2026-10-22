@@ -1571,6 +1571,193 @@ SimpleSpeak Medium: Math expression: \frac{a
 SimpleSpeak Verbose: Math expression: \frac{a
 Nemeth: 
 UEB: 
+=== MathCAT field pass.md #1
+source: \begin{matrix} 1 & 2 \\ 3 & 4 \end{matrix}
+MathML: <math display="inline"><mtable class="menv-arraylike"><mtr><mtd><mn>1</mn></mtd><mtd><mn>2</mn></mtd></mtr><mtr><mtd><mn>3</mn></mtd><mtd><mn>4</mn></mtd></mtr></mtable></math>
+ClearSpeak Terse: array; row 1; column 1; 1, column 2; 2; comma; row 2; column 1; 3, column 2; 4
+ClearSpeak Medium: array of; row 1; column 1; 1, column 2; 2; comma; row 2; column 1; 3, column 2; 4
+ClearSpeak Verbose: array of; row 1; column 1; 1, column 2; 2; comma; row 2; column 1; 3, column 2; 4
+SimpleSpeak Terse: array; row 1; column 1; 1, column 2; 2; comma; row 2; column 1; 3, column 2; 4
+SimpleSpeak Medium: array of; row 1; column 1; 1, column 2; 2; comma; row 2; column 1; 3, column 2; 4
+SimpleSpeak Verbose: array of; row 1; column 1; 1, column 2; 2; comma; row 2; column 1; 3, column 2; 4
+Nemeth: ⠼⠂⠀⠼⠆⠀⣍⠒⠀⠼⠲
+UEB: ⠼⠁⠀⠼⠃⠸⠀⠼⠉⠀⠼⠙
+=== MathCAT field pass.md #2
+source: A = \begin{pmatrix} 1 & 2 \\ 3 & 4 \end{pmatrix}
+MathML: <math display="inline"><mi>A</mi><mo>=</mo><mrow><mo stretchy="true">(</mo><mtable class="menv-arraylike"><mtr><mtd><mn>1</mn></mtd><mtd><mn>2</mn></mtd></mtr><mtr><mtd><mn>3</mn></mtd><mtd><mn>4</mn></mtd></mtr></mtable><mo stretchy="true">)</mo></mrow></math>
+ClearSpeak Terse: cap eigh equals, the 2 by 2 matrix; row 1; 1, 2; row 2; 3, 4
+ClearSpeak Medium: cap eigh is equal to; the 2 by 2 matrix; row 1; 1, 2; row 2; 3, 4
+ClearSpeak Verbose: cap eigh is equal to; the 2 by 2 matrix; row 1; 1, 2; row 2; 3, 4; end matrix
+SimpleSpeak Terse: cap eigh equals, the 2 by 2 matrix; row 1; 1, 2; row 2; 3, 4
+SimpleSpeak Medium: cap eigh is equal to; the 2 by 2 matrix; row 1; 1, 2; row 2; 3, 4
+SimpleSpeak Verbose: cap eigh is equal to; the 2 by 2 matrix; row 1; 1, 2; row 2; 3, 4; end matrix
+Nemeth: ⠠⠁⠀⠨⠅⠀⠠⠷⠼⠂⠀⠼⠆⠀⣍⠒⠀⠼⠲⠠⠾
+UEB: ⠠⠁⠀⠐⠶⠀⠠⠐⠣⠼⠁⠀⠼⠃⠠⠐⠜⠸⠀⠠⠐⠣⠼⠉⠀⠼⠙⠠⠐⠜
+=== MathCAT field pass.md #3
+source: \nabla^2 f
+MathML: <math display="inline"><msup><mi>∇</mi><mn>2</mn></msup><mi>f</mi></math>
+ClearSpeak Terse: laplacian f
+ClearSpeak Medium: laplacian of f
+ClearSpeak Verbose: laplacian of f
+SimpleSpeak Terse: laplacian f
+SimpleSpeak Medium: laplacian of f
+SimpleSpeak Verbose: laplacian of f
+Nemeth: ⠨⠫⠘⠆⠐⠋
+UEB: ⠘⠙⠰⠔⠼⠃⠰⠋
+=== MathCAT field pass.md #4
+source: \nabla \cdot \mathbf{F}
+MathML: <math display="inline"><mi>∇</mi><mo>⋅</mo><mrow><mi>𝐅</mi></mrow></math>
+ClearSpeak Terse: div bold  cap f
+ClearSpeak Medium: divergence of bold  cap f
+ClearSpeak Verbose: divergence of bold  cap f
+SimpleSpeak Terse: div bold  cap f
+SimpleSpeak Medium: divergence of bold  cap f
+SimpleSpeak Verbose: divergence of bold  cap f
+Nemeth: ⠨⠫⠡⠸⠰⠠⠋
+UEB: ⠘⠙⠐⠲⠘⠆⠠⠋
+=== MathCAT field pass.md #5
+source: \operatorname{Log} z
+MathML: <math display="inline"><mi>Log</mi><mo>⁡</mo><mspace width="0.1667em" /><mi>z</mi></math>
+ClearSpeak Terse: principal value log z
+ClearSpeak Medium: the principal value log of z
+ClearSpeak Verbose: the principal value log of z
+SimpleSpeak Terse: principal value log z
+SimpleSpeak Medium: the principal value log of z
+SimpleSpeak Verbose: the principal value log of z
+Nemeth: ⠠⠇⠕⠛⠀⠵
+UEB: ⠠⠇⠕⠛⠀⠰⠵
+=== MathCAT field pass.md #6
+source: \frac12
+MathML: <math display="inline"><mfrac><mn>1</mn><mn>2</mn></mfrac></math>
+ClearSpeak Terse: 1 half
+ClearSpeak Medium: 1 half
+ClearSpeak Verbose: 1 half
+SimpleSpeak Terse: 1 half
+SimpleSpeak Medium: 1 half
+SimpleSpeak Verbose: 1 half
+Nemeth: ⠹⠂⠌⠆⠼
+UEB: ⠼⠁⠌⠃
+=== MathCAT field pass.md #7
+source: x \in \mathbb{R}
+MathML: <math display="inline"><mi>x</mi><mo>∈</mo><mrow><mi>ℝ</mi></mrow></math>
+ClearSpeak Terse: x is a member of the real numbers
+ClearSpeak Medium: x is a member of the real numbers
+ClearSpeak Verbose: x is a member of the real numbers
+SimpleSpeak Terse: x an element of the real numbers
+SimpleSpeak Medium: x is an element of, the real numbers
+SimpleSpeak Verbose: x is an element of, the real numbers
+Nemeth: ⠭⠀⠈⠑⠀⠠⠸⠰⠠⠗
+UEB: ⠰⠭⠀⠘⠑⠀⠈⠆⠰⠠⠗
+=== MathCAT field pass.md #8
+source: \boldsymbol{\alpha}
+MathML: <math display="inline"><mrow><mi>𝜶</mi></mrow></math>
+ClearSpeak Terse: bold alpha
+ClearSpeak Medium: bold alpha
+ClearSpeak Verbose: bold alpha
+SimpleSpeak Terse: bold alpha
+SimpleSpeak Medium: bold alpha
+SimpleSpeak Verbose: bold alpha
+Nemeth: ⠸⠨⠨⠁
+UEB: ⠘⠆⠨⠁
+=== MathCAT field pass.md #9
+source: \vdots
+MathML: <math display="inline"><mi>⋮</mi></math>
+ClearSpeak Terse: vertical ellipsis
+ClearSpeak Medium: vertical ellipsis
+ClearSpeak Verbose: vertical ellipsis
+SimpleSpeak Terse: vertical ellipsis
+SimpleSpeak Medium: vertical ellipsis
+SimpleSpeak Verbose: vertical ellipsis
+Nemeth: ⠩⠄⠄
+UEB: ⠄⠸⠡⠭⠼⠚⠚⠃⠃⠰⠑⠑⠄
+=== MathCAT field pass.md #10
+source: \arctan\frac{y}{x}
+MathML: <math display="inline"><mi>arctan</mi><mo>⁡</mo><mspace width="0.1667em" /><mfrac><mrow><mi>y</mi></mrow><mrow><mi>x</mi></mrow></mfrac></math>
+ClearSpeak Terse: arctan y over x
+ClearSpeak Medium: arctan of y over x
+ClearSpeak Verbose: arctan of y over x, end fraction
+SimpleSpeak Terse: arctan y over x
+SimpleSpeak Medium: arctan of y over x
+SimpleSpeak Verbose: arctan of y over x
+Nemeth: ⠁⠗⠉⠞⠁⠝⠀⠹⠽⠌⠭⠼
+UEB: ⠜⠉⠞⠁⠝⠰⠷⠽⠨⠌⠭⠰⠾
+=== MathCAT field pass.md #11
+source: |x| = \begin{cases} x & x \ge 0 \\ -x & x < 0 \end{cases}
+MathML: <math display="inline"><mi>|</mi><mi>x</mi><mi>|</mi><mo>=</mo><mrow><mo stretchy="true">{</mo><mtable class="menv-cells-left menv-cases"><mtr><mtd><mi>x</mi></mtd><mtd><mi>x</mi><mo>≥</mo><mn>0</mn></mtd></mtr><mtr><mtd><mi>−</mi><mi>x</mi></mtd><mtd><mi>x</mi><mo>&lt;</mo><mn>0</mn></mtd></mtr></mtable></mrow></math>
+ClearSpeak Terse: absolute value of x; equals; 2 cases; case 1; x x  greater than or equal to 0; case 2; negative x x  less than 0
+ClearSpeak Medium: the absolute value of x; is equal to; 2 cases; case 1; x x is greater than or equal to 0; case 2; negative x x is less than 0
+ClearSpeak Verbose: the absolute value of x, end absolute value; is equal to; 2 cases; case 1; x x is greater than or equal to 0; case 2; negative x x is less than 0
+SimpleSpeak Terse: absolute value x equals; 2 cases; case 1; x x  greater than or equal to 0; case 2; negative x, x  less than 0
+SimpleSpeak Medium: the absolute value of x, is equal to; 2 cases; case 1; x x is greater than or equal to 0; case 2; negative x, x is less than 0
+SimpleSpeak Verbose: the absolute value of x, is equal to; 2 cases; case 1; x x is greater than or equal to 0; case 2; negative x, x is less than 0
+Nemeth: ⠳⠭⠳⠀⠨⠅⠀⠨⠷⠭⠀⠭⠀⠨⠂⠱⠀⠼⠴⠀⣍⠤⠭⠀⠭⠀⠐⠅⠀⠼⠴
+UEB: ⠸⠳⠭⠸⠳⠀⠐⠶⠀⠸⠣⠠⠀⠭⠀⠰⠭⠀⠸⠈⠜⠀⠼⠚⠠⠀⠸⠀⠠⠀⠐⠤⠭⠀⠰⠭⠀⠈⠣⠀⠼⠚⠠⠀
+=== MathCAT field pass.md #12
+source: x < y
+MathML: <math display="inline"><mi>x</mi><mo>&lt;</mo><mi>y</mi></math>
+ClearSpeak Terse: x  less than y
+ClearSpeak Medium: x is less than y
+ClearSpeak Verbose: x is less than y
+SimpleSpeak Terse: x  less than y
+SimpleSpeak Medium: x is less than y
+SimpleSpeak Verbose: x is less than y
+Nemeth: ⠭⠀⠐⠅⠀⠽
+UEB: ⠰⠭⠀⠈⠣⠀⠰⠽
+=== MathCAT field pass.md #13
+source: {n \choose k}
+MathML: 
+ClearSpeak Terse: Math expression: {n \choose k}
+ClearSpeak Medium: Math expression: {n \choose k}
+ClearSpeak Verbose: Math expression: {n \choose k}
+SimpleSpeak Terse: Math expression: {n \choose k}
+SimpleSpeak Medium: Math expression: {n \choose k}
+SimpleSpeak Verbose: Math expression: {n \choose k}
+Nemeth: 
+UEB: 
+=== MathCAT field pass.md #14
+source: \sideset{_a^b}{_c^d}\sum
+MathML: 
+ClearSpeak Terse: Math expression: \sideset{_a^b}{_c^d}\sum
+ClearSpeak Medium: Math expression: \sideset{_a^b}{_c^d}\sum
+ClearSpeak Verbose: Math expression: \sideset{_a^b}{_c^d}\sum
+SimpleSpeak Terse: Math expression: \sideset{_a^b}{_c^d}\sum
+SimpleSpeak Medium: Math expression: \sideset{_a^b}{_c^d}\sum
+SimpleSpeak Verbose: Math expression: \sideset{_a^b}{_c^d}\sum
+Nemeth: 
+UEB: 
+=== MathCAT field pass.md #15
+source: E = mc^2
+MathML: <math display="inline"><mi>E</mi><mo>=</mo><mi>m</mi><msup><mi>c</mi><mn>2</mn></msup></math>
+ClearSpeak Terse: cap e equals m c squared
+ClearSpeak Medium: cap e is equal to m c squared
+ClearSpeak Verbose: cap e is equal to m c squared
+SimpleSpeak Terse: cap e equals m c squared
+SimpleSpeak Medium: cap e is equal to m c squared
+SimpleSpeak Verbose: cap e is equal to m c squared
+Nemeth: ⠠⠑⠀⠨⠅⠀⠍⠉⠘⠆
+UEB: ⠰⠠⠑⠀⠐⠶⠀⠍⠉⠰⠔⠼⠃
+=== MathCAT field pass.md #16
+source: \sum_{i=0}^{n} i^2 = \frac{n(n+1)(2n+1)}{6}
+MathML: <math display="inline"><msubsup><mo movablelimits="false">∑</mo><mrow><mi>i</mi><mo>=</mo><mn>0</mn></mrow><mrow><mi>n</mi></mrow></msubsup><msup><mi>i</mi><mn>2</mn></msup><mo>=</mo><mfrac><mrow><mi>n</mi><mo symmetric="false" stretchy="false">(</mo><mi>n</mi><mo>+</mo><mn>1</mn><mo symmetric="false" stretchy="false">)</mo><mo symmetric="false" stretchy="false">(</mo><mn>2</mn><mi>n</mi><mo>+</mo><mn>1</mn><mo symmetric="false" stretchy="false">)</mo></mrow><mrow><mn>6</mn></mrow></mfrac></math>
+ClearSpeak Terse: sum from i equals 0, to n of, i squared; equals; the fraction with numerator; n times, open n plus 1 close, times, open 2 n plus 1, close; and denominator 6
+ClearSpeak Medium: the sum from i is equal to 0, to n of; i squared; is equal to; the fraction with numerator; n times, open paren n plus 1, close paren; times, open paren, 2 n plus 1, close paren; and denominator 6
+ClearSpeak Verbose: the sum from i is equal to 0, to n of; i squared; is equal to; the fraction with numerator; n times, open paren n plus 1, close paren; times, open paren, 2 n plus 1, close paren; and denominator 6; end fraction
+SimpleSpeak Terse: sum from i equals 0, to n of, i squared; equals; fraction, n times, open n plus 1 close, times, open 2 n plus 1, close, over 6, end fraction
+SimpleSpeak Medium: the sum from i is equal to 0, to n of; i squared; is equal to; fraction, n times, open paren n plus 1, close paren; times, open paren, 2 n plus 1, close paren, over 6, end fraction
+SimpleSpeak Verbose: the sum from i is equal to 0, to n of; i squared; is equal to; fraction, n times, open paren n plus 1, close paren; times, open paren, 2 n plus 1, close paren, over 6, end fraction
+Nemeth: ⠨⠠⠎⠰⠊⠀⠰⠨⠅⠀⠼⠴⠘⠝⠐⠊⠘⠆⠀⠨⠅⠀⠹⠝⠷⠝⠬⠂⠾⠷⠆⠝⠬⠂⠾⠌⠖⠼
+UEB: ⠰⠰⠠⠨⠎⠢⠣⠊⠐⠶⠼⠚⠜⠔⠝⠊⠔⠼⠃⠀⠐⠶⠀⠰⠷⠝⠐⠣⠝⠐⠖⠼⠁⠐⠜⠐⠣⠼⠃⠝⠐⠖⠼⠁⠐⠜⠨⠌⠼⠋⠾
+=== MathCAT field pass.md #17
+source: \frac{a
+MathML: 
+ClearSpeak Terse: Math expression: \frac{a
+ClearSpeak Medium: Math expression: \frac{a
+ClearSpeak Verbose: Math expression: \frac{a
+SimpleSpeak Terse: Math expression: \frac{a
+SimpleSpeak Medium: Math expression: \frac{a
+SimpleSpeak Verbose: Math expression: \frac{a
+Nemeth: 
+UEB: 
 === extra-expressions.txt:6
 source: \begin{matrix} a & b \\ c & d \end{matrix}
 MathML: <math display="inline"><mtable class="menv-arraylike"><mtr><mtd><mi>a</mi></mtd><mtd><mi>b</mi></mtd></mtr><mtr><mtd><mi>c</mi></mtd><mtd><mi>d</mi></mtd></mtr></mtable></math>
