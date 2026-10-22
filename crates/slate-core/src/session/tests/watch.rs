@@ -420,45 +420,40 @@ fn stop_watching_stops_the_thread_and_no_callback_follows() {
     assert!(eventually(DELIVERY, || live.recorder.count() >= 1));
 }
 
-/// §4.6 (amended for notify rc.6): a folder the watcher may not read, moved
-/// into the vault, is reported by inotify as a permission error and the rest
-/// of the tree stays watched, so the watch stays live and a later outside
-/// edit still calls back. Root ignores permissions, so the fact proves
-/// nothing there and skips.
+/// §4.6 (#1563, the owner's option A): a folder the watcher may not read,
+/// created in a watched vault, is reported by inotify as a permission error,
+/// so the watch ends after its catch-up and a later outside edit calls back
+/// no more. Root ignores permissions, so the fact proves nothing there and
+/// skips.
 #[cfg(target_os = "linux")]
 #[test]
-fn a_folder_the_watcher_may_not_read_leaves_the_watch_live() {
+fn a_folder_the_watcher_may_not_read_ends_the_watch_after_its_catch_up() {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
     if unsafe { libc::geteuid() } == 0 {
         return;
     }
     let live = live(&[("a.md", "# A\n")]);
-    // Created unreadable in one call, so the watcher never sees it readable.
-    // (A mode-000 folder cannot be moved in: a rename across folders needs
-    // write access to the folder itself.)
+    // Created unreadable in place and in one call, so the watcher never sees
+    // it readable. (A mode-000 folder cannot be moved in: a rename across
+    // folders needs write access to the folder itself.)
     let locked = live.tmp.path().join("locked");
     std::fs::DirBuilder::new()
         .mode(0o000)
         .create(&locked)
         .unwrap();
 
-    assert!(
-        eventually(DELIVERY, || live.recorder.count() >= 1),
-        "the new folder calls back: {:?}",
-        live.session.watch_decisions_for_tests()
-    );
-    assert!(eventually(DELIVERY, || live
-        .session
-        .watch_is_idle_for_tests()));
-    live.recorder.reset();
-    write(live.tmp.path(), "after.md", "# After\n");
     let called_back = eventually(DELIVERY, || live.recorder.count() >= 1);
     let decisions = live.session.watch_decisions_for_tests();
-    let watching = live.session.watch_is_live_for_tests();
+    let ended = eventually(DELIVERY, || !live.session.watch_is_live_for_tests());
+    let at_end = live.recorder.count();
+    write(live.tmp.path(), "after.md", "# After\n");
+    std::thread::sleep(FAST.quiet + Duration::from_millis(500));
+    let after = live.recorder.count();
     // Readable again, so the temp directory can be removed.
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
-    assert!(called_back, "{decisions:?}");
-    assert!(watching, "{decisions:?}");
+    assert!(called_back, "the catch-up: {decisions:?}");
+    assert!(ended, "the watch ended: {decisions:?}");
+    assert_eq!(after, at_end, "no callback after the watch ended");
 }
 
 /// §4.6 (#1563, the owner's option A): a folder that is unreadable when the

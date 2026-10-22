@@ -26,12 +26,11 @@
 //!   branches on a kind; the coalescer keeps the touched paths.
 //! - **Overflow.** notify's `Flag::Rescan` (FSEvents `MustScanSubDirs`,
 //!   ReadDirectoryChangesW's `ERROR_NOTIFY_ENUM_DIR` or zero-byte completion,
-//!   inotify's `IN_Q_OVERFLOW`) becomes `FileEvent::Rescan`; a backend error
-//!   becomes `FileEvent::Ended { cause: Failed }`, which makes one catch-up
-//!   callback before the watch ends. The one exception is a permission error
-//!   naming folders inside the root (inotify keeps watching the rest of the
-//!   tree): the scanner cannot read those folders either, so the watch goes
-//!   on and nothing is reported.
+//!   inotify's `IN_Q_OVERFLOW`) becomes `FileEvent::Rescan`; any backend
+//!   error becomes `FileEvent::Ended { cause: Failed }`, which makes one
+//!   catch-up callback before the watch ends. On Linux that includes a
+//!   folder inotify cannot watch, unreadable or past the watch limit, which
+//!   rc.6 reports and walks past (#1563).
 //! - **The root (§4.4; plan 43 PR 22a's §4.3).** An event on the root itself
 //!   that removes or renames it, or FSEvents' "root changed", is
 //!   `FileEvent::Ended { cause: RootChanged }`. On macOS and Linux the
@@ -593,38 +592,16 @@ fn is_root_change(kind: &EventKind) -> bool {
     )
 }
 
-/// Whether `error` is a permission error for folders strictly inside the root:
-/// at least one named, none the root and none outside it.
-fn is_unreadable_folder(root: &Path, error: &notify::Error) -> bool {
-    matches!(&error.kind, notify::ErrorKind::Io(io_error)
-        if io_error.kind() == std::io::ErrorKind::PermissionDenied)
-        && !error.paths.is_empty()
-        && error.paths.iter().all(|path| {
-            // Exhaustive, so a new kind of path is a decision here, not a
-            // silent yes.
-            match classify(root, path) {
-                Classified::Visible(_) | Classified::Hidden | Classified::Unnamed => true,
-                Classified::Outside | Classified::Root => false,
-            }
-        })
-}
-
 /// One notify delivery as the session's [`FileEvent`]s (design §4.1). Pure,
 /// so the platform rules are pinned without a platform.
 pub(super) fn translate(root: &Path, result: notify::Result<notify::Event>) -> Vec<FileEvent> {
     let event = match result {
         Ok(event) => event,
-        // A folder inside the root that the watcher may not read (inotify
-        // reports it and watches the rest of the tree, notify-rs/notify#970)
-        // is one the scanner cannot read either: nothing it would see is lost.
-        Err(error) if is_unreadable_folder(root, &error) => {
-            // No path: warn and debug lines carry none (#507's privacy rule).
-            log::debug!("vault watch: a folder in the vault may not be read; watching the rest");
-            return Vec::new();
-        }
-        // Any other backend error — a failed re-arm, an unreadable queue, a
-        // watch limit reached for a new folder: one catch-up, then the watch
-        // ends (§4.6). The error's detail is notify's to log.
+        // Any backend error: one catch-up, then the watch ends (§4.6). That
+        // includes a folder inotify cannot watch, which it reports and walks
+        // past (notify-rs/notify#970): unreadable, or past the watch limit.
+        // Kept live, the watch would never see that folder, even once it was
+        // made readable (#1563). The error's detail is notify's to log.
         Err(_) => {
             return vec![FileEvent::Ended {
                 cause: WatchEnd::Failed,
@@ -892,14 +869,15 @@ mod tests {
         );
     }
 
-    /// §4.6: notify 9.0.0-rc.6 (notify-rs/notify#970) keeps a recursive inotify
-    /// watch running past a folder it cannot watch and reports that folder as
-    /// an error. A folder it may not read is one the scanner cannot read
-    /// either, so the watch carries on. A permission error that names no
-    /// folder, names the root or names a path outside it, and every other
-    /// error, still ends the watch.
+    /// §4.6 (#1563, the owner's option A): every backend error ends the watch
+    /// after one catch-up. notify 9.0.0-rc.6 (notify-rs/notify#970) walks a
+    /// recursive inotify watch past a folder it cannot watch and reports that
+    /// folder as an error. Inside the root, outside it, on the root, or with
+    /// no path at all, the error ends the watch. So does a watch limit. A
+    /// `PathNotFound` would too, though rc.6 skips a folder that vanishes
+    /// mid-walk without reporting it.
     #[test]
-    fn a_folder_it_may_not_read_keeps_the_watch() {
+    fn every_backend_error_ends_the_watch() {
         let root = root();
         let denied = |paths: &[PathBuf]| {
             let mut error =
@@ -912,9 +890,9 @@ mod tests {
         let failed = vec![FileEvent::Ended {
             cause: WatchEnd::Failed,
         }];
-        assert_eq!(denied(&[at("private")]), Vec::new());
-        assert_eq!(denied(&[at("notes/private")]), Vec::new());
-        assert_eq!(denied(&[at(".git/objects")]), Vec::new(), "hidden");
+        assert_eq!(denied(&[at("private")]), failed, "a folder in the vault");
+        assert_eq!(denied(&[at("notes/private")]), failed, "a nested folder");
+        assert_eq!(denied(&[at(".git/objects")]), failed, "hidden");
         assert_eq!(denied(&[]), failed, "no folder named");
         assert_eq!(denied(std::slice::from_ref(&root)), failed, "the root");
         let outside = root.parent().expect("root has a parent").join("other");
