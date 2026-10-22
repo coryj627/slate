@@ -110,6 +110,41 @@ public sealed class W2EditorInteractionRedTeamTests
             "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'><rect width='8' height='8' fill='red'/></svg>";
         Assert.True(EditorInteractionCoordinator.SecureSvgParsesForTests(safe));
     }
+
+    /// <summary>The SVG decode runs on its own thread. If the wait for it
+    /// ever failed, the caller would otherwise read the results while the
+    /// decode still runs: the failure is logged, and the image is still the
+    /// finished one.</summary>
+    [Fact]
+    public void SvgPreview_ReadsTheDecodeOnlyOnceItEnds_EvenIfTheWaitFails()
+    {
+        const uint waitFailed = 0xFFFFFFFF;
+        var shapes = new StringBuilder();
+        for (int i = 0; i < 2000; i++)
+        {
+            shapes.Append($"<rect x='{i % 64}' y='{i / 64}' width='1' height='1' fill='red'/>");
+        }
+        string svg = $"<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'>{shapes}</svg>";
+        var log = new StringWriter();
+        TextWriter original = Console.Error;
+        EditorInteractionCoordinator.SvgDecodeWaitForTests = _ => waitFailed;
+        try
+        {
+            Console.SetError(log);
+            Assert.NotNull(EditorInteractionCoordinator.DecodeImage(
+                Encoding.UTF8.GetBytes(svg), "image/svg+xml"));
+        }
+        finally
+        {
+            EditorInteractionCoordinator.SvgDecodeWaitForTests = null;
+            Console.SetError(original);
+        }
+        Assert.Contains(
+            $"SlateWindows.{HostDiagnosticEvent.SvgDecodeWaitFailed}",
+            log.ToString(),
+            StringComparison.Ordinal);
+    }
+
     [Fact]
     public void ExternallyReindexedSnapshot_FailsClosedUntilEditorReloads()
     {

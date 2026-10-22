@@ -3106,6 +3106,10 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     /// many times over, whatever stack the caller has left.</summary>
     private const int SvgDecodeStackBytes = 256 * 1024 * 1024;
 
+    /// <summary>Test seam: replaces the Win32 wait on the decode thread's
+    /// completion, so a test can make it fail.</summary>
+    internal static Func<SafeWaitHandle, uint>? SvgDecodeWaitForTests { get; set; }
+
     private static ImageSource? DecodeSvgImage(
         byte[] bytes,
         Func<long, bool>? reserveDecodedBytes,
@@ -3142,11 +3146,15 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         // the dispatcher, where a pumped UI Automation request could re-enter
         // a half-built document. The decode was synchronous before; it stays
         // synchronous. The wait cannot fail on a live event, but if it ever
-        // returned anything else, Join still keeps the results from being
-        // read before the decode ends.
-        if (NativeMethods.WaitForSingleObject(finished.SafeWaitHandle, NativeMethods.Infinite)
-            != NativeMethods.WaitObject0)
+        // returned anything else, the failure is logged and Join still keeps
+        // the results from being read before the decode ends.
+        uint waited = SvgDecodeWaitForTests?.Invoke(finished.SafeWaitHandle)
+            ?? NativeMethods.WaitForSingleObject(finished.SafeWaitHandle, NativeMethods.Infinite);
+        if (waited != NativeMethods.WaitObject0)
         {
+            HostLog.Write(
+                HostDiagnosticEvent.SvgDecodeWaitFailed,
+                new System.ComponentModel.Win32Exception(Marshal.GetLastPInvokeError()));
             decoder.Join();
         }
         failure?.Throw();
