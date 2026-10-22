@@ -461,6 +461,47 @@ fn a_folder_the_watcher_may_not_read_leaves_the_watch_live() {
     assert!(watching, "{decisions:?}");
 }
 
+/// §4.6 (#1563, the owner's option A): a folder that is unreadable when the
+/// watch arms is reported by inotify as a permission error, and every backend
+/// error ends the watch after one catch-up. Kept live, the watch would miss
+/// that folder for good once it became readable: inotify adds watches only
+/// for folders created or moved in, never on a permission change. Root
+/// ignores permissions, so the fact proves nothing there and skips.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_folder_unreadable_when_the_watch_arms_ends_it_after_one_catch_up() {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    let _switch = switch_shared();
+    let tmp = tempfile::tempdir().unwrap();
+    write(tmp.path(), "a.md", "# A\n");
+    let locked = tmp.path().join("locked");
+    std::fs::DirBuilder::new()
+        .mode(0o000)
+        .create(&locked)
+        .unwrap();
+    let session = Arc::new(VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap());
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let recorder = Recorder::attach(&session);
+
+    let armed = session.start_watching_with(FAST, Arc::new(SystemClock), WatchDrive::Thread);
+    let called_back = eventually(DELIVERY, || recorder.count() >= 1);
+    let decisions = session.watch_decisions_for_tests();
+    let ended = eventually(DELIVERY, || !session.watch_is_live_for_tests());
+    // Readable again, so the temp directory can be removed.
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(armed, "the readable rest of the vault arms the watch");
+    assert!(called_back, "one catch-up: {decisions:?}");
+    assert!(ended, "the watch ended: {decisions:?}");
+    assert_eq!(recorder.count(), 1, "one catch-up, then nothing");
+    assert!(
+        !session.start_watching_with(FAST, Arc::new(SystemClock), WatchDrive::Thread),
+        "an ended watch stays ended until the vault is opened again"
+    );
+}
+
 /// A vault in a folder of its own, so a fact can move it.
 #[cfg(unix)]
 fn live_in_a_movable_folder() -> (tempfile::TempDir, std::path::PathBuf, Live) {
