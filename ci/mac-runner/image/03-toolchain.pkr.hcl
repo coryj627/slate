@@ -72,7 +72,7 @@ variable "rustup_init" {
 
 variable "rust_version" {
   type    = string
-  default = "1.97.1"
+  default = "1.99.1"
 }
 
 variable "a11y_check_ref" {

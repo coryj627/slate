@@ -287,15 +287,15 @@ class Runner:
         return record
 
     def rust(self):
-        self.run("toolchain", [self.metadata["rustup"], "toolchain", "install", "1.97.1", "--profile", "minimal", "--component", "rustfmt", "--component", "clippy"])
-        pinned_cargo = command([self.metadata["rustup"], "which", "--toolchain", "1.97.1", "cargo"], env=self.env)
-        pinned_rust = command([self.metadata["rustup"], "which", "--toolchain", "1.97.1", "rustc"], env=self.env)
+        self.run("toolchain", [self.metadata["rustup"], "toolchain", "install", "1.99.1", "--profile", "minimal", "--component", "rustfmt", "--component", "clippy"])
+        pinned_cargo = command([self.metadata["rustup"], "which", "--toolchain", "1.99.1", "cargo"], env=self.env)
+        pinned_rust = command([self.metadata["rustup"], "which", "--toolchain", "1.99.1", "rustc"], env=self.env)
         require(Path(pinned_cargo).parent == Path(pinned_rust).parent, "pinned Rust/Cargo directories differ")
         self.env["PATH"] = str(Path(pinned_cargo).parent) + os.pathsep + self.env["PATH"]
         version = command(["rustc", "-Vv"], self.source, self.env)
-        require(version.startswith("rustc 1.97.1 "), "effective Rust is not the repository pin")
+        require(version.startswith("rustc 1.99.1 "), "effective Rust is not the repository pin")
         cargo_version = command(["cargo", "-V"], self.source, self.env)
-        require(cargo_version.startswith("cargo 1.97.1 "), "effective Cargo is not the repository pin")
+        require(cargo_version.startswith("cargo 1.99.1 "), "effective Cargo is not the repository pin")
         self.metadata.update(rust=version, cargo=cargo_version, rustc_path=pinned_rust, cargo_path=pinned_cargo,
                              active_toolchain=command(["rustup", "show", "active-toolchain"], self.source, self.env))
         write_json(self.evidence / "metadata.json", self.metadata)
@@ -523,8 +523,8 @@ def validate_summary(summary: dict, expected: dict, layer: str) -> None:
     require(metadata.get("schema") == 1 and metadata.get("layer") == layer and metadata.get("source_is_harness_ancestor") is True,
             "metadata schema/layer/ancestry mismatch")
     require(metadata.get("xcode") == "Xcode 27.0\nBuild version 27A266a", "Xcode qualification mismatch")
-    require(metadata.get("rust", "").startswith("rustc 1.97.1 "), "Rust qualification mismatch")
-    require(metadata.get("cargo", "").startswith("cargo 1.97.1 "), "Cargo qualification mismatch")
+    require(metadata.get("rust", "").startswith("rustc 1.99.1 "), "Rust qualification mismatch")
+    require(metadata.get("cargo", "").startswith("cargo 1.99.1 "), "Cargo qualification mismatch")
     source = metadata.get("source", {})
     require(source.get("sha") == expected["source_sha"] and source.get("tracked_status") == "", "source metadata mismatch")
     require(re.fullmatch(r"[0-9a-f]{40}", source.get("tree", "")) is not None, "source tree identity missing")
