@@ -63,9 +63,15 @@ fn fail(message: String) -> ! {
 }
 
 /// One golden line per field: a display block's source, and the speech
-/// that falls back to it, can span lines.
-fn one_line(text: &str) -> String {
-    text.replace('\r', "␍").replace('\n', "⏎")
+/// that falls back to it, can span lines. An empty field is `label:`, so
+/// no line ends in whitespace an editor might trim.
+fn write_field(out: &mut String, label: &str, value: &str) {
+    let value = value.replace('\r', "␍").replace('\n', "⏎");
+    if value.is_empty() {
+        writeln!(out, "{label}:").expect("write to a String");
+    } else {
+        writeln!(out, "{label}: {value}").expect("write to a String");
+    }
 }
 
 /// The corpus in a stable order: the demo vault's notes by path, each
@@ -199,14 +205,13 @@ fn render_corpus() -> String {
             }
         }
         writeln!(out, "=== {origin}").expect("write to a String");
-        writeln!(out, "source: {}", one_line(&source)).expect("write to a String");
-        writeln!(out, "MathML: {}", one_line(&mathml.unwrap_or_default()))
-            .expect("write to a String");
+        write_field(&mut out, "source", &source);
+        write_field(&mut out, "MathML", &mathml.unwrap_or_default());
         for (label, speech) in &speeches {
-            writeln!(out, "{label}: {}", one_line(speech)).expect("write to a String");
+            write_field(&mut out, label, speech);
         }
         for (code, braille) in &brailles {
-            writeln!(out, "{code}: {}", one_line(braille)).expect("write to a String");
+            write_field(&mut out, code, braille);
         }
     }
     out

@@ -21,7 +21,8 @@ Each entry lists:
 - its two braille translations, which depend only on the braille code.
 
 The test renders every combination and fails if any of those assumptions
-stops holding. Newlines in a field show as ⏎.
+stops holding. Newlines in a field show as ⏎, and an empty field is written
+`label:` with nothing after it (a fallback has no MathML and no braille).
 
 A MathCAT or pulldown-latex upgrade, or a pipeline change, that alters the
 output fails the test and prints what changed. When the change is intended,

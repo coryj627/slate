@@ -1562,15 +1562,15 @@ Nemeth: ⠙⠭
 UEB: ⠙⠭
 === demo-vault/reference/Math sampler.md #18
 source: \frac{a
-MathML: 
+MathML:
 ClearSpeak Terse: Math expression: \frac{a
 ClearSpeak Medium: Math expression: \frac{a
 ClearSpeak Verbose: Math expression: \frac{a
 SimpleSpeak Terse: Math expression: \frac{a
 SimpleSpeak Medium: Math expression: \frac{a
 SimpleSpeak Verbose: Math expression: \frac{a
-Nemeth: 
-UEB: 
+Nemeth:
+UEB:
 === MathCAT field pass.md #1
 source: \begin{matrix} 1 & 2 \\ 3 & 4 \end{matrix}
 MathML: <math display="inline"><mtable class="menv-arraylike"><mtr><mtd><mn>1</mn></mtd><mtd><mn>2</mn></mtd></mtr><mtr><mtd><mn>3</mn></mtd><mtd><mn>4</mn></mtd></mtr></mtable></math>
@@ -1705,26 +1705,26 @@ Nemeth: ⠭⠀⠐⠅⠀⠽
 UEB: ⠰⠭⠀⠈⠣⠀⠰⠽
 === MathCAT field pass.md #13
 source: {n \choose k}
-MathML: 
+MathML:
 ClearSpeak Terse: Math expression: {n \choose k}
 ClearSpeak Medium: Math expression: {n \choose k}
 ClearSpeak Verbose: Math expression: {n \choose k}
 SimpleSpeak Terse: Math expression: {n \choose k}
 SimpleSpeak Medium: Math expression: {n \choose k}
 SimpleSpeak Verbose: Math expression: {n \choose k}
-Nemeth: 
-UEB: 
+Nemeth:
+UEB:
 === MathCAT field pass.md #14
 source: \sideset{_a^b}{_c^d}\sum
-MathML: 
+MathML:
 ClearSpeak Terse: Math expression: \sideset{_a^b}{_c^d}\sum
 ClearSpeak Medium: Math expression: \sideset{_a^b}{_c^d}\sum
 ClearSpeak Verbose: Math expression: \sideset{_a^b}{_c^d}\sum
 SimpleSpeak Terse: Math expression: \sideset{_a^b}{_c^d}\sum
 SimpleSpeak Medium: Math expression: \sideset{_a^b}{_c^d}\sum
 SimpleSpeak Verbose: Math expression: \sideset{_a^b}{_c^d}\sum
-Nemeth: 
-UEB: 
+Nemeth:
+UEB:
 === MathCAT field pass.md #15
 source: E = mc^2
 MathML: <math display="inline"><mi>E</mi><mo>=</mo><mi>m</mi><msup><mi>c</mi><mn>2</mn></msup></math>
@@ -1749,15 +1749,15 @@ Nemeth: ⠨⠠⠎⠰⠊⠀⠰⠨⠅⠀⠼⠴⠘⠝⠐⠊⠘⠆⠀⠨⠅⠀⠹⠝
 UEB: ⠰⠰⠠⠨⠎⠢⠣⠊⠐⠶⠼⠚⠜⠔⠝⠊⠔⠼⠃⠀⠐⠶⠀⠰⠷⠝⠐⠣⠝⠐⠖⠼⠁⠐⠜⠐⠣⠼⠃⠝⠐⠖⠼⠁⠐⠜⠨⠌⠼⠋⠾
 === MathCAT field pass.md #17
 source: \frac{a
-MathML: 
+MathML:
 ClearSpeak Terse: Math expression: \frac{a
 ClearSpeak Medium: Math expression: \frac{a
 ClearSpeak Verbose: Math expression: \frac{a
 SimpleSpeak Terse: Math expression: \frac{a
 SimpleSpeak Medium: Math expression: \frac{a
 SimpleSpeak Verbose: Math expression: \frac{a
-Nemeth: 
-UEB: 
+Nemeth:
+UEB:
 === extra-expressions.txt:6
 source: \begin{matrix} a & b \\ c & d \end{matrix}
 MathML: <math display="inline"><mtable class="menv-arraylike"><mtr><mtd><mi>a</mi></mtd><mtd><mi>b</mi></mtd></mtr><mtr><mtd><mi>c</mi></mtd><mtd><mi>d</mi></mtd></mtr></mtable></math>
@@ -2167,48 +2167,48 @@ Nemeth: ⠷⠹⠝⠌⠅⠼⠾
 UEB: ⠰⠰⠐⠣⠷⠝⠨⠌⠅⠾⠐⠜
 === extra-expressions.txt:59
 source: {n \choose k}
-MathML: 
+MathML:
 ClearSpeak Terse: Math expression: {n \choose k}
 ClearSpeak Medium: Math expression: {n \choose k}
 ClearSpeak Verbose: Math expression: {n \choose k}
 SimpleSpeak Terse: Math expression: {n \choose k}
 SimpleSpeak Medium: Math expression: {n \choose k}
 SimpleSpeak Verbose: Math expression: {n \choose k}
-Nemeth: 
-UEB: 
+Nemeth:
+UEB:
 === extra-expressions.txt:60
 source: \mathscr{L}
-MathML: 
+MathML:
 ClearSpeak Terse: Math expression: \mathscr{L}
 ClearSpeak Medium: Math expression: \mathscr{L}
 ClearSpeak Verbose: Math expression: \mathscr{L}
 SimpleSpeak Terse: Math expression: \mathscr{L}
 SimpleSpeak Medium: Math expression: \mathscr{L}
 SimpleSpeak Verbose: Math expression: \mathscr{L}
-Nemeth: 
-UEB: 
+Nemeth:
+UEB:
 === extra-expressions.txt:61
 source: \sideset{_a^b}{_c^d}\sum
-MathML: 
+MathML:
 ClearSpeak Terse: Math expression: \sideset{_a^b}{_c^d}\sum
 ClearSpeak Medium: Math expression: \sideset{_a^b}{_c^d}\sum
 ClearSpeak Verbose: Math expression: \sideset{_a^b}{_c^d}\sum
 SimpleSpeak Terse: Math expression: \sideset{_a^b}{_c^d}\sum
 SimpleSpeak Medium: Math expression: \sideset{_a^b}{_c^d}\sum
 SimpleSpeak Verbose: Math expression: \sideset{_a^b}{_c^d}\sum
-Nemeth: 
-UEB: 
+Nemeth:
+UEB:
 === extra-expressions.txt:62
 source: \frac{<}{
-MathML: 
+MathML:
 ClearSpeak Terse: Math expression: \frac{<}{
 ClearSpeak Medium: Math expression: \frac{<}{
 ClearSpeak Verbose: Math expression: \frac{<}{
 SimpleSpeak Terse: Math expression: \frac{<}{
 SimpleSpeak Medium: Math expression: \frac{<}{
 SimpleSpeak Verbose: Math expression: \frac{<}{
-Nemeth: 
-UEB: 
+Nemeth:
+UEB:
 === extra-expressions.txt:63
 source: \operatorname{<mi>x</mi>}
 MathML: <math display="inline"><mi>&lt;mi&gt;x&lt;/mi&gt;</mi></math>
