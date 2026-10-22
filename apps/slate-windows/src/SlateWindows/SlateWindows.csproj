@@ -28,7 +28,7 @@
 
   <ItemGroup>
     <PackageReference Include="AvalonEdit" Version="6.3.1.120" />
-    <PackageReference Include="Svg.Skia" Version="5.1.1" />
+    <PackageReference Include="Svg.Skia" Version="5.2.3" />
     <!-- W3-2 (#729): LaTeX rendering for reading-view math. Currency
          check recorded in the PR: v2.1.0 (2023-07) is the latest
          release; the repo is maintained (CI green through 2026-07,
