@@ -22,7 +22,7 @@ runs:
         dotnet-version: '10.0.x'
     - name: Restore dependencies and native Release graph
       if: inputs.cache == 'true'
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
       with:
         path: |
           ~/.cargo/registry
@@ -48,7 +48,7 @@ runs:
     - name: Cache pinned C# binding generator
       id: bindgen-cache
       if: inputs.cache == 'true'
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
       with:
         path: ~/.cargo/bin/uniffi-bindgen-cs.exe
         key: uniffi-bindgen-cs-${{ steps.bindgen-pin.outputs.tag }}-${{ runner.os }}-x64

@@ -71,7 +71,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Assert runner architecture matches the cache lineage
         # The shared custom tag is not scoped per profile/repo or
@@ -89,7 +89,7 @@ jobs:
           fi
 
       - name: Cache Rust build (Namespace NVMe cache)
-        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547  # v1
+        uses: namespacelabs/nscloud-cache-action@1124a6f3ce44e5cf84cc22111530961f4d2a15f9  # v1.7.0
         with:
           cache: rust
 
@@ -159,7 +159,7 @@ jobs:
       UNRESOLVED_LINK_PERF_GUARD: session::tests::link_pass::perf_guard_unresolved_link_rescan_within_twice_the_link_free_one
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Assert runner architecture matches the cache lineage
         # See the lint lane's twin step for the rationale.
@@ -171,7 +171,7 @@ jobs:
           fi
 
       - name: Cache Rust build (Namespace NVMe cache)
-        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547  # v1
+        uses: namespacelabs/nscloud-cache-action@1124a6f3ce44e5cf84cc22111530961f4d2a15f9  # v1.7.0
         with:
           cache: rust
 
@@ -227,9 +227,9 @@ jobs:
         # $CARGO_HOME/bin at job runtime, so nothing needs caching and
         # the preinstalled toolchain is never shadowed (the reason
         # ~/.cargo/bin is deliberately not part of the cache volume).
-        uses: taiki-e/install-action@07b4745e0c39a41822af610387492e3e53aa222b  # v2.83.4
+        uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177  # v2.87.30
         with:
-          tool: cargo-nextest@0.9.140
+          tool: cargo-nextest@0.9.149
 
       - name: cargo nextest run — censuses (ci profile, tmpfs)
         # The wall-clock perf guards are excluded from both sweep halves and
@@ -307,7 +307,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Assert runner architecture matches the cache lineage
         # See the lint lane's twin step for the rationale.
@@ -319,7 +319,7 @@ jobs:
           fi
 
       - name: Cache Rust build (Namespace NVMe cache)
-        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547  # v1
+        uses: namespacelabs/nscloud-cache-action@1124a6f3ce44e5cf84cc22111530961f4d2a15f9  # v1.7.0
         with:
           cache: rust
 

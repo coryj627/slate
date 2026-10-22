@@ -47,7 +47,7 @@ jobs:
         shell: pwsh
     steps:
       - name: Checkout with evidence ancestry
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
@@ -107,7 +107,7 @@ jobs:
           if (-not $github) { throw 'github.com:443 unreachable from inside the job VM' }
       - name: Upload runner metadata before the build
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: windows-pilot-runner-${{ github.run_id }}-${{ github.run_attempt }}
           path: '${{ runner.temp }}\windows-pilot\runner.json'
@@ -142,7 +142,7 @@ jobs:
           python scripts/generate-parity-matrix.py --check
       - name: Upload toolchain evidence before the app phase
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: windows-pilot-native-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -162,7 +162,7 @@ jobs:
           --blame-hang-timeout 10m --blame-hang-dump-type mini
       - name: Upload app results immediately after the app phase
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: windows-pilot-app-${{ github.run_id }}-${{ github.run_attempt }}
           path: '${{ runner.temp }}\windows-pilot\app\**\*'
@@ -239,7 +239,7 @@ jobs:
           "manifest-sha256=$manifestHash" >> $env:GITHUB_OUTPUT
           "artifact-name=windows-pilot-binaries-${{ github.run_id }}-${{ github.run_attempt }}" >> $env:GITHUB_OUTPUT
       - name: Publish same-attempt binaries only after all producer gates pass
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: windows-pilot-binaries-${{ github.run_id }}-${{ github.run_attempt }}
           path: '${{ runner.temp }}\windows-pilot\binaries\**\*'
@@ -266,7 +266,7 @@ jobs:
         shell: pwsh
     steps:
       - name: Checkout exactly the producer SHA for model fixtures
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: ${{ needs.build-app.outputs.revision }}
           fetch-depth: 0
@@ -330,7 +330,7 @@ jobs:
           SLATE_MODEL_ONLY: ''
       - name: Upload model coverage and last progress immediately after this shard
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           # One canonical coverage set per run/shard, replaced on a shard retry.
           name: windows-pilot-model-${{ github.run_id }}-${{ matrix.shard }}
@@ -340,7 +340,7 @@ jobs:
           retention-days: 14
       - name: Preserve this execution attempt including coverage/progress before future retries
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: windows-pilot-model-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
           path: |
@@ -366,7 +366,7 @@ jobs:
             exit 1
           fi
       - name: Checkout exactly the producer SHA
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: ${{ needs.build-app.outputs.revision }}
       - name: Set up Python
@@ -374,7 +374,7 @@ jobs:
         with:
           python-version: '3.13'
       - name: Download both canonical model shard reports
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           # The literal run prefix cannot select model-diagnostics artifacts.
           pattern: windows-pilot-model-${{ github.run_id }}-*
@@ -440,7 +440,7 @@ jobs:
         shell: pwsh
     steps:
       - name: Checkout the producer SHA for source provenance
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: ${{ needs.build-app.outputs.revision }}
       - name: Set up .NET 10
@@ -487,7 +487,7 @@ jobs:
           SLATE_ACCESSIBILITY_EVIDENCE_DIR: '${{ runner.temp }}\windows-pilot\shell-evidence'
       - name: Upload shell results, axe evidence and provenance immediately
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: windows-pilot-shell-${{ github.run_id }}-${{ github.run_attempt }}
           path: |

@@ -236,7 +236,7 @@ Describe 'branch-cleanup.yml' {
     }
     It 'checks out only the script, with the pinned checkout and no persisted token, and runs it as its one command' {
         # The same checkout pin as the other workflows (this lane's).
-        $pin = [regex]::Match($lane, 'uses: actions/checkout@[0-9a-f]{40}  # v\d+').Value
+        $pin = [regex]::Match($lane, 'uses: actions/checkout@[0-9a-f]{40}  # v\d+(?:\.\d+)*').Value
         $pin | Should -Not -BeNullOrEmpty
         $steps = Get-Steps $report
         $steps.Count | Should -Be 2
