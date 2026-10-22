@@ -20,7 +20,8 @@
 # A new release waits a week before Dependabot proposes it (`cooldown`), so a
 # release that is yanked or compromised in its first days never reaches a PR.
 #
-# Security updates and vulnerability alerts are off for this repository.
+# Security updates and vulnerability alerts are repository settings, not keys
+# in this file, and both are off for this repository (checked 2026-10-22).
 # Whoever turns them on: security updates are not held by the cooldown or by
 # `open-pull-requests-limit`, but they do obey `ignore`, so notify and ropey
 # (ignored outright below) would never get one.
