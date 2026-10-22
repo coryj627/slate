@@ -53,6 +53,7 @@ decisions and a DoD, plus per-slice executable `specs/`. Grouped by state.
 - [`runbooks/`](runbooks/) — operational procedures ([VoiceOver feature-test](runbooks/voiceover-feature-test.md)).
 - [`diagrams/`](diagrams/) — Mermaid architecture diagrams ([manifest](diagrams/MANIFEST.md)) and source `mmd/`.
 - [`research/`](research/) — [competitive landscape and resources](research/competitive-landscape-and-resources.md).
+- [`reports/`](reports/) — dated engineering reports: Windows diagnostics and fixes, and testing-strategy audits ([suite](reports/slate-suite-testing-strategy-audit-2026-09-30.md)).
 
 ## Notes
 
