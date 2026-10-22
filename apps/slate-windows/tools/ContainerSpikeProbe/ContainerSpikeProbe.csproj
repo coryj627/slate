@@ -23,7 +23,7 @@
          version. This project is a THROWAWAY spike and is referenced by
          nothing that ships, but a known-vulnerable transitive dependency
          should not sit in the repo unremarked either way. -->
-    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
   </ItemGroup>
 
   <ItemGroup>

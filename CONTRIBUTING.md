@@ -87,7 +87,7 @@ Rust toolchain (`rustup` reads `rust-toolchain.toml` automatically), the
 .NET 10 SDK, and the pinned bindings generator:
 
 ```powershell
-cargo install --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag v0.11.0+v0.31.0 uniffi-bindgen-cs --locked
+cargo install --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag v0.11.1+v0.31.0 uniffi-bindgen-cs --locked
 ```
 
 The daily loop, from the repo root:
