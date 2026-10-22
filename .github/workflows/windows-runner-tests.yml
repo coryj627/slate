@@ -19,6 +19,8 @@ on:
       # (BranchCleanup.Tests.ps1) must run when that workflow or its script changes.
       - '.github/workflows/branch-cleanup.yml'
       - 'ci/branch-cleanup/**'
+      # The PR gate's guard (Workflows.Tests.ps1) must run when it changes.
+      - '.github/workflows/pr-gate.yml'
   push:
     branches: [main]
     paths:
@@ -32,6 +34,8 @@ on:
       # (BranchCleanup.Tests.ps1) must run when that workflow or its script changes.
       - '.github/workflows/branch-cleanup.yml'
       - 'ci/branch-cleanup/**'
+      # The PR gate's guard (Workflows.Tests.ps1) must run when it changes.
+      - '.github/workflows/pr-gate.yml'
 
 permissions:
   contents: read

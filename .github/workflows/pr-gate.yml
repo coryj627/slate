@@ -1,0 +1,35 @@
+# The check main's ruleset requires, with "branches must be up to date
+# before merging" (#1565): a PR merges only once its branch contains the
+# current main, so every merge has been tested on the code it lands on.
+#
+# The lanes cannot be the required check: they are path-filtered, and a
+# lane a PR does not trigger never reports, which would block that PR for
+# good. This job runs on every pull request to main, does nothing that can
+# fail, and is never skipped. It proves only that the PR's branch is up to
+# date; the lanes it triggered still have to be green before a merge
+# (AGENTS.md "Git and PRs"). Its guards are in
+# ci/windows-runner/tests/Workflows.Tests.ps1.
+
+name: PR gate
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: pr gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Record the head and the base it was tested against
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: echo "head $HEAD_SHA on base $BASE_SHA"
