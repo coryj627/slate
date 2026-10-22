@@ -3106,9 +3106,18 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     /// many times over, whatever stack the caller has left.</summary>
     private const int SvgDecodeStackBytes = 256 * 1024 * 1024;
 
+    [ThreadStatic]
+    private static Func<SafeWaitHandle, uint>? svgDecodeWaitForTests;
+
     /// <summary>Test seam: replaces the Win32 wait on the decode thread's
-    /// completion, so a test can make it fail.</summary>
-    internal static Func<SafeWaitHandle, uint>? SvgDecodeWaitForTests { get; set; }
+    /// completion, so a test can make it fail. Per thread: the wait runs on
+    /// the caller's thread, so a test's seam only reaches the decodes that
+    /// test makes.</summary>
+    internal static Func<SafeWaitHandle, uint>? SvgDecodeWaitForTests
+    {
+        get => svgDecodeWaitForTests;
+        set => svgDecodeWaitForTests = value;
+    }
 
     private static ImageSource? DecodeSvgImage(
         byte[] bytes,
@@ -3152,9 +3161,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             ?? NativeMethods.WaitForSingleObject(finished.SafeWaitHandle, NativeMethods.Infinite);
         if (waited != NativeMethods.WaitObject0)
         {
-            HostLog.Write(
-                HostDiagnosticEvent.SvgDecodeWaitFailed,
-                new System.ComponentModel.Win32Exception(Marshal.GetLastPInvokeError()));
+            HostLog.Write(HostDiagnosticEvent.SvgDecodeWaitFailed);
             decoder.Join();
         }
         failure?.Throw();
