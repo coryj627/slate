@@ -599,10 +599,14 @@ fn is_unreadable_folder(root: &Path, error: &notify::Error) -> bool {
     matches!(&error.kind, notify::ErrorKind::Io(io_error)
         if io_error.kind() == std::io::ErrorKind::PermissionDenied)
         && !error.paths.is_empty()
-        && error
-            .paths
-            .iter()
-            .all(|path| !matches!(classify(root, path), Classified::Outside | Classified::Root))
+        && error.paths.iter().all(|path| {
+            // Exhaustive, so a new kind of path is a decision here, not a
+            // silent yes.
+            match classify(root, path) {
+                Classified::Visible(_) | Classified::Hidden | Classified::Unnamed => true,
+                Classified::Outside | Classified::Root => false,
+            }
+        })
 }
 
 /// One notify delivery as the session's [`FileEvent`]s (design §4.1). Pure,
@@ -613,7 +617,11 @@ pub(super) fn translate(root: &Path, result: notify::Result<notify::Event>) -> V
         // A folder inside the root that the watcher may not read (inotify
         // reports it and watches the rest of the tree, notify-rs/notify#970)
         // is one the scanner cannot read either: nothing it would see is lost.
-        Err(error) if is_unreadable_folder(root, &error) => return Vec::new(),
+        Err(error) if is_unreadable_folder(root, &error) => {
+            // No path: warn and debug lines carry none (#507's privacy rule).
+            log::debug!("vault watch: a folder in the vault may not be read; watching the rest");
+            return Vec::new();
+        }
         // Any other backend error — a failed re-arm, an unreadable queue, a
         // watch limit reached for a new folder: one catch-up, then the watch
         // ends (§4.6). The error's detail is notify's to log.
