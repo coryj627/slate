@@ -21,6 +21,8 @@ on:
       - 'ci/branch-cleanup/**'
       # The PR gate's guard (Workflows.Tests.ps1) must run when it changes.
       - '.github/workflows/pr-gate.yml'
+      # The Dependabot pause's guard (Workflows.Tests.ps1) must run when it changes.
+      - '.github/dependabot.yml'
   push:
     branches: [main]
     paths:
@@ -36,6 +38,8 @@ on:
       - 'ci/branch-cleanup/**'
       # The PR gate's guard (Workflows.Tests.ps1) must run when it changes.
       - '.github/workflows/pr-gate.yml'
+      # The Dependabot pause's guard (Workflows.Tests.ps1) must run when it changes.
+      - '.github/dependabot.yml'
 
 permissions:
   contents: read
