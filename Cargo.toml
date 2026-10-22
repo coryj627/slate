@@ -131,13 +131,16 @@ windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
 # (`docs/plans/43_mac_backlog_delivery/20_vault_watcher_design.md` §3.1,
 # §11 Q6): 8.2.0, the latest stable, parses an overflowed Windows buffer as
 # empty and loses it silently, while rc.5 reports it as `Flag::Rescan` and
-# re-arms. Move the pin to 9.0.0 in a one-line follow-up when it ships.
+# re-arms. On 2026-10-22 the owner moved the pin to rc.6, which keeps that
+# Windows behaviour and lets a recursive inotify watch run past a folder it
+# may not read (notify-rs/notify#970; `vault/watch.rs` `translate`). Move the
+# pin to 9.0.0 in a one-line follow-up when it ships (#1493).
 # Default features only (`macos_fsevent`): no `macos_kqueue`, no debouncer
 # crate. CC0-1.0 (notify), MIT OR Apache-2.0 (notify-types), Zlib OR
 # Apache-2.0 OR MIT (objc2-core-*), BSL-1.0 (xxhash-rust), ISC (inotify),
 # MIT (mio; kqueue and kqueue-sys, locked for the BSD targets only) — all
 # compatible inbound for AGPL-3.0-or-later.
-notify = "=9.0.0-rc.5"
+notify = "=9.0.0-rc.6"
 
 # --- Diagnostics facade (#507) ----------------------------------------
 # `log` is the crate-wide logging facade slate-core routes its non-fatal
