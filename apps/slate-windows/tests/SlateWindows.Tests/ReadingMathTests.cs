@@ -448,8 +448,9 @@ public sealed class ReadingMathTests
     }
 
     /// <summary>A math block whose artifact carries no braille (core
-    /// degradation, e.g. MathCAT rejecting the expression) answers
-    /// Ctrl+Enter honestly instead of staying silent.</summary>
+    /// degradation, e.g. a source pulldown-latex cannot parse, which core
+    /// speaks as its source) answers Ctrl+Enter honestly instead of
+    /// staying silent.</summary>
     [Fact]
     public void CtrlEnterWithoutBrailleSaysSo()
     {
@@ -457,7 +458,7 @@ public sealed class ReadingMathTests
         {
             using var fixture = FixtureVault.Create(1, "reading-math-no-braille");
             File.WriteAllText(
-                Path.Combine(fixture.Root, "note0.md"), "$$\\alpha < \\beta$$\n");
+                Path.Combine(fixture.Root, "note0.md"), "$${n \\choose k}$$\n");
             using var session = VaultSession.OpenFilesystem(fixture.Root);
             using var cancel = new CancelToken();
             session.ScanInitial(cancel);
