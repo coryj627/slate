@@ -3141,8 +3141,14 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         // and SendMessage on an STA caller, and the reading view decodes on
         // the dispatcher, where a pumped UI Automation request could re-enter
         // a half-built document. The decode was synchronous before; it stays
-        // synchronous.
-        _ = NativeMethods.WaitForSingleObject(finished.SafeWaitHandle, NativeMethods.Infinite);
+        // synchronous. The wait cannot fail on a live event, but if it ever
+        // returned anything else, Join still keeps the results from being
+        // read before the decode ends.
+        if (NativeMethods.WaitForSingleObject(finished.SafeWaitHandle, NativeMethods.Infinite)
+            != NativeMethods.WaitObject0)
+        {
+            decoder.Join();
+        }
         failure?.Throw();
         budgetSpent = spent;
         if (png is null)
@@ -3237,6 +3243,8 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     private static class NativeMethods
     {
         internal const uint Infinite = 0xFFFFFFFF;
+
+        internal const uint WaitObject0 = 0;
 
         [DllImport("kernel32.dll", SetLastError = true)]
         internal static extern uint WaitForSingleObject(SafeWaitHandle handle, uint milliseconds);
