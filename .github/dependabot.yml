@@ -1,0 +1,106 @@
+# Dependabot version updates.
+#
+# Every ecosystem opens at most one grouped PR a week for its minor and patch
+# updates. A major update (for a 0.x crate, a minor bump) arrives as its own PR,
+# because those are the ones that need reading. Each lane run costs money
+# (AGENTS.md), so the groups keep the weekly count low.
+#
+# A new release waits a week before Dependabot proposes it (`cooldown`), so a
+# release that is yanked or compromised in its first days never reaches a PR.
+# Security updates are not affected by the cooldown.
+#
+# Deliberate pins are left out, with the reason next to each. A pin that moves
+# in lockstep with files Dependabot does not edit stays manual:
+# - the Rust toolchain (`rust-toolchain.toml`) moves together with
+#   ci/windows-runner/golden/versions.json (Golden.Tests.ps1 checks they match),
+#   the mac runner image defaults and the mac CI pilot;
+# - uniffi moves together with uniffi-bindgen-cs (apps/slate-windows/
+#   uniffi-bindgen-cs.version), whose release must support the new uniffi minor;
+# - the Xcode build and A11Y_CHECK_REF move with a mac image rebuild.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directories:
+      - "/"
+      - "/.github/actions/*"
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      cargo:
+        update-types: ["minor", "patch"]
+    ignore:
+      # Lockstep with uniffi-bindgen-cs; see the header.
+      - dependency-name: "uniffi"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      # Pinned exactly at a release candidate for its Windows overflow
+      # behaviour (Cargo.toml); moved by hand when 9.0.0 ships (#1493).
+      - dependency-name: "notify"
+      # The only 2.x line is a beta (Cargo.toml); moved by hand.
+      - dependency-name: "ropey"
+
+  - package-ecosystem: nuget
+    directories:
+      - "/apps/slate-windows/src/*"
+      - "/apps/slate-windows/tests/*"
+      - "/apps/slate-windows/tools/*"
+      - "/apps/slate-windows/benchmarks/*"
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      nuget:
+        update-types: ["minor", "patch"]
+    ignore:
+      # xunit v2 -> xunit.v3 is a migration (TestEvidence, the dispatcher
+      # guard and the serial-execution attribute), not a bump.
+      - dependency-name: "xunit"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: dotnet-sdk
+    directory: "/apps/slate-windows"
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "chore(deps)"
+    ignore:
+      # The app targets .NET 10 LTS; a new major SDK is a TFM decision.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: swift
+    directory: "/apps/slate-mac"
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      swift:
+        update-types: ["minor", "patch"]
