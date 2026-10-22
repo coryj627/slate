@@ -256,9 +256,14 @@ internal static class SvgPreviewGuard
                     SvgRefusal refusal = attribute.Equals("href", StringComparison.OrdinalIgnoreCase)
                         ? ReadHref(index, name, value)
                         : SvgRefusal.None;
+                    bool declarations = attribute == "style";
                     if (refusal == SvgRefusal.None)
                     {
-                        refusal = ScanCss(value, index, declarations: attribute == "style");
+                        refusal = ScanCss(value, index, declarations, tokens: false);
+                    }
+                    if (refusal == SvgRefusal.None)
+                    {
+                        refusal = ScanCss(value, index, declarations, tokens: true);
                     }
                     if (refusal != SvgRefusal.None)
                     {
@@ -348,18 +353,35 @@ internal static class SvgPreviewGuard
         /// <summary>Checks a stylesheet against the caps, and records each
         /// element it references under the rules that reference it.</summary>
         private SvgRefusal ReadStylesheet(string stylesheet) =>
-            ScanCss(stylesheet, from: -1, declarations: true, stylesheet: true);
+            ScanCss(stylesheet, from: -1, declarations: true, tokens: true, stylesheet: true);
 
         /// <summary>
         /// One scan for every CSS-like text: an attribute value (one
         /// value), a style attribute (declarations) or a stylesheet (rules
-        /// of declarations). Escapes are resolved first, as a CSS tokenizer
-        /// resolves them, so an escaped <c>url(</c> still counts and an
-        /// escaped separator never separates. A <c>url(</c> argument is
-        /// opaque, as in CSS: what it holds neither separates declarations
-        /// nor opens a block.
+        /// of declarations).
         /// </summary>
-        private SvgRefusal ScanCss(string raw, int from, bool declarations, bool stylesheet = false)
+        /// <remarks>
+        /// <para>
+        /// Escapes are resolved first, as a CSS tokenizer resolves them, so
+        /// an escaped <c>url(</c> still counts and an escaped separator
+        /// never separates. A <c>url(</c> argument is opaque, as in CSS:
+        /// what it holds neither separates declarations nor opens a block.
+        /// </para>
+        /// <para>
+        /// With <paramref name="tokens"/> the text is read as ExCSS reads
+        /// it: a comment counts for nothing, and a string's brackets and
+        /// separators are its own (a string ends at its quote or, left
+        /// open, at a line end), though a <c>url(</c> in a string still
+        /// counts, in case anything unquotes it. Without, every character
+        /// counts, as a parser that knows no CSS sees it. An attribute
+        /// value is read both ways and refused if either way passes a cap;
+        /// a stylesheet, which only ExCSS reads, only as tokens.
+        /// References are collected once: from an attribute's plain read,
+        /// and from a stylesheet's token read.
+        /// </para>
+        /// </remarks>
+        private SvgRefusal ScanCss(
+            string raw, int from, bool declarations, bool tokens, bool stylesheet = false)
         {
             string text = Unescape(raw);
             int urls = 0;
@@ -368,6 +390,36 @@ internal static class SvgPreviewGuard
             List<string?> preludes = [];
             for (int i = 0; i < text.Length; i++)
             {
+                if (tokens && text[i] == '/' && i + 1 < text.Length && text[i + 1] == '*')
+                {
+                    int close = text.IndexOf("*/", i + 2, StringComparison.Ordinal);
+                    i = close < 0 ? text.Length : close + 1;
+                    continue;
+                }
+                if (tokens && text[i] is '"' or '\'')
+                {
+                    int end = StringEnd(text, i);
+                    for (int k = i + 1; k < end; k++)
+                    {
+                        if (!IsUrlAt(text, k))
+                        {
+                            continue;
+                        }
+                        if (++urls > MaxUrlReferencesPerValue)
+                        {
+                            return SvgRefusal.UrlReferences;
+                        }
+                        int argumentEnd = k + 4 < end ? text.IndexOf(')', k + 4, end - (k + 4)) : -1;
+                        if (stylesheet && Fragment(text, k + 4, argumentEnd < 0 ? end : argumentEnd) is { } quoted)
+                        {
+                            AddRuleTarget(preludes.Count > 0 ? preludes[^1] : null, quoted);
+                        }
+                    }
+                    // Past the closing quote; a line end that cut the string
+                    // short is read on.
+                    i = end < text.Length && text[end] == text[i] ? end : end - 1;
+                    continue;
+                }
                 switch (text[i])
                 {
                     case '{' when stylesheet:
@@ -407,13 +459,14 @@ internal static class SvgPreviewGuard
                             return SvgRefusal.UrlReferences;
                         }
                         int end = UrlArgumentEnd(text, i + 4);
-                        if (Fragment(text, i + 4, end) is { } target)
+                        int argumentEnd = end < text.Length && text[end] == ')' ? end : text.Length;
+                        if (Fragment(text, i + 4, argumentEnd) is { } target)
                         {
                             if (stylesheet)
                             {
                                 AddRuleTarget(preludes.Count > 0 ? preludes[^1] : null, target);
                             }
-                            else
+                            else if (!tokens)
                             {
                                 references.Add((from, target));
                             }
@@ -708,21 +761,37 @@ internal static class SvgPreviewGuard
         return end < 0 ? text.Length - 1 : end;
     }
 
-    /// <summary>The element id a url argument names (<c>#id</c>, quoted
+    /// <summary>The element id the url argument in [<paramref
+    /// name="start"/>, <paramref name="end"/>) names (<c>#id</c>, quoted
     /// or not), or null.</summary>
     private static string? Fragment(string text, int start, int end)
     {
         int from = Math.Min(start, text.Length);
-        int to = end < text.Length && text[end] == ')' ? end : text.Length;
-        string argument = text[from..Math.Max(from, to)].Trim().Trim('"', '\'').Trim();
+        int to = Math.Clamp(end, from, text.Length);
+        string argument = text[from..to].Trim().Trim('"', '\'').Trim();
         return argument.StartsWith('#') && argument.Length > 1 ? argument[1..] : null;
+    }
+
+    /// <summary>Where the CSS string opening at <paramref name="open"/>
+    /// ends: its closing quote, or the line end or text end that leaves it
+    /// open (a CSS tokenizer ends an unclosed string there).</summary>
+    private static int StringEnd(string text, int open)
+    {
+        int i = open + 1;
+        while (i < text.Length && text[i] != text[open] && text[i] is not ('\n' or '\r' or '\f'))
+        {
+            i++;
+        }
+        return i;
     }
 
     /// <summary>
     /// Resolves CSS escapes: <c>\</c> and up to six hex digits (and one
     /// whitespace after them), or <c>\</c> and any other character. An
     /// escaped character that would otherwise be CSS syntax becomes
-    /// <c>_</c>, so it can neither open, close nor separate.
+    /// U+0001, which is neither syntax nor part of a name: it can neither
+    /// open, close, separate nor start a comment, and a selector holding
+    /// one is not a simple selector.
     /// </summary>
     private static string Unescape(string text)
     {
@@ -753,13 +822,14 @@ internal static class SvgPreviewGuard
                 {
                     i++;
                 }
-                resolved = code is > 0 and < 0xD800 ? (char)code : '_';
+                resolved = code is > 0 and < 0xD800 ? (char)code : '\u0001';
             }
             else
             {
-                resolved = i + 1 < text.Length ? text[++i] : '_';
+                resolved = i + 1 < text.Length ? text[++i] : '\u0001';
             }
-            builder.Append(resolved is ';' or '{' or '}' or '(' or ')' or '[' or ']' or '"' or '\'' or '\\' ? '_' : resolved);
+            builder.Append(resolved is ';' or '{' or '}' or '(' or ')' or '[' or ']' or '"' or '\''
+                or '\\' or '/' or '*' or ',' ? '\u0001' : resolved);
         }
         return builder.ToString();
     }

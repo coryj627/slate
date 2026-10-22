@@ -71,6 +71,12 @@ public sealed class SvgPreviewGuardTests
             Svg("<defs><linearGradient id='g0'><stop offset='0' stop-color='red'/></linearGradient>"
                 + Chain(1000, i => $"<linearGradient id='g{i}' href='#g{i - 1}'/>")
                 + "</defs><rect width='16' height='16' fill='url(#g1000)'/>"),
+            // CSS strings and comments are not structure: braces in a string
+            // and references in a comment count for nothing.
+            Svg("<style>text::before{content:\"" + new string('{', SvgPreviewGuard.MaxValueNesting + 1)
+                + "\"}</style>" + Square),
+            Svg("<style>/* " + Repeat("url(#a)", SvgPreviewGuard.MaxUrlReferencesPerValue + 1)
+                + " */rect{fill:red}</style>" + Square),
         ];
 
         foreach (string source in accepted)
@@ -122,6 +128,28 @@ public sealed class SvgPreviewGuardTests
             () => Svg("<style>" + Repeat("@media all{", SvgPreviewGuard.MaxValueNesting)
                 + "rect{fill:red}" + Repeat("}", SvgPreviewGuard.MaxValueNesting) + "</style>" + Square),
             SvgRefusal.ValueNesting),
+        // A string's brackets are its own: a ")" inside one closes nothing.
+        ["brackets hidden behind strings in a stylesheet"] = (
+            () => Svg("<style>rect" + Repeat(":not([a=\")\"]", SvgPreviewGuard.MaxValueNesting)
+                + Repeat(")", SvgPreviewGuard.MaxValueNesting) + "{fill:red}</style>" + Square),
+            SvgRefusal.ValueNesting),
+        ["brackets hidden behind strings in a style attribute"] = (
+            () => Svg("<rect width='16' height='16' style='stroke-width:"
+                + Repeat("calc(\"x)\"", SvgPreviewGuard.MaxValueNesting + 1) + "1px"
+                + Repeat(")", SvgPreviewGuard.MaxValueNesting + 1) + "'/>"),
+            SvgRefusal.ValueNesting),
+        // An escaped comment marker opens no comment.
+        ["an escaped comment marker"] = (
+            () => Svg("<style>\\/\\*rect{stroke-width:" + Repeat("calc(", SvgPreviewGuard.MaxValueNesting)
+                + "1px" + Repeat(")", SvgPreviewGuard.MaxValueNesting) + "}\\*\\/</style>" + Square),
+            SvgRefusal.ValueNesting),
+        // An escaped comma separates no selectors: the selector is not a
+        // simple one, so the rule applies to every element, the mask's own
+        // content included.
+        ["an escaped comma in a selector"] = (
+            () => Svg("<style>.a\\,b{mask:url(#m)}</style><defs><mask id='m'>"
+                + "<rect class='a,b' width='16' height='16' fill='#fff'/></mask></defs>" + Square),
+            SvgRefusal.ReferenceCycle),
         ["element nesting"] = (
             () => Svg(Repeat("<g>", SvgPreviewGuard.MaxRenderDepth - 1) + Square + Repeat("</g>", SvgPreviewGuard.MaxRenderDepth - 1)),
             SvgRefusal.RenderDepth),
