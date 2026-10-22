@@ -14,7 +14,8 @@
 # review-by date has passed, or when active ignores exist and no date does.
 # One date may cover a group of related IDs, and the earliest date bounds
 # every ignore here. An accepted-risk exception must never become silent
-# debt. One exception is active: the zip advisories below (#1457).
+# debt. No exception is active: MathCAT 0.7.7 moved to zip 9, which fixed
+# the zip advisories that were accepted here (#1457).
 # The quick-xml exceptions were removed by the immutable citationberg fix in
 # Cargo.toml; downloaded or shared CSL styles are untrusted parser input.
 # The temporary Git-source admission is NOT an advisory ignore: CI verifies
@@ -26,17 +27,4 @@
 # (#480).
 
 [advisories]
-# zip 8.6.0 reaches Slate only through MathCAT (`include-zip`), and every
-# MathCAT release requires zip ^8.2; the fix is zip >= 9.0.0, with no fixed
-# 8.x. All three advisories concern extracting an archive to disk
-# (`ZipArchive::extract`, `ZipStreamReader::extract`). With `include-zip`,
-# MathCAT reads its own build-time rules archive into memory and the
-# `extract` call is compiled out (shim_filesystem.rs). Accepted by the owner
-# on 2026-10-17. Tracking: #1457. Remove when a MathCAT release accepts zip
-# >= 9.0.0 (or zip 8 gets a fix): upgrade, delete these IDs, close #1457.
-# review-by: 2026-11-17
-ignore = [
-    "RUSTSEC-2026-0367",  # zip: SUID/SGID bits preserved during extraction
-    "RUSTSEC-2026-0368",  # zip: extract creates symlinks outside the destination
-    "RUSTSEC-2026-0369",  # zip: extract applies permissions through symlinks
-]
+ignore = []
