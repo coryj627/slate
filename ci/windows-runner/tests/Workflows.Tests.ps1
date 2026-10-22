@@ -1,12 +1,14 @@
 # Copyright (C) 2026 Cory Joseph
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# Text-level guards over the three workflows that read WINDOWS_RUNNER_MODE
-# and over what branch-cleanup.yml owns (the weekly claude/* branch report;
-# its script's behaviour is BranchCleanup.Tests.ps1). YAML parsing happens
-# on push (GitHub refuses a malformed workflow at the first run); these
-# tests pin the routing contract and the delete switch themselves, and the
-# path filters that make windows-runner-tests.yml run them.
+# Text-level guards over the three workflows that read WINDOWS_RUNNER_MODE,
+# over what branch-cleanup.yml owns (the weekly claude/* branch report;
+# its script's behaviour is BranchCleanup.Tests.ps1), over the PR gate that
+# main's ruleset requires, and over the pause on Dependabot version updates.
+# YAML parsing happens on push (GitHub refuses a malformed workflow at the
+# first run); these tests pin the routing contract, the delete switch, the
+# gate and the pause themselves, and the path filters that make
+# windows-runner-tests.yml run them.
 
 BeforeAll {
     $script:wf = Join-Path $PSScriptRoot '..' '..' '..' '.github' 'workflows'
@@ -204,6 +206,9 @@ Describe 'windows-runner-tests.yml path filters' {
     It 'runs the branch-cleanup behaviour test when its script changes, on pull requests and on main' {
         ([regex]::Matches($lane, (Get-Lines @("      - 'ci/branch-cleanup/**'")))).Count | Should -Be 2
     }
+    It 'runs the Dependabot guard when its config changes, on pull requests and on main' {
+        ([regex]::Matches($lane, (Get-Lines @("      - '.github/dependabot.yml'")))).Count | Should -Be 2
+    }
     It 'runs the router''s Python tests even when Pester failed' {
         $lane | Should -Match ([regex]::Escape('python -I -m unittest discover -v -s ci/windows-runner/route/tests -t ci/windows-runner/route'))
         # The step runs to the next step or the end of the file.
@@ -265,5 +270,25 @@ Describe 'pr-gate.yml' {
         $gate | Should -Not -Match '(?m)^[ \t]*(?:- )?if:'
         $gate | Should -Not -Match 'secrets\.'
         $gate | Should -Not -Match 'actions/checkout'
+    }
+}
+
+Describe 'dependabot.yml' {
+    # Version updates are paused (#1564). A Dependabot PR cannot run CI under the owner-only Actions policy
+    # (plan 42), so it could only merge untested, and admitting Dependabot through allowlist.json would run
+    # dependency code on the owner's hardware. Each ecosystem keeps its settings for the redesign, with a pull
+    # request limit of zero, which stops its version updates.
+    BeforeAll {
+        $script:dependabot = Get-Content -Raw (Join-Path $wf '..' 'dependabot.yml')
+    }
+    It 'pauses version updates for every ecosystem with a pull request limit of zero' {
+        $entries = @([regex]::Matches($dependabot, '(?ms)^  - package-ecosystem: .*?(?=^  - package-ecosystem: |\z)') | ForEach-Object { $_.Value })
+        $entries.Count | Should -BeGreaterThan 0
+        foreach ($entry in $entries) {
+            $name = [regex]::Match($entry, 'package-ecosystem: (\S+)').Groups[1].Value
+            $entry | Should -Match '(?m)^    open-pull-requests-limit: 0[ \t]*\r?$' -Because "$name stays paused until the redesign (#1564)"
+        }
+        # Exactly one limit per ecosystem, so no second key can override a zero.
+        ([regex]::Matches($dependabot, '(?m)^[ \t]*open-pull-requests-limit:')).Count | Should -Be $entries.Count
     }
 }
