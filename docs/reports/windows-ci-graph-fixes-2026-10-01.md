@@ -1,0 +1,66 @@
+# Windows graph CI failure repairs
+
+The source fixes are pushed in `61b52bc530ad6f116eeb5f13c116faf3bfc30ba5` (tree `911fa23c12e7f49978f3356ca3d5ae1d5e4d4b5e`) in [draft PR #1328](https://github.com/coryj627/slate/pull/1328). The final workflow-only revision is `4958e62e61d012d0a6924ec38433a283999f00e1`; it preserves all native/C# source and tests from that source-fix commit. Its normal CI and complete cold hosted pilot are fully green; independent artifacts verify both complete inventories and binary provenance. The preceding pilot exceeded its overall job deadline during continued model progress, leaving coverage/shell incomplete. The [pilot deadline report](windows-ci-pilot-deadline-repair-2026-10-01.md) records the separate scheduling repair and current results. This private report distinguishes controlled failure evidence, local verification and hosted acceptance; no invoice files or private reports are included in the PR.
+
+## Failures and causes
+
+The preceding normal Windows run failed graph paging at 104 live containers versus its 100-container ceiling. The preceding cold hosted pilot failed the 1,500-node warm layout tick at 148.3 ms versus 100 ms. The pilot's tested merge tree matched the PR head exactly. All other app facts passed in both runs, but subsequent shell/format stages were skipped. Those failed runs remain preserved rather than replaced by reruns.
+
+For row cleanup, initial passive local probes passed and did not identify the historical CI scheduling state. A subsequent controlled, real WPF cleanup callback consumed 70 ms, exceeding WPF's 50 ms slice. The original assertion failed at 87/85; the actual panel later continued naturally and unloaded to 18. This confirms that one Background sentinel does not establish completion of WPF's 500 ms cleanup continuation. The repair conditionally waits for public unloading/layout events only when the existing ceiling is exceeded, with a three-second deadline, then compares event counts to actual attached rows. The original initial/paging bounds, cache, viewport, population, distant-row check and three-action inventory remain. A control that cancels unloading still fails at the same bound with zero unloads. No product cleanup policy changed. The exact historical CI timer state remains unobserved.
+
+For warm layout, the 1,500-node fixture uses the exact solver and executes 20 warm iterations; that means up to 22,485,000 pair interactions. Admission locking does not cover the native computation. The unchanged local E2E baseline measured 70.7 ms. A temporary standalone profile separated arithmetic/indexing effects: the former formula measured roughly 70.6 ms, squared-distance arithmetic alone roughly 50.8 ms, and combined disjoint displacement slices plus squared-distance arithmetic roughly 18.6 ms. This isolated native pair cost; it did not establish complete hosted acceptance.
+
+The production loop retains pair/addition order, solver tier, pins, iteration/convergence policy and seeded near-coincidence handling. Ordinary forces use `delta * strength / distance_squared`; near-coincident pairs retain the original square-root/epsilon path. The two formulas can round differently, so old/new trajectories are not claimed bit-identical. A scalar oracle at 2, 17 and 1,500 nodes covers seeds, slider extremes, nonzero initial displacement, coincidence, epsilon neighbors and both sides of the fast-path boundary. Error is bounded against the sum of contributing magnitudes. Existing golden, determinism, force, pin, permutation and Barnes–Hut tests remain unchanged.
+
+## Local evidence
+
+| Verification | Result |
+| --- | --- |
+| Full affected Windows graph closure | 645/645 passed, zero skipped, approximately 4m46s |
+| Separate GraphTable/AccessibleDataGrid closure | 130/130 passed, zero skipped |
+| Original paging, forced continuation, cancellation control | 3/3 passed after a controlled RED of the original assertion |
+| Fresh rebuilt-DLL E2E processes | 19.4/19.2/19.3 ms warm tick; each 20 iterations at generation 1; all original 100/500/100/50 ms gates passed |
+| Broader-suite E2E sample | 19.9 ms, 20 iterations |
+| Native layout tests | 19/19 passed, including unchanged goldens and the new scalar oracle |
+| Focused FFI layout tests | 2/2 passed; these are not the entire FFI inventory |
+| Fresh native frame Criterion benchmark | 19.152–19.222 ms, estimate 19.184 ms, ten samples; fresh ring/hub graph settled outside timing; destruction excluded |
+| Tooling | Release native bindings/C# solution builds, clippy with warnings denied, Rustfmt, full C# formatter and whitespace checks passed |
+
+The new benchmark measures the native frame workload. It does not replace end-to-end timing, measure job duration or establish a billing forecast. The E2E fact now logs actual iteration count before its unchanged 100 ms assertion.
+
+Focused commands include `cargo test -p slate-core --profile ci --locked --offline graph_layout::tests`, the two `canvas_mirror_tests::layout_` FFI checks, and `cargo bench -p slate-core --bench layout_bench --locked --offline -- layout_warm_frame/1500 --warm-up-time 1 --measurement-time 2 --sample-size 10 --noplot`. Native builds use the pinned Rust toolchain and the installed x64 Visual Studio developer environment. C# facts use freshly rebuilt Release bindings and solution binaries.
+
+Raw current local evidence and SHA-256 provenance are retained under `C:\Users\cory\AppData\Local\Temp\slate-ci-failure-repairs-2026-10-01`, with `local-validation.json`. Local measurements used Windows build 26300, Ryzen 7 9800X3D, 16 logical processors, .NET SDK 10.0.401 and Rust 1.97.1. These timings are separate from the hosted pilot's machine. The temporary pair probe is diagnostic code; its executable/PDB are not handoff payloads. Controlled row evidence is detailed in [the virtualization diagnostic](windows-graph-virtualization-diagnostic-2026-09-30.md).
+
+## Preceding source-revision CI
+
+[Normal Windows](https://github.com/coryj627/slate/actions/runs/36864606978), [cold hosted Windows pilot](https://github.com/coryj627/slate/actions/runs/36864606986), [Rust](https://github.com/coryj627/slate/actions/runs/36864607064) and [Swift](https://github.com/coryj627/slate/actions/runs/36864607298) all reference head `61b52bc5`. Normal app and formatter passed: downloaded TRX proves 4,806/4,806 passed, zero failed/skipped/error/timeout, in 1,543.934 seconds. Original graph paging passed in 3.526s, forced continuation 3.520s, refusal control 4.396s, large-graph E2E 2.838s and citation regression 0.609s. All four privilege facts actually passed. Numeric hosted warm-tick/iteration output is not present in the normal-verbosity log, so no exact hosted tick value is inferred from the passing budget assertion.
+
+Swift passed native FFI/XCTest/CLI, reporting 3,032 tests with 3,031 observed raw-log progress ordinals (61 absent), no duplicates or failure/skip markers. That progress gap does not prove a missing test. Windows/Linux Rust, audit, license and model CI passed. Downloaded model artifacts independently prove all 13,069 scenarios exactly once, unchanged inventory digests, complete checkpoints and zero missed progress writes. Normal hosted shell passed 135/135, zero failed/skipped/error/timeout, in 808.514s. All 58 axe scans passed with zero errors/waivers and the exact tested merge revision; citation, palette, launch and all five earlier Canvas physical failures passed. Normal Windows aggregate is fully green. The cold pilot hit its 120-minute job deadline at 14:51:49 UTC. App/format and native witnesses passed; app TRX proves 4,806/4,806 passed. Canonical reroot proves 544 complete ordinals at the unchanged digest in 188.836s. Routes last checkpoint was 10,366/12,388 completed, active ordinal 10,367 in arrangement, elapsed 3,521.775s shortly before cancellation. Routes/composed canonical reports, model TRX and shell evidence are absent; independent verification fails closed. Final coverage and shell steps were explicitly skipped. This supports slow throughput exhausting the serial job, not a frozen-cell hang. At that preceding revision, complete comparative CI acceptance required a revised topology and a fresh full run; the final revision below supplies both. Earlier green runs are historical evidence only. Tested PR merge `e2f6b1e8091bd44c24df279185ab62992045f01e` has the same tree as the head; full app/model logs, TRXs and provenance are preserved under the earlier Temp evidence root's `ci-app-61b52bc5` and `ci-model-61b52bc5` directories. The PR stays draft for the separate Mac analyzer and fresh human AT acceptance.
+
+## Complete exact-revision CI acceptance
+
+All current PR checks passed on `4958e62e61d012d0a6924ec38433a283999f00e1`. [Normal Windows](https://github.com/coryj627/slate/actions/runs/36883467437) and the [cold hosted pilot](https://github.com/coryj627/slate/actions/runs/36883467281) both completed every required app, formatter, model, shell and aggregate gate. Rust, Swift, audit, license, Semgrep and Codoki also passed. No earlier green result substitutes for this acceptance.
+
+| Evidence | Normal Windows | Cold hosted pilot |
+| --- | --- | --- |
+| Complete app | 4,806/4,806 passed; TRX 1,272.284335s | 4,806/4,806 passed; TRX 1,926.811661s |
+| Complete models | All 13,069 scenarios exactly once | All 13,069 scenarios exactly once |
+| Model discovery | Each shard passed the same three model facts | Each shard passed the same three model facts, using transferred assemblies |
+| Canonical inventory | Routes 12,388, reroot 544, composed 137; exact global ordinals and unchanged inventory digests in all six reports | Same complete inventory, exact ordinals and unchanged digests |
+| Progress | Six complete successful checkpoints; zero missed progress writes | Six complete successful checkpoints; zero missed progress writes |
+| Hosted shell | 135/135 passed; TRX 934.979828s | Same 135-name inventory, 135/135 passed; TRX 854.647716s |
+| Axe | 58 scans, zero errors or waivers | Same 58-surface inventory, zero errors or waivers |
+| Required aggregates | Success | Strict coverage and existing Native Windows pilot aggregate success |
+
+App/model/shell TRXs have zero failures, skips, errors or timeouts. The original graph paging, real extra-cleanup slice, unload-refusal control, large-graph performance gate, citation provider-retirement regression and all four privilege facts passed in both app executions. Numeric hosted warm-tick/iteration output is absent from normal-verbosity logs; passing the unchanged budget assertion does not establish an exact hosted tick value.
+
+All tested source is actual PR merge `b682434a80317480a0ef0d43860420f1becd28d0`, whose tree `bf2192e94b9592ed5481159df7b6b02a4d77c870` equals the head tree, with base `39dd2457ace1c8358aa9c954604dfb0e1437d6b0` and this head as parents. All axe source revisions match that tested merge.
+
+The producer artifact independently verifies all **449 files / 1,465,769,935 bytes**, the exact file set, all seven required outputs and identical native DLL copies. Manifest SHA-256 is `8994f2eadc325354eb0d193f73d5ba012e018c3f3535de57ddc2347b1b210027`; native SHA-256 is `37f7f63d9456404ccbab8c5829a29b406eeedd72928d63b5bc8a8e20fa1f3263`. Both model consumers and the shell match producer run `36883467281`, producer attempt `1`, execution attempt `1`, source and both digests. Current CI exercises the first successful attempt; failed-consumer retry acceptance is supported by the local transfer smoke and static review, not claimed as an actual CI retry.
+
+The producer completed at 16:33:15 UTC, hosted shell at 16:48:26, models at 17:18:06/17:18:27, strict coverage at 17:18:41 and final aggregate at **17:18:46 UTC on October 1**. Canonical routes-family execution took 2,522.414875s / 2,514.267266s. Actual TRX route-fact durations were 2,522.4314496s / 2,514.2983306s (approximately 42 minutes), below the existing 45-minute watchdog. Complete model TRXs took 2,630.000507s / 2,625.845139s. Hosted model throughput remains much slower than Namespace in these observations; this scheduling repair does not identify that cause or certify a provider cutover. Matched cold/warm measurements remain follow-up work.
+
+Swift independently reports 3,032 XCTest cases; anchored and global log parsers observe 3,031 unique progress entries, ordinal 61 absent, no duplicates. This is a log evidence gap, not proof of missing execution. Linux Rust passed 2,765 selected nextest cases plus two doctests; Windows Rust passed 2,592 top-level cases, retaining the existing ignored fixture writer and separate nested-child record. Configured audit passed with three allowed warnings; it is not an assertion of zero advisories.
+
+Full raw logs, TRXs, canonical reports/progress, all 58 scans per shell, source/tree proof, producer binary audit, consumer provenance and file hashes are preserved under `C:\Users\cory\AppData\Local\Temp\slate-windows-implementation-2026-09-30`, in `ci-app-4958e62e`, `ci-model-4958e62e`, `ci-shell-4958e62e`, `ci-pilot-4958e62e`, `ci-pilot-shell-4958e62e`, `ci-swift-4958e62e` and `ci-rust-4958e62e`. The PR remains draft for fresh native Mac, the pinned analyzer and human AT acceptance.
