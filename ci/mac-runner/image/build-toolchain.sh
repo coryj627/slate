@@ -8,7 +8,7 @@
 # Environment:
 #   SIP=on|off       re-enable SIP in stage 3c (default off: skip, keep SIP off)
 #   XCODE_BUILD      expected Xcode build (default 27A266a)
-#   RUST_VERSION     default 1.97.1
+#   RUST_VERSION     default 1.99.1
 #   NET=softnet|nat  guest networking during the build (default softnet:
 #                    "out @host"; nat is the fallback if SSH-in fails)
 #   KEEP_STAGE=1     keep the stage VM after a failure
@@ -26,7 +26,7 @@ tree="${SLATE_RUNNER_TREE:-$state/mac-runner}"
 cd "$tree/image"
 
 XCODE_BUILD="${XCODE_BUILD:-27A266a}"
-RUST_VERSION="${RUST_VERSION:-1.97.1}"
+RUST_VERSION="${RUST_VERSION:-1.99.1}"
 SIP="${SIP:-off}"
 NET="${NET:-softnet}"
 stage=slate-mac-toolchain-stage

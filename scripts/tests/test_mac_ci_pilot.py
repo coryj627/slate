@@ -29,7 +29,7 @@ def fixture(layer):
               "locks": {"Cargo.lock": "d" * 64}}
     metadata = {"schema": 1, "layer": layer, **IDENTITY, "qualified": True,
                 "source_is_harness_ancestor": True, "source": source, "reference_tests_tree": "c" * 40,
-                "xcode": "Xcode 27.0\nBuild version 27A266a", "rust": "rustc 1.97.1 (pinned)", "cargo": "cargo 1.97.1 (pinned)"}
+                "xcode": "Xcode 27.0\nBuild version 27A266a", "rust": "rustc 1.99.1 (pinned)", "cargo": "cargo 1.99.1 (pinned)"}
     summary = {"schema": 1, "layer": layer, **IDENTITY, "status": "success", "metadata": metadata,
                "test_workers": 3, "passes": {}, "phases": {"toolchain": {"status": "success", "exit_code": 0}}}
     if layer == "analyzer":

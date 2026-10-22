@@ -183,8 +183,10 @@ fn children(
                 return Err(refused("Invalid directory inventory"));
             }
             let wide = bytes[offset + name_offset..end]
-                .chunks_exact(2)
-                .map(|b| u16::from_le_bytes([b[0], b[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|b| u16::from_le_bytes(*b))
                 .collect::<Vec<_>>();
             if wide != [46] && wide != [46, 46] {
                 if *entries >= MAX_ENTRIES {

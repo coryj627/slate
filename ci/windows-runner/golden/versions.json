@@ -1,7 +1,7 @@
 {
   "runnerVersion": "2.338.0",
   "runnerSha256": "f48e0750a21812bca5f82de5f7f5aeae71abee647fab5a582f1742d07eba455f",
-  "rustToolchain": "1.97.1",
+  "rustToolchain": "1.99.1",
   "bindgenTag": "v0.11.0+v0.31.0",
   "dotnetChannel": "10.0",
   "pythonVersion": "3.13.15",

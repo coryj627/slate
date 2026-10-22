@@ -6173,7 +6173,7 @@ impl VaultSession {
             }));
         }
 
-        let new_stat = self.provider.stat(path).map_err(&published)?;
+        let new_stat = self.provider.stat(path).map_err(published)?;
         let now = now_ms();
         let mut graph_sink = self.graph_sink();
         // `existed = false` by construction: the case-insensitive index
@@ -6193,7 +6193,7 @@ impl VaultSession {
                 &mut graph_sink,
             )
         };
-        let file_id = indexed.map_err(&published)?;
+        let file_id = indexed.map_err(published)?;
         // A materialised file heals the ghost rows that named it (W6-2
         // PR B, #746 — the Connections leaf's journey found it): the
         // links table's unresolved rows re-resolve against the inventory
@@ -6205,7 +6205,7 @@ impl VaultSession {
         // mutation and the Windows shell never does; SQLite now heals at
         // scan, move AND create time, and the graph keeps replaying it.
         let resolved_sources =
-            crate::links_db::re_resolve_unresolved_links(&tx).map_err(&published)?;
+            crate::links_db::re_resolve_unresolved_links(&tx).map_err(published)?;
         if graph_sink.live() {
             for source in &resolved_sources {
                 graph_sink
@@ -6215,7 +6215,7 @@ impl VaultSession {
                             rows: crate::links_db::graph_linkset_for(&tx, source)?,
                         })
                     })
-                    .map_err(&published)?;
+                    .map_err(published)?;
             }
         }
         if let Some(stem) = bind_log {
@@ -13210,6 +13210,9 @@ impl VaultSession {
                 .trash_confirmation
                 .lock()
                 .expect("trash confirmation mutex");
+            // `try_update` replaces `fetch_update` from Rust 1.99, but it is
+            // only stable since 1.95, above the workspace `rust-version`.
+            #[allow(deprecated)]
             let generation = self
                 .trash_stage_generation
                 .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_add(1))

@@ -191,9 +191,9 @@ fn bench_compact(c: &mut Criterion) {
                 _ => 0,
             }
         };
-        let head = &checksum_hex.as_bytes()[..8];
+        let (head, _) = checksum_hex.as_bytes()[..8].as_chunks::<2>();
         let mut sum = [0u8; 4];
-        for (i, pair) in head.chunks_exact(2).enumerate() {
+        for (i, pair) in head.iter().enumerate() {
             sum[i] = (nibble(pair[0]) << 4) | nibble(pair[1]);
         }
         let mut out = Vec::with_capacity(4 + entry_body.len() + 4);

@@ -1428,9 +1428,9 @@ fn body_checksum(body: &[u8]) -> u32 {
     // lowercase blake3 hex, exactly 64 characters. If that contract
     // ever changes, this slice + the lowercase-only `hex_nibble`
     // fallback below need to be revisited.
-    let head = &hash.as_bytes()[..8];
+    let (head, _) = hash.as_bytes()[..8].as_chunks::<2>();
     let mut nibbles = [0u8; 4];
-    for (i, pair) in head.chunks_exact(2).enumerate() {
+    for (i, pair) in head.iter().enumerate() {
         nibbles[i] = (hex_nibble(pair[0]) << 4) | hex_nibble(pair[1]);
     }
     u32::from_le_bytes(nibbles)
