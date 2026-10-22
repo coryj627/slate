@@ -45,7 +45,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout harness
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           persist-credentials: false
       - name: Set up Python
@@ -64,7 +64,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout experiment harness with ancestry
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           ref: ${{ github.sha }}
           path: pilot-harness
@@ -77,7 +77,7 @@ jobs:
       - name: Validate literal source and candidate before checkout
         run: python pilot-harness/scripts/mac-ci-pilot.py validate-inputs
       - name: Checkout frozen application source
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           ref: ${{ env.SOURCE_SHA }}
           path: source
@@ -89,7 +89,7 @@ jobs:
             --source "$GITHUB_WORKSPACE/source" --evidence "$RUNNER_TEMP/mac-pilot-native"
       - name: Upload pre-build metadata
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: mac-pilot-preflight-${{ github.run_id }}-${{ github.run_attempt }}-native
           path: '${{ runner.temp }}/mac-pilot-native/metadata.json'
@@ -101,7 +101,7 @@ jobs:
             --source "$GITHUB_WORKSPACE/source" --evidence "$RUNNER_TEMP/mac-pilot-native"
       - name: Preserve full or partial native evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: mac-pilot-result-${{ github.run_id }}-${{ github.run_attempt }}-native
           path: '${{ runner.temp }}/mac-pilot-native/*'
@@ -115,7 +115,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout experiment harness with ancestry
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           ref: ${{ github.sha }}
           path: pilot-harness
@@ -128,7 +128,7 @@ jobs:
       - name: Validate literal source and candidate before checkout
         run: python pilot-harness/scripts/mac-ci-pilot.py validate-inputs
       - name: Checkout frozen application source
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           ref: ${{ env.SOURCE_SHA }}
           path: source
@@ -140,7 +140,7 @@ jobs:
             --source "$GITHUB_WORKSPACE/source" --evidence "$RUNNER_TEMP/mac-pilot-analyzer"
       - name: Upload pre-build metadata
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: mac-pilot-preflight-${{ github.run_id }}-${{ github.run_attempt }}-analyzer
           path: '${{ runner.temp }}/mac-pilot-analyzer/metadata.json'
@@ -152,7 +152,7 @@ jobs:
             --source "$GITHUB_WORKSPACE/source" --evidence "$RUNNER_TEMP/mac-pilot-analyzer"
       - name: Preserve independent analyzer evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: mac-pilot-result-${{ github.run_id }}-${{ github.run_attempt }}-analyzer
           path: '${{ runner.temp }}/mac-pilot-analyzer/*'
@@ -167,7 +167,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout harness
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           ref: ${{ github.sha }}
           persist-credentials: false

@@ -226,7 +226,7 @@ jobs:
     steps:
       - name: Checkout the route script
         continue-on-error: true
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           sparse-checkout: ci/windows-runner/route
           persist-credentials: false
@@ -258,7 +258,7 @@ jobs:
         run: Write-Host "runner=${{ runner.name }} environment=${{ runner.environment }} attempt=${{ github.run_attempt }} router-attempt=$env:ROUTER_ATTEMPT"
 
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
 
       - name: Assert runner architecture matches the cache lineage
         # Twin of rust.yml's guard: the NVMe cache volume is keyed per
@@ -284,7 +284,7 @@ jobs:
         # actions/cache scheme was built to end). Checkout runs FIRST:
         # Windows mounts are NTFS junctions, which a later checkout
         # would clobber (the action's post step verifies survival).
-        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547  # v1
+        uses: namespacelabs/nscloud-cache-action@1124a6f3ce44e5cf84cc22111530961f4d2a15f9  # v1
         with:
           cache: rust
 
@@ -426,7 +426,7 @@ jobs:
         run: Write-Host "runner=${{ runner.name }} environment=${{ runner.environment }} attempt=${{ github.run_attempt }} router-attempt=$env:ROUTER_ATTEMPT"
 
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           # The W6-1 reconciliation's ancestry gate (CanvasReconciliationCensus)
           # runs `git merge-base --is-ancestor` over the ledgered merge commits;
@@ -451,7 +451,7 @@ jobs:
         # global-packages folder as an explicit path — the action unions
         # `cache:` modes with `path:` entries (swift-tests.yml pattern;
         # spacectl has no nuget mode).
-        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547  # v1
+        uses: namespacelabs/nscloud-cache-action@1124a6f3ce44e5cf84cc22111530961f4d2a15f9  # v1
         with:
           cache: rust
           path: |
@@ -555,7 +555,7 @@ jobs:
 
       - name: Upload app test results and hang evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: slate-windows-app-results-${{ github.run_id }}
           overwrite: true
@@ -570,7 +570,7 @@ jobs:
       # Named per run attempt so a re-run can't collide with a prior
       # attempt's artifact.
       - name: Upload FlaUI gate binaries
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: flaui-binaries-${{ github.run_id }}
           overwrite: true
@@ -652,7 +652,7 @@ jobs:
         run: Write-Host "runner=${{ runner.name }} environment=${{ runner.environment }} attempt=${{ github.run_attempt }} router-attempt=$env:ROUTER_ATTEMPT"
 
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           # The W6-1 reconciliation's ancestry gate (CanvasReconciliationCensus)
           # runs `git merge-base --is-ancestor` over the ledgered merge commits;
@@ -677,7 +677,7 @@ jobs:
         # global-packages folder as an explicit path — the action unions
         # `cache:` modes with `path:` entries (swift-tests.yml pattern;
         # spacectl has no nuget mode).
-        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547  # v1
+        uses: namespacelabs/nscloud-cache-action@1124a6f3ce44e5cf84cc22111530961f4d2a15f9  # v1
         with:
           cache: rust
           path: |
@@ -787,7 +787,7 @@ jobs:
 
       - name: Upload model timings and coverage
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           # Re-running only failed jobs retains successful sibling artifacts.
           # A rerun replaces this shard's evidence within the same run/SHA.
@@ -814,7 +814,7 @@ jobs:
           fi
 
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
 
       - name: Test model coverage verifier
         run: python3 -m unittest discover -s scripts/tests -p test_windows_model_shards.py
@@ -878,7 +878,7 @@ jobs:
       # actionable evidence instead of only an ephemeral console transcript.
       - name: Upload shell accessibility evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: slate-windows-accessibility-${{ github.sha }}
           overwrite: true
@@ -905,7 +905,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
 
       - name: Test the docs trigger check
         run: python3 -m unittest discover -s scripts/tests -p test_windows_docs_trigger.py

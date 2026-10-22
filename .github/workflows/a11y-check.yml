@@ -65,7 +65,7 @@ jobs:
       route: ${{ steps.route.outputs.route }}
     steps:
       - name: Checkout the route script
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           sparse-checkout: ci/mac-runner/route
           persist-credentials: false
@@ -88,7 +88,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout Slate
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           clean: ${{ needs.route.outputs.route != 'studio' }}
           persist-credentials: false
@@ -167,7 +167,7 @@ jobs:
 
       - name: Upload result artifacts
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: a11y-results
           path: |
@@ -195,7 +195,7 @@ jobs:
       actions: read
     steps:
       - name: Checkout Slate
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           persist-credentials: false
 
@@ -212,7 +212,7 @@ jobs:
         # Pinned to SHA for supply-chain hardening; corresponds to
         # github/codeql-action/upload-sarif@v4.35.5. Bump deliberately
         # when picking up new versions.
-        uses: github/codeql-action/upload-sarif@9e0d7b8d25671d64c341c19c0152d693099fb5ba
+        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee
         with:
           sarif_file: a11y-results.sarif
         continue-on-error: true
