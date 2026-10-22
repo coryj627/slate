@@ -124,6 +124,7 @@ From crates.io and the published crates' source, read 2026-10-16.
 |---|---|---|
 | 8.2.0 (latest stable) | 2025-08-03 | Windows completion routine ignores the byte count, so an overflowed buffer is parsed as empty and lost; `ERROR_NOTIFY_ENUM_DIR` ends the watch with a log line (`windows.rs` `handle_event`). FSEvents callback panics on unknown flag bits and on non-UTF-8 paths inside an `extern "C"` callback, which aborts the process. `stop()` spins until `CFRunLoopIsWaiting`. Calls the root-only `FSEventsPurgeEventsForDeviceUpToEventId`. No `WatchRoot`. windows-sys 0.60 (the workspace has 0.61). |
 | 9.0.0-rc.5 | 2026-08-30 | Windows overflow surfaces as `Flag::Rescan` and the watch re-arms (#964, `completion_rescan_event`); a deleted watched directory emits `Remove(Folder)`. FSEvents callback catches panics and keeps raw bytes (#790, rc.2); unknown flags tolerated (`from_bits_truncate`); the run loop stops on a flag instead of spinning, and the purge call is gone (#795, rc.2); `WatchRoot` set, so a renamed or replaced root reports "root changed"; events keep the watched path's spelling (rc.4). windows-sys 0.61. MSRV 1.88 (the workspace pins 1.97.1). |
+| 9.0.0-rc.6 | 2026-10-17 | Windows keeps `Flag::Rescan` for `ERROR_NOTIFY_ENUM_DIR` and a zero-byte completion; `unwatch` of an unwatched path now errors (Slate never unwatches). inotify: a recursive watch carries on past a folder it cannot watch and reports that folder as an error (#970). FSEvents hang fix; poll and kqueue fixes. Adopted 2026-10-22 (§4.6). |
 
 New crates for slate-core with rc.5: `notify` (CC0-1.0),
 `notify-types` (MIT OR Apache-2.0), `objc2-core-foundation` and
@@ -557,6 +558,12 @@ watcher run (#1267 asks for the foreground policy).
 - A watch that ends (root changed or swapped, a backend error after its
   catch-up) is not re-armed in PR 20. The baseline continues until the
   next open.
+- **Amended 2026-10-22 (owner; notify rc.6).** rc.6 keeps a recursive
+  inotify watch running past a folder it cannot watch and reports that
+  folder as an error (notify-rs/notify#970). A permission error that
+  names only folders inside the root does not end the watch: the scanner
+  cannot read those folders either. Every other error, including a watch
+  limit or a folder gone mid-walk, still ends it.
 - **The user is told nothing extra**: no sentence, status text or
   setting about the watcher. Diagnostics go to the host log; core's
   `log::warn!` lines carry no paths (the #507 privacy rule).
