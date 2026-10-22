@@ -46,7 +46,7 @@ pulldown-latex = "0.8"
 mathcat = { version = "0.7.7", default-features = false, features = ["include-zip"] }
 
 # Code: tree-sitter + the 15 compiled-in grammar set per `05` §6.4.
-tree-sitter = "0.26"
+tree-sitter = "0.27"
 tree-sitter-rust = "0.24"
 tree-sitter-swift = "0.7"
 tree-sitter-python = "0.25"
@@ -58,8 +58,8 @@ tree-sitter-json = "0.24"
 tree-sitter-bash = "0.25"
 tree-sitter-sequel = "0.3"        # Audit #248: third-party SQL grammar (maintainer: derekstride, not
                                    # the tree-sitter org). Used because `tree-sitter-sql` 0.0.2 pins
-                                   # tree-sitter 0.19, incompatible with the 0.26 all other grammars use.
-                                   # Monitor for abandonment; long-term, upstreaming a 0.26 update to
+                                   # tree-sitter 0.19, incompatible with the 0.27 all other grammars use.
+                                   # Monitor for abandonment; long-term, upstreaming a 0.27 update to
                                    # `tree-sitter-sql` would eliminate this dependency.
                                    # Pinned test: `sql_grammar_keyword_prefix_convention` in code.rs.
 tree-sitter-html = "0.23"
