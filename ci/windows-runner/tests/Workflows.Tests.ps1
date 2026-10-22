@@ -197,7 +197,7 @@ Describe 'windows-runner-tests.yml Pester pin' {
 
 Describe 'windows-runner-tests.yml path filters' {
     It 'runs these guards when a routed workflow changes, on pull requests and on main' {
-        foreach ($routed in @('windows.yml', 'nightly.yml', 'windows-ci-pilot.yml', 'branch-cleanup.yml')) {
+        foreach ($routed in @('windows.yml', 'nightly.yml', 'windows-ci-pilot.yml', 'branch-cleanup.yml', 'pr-gate.yml')) {
             ([regex]::Matches($lane, [regex]::Escape("- '.github/workflows/$routed'"))).Count | Should -Be 2 -Because "$routed must be in both the pull_request and push path filters"
         }
     }
@@ -243,5 +243,27 @@ Describe 'branch-cleanup.yml' {
         $steps[0] | Should -Match (Get-Lines @("        $pin", '        with:', '          sparse-checkout: ci/branch-cleanup', '          persist-credentials: false'))
         $steps[1] | Should -Match (Get-Lines @('        run: bash ci/branch-cleanup/branch-cleanup.sh'))
         ([regex]::Matches($cleanup, '(?m)^[ \t]*(?:- )?run:')).Count | Should -Be 1
+    }
+}
+
+Describe 'pr-gate.yml' {
+    # main's ruleset requires this job's check with "branches must be up to date before merging" (#1565), so
+    # every PR is re-tested on the current main before it merges. The lanes are path-filtered and cannot be the
+    # required check: a lane a PR does not trigger never reports. This job must report on EVERY pull request
+    # to main, and must not be skippable.
+    BeforeAll {
+        $script:gate = Get-Content -Raw (Join-Path $wf 'pr-gate.yml')
+    }
+    It 'runs on every pull request to main, with no path, branch or type filter' {
+        $gate | Should -Match (Get-Lines @('on:', '  pull_request:', '    branches: [main]'))
+        $gate | Should -Not -Match '(?m)^[ \t]*(paths|paths-ignore|branches-ignore|types):'
+    }
+    It 'reports one unconditional check named "pr gate", with no permissions, secrets or checkout' {
+        $gate | Should -Match (Get-Lines @('permissions: {}'))
+        ([regex]::Matches($gate, '(?m)^    name: ')).Count | Should -Be 1
+        $gate | Should -Match (Get-Lines @('    name: pr gate'))
+        $gate | Should -Not -Match '(?m)^[ \t]*(?:- )?if:'
+        $gate | Should -Not -Match 'secrets\.'
+        $gate | Should -Not -Match 'actions/checkout'
     }
 }
