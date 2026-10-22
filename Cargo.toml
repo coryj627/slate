@@ -64,7 +64,11 @@ proptest = { version = "1", default-features = false, features = ["std"] }
 # is officially deprecated as of 0.9.34. yaml-rust2 exposes the raw Yaml
 # enum which is what we want for type inference (we don't deserialize
 # into known shapes — we walk the parsed tree to classify leaves).
-yaml-rust2 = "0.11"
+# `default-features = false` drops the `encoding` feature (`YamlDecoder`, a
+# byte-stream decoder over `encoding_rs`): every caller parses a `&str` with
+# `YamlLoader::load_from_str`. Since 0.13 that feature also caps `encoding_rs`
+# below 0.8.40, which would otherwise pull the whole graph's copy back.
+yaml-rust2 = { version = "0.13", default-features = false }
 # serde_json round-trips PropertyValue through value_text in the
 # properties table. Used for both write (serialize) and read
 # (deserialize using the row's value_kind tag to pick the variant).
