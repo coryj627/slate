@@ -14,5 +14,6 @@
     <Project Path="tools/GridConformanceHost/GridConformanceHost.csproj" />
     <Project Path="tools/HostLogProbe/HostLogProbe.csproj" />
     <Project Path="tools/ParityHarness/ParityHarness.csproj" />
+    <Project Path="tools/SvgDecodeProbe/SvgDecodeProbe.csproj" />
   </Folder>
 </Solution>

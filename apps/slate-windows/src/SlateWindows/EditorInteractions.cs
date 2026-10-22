@@ -2,13 +2,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.IO;
+using System.Runtime.ExceptionServices;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
-using System.Xml;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using Microsoft.Win32.SafeHandles;
 using SkiaSharp;
 using Svg;
 using Svg.Model;
@@ -3097,11 +3099,70 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             : DecodeRasterImage(bytes, reserveDecodedBytes, ref budgetSpent);
     }
 
+    /// <summary>Stack for the SVG decode's own thread. Rendering recurses
+    /// through a document's nesting and references; <see
+    /// cref="SvgPreviewGuard"/> bounds that depth, and this reservation
+    /// (address space, committed only as the decode touches it) holds it
+    /// many times over, whatever stack the caller has left.</summary>
+    private const int SvgDecodeStackBytes = 256 * 1024 * 1024;
+
     private static ImageSource? DecodeSvgImage(
         byte[] bytes,
         Func<long, bool>? reserveDecodedBytes,
         ref bool budgetSpent)
     {
+        byte[]? png = null;
+        bool spent = false;
+        ExceptionDispatchInfo? failure = null;
+        using var finished = new ManualResetEvent(initialState: false);
+        var decoder = new Thread(
+            () =>
+            {
+                try
+                {
+                    png = RenderSvgToPng(bytes, reserveDecodedBytes, out spent);
+                }
+                catch (Exception exception)
+                {
+                    failure = ExceptionDispatchInfo.Capture(exception);
+                }
+                finally
+                {
+                    finished.Set();
+                }
+            },
+            SvgDecodeStackBytes)
+        {
+            IsBackground = true,
+            Name = "Slate SVG decode",
+        };
+        decoder.Start();
+        // A plain Win32 wait: Thread.Join and WaitHandle.WaitOne pump COM
+        // and SendMessage on an STA caller, and the reading view decodes on
+        // the dispatcher, where a pumped UI Automation request could re-enter
+        // a half-built document. The decode was synchronous before; it stays
+        // synchronous.
+        _ = NativeMethods.WaitForSingleObject(finished.SafeWaitHandle, NativeMethods.Infinite);
+        failure?.Throw();
+        budgetSpent = spent;
+        if (png is null)
+        {
+            return null;
+        }
+        bool alreadyReserved = false;
+        return DecodeRasterImage(png, reserveDecodedBytes: null, ref alreadyReserved);
+    }
+
+    /// <summary>The Skia half of the SVG decode, on the decode thread: the
+    /// guard, the parse, the raster and the PNG the WPF half decodes.
+    /// <paramref name="reserveDecodedBytes"/> runs here while the caller
+    /// waits.</summary>
+    private static byte[]? RenderSvgToPng(
+        byte[] bytes,
+        Func<long, bool>? reserveDecodedBytes,
+        out bool budgetSpent)
+    {
+        budgetSpent = false;
         try
         {
             string source = new UTF8Encoding(
@@ -3162,9 +3223,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             }
             using SKImage image = SKImage.FromBitmap(bitmap);
             using SKData encoded = image.Encode(SKEncodedImageFormat.Png, 100);
-            bool alreadyReserved = false;
-            return DecodeRasterImage(
-                encoded.ToArray(), reserveDecodedBytes: null, ref alreadyReserved);
+            return encoded.ToArray();
         }
         catch (Exception exception) when (
             exception is not OutOfMemoryException
@@ -3173,6 +3232,14 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         {
             return null;
         }
+    }
+
+    private static class NativeMethods
+    {
+        internal const uint Infinite = 0xFFFFFFFF;
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        internal static extern uint WaitForSingleObject(SafeWaitHandle handle, uint milliseconds);
     }
 
     private static global::Svg.SvgDocument? ParseSecureSvg(string source)
@@ -3202,70 +3269,8 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
                 document,
                 new Uri(resource, UriKind.RelativeOrAbsolute));
     }
-    private static bool IsSafeSvg(string source)
-    {
-        string[] forbiddenTokens =
-        [
-            "<!doctype",
-            "<!entity",
-            "<script",
-            "<foreignobject",
-            "@import",
-        ];
-        if (forbiddenTokens.Any(token =>
-                source.Contains(token, StringComparison.OrdinalIgnoreCase)))
-        {
-            return false;
-        }
-
-        var settings = new XmlReaderSettings
-        {
-            DtdProcessing = DtdProcessing.Prohibit,
-            XmlResolver = null,
-            MaxCharactersInDocument = MaxPreviewImageBytes,
-            IgnoreComments = true,
-            IgnoreProcessingInstructions = false,
-        };
-        using var textReader = new StringReader(source);
-        using XmlReader reader = XmlReader.Create(textReader, settings);
-        while (reader.Read())
-        {
-            if (reader.NodeType == XmlNodeType.ProcessingInstruction
-                && reader.Name.Equals("xml-stylesheet", StringComparison.OrdinalIgnoreCase))
-            {
-                return false;
-            }
-            if (reader.NodeType != XmlNodeType.Element)
-            {
-                continue;
-            }
-            if (reader.LocalName.Equals("script", StringComparison.OrdinalIgnoreCase)
-                || reader.LocalName.Equals("foreignObject", StringComparison.OrdinalIgnoreCase))
-            {
-                return false;
-            }
-
-            if (!reader.HasAttributes)
-            {
-                continue;
-            }
-            while (reader.MoveToNextAttribute())
-            {
-                if (!reader.LocalName.Equals("href", StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-                string value = reader.Value.Trim();
-                if (!value.StartsWith('#')
-                    && !value.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase))
-                {
-                    return false;
-                }
-            }
-            reader.MoveToElement();
-        }
-        return true;
-    }
+    private static bool IsSafeSvg(string source) =>
+        SvgPreviewGuard.Check(source, MaxPreviewImageBytes) == SvgRefusal.None;
 
     private static ImageSource? DecodeRasterImage(
         byte[] bytes,
