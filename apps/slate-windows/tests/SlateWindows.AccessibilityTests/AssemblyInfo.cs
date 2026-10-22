@@ -8,4 +8,4 @@
 // class existed (measured on CI, 2026-08-01: stolen keyboard chords,
 // a COM-faulted UIA walk, and a focus assertion failing in a suite
 // that was green alone). Desktop tests run strictly one at a time.
-[assembly: Xunit.CollectionBehavior(DisableTestParallelization = true)]
+[assembly: Xunit.v3.Parallelization(Mode = Xunit.Sdk.ParallelMode.None)]

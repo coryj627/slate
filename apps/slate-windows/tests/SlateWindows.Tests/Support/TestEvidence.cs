@@ -22,6 +22,11 @@ internal sealed class TestEvidence
     private static readonly ConcurrentDictionary<string, HashSet<string>> FixtureStems = new(StringComparer.OrdinalIgnoreCase);
 
     private readonly CSharpCompilation _compilation;
+    // The assembly that defines [Fact] and the data attributes (xunit.v3.core
+    // under xunit v3), read from the type itself so a package move cannot
+    // leave the census binding a name that no longer exists.
+    private static readonly string XunitCoreAssembly = typeof(FactAttribute).Assembly.GetName().Name!;
+
     private readonly IAssemblySymbol _xunit;
     private readonly IMethodSymbol[] _tests;
     private readonly Lazy<HashSet<string>> _names;
@@ -30,7 +35,7 @@ internal sealed class TestEvidence
     internal TestEvidence(CSharpCompilation compilation)
     {
         _compilation = compilation;
-        IAssemblySymbol? xunit = compilation.SourceModule.ReferencedAssemblySymbols.SingleOrDefault(assembly => assembly.Name == "xunit.core");
+        IAssemblySymbol? xunit = compilation.SourceModule.ReferencedAssemblySymbols.SingleOrDefault(assembly => assembly.Name == XunitCoreAssembly);
         Assert.NotNull(xunit);
         _xunit = xunit;
         INamedTypeSymbol fact = _xunit.GetTypeByMetadataName("Xunit.FactAttribute")!;
@@ -174,13 +179,14 @@ internal sealed class TestEvidence
     {
         if (type is null) { return false; }
         INamedTypeSymbol[] contracts = type is INamedTypeSymbol named ? [named, .. type.AllInterfaces] : [.. type.AllInterfaces];
-        if (contracts.Any(contract => SymbolEqualityComparer.Default.Equals(contract,
-                _xunit.GetTypeByMetadataName("Xunit.Sdk.ITheoryData")))) { return true; }
         IArrayTypeSymbol row = _compilation.CreateArrayTypeSymbol(_compilation.GetSpecialType(SpecialType.System_Object));
         ITypeSymbol[] elements = [.. contracts.Where(contract => contract.OriginalDefinition.SpecialType
                 == SpecialType.System_Collections_Generic_IEnumerable_T).Select(contract => contract.TypeArguments[0])];
         bool Assignable(ITypeSymbol from, ITypeSymbol to) => _compilation.ClassifyConversion(from, to)
             is { IsIdentity: true } or { IsReference: true, IsImplicit: true };
+        // xunit v3 rows: TheoryData<…> and TheoryDataRow<…> yield ITheoryDataRow.
+        if (_xunit.GetTypeByMetadataName("Xunit.ITheoryDataRow") is { } theoryDataRow
+            && elements.Any(element => Assignable(element, theoryDataRow))) { return true; }
         if (elements.Any(element => Assignable(element, row))) { return true; }
         // MemberData also permits non-generic IEnumerable. Unknown object rows
         // are runtime data; known impossible rows (e.g. IEnumerable<int>) are not.

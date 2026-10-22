@@ -11,7 +11,6 @@ using System.Windows.Threading;
 using ICSharpCode.AvalonEdit;
 using SlateWindows.Tests.Support;
 using uniffi.slate_uniffi;
-using Xunit.Abstractions;
 
 namespace SlateWindows.Tests.Censuses;
 

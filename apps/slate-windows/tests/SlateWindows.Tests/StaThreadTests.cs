@@ -73,7 +73,7 @@ public sealed class StaThreadTests
             Assert.Contains(name, wedged, StringComparison.Ordinal);
             MethodInfo next = typeof(StaThreadTests).GetMethod(nameof(ABodyThatTimesOutAndThenUnwindsLeavesNoWindowClassBehind))!;
             Xunit.Sdk.XunitException refused = Assert.Throws<Xunit.Sdk.XunitException>(
-                () => new LeakedDispatcherGuardAttribute().Before(next));
+                () => new LeakedDispatcherGuardAttribute().Before(next, (Xunit.v3.IXunitTest)TestContext.Current.Test!));
             Assert.Contains(name, refused.Message, StringComparison.Ordinal);
         }
         finally

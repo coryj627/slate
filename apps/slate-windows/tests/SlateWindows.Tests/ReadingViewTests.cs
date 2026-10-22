@@ -20,9 +20,9 @@ namespace SlateWindows.Tests;
 /// </summary>
 public sealed class ReadingViewTests
 {
-    private readonly Xunit.Abstractions.ITestOutputHelper _output;
+    private readonly ITestOutputHelper _output;
 
-    public ReadingViewTests(Xunit.Abstractions.ITestOutputHelper output) => _output = output;
+    public ReadingViewTests(ITestOutputHelper output) => _output = output;
 
     private const string Fixture =
         "# Top heading\n"
