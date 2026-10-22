@@ -47,11 +47,8 @@ impl TrashConfirmation {
     ) -> Result<Self, VaultError> {
         cancel.check()?;
         static NEXT_TOKEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        // `try_update` replaces `fetch_update` from Rust 1.99, but it is only
-        // stable since 1.95, above the workspace `rust-version`.
-        #[allow(deprecated)]
         let token = NEXT_TOKEN
-            .fetch_update(
+            .try_update(
                 std::sync::atomic::Ordering::Relaxed,
                 std::sync::atomic::Ordering::Relaxed,
                 |n| n.checked_add(1),
