@@ -101,6 +101,27 @@ class RustPinTests(unittest.TestCase):
                 self.assertNotIn("rust_pin", metadata)
                 self.assertIn("does not pin an exact Rust version", metadata.get("error", ""))
 
+    def test_preflight_reads_the_pin_however_toml_spells_it(self):
+        for toolchain in [
+            '[toolchain]\nchannel = "1.98.0"  # bumped deliberately\n',
+            "[toolchain]\nchannel = '1.98.0'\n",
+            '[toolchain]\n  channel="1.98.0"\n',
+        ]:
+            with self.subTest(toolchain=toolchain):
+                self.assertEqual(self.preflight_metadata(toolchain).get("rust_pin"), "1.98.0")
+
+    def test_preflight_takes_the_channel_only_from_the_toolchain_table(self):
+        for toolchain in ['[other]\nchannel = "1.98.0"\n', 'channel = "1.98.0"\n[toolchain]\n']:
+            with self.subTest(toolchain=toolchain):
+                metadata = self.preflight_metadata(toolchain)
+                self.assertNotIn("rust_pin", metadata)
+                self.assertIn("does not pin an exact Rust version", metadata.get("error", ""))
+
+    def test_preflight_refuses_a_toolchain_file_that_is_not_toml(self):
+        metadata = self.preflight_metadata('[toolchain\nchannel = "1.98.0"\n')
+        self.assertNotIn("rust_pin", metadata)
+        self.assertIn("does not parse as TOML", metadata.get("error", ""))
+
     def test_the_toolchain_phase_installs_the_recorded_pin(self):
         installed = []
 

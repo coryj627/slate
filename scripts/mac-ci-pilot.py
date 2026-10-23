@@ -17,6 +17,7 @@ import signal
 import subprocess
 import sys
 import time
+import tomllib
 from datetime import datetime, timezone
 import xml.etree.ElementTree as ET
 
@@ -60,10 +61,16 @@ def command(args: list[str], cwd: Path | None = None, env: dict | None = None) -
 def rust_pin(source: Path) -> str:
     """The exact Rust the source's rust-toolchain.toml pins (#1566). Preflight
     reads it once; the toolchain phase installs it and qualification checks
-    against it, so the pilot never carries a version of its own."""
-    match = re.search(r'^channel\s*=\s*"(\d+\.\d+\.\d+)"\s*$', (source / "rust-toolchain.toml").read_text(), re.M)
-    require(match is not None, "rust-toolchain.toml does not pin an exact Rust version")
-    return match.group(1)
+    against it, so the pilot never carries a version of its own. Parsed as
+    TOML, so only `[toolchain]`'s channel counts, however the file spells it."""
+    try:
+        toolchain = tomllib.loads((source / "rust-toolchain.toml").read_text()).get("toolchain")
+    except tomllib.TOMLDecodeError as error:
+        raise ValueError(f"rust-toolchain.toml does not parse as TOML: {error}") from error
+    channel = toolchain.get("channel") if isinstance(toolchain, dict) else None
+    require(isinstance(channel, str) and re.fullmatch(r"\d+\.\d+\.\d+", channel) is not None,
+            "rust-toolchain.toml does not pin an exact Rust version")
+    return channel
 
 
 def validate_inputs(source: str, candidate: str, pair: str) -> None:
@@ -303,9 +310,9 @@ class Runner:
         require(Path(pinned_cargo).parent == Path(pinned_rust).parent, "pinned Rust/Cargo directories differ")
         self.env["PATH"] = str(Path(pinned_cargo).parent) + os.pathsep + self.env["PATH"]
         version = command(["rustc", "-Vv"], self.source, self.env)
-        require(version.startswith(f"rustc {pin} "), "effective Rust is not the repository pin")
+        require(version.startswith(f"rustc {pin} "), "effective Rust is not the source's pin")
         cargo_version = command(["cargo", "-V"], self.source, self.env)
-        require(cargo_version.startswith(f"cargo {pin} "), "effective Cargo is not the repository pin")
+        require(cargo_version.startswith(f"cargo {pin} "), "effective Cargo is not the source's pin")
         self.metadata.update(rust=version, cargo=cargo_version, rustc_path=pinned_rust, cargo_path=pinned_cargo,
                              active_toolchain=command(["rustup", "show", "active-toolchain"], self.source, self.env))
         write_json(self.evidence / "metadata.json", self.metadata)
