@@ -12,14 +12,10 @@ edition = "2024"
 license = "AGPL-3.0-or-later"
 authors = ["Cory Joseph <cj@startingblind.com>"]
 repository = "https://github.com/coryj627/slate"
-# 1.91 is the floor: 1.89 brought stable `std::fs::File::lock`, which the
-# oplog's first-write serializer relies on (see `oplog::append_entry`);
-# tree-sitter 0.27 and tree-sitter-language 0.1.9 need 1.90, and the
-# MSRV-aware resolver holds them back below it; 1.91 lets a local
-# `cargo install cargo-nextest` build. `rust-toolchain.toml` pins the
-# exact toolchain, so this documents the floor rather than changing the
-# compiler anyone using `rustup` gets.
-rust-version = "1.91"
+# The floor is the toolchain `rust-toolchain.toml` pins (1.99.1). It is
+# the only compiler any lane builds with, so a lower floor would be one
+# nothing checks (#1567). Raise it with the pin.
+rust-version = "1.99"
 
 [workspace.dependencies]
 pulldown-cmark = { version = "0.13", default-features = false }

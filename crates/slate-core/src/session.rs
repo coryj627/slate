@@ -13210,12 +13210,9 @@ impl VaultSession {
                 .trash_confirmation
                 .lock()
                 .expect("trash confirmation mutex");
-            // `try_update` replaces `fetch_update` from Rust 1.99, but it is
-            // only stable since 1.95, above the workspace `rust-version`.
-            #[allow(deprecated)]
             let generation = self
                 .trash_stage_generation
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_add(1))
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_add(1))
                 .map_err(|_| crate::trash_confirmation::stale())?
                 + 1;
             *pending = None;
