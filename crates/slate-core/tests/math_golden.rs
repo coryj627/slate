@@ -282,7 +282,18 @@ fn math_speech_and_braille_match_the_golden_corpus() {
         std::fs::write(&path, &actual).expect("write the math golden");
         return;
     }
-    let expected = std::fs::read_to_string(&path).unwrap_or_default();
+    // Line endings are the golden's format, not output: no field holds a
+    // CR (`write_field` escapes it), so a CRLF copy from an editor compares
+    // equal instead of failing with an empty report.
+    let expected = match std::fs::read_to_string(&path) {
+        Ok(text) => text.replace("\r\n", "\n"),
+        Err(error) => fail(format!(
+            "cannot read {}: {error}\nGenerate the golden with\n  {UPDATE}=1 cargo test -p \
+             slate-core --test math_golden\nand review it: it is what screen-reader and braille \
+             users will hear and read.",
+            path.display()
+        )),
+    };
     if expected != actual {
         let (changed, report) = describe_changes(&expected, &actual);
         let noun = if changed == 1 { "entry" } else { "entries" };
