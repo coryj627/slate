@@ -108,6 +108,29 @@ public sealed partial class ConnectionsLeafTests
                 lifecycleGeneration: lifecycleGeneration);
             Workspace.EditorPaneFocusRequested += (_, _) => FocusRequests.Add("editor");
             Workspace.FocusBoundaryRequested += (_, boundary) => FocusRequests.Add(boundary.ToString());
+            Leaf.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(ConnectionsLeafViewModel.Request) && Leaf.InFlight && Leaf.Request is { } request)
+                {
+                    IssuedLoads.Add($"{Leaf.PendingPolicyForTests} {request.Root} <- {CallerOfLoad()}");
+                }
+            };
+        }
+
+        /// <summary>Every load the leaf issued since <see cref="Clear"/>: its
+        /// policy, root and calling path (#1598), so a cell whose count
+        /// diverges says which load it did not derive. The path comes from
+        /// the stack, so a method the JIT inlined is missing from it.</summary>
+        public List<string> IssuedLoads { get; } = [];
+
+        private static string CallerOfLoad()
+        {
+            List<string> frames = [.. new System.Diagnostics.StackTrace(2, false).GetFrames()
+                .Select(frame => frame.GetMethod())
+                .OfType<System.Reflection.MethodBase>()
+                .Select(method => $"{method.DeclaringType?.Name}.{method.Name}")];
+            int load = frames.FindIndex(name => name.EndsWith(".Load", StringComparison.Ordinal));
+            return string.Join(" < ", frames.Skip(load + 1).Take(6));
         }
 
         public ConnectionsLeafViewModel Leaf => Workspace.Connections;
@@ -142,7 +165,12 @@ public sealed partial class ConnectionsLeafTests
             RelayLines.Clear();
             Timeline.Clear();
             FocusRequests.Clear();
+            IssuedLoads.Clear();
         }
+
+        /// <summary>The loads issued since <see cref="Clear"/>, for a
+        /// mismatch message.</summary>
+        public string IssuedLoadsText => IssuedLoads.Count == 0 ? "none" : string.Join(" | ", IssuedLoads);
 
         public void Dispose()
         {
@@ -165,6 +193,36 @@ public sealed partial class ConnectionsLeafTests
 
     private static string NoConnectionsLine() =>
         Render(new GraphA11yEvent.GraphStatus(new GraphStatusNote.NoConnections()));
+
+    /// <summary>#1598: the models' load mismatches name each load the leaf
+    /// issued since the route began — its policy, root and caller — and a
+    /// cleared host names none.</summary>
+    [Fact]
+    public void TheHostNamesEveryLoadTheLeafIssuesSinceItWasCleared()
+    {
+        using GraphVault vault = GraphVault.Copy("issued-loads");
+        PumpedDispatcher.Run(() =>
+        {
+            using var host = new Host(vault.Root);
+            host.ActivateLeaf();
+            host.OpenNote(Hub);
+            host.Settle();
+            host.Clear();
+            Assert.Equal("none", host.IssuedLoadsText);
+
+            host.Leaf.Probe();
+            host.Settle();
+            Assert.Equal("none", host.IssuedLoadsText);
+
+            host.OpenNote(Deep);
+            host.Settle();
+            string issued = Assert.Single(host.IssuedLoads);
+            // The caller is named, but not pinned frame by frame: the JIT may
+            // inline TransitionTo into the workspace's call (CI on 1f257baa).
+            Assert.Matches($"^Summary {System.Text.RegularExpressions.Regex.Escape(Deep)} <- \\w+\\.\\w+", issued);
+            Assert.Equal(issued, host.IssuedLoadsText);
+        });
+    }
 
     // --- The record (B-17) and the queries (B-15) ---------------------------------
 
