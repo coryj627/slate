@@ -28,6 +28,22 @@ internal static class ShellCompilation
     internal static SemanticModel ModelFor(CSharpSource source) =>
         Compilation.GetSemanticModel(source.Root.SyntaxTree);
 
+    /// <summary>The recorded references minus the shell's own assembly, whose
+    /// types the sources declare. Exactly one <c>SlateWindows.dll</c> must be
+    /// among them: a list without it is not the test project's.</summary>
+    internal static string[] SelectReferences(IReadOnlyList<string> recorded)
+    {
+        string[] shell = recorded.Where(IsShellAssembly).ToArray();
+        Assert.True(shell.Length == 1,
+            "The shell compilation expects exactly one SlateWindows.dll among the test project's recorded "
+            + $"references (evidence-compilation/SlateWindows.Tests/references.txt), and found {shell.Length}. "
+            + "Build SlateWindows.Tests.csproj in the active configuration to regenerate the list.");
+        return recorded.Where(path => !IsShellAssembly(path)).ToArray();
+    }
+
+    private static bool IsShellAssembly(string path) =>
+        string.Equals(Path.GetFileName(path), "SlateWindows.dll", StringComparison.OrdinalIgnoreCase);
+
     private static (IReadOnlyList<(string Relative, CSharpSource Source)>, CSharpCompilation) Build()
     {
         string shellRoot = SourceText.ShellSourceRoot();
