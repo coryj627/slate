@@ -1,0 +1,71 @@
+# XB-11 — A close after a save never has to be repeated for Slate's own refresh
+
+Issues: #1573 #1590 (one defect; both close here). Size S–M. Lanes: windows. AT: NVDA spot only if the refusal sentence or its timing changes (under this design it does not: the sentence survives unchanged for the bounded fallback). Wave: X3, slot 2. Depends on: XD1. Parallel with: XB-7, XB-9 step 0. Interlock: plan 44's WB-9, WB-12, WB-25, WB-28, WB-29 edit `VaultLifecycleViewModel.cs`'s open sequence (`:724`, `:1184`, `:1280`); this chunk edits the file-change path (`:838-876`) and the close path (`:1413-1435`, `:1483-1491`). XB-11 lands first; if WB-9 lands first, XB-11 rebases (no overlapping lines).
+
+## Goal
+
+After a save, Slate schedules a file-tree refresh 150 ms later and, while that read is in flight, refuses a close with "File tree refresh cancellation requested. Close the vault again after the current directory read finishes." The user closes twice for a refresh Slate started itself. After this chunk, a close that has begun stops the pending debounced refresh from starting, cancels and awaits an in-flight tree read (bounded), and proceeds; the refusal and its sentence remain only when the read outlives the bound. A refused close for another reason (a dirty tab's Cancel) re-issues the refresh it skipped, so the tree never goes stale.
+
+## Current state on main
+
+- **The debounce.** `apps/slate-windows/src/SlateWindows/VaultLifecycleViewModel.cs:838-876` `HandleFileChange(int generation, FileChangeEvent @event)`: `_sidebarRefreshTicket` incremented (`:845`); the immediate path when `_rescanActive && FileSidebar is { IsTreePublicationPending: true }` calls `sidebar.Refresh()` and returns (`:846-855`); else `_debouncedSidebarRefreshes` is incremented (`:858`) and `Task.Delay(150).ContinueWith(_ => _enqueueUi(() => { if (generation == _generation && ticket == _sidebarRefreshTicket) FileSidebar?.Refresh(); } finally { decrement }))` (`:859-874`). `_generation` (`:152`) moves at `:475` (open), `:621` (CloseVault), `:667` (DisposeCore). `DebouncedSidebarRefreshPendingForTests` (`:1190`) exposes the counter (#1555). Wired from core's listener at `:500`.
+- **The refusal.** `TryCloseWorkspaceCore` (`:1483-1590`): `if (FileSidebar?.CancelTreeRefresh() == true) { ReportTerminalStatus("File tree refresh cancellation requested. Close the vault again after the current directory read finishes.", A11yPriority.Medium); return WorkspaceTeardown.Refused; }` (`:1485-1491`), **before** the save-settling loop (`:1520-1584`, `SettleSaves()` at `:1527`, `MaxPumpedAdmissionRounds`). Sibling refusals for user-started work: folder expansion (`:1493-1500`), import (`:1503-1509`), filter (`:1512-1517`). The wrapper `TryCloseWorkspace()` (`:1420-1435`) guards re-entry with `_workspaceTeardownInProgress` (`:1413`). Callers: vault switch `OpenVaultAsync` (`:455-460`), `CloseVault` (`:606-610`, then `++_generation` `:621`), `PrepareForApplicationClose` (`:645-650`, from `MainWindow.xaml.cs:1988`). `AnnounceTeardown` (`:1448-1466`) speaks only on `TeardownRoute.Close`. `ReportTerminalStatus` (`:1886-1891`) sets `StatusText` and announces `A11yEvent.HostComposed(message, priority)`: the sentence is host-composed.
+- **The sidebar's read.** `FilesSidebarViewModel.TreeOperations.cs`: `_treeRefreshCompletion` (`:27`), `TreeRefreshCompletion` (`:45`), `IsRefreshingTree` (`:46`), `IsTreePublicationPending` (`:47-48`); `Refresh(bool reportCount = false)` (`:192`) → private `Refresh(...)` (`:198-331`) which returns early on `SessionShutdownStarted` (`:200`), cancels the previous read and bumps `_treeGeneration` (`:238-248`), and sets `_treeRefreshCompletion = RefreshTreeAsync(...)` (`:319-330`); `RefreshTreeAsync` (`:347-471`) runs `BuildTreeRefresh` through `RunAdmittedTreeWorkerAsync` (`:377-383`, `:880-901`: `_treeProviderLane`, `TryBeginSessionWork`, `_runTreeWorker`) and discards a late apply by generation (`:397-418`). `CancelTreeRefresh()` (`:711-725`) cancels, bumps the generation, settles waiters, returns `wasPending`, and **does not wait**. `CancelTreeRefreshAndGetCompletion()` (`:727-731`) returns the completion after cancelling; its only caller is session shutdown (`SessionWork.cs:51`, joined in `SidebarSessionShutdown` `:58`) — so the session teardown already joins the read; the refusal is not what protects the session.
+- **Tests today.** `W1HardeningTests.PendingTreeRefreshMustFinishBeforeTheVaultSessionCloses` (`tests/SlateWindows.Tests/W1HardeningTests.cs:325-351`) pins the refusal: `Assert.False(lifecycle.PrepareForApplicationClose())` (`:346`), `Assert.Contains("tree refresh cancellation requested", StatusText, OrdinalIgnoreCase)` (`:347`), then awaits `sidebar.TreeRefreshCompletion` (`:350`) and expects `true` (`:351`). `PumpedSaveReentrancyTests` (`:1102` `Host`, `enqueueUi` via `Dispatcher.BeginInvoke` `:1122`): `Host.Settle()` (`:1416-1436`) waits for `DebouncedSidebarRefreshPendingForTests` and `TreeRefreshCompletion` (#1555); `ASettleWaitsForTheTreeRefreshASaveSchedules` (`:967-981`); `ASettledSaveThatFaultedAfterAdoptionKeepsTheGateClosed` theory (`:891-959`, site `teardown` closes via `CloseVault()` at `:991`).
+- **Mac:** not checked (#1590 says so). Out of scope here.
+
+## Reference
+
+XD1 (plan 45 §3). Contract 38 (notification dispatcher) for `HostComposed` status; the W1 hardening fact's own doctrine ("a pending tree refresh must finish before the vault session closes" — which `SidebarSessionShutdown` already guarantees).
+
+## Design
+
+1. **A close gates Slate's own refreshes.** `_workspaceTeardownInProgress` (`:1413`), set by the wrapper, is read by `HandleFileChange`: the immediate path (`:846`) and the debounced continuation (`:864`) both add `&& !_workspaceTeardownInProgress`; a skipped refresh sets `_refreshSkippedDuringClose = true`. The ticket and generation checks stay.
+2. **A close awaits an in-flight read, bounded.** `:1485-1491` becomes: if `FileSidebar is { IsRefreshingTree: true } sidebar`, `Task read = sidebar.CancelTreeRefreshAndGetCompletion();` then a pumped wait modelled on the save-settling loop (`:1520-1531`'s rounds; read `WorkspaceViewModel.SettleSaves` for the pump it uses and reuse it) until `read.IsCompleted`, bounded by `TreeRefreshCloseBound` (5 s, `internal static TimeSpan` so a fact can shorten it). On completion within the bound, fall through to the rest of the close; past it, today's sentence and `WorkspaceTeardown.Refused`. Any in-flight tree refresh is awaited, whoever started it (a user who pressed Refresh then Close wants the close; XD1's "a refresh the user started" is read as the folder-expansion, import and filter refusals at `:1493-1517`, which are unchanged). Document that reading in the PR and in XD1's record.
+3. **A refused close re-issues the refresh it skipped.** In the wrapper (`:1420-1435`), after `TryCloseWorkspaceCore` returns `Refused` and before `_workspaceTeardownInProgress` clears: if `_refreshSkippedDuringClose`, clear it and `FileSidebar?.Refresh()`. On any closed outcome the flag is dropped with the workspace.
+4. **Ordering.** Keep the tree-read wait where the refusal is (`:1485`), before `SettleSaves`; with step 1, a save settled inside the call cannot start a new refresh, so the pre-settle position is safe. A refresh that was already in flight when the close began is handled by step 2.
+5. The sentence at `:1488` is unchanged. `CancelTreeRefresh()` keeps its contract (other callers). No core, FFI or mac change.
+
+## Tests
+
+In `tests/SlateWindows.Tests/PumpedSaveReentrancyTests.cs` with its `Host`, or a new `CloseAfterSaveTests.cs` beside it using the same `Host` (the builder's call; name the class in the PR):
+
+- `ACloseInsideTheSavesDebounceWindowClosesWithoutARefusal` — save, then `CloseVault()` within 150 ms (no `Settle`): `Workspace is null`, no `HostComposed` whose text contains "refresh cancellation requested" was announced (the Host's announcer records), and after a 300 ms pump `DebouncedSidebarRefreshPendingForTests` is false with the tree worker never called again (count the `_runTreeWorker` seam's calls). Mutation: drop step 1's gate → the refresh runs after the close (or the close is refused).
+- `ACloseDuringTheSavesTreeReadAwaitsTheReadThenCloses` — hold `BuildTreeRefresh` on the `_runTreeWorker` seam (a `ManualResetEventSlim`, released from a timer 200 ms after the close begins), save, settle the save only, `CloseVault()`: closed, no refusal sentence, the hold observed (WB-4's `HeldWork` shape: assert the wait result, release in `finally`). Mutation: restore the `CancelTreeRefresh() == true → Refused` branch → refused.
+- `ACloseWhoseTreeReadOutlivesTheBoundIsRefusedWithTheSentence` — `TreeRefreshCloseBound = 200 ms`, hold the read past it: `Refused`, `StatusText` is the full sentence (`Assert.Equal`, not `Contains`), the `HostComposed` event at `A11yPriority.Medium`; release; a second `CloseVault()` closes. Mutation: an unbounded wait → the fact hangs (guard with the STA bound).
+- `ARefusedCloseReissuesTheRefreshItSkipped` — dirty tab, `_confirmUnsavedClose` returns Cancel, a save's file change arrives during the close (post it through `_enqueueUi` inside the confirm callback): `Refused`, then exactly one `Refresh()` runs. Mutation: drop step 3 → zero refreshes, stale tree.
+- `W1HardeningTests.PendingTreeRefreshMustFinishBeforeTheVaultSessionCloses` (`:325-351`) is rewritten as `APendingTreeRefreshIsAwaitedByApplicationClose`: `PrepareForApplicationClose()` is true once the read completes within the bound, and the session closed after the read (keep `:350`'s completion await as the witness order).
+- `ASettleWaitsForTheTreeRefreshASaveSchedules` (`:967`) and the `teardown` site of `ASettledSaveThatFaultedAfterAdoptionKeepsTheGateClosed` stay green unchanged.
+
+## Docs and registers
+
+- Contract 38 (`docs/plans/38_notification_dispatcher_contracts.md`): a dated addendum under the host-composed status rows naming the sentence's new condition (spoken only past the bound). Append; never rewrite.
+- `docs/plans/18_windows_port/w_c_matrix.md`: no row (no new speech).
+- If the mac has the same path, file "mac: a vault close shortly after a save …" with `Refs #1590`; do not fix it here.
+
+## Verification
+
+```powershell
+$env:CARGO_TARGET_DIR = 'C:\dev\slate\target-xb11'
+./apps/slate-windows/generate-bindings.ps1 -Locked
+dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release   # Error(s)=0
+$tests = 'apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj'
+$filter = 'FullyQualifiedName~ACloseInsideTheSavesDebounceWindow|FullyQualifiedName~ACloseDuringTheSavesTreeRead|FullyQualifiedName~ACloseWhoseTreeReadOutlivesTheBound|FullyQualifiedName~ARefusedCloseReissuesTheRefresh|FullyQualifiedName~APendingTreeRefreshIsAwaitedByApplicationClose|FullyQualifiedName~PumpedSaveReentrancyTests|FullyQualifiedName~W1HardeningTests'
+$n = (dotnet test $tests -c Release --no-build --list-tests --filter $filter | Select-String '^\s{4}\S').Count; if ($n -lt 10) { throw "filter selects $n facts" }
+dotnet test $tests -c Release --no-build --filter $filter      # new facts red first, then green
+dotnet test $tests -c Release --no-build --filter "FullyQualifiedName!~ConnectionsLeafTests.TheModelOf&kind!=benchmark"
+dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes --include apps/slate-windows/src/SlateWindows/VaultLifecycleViewModel.cs apps/slate-windows/tests/SlateWindows.Tests/W1HardeningTests.cs apps/slate-windows/tests/SlateWindows.Tests/PumpedSaveReentrancyTests.cs <new test file>
+```
+
+CI lanes: `windows.yml`. AT: none under this design (sentence unchanged); if the builder changes the sentence, an NVDA spot check of it on the Close Vault route, recorded in the PR.
+
+## Acceptance
+
+- [ ] A close inside the debounce window, and one during the read, close without the sentence; a read past the bound is refused with the unchanged sentence; a refused close re-issues the skipped refresh.
+- [ ] The five facts (four new, one rewritten) exist, fail first (mutations recorded), pass; the full unit run is green.
+- [ ] Contract 38 addendum appended.
+- [ ] `Closes #1573`, `Closes #1590`. Not delivered: the mac check (filed if applicable).
+
+## Brief
+
+Read `apps/slate-windows/src/SlateWindows/VaultLifecycleViewModel.cs:150-170`, `:437-470`, `:599-670`, `:838-876`, `:1186-1192`, `:1413-1435`, `:1468-1590`, `:1886-1891`; `FilesSidebarViewModel.TreeOperations.cs:20-60`, `:192-331`, `:347-471`, `:711-745`, `:880-901`; `FilesSidebarViewModel.SessionWork.cs:45-60`; `tests/SlateWindows.Tests/W1HardeningTests.cs:320-355`; `tests/SlateWindows.Tests/PumpedSaveReentrancyTests.cs:891-994`, `:1102-1150`, `:1406-1456`; `WorkspaceViewModel`'s `SettleSaves` for the pump. Build, per XD1: (1) `HandleFileChange`'s immediate (`:846`) and debounced (`:864`) refreshes are skipped while `_workspaceTeardownInProgress`, setting `_refreshSkippedDuringClose`; (2) `:1485-1491` becomes: if `FileSidebar is { IsRefreshingTree: true } sidebar`, `var read = sidebar.CancelTreeRefreshAndGetCompletion()` and a pumped wait (the `SettleSaves` pump, `MaxPumpedAdmissionRounds`) until `read.IsCompleted` within `TreeRefreshCloseBound` (5 s, `internal static`), else today's sentence and `Refused`; (3) the wrapper re-issues `FileSidebar?.Refresh()` once after a `Refused` when a refresh was skipped. Keep the sentence byte for byte, `CancelTreeRefresh()`'s contract, and the three user-started refusals at `:1493-1517`. Facts (names above; `Host` from `PumpedSaveReentrancyTests`, the `_runTreeWorker` seam held WB-4 style): the debounce-window close, the during-read close, the past-bound refusal (`Assert.Equal` on the full sentence, Medium priority), the refused-close re-issue, and the rewritten W1 fact `APendingTreeRefreshIsAwaitedByApplicationClose`; each fails first under its named mutation. Contract 38 addendum (dated, appended). If mac has the same path, file an issue with `Refs #1590`. Done when the filter selects ≥10 facts and they pass, the full unit run is green, `dotnet format --verify-no-changes --include` over the touched `.cs` files is clean, `windows.yml` is green; `Closes #1573`, `Closes #1590`. Commit: `fix(windows): a close after a save awaits the save's tree refresh instead of refusing, and skips the one not yet started`.
