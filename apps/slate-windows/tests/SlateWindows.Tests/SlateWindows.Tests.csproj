@@ -48,6 +48,17 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- #1555: the suite's STA threads end without shutting their
+         dispatchers down, and WPF's exit clean-up then waits up to 300 ms on
+         each weak-event table they made. Over a full run that kept the
+         process alive for minutes after the last fact, which xunit v3 fails.
+         WPF's own switch skips that clean-up for this test process only;
+         WeakEventExitTests pins both the switch and its effect. -->
+    <RuntimeHostConfigurationOption Include="Switch.MS.Internal.DoNotInvokeInWeakEventTableShutdownListener"
+                                    Value="true" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- The graph matrix binds the native journeys' own compiled inputs. -->
     <ProjectReference Include="..\SlateWindows.AccessibilityTests\SlateWindows.AccessibilityTests.csproj"
                       ReferenceOutputAssembly="false" />
@@ -61,6 +72,9 @@
     <ProjectReference Include="..\..\tools\ParityHarness\ParityHarness.csproj" />
     <!-- SvgDecodeOutOfProcessTests launches this probe the same way. -->
     <ProjectReference Include="..\..\tools\SvgDecodeProbe\SvgDecodeProbe.csproj"
+                      ReferenceOutputAssembly="false" />
+    <!-- WeakEventExitTests times this probe's exit. -->
+    <ProjectReference Include="..\..\tools\WeakEventExitProbe\WeakEventExitProbe.csproj"
                       ReferenceOutputAssembly="false" />
   </ItemGroup>
 

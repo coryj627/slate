@@ -15,5 +15,6 @@
     <Project Path="tools/HostLogProbe/HostLogProbe.csproj" />
     <Project Path="tools/ParityHarness/ParityHarness.csproj" />
     <Project Path="tools/SvgDecodeProbe/SvgDecodeProbe.csproj" />
+    <Project Path="tools/WeakEventExitProbe/WeakEventExitProbe.csproj" />
   </Folder>
 </Solution>
