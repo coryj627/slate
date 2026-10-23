@@ -710,9 +710,12 @@ internal sealed class GraphConfigMutationCensus
     /// than the runtime type's assembly, so this holds whether it binds
     /// implementation or reference assemblies (#1600: in the reference pack
     /// <c>List&lt;T&gt;</c> is defined in System.Collections and
-    /// <c>Directory</c> in System.Runtime, not System.Private.CoreLib).</summary>
+    /// <c>Directory</c> in System.Runtime, not System.Private.CoreLib). A type
+    /// with no full name (a generic parameter) is never trusted: the census
+    /// fails closed.</summary>
     private bool IsFrameworkType(INamedTypeSymbol symbol, Type frameworkType) =>
-        _compilation.GetTypesByMetadataName(frameworkType.FullName!)
+        frameworkType.FullName is { } fullName
+        && _compilation.GetTypesByMetadataName(fullName)
             .Any(candidate => !SymbolEqualityComparer.Default.Equals(candidate.ContainingAssembly, _compilation.Assembly)
                 && SymbolEqualityComparer.Default.Equals(candidate, symbol.OriginalDefinition));
 
