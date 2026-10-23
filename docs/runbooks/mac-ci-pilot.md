@@ -24,7 +24,9 @@ preflight requires it to be an ancestor of the harness.
 Both candidates must provide ARM macOS and **Xcode 27.0 build 27A266a**. The
 harness selects that exact installed Xcode, verifies the effective Swift path,
 sets `SDKROOT` and absolute `CC`/`CXX` from its qualified SDK and Clang tools,
-and installs/selects repository-pinned Rust/Cargo **1.99.1**. An unavailable
+and installs/selects the Rust/Cargo the **source's** `rust-toolchain.toml`
+pins (#1566): preflight reads that exact version once, records it as
+`rust_pin`, and the toolchain phase and qualification use it. An unavailable
 toolchain or unexpected source/test-tree change fails qualification. Do not
 substitute a compiler or change a shared profile to obtain a pass.
 

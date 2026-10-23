@@ -57,6 +57,15 @@ def command(args: list[str], cwd: Path | None = None, env: dict | None = None) -
     return subprocess.check_output(args, cwd=cwd, env=env, text=True, stderr=subprocess.STDOUT).strip()
 
 
+def rust_pin(source: Path) -> str:
+    """The exact Rust the source's rust-toolchain.toml pins (#1566). Preflight
+    reads it once; the toolchain phase installs it and qualification checks
+    against it, so the pilot never carries a version of its own."""
+    match = re.search(r'^channel\s*=\s*"(\d+\.\d+\.\d+)"\s*$', (source / "rust-toolchain.toml").read_text(), re.M)
+    require(match is not None, "rust-toolchain.toml does not pin an exact Rust version")
+    return match.group(1)
+
+
 def validate_inputs(source: str, candidate: str, pair: str) -> None:
     require(re.fullmatch(r"[0-9a-f]{40}", source) is not None, "source_sha must be a literal lowercase 40-character commit")
     require(candidate in CANDIDATES, "unsupported candidate")
@@ -125,7 +134,7 @@ def preflight(source: Path, evidence: Path, layer: str) -> None:
         reference_tests = command(["git", "rev-parse", f"{REFERENCE}:apps/slate-mac/Tests"], harness)
         require(state["tests_tree"] == reference_tests, "XCTest inventory source differs from the verified reference")
         metadata["reference_tests_tree"] = reference_tests
-        require(re.search(r'^channel\s*=\s*"1\.97\.1"\s*$', (source / "rust-toolchain.toml").read_text(), re.M), "Rust pin changed")
+        metadata["rust_pin"] = rust_pin(source)
         for path in [source / "target", source / "apps/slate-mac/.build"]:
             require(not os.path.lexists(path), f"cold products already exist: {path}")
         metadata.update(os=command(["sw_vers"]), cpu_model=command(["sysctl", "-n", "machdep.cpu.brand_string"]),
@@ -287,15 +296,16 @@ class Runner:
         return record
 
     def rust(self):
-        self.run("toolchain", [self.metadata["rustup"], "toolchain", "install", "1.99.1", "--profile", "minimal", "--component", "rustfmt", "--component", "clippy"])
-        pinned_cargo = command([self.metadata["rustup"], "which", "--toolchain", "1.99.1", "cargo"], env=self.env)
-        pinned_rust = command([self.metadata["rustup"], "which", "--toolchain", "1.99.1", "rustc"], env=self.env)
+        pin = self.metadata["rust_pin"]
+        self.run("toolchain", [self.metadata["rustup"], "toolchain", "install", pin, "--profile", "minimal", "--component", "rustfmt", "--component", "clippy"])
+        pinned_cargo = command([self.metadata["rustup"], "which", "--toolchain", pin, "cargo"], env=self.env)
+        pinned_rust = command([self.metadata["rustup"], "which", "--toolchain", pin, "rustc"], env=self.env)
         require(Path(pinned_cargo).parent == Path(pinned_rust).parent, "pinned Rust/Cargo directories differ")
         self.env["PATH"] = str(Path(pinned_cargo).parent) + os.pathsep + self.env["PATH"]
         version = command(["rustc", "-Vv"], self.source, self.env)
-        require(version.startswith("rustc 1.99.1 "), "effective Rust is not the repository pin")
+        require(version.startswith(f"rustc {pin} "), "effective Rust is not the repository pin")
         cargo_version = command(["cargo", "-V"], self.source, self.env)
-        require(cargo_version.startswith("cargo 1.99.1 "), "effective Cargo is not the repository pin")
+        require(cargo_version.startswith(f"cargo {pin} "), "effective Cargo is not the repository pin")
         self.metadata.update(rust=version, cargo=cargo_version, rustc_path=pinned_rust, cargo_path=pinned_cargo,
                              active_toolchain=command(["rustup", "show", "active-toolchain"], self.source, self.env))
         write_json(self.evidence / "metadata.json", self.metadata)
@@ -523,8 +533,10 @@ def validate_summary(summary: dict, expected: dict, layer: str) -> None:
     require(metadata.get("schema") == 1 and metadata.get("layer") == layer and metadata.get("source_is_harness_ancestor") is True,
             "metadata schema/layer/ancestry mismatch")
     require(metadata.get("xcode") == "Xcode 27.0\nBuild version 27A266a", "Xcode qualification mismatch")
-    require(metadata.get("rust", "").startswith("rustc 1.99.1 "), "Rust qualification mismatch")
-    require(metadata.get("cargo", "").startswith("cargo 1.99.1 "), "Cargo qualification mismatch")
+    pin = metadata.get("rust_pin", "")
+    require(re.fullmatch(r"\d+\.\d+\.\d+", pin) is not None, "Rust pin missing from the metadata")
+    require(metadata.get("rust", "").startswith(f"rustc {pin} "), "Rust qualification mismatch")
+    require(metadata.get("cargo", "").startswith(f"cargo {pin} "), "Cargo qualification mismatch")
     source = metadata.get("source", {})
     require(source.get("sha") == expected["source_sha"] and source.get("tracked_status") == "", "source metadata mismatch")
     require(re.fullmatch(r"[0-9a-f]{40}", source.get("tree", "")) is not None, "source tree identity missing")
