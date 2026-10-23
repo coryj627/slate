@@ -1102,7 +1102,7 @@ public sealed partial class ConnectionsLeafTests
                     }
                     if (loads != expected.Loads && loads != expected.LoadsOr)
                     {
-                        mismatch.Add($"loads {loads}, derived {expected.Loads}{(expected.LoadsOr is { } alternative ? $" or {alternative}" : string.Empty)}");
+                        mismatch.Add($"loads {loads}, derived {expected.Loads}{(expected.LoadsOr is { } alternative ? $" or {alternative}" : string.Empty)} (issued: {host.IssuedLoadsText})");
                     }
                     if (!TimelinesAgree(host.Timeline, timeline, expected.Unordered))
                     {

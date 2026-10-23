@@ -590,7 +590,7 @@ public sealed partial class ConnectionsLeafTests
                     var mismatch = new List<string>();
                     if (loads != expected.Loads)
                     {
-                        mismatch.Add($"loads {loads}, derived {expected.Loads}");
+                        mismatch.Add($"loads {loads}, derived {expected.Loads} (issued: {host.IssuedLoadsText})");
                     }
                     // The depth is the leaf's own and survives a root change (rule
                     // C): derived, never read back from the leaf (IPC-15).
