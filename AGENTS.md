@@ -66,8 +66,6 @@ tests) disagree, the tests and the code win.
   its number, even mid-sentence. A PR that only references an issue keeps those
   words away from the number. Check `gh pr view N --json closingIssuesReferences`
   before merging.
-- Two merges that touch the same files were never tested together. Wait for
-  `main`'s CI on the combined head before building on it.
 
 ## Accessibility gates
 
@@ -87,6 +85,19 @@ tests) disagree, the tests and the code win.
   `docs/plans/` also starts the Windows lane, and lane runs cost money.
 - Report verification as the command you ran and its result, not as a claim.
 
+## Dependencies
+
+- The cooldown: every version a change brings in is a release at least 7
+  days old when the PR opens, so a release yanked or compromised in its
+  first days never reaches `main`. It holds for bot and hand-picked versions
+  alike, and for manifest and lockfile entries, actions, toolchains, tools
+  and image pins.
+- The cooldown's only exceptions are a security fix and a case the owner
+  approves. The PR names the exception and its reason.
+- Release dates come from the release list (crates.io, NuGet, GitHub
+  releases). "Latest" in a PR means the newest release past the cooldown on
+  that list when the PR opens.
+
 ## Git and PRs
 
 - Agents work in a fresh worktree on `<agent>/<slug>` from `main`
@@ -97,7 +108,8 @@ tests) disagree, the tests and the code win.
   `test` and `ci` types); plan and runbook docs use `docs(plans)` and
   `docs(runbooks)`.
 - PR body: `Closes #N` for each issue it closes, the tests added, the contract
-  register rows closed, VoiceOver phrases where a pass was required, and
+  register rows closed, VoiceOver phrases where a pass was required, each
+  version it adds or moves with its release date, and
   `not delivered: <reason>` for anything not done or not verified.
 - One PR closes its issues and nothing else. A defect found on the way is
   filed as an issue unless it blocks the PR. A defect in the PR's own feature
@@ -105,4 +117,15 @@ tests) disagree, the tests and the code win.
 - A PR closes the register rows it affects in the `docs/plans/*_contracts.md`
   documents in the same change. A frozen contracts record is append-only:
   add only the owner's recorded call.
-- Merges are pinned: `gh pr merge N --match-head-commit <sha>`.
+- Merges go one at a time, so every merge is tested on the code it lands on:
+  1. The PR's branch contains the current `main`, and every check
+     `gh pr checks N` lists passes or skips. `main`'s ruleset enforces the
+     up-to-date branch and the `pr gate` check; the path-filtered lanes are
+     yours to check.
+  2. Merge pinned to the head those checks ran on:
+     `gh pr merge N --squash --match-head-commit <head-sha>`.
+  3. Before the next merge, every run on the merge commit finishes green
+     (`gh run list --commit <merge-sha>`, once the push has started them).
+     A newer push to `main` cancels a queued `main` run, so merging during a
+     run can leave a head untested. A red `main` comes back to green before
+     anything else merges.
