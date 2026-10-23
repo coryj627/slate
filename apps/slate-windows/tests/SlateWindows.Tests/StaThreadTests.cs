@@ -40,9 +40,63 @@ public sealed class StaThreadTests
             unwindGrace: TimeSpan.FromSeconds(10)));
 
         Assert.Contains("the body unwound", timedOut.Message, StringComparison.Ordinal);
+        Assert.Contains("did not pump its dispatcher", timedOut.Message, StringComparison.Ordinal);
         Assert.NotNull(name);
         Assert.True(registered >= 2, $"premise: the body's thread registered {registered} WPF classes, expected a dispatcher's and a visual's");
         Assert.Empty(WindowClasses.RegisteredFor(name));
+    }
+
+    /// <summary>#1603: a body that is still pumping when its bound passes —
+    /// a rescan's wait loop, say — has its stack taken on its own dispatcher,
+    /// so the timeout names where it waits.</summary>
+    [Fact]
+    public void ATimedOutBodyThatStillPumpsReportsWhereItWaits()
+    {
+        Xunit.Sdk.XunitException timedOut = Assert.Throws<Xunit.Sdk.XunitException>(() => StaThread.Run(
+            WaitHereWhilePumping,
+            TimeSpan.FromMilliseconds(200),
+            "the body kept pumping",
+            unwindGrace: TimeSpan.FromSeconds(10)));
+
+        Assert.Contains("Its stack while pumping:", timedOut.Message, StringComparison.Ordinal);
+        Assert.Contains($"{nameof(StaThreadTests)}.{nameof(WaitHereWhilePumping)}", timedOut.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>A body that never made a dispatcher has none to pump: the
+    /// timeout says so instead of waiting for a stack.</summary>
+    [Fact]
+    public void ATimedOutBodyWithNoDispatcherSaysWhyItHasNoStack()
+    {
+        Xunit.Sdk.XunitException timedOut = Assert.Throws<Xunit.Sdk.XunitException>(() => StaThread.Run(
+            () => Thread.Sleep(TimeSpan.FromMilliseconds(600)),
+            TimeSpan.FromMilliseconds(200),
+            "the body only slept",
+            unwindGrace: TimeSpan.FromSeconds(10)));
+
+        Assert.Contains("the body has no dispatcher to pump", timedOut.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>A body that pumps its dispatcher until the runner shuts it
+    /// down, or three seconds pass.</summary>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static void WaitHereWhilePumping()
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        Dispatcher dispatcher = Dispatcher.CurrentDispatcher;
+        while (!dispatcher.HasShutdownStarted && clock.Elapsed < TimeSpan.FromSeconds(3))
+        {
+            var frame = new DispatcherFrame();
+            _ = dispatcher.BeginInvoke(DispatcherPriority.Background, () => frame.Continue = false);
+            try
+            {
+                Dispatcher.PushFrame(frame);
+            }
+            catch (InvalidOperationException) when (dispatcher.HasShutdownStarted)
+            {
+                return;
+            }
+            Thread.Sleep(2);
+        }
     }
 
     /// <summary>A body that never unwinds runs on beside the facts after its

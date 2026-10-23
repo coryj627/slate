@@ -136,22 +136,21 @@ internal static class StaThread
         TimeSpan limit = timeout ?? DefaultTimeout;
         if (!thread.Join(limit))
         {
-            if (Volatile.Read(ref owner) is { } started)
-            {
-                Dispatcher.FromThread(started)?.BeginInvokeShutdown(DispatcherPriority.Send);
-            }
+            Dispatcher? dispatcher = Volatile.Read(ref owner) is { } started ? Dispatcher.FromThread(started) : null;
+            string stack = StackOf(thread, dispatcher);
+            dispatcher?.BeginInvokeShutdown(DispatcherPriority.Send);
             string what = $"{timeoutMessage ?? "The STA fact timed out."} (thread {name}, bound {limit.TotalSeconds:0.#} s; its dispatcher was told to shut down";
             if (thread.Join(unwindGrace ?? UnwindGrace))
             {
                 string? left = FreeClasses(name, Volatile.Read(ref exit));
-                throw new Xunit.Sdk.XunitException(what + " and the body unwound" + (left is null ? ".)" : "; " + left + ")"));
+                throw new Xunit.Sdk.XunitException(what + " and the body unwound" + (left is null ? ".) " : "; " + left + ") ") + stack);
             }
             lock (s_wedged)
             {
                 s_wedged.Add((name, Volatile.Read(ref exit), timeoutMessage ?? "an STA fact that timed out"));
             }
             throw new Xunit.Sdk.XunitException(
-                what + ", but the body has not unwound. It runs on beside the facts after this one, so each of them fails until it ends.)");
+                what + ", but the body has not unwound. It runs on beside the facts after this one, so each of them fails until it ends.) " + stack);
         }
         string? residue = FreeClasses(name, Volatile.Read(ref exit));
         failure?.Throw();
@@ -161,6 +160,45 @@ internal static class StaThread
         }
         return result;
     }
+
+    /// <summary>How long a timed-out body gets to pump the operation that
+    /// takes its stack.</summary>
+    internal static readonly TimeSpan StackBound = TimeSpan.FromSeconds(5);
+
+    /// <summary>#1603: where a timed-out body is. The runtime cannot read
+    /// another thread's managed stack, so the stack is taken ON the body's
+    /// thread, by an operation at the highest priority on its dispatcher:
+    /// a body still pumping — a wait loop that drains its dispatcher — runs
+    /// it at its next pump. A body that does not pump within
+    /// <see cref="StackBound"/>, or has no dispatcher, is reported as such.</summary>
+    private static string StackOf(Thread thread, Dispatcher? dispatcher)
+    {
+        if (dispatcher is null)
+        {
+            return "Its stack could not be taken: the body has no dispatcher to pump.";
+        }
+        string? stack = null;
+        _ = dispatcher.BeginInvoke(
+            DispatcherPriority.Send,
+            () => Volatile.Write(ref stack, BelowThePump(new System.Diagnostics.StackTrace(1, true).ToString())));
+        _ = SpinWait.SpinUntil(() => Volatile.Read(ref stack) is not null || !thread.IsAlive, StackBound);
+        return Volatile.Read(ref stack) is { } taken
+            ? "Its stack while pumping:" + Environment.NewLine + taken
+            : $"Its stack could not be taken: the body did not pump its dispatcher within {StackBound.TotalSeconds:0} s.";
+    }
+
+    /// <summary>The stack without the dispatcher's own frames above the
+    /// body's pump — WPF's queue, the message loop and the execution
+    /// context — so the body's frames come first.</summary>
+    private static string BelowThePump(string stack) =>
+        string.Join(
+            Environment.NewLine,
+            stack.Split(Environment.NewLine)
+                .SkipWhile(line => line.TrimStart() is var frame
+                    && (frame.StartsWith("at System.Windows.Threading.", StringComparison.Ordinal)
+                        || frame.StartsWith("at MS.Win32.", StringComparison.Ordinal)
+                        || frame.StartsWith("at MS.Internal.", StringComparison.Ordinal)
+                        || frame.StartsWith("at System.Threading.ExecutionContext.", StringComparison.Ordinal))));
 
     /// <summary>The timed-out fact threads still running (null when none
     /// are): a fact that runs beside one is not isolated, so the leak guard
