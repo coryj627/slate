@@ -8,7 +8,9 @@
 #   4. swift build inside apps/slate-mac/
 #   5. check the SDK the SlateMac binary records (scripts/check_mac_sdk.py,
 #      the #1460 tripwire), and the .app bundle's copy with --bundle
-#   6. (optional, with --run) launch the resulting binary
+#   6. with --bundle, copy the SwiftPM resource bundles into the .app and
+#      check every one arrived (scripts/check_mac_bundle_resources.py, #1589)
+#   7. (optional, with --run) launch the resulting binary
 
 set -euo pipefail
 
@@ -153,6 +155,24 @@ if [[ "$BUNDLE" == "1" ]]; then
     else
         echo "warning: $APP_ICON missing — bundle will show the generic icon" >&2
     fi
+
+    # SwiftPM resource bundles (#1589). `swift build` writes one
+    # <Package>_<Target>.bundle beside the executable for every package
+    # target with resources (MathJaxSwift's, LaTeXSwiftUI's). The
+    # Bundle.module accessor it generates looks for them in the app's
+    # Contents/Resources, not in the build directory, so without this copy
+    # the first math render crashes ("unable to find bundle named
+    # MathJaxSwift_MathJaxSwift"). Copy every one, so a new package with
+    # resources needs no edit here; the tripwire below fails the build when
+    # one is missing or incomplete, and when there are none to copy at all.
+    PRODUCTS_DIR="$(dirname "$ABS_BINARY")"
+    shopt -s nullglob
+    for bundle in "$PRODUCTS_DIR"/*.bundle; do
+        cp -R "$bundle" "$APP_BUNDLE/Contents/Resources/"
+    done
+    shopt -u nullglob
+    echo "==> Checking the SwiftPM resource bundles SlateMac.app carries (#1589)"
+    python3 -I "$WORKSPACE_ROOT/scripts/check_mac_bundle_resources.py" "$PRODUCTS_DIR" "$APP_BUNDLE"
     # The binary records the dylib's build install name (with `deps/`).
     # Bundle target/$PROFILE's copy, which has the Mac Release stripping
     # applied, then rewrite that install name below. No deps/ directory
