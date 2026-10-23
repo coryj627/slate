@@ -1,7 +1,6 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-using System.Reflection;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 
@@ -11,11 +10,14 @@ namespace SlateWindows.Tests;
 /// ONE compilation over the shell's own sources for the censuses that must
 /// BIND rather than read spellings (W6-2 PR B's post-implementation passes,
 /// IPB-4, IPB-8, IPB-9): the shell's trees, the SDK's implicit global
-/// usings, and the metadata the test process has loaded — the framework,
-/// WPF, the binding — everything but the shell's own assembly, whose types
-/// the sources declare. The XAML-generated partials are absent, so a few
-/// members stay unbound; a census asks for what it needs and says when
-/// binding yields nothing. Built once per test process.
+/// usings, and the test project's recorded compile references — the
+/// framework, WPF, the packages, the binding — everything but the shell's
+/// own assembly, whose types the sources declare. The references come from
+/// the build (#1600), so every census binds the same types whatever ran
+/// before it. The XAML-generated partials are added when a build left them
+/// under obj/; without them a few members stay unbound, so a census asks
+/// for what it needs and says when binding yields nothing. Built once per
+/// test process.
 /// </summary>
 internal static class ShellCompilation
 {
@@ -27,6 +29,22 @@ internal static class ShellCompilation
 
     internal static SemanticModel ModelFor(CSharpSource source) =>
         Compilation.GetSemanticModel(source.Root.SyntaxTree);
+
+    /// <summary>The recorded references minus the shell's own assembly, whose
+    /// types the sources declare. Exactly one <c>SlateWindows.dll</c> must be
+    /// among them: a list without it is not the test project's.</summary>
+    internal static string[] SelectReferences(IReadOnlyList<string> recorded)
+    {
+        string[] shell = recorded.Where(IsShellAssembly).ToArray();
+        Assert.True(shell.Length == 1,
+            "The shell compilation expects exactly one SlateWindows.dll among the test project's recorded "
+            + $"references (evidence-compilation/SlateWindows.Tests/references.txt), and found {shell.Length}. "
+            + "Build SlateWindows.Tests.csproj in the active configuration to regenerate the list.");
+        return recorded.Where(path => !IsShellAssembly(path)).ToArray();
+    }
+
+    private static bool IsShellAssembly(string path) =>
+        string.Equals(Path.GetFileName(path), "SlateWindows.dll", StringComparison.OrdinalIgnoreCase);
 
     private static (IReadOnlyList<(string Relative, CSharpSource Source)>, CSharpCompilation) Build()
     {
@@ -73,19 +91,15 @@ internal static class ShellCompilation
         IEnumerable<SyntaxTree> generatedTrees = generated.Values
             .OrderBy(path => path, StringComparer.Ordinal)
             .Select(path => CSharpSyntaxTree.ParseText(File.ReadAllText(path), parseOptions, path: path));
-        var references = new List<MetadataReference>();
-        foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
-        {
-            if (assembly.IsDynamic || string.IsNullOrEmpty(assembly.Location) || !File.Exists(assembly.Location))
-            {
-                continue;
-            }
-            if (string.Equals(assembly.GetName().Name, "SlateWindows", StringComparison.Ordinal))
-            {
-                continue;
-            }
-            references.Add(MetadataReference.CreateFromFile(assembly.Location));
-        }
+        // #1600: the test project's compile references as its build recorded
+        // them, never the assemblies this process happens to have loaded.
+        // Which census builds the compilation first depends on the test
+        // order, and xunit v3 orders differently by runner pool: built from
+        // the loaded assemblies, an early first build bound no WPF or
+        // System.ObjectModel types for every census after it.
+        MetadataReference[] references = SelectReferences(TestEvidenceCompilation.RecordedReferences())
+            .Select(path => (MetadataReference)MetadataReference.CreateFromFile(path))
+            .ToArray();
         var compilation = CSharpCompilation.Create(
             "shell-census",
             sources.Select(s => s.Source.Root.SyntaxTree).Append(globalUsings).Concat(generatedTrees),

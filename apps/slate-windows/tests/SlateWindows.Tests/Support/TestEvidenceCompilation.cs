@@ -17,9 +17,26 @@ internal static class TestEvidenceCompilation
 
     internal static IReadOnlyList<TestEvidence> Projects => Built.Value;
 
+    /// <summary>The test project's own compile references, as its build
+    /// recorded them (#1600). The list is fixed when the project builds, so no
+    /// test order, filter or runner pool changes it. A missing or stale list
+    /// fails with the rebuild instruction.</summary>
+    internal static string[] RecordedReferences(string? directory = null)
+    {
+        directory ??= LocalDirectory;
+        string[] paths = ReadLines(directory, "references.txt");
+        Assert.True(paths.Length > 0, Rebuild(directory, "references.txt is empty"));
+        string? gone = paths.FirstOrDefault(path => !File.Exists(path));
+        Assert.True(gone is null, Rebuild(directory, $"missing reference {gone}"));
+        return paths;
+    }
+
+    private static string LocalDirectory =>
+        Path.Combine(AppContext.BaseDirectory, "evidence-compilation", "SlateWindows.Tests");
+
     private static TestEvidence[] Build()
     {
-        string local = Path.Combine(AppContext.BaseDirectory, "evidence-compilation", "SlateWindows.Tests");
+        string local = LocalDirectory;
         string configuration = ReadOne(local, "configuration.txt");
         Assert.Equal(typeof(TestEvidenceCompilation).Assembly.GetCustomAttribute<AssemblyConfigurationAttribute>()?.Configuration,
             configuration);

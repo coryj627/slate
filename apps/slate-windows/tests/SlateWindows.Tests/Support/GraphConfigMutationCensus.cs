@@ -703,9 +703,21 @@ internal sealed class GraphConfigMutationCensus
         return CarriesPath(construction ? method.ContainingType : method.ReturnType) && (receiver || any);
     }
 
-    private static bool IsFrameworkType(INamedTypeSymbol symbol, Type frameworkType) =>
-        symbol.MetadataName == frameworkType.Name && symbol.ContainingNamespace.ToDisplayString() == frameworkType.Namespace
-        && symbol.ContainingAssembly.Identity.Name == frameworkType.Assembly.GetName().Name;
+    /// <summary>Whether <paramref name="symbol"/> is the framework's own
+    /// <paramref name="frameworkType"/>: one of the inspected compilation's
+    /// metadata definitions of that full name. A type the inspected sources
+    /// declare under the same name never is. The compilation is asked rather
+    /// than the runtime type's assembly, so this holds whether it binds
+    /// implementation or reference assemblies (#1600: in the reference pack
+    /// <c>List&lt;T&gt;</c> is defined in System.Collections and
+    /// <c>Directory</c> in System.Runtime, not System.Private.CoreLib). A type
+    /// with no full name (a generic parameter) is never trusted: the census
+    /// fails closed.</summary>
+    private bool IsFrameworkType(INamedTypeSymbol symbol, Type frameworkType) =>
+        frameworkType.FullName is { } fullName
+        && _compilation.GetTypesByMetadataName(fullName)
+            .Any(candidate => !SymbolEqualityComparer.Default.Equals(candidate.ContainingAssembly, _compilation.Assembly)
+                && SymbolEqualityComparer.Default.Equals(candidate, symbol.OriginalDefinition));
 
     private static bool ReadOnlyOpen(IMethodSymbol method, System.Collections.Immutable.ImmutableArray<IArgumentOperation> arguments)
     {
