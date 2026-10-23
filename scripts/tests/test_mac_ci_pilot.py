@@ -29,7 +29,8 @@ def fixture(layer):
               "locks": {"Cargo.lock": "d" * 64}}
     metadata = {"schema": 1, "layer": layer, **IDENTITY, "qualified": True,
                 "source_is_harness_ancestor": True, "source": source, "reference_tests_tree": "c" * 40,
-                "xcode": "Xcode 27.0\nBuild version 27A266a", "rust": "rustc 1.99.1 (pinned)", "cargo": "cargo 1.99.1 (pinned)"}
+                "xcode": "Xcode 27.0\nBuild version 27A266a", "rust_pin": "1.99.1",
+                "rust": "rustc 1.99.1 (pinned)", "cargo": "cargo 1.99.1 (pinned)"}
     summary = {"schema": 1, "layer": layer, **IDENTITY, "status": "success", "metadata": metadata,
                "test_workers": 3, "passes": {}, "phases": {"toolchain": {"status": "success", "exit_code": 0}}}
     if layer == "analyzer":
@@ -53,6 +54,110 @@ def fixture(layer):
         for suffix in suffixes:
             summary["phases"][state + "." + suffix] = {"status": "success", "exit_code": 0}
     return summary
+
+
+class RustPinTests(unittest.TestCase):
+    """#1566: the pilot reads the Rust pin from the source's rust-toolchain.toml
+    once, in preflight, then installs and qualifies exactly that toolchain, so
+    a source pinned to another Rust than this repository's still qualifies."""
+
+    def preflight_metadata(self, toolchain: str) -> dict:
+        """Preflight against a source whose rust-toolchain.toml is `toolchain`,
+        stopped by a planted `target/` at the check right after the pin; its
+        metadata is written even when it fails."""
+        with tempfile.TemporaryDirectory() as tmp:
+            source, evidence = Path(tmp) / "source", Path(tmp) / "evidence"
+            source.mkdir()
+            (source / "rust-toolchain.toml").write_text(toolchain)
+            (source / "target").mkdir()
+            state = {"sha": IDENTITY["source_sha"], "tracked_status": "", "tests_tree": "c" * 40}
+
+            def fake_command(args, cwd=None, env=None):
+                if args == ["git", "rev-parse", "HEAD"]:
+                    return IDENTITY["harness_sha"]
+                if args[:2] == ["git", "rev-parse"]:
+                    return "c" * 40
+                raise AssertionError(f"unexpected command {args}")
+
+            with patch.object(pilot.platform, "system", return_value="Darwin"), \
+                    patch.object(pilot.platform, "machine", return_value="arm64"), \
+                    patch.object(pilot, "context", return_value=dict(IDENTITY)), \
+                    patch.object(pilot, "command", side_effect=fake_command), \
+                    patch.object(pilot, "source_state", return_value=state), \
+                    patch.object(pilot.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)), \
+                    self.assertRaises(ValueError):
+                pilot.preflight(source, evidence, "native")
+            return json.loads((evidence / "metadata.json").read_text())
+
+    def test_preflight_records_the_sources_own_pin(self):
+        metadata = self.preflight_metadata('[toolchain]\nchannel = "1.98.0"\ncomponents = ["rustfmt"]\n')
+        self.assertEqual(metadata.get("rust_pin"), "1.98.0")
+        self.assertIn("cold products already exist", metadata.get("error", ""))
+
+    def test_preflight_refuses_a_source_that_pins_no_exact_rust(self):
+        for channel in ["stable", "1.98", "nightly-2026-10-01"]:
+            with self.subTest(channel=channel):
+                metadata = self.preflight_metadata(f'[toolchain]\nchannel = "{channel}"\n')
+                self.assertNotIn("rust_pin", metadata)
+                self.assertIn("does not pin an exact Rust version", metadata.get("error", ""))
+
+    def test_preflight_reads_the_pin_however_toml_spells_it(self):
+        for toolchain in [
+            '[toolchain]\nchannel = "1.98.0"  # bumped deliberately\n',
+            "[toolchain]\nchannel = '1.98.0'\n",
+            '[toolchain]\n  channel="1.98.0"\n',
+        ]:
+            with self.subTest(toolchain=toolchain):
+                self.assertEqual(self.preflight_metadata(toolchain).get("rust_pin"), "1.98.0")
+
+    def test_preflight_takes_the_channel_only_from_the_toolchain_table(self):
+        for toolchain in ['[other]\nchannel = "1.98.0"\n', 'channel = "1.98.0"\n[toolchain]\n']:
+            with self.subTest(toolchain=toolchain):
+                metadata = self.preflight_metadata(toolchain)
+                self.assertNotIn("rust_pin", metadata)
+                self.assertIn("does not pin an exact Rust version", metadata.get("error", ""))
+
+    def test_preflight_refuses_a_toolchain_file_that_is_not_toml(self):
+        metadata = self.preflight_metadata('[toolchain\nchannel = "1.98.0"\n')
+        self.assertNotIn("rust_pin", metadata)
+        self.assertIn("does not parse as TOML", metadata.get("error", ""))
+
+    def test_the_toolchain_phase_installs_the_recorded_pin(self):
+        installed = []
+
+        def fake_command(args, cwd=None, env=None):
+            if args[1:3] == ["which", "--toolchain"]:
+                return f"/toolchains/{args[3]}/bin/{args[4]}"
+            if args[0] == "rustc":
+                return "rustc 1.98.0 (abc 2026-01-01)\nhost: aarch64-apple-darwin"
+            if args[0] == "cargo":
+                return "cargo 1.98.0 (def 2026-01-01)"
+            if args[:3] == ["rustup", "show", "active-toolchain"]:
+                return "1.98.0-aarch64-apple-darwin"
+            raise AssertionError(f"unexpected command {args}")
+
+        runner = type("FakeRunner", (), {})()
+        runner.metadata = {"rustup": "/fake/rustup", "rust_pin": "1.98.0"}
+        runner.env = {"PATH": "/usr/bin"}
+        runner.source = Path("/source")
+        runner.evidence = Path("/evidence")
+        runner.run = lambda name, args, **kwargs: installed.append(args)
+        runner.save = lambda: None
+        with patch.object(pilot, "command", side_effect=fake_command), patch.object(pilot, "write_json"):
+            pilot.Runner.rust(runner)
+        self.assertEqual(installed[0][:4], ["/fake/rustup", "toolchain", "install", "1.98.0"])
+        self.assertTrue(runner.metadata["rust"].startswith("rustc 1.98.0 "))
+
+    def test_qualification_checks_rust_against_the_recorded_pin(self):
+        summary = fixture("native")
+        summary["metadata"].update(rust_pin="1.98.0", rust="rustc 1.98.0 (pinned)", cargo="cargo 1.98.0 (pinned)")
+        pilot.validate_summary(summary, IDENTITY, "native")
+        for key, value in [("rust", "rustc 1.99.1 (pinned)"), ("cargo", "cargo 1.99.1 (pinned)"), ("rust_pin", "")]:
+            summary = fixture("native")
+            summary["metadata"].update(rust_pin="1.98.0", rust="rustc 1.98.0 (pinned)", cargo="cargo 1.98.0 (pinned)")
+            summary["metadata"][key] = value
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                pilot.validate_summary(summary, IDENTITY, "native")
 
 
 class MeasurementWrapperTests(unittest.TestCase):
