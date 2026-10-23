@@ -97,13 +97,34 @@ internal sealed class TestEvidence
         AttributeData[] facts = [.. method.GetAttributes().Where(attribute =>
             SymbolEqualityComparer.Default.Equals(attribute.AttributeClass, fact)
             || SymbolEqualityComparer.Default.Equals(attribute.AttributeClass, theoryType))];
-        if (facts.Length != 1 || facts[0].NamedArguments.Any(argument => argument.Key == "Skip" && argument.Value.Value is not null))
+        if (facts.Length != 1 || NeverRuns(facts[0]))
         {
             return false;
         }
         bool theory = SymbolEqualityComparer.Default.Equals(facts[0].AttributeClass, theoryType);
-        return theory ? HasInlineRow(method) || HasDataProvider(method) : method.Parameters.Length == 0;
+        // SkipTestWithoutData turns a provider that yields no rows at run time
+        // into a silent skip, so only a static row certifies such a theory.
+        bool providersCertify = !facts[0].NamedArguments.Any(argument =>
+            argument.Key == "SkipTestWithoutData" && argument.Value.Value is true);
+        return theory
+            ? HasInlineRow(method) || (providersCertify && HasDataProvider(method))
+            : method.Parameters.Length == 0;
     }
+
+    /// <summary>Whether xunit v3 never runs what <paramref name="attribute"/>
+    /// marks (#1555): a fact, theory or data row that is skipped, explicit
+    /// (run only on request), skipped by a condition (<c>SkipWhen</c>,
+    /// <c>SkipUnless</c>, <c>SkipType</c>), or reported as skipped when it
+    /// throws a listed exception (<c>SkipExceptions</c>). Fails closed: any of
+    /// them set counts as not run, whatever the condition says at run time.</summary>
+    private static bool NeverRuns(AttributeData attribute) => attribute.NamedArguments.Any(argument => argument.Key switch
+    {
+        "Skip" or "SkipWhen" or "SkipUnless" or "SkipType" => argument.Value.Value is not null,
+        "Explicit" => argument.Value.Value is true,
+        "SkipExceptions" => argument.Value is { Kind: TypedConstantKind.Array, IsNull: false } exceptions
+            && exceptions.Values.Length > 0,
+        _ => false,
+    });
 
     private bool HasInlineRow(IMethodSymbol method)
     {
@@ -111,6 +132,7 @@ internal sealed class TestEvidence
         foreach (AttributeData attribute in method.GetAttributes())
         {
             if (!SymbolEqualityComparer.Default.Equals(attribute.AttributeClass, inlineData)
+                || NeverRuns(attribute)
                 || attribute.ConstructorArguments is not [{ Kind: TypedConstantKind.Array } row]
                 || row.IsNull || row.Values.Length != method.Parameters.Length) { continue; }
             bool viable = row.Values.Zip(method.Parameters).All(pair => pair.Second.RefKind == RefKind.None
@@ -125,6 +147,10 @@ internal sealed class TestEvidence
     {
         foreach (AttributeData attribute in method.GetAttributes())
         {
+            if (NeverRuns(attribute))
+            {
+                continue;
+            }
             if (SymbolEqualityComparer.Default.Equals(attribute.AttributeClass,
                     _xunit.GetTypeByMetadataName("Xunit.MemberDataAttribute"))
                 && attribute.ConstructorArguments.FirstOrDefault().Value is string memberName)

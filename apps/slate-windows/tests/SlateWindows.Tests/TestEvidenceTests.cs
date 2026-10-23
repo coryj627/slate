@@ -62,6 +62,49 @@ public sealed class TestEvidenceTests
         Assert.False(evidence.HasTestEvidence("Journeys"));
     }
 
+    /// <summary>
+    /// #1555 (the independent review's M2): xunit v3 does not run a fact that
+    /// is explicit, skipped by a condition or by an exception it throws, nor a
+    /// data row or provider that is skipped or explicit, nor (when the theory
+    /// skips without data) a provider whose rows may be empty. None of them
+    /// certifies a name: the census fails closed.
+    /// </summary>
+    [Theory]
+    [InlineData("[Fact(Explicit = true)] public void Journey() { }", "")]
+    [InlineData("[Fact(SkipWhen = nameof(Off))] public void Journey() { } public static bool Off => true;", "")]
+    [InlineData("[Fact(SkipUnless = nameof(On))] public void Journey() { } public static bool On => false;", "")]
+    [InlineData("[Fact(SkipType = typeof(Flags), SkipWhen = nameof(Flags.Off))] public void Journey() { }", "public static class Flags { public static bool Off => true; }")]
+    [InlineData("[Fact(SkipType = typeof(Flags))] public void Journey() { }", "public static class Flags { }")]
+    [InlineData("[Fact(SkipExceptions = new[] { typeof(NotSupportedException) })] public void Journey() { }", "")]
+    [InlineData("[Theory(Explicit = true), InlineData(1)] public void Journey(int value) { }", "")]
+    [InlineData("[Theory, InlineData(1, Skip = \"not run\")] public void Journey(int value) { }", "")]
+    [InlineData("[Theory, InlineData(1, Explicit = true)] public void Journey(int value) { }", "")]
+    [InlineData("[Theory, InlineData(1, SkipWhen = nameof(Off))] public void Journey(int value) { } public static bool Off => true;", "")]
+    [InlineData("[Theory, MemberData(nameof(Rows), Skip = \"not run\")] public void Journey(int value) { } public static IEnumerable<object[]> Rows => new[] { new object[] { 1 } };", "")]
+    [InlineData("[Theory, MemberData(nameof(Rows), Explicit = true)] public void Journey(int value) { } public static IEnumerable<object[]> Rows => new[] { new object[] { 1 } };", "")]
+    [InlineData("[Theory, ClassData(typeof(Rows), Skip = \"not run\")] public void Journey(int value) { }", "public class Rows : List<object[]> { public Rows() { Add(new object[] { 1 }); } }")]
+    [InlineData("[Theory(SkipTestWithoutData = true), MemberData(nameof(Rows))] public void Journey(int value) { } public static IEnumerable<object[]> Rows => new[] { new object[] { 1 } };", "")]
+    public void TestsXunitV3WillNotRunCannotCertifyMethodsClassesOrFiles(string members, string otherTypes)
+    {
+        TestEvidence evidence = Evidence(members, otherTypes);
+        Assert.False(evidence.HasTestEvidence("Journey"));
+        Assert.False(evidence.HasTestEvidence("ShellAccessibilityTests"));
+        Assert.False(evidence.HasTestEvidence("Journeys"));
+    }
+
+    /// <summary>A skipped row beside one that runs, a fact that is explicitly
+    /// not explicit, and a static row under SkipTestWithoutData still run, so
+    /// they still certify.</summary>
+    [Theory]
+    [InlineData("[Theory, InlineData(1, Skip = \"not run\"), InlineData(2)] public void Journey(int value) { }")]
+    [InlineData("[Theory, MemberData(nameof(Rows), Explicit = true), InlineData(2)] public void Journey(int value) { } public static IEnumerable<object[]> Rows => new[] { new object[] { 1 } };")]
+    [InlineData("[Fact(Explicit = false)] public void Journey() { }")]
+    [InlineData("[Theory(SkipTestWithoutData = true), InlineData(1)] public void Journey(int value) { }")]
+    public void ATestXunitV3RunsStillCertifiesBesideRowsItSkips(string members)
+    {
+        Assert.True(Evidence(members).HasTestEvidence("Journey"));
+    }
+
     [Fact]
     public void BuildSymbolsChooseTheActualPreprocessorBranch()
     {
