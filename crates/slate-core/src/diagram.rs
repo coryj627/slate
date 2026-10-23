@@ -162,6 +162,17 @@ pub const MAX_DIAGRAM_SVG_BYTES: usize = 2 * 1024 * 1024;
 /// blocks keep description and source but carry no SVG.
 pub const MAX_RETAINED_SVG_BYTES_PER_NOTE: usize = 8 * 1024 * 1024;
 
+/// Most `url(` references one attribute value or `<style>` declaration
+/// of a rendered diagram may carry. Mermaid style values (`style`,
+/// `classDef`, `linkStyle`) reach the SVG verbatim and every host's SVG
+/// decoder parses them. A paint takes one reference and a fallback, so
+/// no diagram needs more.
+const MAX_STYLE_URL_REFERENCES: usize = 8;
+
+/// Deepest bracket nesting one attribute value or `<style>` block of a
+/// rendered diagram may carry, for the same reason.
+const MAX_STYLE_VALUE_NESTING: usize = 16;
+
 /// The per-call budget set, injectable for tests.
 #[derive(Debug, Clone, Copy)]
 struct DiagramBudgets {
@@ -387,6 +398,16 @@ static RENDERER_POISONED: AtomicBool = AtomicBool::new(false);
 /// hears "diagram couldn't render" instead of seeing a fake
 /// rectangle.
 fn render_mermaid_with_validation(source: &str) -> (Option<Vec<u8>>, DiagramRenderStatus) {
+    // The render stack (`MERMAID_RENDER_STACK_BYTES`) is sized for capped
+    // sources, so the cap holds here too, not only in the per-note budget.
+    if source.len() > MAX_DIAGRAM_SOURCE_BYTES {
+        return (
+            None,
+            DiagramRenderStatus::RenderFailed {
+                message: "diagram source exceeds the render budget".into(),
+            },
+        );
+    }
     let trimmed = source.trim();
     if trimmed.is_empty() {
         return (
@@ -449,7 +470,9 @@ fn try_render_mermaid(source: &str) -> Result<Vec<u8>, RenderError> {
     use std::panic::AssertUnwindSafe;
     let result = std::panic::catch_unwind(AssertUnwindSafe(|| mermaid_renderer_render(source)));
     match result {
-        Ok(Ok(svg)) => Ok(svg.into_bytes()),
+        Ok(Ok(svg)) => check_rendered_style_values(&svg)
+            .map(|()| svg.into_bytes())
+            .map_err(RenderError::Failed),
         Ok(Err(msg)) => {
             let lower = msg.to_ascii_lowercase();
             if lower.contains("poison") {
@@ -475,12 +498,121 @@ fn try_render_mermaid(source: &str) -> Result<Vec<u8>, RenderError> {
     }
 }
 
-/// Thin shim around the actual mermaid-rs-renderer call. The
+/// Stack reserved for each render's own thread. The renderer recurses
+/// in proportion to its input, and a host calls in on whatever thread
+/// it has: a Swift concurrency worker has 512 KiB. The deepest sources
+/// measured under `MAX_DIAGRAM_SOURCE_BYTES` need under 16 MiB with
+/// mermaid-rs-renderer 0.3.1. The reservation is address space; pages
+/// are committed only as a render touches them.
+const MERMAID_RENDER_STACK_BYTES: usize = 256 * 1024 * 1024;
+
+/// Thin shim around the actual mermaid-rs-renderer call, run on a
+/// thread of its own with `MERMAID_RENDER_STACK_BYTES` of stack. The
 /// upstream returns an `anyhow::Error` which we don't depend on
 /// directly — stringify here so the rest of the module deals with
 /// plain `String` messages.
 fn mermaid_renderer_render(source: &str) -> Result<String, String> {
-    mermaid_rs_renderer::render(source).map_err(|e| e.to_string())
+    let source = source.to_owned();
+    let renderer = std::thread::Builder::new()
+        .name("slate-diagram-render".into())
+        .stack_size(MERMAID_RENDER_STACK_BYTES)
+        .spawn(move || mermaid_rs_renderer::render(&source).map_err(|e| e.to_string()))
+        .map_err(|e| format!("could not start the diagram renderer: {e}"))?;
+    match renderer.join() {
+        Ok(result) => result,
+        // Raised again here so `try_render_mermaid`'s `catch_unwind` treats a
+        // panic on the render thread exactly as one on the caller's.
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+
+/// Checks every attribute value and every `<style>` declaration of a
+/// rendered SVG against `MAX_STYLE_URL_REFERENCES` and
+/// `MAX_STYLE_VALUE_NESTING`. The renderer XML-escapes what it writes,
+/// so a quoted value never holds its own quote character, and text
+/// content (which no decoder parses as paint or CSS) is skipped.
+fn check_rendered_style_values(svg: &str) -> Result<(), String> {
+    #[derive(Clone, Copy)]
+    enum State {
+        Text,
+        Tag { style: bool },
+        Value { quote: u8, style: bool },
+        Style,
+    }
+    let bytes = svg.as_bytes();
+    let mut state = State::Text;
+    let mut urls = 0;
+    let mut depth = 0;
+    for (index, &byte) in bytes.iter().enumerate() {
+        state = match state {
+            State::Text if byte == b'<' => State::Tag {
+                style: is_style_open_tag(&bytes[index + 1..]),
+            },
+            State::Text => State::Text,
+            State::Tag { style } => match byte {
+                b'"' | b'\'' => {
+                    urls = 0;
+                    depth = 0;
+                    State::Value { quote: byte, style }
+                }
+                b'>' if style && bytes[index - 1] != b'/' => {
+                    urls = 0;
+                    depth = 0;
+                    State::Style
+                }
+                b'>' => State::Text,
+                _ => State::Tag { style },
+            },
+            State::Value { quote, style } if byte == quote => State::Tag { style },
+            State::Value { .. } => {
+                count_style_byte(&bytes[index..], &mut urls, &mut depth)?;
+                state
+            }
+            // Only `</style>` can end the stylesheet: its text is escaped.
+            State::Style if byte == b'<' => State::Tag { style: false },
+            State::Style => {
+                if matches!(byte, b';' | b'{' | b'}') {
+                    urls = 0;
+                }
+                count_style_byte(&bytes[index..], &mut urls, &mut depth)?;
+                State::Style
+            }
+        };
+    }
+    Ok(())
+}
+
+fn is_style_open_tag(after_lt: &[u8]) -> bool {
+    after_lt.len() > 5
+        && after_lt[..5].eq_ignore_ascii_case(b"style")
+        && matches!(after_lt[5], b'>' | b' ' | b'\t' | b'\r' | b'\n' | b'/')
+}
+
+/// Counts the byte at the head of `rest` against the two caps.
+fn count_style_byte(rest: &[u8], urls: &mut usize, depth: &mut usize) -> Result<(), String> {
+    match rest[0] {
+        b'(' | b'[' | b'{' => {
+            *depth += 1;
+            if *depth > MAX_STYLE_VALUE_NESTING {
+                return Err(format!(
+                    "a style value in this diagram nests brackets more than \
+                     {MAX_STYLE_VALUE_NESTING} deep"
+                ));
+            }
+        }
+        b')' | b']' | b'}' => *depth = depth.saturating_sub(1),
+        b'u' | b'U' if rest.len() >= 4 && rest[..4].eq_ignore_ascii_case(b"url(") => {
+            *urls += 1;
+            if *urls > MAX_STYLE_URL_REFERENCES {
+                return Err(format!(
+                    "a style value in this diagram has more than \
+                     {MAX_STYLE_URL_REFERENCES} url() references"
+                ));
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 // --- Tests -------------------------------------------------------------
@@ -915,5 +1047,157 @@ mod tests {
         assert!(!RENDERER_POISONED.load(Ordering::Relaxed));
         let lower = "mutex poisonerror: poisoned".to_ascii_lowercase();
         assert!(lower.contains("poison"));
+    }
+
+    fn mermaid(source: String) -> RawDiagramBlock {
+        RawDiagramBlock {
+            source,
+            dialect: DiagramDialect::Mermaid,
+            line: 1,
+            byte_offset: 0,
+        }
+    }
+
+    /// The renderer recurses in proportion to its input: in
+    /// mermaid-rs-renderer 0.3.1 a 300-step chain overflows a 64 KiB
+    /// stack. A host calls in on whatever thread it has, so the render
+    /// must run on a stack of its own.
+    #[test]
+    fn render_runs_on_its_own_stack_whatever_the_caller_has() {
+        let _guard = renderer_test_guard();
+        let source: String = std::iter::once("flowchart TD\n".to_string())
+            .chain((0..300).map(|i| format!("n{i}-->n{}\n", i + 1)))
+            .collect();
+        let raw = mermaid(source);
+        let block = std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(move || render_diagram(&raw))
+            .expect("spawn a caller with a 64 KiB stack")
+            .join()
+            .expect("the caller finished");
+        assert_eq!(block.render_status, DiagramRenderStatus::Ok);
+        assert!(block.svg.is_some());
+    }
+
+    /// The source cap holds inside the render itself, not only in the
+    /// per-note budget: the render stack is sized for capped sources.
+    #[test]
+    fn render_diagram_refuses_a_source_over_the_cap_itself() {
+        let _guard = renderer_test_guard();
+        let mut source = String::from("flowchart TD\nA --> B\n");
+        while source.len() <= MAX_DIAGRAM_SOURCE_BYTES {
+            source.push_str("%% padding past the source cap\n");
+        }
+        let block = render_diagram(&mermaid(source));
+        assert!(block.svg.is_none());
+        assert_eq!(
+            block.render_status,
+            DiagramRenderStatus::RenderFailed {
+                message: "diagram source exceeds the render budget".into()
+            }
+        );
+    }
+
+    /// `style`, `classDef` and `linkStyle` values reach the SVG
+    /// verbatim. One past the cap is refused, with a message that says
+    /// why; the cap itself still renders.
+    #[test]
+    fn render_refuses_a_style_value_past_the_url_reference_cap() {
+        let _guard = renderer_test_guard();
+        let templates = [
+            "flowchart TD\nA\nstyle A fill:{value}\n",
+            "flowchart TD\nA:::hot\nclassDef hot fill:{value}\n",
+            "flowchart TD\nA-->B\nlinkStyle 0 stroke:{value}\n",
+        ];
+        for template in templates {
+            let at_cap = template.replace("{value}", &"url(#a)".repeat(MAX_STYLE_URL_REFERENCES));
+            let block = render_diagram(&mermaid(at_cap));
+            assert_eq!(block.render_status, DiagramRenderStatus::Ok, "{template}");
+
+            let over = template.replace("{value}", &"url(#a)".repeat(MAX_STYLE_URL_REFERENCES + 1));
+            let block = render_diagram(&mermaid(over));
+            assert!(block.svg.is_none(), "{template}");
+            assert_eq!(
+                block.render_status,
+                DiagramRenderStatus::RenderFailed {
+                    message: format!(
+                        "a style value in this diagram has more than \
+                         {MAX_STYLE_URL_REFERENCES} url() references"
+                    )
+                },
+                "{template}"
+            );
+        }
+    }
+
+    #[test]
+    fn render_refuses_a_style_value_nested_past_the_cap() {
+        let _guard = renderer_test_guard();
+        // `fill` reaches the SVG verbatim up to its first comma (Mermaid
+        // separates style properties with commas); `stroke-width` is
+        // parsed into a number and never would.
+        let nested = |depth: usize| {
+            format!(
+                "flowchart TD\nA\nstyle A fill:{}red{}\n",
+                "calc(".repeat(depth),
+                ")".repeat(depth)
+            )
+        };
+        let block = render_diagram(&mermaid(nested(MAX_STYLE_VALUE_NESTING)));
+        assert_eq!(block.render_status, DiagramRenderStatus::Ok);
+
+        let block = render_diagram(&mermaid(nested(MAX_STYLE_VALUE_NESTING + 1)));
+        assert!(block.svg.is_none());
+        assert_eq!(
+            block.render_status,
+            DiagramRenderStatus::RenderFailed {
+                message: format!(
+                    "a style value in this diagram nests brackets more than \
+                     {MAX_STYLE_VALUE_NESTING} deep"
+                )
+            }
+        );
+    }
+
+    /// The check reads attribute values and `<style>` declarations, the
+    /// places a decoder parses as paint or CSS. Text content is not one
+    /// of them, and each declaration is counted on its own.
+    #[test]
+    fn style_value_check_reads_values_and_declarations_not_text() {
+        let passes =
+            |body: String| check_rendered_style_values(&format!("<svg>{body}</svg>")).is_ok();
+        let urls = |n: usize| "url(#a)".repeat(n);
+        let brackets = |n: usize| format!("{}{}", "(".repeat(n), ")".repeat(n));
+        let over = MAX_STYLE_URL_REFERENCES + 1;
+
+        assert!(!passes(format!("<rect fill=\"{}\"/>", urls(over))));
+        assert!(!passes(format!("<rect fill='{}'/>", urls(over))));
+        assert!(!passes(format!("<style>a{{fill:{}}}</style>", urls(over))));
+        // Each declaration counts on its own.
+        let declarations = vec![format!("fill:{}", urls(MAX_STYLE_URL_REFERENCES)); 4].join(";");
+        assert!(passes(format!("<style>a{{{declarations}}}</style>")));
+
+        assert!(passes(format!(
+            "<rect fill=\"{}\"/>",
+            brackets(MAX_STYLE_VALUE_NESTING)
+        )));
+        assert!(!passes(format!(
+            "<rect fill=\"{}\"/>",
+            brackets(MAX_STYLE_VALUE_NESTING + 1)
+        )));
+        // Blocks nest like brackets.
+        let blocks = format!(
+            "{}a{{fill:red}}{}",
+            "@media all{".repeat(MAX_STYLE_VALUE_NESTING),
+            "}".repeat(MAX_STYLE_VALUE_NESTING)
+        );
+        assert!(!passes(format!("<style>{blocks}</style>")));
+
+        // Text content is neither.
+        assert!(passes(format!(
+            "<text>{}{}</text>",
+            urls(over * 10),
+            brackets(100)
+        )));
     }
 }

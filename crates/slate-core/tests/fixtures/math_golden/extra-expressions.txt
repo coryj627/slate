@@ -1,0 +1,63 @@
+# Math the golden corpus renders besides the demo vault's (#1559).
+# One LaTeX expression per line, as written between dollar signs.
+# Blank lines and lines starting with # are skipped.
+
+# Matrices and arrays.
+\begin{matrix} a & b \\ c & d \end{matrix}
+\begin{pmatrix} 1 & 2 \\ 3 & 4 \end{pmatrix}
+\begin{bmatrix} x \\ y \end{bmatrix}
+\begin{vmatrix} a & b \\ c & d \end{vmatrix}
+\begin{Vmatrix} a & b \\ c & d \end{Vmatrix}
+\begin{array}{cc} 1 & 0 \\ 0 & 1 \end{array}
+
+# Cases, with a comparison in a condition.
+f(x) = \begin{cases} x & x \ge 0 \\ -x & x < 0 \end{cases}
+\begin{cases} 1 & n = 0 \\ n \cdot f(n - 1) & n > 0 \end{cases}
+
+# Double-struck and bold letters.
+\mathbb{R}^n
+\mathbb{Z} \subset \mathbb{Q} \subset \mathbb{R}
+\mathbb{N}
+\mathbf{v} \cdot \mathbf{w}
+\boldsymbol{\alpha} + \boldsymbol{\beta}
+
+# Named functions.
+\operatorname{Log} z
+\operatorname{arccotan} x
+\arctan x
+\sin^2 \theta + \cos^2 \theta = 1
+\lim_{x \to 0} \frac{\sin x}{x}
+
+# Vector calculus.
+\nabla f
+\nabla \cdot \mathbf{F}
+\nabla \times \mathbf{F}
+\nabla^2 \phi
+
+# Comparisons and the ampersand.
+x < y
+a \le b \le c
+x > 0
+a \& b
+\alpha \ne \beta
+\nless x
+
+# Ellipses.
+1, 2, \ldots, n
+a_1 + a_2 + \cdots + a_n
+\vdots
+
+# Calculus and roots.
+\int_0^1 x^2 \, dx
+\sum_{i=1}^{n} i^2
+\prod_{k=1}^{n} k
+\sqrt[3]{x}
+\frac{d}{dx} e^{x}
+\binom{n}{k}
+
+# Sources pulldown-latex cannot render faithfully: spoken as their source.
+{n \choose k}
+\mathscr{L}
+\sideset{_a^b}{_c^d}\sum
+\frac{<}{
+\operatorname{<mi>x</mi>}

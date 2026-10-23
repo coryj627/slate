@@ -1,13 +1,30 @@
-# Dependabot version updates.
+# Dependabot version updates: paused (#1564).
 #
-# Every ecosystem opens at most one grouped PR a week for its minor and patch
-# updates. A major update (for a 0.x crate, a minor bump) arrives as its own PR,
-# because those are the ones that need reading. Each lane run costs money
-# (AGENTS.md), so the groups keep the weekly count low.
+# Every ecosystem below has `open-pull-requests-limit: 0`, which stops its
+# version updates. A Dependabot PR cannot run CI in this repository: under the
+# owner-only Actions policy (plan 42) every workflow run it triggers ends in
+# `startup_failure`, so its PRs could only merge untested, and main's ruleset
+# (#1565) refuses them because their `pr gate` check never passes. Admitting
+# Dependabot through ci/mac-runner/allowlist.json is not the fix: that list
+# also feeds the Studio admission hook, and the Windows home pool trusts
+# same-repository heads, so dependency code would run on the owner's hardware.
+# Re-enabling is a redesign against plan 42 (#1564). Until then
+# Workflows.Tests.ps1 holds every limit at zero, and the rest of this file is
+# where the redesign starts.
+#
+# As designed, every ecosystem opens at most one grouped PR a week for its
+# minor and patch updates. A major update (for a 0.x crate, a minor bump)
+# arrives as its own PR, because those are the ones that need reading. Each
+# lane run costs money (AGENTS.md), so the groups keep the weekly count low.
 #
 # A new release waits a week before Dependabot proposes it (`cooldown`), so a
 # release that is yanked or compromised in its first days never reaches a PR.
-# Security updates are not affected by the cooldown.
+#
+# Security updates and vulnerability alerts are repository settings, not keys
+# in this file, and both are off for this repository (checked 2026-10-22).
+# Whoever turns them on: security updates are not held by the cooldown or by
+# `open-pull-requests-limit`, but they do obey `ignore`, so notify and ropey
+# (ignored outright below) would never get one.
 #
 # Deliberate pins are left out, with the reason next to each. A pin that moves
 # in lockstep with files Dependabot does not edit stays manual:
@@ -23,6 +40,7 @@ updates:
     directories:
       - "/"
       - "/.github/actions/*"
+    open-pull-requests-limit: 0
     schedule:
       interval: weekly
       day: monday
@@ -36,6 +54,7 @@ updates:
 
   - package-ecosystem: cargo
     directory: "/"
+    open-pull-requests-limit: 0
     schedule:
       interval: weekly
       day: monday
@@ -62,6 +81,7 @@ updates:
       - "/apps/slate-windows/tests/*"
       - "/apps/slate-windows/tools/*"
       - "/apps/slate-windows/benchmarks/*"
+    open-pull-requests-limit: 0
     schedule:
       interval: weekly
       day: monday
@@ -75,6 +95,7 @@ updates:
 
   - package-ecosystem: dotnet-sdk
     directory: "/apps/slate-windows"
+    open-pull-requests-limit: 0
     schedule:
       interval: weekly
       day: monday
@@ -89,6 +110,7 @@ updates:
 
   - package-ecosystem: swift
     directory: "/apps/slate-mac"
+    open-pull-requests-limit: 0
     schedule:
       interval: weekly
       day: monday

@@ -59,6 +59,9 @@
     <ProjectReference Include="..\..\tools\HostLogProbe\HostLogProbe.csproj"
                       ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\..\tools\ParityHarness\ParityHarness.csproj" />
+    <!-- SvgDecodeOutOfProcessTests launches this probe the same way. -->
+    <ProjectReference Include="..\..\tools\SvgDecodeProbe\SvgDecodeProbe.csproj"
+                      ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <Import Project="..\EvidenceCompilation.targets" />

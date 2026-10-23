@@ -124,7 +124,7 @@ From crates.io and the published crates' source, read 2026-10-16.
 |---|---|---|
 | 8.2.0 (latest stable) | 2025-08-03 | Windows completion routine ignores the byte count, so an overflowed buffer is parsed as empty and lost; `ERROR_NOTIFY_ENUM_DIR` ends the watch with a log line (`windows.rs` `handle_event`). FSEvents callback panics on unknown flag bits and on non-UTF-8 paths inside an `extern "C"` callback, which aborts the process. `stop()` spins until `CFRunLoopIsWaiting`. Calls the root-only `FSEventsPurgeEventsForDeviceUpToEventId`. No `WatchRoot`. windows-sys 0.60 (the workspace has 0.61). |
 | 9.0.0-rc.5 | 2026-08-30 | Windows overflow surfaces as `Flag::Rescan` and the watch re-arms (#964, `completion_rescan_event`); a deleted watched directory emits `Remove(Folder)`. FSEvents callback catches panics and keeps raw bytes (#790, rc.2); unknown flags tolerated (`from_bits_truncate`); the run loop stops on a flag instead of spinning, and the purge call is gone (#795, rc.2); `WatchRoot` set, so a renamed or replaced root reports "root changed"; events keep the watched path's spelling (rc.4). windows-sys 0.61. MSRV 1.88 (the workspace pins 1.97.1). |
-| 9.0.0-rc.6 | 2026-10-17 | Windows keeps `Flag::Rescan` for `ERROR_NOTIFY_ENUM_DIR` and a zero-byte completion; `unwatch` of an unwatched path now errors (Slate never unwatches). inotify: a recursive watch carries on past a folder it cannot watch and reports that folder as an error (#970). FSEvents hang fix; poll and kqueue fixes. Adopted 2026-10-22 (§4.6). |
+| 9.0.0-rc.6 | 2026-10-17 | Windows keeps `Flag::Rescan` for `ERROR_NOTIFY_ENUM_DIR` and a zero-byte completion; `unwatch` of an unwatched path now errors (Slate never unwatches). inotify: a recursive watch carries on past a folder it cannot watch and reports that folder as an error (#970); a folder gone mid-walk is skipped and not reported. FSEvents: hang fix; an ancestor's "must scan subdirectories" notice arrives as a `Rescan` naming a path outside the root; the run loop wakes every 0.5 s. Poll and kqueue fixes. Adopted 2026-10-22; every backend error still ends the watch (§4.6, #1563). |
 
 New crates for slate-core with rc.5: `notify` (CC0-1.0),
 `notify-types` (MIT OR Apache-2.0), `objc2-core-foundation` and
@@ -558,12 +558,21 @@ watcher run (#1267 asks for the foreground policy).
 - A watch that ends (root changed or swapped, a backend error after its
   catch-up) is not re-armed in PR 20. The baseline continues until the
   next open.
-- **Amended 2026-10-22 (owner; notify rc.6).** rc.6 keeps a recursive
-  inotify watch running past a folder it cannot watch and reports that
-  folder as an error (notify-rs/notify#970). A permission error that
-  names only folders inside the root does not end the watch: the scanner
-  cannot read those folders either. Every other error, including a watch
-  limit or a folder gone mid-walk, still ends it.
+- **Every backend error ends the watch, after its catch-up (owner,
+  2026-10-22, #1563).** rc.6 walks a recursive inotify watch past a
+  folder it cannot watch, unreadable or past the watch limit, and
+  reports that folder as an error (notify-rs/notify#970). That error
+  ends the watch too.
+  - **The reversed exemption.** #1553 briefly kept the watch for a
+    permission error naming only folders inside the root, on the
+    premise that the scanner cannot read them either. That holds only
+    at that moment. inotify adds watches when a folder is created or
+    moved in, never on a permission change. A folder made readable
+    later would never be watched, while the watch still reported live.
+  - **The rule is Linux's.** The FSEvents backend never reports an
+    error. The Windows backend's only error names the watched root.
+  - **A folder that vanishes mid-walk is not reported.** rc.6 skips it,
+    so it doesn't end the watch. Its removal is an ordinary event.
 - **The user is told nothing extra**: no sentence, status text or
   setting about the watcher. Diagnostics go to the host log; core's
   `log::warn!` lines carry no paths (the #507 privacy rule).

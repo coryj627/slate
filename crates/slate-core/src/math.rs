@@ -542,20 +542,19 @@ fn mathcat_worker_loop(rx: std::sync::mpsc::Receiver<RenderRequest>) {
 /// channel.
 fn render_math_on_worker(raw: &RawMathBlock, prefs: MathPrefs) -> MathBlock {
     let mathml = latex_to_mathml(&raw.source);
-    let (speech, braille) = match mathml_to_speech_and_braille(&mathml, prefs) {
-        Ok(pair) => pair,
-        Err(MathCatError::MathmlTooLarge) => (
-            "Math expression too large to render to accessible speech.".to_string(),
-            Vec::new(),
-        ),
-        Err(_) if mathml.is_empty() => (String::new(), Vec::new()),
-        Err(_) => (
-            // Last-resort fallback: speak the source LaTeX literally
-            // so AT users at least hear what was written. Better
-            // than silence.
-            format!("Math expression: {}", raw.source),
-            Vec::new(),
-        ),
+    let (speech, braille) = if mathml.is_empty() {
+        // pulldown-latex could not render the source faithfully; see
+        // `latex_to_mathml`.
+        (unrendered_speech(&raw.source), Vec::new())
+    } else {
+        match mathml_to_speech_and_braille(&mathml, prefs) {
+            Ok(pair) => pair,
+            Err(MathCatError::MathmlTooLarge) => (
+                "Math expression too large to render to accessible speech.".to_string(),
+                Vec::new(),
+            ),
+            Err(_) => (unrendered_speech(&raw.source), Vec::new()),
+        }
     };
     MathBlock {
         source: raw.source.clone(),
@@ -643,18 +642,146 @@ pub fn render_math(raw: &RawMathBlock, prefs: MathPrefs) -> MathBlock {
     })
 }
 
-/// LaTeX → MathML using pulldown-latex. Returns an empty string on
-/// parser failure rather than propagating an error — `render_math`
-/// already routes around an empty MathML by emitting a stub speech.
+/// What a source that could not be rendered is spoken as: the source
+/// itself, so AT users at least hear what was written. Better than
+/// silence. Empty for an empty source.
+fn unrendered_speech(source: &str) -> String {
+    if source.trim().is_empty() {
+        String::new()
+    } else {
+        format!("Math expression: {source}")
+    }
+}
+
+/// LaTeX → MathML using pulldown-latex.
+///
+/// Returns an empty string when pulldown-latex cannot render the source
+/// faithfully, and `render_math` then speaks the source itself:
+/// - a parse error, which pulldown-latex would write into the MathML as
+///   `<merror>` holding its diagnostic and an unescaped quote of the
+///   source, for MathCAT to speak and braille (#1557, #1558);
+/// - a command it renders without its content (#1556).
+///
+/// The MathML writer copies two kinds of text verbatim: the name of a
+/// function, which `\operatorname{…}` sets, and the character of a
+/// relation or operator such as `<` or `&`. The names are handed to it
+/// already escaped, and the lone characters are escaped in its output
+/// (#1557), so no source text becomes MathML structure.
 fn latex_to_mathml(latex: &str) -> String {
+    use pulldown_latex::event::{Content, Event};
     use pulldown_latex::{RenderConfig, Storage, mathml::push_mathml};
+    if uses_unrenderable_command(latex) {
+        return String::new();
+    }
     let storage = Storage::new();
-    let parser = pulldown_latex::Parser::new(latex, &storage);
+    let Ok(events) =
+        pulldown_latex::Parser::new(latex, &storage).collect::<Result<Vec<Event<'_>>, _>>()
+    else {
+        return String::new();
+    };
+    let names: Vec<String> = events
+        .iter()
+        .filter_map(|event| match event {
+            Event::Content(Content::Function(name)) => Some(escape_xml_text(name)),
+            _ => None,
+        })
+        .collect();
+    let mut escaped_names = names.iter();
+    let escaped = events.into_iter().map(|event| {
+        Ok::<_, std::convert::Infallible>(match event {
+            Event::Content(Content::Function(_)) => Event::Content(Content::Function(
+                escaped_names.next().map_or("", String::as_str),
+            )),
+            other => other,
+        })
+    });
     let mut out = String::new();
-    match push_mathml(&mut out, parser, RenderConfig::default()) {
-        Ok(()) => out,
+    match push_mathml(&mut out, escaped, RenderConfig::default()) {
+        Ok(()) => escape_stray_markup(&out),
         Err(_) => String::new(),
     }
+}
+
+/// Commands pulldown-latex 0.8 parses but renders without their
+/// content, so the accessible output would describe less than the source
+/// holds (#1556): `\sideset` drops all four of its scripts.
+const UNRENDERABLE_COMMANDS: &[&str] = &["sideset"];
+
+/// Whether `latex` uses a command in [`UNRENDERABLE_COMMANDS`]: a
+/// backslash and exactly that command's letters. A control symbol such
+/// as `\\` is skipped whole, so the letters after it are text.
+fn uses_unrenderable_command(latex: &str) -> bool {
+    let bytes = latex.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'\\' {
+            i += 1;
+            continue;
+        }
+        let start = i + 1;
+        let end = start
+            + bytes[start..]
+                .iter()
+                .take_while(|byte| byte.is_ascii_alphabetic())
+                .count();
+        if end == start {
+            i = start + 1;
+            continue;
+        }
+        if UNRENDERABLE_COMMANDS.contains(&&latex[start..end]) {
+            return true;
+        }
+        i = end;
+    }
+    false
+}
+
+fn escape_xml_text(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// Escapes each `<` that cannot open a tag and each `&` that does not
+/// begin a character reference: the lone relation and operator
+/// characters pulldown-latex writes unescaped (#1557). Its own markup
+/// and references are left alone.
+fn escape_stray_markup(mathml: &str) -> String {
+    let mut out = String::with_capacity(mathml.len());
+    let mut rest = mathml;
+    while let Some(index) = rest.find(['<', '&']) {
+        out.push_str(&rest[..index]);
+        let tail = &rest[index..];
+        let markup = if let Some(after) = tail.strip_prefix('<') {
+            after.starts_with(|c: char| c.is_ascii_alphabetic() || matches!(c, '/' | '!' | '?'))
+        } else {
+            begins_reference(&tail[1..])
+        };
+        out.push_str(match (tail.as_bytes()[0], markup) {
+            (b'<', false) => "&lt;",
+            (b'&', false) => "&amp;",
+            (b'<', true) => "<",
+            _ => "&",
+        });
+        rest = &tail[1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Whether `text` (what follows an `&`) completes a character or entity
+/// reference: `name;`, `#digits;` or `#xhex;`.
+fn begins_reference(text: &str) -> bool {
+    let (body, allowed): (&str, fn(char) -> bool) =
+        if let Some(hex) = text.strip_prefix("#x").or_else(|| text.strip_prefix("#X")) {
+            (hex, |c| c.is_ascii_hexdigit())
+        } else if let Some(decimal) = text.strip_prefix('#') {
+            (decimal, |c| c.is_ascii_digit())
+        } else {
+            (text, |c| c.is_ascii_alphanumeric())
+        };
+    let length = body.chars().take_while(|&c| allowed(c)).count();
+    length > 0 && body[length..].starts_with(';')
 }
 
 /// MathML → speech + braille via MathCAT.
@@ -672,8 +799,15 @@ fn mathml_to_speech_and_braille(
     apply_prefs(prefs)?;
     libmathcat::set_mathml(mathml).map_err(MathCatError::SetMathml)?;
     let speech = libmathcat::get_spoken_text().map_err(MathCatError::Speech)?;
-    let braille_str = libmathcat::get_braille("").map_err(MathCatError::Braille)?;
-    Ok((speech, braille_str.into_bytes()))
+    // #1558: a braille failure keeps the speech. The block has no braille,
+    // and the hosts say braille is not available for it.
+    let braille = libmathcat::get_braille("")
+        .map(String::into_bytes)
+        .unwrap_or_else(|_| {
+            log::debug!("slate-mathcat: braille generation failed; the speech is kept");
+            Vec::new()
+        });
+    Ok((speech, braille))
 }
 
 fn apply_prefs(prefs: MathPrefs) -> Result<(), MathCatError> {
@@ -713,7 +847,6 @@ enum MathCatError {
     MathmlTooLarge,
     SetMathml(libmathcat::errors::Error),
     Speech(libmathcat::errors::Error),
-    Braille(libmathcat::errors::Error),
     Preference(libmathcat::errors::Error),
 }
 
@@ -1249,5 +1382,154 @@ mod tests {
         // error. Smoke-test the fallback shape on a basic formula
         // by manually fabricating the MathML.)
         let _ = raw; // silence unused on non-oversized branch
+    }
+
+    fn render_with(source: &str, braille_code: BrailleCode) -> MathBlock {
+        let raw = RawMathBlock {
+            source: source.to_string(),
+            display_style: MathDisplayStyle::Inline,
+            line: 1,
+            byte_offset: 0,
+        };
+        render_math(
+            &raw,
+            MathPrefs {
+                braille_code,
+                ..MathPrefs::default()
+            },
+        )
+    }
+
+    /// #1556: pulldown-latex 0.8 parses `\sideset` and drops all four of
+    /// its scripts, so the accessible output described a bare operator.
+    /// Like a source pulldown-latex cannot parse, it now gets no MathML
+    /// and is spoken as its source.
+    #[test]
+    fn sideset_is_spoken_as_its_source_not_as_a_bare_operator() {
+        let source = r"\sideset{_a^b}{_c^d}\sum";
+        for code in [BrailleCode::Nemeth, BrailleCode::Ueb] {
+            let block = render_with(source, code);
+            assert_eq!(block.mathml, "", "{code:?}");
+            assert_eq!(
+                block.speech,
+                format!("Math expression: {source}"),
+                "{code:?}"
+            );
+            assert!(block.braille.is_empty(), "{code:?}");
+        }
+    }
+
+    #[test]
+    fn only_the_sideset_command_itself_is_refused() {
+        assert!(uses_unrenderable_command(r"\sideset{_a}{_b}\sum"));
+        assert!(uses_unrenderable_command(r"x + \sideset{}{}\prod"));
+        // `\\` is a line break; the letters after it are plain text.
+        assert!(!uses_unrenderable_command(r"a \\sideset"));
+        // A longer command name is a different command.
+        assert!(!uses_unrenderable_command(r"\sidesets x"));
+        assert!(!uses_unrenderable_command(r"\sum_a^b"));
+    }
+
+    /// #1557 and #1558: pulldown-latex writes a parse error into the
+    /// MathML as `<merror>`, holding its diagnostic and an unescaped quote
+    /// of the source. Under UEB MathCAT spoke and brailled that
+    /// diagnostic; under Nemeth the braille failed and took the speech
+    /// with it. A source with a parse error is now spoken as its source
+    /// under every braille code, like `\sideset`.
+    #[test]
+    fn a_parse_error_is_spoken_as_its_source_under_every_braille_code() {
+        for source in [r"{n \choose k}", r"\mathscr{L}", r"\frac{<}{"] {
+            for code in [BrailleCode::Nemeth, BrailleCode::Ueb] {
+                let block = render_with(source, code);
+                assert_eq!(block.mathml, "", "{source} {code:?}");
+                assert_eq!(
+                    block.speech,
+                    format!("Math expression: {source}"),
+                    "{source} {code:?}"
+                );
+                assert!(block.braille.is_empty(), "{source} {code:?}");
+            }
+        }
+    }
+
+    /// #1557: pulldown-latex writes relation and operator characters into
+    /// the MathML unescaped, so every `<` and `\&` made it invalid and the
+    /// block fell back to its source, with no braille.
+    #[test]
+    fn comparisons_and_ampersands_render_speak_and_braille() {
+        for source in [
+            r"x < y",
+            r"a \& b",
+            r"f(x) = \begin{cases} x & x < 0 \\ -x & x \ge 0 \end{cases}",
+        ] {
+            for code in [BrailleCode::Nemeth, BrailleCode::Ueb] {
+                let block = render_with(source, code);
+                assert!(!block.mathml.is_empty(), "{source} {code:?}");
+                assert!(
+                    !block.speech.is_empty() && !block.speech.starts_with("Math expression"),
+                    "{source} {code:?}: {:?}",
+                    block.speech
+                );
+                assert!(!block.braille.is_empty(), "{source} {code:?}");
+            }
+        }
+        assert!(
+            render_with(r"x < y", BrailleCode::Nemeth)
+                .mathml
+                .contains("<mo>&lt;</mo>")
+        );
+        assert!(
+            render_with(r"a \& b", BrailleCode::Nemeth)
+                .mathml
+                .contains("&amp;")
+        );
+    }
+
+    /// #1557: an `\operatorname` argument was copied into the MathML
+    /// verbatim, so markup in it became MathML structure and the speech
+    /// said what the source did not show. It is now text.
+    #[test]
+    fn operatorname_text_cannot_add_mathml_structure() {
+        let block = render_with(r"\operatorname{<mi>evil</mi>}", BrailleCode::Nemeth);
+        assert!(!block.mathml.contains("<mi>evil</mi>"), "{}", block.mathml);
+        assert!(
+            block.mathml.contains("&lt;mi&gt;evil&lt;/mi&gt;"),
+            "{}",
+            block.mathml
+        );
+        assert_ne!(block.speech, "evil");
+    }
+
+    #[test]
+    fn stray_markup_characters_are_escaped_and_markup_is_kept() {
+        assert_eq!(
+            escape_stray_markup("<mo><</mo><mi>&</mi><mtext>&amp;&#x3C;&#60;&nbsp;</mtext>"),
+            "<mo>&lt;</mo><mi>&amp;</mi><mtext>&amp;&#x3C;&#60;&nbsp;</mtext>"
+        );
+        assert_eq!(escape_stray_markup("<mo>≮</mo>"), "<mo>≮</mo>");
+        assert_eq!(
+            escape_stray_markup("<mo><\u{338}</mo>"),
+            "<mo>&lt;\u{338}</mo>"
+        );
+    }
+
+    /// #1558: when MathCAT produces the speech but fails on the braille,
+    /// the speech is kept and the block has no braille; the hosts then say
+    /// braille is not available. MathCAT's Nemeth path fails on
+    /// `<merror>`.
+    #[test]
+    fn a_braille_failure_keeps_the_speech() {
+        let prefs = MathPrefs {
+            braille_code: BrailleCode::Nemeth,
+            ..MathPrefs::default()
+        };
+        let (speech, braille) = thread::spawn(move || {
+            mathml_to_speech_and_braille("<math><merror><mtext>x</mtext></merror></math>", prefs)
+        })
+        .join()
+        .expect("MathCAT thread joined")
+        .expect("the speech survives a braille failure");
+        assert!(!speech.is_empty());
+        assert!(braille.is_empty());
     }
 }

@@ -77,6 +77,7 @@ internal enum HostDiagnosticEvent
     SidebarWriteJournalFailed,
     SingleInstanceActivationFailed,
     SingleInstanceActivationTimedOut,
+    SvgDecodeWaitFailed,
     VaultCommandFailed,
     VaultEventFailed,
     VaultRescanFailed,

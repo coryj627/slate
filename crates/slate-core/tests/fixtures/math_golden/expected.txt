@@ -1,0 +1,2222 @@
+=== demo-vault/learning/Calculus notes — derivatives.md #1
+source: y = f(g(x))
+MathML: <math display="inline"><mi>y</mi><mo>=</mo><mi>f</mi><mo symmetric="false" stretchy="false">(</mo><mi>g</mi><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo><mo symmetric="false" stretchy="false">)</mo></math>
+ClearSpeak Terse: y equals f g x
+ClearSpeak Medium: y is equal to, f of g of x
+ClearSpeak Verbose: y is equal to, f of g of x
+SimpleSpeak Terse: y equals f g x
+SimpleSpeak Medium: y is equal to, f of g of x
+SimpleSpeak Verbose: y is equal to, f of g of x
+Nemeth: ⠽⠀⠨⠅⠀⠋⠷⠛⠷⠭⠾⠾
+UEB: ⠰⠽⠀⠐⠶⠀⠋⠐⠣⠛⠐⠣⠭⠐⠜⠐⠜
+=== demo-vault/learning/Calculus notes — derivatives.md #2
+source: y
+MathML: <math display="inline"><mi>y</mi></math>
+ClearSpeak Terse: y
+ClearSpeak Medium: y
+ClearSpeak Verbose: y
+SimpleSpeak Terse: y
+SimpleSpeak Medium: y
+SimpleSpeak Verbose: y
+Nemeth: ⠰⠽
+UEB: ⠰⠽
+=== demo-vault/learning/Calculus notes — derivatives.md #3
+source: x
+MathML: <math display="inline"><mi>x</mi></math>
+ClearSpeak Terse: x
+ClearSpeak Medium: x
+ClearSpeak Verbose: x
+SimpleSpeak Terse: x
+SimpleSpeak Medium: x
+SimpleSpeak Verbose: x
+Nemeth: ⠰⠭
+UEB: ⠰⠭
+=== demo-vault/learning/Calculus notes — derivatives.md #4
+source: \frac{dy}{dx} = f'(g(x)) \cdot g'(x)
+MathML: <math display="inline"><mfrac><mrow><mi>d</mi><mi>y</mi></mrow><mrow><mi>d</mi><mi>x</mi></mrow></mfrac><mo>=</mo><mi>f</mi><mi>′</mi><mo symmetric="false" stretchy="false">(</mo><mi>g</mi><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo><mo symmetric="false" stretchy="false">)</mo><mo>⋅</mo><mi>g</mi><mi>′</mi><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo></math>
+ClearSpeak Terse: d y over d x, equals; f prime, g x times g prime times x
+ClearSpeak Medium: d y over d x, is equal to; f prime, g of x times g prime times x
+ClearSpeak Verbose: d y over d x, end fraction; is equal to; f prime, g of x times g prime times x
+SimpleSpeak Terse: fraction, d y, over, d x, end fraction; equals; f prime, g x times g prime times x
+SimpleSpeak Medium: fraction, d y, over, d x, end fraction; is equal to; f prime, g of x times g prime times x
+SimpleSpeak Verbose: fraction, d y, over, d x, end fraction; is equal to; f prime, g of x times g prime times x
+Nemeth: ⠹⠙⠽⠌⠙⠭⠼⠀⠨⠅⠀⠋⠄⠷⠛⠷⠭⠾⠾⠡⠛⠄⠷⠭⠾
+UEB: ⠰⠰⠷⠙⠽⠨⠌⠙⠭⠾⠀⠐⠶⠀⠰⠰⠋⠶⠐⠣⠛⠐⠣⠭⠐⠜⠐⠜⠐⠲⠛⠶⠐⠣⠭⠐⠜
+=== demo-vault/learning/Calculus notes — derivatives.md #5
+source: u = g(x)
+MathML: <math display="inline"><mi>u</mi><mo>=</mo><mi>g</mi><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo></math>
+ClearSpeak Terse: u equals g x
+ClearSpeak Medium: u is equal to g of x
+ClearSpeak Verbose: u is equal to g of x
+SimpleSpeak Terse: u equals g x
+SimpleSpeak Medium: u is equal to g of x
+SimpleSpeak Verbose: u is equal to g of x
+Nemeth: ⠥⠀⠨⠅⠀⠛⠷⠭⠾
+UEB: ⠰⠥⠀⠐⠶⠀⠛⠐⠣⠭⠐⠜
+=== demo-vault/learning/Calculus notes — derivatives.md #6
+source: \frac{dy}{dx} = \frac{dy}{du} \cdot \frac{du}{dx}
+MathML: <math display="inline"><mfrac><mrow><mi>d</mi><mi>y</mi></mrow><mrow><mi>d</mi><mi>x</mi></mrow></mfrac><mo>=</mo><mfrac><mrow><mi>d</mi><mi>y</mi></mrow><mrow><mi>d</mi><mi>u</mi></mrow></mfrac><mo>⋅</mo><mfrac><mrow><mi>d</mi><mi>u</mi></mrow><mrow><mi>d</mi><mi>x</mi></mrow></mfrac></math>
+ClearSpeak Terse: d y over d x, equals; d y over d u, times d u over d x
+ClearSpeak Medium: d y over d x, is equal to; d y over d u, times d u over d x
+ClearSpeak Verbose: d y over d x, end fraction; is equal to; d y over d u, end fraction; times, d u over d x, end fraction
+SimpleSpeak Terse: fraction, d y, over, d x, end fraction; equals; fraction, d y, over, d u, end fraction; times, fraction, d u, over, d x, end fraction
+SimpleSpeak Medium: fraction, d y, over, d x, end fraction; is equal to; fraction, d y, over, d u, end fraction; times, fraction, d u, over, d x, end fraction
+SimpleSpeak Verbose: fraction, d y, over, d x, end fraction; is equal to; fraction, d y, over, d u, end fraction; times, fraction, d u, over, d x, end fraction
+Nemeth: ⠹⠙⠽⠌⠙⠭⠼⠀⠨⠅⠀⠹⠙⠽⠌⠙⠥⠼⠡⠹⠙⠥⠌⠙⠭⠼
+UEB: ⠰⠰⠷⠙⠽⠨⠌⠙⠭⠾⠀⠐⠶⠀⠰⠰⠷⠙⠽⠨⠌⠙⠥⠾⠐⠲⠷⠙⠥⠨⠌⠙⠭⠾
+=== demo-vault/learning/Calculus notes — derivatives.md #7
+source: f'
+MathML: <math display="inline"><mi>f</mi><mi>′</mi></math>
+ClearSpeak Terse: f prime
+ClearSpeak Medium: f prime
+ClearSpeak Verbose: f prime
+SimpleSpeak Terse: f prime
+SimpleSpeak Medium: f prime
+SimpleSpeak Verbose: f prime
+Nemeth: ⠋⠄
+UEB: ⠋⠰⠶
+=== demo-vault/learning/Calculus notes — derivatives.md #8
+source: g'
+MathML: <math display="inline"><mi>g</mi><mi>′</mi></math>
+ClearSpeak Terse: g prime
+ClearSpeak Medium: g prime
+ClearSpeak Verbose: g prime
+SimpleSpeak Terse: g prime
+SimpleSpeak Medium: g prime
+SimpleSpeak Verbose: g prime
+Nemeth: ⠛⠄
+UEB: ⠛⠰⠶
+=== demo-vault/learning/Calculus notes — derivatives.md #9
+source: y = \sin(x^2 + 1)
+MathML: <math display="inline"><mi>y</mi><mo>=</mo><mi>sin</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><msup><mi>x</mi><mn>2</mn></msup><mo>+</mo><mn>1</mn><mo symmetric="false" stretchy="false">)</mo></math>
+ClearSpeak Terse: y equals, sine, open x squared plus 1, close
+ClearSpeak Medium: y is equal to; sine of, open paren x squared plus 1, close paren
+ClearSpeak Verbose: y is equal to; sine of, open paren x squared plus 1, close paren
+SimpleSpeak Terse: y equals, sine, open x squared plus 1, close
+SimpleSpeak Medium: y is equal to; sine of, open paren x squared plus 1, close paren
+SimpleSpeak Verbose: y is equal to; sine of, open paren x squared plus 1, close paren
+Nemeth: ⠽⠀⠨⠅⠀⠎⠊⠝⠀⠷⠭⠘⠆⠐⠬⠂⠾
+UEB: ⠰⠽⠀⠐⠶⠀⠎⠔⠐⠣⠭⠰⠔⠼⠃⠐⠖⠼⠁⠐⠜
+=== demo-vault/learning/Calculus notes — derivatives.md #10
+source: u = x^2 + 1
+MathML: <math display="inline"><mi>u</mi><mo>=</mo><msup><mi>x</mi><mn>2</mn></msup><mo>+</mo><mn>1</mn></math>
+ClearSpeak Terse: u equals x squared plus 1
+ClearSpeak Medium: u is equal to, x squared plus 1
+ClearSpeak Verbose: u is equal to, x squared plus 1
+SimpleSpeak Terse: u equals x squared plus 1
+SimpleSpeak Medium: u is equal to, x squared plus 1
+SimpleSpeak Verbose: u is equal to, x squared plus 1
+Nemeth: ⠥⠀⠨⠅⠀⠭⠘⠆⠐⠬⠂
+UEB: ⠰⠥⠀⠐⠶⠀⠭⠰⠔⠼⠃⠐⠖⠼⠁
+=== demo-vault/learning/Calculus notes — derivatives.md #11
+source: y = \sin(u)
+MathML: <math display="inline"><mi>y</mi><mo>=</mo><mi>sin</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><mi>u</mi><mo symmetric="false" stretchy="false">)</mo></math>
+ClearSpeak Terse: y equals sine u
+ClearSpeak Medium: y is equal to sine of u
+ClearSpeak Verbose: y is equal to sine of u
+SimpleSpeak Terse: y equals sine u
+SimpleSpeak Medium: y is equal to sine of u
+SimpleSpeak Verbose: y is equal to sine of u
+Nemeth: ⠽⠀⠨⠅⠀⠎⠊⠝⠀⠷⠥⠾
+UEB: ⠰⠽⠀⠐⠶⠀⠎⠔⠐⠣⠥⠐⠜
+=== demo-vault/learning/Calculus notes — derivatives.md #12
+source: \frac{dy}{du} = \cos(u)
+MathML: <math display="inline"><mfrac><mrow><mi>d</mi><mi>y</mi></mrow><mrow><mi>d</mi><mi>u</mi></mrow></mfrac><mo>=</mo><mi>cos</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><mi>u</mi><mo symmetric="false" stretchy="false">)</mo></math>
+ClearSpeak Terse: d y over d u, equals cos u
+ClearSpeak Medium: d y over d u, is equal to cosine of u
+ClearSpeak Verbose: d y over d u, end fraction; is equal to cosine of u
+SimpleSpeak Terse: fraction, d y, over, d u, end fraction; equals cos u
+SimpleSpeak Medium: fraction, d y, over, d u, end fraction; is equal to cosine of u
+SimpleSpeak Verbose: fraction, d y, over, d u, end fraction; is equal to cosine of u
+Nemeth: ⠹⠙⠽⠌⠙⠥⠼⠀⠨⠅⠀⠉⠕⠎⠀⠷⠥⠾
+UEB: ⠰⠰⠷⠙⠽⠨⠌⠙⠥⠾⠀⠐⠶⠀⠉⠕⠎⠐⠣⠥⠐⠜
+=== demo-vault/learning/Calculus notes — derivatives.md #13
+source: \frac{du}{dx} = 2x
+MathML: <math display="inline"><mfrac><mrow><mi>d</mi><mi>u</mi></mrow><mrow><mi>d</mi><mi>x</mi></mrow></mfrac><mo>=</mo><mn>2</mn><mi>x</mi></math>
+ClearSpeak Terse: d u over d x, equals 2 x
+ClearSpeak Medium: d u over d x, is equal to 2 x
+ClearSpeak Verbose: d u over d x, end fraction; is equal to 2 x
+SimpleSpeak Terse: fraction, d u, over, d x, end fraction; equals 2 x
+SimpleSpeak Medium: fraction, d u, over, d x, end fraction; is equal to 2 x
+SimpleSpeak Verbose: fraction, d u, over, d x, end fraction; is equal to 2 x
+Nemeth: ⠹⠙⠥⠌⠙⠭⠼⠀⠨⠅⠀⠼⠆⠭
+UEB: ⠰⠰⠷⠙⠥⠨⠌⠙⠭⠾⠀⠐⠶⠀⠼⠃⠭
+=== demo-vault/learning/Calculus notes — derivatives.md #14
+source: \frac{dy}{dx} = \cos(x^2 + 1) \cdot 2x = 2x \cos(x^2 + 1)
+MathML: <math display="inline"><mfrac><mrow><mi>d</mi><mi>y</mi></mrow><mrow><mi>d</mi><mi>x</mi></mrow></mfrac><mo>=</mo><mi>cos</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><msup><mi>x</mi><mn>2</mn></msup><mo>+</mo><mn>1</mn><mo symmetric="false" stretchy="false">)</mo><mo>⋅</mo><mn>2</mn><mi>x</mi><mo>=</mo><mn>2</mn><mi>x</mi><mspace width="0.1667em" /><mi>cos</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><msup><mi>x</mi><mn>2</mn></msup><mo>+</mo><mn>1</mn><mo symmetric="false" stretchy="false">)</mo></math>
+ClearSpeak Terse: d y over d x, equals; cos, open x squared plus 1, close; times 2 x; equals; 2 x, cos, open x squared plus 1, close
+ClearSpeak Medium: d y over d x, is equal to; cosine of, open paren x squared plus 1, close paren; times 2 x; is equal to; 2 x; cosine of, open paren x squared plus 1, close paren
+ClearSpeak Verbose: d y over d x, end fraction; is equal to; cosine of, open paren x squared plus 1, close paren; times 2 x; is equal to; 2 x; cosine of, open paren x squared plus 1, close paren
+SimpleSpeak Terse: fraction, d y, over, d x, end fraction; equals; cos, open x squared plus 1, close; times 2 x; equals; 2 x, cos, open x squared plus 1, close
+SimpleSpeak Medium: fraction, d y, over, d x, end fraction; is equal to; cosine of, open paren x squared plus 1, close paren; times 2 x; is equal to; 2 x; cosine of, open paren x squared plus 1, close paren
+SimpleSpeak Verbose: fraction, d y, over, d x, end fraction; is equal to; cosine of, open paren x squared plus 1, close paren; times 2 x; is equal to; 2 x; cosine of, open paren x squared plus 1, close paren
+Nemeth: ⠹⠙⠽⠌⠙⠭⠼⠀⠨⠅⠀⠉⠕⠎⠀⠷⠭⠘⠆⠐⠬⠂⠾⠡⠆⠭⠀⠨⠅⠀⠼⠆⠭⠉⠕⠎⠀⠷⠭⠘⠆⠐⠬⠂⠾
+UEB: ⠰⠰⠰⠷⠙⠽⠨⠌⠙⠭⠾⠀⠐⠶⠀⠉⠕⠎⠐⠣⠭⠔⠼⠃⠐⠖⠼⠁⠐⠜⠐⠲⠼⠃⠭⠀⠐⠶⠀⠼⠃⠭⠀⠉⠕⠎⠐⠣⠭⠔⠼⠃⠐⠖⠼⠁⠐⠜⠰⠄
+=== demo-vault/learning/Calculus notes — derivatives.md #15
+source: y = f(g(h(x)))
+MathML: <math display="inline"><mi>y</mi><mo>=</mo><mi>f</mi><mo symmetric="false" stretchy="false">(</mo><mi>g</mi><mo symmetric="false" stretchy="false">(</mo><mi>h</mi><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo><mo symmetric="false" stretchy="false">)</mo><mo symmetric="false" stretchy="false">)</mo></math>
+ClearSpeak Terse: y equals, f g h x
+ClearSpeak Medium: y is equal to, f of g of h of x
+ClearSpeak Verbose: y is equal to, f of g of h of x
+SimpleSpeak Terse: y equals, f g h x
+SimpleSpeak Medium: y is equal to, f of g of h of x
+SimpleSpeak Verbose: y is equal to, f of g of h of x
+Nemeth: ⠽⠀⠨⠅⠀⠋⠷⠛⠷⠓⠷⠭⠾⠾⠾
+UEB: ⠰⠽⠀⠐⠶⠀⠋⠐⠣⠛⠐⠣⠓⠐⠣⠭⠐⠜⠐⠜⠐⠜
+=== demo-vault/learning/Calculus notes — derivatives.md #16
+source: \frac{dy}{dx} = f'(g(h(x))) \cdot g'(h(x)) \cdot h'(x)
+MathML: <math display="inline"><mfrac><mrow><mi>d</mi><mi>y</mi></mrow><mrow><mi>d</mi><mi>x</mi></mrow></mfrac><mo>=</mo><mi>f</mi><mi>′</mi><mo symmetric="false" stretchy="false">(</mo><mi>g</mi><mo symmetric="false" stretchy="false">(</mo><mi>h</mi><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo><mo symmetric="false" stretchy="false">)</mo><mo symmetric="false" stretchy="false">)</mo><mo>⋅</mo><mi>g</mi><mi>′</mi><mo symmetric="false" stretchy="false">(</mo><mi>h</mi><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo><mo symmetric="false" stretchy="false">)</mo><mo>⋅</mo><mi>h</mi><mi>′</mi><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo></math>
+ClearSpeak Terse: d y over d x, equals; f prime; g h x, times; g prime, h x times h prime times x
+ClearSpeak Medium: d y over d x, is equal to; f prime; g of h of x, times; g prime, h of x times h prime times x
+ClearSpeak Verbose: d y over d x, end fraction; is equal to; f prime; g of h of x, times; g prime, h of x times h prime times x
+SimpleSpeak Terse: fraction, d y, over, d x, end fraction; equals; f prime; g h x, times; g prime, h x times h prime times x
+SimpleSpeak Medium: fraction, d y, over, d x, end fraction; is equal to; f prime; g of h of x, times; g prime, h of x times h prime times x
+SimpleSpeak Verbose: fraction, d y, over, d x, end fraction; is equal to; f prime; g of h of x, times; g prime, h of x times h prime times x
+Nemeth: ⠹⠙⠽⠌⠙⠭⠼⠀⠨⠅⠀⠋⠄⠷⠛⠷⠓⠷⠭⠾⠾⠾⠡⠛⠄⠷⠓⠷⠭⠾⠾⠡⠓⠄⠷⠭⠾
+UEB: ⠰⠰⠷⠙⠽⠨⠌⠙⠭⠾⠀⠐⠶⠀⠰⠰⠋⠶⠐⠣⠛⠐⠣⠓⠐⠣⠭⠐⠜⠐⠜⠐⠜⠐⠲⠛⠶⠐⠣⠓⠐⠣⠭⠐⠜⠐⠜⠐⠲⠓⠶⠐⠣⠭⠐⠜
+=== demo-vault/learning/Calculus notes — derivatives.md #17
+source: y = u(x) \cdot v(x)
+MathML: <math display="inline"><mi>y</mi><mo>=</mo><mi>u</mi><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo><mo>⋅</mo><mi>v</mi><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo></math>
+ClearSpeak Terse: y equals, u x times v x
+ClearSpeak Medium: y is equal to, u of x times v of x
+ClearSpeak Verbose: y is equal to, u of x times v of x
+SimpleSpeak Terse: y equals, u x times v x
+SimpleSpeak Medium: y is equal to, u of x times v of x
+SimpleSpeak Verbose: y is equal to, u of x times v of x
+Nemeth: ⠽⠀⠨⠅⠀⠥⠷⠭⠾⠡⠧⠷⠭⠾
+UEB: ⠰⠽⠀⠐⠶⠀⠥⠐⠣⠭⠐⠜⠐⠲⠧⠐⠣⠭⠐⠜
+=== demo-vault/learning/Calculus notes — derivatives.md #18
+source: \frac{dy}{dx} = u'(x) \cdot v(x) + u(x) \cdot v'(x)
+MathML: <math display="inline"><mfrac><mrow><mi>d</mi><mi>y</mi></mrow><mrow><mi>d</mi><mi>x</mi></mrow></mfrac><mo>=</mo><mi>u</mi><mi>′</mi><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo><mo>⋅</mo><mi>v</mi><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo><mo>+</mo><mi>u</mi><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo><mo>⋅</mo><mi>v</mi><mi>′</mi><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo></math>
+ClearSpeak Terse: d y over d x, equals; u prime, x times v x; plus, u x times v prime times x
+ClearSpeak Medium: d y over d x, is equal to; u prime, x times v of x; plus, u of x times v prime times x
+ClearSpeak Verbose: d y over d x, end fraction; is equal to; u prime, x times v of x; plus, u of x times v prime times x
+SimpleSpeak Terse: fraction, d y, over, d x, end fraction; equals; u prime, x times v x; plus, u x times v prime times x
+SimpleSpeak Medium: fraction, d y, over, d x, end fraction; is equal to; u prime, x times v of x; plus, u of x times v prime times x
+SimpleSpeak Verbose: fraction, d y, over, d x, end fraction; is equal to; u prime, x times v of x; plus, u of x times v prime times x
+Nemeth: ⠹⠙⠽⠌⠙⠭⠼⠀⠨⠅⠀⠥⠄⠷⠭⠾⠡⠧⠷⠭⠾⠬⠥⠷⠭⠾⠡⠧⠄⠷⠭⠾
+UEB: ⠰⠰⠷⠙⠽⠨⠌⠙⠭⠾⠀⠐⠶⠀⠰⠰⠥⠶⠐⠣⠭⠐⠜⠐⠲⠧⠐⠣⠭⠐⠜⠐⠖⠥⠐⠣⠭⠐⠜⠐⠲⠧⠶⠐⠣⠭⠐⠜
+=== demo-vault/learning/Calculus notes — derivatives.md #19
+source: y = x^2 \sin(x)
+MathML: <math display="inline"><mi>y</mi><mo>=</mo><msup><mi>x</mi><mn>2</mn></msup><mspace width="0.1667em" /><mi>sin</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo></math>
+ClearSpeak Terse: y equals, x squared sine x
+ClearSpeak Medium: y is equal to, x squared sine of x
+ClearSpeak Verbose: y is equal to, x squared sine of x
+SimpleSpeak Terse: y equals, x squared sine x
+SimpleSpeak Medium: y is equal to, x squared sine of x
+SimpleSpeak Verbose: y is equal to, x squared sine of x
+Nemeth: ⠽⠀⠨⠅⠀⠭⠘⠆⠐⠎⠊⠝⠀⠷⠭⠾
+UEB: ⠰⠽⠀⠐⠶⠀⠭⠰⠔⠼⠃⠎⠊⠝⠐⠣⠭⠐⠜
+=== demo-vault/learning/Calculus notes — derivatives.md #20
+source: u = x^2
+MathML: <math display="inline"><mi>u</mi><mo>=</mo><msup><mi>x</mi><mn>2</mn></msup></math>
+ClearSpeak Terse: u equals x squared
+ClearSpeak Medium: u is equal to x squared
+ClearSpeak Verbose: u is equal to x squared
+SimpleSpeak Terse: u equals x squared
+SimpleSpeak Medium: u is equal to x squared
+SimpleSpeak Verbose: u is equal to x squared
+Nemeth: ⠥⠀⠨⠅⠀⠭⠘⠆
+UEB: ⠰⠥⠀⠐⠶⠀⠭⠰⠔⠼⠃
+=== demo-vault/learning/Calculus notes — derivatives.md #21
+source: v = \sin(x)
+MathML: <math display="inline"><mi>v</mi><mo>=</mo><mi>sin</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo></math>
+ClearSpeak Terse: v equals sine x
+ClearSpeak Medium: v is equal to sine of x
+ClearSpeak Verbose: v is equal to sine of x
+SimpleSpeak Terse: v equals sine x
+SimpleSpeak Medium: v is equal to sine of x
+SimpleSpeak Verbose: v is equal to sine of x
+Nemeth: ⠧⠀⠨⠅⠀⠎⠊⠝⠀⠷⠭⠾
+UEB: ⠰⠧⠀⠐⠶⠀⠎⠔⠐⠣⠭⠐⠜
+=== demo-vault/learning/Calculus notes — derivatives.md #22
+source: \frac{dy}{dx} = 2x \sin(x) + x^2 \cos(x)
+MathML: <math display="inline"><mfrac><mrow><mi>d</mi><mi>y</mi></mrow><mrow><mi>d</mi><mi>x</mi></mrow></mfrac><mo>=</mo><mn>2</mn><mi>x</mi><mspace width="0.1667em" /><mi>sin</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo><mo>+</mo><msup><mi>x</mi><mn>2</mn></msup><mspace width="0.1667em" /><mi>cos</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo></math>
+ClearSpeak Terse: d y over d x, equals; 2 x sine x; plus, x squared cos x
+ClearSpeak Medium: d y over d x, is equal to; 2 x sine of x; plus, x squared cosine of x
+ClearSpeak Verbose: d y over d x, end fraction; is equal to; 2 x sine of x; plus, x squared cosine of x
+SimpleSpeak Terse: fraction, d y, over, d x, end fraction; equals; 2 x sine x; plus, x squared cos x
+SimpleSpeak Medium: fraction, d y, over, d x, end fraction; is equal to; 2 x sine of x; plus, x squared cosine of x
+SimpleSpeak Verbose: fraction, d y, over, d x, end fraction; is equal to; 2 x sine of x; plus, x squared cosine of x
+Nemeth: ⠹⠙⠽⠌⠙⠭⠼⠀⠨⠅⠀⠼⠆⠭⠎⠊⠝⠀⠷⠭⠾⠬⠭⠘⠆⠐⠉⠕⠎⠀⠷⠭⠾
+UEB: ⠰⠰⠷⠙⠽⠨⠌⠙⠭⠾⠀⠐⠶⠀⠼⠃⠭⠀⠎⠔⠐⠣⠭⠐⠜⠐⠖⠭⠰⠔⠼⠃⠰⠉⠕⠎⠐⠣⠭⠐⠜
+=== demo-vault/learning/Calculus notes — derivatives.md #23
+source: y = u \cdot v \cdot w
+MathML: <math display="inline"><mi>y</mi><mo>=</mo><mi>u</mi><mo>⋅</mo><mi>v</mi><mo>⋅</mo><mi>w</mi></math>
+ClearSpeak Terse: y equals, u times v times w
+ClearSpeak Medium: y is equal to, u times v times w
+ClearSpeak Verbose: y is equal to, u times v times w
+SimpleSpeak Terse: y equals, u times v times w
+SimpleSpeak Medium: y is equal to, u times v times w
+SimpleSpeak Verbose: y is equal to, u times v times w
+Nemeth: ⠽⠀⠨⠅⠀⠥⠡⠧⠡⠺
+UEB: ⠰⠽⠀⠐⠶⠀⠥⠐⠲⠧⠐⠲⠺
+=== demo-vault/learning/Calculus notes — derivatives.md #24
+source: \frac{dy}{dx} = u' v w + u v' w + u v w'
+MathML: <math display="inline"><mfrac><mrow><mi>d</mi><mi>y</mi></mrow><mrow><mi>d</mi><mi>x</mi></mrow></mfrac><mo>=</mo><mi>u</mi><mi>′</mi><mi>v</mi><mi>w</mi><mo>+</mo><mi>u</mi><mi>v</mi><mi>′</mi><mi>w</mi><mo>+</mo><mi>u</mi><mi>v</mi><mi>w</mi><mi>′</mi></math>
+ClearSpeak Terse: d y over d x, equals; u prime v w, plus, u v prime w, plus, u v w prime
+ClearSpeak Medium: d y over d x, is equal to; u prime v w, plus, u v prime w, plus, u v w prime
+ClearSpeak Verbose: d y over d x, end fraction; is equal to; u prime v w, plus, u v prime w, plus, u v w prime
+SimpleSpeak Terse: fraction, d y, over, d x, end fraction; equals; u prime v w, plus, u v prime w, plus, u v w prime
+SimpleSpeak Medium: fraction, d y, over, d x, end fraction; is equal to; u prime v w, plus, u v prime w, plus, u v w prime
+SimpleSpeak Verbose: fraction, d y, over, d x, end fraction; is equal to; u prime v w, plus, u v prime w, plus, u v w prime
+Nemeth: ⠹⠙⠽⠌⠙⠭⠼⠀⠨⠅⠀⠥⠄⠧⠺⠬⠥⠧⠄⠺⠬⠥⠧⠺⠄
+UEB: ⠰⠰⠷⠙⠽⠨⠌⠙⠭⠾⠀⠐⠶⠀⠰⠰⠥⠶⠧⠺⠐⠖⠥⠧⠶⠺⠐⠖⠥⠧⠺⠶
+=== demo-vault/learning/Calculus notes — derivatives.md #25
+source: n
+MathML: <math display="inline"><mi>n</mi></math>
+ClearSpeak Terse: n
+ClearSpeak Medium: n
+ClearSpeak Verbose: n
+SimpleSpeak Terse: n
+SimpleSpeak Medium: n
+SimpleSpeak Verbose: n
+Nemeth: ⠰⠝
+UEB: ⠰⠝
+=== demo-vault/learning/Calculus notes — derivatives.md #26
+source: n
+MathML: <math display="inline"><mi>n</mi></math>
+ClearSpeak Terse: n
+ClearSpeak Medium: n
+ClearSpeak Verbose: n
+SimpleSpeak Terse: n
+SimpleSpeak Medium: n
+SimpleSpeak Verbose: n
+Nemeth: ⠰⠝
+UEB: ⠰⠝
+=== demo-vault/learning/Calculus notes — derivatives.md #27
+source: \frac{d}{dx}\left[x^n\right] = n x^{n-1}
+MathML: <math display="inline"><mfrac><mrow><mi>d</mi></mrow><mrow><mi>d</mi><mi>x</mi></mrow></mfrac><mrow><mo stretchy="true">[</mo><msup><mi>x</mi><mi>n</mi></msup><mo stretchy="true">]</mo></mrow><mo>=</mo><mi>n</mi><msup><mi>x</mi><mrow><mi>n</mi><mo>−</mo><mn>1</mn></mrow></msup></math>
+ClearSpeak Terse: d over d x times, open bracket x to the n-th power, close bracket; equals, n times, x raised to the n minus 1 power
+ClearSpeak Medium: d over d x times, open bracket x to the n-th power, close bracket; is equal to, n times, x raised to the n minus 1 power
+ClearSpeak Verbose: d over d x, end fraction; times, open bracket x to the n-th power, close bracket; is equal to, n times, x raised to the n minus 1 power
+SimpleSpeak Terse: fraction, d over, d x, end fraction; times, open bracket x to the n-th close bracket; equals, n times, x raised to the n minus 1 power
+SimpleSpeak Medium: fraction, d over, d x, end fraction; times, open bracket x to the n-th close bracket; is equal to, n times, x raised to the n minus 1 power
+SimpleSpeak Verbose: fraction, d over, d x, end fraction; times, open bracket x to the n-th close bracket; is equal to, n times, x raised to the n minus 1 power
+Nemeth: ⠹⠙⠌⠙⠭⠼⠈⠷⠭⠘⠝⠐⠈⠾⠀⠨⠅⠀⠝⠭⠘⠝⠤⠂
+UEB: ⠰⠰⠷⠙⠨⠌⠙⠭⠾⠨⠣⠭⠔⠝⠨⠜⠀⠐⠶⠀⠰⠰⠝⠭⠔⠣⠝⠐⠤⠼⠁⠜
+=== demo-vault/learning/Calculus notes — derivatives.md #28
+source: \frac{d}{dx}\left[\sin(x)\right] = \cos(x)
+MathML: <math display="inline"><mfrac><mrow><mi>d</mi></mrow><mrow><mi>d</mi><mi>x</mi></mrow></mfrac><mrow><mo stretchy="true">[</mo><mi>sin</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo><mo stretchy="true">]</mo></mrow><mo>=</mo><mi>cos</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo></math>
+ClearSpeak Terse: d over d x times sine x; equals cos x
+ClearSpeak Medium: d over d x times sine of x; is equal to cosine of x
+ClearSpeak Verbose: d over d x, end fraction; times sine of x; is equal to cosine of x
+SimpleSpeak Terse: fraction, d over, d x, end fraction; times sine x; equals cos x
+SimpleSpeak Medium: fraction, d over, d x, end fraction; times sine of x; is equal to cosine of x
+SimpleSpeak Verbose: fraction, d over, d x, end fraction; times sine of x; is equal to cosine of x
+Nemeth: ⠹⠙⠌⠙⠭⠼⠈⠷⠎⠊⠝⠀⠷⠭⠾⠈⠾⠀⠨⠅⠀⠉⠕⠎⠀⠷⠭⠾
+UEB: ⠰⠰⠷⠙⠨⠌⠙⠭⠾⠨⠣⠎⠊⠝⠐⠣⠭⠐⠜⠨⠜⠀⠐⠶⠀⠉⠕⠎⠐⠣⠭⠐⠜
+=== demo-vault/learning/Calculus notes — derivatives.md #29
+source: \frac{d}{dx}\left[\cos(x)\right] = -\sin(x)
+MathML: <math display="inline"><mfrac><mrow><mi>d</mi></mrow><mrow><mi>d</mi><mi>x</mi></mrow></mfrac><mrow><mo stretchy="true">[</mo><mi>cos</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo><mo stretchy="true">]</mo></mrow><mo>=</mo><mi>−</mi><mspace width="0.1667em" /><mi>sin</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo></math>
+ClearSpeak Terse: d over d x times cos x; equals negative sine x
+ClearSpeak Medium: d over d x times cosine of x; is equal to, negative sine of x
+ClearSpeak Verbose: d over d x, end fraction; times cosine of x; is equal to, negative sine of x
+SimpleSpeak Terse: fraction, d over, d x, end fraction; times cos x; equals negative sine x
+SimpleSpeak Medium: fraction, d over, d x, end fraction; times cosine of x; is equal to, negative sine of x
+SimpleSpeak Verbose: fraction, d over, d x, end fraction; times cosine of x; is equal to, negative sine of x
+Nemeth: ⠹⠙⠌⠙⠭⠼⠈⠷⠉⠕⠎⠀⠷⠭⠾⠈⠾⠀⠨⠅⠀⠤⠎⠊⠝⠀⠷⠭⠾
+UEB: ⠰⠰⠷⠙⠨⠌⠙⠭⠾⠨⠣⠉⠕⠎⠐⠣⠭⠐⠜⠨⠜⠀⠐⠶⠀⠐⠤⠎⠔⠐⠣⠭⠐⠜
+=== demo-vault/learning/Calculus notes — derivatives.md #30
+source: \frac{d}{dx}\left[\tan(x)\right] = \sec^2(x)
+MathML: <math display="inline"><mfrac><mrow><mi>d</mi></mrow><mrow><mi>d</mi><mi>x</mi></mrow></mfrac><mrow><mo stretchy="true">[</mo><mi>tan</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo><mo stretchy="true">]</mo></mrow><mo>=</mo><msup><mi>sec</mi><mn>2</mn></msup><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo></math>
+ClearSpeak Terse: d over d x times tan x; equals seek squared x
+ClearSpeak Medium: d over d x times tangent of x; is equal to, secant squared of x
+ClearSpeak Verbose: d over d x, end fraction; times tangent of x; is equal to, secant squared of x
+SimpleSpeak Terse: fraction, d over, d x, end fraction; times tan x; equals seek squared x
+SimpleSpeak Medium: fraction, d over, d x, end fraction; times tangent of x; is equal to, secant squared of x
+SimpleSpeak Verbose: fraction, d over, d x, end fraction; times tangent of x; is equal to, secant squared of x
+Nemeth: ⠹⠙⠌⠙⠭⠼⠈⠷⠞⠁⠝⠀⠷⠭⠾⠈⠾⠀⠨⠅⠀⠎⠑⠉⠘⠆⠀⠷⠭⠾
+UEB: ⠰⠰⠷⠙⠨⠌⠙⠭⠾⠨⠣⠞⠁⠝⠐⠣⠭⠐⠜⠨⠜⠀⠐⠶⠀⠎⠑⠉⠰⠔⠼⠃⠐⠣⠭⠐⠜
+=== demo-vault/learning/Calculus notes — derivatives.md #31
+source: \frac{d}{dx}\left[e^x\right] = e^x
+MathML: <math display="inline"><mfrac><mrow><mi>d</mi></mrow><mrow><mi>d</mi><mi>x</mi></mrow></mfrac><mrow><mo stretchy="true">[</mo><msup><mi>e</mi><mi>x</mi></msup><mo stretchy="true">]</mo></mrow><mo>=</mo><msup><mi>e</mi><mi>x</mi></msup></math>
+ClearSpeak Terse: d over d x times, open bracket e to the x-th power, close bracket; equals e to the x-th power
+ClearSpeak Medium: d over d x times, open bracket e to the x-th power, close bracket; is equal to e to the x-th power
+ClearSpeak Verbose: d over d x, end fraction; times, open bracket e to the x-th power, close bracket; is equal to e to the x-th power
+SimpleSpeak Terse: fraction, d over, d x, end fraction; times, open bracket e to the x-th close bracket; equals e to the x-th
+SimpleSpeak Medium: fraction, d over, d x, end fraction; times, open bracket e to the x-th close bracket; is equal to e to the x-th
+SimpleSpeak Verbose: fraction, d over, d x, end fraction; times, open bracket e to the x-th close bracket; is equal to e to the x-th
+Nemeth: ⠹⠙⠌⠙⠭⠼⠈⠷⠑⠘⠭⠐⠈⠾⠀⠨⠅⠀⠑⠘⠭
+UEB: ⠰⠰⠷⠙⠨⠌⠙⠭⠾⠨⠣⠑⠔⠭⠨⠜⠀⠐⠶⠀⠑⠰⠔⠭
+=== demo-vault/learning/Calculus notes — derivatives.md #32
+source: \frac{d}{dx}\left[\ln(x)\right] = \frac{1}{x}
+MathML: <math display="inline"><mfrac><mrow><mi>d</mi></mrow><mrow><mi>d</mi><mi>x</mi></mrow></mfrac><mrow><mo stretchy="true">[</mo><mi>ln</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo><mo stretchy="true">]</mo></mrow><mo>=</mo><mfrac><mrow><mn>1</mn></mrow><mrow><mi>x</mi></mrow></mfrac></math>
+ClearSpeak Terse: d over d x times l n x; equals 1 over x
+ClearSpeak Medium: d over d x times the l n of x; is equal to 1 over x
+ClearSpeak Verbose: d over d x, end fraction; times the l n of x; is equal to, 1 over x, end fraction
+SimpleSpeak Terse: fraction, d over, d x, end fraction; times l n x; equals 1 over x
+SimpleSpeak Medium: fraction, d over, d x, end fraction; times the natural log of x; is equal to 1 over x
+SimpleSpeak Verbose: fraction, d over, d x, end fraction; times the natural log of x; is equal to 1 over x
+Nemeth: ⠹⠙⠌⠙⠭⠼⠈⠷⠇⠝⠀⠷⠭⠾⠈⠾⠀⠨⠅⠀⠹⠂⠌⠭⠼
+UEB: ⠰⠰⠷⠙⠨⠌⠙⠭⠾⠨⠣⠇⠝⠐⠣⠭⠐⠜⠨⠜⠀⠐⠶⠀⠰⠷⠼⠁⠨⠌⠭⠾
+=== demo-vault/learning/Calculus notes — derivatives.md #33
+source: \frac{d}{dx}\left[a^x\right] = a^x \ln(a)
+MathML: <math display="inline"><mfrac><mrow><mi>d</mi></mrow><mrow><mi>d</mi><mi>x</mi></mrow></mfrac><mrow><mo stretchy="true">[</mo><msup><mi>a</mi><mi>x</mi></msup><mo stretchy="true">]</mo></mrow><mo>=</mo><msup><mi>a</mi><mi>x</mi></msup><mspace width="0.1667em" /><mi>ln</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><mi>a</mi><mo symmetric="false" stretchy="false">)</mo></math>
+ClearSpeak Terse: d over d x times, open bracket, eigh to the x-th power, close bracket; equals, eigh to the x-th power, l n eigh
+ClearSpeak Medium: d over d x times, open bracket, eigh to the x-th power, close bracket; is equal to; eigh to the x-th power, the l n of eigh
+ClearSpeak Verbose: d over d x, end fraction; times, open bracket, eigh to the x-th power, close bracket; is equal to; eigh to the x-th power, the l n of eigh
+SimpleSpeak Terse: fraction, d over, d x, end fraction; times, open bracket eigh to the x-th, close bracket; equals, eigh to the x-th, l n eigh
+SimpleSpeak Medium: fraction, d over, d x, end fraction; times, open bracket eigh to the x-th, close bracket; is equal to; eigh to the x-th; the natural log of eigh
+SimpleSpeak Verbose: fraction, d over, d x, end fraction; times, open bracket eigh to the x-th, close bracket; is equal to; eigh to the x-th; the natural log of eigh
+Nemeth: ⠹⠙⠌⠙⠭⠼⠈⠷⠁⠘⠭⠐⠈⠾⠀⠨⠅⠀⠁⠘⠭⠐⠇⠝⠀⠷⠁⠾
+UEB: ⠰⠰⠷⠙⠨⠌⠙⠭⠾⠨⠣⠁⠔⠭⠨⠜⠀⠐⠶⠀⠁⠰⠔⠭⠇⠝⠐⠣⠁⠐⠜
+=== demo-vault/learning/Calculus notes — derivatives.md #34
+source: \frac{d}{dx}\left[\arcsin(x)\right] = \frac{1}{\sqrt{1 - x^2}}
+MathML: <math display="inline"><mfrac><mrow><mi>d</mi></mrow><mrow><mi>d</mi><mi>x</mi></mrow></mfrac><mrow><mo stretchy="true">[</mo><mi>arcsin</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo><mo stretchy="true">]</mo></mrow><mo>=</mo><mfrac><mrow><mn>1</mn></mrow><mrow><msqrt><mrow><mn>1</mn><mo>−</mo><msup><mi>x</mi><mn>2</mn></msup></mrow></msqrt></mrow></mfrac></math>
+ClearSpeak Terse: d over d x times arcsin x; equals; the fraction with numerator 1; and denominator square root, 1 minus x squared
+ClearSpeak Medium: d over d x times arcsin of x; is equal to; the fraction with numerator 1; and denominator the square root of 1 minus x squared
+ClearSpeak Verbose: d over d x, end fraction; times arcsin of x; is equal to; the fraction with numerator 1; and denominator the square root of 1 minus x squared, end root; end fraction
+SimpleSpeak Terse: fraction, d over, d x, end fraction; times arcsin x; equals; fraction, 1 over, square root, 1 minus x squared, end root; end fraction
+SimpleSpeak Medium: fraction, d over, d x, end fraction; times arcsin of x; is equal to; fraction, 1 over, the square root of 1 minus x squared, end root; end fraction
+SimpleSpeak Verbose: fraction, d over, d x, end fraction; times arcsin of x; is equal to; fraction, 1 over, the square root of 1 minus x squared, end root; end fraction
+Nemeth: ⠹⠙⠌⠙⠭⠼⠈⠷⠁⠗⠉⠎⠊⠝⠀⠷⠭⠾⠈⠾⠀⠨⠅⠀⠹⠂⠌⠜⠂⠤⠭⠘⠆⠐⠻⠼
+UEB: ⠰⠷⠙⠨⠌⠙⠭⠰⠾⠨⠣⠜⠉⠎⠔⠐⠣⠭⠐⠜⠨⠜⠀⠐⠶⠀⠰⠷⠼⠁⠨⠌⠩⠼⠁⠐⠤⠭⠔⠼⠃⠬⠾
+=== demo-vault/learning/Calculus notes — derivatives.md #35
+source: \frac{d}{dx}\left[\arctan(x)\right] = \frac{1}{1 + x^2}
+MathML: <math display="inline"><mfrac><mrow><mi>d</mi></mrow><mrow><mi>d</mi><mi>x</mi></mrow></mfrac><mrow><mo stretchy="true">[</mo><mi>arctan</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo><mo stretchy="true">]</mo></mrow><mo>=</mo><mfrac><mrow><mn>1</mn></mrow><mrow><mn>1</mn><mo>+</mo><msup><mi>x</mi><mn>2</mn></msup></mrow></mfrac></math>
+ClearSpeak Terse: d over d x times arctan x; equals; the fraction with numerator 1; and denominator 1 plus x squared
+ClearSpeak Medium: d over d x times arctan of x; is equal to; the fraction with numerator 1; and denominator 1 plus x squared
+ClearSpeak Verbose: d over d x, end fraction; times arctan of x; is equal to; the fraction with numerator 1; and denominator 1 plus x squared; end fraction
+SimpleSpeak Terse: fraction, d over, d x, end fraction; times arctan x; equals, fraction, 1 over, 1 plus x squared, end fraction
+SimpleSpeak Medium: fraction, d over, d x, end fraction; times arctan of x; is equal to; fraction, 1 over, 1 plus x squared, end fraction
+SimpleSpeak Verbose: fraction, d over, d x, end fraction; times arctan of x; is equal to; fraction, 1 over, 1 plus x squared, end fraction
+Nemeth: ⠹⠙⠌⠙⠭⠼⠈⠷⠁⠗⠉⠞⠁⠝⠀⠷⠭⠾⠈⠾⠀⠨⠅⠀⠹⠂⠌⠂⠬⠭⠘⠆⠐⠼
+UEB: ⠰⠷⠙⠨⠌⠙⠭⠰⠾⠨⠣⠜⠉⠞⠁⠝⠐⠣⠭⠐⠜⠨⠜⠀⠐⠶⠀⠰⠷⠼⠁⠨⠌⠼⠁⠐⠖⠭⠔⠼⠃⠾
+=== demo-vault/learning/Calculus notes — derivatives.md #36
+source: y = x^2 \cdot e^{\sin(x)}
+MathML: <math display="inline"><mi>y</mi><mo>=</mo><msup><mi>x</mi><mn>2</mn></msup><mo>⋅</mo><msup><mi>e</mi><mrow><mi>sin</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo></mrow></msup></math>
+ClearSpeak Terse: y equals, x squared times, e raised to the sine x power
+ClearSpeak Medium: y is equal to, x squared times, e raised to the sine of x power
+ClearSpeak Verbose: y is equal to, x squared times, e raised to the sine of x power
+SimpleSpeak Terse: y equals, x squared times, e raised to the sine x power
+SimpleSpeak Medium: y is equal to; x squared times, e raised to the sine of x power
+SimpleSpeak Verbose: y is equal to; x squared times, e raised to the sine of x power
+Nemeth: ⠽⠀⠨⠅⠀⠭⠘⠆⠐⠡⠑⠘⠎⠊⠝⠀⠷⠭⠾
+UEB: ⠰⠽⠀⠐⠶⠀⠭⠰⠔⠼⠃⠐⠲⠑⠔⠣⠎⠊⠝⠐⠣⠭⠐⠜⠜
+=== demo-vault/learning/Calculus notes — derivatives.md #37
+source: x^2
+MathML: <math display="inline"><msup><mi>x</mi><mn>2</mn></msup></math>
+ClearSpeak Terse: x squared
+ClearSpeak Medium: x squared
+ClearSpeak Verbose: x squared
+SimpleSpeak Terse: x squared
+SimpleSpeak Medium: x squared
+SimpleSpeak Verbose: x squared
+Nemeth: ⠭⠘⠆
+UEB: ⠭⠰⠔⠼⠃
+=== demo-vault/learning/Calculus notes — derivatives.md #38
+source: e^{\sin(x)}
+MathML: <math display="inline"><msup><mi>e</mi><mrow><mi>sin</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo></mrow></msup></math>
+ClearSpeak Terse: e raised to the sine x power
+ClearSpeak Medium: e raised to the sine of x power
+ClearSpeak Verbose: e raised to the sine of x power
+SimpleSpeak Terse: e raised to the sine x power
+SimpleSpeak Medium: e raised to the sine of x power
+SimpleSpeak Verbose: e raised to the sine of x power
+Nemeth: ⠑⠘⠎⠊⠝⠀⠷⠭⠾
+UEB: ⠰⠰⠑⠔⠣⠎⠊⠝⠐⠣⠭⠐⠜⠜
+=== demo-vault/learning/Calculus notes — derivatives.md #39
+source: \frac{dy}{dx} = 2x \cdot e^{\sin(x)} + x^2 \cdot \frac{d}{dx}\left[e^{\sin(x)}\right]
+MathML: <math display="inline"><mfrac><mrow><mi>d</mi><mi>y</mi></mrow><mrow><mi>d</mi><mi>x</mi></mrow></mfrac><mo>=</mo><mn>2</mn><mi>x</mi><mo>⋅</mo><msup><mi>e</mi><mrow><mi>sin</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo></mrow></msup><mo>+</mo><msup><mi>x</mi><mn>2</mn></msup><mo>⋅</mo><mfrac><mrow><mi>d</mi></mrow><mrow><mi>d</mi><mi>x</mi></mrow></mfrac><mrow><mo stretchy="true">[</mo><msup><mi>e</mi><mrow><mi>sin</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo></mrow></msup><mo stretchy="true">]</mo></mrow></math>
+ClearSpeak Terse: d y over d x, equals; 2, x times, e raised to the sine x power; plus; x squared times; d over d x times, open bracket, e raised to the sine x power, close bracket
+ClearSpeak Medium: d y over d x, is equal to; 2, x times, e raised to the sine of x power; plus; x squared times; d over d x times, open bracket, e raised to the sine of x power, close bracket
+ClearSpeak Verbose: d y over d x, end fraction; is equal to; 2, x times, e raised to the sine of x power; plus; x squared times; d over d x, end fraction; times, open bracket, e raised to the sine of x power, close bracket
+SimpleSpeak Terse: fraction, d y, over, d x, end fraction; equals; 2, x times, e raised to the sine x power; plus; x squared times; fraction, d over, d x, end fraction; times; open bracket, e raised to the sine x power; close bracket
+SimpleSpeak Medium: fraction, d y, over, d x, end fraction; is equal to; 2, x times, e raised to the sine of x power; plus; x squared times; fraction, d over, d x, end fraction; times; open bracket, e raised to the sine of x power; close bracket
+SimpleSpeak Verbose: fraction, d y, over, d x, end fraction; is equal to; 2, x times, e raised to the sine of x power; plus; x squared times; fraction, d over, d x, end fraction; times; open bracket, e raised to the sine of x power; close bracket
+Nemeth: ⠹⠙⠽⠌⠙⠭⠼⠀⠨⠅⠀⠼⠆⠭⠡⠑⠘⠎⠊⠝⠀⠷⠭⠾⠐⠬⠭⠘⠆⠐⠡⠹⠙⠌⠙⠭⠼⠈⠷⠑⠘⠎⠊⠝⠀⠷⠭⠾⠐⠈⠾
+UEB: ⠰⠰⠷⠙⠽⠨⠌⠙⠭⠾⠀⠐⠶⠀⠼⠃⠭⠐⠲⠑⠔⠣⠎⠊⠝⠐⠣⠭⠐⠜⠜⠐⠖⠭⠔⠼⠃⠐⠲⠷⠙⠨⠌⠙⠭⠾⠨⠣⠑⠔⠣⠎⠊⠝⠐⠣⠭⠐⠜⠜⠨⠜
+=== demo-vault/learning/Calculus notes — derivatives.md #40
+source: e
+MathML: <math display="inline"><mi>e</mi></math>
+ClearSpeak Terse: e
+ClearSpeak Medium: e
+ClearSpeak Verbose: e
+SimpleSpeak Terse: e
+SimpleSpeak Medium: e
+SimpleSpeak Verbose: e
+Nemeth: ⠰⠑
+UEB: ⠰⠑
+=== demo-vault/learning/Calculus notes — derivatives.md #41
+source: \sin(x)
+MathML: <math display="inline"><mi>sin</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo></math>
+ClearSpeak Terse: sine x
+ClearSpeak Medium: sine of x
+ClearSpeak Verbose: sine of x
+SimpleSpeak Terse: sine x
+SimpleSpeak Medium: sine of x
+SimpleSpeak Verbose: sine of x
+Nemeth: ⠎⠊⠝⠀⠷⠭⠾
+UEB: ⠎⠔⠐⠣⠭⠐⠜
+=== demo-vault/learning/Calculus notes — derivatives.md #42
+source: u = \sin(x)
+MathML: <math display="inline"><mi>u</mi><mo>=</mo><mi>sin</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo></math>
+ClearSpeak Terse: u equals sine x
+ClearSpeak Medium: u is equal to sine of x
+ClearSpeak Verbose: u is equal to sine of x
+SimpleSpeak Terse: u equals sine x
+SimpleSpeak Medium: u is equal to sine of x
+SimpleSpeak Verbose: u is equal to sine of x
+Nemeth: ⠥⠀⠨⠅⠀⠎⠊⠝⠀⠷⠭⠾
+UEB: ⠰⠥⠀⠐⠶⠀⠎⠔⠐⠣⠭⠐⠜
+=== demo-vault/learning/Calculus notes — derivatives.md #43
+source: \frac{d}{dx}\left[e^{\sin(x)}\right] = e^{\sin(x)} \cdot \cos(x)
+MathML: <math display="inline"><mfrac><mrow><mi>d</mi></mrow><mrow><mi>d</mi><mi>x</mi></mrow></mfrac><mrow><mo stretchy="true">[</mo><msup><mi>e</mi><mrow><mi>sin</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo></mrow></msup><mo stretchy="true">]</mo></mrow><mo>=</mo><msup><mi>e</mi><mrow><mi>sin</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo></mrow></msup><mo>⋅</mo><mi>cos</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo></math>
+ClearSpeak Terse: d over d x times, open bracket, e raised to the sine x power, close bracket; equals, e raised to the sine x power, times cos x
+ClearSpeak Medium: d over d x times, open bracket, e raised to the sine of x power, close bracket; is equal to; e raised to the sine of x power, times cosine of x
+ClearSpeak Verbose: d over d x, end fraction; times, open bracket, e raised to the sine of x power, close bracket; is equal to; e raised to the sine of x power, times cosine of x
+SimpleSpeak Terse: fraction, d over, d x, end fraction; times; open bracket, e raised to the sine x power; close bracket; equals, e raised to the sine x power; times cos x
+SimpleSpeak Medium: fraction, d over, d x, end fraction; times; open bracket, e raised to the sine of x power; close bracket; is equal to; e raised to the sine of x power; times cosine of x
+SimpleSpeak Verbose: fraction, d over, d x, end fraction; times; open bracket, e raised to the sine of x power; close bracket; is equal to; e raised to the sine of x power; times cosine of x
+Nemeth: ⠹⠙⠌⠙⠭⠼⠈⠷⠑⠘⠎⠊⠝⠀⠷⠭⠾⠐⠈⠾⠀⠨⠅⠀⠑⠘⠎⠊⠝⠀⠷⠭⠾⠐⠡⠉⠕⠎⠀⠷⠭⠾
+UEB: ⠰⠰⠷⠙⠨⠌⠙⠭⠾⠨⠣⠑⠔⠣⠎⠊⠝⠐⠣⠭⠐⠜⠜⠨⠜⠀⠐⠶⠀⠰⠰⠑⠔⠣⠎⠊⠝⠐⠣⠭⠐⠜⠜⠐⠲⠉⠕⠎⠐⠣⠭⠐⠜
+=== demo-vault/learning/Calculus notes — derivatives.md #44
+source: \frac{dy}{dx} = 2x e^{\sin(x)} + x^2 \cos(x) e^{\sin(x)} = e^{\sin(x)}\left(2x + x^2 \cos(x)\right)
+MathML: <math display="inline"><mfrac><mrow><mi>d</mi><mi>y</mi></mrow><mrow><mi>d</mi><mi>x</mi></mrow></mfrac><mo>=</mo><mn>2</mn><mi>x</mi><msup><mi>e</mi><mrow><mi>sin</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo></mrow></msup><mo>+</mo><msup><mi>x</mi><mn>2</mn></msup><mspace width="0.1667em" /><mi>cos</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo><msup><mi>e</mi><mrow><mi>sin</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo></mrow></msup><mo>=</mo><msup><mi>e</mi><mrow><mi>sin</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo></mrow></msup><mrow><mo stretchy="true">(</mo><mn>2</mn><mi>x</mi><mo>+</mo><msup><mi>x</mi><mn>2</mn></msup><mspace width="0.1667em" /><mi>cos</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo><mo stretchy="true">)</mo></mrow></math>
+ClearSpeak Terse: d y over d x, equals; 2 x, e raised to the sine x power; plus; x squared cos x, e raised to the sine x power; equals; e raised to the sine x power; open, 2 x plus, x squared cos x; close
+ClearSpeak Medium: d y over d x, is equal to; 2 x, e raised to the sine of x power; plus; x squared cosine of x, e raised to the sine of x power; is equal to; e raised to the sine of x power; open paren; 2 x plus, x squared cosine of x; close paren
+ClearSpeak Verbose: d y over d x, end fraction; is equal to; 2 x, e raised to the sine of x power; plus; x squared cosine of x, e raised to the sine of x power; is equal to; e raised to the sine of x power; open paren; 2 x plus, x squared cosine of x; close paren
+SimpleSpeak Terse: fraction, d y, over, d x, end fraction; equals; 2 x, e raised to the sine x power; plus; x squared cos x, e raised to the sine x power; equals; e raised to the sine x power; open, 2 x plus, x squared cos x; close
+SimpleSpeak Medium: fraction, d y, over, d x, end fraction; is equal to; 2 x, e raised to the sine of x power; plus; x squared cosine of x, e raised to the sine of x power; is equal to; e raised to the sine of x power; open paren; 2 x plus, x squared cosine of x; close paren
+SimpleSpeak Verbose: fraction, d y, over, d x, end fraction; is equal to; 2 x, e raised to the sine of x power; plus; x squared cosine of x, e raised to the sine of x power; is equal to; e raised to the sine of x power; open paren; 2 x plus, x squared cosine of x; close paren
+Nemeth: ⠹⠙⠽⠌⠙⠭⠼⠀⠨⠅⠀⠼⠆⠭⠑⠘⠎⠊⠝⠀⠷⠭⠾⠐⠬⠭⠘⠆⠐⠉⠕⠎⠀⠷⠭⠾⠑⠘⠎⠊⠝⠀⠷⠭⠾⠀⠨⠅⠀⠑⠘⠎⠊⠝⠀⠷⠭⠾⠐⠷⠆⠭⠬⠭⠘⠆⠐⠉⠕⠎⠀⠷⠭⠾⠾
+UEB: ⠰⠰⠷⠙⠽⠨⠌⠙⠭⠾⠀⠐⠶⠀⠼⠃⠭⠑⠔⠣⠎⠊⠝⠐⠣⠭⠐⠜⠜⠐⠖⠭⠔⠼⠃⠰⠉⠕⠎⠐⠣⠭⠐⠜⠑⠔⠣⠎⠊⠝⠐⠣⠭⠐⠜⠜⠀⠐⠶⠀⠰⠰⠑⠔⠣⠎⠊⠝⠐⠣⠭⠐⠜⠜⠐⠣⠼⠃⠭⠐⠖⠭⠔⠼⠃⠰⠉⠕⠎⠐⠣⠭⠐⠜⠐⠜
+=== demo-vault/learning/Calculus notes — derivatives.md #45
+source: e^{\sin(x)}
+MathML: <math display="inline"><msup><mi>e</mi><mrow><mi>sin</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo></mrow></msup></math>
+ClearSpeak Terse: e raised to the sine x power
+ClearSpeak Medium: e raised to the sine of x power
+ClearSpeak Verbose: e raised to the sine of x power
+SimpleSpeak Terse: e raised to the sine x power
+SimpleSpeak Medium: e raised to the sine of x power
+SimpleSpeak Verbose: e raised to the sine of x power
+Nemeth: ⠑⠘⠎⠊⠝⠀⠷⠭⠾
+UEB: ⠰⠰⠑⠔⠣⠎⠊⠝⠐⠣⠭⠐⠜⠜
+=== demo-vault/learning/Linear algebra glossary.md #1
+source: \lambda
+MathML: <math display="inline"><mi>λ</mi></math>
+ClearSpeak Terse: lambda
+ClearSpeak Medium: lambda
+ClearSpeak Verbose: lambda
+SimpleSpeak Terse: lambda
+SimpleSpeak Medium: lambda
+SimpleSpeak Verbose: lambda
+Nemeth: ⠨⠇
+UEB: ⠨⠇
+=== demo-vault/learning/Linear algebra glossary.md #2
+source: v
+MathML: <math display="inline"><mi>v</mi></math>
+ClearSpeak Terse: v
+ClearSpeak Medium: v
+ClearSpeak Verbose: v
+SimpleSpeak Terse: v
+SimpleSpeak Medium: v
+SimpleSpeak Verbose: v
+Nemeth: ⠰⠧
+UEB: ⠰⠧
+=== demo-vault/learning/Linear algebra glossary.md #3
+source: A
+MathML: <math display="inline"><mi>A</mi></math>
+ClearSpeak Terse: cap eigh
+ClearSpeak Medium: cap eigh
+ClearSpeak Verbose: cap eigh
+SimpleSpeak Terse: cap eigh
+SimpleSpeak Medium: cap eigh
+SimpleSpeak Verbose: cap eigh
+Nemeth: ⠰⠠⠁
+UEB: ⠠⠁
+=== demo-vault/learning/Linear algebra glossary.md #4
+source: Av = \lambda v
+MathML: <math display="inline"><mi>A</mi><mi>v</mi><mo>=</mo><mi>λ</mi><mi>v</mi></math>
+ClearSpeak Terse: cap eigh v, equals lambda v
+ClearSpeak Medium: cap eigh v, is equal to lambda v
+ClearSpeak Verbose: cap eigh v, is equal to lambda v
+SimpleSpeak Terse: cap eigh v, equals lambda v
+SimpleSpeak Medium: cap eigh v, is equal to lambda v
+SimpleSpeak Verbose: cap eigh v, is equal to lambda v
+Nemeth: ⠠⠁⠧⠀⠨⠅⠀⠨⠇⠧
+UEB: ⠠⠁⠧⠀⠐⠶⠀⠨⠇⠧
+=== demo-vault/learning/Linear algebra glossary.md #5
+source: v
+MathML: <math display="inline"><mi>v</mi></math>
+ClearSpeak Terse: v
+ClearSpeak Medium: v
+ClearSpeak Verbose: v
+SimpleSpeak Terse: v
+SimpleSpeak Medium: v
+SimpleSpeak Verbose: v
+Nemeth: ⠰⠧
+UEB: ⠰⠧
+=== demo-vault/learning/Linear algebra glossary.md #6
+source: A
+MathML: <math display="inline"><mi>A</mi></math>
+ClearSpeak Terse: cap eigh
+ClearSpeak Medium: cap eigh
+ClearSpeak Verbose: cap eigh
+SimpleSpeak Terse: cap eigh
+SimpleSpeak Medium: cap eigh
+SimpleSpeak Verbose: cap eigh
+Nemeth: ⠰⠠⠁
+UEB: ⠠⠁
+=== demo-vault/learning/Linear algebra glossary.md #7
+source: A
+MathML: <math display="inline"><mi>A</mi></math>
+ClearSpeak Terse: cap eigh
+ClearSpeak Medium: cap eigh
+ClearSpeak Verbose: cap eigh
+SimpleSpeak Terse: cap eigh
+SimpleSpeak Medium: cap eigh
+SimpleSpeak Verbose: cap eigh
+Nemeth: ⠰⠠⠁
+UEB: ⠠⠁
+=== demo-vault/learning/Linear algebra glossary.md #8
+source: \det(A - \lambda I)
+MathML: <math display="inline"><mi>det</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><mi>A</mi><mo>−</mo><mi>λ</mi><mi>I</mi><mo symmetric="false" stretchy="false">)</mo></math>
+ClearSpeak Terse: det; open,  cap eigh minus lambda  cap i; close
+ClearSpeak Medium: det of; open paren,  cap eigh minus lambda  cap i; close paren
+ClearSpeak Verbose: det of; open paren,  cap eigh minus lambda  cap i; close paren
+SimpleSpeak Terse: det; open,  cap eigh minus lambda  cap i; close
+SimpleSpeak Medium: det of; open paren,  cap eigh minus lambda  cap i; close paren
+SimpleSpeak Verbose: det of; open paren,  cap eigh minus lambda  cap i; close paren
+Nemeth: ⠙⠑⠞⠀⠷⠠⠁⠤⠨⠇⠠⠊⠾
+UEB: ⠙⠑⠞⠐⠣⠠⠁⠐⠤⠨⠇⠠⠊⠐⠜
+=== demo-vault/learning/Linear algebra glossary.md #9
+source: n \times n
+MathML: <math display="inline"><mi>n</mi><mo>×</mo><mi>n</mi></math>
+ClearSpeak Terse: n times n
+ClearSpeak Medium: n times n
+ClearSpeak Verbose: n times n
+SimpleSpeak Terse: n times n
+SimpleSpeak Medium: n times n
+SimpleSpeak Verbose: n times n
+Nemeth: ⠝⠈⠡⠝
+UEB: ⠝⠐⠦⠝
+=== demo-vault/learning/Linear algebra glossary.md #10
+source: n
+MathML: <math display="inline"><mi>n</mi></math>
+ClearSpeak Terse: n
+ClearSpeak Medium: n
+ClearSpeak Verbose: n
+SimpleSpeak Terse: n
+SimpleSpeak Medium: n
+SimpleSpeak Verbose: n
+Nemeth: ⠰⠝
+UEB: ⠰⠝
+=== demo-vault/learning/Linear algebra glossary.md #11
+source: A
+MathML: <math display="inline"><mi>A</mi></math>
+ClearSpeak Terse: cap eigh
+ClearSpeak Medium: cap eigh
+ClearSpeak Verbose: cap eigh
+SimpleSpeak Terse: cap eigh
+SimpleSpeak Medium: cap eigh
+SimpleSpeak Verbose: cap eigh
+Nemeth: ⠰⠠⠁
+UEB: ⠠⠁
+=== demo-vault/learning/Linear algebra glossary.md #12
+source: n
+MathML: <math display="inline"><mi>n</mi></math>
+ClearSpeak Terse: n
+ClearSpeak Medium: n
+ClearSpeak Verbose: n
+SimpleSpeak Terse: n
+SimpleSpeak Medium: n
+SimpleSpeak Verbose: n
+Nemeth: ⠰⠝
+UEB: ⠰⠝
+=== demo-vault/learning/Linear algebra glossary.md #13
+source: n
+MathML: <math display="inline"><mi>n</mi></math>
+ClearSpeak Terse: n
+ClearSpeak Medium: n
+ClearSpeak Verbose: n
+SimpleSpeak Terse: n
+SimpleSpeak Medium: n
+SimpleSpeak Verbose: n
+Nemeth: ⠰⠝
+UEB: ⠰⠝
+=== demo-vault/learning/Linear algebra glossary.md #14
+source: v
+MathML: <math display="inline"><mi>v</mi></math>
+ClearSpeak Terse: v
+ClearSpeak Medium: v
+ClearSpeak Verbose: v
+SimpleSpeak Terse: v
+SimpleSpeak Medium: v
+SimpleSpeak Verbose: v
+Nemeth: ⠰⠧
+UEB: ⠰⠧
+=== demo-vault/learning/Linear algebra glossary.md #15
+source: A v = \lambda v
+MathML: <math display="inline"><mi>A</mi><mi>v</mi><mo>=</mo><mi>λ</mi><mi>v</mi></math>
+ClearSpeak Terse: cap eigh v, equals lambda v
+ClearSpeak Medium: cap eigh v, is equal to lambda v
+ClearSpeak Verbose: cap eigh v, is equal to lambda v
+SimpleSpeak Terse: cap eigh v, equals lambda v
+SimpleSpeak Medium: cap eigh v, is equal to lambda v
+SimpleSpeak Verbose: cap eigh v, is equal to lambda v
+Nemeth: ⠠⠁⠧⠀⠨⠅⠀⠨⠇⠧
+UEB: ⠠⠁⠧⠀⠐⠶⠀⠨⠇⠧
+=== demo-vault/learning/Linear algebra glossary.md #16
+source: \lambda
+MathML: <math display="inline"><mi>λ</mi></math>
+ClearSpeak Terse: lambda
+ClearSpeak Medium: lambda
+ClearSpeak Verbose: lambda
+SimpleSpeak Terse: lambda
+SimpleSpeak Medium: lambda
+SimpleSpeak Verbose: lambda
+Nemeth: ⠨⠇
+UEB: ⠨⠇
+=== demo-vault/learning/Linear algebra glossary.md #17
+source: n \times n
+MathML: <math display="inline"><mi>n</mi><mo>×</mo><mi>n</mi></math>
+ClearSpeak Terse: n times n
+ClearSpeak Medium: n times n
+ClearSpeak Verbose: n times n
+SimpleSpeak Terse: n times n
+SimpleSpeak Medium: n times n
+SimpleSpeak Verbose: n times n
+Nemeth: ⠝⠈⠡⠝
+UEB: ⠝⠐⠦⠝
+=== demo-vault/learning/Linear algebra glossary.md #18
+source: A
+MathML: <math display="inline"><mi>A</mi></math>
+ClearSpeak Terse: cap eigh
+ClearSpeak Medium: cap eigh
+ClearSpeak Verbose: cap eigh
+SimpleSpeak Terse: cap eigh
+SimpleSpeak Medium: cap eigh
+SimpleSpeak Verbose: cap eigh
+Nemeth: ⠰⠠⠁
+UEB: ⠠⠁
+=== demo-vault/learning/Linear algebra glossary.md #19
+source: p(\lambda) = \det(A - \lambda I)
+MathML: <math display="inline"><mi>p</mi><mo symmetric="false" stretchy="false">(</mo><mi>λ</mi><mo symmetric="false" stretchy="false">)</mo><mo>=</mo><mi>det</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><mi>A</mi><mo>−</mo><mi>λ</mi><mi>I</mi><mo symmetric="false" stretchy="false">)</mo></math>
+ClearSpeak Terse: p lambda, equals; det; open,  cap eigh minus lambda  cap i; close
+ClearSpeak Medium: p of lambda, is equal to; det of; open paren,  cap eigh minus lambda  cap i; close paren
+ClearSpeak Verbose: p of lambda, is equal to; det of; open paren,  cap eigh minus lambda  cap i; close paren
+SimpleSpeak Terse: p lambda, equals; det; open,  cap eigh minus lambda  cap i; close
+SimpleSpeak Medium: p of lambda, is equal to; det of; open paren,  cap eigh minus lambda  cap i; close paren
+SimpleSpeak Verbose: p of lambda, is equal to; det of; open paren,  cap eigh minus lambda  cap i; close paren
+Nemeth: ⠏⠷⠨⠇⠾⠀⠨⠅⠀⠙⠑⠞⠀⠷⠠⠁⠤⠨⠇⠠⠊⠾
+UEB: ⠏⠐⠣⠨⠇⠐⠜⠀⠐⠶⠀⠙⠑⠞⠐⠣⠠⠁⠐⠤⠨⠇⠠⠊⠐⠜
+=== demo-vault/learning/Linear algebra glossary.md #20
+source: A
+MathML: <math display="inline"><mi>A</mi></math>
+ClearSpeak Terse: cap eigh
+ClearSpeak Medium: cap eigh
+ClearSpeak Verbose: cap eigh
+SimpleSpeak Terse: cap eigh
+SimpleSpeak Medium: cap eigh
+SimpleSpeak Verbose: cap eigh
+Nemeth: ⠰⠠⠁
+UEB: ⠠⠁
+=== demo-vault/learning/Linear algebra glossary.md #21
+source: A
+MathML: <math display="inline"><mi>A</mi></math>
+ClearSpeak Terse: cap eigh
+ClearSpeak Medium: cap eigh
+ClearSpeak Verbose: cap eigh
+SimpleSpeak Terse: cap eigh
+SimpleSpeak Medium: cap eigh
+SimpleSpeak Verbose: cap eigh
+Nemeth: ⠰⠠⠁
+UEB: ⠠⠁
+=== demo-vault/learning/Linear algebra glossary.md #22
+source: P
+MathML: <math display="inline"><mi>P</mi></math>
+ClearSpeak Terse: cap p
+ClearSpeak Medium: cap p
+ClearSpeak Verbose: cap p
+SimpleSpeak Terse: cap p
+SimpleSpeak Medium: cap p
+SimpleSpeak Verbose: cap p
+Nemeth: ⠰⠠⠏
+UEB: ⠰⠠⠏
+=== demo-vault/learning/Linear algebra glossary.md #23
+source: D
+MathML: <math display="inline"><mi>D</mi></math>
+ClearSpeak Terse: cap d
+ClearSpeak Medium: cap d
+ClearSpeak Verbose: cap d
+SimpleSpeak Terse: cap d
+SimpleSpeak Medium: cap d
+SimpleSpeak Verbose: cap d
+Nemeth: ⠰⠠⠙
+UEB: ⠰⠠⠙
+=== demo-vault/learning/Linear algebra glossary.md #24
+source: A = P D P^{-1}
+MathML: <math display="inline"><mi>A</mi><mo>=</mo><mi>P</mi><mi>D</mi><msup><mi>P</mi><mrow><mi>−</mi><mn>1</mn></mrow></msup></math>
+ClearSpeak Terse: cap eigh equals,  cap p  cap d,  cap p to the negative 1 power
+ClearSpeak Medium: cap eigh is equal to,  cap p  cap d,  cap p to the negative 1 power
+ClearSpeak Verbose: cap eigh is equal to,  cap p  cap d,  cap p to the negative 1 power
+SimpleSpeak Terse: cap eigh equals,  cap p  cap d,  cap p to the negative 1
+SimpleSpeak Medium: cap eigh is equal to,  cap p  cap d,  cap p to the negative 1
+SimpleSpeak Verbose: cap eigh is equal to,  cap p  cap d,  cap p to the negative 1
+Nemeth: ⠠⠁⠀⠨⠅⠀⠠⠏⠠⠙⠠⠏⠘⠤⠂
+UEB: ⠠⠁⠀⠐⠶⠀⠰⠰⠠⠠⠏⠙⠏⠔⠣⠐⠤⠼⠁⠜
+=== demo-vault/learning/Linear algebra glossary.md #25
+source: A
+MathML: <math display="inline"><mi>A</mi></math>
+ClearSpeak Terse: cap eigh
+ClearSpeak Medium: cap eigh
+ClearSpeak Verbose: cap eigh
+SimpleSpeak Terse: cap eigh
+SimpleSpeak Medium: cap eigh
+SimpleSpeak Verbose: cap eigh
+Nemeth: ⠰⠠⠁
+UEB: ⠠⠁
+=== demo-vault/learning/Linear algebra glossary.md #26
+source: n
+MathML: <math display="inline"><mi>n</mi></math>
+ClearSpeak Terse: n
+ClearSpeak Medium: n
+ClearSpeak Verbose: n
+SimpleSpeak Terse: n
+SimpleSpeak Medium: n
+SimpleSpeak Verbose: n
+Nemeth: ⠰⠝
+UEB: ⠰⠝
+=== demo-vault/learning/Linear algebra glossary.md #27
+source: Q
+MathML: <math display="inline"><mi>Q</mi></math>
+ClearSpeak Terse: cap q
+ClearSpeak Medium: cap q
+ClearSpeak Verbose: cap q
+SimpleSpeak Terse: cap q
+SimpleSpeak Medium: cap q
+SimpleSpeak Verbose: cap q
+Nemeth: ⠰⠠⠟
+UEB: ⠰⠠⠟
+=== demo-vault/learning/Linear algebra glossary.md #28
+source: Q^T Q = I
+MathML: <math display="inline"><msup><mi>Q</mi><mi>T</mi></msup><mi>Q</mi><mo>=</mo><mi>I</mi></math>
+ClearSpeak Terse: cap q transpose  cap q, equals  cap i
+ClearSpeak Medium: cap q transpose  cap q, is equal to  cap i
+ClearSpeak Verbose: cap q transpose  cap q, is equal to  cap i
+SimpleSpeak Terse: cap q transpose  cap q, equals  cap i
+SimpleSpeak Medium: cap q transpose  cap q, is equal to  cap i
+SimpleSpeak Verbose: cap q transpose  cap q, is equal to  cap i
+Nemeth: ⠠⠟⠘⠠⠞⠐⠠⠟⠀⠨⠅⠀⠠⠊
+UEB: ⠠⠟⠰⠔⠠⠞⠠⠟⠀⠐⠶⠀⠠⠊
+=== demo-vault/learning/Linear algebra glossary.md #29
+source: A
+MathML: <math display="inline"><mi>A</mi></math>
+ClearSpeak Terse: cap eigh
+ClearSpeak Medium: cap eigh
+ClearSpeak Verbose: cap eigh
+SimpleSpeak Terse: cap eigh
+SimpleSpeak Medium: cap eigh
+SimpleSpeak Verbose: cap eigh
+Nemeth: ⠰⠠⠁
+UEB: ⠠⠁
+=== demo-vault/learning/Linear algebra glossary.md #30
+source: A^T = A
+MathML: <math display="inline"><msup><mi>A</mi><mi>T</mi></msup><mo>=</mo><mi>A</mi></math>
+ClearSpeak Terse: cap eigh transpose equals  cap eigh
+ClearSpeak Medium: cap eigh transpose, is equal to  cap eigh
+ClearSpeak Verbose: cap eigh transpose, is equal to  cap eigh
+SimpleSpeak Terse: cap eigh transpose equals  cap eigh
+SimpleSpeak Medium: cap eigh transpose, is equal to  cap eigh
+SimpleSpeak Verbose: cap eigh transpose, is equal to  cap eigh
+Nemeth: ⠠⠁⠘⠠⠞⠀⠨⠅⠀⠠⠁
+UEB: ⠠⠁⠰⠔⠠⠞⠀⠐⠶⠀⠠⠁
+=== demo-vault/learning/Linear algebra lecture 2.md #1
+source: AB
+MathML: <math display="inline"><mi>A</mi><mi>B</mi></math>
+ClearSpeak Terse: cap eigh  cap b
+ClearSpeak Medium: cap eigh  cap b
+ClearSpeak Verbose: cap eigh  cap b
+SimpleSpeak Terse: cap eigh  cap b
+SimpleSpeak Medium: cap eigh  cap b
+SimpleSpeak Verbose: cap eigh  cap b
+Nemeth: ⠠⠁⠠⠃
+UEB: ⠰⠠⠠⠁⠃
+=== demo-vault/learning/Linear algebra lecture 2.md #2
+source: m \times n
+MathML: <math display="inline"><mi>m</mi><mo>×</mo><mi>n</mi></math>
+ClearSpeak Terse: m times n
+ClearSpeak Medium: m times n
+ClearSpeak Verbose: m times n
+SimpleSpeak Terse: m times n
+SimpleSpeak Medium: m times n
+SimpleSpeak Verbose: m times n
+Nemeth: ⠍⠈⠡⠝
+UEB: ⠍⠐⠦⠝
+=== demo-vault/learning/Linear algebra lecture 2.md #3
+source: A
+MathML: <math display="inline"><mi>A</mi></math>
+ClearSpeak Terse: cap eigh
+ClearSpeak Medium: cap eigh
+ClearSpeak Verbose: cap eigh
+SimpleSpeak Terse: cap eigh
+SimpleSpeak Medium: cap eigh
+SimpleSpeak Verbose: cap eigh
+Nemeth: ⠰⠠⠁
+UEB: ⠠⠁
+=== demo-vault/learning/Linear algebra lecture 2.md #4
+source: n \times p
+MathML: <math display="inline"><mi>n</mi><mo>×</mo><mi>p</mi></math>
+ClearSpeak Terse: n times p
+ClearSpeak Medium: n times p
+ClearSpeak Verbose: n times p
+SimpleSpeak Terse: n times p
+SimpleSpeak Medium: n times p
+SimpleSpeak Verbose: n times p
+Nemeth: ⠝⠈⠡⠏
+UEB: ⠝⠐⠦⠏
+=== demo-vault/learning/Linear algebra lecture 2.md #5
+source: B
+MathML: <math display="inline"><mi>B</mi></math>
+ClearSpeak Terse: cap b
+ClearSpeak Medium: cap b
+ClearSpeak Verbose: cap b
+SimpleSpeak Terse: cap b
+SimpleSpeak Medium: cap b
+SimpleSpeak Verbose: cap b
+Nemeth: ⠰⠠⠃
+UEB: ⠰⠠⠃
+=== demo-vault/learning/Linear algebra lecture 2.md #6
+source: m \times p
+MathML: <math display="inline"><mi>m</mi><mo>×</mo><mi>p</mi></math>
+ClearSpeak Terse: m times p
+ClearSpeak Medium: m times p
+ClearSpeak Verbose: m times p
+SimpleSpeak Terse: m times p
+SimpleSpeak Medium: m times p
+SimpleSpeak Verbose: m times p
+Nemeth: ⠍⠈⠡⠏
+UEB: ⠍⠐⠦⠏
+=== demo-vault/learning/Linear algebra lecture 2.md #7
+source: (i, j)
+MathML: <math display="inline"><mo symmetric="false" stretchy="false">(</mo><mi>i</mi><mo>,</mo><mi>j</mi><mo symmetric="false" stretchy="false">)</mo></math>
+ClearSpeak Terse: open i comma, j, close
+ClearSpeak Medium: open paren i comma, j, close paren
+ClearSpeak Verbose: open paren i comma, j, close paren
+SimpleSpeak Terse: open i comma, j, close
+SimpleSpeak Medium: open paren i comma, j, close paren
+SimpleSpeak Verbose: open paren i comma, j, close paren
+Nemeth: ⠷⠊⠠⠀⠚⠾
+UEB: ⠐⠣⠊⠂⠀⠰⠚⠐⠜
+=== demo-vault/learning/Linear algebra lecture 2.md #8
+source: i
+MathML: <math display="inline"><mi>i</mi></math>
+ClearSpeak Terse: i
+ClearSpeak Medium: i
+ClearSpeak Verbose: i
+SimpleSpeak Terse: i
+SimpleSpeak Medium: i
+SimpleSpeak Verbose: i
+Nemeth: ⠰⠊
+UEB: ⠊
+=== demo-vault/learning/Linear algebra lecture 2.md #9
+source: A
+MathML: <math display="inline"><mi>A</mi></math>
+ClearSpeak Terse: cap eigh
+ClearSpeak Medium: cap eigh
+ClearSpeak Verbose: cap eigh
+SimpleSpeak Terse: cap eigh
+SimpleSpeak Medium: cap eigh
+SimpleSpeak Verbose: cap eigh
+Nemeth: ⠰⠠⠁
+UEB: ⠠⠁
+=== demo-vault/learning/Linear algebra lecture 2.md #10
+source: j
+MathML: <math display="inline"><mi>j</mi></math>
+ClearSpeak Terse: j
+ClearSpeak Medium: j
+ClearSpeak Verbose: j
+SimpleSpeak Terse: j
+SimpleSpeak Medium: j
+SimpleSpeak Verbose: j
+Nemeth: ⠰⠚
+UEB: ⠰⠚
+=== demo-vault/learning/Linear algebra lecture 2.md #11
+source: B
+MathML: <math display="inline"><mi>B</mi></math>
+ClearSpeak Terse: cap b
+ClearSpeak Medium: cap b
+ClearSpeak Verbose: cap b
+SimpleSpeak Terse: cap b
+SimpleSpeak Medium: cap b
+SimpleSpeak Verbose: cap b
+Nemeth: ⠰⠠⠃
+UEB: ⠰⠠⠃
+=== demo-vault/learning/Linear algebra lecture 2.md #12
+source: n
+MathML: <math display="inline"><mi>n</mi></math>
+ClearSpeak Terse: n
+ClearSpeak Medium: n
+ClearSpeak Verbose: n
+SimpleSpeak Terse: n
+SimpleSpeak Medium: n
+SimpleSpeak Verbose: n
+Nemeth: ⠰⠝
+UEB: ⠰⠝
+=== demo-vault/learning/Linear algebra lecture 2.md #13
+source: A
+MathML: <math display="inline"><mi>A</mi></math>
+ClearSpeak Terse: cap eigh
+ClearSpeak Medium: cap eigh
+ClearSpeak Verbose: cap eigh
+SimpleSpeak Terse: cap eigh
+SimpleSpeak Medium: cap eigh
+SimpleSpeak Verbose: cap eigh
+Nemeth: ⠰⠠⠁
+UEB: ⠠⠁
+=== demo-vault/learning/Linear algebra lecture 2.md #14
+source: n
+MathML: <math display="inline"><mi>n</mi></math>
+ClearSpeak Terse: n
+ClearSpeak Medium: n
+ClearSpeak Verbose: n
+SimpleSpeak Terse: n
+SimpleSpeak Medium: n
+SimpleSpeak Verbose: n
+Nemeth: ⠰⠝
+UEB: ⠰⠝
+=== demo-vault/learning/Linear algebra lecture 2.md #15
+source: B
+MathML: <math display="inline"><mi>B</mi></math>
+ClearSpeak Terse: cap b
+ClearSpeak Medium: cap b
+ClearSpeak Verbose: cap b
+SimpleSpeak Terse: cap b
+SimpleSpeak Medium: cap b
+SimpleSpeak Verbose: cap b
+Nemeth: ⠰⠠⠃
+UEB: ⠰⠠⠃
+=== demo-vault/learning/Linear algebra lecture 2.md #16
+source: A(BC) = (AB)C
+MathML: <math display="inline"><mi>A</mi><mo symmetric="false" stretchy="false">(</mo><mi>B</mi><mi>C</mi><mo symmetric="false" stretchy="false">)</mo><mo>=</mo><mo symmetric="false" stretchy="false">(</mo><mi>A</mi><mi>B</mi><mo symmetric="false" stretchy="false">)</mo><mi>C</mi></math>
+ClearSpeak Terse: cap eigh, open  cap b  cap c, close; equals; open  cap eigh  cap b, close; times  cap c
+ClearSpeak Medium: cap eigh, open paren  cap b  cap c, close paren; is equal to; open paren,  cap eigh  cap b, close paren; times  cap c
+ClearSpeak Verbose: cap eigh, open paren  cap b  cap c, close paren; is equal to; open paren,  cap eigh  cap b, close paren; times  cap c
+SimpleSpeak Terse: cap eigh, open  cap b  cap c, close; equals; open  cap eigh  cap b, close; times  cap c
+SimpleSpeak Medium: cap eigh, open paren  cap b  cap c, close paren; is equal to; open paren,  cap eigh  cap b, close paren; times  cap c
+SimpleSpeak Verbose: cap eigh, open paren  cap b  cap c, close paren; is equal to; open paren,  cap eigh  cap b, close paren; times  cap c
+Nemeth: ⠠⠁⠷⠠⠃⠠⠉⠾⠀⠨⠅⠀⠷⠠⠁⠠⠃⠾⠠⠉
+UEB: ⠠⠠⠠⠁⠐⠣⠃⠉⠐⠜⠀⠐⠶⠀⠐⠣⠁⠃⠐⠜⠉⠠⠄
+=== demo-vault/learning/Linear algebra lecture 2.md #17
+source: A(B + C) = AB + AC
+MathML: <math display="inline"><mi>A</mi><mo symmetric="false" stretchy="false">(</mo><mi>B</mi><mo>+</mo><mi>C</mi><mo symmetric="false" stretchy="false">)</mo><mo>=</mo><mi>A</mi><mi>B</mi><mo>+</mo><mi>A</mi><mi>C</mi></math>
+ClearSpeak Terse: cap eigh, open  cap b plus  cap c, close; equals,  cap eigh  cap b, plus  cap eigh  cap c
+ClearSpeak Medium: cap eigh, open paren,  cap b plus  cap c, close paren; is equal to;  cap eigh  cap b, plus  cap eigh  cap c
+ClearSpeak Verbose: cap eigh, open paren,  cap b plus  cap c, close paren; is equal to;  cap eigh  cap b, plus  cap eigh  cap c
+SimpleSpeak Terse: cap eigh, open  cap b plus  cap c, close; equals,  cap eigh  cap b, plus  cap eigh  cap c
+SimpleSpeak Medium: cap eigh, open paren,  cap b plus  cap c, close paren; is equal to;  cap eigh  cap b, plus  cap eigh  cap c
+SimpleSpeak Verbose: cap eigh, open paren,  cap b plus  cap c, close paren; is equal to;  cap eigh  cap b, plus  cap eigh  cap c
+Nemeth: ⠠⠁⠷⠠⠃⠬⠠⠉⠾⠀⠨⠅⠀⠠⠁⠠⠃⠬⠠⠁⠠⠉
+UEB: ⠠⠠⠠⠁⠐⠣⠃⠐⠖⠉⠐⠜⠀⠐⠶⠀⠁⠃⠐⠖⠁⠉⠠⠄
+=== demo-vault/learning/Linear algebra lecture 2.md #18
+source: AB \ne BA
+MathML: <math display="inline"><mi>A</mi><mi>B</mi><mo>≠</mo><mi>B</mi><mi>A</mi></math>
+ClearSpeak Terse: cap eigh  cap b,  not equal to,  cap b  cap eigh
+ClearSpeak Medium: cap eigh  cap b, is not equal to,  cap b  cap eigh
+ClearSpeak Verbose: cap eigh  cap b, is not equal to,  cap b  cap eigh
+SimpleSpeak Terse: cap eigh  cap b,  not equal to,  cap b  cap eigh
+SimpleSpeak Medium: cap eigh  cap b, is not equal to,  cap b  cap eigh
+SimpleSpeak Verbose: cap eigh  cap b, is not equal to,  cap b  cap eigh
+Nemeth: ⠠⠁⠠⠃⠀⠌⠨⠅⠀⠠⠃⠠⠁
+UEB: ⠰⠠⠠⠁⠃⠀⠐⠶⠈⠱⠀⠠⠠⠃⠁
+=== demo-vault/learning/Linear algebra lecture 2.md #19
+source: \det \begin{pmatrix} a & b \\ c & d \end{pmatrix} = ad - bc
+MathML: <math display="inline"><mi>det</mi><mo>⁡</mo><mspace width="0.1667em" /><mrow><mo stretchy="true">(</mo><mtable class="menv-arraylike"><mtr><mtd><mi>a</mi></mtd><mtd><mi>b</mi></mtd></mtr><mtr><mtd><mi>c</mi></mtd><mtd><mi>d</mi></mtd></mtr></mtable><mo stretchy="true">)</mo></mrow><mo>=</mo><mi>a</mi><mi>d</mi><mo>−</mo><mi>b</mi><mi>c</mi></math>
+ClearSpeak Terse: det; the 2 by 2 matrix; row 1; eigh, b; row 2; c, d; equals, eigh d minus b c
+ClearSpeak Medium: det of, the 2 by 2 matrix; row 1; eigh, b; row 2; c, d; is equal to, eigh d minus b c
+ClearSpeak Verbose: det of; the 2 by 2 matrix; row 1; eigh, b; row 2; c, d; end matrix; is equal to, eigh d minus b c
+SimpleSpeak Terse: det; the 2 by 2 matrix; row 1; eigh, b; row 2; c, d; equals, eigh d minus b c
+SimpleSpeak Medium: det of, the 2 by 2 matrix; row 1; eigh, b; row 2; c, d; is equal to, eigh d minus b c
+SimpleSpeak Verbose: det of; the 2 by 2 matrix; row 1; eigh, b; row 2; c, d; end matrix; is equal to, eigh d minus b c
+Nemeth: ⠙⠑⠞⠀⠠⠷⠁⠀⠰⠃⠀⣍⠉⠀⠙⠠⠾⠀⠨⠅⠀⠁⠙⠤⠃⠉
+UEB: ⠙⠑⠞⠠⠐⠣⠁⠀⠃⠠⠐⠜⠸⠀⠠⠐⠣⠉⠀⠙⠠⠐⠜⠀⠐⠶⠀⠁⠙⠐⠤⠃⠉
+=== demo-vault/learning/Linear algebra lecture 2.md #20
+source: A
+MathML: <math display="inline"><mi>A</mi></math>
+ClearSpeak Terse: cap eigh
+ClearSpeak Medium: cap eigh
+ClearSpeak Verbose: cap eigh
+SimpleSpeak Terse: cap eigh
+SimpleSpeak Medium: cap eigh
+SimpleSpeak Verbose: cap eigh
+Nemeth: ⠰⠠⠁
+UEB: ⠠⠁
+=== demo-vault/learning/Linear algebra lecture 2.md #21
+source: \det(A) \ne 0
+MathML: <math display="inline"><mi>det</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><mi>A</mi><mo symmetric="false" stretchy="false">)</mo><mo>≠</mo><mn>0</mn></math>
+ClearSpeak Terse: det  cap eigh,  not equal to 0
+ClearSpeak Medium: det of  cap eigh, is not equal to 0
+ClearSpeak Verbose: det of  cap eigh, is not equal to 0
+SimpleSpeak Terse: det  cap eigh,  not equal to 0
+SimpleSpeak Medium: det of  cap eigh, is not equal to 0
+SimpleSpeak Verbose: det of  cap eigh, is not equal to 0
+Nemeth: ⠙⠑⠞⠀⠷⠠⠁⠾⠀⠌⠨⠅⠀⠼⠴
+UEB: ⠙⠑⠞⠐⠣⠠⠁⠐⠜⠀⠐⠶⠈⠱⠀⠼⠚
+=== demo-vault/learning/Linear algebra lecture 2.md #22
+source: A^{-1}
+MathML: <math display="inline"><msup><mi>A</mi><mrow><mi>−</mi><mn>1</mn></mrow></msup></math>
+ClearSpeak Terse: cap eigh to the negative 1 power
+ClearSpeak Medium: cap eigh to the negative 1 power
+ClearSpeak Verbose: cap eigh to the negative 1 power
+SimpleSpeak Terse: cap eigh to the negative 1
+SimpleSpeak Medium: cap eigh to the negative 1
+SimpleSpeak Verbose: cap eigh to the negative 1
+Nemeth: ⠠⠁⠘⠤⠂
+UEB: ⠰⠰⠠⠁⠔⠣⠐⠤⠼⠁⠜
+=== demo-vault/learning/Linear algebra lecture 2.md #23
+source: A A^{-1} = A^{-1} A = I
+MathML: <math display="inline"><mi>A</mi><msup><mi>A</mi><mrow><mi>−</mi><mn>1</mn></mrow></msup><mo>=</mo><msup><mi>A</mi><mrow><mi>−</mi><mn>1</mn></mrow></msup><mi>A</mi><mo>=</mo><mi>I</mi></math>
+ClearSpeak Terse: cap eigh  cap eigh to the negative 1 power; equals,  cap eigh to the negative 1 power,  cap eigh; equals  cap i
+ClearSpeak Medium: cap eigh  cap eigh to the negative 1 power; is equal to,  cap eigh to the negative 1 power,  cap eigh; is equal to  cap i
+ClearSpeak Verbose: cap eigh  cap eigh to the negative 1 power; is equal to,  cap eigh to the negative 1 power,  cap eigh; is equal to  cap i
+SimpleSpeak Terse: cap eigh  cap eigh to the negative 1; equals,  cap eigh to the negative 1,  cap eigh; equals  cap i
+SimpleSpeak Medium: cap eigh  cap eigh to the negative 1; is equal to,  cap eigh to the negative 1,  cap eigh; is equal to  cap i
+SimpleSpeak Verbose: cap eigh  cap eigh to the negative 1; is equal to,  cap eigh to the negative 1,  cap eigh; is equal to  cap i
+Nemeth: ⠠⠁⠠⠁⠘⠤⠂⠀⠨⠅⠀⠠⠁⠘⠤⠂⠐⠠⠁⠀⠨⠅⠀⠠⠊
+UEB: ⠠⠠⠠⠰⠰⠁⠁⠔⠣⠐⠤⠼⠁⠜⠀⠐⠶⠀⠰⠰⠁⠔⠣⠐⠤⠼⠁⠜⠁⠀⠐⠶⠀⠊⠠⠄
+=== demo-vault/learning/Linear algebra lecture 3.md #1
+source: A
+MathML: <math display="inline"><mi>A</mi></math>
+ClearSpeak Terse: cap eigh
+ClearSpeak Medium: cap eigh
+ClearSpeak Verbose: cap eigh
+SimpleSpeak Terse: cap eigh
+SimpleSpeak Medium: cap eigh
+SimpleSpeak Verbose: cap eigh
+Nemeth: ⠰⠠⠁
+UEB: ⠠⠁
+=== demo-vault/learning/Linear algebra lecture 3.md #2
+source: v
+MathML: <math display="inline"><mi>v</mi></math>
+ClearSpeak Terse: v
+ClearSpeak Medium: v
+ClearSpeak Verbose: v
+SimpleSpeak Terse: v
+SimpleSpeak Medium: v
+SimpleSpeak Verbose: v
+Nemeth: ⠰⠧
+UEB: ⠰⠧
+=== demo-vault/learning/Linear algebra lecture 3.md #3
+source: A
+MathML: <math display="inline"><mi>A</mi></math>
+ClearSpeak Terse: cap eigh
+ClearSpeak Medium: cap eigh
+ClearSpeak Verbose: cap eigh
+SimpleSpeak Terse: cap eigh
+SimpleSpeak Medium: cap eigh
+SimpleSpeak Verbose: cap eigh
+Nemeth: ⠰⠠⠁
+UEB: ⠠⠁
+=== demo-vault/learning/Linear algebra lecture 3.md #4
+source: \lambda
+MathML: <math display="inline"><mi>λ</mi></math>
+ClearSpeak Terse: lambda
+ClearSpeak Medium: lambda
+ClearSpeak Verbose: lambda
+SimpleSpeak Terse: lambda
+SimpleSpeak Medium: lambda
+SimpleSpeak Verbose: lambda
+Nemeth: ⠨⠇
+UEB: ⠨⠇
+=== demo-vault/learning/Linear algebra lecture 3.md #5
+source: A v = \lambda v
+MathML: <math display="inline"><mi>A</mi><mi>v</mi><mo>=</mo><mi>λ</mi><mi>v</mi></math>
+ClearSpeak Terse: cap eigh v, equals lambda v
+ClearSpeak Medium: cap eigh v, is equal to lambda v
+ClearSpeak Verbose: cap eigh v, is equal to lambda v
+SimpleSpeak Terse: cap eigh v, equals lambda v
+SimpleSpeak Medium: cap eigh v, is equal to lambda v
+SimpleSpeak Verbose: cap eigh v, is equal to lambda v
+Nemeth: ⠠⠁⠧⠀⠨⠅⠀⠨⠇⠧
+UEB: ⠠⠁⠧⠀⠐⠶⠀⠨⠇⠧
+=== demo-vault/learning/Linear algebra lecture 3.md #6
+source: \lambda
+MathML: <math display="inline"><mi>λ</mi></math>
+ClearSpeak Terse: lambda
+ClearSpeak Medium: lambda
+ClearSpeak Verbose: lambda
+SimpleSpeak Terse: lambda
+SimpleSpeak Medium: lambda
+SimpleSpeak Verbose: lambda
+Nemeth: ⠨⠇
+UEB: ⠨⠇
+=== demo-vault/learning/Linear algebra lecture 3.md #7
+source: A
+MathML: <math display="inline"><mi>A</mi></math>
+ClearSpeak Terse: cap eigh
+ClearSpeak Medium: cap eigh
+ClearSpeak Verbose: cap eigh
+SimpleSpeak Terse: cap eigh
+SimpleSpeak Medium: cap eigh
+SimpleSpeak Verbose: cap eigh
+Nemeth: ⠰⠠⠁
+UEB: ⠠⠁
+=== demo-vault/learning/Linear algebra lecture 3.md #8
+source: A
+MathML: <math display="inline"><mi>A</mi></math>
+ClearSpeak Terse: cap eigh
+ClearSpeak Medium: cap eigh
+ClearSpeak Verbose: cap eigh
+SimpleSpeak Terse: cap eigh
+SimpleSpeak Medium: cap eigh
+SimpleSpeak Verbose: cap eigh
+Nemeth: ⠰⠠⠁
+UEB: ⠠⠁
+=== demo-vault/learning/Linear algebra lecture 3.md #9
+source: A = \begin{pmatrix} 4 & -2 \\ 1 & 1 \end{pmatrix}
+MathML: <math display="inline"><mi>A</mi><mo>=</mo><mrow><mo stretchy="true">(</mo><mtable class="menv-arraylike"><mtr><mtd><mn>4</mn></mtd><mtd><mi>−</mi><mn>2</mn></mtd></mtr><mtr><mtd><mn>1</mn></mtd><mtd><mn>1</mn></mtd></mtr></mtable><mo stretchy="true">)</mo></mrow></math>
+ClearSpeak Terse: cap eigh equals; the 2 by 2 matrix; row 1; 4, negative 2; row 2; 1, 1
+ClearSpeak Medium: cap eigh is equal to; the 2 by 2 matrix; row 1; 4, negative 2; row 2; 1, 1
+ClearSpeak Verbose: cap eigh is equal to; the 2 by 2 matrix; row 1; 4, negative 2; row 2; 1, 1; end matrix
+SimpleSpeak Terse: cap eigh equals; the 2 by 2 matrix; row 1; 4, negative 2; row 2; 1, 1
+SimpleSpeak Medium: cap eigh is equal to; the 2 by 2 matrix; row 1; 4, negative 2; row 2; 1, 1
+SimpleSpeak Verbose: cap eigh is equal to; the 2 by 2 matrix; row 1; 4, negative 2; row 2; 1, 1; end matrix
+Nemeth: ⠠⠁⠀⠨⠅⠀⠠⠷⠼⠲⠀⠤⠼⠆⠀⣍⠂⠀⠼⠂⠠⠾
+UEB: ⠠⠁⠀⠐⠶⠀⠠⠐⠣⠼⠙⠀⠐⠤⠼⠃⠠⠐⠜⠸⠀⠠⠐⠣⠼⠁⠀⠼⠁⠠⠐⠜
+=== demo-vault/learning/Linear algebra lecture 3.md #10
+source: \det(A - \lambda I) = 0
+MathML: <math display="inline"><mi>det</mi><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><mi>A</mi><mo>−</mo><mi>λ</mi><mi>I</mi><mo symmetric="false" stretchy="false">)</mo><mo>=</mo><mn>0</mn></math>
+ClearSpeak Terse: det; open,  cap eigh minus lambda  cap i; close; equals 0
+ClearSpeak Medium: det of; open paren,  cap eigh minus lambda  cap i; close paren; is equal to 0
+ClearSpeak Verbose: det of; open paren,  cap eigh minus lambda  cap i; close paren; is equal to 0
+SimpleSpeak Terse: det; open,  cap eigh minus lambda  cap i; close; equals 0
+SimpleSpeak Medium: det of; open paren,  cap eigh minus lambda  cap i; close paren; is equal to 0
+SimpleSpeak Verbose: det of; open paren,  cap eigh minus lambda  cap i; close paren; is equal to 0
+Nemeth: ⠙⠑⠞⠀⠷⠠⠁⠤⠨⠇⠠⠊⠾⠀⠨⠅⠀⠼⠴
+UEB: ⠙⠑⠞⠐⠣⠠⠁⠐⠤⠨⠇⠠⠊⠐⠜⠀⠐⠶⠀⠼⠚
+=== demo-vault/learning/Linear algebra lecture 3.md #11
+source: \det \begin{pmatrix} 4 - \lambda & -2 \\ 1 & 1 - \lambda \end{pmatrix} = (4 - \lambda)(1 - \lambda) - (-2)(1) = \lambda^2 - 5\lambda + 6 = 0
+MathML: <math display="inline"><mi>det</mi><mo>⁡</mo><mspace width="0.1667em" /><mrow><mo stretchy="true">(</mo><mtable class="menv-arraylike"><mtr><mtd><mn>4</mn><mo>−</mo><mi>λ</mi></mtd><mtd><mi>−</mi><mn>2</mn></mtd></mtr><mtr><mtd><mn>1</mn></mtd><mtd><mn>1</mn><mo>−</mo><mi>λ</mi></mtd></mtr></mtable><mo stretchy="true">)</mo></mrow><mo>=</mo><mo symmetric="false" stretchy="false">(</mo><mn>4</mn><mo>−</mo><mi>λ</mi><mo symmetric="false" stretchy="false">)</mo><mo symmetric="false" stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi>λ</mi><mo symmetric="false" stretchy="false">)</mo><mo>−</mo><mo symmetric="false" stretchy="false">(</mo><mi>−</mi><mn>2</mn><mo symmetric="false" stretchy="false">)</mo><mo symmetric="false" stretchy="false">(</mo><mn>1</mn><mo symmetric="false" stretchy="false">)</mo><mo>=</mo><msup><mi>λ</mi><mn>2</mn></msup><mo>−</mo><mn>5</mn><mi>λ</mi><mo>+</mo><mn>6</mn><mo>=</mo><mn>0</mn></math>
+ClearSpeak Terse: det; the 2 by 2 matrix; row 1; column 1; 4 minus lambda, column 2; negative 2; row 2; column 1; 1, column 2; 1 minus lambda; equals; open 4 minus lambda, close; times, open 1 minus lambda, close; minus negative 2 times 1; equals, lambda squared minus 5 lambda, plus 6; equals 0
+ClearSpeak Medium: det of; the 2 by 2 matrix; row 1; column 1; 4 minus lambda, column 2; negative 2; row 2; column 1; 1, column 2; 1 minus lambda; is equal to; open paren, 4 minus lambda, close paren; times, open paren, 1 minus lambda, close paren; minus negative 2 times 1; is equal to; lambda squared minus 5 lambda, plus 6; is equal to 0
+ClearSpeak Verbose: det of; the 2 by 2 matrix; row 1; column 1; 4 minus lambda, column 2; negative 2; row 2; column 1; 1, column 2; 1 minus lambda; end matrix; is equal to; open paren, 4 minus lambda, close paren; times, open paren, 1 minus lambda, close paren; minus negative 2 times 1; is equal to; lambda squared minus 5 lambda, plus 6; is equal to 0
+SimpleSpeak Terse: det; the 2 by 2 matrix; row 1; column 1; 4 minus lambda, column 2; negative 2; row 2; column 1; 1, column 2; 1 minus lambda; equals; open 4 minus lambda, close; times, open 1 minus lambda, close; minus negative 2 times 1; equals, lambda squared minus 5 lambda, plus 6; equals 0
+SimpleSpeak Medium: det of; the 2 by 2 matrix; row 1; column 1; 4 minus lambda, column 2; negative 2; row 2; column 1; 1, column 2; 1 minus lambda; is equal to; open paren, 4 minus lambda, close paren; times, open paren, 1 minus lambda, close paren; minus negative 2 times 1; is equal to; lambda squared minus 5 lambda, plus 6; is equal to 0
+SimpleSpeak Verbose: det of; the 2 by 2 matrix; row 1; column 1; 4 minus lambda, column 2; negative 2; row 2; column 1; 1, column 2; 1 minus lambda; end matrix; is equal to; open paren, 4 minus lambda, close paren; times, open paren, 1 minus lambda, close paren; minus negative 2 times 1; is equal to; lambda squared minus 5 lambda, plus 6; is equal to 0
+Nemeth: ⠙⠑⠞⠀⠠⠷⠼⠲⠤⠨⠇⠀⠤⠼⠆⠀⣍⠂⠀⠼⠂⠤⠨⠇⠠⠾⠀⠨⠅⠀⠷⠲⠤⠨⠇⠾⠷⠂⠤⠨⠇⠾⠤⠷⠤⠆⠾⠷⠂⠾⠀⠨⠅⠀⠨⠇⠘⠆⠐⠤⠢⠨⠇⠬⠖⠀⠨⠅⠀⠼⠴
+UEB: ⠙⠑⠞⠠⠐⠣⠼⠙⠐⠤⠨⠇⠀⠐⠤⠼⠃⠠⠐⠜⠸⠀⠠⠐⠣⠼⠁⠀⠼⠁⠐⠤⠨⠇⠠⠐⠜⠀⠐⠶⠀⠐⠣⠼⠙⠐⠤⠨⠇⠐⠜⠐⠣⠼⠁⠐⠤⠨⠇⠐⠜⠐⠤⠐⠣⠐⠤⠼⠃⠐⠜⠐⠣⠼⠁⠐⠜⠀⠐⠶⠀⠨⠇⠰⠔⠼⠃⠐⠤⠼⠑⠨⠇⠐⠖⠼⠋⠀⠐⠶⠀⠼⠚
+=== demo-vault/learning/Linear algebra lecture 3.md #12
+source: (\lambda - 2)(\lambda - 3) = 0
+MathML: <math display="inline"><mo symmetric="false" stretchy="false">(</mo><mi>λ</mi><mo>−</mo><mn>2</mn><mo symmetric="false" stretchy="false">)</mo><mo symmetric="false" stretchy="false">(</mo><mi>λ</mi><mo>−</mo><mn>3</mn><mo symmetric="false" stretchy="false">)</mo><mo>=</mo><mn>0</mn></math>
+ClearSpeak Terse: open lambda minus 2, close; times, open lambda minus 3, close; equals 0
+ClearSpeak Medium: open paren lambda minus 2, close paren; times, open paren lambda minus 3, close paren; is equal to 0
+ClearSpeak Verbose: open paren lambda minus 2, close paren; times, open paren lambda minus 3, close paren; is equal to 0
+SimpleSpeak Terse: open lambda minus 2, close; times, open lambda minus 3, close; equals 0
+SimpleSpeak Medium: open paren lambda minus 2, close paren; times, open paren lambda minus 3, close paren; is equal to 0
+SimpleSpeak Verbose: open paren lambda minus 2, close paren; times, open paren lambda minus 3, close paren; is equal to 0
+Nemeth: ⠷⠨⠇⠤⠆⠾⠷⠨⠇⠤⠒⠾⠀⠨⠅⠀⠼⠴
+UEB: ⠐⠣⠨⠇⠐⠤⠼⠃⠐⠜⠐⠣⠨⠇⠐⠤⠼⠉⠐⠜⠀⠐⠶⠀⠼⠚
+=== demo-vault/learning/Linear algebra lecture 3.md #13
+source: \lambda_1 = 2
+MathML: <math display="inline"><msub><mi>λ</mi><mn>1</mn></msub><mo>=</mo><mn>2</mn></math>
+ClearSpeak Terse: lambda 1, equals 2
+ClearSpeak Medium: lambda sub 1; is equal to 2
+ClearSpeak Verbose: lambda sub 1; is equal to 2
+SimpleSpeak Terse: lambda 1, equals 2
+SimpleSpeak Medium: lambda sub 1; is equal to 2
+SimpleSpeak Verbose: lambda sub 1; is equal to 2
+Nemeth: ⠨⠇⠂⠀⠨⠅⠀⠼⠆
+UEB: ⠨⠇⠰⠢⠼⠁⠀⠐⠶⠀⠼⠃
+=== demo-vault/learning/Linear algebra lecture 3.md #14
+source: \lambda_2 = 3
+MathML: <math display="inline"><msub><mi>λ</mi><mn>2</mn></msub><mo>=</mo><mn>3</mn></math>
+ClearSpeak Terse: lambda 2, equals 3
+ClearSpeak Medium: lambda sub 2; is equal to 3
+ClearSpeak Verbose: lambda sub 2; is equal to 3
+SimpleSpeak Terse: lambda 2, equals 3
+SimpleSpeak Medium: lambda sub 2; is equal to 3
+SimpleSpeak Verbose: lambda sub 2; is equal to 3
+Nemeth: ⠨⠇⠆⠀⠨⠅⠀⠼⠒
+UEB: ⠨⠇⠰⠢⠼⠃⠀⠐⠶⠀⠼⠉
+=== demo-vault/learning/Linear algebra lecture 3.md #15
+source: (A - \lambda I) v = 0
+MathML: <math display="inline"><mo symmetric="false" stretchy="false">(</mo><mi>A</mi><mo>−</mo><mi>λ</mi><mi>I</mi><mo symmetric="false" stretchy="false">)</mo><mi>v</mi><mo>=</mo><mn>0</mn></math>
+ClearSpeak Terse: open,  cap eigh minus lambda  cap i; close; times v; equals 0
+ClearSpeak Medium: open paren,  cap eigh minus lambda  cap i; close paren; times v; is equal to 0
+ClearSpeak Verbose: open paren,  cap eigh minus lambda  cap i; close paren; times v; is equal to 0
+SimpleSpeak Terse: open,  cap eigh minus lambda  cap i; close; times v; equals 0
+SimpleSpeak Medium: open paren,  cap eigh minus lambda  cap i; close paren; times v; is equal to 0
+SimpleSpeak Verbose: open paren,  cap eigh minus lambda  cap i; close paren; times v; is equal to 0
+Nemeth: ⠷⠠⠁⠤⠨⠇⠠⠊⠾⠧⠀⠨⠅⠀⠼⠴
+UEB: ⠐⠣⠠⠁⠐⠤⠨⠇⠠⠊⠐⠜⠧⠀⠐⠶⠀⠼⠚
+=== demo-vault/learning/Linear algebra lecture 3.md #16
+source: \lambda = 2
+MathML: <math display="inline"><mi>λ</mi><mo>=</mo><mn>2</mn></math>
+ClearSpeak Terse: lambda equals 2
+ClearSpeak Medium: lambda is equal to 2
+ClearSpeak Verbose: lambda is equal to 2
+SimpleSpeak Terse: lambda equals 2
+SimpleSpeak Medium: lambda is equal to 2
+SimpleSpeak Verbose: lambda is equal to 2
+Nemeth: ⠨⠇⠀⠨⠅⠀⠼⠆
+UEB: ⠨⠇⠀⠐⠶⠀⠼⠃
+=== demo-vault/learning/Linear algebra lecture 3.md #17
+source: v_1 = (1, 1)^T
+MathML: <math display="inline"><msub><mi>v</mi><mn>1</mn></msub><mo>=</mo><mo symmetric="false" stretchy="false">(</mo><mn>1</mn><mo>,</mo><mn>1</mn><msup><mo symmetric="false" stretchy="false">)</mo><mi>T</mi></msup></math>
+ClearSpeak Terse: v 1, equals, open 1 comma, 1, close transpose
+ClearSpeak Medium: v sub 1, is equal to, open paren 1 comma, 1, close paren transpose
+ClearSpeak Verbose: v sub 1, is equal to, open paren 1 comma, 1, close paren transpose
+SimpleSpeak Terse: v 1, equals, open 1 comma, 1, close transpose
+SimpleSpeak Medium: v sub 1, is equal to, open paren 1 comma, 1, close paren transpose
+SimpleSpeak Verbose: v sub 1, is equal to, open paren 1 comma, 1, close paren transpose
+Nemeth: ⠧⠂⠀⠨⠅⠀⠷⠂⠠⠀⠂⠾⠘⠠⠞
+UEB: ⠧⠰⠢⠼⠁⠀⠐⠶⠀⠐⠣⠼⠁⠂⠀⠼⠁⠐⠜⠔⠠⠞
+=== demo-vault/learning/Linear algebra lecture 3.md #18
+source: \lambda = 3
+MathML: <math display="inline"><mi>λ</mi><mo>=</mo><mn>3</mn></math>
+ClearSpeak Terse: lambda equals 3
+ClearSpeak Medium: lambda is equal to 3
+ClearSpeak Verbose: lambda is equal to 3
+SimpleSpeak Terse: lambda equals 3
+SimpleSpeak Medium: lambda is equal to 3
+SimpleSpeak Verbose: lambda is equal to 3
+Nemeth: ⠨⠇⠀⠨⠅⠀⠼⠒
+UEB: ⠨⠇⠀⠐⠶⠀⠼⠉
+=== demo-vault/learning/Linear algebra lecture 3.md #19
+source: v_2 = (2, 1)^T
+MathML: <math display="inline"><msub><mi>v</mi><mn>2</mn></msub><mo>=</mo><mo symmetric="false" stretchy="false">(</mo><mn>2</mn><mo>,</mo><mn>1</mn><msup><mo symmetric="false" stretchy="false">)</mo><mi>T</mi></msup></math>
+ClearSpeak Terse: v 2, equals, open 2 comma, 1, close transpose
+ClearSpeak Medium: v sub 2, is equal to, open paren 2 comma, 1, close paren transpose
+ClearSpeak Verbose: v sub 2, is equal to, open paren 2 comma, 1, close paren transpose
+SimpleSpeak Terse: v 2, equals, open 2 comma, 1, close transpose
+SimpleSpeak Medium: v sub 2, is equal to, open paren 2 comma, 1, close paren transpose
+SimpleSpeak Verbose: v sub 2, is equal to, open paren 2 comma, 1, close paren transpose
+Nemeth: ⠧⠆⠀⠨⠅⠀⠷⠆⠠⠀⠂⠾⠘⠠⠞
+UEB: ⠧⠰⠢⠼⠃⠀⠐⠶⠀⠐⠣⠼⠃⠂⠀⠼⠁⠐⠜⠔⠠⠞
+=== demo-vault/learning/Linear algebra lecture 3.md #20
+source: A
+MathML: <math display="inline"><mi>A</mi></math>
+ClearSpeak Terse: cap eigh
+ClearSpeak Medium: cap eigh
+ClearSpeak Verbose: cap eigh
+SimpleSpeak Terse: cap eigh
+SimpleSpeak Medium: cap eigh
+SimpleSpeak Verbose: cap eigh
+Nemeth: ⠰⠠⠁
+UEB: ⠠⠁
+=== demo-vault/learning/Linear algebra lecture 3.md #21
+source: |\lambda| > 1
+MathML: <math display="inline"><mi>|</mi><mi>λ</mi><mi>|</mi><mo>></mo><mn>1</mn></math>
+ClearSpeak Terse: absolute value of lambda;  greater than 1
+ClearSpeak Medium: the absolute value of lambda; is greater than 1
+ClearSpeak Verbose: the absolute value of lambda, end absolute value; is greater than 1
+SimpleSpeak Terse: absolute value lambda,  greater than 1
+SimpleSpeak Medium: the absolute value of lambda, is greater than 1
+SimpleSpeak Verbose: the absolute value of lambda, is greater than 1
+Nemeth: ⠳⠨⠇⠳⠀⠨⠂⠀⠼⠂
+UEB: ⠸⠳⠨⠇⠸⠳⠀⠈⠜⠀⠼⠁
+=== demo-vault/learning/Linear algebra lecture 3.md #22
+source: |\lambda| < 1
+MathML: <math display="inline"><mi>|</mi><mi>λ</mi><mi>|</mi><mo>&lt;</mo><mn>1</mn></math>
+ClearSpeak Terse: absolute value of lambda;  less than 1
+ClearSpeak Medium: the absolute value of lambda; is less than 1
+ClearSpeak Verbose: the absolute value of lambda, end absolute value; is less than 1
+SimpleSpeak Terse: absolute value lambda,  less than 1
+SimpleSpeak Medium: the absolute value of lambda, is less than 1
+SimpleSpeak Verbose: the absolute value of lambda, is less than 1
+Nemeth: ⠳⠨⠇⠳⠀⠐⠅⠀⠼⠂
+UEB: ⠸⠳⠨⠇⠸⠳⠀⠈⠣⠀⠼⠁
+=== demo-vault/learning/Linear algebra lecture 3.md #23
+source: |\lambda| = 1
+MathML: <math display="inline"><mi>|</mi><mi>λ</mi><mi>|</mi><mo>=</mo><mn>1</mn></math>
+ClearSpeak Terse: absolute value of lambda; equals 1
+ClearSpeak Medium: the absolute value of lambda; is equal to 1
+ClearSpeak Verbose: the absolute value of lambda, end absolute value; is equal to 1
+SimpleSpeak Terse: absolute value lambda, equals 1
+SimpleSpeak Medium: the absolute value of lambda, is equal to 1
+SimpleSpeak Verbose: the absolute value of lambda, is equal to 1
+Nemeth: ⠳⠨⠇⠳⠀⠨⠅⠀⠼⠂
+UEB: ⠸⠳⠨⠇⠸⠳⠀⠐⠶⠀⠼⠁
+=== demo-vault/learning/Linear algebra lecture 4.md #1
+source: A
+MathML: <math display="inline"><mi>A</mi></math>
+ClearSpeak Terse: cap eigh
+ClearSpeak Medium: cap eigh
+ClearSpeak Verbose: cap eigh
+SimpleSpeak Terse: cap eigh
+SimpleSpeak Medium: cap eigh
+SimpleSpeak Verbose: cap eigh
+Nemeth: ⠰⠠⠁
+UEB: ⠠⠁
+=== demo-vault/learning/Linear algebra lecture 4.md #2
+source: D
+MathML: <math display="inline"><mi>D</mi></math>
+ClearSpeak Terse: cap d
+ClearSpeak Medium: cap d
+ClearSpeak Verbose: cap d
+SimpleSpeak Terse: cap d
+SimpleSpeak Medium: cap d
+SimpleSpeak Verbose: cap d
+Nemeth: ⠰⠠⠙
+UEB: ⠰⠠⠙
+=== demo-vault/learning/Linear algebra lecture 4.md #3
+source: A
+MathML: <math display="inline"><mi>A</mi></math>
+ClearSpeak Terse: cap eigh
+ClearSpeak Medium: cap eigh
+ClearSpeak Verbose: cap eigh
+SimpleSpeak Terse: cap eigh
+SimpleSpeak Medium: cap eigh
+SimpleSpeak Verbose: cap eigh
+Nemeth: ⠰⠠⠁
+UEB: ⠠⠁
+=== demo-vault/learning/Linear algebra lecture 4.md #4
+source: n
+MathML: <math display="inline"><mi>n</mi></math>
+ClearSpeak Terse: n
+ClearSpeak Medium: n
+ClearSpeak Verbose: n
+SimpleSpeak Terse: n
+SimpleSpeak Medium: n
+SimpleSpeak Verbose: n
+Nemeth: ⠰⠝
+UEB: ⠰⠝
+=== demo-vault/reference/Math sampler.md #1
+source: m
+MathML: <math display="inline"><mi>m</mi></math>
+ClearSpeak Terse: m
+ClearSpeak Medium: m
+ClearSpeak Verbose: m
+SimpleSpeak Terse: m
+SimpleSpeak Medium: m
+SimpleSpeak Verbose: m
+Nemeth: ⠰⠍
+UEB: ⠰⠍
+=== demo-vault/reference/Math sampler.md #2
+source: v
+MathML: <math display="inline"><mi>v</mi></math>
+ClearSpeak Terse: v
+ClearSpeak Medium: v
+ClearSpeak Verbose: v
+SimpleSpeak Terse: v
+SimpleSpeak Medium: v
+SimpleSpeak Verbose: v
+Nemeth: ⠰⠧
+UEB: ⠰⠧
+=== demo-vault/reference/Math sampler.md #3
+source: E_k = \tfrac{1}{2} m v^2
+MathML: <math display="inline"><msub><mi>E</mi><mi>k</mi></msub><mo>=</mo><mrow displaystyle="false" scriptlevel="0"><mfrac><mrow><mn>1</mn></mrow><mrow><mn>2</mn></mrow></mfrac></mrow><mi>m</mi><msup><mi>v</mi><mn>2</mn></msup></math>
+ClearSpeak Terse: cap e sub k; equals, 1 half m v squared
+ClearSpeak Medium: cap e sub k; is equal to, 1 half m v squared
+ClearSpeak Verbose: cap e sub k; is equal to, 1 half m v squared
+SimpleSpeak Terse: cap e sub k; equals, 1 half m v squared
+SimpleSpeak Medium: cap e sub k; is equal to, 1 half m v squared
+SimpleSpeak Verbose: cap e sub k; is equal to, 1 half m v squared
+Nemeth: ⠠⠑⠰⠅⠀⠨⠅⠀⠹⠂⠌⠆⠼⠍⠧⠘⠆
+UEB: ⠠⠑⠰⠢⠅⠀⠐⠶⠀⠼⠁⠌⠃⠍⠧⠔⠼⠃
+=== demo-vault/reference/Math sampler.md #4
+source: r
+MathML: <math display="inline"><mi>r</mi></math>
+ClearSpeak Terse: r
+ClearSpeak Medium: r
+ClearSpeak Verbose: r
+SimpleSpeak Terse: r
+SimpleSpeak Medium: r
+SimpleSpeak Verbose: r
+Nemeth: ⠰⠗
+UEB: ⠰⠗
+=== demo-vault/reference/Math sampler.md #5
+source: A = \pi r^2
+MathML: <math display="inline"><mi>A</mi><mo>=</mo><mi>π</mi><msup><mi>r</mi><mn>2</mn></msup></math>
+ClearSpeak Terse: cap eigh equals pi r squared
+ClearSpeak Medium: cap eigh is equal to, pi r squared
+ClearSpeak Verbose: cap eigh is equal to, pi r squared
+SimpleSpeak Terse: cap eigh equals pi r squared
+SimpleSpeak Medium: cap eigh is equal to, pi r squared
+SimpleSpeak Verbose: cap eigh is equal to, pi r squared
+Nemeth: ⠠⠁⠀⠨⠅⠀⠨⠏⠗⠘⠆
+UEB: ⠠⠁⠀⠐⠶⠀⠨⠏⠗⠰⠔⠼⠃
+=== demo-vault/reference/Math sampler.md #6
+source: \pi
+MathML: <math display="inline"><mi>π</mi></math>
+ClearSpeak Terse: pi
+ClearSpeak Medium: pi
+ClearSpeak Verbose: pi
+SimpleSpeak Terse: pi
+SimpleSpeak Medium: pi
+SimpleSpeak Verbose: pi
+Nemeth: ⠨⠏
+UEB: ⠨⠏
+=== demo-vault/reference/Math sampler.md #7
+source: \sum_{i=0}^{n} i^2 = \frac{n(n+1)(2n+1)}{6}
+MathML: <math display="inline"><msubsup><mo movablelimits="false">∑</mo><mrow><mi>i</mi><mo>=</mo><mn>0</mn></mrow><mrow><mi>n</mi></mrow></msubsup><msup><mi>i</mi><mn>2</mn></msup><mo>=</mo><mfrac><mrow><mi>n</mi><mo symmetric="false" stretchy="false">(</mo><mi>n</mi><mo>+</mo><mn>1</mn><mo symmetric="false" stretchy="false">)</mo><mo symmetric="false" stretchy="false">(</mo><mn>2</mn><mi>n</mi><mo>+</mo><mn>1</mn><mo symmetric="false" stretchy="false">)</mo></mrow><mrow><mn>6</mn></mrow></mfrac></math>
+ClearSpeak Terse: sum from i equals 0, to n of, i squared; equals; the fraction with numerator; n times, open n plus 1 close, times, open 2 n plus 1, close; and denominator 6
+ClearSpeak Medium: the sum from i is equal to 0, to n of; i squared; is equal to; the fraction with numerator; n times, open paren n plus 1, close paren; times, open paren, 2 n plus 1, close paren; and denominator 6
+ClearSpeak Verbose: the sum from i is equal to 0, to n of; i squared; is equal to; the fraction with numerator; n times, open paren n plus 1, close paren; times, open paren, 2 n plus 1, close paren; and denominator 6; end fraction
+SimpleSpeak Terse: sum from i equals 0, to n of, i squared; equals; fraction, n times, open n plus 1 close, times, open 2 n plus 1, close, over 6, end fraction
+SimpleSpeak Medium: the sum from i is equal to 0, to n of; i squared; is equal to; fraction, n times, open paren n plus 1, close paren; times, open paren, 2 n plus 1, close paren, over 6, end fraction
+SimpleSpeak Verbose: the sum from i is equal to 0, to n of; i squared; is equal to; fraction, n times, open paren n plus 1, close paren; times, open paren, 2 n plus 1, close paren, over 6, end fraction
+Nemeth: ⠨⠠⠎⠰⠊⠀⠰⠨⠅⠀⠼⠴⠘⠝⠐⠊⠘⠆⠀⠨⠅⠀⠹⠝⠷⠝⠬⠂⠾⠷⠆⠝⠬⠂⠾⠌⠖⠼
+UEB: ⠰⠰⠠⠨⠎⠢⠣⠊⠐⠶⠼⠚⠜⠔⠝⠊⠔⠼⠃⠀⠐⠶⠀⠰⠷⠝⠐⠣⠝⠐⠖⠼⠁⠐⠜⠐⠣⠼⠃⠝⠐⠖⠼⠁⠐⠜⠨⠌⠼⠋⠾
+=== demo-vault/reference/Math sampler.md #8
+source: n
+MathML: <math display="inline"><mi>n</mi></math>
+ClearSpeak Terse: n
+ClearSpeak Medium: n
+ClearSpeak Verbose: n
+SimpleSpeak Terse: n
+SimpleSpeak Medium: n
+SimpleSpeak Verbose: n
+Nemeth: ⠰⠝
+UEB: ⠰⠝
+=== demo-vault/reference/Math sampler.md #9
+source: \begin{align*}⏎(x + 1)^2 - (x - 1)^2⏎  &= \left(x^2 + 2x + 1\right) - \left(x^2 - 2x + 1\right) \\⏎  &= x^2 + 2x + 1 - x^2 + 2x - 1 \\⏎  &= 4x⏎\end{align*}
+MathML: <math display="inline"><mtable class="menv-alignlike menv-align"><mtr><mtd><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo>+</mo><mn>1</mn><msup><mo symmetric="false" stretchy="false">)</mo><mn>2</mn></msup><mo>−</mo><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo>−</mo><mn>1</mn><msup><mo symmetric="false" stretchy="false">)</mo><mn>2</mn></msup></mtd><mtd><mo>=</mo><mrow><mo stretchy="true">(</mo><msup><mi>x</mi><mn>2</mn></msup><mo>+</mo><mn>2</mn><mi>x</mi><mo>+</mo><mn>1</mn><mo stretchy="true">)</mo></mrow><mo>−</mo><mrow><mo stretchy="true">(</mo><msup><mi>x</mi><mn>2</mn></msup><mo>−</mo><mn>2</mn><mi>x</mi><mo>+</mo><mn>1</mn><mo stretchy="true">)</mo></mrow></mtd></mtr><mtr><mtd></mtd><mtd><mo>=</mo><msup><mi>x</mi><mn>2</mn></msup><mo>+</mo><mn>2</mn><mi>x</mi><mo>+</mo><mn>1</mn><mo>−</mo><msup><mi>x</mi><mn>2</mn></msup><mo>+</mo><mn>2</mn><mi>x</mi><mo>−</mo><mn>1</mn></mtd></mtr><mtr><mtd></mtd><mtd><mo>=</mo><mn>4</mn><mi>x</mi></mtd></mtr></mtable></math>
+ClearSpeak Terse: 3 lines; line 1; open x plus 1 close squared; minus, open x minus 1 close squared; equals; open, x squared plus 2 x plus 1; close; minus; open, x squared minus 2 x plus 1; close; line 2; equals; x squared plus 2 x plus 1 minus x squared plus 2 x minus 1; line 3; equals 4 x
+ClearSpeak Medium: 3 lines; line 1; open paren x plus 1, close paren squared; minus, open paren x minus 1, close paren squared; is equal to; open paren, x squared plus 2 x plus 1; close paren; minus; open paren, x squared minus 2 x plus 1; close paren; line 2; is equal to; x squared plus 2 x plus 1 minus x squared plus 2 x minus 1; line 3; is equal to 4 x
+ClearSpeak Verbose: 3 lines; line 1; open paren x plus 1, close paren squared; minus, open paren x minus 1, close paren squared; is equal to; open paren, x squared plus 2 x plus 1; close paren; minus; open paren, x squared minus 2 x plus 1; close paren; line 2; is equal to; x squared plus 2 x plus 1 minus x squared plus 2 x minus 1; line 3; is equal to 4 x
+SimpleSpeak Terse: 3 equations; equation 1; open x plus 1 close squared; minus, open x minus 1 close squared; equals; open, x squared plus 2 x plus 1; close; minus; open, x squared minus 2 x plus 1; close; equation 2; equals; x squared plus 2 x plus 1 minus x squared plus 2 x minus 1; equation 3; equals 4 x
+SimpleSpeak Medium: 3 equations; equation 1; open paren x plus 1, close paren squared; minus, open paren x minus 1, close paren squared; is equal to; open paren, x squared plus 2 x plus 1; close paren; minus; open paren, x squared minus 2 x plus 1; close paren; equation 2; is equal to; x squared plus 2 x plus 1 minus x squared plus 2 x minus 1; equation 3; is equal to 4 x
+SimpleSpeak Verbose: 3 equations; equation 1; open paren x plus 1, close paren squared; minus, open paren x minus 1, close paren squared; is equal to; open paren, x squared plus 2 x plus 1; close paren; minus; open paren, x squared minus 2 x plus 1; close paren; equation 2; is equal to; x squared plus 2 x plus 1 minus x squared plus 2 x minus 1; equation 3; is equal to 4 x
+Nemeth: ⠷⠭⠬⠂⠾⠘⠆⠐⠤⠷⠭⠤⠂⠾⠘⠆⠀⠨⠅⠀⠷⠭⠘⠆⠐⠬⠆⠭⠬⠂⠾⠤⠷⠭⠘⠆⠐⠤⠆⠭⠬⠂⠾⠀⣍⠀⠿⠀⠨⠅⠀⠭⠘⠆⠐⠬⠆⠭⠬⠂⠤⠭⠘⠆⠐⠬⠆⠭⠤⠂⠀⣍⠀⠿⠀⠨⠅⠀⠼⠲⠭
+UEB: ⠐⠣⠭⠐⠖⠼⠁⠐⠜⠔⠼⠃⠐⠤⠐⠣⠭⠐⠤⠼⠁⠐⠜⠔⠼⠃⠀⠐⠶⠀⠐⠣⠭⠰⠔⠼⠃⠐⠖⠼⠃⠭⠐⠖⠼⠁⠐⠜⠐⠤⠐⠣⠭⠔⠼⠃⠐⠤⠼⠃⠭⠐⠖⠼⠁⠐⠜⠸⠀⠬⠀⠐⠶⠀⠭⠰⠔⠼⠃⠐⠖⠼⠃⠭⠐⠖⠼⠁⠐⠤⠭⠔⠼⠃⠐⠖⠼⠃⠭⠐⠤⠼⠁⠸⠀⠬⠀⠐⠶⠀⠼⠙⠭
+=== demo-vault/reference/Math sampler.md #10
+source: A = \begin{pmatrix}⏎1 & 2 & 3 \\⏎4 & 5 & 6 \\⏎7 & 8 & 9⏎\end{pmatrix}
+MathML: <math display="inline"><mi>A</mi><mo>=</mo><mrow><mo stretchy="true">(</mo><mtable class="menv-arraylike"><mtr><mtd><mn>1</mn></mtd><mtd><mn>2</mn></mtd><mtd><mn>3</mn></mtd></mtr><mtr><mtd><mn>4</mn></mtd><mtd><mn>5</mn></mtd><mtd><mn>6</mn></mtd></mtr><mtr><mtd><mn>7</mn></mtd><mtd><mn>8</mn></mtd><mtd><mn>9</mn></mtd></mtr></mtable><mo stretchy="true">)</mo></mrow></math>
+ClearSpeak Terse: cap eigh equals; the 3 by 3 matrix; row 1; 1, 2, 3; row 2; 4, 5, 6; row 3; 7, 8, 9
+ClearSpeak Medium: cap eigh is equal to; the 3 by 3 matrix; row 1; 1, 2, 3; row 2; 4, 5, 6; row 3; 7, 8, 9
+ClearSpeak Verbose: cap eigh is equal to; the 3 by 3 matrix; row 1; 1, 2, 3; row 2; 4, 5, 6; row 3; 7, 8, 9; end matrix
+SimpleSpeak Terse: cap eigh equals; the 3 by 3 matrix; row 1; 1, 2, 3; row 2; 4, 5, 6; row 3; 7, 8, 9
+SimpleSpeak Medium: cap eigh is equal to; the 3 by 3 matrix; row 1; 1, 2, 3; row 2; 4, 5, 6; row 3; 7, 8, 9
+SimpleSpeak Verbose: cap eigh is equal to; the 3 by 3 matrix; row 1; 1, 2, 3; row 2; 4, 5, 6; row 3; 7, 8, 9; end matrix
+Nemeth: ⠠⠁⠀⠨⠅⠀⠠⠷⠼⠂⠀⠼⠆⠀⠼⠒⠀⣍⠲⠀⠼⠢⠀⠼⠖⠀⣍⠶⠀⠼⠦⠀⠼⠔⠠⠾
+UEB: ⠠⠁⠀⠐⠶⠀⠠⠐⠣⠼⠁⠀⠼⠃⠀⠼⠉⠠⠐⠜⠸⠀⠠⠐⠣⠼⠙⠀⠼⠑⠀⠼⠋⠠⠐⠜⠸⠀⠠⠐⠣⠼⠛⠀⠼⠓⠀⠼⠊⠠⠐⠜
+=== demo-vault/reference/Math sampler.md #11
+source: a
+MathML: <math display="inline"><mi>a</mi></math>
+ClearSpeak Terse: eigh
+ClearSpeak Medium: eigh
+ClearSpeak Verbose: eigh
+SimpleSpeak Terse: eigh
+SimpleSpeak Medium: eigh
+SimpleSpeak Verbose: eigh
+Nemeth: ⠰⠁
+UEB: ⠁
+=== demo-vault/reference/Math sampler.md #12
+source: b
+MathML: <math display="inline"><mi>b</mi></math>
+ClearSpeak Terse: b
+ClearSpeak Medium: b
+ClearSpeak Verbose: b
+SimpleSpeak Terse: b
+SimpleSpeak Medium: b
+SimpleSpeak Verbose: b
+Nemeth: ⠰⠃
+UEB: ⠰⠃
+=== demo-vault/reference/Math sampler.md #13
+source: f(x)
+MathML: <math display="inline"><mi>f</mi><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo></math>
+ClearSpeak Terse: f x
+ClearSpeak Medium: f of x
+ClearSpeak Verbose: f of x
+SimpleSpeak Terse: f x
+SimpleSpeak Medium: f of x
+SimpleSpeak Verbose: f of x
+Nemeth: ⠋⠷⠭⠾
+UEB: ⠋⠐⠣⠭⠐⠜
+=== demo-vault/reference/Math sampler.md #14
+source: x
+MathML: <math display="inline"><mi>x</mi></math>
+ClearSpeak Terse: x
+ClearSpeak Medium: x
+ClearSpeak Verbose: x
+SimpleSpeak Terse: x
+SimpleSpeak Medium: x
+SimpleSpeak Verbose: x
+Nemeth: ⠰⠭
+UEB: ⠰⠭
+=== demo-vault/reference/Math sampler.md #15
+source: \int_a^b f(x)\,dx
+MathML: <math display="inline"><msubsup><mo movablelimits="false">∫</mo><mi>a</mi><mi>b</mi></msubsup><mi>f</mi><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo><mspace width="0.16666667em" /><mi>d</mi><mi>x</mi></math>
+ClearSpeak Terse: integral from eigh, to b of; f x d x
+ClearSpeak Medium: the integral from eigh, to b of; f of x d x
+ClearSpeak Verbose: the integral from eigh, to b of; f of x d x
+SimpleSpeak Terse: integral from eigh, to b of; f x d x
+SimpleSpeak Medium: the integral from eigh, to b of; f of x d x
+SimpleSpeak Verbose: the integral from eigh, to b of; f of x d x
+Nemeth: ⠮⠰⠁⠘⠃⠐⠋⠷⠭⠾⠙⠭
+UEB: ⠰⠰⠮⠢⠁⠔⠃⠋⠐⠣⠭⠐⠜⠙⠭
+=== demo-vault/reference/Math sampler.md #16
+source: f(x)
+MathML: <math display="inline"><mi>f</mi><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo></math>
+ClearSpeak Terse: f x
+ClearSpeak Medium: f of x
+ClearSpeak Verbose: f of x
+SimpleSpeak Terse: f x
+SimpleSpeak Medium: f of x
+SimpleSpeak Verbose: f of x
+Nemeth: ⠋⠷⠭⠾
+UEB: ⠋⠐⠣⠭⠐⠜
+=== demo-vault/reference/Math sampler.md #17
+source: dx
+MathML: <math display="inline"><mi>d</mi><mi>x</mi></math>
+ClearSpeak Terse: d x
+ClearSpeak Medium: d x
+ClearSpeak Verbose: d x
+SimpleSpeak Terse: d x
+SimpleSpeak Medium: d x
+SimpleSpeak Verbose: d x
+Nemeth: ⠙⠭
+UEB: ⠙⠭
+=== demo-vault/reference/Math sampler.md #18
+source: \frac{a
+MathML:
+ClearSpeak Terse: Math expression: \frac{a
+ClearSpeak Medium: Math expression: \frac{a
+ClearSpeak Verbose: Math expression: \frac{a
+SimpleSpeak Terse: Math expression: \frac{a
+SimpleSpeak Medium: Math expression: \frac{a
+SimpleSpeak Verbose: Math expression: \frac{a
+Nemeth:
+UEB:
+=== MathCAT field pass.md #1
+source: \begin{matrix} 1 & 2 \\ 3 & 4 \end{matrix}
+MathML: <math display="inline"><mtable class="menv-arraylike"><mtr><mtd><mn>1</mn></mtd><mtd><mn>2</mn></mtd></mtr><mtr><mtd><mn>3</mn></mtd><mtd><mn>4</mn></mtd></mtr></mtable></math>
+ClearSpeak Terse: array; row 1; column 1; 1, column 2; 2; comma; row 2; column 1; 3, column 2; 4
+ClearSpeak Medium: array of; row 1; column 1; 1, column 2; 2; comma; row 2; column 1; 3, column 2; 4
+ClearSpeak Verbose: array of; row 1; column 1; 1, column 2; 2; comma; row 2; column 1; 3, column 2; 4
+SimpleSpeak Terse: array; row 1; column 1; 1, column 2; 2; comma; row 2; column 1; 3, column 2; 4
+SimpleSpeak Medium: array of; row 1; column 1; 1, column 2; 2; comma; row 2; column 1; 3, column 2; 4
+SimpleSpeak Verbose: array of; row 1; column 1; 1, column 2; 2; comma; row 2; column 1; 3, column 2; 4
+Nemeth: ⠼⠂⠀⠼⠆⠀⣍⠒⠀⠼⠲
+UEB: ⠼⠁⠀⠼⠃⠸⠀⠼⠉⠀⠼⠙
+=== MathCAT field pass.md #2
+source: A = \begin{pmatrix} 1 & 2 \\ 3 & 4 \end{pmatrix}
+MathML: <math display="inline"><mi>A</mi><mo>=</mo><mrow><mo stretchy="true">(</mo><mtable class="menv-arraylike"><mtr><mtd><mn>1</mn></mtd><mtd><mn>2</mn></mtd></mtr><mtr><mtd><mn>3</mn></mtd><mtd><mn>4</mn></mtd></mtr></mtable><mo stretchy="true">)</mo></mrow></math>
+ClearSpeak Terse: cap eigh equals, the 2 by 2 matrix; row 1; 1, 2; row 2; 3, 4
+ClearSpeak Medium: cap eigh is equal to; the 2 by 2 matrix; row 1; 1, 2; row 2; 3, 4
+ClearSpeak Verbose: cap eigh is equal to; the 2 by 2 matrix; row 1; 1, 2; row 2; 3, 4; end matrix
+SimpleSpeak Terse: cap eigh equals, the 2 by 2 matrix; row 1; 1, 2; row 2; 3, 4
+SimpleSpeak Medium: cap eigh is equal to; the 2 by 2 matrix; row 1; 1, 2; row 2; 3, 4
+SimpleSpeak Verbose: cap eigh is equal to; the 2 by 2 matrix; row 1; 1, 2; row 2; 3, 4; end matrix
+Nemeth: ⠠⠁⠀⠨⠅⠀⠠⠷⠼⠂⠀⠼⠆⠀⣍⠒⠀⠼⠲⠠⠾
+UEB: ⠠⠁⠀⠐⠶⠀⠠⠐⠣⠼⠁⠀⠼⠃⠠⠐⠜⠸⠀⠠⠐⠣⠼⠉⠀⠼⠙⠠⠐⠜
+=== MathCAT field pass.md #3
+source: \nabla^2 f
+MathML: <math display="inline"><msup><mi>∇</mi><mn>2</mn></msup><mi>f</mi></math>
+ClearSpeak Terse: laplacian f
+ClearSpeak Medium: laplacian of f
+ClearSpeak Verbose: laplacian of f
+SimpleSpeak Terse: laplacian f
+SimpleSpeak Medium: laplacian of f
+SimpleSpeak Verbose: laplacian of f
+Nemeth: ⠨⠫⠘⠆⠐⠋
+UEB: ⠘⠙⠰⠔⠼⠃⠰⠋
+=== MathCAT field pass.md #4
+source: \nabla \cdot \mathbf{F}
+MathML: <math display="inline"><mi>∇</mi><mo>⋅</mo><mrow><mi>𝐅</mi></mrow></math>
+ClearSpeak Terse: div bold  cap f
+ClearSpeak Medium: divergence of bold  cap f
+ClearSpeak Verbose: divergence of bold  cap f
+SimpleSpeak Terse: div bold  cap f
+SimpleSpeak Medium: divergence of bold  cap f
+SimpleSpeak Verbose: divergence of bold  cap f
+Nemeth: ⠨⠫⠡⠸⠰⠠⠋
+UEB: ⠘⠙⠐⠲⠘⠆⠠⠋
+=== MathCAT field pass.md #5
+source: \operatorname{Log} z
+MathML: <math display="inline"><mi>Log</mi><mo>⁡</mo><mspace width="0.1667em" /><mi>z</mi></math>
+ClearSpeak Terse: principal value log z
+ClearSpeak Medium: the principal value log of z
+ClearSpeak Verbose: the principal value log of z
+SimpleSpeak Terse: principal value log z
+SimpleSpeak Medium: the principal value log of z
+SimpleSpeak Verbose: the principal value log of z
+Nemeth: ⠠⠇⠕⠛⠀⠵
+UEB: ⠠⠇⠕⠛⠀⠰⠵
+=== MathCAT field pass.md #6
+source: \frac12
+MathML: <math display="inline"><mfrac><mn>1</mn><mn>2</mn></mfrac></math>
+ClearSpeak Terse: 1 half
+ClearSpeak Medium: 1 half
+ClearSpeak Verbose: 1 half
+SimpleSpeak Terse: 1 half
+SimpleSpeak Medium: 1 half
+SimpleSpeak Verbose: 1 half
+Nemeth: ⠹⠂⠌⠆⠼
+UEB: ⠼⠁⠌⠃
+=== MathCAT field pass.md #7
+source: x \in \mathbb{R}
+MathML: <math display="inline"><mi>x</mi><mo>∈</mo><mrow><mi>ℝ</mi></mrow></math>
+ClearSpeak Terse: x is a member of the real numbers
+ClearSpeak Medium: x is a member of the real numbers
+ClearSpeak Verbose: x is a member of the real numbers
+SimpleSpeak Terse: x an element of the real numbers
+SimpleSpeak Medium: x is an element of, the real numbers
+SimpleSpeak Verbose: x is an element of, the real numbers
+Nemeth: ⠭⠀⠈⠑⠀⠠⠸⠰⠠⠗
+UEB: ⠰⠭⠀⠘⠑⠀⠈⠆⠰⠠⠗
+=== MathCAT field pass.md #8
+source: \boldsymbol{\alpha}
+MathML: <math display="inline"><mrow><mi>𝜶</mi></mrow></math>
+ClearSpeak Terse: bold alpha
+ClearSpeak Medium: bold alpha
+ClearSpeak Verbose: bold alpha
+SimpleSpeak Terse: bold alpha
+SimpleSpeak Medium: bold alpha
+SimpleSpeak Verbose: bold alpha
+Nemeth: ⠸⠨⠨⠁
+UEB: ⠘⠆⠨⠁
+=== MathCAT field pass.md #9
+source: \vdots
+MathML: <math display="inline"><mi>⋮</mi></math>
+ClearSpeak Terse: vertical ellipsis
+ClearSpeak Medium: vertical ellipsis
+ClearSpeak Verbose: vertical ellipsis
+SimpleSpeak Terse: vertical ellipsis
+SimpleSpeak Medium: vertical ellipsis
+SimpleSpeak Verbose: vertical ellipsis
+Nemeth: ⠩⠄⠄
+UEB: ⠄⠸⠡⠭⠼⠚⠚⠃⠃⠰⠑⠑⠄
+=== MathCAT field pass.md #10
+source: \arctan\frac{y}{x}
+MathML: <math display="inline"><mi>arctan</mi><mo>⁡</mo><mspace width="0.1667em" /><mfrac><mrow><mi>y</mi></mrow><mrow><mi>x</mi></mrow></mfrac></math>
+ClearSpeak Terse: arctan y over x
+ClearSpeak Medium: arctan of y over x
+ClearSpeak Verbose: arctan of y over x, end fraction
+SimpleSpeak Terse: arctan y over x
+SimpleSpeak Medium: arctan of y over x
+SimpleSpeak Verbose: arctan of y over x
+Nemeth: ⠁⠗⠉⠞⠁⠝⠀⠹⠽⠌⠭⠼
+UEB: ⠜⠉⠞⠁⠝⠰⠷⠽⠨⠌⠭⠰⠾
+=== MathCAT field pass.md #11
+source: |x| = \begin{cases} x & x \ge 0 \\ -x & x < 0 \end{cases}
+MathML: <math display="inline"><mi>|</mi><mi>x</mi><mi>|</mi><mo>=</mo><mrow><mo stretchy="true">{</mo><mtable class="menv-cells-left menv-cases"><mtr><mtd><mi>x</mi></mtd><mtd><mi>x</mi><mo>≥</mo><mn>0</mn></mtd></mtr><mtr><mtd><mi>−</mi><mi>x</mi></mtd><mtd><mi>x</mi><mo>&lt;</mo><mn>0</mn></mtd></mtr></mtable></mrow></math>
+ClearSpeak Terse: absolute value of x; equals; 2 cases; case 1; x x  greater than or equal to 0; case 2; negative x x  less than 0
+ClearSpeak Medium: the absolute value of x; is equal to; 2 cases; case 1; x x is greater than or equal to 0; case 2; negative x x is less than 0
+ClearSpeak Verbose: the absolute value of x, end absolute value; is equal to; 2 cases; case 1; x x is greater than or equal to 0; case 2; negative x x is less than 0
+SimpleSpeak Terse: absolute value x equals; 2 cases; case 1; x x  greater than or equal to 0; case 2; negative x, x  less than 0
+SimpleSpeak Medium: the absolute value of x, is equal to; 2 cases; case 1; x x is greater than or equal to 0; case 2; negative x, x is less than 0
+SimpleSpeak Verbose: the absolute value of x, is equal to; 2 cases; case 1; x x is greater than or equal to 0; case 2; negative x, x is less than 0
+Nemeth: ⠳⠭⠳⠀⠨⠅⠀⠨⠷⠭⠀⠭⠀⠨⠂⠱⠀⠼⠴⠀⣍⠤⠭⠀⠭⠀⠐⠅⠀⠼⠴
+UEB: ⠸⠳⠭⠸⠳⠀⠐⠶⠀⠸⠣⠠⠀⠭⠀⠰⠭⠀⠸⠈⠜⠀⠼⠚⠠⠀⠸⠀⠠⠀⠐⠤⠭⠀⠰⠭⠀⠈⠣⠀⠼⠚⠠⠀
+=== MathCAT field pass.md #12
+source: x < y
+MathML: <math display="inline"><mi>x</mi><mo>&lt;</mo><mi>y</mi></math>
+ClearSpeak Terse: x  less than y
+ClearSpeak Medium: x is less than y
+ClearSpeak Verbose: x is less than y
+SimpleSpeak Terse: x  less than y
+SimpleSpeak Medium: x is less than y
+SimpleSpeak Verbose: x is less than y
+Nemeth: ⠭⠀⠐⠅⠀⠽
+UEB: ⠰⠭⠀⠈⠣⠀⠰⠽
+=== MathCAT field pass.md #13
+source: {n \choose k}
+MathML:
+ClearSpeak Terse: Math expression: {n \choose k}
+ClearSpeak Medium: Math expression: {n \choose k}
+ClearSpeak Verbose: Math expression: {n \choose k}
+SimpleSpeak Terse: Math expression: {n \choose k}
+SimpleSpeak Medium: Math expression: {n \choose k}
+SimpleSpeak Verbose: Math expression: {n \choose k}
+Nemeth:
+UEB:
+=== MathCAT field pass.md #14
+source: \sideset{_a^b}{_c^d}\sum
+MathML:
+ClearSpeak Terse: Math expression: \sideset{_a^b}{_c^d}\sum
+ClearSpeak Medium: Math expression: \sideset{_a^b}{_c^d}\sum
+ClearSpeak Verbose: Math expression: \sideset{_a^b}{_c^d}\sum
+SimpleSpeak Terse: Math expression: \sideset{_a^b}{_c^d}\sum
+SimpleSpeak Medium: Math expression: \sideset{_a^b}{_c^d}\sum
+SimpleSpeak Verbose: Math expression: \sideset{_a^b}{_c^d}\sum
+Nemeth:
+UEB:
+=== MathCAT field pass.md #15
+source: E = mc^2
+MathML: <math display="inline"><mi>E</mi><mo>=</mo><mi>m</mi><msup><mi>c</mi><mn>2</mn></msup></math>
+ClearSpeak Terse: cap e equals m c squared
+ClearSpeak Medium: cap e is equal to m c squared
+ClearSpeak Verbose: cap e is equal to m c squared
+SimpleSpeak Terse: cap e equals m c squared
+SimpleSpeak Medium: cap e is equal to m c squared
+SimpleSpeak Verbose: cap e is equal to m c squared
+Nemeth: ⠠⠑⠀⠨⠅⠀⠍⠉⠘⠆
+UEB: ⠰⠠⠑⠀⠐⠶⠀⠍⠉⠰⠔⠼⠃
+=== MathCAT field pass.md #16
+source: \sum_{i=0}^{n} i^2 = \frac{n(n+1)(2n+1)}{6}
+MathML: <math display="inline"><msubsup><mo movablelimits="false">∑</mo><mrow><mi>i</mi><mo>=</mo><mn>0</mn></mrow><mrow><mi>n</mi></mrow></msubsup><msup><mi>i</mi><mn>2</mn></msup><mo>=</mo><mfrac><mrow><mi>n</mi><mo symmetric="false" stretchy="false">(</mo><mi>n</mi><mo>+</mo><mn>1</mn><mo symmetric="false" stretchy="false">)</mo><mo symmetric="false" stretchy="false">(</mo><mn>2</mn><mi>n</mi><mo>+</mo><mn>1</mn><mo symmetric="false" stretchy="false">)</mo></mrow><mrow><mn>6</mn></mrow></mfrac></math>
+ClearSpeak Terse: sum from i equals 0, to n of, i squared; equals; the fraction with numerator; n times, open n plus 1 close, times, open 2 n plus 1, close; and denominator 6
+ClearSpeak Medium: the sum from i is equal to 0, to n of; i squared; is equal to; the fraction with numerator; n times, open paren n plus 1, close paren; times, open paren, 2 n plus 1, close paren; and denominator 6
+ClearSpeak Verbose: the sum from i is equal to 0, to n of; i squared; is equal to; the fraction with numerator; n times, open paren n plus 1, close paren; times, open paren, 2 n plus 1, close paren; and denominator 6; end fraction
+SimpleSpeak Terse: sum from i equals 0, to n of, i squared; equals; fraction, n times, open n plus 1 close, times, open 2 n plus 1, close, over 6, end fraction
+SimpleSpeak Medium: the sum from i is equal to 0, to n of; i squared; is equal to; fraction, n times, open paren n plus 1, close paren; times, open paren, 2 n plus 1, close paren, over 6, end fraction
+SimpleSpeak Verbose: the sum from i is equal to 0, to n of; i squared; is equal to; fraction, n times, open paren n plus 1, close paren; times, open paren, 2 n plus 1, close paren, over 6, end fraction
+Nemeth: ⠨⠠⠎⠰⠊⠀⠰⠨⠅⠀⠼⠴⠘⠝⠐⠊⠘⠆⠀⠨⠅⠀⠹⠝⠷⠝⠬⠂⠾⠷⠆⠝⠬⠂⠾⠌⠖⠼
+UEB: ⠰⠰⠠⠨⠎⠢⠣⠊⠐⠶⠼⠚⠜⠔⠝⠊⠔⠼⠃⠀⠐⠶⠀⠰⠷⠝⠐⠣⠝⠐⠖⠼⠁⠐⠜⠐⠣⠼⠃⠝⠐⠖⠼⠁⠐⠜⠨⠌⠼⠋⠾
+=== MathCAT field pass.md #17
+source: \frac{a
+MathML:
+ClearSpeak Terse: Math expression: \frac{a
+ClearSpeak Medium: Math expression: \frac{a
+ClearSpeak Verbose: Math expression: \frac{a
+SimpleSpeak Terse: Math expression: \frac{a
+SimpleSpeak Medium: Math expression: \frac{a
+SimpleSpeak Verbose: Math expression: \frac{a
+Nemeth:
+UEB:
+=== extra-expressions.txt:6
+source: \begin{matrix} a & b \\ c & d \end{matrix}
+MathML: <math display="inline"><mtable class="menv-arraylike"><mtr><mtd><mi>a</mi></mtd><mtd><mi>b</mi></mtd></mtr><mtr><mtd><mi>c</mi></mtd><mtd><mi>d</mi></mtd></mtr></mtable></math>
+ClearSpeak Terse: array; row 1; column 1; eigh, column 2; b; comma; row 2; column 1; c, column 2; d
+ClearSpeak Medium: array of; row 1; column 1; eigh, column 2; b; comma; row 2; column 1; c, column 2; d
+ClearSpeak Verbose: array of; row 1; column 1; eigh, column 2; b; comma; row 2; column 1; c, column 2; d
+SimpleSpeak Terse: array; row 1; column 1; eigh, column 2; b; comma; row 2; column 1; c, column 2; d
+SimpleSpeak Medium: array of; row 1; column 1; eigh, column 2; b; comma; row 2; column 1; c, column 2; d
+SimpleSpeak Verbose: array of; row 1; column 1; eigh, column 2; b; comma; row 2; column 1; c, column 2; d
+Nemeth: ⠰⠁⠀⠰⠃⠀⣍⠉⠀⠰⠙
+UEB: ⠁⠀⠃⠸⠀⠰⠉⠀⠰⠙
+=== extra-expressions.txt:7
+source: \begin{pmatrix} 1 & 2 \\ 3 & 4 \end{pmatrix}
+MathML: <math display="inline"><mrow><mo stretchy="true">(</mo><mtable class="menv-arraylike"><mtr><mtd><mn>1</mn></mtd><mtd><mn>2</mn></mtd></mtr><mtr><mtd><mn>3</mn></mtd><mtd><mn>4</mn></mtd></mtr></mtable><mo stretchy="true">)</mo></mrow></math>
+ClearSpeak Terse: the 2 by 2 matrix; row 1; 1, 2; row 2; 3, 4
+ClearSpeak Medium: the 2 by 2 matrix; row 1; 1, 2; row 2; 3, 4
+ClearSpeak Verbose: the 2 by 2 matrix; row 1; 1, 2; row 2; 3, 4; end matrix
+SimpleSpeak Terse: the 2 by 2 matrix; row 1; 1, 2; row 2; 3, 4
+SimpleSpeak Medium: the 2 by 2 matrix; row 1; 1, 2; row 2; 3, 4
+SimpleSpeak Verbose: the 2 by 2 matrix; row 1; 1, 2; row 2; 3, 4; end matrix
+Nemeth: ⠠⠷⠼⠂⠀⠼⠆⠀⣍⠒⠀⠼⠲⠠⠾
+UEB: ⠠⠐⠣⠼⠁⠀⠼⠃⠠⠐⠜⠸⠀⠠⠐⠣⠼⠉⠀⠼⠙⠠⠐⠜
+=== extra-expressions.txt:8
+source: \begin{bmatrix} x \\ y \end{bmatrix}
+MathML: <math display="inline"><mrow><mo stretchy="true">[</mo><mtable class="menv-arraylike"><mtr><mtd><mi>x</mi></mtd></mtr><mtr><mtd><mi>y</mi></mtd></mtr></mtable><mo stretchy="true">]</mo></mrow></math>
+ClearSpeak Terse: the 2 by 1 column matrix; x; y
+ClearSpeak Medium: the 2 by 1 column matrix; x; y
+ClearSpeak Verbose: the 2 by 1 column matrix; x; y; end matrix
+SimpleSpeak Terse: the 2 by 1 column matrix; x; y
+SimpleSpeak Medium: the 2 by 1 column matrix; x; y
+SimpleSpeak Verbose: the 2 by 1 column matrix; x; y; end matrix
+Nemeth: ⠠⠈⠷⠭⠀⣍⠽⠠⠈⠾
+UEB: ⠠⠨⠣⠭⠠⠨⠜⠸⠀⠠⠨⠣⠽⠠⠨⠜
+=== extra-expressions.txt:9
+source: \begin{vmatrix} a & b \\ c & d \end{vmatrix}
+MathML: <math display="inline"><mrow><mo stretchy="true">|</mo><mtable class="menv-arraylike"><mtr><mtd><mi>a</mi></mtd><mtd><mi>b</mi></mtd></mtr><mtr><mtd><mi>c</mi></mtd><mtd><mi>d</mi></mtd></mtr></mtable><mo stretchy="true">|</mo></mrow></math>
+ClearSpeak Terse: the 2 by 2 determinant; row 1; eigh, b; row 2; c, d
+ClearSpeak Medium: the 2 by 2 determinant; row 1; eigh, b; row 2; c, d
+ClearSpeak Verbose: the 2 by 2 determinant; row 1; eigh, b; row 2; c, d; end determinant
+SimpleSpeak Terse: the 2 by 2 determinant; row 1; eigh, b; row 2; c, d
+SimpleSpeak Medium: the 2 by 2 determinant; row 1; eigh, b; row 2; c, d
+SimpleSpeak Verbose: the 2 by 2 determinant; row 1; eigh, b; row 2; c, d; end determinant
+Nemeth: ⠠⠳⠁⠀⠰⠃⠀⣍⠉⠀⠙⠠⠳
+UEB: ⠠⠸⠳⠁⠀⠃⠠⠸⠳⠸⠀⠠⠸⠳⠉⠀⠙⠠⠸⠳
+=== extra-expressions.txt:10
+source: \begin{Vmatrix} a & b \\ c & d \end{Vmatrix}
+MathML: <math display="inline"><mrow><mo stretchy="true">‖</mo><mtable class="menv-arraylike"><mtr><mtd><mi>a</mi></mtd><mtd><mi>b</mi></mtd></mtr><mtr><mtd><mi>c</mi></mtd><mtd><mi>d</mi></mtd></mtr></mtable><mo stretchy="true">‖</mo></mrow></math>
+ClearSpeak Terse: magnitude 2 lines; line 1; eigh b; line 2; c d
+ClearSpeak Medium: magnitude of 2 lines; line 1; eigh b; line 2; c d
+ClearSpeak Verbose: magnitude of 2 lines; line 1; eigh b; line 2; c d
+SimpleSpeak Terse: magnitude 2 lines; line 1; eigh b; line 2; c d
+SimpleSpeak Medium: magnitude of 2 lines; line 1; eigh b; line 2; c d
+SimpleSpeak Verbose: magnitude of 2 lines; line 1; eigh b; line 2; c d
+Nemeth: ⠳⠳⠁⠀⠰⠃⠀⣍⠉⠀⠙⠳⠳
+UEB: ⠸⠳⠠⠀⠁⠀⠃⠠⠀⠸⠀⠠⠀⠉⠀⠙⠠⠀⠸⠳
+=== extra-expressions.txt:11
+source: \begin{array}{cc} 1 & 0 \\ 0 & 1 \end{array}
+MathML: <math display="inline"><mtable class="menv-arraylike"><mtr><mtd><mn>1</mn></mtd><mtd><mn>0</mn></mtd></mtr><mtr><mtd><mn>0</mn></mtd><mtd><mn>1</mn></mtd></mtr></mtable></math>
+ClearSpeak Terse: array; row 1; column 1; 1, column 2; 0; comma; row 2; column 1; 0, column 2; 1
+ClearSpeak Medium: array of; row 1; column 1; 1, column 2; 0; comma; row 2; column 1; 0, column 2; 1
+ClearSpeak Verbose: array of; row 1; column 1; 1, column 2; 0; comma; row 2; column 1; 0, column 2; 1
+SimpleSpeak Terse: array; row 1; column 1; 1, column 2; 0; comma; row 2; column 1; 0, column 2; 1
+SimpleSpeak Medium: array of; row 1; column 1; 1, column 2; 0; comma; row 2; column 1; 0, column 2; 1
+SimpleSpeak Verbose: array of; row 1; column 1; 1, column 2; 0; comma; row 2; column 1; 0, column 2; 1
+Nemeth: ⠼⠂⠀⠼⠴⠀⣍⠴⠀⠼⠂
+UEB: ⠼⠁⠀⠼⠚⠸⠀⠼⠚⠀⠼⠁
+=== extra-expressions.txt:14
+source: f(x) = \begin{cases} x & x \ge 0 \\ -x & x < 0 \end{cases}
+MathML: <math display="inline"><mi>f</mi><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo><mo>=</mo><mrow><mo stretchy="true">{</mo><mtable class="menv-cells-left menv-cases"><mtr><mtd><mi>x</mi></mtd><mtd><mi>x</mi><mo>≥</mo><mn>0</mn></mtd></mtr><mtr><mtd><mi>−</mi><mi>x</mi></mtd><mtd><mi>x</mi><mo>&lt;</mo><mn>0</mn></mtd></mtr></mtable></mrow></math>
+ClearSpeak Terse: f x equals; 2 cases; case 1; x x  greater than or equal to 0; case 2; negative x x  less than 0
+ClearSpeak Medium: f of x is equal to; 2 cases; case 1; x x is greater than or equal to 0; case 2; negative x x is less than 0
+ClearSpeak Verbose: f of x is equal to; 2 cases; case 1; x x is greater than or equal to 0; case 2; negative x x is less than 0
+SimpleSpeak Terse: f x equals; 2 cases; case 1; x x  greater than or equal to 0; case 2; negative x, x  less than 0
+SimpleSpeak Medium: f of x is equal to; 2 cases; case 1; x x is greater than or equal to 0; case 2; negative x, x is less than 0
+SimpleSpeak Verbose: f of x is equal to; 2 cases; case 1; x x is greater than or equal to 0; case 2; negative x, x is less than 0
+Nemeth: ⠋⠷⠭⠾⠀⠨⠅⠀⠨⠷⠭⠀⠭⠀⠨⠂⠱⠀⠼⠴⠀⣍⠤⠭⠀⠭⠀⠐⠅⠀⠼⠴
+UEB: ⠋⠐⠣⠭⠐⠜⠀⠐⠶⠀⠸⠣⠠⠀⠭⠀⠰⠭⠀⠸⠈⠜⠀⠼⠚⠠⠀⠸⠀⠠⠀⠐⠤⠭⠀⠰⠭⠀⠈⠣⠀⠼⠚⠠⠀
+=== extra-expressions.txt:15
+source: \begin{cases} 1 & n = 0 \\ n \cdot f(n - 1) & n > 0 \end{cases}
+MathML: <math display="inline"><mrow><mo stretchy="true">{</mo><mtable class="menv-cells-left menv-cases"><mtr><mtd><mn>1</mn></mtd><mtd><mi>n</mi><mo>=</mo><mn>0</mn></mtd></mtr><mtr><mtd><mi>n</mi><mo>⋅</mo><mi>f</mi><mo symmetric="false" stretchy="false">(</mo><mi>n</mi><mo>−</mo><mn>1</mn><mo symmetric="false" stretchy="false">)</mo></mtd><mtd><mi>n</mi><mo>></mo><mn>0</mn></mtd></mtr></mtable></mrow></math>
+ClearSpeak Terse: 2 cases; case 1; 1 n equals 0; case 2; n times, f, open n minus 1 close; n  greater than 0
+ClearSpeak Medium: 2 cases; case 1; 1 n is equal to 0; case 2; n times, f of, open paren n minus 1, close paren; n is greater than 0
+ClearSpeak Verbose: 2 cases; case 1; 1 n is equal to 0; case 2; n times, f of, open paren n minus 1, close paren; n is greater than 0
+SimpleSpeak Terse: 2 cases; case 1; 1 n equals 0; case 2; n times, f, open n minus 1 close; n  greater than 0
+SimpleSpeak Medium: 2 cases; case 1; 1 n is equal to 0; case 2; n times, f of, open paren n minus 1, close paren; n is greater than 0
+SimpleSpeak Verbose: 2 cases; case 1; 1 n is equal to 0; case 2; n times, f of, open paren n minus 1, close paren; n is greater than 0
+Nemeth: ⠨⠷⠂⠀⠝⠀⠨⠅⠀⠼⠴⠀⣍⠝⠡⠋⠷⠝⠤⠂⠾⠀⠝⠀⠨⠂⠀⠼⠴
+UEB: ⠸⠣⠠⠀⠼⠁⠀⠰⠝⠀⠐⠶⠀⠼⠚⠠⠀⠸⠀⠠⠀⠝⠐⠲⠋⠐⠣⠝⠐⠤⠼⠁⠐⠜⠀⠰⠝⠀⠈⠜⠀⠼⠚⠠⠀
+=== extra-expressions.txt:18
+source: \mathbb{R}^n
+MathML: <math display="inline"><msup><mrow><mi>ℝ</mi></mrow><mi>n</mi></msup></math>
+ClearSpeak Terse: the real numbers to the n-th power
+ClearSpeak Medium: the real numbers to the n-th power
+ClearSpeak Verbose: the real numbers to the n-th power
+SimpleSpeak Terse: the real numbers to the n-th
+SimpleSpeak Medium: the real numbers to the n-th
+SimpleSpeak Verbose: the real numbers to the n-th
+Nemeth: ⠠⠸⠰⠠⠗⠘⠝
+UEB: ⠈⠆⠠⠗⠰⠔⠝
+=== extra-expressions.txt:19
+source: \mathbb{Z} \subset \mathbb{Q} \subset \mathbb{R}
+MathML: <math display="inline"><mrow><mi>ℤ</mi></mrow><mo>⊂</mo><mrow><mi>ℚ</mi></mrow><mo>⊂</mo><mrow><mi>ℝ</mi></mrow></math>
+ClearSpeak Terse: the integers  subset of the rational numbers,  subset of the real numbers
+ClearSpeak Medium: the integers is a subset of, the rational numbers, is a subset of the real numbers
+ClearSpeak Verbose: the integers is a subset of, the rational numbers, is a subset of the real numbers
+SimpleSpeak Terse: the integers  subset of the rational numbers,  subset of the real numbers
+SimpleSpeak Medium: the integers is a subset of, the rational numbers, is a subset of the real numbers
+SimpleSpeak Verbose: the integers is a subset of, the rational numbers, is a subset of the real numbers
+Nemeth: ⠠⠸⠰⠠⠵⠀⠸⠐⠅⠀⠠⠸⠰⠠⠟⠀⠸⠐⠅⠀⠠⠸⠰⠠⠗
+UEB: ⠰⠰⠰⠠⠠⠠⠈⠆⠵⠀⠘⠣⠀⠈⠆⠟⠀⠘⠣⠀⠈⠆⠗⠠⠄⠰⠄
+=== extra-expressions.txt:20
+source: \mathbb{N}
+MathML: <math display="inline"><mrow><mi>ℕ</mi></mrow></math>
+ClearSpeak Terse: the natural numbers
+ClearSpeak Medium: the natural numbers
+ClearSpeak Verbose: the natural numbers
+SimpleSpeak Terse: the natural numbers
+SimpleSpeak Medium: the natural numbers
+SimpleSpeak Verbose: the natural numbers
+Nemeth: ⠠⠸⠰⠠⠝
+UEB: ⠈⠆⠰⠠⠝
+=== extra-expressions.txt:21
+source: \mathbf{v} \cdot \mathbf{w}
+MathML: <math display="inline"><mrow><mi>𝐯</mi></mrow><mo>⋅</mo><mrow><mi>𝐰</mi></mrow></math>
+ClearSpeak Terse: bold v dot product bold w
+ClearSpeak Medium: bold v dot product bold w
+ClearSpeak Verbose: bold v dot product bold w
+SimpleSpeak Terse: bold v dot product bold w
+SimpleSpeak Medium: bold v dot product bold w
+SimpleSpeak Verbose: bold v dot product bold w
+Nemeth: ⠸⠰⠧⠡⠸⠰⠺
+UEB: ⠘⠆⠧⠐⠲⠘⠆⠺
+=== extra-expressions.txt:22
+source: \boldsymbol{\alpha} + \boldsymbol{\beta}
+MathML: <math display="inline"><mrow><mi>𝜶</mi></mrow><mo>+</mo><mrow><mi>𝜷</mi></mrow></math>
+ClearSpeak Terse: bold alpha plus bold beta
+ClearSpeak Medium: bold alpha plus bold beta
+ClearSpeak Verbose: bold alpha plus bold beta
+SimpleSpeak Terse: bold alpha plus bold beta
+SimpleSpeak Medium: bold alpha plus bold beta
+SimpleSpeak Verbose: bold alpha plus bold beta
+Nemeth: ⠸⠨⠨⠁⠬⠸⠨⠨⠃
+UEB: ⠘⠆⠨⠁⠐⠖⠘⠆⠨⠃
+=== extra-expressions.txt:25
+source: \operatorname{Log} z
+MathML: <math display="inline"><mi>Log</mi><mo>⁡</mo><mspace width="0.1667em" /><mi>z</mi></math>
+ClearSpeak Terse: principal value log z
+ClearSpeak Medium: the principal value log of z
+ClearSpeak Verbose: the principal value log of z
+SimpleSpeak Terse: principal value log z
+SimpleSpeak Medium: the principal value log of z
+SimpleSpeak Verbose: the principal value log of z
+Nemeth: ⠠⠇⠕⠛⠀⠵
+UEB: ⠠⠇⠕⠛⠀⠰⠵
+=== extra-expressions.txt:26
+source: \operatorname{arccotan} x
+MathML: <math display="inline"><mi>arccotan</mi><mo>⁡</mo><mspace width="0.1667em" /><mi>x</mi></math>
+ClearSpeak Terse: arccotan x
+ClearSpeak Medium: arccotan of x
+ClearSpeak Verbose: arccotan of x
+SimpleSpeak Terse: arccotan x
+SimpleSpeak Medium: arccotan of x
+SimpleSpeak Verbose: arccotan of x
+Nemeth: ⠁⠗⠉⠉⠕⠞⠁⠝⠀⠭
+UEB: ⠜⠒⠕⠞⠁⠝⠀⠰⠭
+=== extra-expressions.txt:27
+source: \arctan x
+MathML: <math display="inline"><mi>arctan</mi><mo>⁡</mo><mspace width="0.1667em" /><mi>x</mi></math>
+ClearSpeak Terse: arctan x
+ClearSpeak Medium: arctan of x
+ClearSpeak Verbose: arctan of x
+SimpleSpeak Terse: arctan x
+SimpleSpeak Medium: arctan of x
+SimpleSpeak Verbose: arctan of x
+Nemeth: ⠁⠗⠉⠞⠁⠝⠀⠭
+UEB: ⠜⠉⠞⠁⠝⠀⠰⠭
+=== extra-expressions.txt:28
+source: \sin^2 \theta + \cos^2 \theta = 1
+MathML: <math display="inline"><msup><mi>sin</mi><mn>2</mn></msup><mo>⁡</mo><mspace width="0.1667em" /><mi>θ</mi><mo>+</mo><msup><mi>cos</mi><mn>2</mn></msup><mo>⁡</mo><mspace width="0.1667em" /><mi>θ</mi><mo>=</mo><mn>1</mn></math>
+ClearSpeak Terse: sine squared theta, plus cos squared theta; equals 1
+ClearSpeak Medium: sine squared of theta, plus cosine squared of theta; is equal to 1
+ClearSpeak Verbose: sine squared of theta, plus cosine squared of theta; is equal to 1
+SimpleSpeak Terse: sine squared theta, plus cos squared theta; equals 1
+SimpleSpeak Medium: sine squared of theta, plus cosine squared of theta; is equal to 1
+SimpleSpeak Verbose: sine squared of theta, plus cosine squared of theta; is equal to 1
+Nemeth: ⠎⠊⠝⠘⠆⠀⠨⠹⠬⠉⠕⠎⠘⠆⠀⠨⠹⠀⠨⠅⠀⠼⠂
+UEB: ⠎⠔⠰⠔⠼⠃⠨⠹⠐⠖⠉⠕⠎⠔⠼⠃⠨⠹⠀⠐⠶⠀⠼⠁
+=== extra-expressions.txt:29
+source: \lim_{x \to 0} \frac{\sin x}{x}
+MathML: <math display="inline"><msub><mi>lim</mi><mrow><mi>x</mi><mo>→</mo><mn>0</mn></mrow></msub><mo>⁡</mo><mspace width="0.1667em" /><mfrac><mrow><mi>sin</mi><mo>⁡</mo><mspace width="0.1667em" /><mi>x</mi></mrow><mrow><mi>x</mi></mrow></mfrac></math>
+ClearSpeak Terse: limit as x approaches 0; sine x over x
+ClearSpeak Medium: the limit as x approaches 0, of sine x over x
+ClearSpeak Verbose: the limit as x approaches 0, of, sine x over x, end fraction
+SimpleSpeak Terse: limit as x approaches 0; fraction, sine x, over x, end fraction
+SimpleSpeak Medium: the limit as x approaches 0, of, fraction, sine of x, over x, end fraction
+SimpleSpeak Verbose: the limit as x approaches 0, of, fraction, sine of x, over x, end fraction
+Nemeth: ⠇⠊⠍⠰⠭⠀⠰⠫⠕⠀⠼⠴⠀⠹⠎⠊⠝⠀⠭⠌⠭⠼
+UEB: ⠰⠰⠇⠊⠍⠢⠣⠭⠳⠕⠼⠚⠜⠷⠎⠊⠝⠀⠭⠨⠌⠭⠰⠾
+=== extra-expressions.txt:32
+source: \nabla f
+MathML: <math display="inline"><mi>∇</mi><mi>f</mi></math>
+ClearSpeak Terse: del f
+ClearSpeak Medium: gradient of f
+ClearSpeak Verbose: gradient of f
+SimpleSpeak Terse: del f
+SimpleSpeak Medium: gradient of f
+SimpleSpeak Verbose: gradient of f
+Nemeth: ⠨⠫⠋
+UEB: ⠘⠙⠋
+=== extra-expressions.txt:33
+source: \nabla \cdot \mathbf{F}
+MathML: <math display="inline"><mi>∇</mi><mo>⋅</mo><mrow><mi>𝐅</mi></mrow></math>
+ClearSpeak Terse: div bold  cap f
+ClearSpeak Medium: divergence of bold  cap f
+ClearSpeak Verbose: divergence of bold  cap f
+SimpleSpeak Terse: div bold  cap f
+SimpleSpeak Medium: divergence of bold  cap f
+SimpleSpeak Verbose: divergence of bold  cap f
+Nemeth: ⠨⠫⠡⠸⠰⠠⠋
+UEB: ⠘⠙⠐⠲⠘⠆⠠⠋
+=== extra-expressions.txt:34
+source: \nabla \times \mathbf{F}
+MathML: <math display="inline"><mi>∇</mi><mo>×</mo><mrow><mi>𝐅</mi></mrow></math>
+ClearSpeak Terse: curl bold  cap f
+ClearSpeak Medium: curl of bold  cap f
+ClearSpeak Verbose: curl of bold  cap f
+SimpleSpeak Terse: curl bold  cap f
+SimpleSpeak Medium: curl of bold  cap f
+SimpleSpeak Verbose: curl of bold  cap f
+Nemeth: ⠨⠫⠈⠡⠸⠰⠠⠋
+UEB: ⠘⠙⠐⠦⠘⠆⠠⠋
+=== extra-expressions.txt:35
+source: \nabla^2 \phi
+MathML: <math display="inline"><msup><mi>∇</mi><mn>2</mn></msup><mi>ϕ</mi></math>
+ClearSpeak Terse: laplacian phi
+ClearSpeak Medium: laplacian of phi
+ClearSpeak Verbose: laplacian of phi
+SimpleSpeak Terse: laplacian phi
+SimpleSpeak Medium: laplacian of phi
+SimpleSpeak Verbose: laplacian of phi
+Nemeth: ⠨⠫⠘⠆⠐⠨⠋
+UEB: ⠘⠙⠰⠔⠼⠃⠨⠋
+=== extra-expressions.txt:38
+source: x < y
+MathML: <math display="inline"><mi>x</mi><mo>&lt;</mo><mi>y</mi></math>
+ClearSpeak Terse: x  less than y
+ClearSpeak Medium: x is less than y
+ClearSpeak Verbose: x is less than y
+SimpleSpeak Terse: x  less than y
+SimpleSpeak Medium: x is less than y
+SimpleSpeak Verbose: x is less than y
+Nemeth: ⠭⠀⠐⠅⠀⠽
+UEB: ⠰⠭⠀⠈⠣⠀⠰⠽
+=== extra-expressions.txt:39
+source: a \le b \le c
+MathML: <math display="inline"><mi>a</mi><mo>≤</mo><mi>b</mi><mo>≤</mo><mi>c</mi></math>
+ClearSpeak Terse: eigh  less than or equal to b  less than or equal to c
+ClearSpeak Medium: eigh is less than or equal to b is less than or equal to c
+ClearSpeak Verbose: eigh is less than or equal to b is less than or equal to c
+SimpleSpeak Terse: eigh  less than or equal to b  less than or equal to c
+SimpleSpeak Medium: eigh is less than or equal to b is less than or equal to c
+SimpleSpeak Verbose: eigh is less than or equal to b is less than or equal to c
+Nemeth: ⠁⠀⠐⠅⠱⠀⠃⠀⠐⠅⠱⠀⠉
+UEB: ⠁⠀⠸⠈⠣⠀⠰⠃⠀⠸⠈⠣⠀⠰⠉
+=== extra-expressions.txt:40
+source: x > 0
+MathML: <math display="inline"><mi>x</mi><mo>></mo><mn>0</mn></math>
+ClearSpeak Terse: x  greater than 0
+ClearSpeak Medium: x is greater than 0
+ClearSpeak Verbose: x is greater than 0
+SimpleSpeak Terse: x  greater than 0
+SimpleSpeak Medium: x is greater than 0
+SimpleSpeak Verbose: x is greater than 0
+Nemeth: ⠭⠀⠨⠂⠀⠼⠴
+UEB: ⠰⠭⠀⠈⠜⠀⠼⠚
+=== extra-expressions.txt:41
+source: a \& b
+MathML: <math display="inline"><mi>a</mi><mi>&amp;</mi><mi>b</mi></math>
+ClearSpeak Terse: eigh ampersand, b
+ClearSpeak Medium: eigh ampersand, b
+ClearSpeak Verbose: eigh ampersand, b
+SimpleSpeak Terse: eigh ampersand, b
+SimpleSpeak Medium: eigh ampersand, b
+SimpleSpeak Verbose: eigh ampersand, b
+Nemeth: ⠁⠸⠯⠃
+UEB: ⠁⠈⠯⠃
+=== extra-expressions.txt:42
+source: \alpha \ne \beta
+MathML: <math display="inline"><mi>α</mi><mo>≠</mo><mi>β</mi></math>
+ClearSpeak Terse: alpha  not equal to beta
+ClearSpeak Medium: alpha is not equal to beta
+ClearSpeak Verbose: alpha is not equal to beta
+SimpleSpeak Terse: alpha  not equal to beta
+SimpleSpeak Medium: alpha is not equal to beta
+SimpleSpeak Verbose: alpha is not equal to beta
+Nemeth: ⠨⠁⠀⠌⠨⠅⠀⠨⠃
+UEB: ⠨⠁⠀⠐⠶⠈⠱⠀⠨⠃
+=== extra-expressions.txt:43
+source: \nless x
+MathML: <math display="inline"><mo>≮</mo><mi>x</mi></math>
+ClearSpeak Terse: not less than x
+ClearSpeak Medium: is not less than x
+ClearSpeak Verbose: is not less than x
+SimpleSpeak Terse: not less than x
+SimpleSpeak Medium: is not less than x
+SimpleSpeak Verbose: is not less than x
+Nemeth: ⠌⠐⠅⠀⠭
+UEB: ⠈⠣⠈⠱⠀⠰⠭
+=== extra-expressions.txt:46
+source: 1, 2, \ldots, n
+MathML: <math display="inline"><mn>1</mn><mo>,</mo><mn>2</mn><mo>,</mo><mi>…</mi><mo>,</mo><mi>n</mi></math>
+ClearSpeak Terse: 1 comma, 2 comma, dot dot dot comma, n
+ClearSpeak Medium: 1 comma, 2 comma, dot dot dot comma, n
+ClearSpeak Verbose: 1 comma, 2 comma, dot dot dot comma, n
+SimpleSpeak Terse: 1 comma, 2 comma, dot dot dot comma, n
+SimpleSpeak Medium: 1 comma, 2 comma, dot dot dot comma, n
+SimpleSpeak Verbose: 1 comma, 2 comma, dot dot dot comma, n
+Nemeth: ⠼⠂⠠⠀⠼⠆⠠⠀⠄⠄⠄⠠⠀⠰⠝
+UEB: ⠼⠁⠂⠀⠼⠃⠂⠀⠲⠲⠲⠂⠀⠰⠝
+=== extra-expressions.txt:47
+source: a_1 + a_2 + \cdots + a_n
+MathML: <math display="inline"><msub><mi>a</mi><mn>1</mn></msub><mo>+</mo><msub><mi>a</mi><mn>2</mn></msub><mo>+</mo><mi>⋯</mi><mo>+</mo><msub><mi>a</mi><mi>n</mi></msub></math>
+ClearSpeak Terse: eigh 1, plus eigh 2, plus dot dot dot plus eigh sub n
+ClearSpeak Medium: eigh sub 1, plus eigh sub 2, plus dot dot dot plus eigh sub n
+ClearSpeak Verbose: eigh sub 1, plus eigh sub 2, plus dot dot dot plus eigh sub n
+SimpleSpeak Terse: eigh 1, plus eigh 2, plus dot dot dot plus eigh sub n
+SimpleSpeak Medium: eigh sub 1, plus eigh sub 2, plus dot dot dot plus eigh sub n
+SimpleSpeak Verbose: eigh sub 1, plus eigh sub 2, plus dot dot dot plus eigh sub n
+Nemeth: ⠁⠂⠬⠁⠆⠬⠄⠄⠄⠬⠁⠰⠝
+UEB: ⠁⠰⠢⠼⠁⠐⠖⠁⠢⠼⠃⠐⠖⠄⠄⠄⠐⠖⠁⠢⠝
+=== extra-expressions.txt:48
+source: \vdots
+MathML: <math display="inline"><mi>⋮</mi></math>
+ClearSpeak Terse: vertical ellipsis
+ClearSpeak Medium: vertical ellipsis
+ClearSpeak Verbose: vertical ellipsis
+SimpleSpeak Terse: vertical ellipsis
+SimpleSpeak Medium: vertical ellipsis
+SimpleSpeak Verbose: vertical ellipsis
+Nemeth: ⠩⠄⠄
+UEB: ⠄⠸⠡⠭⠼⠚⠚⠃⠃⠰⠑⠑⠄
+=== extra-expressions.txt:51
+source: \int_0^1 x^2 \, dx
+MathML: <math display="inline"><msubsup><mo movablelimits="false">∫</mo><mn>0</mn><mn>1</mn></msubsup><msup><mi>x</mi><mn>2</mn></msup><mspace width="0.16666667em" /><mi>d</mi><mi>x</mi></math>
+ClearSpeak Terse: integral from 0, to 1 of, x squared d x
+ClearSpeak Medium: the integral from 0, to 1 of; x squared d x
+ClearSpeak Verbose: the integral from 0, to 1 of; x squared d x
+SimpleSpeak Terse: integral from 0, to 1 of, x squared d x
+SimpleSpeak Medium: the integral from 0, to 1 of; x squared d x
+SimpleSpeak Verbose: the integral from 0, to 1 of; x squared d x
+Nemeth: ⠮⠰⠴⠘⠂⠐⠭⠘⠆⠐⠙⠭
+UEB: ⠰⠰⠮⠢⠼⠚⠔⠼⠁⠭⠔⠼⠃⠰⠙⠭
+=== extra-expressions.txt:52
+source: \sum_{i=1}^{n} i^2
+MathML: <math display="inline"><msubsup><mo movablelimits="false">∑</mo><mrow><mi>i</mi><mo>=</mo><mn>1</mn></mrow><mrow><mi>n</mi></mrow></msubsup><msup><mi>i</mi><mn>2</mn></msup></math>
+ClearSpeak Terse: sum from i equals 1, to n of, i squared
+ClearSpeak Medium: the sum from i is equal to 1, to n of; i squared
+ClearSpeak Verbose: the sum from i is equal to 1, to n of; i squared
+SimpleSpeak Terse: sum from i equals 1, to n of, i squared
+SimpleSpeak Medium: the sum from i is equal to 1, to n of; i squared
+SimpleSpeak Verbose: the sum from i is equal to 1, to n of; i squared
+Nemeth: ⠨⠠⠎⠰⠊⠀⠰⠨⠅⠀⠼⠂⠘⠝⠐⠊⠘⠆
+UEB: ⠰⠰⠠⠨⠎⠢⠣⠊⠐⠶⠼⠁⠜⠔⠝⠊⠔⠼⠃
+=== extra-expressions.txt:53
+source: \prod_{k=1}^{n} k
+MathML: <math display="inline"><msubsup><mo movablelimits="false">∏</mo><mrow><mi>k</mi><mo>=</mo><mn>1</mn></mrow><mrow><mi>n</mi></mrow></msubsup><mi>k</mi></math>
+ClearSpeak Terse: product from k equals 1, to n of k
+ClearSpeak Medium: the product from k is equal to 1, to n of k
+ClearSpeak Verbose: the product from k is equal to 1, to n of k
+SimpleSpeak Terse: product from k equals 1, to n of k
+SimpleSpeak Medium: the product from k is equal to 1, to n of k
+SimpleSpeak Verbose: the product from k is equal to 1, to n of k
+Nemeth: ⠨⠠⠏⠰⠅⠀⠰⠨⠅⠀⠼⠂⠘⠝⠐⠅
+UEB: ⠰⠰⠠⠨⠏⠢⠣⠅⠐⠶⠼⠁⠜⠔⠝⠅
+=== extra-expressions.txt:54
+source: \sqrt[3]{x}
+MathML: <math display="inline"><mroot><mrow><mi>x</mi></mrow><mn>3</mn></mroot></math>
+ClearSpeak Terse: cube root x
+ClearSpeak Medium: the cube root of x
+ClearSpeak Verbose: the cube root of x, end root
+SimpleSpeak Terse: cube root x
+SimpleSpeak Medium: the cube root of x
+SimpleSpeak Verbose: the cube root of x
+Nemeth: ⠣⠒⠜⠭⠻
+UEB: ⠰⠰⠩⠔⠼⠉⠭⠬
+=== extra-expressions.txt:55
+source: \frac{d}{dx} e^{x}
+MathML: <math display="inline"><mfrac><mrow><mi>d</mi></mrow><mrow><mi>d</mi><mi>x</mi></mrow></mfrac><msup><mi>e</mi><mrow><mi>x</mi></mrow></msup></math>
+ClearSpeak Terse: d over d x, e to the x-th power
+ClearSpeak Medium: d over d x, e to the x-th power
+ClearSpeak Verbose: d over d x, end fraction; e to the x-th power
+SimpleSpeak Terse: fraction, d over, d x, end fraction; e to the x-th
+SimpleSpeak Medium: fraction, d over, d x, end fraction; e to the x-th
+SimpleSpeak Verbose: fraction, d over, d x, end fraction; e to the x-th
+Nemeth: ⠹⠙⠌⠙⠭⠼⠑⠘⠭
+UEB: ⠰⠰⠷⠙⠨⠌⠙⠭⠾⠑⠔⠭
+=== extra-expressions.txt:56
+source: \binom{n}{k}
+MathML: <math display="inline"><mrow><mo stretchy="true">(</mo><mfrac linethickness="0em"><mrow><mi>n</mi></mrow><mrow><mi>k</mi></mrow></mfrac><mo stretchy="true">)</mo></mrow></math>
+ClearSpeak Terse: n choose k
+ClearSpeak Medium: n choose k
+ClearSpeak Verbose: n choose k
+SimpleSpeak Terse: n choose k
+SimpleSpeak Medium: n choose k
+SimpleSpeak Verbose: n choose k
+Nemeth: ⠷⠹⠝⠌⠅⠼⠾
+UEB: ⠰⠰⠐⠣⠷⠝⠨⠌⠅⠾⠐⠜
+=== extra-expressions.txt:59
+source: {n \choose k}
+MathML:
+ClearSpeak Terse: Math expression: {n \choose k}
+ClearSpeak Medium: Math expression: {n \choose k}
+ClearSpeak Verbose: Math expression: {n \choose k}
+SimpleSpeak Terse: Math expression: {n \choose k}
+SimpleSpeak Medium: Math expression: {n \choose k}
+SimpleSpeak Verbose: Math expression: {n \choose k}
+Nemeth:
+UEB:
+=== extra-expressions.txt:60
+source: \mathscr{L}
+MathML:
+ClearSpeak Terse: Math expression: \mathscr{L}
+ClearSpeak Medium: Math expression: \mathscr{L}
+ClearSpeak Verbose: Math expression: \mathscr{L}
+SimpleSpeak Terse: Math expression: \mathscr{L}
+SimpleSpeak Medium: Math expression: \mathscr{L}
+SimpleSpeak Verbose: Math expression: \mathscr{L}
+Nemeth:
+UEB:
+=== extra-expressions.txt:61
+source: \sideset{_a^b}{_c^d}\sum
+MathML:
+ClearSpeak Terse: Math expression: \sideset{_a^b}{_c^d}\sum
+ClearSpeak Medium: Math expression: \sideset{_a^b}{_c^d}\sum
+ClearSpeak Verbose: Math expression: \sideset{_a^b}{_c^d}\sum
+SimpleSpeak Terse: Math expression: \sideset{_a^b}{_c^d}\sum
+SimpleSpeak Medium: Math expression: \sideset{_a^b}{_c^d}\sum
+SimpleSpeak Verbose: Math expression: \sideset{_a^b}{_c^d}\sum
+Nemeth:
+UEB:
+=== extra-expressions.txt:62
+source: \frac{<}{
+MathML:
+ClearSpeak Terse: Math expression: \frac{<}{
+ClearSpeak Medium: Math expression: \frac{<}{
+ClearSpeak Verbose: Math expression: \frac{<}{
+SimpleSpeak Terse: Math expression: \frac{<}{
+SimpleSpeak Medium: Math expression: \frac{<}{
+SimpleSpeak Verbose: Math expression: \frac{<}{
+Nemeth:
+UEB:
+=== extra-expressions.txt:63
+source: \operatorname{<mi>x</mi>}
+MathML: <math display="inline"><mi>&lt;mi&gt;x&lt;/mi&gt;</mi></math>
+ClearSpeak Terse: <mi>x</mi>
+ClearSpeak Medium: <mi>x</mi>
+ClearSpeak Verbose: <mi>x</mi>
+SimpleSpeak Terse: <mi>x</mi>
+SimpleSpeak Medium: <mi>x</mi>
+SimpleSpeak Verbose: <mi>x</mi>
+Nemeth: ⠐⠅⠍⠊⠨⠂⠭⠐⠅⠸⠌⠍⠊⠨⠂
+UEB: ⠈⠣⠍⠊⠈⠜⠭⠈⠣⠸⠌⠍⠊⠈⠜
