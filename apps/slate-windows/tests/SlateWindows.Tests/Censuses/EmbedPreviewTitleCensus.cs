@@ -75,7 +75,6 @@ using System.Text.RegularExpressions;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
-using Xunit.Abstractions;
 
 namespace SlateWindows.Tests.Censuses;
 

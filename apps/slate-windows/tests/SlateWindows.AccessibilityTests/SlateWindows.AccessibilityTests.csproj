@@ -5,13 +5,20 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
+    <!-- xunit v3: a test project is its own executable. -->
+    <OutputType>Exe</OutputType>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Axe.Windows" Version="2.4.2" />
     <PackageReference Include="FlaUI.UIA3" Version="5.0.0" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
-    <PackageReference Include="xunit" Version="2.9.3" />
+    <!-- xunit v3 without the Microsoft Testing Platform runner: tests run
+         through VSTest (xunit.runner.visualstudio), so every CI `dotnet test`
+         keeps its VSTest filter, TRX logger and blame-hang options. The
+         `xunit.v3` meta-package would pull in MTP, which the .NET 10 SDK's
+         `dotnet test` refuses to run through VSTest. -->
+    <PackageReference Include="xunit.v3.mtp-off" Version="4.0.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="4.0.1" />
   </ItemGroup>
 

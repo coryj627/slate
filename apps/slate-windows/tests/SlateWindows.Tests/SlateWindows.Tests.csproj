@@ -6,12 +6,14 @@
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <UseWPF>true</UseWPF>
+    <!-- xunit v3: a test project is its own executable. -->
+    <OutputType>Exe</OutputType>
   </PropertyGroup>
 
   <ItemGroup>
     <!-- Test-only infrastructure: PrivateAssets="all" keeps the collector,
          test host, and VSTest runner from flowing to anything that
-         references this project. `xunit` itself is left alone — the test
+         references this project. `xunit.v3.mtp-off` itself is left alone — the test
          sources compile against its API. -->
     <!-- #1108: the drift twins read production source to prove the shipped
          code agrees with the declarative tables. A regex cannot tell live
@@ -31,13 +33,29 @@
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.9.0" PrivateAssets="all" />
     <PackageReference Include="coverlet.collector" Version="10.1.0" PrivateAssets="all" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.11.0" PrivateAssets="all" />
-    <PackageReference Include="xunit" Version="2.9.3" />
+    <!-- xunit v3 without the Microsoft Testing Platform runner: tests run
+         through VSTest (xunit.runner.visualstudio), so every CI `dotnet test`
+         keeps its VSTest filter, TRX logger and blame-hang options. The
+         `xunit.v3` meta-package would pull in MTP, which the .NET 10 SDK's
+         `dotnet test` refuses to run through VSTest. -->
+    <PackageReference Include="xunit.v3.mtp-off" Version="4.0.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="4.0.1" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>
     <Using Include="Xunit" />
     <Using Include="System.IO" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- #1555: the suite's STA threads end without shutting their
+         dispatchers down, and WPF's exit clean-up then waits up to 300 ms on
+         each weak-event table they made. Over a full run that kept the
+         process alive for minutes after the last fact, which xunit v3 fails.
+         WPF's own switch skips that clean-up for this test process only;
+         WeakEventExitTests pins both the switch and its effect. -->
+    <RuntimeHostConfigurationOption Include="Switch.MS.Internal.DoNotInvokeInWeakEventTableShutdownListener"
+                                    Value="true" />
   </ItemGroup>
 
   <ItemGroup>
@@ -54,6 +72,9 @@
     <ProjectReference Include="..\..\tools\ParityHarness\ParityHarness.csproj" />
     <!-- SvgDecodeOutOfProcessTests launches this probe the same way. -->
     <ProjectReference Include="..\..\tools\SvgDecodeProbe\SvgDecodeProbe.csproj"
+                      ReferenceOutputAssembly="false" />
+    <!-- WeakEventExitTests times this probe's exit. -->
+    <ProjectReference Include="..\..\tools\WeakEventExitProbe\WeakEventExitProbe.csproj"
                       ReferenceOutputAssembly="false" />
   </ItemGroup>
 

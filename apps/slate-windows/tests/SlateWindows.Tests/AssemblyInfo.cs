@@ -6,7 +6,7 @@
 // under controlled load — parallel test classes would cross-talk both.
 // Serial execution keeps every census's baseline and timing honest.
 
-[assembly: CollectionBehavior(DisableTestParallelization = true)]
+[assembly: Xunit.v3.Parallelization(Mode = Xunit.Sdk.ParallelMode.None)]
 
 // Every fact, whichever helper started its threads: a WPF dispatcher it
 // abandons (thread ended, never shut down) leaks window classes into the

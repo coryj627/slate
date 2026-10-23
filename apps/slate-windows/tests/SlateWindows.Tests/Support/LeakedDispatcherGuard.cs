@@ -58,7 +58,7 @@ namespace SlateWindows.Tests;
 /// </para>
 /// </remarks>
 [AttributeUsage(AttributeTargets.Assembly)]
-internal sealed class LeakedDispatcherGuardAttribute : Xunit.Sdk.BeforeAfterTestAttribute
+internal sealed class LeakedDispatcherGuardAttribute : Xunit.v3.BeforeAfterTestAttribute
 {
     private static readonly FieldInfo? Registry =
         typeof(Dispatcher).GetField("_dispatchers", BindingFlags.NonPublic | BindingFlags.Static);
@@ -75,7 +75,7 @@ internal sealed class LeakedDispatcherGuardAttribute : Xunit.Sdk.BeforeAfterTest
     /// <summary>Whether WPF's dispatcher registry is where this guard reads it.</summary>
     internal static bool Readable => Registry?.GetValue(null) is IList && RegistryLock?.GetValue(null) is not null;
 
-    public override void Before(MethodInfo methodUnderTest)
+    public override void Before(MethodInfo methodUnderTest, Xunit.v3.IXunitTest test)
     {
         s_baseline = FactBaseline.Capture();
         if (StaThread.Wedged() is { } wedged)
@@ -84,7 +84,7 @@ internal sealed class LeakedDispatcherGuardAttribute : Xunit.Sdk.BeforeAfterTest
         }
     }
 
-    public override void After(MethodInfo methodUnderTest)
+    public override void After(MethodInfo methodUnderTest, Xunit.v3.IXunitTest test)
     {
         string fact = $"{methodUnderTest.DeclaringType?.Name}.{methodUnderTest.Name}";
         FactBaseline baseline = s_baseline ?? FactBaseline.Capture();

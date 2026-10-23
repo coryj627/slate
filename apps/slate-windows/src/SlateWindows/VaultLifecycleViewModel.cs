@@ -163,6 +163,7 @@ internal sealed partial class VaultLifecycleViewModel
     private QuickSwitcherViewModel? _quickSwitcher;
     private Task _sessionLoadCompletion = Task.CompletedTask;
     private int _sidebarRefreshTicket;
+    private int _debouncedSidebarRefreshes;
     // W4-8 (SD8): the bounded sync-marker watch, owned by the vault
     // lifecycle for exactly the open-vault state.
     private SyncMarkerWatcher? _syncMarkerWatcher;
@@ -854,12 +855,20 @@ internal sealed partial class VaultLifecycleViewModel
                 return;
             }
 
+            Interlocked.Increment(ref _debouncedSidebarRefreshes);
             _ = Task.Delay(150).ContinueWith(
                 _ => _enqueueUi(() =>
                 {
-                    if (generation == _generation && ticket == _sidebarRefreshTicket)
+                    try
                     {
-                        FileSidebar?.Refresh();
+                        if (generation == _generation && ticket == _sidebarRefreshTicket)
+                        {
+                            FileSidebar?.Refresh();
+                        }
+                    }
+                    finally
+                    {
+                        Interlocked.Decrement(ref _debouncedSidebarRefreshes);
                     }
                 }),
                 TaskScheduler.Default);
@@ -1173,6 +1182,12 @@ internal sealed partial class VaultLifecycleViewModel
     /// so a fact can make the call core's watcher makes — from its own
     /// thread, through the real marshalling.</summary>
     internal VaultEventListener? EventListenerForTests => _eventListener;
+
+    /// <summary>A Slate write's debounced tree refresh (150 ms, in
+    /// <see cref="HandleFileChange"/>) is scheduled and has not run. A vault
+    /// close refuses while a tree refresh is reading, so a fact that saves and
+    /// then closes settles past this first (#1555).</summary>
+    internal bool DebouncedSidebarRefreshPendingForTests => Volatile.Read(ref _debouncedSidebarRefreshes) > 0;
 
     private void InitializeWorkspace(
         VaultSession session,

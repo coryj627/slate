@@ -172,7 +172,7 @@ public sealed class PumpedSaveReentrancyTests
 
             host.Type(host.T, "Marker-B");
             host.Announced.Clear();
-            host.Workspace.SaveActiveAndSettle();
+            host.SaveActiveAndSettle();
 
             var saved = Assert.Single(host.Announced, item => item.Event is A11yEvent.NoteSaved);
             Assert.Equal("renamed0.md", Assert.IsType<A11yEvent.NoteSaved>(saved.Event).Filename);
@@ -230,7 +230,7 @@ public sealed class PumpedSaveReentrancyTests
         host.RunCell("save", "teardown");
         host.AssertInvariants("save", "teardown");
 
-        Assert.Null(host.Lifecycle.Workspace);
+        Assert.True(host.Lifecycle.Workspace is null, $"the vault stayed open: {host.Lifecycle.StatusText}");
         Assert.Equal(0, host.ClosePrompts);
         Assert.Single(host.Announced, item => item.Event is A11yEvent.NoteSaved);
         Assert.Single(
@@ -267,7 +267,7 @@ public sealed class PumpedSaveReentrancyTests
         Assert.Equal(1, host.WritesTo("note0.md"));
         Assert.Contains("Marker-A", host.Disk("note0.md"), StringComparison.Ordinal);
         Assert.True(host.Workspace.SavesForTests.IsClosed);
-        Assert.Null(host.Lifecycle.Workspace);
+        Assert.True(host.Lifecycle.Workspace is null, $"the vault stayed open: {host.Lifecycle.StatusText}");
         host.Settle();
         Assert.Equal(0, host.Workspace.SavesForTests.LiveWorkersForTests);
         Assert.True(host.Faults.Count == 0, string.Join("\n---\n", host.Faults));
@@ -398,7 +398,7 @@ public sealed class PumpedSaveReentrancyTests
         Assert.DoesNotContain("Marker-During", host.Disk("note0.md"), StringComparison.Ordinal);
         if (site == "teardown")
         {
-            Assert.Null(host.Lifecycle.Workspace);
+            Assert.True(host.Lifecycle.Workspace is null, $"the vault stayed open: {host.Lifecycle.StatusText}");
             Assert.Single(host.Announced, item => item.Event is A11yEvent.VaultClosedChangesDiscarded);
         }
     }
@@ -442,7 +442,7 @@ public sealed class PumpedSaveReentrancyTests
             case "close-pane": Assert.DoesNotContain(host.G1, host.Workspace.Groups); break;
             case "replace": Assert.Equal("note3.md", host.T.Path); break;
             case "teardown":
-                Assert.Null(host.Lifecycle.Workspace);
+                Assert.True(host.Lifecycle.Workspace is null, $"the vault stayed open: {host.Lifecycle.StatusText}");
                 Assert.Single(host.Announced, item => item.Event is A11yEvent.VaultClosedChangesDiscarded);
                 break;
         }
@@ -639,7 +639,7 @@ public sealed class PumpedSaveReentrancyTests
             switch (state)
             {
                 case "clean":
-                    host.Workspace.SaveActiveAndSettle();
+                    host.SaveActiveAndSettle();
                     Assert.False(host.Workspace.HasDirtyTabs, "the arrangement left a dirty tab");
                     break;
                 case "settled":
@@ -657,7 +657,7 @@ public sealed class PumpedSaveReentrancyTests
             {
                 case "close":
                     host.Lifecycle.CloseVault();
-                    Assert.Null(host.Lifecycle.Workspace);
+                    Assert.True(host.Lifecycle.Workspace is null, $"the vault stayed open: {host.Lifecycle.StatusText}");
                     break;
                 case "switch":
                     Task open = host.Lifecycle.OpenVaultAsync(other);
@@ -821,7 +821,7 @@ public sealed class PumpedSaveReentrancyTests
         Assert.Contains("Marker-C", host.Disk("fresh2.md"), StringComparison.Ordinal);
 
         host.Type(fresh, "Marker-D");
-        host.Workspace.SaveActiveAndSettle();
+        host.SaveActiveAndSettle();
 
         var saved = Assert.Single(host.Announced, item => item.Event is A11yEvent.NoteSaved);
         Assert.Equal("fresh2.md", Assert.IsType<A11yEvent.NoteSaved>(saved.Event).Filename);
@@ -848,7 +848,7 @@ public sealed class PumpedSaveReentrancyTests
     {
         using var host = new Host(VaultCloseDecision.SaveAll);
         using var log = new FaultLog();
-        host.Workspace.SaveActiveAndSettle();
+        host.SaveActiveAndSettle();
         Assert.False(host.Workspace.HasDirtyTabs, "the arrangement left a dirty tab");
         host.Type(host.S, "Marker-S");
         host.S.SaveAdoptedHookForTests = () => throw new InjectedSaveFault();
@@ -899,7 +899,7 @@ public sealed class PumpedSaveReentrancyTests
         using var log = new FaultLog();
         // The target and its peer saved: the note under test is the only
         // one with anything to save.
-        host.Workspace.SaveActiveAndSettle();
+        host.SaveActiveAndSettle();
         Assert.False(host.Workspace.HasDirtyTabs, "the arrangement left a dirty tab");
         host.G1.ActiveTab = host.S;
         host.Type(host.S, "Marker-S");
@@ -942,7 +942,7 @@ public sealed class PumpedSaveReentrancyTests
 
         // A later successful save of the same note clears it.
         host.S.SaveAdoptedHookForTests = null;
-        host.Workspace.SaveActiveAndSettle();
+        host.SaveActiveAndSettle();
         host.Announced.Clear();
         RunGateOn(host, site);
         host.Settle();
@@ -952,10 +952,32 @@ public sealed class PumpedSaveReentrancyTests
             case "close-pane": Assert.DoesNotContain(host.G1, host.Workspace.Groups); break;
             case "replace": Assert.Equal("note3.md", host.S.Path); break;
             case "teardown":
-                Assert.Null(host.Lifecycle.Workspace);
+                Assert.True(host.Lifecycle.Workspace is null, $"the vault stayed open: {host.Lifecycle.StatusText}");
                 Assert.Single(host.Announced, item => item.Event is A11yEvent.VaultClosed);
                 break;
         }
+    }
+
+    /// <summary>#1555's first CI failure (<c>…KeepsTheGateClosed(site:
+    /// "teardown")</c>): a save schedules a tree refresh 150 ms later
+    /// (<c>HandleFileChange</c>), and a vault close that lands while it reads
+    /// is refused ("File tree refresh cancellation requested …"). The host's
+    /// settle waits for that refresh, so a fact that saves and then runs a
+    /// gate meets none in flight.</summary>
+    [Fact]
+    public void ASettleWaitsForTheTreeRefreshASaveSchedules()
+    {
+        using var host = new Host(VaultCloseDecision.Discard);
+        FilesSidebarViewModel sidebar = Assert.IsType<FilesSidebarViewModel>(host.Lifecycle.FileSidebar);
+        Task before = sidebar.TreeRefreshCompletion;
+        host.G1.ActiveTab = host.S;
+        host.Type(host.S, "Marker-D");
+
+        host.SaveActiveAndSettle();
+
+        Assert.False(host.Lifecycle.DebouncedSidebarRefreshPendingForTests, "the save's tree refresh was still to come");
+        Assert.NotSame(before, sidebar.TreeRefreshCompletion);
+        Assert.True(sidebar.TreeRefreshCompletion.IsCompleted, "the save's tree refresh was still reading");
     }
 
     /// <summary>The gates, on the note under test (S) in the first pane.</summary>
@@ -1380,12 +1402,32 @@ public sealed class PumpedSaveReentrancyTests
 
         internal string Disk(string path) => File.ReadAllText(Path.Combine(Root, path));
 
-        /// <summary>Pump until no save is admitted or writing, then drain what
-        /// the publications queued.</summary>
+        /// <summary>Save the active tab, then <see cref="Settle"/>.</summary>
+        internal void SaveActiveAndSettle()
+        {
+            Workspace.SaveActiveAndSettle();
+            Settle();
+        }
+
+        /// <summary>Pump until no save is admitted or writing, and drain what
+        /// the publications queued. Then pump until the tree refresh a save
+        /// scheduled has run and finished reading, and drain again: a vault
+        /// close refuses while a tree refresh reads (#1555).</summary>
         internal void Settle()
         {
             PumpedDispatcher.PumpUntil(
                 () => Workspace.SavesIdle && Workspace.SavesForTests.LiveWorkersForTests == 0,
+                TimeSpan.FromSeconds(30));
+            for (int drain = 0; drain < 3; drain++)
+            {
+                PumpedDispatcher.Drain();
+            }
+            PumpedDispatcher.PumpUntil(
+                () => !Lifecycle.DebouncedSidebarRefreshPendingForTests
+                    && (Lifecycle.FileSidebar is not { } sidebar
+                        || (sidebar.TreeRefreshCompletion.IsCompleted
+                            && !sidebar.IsLoadingChildren
+                            && !sidebar.IsExpandingLoaded)),
                 TimeSpan.FromSeconds(30));
             for (int drain = 0; drain < 3; drain++)
             {

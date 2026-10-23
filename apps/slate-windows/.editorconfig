@@ -9,3 +9,10 @@ generated_code = true
 # xUnit runs without a synchronization context, so blocking is safe here.
 [tests/**.cs]
 dotnet_diagnostic.xUnit1031.severity = none
+# xunit v3's xUnit1051 asks every call that takes a CancellationToken to pass
+# TestContext.Current.CancellationToken. That token fires only when a run is
+# cancelled or a per-test timeout trips; both suites run serially with no
+# per-test timeouts, and v3 runs them in their own process, so a cancelled
+# run ends with it. Threading the token through ~350 calls (many inside the
+# bounded-wait watchdogs above) would change no behaviour.
+dotnet_diagnostic.xUnit1051.severity = none

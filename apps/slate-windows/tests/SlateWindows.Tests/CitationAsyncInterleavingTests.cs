@@ -484,20 +484,27 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
         using var workspace = MakeAsyncWorkspace(session, announced);
         await QuiesceAsync(workspace);
 
+        // Inline means on the caller's thread while ReloadBibliography is
+        // still on its stack. A thread id alone cannot say that: once the
+        // caller awaits, the pool may run the scheduled seed on that same
+        // thread (xunit v3 runs facts on pool threads).
         int callerThread = Environment.CurrentManagedThreadId;
-        int seedThread = 0;
-        workspace.SeedInterleaveForTests =
-            () => Volatile.Write(ref seedThread, Environment.CurrentManagedThreadId);
+        int reloading = 1;
+        int ranInline = -1;
+        workspace.SeedInterleaveForTests = () => Volatile.Write(
+            ref ranInline,
+            Volatile.Read(ref reloading) == 1 && Environment.CurrentManagedThreadId == callerThread ? 1 : 0);
 
         workspace.ReloadBibliography();
+        Volatile.Write(ref reloading, 0);
         for (int round = 0; round < 40; round++)
         {
             await workspace.SeedWorkForTests;
             await Task.Delay(2);
         }
 
-        Assert.NotEqual(0, Volatile.Read(ref seedThread));
-        Assert.NotEqual(callerThread, Volatile.Read(ref seedThread));
+        Assert.NotEqual(-1, Volatile.Read(ref ranInline));
+        Assert.Equal(0, Volatile.Read(ref ranInline));
     }
 
     /// <summary>

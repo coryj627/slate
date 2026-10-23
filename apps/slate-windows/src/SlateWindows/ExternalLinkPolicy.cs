@@ -560,8 +560,8 @@ internal static class CanvasMediaPolicy
     /// <seealso cref="BetweenCheckAndLaunchForTests"/>
     // Static mutable state: while this is set, EVERY identity query in the
     // process refuses. That is safe only because the test assembly runs
-    // serially — `[assembly: CollectionBehavior(DisableTestParallelization
-    // = true)]` in AssemblyInfo.cs. If assembly-wide parallelization is
+    // serially — `[assembly: Xunit.v3.Parallelization(Mode =
+    // Xunit.Sdk.ParallelMode.None)]` in AssemblyInfo.cs. If assembly-wide parallelization is
     // ever enabled, this seam (and BetweenCheckAndLaunchForTests, which has
     // the same exposure) must become scoped state rather than a static
     // flag, or it will fail unrelated facts nondeterministically.

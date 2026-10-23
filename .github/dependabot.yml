@@ -92,11 +92,6 @@ updates:
     groups:
       nuget:
         update-types: ["minor", "patch"]
-    ignore:
-      # xunit v2 -> xunit.v3 is a migration (TestEvidence, the dispatcher
-      # guard and the serial-execution attribute), not a bump.
-      - dependency-name: "xunit"
-        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: dotnet-sdk
     directory: "/apps/slate-windows"

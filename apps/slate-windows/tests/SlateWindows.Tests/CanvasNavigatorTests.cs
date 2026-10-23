@@ -35,9 +35,9 @@ public sealed partial class CanvasNavigatorTests : IDisposable
     private readonly List<RenderedAnnouncement> _announced = [];
     private CanvasVerbosity _verbosity = CanvasVerbosity.Standard;
 
-    private readonly Xunit.Abstractions.ITestOutputHelper _output;
+    private readonly ITestOutputHelper _output;
 
-    public CanvasNavigatorTests(Xunit.Abstractions.ITestOutputHelper output)
+    public CanvasNavigatorTests(ITestOutputHelper output)
     {
         _output = output;
         _fixture = FixtureVault.Create(3, "canvas-navigator");
