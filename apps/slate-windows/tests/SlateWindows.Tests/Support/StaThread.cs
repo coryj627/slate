@@ -137,7 +137,11 @@ internal static class StaThread
         if (!thread.Join(limit))
         {
             Dispatcher? dispatcher = Volatile.Read(ref owner) is { } started ? Dispatcher.FromThread(started) : null;
-            string stack = StackOf(thread, dispatcher);
+            (string stack, bool taken) = StackOf(thread, dispatcher);
+            if (!taken)
+            {
+                stack += DumpOnTimeout(name);
+            }
             dispatcher?.BeginInvokeShutdown(DispatcherPriority.Send);
             string what = $"{timeoutMessage ?? "The STA fact timed out."} (thread {name}, bound {limit.TotalSeconds:0.#} s; its dispatcher was told to shut down";
             if (thread.Join(unwindGrace ?? UnwindGrace))
@@ -161,6 +165,66 @@ internal static class StaThread
         return result;
     }
 
+    /// <summary>The folder a timed-out body's minidump goes to (#1603): CI's
+    /// app job names its uploaded results folder through
+    /// <c>SLATE_STA_DUMP_DIR</c>; null writes none.</summary>
+    internal static string? DumpDirectory { get; set; } = Environment.GetEnvironmentVariable("SLATE_STA_DUMP_DIR");
+
+    /// <summary>At most this many minidumps per test process: one wedged body
+    /// fails every fact beside it, and each dump is the process's size.</summary>
+    internal const int MaxDumps = 2;
+
+    private static int s_dumps;
+
+    internal static void ResetDumpsForTests() => Volatile.Write(ref s_dumps, 0);
+
+    /// <summary>Write a minidump of the test process into
+    /// <see cref="DumpDirectory"/>, answering the sentence that names it
+    /// (empty when no folder is named or the cap is reached). The dump keeps
+    /// every thread and the memory a debugger needs to walk managed stacks
+    /// (<c>dotnet-dump analyze</c>, then <c>clrstack -all</c>).</summary>
+    private static string DumpOnTimeout(string name)
+    {
+        if (DumpDirectory is not { Length: > 0 } folder || Interlocked.Increment(ref s_dumps) > MaxDumps)
+        {
+            return string.Empty;
+        }
+        string path = Path.Combine(folder, $"{name}-{DateTime.UtcNow:yyyyMMddTHHmmss}.dmp");
+        try
+        {
+            Directory.CreateDirectory(folder);
+            using var process = System.Diagnostics.Process.GetCurrentProcess();
+            using FileStream file = File.Create(path);
+            if (!MiniDumpWriteDump(process.Handle, (uint)process.Id, file.SafeFileHandle, DumpType, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero))
+            {
+                int error = System.Runtime.InteropServices.Marshal.GetLastPInvokeError();
+                file.Close();
+                File.Delete(path);
+                return $" No minidump was written: MiniDumpWriteDump failed with error {error}.";
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return $" No minidump was written: {exception.Message}";
+        }
+        return $" A minidump of the test process is at {path}.";
+    }
+
+    /// <summary>MiniDumpWithDataSegs | WithHandleData | WithUnloadedModules
+    /// | WithPrivateReadWriteMemory | WithFullMemoryInfo | WithThreadInfo:
+    /// .NET's own "heap" dump, enough for managed stacks.</summary>
+    private const int DumpType = 0x1 | 0x4 | 0x20 | 0x200 | 0x800 | 0x1000;
+
+    [System.Runtime.InteropServices.DllImport("dbghelp.dll", SetLastError = true)]
+    private static extern bool MiniDumpWriteDump(
+        IntPtr process,
+        uint processId,
+        Microsoft.Win32.SafeHandles.SafeFileHandle file,
+        int dumpType,
+        IntPtr exceptionParam,
+        IntPtr userStreamParam,
+        IntPtr callbackParam);
+
     /// <summary>How long a timed-out body gets to pump the operation that
     /// takes its stack.</summary>
     internal static readonly TimeSpan StackBound = TimeSpan.FromSeconds(5);
@@ -171,11 +235,11 @@ internal static class StaThread
     /// a body still pumping — a wait loop that drains its dispatcher — runs
     /// it at its next pump. A body that does not pump within
     /// <see cref="StackBound"/>, or has no dispatcher, is reported as such.</summary>
-    private static string StackOf(Thread thread, Dispatcher? dispatcher)
+    private static (string Text, bool Taken) StackOf(Thread thread, Dispatcher? dispatcher)
     {
         if (dispatcher is null)
         {
-            return "Its stack could not be taken: the body has no dispatcher to pump.";
+            return ("Its stack could not be taken: the body has no dispatcher to pump.", false);
         }
         string? stack = null;
         _ = dispatcher.BeginInvoke(
@@ -183,8 +247,8 @@ internal static class StaThread
             () => Volatile.Write(ref stack, BelowThePump(new System.Diagnostics.StackTrace(1, true).ToString())));
         _ = SpinWait.SpinUntil(() => Volatile.Read(ref stack) is not null || !thread.IsAlive, StackBound);
         return Volatile.Read(ref stack) is { } taken
-            ? "Its stack while pumping:" + Environment.NewLine + taken
-            : $"Its stack could not be taken: the body did not pump its dispatcher within {StackBound.TotalSeconds:0} s.";
+            ? ("Its stack while pumping:" + Environment.NewLine + taken, true)
+            : ($"Its stack could not be taken: the body did not pump its dispatcher within {StackBound.TotalSeconds:0} s.", false);
     }
 
     /// <summary>The stack without the dispatcher's own frames above the

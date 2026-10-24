@@ -15,8 +15,71 @@ namespace SlateWindows.Tests;
 /// and one that never unwinds fails every fact that runs beside it until it
 /// ends — then its classes are freed.
 /// </summary>
-public sealed class StaThreadTests
+public sealed class StaThreadTests : IDisposable
 {
+    private readonly string? _dumpDirectory = StaThread.DumpDirectory;
+
+    /// <summary>These facts time out on purpose: none of them writes CI's
+    /// minidump unless it names a folder of its own.</summary>
+    public StaThreadTests()
+    {
+        StaThread.DumpDirectory = null;
+        StaThread.ResetDumpsForTests();
+    }
+
+    public void Dispose()
+    {
+        StaThread.DumpDirectory = _dumpDirectory;
+        StaThread.ResetDumpsForTests();
+    }
+
+    /// <summary>#1603: a body that does not pump gives no stack, so with a
+    /// dump folder named (CI's app job names its results folder) the timeout
+    /// writes a minidump of the process there and says where; the dump
+    /// carries every thread, the body's included.</summary>
+    [Fact]
+    public void ATimedOutBodyThatDoesNotPumpLeavesAMinidumpWhereTheFolderSays()
+    {
+        string folder = Path.Combine(Path.GetTempPath(), $"sta-dump-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(folder);
+        StaThread.DumpDirectory = folder;
+        try
+        {
+            Xunit.Sdk.XunitException timedOut = Assert.Throws<Xunit.Sdk.XunitException>(() => StaThread.Run(
+                () => Thread.Sleep(TimeSpan.FromMilliseconds(600)),
+                TimeSpan.FromMilliseconds(200),
+                "the body only slept",
+                unwindGrace: TimeSpan.FromSeconds(10)));
+
+            string dump = Assert.Single(Directory.GetFiles(folder, "*.dmp"));
+            Assert.Contains($"A minidump of the test process is at {dump}", timedOut.Message, StringComparison.Ordinal);
+            byte[] signature = new byte[4];
+            using (FileStream stream = File.OpenRead(dump))
+            {
+                stream.ReadExactly(signature);
+            }
+            Assert.Equal("MDMP", System.Text.Encoding.ASCII.GetString(signature));
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    /// <summary>With no folder named, nothing is written and the message
+    /// says nothing of a dump.</summary>
+    [Fact]
+    public void WithNoDumpFolderATimeoutWritesNoMinidump()
+    {
+        Xunit.Sdk.XunitException timedOut = Assert.Throws<Xunit.Sdk.XunitException>(() => StaThread.Run(
+            () => Thread.Sleep(TimeSpan.FromMilliseconds(600)),
+            TimeSpan.FromMilliseconds(200),
+            "the body only slept",
+            unwindGrace: TimeSpan.FromSeconds(10)));
+
+        Assert.DoesNotContain("minidump", timedOut.Message, StringComparison.Ordinal);
+    }
+
     /// <summary>The body neither pumps nor returns before its bound, so the
     /// shutdown the runner asks for never runs; it returns inside the grace,
     /// and its thread's classes — a dispatcher's and a visual's at least —
