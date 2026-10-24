@@ -4,7 +4,9 @@
 # Text-level guards over the three workflows that read WINDOWS_RUNNER_MODE,
 # over what branch-cleanup.yml owns (the weekly claude/* branch report;
 # its script's behaviour is BranchCleanup.Tests.ps1), over the PR gate that
-# main's ruleset requires, and over the pause on Dependabot version updates.
+# main's ruleset requires, over the pause on Dependabot version updates, over
+# a11y-check.yml's gate on results whose download failed (#1575), and over the
+# .NET SDK pin every setup-dotnet step reads (#1568).
 # YAML parsing happens on push (GitHub refuses a malformed workflow at the
 # first run); these tests pin the routing contract, the delete switch, the
 # gate and the pause themselves, and the path filters that make
@@ -16,6 +18,7 @@ BeforeAll {
     $script:nightly = Get-Content -Raw (Join-Path $wf 'nightly.yml')
     $script:pilot = Get-Content -Raw (Join-Path $wf 'windows-ci-pilot.yml')
     $script:lane = Get-Content -Raw (Join-Path $wf 'windows-runner-tests.yml')
+    $script:a11y = Get-Content -Raw (Join-Path $wf 'a11y-check.yml')
     function Get-JobBlock([string]$Text, [string]$Job) {
         $start = $Text.IndexOf("`n  ${Job}:")
         if ($start -lt 0) { return '' }
@@ -220,6 +223,69 @@ Describe 'the .NET SDK pin' {
     }
 }
 
+Describe 'a11y-check.yml' {
+    # download-artifact extracts first and checks the digest after, so a mismatch fails the step with the
+    # unverified files on disk (#1575). The score must never be computed, uploaded or posted from them.
+    It 'discards the downloaded results when the download step did not succeed, before anything reads them' {
+        $steps = Get-Steps (Get-JobBlock $a11y 'a11y-check')
+        $download = [array]::IndexOf($steps, @($steps | Where-Object { $_ -match '(?m)^      - name: Download the analysis results' })[0])
+        $download | Should -BeGreaterOrEqual 0
+        $steps[$download] | Should -Match (Get-Lines @('        id: results'))
+        $steps[$download] | Should -Match (Get-Lines @('        continue-on-error: true')) -Because 'a missing artifact must still reach the floor step''s plain-words report'
+        $discard = $steps[$download + 1]
+        $discard | Should -Match (Get-Lines @(
+            '      - name: Discard results the download did not verify',
+            '        id: discard',
+            "        if: steps.results.outcome != 'success'",
+            '        run: |',
+            '          if [ -e a11y-results.json ] || [ -e a11y-results.sarif ]; then',
+            '            echo "discarded=true" >> "$GITHUB_OUTPUT"',
+            '          fi',
+            '          rm -f a11y-results.json a11y-results.sarif'))
+        $discard | Should -Not -Match '(?m)^        continue-on-error:' -Because 'a discard that fails must stop the job before anything reads the files'
+        # Every later step that reads the files is guarded on their existence, and none comes before the discard.
+        foreach ($reader in @(
+                @('Upload SARIF to GitHub Code Scanning', "        if: hashFiles('a11y-results.sarif') != ''"),
+                @('Post score summary on PR', "        if: github.event_name == 'pull_request' && hashFiles('a11y-results.json') != ''"))) {
+            $index = [array]::IndexOf($steps, @($steps | Where-Object { $_ -match ('(?m)^      - name: ' + [regex]::Escape($reader[0])) })[0])
+            $index | Should -BeGreaterThan ($download + 1) -Because "$($reader[0]) must run after the discard"
+            $steps[$index] | Should -Match (Get-Lines @($reader[1]))
+        }
+        $floor = @($steps | Where-Object { $_ -match '(?m)^      - name: Enforce score floor' })
+        $floor.Count | Should -Be 1
+        [array]::IndexOf($steps, $floor[0]) | Should -BeGreaterThan ($download + 1)
+        # The floor always runs and always fails without results: no if:, no continue-on-error:, and each
+        # missing-results branch is a setFailed that returns.
+        $floor[0] | Should -Not -Match '(?m)^        (if|continue-on-error):' -Because 'a skipped or softened floor turns a discarded download green'
+        $floor[0] | Should -Match (Get-Lines @(
+            '          RESULTS_DOWNLOAD: ${{ steps.results.outcome }}',
+            '          RESULTS_DISCARDED: ${{ steps.discard.outputs.discarded }}',
+            '          ANALYZE_RESULT: ${{ needs.analyze.result }}'))
+        $floor[0] | Should -Match (Get-Lines @(
+            '            if (!fs.existsSync(resultsPath)) {',
+            "              if (process.env.RESULTS_DISCARDED === 'true') {",
+            '                core.setFailed('))
+        $floor[0] | Should -Match (Get-Lines @(
+            '                  `the "Download the analysis results" step.`',
+            '                );',
+            '                return;',
+            '              }',
+            "              if (process.env.RESULTS_DOWNLOAD === 'failure' && process.env.ANALYZE_RESULT === 'success') {",
+            '                core.setFailed('))
+        $floor[0] | Should -Match (Get-Lines @(
+            '                  `computed. See the "Download the analysis results" step.`',
+            '                );',
+            '                return;',
+            '              }',
+            '              core.setFailed('))
+        $missing = [regex]::Match($floor[0], '(?s)if \(!fs\.existsSync\(resultsPath\)\) \{.*?const results = JSON\.parse').Value
+        $missing | Should -Not -BeNullOrEmpty
+        $missing | Should -Not -Match 'core\.(warning|notice|info)\(' -Because 'every missing-results branch fails the check'
+        ([regex]::Matches($missing, 'core\.setFailed\(')).Count | Should -Be 3
+        ([regex]::Matches($missing, '(?m)^[ ]+return;[ \t]*\r?$')).Count | Should -Be 3
+    }
+}
+
 Describe 'nightly.yml pool switch' {
     It 'routes the Windows stress job home on home and home-only, and restores the GitHub cache everywhere else' {
         $nightly.Contains("runs-on: `${{ (vars.WINDOWS_RUNNER_MODE == 'home' || vars.WINDOWS_RUNNER_MODE == 'home-only') && 'slate-win-app' || 'windows-latest' }}") | Should -BeTrue
@@ -265,7 +331,7 @@ Describe 'windows-runner-tests.yml Pester pin' {
 
 Describe 'windows-runner-tests.yml path filters' {
     It 'runs these guards when a routed workflow changes, on pull requests and on main' {
-        foreach ($routed in @('windows.yml', 'nightly.yml', 'windows-ci-pilot.yml', 'branch-cleanup.yml', 'pr-gate.yml')) {
+        foreach ($routed in @('windows.yml', 'nightly.yml', 'windows-ci-pilot.yml', 'branch-cleanup.yml', 'pr-gate.yml', 'a11y-check.yml')) {
             ([regex]::Matches($lane, [regex]::Escape("- '.github/workflows/$routed'"))).Count | Should -Be 2 -Because "$routed must be in both the pull_request and push path filters"
         }
     }

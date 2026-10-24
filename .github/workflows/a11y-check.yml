@@ -200,12 +200,29 @@ jobs:
           persist-credentials: false
 
       - name: Download the analysis results
+        id: results
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           name: a11y-results
         # A missing artifact means the analysis died before producing
         # results; the floor step below reports that in plain words.
         continue-on-error: true
+
+      # download-artifact extracts first and checks the digest after, so a
+      # mismatch fails the step with the unverified files still on disk
+      # (#1575). Nothing below may read them: with the files gone, the
+      # SARIF upload and the PR comment skip on their hashFiles guards, and
+      # the floor step (which runs unconditionally) fails. A missing artifact
+      # or a download that failed before extracting anything fails the step
+      # too, with nothing on disk; `discarded` tells the floor step which.
+      - name: Discard results the download did not verify
+        id: discard
+        if: steps.results.outcome != 'success'
+        run: |
+          if [ -e a11y-results.json ] || [ -e a11y-results.sarif ]; then
+            echo "discarded=true" >> "$GITHUB_OUTPUT"
+          fi
+          rm -f a11y-results.json a11y-results.sarif
 
       - name: Upload SARIF to GitHub Code Scanning
         if: hashFiles('a11y-results.sarif') != ''
@@ -286,6 +303,9 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
         env:
           MIN_SCORE: ${{ env.MIN_SCORE }}
+          RESULTS_DOWNLOAD: ${{ steps.results.outcome }}
+          RESULTS_DISCARDED: ${{ steps.discard.outputs.discarded }}
+          ANALYZE_RESULT: ${{ needs.analyze.result }}
         with:
           # Parsing in Node sidesteps any "is jq installed on this
           # runner image" question — github-script always has Node.
@@ -293,6 +313,21 @@ jobs:
             const fs = require('fs');
             const resultsPath = 'a11y-results.json';
             if (!fs.existsSync(resultsPath)) {
+              if (process.env.RESULTS_DISCARDED === 'true') {
+                core.setFailed(
+                  `The analysis results were extracted, but the download step failed (a digest mismatch ` +
+                  `or an interrupted download), so they were discarded and no score was computed. See ` +
+                  `the "Download the analysis results" step.`
+                );
+                return;
+              }
+              if (process.env.RESULTS_DOWNLOAD === 'failure' && process.env.ANALYZE_RESULT === 'success') {
+                core.setFailed(
+                  `The analysis job succeeded, but its results could not be downloaded, so no score was ` +
+                  `computed. See the "Download the analysis results" step.`
+                );
+                return;
+              }
               core.setFailed(
                 `${resultsPath} was not produced — a11y-check likely crashed, or the analysis job ` +
                 `never reached it. See the "SwiftUI Accessibility Check" job.`
