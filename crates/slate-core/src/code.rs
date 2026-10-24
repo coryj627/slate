@@ -275,29 +275,55 @@ pub fn highlight_code(raw: &RawCodeBlock) -> CodeBlock {
     }
 }
 
-/// Tag → grammar lookup. The grammar set is exactly the 15 entries
-/// locked in `05` §6.4; anything else returns `None` so the caller
-/// falls back to the passthrough token.
+/// One highlighted language: its tags (its own name first, then its
+/// aliases) and its grammar.
+type GrammarRow = (&'static [&'static str], fn() -> Language);
+
+/// Every language the highlighter has a grammar for. The grammar set is
+/// exactly the 15 entries locked in `05` §6.4 (TypeScript and TSX are two
+/// grammars, so sixteen rows).
+const GRAMMARS: &[GrammarRow] = &[
+    (&["rust", "rs"], || tree_sitter_rust::LANGUAGE.into()),
+    (&["swift"], || tree_sitter_swift::LANGUAGE.into()),
+    (&["python", "py"], || tree_sitter_python::LANGUAGE.into()),
+    (&["javascript", "js"], || {
+        tree_sitter_javascript::LANGUAGE.into()
+    }),
+    (&["typescript", "ts"], || {
+        tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
+    }),
+    (&["tsx"], || tree_sitter_typescript::LANGUAGE_TSX.into()),
+    (&["markdown", "md"], || tree_sitter_md::LANGUAGE.into()),
+    (&["yaml", "yml"], || tree_sitter_yaml::LANGUAGE.into()),
+    (&["json"], || tree_sitter_json::LANGUAGE.into()),
+    (&["bash", "sh", "shell"], || {
+        tree_sitter_bash::LANGUAGE.into()
+    }),
+    (&["sql"], || tree_sitter_sequel::LANGUAGE.into()),
+    (&["html"], || tree_sitter_html::LANGUAGE.into()),
+    (&["css"], || tree_sitter_css::LANGUAGE.into()),
+    (&["go"], || tree_sitter_go::LANGUAGE.into()),
+    (&["c"], || tree_sitter_c::LANGUAGE.into()),
+    (&["cpp", "c++", "cxx", "cc"], || {
+        tree_sitter_cpp::LANGUAGE.into()
+    }),
+];
+
+/// Tag → grammar lookup over [`GRAMMARS`]; anything else returns `None`
+/// so the caller falls back to the passthrough token.
 fn grammar_for_tag(tag: &str) -> Option<Language> {
-    Some(match tag {
-        "rust" | "rs" => tree_sitter_rust::LANGUAGE.into(),
-        "swift" => tree_sitter_swift::LANGUAGE.into(),
-        "python" | "py" => tree_sitter_python::LANGUAGE.into(),
-        "javascript" | "js" => tree_sitter_javascript::LANGUAGE.into(),
-        "typescript" | "ts" => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-        "tsx" => tree_sitter_typescript::LANGUAGE_TSX.into(),
-        "markdown" | "md" => tree_sitter_md::LANGUAGE.into(),
-        "yaml" | "yml" => tree_sitter_yaml::LANGUAGE.into(),
-        "json" => tree_sitter_json::LANGUAGE.into(),
-        "bash" | "sh" | "shell" => tree_sitter_bash::LANGUAGE.into(),
-        "sql" => tree_sitter_sequel::LANGUAGE.into(),
-        "html" => tree_sitter_html::LANGUAGE.into(),
-        "css" => tree_sitter_css::LANGUAGE.into(),
-        "go" => tree_sitter_go::LANGUAGE.into(),
-        "c" => tree_sitter_c::LANGUAGE.into(),
-        "cpp" | "c++" | "cxx" | "cc" => tree_sitter_cpp::LANGUAGE.into(),
-        _ => return None,
-    })
+    GRAMMARS
+        .iter()
+        .find(|(tags, _)| tags.contains(&tag))
+        .map(|(_, grammar)| grammar())
+}
+
+/// The tags of every language [`highlight_code`] has a grammar for, one
+/// list per language: its own name first, then its aliases. The malformed-
+/// code golden (`tests/highlight_golden.rs`) covers each language from
+/// this list and checks each alias highlights like its language (#1576).
+pub fn highlighted_language_tags() -> impl Iterator<Item = &'static [&'static str]> {
+    GRAMMARS.iter().map(|(tags, _)| *tags)
 }
 
 fn passthrough_code_block(raw: &RawCodeBlock, language_key: &str) -> CodeBlock {
