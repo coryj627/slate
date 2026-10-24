@@ -544,7 +544,11 @@ jobs:
         run: dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release
 
       # The Connections model (W6-2 PR B2, B2-8) runs in its own lane below.
+      # An STA fact that times out without pumping writes a minidump into the
+      # uploaded results folder (StaThread.DumpDirectory, #1603).
       - name: Test
+        env:
+          SLATE_STA_DUMP_DIR: '${{ runner.temp }}\slate-app-results'
         run: >-
           dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj
           --configuration Release --no-build
