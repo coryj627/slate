@@ -94,7 +94,7 @@ updates:
         update-types: ["minor", "patch"]
 
   - package-ecosystem: dotnet-sdk
-    directory: "/apps/slate-windows"
+    directory: "/"
     open-pull-requests-limit: 0
     schedule:
       interval: weekly

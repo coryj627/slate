@@ -93,6 +93,23 @@ pub(crate) enum Relocation {
     Intact,
     /// Nothing is at the watched path any more, and the held root's verified
     /// current path is this one: the vault folder was renamed.
+    ///
+    /// Only [`RootAnchor::Held`] can find a renamed root, so nothing builds
+    /// this variant where that anchor is compiled out (Windows until 22W).
+    /// The re-arm chain that consumes it stays compiled everywhere, which
+    /// keeps 22W a one-line change. The day such a host constructs it, the
+    /// expectation goes unfulfilled and the `-D warnings` lint lanes fail
+    /// (#1570).
+    #[cfg_attr(
+        not(all(
+            any(target_os = "macos", target_os = "linux"),
+            target_pointer_width = "64"
+        )),
+        expect(
+            dead_code,
+            reason = "only a held root (macOS and Linux, 64-bit) can be found renamed"
+        )
+    )]
     Moved(PathBuf),
     /// Something else is at the watched path: a swap.
     Swapped,

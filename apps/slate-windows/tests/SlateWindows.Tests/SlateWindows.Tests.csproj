@@ -76,6 +76,10 @@
     <!-- WeakEventExitTests times this probe's exit. -->
     <ProjectReference Include="..\..\tools\WeakEventExitProbe\WeakEventExitProbe.csproj"
                       ReferenceOutputAssembly="false" />
+    <!-- BuildOutputCensus reads this host's output, which the shell gate's
+         flaui-binaries artifact carries. -->
+    <ProjectReference Include="..\..\tools\GridConformanceHost\GridConformanceHost.csproj"
+                      ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <Import Project="..\EvidenceCompilation.targets" />
