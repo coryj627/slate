@@ -50,15 +50,10 @@ fn fixture_dir() -> PathBuf {
         .join("math_golden")
 }
 
-/// MathCAT's panic hook silences panic messages (#1583), so a failure says
-/// why on stderr before it panics. Only this helper prints, and what it
-/// prints is the fixture corpus and its renderings, never user content.
-#[expect(
-    clippy::disallowed_macros,
-    reason = "libtest must show why the golden failed despite MathCAT's silent panic hook"
-)]
+/// Fails the golden with its report. MathCAT's panic hook used to swallow
+/// the message once the corpus had rendered; `math.rs` now chains it to the
+/// hook before it (#1583), so libtest shows the report.
 fn fail(message: String) -> ! {
-    eprintln!("{message}");
     panic!("{message}");
 }
 
