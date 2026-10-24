@@ -16,10 +16,13 @@
 
 use super::*;
 use crate::session::watch::{
-    FakeClock, SystemClock, WATCH_CEILING, WATCH_DUTY_FACTOR, WATCH_QUIET, WATCH_REARM_ENABLED,
-    WATCH_SPACING, WATCH_TOUCHED_PATH_BOUND, WATCHER_SENTENCE_SPACING_MS, WatchClock,
-    WatchDecision, WatchDrive, WatchTiming,
+    FakeClock, SystemClock, WATCH_CEILING, WATCH_DUTY_FACTOR, WATCH_QUIET, WATCH_SPACING,
+    WATCH_TOUCHED_PATH_BOUND, WATCHER_SENTENCE_SPACING_MS, WatchClock, WatchDecision, WatchDrive,
+    WatchTiming,
 };
+// Read only by the two `#[cfg(unix)]` root-rename facts (#1513's switch).
+#[cfg(unix)]
+use crate::session::watch::WATCH_REARM_ENABLED;
 use crate::vault::{FileEvent, FileEventSink, RootAnchor, RootIdentity, WatchEnd, WatchHandle};
 use std::sync::atomic::AtomicUsize;
 use std::sync::{RwLock, RwLockReadGuard, Weak};
