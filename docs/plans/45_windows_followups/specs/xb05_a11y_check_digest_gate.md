@@ -19,6 +19,8 @@ The issue's two options (drop `continue-on-error` and handle "no results" explic
 
 ## Design
 
+> **Delivered shape (2026-10-24).** Step 2 below keys the floor step's message on the download step's outcome. But a missing artifact fails that step too, and the Goal keeps today's plain-words report for that case. So the discard step records `discarded=true` when it removed files, and the floor step reads `RESULTS_DISCARDED`, `RESULTS_DOWNLOAD` and `ANALYZE_RESULT`. Discarded files fail with "The analysis results were extracted, but the download step failed (a digest mismatch or an interrupted download), so they were discarded and no score was computed." A download that failed with nothing extracted after a successful analysis fails with "The analysis job succeeded, but its results could not be downloaded, so no score was computed." Anything else keeps the "was not produced" sentence. The Pester fact also pins that the floor step has no `if:` and no `continue-on-error:`, and that each missing-results branch is a `setFailed` that returns. The forced missing-artifact run in Tests was not made: it would cost a mac analysis run, and it would only show the unchanged "was not produced" sentence (see the PR). #1616 tracks the stale score comment and the malformed-JSON stack trace, both of which predate this change.
+
 1. **Name the step and act on its outcome.** `:202-208` gains `id: results` and keeps `continue-on-error: true` (so a missing artifact still reaches the floor step's plain-words message). A new step right after it:
    ```yaml
          - name: Discard results the download did not verify
@@ -46,7 +48,6 @@ The issue's two options (drop `continue-on-error` and handle "no results" explic
 Import-Module Pester -RequiredVersion 5.9.1 -Force
 ./ci/windows-runner/tests/Invoke-Tests.ps1             # the new fact red on main, green after
 gh pr checks <N>                                       # a11y-check (analyze + a11y-check jobs) and windows-runner-tests green
-gh run view <scratch run id> --log | Select-String 'could not be downloaded'   # the forced missing-artifact run
 ```
 
 CI lanes: `a11y-check.yml` (its `analyze` job runs on the mac route; the PR is the owner's, same-repo), `windows-runner-tests.yml`. AT: none.
