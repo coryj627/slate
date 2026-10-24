@@ -1,0 +1,44 @@
+<Project>
+
+  <!-- XB-4b (#1574, XD7): NuGet hands every project here the native assets
+       of every RID its packages ship. SkiaSharp and HarfBuzzSharp alone
+       brought 17 RIDs and over 300 MiB of native .pdb symbols into each
+       output that resolves them (the app, GridConformanceHost,
+       SvgDecodeProbe and SlateWindows.Tests), and so into the flaui-binaries
+       artifact.
+
+       The trim runs in every project because each one resolves its own
+       package assets: a RuntimeIdentifier on the app trims the app's output
+       only, and it moves the exe out of the path the shell gate, the
+       censuses and the CI pilot launch it from.
+
+       It removes the assets from RuntimeTargetsCopyLocalItems, the list both
+       the copy and the deps.json are made from, so the manifest never names a
+       file the output lacks. Kept, without their .pdb symbols:
+       - the RID the apphost runs as. That is the build machine's own
+         architecture unless PlatformTarget says otherwise, and
+         generate-bindings.ps1 builds slate_uniffi.dll for the same one, so
+         an ARM64 build keeps win-arm64;
+       - `win` and `any`, the host's fallbacks for it. AccessibilityTests needs
+         `win`: System.Management's real implementation is
+         runtimes/win/lib, and its lib copy only throws
+         PlatformNotSupportedException.
+
+       A RID-specific build (an MSIX publish with -r) gets its native assets
+       as NativeCopyLocalItems instead, flattened into the output root, and
+       this target leaves those alone. BuildOutputCensus pins the result. -->
+  <Target Name="KeepOnlyThisMachinesNativeAssets" AfterTargets="ResolvePackageAssets">
+    <PropertyGroup>
+      <_KeptNativeRuntimeIdentifier>$(DefaultAppHostRuntimeIdentifier)</_KeptNativeRuntimeIdentifier>
+      <_KeptNativeRuntimeIdentifier Condition="'$(_KeptNativeRuntimeIdentifier)' == ''">$(NETCoreSdkRuntimeIdentifier)</_KeptNativeRuntimeIdentifier>
+    </PropertyGroup>
+    <ItemGroup>
+      <_AssetForAnotherPlatform Include="@(RuntimeTargetsCopyLocalItems)"
+                                Condition="'%(RuntimeTargetsCopyLocalItems.RuntimeIdentifier)' != '$(_KeptNativeRuntimeIdentifier)' And '%(RuntimeTargetsCopyLocalItems.RuntimeIdentifier)' != 'win' And '%(RuntimeTargetsCopyLocalItems.RuntimeIdentifier)' != 'any'" />
+      <_AssetForAnotherPlatform Include="@(RuntimeTargetsCopyLocalItems)"
+                                Condition="'%(RuntimeTargetsCopyLocalItems.Extension)' == '.pdb'" />
+      <RuntimeTargetsCopyLocalItems Remove="@(_AssetForAnotherPlatform)" />
+    </ItemGroup>
+  </Target>
+
+</Project>
