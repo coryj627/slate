@@ -273,7 +273,15 @@ jobs:
       - name: Set up .NET 10
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v6.0.0
         with:
-          dotnet-version: '10.0.x'
+          global-json-file: global.json
+      - name: Record the .NET SDK
+        # The pin is global.json at the repository root (#1568): every
+        # dotnet here runs from the root, so it reads that file.
+        run: |
+          $pinned = (Get-Content -Raw global.json | ConvertFrom-Json).sdk.version
+          $resolved = (dotnet --version).Trim()
+          Write-Host "global.json pins $pinned; dotnet resolves $resolved"
+          if ($resolved -ne $pinned) { throw "dotnet resolved SDK $resolved, not the pinned $pinned" }
       - name: Download and verify the pinned producer-attempt binaries
         uses: ./.github/actions/windows-pilot-binaries
         with:
@@ -446,7 +454,15 @@ jobs:
       - name: Set up .NET 10
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v6.0.0
         with:
-          dotnet-version: '10.0.x'
+          global-json-file: global.json
+      - name: Record the .NET SDK
+        # The pin is global.json at the repository root (#1568): every
+        # dotnet here runs from the root, so it reads that file.
+        run: |
+          $pinned = (Get-Content -Raw global.json | ConvertFrom-Json).sdk.version
+          $resolved = (dotnet --version).Trim()
+          Write-Host "global.json pins $pinned; dotnet resolves $resolved"
+          if ($resolved -ne $pinned) { throw "dotnet resolved SDK $resolved, not the pinned $pinned" }
       - name: Download and verify the pinned producer-attempt binaries
         uses: ./.github/actions/windows-pilot-binaries
         with:

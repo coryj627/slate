@@ -79,17 +79,26 @@ public sealed class PumpedDispatcherTests
         FieldInfo? window = typeof(Dispatcher).GetField("_window", BindingFlags.NonPublic | BindingFlags.Instance);
         Assert.True(window is not null, "WPF's Dispatcher._window moved; teach this witness the new shape");
         var wakes = new List<bool>();
+        int recorded = 0;
+        uint drainingThread = 0;
         Func<uint, bool> directWake = PumpedDispatcher.WakeThread;
         PumpedDispatcher.WakeThread = threadId =>
         {
             bool posted = directWake(threadId);
+            // A watchdog an earlier fact's drain left behind reads the seam
+            // only when it fires, so it can reach this wrapper with its own,
+            // long-gone thread: pass it through, record only this drain's.
+            if (threadId != Volatile.Read(ref drainingThread))
+            {
+                return posted;
+            }
             lock (wakes)
             {
                 wakes.Add(posted);
             }
+            Volatile.Write(ref recorded, 1);
             return posted;
         };
-        uint drainingThread = 0;
         bool timedOut = false;
         try
         {
@@ -128,9 +137,15 @@ public sealed class PumpedDispatcherTests
                 "the drained thread did not end even after this fact woke it");
             Assert.Fail("the drain on a windowless dispatcher blocked until this fact woke its thread: the watchdog's direct wake is missing or failed");
         }
+        // The watchdog posts its wake before it records it, so the drain,
+        // the STA body and this thread can all get here before the record
+        // lands (#1594); read the record only once it has.
+        Assert.True(
+            SpinWait.SpinUntil(() => Volatile.Read(ref recorded) == 1, TimeSpan.FromSeconds(5)),
+            "the watchdog's direct wake for this drain was not recorded within 5 s: it was never made, or the drain ended another way");
         lock (wakes)
         {
-            Assert.Equal([true], wakes);
+            Assert.Equal(new[] { true }, wakes);
         }
     }
 

@@ -510,7 +510,7 @@ fn mathcat_worker_loop(rx: std::sync::mpsc::Receiver<RenderRequest>) {
     // the cached state; SpeechStyle / BrailleCode swaps go
     // through `set_preference` and propagate correctly because
     // they execute sequentially on the same thread.
-    match libmathcat::set_rules_dir("Rules") {
+    match set_rules_dir_chaining_panic_hook() {
         Ok(()) => {
             MATHCAT_INITIALIZED.with(|c| c.set(true));
         }
@@ -584,9 +584,40 @@ fn ensure_mathcat_initialized_on_this_thread() -> Result<(), MathCatError> {
     if MATHCAT_INITIALIZED.with(|c| c.get()) {
         return Ok(());
     }
-    libmathcat::set_rules_dir("Rules").map_err(MathCatError::Init)?;
+    set_rules_dir_chaining_panic_hook().map_err(MathCatError::Init)?;
     MATHCAT_INITIALIZED.with(|c| c.set(true));
     Ok(())
+}
+
+/// `libmathcat::set_rules_dir("Rules")`, with MathCAT's panic hook chained
+/// to the hook installed before it (#1583).
+///
+/// MathCAT installs a panic hook of its own, once per process, at the start
+/// of its first `set_rules_dir` (`init_panic_handler`, a `Once`). That hook
+/// records the panic for MathCAT's error reporting and calls the hook it
+/// replaced only under MathCAT's own `cfg(test)`, which no Slate build sets.
+/// So from the first math render on, every panic in the process, caught or
+/// not, on any thread, printed nothing. Before the first `set_rules_dir`,
+/// on whichever thread gets here first, this takes the current hook, has
+/// MathCAT install its own over the default (`init_panic_handler`, the same
+/// `Once` `set_rules_dir` would run), then installs a hook that runs
+/// MathCAT's and then the previous one; only then does MathCAT load its
+/// rules, so no panic during that load is silent either. Taken after
+/// MathCAT's `Once`, `previous` would be MathCAT's own hook, and the chain
+/// would never reach the one before it. Every call then sets the rules
+/// directory (each thread initializes its own MathCAT state).
+fn set_rules_dir_chaining_panic_hook() -> Result<(), libmathcat::errors::Error> {
+    static CHAINED: std::sync::Once = std::sync::Once::new();
+    CHAINED.call_once(|| {
+        let previous = std::panic::take_hook();
+        libmathcat::init_panic_handler();
+        let mathcat = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            mathcat(info);
+            previous(info);
+        }));
+    });
+    libmathcat::set_rules_dir("Rules")
 }
 
 /// Largest MathML payload MathCAT 0.7 accepts. Bigger inputs fail
@@ -1210,6 +1241,62 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// #1583: MathCAT's own panic hook, installed on the first call into
+    /// MathCAT, calls the hook it replaced only under MathCAT's `cfg(test)`.
+    /// After a math render, a panic anywhere in the process must still reach
+    /// the hook that was installed before. This proves the chain when the
+    /// render is the first MathCAT init in its process (nextest runs each
+    /// fact in its own; under `cargo test` run it alone with `--exact`). In
+    /// a shared process where an earlier fact already initialized MathCAT,
+    /// the probe wraps the chain and passes either way.
+    #[test]
+    fn a_panic_after_mathcat_initializes_still_reaches_the_previous_hook() {
+        use std::sync::{Arc, Mutex, PoisonError};
+        let seen: Arc<Mutex<Vec<String>>> = Arc::default();
+        let recorder = Arc::clone(&seen);
+        let current = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let payload = info.payload();
+            let message = payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| {
+                    payload
+                        .downcast_ref::<&str>()
+                        .map(|text| (*text).to_string())
+                })
+                .unwrap_or_default();
+            recorder
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(message);
+            current(info);
+        }));
+        let raw = RawMathBlock {
+            source: "x^2".to_string(),
+            display_style: MathDisplayStyle::Block,
+            line: 1,
+            byte_offset: 0,
+        };
+        let block = render_math(&raw, MathPrefs::default());
+        assert!(!block.mathml.is_empty(), "the render must reach MathCAT");
+        let marker = "slate-1583: a panic after the first math render".to_string();
+        let thrown = marker.clone();
+        let outcome =
+            thread::spawn(move || std::panic::catch_unwind(move || panic!("{thrown}"))).join();
+        assert!(
+            matches!(outcome, Ok(Err(_))),
+            "the probe panic is caught on its own thread"
+        );
+        // A copy, so the guard is dropped before the assertion: a failing
+        // assert panics through the probe, which takes the same lock.
+        let seen = seen.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        assert!(
+            seen.iter().any(|message| message == &marker),
+            "the hook installed before MathCAT never saw the panic: {seen:?}"
+        );
     }
 
     /// W3-2 round 5: `get_math_blocks` work is bounded per call. The
