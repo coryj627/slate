@@ -22,9 +22,10 @@
 #     gate consumes the app lane's built binaries as an artifact — the
 #     exe resolver walks RELATIVE from the test assembly
 #     (ShellAccessibilityTests.SlateWindowsExe), so the artifact
-#     preserves the apps/slate-windows bin layout and needs no
-#     checkout. Revisit if Namespace ships interactive Windows
-#     sessions (they ship RDP, so a desktop plainly can exist).
+#     preserves the apps/slate-windows bin layout, carries the root
+#     global.json (the SDK pin), and needs no checkout. Revisit if
+#     Namespace ships interactive Windows sessions (they ship RDP, so
+#     a desktop plainly can exist).
 #
 # The historical check name "build + test (windows x64)" belongs to the
 # `gate` aggregate job, which fails unless ALL FOUR lanes succeed — a
@@ -116,6 +117,8 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
+      # The .NET SDK pin every dotnet in the lane reads (#1568).
+      - 'global.json'
       - '.github/workflows/windows.yml'
       - 'ci/windows-runner/route/**'
       - 'scripts/verify_windows_model_shards.py'
@@ -157,6 +160,8 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
+      # The .NET SDK pin every dotnet in the lane reads (#1568).
+      - 'global.json'
       - '.github/workflows/windows.yml'
       - 'ci/windows-runner/route/**'
       - 'scripts/verify_windows_model_shards.py'
@@ -542,7 +547,15 @@ jobs:
       - name: Set up .NET 10
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v6.0.0
         with:
-          dotnet-version: '10.0.x'
+          global-json-file: global.json
+      - name: Record the .NET SDK
+        # The pin is global.json at the repository root (#1568): every
+        # dotnet here runs from the root, so it reads that file.
+        run: |
+          $pinned = (Get-Content -Raw global.json | ConvertFrom-Json).sdk.version
+          $resolved = (dotnet --version).Trim()
+          Write-Host "global.json pins $pinned; dotnet resolves $resolved"
+          if ($resolved -ne $pinned) { throw "dotnet resolved SDK $resolved, not the pinned $pinned" }
 
       - name: Generate C# bindings (builds slate_uniffi x64 cdylib)
         run: ./apps/slate-windows/generate-bindings.ps1 -Locked
@@ -575,17 +588,19 @@ jobs:
           retention-days: 7
 
       # Handoff to the flaui job: the exe resolver walks relative from
-      # the test assembly, so the artifact root is apps/slate-windows
-      # (upload-artifact stores paths relative to the least common
-      # ancestor) and the download recreates the exact bin layout.
-      # Named per run attempt so a re-run can't collide with a prior
-      # attempt's artifact.
+      # the test assembly, so the download must recreate the exact bin
+      # layout. upload-artifact stores paths relative to the least common
+      # ancestor, which global.json (the SDK pin the job has no checkout
+      # to read, #1568) makes the repository root; the job downloads to
+      # the workspace root. Named per run attempt so a re-run can't
+      # collide with a prior attempt's artifact.
       - name: Upload FlaUI gate binaries
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: flaui-binaries-${{ github.run_id }}
           overwrite: true
           path: |
+            global.json
             apps/slate-windows/src/SlateWindows/bin/Release/**/*
             apps/slate-windows/tests/SlateWindows.AccessibilityTests/bin/Release/**/*
             apps/slate-windows/tools/GridConformanceHost/bin/Release/**/*
@@ -772,7 +787,15 @@ jobs:
       - name: Set up .NET 10
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v6.0.0
         with:
-          dotnet-version: '10.0.x'
+          global-json-file: global.json
+      - name: Record the .NET SDK
+        # The pin is global.json at the repository root (#1568): every
+        # dotnet here runs from the root, so it reads that file.
+        run: |
+          $pinned = (Get-Content -Raw global.json | ConvertFrom-Json).sdk.version
+          $resolved = (dotnet --version).Trim()
+          Write-Host "global.json pins $pinned; dotnet resolves $resolved"
+          if ($resolved -ne $pinned) { throw "dotnet resolved SDK $resolved, not the pinned $pinned" }
 
       - name: Generate C# bindings (builds slate_uniffi x64 cdylib)
         run: ./apps/slate-windows/generate-bindings.ps1 -Locked
@@ -857,22 +880,33 @@ jobs:
     runs-on: ${{ (vars.WINDOWS_RUNNER_MODE == 'home-only' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && 'slate-win-shell' || 'windows-latest' }}
     timeout-minutes: 20
     steps:
-      - name: Set up .NET 10
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v6.0.0
-        with:
-          dotnet-version: '10.0.x'
-
+      # First, so setup-dotnet below reads the global.json the artifact
+      # carries; the download itself needs no SDK.
       - name: Download FlaUI gate binaries
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           name: flaui-binaries-${{ github.run_id }}
-          path: apps/slate-windows
+          path: .
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v6.0.0
+        with:
+          global-json-file: global.json
+      - name: Record the .NET SDK
+        # The pin is global.json at the repository root (#1568): every
+        # dotnet here runs from the root, so it reads that file.
+        run: |
+          $pinned = (Get-Content -Raw global.json | ConvertFrom-Json).sdk.version
+          $resolved = (dotnet --version).Trim()
+          Write-Host "global.json pins $pinned; dotnet resolves $resolved"
+          if ($resolved -ne $pinned) { throw "dotnet resolved SDK $resolved, not the pinned $pinned" }
 
       # Keep this process-owning gate separate from the in-process
       # censuses so the two test hosts cannot race for Slate's
       # single-instance identity. VSTest assembly mode: the adapters
-      # ship in the bin folder, so no project file (and no source) is
-      # needed on this runner.
+      # ship in the bin folder, so no project file and no source are
+      # needed on this runner; the one source file the artifact carries
+      # is global.json, the SDK pin.
       - name: Shell accessibility gate (FlaUI + axe-windows)
         run: >-
           dotnet test

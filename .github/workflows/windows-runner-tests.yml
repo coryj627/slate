@@ -15,6 +15,10 @@ on:
       - '.github/workflows/windows.yml'
       - '.github/workflows/nightly.yml'
       - '.github/workflows/windows-ci-pilot.yml'
+      # The setup-dotnet guards read the composite build action and the SDK pin,
+      # and refuse a second global.json anywhere.
+      - '.github/actions/windows-native-build/action.yml'
+      - '**/global.json'
       # The branch-cleanup guard (Workflows.Tests.ps1) and behaviour test
       # (BranchCleanup.Tests.ps1) must run when that workflow or its script changes.
       - '.github/workflows/branch-cleanup.yml'
@@ -23,6 +27,8 @@ on:
       - '.github/workflows/pr-gate.yml'
       # The Dependabot pause's guard (Workflows.Tests.ps1) must run when it changes.
       - '.github/dependabot.yml'
+      # The a11y score's download gate (Workflows.Tests.ps1) must run when it changes.
+      - '.github/workflows/a11y-check.yml'
       # The Windows rust lint guard (Workflows.Tests.ps1) reads rust.yml's clippy line.
       - '.github/workflows/rust.yml'
   push:
@@ -34,6 +40,10 @@ on:
       - '.github/workflows/windows.yml'
       - '.github/workflows/nightly.yml'
       - '.github/workflows/windows-ci-pilot.yml'
+      # The setup-dotnet guards read the composite build action and the SDK pin,
+      # and refuse a second global.json anywhere.
+      - '.github/actions/windows-native-build/action.yml'
+      - '**/global.json'
       # The branch-cleanup guard (Workflows.Tests.ps1) and behaviour test
       # (BranchCleanup.Tests.ps1) must run when that workflow or its script changes.
       - '.github/workflows/branch-cleanup.yml'
@@ -42,6 +52,8 @@ on:
       - '.github/workflows/pr-gate.yml'
       # The Dependabot pause's guard (Workflows.Tests.ps1) must run when it changes.
       - '.github/dependabot.yml'
+      # The a11y score's download gate (Workflows.Tests.ps1) must run when it changes.
+      - '.github/workflows/a11y-check.yml'
       # The Windows rust lint guard (Workflows.Tests.ps1) reads rust.yml's clippy line.
       - '.github/workflows/rust.yml'
 

@@ -321,11 +321,7 @@ public sealed partial class ShellAccessibilityTests
                 "FilesTree",
                 TimeSpan.FromSeconds(10));
             Assert.Equal(ControlType.Tree, filesTree.ControlType);
-            AutomationElement[] treeItems = filesTree.FindAllDescendants(
-                automation.ConditionFactory.ByControlType(ControlType.TreeItem));
-            AutomationElement noteItem = treeItems.FirstOrDefault(item =>
-                item.Name.StartsWith("note", StringComparison.OrdinalIgnoreCase))
-                ?? throw new Xunit.Sdk.XunitException("The note TreeItem is absent.");
+            AutomationElement noteItem = WaitForTreeItemStartingWith(filesTree, automation, "note.md");
             Assert.True(noteItem.Patterns.SelectionItem.IsSupported);
             noteItem.Patterns.SelectionItem.Pattern.Select();
             AutomationElement editor = WaitForEditor(
@@ -600,9 +596,7 @@ public sealed partial class ShellAccessibilityTests
                 "F2 from the Files tree did not focus the rename field.");
             Assert.Equal("note.md", renameInput.Patterns.Value.Pattern.Value);
             PressKey(VirtualKeyShort.ESCAPE);
-            AutomationElement folderItem = treeItems.FirstOrDefault(item =>
-                item.Name.StartsWith("Folder", StringComparison.OrdinalIgnoreCase))
-                ?? throw new Xunit.Sdk.XunitException("The folder TreeItem is absent.");
+            AutomationElement folderItem = WaitForTreeItemStartingWith(filesTree, automation, "Folder");
             Assert.True(folderItem.Patterns.ExpandCollapse.IsSupported);
             var folderExpansion = folderItem.Patterns.ExpandCollapse.Pattern;
             folderItem.Focus();
@@ -1433,12 +1427,7 @@ public sealed partial class ShellAccessibilityTests
             // command, and require the ReadingSurface AutomationId.
             AutomationElement filesTree = WaitForElement(
                 window, "FilesTree", TimeSpan.FromSeconds(30));
-            AutomationElement noteItem = filesTree
-                .FindAllDescendants(
-                    automation.ConditionFactory.ByControlType(ControlType.TreeItem))
-                .FirstOrDefault(item =>
-                    item.Name.StartsWith("note", StringComparison.OrdinalIgnoreCase))
-                ?? throw new Xunit.Sdk.XunitException("The note TreeItem is absent.");
+            AutomationElement noteItem = WaitForTreeItemStartingWith(filesTree, automation, "note.md");
             noteItem.Patterns.SelectionItem.Pattern.Select();
             WaitForEditor(
                 window, automation, "note.md editor", TimeSpan.FromSeconds(10));
@@ -1768,12 +1757,7 @@ public sealed partial class ShellAccessibilityTests
 
             AutomationElement filesTree = WaitForElement(
                 window, "FilesTree", TimeSpan.FromSeconds(30));
-            AutomationElement noteItem = filesTree
-                .FindAllDescendants(
-                    automation.ConditionFactory.ByControlType(ControlType.TreeItem))
-                .FirstOrDefault(item =>
-                    item.Name.StartsWith("note", StringComparison.OrdinalIgnoreCase))
-                ?? throw new Xunit.Sdk.XunitException("The note TreeItem is absent.");
+            AutomationElement noteItem = WaitForTreeItemStartingWith(filesTree, automation, "note.md");
             noteItem.Patterns.SelectionItem.Pattern.Select();
             WaitForEditor(
                 window, automation, "note.md editor", TimeSpan.FromSeconds(10));
@@ -2730,12 +2714,7 @@ public sealed partial class ShellAccessibilityTests
 
             AutomationElement filesTree = WaitForElement(
                 window, "FilesTree", TimeSpan.FromSeconds(30));
-            AutomationElement hostItem = filesTree
-                .FindAllDescendants(
-                    automation.ConditionFactory.ByControlType(ControlType.TreeItem))
-                .FirstOrDefault(item =>
-                    item.Name.StartsWith("host", StringComparison.OrdinalIgnoreCase))
-                ?? throw new Xunit.Sdk.XunitException("The host TreeItem is absent.");
+            AutomationElement hostItem = WaitForTreeItemStartingWith(filesTree, automation, "host.md");
             hostItem.Patterns.SelectionItem.Pattern.Select();
             WaitForEditor(
                 window, automation, "host.md editor", TimeSpan.FromSeconds(10));
@@ -2934,12 +2913,7 @@ public sealed partial class ShellAccessibilityTests
 
             AutomationElement filesTree = WaitForElement(
                 window, "FilesTree", TimeSpan.FromSeconds(30));
-            AutomationElement todoItem = filesTree
-                .FindAllDescendants(
-                    automation.ConditionFactory.ByControlType(ControlType.TreeItem))
-                .FirstOrDefault(item =>
-                    item.Name.StartsWith("todo", StringComparison.OrdinalIgnoreCase))
-                ?? throw new Xunit.Sdk.XunitException("The todo TreeItem is absent.");
+            AutomationElement todoItem = WaitForTreeItemStartingWith(filesTree, automation, "todo.md");
             todoItem.Patterns.SelectionItem.Pattern.Select();
             WaitForEditor(
                 window, automation, "todo.md editor", TimeSpan.FromSeconds(10));
@@ -3446,12 +3420,7 @@ public sealed partial class ShellAccessibilityTests
 
             AutomationElement filesTree = WaitForElement(
                 window, "FilesTree", TimeSpan.FromSeconds(30));
-            AutomationElement citedItem = filesTree
-                .FindAllDescendants(
-                    automation.ConditionFactory.ByControlType(ControlType.TreeItem))
-                .FirstOrDefault(item =>
-                    item.Name.StartsWith("cited", StringComparison.OrdinalIgnoreCase))
-                ?? throw new Xunit.Sdk.XunitException("The cited TreeItem is absent.");
+            AutomationElement citedItem = WaitForTreeItemStartingWith(filesTree, automation, "cited.md");
             citedItem.Patterns.SelectionItem.Pattern.Select();
             WaitForEditor(
                 window, automation, "cited.md editor", TimeSpan.FromSeconds(10));
@@ -4260,12 +4229,7 @@ public sealed partial class ShellAccessibilityTests
             // Open the base from the files tree.
             AutomationElement filesTree = WaitForElement(
                 window, "FilesTree", TimeSpan.FromSeconds(30));
-            AutomationElement baseItem = filesTree
-                .FindAllDescendants(
-                    automation.ConditionFactory.ByControlType(ControlType.TreeItem))
-                .FirstOrDefault(item =>
-                    item.Name.StartsWith("Notes", StringComparison.OrdinalIgnoreCase))
-                ?? throw new Xunit.Sdk.XunitException("The Notes.base TreeItem is absent.");
+            AutomationElement baseItem = WaitForTreeItemStartingWith(filesTree, automation, "Notes.base");
             baseItem.Patterns.SelectionItem.Pattern.Select();
 
             // The tab surface: grid identity + §8.7 headers.
@@ -4757,12 +4721,7 @@ public sealed partial class ShellAccessibilityTests
             // save).
             AutomationElement filesTree = WaitForElement(
                 window, "FilesTree", TimeSpan.FromSeconds(30));
-            AutomationElement noteItem = filesTree
-                .FindAllDescendants(
-                    automation.ConditionFactory.ByControlType(ControlType.TreeItem))
-                .FirstOrDefault(item =>
-                    item.Name.StartsWith("alpha", StringComparison.OrdinalIgnoreCase))
-                ?? throw new Xunit.Sdk.XunitException("The alpha TreeItem is absent.");
+            AutomationElement noteItem = WaitForTreeItemStartingWith(filesTree, automation, "alpha.md");
             noteItem.Patterns.SelectionItem.Pattern.Select();
             AutomationElement editor = WaitForEditor(
                 window, automation, "alpha.md editor", TimeSpan.FromSeconds(10));
@@ -11777,7 +11736,7 @@ public sealed partial class ShellAccessibilityTests
                                         or FlaUI.Core.Definitions.ExpandCollapseState.PartiallyExpanded));
                         return found is not null;
                     }
-                    catch (System.Runtime.InteropServices.COMException)
+                    catch (Exception exception) when (IsTransientUiaFault(exception))
                     {
                         return false;
                     }
