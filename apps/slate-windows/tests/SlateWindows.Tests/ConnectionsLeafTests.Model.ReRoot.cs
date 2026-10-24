@@ -82,6 +82,13 @@ public sealed partial class ConnectionsLeafTests
 
         public int Asked { get; private set; }
 
+        /// <summary>The leaf whose pool reads the dialog waits for (#1598).</summary>
+        public ConnectionsLeafViewModel? Leaf { get; set; }
+
+        /// <summary>The dialog window the work being scheduled belongs to: a
+        /// computation inherits it from the action that scheduled it.</summary>
+        private static readonly AsyncLocal<object?> DialogWindow = new();
+
         public WorkspaceDirtyNavigationDecision Decide(WorkspaceTabViewModel tab, WorkspaceItemState item)
         {
             Asked++;
@@ -100,12 +107,123 @@ public sealed partial class ConnectionsLeafTests
             {
                 Assert.True(parked.Reached.Wait(TimeSpan.FromSeconds(10)), "the parked load never reached its gate before the dialog acted");
             }
-            inside?.Invoke();
+            if (inside is not null)
+            {
+                RunInsideTheDialog(inside);
+            }
             return Decision;
+        }
+
+        /// <summary>#1598: every read the in-dialog action started on the
+        /// leaf's pool has finished before the dialog returns, so it reads the
+        /// vault that action left. A seam that returned at once let the open
+        /// after the dialog race those reads: its task query on the moved-from
+        /// path it installs (B2-D10) has core re-read that path, which moves
+        /// the graph's generation, and a probe the pool started late then read
+        /// the moved generation and reloaded once more, on a cold runner only.
+        /// The order this fixes, reads inside the dialog and applies after the
+        /// open, is the model's choice, not production's: there the modal
+        /// frame's pump runs the applies too, and the re-read's own
+        /// file-change event probes again, which the model's host does not
+        /// deliver (#1625). The work is told apart by a token per dialog window
+        /// that a computation inherits from the action that scheduled it; a
+        /// leaf retired inside the dialog refuses the applies, so the wait
+        /// ends there.</summary>
+        private void RunInsideTheDialog(Action inside)
+        {
+            Assert.True(Leaf is not null, "the gate seam has no leaf to wait for: build its host with ReRootHost");
+            ConnectionsLeafViewModel leaf = Leaf!;
+            object window = new();
+            int scheduled = 0;
+            int read = 0;
+            Action? afterSchedule = leaf.AfterScheduleForTests;
+            Action? applyQueued = leaf.ApplyQueuedForTests;
+            leaf.AfterScheduleForTests = () =>
+            {
+                afterSchedule?.Invoke();
+                if (ReferenceEquals(DialogWindow.Value, window))
+                {
+                    Interlocked.Increment(ref scheduled);
+                }
+            };
+            leaf.ApplyQueuedForTests = () =>
+            {
+                applyQueued?.Invoke();
+                if (ReferenceEquals(DialogWindow.Value, window))
+                {
+                    Interlocked.Increment(ref read);
+                }
+            };
+            object? outer = DialogWindow.Value;
+            try
+            {
+                DialogWindow.Value = window;
+                try
+                {
+                    inside();
+                }
+                finally
+                {
+                    DialogWindow.Value = outer;
+                }
+                Assert.True(
+                    SpinWait.SpinUntil(
+                        () => leaf.IsRetired || Volatile.Read(ref read) >= Volatile.Read(ref scheduled),
+                        TimeSpan.FromSeconds(10)),
+                    "the pool never finished the reads the dialog's action started");
+            }
+            finally
+            {
+                leaf.AfterScheduleForTests = afterSchedule;
+                leaf.ApplyQueuedForTests = applyQueued;
+            }
         }
     }
 
-    private static Host ReRootHost(string root, GateSeam gate) => new(root, () => 1, gate.Decide);
+    private static Host ReRootHost(string root, GateSeam gate)
+    {
+        var host = new Host(root, () => 1, gate.Decide);
+        gate.Leaf = host.Leaf;
+        return host;
+    }
+
+    /// <summary>#1598: the dialog returns only after the pool has read what
+    /// its action started, here a probe whose computation the pool starts
+    /// late, and before that read's apply runs: the route settles it. A seam
+    /// that returned at once let the route's open run first, and the probe
+    /// then read the generation the open's task query moved, not the one
+    /// the dialog left: an extra silent load on a cold runner.</summary>
+    [Fact]
+    public void TheDialogReturnsOnlyAfterThePoolReadWhatItsActionStarted()
+    {
+        PumpedDispatcher.Run(() =>
+        {
+            using GraphVault vault = GraphVault.Copy("dialog-seam");
+            var gate = new GateSeam();
+            using Host host = ReRootHost(vault.Root, gate);
+            host.ActivateLeaf();
+            host.OpenNote(Hub);
+            host.Settle();
+            int loads = host.Loads;
+            int reads = host.Leaf.CrossingsForTests["graph_generation"];
+            host.Leaf.BeforeComputeForTests = () => Thread.Sleep(500);
+            // The vault moves inside the dialog, so the probe reads a newer
+            // generation than the leaf's tree and its apply reloads.
+            gate.InsideTheDialog = () =>
+            {
+                BumpTheVault(host, 1598);
+                host.Workspace.NotifyGraphOfVaultChange();
+            };
+
+            _ = gate.Decide(null!, null!);
+
+            Assert.Equal(reads + 1, host.Leaf.CrossingsForTests["graph_generation"]);
+            Assert.Equal(loads, host.Loads);
+            host.Leaf.BeforeComputeForTests = null;
+            host.Settle();
+            Assert.Equal(loads + 1, host.Loads);
+        });
+    }
 
     private static string? UnreachableReRoot(ReRootCell cell)
     {
