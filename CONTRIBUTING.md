@@ -84,7 +84,12 @@ compile break on either side fails the PR.
 The `Makefile` and `scripts/*.sh` assume a unix shell; on Windows, work in
 PowerShell with the `dotnet` CLI directly. Prerequisites: the repo-pinned
 Rust toolchain (`rustup` reads `rust-toolchain.toml` automatically), the
-.NET 10 SDK, and the pinned bindings generator:
+.NET SDK `global.json` pins at the repository root (an exact version, or a
+later patch of its feature band; CI installs exactly that version), and the
+pinned bindings generator. With only an SDK from another feature band
+installed, every `dotnet` command stops with "A compatible .NET SDK was not
+found"; install the pinned version with
+`dotnet-install.ps1 -Version <global.json's version>`:
 
 ```powershell
 cargo install --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag v0.11.1+v0.31.0 uniffi-bindgen-cs --locked
