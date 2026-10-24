@@ -1,0 +1,371 @@
+=== rust #1
+source: fn (⏎
+token Keyword 0..2 fn
+token Punctuation 3..4 (
+
+=== rust #2
+source: let point = Point { x: 1, y:⏎fn next() -> {⏎
+token Keyword 0..3 let
+token Identifier 4..9 point
+token Operator 10..11 =
+token Identifier 12..17 Point
+token Punctuation 18..19 {
+token Identifier 20..21 x
+token Punctuation 21..22 :
+token Number 23..24 1
+token Punctuation 24..25 ,
+token Identifier 26..27 y
+token Punctuation 27..28 :
+token Identifier 29..31 fn
+token Identifier 32..36 next
+token Punctuation 36..37 (
+token Punctuation 37..38 )
+token Operator 39..40 -
+token Operator 40..41 >
+token Punctuation 42..43 {
+
+=== swift #1
+source: func area(width: Int, -> Int {⏎    return width *⏎
+token Keyword 0..4 func
+token Identifier 5..9 area
+token Punctuation 9..10 (
+token Identifier 10..15 width
+token Punctuation 15..16 :
+token Type 17..20 Int
+token Punctuation 20..21 ,
+token Operator 22..24 ->
+token Type 25..28 Int
+token Punctuation 29..30 {
+token Keyword 35..41 return
+token Identifier 42..47 width
+token Operator 48..49 *
+
+=== python #1
+source: def area(width, height:⏎    return width *⏎
+token Keyword 0..3 def
+token Identifier 4..8 area
+token Punctuation 8..9 (
+token Identifier 9..14 width
+token Punctuation 14..15 ,
+token Identifier 16..22 height
+token Punctuation 22..23 :
+token Keyword 28..34 return
+token Identifier 35..40 width
+token Operator 41..42 *
+
+=== javascript #1
+source: const { width, height = props;⏎
+token Keyword 0..5 const
+token Punctuation 6..7 {
+token Identifier 8..13 width
+token Punctuation 13..14 ,
+token Identifier 15..21 height
+token Operator 22..23 =
+token Identifier 24..29 props
+token Punctuation 29..30 ;
+
+=== javascript #2
+source: function area({ width, height ) {⏎  return width *⏎
+token Keyword 0..8 function
+token Identifier 9..13 area
+token Punctuation 13..14 (
+token Punctuation 14..15 {
+token Identifier 16..21 width
+token Punctuation 21..22 ,
+token Identifier 23..29 height
+token Punctuation 30..31 )
+token Punctuation 32..33 {
+token Keyword 36..42 return
+token Identifier 43..48 width
+token Operator 49..50 *
+
+=== typescript #1
+source: const { width, height: number = props;⏎
+token Keyword 0..5 const
+token Punctuation 6..7 {
+token Identifier 8..13 width
+token Punctuation 13..14 ,
+token Identifier 15..21 height
+token Punctuation 21..22 :
+token Identifier 23..29 number
+token Operator 30..31 =
+token Identifier 32..37 props
+token Punctuation 37..38 ;
+
+=== typescript #2
+source: let { x, y = origin;⏎function area(w: number, h:): number {⏎
+token Keyword 0..3 let
+token Punctuation 4..5 {
+token Identifier 6..7 x
+token Punctuation 7..8 ,
+token Identifier 9..10 y
+token Operator 11..12 =
+token Identifier 13..19 origin
+token Punctuation 19..20 ;
+token Keyword 21..29 function
+token Identifier 30..34 area
+token Punctuation 34..35 (
+token Identifier 35..36 w
+token Punctuation 36..37 :
+token Number 38..44 number
+token Punctuation 44..45 ,
+token Identifier 46..47 h
+token Punctuation 47..48 :
+token Punctuation 48..49 )
+token Punctuation 49..50 :
+token Number 51..57 number
+token Punctuation 58..59 {
+
+=== tsx #1
+source: const { title, items = props;⏎return <ul>{items</ul>;⏎
+token Keyword 0..5 const
+token Punctuation 6..7 {
+token Identifier 8..13 title
+token Punctuation 13..14 ,
+token Identifier 15..20 items
+token Operator 21..22 =
+token Identifier 23..28 props
+token Punctuation 28..29 ;
+token Keyword 30..36 return
+token Operator 37..38 <
+token Identifier 38..40 ul
+token Operator 40..41 >
+token Punctuation 41..42 {
+token Identifier 42..47 items
+token Operator 47..48 <
+token Operator 48..49 /
+
+=== tsx #2
+source: function List({ items, onPick ) {⏎  return <li onClick={onPick>{items}</li>;⏎}⏎
+token Keyword 0..8 function
+token Identifier 9..13 List
+token Punctuation 13..14 (
+token Punctuation 14..15 {
+token Identifier 16..21 items
+token Punctuation 21..22 ,
+token Identifier 23..29 onPick
+token Punctuation 30..31 )
+token Punctuation 32..33 {
+token Keyword 36..42 return
+token Operator 43..44 <
+token Identifier 44..46 li
+token Identifier 47..54 onClick
+token Operator 54..55 =
+token Punctuation 55..56 {
+token Identifier 56..62 onPick
+token Operator 62..63 >
+token Punctuation 63..64 {
+token Identifier 64..69 items
+token Punctuation 69..70 }
+token Operator 70..71 <
+token Operator 71..72 /
+token Punctuation 77..78 }
+
+=== markdown #1
+source: # Heading⏎[link](⏎```rust⏎fn x(⏎
+token Keyword 0..1 #
+token Other("text") 2..9 Heading
+token Punctuation 10..11 [
+token Punctuation 15..16 ]
+token Punctuation 16..17 (
+token Punctuation 18..21 ```
+token Punctuation 30..31 (
+
+=== yaml #1
+source: key: [a, b⏎other: : value⏎- item⏎
+token String 0..3 key
+token Punctuation 3..4 :
+token Punctuation 5..6 [
+token String 6..7 a
+token Punctuation 7..8 ,
+token String 9..10 b
+token String 11..16 other
+token Punctuation 16..17 :
+
+=== json #1
+source: {"a": [1, 2, "b": }⏎
+token Punctuation 0..1 {
+token String 1..2 "
+token String 2..3 a
+token String 3..4 "
+token Punctuation 4..5 :
+token Punctuation 6..7 [
+token Number 7..8 1
+token Punctuation 8..9 ,
+token Number 10..11 2
+token Punctuation 11..12 ,
+token String 13..14 "
+token String 14..15 b
+token String 15..16 "
+token Punctuation 16..17 :
+token Punctuation 18..19 }
+
+=== bash #1
+source: if [ -f file ]; then⏎  echo "unterminated⏎fi⏎
+token Keyword 0..2 if
+token Punctuation 3..4 [
+token Identifier 8..12 file
+token Punctuation 13..14 ]
+token Punctuation 14..15 ;
+token Keyword 16..20 then
+token Identifier 23..27 echo
+token String 28..29 "
+token String 29..41 unterminated
+token String 42..44 fi
+
+=== sql #1
+source: SELECT name, FROM users WHERE⏎
+token Keyword 0..6 SELECT
+token Identifier 7..11 name
+token Punctuation 11..12 ,
+token Identifier 13..17 FROM
+token Identifier 18..23 users
+
+=== html #1
+source: <div class="card><p>text</div⏎
+token Operator 0..1 <
+token Keyword 1..4 div
+token Identifier 5..10 class
+token Operator 10..11 =
+token String 11..12 "
+token String 12..30 card><p>text</div⏎
+
+=== css #1
+source: .card { color: red; .title {⏎  margin: 0⏎
+token Punctuation 0..1 .
+token Identifier 1..5 card
+token Punctuation 6..7 {
+token Identifier 8..13 color
+token Punctuation 13..14 :
+token String 15..18 red
+token Punctuation 18..19 ;
+token Punctuation 20..21 .
+token Identifier 21..26 title
+token Punctuation 27..28 {
+token Keyword 31..37 margin
+token Punctuation 37..38 :
+
+=== go #1
+source: func main( {⏎	fmt.Println("x"⏎
+token Keyword 0..4 func
+token Identifier 5..9 main
+token Punctuation 9..10 (
+token Punctuation 11..12 {
+token Identifier 14..17 fmt
+token Punctuation 17..18 .
+token Type 18..25 Println
+token Punctuation 25..26 (
+token String 26..27 "
+token String 27..28 x
+token String 28..29 "
+semantic Function 5..9 main
+
+=== c #1
+source: int width = 1⏎int height = 2;⏎
+token Type 0..3 int
+token Identifier 4..9 width
+token Operator 10..11 =
+token Number 12..13 1
+token Type 14..17 int
+token Identifier 18..24 height
+token Operator 25..26 =
+token Number 27..28 2
+token Punctuation 28..29 ;
+
+=== c #2
+source: width height area;⏎
+token Type 0..5 width
+token Identifier 6..12 height
+token Identifier 13..17 area
+token Punctuation 17..18 ;
+
+=== c #3
+source: struct size { int width height; };⏎
+token Keyword 0..6 struct
+token Type 7..11 size
+token Punctuation 12..13 {
+token Type 14..17 int
+token Identifier 18..23 width
+token Identifier 24..30 height
+token Punctuation 30..31 ;
+token Punctuation 32..33 }
+token Punctuation 33..34 ;
+
+=== c #4
+source: unsigned = 3;⏎size_t area(size_t w, h) { return w *⏎
+token Keyword 0..8 unsigned
+token Operator 9..10 =
+token Number 11..12 3
+token Punctuation 12..13 ;
+token Type 14..20 size_t
+token Identifier 21..25 area
+token Punctuation 25..26 (
+token Type 26..32 size_t
+token Identifier 33..34 w
+token Punctuation 34..35 ,
+token Type 36..37 h
+token Punctuation 37..38 )
+token Punctuation 39..40 {
+token Keyword 41..47 return
+token Identifier 48..49 w
+token Operator 50..51 *
+
+=== cpp #1
+source: class Shape { public: void draw( };⏎template <typename T T value;⏎
+token Keyword 0..5 class
+token Type 6..11 Shape
+token Punctuation 12..13 {
+token Keyword 14..20 public
+token Punctuation 20..21 :
+token Type 22..26 void
+token Identifier 27..31 draw
+token Punctuation 31..32 (
+token Punctuation 33..34 }
+token Punctuation 34..35 ;
+token Keyword 36..44 template
+token Operator 45..46 <
+token Keyword 46..54 typename
+token Type 55..56 T
+token Identifier 57..58 T
+token Identifier 59..64 value
+token Punctuation 64..65 ;
+
+=== c #5
+source: unsigned unsigned 1 height int } ,⏎
+token Keyword 0..8 unsigned
+token Keyword 9..17 unsigned
+token Number 18..19 1
+token Identifier 20..26 height
+token Identifier 27..30 int
+token Punctuation 31..32 }
+token Punctuation 33..34 ,
+
+=== c #6
+source: unsigned unsigned = * 1 return }⏎
+token Keyword 0..8 unsigned
+token Keyword 9..17 unsigned
+token Operator 18..19 =
+token Operator 20..21 *
+token Number 22..23 1
+token Identifier 24..30 return
+token Punctuation 31..32 }
+
+=== c #7
+source: ) unsigned unsigned = T T ( b⏎
+token Punctuation 0..1 )
+token Keyword 2..10 unsigned
+token Keyword 11..19 unsigned
+token Operator 20..21 =
+token Identifier 22..23 T
+token Identifier 24..25 T
+token Punctuation 26..27 (
+token Identifier 28..29 b
+
+=== javascript #3
+source: catch ({ message, code⏎
+token Keyword 0..5 catch
+token Punctuation 6..7 (
+token Punctuation 7..8 {
+token Identifier 9..16 message
+token Punctuation 16..17 ,
+token Identifier 18..22 code

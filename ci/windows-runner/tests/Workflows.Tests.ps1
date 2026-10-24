@@ -4,8 +4,10 @@
 # Text-level guards over the three workflows that read WINDOWS_RUNNER_MODE,
 # over what branch-cleanup.yml owns (the weekly claude/* branch report;
 # its script's behaviour is BranchCleanup.Tests.ps1), over the PR gate that
-# main's ruleset requires, over the pause on Dependabot version updates, and
-# over a11y-check.yml's gate on results whose download failed (#1575).
+# main's ruleset requires, over the pause on Dependabot version updates, over
+# a11y-check.yml's gate on results whose download failed (#1575), and over the
+# .NET SDK pin every setup-dotnet step reads (#1568), and over the Windows
+# lane's clippy step (#1570).
 # YAML parsing happens on push (GitHub refuses a malformed workflow at the
 # first run); these tests pin the routing contract, the delete switch, the
 # gate and the pause themselves, and the path filters that make
@@ -156,6 +158,93 @@ Describe 'windows.yml routing through the router' {
     }
 }
 
+Describe 'windows.yml rust lint' {
+    # rust.yml lints on Linux, where cfg(windows) code never compiles (#1570); this lane lints what Windows builds.
+    It 'the windows rust lane runs clippy with warnings as errors, rust.yml''s invocation verbatim, unconditionally, after both suites' {
+        $command = 'cargo clippy --workspace --all-targets --locked -- -D warnings'
+        $rustLint = Get-Content -Raw (Join-Path $wf 'rust.yml')
+        $rustLint | Should -Match (Get-Lines @("        run: $command")) -Because 'the Windows step mirrors rust.yml''s lint job'
+        $steps = Get-Steps (Get-JobBlock $windows 'rust-tests')
+        $clippy = @($steps | Where-Object { $_ -match (Get-Lines @('      - name: clippy (windows x64, -D warnings)')) })
+        $clippy.Count | Should -Be 1
+        # Its only keys are the name and the command: no if:, continue-on-error: or shell override can soften it.
+        $keys = @($clippy[0] -split '\r?\n' | Where-Object { $_ -match '\S' -and $_ -notmatch '^[ \t]*#' } | ForEach-Object { $_.TrimEnd() })
+        $keys | Should -Be @('      - name: clippy (windows x64, -D warnings)', "        run: $command")
+        # After the suites, so a lint finding never hides the Windows test results.
+        foreach ($suiteName in 'slate-core non-census test suite', 'slate-cli test suite') {
+            $suite = @($steps | Where-Object { $_ -match ('(?m)^      - name: ' + [regex]::Escape($suiteName)) })
+            $suite.Count | Should -Be 1
+            [array]::IndexOf($steps, $suite[0]) | Should -BeLessThan ([array]::IndexOf($steps, $clippy[0]))
+        }
+    }
+}
+
+Describe 'the .NET SDK pin' {
+    # dotnet resolves global.json upward from the working directory, and every CI dotnet runs from the repository
+    # root, so the pin lives there (#1568). setup-dotnet installs the newest SDK for a latest* rollForward, so the
+    # pin is exact; the step after each setup fails the job unless dotnet resolves exactly that version.
+    BeforeAll {
+        $script:root = Join-Path $PSScriptRoot '..' '..' '..'
+        $script:sdkPin = Get-Content -Raw (Join-Path $root 'global.json') | ConvertFrom-Json
+        # Every workflow and every composite action, so a setup-dotnet added anywhere is held to the pin.
+        $script:setupFiles = @{}
+        foreach ($file in @(Get-ChildItem (Join-Path $root '.github' 'workflows') -File -Include '*.yml', '*.yaml' -Recurse) +
+            @(Get-ChildItem (Join-Path $root '.github' 'actions') -File -Include 'action.yml', 'action.yaml' -Recurse)) {
+            $setupFiles[$file.FullName.Substring((Resolve-Path $root).Path.Length + 1)] = Get-Content -Raw $file.FullName
+        }
+        $script:recordBody = @(
+            '$pinned = (Get-Content -Raw global.json | ConvertFrom-Json).sdk.version',
+            '$resolved = (dotnet --version).Trim()',
+            'Write-Host "global.json pins $pinned; dotnet resolves $resolved"',
+            'if ($resolved -ne $pinned) { throw "dotnet resolved SDK $resolved, not the pinned $pinned" }')
+    }
+    It 'global.json at the root names one exact SDK with rollForward patch, and no other tracked global.json shadows it' {
+        $sdkPin.sdk.version | Should -Match '^\d+\.\d+\.\d{3}$' -Because 'a full SDK version, never a band or a prerelease'
+        $sdkPin.sdk.rollForward | Should -BeExactly 'patch' -Because 'a latest* rollForward makes setup-dotnet install the newest SDK on its release day'
+        $tracked = @(git -C $root ls-files | Where-Object { $_ -match '(^|/)global\.json$' })
+        $tracked | Should -Be @('global.json') -Because 'dotnet run below a second global.json would read that pin first'
+    }
+    It 'every setup-dotnet step in every workflow and action reads the root global.json, names no version, and is followed by the step that fails unless dotnet resolves the pin' {
+        $count = 0
+        foreach ($name in $setupFiles.Keys) {
+            $text = $setupFiles[$name]
+            if ($text -notmatch 'actions/setup-dotnet@') { continue }
+            $text | Should -Not -Match 'dotnet-version:' -Because "$name must take the version from global.json alone"
+            $steps = @(foreach ($match in [regex]::Matches($text, '(?ms)^(?<indent>[ ]+)- (?:(?!^\k<indent>- ).)*')) { $match.Value })
+            for ($i = 0; $i -lt $steps.Count; $i++) {
+                if ($steps[$i] -notmatch 'uses: actions/setup-dotnet@') { continue }
+                $count++
+                $steps[$i] | Should -Match '(?m)^[ ]+global-json-file: global\.json[ \t]*\r?$' -Because "every setup-dotnet in $name reads the pin"
+                $indent = [regex]::Match($steps[$i], '^[ ]+').Value
+                # The record step's lines, exactly: nothing can be added to soften it (an if:, a continue-on-error:,
+                # an early exit) or taken out of it.
+                $expected = @("$indent- name: Record the .NET SDK")
+                if ($name -like '*action.y*ml') { $expected += "$indent  shell: pwsh" }
+                $expected += "$indent  run: |"
+                $expected += @($recordBody | ForEach-Object { "$indent    $_" })
+                $lines = @($steps[$i + 1] -split '\r?\n' | Where-Object { $_ -match '\S' -and $_ -notmatch '^[ \t]*#' } | ForEach-Object { $_.TrimEnd() })
+                $lines | Should -Be $expected -Because "the step after setup-dotnet in $name checks the pin and nothing else"
+            }
+        }
+        $count | Should -Be 6 -Because 'three in windows.yml, two in the pilot, one in the composite build action; a removed one leaves dotnet on the image''s SDK'
+    }
+    It 'the flaui job downloads the artifact to the workspace root before it sets up .NET, and the artifact carries global.json' {
+        $steps = Get-Steps (Get-JobBlock $windows 'flaui')
+        $steps[0] | Should -Match (Get-Lines @('      - name: Download FlaUI gate binaries'))
+        $steps[0] | Should -Match (Get-Lines @('          path: .'))
+        $steps[1] | Should -Match 'uses: actions/setup-dotnet@'
+        $upload = @(Get-Steps (Get-JobBlock $windows 'windows') | Where-Object { $_ -match '- name: Upload FlaUI gate binaries' })
+        $upload.Count | Should -Be 1
+        $upload[0] | Should -Match (Get-Lines @('          path: |', '            global.json'))
+    }
+    It 'a change to the pin runs the Windows lane and these guards, on pull requests and on main' {
+        ([regex]::Matches($windows, (Get-Lines @("      - 'global.json'")))).Count | Should -Be 2
+        foreach ($path in "      - '**/global.json'", "      - '.github/actions/windows-native-build/action.yml'") {
+            ([regex]::Matches($lane, (Get-Lines @($path)))).Count | Should -Be 2 -Because "$path must be in both windows-runner-tests.yml filters"
+        }
+    }
+}
+
 Describe 'a11y-check.yml' {
     # download-artifact extracts first and checks the digest after, so a mismatch fails the step with the
     # unverified files on disk (#1575). The score must never be computed, uploaded or posted from them.
@@ -264,7 +353,8 @@ Describe 'windows-runner-tests.yml Pester pin' {
 
 Describe 'windows-runner-tests.yml path filters' {
     It 'runs these guards when a routed workflow changes, on pull requests and on main' {
-        foreach ($routed in @('windows.yml', 'nightly.yml', 'windows-ci-pilot.yml', 'branch-cleanup.yml', 'pr-gate.yml', 'a11y-check.yml')) {
+        # rust.yml is read by the rust lint fact: a change to its clippy line must run these guards too.
+        foreach ($routed in @('windows.yml', 'nightly.yml', 'windows-ci-pilot.yml', 'branch-cleanup.yml', 'pr-gate.yml', 'a11y-check.yml', 'rust.yml')) {
             ([regex]::Matches($lane, [regex]::Escape("- '.github/workflows/$routed'"))).Count | Should -Be 2 -Because "$routed must be in both the pull_request and push path filters"
         }
     }

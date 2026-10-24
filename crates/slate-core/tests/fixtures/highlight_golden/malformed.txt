@@ -1,0 +1,74 @@
+=== rust #1
+fn (
+=== rust #2
+let point = Point { x: 1, y:
+fn next() -> {
+=== swift #1
+func area(width: Int, -> Int {
+    return width *
+=== python #1
+def area(width, height:
+    return width *
+=== javascript #1
+const { width, height = props;
+=== javascript #2
+function area({ width, height ) {
+  return width *
+=== typescript #1
+const { width, height: number = props;
+=== typescript #2
+let { x, y = origin;
+function area(w: number, h:): number {
+=== tsx #1
+const { title, items = props;
+return <ul>{items</ul>;
+=== tsx #2
+function List({ items, onPick ) {
+  return <li onClick={onPick>{items}</li>;
+}
+=== markdown #1
+# Heading
+[link](
+```rust
+fn x(
+=== yaml #1
+key: [a, b
+other: : value
+- item
+=== json #1
+{"a": [1, 2, "b": }
+=== bash #1
+if [ -f file ]; then
+  echo "unterminated
+fi
+=== sql #1
+SELECT name, FROM users WHERE
+=== html #1
+<div class="card><p>text</div
+=== css #1
+.card { color: red; .title {
+  margin: 0
+=== go #1
+func main( {
+	fmt.Println("x"
+=== c #1
+int width = 1
+int height = 2;
+=== c #2
+width height area;
+=== c #3
+struct size { int width height; };
+=== c #4
+unsigned = 3;
+size_t area(size_t w, h) { return w *
+=== cpp #1
+class Shape { public: void draw( };
+template <typename T T value;
+=== c #5
+unsigned unsigned 1 height int } ,
+=== c #6
+unsigned unsigned = * 1 return }
+=== c #7
+) unsigned unsigned = T T ( b
+=== javascript #3
+catch ({ message, code

@@ -29,6 +29,16 @@
   <ItemGroup>
     <PackageReference Include="AvalonEdit" Version="6.3.1.120" />
     <PackageReference Include="Svg.Skia" Version="5.2.3" />
+    <!-- XB-4b (#1574): Svg.Skia's two native dependencies are named here,
+         so a Svg.Skia minor can no longer carry a new SkiaSharp or
+         HarfBuzzSharp major in transitively, as 5.2.3 did (#1542). Both are
+         the newest stable releases past the cooldown: SkiaSharp 4.153.1
+         (2026-09-30; the 4.148.0 it replaces still compiled in the RAW/DNG
+         decoder) and HarfBuzzSharp 14.2.1.301 (2026-09-30). Their native
+         assets follow them; the build copies only the ones the build
+         machine's architecture runs (../../Directory.Build.targets). -->
+    <PackageReference Include="SkiaSharp" Version="4.153.1" />
+    <PackageReference Include="HarfBuzzSharp" Version="14.2.1.301" />
     <!-- W3-2 (#729): LaTeX rendering for reading-view math. Currency
          check recorded in the PR: v2.1.0 (2023-07) is the latest
          release; the repo is maintained (CI green through 2026-07,
