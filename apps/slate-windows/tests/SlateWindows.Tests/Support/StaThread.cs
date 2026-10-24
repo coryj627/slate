@@ -178,6 +178,10 @@ internal static class StaThread
 
     internal static void ResetDumpsForTests() => Volatile.Write(ref s_dumps, 0);
 
+    /// <summary>Test seam: replaces the dump call over the open file, so a
+    /// fact can make it report a failure after writing.</summary>
+    internal static Func<Microsoft.Win32.SafeHandles.SafeFileHandle, bool>? DumpWriterForTests { get; set; }
+
     /// <summary>Write a minidump of the test process into
     /// <see cref="DumpDirectory"/>, answering the sentence that names it
     /// (empty when no folder is named or the cap is reached). The dump keeps
@@ -195,12 +199,24 @@ internal static class StaThread
             Directory.CreateDirectory(folder);
             using var process = System.Diagnostics.Process.GetCurrentProcess();
             using FileStream file = File.Create(path);
-            if (!MiniDumpWriteDump(process.Handle, (uint)process.Id, file.SafeFileHandle, DumpType, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero))
+            bool written = DumpWriterForTests is { } writer
+                ? writer(file.SafeFileHandle)
+                : MiniDumpWriteDump(process.Handle, (uint)process.Id, file.SafeFileHandle, DumpType, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+            if (!written)
             {
+                // Dumping its own running process, the writer can report a
+                // failure (a partial copy, 0x8007012B) after it wrote most of
+                // the dump: a file with content is kept, and the error named
+                // (CI on 3d4aa90d deleted one and said nothing).
                 int error = System.Runtime.InteropServices.Marshal.GetLastPInvokeError();
+                long length = file.Length;
+                if (length > 0)
+                {
+                    return $" A partial minidump of the test process is at {path} ({length} bytes; MiniDumpWriteDump reported error 0x{error:X8}).";
+                }
                 file.Close();
                 File.Delete(path);
-                return $" No minidump was written: MiniDumpWriteDump failed with error {error}.";
+                return $" No minidump was written: MiniDumpWriteDump failed with error 0x{error:X8}.";
             }
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)

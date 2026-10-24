@@ -51,8 +51,11 @@ public sealed class StaThreadTests : IDisposable
                 "the body only slept",
                 unwindGrace: TimeSpan.FromSeconds(10)));
 
+            // The message first: a write that fails says why (CI on 3d4aa90d
+            // failed here with an empty folder and no message to read).
+            Assert.Contains("minidump of the test process is at ", timedOut.Message, StringComparison.Ordinal);
             string dump = Assert.Single(Directory.GetFiles(folder, "*.dmp"));
-            Assert.Contains($"A minidump of the test process is at {dump}", timedOut.Message, StringComparison.Ordinal);
+            Assert.Contains($"minidump of the test process is at {dump}", timedOut.Message, StringComparison.Ordinal);
             byte[] signature = new byte[4];
             using (FileStream stream = File.OpenRead(dump))
             {
@@ -62,6 +65,41 @@ public sealed class StaThreadTests : IDisposable
         }
         finally
         {
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    /// <summary>Dumping its own process while threads run, the writer can
+    /// report a failure — a partial copy — after it wrote most of the dump:
+    /// that file is kept and named with the error, not deleted.</summary>
+    [Fact]
+    public void AMinidumpTheWriterReportsAsPartialIsKeptAndNamed()
+    {
+        string folder = Path.Combine(Path.GetTempPath(), $"sta-dump-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(folder);
+        StaThread.DumpDirectory = folder;
+        StaThread.DumpWriterForTests = file =>
+        {
+            RandomAccess.Write(file, "MDMP"u8, 0);
+            System.Runtime.InteropServices.Marshal.SetLastPInvokeError(unchecked((int)0x8007012B));
+            return false;
+        };
+        try
+        {
+            Xunit.Sdk.XunitException timedOut = Assert.Throws<Xunit.Sdk.XunitException>(() => StaThread.Run(
+                () => Thread.Sleep(TimeSpan.FromMilliseconds(600)),
+                TimeSpan.FromMilliseconds(200),
+                "the body only slept",
+                unwindGrace: TimeSpan.FromSeconds(10)));
+
+            Assert.Contains("A partial minidump of the test process is at ", timedOut.Message, StringComparison.Ordinal);
+            Assert.Contains("0x8007012B", timedOut.Message, StringComparison.Ordinal);
+            string dump = Assert.Single(Directory.GetFiles(folder, "*.dmp"));
+            Assert.Contains(dump, timedOut.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            StaThread.DumpWriterForTests = null;
             Directory.Delete(folder, recursive: true);
         }
     }
