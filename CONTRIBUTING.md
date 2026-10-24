@@ -101,7 +101,9 @@ dotnet format apps/slate-windows/SlateWindows.slnx  # pre-push; CI enforces --ve
 
 Rust-side checks (`cargo fmt --all -- --check`, `cargo clippy --all-targets
 --workspace -- -D warnings`, `cargo test --workspace`) run the same commands
-as `make ci` and work unchanged in PowerShell.
+as `make ci` and work unchanged in PowerShell. The Windows lane runs the
+same clippy command, so `cfg(windows)` code is linted with warnings as
+errors too.
 
 ## Before you open a PR
 

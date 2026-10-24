@@ -154,6 +154,27 @@ Describe 'windows.yml routing through the router' {
     }
 }
 
+Describe 'windows.yml rust lint' {
+    # rust.yml lints on Linux, where cfg(windows) code never compiles (#1570); this lane lints what Windows builds.
+    It 'the windows rust lane runs clippy with warnings as errors, rust.yml''s invocation verbatim, unconditionally, after both suites' {
+        $command = 'cargo clippy --workspace --all-targets --locked -- -D warnings'
+        $rustLint = Get-Content -Raw (Join-Path $wf 'rust.yml')
+        $rustLint | Should -Match (Get-Lines @("        run: $command")) -Because 'the Windows step mirrors rust.yml''s lint job'
+        $steps = Get-Steps (Get-JobBlock $windows 'rust-tests')
+        $clippy = @($steps | Where-Object { $_ -match (Get-Lines @('      - name: clippy (windows x64, -D warnings)')) })
+        $clippy.Count | Should -Be 1
+        # Its only keys are the name and the command: no if:, continue-on-error: or shell override can soften it.
+        $keys = @($clippy[0] -split '\r?\n' | Where-Object { $_ -match '\S' -and $_ -notmatch '^[ \t]*#' } | ForEach-Object { $_.TrimEnd() })
+        $keys | Should -Be @('      - name: clippy (windows x64, -D warnings)', "        run: $command")
+        # After the suites, so a lint finding never hides the Windows test results.
+        foreach ($suiteName in 'slate-core non-census test suite', 'slate-cli test suite') {
+            $suite = @($steps | Where-Object { $_ -match ('(?m)^      - name: ' + [regex]::Escape($suiteName)) })
+            $suite.Count | Should -Be 1
+            [array]::IndexOf($steps, $suite[0]) | Should -BeLessThan ([array]::IndexOf($steps, $clippy[0]))
+        }
+    }
+}
+
 Describe 'nightly.yml pool switch' {
     It 'routes the Windows stress job home on home and home-only, and restores the GitHub cache everywhere else' {
         $nightly.Contains("runs-on: `${{ (vars.WINDOWS_RUNNER_MODE == 'home' || vars.WINDOWS_RUNNER_MODE == 'home-only') && 'slate-win-app' || 'windows-latest' }}") | Should -BeTrue
@@ -199,7 +220,8 @@ Describe 'windows-runner-tests.yml Pester pin' {
 
 Describe 'windows-runner-tests.yml path filters' {
     It 'runs these guards when a routed workflow changes, on pull requests and on main' {
-        foreach ($routed in @('windows.yml', 'nightly.yml', 'windows-ci-pilot.yml', 'branch-cleanup.yml', 'pr-gate.yml')) {
+        # rust.yml is read by the rust lint fact: a change to its clippy line must run these guards too.
+        foreach ($routed in @('windows.yml', 'nightly.yml', 'windows-ci-pilot.yml', 'branch-cleanup.yml', 'pr-gate.yml', 'rust.yml')) {
             ([regex]::Matches($lane, [regex]::Escape("- '.github/workflows/$routed'"))).Count | Should -Be 2 -Because "$routed must be in both the pull_request and push path filters"
         }
     }

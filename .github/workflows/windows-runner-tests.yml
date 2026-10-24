@@ -23,6 +23,8 @@ on:
       - '.github/workflows/pr-gate.yml'
       # The Dependabot pause's guard (Workflows.Tests.ps1) must run when it changes.
       - '.github/dependabot.yml'
+      # The Windows rust lint guard (Workflows.Tests.ps1) reads rust.yml's clippy line.
+      - '.github/workflows/rust.yml'
   push:
     branches: [main]
     paths:
@@ -40,6 +42,8 @@ on:
       - '.github/workflows/pr-gate.yml'
       # The Dependabot pause's guard (Workflows.Tests.ps1) must run when it changes.
       - '.github/dependabot.yml'
+      # The Windows rust lint guard (Workflows.Tests.ps1) reads rust.yml's clippy line.
+      - '.github/workflows/rust.yml'
 
 permissions:
   contents: read
