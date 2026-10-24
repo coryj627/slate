@@ -61,3 +61,12 @@ a_1 + a_2 + \cdots + a_n
 \sideset{_a^b}{_c^d}\sum
 \frac{<}{
 \operatorname{<mi>x</mi>}
+
+# Primes (#1585): a prime after an element is its superscript; two fold
+# into one double prime; three stay as parsed; a primed script on a
+# function is grouped first.
+f''(x)
+f'''(x)
+x_1'
+\sin'(x)
+\sin^2'(x)
