@@ -145,7 +145,7 @@ public sealed class PumpedDispatcherTests
             "the watchdog's direct wake for this drain was not recorded within 5 s: it was never made, or the drain ended another way");
         lock (wakes)
         {
-            Assert.Equal([true], wakes);
+            Assert.Equal(new[] { true }, wakes);
         }
     }
 
