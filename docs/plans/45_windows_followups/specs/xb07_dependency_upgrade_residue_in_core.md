@@ -1,6 +1,6 @@
 # XB-7 — A panic after the first math render prints its message, and malformed-code highlighting is pinned
 
-Issues: #1583 #1576. Size S. Lanes: rust (and `windows.yml`'s `rust-tests`, which runs `cargo test -p slate-core`). AT: —. Wave: X3, slot 1. Depends on: XD5. Parallel with: XB-11, XB-9 step 0. Decision: XD5 (pending; recommended "pin snapshots"; under "accept as cosmetic": the #1576 half becomes a closing comment and this chunk is #1583 alone). Interlock: XB-8 edits `math.rs:670-703`; this chunk edits `math.rs:507-537` (the worker loop). XB-7 lands first; one golden diff at a time.
+Issues: #1583 #1576. Size S. Lanes: rust (and `windows.yml`'s `rust-tests`, which runs `cargo test -p slate-core`). AT: —. Wave: X3, slot 1. Depends on: XD5. Parallel with: XB-11, XB-9 step 0. Decision: XD5 (decided 2026-10-24: "pin snapshots"). Interlock: XB-8 edits `math.rs:670-703`; this chunk edits `math.rs:507-537` (the worker loop). XB-7 lands first; one golden diff at a time.
 
 ## Goal
 

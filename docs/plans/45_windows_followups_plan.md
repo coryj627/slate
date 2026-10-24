@@ -47,9 +47,8 @@ code checked against the tree at 2463ee7a.
 
 **Fixed already, close after a verification run (§2.1):** #1572.
 
-**Written already, waiting to be pushed:** #1569 with #1565's step 3,
-on the local branch `claude/agents-cooldown-merge-procedure` (commit
-683e5cf3, one file, `AGENTS.md`, not on `origin`). XB-0 opens it.
+**Merged since this plan was written:** #1569 with #1565's step 3,
+as #1605 (1aeb0115, `AGENTS.md` only, 2026-10-23).
 
 ## 2. What the reading found
 
@@ -121,7 +120,9 @@ shares their files. §6 names each interlock.
 
 ## 3. Decisions for the owner (XD1 to XD8)
 
-| Id | Issue | Question | Recommendation | Blocks |
+**Decided 2026-10-24.** The owner took every recommendation below as written. Each call is recorded on its issue: #1590 (XD1), #1595 and #1591 (XD2), #1580 and #1581 (XD3), #1585 (XD4), #1576 (XD5), #1564 (XD6) and #1574 (XD7). XD8 is recorded by XB-0's close-out comment on #1562.
+
+| Id | Issue | Question | Decision (as recommended) | Blocks |
 |---|---|---|---|---|
 | XD1 | #1573 #1590 | After a save, a close that lands during the debounced tree refresh is refused ("File tree refresh cancellation requested…"). Keep the refusal, have the close cancel and await the read, or skip the refresh once a close has begun? | A close that has begun cancels the pending debounced refresh (it never starts) and awaits any in-flight tree read before tearing down, whoever started it (a user who pressed Refresh then Close wants the close), bounded (5 s, then today's refusal with its sentence, so the fallback path keeps its announcement contract). The user never repeats a close for Slate's own save. The three refusals for user-started work (folder expansion, import, filter) are unchanged. A close refused for another reason re-issues the refresh it skipped. | XB-11 |
 | XD2 | #1595 #1591 | Line reading (Down) speaks a drawn formula as "grouping" and a coverage-gap formula as its `$$…$$` source; Tab speaks the HelpText source after the speech. Which shape: (a) a text-range representation that reads as the MathCAT speech, (b) a caret-entry announcement like Ctrl+Alt+M, or (c) document that math is read with Ctrl+Alt+M? And where does the source go when it leaves HelpText? | Decided by a one-day spike (XB-9 step 0, recorded on #1595 before any product code) that records what NVDA and Narrator speak, per block, for Down, Up, caret re-entry and Tab under three candidate shapes: the speech as the paragraph's range text in a visually suppressed `Run` beside the drawing; every math paragraph element-only (empty range, the speech as the element's Name) with the peer's control type tried as Group, Image and Text; and a caret-entry announcement. The shape that speaks the speech once with no LaTeX and no bare "grouping" under both readers wins; (c) is rejected because it leaves the commonest path broken. The source leaves HelpText (ToolTip keeps it) and is spoken on request by a Reading-scope chord (`Ctrl+Shift+Enter` unless taken), named in the help line and the chord table; its sentence is core-owned (`A11yEvent::MathSourceSpoken`, an FFI addition that keeps the Swift switch compiling) unless the owner declines the FFI change, then `HostComposed` like the braille sentence. The mac half of #1591 takes the same "on request, never on focus" rule. | XB-9 |
@@ -142,9 +143,8 @@ gates in PowerShell for a core change; field passes launched per plan 44
 §4 rule 4; the adversarial review per chunk; the parity matrix regenerated
 when a chord or help line changes. Two additions:
 
-1. **The cooldown and the one-at-a-time merge** of
-   `claude/agents-cooldown-merge-procedure` are in force from XB-0's merge
-   on: every version a PR brings in is at least 7 days old when the PR
+1. **The cooldown and the one-at-a-time merge** (`AGENTS.md`,
+   "Dependencies" and "Git and PRs", #1605) are in force for every chunk: every version a PR brings in is at least 7 days old when the PR
    opens, and no PR merges until `main`'s runs on the previous merge
    commit are green.
 2. **A Windows-lane change proves itself on the lane.** A chunk that edits
@@ -161,7 +161,7 @@ carries.
 
 | Chunk | What | Closes | Size | Lanes | AT | Decision |
 |---|---|---|---|---|---|---|
-| XB-0 | Close-outs: verify #1572 on `main` by its own filtered-run reproduction and close it with a comment at f267867b; push `claude/agents-cooldown-merge-procedure` as the PR for #1569 (`Refs #1565`, whose step 3 it writes; the issue stays open for its lane-level checks, XB-13); correct #1493's starting pin to rc.6 in a comment; close #1562 per XD8; file the two follow-up issues this plan names (the SVG guard weights, XD3; the mac "source on request" twin of XD2 if #1591's mac half does not already carry it) | #1572 #1569 #1562 (Refs #1565 #1493) | S | windows (the AGENTS.md PR runs only `pr gate`) | — | XD8 |
+| XB-0 | Close-outs: verify #1572 on `main` by its own filtered-run reproduction and close it with a comment at f267867b; the cooldown PR for #1569 is done (#1605, merged as 1aeb0115; `Refs #1565`, which stays open for XB-13's lane-level checks); correct #1493's starting pin to rc.6 in a comment; close #1562 per XD8; file the two follow-up issues this plan names (the SVG guard weights, XD3; the mac "source on request" twin of XD2 if #1591's mac half does not already carry it) | #1572 #1562 (Refs #1493) | S | none (issue comments and one local run) | — | XD8 (decided: close) |
 | XB-1 | The shell gate's history test waits for the alpha row (`WaitForTreeItemStartingWith(filesTree, automation, "alpha")`, the file's own helper at `:1571`), after confirming the row's name in a run; the other files-tree failure (run 39728855123, `FilesTree_ArrowsKeepFocusEnterOpens`) is read and, if it is the same one-shot lookup, fixed in the same PR, else filed | #1586 | S | windows (shell gate) | — | — |
 | XB-2 | `PumpedDispatcherTests.ADrainOnADispatcherWithoutItsWindowEndsThroughTheDirectWake`: a diagnosis first (which path ended the drain on run 39897042671; the test records every wake source, run on a busy local desktop and on the lane); then the fact either insists on the direct wake deterministically (the window-less dispatcher's other wake paths closed in the test) or accepts the other path with a comment naming it as legitimate | #1594 | S–M (diagnose first) | windows (app tests) | — | — |
 | XB-3 | Rust on the Windows lane: the four clippy findings in Windows-only code fixed by tightening their `cfg` gates (`session/tests/watch.rs`'s `WATCH_REARM_ENABLED` import, `vault/watch.rs`'s `Relocation::Moved`, `session.rs`'s `OpenSwapSeamGuard` and `install_open_swap_seam`, `vault/fs.rs:331`'s borrow), never a blanket allow and never touching the #1513 switch itself; `cargo clippy --all-targets --workspace --locked -- -D warnings` added to windows.yml's rust-tests job after `cargo check`; the `dir_tree` census generator produces only host-valid names (a Windows name filter at generation, with the seed sequence unchanged on Linux and macOS so their coverage is identical), and the five censuses pass on Windows | #1570 #1571 | S | windows (rust-tests), rust | — | — |
@@ -313,7 +313,7 @@ XD2 spike record; the plan 42 amendment).
 
 | Chunk | Spec | What becomes true |
 |---|---|---|
-| XB-0 | `specs/xb00_close_outs.md` | #1572 closes on its own reproduction, the cooldown branch becomes a PR, #1562 closes on its recorded pass, and the stale notes are corrected |
+| XB-0 | `specs/xb00_close_outs.md` | #1572 closes on its own reproduction, the cooldown rules are already on `main` (#1605), #1562 closes on its recorded pass, and the stale notes are corrected |
 | XB-1 | `specs/xb01_shell_gate_waits_for_the_alpha_row.md` | The shell gate's files-tree tests wait for their rows instead of looking once |
 | XB-2 | `specs/xb02_pumped_dispatcher_direct_wake_diagnosis.md` | The direct-wake fact says which path ended its drain, and insists on it |
 | XB-3 | `specs/xb03_rust_on_the_windows_lane_lints_and_censuses.md` | The Windows Rust lane runs clippy on the code it builds, and the dir_tree censuses pass on Windows |
