@@ -323,12 +323,14 @@ impl FsVaultProvider {
                         path: relative.to_string(),
                         reason: "mutation destination is not beneath the vault root".into(),
                     })?;
+            // A reference on both hosts: Unix opens against the pinned
+            // root, Windows against the root's path (#1570).
             #[cfg(unix)]
-            let root = self.pinned_root()?;
+            let root = &self.pinned_root()?;
             #[cfg(windows)]
             let root = self.root.as_path();
             PinnedMutationTarget::open(
-                &root,
+                root,
                 vault_relative,
                 relative,
                 create_missing_parents,

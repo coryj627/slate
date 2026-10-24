@@ -29,6 +29,8 @@ on:
       - '.github/dependabot.yml'
       # The a11y score's download gate (Workflows.Tests.ps1) must run when it changes.
       - '.github/workflows/a11y-check.yml'
+      # The Windows rust lint guard (Workflows.Tests.ps1) reads rust.yml's clippy line.
+      - '.github/workflows/rust.yml'
   push:
     branches: [main]
     paths:
@@ -52,6 +54,8 @@ on:
       - '.github/dependabot.yml'
       # The a11y score's download gate (Workflows.Tests.ps1) must run when it changes.
       - '.github/workflows/a11y-check.yml'
+      # The Windows rust lint guard (Workflows.Tests.ps1) reads rust.yml's clippy line.
+      - '.github/workflows/rust.yml'
 
 permissions:
   contents: read

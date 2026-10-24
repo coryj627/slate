@@ -370,6 +370,13 @@ jobs:
       - name: slate-cli test suite (ci profile)
         run: cargo test -p slate-cli --profile ci --locked
 
+      # rust.yml's lint job runs this on Linux, where cfg(windows) code is
+      # never compiled (#1570). The same invocation here lints what the
+      # Windows build compiles; dev profile, as there. After the suites, so a
+      # lint finding never hides the Windows test results.
+      - name: clippy (windows x64, -D warnings)
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
       - name: Cache footprint report
         # The volume resets to EMPTY past its configured size — keep the
         # trend visible from every lane that can commit (rust.yml's twin
