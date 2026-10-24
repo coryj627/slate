@@ -1098,6 +1098,8 @@ public sealed class PumpedSaveReentrancyTests
         private int _parkCandidates;
         private bool _parkAfterWrite;
         private bool _lifecycleDisposed;
+        private readonly ManualResetEventSlim _treeReadsOpen = new(initialState: true);
+        private int _treeReadsStarted;
 
         internal Host(VaultCloseDecision closeDecision = VaultCloseDecision.SaveAll)
         {
@@ -1129,7 +1131,8 @@ public sealed class PumpedSaveReentrancyTests
                     return ClosePrompt();
                 },
                 confirmDirtyNavigation: (tab, _) => AskTab(tab),
-                confirmDirtyClose: AskTab);
+                confirmDirtyClose: AskTab,
+                treeWorker: RunTreeRead);
             Task open = Lifecycle.OpenVaultAsync(Root);
             Assert.True(
                 PumpedDispatcher.PumpUntil(() => open.IsCompleted, TimeSpan.FromSeconds(60)),
@@ -1208,6 +1211,34 @@ public sealed class PumpedSaveReentrancyTests
         internal Func<VaultCloseDecision> ClosePrompt { get; set; }
 
         internal int ClosePrompts { get; private set; }
+
+        /// <summary>XB-11: tree reads the sidebar has started, ever.</summary>
+        internal int TreeReadsStarted => Volatile.Read(ref _treeReadsStarted);
+
+        /// <summary>XB-11: set once a read has started while
+        /// <see cref="HoldTreeReads"/> held it.</summary>
+        internal ManualResetEventSlim TreeReadHeld { get; } = new();
+
+        /// <summary>XB-11: the next tree reads wait, ignoring cancellation as
+        /// a slow directory would, until <see cref="ReleaseTreeReads"/>.</summary>
+        internal void HoldTreeReads() => _treeReadsOpen.Reset();
+
+        internal void ReleaseTreeReads() => _treeReadsOpen.Set();
+
+        /// <summary>Every tree read runs here, on the pool as the sidebar's
+        /// own worker does.</summary>
+        private Task RunTreeRead(Action work, CancellationToken token) => Task.Run(
+            () =>
+            {
+                Interlocked.Increment(ref _treeReadsStarted);
+                if (!_treeReadsOpen.IsSet)
+                {
+                    TreeReadHeld.Set();
+                    _treeReadsOpen.Wait();
+                }
+                work();
+            },
+            CancellationToken.None);
 
         internal bool Released => _release.IsSet;
 
@@ -1411,8 +1442,9 @@ public sealed class PumpedSaveReentrancyTests
 
         /// <summary>Pump until no save is admitted or writing, and drain what
         /// the publications queued. Then pump until the tree refresh a save
-        /// scheduled has run and finished reading, and drain again: a vault
-        /// close refuses while a tree refresh reads (#1555).</summary>
+        /// scheduled has run and finished reading, and drain again, so a fact
+        /// that saves and then runs a gate meets no tree work in flight
+        /// (#1555; a close now waits for such a read, XB-11).</summary>
         internal void Settle()
         {
             PumpedDispatcher.PumpUntil(
@@ -1458,6 +1490,7 @@ public sealed class PumpedSaveReentrancyTests
         public void Dispose()
         {
             Release();
+            ReleaseTreeReads();
             try
             {
                 Settle();
@@ -1471,6 +1504,9 @@ public sealed class PumpedSaveReentrancyTests
                 SynchronizationContext.SetSynchronizationContext(_previousContext);
                 _parked.Dispose();
                 _release.Dispose();
+                // The lifecycle's teardown joined every tree read first.
+                _treeReadsOpen.Dispose();
+                TreeReadHeld.Dispose();
                 TryDelete(Root);
                 TryDelete(_stateDir);
             }
