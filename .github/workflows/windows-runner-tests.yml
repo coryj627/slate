@@ -15,6 +15,10 @@ on:
       - '.github/workflows/windows.yml'
       - '.github/workflows/nightly.yml'
       - '.github/workflows/windows-ci-pilot.yml'
+      # The setup-dotnet guards read the composite build action and the SDK pin,
+      # and refuse a second global.json anywhere.
+      - '.github/actions/windows-native-build/action.yml'
+      - '**/global.json'
       # The branch-cleanup guard (Workflows.Tests.ps1) and behaviour test
       # (BranchCleanup.Tests.ps1) must run when that workflow or its script changes.
       - '.github/workflows/branch-cleanup.yml'
@@ -32,6 +36,10 @@ on:
       - '.github/workflows/windows.yml'
       - '.github/workflows/nightly.yml'
       - '.github/workflows/windows-ci-pilot.yml'
+      # The setup-dotnet guards read the composite build action and the SDK pin,
+      # and refuse a second global.json anywhere.
+      - '.github/actions/windows-native-build/action.yml'
+      - '**/global.json'
       # The branch-cleanup guard (Workflows.Tests.ps1) and behaviour test
       # (BranchCleanup.Tests.ps1) must run when that workflow or its script changes.
       - '.github/workflows/branch-cleanup.yml'

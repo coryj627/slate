@@ -1229,6 +1229,15 @@ Rebuild when one of these changes: the `rust-toolchain.toml` channel,
 `apps/slate-windows/uniffi-bindgen-cs.version`, the runner version (GitHub
 refuses runners outside its support window), or the .NET SDK band.
 
+The image's .NET SDK is a cache, not the pin. CI pins the SDK through
+`global.json` at the repository root (#1568): every `setup-dotnet` step reads
+it and installs that exact version into `C:\dotnet` when the image lacks it,
+and the step after it fails the job unless `dotnet --version` from the root
+is that version. The image installs the newest SDK of `versions.json`'s
+`dotnetChannel` instead, so when it lacks the pinned version (the channel has
+moved past it, or the pin moved), each job downloads the pin once. A rebuild
+does not fix that until `versions.json` pins the version too (#1614).
+
 Rebuild too when the guest scripts, the provisioning scripts, or the
 module's KVP functions (`Select-SlateKvpItems`, `Join-KvpChunks`, and their
 host-side partner `Split-KvpChunks`) change. The image carries its own
