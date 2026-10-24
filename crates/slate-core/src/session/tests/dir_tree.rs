@@ -4,8 +4,9 @@
 //! `VaultSession` tests — the directory-tree API (`list_dir_children`)
 //! and its scan integration (`dirs` table upsert + prune) (#459, U2-1).
 //!
-//! The two censuses (`census_dir_tree_matches_filesystem`,
-//! `census_dir_ids_stable_across_rescans`) follow the project's
+//! The censuses (`census_dir_tree_matches_filesystem_seeds_*`, four seed
+//! chunks of one body, `census_dir_tree_matches_filesystem_exhaustive_shapes`
+//! and `census_dir_ids_stable_across_rescans`) follow the project's
 //! adversarial-census methodology: plain `#[test]` functions driven by a
 //! deterministic seeded PRNG, printing the failing seed so any failure
 //! replays. NOT proptest — these run in the normal suite every time.
@@ -581,6 +582,70 @@ const NAME_ATOMS: &[&str] = &[
     "mix ED",
 ];
 
+/// Whether this host's file system accepts `name` as one path segment. Windows
+/// refuses `* ? < > : " | \` in a name (`Os { code: 123 }`, #1571), so the
+/// two glob atoms are skipped there, as `glob_hazard_names_do_not_break_range_scan`
+/// writes `star*dir` and `q?dir` on Unix only. Every other host accepts every
+/// atom.
+fn host_accepts(name: &str) -> bool {
+    !cfg!(windows) || !name.contains(['*', '?', '<', '>', ':', '"', '|', '\\'])
+}
+
+#[cfg(windows)]
+#[test]
+fn host_accepts_refuses_the_two_glob_atoms_on_windows() {
+    assert!(!host_accepts("star*"));
+    assert!(!host_accepts("q?mark"));
+    assert!(!host_accepts("alphastar*"));
+    assert!(host_accepts("br[ack]"));
+    assert!(host_accepts("gamma note"));
+}
+
+/// Every name the generator keeps can be created on this host, as a folder and
+/// as a note. The censuses do this at scale, but CI skips them on Windows
+/// (`--skip census_`); this witness is cheap and runs everywhere, so a new atom
+/// the host refuses (a device name like `con`, a trailing dot) fails here
+/// first (#1571).
+#[test]
+fn every_kept_generated_name_is_creatable_on_this_host() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut index = 0usize;
+    let mut check = |name: &str| {
+        if !host_accepts(name) {
+            return;
+        }
+        // One parent per name, so two spellings that fold together on a
+        // case-insensitive volume never meet.
+        index += 1;
+        let parent = tmp.path().join(format!("n{index}"));
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::create_dir(parent.join(name))
+            .unwrap_or_else(|error| panic!("folder {name:?}: {error}"));
+        std::fs::write(parent.join(format!("{name}.md")), b"# note\n")
+            .unwrap_or_else(|error| panic!("note {name:?}.md: {error}"));
+    };
+    for first in NAME_ATOMS {
+        check(first);
+        for second in NAME_ATOMS {
+            check(&format!("{first}{second}"));
+        }
+    }
+}
+
+/// Off Windows the filter never skips, so every name the generator can build
+/// (one atom or two) is kept and the censuses draw what they drew before #1571.
+#[cfg(not(windows))]
+#[test]
+fn host_accepts_every_generated_name_off_windows() {
+    for first in NAME_ATOMS {
+        assert!(host_accepts(first), "{first:?}");
+        for second in NAME_ATOMS {
+            let name = format!("{first}{second}");
+            assert!(host_accepts(&name), "{name:?}");
+        }
+    }
+}
+
 /// Build a random vault on disk under `root`. Returns the set of expected
 /// (relative) directory paths and file paths, matching the scanner's
 /// dot-exclusion rule (the generator never emits dot-prefixed names).
@@ -622,6 +687,12 @@ fn generate_into(
         let mut name = NAME_ATOMS[rng.below(NAME_ATOMS.len())].to_string();
         if rng.chance(1, 3) {
             name.push_str(NAME_ATOMS[rng.below(NAME_ATOMS.len())]);
+        }
+        // A name the host refuses is skipped like a collision: the same
+        // draws are consumed, so a host that accepts every atom generates
+        // exactly what it always has.
+        if !host_accepts(&name) {
+            continue;
         }
         // Fold key mirrors the OS's collision surface: NFC + lowercase.
         let key = {
