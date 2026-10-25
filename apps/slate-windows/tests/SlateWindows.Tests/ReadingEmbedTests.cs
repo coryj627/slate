@@ -332,6 +332,69 @@ public sealed class ReadingEmbedTests
         });
     }
 
+    /// <summary>#1581 (plan 45 XB-10b): an SVG embed whose decode outlives
+    /// its budget shows core's sentence in range, where an undecodable image
+    /// shows mac's failure string.</summary>
+    [Fact]
+    public void AnSvgEmbedPastTheDecodeBudgetShowsCoresSentence()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-embed-slow-svg");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "slow.svg"),
+                "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'>"
+                + "<rect width='8' height='8' fill='red'/></svg>");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"), "![[slow.svg]]\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            // The wait reports its budget spent while the decode is parked, so
+            // it cannot finish first.
+            using var release = new ManualResetEventSlim(false);
+            var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
+            EditorInteractionCoordinator.SvgDecodeSlotsForTests = slots;
+            EditorInteractionCoordinator.SvgDecodeBodyForTests = (_, _) =>
+            {
+                release.Wait(TimeSpan.FromSeconds(10));
+                return null;
+            };
+            EditorInteractionCoordinator.SvgDecodeWaitForTests = _ => 0x102;
+            try
+            {
+                using var tab = new WorkspaceTabViewModel(
+                    session,
+                    new WorkspaceTabState(
+                        Guid.NewGuid(),
+                        new WorkspaceItemState(
+                            WorkspaceItemKind.Markdown, "note0.md")),
+                    startInteractionBackgroundWork: false);
+                tab.ToggleViewMode();
+                var surface = new ReadingSurface { Model = tab.Reading };
+
+                string text = new System.Windows.Documents.TextRange(
+                    surface.Document.ContentStart,
+                    surface.Document.ContentEnd).Text;
+                Assert.Contains(
+                    "Image not shown: decoding took longer than 5 seconds.",
+                    text,
+                    StringComparison.Ordinal);
+                Assert.DoesNotContain("Could not decode image", text, StringComparison.Ordinal);
+            }
+            finally
+            {
+                EditorInteractionCoordinator.SvgDecodeWaitForTests = null;
+                EditorInteractionCoordinator.SvgDecodeBodyForTests = null;
+                EditorInteractionCoordinator.SvgDecodeSlotsForTests = null;
+                release.Set();
+                Assert.True(SpinWait.SpinUntil(
+                    () => Volatile.Read(ref slots.Live) == 0, TimeSpan.FromSeconds(10)));
+            }
+        });
+    }
+
     /// <summary>Undecodable image bytes show mac's exact failure
     /// string in range instead of a blank card.</summary>
     [Fact]

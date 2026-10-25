@@ -77,7 +77,7 @@ internal sealed class ReadingListBuildContext
     /// over-budget key re-decode at every occurrence.</summary>
     internal Dictionary<
         string,
-        (System.Windows.Media.ImageSource? Source, bool BudgetRefused)>
+        (System.Windows.Media.ImageSource? Source, bool BudgetRefused, string? FailureReason)>
         DecodedEmbedImages
     { get; } = new(StringComparer.Ordinal);
 
@@ -972,11 +972,15 @@ internal static class ReadingDocumentBuilder
                 }
                 context.RemainingDiagramRenderBytes -= svg.Length;
                 DiagramRenderProbeForTests?.Invoke(svg.Length);
-                visual = EditorInteractionCoordinator.DecodeImage(svg, "image/svg+xml");
+                visual = EditorInteractionCoordinator.DecodeImage(
+                    svg, "image/svg+xml", out string? decodeFailure);
                 if (visual is null)
                 {
+                    // A decode past its budget, or refused at the cap, says
+                    // so in core's sentence (#1581).
                     failureHeader = "Diagram could not be rendered";
-                    failureReason = "diagram rendered but image could not be decoded";
+                    failureReason = decodeFailure
+                        ?? "diagram rendered but image could not be decoded";
                 }
                 break;
         }
@@ -1547,16 +1551,17 @@ internal static class ReadingDocumentBuilder
         {
             if (context.RemainingEmbedDecodedPixels <= 0)
             {
-                outcome = (null, true);
+                outcome = (null, true, null);
             }
             else
             {
                 EmbedImageDecodeProbeForTests?.Invoke(key);
                 System.Windows.Media.ImageSource? decoded =
-                    EditorInteractionCoordinator.DecodeImage(image.Bytes, image.Mime);
+                    EditorInteractionCoordinator.DecodeImage(
+                        image.Bytes, image.Mime, out string? decodeFailure);
                 if (decoded is null)
                 {
-                    outcome = (null, false);
+                    outcome = (null, false, decodeFailure);
                 }
                 else
                 {
@@ -1576,12 +1581,12 @@ internal static class ReadingDocumentBuilder
                         // surface is discarded unreferenced, bounded
                         // by the per-image dimension cap.
                         context.RemainingEmbedDecodedPixels = 0;
-                        outcome = (null, true);
+                        outcome = (null, true, null);
                     }
                     else
                     {
                         context.RemainingEmbedDecodedPixels -= pixels;
-                        outcome = (decoded, false);
+                        outcome = (decoded, false, null);
                     }
                 }
             }
@@ -1593,8 +1598,9 @@ internal static class ReadingDocumentBuilder
                 outcome.BudgetRefused
                     ? "Image not displayed: over this note's embedded-image "
                         + "budget. Open the source note to view it."
-                    : $"Could not decode image. MIME: {image.Mime}. "
-                        + "The file may be corrupt or an unsupported codec."));
+                    : outcome.FailureReason
+                        ?? $"Could not decode image. MIME: {image.Mime}. "
+                            + "The file may be corrupt or an unsupported codec."));
             return;
         }
         var visual = new ReadingDiagramImage

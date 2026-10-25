@@ -255,10 +255,11 @@ impl Default for DiagramBudgets {
 /// The sentence a block shows when a time budget stopped its render
 /// (#1580): `what` is `"diagram"` (this render ran past its budget),
 /// `"note"` (the note's diagrams used theirs), `"busy"` (earlier renders
-/// are still running past theirs, so this one was not started) or
-/// `"image"` (an SVG preview's decode, #1581). Both hosts show it
-/// verbatim as the failed state's reason. An unknown `what` reads as
-/// `"diagram"`.
+/// are still running past theirs, so this one was not started),
+/// `"image"` (an SVG preview's decode ran past its budget, #1581) or
+/// `"image-busy"` (earlier decodes are still running past theirs, so this
+/// one was not started). Both hosts show it verbatim as the failed state's
+/// reason. An unknown `what` reads as `"diagram"`.
 pub fn render_time_exceeded_message(what: &str, seconds: u64) -> String {
     let unit = if seconds == 1 { "second" } else { "seconds" };
     match what {
@@ -271,6 +272,10 @@ pub fn render_time_exceeded_message(what: &str, seconds: u64) -> String {
              {seconds}-second budget. The source follows."
         ),
         "image" => format!("Image not shown: decoding took longer than {seconds} {unit}."),
+        "image-busy" => format!(
+            "Image not shown: earlier images are still decoding past their \
+             {seconds}-second budget."
+        ),
         _ => format!(
             "Diagram not drawn: rendering took longer than {seconds} {unit}. The source follows."
         ),
@@ -1865,6 +1870,10 @@ mod tests {
         assert_eq!(
             render_time_exceeded_message("image", 3),
             "Image not shown: decoding took longer than 3 seconds."
+        );
+        assert_eq!(
+            render_time_exceeded_message("image-busy", 5),
+            "Image not shown: earlier images are still decoding past their 5-second budget."
         );
         assert_eq!(
             render_time_exceeded_message("diagram", 1),
