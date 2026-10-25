@@ -20,7 +20,11 @@
 name: Swift Tests
 
 on:
+  # Every pull request: the changes job decides from on.push.paths, the
+  # lane's one path list, whether it touches the lane (#1565).
   pull_request:
+  push:
+    branches: [main]
     paths:
       - 'apps/slate-mac/**'
       - 'crates/slate-uniffi/**'
@@ -40,28 +44,6 @@ on:
       - 'scripts/check_mac_sdk.py'
       - 'scripts/tests/test_mac_sdk.py'
       # The #1589 resource bundle tripwire its --bundle step runs, and its facts.
-      - 'scripts/check_mac_bundle_resources.py'
-      - 'scripts/tests/test_mac_bundle_resources.py'
-      - 'scripts/build-swift-cli.sh'
-      - 'Makefile'
-  push:
-    branches: [main]
-    paths:
-      - 'apps/slate-mac/**'
-      - 'crates/slate-uniffi/**'
-      - 'crates/slate-core/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'rust-toolchain.toml'
-      # macOS rustflags (rustc stripping disabled) live here.
-      - '.cargo/config.toml'
-      - '.github/workflows/swift-tests.yml'
-      - 'examples/swift-cli/**'
-      - 'docs/help/**'
-      - 'tests/fixtures/**'
-      - 'scripts/build-mac-app.sh'
-      - 'scripts/check_mac_sdk.py'
-      - 'scripts/tests/test_mac_sdk.py'
       - 'scripts/check_mac_bundle_resources.py'
       - 'scripts/tests/test_mac_bundle_resources.py'
       - 'scripts/build-swift-cli.sh'
@@ -90,8 +72,21 @@ env:
   XCODE_BUILD: 27A266a
 
 jobs:
+  # #1565: does this pull request touch the lane? Each job below is skipped
+  # when it does not (a skipped job reports as passed), and runs when the
+  # decision failed (.github/workflows/lane-changes.yml).
+  changes:
+    name: changes
+    uses: ./.github/workflows/lane-changes.yml
+    permissions:
+      contents: read
+    with:
+      workflow: .github/workflows/swift-tests.yml
+
   route:
     name: Route mac jobs
+    needs: [changes]
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -203,6 +198,8 @@ jobs:
   # inside the build step above.
   sdk-tripwire-facts:
     name: SDK tripwire facts (#1460)
+    needs: [changes]
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -222,6 +219,8 @@ jobs:
   # mac lane builds the .app bundle.
   bundle-resources-facts:
     name: Resource bundle tripwire facts (#1589)
+    needs: [changes]
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -234,3 +233,34 @@ jobs:
 
       - name: Test the resource bundle tripwire against temporary bundles
         run: python3 -I -m unittest discover -v -s scripts/tests -p test_mac_bundle_resources.py
+
+  # The check main's ruleset can require for this lane (#1565). The XCTest
+  # job is skipped when route failed, and a skipped job reports as passed;
+  # this one reports on every pull request that touches the lane, and fails
+  # unless every job ran and passed. A fork's pull request is the one skip
+  # it accepts: its head never runs on the mac runners (swift-tests' if:).
+  gate:
+    name: swift tests (mac)
+    needs: [changes, route, swift-tests, sdk-tripwire-facts, bundle-resources-facts]
+    if: ${{ always() && needs.changes.outputs.run != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Require every job of the lane to succeed
+        env:
+          ROUTE_RESULT: ${{ needs.route.result }}
+          XCTEST_RESULT: ${{ needs.swift-tests.result }}
+          SDK_RESULT: ${{ needs.sdk-tripwire-facts.result }}
+          BUNDLE_RESULT: ${{ needs.bundle-resources-facts.result }}
+          FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+        run: |
+          xctest="$XCTEST_RESULT"
+          if [ "$FORK" = true ] && [ "$xctest" = skipped ]; then
+            echo "A fork's pull request: the XCTest suite does not run on the mac runners."
+            xctest=success
+          fi
+          if [ "$ROUTE_RESULT" != success ] || [ "$xctest" != success ] || [ "$SDK_RESULT" != success ] || [ "$BUNDLE_RESULT" != success ]; then
+            echo "::error::route=$ROUTE_RESULT xctest=$XCTEST_RESULT sdk=$SDK_RESULT bundle=$BUNDLE_RESULT fork=$FORK"
+            exit 1
+          fi

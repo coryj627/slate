@@ -19,11 +19,6 @@ WORKFLOW = textwrap.dedent(
 
     on:
       pull_request:
-        paths:
-          - 'apps/slate-windows/**'
-          # a comment between items
-          - 'docs/plans/*.md'
-          - 'docs/plans/18_windows_port/**'
       push:
         branches: [main]
         paths:
@@ -73,10 +68,9 @@ class GlobFacts(unittest.TestCase):
         # Top-level plan documents are listed by name, so a plan no check
         # reads (plan 44, an unread contracts document) starts nothing.
         lists = trigger.trigger_lists((trigger.REPO / trigger.WORKFLOW).read_text(encoding="utf-8"))
-        for event in ("pull_request", "push"):
-            self.assertNotIn("docs/plans/*.md", lists[event])
-            self.assertFalse(trigger.covered("docs/plans/44_windows_backlog_plan.md", lists[event]))
-            self.assertTrue(trigger.covered("docs/plans/35_graph_contracts.md", lists[event]))
+        self.assertNotIn("docs/plans/*.md", lists["push"])
+        self.assertFalse(trigger.covered("docs/plans/44_windows_backlog_plan.md", lists["push"]))
+        self.assertTrue(trigger.covered("docs/plans/35_graph_contracts.md", lists["push"]))
 
     def test_a_double_star_matches_any_depth(self):
         self.assertTrue(trigger.covered("docs/plans/18_windows_port/reports/w1.md", ["docs/plans/18_windows_port/**"]))
@@ -92,11 +86,11 @@ class GlobFacts(unittest.TestCase):
 
 
 class ParserFacts(unittest.TestCase):
-    def test_both_event_lists_are_read_in_order_without_comments(self):
+    def test_the_push_list_is_read_in_order_without_comments(self):
         lists = trigger.trigger_lists(WORKFLOW)
         expected = ["apps/slate-windows/**", "docs/plans/*.md", "docs/plans/18_windows_port/**"]
-        self.assertEqual(expected, lists["pull_request"])
         self.assertEqual(expected, lists["push"])
+        self.assertNotIn("pull_request", lists)
 
 
 class CheckFacts(unittest.TestCase):
@@ -105,12 +99,9 @@ class CheckFacts(unittest.TestCase):
 
     def test_the_plan_43_design_documents_do_not_start_the_lane(self):
         lists = trigger.trigger_lists((trigger.REPO / trigger.WORKFLOW).read_text(encoding="utf-8"))
-        for event in ("pull_request", "push"):
-            self.assertFalse(
-                trigger.covered("docs/plans/43_mac_backlog_delivery/20_vault_watcher_design.md", lists[event])
-            )
-            self.assertTrue(trigger.covered("docs/plans/38_notification_dispatcher_contracts.md", lists[event]))
-            self.assertTrue(trigger.covered("docs/plans/18_windows_port/w_c_matrix.md", lists[event]))
+        self.assertFalse(trigger.covered("docs/plans/43_mac_backlog_delivery/20_vault_watcher_design.md", lists["push"]))
+        self.assertTrue(trigger.covered("docs/plans/38_notification_dispatcher_contracts.md", lists["push"]))
+        self.assertTrue(trigger.covered("docs/plans/18_windows_port/w_c_matrix.md", lists["push"]))
 
     def test_a_census_reading_an_uncovered_document_fails(self):
         source = 'File.ReadAllText(Path.Combine(Root, "docs", "plans", "43_mac_backlog_delivery", "x.md"));'
@@ -191,15 +182,19 @@ class CheckFacts(unittest.TestCase):
         self.assertTrue(any("docs/plans/38_ledger.md" in p for p in problems), problems)
         self.assertTrue(any("docs/plans/25_grid.md" in p for p in problems), problems)
 
-    def test_differing_event_lists_fail(self):
-        skewed = WORKFLOW.replace(
-            "  push:\n    branches: [main]\n    paths:\n      - 'apps/slate-windows/**'\n",
-            "  push:\n    branches: [main]\n    paths:\n      - 'apps/slate-windows/**'\n      - 'extra/**'\n",
-        )
+    def test_a_pull_request_path_list_fails(self):
+        # #1565: lane-changes.yml decides pull requests from on.push.paths; a second list would filter some
+        # pull requests out before the decision, and the lane would not report on them.
+        filtered = WORKFLOW.replace("  pull_request:\n", "  pull_request:\n    paths:\n      - 'apps/slate-windows/**'\n")
         with tempfile.TemporaryDirectory() as tmp:
-            problems = trigger.check(make_repo(Path(tmp), workflow=skewed))
-        self.assertNotEqual(WORKFLOW, skewed)
-        self.assertTrue(any("differ" in p for p in problems), problems)
+            problems = trigger.check(make_repo(Path(tmp), workflow=filtered))
+        self.assertNotEqual(WORKFLOW, filtered)
+        self.assertTrue(any("on.pull_request.paths" in p for p in problems), problems)
+
+    def test_a_workflow_without_a_push_list_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            problems = trigger.check(make_repo(Path(tmp), workflow=WORKFLOW.replace("    paths:\n", "    tags:\n")))
+        self.assertTrue(any("on.push.paths not found" in p for p in problems), problems)
 
 
 if __name__ == "__main__":

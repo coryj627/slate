@@ -17,10 +17,9 @@
 name: Accessibility Check
 
 on:
+  # Every pull request: the changes job decides from on.push.paths, the
+  # lane's one path list, whether it touches the lane (#1565).
   pull_request:
-    paths:
-      - 'apps/slate-mac/**/*.swift'
-      - '.github/workflows/a11y-check.yml'
   push:
     branches: [main]
     paths:
@@ -59,8 +58,21 @@ env:
   XCODE_BUILD: 27A266a
 
 jobs:
+  # #1565: does this pull request touch the lane? Each job below is skipped
+  # when it does not (a skipped job reports as passed), and runs when the
+  # decision failed (.github/workflows/lane-changes.yml).
+  changes:
+    name: changes
+    uses: ./.github/workflows/lane-changes.yml
+    permissions:
+      contents: read
+    with:
+      workflow: .github/workflows/a11y-check.yml
+
   route:
     name: Route mac jobs
+    needs: [changes]
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -192,11 +204,11 @@ jobs:
   # "<workflow file>:<job id>", so this keeps the alert history continuous.
   a11y-check:
     name: Report and enforce the floor
-    needs: analyze
+    needs: [changes, analyze]
     # Runs after the analysis whether it passed or failed, so a drop below
     # the floor still gets its comment and its red check; only a cancelled
-    # run skips it.
-    if: ${{ !cancelled() && needs.analyze.result != 'skipped' }}
+    # run, or a pull request that touches none of the lane's paths, skips it.
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' && needs.analyze.result != 'skipped' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # actions: read is only needed by codeql-action/upload-sarif within
@@ -404,3 +416,36 @@ jobs:
                 `Accessibility score ${score} is below minimum threshold ${min}`
               );
             }
+
+  # The check main's ruleset can require for this lane (#1565). A job above
+  # is skipped when the one before it failed (route, then the analysis), and
+  # a skipped job reports as passed; this one reports on every pull request
+  # that touches the lane, and fails unless the lane ran and passed. A
+  # fork's pull request is the one skip it accepts: its head never runs on
+  # the mac runners (analyze's if:).
+  gate:
+    name: accessibility check (mac)
+    needs: [changes, route, analyze, a11y-check]
+    if: ${{ always() && needs.changes.outputs.run != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Require the routing, the analysis and the floor to succeed
+        env:
+          ROUTE_RESULT: ${{ needs.route.result }}
+          ANALYZE_RESULT: ${{ needs.analyze.result }}
+          FLOOR_RESULT: ${{ needs.a11y-check.result }}
+          FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+        run: |
+          analyze="$ANALYZE_RESULT"
+          floor="$FLOOR_RESULT"
+          if [ "$FORK" = true ] && [ "$analyze" = skipped ] && [ "$floor" = skipped ]; then
+            echo "A fork's pull request: the analysis does not run on the mac runners."
+            analyze=success
+            floor=success
+          fi
+          if [ "$ROUTE_RESULT" != success ] || [ "$analyze" != success ] || [ "$floor" != success ]; then
+            echo "::error::route=$ROUTE_RESULT analyze=$ANALYZE_RESULT floor=$FLOOR_RESULT fork=$FORK"
+            exit 1
+          fi

@@ -1,0 +1,85 @@
+# The first job of every lane: does this pull request touch the lane?
+# (#1565, plan 45 XB-13.)
+#
+# A lane triggers on every pull request, so its checks report on every one
+# and main's ruleset can require them. This job decides whether the pull
+# request changes one of the lane's paths: the calling workflow's
+# on.push.paths, the one list each lane keeps. scripts/lane_changes.py
+# matches the merge commit's changes on its base with GitHub's filter
+# rules and writes run=true or run=false. On any other event the trigger's
+# own path filter already chose the run, so it is true; and so it is on a
+# pull request that changes this file or the script, so a decision that
+# wrongly answers false cannot skip the lanes whose tests would catch it.
+#
+# Each lane job skips on run == 'false', and GitHub reports a skipped job as
+# passed. A job that decides for itself has a status function before the
+# decision (`!cancelled() && needs.changes.outputs.run != 'false'`), so a
+# failed or cancelled decision leaves run empty and the lane runs: a broken
+# decision costs a full run, never a skipped lane. The rule is pinned in
+# ci/windows-runner/tests/Workflows.Tests.ps1 ('lane change detection').
+
+name: Lane changes
+
+on:
+  workflow_call:
+    inputs:
+      workflow:
+        description: The calling lane's workflow file, from the repository root.
+        type: string
+        required: true
+    outputs:
+      run:
+        description: "'false' when the pull request touches none of the lane's paths; otherwise 'true'."
+        value: ${{ jobs.match.outputs.run }}
+
+permissions: {}
+
+jobs:
+  match:
+    name: lane paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      run: ${{ steps.match.outputs.run }}
+    steps:
+      # The merge commit and its two parents (depth 2), trees only, and just
+      # the script and the workflows on disk; the diff needs no file contents.
+      - name: Check out the merge commit and its base
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 2
+          filter: blob:none
+          sparse-checkout: |
+            /scripts/lane_changes.py
+            /.github/workflows/
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Match the changed files with the lane's paths
+        id: match
+        env:
+          EVENT: ${{ github.event_name }}
+          WORKFLOW: ${{ inputs.workflow }}
+        run: |
+          if [ "$EVENT" != pull_request ]; then
+            echo "A $EVENT run: the trigger's own path filter chose it, so the lane runs."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # A pull request that changes the decision itself runs every lane,
+          # so a decision that wrongly answers false cannot skip the tests
+          # that would catch it. Names only: no file contents are fetched.
+          if ! decider="$(git diff --name-only --no-renames HEAD^1 HEAD -- scripts/lane_changes.py .github/workflows/lane-changes.yml)"; then
+            echo "::warning::cannot diff the merge commit with its base parent, so the lane runs."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -n "$decider" ]; then
+            echo "This pull request changes the lane decision itself, so the lane runs: $decider"
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python3 -I scripts/lane_changes.py "$WORKFLOW"

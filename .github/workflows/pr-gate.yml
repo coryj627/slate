@@ -2,12 +2,13 @@
 # before merging" (#1565): a PR merges only once its branch contains the
 # current main, so every merge has been tested on the code it lands on.
 #
-# The lanes cannot be the required check: they are path-filtered, and a
-# lane a PR does not trigger never reports, which would block that PR for
-# good. This job runs on every pull request to main, does nothing that can
-# fail, and is never skipped. It proves only that the PR's branch is up to
-# date; the lanes it triggered still have to be green before a merge
-# (AGENTS.md "Git and PRs"). Its guards are in
+# Until the owner adds the lanes' checks to the ruleset, this is the only
+# required check. Each lane now reports on every pull request: its changes
+# job skips the rest when the PR touches none of its paths, and a skipped
+# job reports as passed (lane-changes.yml). This job runs on every pull
+# request to main, does nothing that can fail, and is never skipped. It
+# proves only that the PR's branch is up to date; the lanes still have to
+# be green before a merge (AGENTS.md "Git and PRs"). Its guards are in
 # ci/windows-runner/tests/Workflows.Tests.ps1.
 
 name: PR gate

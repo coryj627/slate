@@ -7,32 +7,9 @@
 name: Windows runner tests
 
 on:
+  # Every pull request: the changes job decides from on.push.paths, the
+  # lane's one path list, whether it touches the lane (#1565).
   pull_request:
-    paths:
-      - 'ci/windows-runner/**'
-      - '.github/workflows/windows-runner-tests.yml'
-      # The Workflows guards must run when a routed workflow changes.
-      - '.github/workflows/windows.yml'
-      - '.github/workflows/nightly.yml'
-      - '.github/workflows/windows-ci-pilot.yml'
-      # The setup-dotnet guards read the composite build action and the SDK pin,
-      # and refuse a second global.json anywhere.
-      - '.github/actions/windows-native-build/action.yml'
-      - '**/global.json'
-      # The branch-cleanup guard (Workflows.Tests.ps1) and behaviour test
-      # (BranchCleanup.Tests.ps1) must run when that workflow or its script changes.
-      - '.github/workflows/branch-cleanup.yml'
-      - 'ci/branch-cleanup/**'
-      # The PR gate's guard (Workflows.Tests.ps1) must run when it changes.
-      - '.github/workflows/pr-gate.yml'
-      # The Dependabot pause's guard (Workflows.Tests.ps1) must run when it changes.
-      - '.github/dependabot.yml'
-      # The a11y score's download gate (Workflows.Tests.ps1) must run when it changes.
-      - '.github/workflows/a11y-check.yml'
-      # The Windows rust lint guard (Workflows.Tests.ps1) reads rust.yml's clippy line.
-      - '.github/workflows/rust.yml'
-      # The router's bot rule reads the mac allow-list (plan 42 §3.7).
-      - 'ci/mac-runner/allowlist.json'
   push:
     branches: [main]
     paths:
@@ -60,6 +37,15 @@ on:
       - '.github/workflows/rust.yml'
       # The router's bot rule reads the mac allow-list (plan 42 §3.7).
       - 'ci/mac-runner/allowlist.json'
+      # The lane decision's guards (Workflows.Tests.ps1, 'lane change
+      # detection') read every lane, and its script has its own tests (#1565).
+      - '.github/workflows/lane-changes.yml'
+      - '.github/workflows/audit.yml'
+      - '.github/workflows/license-headers.yml'
+      - '.github/workflows/mac-runner-tests.yml'
+      - '.github/workflows/swift-tests.yml'
+      - 'scripts/lane_changes.py'
+      - 'scripts/tests/test_lane_changes.py'
 
 permissions:
   contents: read
@@ -74,8 +60,21 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # #1565: does this pull request touch the lane? Each job below is skipped
+  # when it does not (a skipped job reports as passed), and runs when the
+  # decision failed (.github/workflows/lane-changes.yml).
+  changes:
+    name: changes
+    uses: ./.github/workflows/lane-changes.yml
+    permissions:
+      contents: read
+    with:
+      workflow: .github/workflows/windows-runner-tests.yml
+
   tests:
     name: module, adapters, scripts
+    needs: [changes]
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -117,3 +116,9 @@ jobs:
         # one red suite cannot hide the other.
         if: ${{ !cancelled() }}
         run: python -I -m unittest discover -v -s ci/windows-runner/route/tests -t ci/windows-runner/route
+
+      - name: Run the lane decision's tests
+        # scripts/lane_changes.py decides whether a pull request runs each
+        # lane (#1565). Runs even when an earlier suite failed.
+        if: ${{ !cancelled() }}
+        run: python -I -m unittest discover -v -s scripts/tests -p test_lane_changes.py

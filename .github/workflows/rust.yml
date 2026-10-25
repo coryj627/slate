@@ -34,14 +34,9 @@
 name: Rust
 
 on:
+  # Every pull request: the changes job decides from on.push.paths, the
+  # lane's one path list, whether it touches the lane (#1565).
   pull_request:
-    paths:
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'rust-toolchain.toml'
-      - 'crates/**'
-      - '.config/nextest.toml'
-      - '.github/workflows/rust.yml'
   push:
     branches: [main]
     paths:
@@ -67,8 +62,21 @@ permissions:
   contents: read
 
 jobs:
+  # #1565: does this pull request touch the lane? Each job below is skipped
+  # when it does not (a skipped job reports as passed), and runs when the
+  # decision failed (.github/workflows/lane-changes.yml).
+  changes:
+    name: changes
+    uses: ./.github/workflows/lane-changes.yml
+    permissions:
+      contents: read
+    with:
+      workflow: .github/workflows/rust.yml
+
   lint:
     name: fmt / clippy
+    needs: [changes]
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     # Namespace Linux runner profile (dashboard-configured; re-pinned to
     # genuine ARM64 by the owner on 2026-07-18 — the name is truthful now).
     runs-on: namespace-profile-arm64-fast${{ github.ref != 'refs/heads/main' && '-pr' || '' }};overrides.cache-tag=slate-arm64
@@ -156,6 +164,8 @@ jobs:
 
   test:
     name: test (nextest, ci profile)
+    needs: [changes]
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     runs-on: namespace-profile-arm64-fast${{ github.ref != 'refs/heads/main' && '-pr' || '' }};overrides.cache-tag=slate-arm64
     permissions:
       contents: read
@@ -307,6 +317,8 @@ jobs:
 
   bench-compile:
     name: bench-compile
+    needs: [changes]
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     runs-on: namespace-profile-arm64-fast${{ github.ref != 'refs/heads/main' && '-pr' || '' }};overrides.cache-tag=slate-arm64
     permissions:
       contents: read

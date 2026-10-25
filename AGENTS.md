@@ -80,9 +80,11 @@ tests) disagree, the tests and the code win.
 
 - Write the failing test first for every behaviour you add or fix.
 - Swift tests reuse the Windows test name where a Windows twin exists.
-- Run only the lanes the change touches, and batch follow-up pushes. CI lanes
-  are path-filtered, but any change under `apps/slate-mac/`, `crates/` or
-  `docs/plans/` also starts the Windows lane, and lane runs cost money.
+- Run only the lanes the change touches, and batch follow-up pushes. Every
+  lane reports on every PR but runs its jobs only for its own paths (its
+  other jobs report as skipped, which counts as passed); any change under
+  `apps/slate-mac/` or `crates/`, or to a plan document its censuses read,
+  also starts the Windows lane, and lane runs cost money.
 - Report verification as the command you ran and its result, not as a claim.
 
 ## Dependencies
@@ -120,12 +122,12 @@ tests) disagree, the tests and the code win.
 - Merges go one at a time, so every merge is tested on the code it lands on:
   1. The PR's branch contains the current `main`, and every check
      `gh pr checks N` lists passes or skips. `main`'s ruleset enforces the
-     up-to-date branch and the `pr gate` check; the path-filtered lanes are
-     yours to check.
+     up-to-date branch and the `pr gate` check; the lanes are yours to
+     check until the ruleset requires them (#1565).
   2. Merge pinned to the head those checks ran on:
      `gh pr merge N --squash --match-head-commit <head-sha>`.
   3. Before the next merge, every run on the merge commit finishes green
      (`gh run list --commit <merge-sha>`, once the push has started them).
-     A newer push to `main` cancels a queued `main` run, so merging during a
-     run can leave a head untested. A red `main` comes back to green before
-     anything else merges.
+     Each `main` push runs in its own concurrency group, so no run is
+     dropped (#1565); waiting keeps a red run traceable to one merge. A red
+     `main` comes back to green before anything else merges.

@@ -5,13 +5,14 @@
 """Prove the Windows workflow runs for every docs file its checks read.
 
 `.github/workflows/windows.yml` runs the Windows lane only for the paths in
-its `on.pull_request.paths` and `on.push.paths` lists. The lane's censuses
-read plan and help documents, so a docs-only change to a file they read must
-start the lane, while a change to a planning document none of them reads
-should not pay for a full Windows run.
+its one path list, `on.push.paths`: GitHub applies it to pushes to main, and
+the lane's `changes` job (scripts/lane_changes.py, #1565) applies it to pull
+requests. The lane's censuses read plan and help documents, so a docs-only
+change to a file they read must run the lane, while a change to a planning
+document none of them reads should not pay for a full Windows run.
 
-This check collects every docs path the lane reads and fails if a path is not
-matched by both trigger lists. It reads:
+This check collects every docs path the lane reads and fails if the list does
+not match a path, or if `on.pull_request` carries a list of its own. It reads:
 
 * string literals and `"docs", "plans"|"help", ...` path chains in the
   Windows sources (`apps/slate-windows/**/*.cs`), resolving same-file string
@@ -30,8 +31,8 @@ that helper in the same file; a call whose argument is not a string literal
 or same-file constant, or a helper with no call, fails the check, naming the
 file, so a new kind of dynamic read is reviewed rather than silently missed.
 
-Exit 0 when every path is covered and both trigger lists agree; exit 1 with
-the uncovered paths otherwise.
+Exit 0 when every path is covered by the one list; exit 1 with the problems
+otherwise.
 """
 
 from __future__ import annotations
@@ -40,6 +41,12 @@ import json
 from pathlib import Path
 import re
 import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+# GitHub's filter-pattern rules live in one place, the script that decides
+# pull requests, so this check and that decision cannot disagree.
+from lane_changes import covered, glob_regex, trigger_lists  # noqa: E402,F401
 
 REPO = Path(__file__).resolve().parent.parent
 WORKFLOW = Path(".github/workflows/windows.yml")
@@ -120,83 +127,6 @@ def _helper_arguments(text: str, chain_at: int, parameter: str, consts: dict[str
         else:
             return None
     return values or None
-
-
-def trigger_lists(workflow_text: str) -> dict[str, list[str]]:
-    """Return the `paths:` list of each `on:` event, in file order.
-
-    A small line parser keeps the check free of a YAML dependency: it reads
-    the `on:` block up to the next top-level key and collects `- 'pattern'`
-    items under each event's `paths:`.
-    """
-    lists: dict[str, list[str]] = {}
-    in_on = False
-    event: str | None = None
-    in_paths = False
-    for raw in workflow_text.splitlines():
-        line = raw.split("#", 1)[0].rstrip() if not raw.lstrip().startswith("- '") else raw.rstrip()
-        if not line.strip():
-            continue
-        indent = len(line) - len(line.lstrip())
-        if indent == 0:
-            in_on = line.strip() == "on:"
-            event = None
-            in_paths = False
-            continue
-        if not in_on:
-            continue
-        stripped = line.strip()
-        if indent == 2 and stripped.endswith(":"):
-            event = stripped[:-1]
-            in_paths = False
-            continue
-        if event and indent == 4:
-            in_paths = stripped == "paths:"
-            continue
-        if event and in_paths and stripped.startswith("- "):
-            item = stripped[2:].split("#", 1)[0].strip().strip("'\"")
-            lists.setdefault(event, []).append(item)
-    return lists
-
-
-def glob_regex(pattern: str) -> re.Pattern[str]:
-    """Translate a GitHub Actions path pattern to a regular expression.
-
-    `**` matches any characters including `/`, `*` any characters but `/`,
-    `?` one character but `/`. A trailing `/**` also matches the folder's
-    own files at any depth.
-    """
-    out = []
-    i = 0
-    while i < len(pattern):
-        if pattern.startswith("**", i):
-            out.append(".*")
-            i += 2
-        elif pattern[i] == "*":
-            out.append("[^/]*")
-            i += 1
-        elif pattern[i] == "?":
-            out.append("[^/]")
-            i += 1
-        else:
-            out.append(re.escape(pattern[i]))
-            i += 1
-    return re.compile("".join(out) + r"\Z")
-
-
-def covered(path: str, patterns: list[str]) -> bool:
-    """Whether GitHub would run the workflow for a change to `path`.
-
-    Patterns apply in order; a later `!pattern` excludes what an earlier one
-    included, and the last pattern that matches decides.
-    """
-    decision = False
-    for pattern in patterns:
-        negated = pattern.startswith("!")
-        body = pattern[1:] if negated else pattern
-        if glob_regex(body).match(path):
-            decision = not negated
-    return decision
 
 
 def requirement(path: str) -> str:
@@ -295,13 +225,13 @@ def check(repo: Path = REPO) -> list[str]:
     workflow_text = (repo / WORKFLOW).read_text(encoding="utf-8")
     lists = trigger_lists(workflow_text)
     problems: list[str] = []
-    for event in ("pull_request", "push"):
-        if event not in lists:
-            problems.append(f"{WORKFLOW}: on.{event}.paths not found")
-    if problems:
-        return problems
-    if lists["pull_request"] != lists["push"]:
-        problems.append(f"{WORKFLOW}: on.pull_request.paths and on.push.paths differ; keep them identical")
+    if "push" not in lists:
+        return [f"{WORKFLOW}: on.push.paths not found"]
+    if "pull_request" in lists:
+        problems.append(
+            f"{WORKFLOW}: on.pull_request.paths found; the changes job decides pull requests from on.push.paths, "
+            "and a second list would keep the lane from reporting on some pull requests (#1565)"
+        )
 
     reads, unresolved = source_reads(repo)
     for extra in (designation_reads(repo), at_map_reads(repo), script_reads(repo, workflow_text)):
@@ -310,13 +240,9 @@ def check(repo: Path = REPO) -> list[str]:
     problems.extend(unresolved)
 
     for path in sorted(reads):
-        need = requirement(path)
-        for event in ("pull_request", "push"):
-            if not covered(need, lists[event]):
-                readers = ", ".join(sorted(reads[path]))
-                problems.append(
-                    f"{path} is read by the Windows lane ({readers}) but on.{event}.paths in {WORKFLOW} does not match it"
-                )
+        if not covered(requirement(path), lists["push"]):
+            readers = ", ".join(sorted(reads[path]))
+            problems.append(f"{path} is read by the Windows lane ({readers}) but on.push.paths in {WORKFLOW} does not match it")
     return problems
 
 
@@ -326,11 +252,11 @@ def main() -> int:
         for problem in problems:
             print(f"::error::{problem}")
         print(
-            "Add each path (or its folder with /**) to BOTH on.pull_request.paths and on.push.paths in "
-            f"{WORKFLOW}, so a docs-only change to it still runs the Windows lane."
+            f"Add each path (or its folder with /**) to on.push.paths in {WORKFLOW}, the lane's one path list, "
+            "so a docs-only change to it still runs the Windows lane on main and on pull requests."
         )
         return 1
-    print("Every docs path the Windows lane reads is in both of windows.yml's path triggers.")
+    print("Every docs path the Windows lane reads is in windows.yml's path list.")
     return 0
 
 
