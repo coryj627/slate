@@ -225,7 +225,7 @@
       },
       "MathSourceSpoken": {
         "reason": "Plan 45 XB-9 (#1591): the Windows reading view's Ctrl+Shift+Enter speaks a math block's source on request, since line reading and focus speak the MathCAT speech. Mac offers the source on request as \"Source\" in VoiceOver's More Content menu (MathView.swift), which VoiceOver reads itself; no Mac construction site.",
-        "decision": "docs/plans/45_windows_followups/specs/xb09_reading_view_math_under_line_reading_and_tab.md",
+        "decision": "docs/plans/39_at_navigation_contracts.md",
         "status": "recorded"
       },
       "RecentSearchFocused": {
