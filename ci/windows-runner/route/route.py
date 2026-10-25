@@ -17,6 +17,11 @@ Inputs, from the environment:
   ROUTE_ATTEMPT         github.run_attempt, echoed as `attempt`
   ROUTE_RUN_ID          github.run_id (the start-time read, the summary)
   ROUTE_EVENT, ROUTE_HEAD_REPO, ROUTE_REPO   the fork rule
+  ROUTE_ACTOR, ROUTE_TRIGGERING_ACTOR, ROUTE_PR_AUTHOR, ROUTE_HEAD_REF
+                        the bot rule (plan 42 §3.7): who started the run,
+                        who wrote its pull request, whose branch it runs
+  ROUTE_ALLOWLIST       the allow-list the bot rule reads (default:
+                        ci/mac-runner/allowlist.json beside this tree)
   ROUTE_STALE_SECONDS   180: a state whose `at` is older than this by the router's clock is dead
   ROUTE_SLOTS_MAX       8: a published slot count above it is not serving
   ROUTE_NOW, ROUTE_RUN_STARTED   epoch seconds (tests, replay); ROUTE_NOW is the
@@ -60,6 +65,7 @@ DURATIONS = {
 }
 HANDOVER_SECONDS = 110        # settle, provision, hand off, runner online (94-131 s measured)
 OVERRUN_FLOOR_SECONDS = 300   # a job past its duration is assumed to need five more minutes
+DEFAULT_ALLOWLIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "mac-runner", "allowlist.json")
 DEFAULT_STALE_SECONDS = 180
 DEFAULT_SLOTS_MAX = 8
 STATE_VERSION = 1
@@ -264,6 +270,62 @@ def is_fork(event, head_repo, repo):
     return event == "pull_request" and (not head_repo or head_repo != repo)
 
 
+# A policy-only actor's branches when the allow-list cannot be read.
+DEFAULT_HEAD_PREFIXES = ("dependabot/",)
+
+
+def load_actor_lists(path):
+    """Plan 42 §3.7: (trusted logins, policy-only logins, policy-only head
+    prefixes) from the allow-list, logins in lower case, or None when it
+    cannot be read."""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+
+        def entries(key):
+            return [a for a in data.get(key, []) if isinstance(a, dict)]
+
+        def logins(key):
+            return {a["login"].strip().lower() for a in entries(key)
+                    if isinstance(a.get("login"), str) and a["login"].strip()}
+
+        prefixes = tuple(a["head_prefix"] for a in entries("policy_only_actors")
+                         if isinstance(a.get("head_prefix"), str) and a["head_prefix"])
+        return logins("actors"), logins("policy_only_actors"), prefixes
+    except (OSError, ValueError, AttributeError, TypeError):
+        return None
+
+
+def vendor_only_actor(actors, lists):
+    """The first of a run's actors that may run on vendor runners only, or
+    None: a policy-only actor, or a [bot] login the allow-list does not trust.
+    With no allow-list, every [bot] login is one."""
+    trusted, policy_only, _ = lists if lists is not None else (set(), set(), ())
+    for actor in actors:
+        login = (actor or "").strip()
+        lowered = login.lower()
+        if lowered and (lowered in policy_only or (lowered.endswith("[bot]") and lowered not in trusted)):
+            return login
+    return None
+
+
+def vendor_only_reason(actors, head_ref, lists):
+    """Why a run must stay on vendor runners (plan 42 §3.7), or None. It
+    covers who started the run (the actor and the triggering actor), who wrote
+    its pull request (the author), and whose branch it runs (the head ref):
+    the owner updating, reopening or dispatching on a Dependabot branch still
+    runs Dependabot's code."""
+    bot = vendor_only_actor(actors, lists)
+    if bot:
+        return "run by %s, which runs on vendor runners only (plan 42 §3.7)" % bot
+    prefixes = lists[2] if lists is not None else DEFAULT_HEAD_PREFIXES
+    head = (head_ref or "").strip()
+    for prefix in prefixes:
+        if head.startswith(prefix):
+            return "a run of %s, a branch that runs on vendor runners only (plan 42 §3.7)" % head
+    return None
+
+
 def _summary(mode):
     return {"mode": mode, "state_age": None, "serving": None, "slots": None, "running": None, "queued": None,
             "concurrent": None, "free": None, "deadline": None, "dead": False, "unknown_lanes": [], "reason": ""}
@@ -276,7 +338,8 @@ def _skew(state_age):
     return "; the state's 'at' is %d s in the future (clock skew), counted as fresh" % -state_age
 
 
-def settle_early(mode, lanes, state_text, now, *, stale_seconds, slots_max, event, head_repo, repo):
+def settle_early(mode, lanes, state_text, now, *, stale_seconds, slots_max, event, head_repo, repo,
+                 actors=(), head_ref="", actor_lists=None):
     """The decision before occupancy (spec §3), shared by decide and main.
 
     Returns (decisions, summary, None) when the fork rule, the mode or the
@@ -291,6 +354,10 @@ def settle_early(mode, lanes, state_text, now, *, stale_seconds, slots_max, even
     if is_fork(event, head_repo, repo):
         summary["reason"] = "pull request from %s: the vendor in every mode, whatever the pool says" % (
             head_repo or "an unknown repository")
+        return _everything(lanes, "vendor", summary["reason"]), summary, None
+    bot = vendor_only_reason(actors, head_ref, actor_lists)
+    if bot:
+        summary["reason"] = bot + ": the vendor in every mode"
         return _everything(lanes, "vendor", summary["reason"]), summary, None
     if normalized == "home-only":
         summary["reason"] = "WINDOWS_RUNNER_MODE=home-only: every lane queues at home"
@@ -326,10 +393,12 @@ def decide_from_occupancy(lanes, state, now, concurrent, summary, durations):
     return decisions, summary
 
 
-def decide(mode, lanes, state_text, now, concurrent, *, stale_seconds, slots_max, event, head_repo, repo, durations=None):
+def decide(mode, lanes, state_text, now, concurrent, *, stale_seconds, slots_max, event, head_repo, repo, durations=None,
+           actors=(), head_ref="", actor_lists=None):
     """The whole rule (spec §3) as a pure function; every age is measured against `now`, the router's clock."""
     decisions, summary, state = settle_early(mode, lanes, state_text, now, stale_seconds=stale_seconds,
-                                             slots_max=slots_max, event=event, head_repo=head_repo, repo=repo)
+                                             slots_max=slots_max, event=event, head_repo=head_repo, repo=repo,
+                                             actors=actors, head_ref=head_ref, actor_lists=actor_lists)
     if state is None:
         return decisions, summary
     return decide_from_occupancy(lanes, state, now, concurrent, summary, DURATIONS if durations is None else durations)
@@ -447,6 +516,10 @@ def replay_line(env, now, run_started, concurrent):
              "ROUTE_EVENT=%s" % (env.get("ROUTE_EVENT") or ""),
              "ROUTE_HEAD_REPO=%s" % (env.get("ROUTE_HEAD_REPO") or ""),
              "ROUTE_REPO=%s" % (env.get("ROUTE_REPO") or "")]
+    # The bot rule's inputs, when the run carried them: without them a replay of a bot's run decides otherwise.
+    for name in ("ROUTE_ACTOR", "ROUTE_TRIGGERING_ACTOR", "ROUTE_PR_AUTHOR", "ROUTE_HEAD_REF", "ROUTE_ALLOWLIST"):
+        if env.get(name):
+            parts.append("%s=%s" % (name, json.dumps(env[name])))
     return " ".join(parts) + " python3 ci/windows-runner/route/route.py"
 
 
@@ -512,7 +585,11 @@ def main(env=None, get=gh_api, clock=time.time):
     try:
         rule = dict(stale_seconds=_int_env(env, "ROUTE_STALE_SECONDS", DEFAULT_STALE_SECONDS),
                     slots_max=_int_env(env, "ROUTE_SLOTS_MAX", DEFAULT_SLOTS_MAX),
-                    event=env.get("ROUTE_EVENT") or "", head_repo=env.get("ROUTE_HEAD_REPO") or "", repo=repo)
+                    event=env.get("ROUTE_EVENT") or "", head_repo=env.get("ROUTE_HEAD_REPO") or "", repo=repo,
+                    actors=(env.get("ROUTE_ACTOR") or "", env.get("ROUTE_TRIGGERING_ACTOR") or "",
+                            env.get("ROUTE_PR_AUTHOR") or ""),
+                    head_ref=env.get("ROUTE_HEAD_REF") or "",
+                    actor_lists=load_actor_lists(env.get("ROUTE_ALLOWLIST") or DEFAULT_ALLOWLIST))
         # The fork rule, the mode and the state come first: the reads (or their replayed values) matter only when
         # occupancy decides, and the state parsed here is the one occupancy uses.
         decisions, summary, state = settle_early(mode, lanes, state_text, now, **rule)

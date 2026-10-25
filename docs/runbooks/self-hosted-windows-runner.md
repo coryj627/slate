@@ -98,6 +98,17 @@ reads only the routed workflows' jobs, so a fork that adds a workflow of
 its own naming a home label is not evicted. The approval click is the
 control for that case.
 
+A run of Dependabot's code never runs on the pool either, whoever started
+it: a run by Dependabot, a re-run or "Update branch" by you on its PR, or a
+dispatch on a `dependabot/` branch (plan 42 §3.7). The routers send it to the
+vendor in every mode. The host refuses any run by a bot, or by a
+`PolicyOnlyActors` entry in `config.json`, and any run of a branch under such
+an entry's `HeadPrefix`. The logs say so, for example `admission: skipped job
+<id> of coryj627/slate (a run of dependabot/…, a policy-only actor's branch
+this host never admits)`. Never re-run a Dependabot run from before
+2026-10-25 unless `WINDOWS_RUNNER_MODE` is `namespace`: its commit carries
+the old rules.
+
 A fork or Dependabot run that cannot read repository variables sees the
 mode as unset. The routing job does not run, every lane takes the vendor
 whatever the mode says, and the run never waits on this host, even while it
@@ -1703,6 +1714,10 @@ and `"status": "401"`. Rotate it before then.
   whose copy of the workflow named a home label. The host never provisions
   a VM for it and logs this once per job. Nothing to do. The job stays
   queued on GitHub and runs nowhere here.
+- **`admission: skipped job <id> of coryj627/slate (a run by <bot>, …)`** or
+  **`(a run of dependabot/…, a policy-only actor's branch this host never
+  admits)`.** The same refusal for a bot's code (plan 42 §3.7). Nothing to
+  do unless it is your own branch under a `HeadPrefix`: rename the branch.
 - **`admission: job <id>: run <run> could not be read: <error>`.** The host
   reads each queued job's run once, to learn which repository it comes
   from, and does not admit that job before it has. It retries once a
@@ -1932,7 +1947,7 @@ when the loop resumes.
 
 | Boundary | Control |
 |---|---|
-| Who can run code here | Only approved workflows. Every fork pull request waits for an owner click, every time. Only `home` and `home-only` route here; a fork pull request is sent to the vendor by the router in every mode, refused at admission and evicted at handoff by this host, and still waits for an owner click first. A fork or Dependabot run that cannot read the variable goes to Namespace and `windows-latest`. Non-fork branches are the owner's own commits (and Renovate's). |
+| Who can run code here | Only approved workflows. Every fork pull request waits for an owner click, every time. Only `home` and `home-only` route here; a fork pull request is sent to the vendor by the router in every mode, refused at admission and evicted at handoff by this host, and still waits for an owner click first. A fork or Dependabot run that cannot read the variable goes to Namespace and `windows-latest`. Dependabot's code goes to the vendor whoever starts the run, and the host refuses any bot's run and any `dependabot/` branch (plan 42 §3.7). Other non-fork branches are the owner's own commits. |
 | What a job can touch | A VM that exists for that job only, as the standard user `runner`, with no secret valid outside the VM. Its JIT runner config is single-use. |
 | Where a job can connect | The Internet, through the host's NAT. Hyper-V port ACLs drop everything to and from 10/8, 172.16/12, 192.168/16, 100.64/10 (Tailscale), 169.254/16, multicast 224/4, broadcast 255.255.255.255, 0/8 and all IPv6; the image also turns IPv6 off. The host firewall drops inbound traffic from the VM subnet to any address of the host on that interface. |
 | What survives a job | Only a cache merge, and only after the host verifies from GitHub's API: a green push, schedule or dispatch on `main` of this repository, a VM the loop did not force off, and an unchanged parent generation. |

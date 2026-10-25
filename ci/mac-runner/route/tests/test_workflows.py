@@ -58,6 +58,30 @@ class RouterOutputsReachScriptsOnlyThroughEnv(unittest.TestCase):
             "a11y-check.yml: the Studio pin check's script is among the blocks",
         )
 
+    def test_both_mac_lanes_hand_the_router_the_bot_rules_inputs(self):
+        # Plan 42 §3.7: without these the router cannot keep a bot's run, or a run of its branch, off the Studio.
+        step = (
+            "          MAC_RUNNER_MODE: ${{ vars.MAC_RUNNER_MODE }}",
+            "          MAC_RUNNER_HEARTBEAT: ${{ vars.MAC_RUNNER_HEARTBEAT }}",
+        )
+        entries = (
+            "          ROUTE_ACTOR: ${{ github.actor }}",
+            "          ROUTE_TRIGGERING_ACTOR: ${{ github.triggering_actor }}",
+            "          ROUTE_PR_AUTHOR: ${{ github.event.pull_request.user.login }}",
+            "          ROUTE_HEAD_REF: ${{ github.head_ref || github.ref_name }}",
+            "          ROUTE_ALLOWLIST: ci/mac-runner/allowlist.json",
+            "        run: python3 ci/mac-runner/route/route.py",
+        )
+        for name in ("swift-tests.yml", "a11y-check.yml"):
+            text = read(name)
+            start = text.index("\n".join(step))
+            block = text[start:text.index("run: python3 ci/mac-runner/route/route.py", start) + len(
+                "run: python3 ci/mac-runner/route/route.py")]
+            for entry in entries:
+                self.assertIn(entry, block, name)
+            # The cone-mode checkout of the route directory brings ci/mac-runner's own files, the allow-list among them.
+            self.assertIn("          sparse-checkout: ci/mac-runner/route\n", text, name)
+
     def test_swift_tests_prints_the_route_from_its_environment(self):
         step = (
             "        env:",

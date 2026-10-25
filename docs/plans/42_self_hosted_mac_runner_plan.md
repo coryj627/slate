@@ -132,6 +132,8 @@ one repository.
    available on 2026-09-17. A repository policy with
    `enforcement: active` and these two rules covers every workflow:
    - `restrict_actions_actors` allowing only user 933688 (`coryj627`).
+     Since 2026-10-25 it also allows Dependabot, for runs that only ever
+     reach vendor runners (§3.7).
    - `restrict_action_events` allowing only `push`, `pull_request`,
      `workflow_dispatch` and `schedule`. The Linux nightly and audit
      workflows need `schedule`; the runner's own hook refuses it.
@@ -296,6 +298,106 @@ identity also answers an open question: whether control 1, collaborators
 only, lets an installed app open PRs at all. If it does not, the owner
 chooses between relaxing control 1, with controls 2 and 5 still refusing
 anyone not on the list, and keeping tools acting as the owner.
+
+### 3.7 Bots that open PRs (2026-10-25, #1564)
+
+Dependabot opens its version-update PRs as `dependabot[bot]`, actor
+49699333, of type `Bot`, on branches named `dependabot/…`. The policy in
+§3.2 allows only the owner, so all 30 of its first runs ended in
+`startup_failure` (#1564).
+
+Granting it through §3.6 would put it in `actors`. That list also feeds the
+Studio hook, so it would run third-party dependency code on the owner's
+hardware. The Windows home pool trusts any same-repository head, so it would
+run it too.
+
+The owner decided the shape on 2026-10-24 (plan 45 XD6): Dependabot's
+*heads* run only on vendor runners. That covers its code whoever starts the
+run: the owner pressing "Update branch", reopening its PR, pushing a fix
+commit onto its branch, or dispatching a workflow on it. So a bot that opens
+PRs gets a narrower grant:
+
+- **The policy, not the hardware.** `allowlist.json` gains
+  `policy_only_actors`, in the shape of `actors` plus the bot's
+  `head_prefix` (`dependabot/`).
+  - `apply-policy.sh` writes `actors` ∪ `policy_only_actors` into the
+    policy's `restrict_actions_actors`, so the bot's runs can start. Its
+    builder, `ci/mac-runner/github/policy.py`, refuses an entry in both
+    lists and a policy-only entry with no type.
+  - GitHub's documentation says a policy can allow "selected bot accounts".
+    It names `dependabot[bot]` as an identity to add as an allowed actor
+    when workflows must run as it. The owner's first `apply-policy.sh
+    --apply` is the first write that proves it here. If GitHub refuses the
+    PUT, the script stops (`set -e`) and the old policy stands: Dependabot
+    stays off.
+  - The hook reads `actors` only, and it checks the PR's author id. The
+    Studio therefore refuses the bot's jobs, and the owner's runs of its
+    PRs, at admission, whatever label a workflow names.
+- **Routing to vendor runners.** Both routers, `ci/windows-runner/route/route.py`
+  and `ci/mac-runner/route/route.py`, read the allow-list. A run goes to
+  Namespace in every mode, `home-only` and `studio` included, when any of
+  these holds:
+  - its actor, triggering actor or PR author is a policy-only actor, or a
+    `[bot]` login not in `actors`;
+  - its head ref (`github.head_ref`, or `github.ref_name` on a push or
+    dispatch) starts with a policy-only `head_prefix`.
+
+  With no allow-list, every `[bot]` login and every `dependabot/` branch
+  count. The Windows shell gate's `runs-on` adds the same conditions for
+  Dependabot. Routing is not security (§6.1); the next item is.
+- **The home host refuses it.** `ci/windows-runner/config.json` lists the
+  same actors as `PolicyOnlyActors`, `{ Id, Login, HeadPrefix }`. The key
+  is required: a missing or empty list stops the host at load. A Pester
+  fact holds the allow-list's entries to it. `Get-RunRefusal` in
+  `SlateCiHost.psm1` refuses:
+  - a run whose actor or triggering actor is of type `Bot`, whatever the
+    lists say;
+  - a run whose actor or triggering actor is a policy-only actor, by login
+    or id;
+  - a run whose head branch starts with a policy-only prefix;
+  - a run that names no actor.
+
+  The run object carries no PR author for these runs, which is why the
+  branch is checked.
+  - The host never provisions a VM for such a job. GitHub can still hand a
+    VM provisioned for another job to whichever queued job's labels match.
+    A bot's job that names a home label could start there, and is forced
+    off at the next tick (10 s), its cache discarded. Only a run started
+    before this change names a home label for a bot (next item).
+  - The admission and handoff logs name the reason, for example `a run of
+    dependabot/cargo/…, a policy-only actor's branch this host never
+    admits`.
+- **Runs from before this change.** The 30 runs of 2026-10-22 can be
+  re-run. A re-run uses its original commit, so it uses the old router and
+  shell-gate rules, which name home labels in `home` and `home-only`. Never
+  re-run one unless `WINDOWS_RUNNER_MODE` is `namespace`.
+- **Tokens and secrets.** A Dependabot run gets no Actions secrets, and no
+  lane uses one, so every lane can run.
+  - Its `GITHUB_TOKEN` is read-only unless a job's `permissions` grant
+    more.
+  - `a11y-check.yml` grants `security-events: write` and
+    `pull-requests: write`, on hosted Linux, not the owner's hardware.
+  - The cooldown and the owner's review of the diff are the guard there.
+- **The merge gate is unchanged.** Ruleset 25660813 (`pr gate`, up to date)
+  gates a Dependabot PR like any other. The owner merges it with the pinned
+  command after reading the diff (AGENTS.md "Git and PRs").
+- **What stays the owner's, in this order:**
+  1. **Deploy the host first.** Run `setup-host.ps1` with this module and
+     `config.json`, then confirm the orchestrator starts. A config without
+     `PolicyOnlyActors` refuses to load.
+  2. **Then apply the policy.** Run `apply-policy.sh --apply` and confirm
+     the policy lists both actors. Before step 1, a bot's run could start
+     while the deployed host still trusted any same-repository head.
+  3. **Then the re-enable PR.** It raises one ecosystem's
+     `open-pull-requests-limit` to 1 and flips that ecosystem's zero pin in
+     `Workflows.Tests.ps1`.
+  4. **Then read that ecosystem's first Dependabot PR's runs:**
+     - each Windows route summary says `run by dependabot[bot] …`, or the
+       route job did not run, because a Dependabot run may not read
+       repository variables and then takes the vendor fallback;
+     - every job ran on Namespace or a GitHub-hosted label;
+     - the Studio's hook log shows any it saw denied.
+  5. **Then the rest of the ecosystems.**
 
 ## 4. Architecture
 
@@ -1211,7 +1313,7 @@ All seven were decided by the owner on 2026-10-09.
   control is ever shown to be bypassable.
 - **D3, workflow policy scope: every workflow.** The policy allows only
   `coryj627` and only `push`, `pull_request`, `workflow_dispatch` and
-  `schedule`, for all workflows. A future collaborator or bot needs adding
+  `schedule`, for all workflows (a bot that opens PRs: §3.7). A future collaborator or bot needs adding
   to it.
 - **D4, VM shape: up to 90 GB.** The Studio has 36 GB of memory, so the
   90 GB is the disk budget for everything `slate-ci` stores: images, job
@@ -1233,6 +1335,13 @@ default disk sync (§4.5); the hook compares IDs (§3.2); tools such as Codex
 are added through the allow-list (§3.6). Still open:
 
 - **D8, a separate account for the VM process.** Decide in Phase 2 (§4.1).
+
+Decided later:
+
+- **Bots that open PRs (#1564, owner, 2026-10-24, plan 45 XD6).** A bot
+  gets a policy-only grant. Its runs may start, but they route to vendor
+  runners, and neither the Studio hook nor the home host admits them
+  (§3.7).
 
 ## 9. Risks
 

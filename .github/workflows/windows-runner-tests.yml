@@ -31,6 +31,8 @@ on:
       - '.github/workflows/a11y-check.yml'
       # The Windows rust lint guard (Workflows.Tests.ps1) reads rust.yml's clippy line.
       - '.github/workflows/rust.yml'
+      # The router's bot rule reads the mac allow-list (plan 42 §3.7).
+      - 'ci/mac-runner/allowlist.json'
   push:
     branches: [main]
     paths:
@@ -56,6 +58,8 @@ on:
       - '.github/workflows/a11y-check.yml'
       # The Windows rust lint guard (Workflows.Tests.ps1) reads rust.yml's clippy line.
       - '.github/workflows/rust.yml'
+      # The router's bot rule reads the mac allow-list (plan 42 §3.7).
+      - 'ci/mac-runner/allowlist.json'
 
 permissions:
   contents: read

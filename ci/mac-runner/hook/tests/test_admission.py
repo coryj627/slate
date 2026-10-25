@@ -19,6 +19,8 @@ OWNER_LOGIN = "coryj627"
 OTHER = 4242
 OTHER_LOGIN = "someone-else"
 FORK = 999999
+DEPENDABOT = 49699333
+DEPENDABOT_LOGIN = "dependabot[bot]"
 
 ALLOWLIST = {
     "repository_id": REPO,
@@ -87,6 +89,18 @@ class AllowlistValidation(unittest.TestCase):
         out = admission.validate_allowlist(dict(ALLOWLIST, candidates=[{"id": 1}], _comment="x"))
         self.assertEqual(out["actor_ids"], {OWNER})
 
+    def test_validate_allowlist_accepts_policy_only_actors_and_never_trusts_them(self):
+        # Plan 42 §3.7: the policy lets a policy-only actor's runs start; the hook reads `actors` only.
+        out = admission.validate_allowlist(dict(ALLOWLIST, policy_only_actors=[
+            {"id": DEPENDABOT, "login": DEPENDABOT_LOGIN, "type": "Bot"}]))
+        self.assertEqual(out["actor_ids"], {OWNER})
+        self.assertEqual(out["actor_logins"], {OWNER_LOGIN})
+
+    def test_the_repository_allowlist_keeps_dependabot_out_of_actors(self):
+        out = admission.load_allowlist(os.path.join(os.path.dirname(__file__), "..", "..", "allowlist.json"))
+        self.assertNotIn(DEPENDABOT, out["actor_ids"])
+        self.assertNotIn(DEPENDABOT_LOGIN, out["actor_logins"])
+
 
 class Decide(unittest.TestCase):
     def setUp(self):
@@ -117,6 +131,21 @@ class Decide(unittest.TestCase):
     def test_fork_pr_by_other_denied(self):
         self.deny(env_for("pull_request", actor_id=OTHER, trigger=OTHER_LOGIN),
                   pr_payload(author=OTHER, head_repo=FORK, sender=OTHER), "actor id")
+
+    def test_policy_only_actor_is_denied_by_the_hook_even_though_the_policy_allows_it(self):
+        allow = admission.validate_allowlist(dict(ALLOWLIST, policy_only_actors=[
+            {"id": DEPENDABOT, "login": DEPENDABOT_LOGIN, "type": "Bot"}]))
+        with self.assertRaises(admission.Deny) as ctx:
+            admission.decide(env_for("pull_request", actor_id=DEPENDABOT, trigger=DEPENDABOT_LOGIN),
+                             pr_payload(author=DEPENDABOT, sender=DEPENDABOT), allow)
+        self.assertIn("actor id", str(ctx.exception))
+
+    def test_a_policy_only_actors_pr_rerun_by_the_owner_is_denied(self):
+        allow = admission.validate_allowlist(dict(ALLOWLIST, policy_only_actors=[
+            {"id": DEPENDABOT, "login": DEPENDABOT_LOGIN, "type": "Bot"}]))
+        with self.assertRaises(admission.Deny):
+            admission.decide(env_for("pull_request", actor_id=DEPENDABOT, trigger=OWNER_LOGIN),
+                             pr_payload(author=DEPENDABOT, sender=OWNER), allow)
 
     def test_same_repo_pr_by_other_author_denied(self):
         self.deny(env_for("pull_request"), pr_payload(author=OTHER), "author id")

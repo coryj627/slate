@@ -101,6 +101,14 @@ Disk: track with `df -h /`, not `tart list`; layers share blocks. Budget is
 3. If the tool opens PRs under its own identity and GitHub refuses them,
    control 1 (collaborators only) is the cause; decide per plan §3.6.
 
+A bot whose code must never reach the Studio or the home pool, such as
+Dependabot, goes in `policy_only_actors` instead, with its branch prefix
+(plan 42 §3.7). The policy then lets its runs start, but the routers send
+any run of its code to Namespace, and neither the hook nor the home host
+admits them. Add it to the home host's `config.json` `PolicyOnlyActors` as
+well (a Pester fact keeps the two lists together), deploy the host first,
+then run `apply-policy.sh --apply`.
+
 ## Tokens
 
 The controller's fine-grained token (repo `coryj627/slate` only;

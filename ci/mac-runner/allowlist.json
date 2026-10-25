@@ -1,5 +1,5 @@
 {
-  "_comment": "Who and what the self-hosted mac runner accepts. docs/plans/42_self_hosted_mac_runner_plan.md section 3.6. Two consumers: the controller streams this file into every job VM for the admission hook (hook_events, push_refs, actors), and github/apply-policy.sh writes the repository's workflow execution policy from it (policy_events, actors). IDs are what count; logins are notes, except that a re-run's triggering actor is only known by login.",
+  "_comment": "Who and what the self-hosted mac runner accepts. docs/plans/42_self_hosted_mac_runner_plan.md sections 3.6 and 3.7. Three consumers: the controller streams this file into every job VM for the admission hook (hook_events, push_refs, actors; never policy_only_actors); github/apply-policy.sh writes the repository's workflow execution policy from it (policy_events, actors and policy_only_actors); and the mac and Windows routers send a run by, or a pull request authored by, a policy_only_actors login or any [bot] login not in actors, and any run of a head_prefix branch, to vendor runners. IDs are what count; logins are notes, except that a re-run's triggering actor is only known by login.",
   "repository": "coryj627/slate",
   "repository_id": 1241111067,
   "hook_events": ["pull_request", "push", "workflow_dispatch"],
@@ -7,6 +7,9 @@
   "policy_events": ["push", "pull_request", "workflow_dispatch", "schedule"],
   "actors": [
     { "id": 933688, "login": "coryj627", "type": "User", "note": "owner" }
+  ],
+  "policy_only_actors": [
+    { "id": 49699333, "login": "dependabot[bot]", "type": "Bot", "head_prefix": "dependabot/", "note": "version updates (#1564): its runs, and any run of its branches, may start, route to vendor runners, and neither the hook nor the home host admits them" }
   ],
   "candidates": [
     { "id": 199175422, "login": "chatgpt-codex-connector[bot]", "type": "Bot", "note": "Codex; move to actors when it opens PRs under its own identity" }

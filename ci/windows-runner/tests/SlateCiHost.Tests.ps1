@@ -409,6 +409,10 @@ Describe 'Get-CiHostConfig' {
         $cfg.StateDir | Should -Be 'C:\slate-ci\state'
         $cfg.LogDir | Should -Be 'C:\slate-ci\logs'
         @($cfg.TrustedEvents) | Should -Be @('push', 'schedule', 'workflow_dispatch')
+        @($cfg.PolicyOnlyActors).Count | Should -Be 1
+        $cfg.PolicyOnlyActors[0]['Login'] | Should -BeExactly 'dependabot[bot]'
+        $cfg.PolicyOnlyActors[0]['Id'] | Should -Be 49699333
+        $cfg.PolicyOnlyActors[0]['HeadPrefix'] | Should -BeExactly 'dependabot/'
         @($cfg.RoutedWorkflows) | Should -Be @('.github/workflows/windows.yml', '.github/workflows/nightly.yml', '.github/workflows/windows-ci-pilot.yml')
     }
     It 'requires RoutedWorkflows as a non-empty array of workflow paths' {
@@ -424,6 +428,19 @@ Describe 'Get-CiHostConfig' {
             $raw['RoutedWorkflows'] = $bad
             $raw | ConvertTo-Json -Depth 6 | Set-Content $p
             { Get-CiHostConfig -Path $p } | Should -Throw '*RoutedWorkflows must be a non-empty array of workflow paths*'
+        }
+    }
+    It 'requires PolicyOnlyActors, so a missing or emptied list cannot turn the check off' {
+        $p = Join-Path $TestDrive 'policyonly.json'
+        $raw = Get-Content -Raw (Join-Path $PSScriptRoot '..' 'config.json') | ConvertFrom-Json -AsHashtable
+        $raw.Remove('PolicyOnlyActors')
+        $raw | ConvertTo-Json -Depth 6 | Set-Content $p
+        { Get-CiHostConfig -Path $p } | Should -Throw '*PolicyOnlyActors must be a non-empty array of { Id, Login, HeadPrefix } actors*'
+        foreach ($bad in @(@(), 'dependabot[bot]', @(@{ Login = 'dependabot[bot]'; HeadPrefix = 'dependabot/' }), @(@{ Id = 1; Login = ''; HeadPrefix = 'd/' }),
+                @(@{ Id = 'x'; Login = 'a'; HeadPrefix = 'd/' }), @(@{ Id = 1; Login = 'a' }), @(@{ Id = 1; Login = 'a'; HeadPrefix = '' }))) {
+            $raw['PolicyOnlyActors'] = $bad
+            $raw | ConvertTo-Json -Depth 6 | Set-Content $p
+            { Get-CiHostConfig -Path $p } | Should -Throw '*PolicyOnlyActors must be a non-empty array of { Id, Login, HeadPrefix } actors*'
         }
     }
     It 'rejects a config missing a required key' {
@@ -690,6 +707,10 @@ Describe 'Get-PublishedState' {
 }
 
 Describe 'Test-TrustedRun' {
+    BeforeAll {
+        # The entries the host loads, so the tests and the validated config share one shape.
+        $script:policyOnly = @((Get-CiHostConfig -Path (Join-Path $PSScriptRoot '..' 'config.json')).PolicyOnlyActors)
+    }
     It 'is <Expected> for <Case>' -ForEach @(
         @{ Case = 'the trusted repository'; Expected = $true; Run = [pscustomobject]@{ head_repository = [pscustomobject]@{ full_name = 'coryj627/slate' } } }
         @{ Case = 'the trusted repository in another case'; Expected = $true; Run = [pscustomobject]@{ head_repository = [pscustomobject]@{ full_name = 'CoryJ627/SLATE' } } }
@@ -701,6 +722,57 @@ Describe 'Test-TrustedRun' {
         @{ Case = 'a fork of the same name'; Expected = $false; Run = [pscustomobject]@{ head_repository = [pscustomobject]@{ full_name = 'someone/slate' } } }
     ) {
         Test-TrustedRun -Run $Run -TrustedRepo 'coryj627/slate' | Should -Be $Expected
+    }
+    # Plan 42 §3.7: the policy lets a policy-only actor's runs start, so the
+    # host refuses them, by login or by id, started or re-run by the owner.
+    It 'is <Expected> with policy-only actors for <Case>' -ForEach @(
+        @{ Case = 'the owner''s run'; Expected = $true; Actor = @{ login = 'coryj627'; id = 933688 }; Trigger = @{ login = 'coryj627'; id = 933688 } }
+        @{ Case = 'a run by a policy-only actor'; Expected = $false; Actor = @{ login = 'dependabot[bot]'; id = 49699333 }; Trigger = @{ login = 'dependabot[bot]'; id = 49699333 } }
+        @{ Case = 'a policy-only actor''s run re-run by the owner'; Expected = $false; Actor = @{ login = 'dependabot[bot]'; id = 49699333 }; Trigger = @{ login = 'coryj627'; id = 933688 } }
+        @{ Case = 'a run re-run by a policy-only actor'; Expected = $false; Actor = @{ login = 'coryj627'; id = 933688 }; Trigger = @{ login = 'dependabot[bot]'; id = 49699333 } }
+        @{ Case = 'a policy-only actor matched by id under another login'; Expected = $false; Actor = @{ login = 'renamed[bot]'; id = 49699333 }; Trigger = @{ login = 'renamed[bot]'; id = 49699333 } }
+        @{ Case = 'a policy-only login in another case'; Expected = $false; Actor = @{ login = 'Dependabot[BOT]'; id = 1 }; Trigger = @{ login = 'Dependabot[BOT]'; id = 1 } }
+        @{ Case = 'a run that names no actor'; Expected = $false; Actor = $null; Trigger = $null }
+        @{ Case = 'a run by any bot, listed or not'; Expected = $false; Actor = @{ login = 'renovate[bot]'; id = 29139614; type = 'Bot' }; Trigger = @{ login = 'renovate[bot]'; id = 29139614; type = 'Bot' } }
+        @{ Case = 'the owner''s update of a Dependabot branch'; Expected = $false; Branch = 'dependabot/nuget/apps/slate-windows/nuget-0838e9d5cd'; Actor = @{ login = 'coryj627'; id = 933688; type = 'User' }; Trigger = @{ login = 'coryj627'; id = 933688; type = 'User' } }
+        @{ Case = 'the owner''s own branch'; Expected = $true; Branch = 'claude/xb-12-dependabot-vendor-only'; Actor = @{ login = 'coryj627'; id = 933688; type = 'User' }; Trigger = @{ login = 'coryj627'; id = 933688; type = 'User' } }
+    ) {
+        $run = [pscustomobject]@{ head_repository = [pscustomobject]@{ full_name = 'coryj627/slate' } }
+        if ($Actor) { $run | Add-Member -NotePropertyName actor -NotePropertyValue ([pscustomobject]$Actor) }
+        if ($Trigger) { $run | Add-Member -NotePropertyName triggering_actor -NotePropertyValue ([pscustomobject]$Trigger) }
+        if ($Branch) { $run | Add-Member -NotePropertyName head_branch -NotePropertyValue $Branch }
+        Test-TrustedRun -Run $run -TrustedRepo 'coryj627/slate' -PolicyOnlyActors $policyOnly | Should -Be $Expected
+    }
+    It 'refuses a Bot actor even with no policy-only actors configured' {
+        $run = [pscustomobject]@{ head_repository = [pscustomobject]@{ full_name = 'coryj627/slate' }; actor = [pscustomobject]@{ login = 'renovate[bot]'; id = 1; type = 'Bot' }; triggering_actor = [pscustomobject]@{ login = 'renovate[bot]'; id = 1; type = 'Bot' } }
+        Test-TrustedRun -Run $run -TrustedRepo 'coryj627/slate' | Should -BeFalse
+    }
+    It 'names why it refuses a run' {
+        $owner = [pscustomobject]@{ login = 'coryj627'; id = 933688; type = 'User' }
+        $bot = [pscustomobject]@{ login = 'dependabot[bot]'; id = 49699333; type = 'Bot' }
+        $fork = [pscustomobject]@{ head_repository = [pscustomobject]@{ full_name = 'someone/slate' }; actor = $owner; triggering_actor = $owner }
+        Get-RunRefusal -Run $fork -TrustedRepo 'coryj627/slate' -PolicyOnlyActors $policyOnly | Should -BeExactly 'not the trusted repository'
+        $byBot = [pscustomobject]@{ head_repository = [pscustomobject]@{ full_name = 'coryj627/slate' }; actor = $bot; triggering_actor = $bot }
+        Get-RunRefusal -Run $byBot -TrustedRepo 'coryj627/slate' -PolicyOnlyActors $policyOnly | Should -BeExactly 'a run by dependabot[bot], a bot this host never admits'
+        $ofBranch = [pscustomobject]@{ head_repository = [pscustomobject]@{ full_name = 'coryj627/slate' }; head_branch = 'dependabot/cargo/x'; actor = $owner; triggering_actor = $owner }
+        Get-RunRefusal -Run $ofBranch -TrustedRepo 'coryj627/slate' -PolicyOnlyActors $policyOnly | Should -BeExactly "a run of dependabot/cargo/x, a policy-only actor's branch this host never admits"
+        $mine = [pscustomobject]@{ head_repository = [pscustomobject]@{ full_name = 'coryj627/slate' }; head_branch = 'main'; actor = $owner; triggering_actor = $owner }
+        Get-RunRefusal -Run $mine -TrustedRepo 'coryj627/slate' -PolicyOnlyActors $policyOnly | Should -BeExactly ''
+    }
+    It 'refuses every policy-only actor the allow-list names, with its branch prefix' {
+        # The routers read ci/mac-runner/allowlist.json, this host its own config: one list must cover the other.
+        $allow = Get-Content -Raw (Join-Path $PSScriptRoot '..' '..' 'mac-runner' 'allowlist.json') | ConvertFrom-Json -AsHashtable
+        $cfg = Get-CiHostConfig -Path (Join-Path $PSScriptRoot '..' 'config.json')
+        foreach ($entry in @($allow['policy_only_actors'])) {
+            $match = @($cfg.PolicyOnlyActors | Where-Object { [int64]$_['Id'] -eq [int64]$entry['id'] })
+            $match.Count | Should -Be 1 -Because "config.json must refuse $($entry['login'])"
+            $match[0]['Login'] | Should -BeExactly $entry['login']
+            $match[0]['HeadPrefix'] | Should -BeExactly $entry['head_prefix']
+        }
+    }
+    It 'refuses another repository whatever the actor' {
+        $run = [pscustomobject]@{ head_repository = [pscustomobject]@{ full_name = 'someone/slate' }; actor = [pscustomobject]@{ login = 'coryj627'; id = 933688 }; triggering_actor = [pscustomobject]@{ login = 'coryj627'; id = 933688 } }
+        Test-TrustedRun -Run $run -TrustedRepo 'coryj627/slate' -PolicyOnlyActors $policyOnly | Should -BeFalse
     }
 }
 

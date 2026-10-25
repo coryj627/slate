@@ -8,9 +8,12 @@
 # Dependabot through ci/mac-runner/allowlist.json is not the fix: that list
 # also feeds the Studio admission hook, and the Windows home pool trusts
 # same-repository heads, so dependency code would run on the owner's hardware.
-# Re-enabling is a redesign against plan 42 (#1564). Until then
-# Workflows.Tests.ps1 holds every limit at zero, and the rest of this file is
-# where the redesign starts.
+# Re-enabling follows plan 42 §3.7 (#1564): Dependabot is a policy-only actor
+# in that allow-list, so its runs may start but route to vendor runners, and
+# neither the Studio hook nor the home host admits them. The owner applies
+# the policy, deploys the host config and watches one hand-triggered run land
+# on vendor runners; only then does a separate PR raise these limits. Until
+# then Workflows.Tests.ps1 holds every limit at zero.
 #
 # As designed, every ecosystem opens at most one grouped PR a week for its
 # minor and patch updates. A major update (for a 0.x crate, a minor bump)

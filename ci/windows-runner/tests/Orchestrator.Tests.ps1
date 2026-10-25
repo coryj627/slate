@@ -36,7 +36,7 @@ BeforeAll {
             GetJob        = { param($id) & $script:record 'GetJob' @($id); $script:world.Jobs[[string]$id] }
             GetRun        = { param($id) & $script:record 'GetRun' @($id)
                               if ($script:world.Runs.ContainsKey([string]$id)) { $script:world.Runs[[string]$id] }
-                              else { [pscustomobject]@{ id = $id; event = 'push'; head_branch = 'main'; head_repository = [pscustomobject]@{ full_name = 'coryj627/slate' } } } }
+                              else { [pscustomobject]@{ id = $id; event = 'push'; head_branch = 'main'; actor = [pscustomobject]@{ login = 'coryj627'; id = 933688 }; triggering_actor = [pscustomobject]@{ login = 'coryj627'; id = 933688 }; head_repository = [pscustomobject]@{ full_name = 'coryj627/slate' } } } }
             NewJitRunner  = { param($name, $labels) & $script:record 'NewJitRunner' @($name, $labels); @{ RunnerId = 77; EncodedJitConfig = $script:world.JitConfig } }
             RemoveRunner  = { param($id) & $script:record 'RemoveRunner' @($id) }
             GetRunner     = { param($id) & $script:record 'GetRunner' @($id); $script:world.Runner }
@@ -77,8 +77,12 @@ BeforeAll {
         $script:world.Jobs[[string]$Id] = [pscustomobject]@{ id = $Id; run_id = $RunId; status = 'completed'; conclusion = $Conclusion; runner_name = $RunnerName }
     }
 
-    function Set-Run([int64]$RunId, [string]$Event = 'push', [string]$Branch = 'main', [string]$Repo = 'coryj627/slate') {
-        $script:world.Runs[[string]$RunId] = [pscustomobject]@{ id = $RunId; event = $Event; head_branch = $Branch; head_repository = [pscustomobject]@{ full_name = $Repo } }
+    function Set-Run([int64]$RunId, [string]$Event = 'push', [string]$Branch = 'main', [string]$Repo = 'coryj627/slate',
+        [string]$Actor = 'coryj627', [int64]$ActorId = 933688, [string]$TriggeringActor = $Actor, [int64]$TriggeringActorId = $ActorId) {
+        $script:world.Runs[[string]$RunId] = [pscustomobject]@{ id = $RunId; event = $Event; head_branch = $Branch
+            actor = [pscustomobject]@{ login = $Actor; id = $ActorId }
+            triggering_actor = [pscustomobject]@{ login = $TriggeringActor; id = $TriggeringActorId }
+            head_repository = [pscustomobject]@{ full_name = $Repo } }
     }
 
     $script:t0 = [datetimeoffset]::Parse('2026-10-10T12:00:00Z')
@@ -111,7 +115,8 @@ Context 'admission' {
         $journal.SeenJobs['1'].Foreign | Should -BeFalse
         $journal.SeenJobs['1'].Repo | Should -Be 'coryj627/slate'
         # The SeenJobs entry's shape (both sides sorted: Sort-Object ignores case).
-        @($journal.SeenJobs['1'].Keys | Sort-Object) | Should -Be @('FirstSeenAt', 'Foreign', 'Lane', 'Repo', 'RunCheckedAt', 'RunId' | Sort-Object)
+        @($journal.SeenJobs['1'].Keys | Sort-Object) | Should -Be @('FirstSeenAt', 'Foreign', 'Lane', 'Repo', 'RunCheckedAt', 'RunId', 'Why' | Sort-Object)
+        $journal.SeenJobs['1'].Why | Should -BeNullOrEmpty -Because 'a trusted run has no refusal'
         # The journal entry's shape: 18 keys, every one present from admission.
         @($vm.Keys | Sort-Object) | Should -Be @('CachePath', 'ClaimCheckedAt', 'Claimed', 'Dir', 'ForkGeneration', 'GuestError', 'HandedAt', 'JobId', 'Lane', 'Name', 'PendingCommit', 'Phase', 'RunId', 'RunnerId', 'SettleWaits', 'Slot', 'SlotIp', 'StartedAt')
         $vm.GuestError | Should -Be $null
@@ -164,6 +169,38 @@ Context 'admission' {
         ([regex]::Matches(($logs -join "`n"), 'admission: skipped job 1 of someone/slate \(not the trusted repository\)')).Count | Should -Be 1
         @(($journal.PublishedState | ConvertFrom-Json).queued).Count | Should -Be 0
     }
+    It 'never admits a job of a policy-only actor, even on the owner''s re-run (plan 42 §3.7)' {
+        $world.Queued = @((New-QueuedJob 1 10 'app'), (New-QueuedJob 2 11 'app'))
+        Set-Run 10 'pull_request' 'dependabot/cargo/serde-1.0.230' -Actor 'dependabot[bot]' -ActorId 49699333
+        Set-Run 11 'pull_request' 'dependabot/cargo/serde-1.0.230' -Actor 'dependabot[bot]' -ActorId 49699333 -TriggeringActor 'coryj627' -TriggeringActorId 933688
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        (Get-Calls 'NewVm').Count | Should -Be 0
+        $journal.SeenJobs['1'].Foreign | Should -BeTrue
+        $journal.SeenJobs['2'].Foreign | Should -BeTrue
+        @($logs) | Should -Contain '[warn] admission: skipped job 1 of coryj627/slate (a run by dependabot[bot], a policy-only actor this host never admits)'
+    }
+    It 'never admits the owner''s update of a Dependabot branch (plan 42 §3.7)' {
+        $world.Queued = @((New-QueuedJob 1 10 'app'))
+        Set-Run 10 'pull_request' 'dependabot/cargo/serde-1.0.230'
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        (Get-Calls 'NewVm').Count | Should -Be 0
+        $journal.SeenJobs['1'].Foreign | Should -BeTrue
+        @($logs) | Should -Contain "[warn] admission: skipped job 1 of coryj627/slate (a run of dependabot/cargo/serde-1.0.230, a policy-only actor's branch this host never admits)"
+    }
+    It 'forces a handed VM off when a policy-only actor''s job took its runner, and says why' {
+        $world.Queued = @((New-QueuedJob 1 10 'model'))
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
+        $name = @($journal.Vms.Keys)[0]
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
+        $journal.Vms[$name].Phase | Should -Be 'handed'
+        Set-Run 99 'pull_request' 'dependabot/cargo/serde-1.0.230' -Actor 'dependabot[bot]' -ActorId 49699333
+        $world.InProgress = @([pscustomobject]@{ id = 2; run_id = 99; status = 'in_progress'; labels = @('slate-win-model'); created_at = $t0.ToString('o'); runner_name = $name })
+        Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(20)
+        (Get-Calls 'StopVmForce').Count | Should -Be 1
+        (Get-Calls 'CommitCache').Count | Should -Be 0
+        $journal.SeenJobs['2'].Foreign | Should -BeTrue
+        @($logs) | Should -Contain "[warn] handoff: ${name} runs job 2 of coryj627/slate (a run by dependabot[bot], a policy-only actor this host never admits); forcing it off"
+    }
     It 'treats a run without a head repository as foreign' {
         $world.Queued = @((New-QueuedJob 1 10 'app'))
         $world.Runs['10'] = [pscustomobject]@{ id = 10; event = 'pull_request'; head_branch = 'x'; head_repository = $null }
@@ -184,7 +221,7 @@ Context 'admission' {
     It 'retries a run read that failed at most once a minute, logging the first failure only, then admits' {
         $world.Queued = @((New-QueuedJob 1 10 'app'))
         $script:runCalls = 0
-        $adapters.GetRun = { param($id) $script:runCalls++; if ($script:runCalls -le 2) { throw '502' }; [pscustomobject]@{ id = $id; event = 'push'; head_branch = 'main'; head_repository = [pscustomobject]@{ full_name = 'coryj627/slate' } } }
+        $adapters.GetRun = { param($id) $script:runCalls++; if ($script:runCalls -le 2) { throw '502' }; [pscustomobject]@{ id = $id; event = 'push'; head_branch = 'main'; actor = [pscustomobject]@{ login = 'coryj627'; id = 933688 }; triggering_actor = [pscustomobject]@{ login = 'coryj627'; id = 933688 }; head_repository = [pscustomobject]@{ full_name = 'coryj627/slate' } } }
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0
         Invoke-OrchestratorTick -Config $config -Journal $journal -Adapters $adapters -Now $t0.AddSeconds(10)
         $script:runCalls | Should -Be 1

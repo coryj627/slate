@@ -50,6 +50,8 @@ jobs:
 
       - name: Route decision tests
         run: python -I -m unittest discover -v -s ci/mac-runner/route/tests -t ci/mac-runner/route
+      - name: Policy builder tests
+        run: python -I -m unittest discover -v -s ci/mac-runner/github/tests -t ci/mac-runner/github
 
       - name: Controller tests
         run: python -I -m unittest discover -v -s ci/mac-runner/controller/tests -t ci/mac-runner/controller
