@@ -21,6 +21,15 @@ XD3 (5 s / 20 s / 2). #1579's own pattern (a dedicated thread, structured degrad
 
 ## Design
 
+> **Delivered shape (2026-10-24).** As designed, with four changes from the two reviews and one owner call:
+>
+> - **A refused render has its own sentence** (owner, on #1580). Its form is `"busy"`: "Diagram not drawn: earlier diagrams are still rendering past their 5-second budget. The source follows." It is not the timeout sentence with a clause appended.
+> - **A refusal is transient and not cached.** `get_diagram_blocks` hands it to the flight's waiters but skips the cache insert, so the next request renders again. A real timeout is cached like any failed render (item 6).
+> - **The note's budget is a deadline.** Each render's wait is the per-diagram budget or what is left of the note's, whichever is shorter. A render cut by the note's deadline gets the `"note"` sentence, so no note holds a refresh past 20 s.
+> - **The deadline is checked where a render would start,** after validation. A note's unsupported or empty blocks keep their own reasons past it.
+>
+> The test seam applies only to renders the setting thread asks for, so session tests elsewhere in the process render for real. mermaid-rs-renderer 0.3.1 locks its text measurer per measurement, not for a whole render: what the cap of two bounds is the cores and memory abandoned renders keep.
+
 1. **Budgets.** `DiagramBudgets` gains `max_render_time_per_diagram: Duration` (5 s), `max_render_time_per_note: Duration` (20 s) and `max_abandoned_renders: usize` (2), as `pub const`s beside the byte caps, documented with the issue's measurements.
 2. **A bounded wait.** `mermaid_renderer_render` returns through a channel instead of `join`: the thread sends its `Result` and the caller does `rx.recv_timeout(budget)`. On `Ok(result)` the behaviour is today's (including `resume_unwind` on a panic payload, which the thread sends as `Err(payload)`). On `Timeout`: increment `ABANDONED_RENDERS` (a `static AtomicUsize`), leave the thread running (it decrements when it finishes, through a guard dropped at the end of the closure, so a panic also releases), and return `RenderFailed { message: render_time_exceeded_message("diagram", 5) }`. Before spawning, if `ABANDONED_RENDERS >= max_abandoned_renders`, return the same message without spawning ("…; an earlier diagram is still rendering" appended). The `TEXT_MEASURER` consequence is documented: an abandoned render holds mermaid's mutex until it ends, so the next render waits on it and is itself budget-bounded — the cap of two bounds how long that can go on.
 3. **A per-note budget.** `render_diagram_blocks_bounded` (`:207-238`) keeps an `Instant`; once the elapsed render time of the note exceeds `max_render_time_per_note`, every remaining block degrades with `render_time_exceeded_message("note", 20)` without spawning.

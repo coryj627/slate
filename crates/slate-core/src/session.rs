@@ -9766,14 +9766,16 @@ impl VaultSession {
             let raws = crate::diagram::extract_diagram_blocks(&source);
             // Bounded per call (W3-3, the math render-budget
             // precedent): per-note count, per-diagram source and
-            // output, and aggregate retention budgets; over-budget
-            // blocks degrade to a typed RenderFailed with source,
-            // position, and description intact. No lock is held
-            // across rendering.
+            // output, and aggregate retention budgets, and the
+            // per-diagram and per-note render time budgets (#1580);
+            // over-budget blocks degrade to a typed RenderFailed with
+            // source, position, and description intact. No lock is
+            // held across rendering.
             #[cfg(test)]
             self.diagram_render_passes
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let blocks = crate::diagram::render_diagram_blocks(&raws);
+            let rendered = crate::diagram::render_diagram_blocks_for_cache(&raws);
+            let blocks = rendered.blocks;
 
             {
                 let mut flights = self
@@ -9783,11 +9785,16 @@ impl VaultSession {
                 // Publish BEFORE removal, atomically with it (round
                 // 4): admission rechecks the cache under this same
                 // lock, so "no flight" always implies "result
-                // published".
-                self.diagram_cache
-                    .lock()
-                    .expect("diagram_cache mutex poisoned")
-                    .insert(key.clone(), blocks.clone());
+                // published". A transient result (a render refused
+                // while earlier renders ran on past their budget,
+                // #1580) is handed to this flight's waiters but not
+                // cached: the next request renders again.
+                if !rendered.transient {
+                    self.diagram_cache
+                        .lock()
+                        .expect("diagram_cache mutex poisoned")
+                        .insert(key.clone(), blocks.clone());
+                }
                 flights.remove(&key);
             }
             *flight

@@ -376,6 +376,71 @@ public sealed class ReadingDiagramTests
         });
     }
 
+    /// <summary>
+    /// #1580: a block core stopped at its render time budget arrives as
+    /// <c>RenderFailed</c> with core's sentence, and the host shows it
+    /// through the failed state it already has: the honest header, core's
+    /// reason verbatim and the source in the text range, and the element
+    /// speaking the structured description.
+    /// </summary>
+    [Fact]
+    public void ACoreRenderFailedBlockShowsTheHonestHeaderAndCoresReason()
+    {
+        RunSta(() =>
+        {
+            const string source = "flowchart LR\nA --> B\n";
+            const string markdown = "```mermaid\n" + source + "```\n";
+            ReadingBlock[] blocks = SlateUniffiMethods.ReadingBlocksSource(markdown);
+            ReadingBlockInlines[] inlines = SlateUniffiMethods.ReadingInlineSegmentsSource(
+                markdown,
+                Array.Empty<RenderedCitation>(),
+                Array.Empty<OutgoingLink>());
+            var model = new List<(ReadingBlock, ReadingBlockInlines)>();
+            for (int i = 0; i < blocks.Length; i++)
+            {
+                model.Add((blocks[i], inlines[i]));
+            }
+            string reason = SlateUniffiMethods.RenderTimeExceededMessage("diagram", 5);
+            Assert.Equal(
+                "Diagram not drawn: rendering took longer than 5 seconds. The source follows.",
+                reason);
+            var timedOut = new DiagramBlock(
+                Source: source,
+                Dialect: DiagramDialect.Mermaid,
+                Svg: null,
+                PngFallback: null,
+                StructuredDescription: "Flowchart with 1 step.",
+                RenderStatus: new DiagramRenderStatus.RenderFailed(reason),
+                Line: 1,
+                ByteOffset: (uint)markdown.IndexOf("```", StringComparison.Ordinal));
+
+            ReadingDocumentModel built = ReadingDocumentBuilder.Build(
+                model,
+                new ReadingListBuildContext(),
+                Array.Empty<CodeBlock>(),
+                Array.Empty<MathBlock>(),
+                new[] { timedOut });
+
+            string text = new System.Windows.Documents.TextRange(
+                built.Document.ContentStart,
+                built.Document.ContentEnd).Text;
+            // In reading order: the header, core's reason, then the source the
+            // reason says follows.
+            int header = text.IndexOf("Diagram could not be rendered", StringComparison.Ordinal);
+            int said = text.IndexOf(reason, StringComparison.Ordinal);
+            int shown = text.IndexOf("A --> B", StringComparison.Ordinal);
+            Assert.True(header >= 0, text);
+            Assert.True(said > header, text);
+            Assert.True(shown > said, text);
+            ReadingDiagramElement element =
+                Assert.Single(FindDiagramElements(built.Document));
+            Assert.Null(element.Content);
+            Assert.Equal(
+                "Flowchart with 1 step.",
+                System.Windows.Automation.AutomationProperties.GetName(element));
+        });
+    }
+
     /// <summary>The mac tooltip rule verbatim: three lines, spaces,
     /// 120-char cap with ellipsis; empty source yields no tooltip.</summary>
     [Fact]
