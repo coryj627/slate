@@ -630,11 +630,12 @@ Describe 'lane change detection' {
         $steps[1] | Should -Match (Get-Lines @('          if [ "$EVENT" != pull_request ]; then'))
         $steps[1] | Should -Match (Get-Lines @('            echo "run=true" >> "$GITHUB_OUTPUT"', '            exit 0', '          fi'))
         # A pull request that changes the decision runs every lane, so a decision that wrongly answers false cannot
-        # skip the tests that would catch it; a failed diff fails the job, which runs the lane too.
+        # skip the tests that would catch it; a diff that fails answers true, with a warning.
         $steps[1] | Should -Match (Get-Lines @(
                 '          if ! decider="$(git diff --name-only --no-renames HEAD^1 HEAD -- scripts/lane_changes.py .github/workflows/lane-changes.yml)"; then',
-                '            echo "::error::cannot diff the merge commit with its base parent, so the lane runs."',
-                '            exit 1',
+                '            echo "::warning::cannot diff the merge commit with its base parent, so the lane runs."',
+                '            echo "run=true" >> "$GITHUB_OUTPUT"',
+                '            exit 0',
                 '          fi',
                 '          if [ -n "$decider" ]; then',
                 '            echo "This pull request changes the lane decision itself, so the lane runs: $decider"',
