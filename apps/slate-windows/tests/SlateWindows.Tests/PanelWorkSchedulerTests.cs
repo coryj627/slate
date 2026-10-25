@@ -58,6 +58,10 @@ public sealed class PanelWorkSchedulerTests
                 });
         }
 
+        /// <summary>A body through <see cref="PanelWorkScheduler.StartWork"/>,
+        /// gated when a prerequisite was set.</summary>
+        public void RunBody(Action body) => StartWork(body);
+
         public Task DrainAll() => WhenAllWorkDrained();
 
         public Task DrainOnce() => WhenWorkDrained();
@@ -200,7 +204,7 @@ public sealed class PanelWorkSchedulerTests
         Assert.NotNull(probe);
         // Never disposed: a removal that reaches the seam late must find it set.
         var untrack = new ManualResetEventSlim();
-        probe.BeforeUntrackForTests = () => untrack.Wait(TimeSpan.FromSeconds(30));
+        probe.BeforeUntrackForTests = _ => untrack.Wait(TimeSpan.FromSeconds(30));
         try
         {
             probe.Run();
@@ -236,7 +240,7 @@ public sealed class PanelWorkSchedulerTests
         });
         Assert.NotNull(probe);
         var untrack = new ManualResetEventSlim();
-        probe.BeforeUntrackForTests = () => untrack.Wait(TimeSpan.FromSeconds(30));
+        probe.BeforeUntrackForTests = _ => untrack.Wait(TimeSpan.FromSeconds(30));
         try
         {
             probe.Run(beforeComputeReturns: () => throw new InvalidOperationException("a compute that throws"));
@@ -248,6 +252,46 @@ public sealed class PanelWorkSchedulerTests
             InvalidOperationException fault = await Assert.ThrowsAsync<InvalidOperationException>(() => drain);
             Assert.Equal("a compute that throws", fault.Message);
             Assert.Equal(0, probe.Applies);
+        }
+        finally
+        {
+            probe.BeforeUntrackForTests = null;
+            untrack.Set();
+        }
+    }
+
+    /// <summary>#1603: nor is work that ended cancelled. A gated body that
+    /// throws <see cref="OperationCanceledException"/> ends its tracked task
+    /// cancelled, and while that task is listed the drain ends cancelled
+    /// with it, as before.</summary>
+    [Fact]
+    public async Task TheFixedPointDrainStillEndsCancelledOnListedWorkThatWasCancelled()
+    {
+        Probe? probe = null;
+        await Task.Run(() =>
+        {
+            SynchronizationContext.SetSynchronizationContext(null);
+            probe = new Probe(synchronousForTests: false);
+        });
+        Assert.NotNull(probe);
+        probe.GateWorkOn(Task.CompletedTask);
+        var untrack = new ManualResetEventSlim();
+        Task? listed = null;
+        probe.BeforeUntrackForTests = ended =>
+        {
+            Volatile.Write(ref listed, ended);
+            _ = untrack.Wait(TimeSpan.FromSeconds(30));
+        };
+        try
+        {
+            probe.RunBody(() => throw new OperationCanceledException("a body that was cancelled"));
+            Assert.True(SpinWait.SpinUntil(() => Volatile.Read(ref listed) is not null, TimeSpan.FromSeconds(10)), "the tracked work ended");
+            Assert.Equal(TaskStatus.Canceled, Volatile.Read(ref listed)!.Status);
+            Assert.True(probe.PendingWorkForTests > 0, "the cancelled work is still listed: its removal is held");
+
+            Task drain = Task.Run(probe.DrainAll);
+            Assert.True(await Task.WhenAny(drain, Task.Delay(TimeSpan.FromSeconds(5))) == drain, "the drain never ended");
+            _ = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => drain);
         }
         finally
         {

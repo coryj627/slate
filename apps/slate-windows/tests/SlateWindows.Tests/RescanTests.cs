@@ -1576,7 +1576,7 @@ public sealed partial class RescanTests
         {
             h.Workspace.OpenPath("x.md", WorkspaceOpenTarget.NewTab);
             h.Context.Drain();
-            leaf.BeforeUntrackForTests = () => held.Wait(TimeSpan.FromSeconds(60));
+            leaf.BeforeUntrackForTests = _ => held.Wait(TimeSpan.FromSeconds(60));
             var clock = Stopwatch.StartNew();
             h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
             Assert.True(clock.Elapsed < TimeSpan.FromSeconds(10), $"the rescan took {clock.Elapsed.TotalSeconds:0.0} s");
@@ -1612,7 +1612,7 @@ public sealed partial class RescanTests
         {
             h.Workspace.OpenPath("x.md", WorkspaceOpenTarget.NewTab);
             h.Context.RunUntil(() => leaf.DrainForTests().IsCompleted && leaf.PendingWorkForTests == 0, "the open's quiet");
-            leaf.BeforeUntrackForTests = () => held.Wait(TimeSpan.FromSeconds(60));
+            leaf.BeforeUntrackForTests = _ => held.Wait(TimeSpan.FromSeconds(60));
             h.Workspace.NotifyGraphOfVaultChange();
             h.Context.RunUntil(
                 () => leaf.PendingWorkForTests > 0 && leaf.DrainForTests().IsCompleted,

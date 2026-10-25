@@ -251,9 +251,9 @@ internal abstract class PanelWorkScheduler : BindableBase
     }
 
     /// <summary>Test seam (#1603): runs in a tracked task's removal, on the
-    /// pool, after the task ended and before it leaves the set, so a fact
+    /// pool, with the task that ended and before it leaves the set, so a fact
     /// can keep an ended task listed. A seam that throws leaves it listed.</summary>
-    internal Action? BeforeUntrackForTests { get; set; }
+    internal Action<Task>? BeforeUntrackForTests { get; set; }
 
     /// <summary>The tracked task's removal, and its fault counted, once
     /// it completes.</summary>
@@ -266,7 +266,7 @@ internal abstract class PanelWorkScheduler : BindableBase
                 {
                     _ = Interlocked.Increment(ref _faultedWork);
                 }
-                BeforeUntrackForTests?.Invoke();
+                BeforeUntrackForTests?.Invoke(completed);
                 lock (_workLock)
                 {
                     _ = _pendingWork.Remove(completed);
