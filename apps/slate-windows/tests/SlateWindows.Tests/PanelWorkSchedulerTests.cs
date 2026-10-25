@@ -81,6 +81,12 @@ public sealed class PanelWorkSchedulerTests
         }
     }
 
+    /// <summary>#1603: a drain returns once nothing tracked is running; the
+    /// set is pruned, and a fault counted, on the pool a moment later. A fact
+    /// that reads either after a drain waits for this first.</summary>
+    private static bool Untracked(PanelWorkScheduler scheduler) =>
+        SpinWait.SpinUntil(() => scheduler.PendingWorkForTests == 0, TimeSpan.FromSeconds(10));
+
     private static bool PumpUntil(Func<bool> condition)
     {
         var budget = System.Diagnostics.Stopwatch.StartNew();
@@ -176,6 +182,80 @@ public sealed class PanelWorkSchedulerTests
         Assert.Equal(2, probe.Applies);
     }
 
+    /// <summary>#1603: a tracked task leaves the set on the pool after it
+    /// ends, so an ended task can still be listed when the fixed-point
+    /// drain looks. The drain does not wait for that removal: awaiting a
+    /// snapshot of ended tasks completes at once, and a loop that read the
+    /// same snapshot again spun on its caller's thread (the teardown's
+    /// dispatcher, in CI) until a busy pool got to the removals.</summary>
+    [Fact]
+    public async Task TheFixedPointDrainDoesNotWaitForThePoolToUntrackEndedWork()
+    {
+        Probe? probe = null;
+        await Task.Run(() =>
+        {
+            SynchronizationContext.SetSynchronizationContext(null);
+            probe = new Probe(synchronousForTests: true);
+        });
+        Assert.NotNull(probe);
+        // Never disposed: a removal that reaches the seam late must find it set.
+        var untrack = new ManualResetEventSlim();
+        probe.BeforeUntrackForTests = () => untrack.Wait(TimeSpan.FromSeconds(30));
+        try
+        {
+            probe.Run();
+            Assert.True(SpinWait.SpinUntil(() => probe.DrainOnce().IsCompleted, TimeSpan.FromSeconds(10)), "the tracked work ended");
+            Assert.Equal(1, probe.Applies);
+            Assert.True(probe.PendingWorkForTests > 0, "the ended work is still listed: its removal is held");
+
+            Task drain = Task.Run(probe.DrainAll);
+            Assert.True(
+                await Task.WhenAny(drain, Task.Delay(TimeSpan.FromSeconds(5))) == drain,
+                "the drain waited for the pool to remove work that had already ended");
+            await drain;
+        }
+        finally
+        {
+            probe.BeforeUntrackForTests = null;
+            untrack.Set();
+        }
+    }
+
+    /// <summary>#1603: skipping ended work skips only work that succeeded.
+    /// A tracked task that faulted still faults the drain while it is
+    /// listed, as before (contract 35: a throwing compute "would fault the
+    /// drain with it").</summary>
+    [Fact]
+    public async Task TheFixedPointDrainStillFaultsOnListedWorkThatFaulted()
+    {
+        Probe? probe = null;
+        await Task.Run(() =>
+        {
+            SynchronizationContext.SetSynchronizationContext(null);
+            probe = new Probe(synchronousForTests: true);
+        });
+        Assert.NotNull(probe);
+        var untrack = new ManualResetEventSlim();
+        probe.BeforeUntrackForTests = () => untrack.Wait(TimeSpan.FromSeconds(30));
+        try
+        {
+            probe.Run(beforeComputeReturns: () => throw new InvalidOperationException("a compute that throws"));
+            Assert.True(SpinWait.SpinUntil(() => probe.DrainOnce().IsCompleted, TimeSpan.FromSeconds(10)), "the tracked work ended");
+            Assert.True(probe.PendingWorkForTests > 0, "the faulted work is still listed: its removal is held");
+
+            Task drain = Task.Run(probe.DrainAll);
+            Assert.True(await Task.WhenAny(drain, Task.Delay(TimeSpan.FromSeconds(5))) == drain, "the drain never ended");
+            InvalidOperationException fault = await Assert.ThrowsAsync<InvalidOperationException>(() => drain);
+            Assert.Equal("a compute that throws", fault.Message);
+            Assert.Equal(0, probe.Applies);
+        }
+        finally
+        {
+            probe.BeforeUntrackForTests = null;
+            untrack.Set();
+        }
+    }
+
     [Fact]
     public async Task ShutdownStopsBothHalves()
     {
@@ -245,7 +325,7 @@ public sealed class PanelWorkSchedulerTests
             Assert.Equal(1, pendingAtStart);
             Assert.False(drainCompleteAtStart);
             Assert.Equal(1, probe.Applies);
-            Assert.Equal(0, probe.PendingWorkForTests);
+            Assert.True(Untracked(probe), "the ended work never left the tracked set");
         });
     }
 
@@ -423,6 +503,7 @@ public sealed class PanelWorkSchedulerTests
         await drain;
         // The released callback fails to claim the settled promise.
         Assert.Equal(0, probe.Applies);
+        Assert.True(Untracked(probe), "the ended work never left the tracked set");
         Assert.Equal(0, probe.FaultedWorkForTests);
     }
 
@@ -487,7 +568,7 @@ public sealed class PanelWorkSchedulerTests
             await drain;
             Assert.NotNull(probe.ComputeThread);
             Assert.Equal(0, probe.Applies);
-            await Task.Delay(50);
+            Assert.True(Untracked(probe), "the ended work never left the tracked set");
             Assert.Equal(0, probe.FaultedWorkForTests);
         }
         finally
@@ -586,7 +667,7 @@ public sealed class PanelWorkSchedulerTests
             await drain;
             Assert.NotNull(probe.ComputeThread);
             Assert.Equal(0, probe.Applies);
-            await Task.Delay(50);
+            Assert.True(Untracked(probe), "the ended work never left the tracked set");
             Assert.Equal(0, probe.FaultedWorkForTests);
         }
         finally
@@ -613,7 +694,7 @@ public sealed class PanelWorkSchedulerTests
             Task drain = probe.DrainAll();
             Assert.True(pump(() => drain.IsCompleted), "the drain completed");
             drain.GetAwaiter().GetResult();
-            Assert.True(pump(() => probe.FaultedWorkForTests == 0));
+            Assert.True(Untracked(probe), "the ended work never left the tracked set");
             Assert.Equal(0, probe.FaultedWorkForTests);
         });
     }
@@ -631,7 +712,7 @@ public sealed class PanelWorkSchedulerTests
         // A completed task leaves the pending set, so the drain cannot see
         // a fault — the scheduler counts them, and the count stays zero
         // (the sweep's `ipd1-refused-post-faults`).
-        await Task.Delay(50);
+        Assert.True(Untracked(probe), "the ended work never left the tracked set");
         Assert.Equal(0, probe.FaultedWorkForTests);
     }
 }

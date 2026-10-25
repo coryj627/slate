@@ -1559,6 +1559,80 @@ public sealed partial class RescanTests
         Assert.Equal([Explicit1], h.Spoken);
     });
 
+    /// <summary>#1603: a rescan never waits for the pool to untrack work
+    /// that has already ended. With the Connections leaf's untracking held,
+    /// the rescan's probe ends but stays listed, and the rescan, which awaits
+    /// the leaf's publication, still completes at once. The fixed-point
+    /// drain used to spin until the pool removed the ended work.</summary>
+    [Fact]
+    public void TheRescanDoesNotWaitForThePoolToUntrackEndedWork() => RunSta(() =>
+    {
+        // Never disposed: a removal that reaches the seam late must find it set.
+        var held = new ManualResetEventSlim();
+        var h = new Harness("untrack-held-rescan", ("x.md", "# X\n"));
+        ConnectionsLeafViewModel leaf = h.Workspace.Connections;
+        bool disposed = false;
+        try
+        {
+            h.Workspace.OpenPath("x.md", WorkspaceOpenTarget.NewTab);
+            h.Context.Drain();
+            leaf.BeforeUntrackForTests = () => held.Wait(TimeSpan.FromSeconds(60));
+            var clock = Stopwatch.StartNew();
+            h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+            Assert.True(clock.Elapsed < TimeSpan.FromSeconds(10), $"the rescan took {clock.Elapsed.TotalSeconds:0.0} s");
+            Assert.True(leaf.PendingWorkForTests > 0, "the probe's ended work is still listed");
+        }
+        finally
+        {
+            leaf.BeforeUntrackForTests = null;
+            held.Set();
+            if (!disposed)
+            {
+                disposed = true;
+                h.Dispose();
+            }
+        }
+    });
+
+    /// <summary>#1603: the close never waits for the pool to untrack work
+    /// that has already ended. With the Connections leaf's untracking held
+    /// once a probe's work has ended, the teardown, which drains the leaf on
+    /// this thread, still returns at once. It used to spin here, never
+    /// pumping, until the pool removed the ended work: minutes on a busy
+    /// runner, past the fact bound.</summary>
+    [Fact]
+    public void TheCloseDoesNotWaitForThePoolToUntrackEndedWork() => RunSta(() =>
+    {
+        // Never disposed: a removal that reaches the seam late must find it set.
+        var held = new ManualResetEventSlim();
+        var h = new Harness("untrack-held-close", ("x.md", "# X\n"));
+        ConnectionsLeafViewModel leaf = h.Workspace.Connections;
+        bool disposed = false;
+        try
+        {
+            h.Workspace.OpenPath("x.md", WorkspaceOpenTarget.NewTab);
+            h.Context.RunUntil(() => leaf.DrainForTests().IsCompleted && leaf.PendingWorkForTests == 0, "the open's quiet");
+            leaf.BeforeUntrackForTests = () => held.Wait(TimeSpan.FromSeconds(60));
+            h.Workspace.NotifyGraphOfVaultChange();
+            h.Context.RunUntil(
+                () => leaf.PendingWorkForTests > 0 && leaf.DrainForTests().IsCompleted,
+                "the probe's work ending, still listed");
+            var clock = Stopwatch.StartNew();
+            disposed = true;
+            h.Dispose();
+            Assert.True(clock.Elapsed < TimeSpan.FromSeconds(10), $"the close took {clock.Elapsed.TotalSeconds:0.0} s");
+        }
+        finally
+        {
+            leaf.BeforeUntrackForTests = null;
+            held.Set();
+            if (!disposed)
+            {
+                h.Dispose();
+            }
+        }
+    });
+
     /// <summary>v2 §5 (codex design pass 1, high 5): the open paths are
     /// hashed in chunks of at most core's bound under the one token. With
     /// 1,025 distinct open notes — one more than a single call accepts — the
