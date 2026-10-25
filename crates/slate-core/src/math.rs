@@ -710,6 +710,7 @@ fn latex_to_mathml(latex: &str) -> String {
     else {
         return String::new();
     };
+    let events = fold_primes_into_superscripts(events);
     let names: Vec<String> = events
         .iter()
         .filter_map(|event| match event {
@@ -731,6 +732,221 @@ fn latex_to_mathml(latex: &str) -> String {
         Ok(()) => escape_stray_markup(&out),
         Err(_) => String::new(),
     }
+}
+
+/// #1585: a prime after an element is that element's superscript, as in TeX
+/// and MathJax (`<msup><mi>v</mi><mo>′</mo></msup>`). pulldown-latex 0.8
+/// reads `v'` as `v` followed by a loose `′`, so MathCAT, seeing no function
+/// before `(`, speaks `v'(x)` as "v prime times x". This rewrites a run of one
+/// or two primes that follows a free element into exactly the events
+/// pulldown-latex itself yields for `v^{\prime}` (or `v^{\dprime}`): the
+/// superscript script, the element, then a group holding `′` or `″`. A
+/// function name, script or visual that carries the primes is grouped
+/// first, as for `{\sin^2}^{\prime}`: pulldown-latex writes a function's
+/// application mark after its script, and the thin space before a function
+/// name that follows an ordinary atom (`2\sin`) inside the script it opens,
+/// and either gives MathCAT a superscript of three or four children, which
+/// it rejects.
+///
+/// Three or more primes stay as parsed: no superscript MathCAT 0.7.7 reads
+/// gives correct Nemeth for them (`‴` brailles a stray `.`, and a run of `′`
+/// gains a level indicator), while the loose run keeps the braille right
+/// (#1628).
+///
+/// An element is free when it is not an argument a script or visual is
+/// still waiting for. A prime there is itself that argument, and stays. An
+/// ordinary character (a letter, or `|` typed as itself), a function name,
+/// a number, a plain `{...}` group or a whole script or visual (root,
+/// fraction, negation) can carry primes; a delimiter or an operator
+/// pulldown-latex classes as one, a `\left...\right` group and an
+/// environment cannot (`(fg)'`, `\left(fg\right)'`, `\vert x\vert'` and
+/// `a/'` keep their loose prime). A prime with nothing before it stays loose
+/// too.
+fn fold_primes_into_superscripts(
+    events: Vec<pulldown_latex::event::Event<'_>>,
+) -> Vec<pulldown_latex::event::Event<'_>> {
+    use pulldown_latex::event::{Content, Event, Grouping, ScriptPosition, ScriptType, Visual};
+
+    /// What an element still open at this point is waiting for.
+    enum Open {
+        /// A `{...}` group, from its `Begin` at this index.
+        Group(usize),
+        /// A script or visual at this index, waiting for `remaining` elements.
+        Construct { start: usize, remaining: usize },
+    }
+
+    /// The element that just completed at a free position and can carry
+    /// primes: where it starts in `out`, and whether it is grouped before it
+    /// is scripted (a function name, or a whole script or visual).
+    #[derive(Clone, Copy)]
+    struct Carrier {
+        start: usize,
+        grouped: bool,
+    }
+
+    fn primes_in(event: &Event<'_>) -> Option<usize> {
+        match event {
+            Event::Content(Content::Ordinary { content, .. }) => match content {
+                '′' => Some(1),
+                '″' => Some(2),
+                '‴' => Some(3),
+                '⁗' => Some(4),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// One element completed: count it against the construct waiting for
+    /// it, and answer the element now free, if it can carry primes.
+    fn complete(
+        stack: &mut Vec<Open>,
+        start: usize,
+        carriable: bool,
+        grouped: bool,
+    ) -> Option<Carrier> {
+        let mut carrier = carriable.then_some(Carrier { start, grouped });
+        loop {
+            match stack.last_mut() {
+                Some(Open::Construct {
+                    start: construct,
+                    remaining,
+                }) => {
+                    *remaining -= 1;
+                    if *remaining > 0 {
+                        return None;
+                    }
+                    carrier = Some(Carrier {
+                        start: *construct,
+                        grouped: true,
+                    });
+                    stack.pop();
+                }
+                _ => return carrier,
+            }
+        }
+    }
+
+    if !events.iter().any(|event| primes_in(event).is_some()) {
+        return events;
+    }
+    let original = events.clone();
+    let mut out: Vec<Event<'_>> = Vec::with_capacity(events.len() + 6);
+    let mut stack: Vec<Open> = Vec::new();
+    let mut previous: Option<Carrier> = None;
+    let mut events = events.into_iter().peekable();
+    while let Some(event) = events.next() {
+        // A carrier is only ever free: `complete` answers one only when no
+        // construct is left waiting, and every push clears it.
+        if let Some(primes) = primes_in(&event)
+            && let Some(carrier) = previous
+        {
+            let mut run = vec![event];
+            let mut count = primes;
+            while let Some(more) = events.peek().and_then(primes_in) {
+                count += more;
+                run.extend(events.next());
+            }
+            previous = None;
+            let glyph = match count {
+                1 => '′',
+                2 => '″',
+                _ => {
+                    // Three or more: kept loose (see above).
+                    out.extend(run);
+                    continue;
+                }
+            };
+            out.insert(
+                carrier.start,
+                Event::Script {
+                    ty: ScriptType::Superscript,
+                    position: ScriptPosition::Right,
+                },
+            );
+            if carrier.grouped {
+                out.insert(carrier.start + 1, Event::Begin(Grouping::Normal));
+                out.push(Event::End);
+            }
+            out.push(Event::Begin(Grouping::Normal));
+            out.push(Event::Content(Content::Ordinary {
+                content: glyph,
+                stretchy: false,
+            }));
+            out.push(Event::End);
+            continue;
+        }
+        let index = out.len();
+        match &event {
+            Event::Script { ty, .. } => {
+                let remaining = if matches!(ty, ScriptType::SubSuperscript) {
+                    3
+                } else {
+                    2
+                };
+                stack.push(Open::Construct {
+                    start: index,
+                    remaining,
+                });
+                previous = None;
+            }
+            Event::Visual(visual) => {
+                let remaining = match visual {
+                    Visual::SquareRoot | Visual::Negation => 1,
+                    Visual::Root | Visual::Fraction(_) => 2,
+                };
+                stack.push(Open::Construct {
+                    start: index,
+                    remaining,
+                });
+                previous = None;
+            }
+            Event::Begin(_) => {
+                stack.push(Open::Group(index));
+                previous = None;
+            }
+            Event::End => {
+                let Some(Open::Group(start)) = stack.pop() else {
+                    // The walker's arity model disagrees with the stream:
+                    // leave it exactly as parsed.
+                    return original;
+                };
+                // Only a plain `{...}` group carries: a `\left...\right` group
+                // or an environment is bracketed, and keeps its prime loose as
+                // a delimiter does.
+                let plain = matches!(out.get(start), Some(Event::Begin(Grouping::Normal)));
+                out.push(event);
+                previous = complete(&mut stack, start, plain, false);
+                continue;
+            }
+            Event::Content(content) => {
+                let function = matches!(content, Content::Function(_));
+                let carriable = match content {
+                    Content::Function(_) | Content::Number(_) => true,
+                    Content::Ordinary { .. } => primes_in(&event).is_none(),
+                    _ => false,
+                };
+                out.push(event);
+                previous = complete(&mut stack, index, carriable, function);
+                continue;
+            }
+            _ => {
+                // A space, a state change (`\rm`) or an environment's flow:
+                // `push_mathml` takes any event a script or visual is
+                // waiting for as that argument, so it counts as one there,
+                // and carries no prime.
+                out.push(event);
+                previous = if matches!(stack.last(), Some(Open::Construct { .. })) {
+                    complete(&mut stack, index, false, false)
+                } else {
+                    None
+                };
+                continue;
+            }
+        }
+        out.push(event);
+    }
+    out
 }
 
 /// Commands pulldown-latex 0.8 parses but renders without their
@@ -906,6 +1122,203 @@ fn math_error_to_vault(_err: MathCatError) -> VaultError {
 mod tests {
     use super::*;
     use std::thread;
+
+    /// #1585: a prime after an element is its superscript, byte for byte the
+    /// MathML of the explicit `^{\prime}` form.
+    #[test]
+    fn a_prime_after_an_identifier_is_a_superscript_in_mathml() {
+        let folded = latex_to_mathml("v'(x)");
+        assert_eq!(folded, latex_to_mathml("v^{\\prime}(x)"));
+        assert!(folded.contains("<msup><mi>v</mi>"), "{folded}");
+        assert_eq!(
+            latex_to_mathml("f'(g(x)) \\cdot g'(x)"),
+            latex_to_mathml("f^{\\prime}(g(x)) \\cdot g^{\\prime}(x)")
+        );
+        // A function name is grouped before it is scripted (see the fold).
+        assert_eq!(
+            latex_to_mathml("\\sin'(x)"),
+            latex_to_mathml("{\\sin}^{\\prime}(x)")
+        );
+        assert_eq!(latex_to_mathml("{u}'v"), latex_to_mathml("{u}^{\\prime}v"));
+    }
+
+    /// Two primes fold into one `″` (MathCAT reads "double prime", and its
+    /// Nemeth keeps the two prime cells). Three or more stay as parsed: no
+    /// superscript MathCAT reads gives them correct Nemeth.
+    #[test]
+    fn consecutive_primes_fold_into_one_superscript() {
+        assert_eq!(
+            latex_to_mathml("f''(x)"),
+            latex_to_mathml("f^{\\dprime}(x)")
+        );
+        // A run counts primes, not glyphs: `\dprime` is two.
+        assert_eq!(latex_to_mathml("f\\dprime(x)"), latex_to_mathml("f''(x)"));
+        for source in ["f'''(x)", "f''''(x)", "f\\dprime'(x)", "f'\\dprime(x)"] {
+            let mathml = latex_to_mathml(source);
+            assert!(!mathml.is_empty(), "{source} did not render");
+            assert!(!mathml.contains("<msup>"), "{source}: {mathml}");
+        }
+    }
+
+    /// A prime with no element before it, a prime after a delimiter, an
+    /// operator, a `\left...\right` group or an environment, and a prime
+    /// that is itself an argument a script or fraction still waits for are
+    /// left as pulldown-latex parsed them.
+    #[test]
+    fn a_prime_with_no_free_element_before_it_is_left_alone() {
+        for source in [
+            "'x",
+            "(f g)'(x)",
+            "\\left(f g\\right)'(x)",
+            "\\begin{matrix} a \\end{matrix}'",
+            "a/'",
+            "\\frac a'",
+        ] {
+            let mathml = latex_to_mathml(source);
+            assert!(!mathml.is_empty(), "{source} did not render");
+            assert!(!mathml.contains("<msup>"), "{source}: {mathml}");
+        }
+        assert_eq!(
+            latex_to_mathml("'x"),
+            "<math display=\"inline\"><mi>′</mi><mi>x</mi></math>"
+        );
+        // A whole script carries the prime, grouped: x_1' is {x_1} primed.
+        assert!(latex_to_mathml("x_1'").contains("<msup><mrow><msub>"));
+    }
+
+    /// A primed script on a function (`\sin^2'`, `\log_2'`) is grouped
+    /// before it is scripted, as `{\sin^2}^{\prime}` is: pulldown-latex
+    /// writes the function's application mark after its script, and in a
+    /// bare `msup` that mark gave MathCAT a four-child superscript it
+    /// rejected, so the whole formula fell back to its source.
+    #[test]
+    fn a_primed_script_on_a_function_is_grouped_before_it_is_scripted() {
+        assert_eq!(
+            latex_to_mathml("\\sin^2'(x)"),
+            latex_to_mathml("{\\sin^2}^{\\prime}(x)")
+        );
+        assert_eq!(
+            latex_to_mathml("\\log_2'(x)"),
+            latex_to_mathml("{\\log_2}^{\\prime}(x)")
+        );
+        for source in ["\\sin^2'(x)", "v'(x) + \\sin^2'(x)", "\\lim_{x\\to 0}'"] {
+            let raw = RawMathBlock {
+                source: source.to_string(),
+                display_style: MathDisplayStyle::Block,
+                line: 1,
+                byte_offset: 0,
+            };
+            let block = render_math(&raw, MathPrefs::default());
+            assert!(
+                !block.speech.starts_with("Math expression"),
+                "{source} fell back: {}",
+                block.speech
+            );
+            assert!(!block.braille.is_empty(), "{source} has no braille");
+        }
+    }
+
+    /// A primed function after a letter, a number, a closing bracket or a
+    /// group renders and is spoken as a function: pulldown-latex writes a
+    /// thin space before a function name after such an atom, and inside a
+    /// bare `msup` that space gave MathCAT a three-child superscript it
+    /// rejected, so the whole formula fell back to its source.
+    #[test]
+    fn a_primed_function_after_an_ordinary_atom_still_renders() {
+        for source in [
+            "2\\sin'(x)",
+            "x\\cos'(x)",
+            "-\\sin'(x)",
+            "\\sin'(x)\\cos'(x)",
+            "x\\operatorname{erf}'(x)",
+        ] {
+            let raw = RawMathBlock {
+                source: source.to_string(),
+                display_style: MathDisplayStyle::Block,
+                line: 1,
+                byte_offset: 0,
+            };
+            let block = render_math(&raw, MathPrefs::default());
+            assert!(
+                !block.speech.starts_with("Math expression"),
+                "{source} fell back: {}",
+                block.speech
+            );
+            assert!(!block.braille.is_empty(), "{source} has no braille");
+            assert!(block.speech.contains("of x"), "{source}: {}", block.speech);
+        }
+    }
+
+    /// A number, a whole fraction and a function inside an environment's cell
+    /// carry primes too; and an arity the walker cannot follow leaves the
+    /// formula exactly as parsed rather than mis-nesting it.
+    #[test]
+    fn every_kind_of_free_element_carries_its_prime() {
+        assert!(latex_to_mathml("2'").contains("<msup><mn>2</mn>"));
+        // A bar typed as itself is an ordinary character.
+        assert_eq!(latex_to_mathml("|x|'"), latex_to_mathml("|x|^{\\prime}"));
+        assert_eq!(
+            latex_to_mathml("\\frac{a}{b}'"),
+            latex_to_mathml("{\\frac{a}{b}}^{\\prime}")
+        );
+        assert!(
+            latex_to_mathml("\\begin{matrix} f'(x) \\end{matrix}").contains("<msup><mi>f</mi>")
+        );
+        // `\sqrt[]` takes an empty index the walker does not count: the
+        // stream is handed on unchanged, and still renders.
+        assert!(!latex_to_mathml("{\\sqrt[]{x}}'").is_empty());
+    }
+
+    /// A state change (`\rm`) a script or root is waiting for is that
+    /// argument, as `push_mathml` takes it, so the element after it is free.
+    #[test]
+    fn a_state_change_counts_as_the_argument_it_fills() {
+        let mathml = latex_to_mathml("\\sqrt\\rm x'");
+        assert!(
+            mathml.contains("<msqrt></msqrt><msup><mi mathvariant=\"normal\">x</mi>"),
+            "{mathml}"
+        );
+    }
+
+    /// The step-0 probe, pinned: a primed function is spoken as a function
+    /// ("of x"), never as a product ("times x"), under every speech style
+    /// and verbosity.
+    #[test]
+    fn a_primed_function_is_spoken_as_a_function() {
+        let raw = RawMathBlock {
+            source: "v'(x)".to_string(),
+            display_style: MathDisplayStyle::Block,
+            line: 1,
+            byte_offset: 0,
+        };
+        for speech_style in [MathSpeechStyle::ClearSpeak, MathSpeechStyle::SimpleSpeak] {
+            for verbosity in [
+                MathVerbosity::Terse,
+                MathVerbosity::Medium,
+                MathVerbosity::Verbose,
+            ] {
+                let speech = render_math(
+                    &raw,
+                    MathPrefs {
+                        speech_style,
+                        verbosity,
+                        braille_code: BrailleCode::Nemeth,
+                    },
+                )
+                .speech;
+                assert!(
+                    !speech.contains("times"),
+                    "{speech_style:?} {verbosity:?}: {speech}"
+                );
+                if verbosity != MathVerbosity::Terse {
+                    assert!(
+                        speech.contains("of x"),
+                        "{speech_style:?} {verbosity:?}: {speech}"
+                    );
+                }
+            }
+        }
+    }
 
     /// #1583: MathCAT's own panic hook, installed on the first call into
     /// MathCAT, calls the hook it replaced only under MathCAT's `cfg(test)`.
