@@ -87,3 +87,4 @@ Slate is distributed in the hope that it will be useful, but WITHOUT ANY WARRANT
 ## Don't try to use this yet
 
 The macOS app has a substantial feature set built and tested, but Slate is still pre-release: there is no signed, downloadable build; features are landing and changing weekly; and the accessibility work is verified continuously but has not been through a full AT-user testing round. **Don't try to use Slate as your daily notes app yet.** When a packaged alpha is ready for AT-user testing, it will be announced through the project's issue tracker and discussions.
+
