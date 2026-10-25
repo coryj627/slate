@@ -55,7 +55,7 @@ def trigger_lists(workflow_text: str) -> dict[str, list[str]]:
     event: str | None = None
     in_paths = False
     for raw in workflow_text.splitlines():
-        line = raw.split("#", 1)[0].rstrip() if not raw.lstrip().startswith("- '") else raw.rstrip()
+        line = raw.split("#", 1)[0].rstrip() if not raw.lstrip().startswith(("- '", '- "')) else raw.rstrip()
         if not line.strip():
             continue
         indent = len(line) - len(line.lstrip())
@@ -75,9 +75,21 @@ def trigger_lists(workflow_text: str) -> dict[str, list[str]]:
             in_paths = stripped == "paths:"
             continue
         if event and in_paths and stripped.startswith("- "):
-            item = stripped[2:].split("#", 1)[0].strip().strip("'\"")
-            lists.setdefault(event, []).append(item)
+            lists.setdefault(event, []).append(_item(stripped[2:]))
     return lists
+
+
+def _item(text: str) -> str:
+    """One list item: a quoted pattern keeps a `#` inside its quotes, and a
+    comment after it is dropped; an unquoted one ends at its comment."""
+    text = text.strip()
+    if text[:1] in ("'", '"'):
+        quote = text[0]
+        end = text.find(quote, 1)
+        if end < 0 or text[end + 1:end + 2] == quote:
+            raise ValueError(f"{text!r}: write the pattern in one pair of quotes, with no quote inside")
+        return text[1:end]
+    return text.split("#", 1)[0].strip()
 
 
 def glob_regex(pattern: str) -> re.Pattern[str]:

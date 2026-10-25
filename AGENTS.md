@@ -83,8 +83,8 @@ tests) disagree, the tests and the code win.
 - Run only the lanes the change touches, and batch follow-up pushes. Every
   lane reports on every PR but runs its jobs only for its own paths (its
   other jobs report as skipped, which counts as passed); any change under
-  `apps/slate-mac/`, `crates/` or `docs/plans/` also starts the Windows lane,
-  and lane runs cost money.
+  `apps/slate-mac/` or `crates/`, or to a plan document its censuses read,
+  also starts the Windows lane, and lane runs cost money.
 - Report verification as the command you ran and its result, not as a claim.
 
 ## Dependencies

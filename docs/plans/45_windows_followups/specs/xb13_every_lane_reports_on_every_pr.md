@@ -27,16 +27,23 @@ The first draft gave each lane a twin, `<W>-paths-unchanged.yml`, triggered by `
    - On a pull request it checks out the merge commit and its parents (depth 2, trees only, sparse) and runs `scripts/lane_changes.py`.
    - The script lists `git diff --name-only --no-renames HEAD^1 HEAD` and matches it against the lane's `on.push.paths` with GitHub's filter-pattern rules: `*`, `**`, `**/` as zero or more folders, `!` negation, and the last match decides. It refuses `?`, `+` and `[]`.
    - It writes `run=true` or `run=false`. On any other event the decision is `run=true`.
+   - A pull request that changes `lane_changes.py` or `lane-changes.yml` is `run=true` before the script runs. A decision that wrongly answered `false` would otherwise skip, on its own PR, the tests that would catch it.
    - `check_windows_docs_trigger.py` imports the same matcher.
 3. **The gates.** Two kinds of job decide for themselves: a job with no other needs, and a job whose `if:` has a status function.
    - Each of those needs `changes` and opens its `if:` with `!cancelled() && needs.changes.outputs.run != 'false'`. The aggregates that already used `always()` keep it.
    - Any other term follows with `&&`, and an `||` stays inside parentheses.
    - Every other job reaches `changes` through a gated job and keeps its implicit `success()`.
    - So a `false` decision skips every job, and a skipped job reports as passed. A failed or cancelled decision leaves `run` empty, and the lane runs.
-   - Required-check names do not change. `windows.yml`'s `build + test (windows x64)` is skipped with the lane, and so passes. When the lane runs, it still fails unless every lane job succeeds.
+   - `windows.yml`'s `build + test (windows x64)` is skipped with the lane, and so passes. When the lane runs, it still fails unless every lane job succeeds.
+   - **The mac lanes gain the same kind of aggregate**: `swift tests (mac)` and `accessibility check (mac)`.
+     - The problem it fixes: a mac job is skipped when the one it needs failed (route, then the XCTest suite or the analysis), and that skip reads as passed.
+     - Each `gate` waits on every other job of its lane. It fails unless they all passed. The one skip it accepts is a fork's pull request, which never runs on the mac runners.
 4. **No dropped `main` runs.** Shipped first as #1638 (46d7a34a): every lane groups pushes by `github.sha` and pull requests by `github.ref`.
-5. **The ruleset, the owner's step, after a week.** The PR body carries the `gh api -X PUT repos/coryj627/slate/rulesets/25660813` payload, which adds each lane's check context (integration 15368). The owner applies it once seven days of PRs show every lane reporting.
-6. **Not changed:** any lane job's runner, steps or name; `pr-gate.yml`'s trigger and job; the lanes' push triggers and their lists.
+5. **The ruleset, the owner's step, after a week.**
+   - The PR body carries the `gh api -X PUT repos/coryj627/slate/rulesets/25660813` payload, which adds each lane's check context (integration 15368). The owner applies it once seven days of PRs show every lane reporting.
+   - The payload names only non-matrix jobs: the aggregates, the root jobs, and the Windows docs census. A matrix job skipped by `if:` reports one check under its unexpanded name, because `if:` is evaluated before the matrix. A required shard name would wait forever.
+   - It never names a check two workflows share, such as `Route mac jobs` or `changes / lane paths`.
+6. **Not changed:** any lane job's runner, steps or name; `pr-gate.yml`'s trigger and job; the lanes' push triggers and their lists. The mac lanes' new `gate` jobs are the only jobs added.
 
 ## Tests
 
@@ -44,27 +51,31 @@ The first draft gave each lane a twin, `<W>-paths-unchanged.yml`, triggered by `
   - per lane: the bare `pull_request` trigger and the one `on.push.paths` list;
   - the `changes` job comes first and hands over the lane's own file;
   - every other job is gated by the rule in Design 3, checked as a fixpoint over `needs`;
-  - a fixture fact shows the rule refuses each way of breaking it;
-  - `lane-changes.yml`'s trigger, permissions and checkout, and its script expands no expression.
+  - a fixture fact shows the rule refuses each way of breaking it, including an `if:` that reads a job it does not need, and a block-scalar `if:`;
+  - every workflow a pull request starts is a lane that decides, the PR gate, or a pilot;
+  - `lane-changes.yml`'s trigger, permissions, checkout and decider guard, and its script expands no expression;
+  - the mac gates wait on every job of their lane, and their scripts, run through bash, fail on each result but success (a fork's skipped suite aside).
 - The routing, path-list and SDK-pin facts move to the gated `needs:` and `if:` lines and to one list.
 - `scripts/tests/test_lane_changes.py`:
-  - the cheat sheet's patterns, and the refused syntax;
+  - the cheat sheet's patterns, the refused syntax, and a `#` inside a quoted pattern;
   - a real repository with a merge commit: a lane path changed; no lane path changed while `main` moved in one; a rename out of the paths; a head that is not a merge; an unreadable list.
 - `scripts/tests/test_windows_docs_trigger.py`, `test_mac_sdk.py` and `test_mac_bundle_resources.py` read one list.
-- Mutations: each of nine breaks fails a fact. Among them:
+- Mutations: each of fourteen breaks fails a fact. Among them:
   - a lane job with an implicit `success()` on `changes`;
   - a status function without the decision;
   - a `pull_request` list put back;
   - a top-level `||`;
   - a job that never needs `changes`;
   - another lane's file handed over;
-  - an expression in the script.
+  - an expression in the script;
+  - no decider guard;
+  - a mac gate that passes a failed route, lets any PR skip, or forgets a job.
 - The PR itself edits every lane's own file, so every lane runs on it. A draft scratch PR stacked on the branch, touching only `README.md`, shows the other half: every lane's `changes` decides `false`, and every other check reports as skipped.
 
 ## Docs and registers
 
 - New: `lane-changes.yml`, `scripts/lane_changes.py` and its test.
-- The eight lanes, and the header comments of `pr-gate.yml` and `windows.yml`.
+- The eight lanes (the mac two gain their `gate` jobs), and the header comments of `pr-gate.yml` and `windows.yml`.
 - `windows-runner-tests.yml`: its list gains every lane, the reusable workflow, the script and its test, plus a step that runs the script's tests.
 - AGENTS.md:
   - every lane reports on every PR;

@@ -98,6 +98,18 @@ class TriggerListFacts(unittest.TestCase):
         self.assertEqual(["crates/**", "**/*.rs", ".github/workflows/lane.yml"], lists["push"])
         self.assertNotIn("pull_request", lists)
 
+    def test_a_hash_inside_quotes_is_part_of_the_pattern(self):
+        # Cutting at the '#' would narrow the list, and the lane would skip where GitHub's filter matches.
+        text = WORKFLOW.replace("      - 'crates/**'\n", "      - 'docs/#notes/**'  # a comment\n      - \"a#b.md\"\n      - plain.md # comment\n")
+        self.assertEqual(["docs/#notes/**", "a#b.md", "plain.md", "**/*.rs", ".github/workflows/lane.yml"],
+                         lane_changes.trigger_lists(text)["push"])
+
+    def test_a_quote_inside_a_quoted_pattern_is_refused(self):
+        for item in ("'it''s.md'", "'open.md"):
+            with self.subTest(item=item):
+                with self.assertRaises(ValueError):
+                    lane_changes.trigger_lists(WORKFLOW.replace("'crates/**'", item))
+
     def test_every_lane_in_the_repository_has_a_push_list_the_check_can_read(self):
         for lane in ("a11y-check", "audit", "license-headers", "mac-runner-tests", "rust", "swift-tests",
                      "windows-runner-tests", "windows"):

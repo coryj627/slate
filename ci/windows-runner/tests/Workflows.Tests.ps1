@@ -497,7 +497,16 @@ Describe 'lane change detection' {
                 $block = Get-JobBlock $Text $id
                 $needs = Get-JobKey $block 'needs'
                 if ($needs -eq '') { $problems += "${id}: write needs on one line"; continue }
-                $jobs[$id] = @{ Needs = @(Get-NeedsList $needs); If = Get-JobKey $block 'if' }
+                $needsList = @(Get-NeedsList $needs)
+                $if = Get-JobKey $block 'if'
+                if ($null -ne $if -and ($if -eq '' -or $if -match '^[>|]')) { $problems += "${id}: write if on one line"; continue }
+                # A job that is not in needs reads as empty: needs.changes.outputs.run == 'true' without changes in
+                # needs skips the job on every pull request, and the skip reports as passed.
+                if ($if -match '(?i)\bneeds\s*\[') { $problems += "${id}: read needs as needs.<job>"; continue }
+                $unread = @([regex]::Matches("$if", '(?i)(?<![\w.-])needs\.([A-Za-z0-9_-]+)') | ForEach-Object { $_.Groups[1].Value } |
+                        Where-Object { $needsList -notcontains $_ })
+                if ($unread.Count -gt 0) { $problems += "${id}: reads needs.$($unread[0]), which it does not need"; continue }
+                $jobs[$id] = @{ Needs = $needsList; If = $if }
             }
             $decided = @{}
             do {
@@ -574,6 +583,10 @@ Describe 'lane change detection' {
                 @('a', ($fixture.Replace('    needs: [changes]', '    needs: [route]'))),
                 @('b', ($fixture.Replace('    needs: a', "    needs: a`n    if: `${{ always() }}"))),
                 @('b', ($fixture.Replace('    needs: a', '    needs: [changes, a]'))),
+                # Without a status function b keeps its implicit success(), but its if: reads a job it does not need.
+                @('b', ($fixture.Replace('    needs: a', "    needs: a`n    if: `${{ needs.changes.outputs.run == 'true' }}"))),
+                # A block scalar hides the status function from a one-line reading.
+                @('b', ($fixture.Replace('    needs: a', "    needs: a`n    if: >-`n      `${{ always() }}"))),
                 @('b', ($fixture.Replace("    needs: a`n", ''))))) {
             $problems = @(Get-GateProblems $case[1])
             ($problems -join '; ') | Should -Match ('^(?:.*; )?' + $case[0] + ':') -Because "job $($case[0]) breaks the rule in:`n$($case[1])"
@@ -581,6 +594,17 @@ Describe 'lane change detection' {
         # Parentheses keep an || inside the job's own condition.
         $grouped = $fixture.Replace($decided, "    if: `${{ !cancelled() && needs.changes.outputs.run != 'false' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) }}")
         @(Get-GateProblems $grouped).Count | Should -Be 0
+    }
+    It 'every workflow a pull request starts is a lane that decides, the PR gate, or a pilot nothing requires' {
+        # A new path-filtered workflow would never report on some pull requests; it joins the lists above instead.
+        $known = 'a11y-check', 'audit', 'license-headers', 'mac-runner-tests', 'rust', 'swift-tests', 'windows-runner-tests', 'windows',
+        'pr-gate', 'mac-ci-pilot', 'windows-ci-pilot'
+        foreach ($file in Get-ChildItem $wf -Filter '*.yml') {
+            $text = Get-Content -Raw $file.FullName
+            $on = [regex]::Match($text, '(?ms)^on:.*?(?=^\S)').Value
+            if ($on -notmatch '\bpull_request') { continue }
+            $known | Should -Contain $file.BaseName -Because "$($file.Name) runs on pull requests"
+        }
     }
     It 'lane-changes.yml decides on pull requests only, with a read-only token, from the merge commit and its base, and expands nothing in its script' {
         $decider | Should -Match (Get-Lines @('on:', '  workflow_call:'))
@@ -604,8 +628,115 @@ Describe 'lane change detection' {
         $steps[1] | Should -Match (Get-Lines @('        id: match', '        env:', '          EVENT: ${{ github.event_name }}', '          WORKFLOW: ${{ inputs.workflow }}', '        run: |'))
         # Outside a pull request the trigger's own path filter chose the run.
         $steps[1] | Should -Match (Get-Lines @('          if [ "$EVENT" != pull_request ]; then'))
-        $steps[1] | Should -Match (Get-Lines @('            echo "run=true" >> "$GITHUB_OUTPUT"', '            exit 0', '          fi', '          python3 -I scripts/lane_changes.py "$WORKFLOW"'))
+        $steps[1] | Should -Match (Get-Lines @('            echo "run=true" >> "$GITHUB_OUTPUT"', '            exit 0', '          fi'))
+        # A pull request that changes the decision runs every lane, so a decision that wrongly answers false cannot
+        # skip the tests that would catch it; a failed diff fails the job, which runs the lane too.
+        $steps[1] | Should -Match (Get-Lines @(
+                '          if ! decider="$(git diff --name-only --no-renames HEAD^1 HEAD -- scripts/lane_changes.py .github/workflows/lane-changes.yml)"; then',
+                '            echo "::error::cannot diff the merge commit with its base parent, so the lane runs."',
+                '            exit 1',
+                '          fi',
+                '          if [ -n "$decider" ]; then',
+                '            echo "This pull request changes the lane decision itself, so the lane runs: $decider"',
+                '            echo "run=true" >> "$GITHUB_OUTPUT"',
+                '            exit 0',
+                '          fi',
+                '          python3 -I scripts/lane_changes.py "$WORKFLOW"'))
         $steps[1].Substring($steps[1].IndexOf('        run: |')) | Should -Not -Match '\$\{\{' -Because 'the inputs reach the script through env:'
+    }
+    Context 'the mac lanes'' required checks' {
+        # On the mac lanes a job is skipped when the one it needs failed (route, then the XCTest suite or the
+        # analysis), and a skipped job reports as passed. Each lane's gate reports on every pull request that touches
+        # the lane and fails unless the lane ran; the ruleset requires the gate (#1565), as windows.yml's gate.
+        BeforeAll {
+            $script:bash = $null
+            if ($IsWindows) {
+                # Git for Windows' bash, beside git: the bash on PATH can be WSL's (BranchCleanup.Tests.ps1).
+                $git = Get-Command git -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+                $dir = if ($git) { Split-Path $git.Source } else { '' }
+                while ($dir -and -not $script:bash) {
+                    $candidate = Join-Path $dir 'bin' 'bash.exe'
+                    if (Test-Path $candidate) { $script:bash = $candidate }
+                    $dir = Split-Path $dir
+                }
+            }
+            else {
+                $script:bash = (Get-Command bash -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+            }
+            # The gate's run: block, its lines dedented.
+            function Get-GateScript([string]$Text) {
+                $gate = Get-JobBlock $Text 'gate'
+                $at = [regex]::Match($gate, '(?m)^        run: \|[ \t]*\r?\n')
+                if (-not $at.Success) { return '' }
+                $lines = @()
+                foreach ($line in ($gate.Substring($at.Index + $at.Length) -split '\r?\n')) {
+                    if ($line -match '^          ') { $lines += $line.Substring(10) } elseif ($line.Trim()) { break }
+                }
+                return ($lines -join "`n") + "`n"
+            }
+            # Runs the gate's script with the needed jobs' results, returns its exit code.
+            function Invoke-Gate([string]$Body, [hashtable]$Results) {
+                $file = Join-Path $TestDrive 'gate.sh'
+                [IO.File]::WriteAllText($file, $Body)
+                $saved = @{}
+                foreach ($key in $Results.Keys) { $saved[$key] = [Environment]::GetEnvironmentVariable($key); [Environment]::SetEnvironmentVariable($key, $Results[$key]) }
+                try { & $bash ($file -replace '\\', '/') *> $null; return $LASTEXITCODE }
+                finally { foreach ($key in $saved.Keys) { [Environment]::SetEnvironmentVariable($key, $saved[$key]) } }
+            }
+        }
+        It 'waits on every other job, reports on every pull request that touches the lane, and reads the results only through env: <Workflow>' -ForEach @(
+            @{ Workflow = 'a11y-check'; Name = 'accessibility check (mac)' }, @{ Workflow = 'swift-tests'; Name = 'swift tests (mac)' }
+        ) {
+            $text = Get-Content -Raw (Join-Path $wf "$Workflow.yml")
+            $gate = Get-JobBlock $text 'gate'
+            $gate | Should -Match (Get-Lines @('  gate:', "    name: $Name"))
+            $needs = @(Get-NeedsList (Get-JobKey $gate 'needs'))
+            ($needs | Sort-Object) -join ',' | Should -BeExactly ((@(Get-JobIds $text) | Where-Object { $_ -ne 'gate' } | Sort-Object) -join ',') -Because 'the gate waits on every job of the lane'
+            $gate | Should -Match (Get-JobLine "if: `${{ always() && needs.changes.outputs.run != 'false' }}")
+            $gate | Should -Match (Get-JobLine 'permissions: {}')
+            foreach ($job in @($needs | Where-Object { $_ -ne 'changes' })) {
+                $gate | Should -Match ('(?m)^          [A-Z0-9_]+: ' + [regex]::Escape("`${{ needs.$job.result }}") + '[ \t]*\r?$') -Because "the gate reads $job's result"
+            }
+            $gate | Should -Match (Get-Lines @("          FORK: `${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}"))
+            Get-GateScript $text | Should -Not -Match '\$\{\{' -Because 'the results reach the script through env:'
+        }
+        It 'the accessibility gate fails unless the routing, the analysis and the floor passed, and lets a fork''s pull request skip both' {
+            if (-not $bash) { if ($env:GITHUB_ACTIONS -eq 'true') { throw 'bash is required on CI' }; Set-ItResult -Skipped -Because 'no bash (on Windows, Git for Windows'' bash beside git)'; return }
+            $body = Get-GateScript (Get-Content -Raw (Join-Path $wf 'a11y-check.yml'))
+            $body | Should -Not -BeNullOrEmpty
+            foreach ($case in @(
+                    @(0, 'success', 'success', 'success', 'false'),
+                    @(1, 'failure', 'skipped', 'skipped', 'false'),
+                    @(1, 'failure', 'skipped', 'skipped', 'true'),
+                    @(0, 'success', 'skipped', 'skipped', 'true'),
+                    @(1, 'success', 'skipped', 'skipped', 'false'),
+                    @(1, 'success', 'success', 'failure', 'false'),
+                    @(1, 'success', 'failure', 'success', 'false'),
+                    @(1, 'success', 'success', 'failure', 'true'),
+                    @(1, 'success', 'cancelled', 'skipped', 'false'))) {
+                $code = Invoke-Gate $body @{ ROUTE_RESULT = $case[1]; ANALYZE_RESULT = $case[2]; FLOOR_RESULT = $case[3]; FORK = $case[4] }
+                $code | Should -Be $case[0] -Because "route=$($case[1]) analyze=$($case[2]) floor=$($case[3]) fork=$($case[4])"
+            }
+        }
+        It 'the swift gate fails unless every job passed, and lets a fork''s pull request skip the XCTest suite' {
+            if (-not $bash) { if ($env:GITHUB_ACTIONS -eq 'true') { throw 'bash is required on CI' }; Set-ItResult -Skipped -Because 'no bash (on Windows, Git for Windows'' bash beside git)'; return }
+            $body = Get-GateScript (Get-Content -Raw (Join-Path $wf 'swift-tests.yml'))
+            $body | Should -Not -BeNullOrEmpty
+            foreach ($case in @(
+                    @(0, 'success', 'success', 'success', 'success', 'false'),
+                    @(1, 'failure', 'skipped', 'success', 'success', 'false'),
+                    # A fork's skipped suite is accepted only when the routing itself passed.
+                    @(1, 'failure', 'skipped', 'success', 'success', 'true'),
+                    @(0, 'success', 'skipped', 'success', 'success', 'true'),
+                    @(1, 'success', 'skipped', 'success', 'success', 'false'),
+                    @(1, 'success', 'failure', 'success', 'success', 'false'),
+                    @(1, 'success', 'cancelled', 'success', 'success', 'true'),
+                    @(1, 'success', 'success', 'failure', 'success', 'false'),
+                    @(1, 'success', 'skipped', 'success', 'skipped', 'true'))) {
+                $code = Invoke-Gate $body @{ ROUTE_RESULT = $case[1]; XCTEST_RESULT = $case[2]; SDK_RESULT = $case[3]; BUNDLE_RESULT = $case[4]; FORK = $case[5] }
+                $code | Should -Be $case[0] -Because "route=$($case[1]) xctest=$($case[2]) sdk=$($case[3]) bundle=$($case[4]) fork=$($case[5])"
+            }
+        }
     }
 }
 

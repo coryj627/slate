@@ -416,3 +416,36 @@ jobs:
                 `Accessibility score ${score} is below minimum threshold ${min}`
               );
             }
+
+  # The check main's ruleset can require for this lane (#1565). A job above
+  # is skipped when the one before it failed (route, then the analysis), and
+  # a skipped job reports as passed; this one reports on every pull request
+  # that touches the lane, and fails unless the lane ran and passed. A
+  # fork's pull request is the one skip it accepts: its head never runs on
+  # the mac runners (analyze's if:).
+  gate:
+    name: accessibility check (mac)
+    needs: [changes, route, analyze, a11y-check]
+    if: ${{ always() && needs.changes.outputs.run != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Require the routing, the analysis and the floor to succeed
+        env:
+          ROUTE_RESULT: ${{ needs.route.result }}
+          ANALYZE_RESULT: ${{ needs.analyze.result }}
+          FLOOR_RESULT: ${{ needs.a11y-check.result }}
+          FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+        run: |
+          analyze="$ANALYZE_RESULT"
+          floor="$FLOOR_RESULT"
+          if [ "$FORK" = true ] && [ "$analyze" = skipped ] && [ "$floor" = skipped ]; then
+            echo "A fork's pull request: the analysis does not run on the mac runners."
+            analyze=success
+            floor=success
+          fi
+          if [ "$ROUTE_RESULT" != success ] || [ "$analyze" != success ] || [ "$floor" != success ]; then
+            echo "::error::route=$ROUTE_RESULT analyze=$ANALYZE_RESULT floor=$FLOOR_RESULT fork=$FORK"
+            exit 1
+          fi

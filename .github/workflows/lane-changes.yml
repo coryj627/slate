@@ -7,7 +7,9 @@
 # on.push.paths, the one list each lane keeps. scripts/lane_changes.py
 # matches the merge commit's changes on its base with GitHub's filter
 # rules and writes run=true or run=false. On any other event the trigger's
-# own path filter already chose the run, so it is true.
+# own path filter already chose the run, so it is true; and so it is on a
+# pull request that changes this file or the script, so a decision that
+# wrongly answers false cannot skip the lanes whose tests would catch it.
 #
 # Each lane job skips on run == 'false', and GitHub reports a skipped job as
 # passed. A job that decides for itself has a status function before the
@@ -64,6 +66,18 @@ jobs:
         run: |
           if [ "$EVENT" != pull_request ]; then
             echo "A $EVENT run: the trigger's own path filter chose it, so the lane runs."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # A pull request that changes the decision itself runs every lane,
+          # so a decision that wrongly answers false cannot skip the tests
+          # that would catch it. Names only: no file contents are fetched.
+          if ! decider="$(git diff --name-only --no-renames HEAD^1 HEAD -- scripts/lane_changes.py .github/workflows/lane-changes.yml)"; then
+            echo "::error::cannot diff the merge commit with its base parent, so the lane runs."
+            exit 1
+          fi
+          if [ -n "$decider" ]; then
+            echo "This pull request changes the lane decision itself, so the lane runs: $decider"
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
