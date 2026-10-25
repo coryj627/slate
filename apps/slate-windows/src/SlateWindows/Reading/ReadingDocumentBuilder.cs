@@ -45,7 +45,7 @@ internal sealed class ReadingListBuildContext
     /// from this shared pool, carried across chunks exactly like the
     /// highlight pool; formulas after exhaustion keep their FULL
     /// accessibility artifacts (speech, braille, MathML) and degrade
-    /// only the visual to source-in-range.
+    /// only the visual, to the source shown as the element's content.
     /// </summary>
     internal int RemainingMathRenderBytes { get; set; } =
         ReadingDocumentBuilder.ProjectionMathRenderByteBudgetOverrideForTests
@@ -502,12 +502,19 @@ internal static class ReadingDocumentBuilder
     /// focusable <see cref="ReadingMathElement"/> whose Name is the
     /// MathCAT speech — spoken on focus/Tab/object navigation in stock
     /// NVDA and JAWS, with the MathML convention property riding the
-    /// peer. Unmatched blocks and TexException coverage gaps (the
-    /// documented WPFMath subset) degrade to the source IN the text
-    /// range — never silently absent — with the block still a nav
-    /// stop; the landing announcement then carries the speech when the
-    /// artifact matched, or the raw source otherwise (content either
-    /// way, composition never).
+    /// peer. #1595 (plan 45 XB-9, the spike's shape a1h): line reading
+    /// speaks the speech too. A matched block's paragraph is a visually
+    /// suppressed run of the speech, which its text range reads (WPF
+    /// text ranges blank embedded objects), followed by the element,
+    /// whose content is the drawing or, for a WPFMath coverage gap (the
+    /// documented subset) or core's fallback, the source in monospace:
+    /// the source stays visible and is spoken on request by the source
+    /// chord, never by line reading or on focus (#1591). An unmatched
+    /// block has no speech to speak, so its source stays IN the text
+    /// range — never silently absent — and a zero-size element still
+    /// gives Tab and the source chord a stop. The landing announcement
+    /// carries the speech when the artifact matched, or the raw source
+    /// otherwise (content either way, composition never).
     /// </summary>
     private static Block MathBlockElement(
         ReadingBlock block,
@@ -545,6 +552,15 @@ internal static class ReadingDocumentBuilder
         if (matched is null)
         {
             Paragraph unmatchedParagraph = MonospaceParagraph(fallbackSource);
+            // Zero-size, so the source in range reads as it did: WPF text
+            // ranges blank embedded objects. Named with its content, as its
+            // landing is: the source is all there is to speak.
+            unmatchedParagraph.Inlines.Add(new InlineUIContainer(
+                new ReadingMathElement(
+                    fallbackSource,
+                    string.Empty,
+                    StripMathDelimiters(block.Source),
+                    string.Empty)));
             ReadingSemantics.MarkMathBlock(unmatchedParagraph, fallbackSource);
             return unmatchedParagraph;
         }
@@ -556,7 +572,8 @@ internal static class ReadingDocumentBuilder
         // budget refused — supported oversized TeX parses into a giant
         // Geometry. The conservative cost: a formula pulldown-latex
         // cannot convert loses its visual even if WPFMath could have
-        // drawn it; it keeps source-in-range + the artifact element.
+        // drawn it; it keeps the artifact element, with the source as its
+        // content.
         //
         // Round 7 completes the W3-4 shape: within core's budgets a
         // formula is still WPFMath work proportional to its LaTeX, so
@@ -572,40 +589,67 @@ internal static class ReadingDocumentBuilder
             context.RemainingMathRenderBytes -= renderCost;
             visual = TryRenderFormula(matched.Source);
         }
-        if (visual is null)
-        {
-            // Coverage gap (documented WPFMath subset, matrix-rowed):
-            // source stays readable in range — and the CORE artifacts
-            // stay retrievable (round 4: a host-only rendering failure
-            // must not hide valid braille or MathML). A zero-size
-            // focusable element at the fence end carries Name,
-            // ItemStatus, and the MathML property exactly like the
-            // rendered path; WPF text ranges blank embedded objects, so
-            // it costs the in-range source nothing.
-            Paragraph gapParagraph = MonospaceParagraph(fallbackSource);
-            gapParagraph.Inlines.Add(new InlineUIContainer(
-                new ReadingMathElement(
-                    speech,
-                    matched.Mathml,
-                    matched.Source,
-                    DecodeBraille(matched.Braille))));
-            ReadingSemantics.MarkMathBlock(gapParagraph, speech);
-            return gapParagraph;
-        }
-
+        // A coverage gap (documented WPFMath subset, matrix-rowed) or
+        // core's fallback shows its source as the element's content: visible,
+        // and out of the text range. The CORE artifacts stay retrievable
+        // either way (round 4: a host-only rendering failure must not hide
+        // valid braille or MathML).
         var element = new ReadingMathElement(
             speech, matched.Mathml, matched.Source, DecodeBraille(matched.Braille))
         {
-            Content = visual,
+            Content = visual ?? SourceContent(fallbackSource),
             Margin = new Thickness(0, 4, 0, 4),
+            LineReserve = SpeechRunReserve(speech),
         };
-        var paragraph = new Paragraph(new InlineUIContainer(element))
+        var paragraph = new Paragraph
         {
-            TextAlignment = TextAlignment.Center,
+            TextAlignment = visual is null ? TextAlignment.Left : TextAlignment.Center,
         };
+        paragraph.Inlines.Add(SpeechRun(speech));
+        paragraph.Inlines.Add(new InlineUIContainer(element));
+        if (visual is null)
+        {
+            paragraph.Padding = new Thickness(8);
+            paragraph.SetResourceReference(Block.BackgroundProperty, "Slate.RaisedSurfaceBrush");
+        }
         ReadingSemantics.MarkMathBlock(paragraph, speech);
+        ReadingSemantics.MarkMathCopyText(paragraph, fallbackSource);
         return paragraph;
     }
+
+    /// <summary>#1595: the speech a math paragraph's text range reads,
+    /// visually suppressed (the plan 45 XB-9 spike's shape a1h: a
+    /// transparent run at a 0.1 font size, since a normal-size one wraps
+    /// and a long formula then took several Down presses, some a bare
+    /// role). A long speech gets a smaller size, down to 0.01 (WPF's
+    /// floor is between 0.001 and 0.01), so the run stays a sliver of its
+    /// line.</summary>
+    private static Run SpeechRun(string speech) => new(speech)
+    {
+        Foreground = Brushes.Transparent,
+        FontSize = SpeechRunFontSize(speech),
+    };
+
+    /// <summary>The width a speech run's whole line may give it.</summary>
+    private const double SpeechRunWidthBudget = 24;
+
+    private static double SpeechRunFontSize(string speech) =>
+        Math.Clamp(SpeechRunWidthBudget / Math.Max(1, speech.Length), 0.01, 0.1);
+
+    /// <summary>An upper bound on the speech run's width, which the
+    /// element leaves free on their line: a speech glyph's advance stays
+    /// within its em, plus a margin.</summary>
+    private static double SpeechRunReserve(string speech) =>
+        (speech.Length * SpeechRunFontSize(speech)) + 4;
+
+    /// <summary>The source a coverage gap or core's fallback shows, in the
+    /// monospace face the in-range source used.</summary>
+    private static TextBlock SourceContent(string source) => new()
+    {
+        Text = source,
+        FontFamily = new FontFamily("Cascadia Mono, Consolas, monospace"),
+        TextWrapping = TextWrapping.Wrap,
+    };
 
     /// <summary>The braille artifact decodes as UTF-8 (Nemeth is
     /// ASCII, UEB is Unicode cells — MathCAT emits per the session
@@ -645,7 +689,7 @@ internal static class ReadingDocumentBuilder
     /// <summary>
     /// LaTeX to a themed vector Path via WPFMath; null on the parser's
     /// documented coverage boundary (TexException family) or renderer
-    /// failure — callers degrade to source-in-range.
+    /// failure — callers show the source as the element's content.
     /// </summary>
     /// <summary>Fires with the LaTeX whenever the WPFMath renderer is
     /// entered — the round-6 pin that core-degraded artifacts never

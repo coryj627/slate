@@ -9552,6 +9552,10 @@ pub enum A11yEvent {
         target: ReadingNavTarget,
         text: String,
     },
+    /// #1591 (plan 45 XB-9): a math block's source, spoken on request.
+    MathSourceSpoken {
+        source: Option<String>,
+    },
     GridSorted {
         column: String,
         ascending: bool,
@@ -11286,6 +11290,7 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
                 target: target.into(),
                 text,
             },
+            F::MathSourceSpoken { source } => C::MathSourceSpoken { source },
             F::GridSorted { column, ascending } => C::GridSorted { column, ascending },
             F::GridRowMoved {
                 description,

@@ -1659,6 +1659,26 @@ internal static class ChordTable
                 readingReason));
         }
 
+        rows.Add(Chord(
+            "windows.reading.mathBraille",
+            "Reading: read the math block's braille",
+            "Ctrl+Enter",
+            ChordScope.Reading,
+            "W3-2: a math block's braille, read on request by Reading/ReadingNavigator.cs "
+            + "while the caret is on the block; elsewhere Ctrl+Enter activates what the "
+            + "caret is on, as Enter does (the editor's activate-at-cursor parity chord). "
+            + "No mac twin (mac reads it from VoiceOver's More Content menu, MathView.swift); "
+            + "no command object."));
+        rows.Add(Chord(
+            "windows.reading.mathSource",
+            "Reading: speak the math block's source",
+            "Ctrl+Shift+Enter",
+            ChordScope.Reading,
+            "#1591 (plan 45 XB-9): a math block's authored source, spoken on request "
+            + "by Reading/ReadingNavigator.cs while the caret is on the block, never on "
+            + "focus or by line reading. No mac twin (mac reads it from VoiceOver's More "
+            + "Content menu, MathView.swift); no command object."));
+
         const string PropertyRowReason =
             "A property-row editor interaction, live only while a numeric row's "
             + "TextBox has focus (WorkspaceTemplates.xaml). Delivered by a "

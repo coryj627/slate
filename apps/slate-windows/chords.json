@@ -3837,6 +3837,32 @@
       "reason": "PR-3: structural navigation delivered by Reading/ReadingNavigator.cs while the reading surface has focus. No mac twin (mac uses VoiceOver rotor navigation); no command object."
     },
     {
+      "id": "windows.reading.mathBraille",
+      "label": "Reading: read the math block's braille",
+      "section": "View",
+      "hint": null,
+      "macChord": null,
+      "mac": null,
+      "windows": "Ctrl+Enter",
+      "windowsSpoken": "Control Enter",
+      "scope": "Reading",
+      "registered": false,
+      "reason": "W3-2: a math block's braille, read on request by Reading/ReadingNavigator.cs while the caret is on the block; elsewhere Ctrl+Enter activates what the caret is on, as Enter does (the editor's activate-at-cursor parity chord). No mac twin (mac reads it from VoiceOver's More Content menu, MathView.swift); no command object."
+    },
+    {
+      "id": "windows.reading.mathSource",
+      "label": "Reading: speak the math block's source",
+      "section": "View",
+      "hint": null,
+      "macChord": null,
+      "mac": null,
+      "windows": "Ctrl+Shift+Enter",
+      "windowsSpoken": "Control Shift Enter",
+      "scope": "Reading",
+      "registered": false,
+      "reason": "#1591 (plan 45 XB-9): a math block's authored source, spoken on request by Reading/ReadingNavigator.cs while the caret is on the block, never on focus or by line reading. No mac twin (mac reads it from VoiceOver's More Content menu, MathView.swift); no command object."
+    },
+    {
       "id": "windows.quickOpen.openCurrentTab",
       "label": "Quick Open: open in the current tab",
       "section": "View",

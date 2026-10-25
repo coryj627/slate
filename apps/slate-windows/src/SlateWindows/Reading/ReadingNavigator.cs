@@ -147,12 +147,41 @@ internal sealed class ReadingNavigator
         // own keys — preview tunneling reaches this handler first and
         // would otherwise hijack Space for whatever task holds the
         // caret instead.
+        // #1591: Tab puts focus ON a math element, where the caret arms
+        // below do not apply; its three requests are answered for it (the
+        // plan 45 XB-9 review).
+        if (key == Key.Return
+            && !e.IsRepeat
+            && Keyboard.FocusedElement is ReadingMathElement focusedMath
+            && _surface.TryAnswerMath(focusedMath, Keyboard.Modifiers))
+        {
+            e.Handled = true;
+            return;
+        }
         if (CaretActivationApplies(_surface.IsKeyboardFocused, e.IsRepeat))
         {
             if (key == Key.Return
-                && Keyboard.Modifiers is ModifierKeys.None or ModifierKeys.Control
-                && _surface.TryActivateAtCaret(
-                    brailleRequested: Keyboard.Modifiers == ModifierKeys.Control))
+                && Keyboard.Modifiers == ModifierKeys.None
+                && _surface.TryActivateAtCaret())
+            {
+                e.Handled = true;
+                return;
+            }
+            // Ctrl+Enter on a math block reads its braille
+            // (windows.reading.mathBraille); elsewhere it activates, as
+            // Enter does.
+            if (key == Key.Return
+                && Keyboard.Modifiers == ModifierKeys.Control
+                && _surface.TryActivateAtCaret(brailleRequested: true))
+            {
+                e.Handled = true;
+                return;
+            }
+            // #1591: Ctrl+Shift+Enter speaks a math block's source, on
+            // request only (windows.reading.mathSource).
+            if (key == Key.Return
+                && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)
+                && _surface.TrySpeakMathSourceAtCaret())
             {
                 e.Handled = true;
                 return;

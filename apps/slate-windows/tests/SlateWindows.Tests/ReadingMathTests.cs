@@ -153,14 +153,15 @@ public sealed class ReadingMathTests
     }
 
     /// <summary>
-    /// The documented WPFMath coverage boundary degrades to
-    /// source-in-range (never silently absent) while the block stays a
-    /// nav stop — and the CORE artifacts stay retrievable (round 4: a
+    /// The documented WPFMath coverage boundary: line reading speaks the
+    /// speech, the source is visible as the element's content and spoken
+    /// on request (#1595, #1591, plan 45 XB-9), the block stays a nav
+    /// stop — and the CORE artifacts stay retrievable (round 4: a
     /// host-only rendering failure must not hide valid braille or
     /// MathML, or lie "Braille not available." while core produced it).
     /// </summary>
     [Fact]
-    public void UnrenderableMathDegradesToSourceInRange()
+    public void UnrenderableMathSpeaksItsSpeechInRangeAndItsSourceOnRequest()
     {
         RunSta(() =>
         {
@@ -184,18 +185,24 @@ public sealed class ReadingMathTests
             tab.ToggleViewMode();
             var surface = new ReadingSurface { Model = tab.Reading };
 
-            Assert.Contains(
-                "bmatrix",
-                new System.Windows.Documents.TextRange(
-                    surface.Document.ContentStart,
-                    surface.Document.ContentEnd).Text,
-                StringComparison.Ordinal);
             ReadingLandmark landmark = Assert.Single(
                 surface.LandmarksForTests,
                 candidate => candidate.Kind == ReadingLandmarkKind.Math);
 
             ReadingMathElement element =
                 Assert.Single(FindMathElements(surface.Document));
+            Assert.Equal(
+                element.Speech, RangeTextOf(MathParagraphOf(element)));
+            Assert.DoesNotContain(
+                "bmatrix",
+                new System.Windows.Documents.TextRange(
+                    surface.Document.ContentStart,
+                    surface.Document.ContentEnd).Text,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "bmatrix",
+                Assert.IsType<System.Windows.Controls.TextBlock>(element.Content).Text,
+                StringComparison.Ordinal);
             Assert.True(element.Focusable);
             Assert.StartsWith("<math", element.MathMl.TrimStart());
             Assert.NotEmpty(element.Braille);
@@ -209,8 +216,292 @@ public sealed class ReadingMathTests
             Assert.Equal(
                 element.Braille,
                 SlateUniffiMethods.A11yRender(Assert.Single(announced)).Text);
+
+            announced.Clear();
+            Assert.True(surface.TrySpeakMathSourceAtCaret());
+            Assert.Equal(
+                @"Source: \begin{bmatrix} 1 \\ 2 \end{bmatrix}.",
+                SlateUniffiMethods.A11yRender(Assert.Single(announced)).Text);
         });
     }
+
+    /// <summary>
+    /// #1595 (plan 45 XB-9, the spike's shape a1h): a drawn formula's
+    /// text range, which line reading and caret re-entry read, is its
+    /// MathCAT speech, never its LaTeX; the drawing stays the element's
+    /// content.
+    /// </summary>
+    [Fact]
+    public void LineReadingTextOfADrawnFormulaIsItsSpeech()
+        => WithReadingSurface("reading-math-line-drawn", "$$\\nabla^2 f$$\n", (_, surface, _) =>
+        {
+            ReadingMathElement element = Assert.Single(FindMathElements(surface.Document));
+            Assert.IsType<System.Windows.Shapes.Path>(element.Content);
+            string speech = System.Windows.Automation.AutomationProperties.GetName(element);
+            Assert.NotEqual("Math expression.", speech);
+            string range = RangeTextOf(MathParagraphOf(element));
+            Assert.Equal(speech, range);
+            Assert.DoesNotContain("\\", range, StringComparison.Ordinal);
+            Assert.DoesNotContain("$", range, StringComparison.Ordinal);
+        });
+
+    /// <summary>#1595: a WPFMath coverage gap reads as its speech too; the
+    /// source is visible as the element's content, never in range.</summary>
+    [Fact]
+    public void LineReadingTextOfACoverageGapFormulaIsItsSpeech()
+        => WithReadingSurface("reading-math-line-gap", "$$\\mathbb{R}$$\n", (_, surface, _) =>
+        {
+            ReadingMathElement element = Assert.Single(FindMathElements(surface.Document));
+            Assert.Equal(
+                "$$\\mathbb{R}$$",
+                Assert.IsType<System.Windows.Controls.TextBlock>(element.Content).Text);
+            Assert.DoesNotContain("Math expression", element.Speech, StringComparison.Ordinal);
+            string range = RangeTextOf(MathParagraphOf(element));
+            Assert.Equal(element.Speech, range);
+            Assert.DoesNotContain("\\", range, StringComparison.Ordinal);
+            Assert.DoesNotContain("$", range, StringComparison.Ordinal);
+        });
+
+    /// <summary>#1595: core's fallback (a source pulldown-latex cannot
+    /// parse) reads as core's fallback speech, not as the fenced
+    /// source.</summary>
+    [Fact]
+    public void LineReadingTextOfACoreFallbackIsItsSpeech()
+        => WithReadingSurface("reading-math-line-fallback", "$${n \\choose k}$$\n", (_, surface, _) =>
+        {
+            ReadingMathElement element = Assert.Single(FindMathElements(surface.Document));
+            Assert.StartsWith("Math expression: ", element.Speech, StringComparison.Ordinal);
+            Assert.IsType<System.Windows.Controls.TextBlock>(element.Content);
+            string range = RangeTextOf(MathParagraphOf(element));
+            Assert.Equal(element.Speech, range);
+            Assert.DoesNotContain("$", range, StringComparison.Ordinal);
+        });
+
+    /// <summary>#1595: a block with no core artifact has no speech, so its
+    /// source stays in range, and it still carries an element, so Tab and
+    /// the source chord reach it.</summary>
+    [Fact]
+    public void AnUnmatchedMathBlockKeepsItsSourceInRangeAndCarriesAnElement()
+        => WithReadingSurface("reading-math-unmatched", "$$x^2 + 1$$\n", (tab, surface, announced) =>
+        {
+            tab.EditorDocument!.Replace(
+                tab.Text.IndexOf("x^2 + 1", StringComparison.Ordinal), 7, "y^3 - 2");
+            tab.Reading!.Refresh();
+
+            ReadingMathElement element = Assert.Single(FindMathElements(surface.Document));
+            Assert.Null(element.Content);
+            Assert.Equal("$$y^3 - 2$$", element.Speech);
+            Assert.Equal("y^3 - 2", element.Source);
+            Assert.Equal("$$y^3 - 2$$", RangeTextOf(MathParagraphOf(element)));
+
+            ReadingLandmark landmark = Assert.Single(
+                surface.LandmarksForTests,
+                candidate => candidate.Kind == ReadingLandmarkKind.Math);
+            surface.CaretPosition = landmark.Position;
+            Assert.True(surface.TrySpeakMathSourceAtCaret());
+            Assert.Equal(
+                "Source: y^3 - 2.",
+                SlateUniffiMethods.A11yRender(Assert.Single(announced)).Text);
+        });
+
+    /// <summary>#1591 (plan 45 XB-9): Tab onto a math element speaks its
+    /// speech and role, never the source: no HelpText, and the peer does
+    /// not fall back to the ToolTip, which keeps the source for sighted
+    /// hover.</summary>
+    [Fact]
+    public void TabFocusOnAMathElementCarriesNoHelpText()
+        => WithReadingSurface("reading-math-tab", "$$\\nabla^2 f$$\n", (_, surface, _) =>
+        {
+            ReadingMathElement element = Assert.Single(FindMathElements(surface.Document));
+            Assert.Equal(
+                string.Empty,
+                System.Windows.Automation.AutomationProperties.GetHelpText(element));
+            Assert.Equal(
+                string.Empty,
+                UIElementAutomationPeer.CreatePeerForElement(element).GetHelpText());
+            Assert.Equal("\\nabla^2 f", element.ToolTip);
+            Assert.False(System.Windows.Controls.ToolTipService.GetShowsToolTipOnKeyboardFocus(element));
+        });
+
+    /// <summary>#1591: Ctrl+Shift+Enter on a math block speaks core's source
+    /// sentence, once; off a math block it declines, so the key falls
+    /// through.</summary>
+    [Fact]
+    public void CtrlShiftEnterSpeaksTheSourceOnRequest()
+        => WithReadingSurface("reading-math-source", "Text.\n\n$$\\nabla^2 f$$\n", (_, surface, announced) =>
+        {
+            surface.CaretPosition = surface.Document.ContentStart.GetInsertionPosition(
+                System.Windows.Documents.LogicalDirection.Forward);
+            Assert.False(surface.TrySpeakMathSourceAtCaret());
+            Assert.Empty(announced);
+
+            ReadingLandmark landmark = Assert.Single(
+                surface.LandmarksForTests,
+                candidate => candidate.Kind == ReadingLandmarkKind.Math);
+            surface.CaretPosition = landmark.Position;
+            Assert.True(surface.TrySpeakMathSourceAtCaret());
+            A11yEvent spoken = Assert.Single(announced);
+            Assert.IsType<A11yEvent.MathSourceSpoken>(spoken);
+            Assert.Equal("Source: \\nabla^2 f.", SlateUniffiMethods.A11yRender(spoken).Text);
+        });
+
+    /// <summary>#1591: a math block with no source to speak says so rather
+    /// than staying silent. Core never projects an empty formula (math.rs
+    /// skips one), so the fact builds the paragraph by hand.</summary>
+    [Fact]
+    public void CtrlShiftEnterWithoutASourceSaysSo()
+        => WithReadingSurface("reading-math-no-source", "Text.\n", (_, surface, announced) =>
+        {
+            var paragraph = new System.Windows.Documents.Paragraph(
+                new System.Windows.Documents.InlineUIContainer(
+                    new ReadingMathElement("x", string.Empty, " ", string.Empty)));
+            ReadingSemantics.MarkMathBlock(paragraph, "x");
+            surface.Document.Blocks.Add(paragraph);
+            surface.CaretPosition = paragraph.ContentStart;
+            Assert.True(surface.TrySpeakMathSourceAtCaret());
+            Assert.Equal(
+                "Source not available.",
+                SlateUniffiMethods.A11yRender(Assert.Single(announced)).Text);
+        });
+
+    /// <summary>#1591 (the plan 45 XB-9 review): a coverage gap's element
+    /// shows its source as text, and object navigation finds no child to
+    /// read it from: the element's peer has no children, as the diagram's
+    /// rendered visual has no peer.</summary>
+    [Fact]
+    public void AGapElementShowsNoSourceToObjectNavigation()
+        => WithReadingSurface("reading-math-gap-children", "$$\\mathbb{R}$$\n", (_, surface, _) =>
+            WithHostedSurface(surface, 600, () =>
+            {
+                ReadingMathElement element = Assert.Single(FindMathElements(surface.Document));
+                Assert.IsType<System.Windows.Controls.TextBlock>(element.Content);
+                Assert.True(System.Windows.Media.VisualTreeHelper.GetChildrenCount(element) > 0);
+                Assert.True(
+                    UIElementAutomationPeer.CreatePeerForElement(element).GetChildren()
+                        is null or { Count: 0 });
+            }));
+
+    /// <summary>#1595 (the plan 45 XB-9 review): an element whose content
+    /// would fill its line (a wrapping source, a drawing wider than the
+    /// page) still shares the line with its speech run, so Down never lands
+    /// on a line holding only the role.</summary>
+    [Fact]
+    public void ALongFormulaSharesItsLineWithItsSpeech()
+        => WithReadingSurface(
+            "reading-math-long-line",
+            "$$\\begin{bmatrix} " + string.Join(" & ", Enumerable.Range(1, 60))
+                + " \\end{bmatrix}$$\n\n$$"
+                + string.Join(" + ", Enumerable.Range(1, 80).Select(i => $"x_{{{i}}}"))
+                + "$$\n",
+            (_, surface, _) => WithHostedSurface(surface, 420, () =>
+            {
+                List<ReadingMathElement> elements = FindMathElements(surface.Document).ToList();
+                Assert.Equal(2, elements.Count);
+                Assert.IsType<System.Windows.Controls.TextBlock>(elements[0].Content);
+                Assert.IsType<System.Windows.Shapes.Path>(elements[1].Content);
+                foreach (ReadingMathElement element in elements)
+                {
+                    var container = (System.Windows.Documents.InlineUIContainer)element.Parent;
+                    System.Windows.Documents.Paragraph paragraph = MathParagraphOf(element);
+                    Assert.Equal(
+                        0,
+                        paragraph.ContentStart.GetLineStartPosition(0)!.CompareTo(
+                            container.ElementStart.GetLineStartPosition(0)));
+                }
+            }));
+
+    /// <summary>#1595 (the plan 45 XB-9 review): a math prefs change
+    /// rewrites every formula's speech, and with it its paragraph's length;
+    /// the reader's caret stays in the paragraph it was in.</summary>
+    [Fact]
+    public void AMathPrefsChangeKeepsTheCaretInItsParagraph()
+    {
+        RunSta(() =>
+        {
+            string directory = Path.Combine(
+                Path.GetTempPath(), $"slate-math-caret-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(directory);
+            try
+            {
+                var store = new AppPreferencesStore(
+                    Path.Combine(directory, "preferences.json"));
+                using var fixture = FixtureVault.Create(1, "reading-math-caret");
+                File.WriteAllText(
+                    Path.Combine(fixture.Root, "note0.md"),
+                    "$$\\frac{a}{b} + x^2$$\n\n$$\\frac{c}{d}$$\n\nThe target paragraph.\n");
+                using var session = VaultSession.OpenFilesystem(fixture.Root);
+                using var cancel = new CancelToken();
+                session.ScanInitial(cancel);
+
+                using var workspace = new WorkspaceViewModel(
+                    session,
+                    fixture.Root,
+                    () => [],
+                    _ => { },
+                    startInteractionBackgroundWork: false,
+                    preferencesStore: store);
+                workspace.OpenPath("note0.md");
+                WorkspaceTabViewModel tab = workspace.ActiveGroup.ActiveTab!;
+                tab.ToggleViewMode();
+                var surface = new ReadingSurface { Model = tab.Reading };
+                System.Windows.Documents.Paragraph target = surface.Document.Blocks
+                    .OfType<System.Windows.Documents.Paragraph>()
+                    .Single(paragraph => RangeTextOf(paragraph) == "The target paragraph.");
+                surface.CaretPosition = target.ContentStart.GetPositionAtOffset(4);
+                string speechBefore = FindMathElements(surface.Document).First().Speech;
+
+                workspace.EditorPreferences.SetMathVerbosityCommand.Execute("verbose");
+
+                Assert.NotEqual(speechBefore, FindMathElements(surface.Document).First().Speech);
+                Assert.Equal(
+                    "The target paragraph.",
+                    RangeTextOf(surface.CaretPosition.Paragraph!));
+            }
+            finally
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        });
+    }
+
+    /// <summary>#1591 (the plan 45 XB-9 review): with keyboard focus ON a
+    /// math element (Tab), Enter speaks it, Ctrl+Enter its braille and
+    /// Ctrl+Shift+Enter its source; any other modifier falls through.</summary>
+    [Fact]
+    public void AFocusedMathElementAnswersItsThreeRequests()
+        => WithReadingSurface("reading-math-focused", "$$\\nabla^2 f$$\n", (_, surface, announced) =>
+        {
+            ReadingMathElement element = Assert.Single(FindMathElements(surface.Document));
+            Assert.True(surface.TryAnswerMath(element, System.Windows.Input.ModifierKeys.None));
+            Assert.True(surface.TryAnswerMath(element, System.Windows.Input.ModifierKeys.Control));
+            Assert.True(surface.TryAnswerMath(
+                element,
+                System.Windows.Input.ModifierKeys.Control | System.Windows.Input.ModifierKeys.Shift));
+            Assert.False(surface.TryAnswerMath(element, System.Windows.Input.ModifierKeys.Alt));
+            Assert.NotEmpty(element.Braille);
+            Assert.Equal(
+                new[] { element.Speech + ", math.", element.Braille, "Source: \\nabla^2 f." },
+                announced.Select(item => SlateUniffiMethods.A11yRender(item).Text));
+        });
+
+    /// <summary>#1595 (the plan 45 XB-9 review): a copy across a math block
+    /// carries its fenced source, not the speech its text range reads; a
+    /// selection that reaches no math paragraph's speech copies as WPF
+    /// builds it.</summary>
+    [Fact]
+    public void CopyingAcrossAMathBlockCopiesItsSource()
+        => WithReadingSurface("reading-math-copy", "Before.\n\n$$\\nabla^2 f$$\n\nAfter.\n", (_, surface, _) =>
+        {
+            System.Windows.Documents.FlowDocument document = surface.Document;
+            ReadingMathElement element = Assert.Single(FindMathElements(surface.Document));
+            string copied = surface.CopyTextOf(document.ContentStart, document.ContentEnd)!;
+            Assert.StartsWith("Before.\r\n$$\\nabla^2 f$$\r\nAfter.", copied, StringComparison.Ordinal);
+            Assert.DoesNotContain(element.Speech, copied, StringComparison.Ordinal);
+            System.Windows.Documents.Paragraph after = document.Blocks
+                .OfType<System.Windows.Documents.Paragraph>()
+                .Last();
+            Assert.Null(surface.CopyTextOf(after.ContentStart, after.ContentEnd));
+        });
 
     /// <summary>Enter at the caret on a math block speaks the
     /// canonical landed vocabulary — "{speech}, math."</summary>
@@ -307,7 +598,10 @@ public sealed class ReadingMathTests
                 Assert.Empty(rendererEntered);
                 ReadingMathElement element =
                     Assert.Single(FindMathElements(surface.Document));
-                Assert.Null(element.Content);
+                Assert.IsType<System.Windows.Controls.TextBlock>(element.Content);
+                Assert.Equal(
+                    "Math expression too large to render to accessible speech.",
+                    RangeTextOf(MathParagraphOf(element)));
                 Assert.Equal(
                     "Math expression too large to render to accessible speech.",
                     System.Windows.Automation.AutomationProperties.GetName(element));
@@ -375,7 +669,9 @@ public sealed class ReadingMathTests
                 List<ReadingMathElement> elements =
                     FindMathElements(surface.Document).ToList();
                 Assert.Equal(40, elements.Count);
-                Assert.Equal(2, elements.Count(element => element.Content is not null));
+                Assert.Equal(
+                    2,
+                    elements.Count(element => element.Content is System.Windows.Shapes.Path));
                 Assert.All(elements, element =>
                 {
                     string name = System.Windows.Automation.AutomationProperties
@@ -434,9 +730,10 @@ public sealed class ReadingMathTests
                 Assert.Empty(rendererEntered);
                 ReadingMathElement element =
                     Assert.Single(FindMathElements(surface.Document));
-                Assert.Null(element.Content);
+                Assert.IsType<System.Windows.Controls.TextBlock>(element.Content);
                 string name = System.Windows.Automation.AutomationProperties
                     .GetName(element);
+                Assert.Equal(name, RangeTextOf(MathParagraphOf(element)));
                 Assert.Contains("plus", name, StringComparison.OrdinalIgnoreCase);
                 Assert.StartsWith("<math", element.MathMl.TrimStart());
             }
@@ -646,7 +943,11 @@ public sealed class ReadingMathTests
                 tab.Text.IndexOf("x^2 + 1", StringComparison.Ordinal), 7, "y^3 - 2");
             tab.Reading!.Refresh();
 
-            Assert.Empty(FindMathElements(surface.Document));
+            ReadingMathElement stale = Assert.Single(FindMathElements(surface.Document));
+            Assert.Equal("$$y^3 - 2$$", stale.Speech);
+            Assert.Equal("y^3 - 2", stale.Source);
+            Assert.Empty(stale.MathMl);
+            Assert.Empty(stale.Braille);
             string text = new System.Windows.Documents.TextRange(
                 surface.Document.ContentStart,
                 surface.Document.ContentEnd).Text;
@@ -860,6 +1161,72 @@ public sealed class ReadingMathTests
             Directory.Delete(directory, recursive: true);
         }
     }
+
+    /// <summary>One note's reading surface over a real vault and
+    /// MathCAT, with the announcements it posts.</summary>
+    private static void WithReadingSurface(
+        string slug, string markdown, Action<WorkspaceTabViewModel, ReadingSurface, List<A11yEvent>> body)
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, slug);
+            File.WriteAllText(Path.Combine(fixture.Root, "note0.md"), markdown);
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            var announced = new List<A11yEvent>();
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(
+                        WorkspaceItemKind.Markdown, "note0.md")),
+                announce: announced.Add,
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            body(tab, new ReadingSurface { Model = tab.Reading }, announced);
+        });
+    }
+
+    /// <summary>The surface in a laid-out window of this width, off
+    /// screen and never activated.</summary>
+    private static void WithHostedSurface(ReadingSurface surface, double width, Action body)
+    {
+        var window = new System.Windows.Window
+        {
+            Content = surface,
+            Width = width,
+            Height = 600,
+            Left = -10000,
+            Top = -10000,
+            ShowInTaskbar = false,
+            ShowActivated = false,
+            WindowStyle = System.Windows.WindowStyle.None,
+        };
+        window.Show();
+        try
+        {
+            window.UpdateLayout();
+            body();
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    private static System.Windows.Documents.Paragraph MathParagraphOf(
+        ReadingMathElement element) =>
+        (System.Windows.Documents.Paragraph)
+            ((System.Windows.Documents.InlineUIContainer)element.Parent).Parent;
+
+    /// <summary>What line reading reads: the paragraph's text range. WPF
+    /// writes the embedded element as one trailing space, which no reader
+    /// speaks.</summary>
+    private static string RangeTextOf(System.Windows.Documents.Paragraph paragraph) =>
+        new System.Windows.Documents.TextRange(
+            paragraph.ContentStart, paragraph.ContentEnd).Text.TrimEnd(' ');
 
     private static IEnumerable<ReadingMathElement> FindMathElements(
         System.Windows.Documents.FlowDocument document)

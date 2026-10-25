@@ -20,6 +20,9 @@ internal static class NavigationHelp
         + $"Next link: {Spoken("windows.reading.nextK")}. "
         + $"Next list: {Spoken("windows.reading.nextL")}. "
         + $"Next table: {Spoken("windows.reading.nextT")}. "
+        + $"Next math: {Spoken("windows.reading.nextM")}. "
+        + $"Enter speaks it, {Spoken("windows.reading.mathBraille")} its braille, "
+        + $"{Spoken("windows.reading.mathSource")} its source. "
         + "Tab moves through links and embedded controls. Enter activates.";
 
     public static string HorizontalSplitter =>

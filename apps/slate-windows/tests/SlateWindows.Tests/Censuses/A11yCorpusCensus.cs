@@ -361,6 +361,8 @@ public sealed class A11yCorpusCensus
         new A11yEvent.ReadingNavNoTarget(Target: new ReadingNavTarget.Diagram(), Forward: true),
         new A11yEvent.ReadingNavLanded(Target: new ReadingNavTarget.Diagram(), Text: "Flowchart with 3 steps"),
         new A11yEvent.ReadingNavLanded(Target: new ReadingNavTarget.Embed(), Text: ""),
+        new A11yEvent.MathSourceSpoken(Source: @"\nabla^2 f"),
+        new A11yEvent.MathSourceSpoken(Source: null),
         new A11yEvent.GridSorted(Column: "Status", Ascending: true),
         new A11yEvent.GridSorted(Column: "Due", Ascending: false),
         new A11yEvent.GridRowMoved(Description: "Ship the plan. Status: Open. Due: Friday", FocusedCell: "Status: Open"),

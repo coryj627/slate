@@ -63,6 +63,7 @@ internal sealed class ReadingSurface : RichTextBox
         AutomationProperties.SetAutomationId(this, "ReadingSurface");
         AutomationProperties.SetName(this, "Reading view");
         AutomationProperties.SetHelpText(this, Commands.NavigationHelp.Reading);
+        DataObject.AddCopyingHandler(this, OnCopying);
 
         // ONE document for the surface's whole life. Replacing the
         // Document property on a live RichTextBox breaks the UIA
@@ -413,19 +414,23 @@ internal sealed class ReadingSurface : RichTextBox
         // A re-projection replaces every block, which would collapse a
         // caret inside the old content to the document start — throwing
         // the reader to the top after every task toggle. Preserve the
-        // position by symbol offset: a toggle changes one status char
-        // the projection never renders, so the same offset lands on the
-        // same content. Caret state is REPAIRABLE UI state: any failure
-        // reading or restoring it degrades to the document start and
-        // must never abort the content merge into a terminal failure.
-        int caretOffset;
+        // position by top-level block and the offset inside it: a toggle
+        // changes one status char the projection never renders, so the
+        // same anchor lands on the same content. A document-wide offset
+        // no longer would (#1595, the plan 45 XB-9 review): a math
+        // paragraph's length is its speech, which a math prefs change
+        // rewrites without touching the note. Caret state is REPAIRABLE
+        // UI state: any failure reading or restoring it degrades to the
+        // document start and must never abort the content merge into a
+        // terminal failure.
+        (int Block, int Offset)? caretAnchor;
         try
         {
-            caretOffset = Document.ContentStart.GetOffsetToPosition(CaretPosition);
+            caretAnchor = CaretAnchorOf(Document, CaretPosition);
         }
         catch (InvalidOperationException)
         {
-            caretOffset = 0;
+            caretAnchor = null;
         }
 
         Document.Blocks.Clear();
@@ -438,12 +443,11 @@ internal sealed class ReadingSurface : RichTextBox
         _navigator?.SetLandmarks(_landmarks);
         InvalidateAutomationChildren();
 
-        if (caretOffset > 0)
+        if (caretAnchor is { } anchor && anchor != (0, 0))
         {
             try
             {
-                CaretPosition = Document.ContentStart.GetPositionAtOffset(caretOffset)
-                    ?? Document.ContentEnd;
+                CaretPosition = PositionAt(Document, anchor);
             }
             catch (InvalidOperationException)
             {
@@ -456,6 +460,36 @@ internal sealed class ReadingSurface : RichTextBox
         // state a reader who moved away leaves behind, so a late merge could
         // steal focus back. The landing the shell asked for is delivered by
         // ApplyModel after the merge, and nothing else lands.
+    }
+
+    /// <summary>The caret as its top-level block's index and the offset
+    /// inside that block; a caret between blocks anchors to the next one's
+    /// start.</summary>
+    private static (int Block, int Offset)? CaretAnchorOf(FlowDocument document, TextPointer caret)
+    {
+        int index = 0;
+        foreach (Block block in document.Blocks)
+        {
+            if (caret.CompareTo(block.ElementEnd) <= 0)
+            {
+                return (index, Math.Max(0, block.ContentStart.GetOffsetToPosition(caret)));
+            }
+            index++;
+        }
+        return null;
+    }
+
+    /// <summary>The position an anchor names, clamped to its block; the
+    /// document end when the block is gone.</summary>
+    private static TextPointer PositionAt(FlowDocument document, (int Block, int Offset) anchor)
+    {
+        if (document.Blocks.ElementAtOrDefault(anchor.Block) is not { } block)
+        {
+            return document.ContentEnd;
+        }
+        int length = block.ContentStart.GetOffsetToPosition(block.ContentEnd);
+        return block.ContentStart.GetPositionAtOffset(Math.Min(anchor.Offset, length))
+            ?? block.ContentEnd;
     }
 
     /// <summary>Whether a shell landing is held for this surface's first
@@ -819,21 +853,10 @@ internal sealed class ReadingSurface : RichTextBox
             // Plain Enter reads the speech. Both announce core content.
             if (brailleRequested)
             {
-                ReadingMathElement? mathElement = mathParagraph.Inlines
-                    .OfType<InlineUIContainer>()
-                    .Select(container => container.Child)
-                    .OfType<ReadingMathElement>()
-                    .FirstOrDefault();
-                mathModel.Announce(new uniffi.slate_uniffi.A11yEvent.HostComposed(
-                    mathElement is { Braille.Length: > 0 }
-                        ? mathElement.Braille
-                        : "Braille not available.",
-                    uniffi.slate_uniffi.A11yPriority.Medium));
+                AnnounceMathBraille(mathModel, MathElementOf(mathParagraph));
                 return true;
             }
-            mathModel.Announce(new uniffi.slate_uniffi.A11yEvent.ReadingNavLanded(
-                new uniffi.slate_uniffi.ReadingNavTarget.Math(),
-                ReadingSemantics.MathSpeechOf(mathParagraph)));
+            AnnounceMathSpeech(mathModel, mathParagraph);
             return true;
         }
         // Diagram block at the caret (W3-3): Enter (and Ctrl+Enter —
@@ -880,6 +903,146 @@ internal sealed class ReadingSurface : RichTextBox
         }
         return false;
     }
+
+    /// <summary>
+    /// #1591 (plan 45 XB-9): Ctrl+Shift+Enter on a math block speaks its
+    /// authored source, the one route to it, since line reading and focus
+    /// speak the speech. The sentence is core's. Returns false off a math
+    /// block, so the key falls through.
+    /// </summary>
+    internal bool TrySpeakMathSourceAtCaret()
+    {
+        if (_model is not { } model
+            || CaretPosition?.Paragraph is not { } paragraph
+            || !ReadingSemantics.IsMathBlock(paragraph))
+        {
+            return false;
+        }
+        AnnounceMathSource(model, MathElementOf(paragraph));
+        return true;
+    }
+
+    /// <summary>
+    /// #1591 (the plan 45 XB-9 review): Tab puts keyboard focus ON a math
+    /// element, where the caret requests do not reach, so its three
+    /// requests are answered for it: Enter its speech, Ctrl+Enter its
+    /// braille, Ctrl+Shift+Enter its source. Returns false for any other
+    /// modifier state, so the key falls through.
+    /// </summary>
+    internal bool TryAnswerMath(
+        ReadingMathElement element, System.Windows.Input.ModifierKeys modifiers)
+    {
+        if (_model is not { } model
+            || (element.Parent as InlineUIContainer)?.Parent is not Paragraph paragraph
+            || !ReadingSemantics.IsMathBlock(paragraph))
+        {
+            return false;
+        }
+        switch (modifiers)
+        {
+            case System.Windows.Input.ModifierKeys.None:
+                AnnounceMathSpeech(model, paragraph);
+                return true;
+            case System.Windows.Input.ModifierKeys.Control:
+                AnnounceMathBraille(model, element);
+                return true;
+            case System.Windows.Input.ModifierKeys.Control | System.Windows.Input.ModifierKeys.Shift:
+                AnnounceMathSource(model, element);
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static void AnnounceMathSpeech(ReadingContentViewModel model, Paragraph paragraph) =>
+        model.Announce(new uniffi.slate_uniffi.A11yEvent.ReadingNavLanded(
+            new uniffi.slate_uniffi.ReadingNavTarget.Math(),
+            ReadingSemantics.MathSpeechOf(paragraph)));
+
+    private static void AnnounceMathBraille(ReadingContentViewModel model, ReadingMathElement? element) =>
+        model.Announce(new uniffi.slate_uniffi.A11yEvent.HostComposed(
+            element is { Braille.Length: > 0 } ? element.Braille : "Braille not available.",
+            uniffi.slate_uniffi.A11yPriority.Medium));
+
+    private static void AnnounceMathSource(ReadingContentViewModel model, ReadingMathElement? element) =>
+        model.Announce(new uniffi.slate_uniffi.A11yEvent.MathSourceSpoken(
+            string.IsNullOrWhiteSpace(element?.Source) ? null : element.Source));
+
+    /// <summary>
+    /// #1595 (the plan 45 XB-9 review): a math paragraph's text is its
+    /// speech, which line reading needs, but a copy wants the formula. A
+    /// selection that reaches a math paragraph's speech copies as plain
+    /// text, each such paragraph's fenced source in its speech's place;
+    /// any other selection copies as WPF builds it.
+    /// </summary>
+    private void OnCopying(object sender, DataObjectCopyingEventArgs e)
+    {
+        if (CopyTextOf(Selection.Start, Selection.End) is not { } text)
+        {
+            return;
+        }
+        if (e.IsDragDrop)
+        {
+            e.DataObject.SetData(DataFormats.UnicodeText, text);
+            e.DataObject.SetData(DataFormats.Text, text);
+            return;
+        }
+        e.CancelCommand();
+        try
+        {
+            Clipboard.SetDataObject(new DataObject(DataFormats.UnicodeText, text), copy: true);
+        }
+        catch (System.Runtime.InteropServices.ExternalException)
+        {
+            // Another process holds the clipboard; the copy is lost, as
+            // WPF's own would be.
+        }
+    }
+
+    /// <summary>The text a copy of [start, end] puts on the clipboard,
+    /// or null when the range reaches no math paragraph's speech.</summary>
+    internal string? CopyTextOf(TextPointer start, TextPointer end)
+    {
+        var text = new System.Text.StringBuilder();
+        TextPointer cursor = start;
+        bool substituted = false;
+        foreach (Block block in Document.Blocks)
+        {
+            if (block.ContentStart.CompareTo(end) >= 0)
+            {
+                break;
+            }
+            if (block is not Paragraph paragraph
+                || ReadingSemantics.MathCopyTextOf(paragraph) is not { } fencedSource
+                || paragraph.ContentEnd.CompareTo(start) <= 0)
+            {
+                continue;
+            }
+            if (cursor.CompareTo(paragraph.ContentStart) < 0)
+            {
+                text.Append(new TextRange(cursor, paragraph.ContentStart).Text);
+            }
+            text.Append(fencedSource);
+            cursor = paragraph.ContentEnd.CompareTo(end) < 0 ? paragraph.ContentEnd : end;
+            substituted = true;
+        }
+        if (!substituted)
+        {
+            return null;
+        }
+        if (cursor.CompareTo(end) < 0)
+        {
+            text.Append(new TextRange(cursor, end).Text);
+        }
+        return text.ToString();
+    }
+
+    private static ReadingMathElement? MathElementOf(Paragraph paragraph) =>
+        paragraph.Inlines
+            .OfType<InlineUIContainer>()
+            .Select(container => container.Child)
+            .OfType<ReadingMathElement>()
+            .FirstOrDefault();
 
     /// <summary>Test seam for the table→grid hop; production opens
     /// the substrate window. Returns whether a grid actually opened —
