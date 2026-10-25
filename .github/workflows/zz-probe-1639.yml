@@ -1,0 +1,66 @@
+# Throwaway probe for #1639 (never merges): what a lane job does when the
+# lane decision fails or times out. GitHub-hosted only.
+
+name: Probe 1639
+
+on:
+  pull_request:
+
+permissions: {}
+
+jobs:
+  # The real decision, handed a file that does not exist: lane_changes.py
+  # exits 1 and writes no output.
+  changes:
+    name: changes
+    uses: ./.github/workflows/lane-changes.yml
+    permissions:
+      contents: read
+    with:
+      workflow: .github/workflows/no-such-lane.yml
+
+  after-failed-decision:
+    name: runs after a failed decision
+    needs: [changes]
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - env:
+          RESULT: ${{ needs.changes.result }}
+          RUN: ${{ needs.changes.outputs.run }}
+        run: echo "changes=$RESULT run='$RUN', so the lane job ran"
+
+  # A decision that times out before it writes run=false.
+  slow:
+    name: a decision that times out
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    outputs:
+      run: ${{ steps.never.outputs.run }}
+    steps:
+      - id: never
+        run: |
+          sleep 150
+          echo "run=false" >> "$GITHUB_OUTPUT"
+
+  after-timeout:
+    name: runs after a timed-out decision
+    needs: [slow]
+    if: ${{ !cancelled() && needs.slow.outputs.run != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - env:
+          RESULT: ${{ needs.slow.result }}
+          RUN: ${{ needs.slow.outputs.run }}
+        run: echo "slow=$RESULT run='$RUN', so the lane job ran"
+
+  # What the Pester rule refuses: an implicit success() on changes.
+  implicit:
+    name: implicit success after a failed decision
+    needs: [changes]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - run: echo "this should never print"
