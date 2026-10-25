@@ -1,9 +1,13 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Windows.Threading;
+using Microsoft.Win32.SafeHandles;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows.Tests;
@@ -103,7 +107,9 @@ public sealed class W2EditorInteractionRedTeamTests
         {
             Assert.Null(EditorInteractionCoordinator.DecodeImage(
                 Encoding.UTF8.GetBytes(source),
-                "image/svg+xml"));
+                "image/svg+xml",
+                out string? reason));
+            Assert.Null(reason);
         }
 
         const string safe =
@@ -143,6 +149,433 @@ public sealed class W2EditorInteractionRedTeamTests
             $"SlateWindows.{HostDiagnosticEvent.SvgDecodeWaitFailed}",
             log.ToString(),
             StringComparison.Ordinal);
+    }
+
+    private const string SmallSvg =
+        "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'><rect width='8' height='8' fill='red'/></svg>";
+
+    /// <summary>#1581 (plan 45 XB-10b): a decode past its budget is no
+    /// longer waited on. The preview gets core's sentence at once, the decode
+    /// runs on to its end, and its slots are released when it does.</summary>
+    [Fact]
+    public void SvgPreview_PastTheDecodeBudgetShowsCoresSentenceAndLeavesTheDecoderRunning()
+    {
+        using var release = new ManualResetEventSlim(false);
+        using var lines = new DiagnosticLines();
+        var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
+        int finished = 0;
+        WithSvgDecodeSeams(
+            slots,
+            budgetMilliseconds: 100,
+            body: (_, _) =>
+            {
+                release.Wait(TimeSpan.FromSeconds(10));
+                Interlocked.Increment(ref finished);
+                return null;
+            },
+            () =>
+            {
+                var clock = Stopwatch.StartNew();
+                Assert.Null(EditorInteractionCoordinator.DecodeImage(
+                    Encoding.UTF8.GetBytes(SmallSvg), "image/svg+xml", out string? reason));
+                Assert.True(
+                    clock.ElapsedMilliseconds < 2_000,
+                    $"the decode was waited on for {clock.ElapsedMilliseconds} ms");
+                Assert.Equal("Image not shown: decoding took longer than 5 seconds.", reason);
+                Assert.Equal(1, Volatile.Read(ref slots.Abandoned));
+                Assert.Equal(1, Volatile.Read(ref slots.Live));
+                Assert.Equal(0, Volatile.Read(ref finished));
+            });
+        Assert.Contains(
+            lines.Snapshot,
+            line => line.StartsWith(
+                $"SlateWindows.{HostDiagnosticEvent.SvgDecodeAbandoned} (bytes=",
+                StringComparison.Ordinal));
+        release.Set();
+        WaitUntil(() => Volatile.Read(ref slots.Live) == 0);
+        Assert.Equal(0, Volatile.Read(ref slots.Abandoned));
+        Assert.Equal(1, Volatile.Read(ref finished));
+    }
+
+    /// <summary>#1581: the editor's embed preview shows core's sentence as a
+    /// warning in place of an image, and an ordinary failure keeps the
+    /// editor's own sentence.</summary>
+    [Fact]
+    public void SvgPreview_TheEditorEmbedShowsCoresSentenceAsAWarning()
+    {
+        using var release = new ManualResetEventSlim(false);
+        var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
+        WithSvgDecodeSeams(
+            slots,
+            budgetMilliseconds: 100,
+            body: (_, _) =>
+            {
+                release.Wait(TimeSpan.FromSeconds(10));
+                return null;
+            },
+            () =>
+            {
+                EditorEmbedPreviewNode node = EditorInteractionCoordinator.BuildEmbedPreviewNode(
+                    new EmbedResolution.Image(
+                        "slow.svg", Encoding.UTF8.GetBytes(SmallSvg), "image/svg+xml", null));
+                Assert.Null(node.Image);
+                Assert.True(node.IsWarning);
+                Assert.Equal(
+                    EditorInteractionCoordinator.SvgDecodeTimeExceededMessage,
+                    Assert.Single(node.Parts).Text);
+            });
+        release.Set();
+        WaitUntil(() => Volatile.Read(ref slots.Live) == 0);
+
+        WithSvgDecodeSeams(
+            slots,
+            budgetMilliseconds: null,
+            body: null,
+            () =>
+            {
+                EditorEmbedPreviewNode corrupt = EditorInteractionCoordinator.BuildEmbedPreviewNode(
+                    new EmbedResolution.Image(
+                        "broken.svg",
+                        Encoding.UTF8.GetBytes("<svg xmlns='http://www.w3.org/2000/svg'><unclosed"),
+                        "image/svg+xml",
+                        null));
+                Assert.True(corrupt.IsWarning);
+                Assert.Equal(
+                    "Could not decode image. MIME: image/svg+xml. "
+                    + "The file may be corrupt or use an unsupported codec.",
+                    Assert.Single(corrupt.Parts).Text);
+            });
+    }
+
+    /// <summary>#1581: while two abandoned decodes run, a new decode is
+    /// refused with core's busy sentence (it never started, so it is not told
+    /// it took too long) and starts no decoder; once they end, decoding works
+    /// again.</summary>
+    [Fact]
+    public void SvgPreview_RefusesANewDecodeWhileTwoAreAbandoned()
+    {
+        using var release = new ManualResetEventSlim(false);
+        using var lines = new DiagnosticLines();
+        var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
+        int bodyRuns = 0;
+        byte[] svg = Encoding.UTF8.GetBytes(SmallSvg);
+        WithSvgDecodeSeams(
+            slots,
+            budgetMilliseconds: 100,
+            body: (_, _) =>
+            {
+                Interlocked.Increment(ref bodyRuns);
+                release.Wait(TimeSpan.FromSeconds(10));
+                return null;
+            },
+            () =>
+            {
+                Assert.Null(EditorInteractionCoordinator.DecodeImage(svg, "image/svg+xml", out _));
+                Assert.Null(EditorInteractionCoordinator.DecodeImage(svg, "image/svg+xml", out _));
+                WaitUntil(() => Volatile.Read(ref bodyRuns) == 2);
+                Assert.Equal(
+                    EditorInteractionCoordinator.MaxAbandonedSvgDecodes,
+                    Volatile.Read(ref slots.Abandoned));
+
+                Assert.Null(EditorInteractionCoordinator.DecodeImage(svg, "image/svg+xml", out string? refused));
+                Assert.Equal(
+                    "Image not shown: earlier images are still decoding past their 5-second budget.",
+                    refused);
+                Assert.Equal(EditorInteractionCoordinator.SvgDecodeBusyMessage, refused);
+                Assert.Equal(2, Volatile.Read(ref bodyRuns));
+            });
+        Assert.Contains(
+            lines.Snapshot,
+            line => line == $"SlateWindows.{HostDiagnosticEvent.SvgDecodeRefusedAtCap}");
+
+        release.Set();
+        WaitUntil(() => Volatile.Read(ref slots.Live) == 0);
+        WithSvgDecodeSeams(
+            slots,
+            budgetMilliseconds: null,
+            body: null,
+            () => Assert.NotNull(EditorInteractionCoordinator.DecodeImage(svg, "image/svg+xml", out _)));
+    }
+
+    /// <summary>#1581 (the plan 45 XB-10b review): decodes waited on from
+    /// several threads at once count against a hard ceiling, so callers that
+    /// all pass the abandoned cap before any is abandoned cannot pile up
+    /// threads; a decode past the ceiling never starts.</summary>
+    [Fact]
+    public void SvgPreview_RefusesANewDecodeAtTheDecoderCeiling()
+    {
+        using var release = new ManualResetEventSlim(false);
+        var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
+        int started = 0;
+        byte[] svg = Encoding.UTF8.GetBytes(SmallSvg);
+        Thread[] callers = Enumerable.Range(0, EditorInteractionCoordinator.MaxLiveSvgDecodes)
+            .Select(index => new Thread(() => WithSvgDecodeSeams(
+                slots,
+                budgetMilliseconds: 10_000,
+                body: (_, _) =>
+                {
+                    Interlocked.Increment(ref started);
+                    release.Wait(TimeSpan.FromSeconds(10));
+                    return null;
+                },
+                () => EditorInteractionCoordinator.DecodeImage(svg, "image/svg+xml", out _)))
+            {
+                IsBackground = true,
+            })
+            .ToArray();
+        foreach (Thread caller in callers)
+        {
+            caller.Start();
+        }
+        try
+        {
+            WaitUntil(() => Volatile.Read(ref started) == EditorInteractionCoordinator.MaxLiveSvgDecodes);
+            WithSvgDecodeSeams(
+                slots,
+                budgetMilliseconds: 100,
+                body: (_, _) => throw new InvalidOperationException("no decode starts past the ceiling"),
+                () =>
+                {
+                    Assert.Null(EditorInteractionCoordinator.DecodeImage(svg, "image/svg+xml", out string? refused));
+                    Assert.Equal(EditorInteractionCoordinator.SvgDecodeBusyMessage, refused);
+                });
+            // None was abandoned: their callers are still waiting.
+            Assert.Equal(0, Volatile.Read(ref slots.Abandoned));
+        }
+        finally
+        {
+            release.Set();
+            foreach (Thread caller in callers)
+            {
+                Assert.True(caller.Join(TimeSpan.FromSeconds(10)));
+            }
+        }
+        WaitUntil(() => Volatile.Read(ref slots.Live) == 0);
+    }
+
+    /// <summary>#1581: an abandoned decode that throws still releases its
+    /// slots, and nothing is rethrown on the thread that stopped waiting.</summary>
+    [Fact]
+    public void SvgPreview_AnAbandonedDecodeThatThrowsStillReleasesItsSlot()
+    {
+        using var release = new ManualResetEventSlim(false);
+        var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
+        WithSvgDecodeSeams(
+            slots,
+            budgetMilliseconds: 100,
+            body: (_, _) =>
+            {
+                release.Wait(TimeSpan.FromSeconds(10));
+                throw new InvalidOperationException("the parked decode fails");
+            },
+            () =>
+            {
+                Assert.Null(EditorInteractionCoordinator.DecodeImage(
+                    Encoding.UTF8.GetBytes(SmallSvg), "image/svg+xml", out string? reason));
+                Assert.Equal(EditorInteractionCoordinator.SvgDecodeTimeExceededMessage, reason);
+                Assert.Equal(1, Volatile.Read(ref slots.Abandoned));
+            });
+        release.Set();
+        WaitUntil(() => Volatile.Read(ref slots.Live) == 0);
+        Assert.Equal(0, Volatile.Read(ref slots.Abandoned));
+    }
+
+    /// <summary>#1581 (the plan 45 XB-10b review): an abandoned decode cannot
+    /// spend its caller's budget. The gate refuses once the caller has
+    /// stopped waiting, and the caller's callback is never called.</summary>
+    [Fact]
+    public void SvgPreview_AnAbandonedDecodeCannotSpendItsCallersBudget()
+    {
+        using var release = new ManualResetEventSlim(false);
+        var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
+        int charges = 0;
+        int reservedAfterAbandon = -1;
+        WithSvgDecodeSeams(
+            slots,
+            budgetMilliseconds: 100,
+            body: (_, reserve) =>
+            {
+                release.Wait(TimeSpan.FromSeconds(10));
+                Volatile.Write(ref reservedAfterAbandon, reserve(64) ? 1 : 0);
+                return null;
+            },
+            () =>
+            {
+                Assert.Null(EditorInteractionCoordinator.DecodeImage(
+                    Encoding.UTF8.GetBytes(SmallSvg),
+                    "image/svg+xml",
+                    _ =>
+                    {
+                        Interlocked.Increment(ref charges);
+                        return true;
+                    },
+                    out _,
+                    out string? reason));
+                Assert.Equal(EditorInteractionCoordinator.SvgDecodeTimeExceededMessage, reason);
+            });
+        release.Set();
+        WaitUntil(() => Volatile.Read(ref slots.Live) == 0);
+        Assert.Equal(0, Volatile.Read(ref reservedAfterAbandon));
+        Assert.Equal(0, Volatile.Read(ref charges));
+    }
+
+    /// <summary>#1581 (the plan 45 XB-10b review): a budget that ends while
+    /// the decoder is inside the caller's callback waits that callback out
+    /// before abandoning, so the callback never runs after the caller has
+    /// returned.</summary>
+    [Fact]
+    public void SvgPreview_TheBudgetEndsOnlyAfterACallbackInProgressReturns()
+    {
+        using var inCallback = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
+        int callbackReturned = 0;
+        // The wait ends its budget only once the decoder is in the callback.
+        EditorInteractionCoordinator.SvgDecodeWaitForTests = _ =>
+        {
+            inCallback.Wait(TimeSpan.FromSeconds(10));
+            return 0x102;
+        };
+        try
+        {
+            WithSvgDecodeSeams(
+                slots,
+                budgetMilliseconds: null,
+                body: (_, reserve) =>
+                {
+                    reserve(64);
+                    // Parked after the callback, so the caller's abandon,
+                    // not the decode's end, follows the callback.
+                    release.Wait(TimeSpan.FromSeconds(10));
+                    return null;
+                },
+                () =>
+                {
+                    Assert.Null(EditorInteractionCoordinator.DecodeImage(
+                        Encoding.UTF8.GetBytes(SmallSvg),
+                        "image/svg+xml",
+                        _ =>
+                        {
+                            inCallback.Set();
+                            Thread.Sleep(300);
+                            Volatile.Write(ref callbackReturned, 1);
+                            return true;
+                        },
+                        out _,
+                        out string? reason));
+                    Assert.Equal(1, Volatile.Read(ref callbackReturned));
+                    Assert.Equal(EditorInteractionCoordinator.SvgDecodeTimeExceededMessage, reason);
+                });
+        }
+        finally
+        {
+            EditorInteractionCoordinator.SvgDecodeWaitForTests = null;
+            release.Set();
+        }
+        WaitUntil(() => Volatile.Read(ref slots.Live) == 0);
+    }
+
+    /// <summary>#1581 (the plan 45 XB-10b review): a decode that finishes
+    /// just as its budget ends is read as an ordinary end, its image
+    /// returned and no slot kept.</summary>
+    [Fact]
+    public void SvgPreview_ADecodeThatFinishesAsTheBudgetEndsIsReadAsAnOrdinaryEnd()
+    {
+        var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
+        // The budget "ends" only after the decode has finished entirely.
+        EditorInteractionCoordinator.SvgDecodeWaitForTests = handle =>
+        {
+            Assert.Equal(0u, WaitForSingleObject(handle, 10_000));
+            WaitUntil(() => Volatile.Read(ref slots.Live) == 0);
+            return 0x102;
+        };
+        try
+        {
+            WithSvgDecodeSeams(
+                slots,
+                budgetMilliseconds: null,
+                body: null,
+                () =>
+                {
+                    Assert.NotNull(EditorInteractionCoordinator.DecodeImage(
+                        Encoding.UTF8.GetBytes(SmallSvg), "image/svg+xml", out string? reason));
+                    Assert.Null(reason);
+                });
+        }
+        finally
+        {
+            EditorInteractionCoordinator.SvgDecodeWaitForTests = null;
+        }
+        Assert.Equal(0, Volatile.Read(ref slots.Abandoned));
+    }
+
+    /// <summary>#1581: an ordinary decode failure carries no reason, so the
+    /// callers keep their own "Could not decode image" sentence.</summary>
+    [Fact]
+    public void SvgPreview_AnOrdinaryDecodeFailureKeepsTheCorruptImageSentence()
+    {
+        var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
+        WithSvgDecodeSeams(
+            slots,
+            budgetMilliseconds: null,
+            body: null,
+            () =>
+            {
+                Assert.Null(EditorInteractionCoordinator.DecodeImage(
+                    Encoding.UTF8.GetBytes("<svg xmlns='http://www.w3.org/2000/svg'><unclosed"),
+                    "image/svg+xml",
+                    out string? reason));
+                Assert.Null(reason);
+            });
+        Assert.Equal(0, Volatile.Read(ref slots.Abandoned));
+    }
+
+    [DllImport("kernel32.dll")]
+    private static extern uint WaitForSingleObject(SafeWaitHandle handle, uint milliseconds);
+
+    /// <summary>Runs <paramref name="test"/> with this thread's decode seams
+    /// set: its own decoder slots, a budget, a decode body.</summary>
+    private static void WithSvgDecodeSeams(
+        EditorInteractionCoordinator.SvgDecodeSlots slots,
+        int? budgetMilliseconds,
+        Func<byte[], Func<long, bool>, byte[]?>? body,
+        Action test)
+    {
+        EditorInteractionCoordinator.SvgDecodeSlotsForTests = slots;
+        EditorInteractionCoordinator.SvgDecodeBudgetMillisecondsForTests = budgetMilliseconds;
+        EditorInteractionCoordinator.SvgDecodeBodyForTests = body;
+        try
+        {
+            test();
+        }
+        finally
+        {
+            EditorInteractionCoordinator.SvgDecodeSlotsForTests = null;
+            EditorInteractionCoordinator.SvgDecodeBudgetMillisecondsForTests = null;
+            EditorInteractionCoordinator.SvgDecodeBodyForTests = null;
+        }
+    }
+
+    private static void WaitUntil(Func<bool> condition) =>
+        Assert.True(SpinWait.SpinUntil(condition, TimeSpan.FromSeconds(10)), "timed out");
+
+    /// <summary>Every host diagnostic written while alive, from any thread,
+    /// chained to whatever observer was installed before.</summary>
+    private sealed class DiagnosticLines : IDisposable
+    {
+        private readonly Action<string>? _previous = HostLog.ObserverForTests;
+        private readonly ConcurrentQueue<string> _lines = new();
+
+        public DiagnosticLines() =>
+            HostLog.ObserverForTests = line =>
+            {
+                _previous?.Invoke(line);
+                _lines.Enqueue(line);
+            };
+
+        public string[] Snapshot => [.. _lines];
+
+        public void Dispose() => HostLog.ObserverForTests = _previous;
     }
 
     [Fact]

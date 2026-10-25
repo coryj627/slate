@@ -77,6 +77,8 @@ internal enum HostDiagnosticEvent
     SidebarWriteJournalFailed,
     SingleInstanceActivationFailed,
     SingleInstanceActivationTimedOut,
+    SvgDecodeAbandoned,
+    SvgDecodeRefusedAtCap,
     SvgDecodeWaitFailed,
     VaultCommandFailed,
     VaultEventFailed,
@@ -166,6 +168,11 @@ internal static class HostLog
 
         WriteWithoutThrowing(message);
     }
+
+    /// <summary>A diagnostic with a short mechanical detail (sizes, counts,
+    /// budgets), never document or payload text.</summary>
+    public static void WriteDetail(HostDiagnosticEvent diagnosticEvent, string detail) =>
+        WriteWithoutThrowing($"SlateWindows.{diagnosticEvent} ({detail})");
 
     /// <summary>Whether <c>SLATE_UIA_DIAGNOSTICS=1</c> is set. A diagnostic
     /// that must do work to exist — read a clock, queue a callback — asks

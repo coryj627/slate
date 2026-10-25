@@ -441,6 +441,81 @@ public sealed class ReadingDiagramTests
         });
     }
 
+    /// <summary>#1581 (plan 45 XB-10b): a rendered diagram whose SVG decode
+    /// outlives its budget shows the honest header with core's image
+    /// sentence as its reason, not "could not be decoded".</summary>
+    [Fact]
+    public void ADiagramWhoseSvgDecodeOutlivesTheBudgetShowsCoresReason()
+    {
+        RunSta(() =>
+        {
+            const string source = "flowchart LR\nA --> B\n";
+            const string markdown = "```mermaid\n" + source + "```\n";
+            ReadingBlock[] blocks = SlateUniffiMethods.ReadingBlocksSource(markdown);
+            ReadingBlockInlines[] inlines = SlateUniffiMethods.ReadingInlineSegmentsSource(
+                markdown,
+                Array.Empty<RenderedCitation>(),
+                Array.Empty<OutgoingLink>());
+            var model = new List<(ReadingBlock, ReadingBlockInlines)>();
+            for (int i = 0; i < blocks.Length; i++)
+            {
+                model.Add((blocks[i], inlines[i]));
+            }
+            var rendered = new DiagramBlock(
+                Source: source,
+                Dialect: DiagramDialect.Mermaid,
+                Svg: System.Text.Encoding.UTF8.GetBytes(
+                    "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'>"
+                    + "<rect width='8' height='8' fill='red'/></svg>"),
+                PngFallback: null,
+                StructuredDescription: "Flowchart with 1 step.",
+                RenderStatus: new DiagramRenderStatus.Ok(),
+                Line: 1,
+                ByteOffset: (uint)markdown.IndexOf("```", StringComparison.Ordinal));
+
+            // The wait reports its budget spent while the decode is parked, so
+            // it cannot finish first.
+            using var release = new ManualResetEventSlim(false);
+            var slots = new EditorInteractionCoordinator.SvgDecodeSlots();
+            EditorInteractionCoordinator.SvgDecodeSlotsForTests = slots;
+            EditorInteractionCoordinator.SvgDecodeBodyForTests = (_, _) =>
+            {
+                release.Wait(TimeSpan.FromSeconds(10));
+                return null;
+            };
+            EditorInteractionCoordinator.SvgDecodeWaitForTests = _ => 0x102;
+            try
+            {
+                ReadingDocumentModel built = ReadingDocumentBuilder.Build(
+                    model,
+                    new ReadingListBuildContext(),
+                    Array.Empty<CodeBlock>(),
+                    Array.Empty<MathBlock>(),
+                    new[] { rendered });
+
+                string text = new System.Windows.Documents.TextRange(
+                    built.Document.ContentStart,
+                    built.Document.ContentEnd).Text;
+                int header = text.IndexOf("Diagram could not be rendered", StringComparison.Ordinal);
+                int said = text.IndexOf(
+                    "Image not shown: decoding took longer than 5 seconds.",
+                    StringComparison.Ordinal);
+                Assert.True(header >= 0, text);
+                Assert.True(said > header, text);
+                Assert.DoesNotContain("could not be decoded", text, StringComparison.Ordinal);
+            }
+            finally
+            {
+                EditorInteractionCoordinator.SvgDecodeWaitForTests = null;
+                EditorInteractionCoordinator.SvgDecodeBodyForTests = null;
+                EditorInteractionCoordinator.SvgDecodeSlotsForTests = null;
+                release.Set();
+                Assert.True(SpinWait.SpinUntil(
+                    () => Volatile.Read(ref slots.Live) == 0, TimeSpan.FromSeconds(10)));
+            }
+        });
+    }
+
     /// <summary>The mac tooltip rule verbatim: three lines, spaces,
     /// 120-char cap with ellipsis; empty source yields no tooltip.</summary>
     [Fact]
