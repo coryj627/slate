@@ -164,6 +164,10 @@ internal sealed partial class VaultLifecycleViewModel
     private Task _sessionLoadCompletion = Task.CompletedTask;
     private int _sidebarRefreshTicket;
     private int _debouncedSidebarRefreshes;
+    // XB-11 (#1573, #1590; plan 45 XD1): a file change's tree refresh that a
+    // close in progress skipped; a close that is refused re-issues it.
+    private bool _refreshSkippedDuringClose;
+    private int _fileChangesHandled;
     // W4-8 (SD8): the bounded sync-marker watch, owned by the vault
     // lifecycle for exactly the open-vault state.
     private SyncMarkerWatcher? _syncMarkerWatcher;
@@ -843,6 +847,7 @@ internal sealed partial class VaultLifecycleViewModel
             // change's host effects.
             ApplyFileChangeEffects([(@event, CoreDocumentClassification.IsOpenable(@event.Path))]);
             int ticket = Interlocked.Increment(ref _sidebarRefreshTicket);
+            Interlocked.Increment(ref _fileChangesHandled);
             if (_rescanActive && FileSidebar is { IsTreePublicationPending: true } sidebar)
             {
                 // W7-7 PR 7 (F2, codex design pass 2): a rescan's tree
@@ -850,8 +855,20 @@ internal sealed partial class VaultLifecycleViewModel
                 // Slate write. Refresh AT ONCE — the stale snapshot then
                 // fails its generation check, and the rescan settles on
                 // a tree that includes the write, before its sentence.
-                // The debounce below would land after the sentence.
+                // The debounce below would land after the sentence. Ahead
+                // of the close gate below: the rescan's sentence must not
+                // precede the write even inside a close (the session
+                // teardown joins this read if the close goes ahead).
                 sidebar.Refresh();
+                return;
+            }
+            if (_workspaceTeardownInProgress)
+            {
+                // XD1: a close has begun (its saves settle with the window
+                // enabled, so their changes land here); a refresh started
+                // now would only be a read the close must wait for. A
+                // refused close re-issues it.
+                _refreshSkippedDuringClose = true;
                 return;
             }
 
@@ -863,7 +880,15 @@ internal sealed partial class VaultLifecycleViewModel
                     {
                         if (generation == _generation && ticket == _sidebarRefreshTicket)
                         {
-                            FileSidebar?.Refresh();
+                            if (_workspaceTeardownInProgress)
+                            {
+                                // XD1: the debounce ran out inside a close.
+                                _refreshSkippedDuringClose = true;
+                            }
+                            else
+                            {
+                                FileSidebar?.Refresh();
+                            }
                         }
                     }
                     finally
@@ -1184,10 +1209,15 @@ internal sealed partial class VaultLifecycleViewModel
     internal VaultEventListener? EventListenerForTests => _eventListener;
 
     /// <summary>A Slate write's debounced tree refresh (150 ms, in
-    /// <see cref="HandleFileChange"/>) is scheduled and has not run. A vault
-    /// close refuses while a tree refresh is reading, so a fact that saves and
-    /// then closes settles past this first (#1555).</summary>
+    /// <see cref="HandleFileChange"/>) is scheduled and has not run. A close
+    /// that lands meanwhile skips it (XD1, #1590); a fact that saves and then
+    /// closes settles past this first when it means to (#1555).</summary>
     internal bool DebouncedSidebarRefreshPendingForTests => Volatile.Read(ref _debouncedSidebarRefreshes) > 0;
+
+    /// <summary>XB-11 test seam: the Slate-owned file changes
+    /// <see cref="HandleFileChange"/> has handled for the open vault, so a
+    /// fact can wait for a save's change to land inside a close.</summary>
+    internal int FileChangesHandledForTests => Volatile.Read(ref _fileChangesHandled);
 
     private void InitializeWorkspace(
         VaultSession session,
@@ -1424,14 +1454,66 @@ internal sealed partial class VaultLifecycleViewModel
             return WorkspaceTeardown.Refused;
         }
         _workspaceTeardownInProgress = true;
+        WorkspaceTeardown teardown = WorkspaceTeardown.Refused;
         try
         {
-            return TryCloseWorkspaceCore();
+            teardown = TryCloseWorkspaceCore();
+            return teardown;
         }
         finally
         {
             _workspaceTeardownInProgress = false;
+            // XD1: a close that stays open re-issues the tree refresh it
+            // skipped, so the tree never stays stale; one that closed drops
+            // it with the workspace.
+            bool skipped = _refreshSkippedDuringClose;
+            _refreshSkippedDuringClose = false;
+            if (skipped && teardown == WorkspaceTeardown.Refused)
+            {
+                FileSidebar?.Refresh();
+            }
         }
+    }
+
+    /// <summary>XB-11 (#1573, #1590; plan 45 XD1): how long a close waits for
+    /// a tree read already in flight before it refuses with the sentence. A
+    /// fact shortens it.</summary>
+    internal static TimeSpan TreeRefreshCloseBound { get; set; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>XD1: a close that has begun cancels the tree read in flight,
+    /// whoever started it (a user who pressed Refresh, then Close, wants the
+    /// close), and waits for it, up to <see cref="TreeRefreshCloseBound"/>.
+    /// True when the read ended inside the bound. The read's completion runs
+    /// off the dispatcher (its awaits are <c>ConfigureAwait(false)</c>, and a
+    /// cancelled read stops waiting for its apply), so the wait pumps where
+    /// the lifecycle has a dispatcher, keeping the window painted, and
+    /// blocks where it has none (a headless host).</summary>
+    private bool AwaitTreeRefreshForClose(FilesSidebarViewModel sidebar)
+    {
+        Task read = sidebar.CancelTreeRefreshAndGetCompletion();
+        if (!read.IsCompleted)
+        {
+            Task bounded = Task.WhenAny(read, Task.Delay(TreeRefreshCloseBound));
+            if (_lifecycleDispatcher is Dispatcher dispatcher && dispatcher.CheckAccess())
+            {
+                PumpedWait.Until(dispatcher, bounded);
+            }
+            else
+            {
+                bounded.Wait();
+            }
+        }
+        if (!read.IsCompleted)
+        {
+            // Past the bound: today's refusal, and nothing re-issued, so a
+            // vault whose reads are slow is not handed another one the moment
+            // this one ends (the next close then finds the tree idle).
+            return false;
+        }
+        // The cancelled read is a refresh this close skipped: if the close is
+        // refused for a later reason, it is issued again.
+        _refreshSkippedDuringClose = true;
+        return true;
     }
 
     /// <summary>
@@ -1466,10 +1548,13 @@ internal sealed partial class VaultLifecycleViewModel
     }
 
     /// <summary>
-    /// The teardown admission (#1280; contract 35 A-1). The sidebar work
-    /// that refuses a close is checked first, before anything pumps; work
-    /// the sidebar starts later — the refresh our own saves schedule — is
-    /// joined by the session teardown, as it always was. Settling admitted
+    /// The teardown admission (#1280; contract 35 A-1). A tree read in flight
+    /// is cancelled and awaited first, bounded (XD1, #1590); the sidebar work
+    /// a user started (folder expansion, import, filter) still refuses the
+    /// close before anything else pumps. A refresh our own saves would start
+    /// while the close runs is skipped (<see cref="HandleFileChange"/>), and
+    /// re-issued if the close is refused; the session teardown joins any read
+    /// left, as it always did. Settling admitted
     /// saves and Save All both pump with the window enabled, so the rest of
     /// the admission runs in rounds and re-checks the admitted saves and the
     /// dirty tabs after any frame before it answers. Every save admitted
@@ -1482,7 +1567,9 @@ internal sealed partial class VaultLifecycleViewModel
     /// </summary>
     private WorkspaceTeardown TryCloseWorkspaceCore()
     {
-        if (FileSidebar?.CancelTreeRefresh() == true)
+        // XD1: a tree read in flight is cancelled and awaited, bounded; only
+        // a read past the bound refuses, with the sentence it always had.
+        if (FileSidebar is { IsRefreshingTree: true } sidebar && !AwaitTreeRefreshForClose(sidebar))
         {
             ReportTerminalStatus(
                 "File tree refresh cancellation requested. Close the vault again after the current directory read finishes.",
