@@ -33,6 +33,11 @@ internal static class ReadingSemantics
             "ReadingMathSpeech", typeof(string), typeof(ReadingSemantics),
             new PropertyMetadata(null));
 
+    private static readonly DependencyProperty MathCopyTextProperty =
+        DependencyProperty.RegisterAttached(
+            "ReadingMathCopyText", typeof(string), typeof(ReadingSemantics),
+            new PropertyMetadata(null));
+
     private static readonly DependencyProperty DiagramDescriptionProperty =
         DependencyProperty.RegisterAttached(
             "ReadingDiagramDescription", typeof(string), typeof(ReadingSemantics),
@@ -221,6 +226,18 @@ internal static class ReadingSemantics
 
     public static string MathSpeechOf(Paragraph paragraph) =>
         paragraph.GetValue(MathSpeechProperty) as string ?? string.Empty;
+
+    /// <summary>#1595: a math paragraph whose text range is its speech
+    /// (the plan 45 XB-9 shape) carries the fenced source a copy puts in
+    /// the speech's place.</summary>
+    public static void MarkMathCopyText(Paragraph paragraph, string fencedSource) =>
+        paragraph.SetValue(MathCopyTextProperty, fencedSource);
+
+    /// <summary>The fenced source a copy substitutes for this math
+    /// paragraph's speech; null when its range already holds the source
+    /// (a block with no core artifact).</summary>
+    public static string? MathCopyTextOf(Paragraph paragraph) =>
+        paragraph.GetValue(MathCopyTextProperty) as string;
 
     /// <summary>Diagram block (W3-3): the marker carries the canonical
     /// structured description so the landmark walk and the caret

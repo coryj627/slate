@@ -223,6 +223,11 @@
         "decision": "docs/plans/18_windows_port/specs/gap_analysis.md",
         "status": "recorded"
       },
+      "MathSourceSpoken": {
+        "reason": "Plan 45 XB-9 (#1591): the Windows reading view's Ctrl+Shift+Enter speaks a math block's source on request, since line reading and focus speak the MathCAT speech. Mac offers the source on request as \"Source\" in VoiceOver's More Content menu (MathView.swift), which VoiceOver reads itself; no Mac construction site.",
+        "decision": "docs/plans/39_at_navigation_contracts.md",
+        "status": "recorded"
+      },
       "RecentSearchFocused": {
         "reason": "#1412: on Mac, keyboard focus moves onto the recent-search row and VoiceOver reads the row's own label (Recent search: {query}) on every move; posting RecentSearchFocused as well spoke the row twice or cut the read short (VoiceOver pass 2026-10-16).",
         "decision": "docs/plans/29_search_overlay_contracts.md",
@@ -515,7 +520,7 @@
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "recorded"
       },
-      "Reading/ReadingSurface.cs#ReadingSurface.TryActivateAtCaret@1": {
+      "Reading/ReadingSurface.cs#ReadingSurface.AnnounceMathBraille@1": {
         "engine": "Reading projection load/clipboard/readiness and canonical citation/math content adapter",
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "recorded"

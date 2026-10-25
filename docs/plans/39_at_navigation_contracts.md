@@ -117,6 +117,18 @@ cells and W5 checklist gain the new composed help and spoken-chord checks.
   assumed mechanism while delivering N-4's required behavior. See
   [WPF peer source](https://source.dot.net/PresentationCore/System/Windows/Automation/Peers/UIElementAutomationPeer.cs.html).
 
+- **A-10 (2026-10-24, plan 45 XB-9, #1595 and #1591; the owner's call
+  XD2, decided 2026-10-24: the spike picks the shape, and the source is
+  spoken on request by a Reading-scope chord named in the help line):**
+  the reading help (A-8) gains the math entry point and its three requests: next math,
+  Enter for the speech, Ctrl+Enter for the braille and Ctrl+Shift+Enter
+  for the source. Each chord is spoken from its own row
+  (`windows.reading.nextM`, `windows.reading.mathBraille`,
+  `windows.reading.mathSource`), so N-2's audit holds. The math landing
+  phrases are unchanged. Line reading and caret re-entry now speak a
+  block's MathCAT speech (the spike's shape a1h, recorded on #1595), and
+  the source is spoken only on request, by core's `MathSourceSpoken`.
+
 ## Review record
 
 Contract/map round 1 reviewed fixed remote `88ec8440` against `541f7ceb`.

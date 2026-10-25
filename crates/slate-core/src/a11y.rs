@@ -1429,6 +1429,14 @@ pub enum A11yEvent {
         target: ReadingNavTarget,
         text: String,
     },
+    /// The reading view's source chord on a math block (#1591, plan 45
+    /// XB-9): the authored LaTeX is spoken on request, never on focus and
+    /// never by line reading, which speak the MathCAT speech. `source` is
+    /// `None` when the block has no source to speak: an empty formula, or
+    /// a caret on a math block the host holds no element for.
+    MathSourceSpoken {
+        source: Option<String>,
+    },
 
     // --- Accessible data grid (W4-1, the #969 grid announce family) ---
     /// A grid column sort was applied (keyboard or header click).
@@ -2593,6 +2601,10 @@ impl A11yEvent {
                     format!("{text}, {}.", target.spoken())
                 }
             }
+            MathSourceSpoken { source } => match source.as_deref().map(str::trim) {
+                Some(source) if !source.is_empty() => format!("Source: {source}."),
+                _ => "Source not available.".to_owned(),
+            },
 
             GridSorted { column, ascending } => format!(
                 "Sorted by {column}, {}",
@@ -4884,6 +4896,10 @@ pub fn corpus() -> Vec<A11yEvent> {
             target: ReadingNavTarget::Embed,
             text: "".into(),
         },
+        MathSourceSpoken {
+            source: Some("\\nabla^2 f".into()),
+        },
+        MathSourceSpoken { source: None },
         GridSorted {
             column: "Status".into(),
             ascending: true,
@@ -7282,6 +7298,8 @@ mod tests {
             (Medium, "No next diagram."),
             (Medium, "Flowchart with 3 steps, diagram."),
             (Medium, "Embed."),
+            (Medium, "Source: \\nabla^2 f."),
+            (Medium, "Source not available."),
             (Medium, "Sorted by Status, ascending"),
             (Medium, "Sorted by Due, descending"),
             (Medium, "Ship the plan. Status: Open. Due: Friday"),
@@ -8380,8 +8398,9 @@ mod tests {
             // activate-at-cursor refusal, NothingToActivateAtCursor, and its
             // task outcomes, TaskToggled and TaskToggleFailed, 221; plan 43
             // PR 21a (#1293) the change feed's uncounted rescan sentence,
-            // VaultRescanFinishedUncounted, 222.
-            222,
+            // VaultRescanFinishedUncounted, 222; plan 45 XB-9 (#1591) the
+            // reading view's on-request math source, MathSourceSpoken, 223.
+            223,
             "A11yEvent's top-level variant count moved; uniffi caps an enum at 256"
         );
     }

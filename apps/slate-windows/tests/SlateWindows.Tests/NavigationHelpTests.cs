@@ -66,7 +66,7 @@ public sealed class NavigationHelpTests
             var surface = new ReadingSurface();
             string help = AutomationProperties.GetHelpText(surface);
             Assert.Equal(NavigationHelp.Reading, help);
-            foreach (string id in new[] { "nextH", "previousH", "nextK", "nextL", "nextT" })
+            foreach (string id in new[] { "nextH", "previousH", "nextK", "nextL", "nextT", "nextM", "mathBraille", "mathSource" })
             {
                 Assert.Contains(ChordTable.WindowsSpokenFor("windows.reading." + id)!, help);
             }

@@ -1525,6 +1525,16 @@
     "text": "Embed."
   },
   {
+    "event": "MathSourceSpoken { source: Some(\"\\\\nabla^2 f\") }",
+    "priority": "medium",
+    "text": "Source: \\nabla^2 f."
+  },
+  {
+    "event": "MathSourceSpoken { source: None }",
+    "priority": "medium",
+    "text": "Source not available."
+  },
+  {
     "event": "GridSorted { column: \"Status\", ascending: true }",
     "priority": "medium",
     "text": "Sorted by Status, ascending"

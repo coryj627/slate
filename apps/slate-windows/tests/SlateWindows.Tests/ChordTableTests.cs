@@ -526,8 +526,9 @@ public sealed class ChordTableTests
         Assert.Equal("Ctrl+Alt+U", ChordTable.Find("windows.reading.nextU")!.WindowsChord);
         Assert.Equal("Ctrl+Alt+G", ChordTable.Find("windows.reading.nextG")!.WindowsChord);
 
+        // 32, and plan 45 XB-9's math braille and source chords (#1591).
         Assert.Equal(
-            32,
+            34,
             ChordTable.Entries.Count(row => row.Scope == ChordScope.Reading));
     }
 
@@ -782,6 +783,7 @@ public sealed class ChordTableTests
             [ChordScope.Splitter] = SplitterChords(),
             [ChordScope.Reading] = ReadingNavigatorChords()
                 .Union(ReadingHeadingLevelChords())
+                .Union(ReadingMathRequestChords())
                 .ToHashSet(System.StringComparer.Ordinal),
             [ChordScope.Grid] = GridGestureChords(),
             [ChordScope.Palette] = PaletteChords(),
@@ -1512,6 +1514,41 @@ public sealed class ChordTableTests
         Assert.Equal(20, chords.Count);
         return chords;
 
+    }
+
+    /// <summary>#1591 (plan 45 XB-9): the reading view's math braille and
+    /// source chords, read from the arms of
+    /// <c>ReadingNavigator.Surface_PreviewKeyDown</c> that request them (the
+    /// braille activation and <c>TrySpeakMathSourceAtCaret</c>): each arm's
+    /// key and its EXACT modifier state.</summary>
+    private static HashSet<string> ReadingMathRequestChords()
+    {
+        MethodDeclarationSyntax route = CSharpSource.Load("Reading", "ReadingNavigator.cs")
+            .Method("Surface_PreviewKeyDown");
+        IfStatementSyntax[] arms = route.DescendantNodes()
+            .OfType<IfStatementSyntax>()
+            .Where(arm => CSharpSource.Invokes(arm.Condition, "_surface.TrySpeakMathSourceAtCaret")
+                || CSharpSource.Normalize(arm.Condition).Contains(
+                    "_surface.TryActivateAtCaret(brailleRequested:true)", System.StringComparison.Ordinal))
+            .ToArray();
+        Assert.Equal(2, arms.Length);
+        var chords = new HashSet<string>(System.StringComparer.Ordinal);
+        foreach (IfStatementSyntax arm in arms)
+        {
+            Match exact = Regex.Match(
+                CSharpSource.Normalize(arm.Condition),
+                @"Keyboard\.Modifiers==(?:\(ModifierKeys\.(\w+)\|ModifierKeys\.(\w+)\)|ModifierKeys\.(\w+))");
+            Assert.True(
+                exact.Success,
+                $"the math request arm `{arm.Condition}` names no exact modifier state.");
+            string modifiers = exact.Groups[3].Success
+                ? exact.Groups[3].Value
+                : $"{exact.Groups[1].Value}+{exact.Groups[2].Value}";
+            chords.Add(Canonical(modifiers, Assert.Single(CSharpSource.KeyNames(arm.Condition))));
+        }
+
+        Assert.Equal(2, chords.Count);
+        return chords;
     }
 
     private static HashSet<string> GridGestureChords()
