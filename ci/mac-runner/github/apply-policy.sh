@@ -2,9 +2,10 @@
 # Write the repository's workflow execution policy from ci/mac-runner/allowlist.json.
 # docs/plans/42_self_hosted_mac_runner_plan.md §3.2 control 2 and §3.6.
 #
-# The policy allows only the allow-list's actors and only its policy_events,
-# for every workflow (D3). Idempotent: updates the policy of this name if it
-# exists, creates it otherwise. Needs the owner's gh login (repo admin).
+# The policy allows only the allow-list's actors and policy_only_actors
+# (§3.7), and only its policy_events, for every workflow (D3); policy.py
+# builds the body. Idempotent: updates the policy of this name if it exists,
+# creates it otherwise. Needs the owner's gh login (repo admin).
 #
 #   ci/mac-runner/github/apply-policy.sh            # show the plan and the current policies
 #   ci/mac-runner/github/apply-policy.sh --apply    # write it
@@ -15,22 +16,7 @@ allowlist="$here/allowlist.json"
 POLICY_NAME="slate mac runner: owner-only workflow execution"
 REPO="$(/usr/bin/python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["repository"])' "$allowlist")"
 
-body="$(/usr/bin/python3 -I - "$allowlist" "$POLICY_NAME" <<'PY'
-import json, sys
-data = json.load(open(sys.argv[1]))
-actors = [{"id": int(a["id"]), "type": a.get("type", "User")} for a in data["actors"]]
-events = list(data["policy_events"])
-policy = {
-    "name": sys.argv[2],
-    "enforcement": "active",
-    "rules": [
-        {"type": "restrict_actions_actors", "parameters": {"allowed_actors": actors}},
-        {"type": "restrict_action_events", "parameters": {"allowed_events": events}},
-    ],
-}
-print(json.dumps(policy, indent=2))
-PY
-)"
+body="$(/usr/bin/python3 -I "$here/github/policy.py" "$allowlist" "$POLICY_NAME")"
 
 echo "== repository: $REPO"
 echo "== policy to apply:"

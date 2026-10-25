@@ -379,6 +379,98 @@ class Decide(unittest.TestCase):
         self.assertEqual(decisions["app"]["pool"], "home")
 
 
+class BotRule(unittest.TestCase):
+    """Plan 42 §3.7: a bot's run goes to the vendor in every mode."""
+
+    LISTS = ({"coryj627"}, {"dependabot[bot]"}, ("dependabot/",))
+
+    def test_a_policy_only_actor_routes_to_the_vendor_in_every_mode(self):
+        for mode in ("home", "home-only", "namespace"):
+            decisions, summary = decide(mode=mode, event="pull_request", head_repo=REPO,
+                                        actors=("dependabot[bot]", "dependabot[bot]"), actor_lists=self.LISTS)
+            self.assertEqual(set(pools(decisions).values()), {"vendor"}, mode)
+            self.assertIn("run by dependabot[bot]", summary["reason"], mode)
+
+    def test_the_triggering_actor_is_checked_too(self):
+        # The owner re-running a bot's run keeps the bot as its actor; a bot re-running the owner's is caught too.
+        for actors in (("dependabot[bot]", "coryj627"), ("coryj627", "dependabot[bot]")):
+            decisions, _ = decide(mode="home-only", actors=actors, actor_lists=self.LISTS)
+            self.assertEqual(set(pools(decisions).values()), {"vendor"}, actors)
+
+    def test_a_bot_not_in_actors_routes_to_the_vendor(self):
+        decisions, _ = decide(mode="home-only", actors=("renovate[bot]", "renovate[bot]"), actor_lists=self.LISTS)
+        self.assertEqual(set(pools(decisions).values()), {"vendor"})
+
+    def test_a_bot_the_allowlist_trusts_is_routed(self):
+        decisions, _ = decide(mode="home-only", actors=("helper[bot]", "helper[bot]"),
+                              actor_lists=({"coryj627", "helper[bot]"}, set(), ()))
+        self.assertEqual(set(pools(decisions).values()), {"home"})
+
+    def test_the_owner_is_routed_as_before(self):
+        decisions, _ = decide(mode="home-only", actors=("coryj627", "coryj627"), actor_lists=self.LISTS)
+        self.assertEqual(set(pools(decisions).values()), {"home"})
+
+    def test_without_an_allowlist_every_bot_routes_to_the_vendor_and_the_owner_is_routed(self):
+        bot, _ = decide(mode="home-only", actors=("dependabot[bot]", ""), actor_lists=None)
+        self.assertEqual(set(pools(bot).values()), {"vendor"})
+        owner, _ = decide(mode="home-only", actors=("coryj627", ""), actor_lists=None)
+        self.assertEqual(set(pools(owner).values()), {"home"})
+
+    def test_logins_compare_without_case(self):
+        decisions, _ = decide(mode="home-only", actors=("Dependabot[BOT]", ""), actor_lists=self.LISTS)
+        self.assertEqual(set(pools(decisions).values()), {"vendor"})
+
+    def test_the_owner_updating_or_reopening_a_dependabot_pull_request_routes_to_the_vendor(self):
+        # Update branch, reopen, a fix commit: the owner is actor and triggering actor; the code is Dependabot's.
+        for actors in (("coryj627", "coryj627", "dependabot[bot]"), ("coryj627", "coryj627", "")):
+            decisions, summary = decide(mode="home-only", event="pull_request", head_repo=REPO, actors=actors,
+                                        head_ref="dependabot/nuget/apps/slate-windows/nuget-0838e9d5cd",
+                                        actor_lists=self.LISTS)
+            self.assertEqual(set(pools(decisions).values()), {"vendor"}, actors)
+
+    def test_a_pull_request_a_policy_only_actor_wrote_routes_to_the_vendor_on_any_branch(self):
+        decisions, summary = decide(mode="home-only", event="pull_request", head_repo=REPO,
+                                    actors=("coryj627", "coryj627", "dependabot[bot]"), head_ref="renamed",
+                                    actor_lists=self.LISTS)
+        self.assertEqual(set(pools(decisions).values()), {"vendor"})
+        self.assertIn("run by dependabot[bot]", summary["reason"])
+
+    def test_a_dispatch_on_a_dependabot_branch_routes_to_the_vendor(self):
+        decisions, summary = decide(mode="home-only", event="workflow_dispatch", actors=("coryj627", "coryj627", ""),
+                                    head_ref="dependabot/cargo/serde-1.0.230", actor_lists=self.LISTS)
+        self.assertEqual(set(pools(decisions).values()), {"vendor"})
+        self.assertIn("a run of dependabot/cargo/serde-1.0.230", summary["reason"])
+
+    def test_without_an_allowlist_a_dependabot_branch_still_routes_to_the_vendor(self):
+        decisions, _ = decide(mode="home-only", actors=("coryj627", "coryj627", ""), head_ref="dependabot/x",
+                              actor_lists=None)
+        self.assertEqual(set(pools(decisions).values()), {"vendor"})
+
+    def test_the_owners_own_branches_are_routed(self):
+        for head in ("main", "claude/xb-12-dependabot-vendor-only", "my-dependabot-notes"):
+            decisions, _ = decide(mode="home-only", actors=("coryj627", "coryj627", "coryj627"), head_ref=head,
+                                  actor_lists=self.LISTS)
+            self.assertEqual(set(pools(decisions).values()), {"home"}, head)
+
+    def test_the_repository_allowlist_names_dependabot_policy_only(self):
+        trusted, policy_only, prefixes = route.load_actor_lists(route.DEFAULT_ALLOWLIST)
+        self.assertIn("dependabot[bot]", policy_only)
+        self.assertIn("coryj627", trusted)
+        self.assertNotIn("dependabot[bot]", trusted)
+        self.assertEqual(prefixes, ("dependabot/",))
+
+    def test_an_unreadable_allowlist_reads_as_none(self):
+        self.assertIsNone(route.load_actor_lists(os.path.join(tempfile.gettempdir(), "no-such-allowlist.json")))
+        fd, path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        try:
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("{ not json")
+            self.assertIsNone(route.load_actor_lists(path))
+        finally:
+            os.remove(path)
+
+
 class Constants(unittest.TestCase):
     def test_production_durations(self):
         self.assertEqual(route.DURATIONS, TEST_DURATIONS)
@@ -609,6 +701,27 @@ class Main(unittest.TestCase):
         env.pop("ROUTE_RUN_STARTED")
         env.pop("ROUTE_CONCURRENT")
         return env
+
+    def test_a_dependabot_run_takes_the_vendor_from_the_environment(self):
+        env = self.env(mode="home-only", ROUTE_EVENT="pull_request", ROUTE_HEAD_REPO=REPO,
+                       ROUTE_ACTOR="dependabot[bot]", ROUTE_TRIGGERING_ACTOR="dependabot[bot]",
+                       ROUTE_ALLOWLIST=route.DEFAULT_ALLOWLIST)
+        code, outputs, text, _ = self.run_main(env)
+        self.assertEqual(code, 0)
+        self.assertEqual(outputs, {"attempt": "1", "rust-pool": "vendor", "app-pool": "vendor", "model-0-pool": "vendor",
+                                   "model-1-pool": "vendor"})
+        self.assertIn("run by dependabot[bot]", text)
+        # The replay line carries the bot rule's inputs.
+        self.assertIn('ROUTE_ACTOR="dependabot[bot]"', text)
+
+    def test_the_owner_updating_a_dependabot_branch_takes_the_vendor_from_the_environment(self):
+        env = self.env(mode="home-only", ROUTE_EVENT="pull_request", ROUTE_HEAD_REPO=REPO,
+                       ROUTE_ACTOR="coryj627", ROUTE_TRIGGERING_ACTOR="coryj627", ROUTE_PR_AUTHOR="dependabot[bot]",
+                       ROUTE_HEAD_REF="dependabot/cargo/serde-1.0.230", ROUTE_ALLOWLIST=route.DEFAULT_ALLOWLIST)
+        code, outputs, text, _ = self.run_main(env)
+        self.assertEqual(code, 0)
+        self.assertEqual(set(outputs[lane] for lane in ("rust-pool", "app-pool", "model-0-pool", "model-1-pool")),
+                         {"vendor"})
 
     def test_home_idle_pool_writes_pools_and_the_attempt(self):
         code, outputs, text, _ = self.run_main(self.env())

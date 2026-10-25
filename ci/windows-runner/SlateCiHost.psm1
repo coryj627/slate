@@ -448,11 +448,53 @@ function Format-RunRepository {
     return 'an unknown repository'
 }
 
-function Test-TrustedRun {
-    # A null head repository (a deleted fork) is not trusted.
-    param($Run, [Parameter(Mandatory)][string]$TrustedRepo)
+function Get-RunRefusal {
+    # Why this host refuses a run, or '' when it may run here. A run of
+    # another repository, or of none (a deleted fork), is refused (overflow
+    # spec OR-D5). So is a run of a bot's code (plan 42 §3.7): an actor or
+    # triggering actor of type Bot, whatever the lists say, or one of the
+    # configured policy-only actors by login or id; or a head branch under a
+    # policy-only actor's prefix, since the owner updating, reopening or
+    # dispatching on a Dependabot branch still runs Dependabot's code. With
+    # policy-only actors configured, a run that names no actor is refused.
+    param($Run, [Parameter(Mandatory)][string]$TrustedRepo, [object[]]$PolicyOnlyActors = @())
     $repo = Get-RunRepository -Run $Run
-    return [bool]$repo -and [string]::Equals($repo, $TrustedRepo, [System.StringComparison]::OrdinalIgnoreCase)
+    if (-not ([bool]$repo -and [string]::Equals($repo, $TrustedRepo, [System.StringComparison]::OrdinalIgnoreCase))) {
+        return 'not the trusted repository'
+    }
+    $excluded = @($PolicyOnlyActors | Where-Object { $null -ne $_ })
+    foreach ($field in 'actor', 'triggering_actor') {
+        $who = if ($Run.PSObject.Properties[$field]) { $Run.$field } else { $null }
+        $login = if ($who -and $who.PSObject.Properties['login']) { [string]$who.login } else { '' }
+        $id = if ($who -and $who.PSObject.Properties['id']) { [string]$who.id } else { '' }
+        $type = if ($who -and $who.PSObject.Properties['type']) { [string]$who.type } else { '' }
+        if (-not $login -and -not $id) {
+            if ($excluded.Count -gt 0) { return "a run that names no $($field -replace '_', ' ')" }
+            continue
+        }
+        if ([string]::Equals($type, 'Bot', [System.StringComparison]::OrdinalIgnoreCase)) {
+            return "a run by $login, a bot this host never admits"
+        }
+        foreach ($actor in $excluded) {
+            if (($login -and [string]::Equals($login, [string]$actor['Login'], [System.StringComparison]::OrdinalIgnoreCase)) -or
+                ($id -and $id -eq [string]$actor['Id'])) {
+                return "a run by $login, a policy-only actor this host never admits"
+            }
+        }
+    }
+    $branch = if ($Run.PSObject.Properties['head_branch']) { [string]$Run.head_branch } else { '' }
+    foreach ($actor in $excluded) {
+        $prefix = [string]$actor['HeadPrefix']
+        if ($prefix -and $branch.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return "a run of $branch, a policy-only actor's branch this host never admits"
+        }
+    }
+    return ''
+}
+
+function Test-TrustedRun {
+    param($Run, [Parameter(Mandatory)][string]$TrustedRepo, [object[]]$PolicyOnlyActors = @())
+    return -not (Get-RunRefusal -Run $Run -TrustedRepo $TrustedRepo -PolicyOnlyActors $PolicyOnlyActors)
 }
 
 function Resolve-RunnerJob {
@@ -557,6 +599,21 @@ function Get-CiHostConfig {
         @($routed | Where-Object { -not ($_ -is [string]) -or -not $_ }).Count -gt 0) {
         throw "config ${Path}: RoutedWorkflows must be a non-empty array of workflow paths"
     }
+    # Plan 42 §3.7: actors the workflow execution policy lets start a run
+    # but this host never admits, with their branches. Required, so a
+    # missing or emptied list cannot quietly turn the check off: setup-host
+    # deploys this file with the module.
+    # Assigned in the branch: an if expression's output unrolls a one-entry array.
+    $policyOnly = $null
+    if ($config.Contains('PolicyOnlyActors')) { $policyOnly = $config.PolicyOnlyActors }
+    if (-not ($policyOnly -is [System.Collections.IList]) -or $policyOnly.Count -lt 1 -or
+        @($policyOnly | Where-Object {
+            -not ($_ -is [System.Collections.IDictionary]) -or -not ($_['Login'] -is [string]) -or -not $_['Login'] -or
+            -not ($_['Id'] -is [int] -or $_['Id'] -is [int64]) -or -not ($_['HeadPrefix'] -is [string]) -or -not $_['HeadPrefix']
+        }).Count -gt 0) {
+        throw "config ${Path}: PolicyOnlyActors must be a non-empty array of { Id, Login, HeadPrefix } actors"
+    }
+    $config['PolicyOnlyActors'] = @($policyOnly)
     # Older config files predate the key: default it rather than crash-loop
     # a host installed before it existed.
     if (-not $config.Contains('LogRetentionDays')) { $config['LogRetentionDays'] = 30 }
@@ -1208,6 +1265,7 @@ function Update-SeenJob {
     }
     $seen = $Journal.SeenJobs[$key]
     if (-not $seen.Contains('Foreign')) { $seen['Foreign'] = $null; $seen['RunCheckedAt'] = $null }
+    if (-not $seen.Contains('Why')) { $seen['Why'] = $null }
     if (-not $seen.Contains('Repo')) { $seen['Repo'] = $null }
     $result = [pscustomobject]@{ Seen = $seen; Learned = $false; Run = $null; Failure = $null; FirstTry = $false }
     if ($null -ne $seen['Foreign']) { return $result }
@@ -1218,7 +1276,9 @@ function Update-SeenJob {
     try {
         $result.Run = & $Adapters.GetRun ([int64]$Job.RunId)
         $seen['Repo'] = Get-RunRepository -Run $result.Run
-        $seen['Foreign'] = -not (Test-TrustedRun -Run $result.Run -TrustedRepo $Config.TrustedRepo)
+        $refusal = Get-RunRefusal -Run $result.Run -TrustedRepo $Config.TrustedRepo -PolicyOnlyActors @($Config.PolicyOnlyActors)
+        $seen['Foreign'] = [bool]$refusal
+        $seen['Why'] = if ($refusal) { $refusal } else { $null }
         $result.Learned = $true
     } catch {
         $result.Failure = $_
@@ -1247,7 +1307,8 @@ function Invoke-Admission {
             & $Adapters.Log 'warn' "admission: job $($q.JobId): run $($q.RunId) could not be read: $($check.Failure)"
         }
         if ($check.Learned -and $check.Seen['Foreign']) {
-            & $Adapters.Log 'warn' "admission: skipped job $($q.JobId) of $(Format-RunRepository -Run $check.Run) (not the trusted repository)"
+            $why = if ($check.Seen['Why']) { [string]$check.Seen['Why'] } else { 'not the trusted repository' }
+            & $Adapters.Log 'warn' "admission: skipped job $($q.JobId) of $(Format-RunRepository -Run $check.Run) ($why)"
         }
         if ($check.Seen['Foreign'] -eq $false) { $admissible += $q }
         if ($check.Seen['Foreign'] -ne $true) { $publishable += $q }
@@ -1282,9 +1343,10 @@ function Invoke-Admission {
                 if ($check.Failure) { & $Adapters.Log 'warn' "handoff: ${name}: run $($job.RunId) of job $($job.JobId) could not be read: $($check.Failure)" }
                 if ($null -eq $check.Seen['Foreign']) { continue }
                 $evict = [bool]$check.Seen['Foreign']
-                # The repository remembered with the answer names it in the
-                # log: the run is never read again for that.
+                # The repository and the reason remembered with the answer
+                # name them in the log: the run is never read again for that.
                 if ($check.Seen['Repo']) { $repo = [string]$check.Seen['Repo'] }
+                if ($check.Seen['Why']) { $why = [string]$check.Seen['Why'] }
             } else {
                 # A job without a lane label has no SeenJobs entry: its run is
                 # read here, only to name the repository, so a failed read
@@ -1293,7 +1355,8 @@ function Invoke-Admission {
                 $run = $null
                 try { $run = & $Adapters.GetRun ([int64]$job.RunId) } catch { $run = $null }
                 $repo = Format-RunRepository -Run $run
-                if ($null -eq $run -or (Test-TrustedRun -Run $run -TrustedRepo $Config.TrustedRepo)) { $why = 'no lane label' }
+                $refusal = if ($null -eq $run) { '' } else { Get-RunRefusal -Run $run -TrustedRepo $Config.TrustedRepo -PolicyOnlyActors @($Config.PolicyOnlyActors) }
+                $why = if ($refusal) { $refusal } else { 'no lane label' }
             }
             if ($evict) {
                 & $Adapters.Log 'warn' "handoff: ${name} runs job $($job.JobId) of $repo ($why); forcing it off"
@@ -1570,6 +1633,6 @@ function Set-LocalUserRights {
 Export-ModuleMember -Function Get-LaneFromLabels, New-RunnerName, Split-KvpChunks, Join-KvpChunks,
     ConvertTo-DateTimeOffset, Select-QueuedLaneJobs, Select-HostRunnerJobs, Select-JobsToAdmit, Register-JobRetry, Get-HostHealth, Test-HostServing, Register-HostFailure, Register-HostSuccess, Reset-HostHealth, Update-HostHealth, Clear-JobRetries, Clear-KeptRetries, Test-VmExpired, Get-StaleRunnerNames, Test-CommitEligible, Resolve-RunnerJob, Test-IPv4InPrefix, Get-CiHostConfig, New-Journal, Read-Journal, Write-Journal, Write-CiLog,
     Get-FreeSlots, Remove-ActiveVm, Test-SiblingRunning, Complete-ActiveVm, Update-ActiveVm, Invoke-Admission, Invoke-OrchestratorTick, Invoke-StartupSweep, Select-SlateKvpItems,
-    Get-PublishedState, Publish-HomeState, Get-RunRepository, Test-TrustedRun, Get-OrchestratorLogDate, Get-OrchestratorLogName, Get-ExpiredLogNames, Invoke-LogPrune, Register-GoldenAcceptance, Test-GoldenPrevRemovable,
+    Get-PublishedState, Publish-HomeState, Get-RunRepository, Get-RunRefusal, Test-TrustedRun, Get-OrchestratorLogDate, Get-OrchestratorLogName, Get-ExpiredLogNames, Invoke-LogPrune, Register-GoldenAcceptance, Test-GoldenPrevRemovable,
     Get-CiHostPaths, Read-JournalSnapshot, Remove-SealedFile,
     New-RandomPassword, Expand-UnattendTemplate, Add-SidToUserRight, Set-LocalUserRights

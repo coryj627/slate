@@ -103,6 +103,14 @@ jobs:
         env:
           MAC_RUNNER_MODE: ${{ vars.MAC_RUNNER_MODE }}
           MAC_RUNNER_HEARTBEAT: ${{ vars.MAC_RUNNER_HEARTBEAT }}
+          # The bot rule (plan 42 §3.7). The cone-mode checkout of
+          # ci/mac-runner/route brings ci/mac-runner's own files, the
+          # allow-list among them.
+          ROUTE_ACTOR: ${{ github.actor }}
+          ROUTE_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          ROUTE_PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          ROUTE_HEAD_REF: ${{ github.head_ref || github.ref_name }}
+          ROUTE_ALLOWLIST: ci/mac-runner/allowlist.json
         run: python3 ci/mac-runner/route/route.py
 
   swift-tests:

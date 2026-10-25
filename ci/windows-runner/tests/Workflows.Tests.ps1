@@ -58,11 +58,14 @@ Describe 'windows.yml routing through the router' {
         $route | Should -Match (Get-JobLine 'continue-on-error: true') -Because 'step-level continue-on-error does not cover a job timeout or a lost runner'
         ([regex]::Matches($route, '(?m)^        continue-on-error: true[ \t]*\r?$')).Count | Should -Be 2
         $route | Should -Match '(?m)^\s+permissions:\r?\n\s+actions: read\r?\n\s+contents: read'
-        $route | Should -Match 'sparse-checkout: ci/windows-runner/route'
+        # The router and the allow-list its bot rule reads (plan 42 §3.7), as patterns: cone mode would not bring a file.
+        $route | Should -Match '(?m)^          sparse-checkout: \|\r?\n            /ci/windows-runner/route/\r?\n            /ci/mac-runner/allowlist\.json\r?\n          sparse-checkout-cone-mode: false'
         $route | Should -Match 'persist-credentials: false'
         foreach ($entry in 'GH_TOKEN: ${{ github.token }}', 'WINDOWS_RUNNER_MODE: ${{ vars.WINDOWS_RUNNER_MODE }}', 'WINDOWS_HOME_STATE: ${{ vars.WINDOWS_HOME_STATE }}',
             'ROUTE_LANES: rust,app,model-0,model-1', 'ROUTE_ATTEMPT: ${{ github.run_attempt }}', 'ROUTE_RUN_ID: ${{ github.run_id }}',
-            'ROUTE_EVENT: ${{ github.event_name }}', 'ROUTE_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}', 'ROUTE_REPO: ${{ github.repository }}') {
+            'ROUTE_EVENT: ${{ github.event_name }}', 'ROUTE_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}', 'ROUTE_REPO: ${{ github.repository }}',
+            'ROUTE_ACTOR: ${{ github.actor }}', 'ROUTE_TRIGGERING_ACTOR: ${{ github.triggering_actor }}', 'ROUTE_PR_AUTHOR: ${{ github.event.pull_request.user.login }}',
+            'ROUTE_HEAD_REF: ${{ github.head_ref || github.ref_name }}', 'ROUTE_ALLOWLIST: ci/mac-runner/allowlist.json') {
             $route.Contains($entry) | Should -BeTrue -Because "the routing step needs $entry"
         }
         # Every output below reads steps.route: the id belongs to the step that runs the router, or every output is
@@ -71,7 +74,7 @@ Describe 'windows.yml routing through the router' {
         $router = @($steps | Where-Object { $_ -match '(?m)^        run: python3 ci/windows-runner/route/route\.py[ \t]*\r?$' })
         $router.Count | Should -Be 1 -Because 'one step runs the router'
         $router[0] | Should -Match '(?m)^        id: route[ \t]*\r?$' -Because 'the step that runs the router is the one the outputs read'
-        $checkout = @($steps | Where-Object { $_.Contains('sparse-checkout: ci/windows-runner/route') })
+        $checkout = @($steps | Where-Object { $_.Contains('/ci/windows-runner/route/') })
         $checkout.Count | Should -Be 1
         $checkout[0] | Should -Not -Match '(?m)^        id:' -Because 'the checkout step carries no id'
         foreach ($output in 'attempt', 'rust-pool', 'app-pool', 'model-0-pool', 'model-1-pool') {
@@ -94,11 +97,12 @@ Describe 'windows.yml routing through the router' {
         $shards | Should -Match (Get-CacheGate $selector) -Because 'the cache gate of windows-model-shard'
         ([regex]::Matches($windows, 'namespacelabs/nscloud-cache-action')).Count | Should -Be 3
     }
-    It 'runs the shell gate on windows-latest in every mode but home-only, and for a fork pull request even then, and only after a green app build whatever happened to route' {
+    It 'runs the shell gate on windows-latest in every mode but home-only, and for a fork pull request or a Dependabot run even then, and only after a green app build whatever happened to route' {
         $flaui = Get-JobBlock $windows 'flaui'
         $flaui | Should -Match '(?m)^    runs-on: \$\{\{ .* \|\| ''windows-latest'' \}\}[ \t]*\r?$' -Because 'today''s provider is the fallback, verbatim'
-        # home-only sends it home only for a run of this repository: a fork never goes home.
-        $flaui | Should -Match (Get-JobLine "runs-on: `${{ (vars.WINDOWS_RUNNER_MODE == 'home-only' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && 'slate-win-shell' || 'windows-latest' }}")
+        # home-only sends it home only for a run of this repository: a fork never goes home, and neither does a run
+        # Dependabot started or re-ran (plan 42 §3.7).
+        $flaui | Should -Match (Get-JobLine "runs-on: `${{ (vars.WINDOWS_RUNNER_MODE == 'home-only' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && github.event.pull_request.user.login != 'dependabot[bot]' && !startsWith(github.head_ref || github.ref_name, 'dependabot/')) && 'slate-win-shell' || 'windows-latest' }}")
         $flaui | Should -Match (Get-JobLine "if: `${{ !cancelled() && needs.windows.result == 'success' }}")
     }
     It 'the gate waits on route too, runs whatever route did, and names the pools, the routing job''s result and the router''s attempt, quoted, when it fails' {

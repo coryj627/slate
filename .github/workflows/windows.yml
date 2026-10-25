@@ -55,7 +55,9 @@
 # included: the router applies its fork rule before the mode, the shell
 # gate's runs-on carries the same rule, and the host refuses and evicts
 # a fork's job even if its copy of the router or of this workflow says
-# otherwise. The shell gate stays on GitHub-hosted windows-latest in
+# otherwise. A run of Dependabot's code, whoever started it (its PR, its
+# branch, a re-run or an update by the owner), is treated the same way
+# (plan 42 §3.7). The shell gate stays on GitHub-hosted windows-latest in
 # every mode but home-only: free on a public repository and faster than
 # the home pool.
 # ci/windows-runner/route/route.py is the rule; its step summary shows
@@ -233,7 +235,11 @@ jobs:
         continue-on-error: true
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          sparse-checkout: ci/windows-runner/route
+          # The router and the allow-list its bot rule reads (plan 42 §3.7).
+          sparse-checkout: |
+            /ci/windows-runner/route/
+            /ci/mac-runner/allowlist.json
+          sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: Pick a pool for each lane from the mode and the host's published state
         id: route
@@ -248,6 +254,11 @@ jobs:
           ROUTE_EVENT: ${{ github.event_name }}
           ROUTE_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           ROUTE_REPO: ${{ github.repository }}
+          ROUTE_ACTOR: ${{ github.actor }}
+          ROUTE_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          ROUTE_PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          ROUTE_HEAD_REF: ${{ github.head_ref || github.ref_name }}
+          ROUTE_ALLOWLIST: ci/mac-runner/allowlist.json
         run: python3 ci/windows-runner/route/route.py
 
   rust-tests:
@@ -877,7 +888,7 @@ jobs:
     name: shell accessibility gate (windows x64)
     needs: [windows]
     if: ${{ !cancelled() && needs.windows.result == 'success' }}
-    runs-on: ${{ (vars.WINDOWS_RUNNER_MODE == 'home-only' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && 'slate-win-shell' || 'windows-latest' }}
+    runs-on: ${{ (vars.WINDOWS_RUNNER_MODE == 'home-only' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && github.event.pull_request.user.login != 'dependabot[bot]' && !startsWith(github.head_ref || github.ref_name, 'dependabot/')) && 'slate-win-shell' || 'windows-latest' }}
     timeout-minutes: 20
     steps:
       # First, so setup-dotnet below reads the global.json the artifact
