@@ -755,12 +755,13 @@ fn latex_to_mathml(latex: &str) -> String {
 ///
 /// An element is free when it is not an argument a script or visual is
 /// still waiting for. A prime there is itself that argument, and stays. An
-/// ordinary character (a letter, or `|` and `/` typed as themselves), a
-/// function name, a number, a plain `{...}` group or a whole script or
-/// visual (root, fraction, negation) can carry primes; a delimiter or an
-/// operator pulldown-latex classes as one, a `\left...\right` group and an
-/// environment cannot (`(fg)'`, `\left(fg\right)'` and `\vert x\vert'` keep
-/// their loose prime). A prime with nothing before it stays loose too.
+/// ordinary character (a letter, or `|` typed as itself), a function name,
+/// a number, a plain `{...}` group or a whole script or visual (root,
+/// fraction, negation) can carry primes; a delimiter or an operator
+/// pulldown-latex classes as one, a `\left...\right` group and an
+/// environment cannot (`(fg)'`, `\left(fg\right)'`, `\vert x\vert'` and
+/// `a/'` keep their loose prime). A prime with nothing before it stays loose
+/// too.
 fn fold_primes_into_superscripts(
     events: Vec<pulldown_latex::event::Event<'_>>,
 ) -> Vec<pulldown_latex::event::Event<'_>> {
@@ -1150,17 +1151,19 @@ mod tests {
             latex_to_mathml("f''(x)"),
             latex_to_mathml("f^{\\dprime}(x)")
         );
-        for source in ["f'''(x)", "f''''(x)"] {
+        // A run counts primes, not glyphs: `\dprime` is two.
+        assert_eq!(latex_to_mathml("f\\dprime(x)"), latex_to_mathml("f''(x)"));
+        for source in ["f'''(x)", "f''''(x)", "f\\dprime'(x)", "f'\\dprime(x)"] {
             let mathml = latex_to_mathml(source);
             assert!(!mathml.is_empty(), "{source} did not render");
             assert!(!mathml.contains("<msup>"), "{source}: {mathml}");
         }
     }
 
-    /// A prime with no element before it, a prime after a delimiter, a
-    /// `\left...\right` group or an environment, and a prime that is itself
-    /// an argument a script or fraction still waits for are left as
-    /// pulldown-latex parsed them.
+    /// A prime with no element before it, a prime after a delimiter, an
+    /// operator, a `\left...\right` group or an environment, and a prime
+    /// that is itself an argument a script or fraction still waits for are
+    /// left as pulldown-latex parsed them.
     #[test]
     fn a_prime_with_no_free_element_before_it_is_left_alone() {
         for source in [
@@ -1168,6 +1171,7 @@ mod tests {
             "(f g)'(x)",
             "\\left(f g\\right)'(x)",
             "\\begin{matrix} a \\end{matrix}'",
+            "a/'",
             "\\frac a'",
         ] {
             let mathml = latex_to_mathml(source);
@@ -1251,6 +1255,8 @@ mod tests {
     #[test]
     fn every_kind_of_free_element_carries_its_prime() {
         assert!(latex_to_mathml("2'").contains("<msup><mn>2</mn>"));
+        // A bar typed as itself is an ordinary character.
+        assert_eq!(latex_to_mathml("|x|'"), latex_to_mathml("|x|^{\\prime}"));
         assert_eq!(
             latex_to_mathml("\\frac{a}{b}'"),
             latex_to_mathml("{\\frac{a}{b}}^{\\prime}")
