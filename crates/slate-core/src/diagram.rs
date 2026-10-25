@@ -15,6 +15,8 @@
 //! users at least hear the raw Mermaid syntax. We never panic on
 //! malformed source.
 
+use std::time::{Duration, Instant};
+
 /// Which diagramming dialect a block uses.
 ///
 /// V1 supports Mermaid only. PlantUML / D2 / Graphviz are V1.x.
@@ -118,19 +120,48 @@ pub fn extract_diagram_blocks(source: &str) -> Vec<RawDiagramBlock> {
 /// always populated, derived from the source itself even on render
 /// failure — that's the AT-facing contract.
 pub fn render_diagram(raw: &RawDiagramBlock) -> DiagramBlock {
+    render_diagram_within(raw, DiagramBudgets::default())
+}
+
+/// [`render_diagram`] under `budgets`: the per-diagram time budget and the
+/// abandoned-render cap bound the render itself.
+fn render_diagram_within(raw: &RawDiagramBlock, budgets: DiagramBudgets) -> DiagramBlock {
+    render_diagram_attempt(raw, budgets, None).block
+}
+
+/// One render's block, and whether its outcome is transient: a render
+/// refused while earlier renders run on says nothing about the note, so the
+/// session does not cache it (#1580).
+struct DiagramAttempt {
+    block: DiagramBlock,
+    transient: bool,
+}
+
+/// The render under `budgets` and, inside a note, before the note's render
+/// deadline.
+fn render_diagram_attempt(
+    raw: &RawDiagramBlock,
+    budgets: DiagramBudgets,
+    note_deadline: Option<Instant>,
+) -> DiagramAttempt {
     let description = structured_description(&raw.source, raw.dialect);
-    let (svg, status) = match raw.dialect {
-        DiagramDialect::Mermaid => render_mermaid_with_validation(&raw.source),
+    let (svg, status, transient) = match raw.dialect {
+        DiagramDialect::Mermaid => {
+            render_mermaid_with_validation(&raw.source, budgets, note_deadline)
+        }
     };
-    DiagramBlock {
-        source: raw.source.clone(),
-        dialect: raw.dialect,
-        svg,
-        png_fallback: None,
-        structured_description: description,
-        render_status: status,
-        line: raw.line,
-        byte_offset: raw.byte_offset,
+    DiagramAttempt {
+        block: DiagramBlock {
+            source: raw.source.clone(),
+            dialect: raw.dialect,
+            svg,
+            png_fallback: None,
+            structured_description: description,
+            render_status: status,
+            line: raw.line,
+            byte_offset: raw.byte_offset,
+        },
+        transient,
     }
 }
 
@@ -162,6 +193,28 @@ pub const MAX_DIAGRAM_SVG_BYTES: usize = 2 * 1024 * 1024;
 /// blocks keep description and source but carry no SVG.
 pub const MAX_RETAINED_SVG_BYTES_PER_NOTE: usize = 8 * 1024 * 1024;
 
+/// Longest one diagram's render is waited on (#1580, XD3). The render
+/// is super-linear in its input with mermaid-rs-renderer 0.3.1 (release,
+/// Linux, the issue's measurements): a 500-step chain takes about 1 s,
+/// 1,000 steps 3.6 s, 2,000 steps 7.6 s and a 64 KiB chain 17 s. An
+/// authored diagram stays far under it; a note built to stall the
+/// reading view cannot hold a refresh past it.
+pub const MAX_RENDER_TIME_PER_DIAGRAM: Duration = Duration::from_secs(5);
+
+/// Longest one note's renders are waited on in all: four diagrams at the
+/// per-diagram budget. A render's wait is cut to what is left of it, and
+/// past it the remaining diagrams degrade without rendering.
+pub const MAX_RENDER_TIME_PER_NOTE: Duration = Duration::from_secs(20);
+
+/// Most renders abandoned past their budget that may still run in the
+/// background. An abandoned render keeps its thread, a core and its
+/// memory until it ends, and it shares mermaid-rs-renderer's
+/// process-global text measurer (locked per measurement) with every
+/// render after it; while this many are still running, a new render is
+/// refused instead of adding to them. The check precedes the spawn, so
+/// callers rendering at the same moment can each start one more.
+pub const MAX_ABANDONED_RENDERS: usize = 2;
+
 /// Most `url(` references one attribute value or `<style>` declaration
 /// of a rendered diagram may carry. Mermaid style values (`style`,
 /// `classDef`, `linkStyle`) reach the SVG verbatim and every host's SVG
@@ -180,6 +233,9 @@ struct DiagramBudgets {
     max_source_bytes: usize,
     max_svg_bytes: usize,
     max_retained_svg_bytes: usize,
+    max_render_time_per_diagram: Duration,
+    max_render_time_per_note: Duration,
+    max_abandoned_renders: usize,
 }
 
 impl Default for DiagramBudgets {
@@ -189,14 +245,61 @@ impl Default for DiagramBudgets {
             max_source_bytes: MAX_DIAGRAM_SOURCE_BYTES,
             max_svg_bytes: MAX_DIAGRAM_SVG_BYTES,
             max_retained_svg_bytes: MAX_RETAINED_SVG_BYTES_PER_NOTE,
+            max_render_time_per_diagram: MAX_RENDER_TIME_PER_DIAGRAM,
+            max_render_time_per_note: MAX_RENDER_TIME_PER_NOTE,
+            max_abandoned_renders: MAX_ABANDONED_RENDERS,
         }
     }
+}
+
+/// The sentence a block shows when a time budget stopped its render
+/// (#1580): `what` is `"diagram"` (this render ran past its budget),
+/// `"note"` (the note's diagrams used theirs), `"busy"` (earlier renders
+/// are still running past theirs, so this one was not started) or
+/// `"image"` (an SVG preview's decode, #1581). Both hosts show it
+/// verbatim as the failed state's reason. An unknown `what` reads as
+/// `"diagram"`.
+pub fn render_time_exceeded_message(what: &str, seconds: u64) -> String {
+    let unit = if seconds == 1 { "second" } else { "seconds" };
+    match what {
+        "note" => format!(
+            "Diagram not drawn: this note's diagrams used their {seconds}-second render budget. \
+             The source follows."
+        ),
+        "busy" => format!(
+            "Diagram not drawn: earlier diagrams are still rendering past their \
+             {seconds}-second budget. The source follows."
+        ),
+        "image" => format!("Image not shown: decoding took longer than {seconds} {unit}."),
+        _ => format!(
+            "Diagram not drawn: rendering took longer than {seconds} {unit}. The source follows."
+        ),
+    }
+}
+
+/// A budget in the whole seconds its sentence names, rounded up so a
+/// budget under a second is never called zero.
+fn budget_seconds(budget: Duration) -> u64 {
+    budget.as_secs() + u64::from(budget.subsec_nanos() > 0)
 }
 
 /// Render every extracted block under the per-note budgets — the
 /// bounded entry `VaultSession::get_diagram_blocks` uses.
 pub fn render_diagram_blocks(raws: &[RawDiagramBlock]) -> Vec<DiagramBlock> {
     render_diagram_blocks_bounded(raws, DiagramBudgets::default())
+}
+
+/// A note's rendered blocks, and whether any outcome among them is
+/// transient (a render refused while earlier renders ran on, #1580).
+pub(crate) struct RenderedDiagrams {
+    pub(crate) blocks: Vec<DiagramBlock>,
+    pub(crate) transient: bool,
+}
+
+/// [`render_diagram_blocks`] for `VaultSession::get_diagram_blocks`, which
+/// caches a note's blocks only when nothing among them is transient.
+pub(crate) fn render_diagram_blocks_for_cache(raws: &[RawDiagramBlock]) -> RenderedDiagrams {
+    render_diagram_blocks_reporting(raws, DiagramBudgets::default())
 }
 
 /// Budget mechanism, injectable so the caps are testable without
@@ -208,8 +311,22 @@ fn render_diagram_blocks_bounded(
     raws: &[RawDiagramBlock],
     budgets: DiagramBudgets,
 ) -> Vec<DiagramBlock> {
+    render_diagram_blocks_reporting(raws, budgets).blocks
+}
+
+fn render_diagram_blocks_reporting(
+    raws: &[RawDiagramBlock],
+    budgets: DiagramBudgets,
+) -> RenderedDiagrams {
     let mut retained: usize = 0;
-    raws.iter()
+    let mut transient = false;
+    // #1580: no render of this note is waited on past its deadline. Each
+    // render's wait is the per-diagram budget or what is left of the
+    // note's, whichever is shorter, and a render due past the deadline is
+    // not started.
+    let note_deadline = Instant::now().checked_add(budgets.max_render_time_per_note);
+    let blocks = raws
+        .iter()
         .enumerate()
         .map(|(index, raw)| {
             if raw.source.len() > budgets.max_source_bytes {
@@ -218,7 +335,9 @@ fn render_diagram_blocks_bounded(
             if index >= budgets.max_rendered {
                 return budget_degraded(raw, "diagram count exceeds the per-note render budget");
             }
-            let mut block = render_diagram(raw);
+            let attempt = render_diagram_attempt(raw, budgets, note_deadline);
+            transient |= attempt.transient;
+            let mut block = attempt.block;
             if let Some(svg) = &block.svg {
                 if svg.len() > budgets.max_svg_bytes {
                     return budget_degraded(raw, "diagram output exceeds the render budget");
@@ -234,7 +353,8 @@ fn render_diagram_blocks_bounded(
             }
             block
         })
-        .collect()
+        .collect();
+    RenderedDiagrams { blocks, transient }
 }
 
 /// The budget-degradation shape: a typed `RenderFailed` with the
@@ -379,9 +499,14 @@ fn classify_mermaid_kind(first_line_lower: &str) -> MermaidKind {
 enum RenderError {
     Unsupported(String),
     Failed(String),
+    /// Refused while earlier renders ran on past their budget: transient.
+    Busy(String),
 }
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
+
+/// Renders abandoned past their budget that are still running (#1580).
+static ABANDONED_RENDERS: AtomicUsize = AtomicUsize::new(0);
 
 /// Set after the renderer panics, indicating the process-global
 /// `TEXT_MEASURER` mutex inside `mermaid-rs-renderer` is poisoned.
@@ -397,7 +522,11 @@ static RENDERER_POISONED: AtomicBool = AtomicBool::new(false);
 /// not, route to `UnsupportedDialect` immediately so the user
 /// hears "diagram couldn't render" instead of seeing a fake
 /// rectangle.
-fn render_mermaid_with_validation(source: &str) -> (Option<Vec<u8>>, DiagramRenderStatus) {
+fn render_mermaid_with_validation(
+    source: &str,
+    budgets: DiagramBudgets,
+    note_deadline: Option<Instant>,
+) -> (Option<Vec<u8>>, DiagramRenderStatus, bool) {
     // The render stack (`MERMAID_RENDER_STACK_BYTES`) is sized for capped
     // sources, so the cap holds here too, not only in the per-note budget.
     if source.len() > MAX_DIAGRAM_SOURCE_BYTES {
@@ -406,6 +535,7 @@ fn render_mermaid_with_validation(source: &str) -> (Option<Vec<u8>>, DiagramRend
             DiagramRenderStatus::RenderFailed {
                 message: "diagram source exceeds the render budget".into(),
             },
+            false,
         );
     }
     let trimmed = source.trim();
@@ -415,6 +545,7 @@ fn render_mermaid_with_validation(source: &str) -> (Option<Vec<u8>>, DiagramRend
             DiagramRenderStatus::RenderFailed {
                 message: "empty diagram source".into(),
             },
+            false,
         );
     }
     // Skip Mermaid directive / comment lines (e.g.
@@ -435,14 +566,22 @@ fn render_mermaid_with_validation(source: &str) -> (Option<Vec<u8>>, DiagramRend
             DiagramRenderStatus::UnsupportedDialect {
                 reason: format!("unrecognized Mermaid diagram type (first line: {first_line:?})"),
             },
+            false,
         );
     }
-    match try_render_mermaid(source) {
-        Ok(svg) => (Some(svg), DiagramRenderStatus::Ok),
-        Err(RenderError::Unsupported(reason)) => {
-            (None, DiagramRenderStatus::UnsupportedDialect { reason })
+    match try_render_mermaid(source, budgets, note_deadline) {
+        Ok(svg) => (Some(svg), DiagramRenderStatus::Ok, false),
+        Err(RenderError::Unsupported(reason)) => (
+            None,
+            DiagramRenderStatus::UnsupportedDialect { reason },
+            false,
+        ),
+        Err(RenderError::Failed(message)) => {
+            (None, DiagramRenderStatus::RenderFailed { message }, false)
         }
-        Err(RenderError::Failed(message)) => (None, DiagramRenderStatus::RenderFailed { message }),
+        Err(RenderError::Busy(message)) => {
+            (None, DiagramRenderStatus::RenderFailed { message }, true)
+        }
     }
 }
 
@@ -457,7 +596,11 @@ fn render_mermaid_with_validation(source: &str) -> (Option<Vec<u8>>, DiagramRend
 /// If a panic occurs while the lock is held, the mutex is poisoned for
 /// the rest of the process. We track this via `RENDERER_POISONED` and
 /// short-circuit all future renders with a clear message.
-fn try_render_mermaid(source: &str) -> Result<Vec<u8>, RenderError> {
+fn try_render_mermaid(
+    source: &str,
+    budgets: DiagramBudgets,
+    note_deadline: Option<Instant>,
+) -> Result<Vec<u8>, RenderError> {
     if RENDERER_POISONED.load(Ordering::Relaxed) {
         return Err(RenderError::Failed(
             "mermaid renderer is unavailable for the rest of this session \
@@ -468,12 +611,18 @@ fn try_render_mermaid(source: &str) -> Result<Vec<u8>, RenderError> {
     }
 
     use std::panic::AssertUnwindSafe;
-    let result = std::panic::catch_unwind(AssertUnwindSafe(|| mermaid_renderer_render(source)));
+    let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        mermaid_renderer_render(source, budgets, note_deadline)
+    }));
     match result {
         Ok(Ok(svg)) => check_rendered_style_values(&svg)
             .map(|()| svg.into_bytes())
             .map_err(RenderError::Failed),
-        Ok(Err(msg)) => {
+        // Our own outcome (a budget, the cap, the thread): its message is
+        // final, never classified as the renderer's.
+        Ok(Err(RendererError::Bounded(message))) => Err(RenderError::Failed(message)),
+        Ok(Err(RendererError::Busy(message))) => Err(RenderError::Busy(message)),
+        Ok(Err(RendererError::Upstream(msg))) => {
             let lower = msg.to_ascii_lowercase();
             if lower.contains("poison") {
                 RENDERER_POISONED.store(true, Ordering::Relaxed);
@@ -506,23 +655,157 @@ fn try_render_mermaid(source: &str) -> Result<Vec<u8>, RenderError> {
 /// are committed only as a render touches them.
 const MERMAID_RENDER_STACK_BYTES: usize = 256 * 1024 * 1024;
 
+/// How a render ended without an SVG.
+#[derive(Debug)]
+enum RendererError {
+    /// The renderer's own error, stringified: `try_render_mermaid`
+    /// classifies it.
+    Upstream(String),
+    /// Ours: a budget stopped the render, or its thread could not run.
+    /// The message is final.
+    Bounded(String),
+    /// Ours: refused at the abandoned-render cap. Final, and transient.
+    Busy(String),
+}
+
+/// A render for the facts to stand in for mermaid-rs-renderer: it runs on
+/// the render thread, through the channel and the counters, as the real
+/// one does. Only renders the setting thread asks for take it, so a test
+/// elsewhere in the process renders for real.
+#[cfg(test)]
+type RenderSeam = (
+    std::thread::ThreadId,
+    std::sync::Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>,
+);
+
+#[cfg(test)]
+static RENDER_SEAM: std::sync::Mutex<Option<RenderSeam>> = std::sync::Mutex::new(None);
+
+/// A render thread's state, shared with the call that waits on it.
+const RENDER_RUNNING: u8 = 0;
+const RENDER_FINISHED: u8 = 1;
+const RENDER_ABANDONED: u8 = 2;
+
+/// Held by a render thread for its whole run, panic included: when the
+/// thread ends, a render its caller abandoned releases its slot in
+/// `ABANDONED_RENDERS`.
+struct RenderSlot(std::sync::Arc<AtomicU8>);
+
+impl Drop for RenderSlot {
+    fn drop(&mut self) {
+        if self.0.swap(RENDER_FINISHED, Ordering::AcqRel) == RENDER_ABANDONED {
+            ABANDONED_RENDERS.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+}
+
+/// What a render thread sends: the renderer's result, or the payload of
+/// its panic.
+type RenderThreadOutcome = std::thread::Result<Result<String, String>>;
+
 /// Thin shim around the actual mermaid-rs-renderer call, run on a
 /// thread of its own with `MERMAID_RENDER_STACK_BYTES` of stack. The
 /// upstream returns an `anyhow::Error` which we don't depend on
 /// directly — stringify here so the rest of the module deals with
 /// plain `String` messages.
-fn mermaid_renderer_render(source: &str) -> Result<String, String> {
+///
+/// #1580: the render is waited on for at most the per-diagram budget, or
+/// what is left of the note's when that is shorter. Past it the call
+/// returns the sentence of the budget that ran out and the thread is
+/// abandoned: it runs on, holding a slot in `ABANDONED_RENDERS` until it
+/// ends. A render due past the note's deadline, or asked for while
+/// `max_abandoned_renders` are still running, is not started.
+fn mermaid_renderer_render(
+    source: &str,
+    budgets: DiagramBudgets,
+    note_deadline: Option<Instant>,
+) -> Result<String, RendererError> {
+    let per_diagram = budgets.max_render_time_per_diagram;
+    let note_sentence =
+        || render_time_exceeded_message("note", budget_seconds(budgets.max_render_time_per_note));
+    let (wait, timed_out) =
+        match note_deadline.map(|deadline| deadline.saturating_duration_since(Instant::now())) {
+            Some(left) if left.is_zero() => return Err(RendererError::Bounded(note_sentence())),
+            Some(left) if left < per_diagram => (left, note_sentence()),
+            _ => (
+                per_diagram,
+                render_time_exceeded_message("diagram", budget_seconds(per_diagram)),
+            ),
+        };
+    if ABANDONED_RENDERS.load(Ordering::SeqCst) >= budgets.max_abandoned_renders {
+        return Err(RendererError::Busy(render_time_exceeded_message(
+            "busy",
+            budget_seconds(per_diagram),
+        )));
+    }
     let source = source.to_owned();
-    let renderer = std::thread::Builder::new()
+    #[cfg(test)]
+    let seam = RENDER_SEAM
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+        .filter(|(owner, _)| *owner == std::thread::current().id())
+        .map(|(_, seam)| std::sync::Arc::clone(seam));
+    let state = std::sync::Arc::new(AtomicU8::new(RENDER_RUNNING));
+    let slot = RenderSlot(std::sync::Arc::clone(&state));
+    let (sender, receiver) = std::sync::mpsc::sync_channel::<RenderThreadOutcome>(1);
+    std::thread::Builder::new()
         .name("slate-diagram-render".into())
         .stack_size(MERMAID_RENDER_STACK_BYTES)
-        .spawn(move || mermaid_rs_renderer::render(&source).map_err(|e| e.to_string()))
-        .map_err(|e| format!("could not start the diagram renderer: {e}"))?;
-    match renderer.join() {
-        Ok(result) => result,
+        .spawn(move || {
+            // Dropped last, after the send: a caller that sees the render
+            // finished finds its outcome already sent.
+            let _slot = slot;
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                #[cfg(test)]
+                if let Some(seam) = &seam {
+                    return seam(&source);
+                }
+                mermaid_rs_renderer::render(&source).map_err(|e| e.to_string())
+            }));
+            if outcome.is_err() {
+                // An abandoned render's panic has no caller to raise it: the
+                // poisoning rule (`RENDERER_POISONED`) applies to it as to a
+                // waited-on render's.
+                RENDERER_POISONED.store(true, Ordering::SeqCst);
+            }
+            // A caller that abandoned the render has dropped the receiver.
+            let _ = sender.send(outcome);
+        })
+        .map_err(|e| {
+            RendererError::Bounded(format!("could not start the diagram renderer: {e}"))
+        })?;
+    let received = match receiver.recv_timeout(wait) {
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            // The slot is taken before the render is marked abandoned, so the
+            // thread can never release it first.
+            ABANDONED_RENDERS.fetch_add(1, Ordering::SeqCst);
+            if state
+                .compare_exchange(
+                    RENDER_RUNNING,
+                    RENDER_ABANDONED,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok()
+            {
+                return Err(RendererError::Bounded(timed_out));
+            }
+            // It finished as the budget ran out: its outcome is already sent.
+            ABANDONED_RENDERS.fetch_sub(1, Ordering::SeqCst);
+            receiver.recv().ok()
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => None,
+        Ok(outcome) => Some(outcome),
+    };
+    match received {
+        Some(Ok(result)) => result.map_err(RendererError::Upstream),
         // Raised again here so `try_render_mermaid`'s `catch_unwind` treats a
         // panic on the render thread exactly as one on the caller's.
-        Err(panic) => std::panic::resume_unwind(panic),
+        Some(Err(panic)) => std::panic::resume_unwind(panic),
+        None => Err(RendererError::Bounded(
+            "the diagram renderer stopped without a result".into(),
+        )),
     }
 }
 
@@ -1000,7 +1283,7 @@ mod tests {
     fn poisoned_renderer_short_circuits_with_clear_message() {
         let _guard = renderer_test_guard();
         RENDERER_POISONED.store(true, Ordering::Relaxed);
-        let result = try_render_mermaid("flowchart LR\nA --> B\n");
+        let result = try_render_mermaid("flowchart LR\nA --> B\n", DiagramBudgets::default(), None);
         match result {
             Err(RenderError::Failed(msg)) => {
                 assert!(
@@ -1069,9 +1352,11 @@ mod tests {
             .chain((0..300).map(|i| format!("n{i}-->n{}\n", i + 1)))
             .collect();
         let raw = mermaid(source);
+        // A generous time budget: this fact is about the stack, and an
+        // unoptimised build renders slowly.
         let block = std::thread::Builder::new()
             .stack_size(64 * 1024)
-            .spawn(move || render_diagram(&raw))
+            .spawn(move || render_diagram_within(&raw, budgets_with(Duration::from_secs(120))))
             .expect("spawn a caller with a 64 KiB stack")
             .join()
             .expect("the caller finished");
@@ -1199,5 +1484,446 @@ mod tests {
             urls(over * 10),
             brackets(100)
         )));
+    }
+
+    // --- Render time budgets (#1580) ---------------------------------------
+
+    /// The render seam for one fact, cleared when the fact ends.
+    struct SeamGuard;
+
+    impl Drop for SeamGuard {
+        fn drop(&mut self) {
+            *RENDER_SEAM
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        }
+    }
+
+    /// Sets the seam for renders this thread asks for.
+    fn render_seam(
+        seam: impl Fn(&str) -> Result<String, String> + Send + Sync + 'static,
+    ) -> SeamGuard {
+        *RENDER_SEAM
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some((std::thread::current().id(), std::sync::Arc::new(seam)));
+        SeamGuard
+    }
+
+    /// Opens a parked seam's gate when the fact ends, so a failed assertion
+    /// cannot leave its renders parked, and abandoned, for every later fact.
+    struct GateGuard(std::sync::Arc<AtomicBool>);
+
+    impl Drop for GateGuard {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// Waits up to 2 s for `count` to reach `target`.
+    fn reaches(count: &AtomicUsize, target: usize) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while count.load(Ordering::SeqCst) < target {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        true
+    }
+
+    /// What a seam render returns: a small SVG with no style values.
+    const SEAM_SVG: &str = "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>";
+
+    fn flowchart() -> RawDiagramBlock {
+        mermaid("flowchart LR\nA --> B".to_string())
+    }
+
+    fn budgets_with(per_diagram: Duration) -> DiagramBudgets {
+        DiagramBudgets {
+            max_render_time_per_diagram: per_diagram,
+            ..DiagramBudgets::default()
+        }
+    }
+
+    /// Every abandoned render finished and released its slot, within 2 s.
+    fn abandoned_renders_settle() -> bool {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while ABANDONED_RENDERS.load(Ordering::SeqCst) != 0 {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        true
+    }
+
+    /// #1580: a render past the per-diagram budget stops being waited on.
+    /// The block degrades with core's sentence while the render runs on,
+    /// abandoned, and the render releases its slot when it ends.
+    #[test]
+    fn a_render_past_the_per_diagram_budget_degrades_with_the_budget_sentence() {
+        let _guard = renderer_test_guard();
+        let _seam = render_seam(|_| {
+            std::thread::sleep(Duration::from_secs(1));
+            Ok(SEAM_SVG.to_string())
+        });
+        let started = Instant::now();
+        let block = render_diagram_within(&flowchart(), budgets_with(Duration::from_millis(100)));
+        let waited = started.elapsed();
+        assert!(
+            waited < Duration::from_millis(800),
+            "the render was waited on for {waited:?}"
+        );
+        assert!(block.svg.is_none());
+        assert_eq!(
+            block.render_status,
+            DiagramRenderStatus::RenderFailed {
+                message: render_time_exceeded_message("diagram", 1)
+            }
+        );
+        assert_eq!(block.structured_description, "Flowchart with 1 step.");
+        assert_eq!(block.source, "flowchart LR\nA --> B");
+        assert_eq!(
+            ABANDONED_RENDERS.load(Ordering::SeqCst),
+            1,
+            "the render runs on, abandoned"
+        );
+        assert!(
+            abandoned_renders_settle(),
+            "the abandoned render never released its slot"
+        );
+    }
+
+    #[test]
+    fn a_render_within_the_budget_is_unchanged() {
+        let _guard = renderer_test_guard();
+        let _seam = render_seam(|_| Ok(SEAM_SVG.to_string()));
+        let block = render_diagram_within(&flowchart(), budgets_with(Duration::from_secs(5)));
+        assert_eq!(block.render_status, DiagramRenderStatus::Ok);
+        assert_eq!(block.svg.as_deref(), Some(SEAM_SVG.as_bytes()));
+        assert_eq!(ABANDONED_RENDERS.load(Ordering::SeqCst), 0);
+    }
+
+    /// Once a note's renders have used its budget, the remaining diagrams
+    /// degrade with the note's sentence and are never handed to the renderer.
+    #[test]
+    fn a_note_past_its_render_budget_degrades_the_rest_without_rendering() {
+        let _guard = renderer_test_guard();
+        let calls = std::sync::Arc::new(AtomicUsize::new(0));
+        let counted = std::sync::Arc::clone(&calls);
+        let _seam = render_seam(move |_| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(400));
+            Ok(SEAM_SVG.to_string())
+        });
+        let raws = vec![flowchart(); 3];
+        let blocks = render_diagram_blocks_bounded(
+            &raws,
+            DiagramBudgets {
+                max_render_time_per_note: Duration::from_millis(600),
+                ..DiagramBudgets::default()
+            },
+        );
+        let note = DiagramRenderStatus::RenderFailed {
+            message: render_time_exceeded_message("note", 1),
+        };
+        assert_eq!(blocks.len(), 3, "a degraded block is never dropped");
+        assert_eq!(blocks[0].render_status, DiagramRenderStatus::Ok);
+        // The second render starts before the deadline and is waited on
+        // only for what is left of it; the third is due past it.
+        assert_eq!(blocks[1].render_status, note);
+        assert_eq!(blocks[2].render_status, note);
+        assert!(blocks[2].svg.is_none());
+        assert_eq!(blocks[2].structured_description, "Flowchart with 1 step.");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "a block past the note's deadline was handed to the renderer"
+        );
+        assert!(abandoned_renders_settle());
+    }
+
+    /// A render that starts close to the note's deadline is waited on only
+    /// for what is left of it, and says so with the note's sentence: no
+    /// note holds a refresh past its budget.
+    #[test]
+    fn a_render_near_the_note_deadline_waits_only_for_what_is_left() {
+        let _guard = renderer_test_guard();
+        let _seam = render_seam(|_| {
+            std::thread::sleep(Duration::from_secs(1));
+            Ok(SEAM_SVG.to_string())
+        });
+        let started = Instant::now();
+        let blocks = render_diagram_blocks_bounded(
+            &[flowchart()],
+            DiagramBudgets {
+                max_render_time_per_note: Duration::from_millis(150),
+                ..DiagramBudgets::default()
+            },
+        );
+        let waited = started.elapsed();
+        assert!(
+            waited < Duration::from_millis(800),
+            "the note's render was waited on for {waited:?}"
+        );
+        assert_eq!(
+            blocks[0].render_status,
+            DiagramRenderStatus::RenderFailed {
+                message: render_time_exceeded_message("note", 1)
+            }
+        );
+        assert!(abandoned_renders_settle());
+    }
+
+    /// Past its deadline a note's unsupported or empty block keeps its own
+    /// reason: the deadline is checked where a render would start.
+    #[test]
+    fn a_block_past_the_note_deadline_keeps_a_reason_of_its_own() {
+        let _guard = renderer_test_guard();
+        let blocks = render_diagram_blocks_bounded(
+            &[
+                mermaid("weirdDiagram\nstuff".to_string()),
+                mermaid(String::new()),
+            ],
+            DiagramBudgets {
+                max_render_time_per_note: Duration::ZERO,
+                ..DiagramBudgets::default()
+            },
+        );
+        assert!(matches!(
+            blocks[0].render_status,
+            DiagramRenderStatus::UnsupportedDialect { .. }
+        ));
+        assert_eq!(
+            blocks[1].render_status,
+            DiagramRenderStatus::RenderFailed {
+                message: "empty diagram source".into()
+            }
+        );
+    }
+
+    /// While `max_abandoned_renders` abandoned renders are still running, a
+    /// new render is refused without starting; once they end, rendering
+    /// works again.
+    #[test]
+    fn abandoned_renders_are_capped_and_new_renders_are_refused_while_the_cap_holds() {
+        let _guard = renderer_test_guard();
+        let released = std::sync::Arc::new(AtomicBool::new(false));
+        let calls = std::sync::Arc::new(AtomicUsize::new(0));
+        let (gate, counted) = (
+            std::sync::Arc::clone(&released),
+            std::sync::Arc::clone(&calls),
+        );
+        let _seam = render_seam(move |_| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            while !gate.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Ok(SEAM_SVG.to_string())
+        });
+        let _gate = GateGuard(std::sync::Arc::clone(&released));
+        let budgets = budgets_with(Duration::from_millis(50));
+        let timed_out = DiagramRenderStatus::RenderFailed {
+            message: render_time_exceeded_message("diagram", 1),
+        };
+        for _ in 0..MAX_ABANDONED_RENDERS {
+            assert_eq!(
+                render_diagram_within(&flowchart(), budgets).render_status,
+                timed_out
+            );
+        }
+        assert_eq!(
+            ABANDONED_RENDERS.load(Ordering::SeqCst),
+            MAX_ABANDONED_RENDERS
+        );
+        assert!(
+            reaches(&calls, MAX_ABANDONED_RENDERS),
+            "the abandoned renders never started"
+        );
+
+        let refused = render_diagram_blocks_reporting(&[flowchart()], budgets);
+        assert_eq!(
+            refused.blocks[0].render_status,
+            DiagramRenderStatus::RenderFailed {
+                message: render_time_exceeded_message("busy", 1)
+            }
+        );
+        assert!(refused.transient, "a refusal at the cap must not be cached");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            MAX_ABANDONED_RENDERS,
+            "a render was started past the cap"
+        );
+
+        released.store(true, Ordering::SeqCst);
+        assert!(
+            abandoned_renders_settle(),
+            "the abandoned renders never released their slots"
+        );
+        let after =
+            render_diagram_blocks_reporting(&[flowchart()], budgets_with(Duration::from_secs(5)));
+        assert_eq!(after.blocks[0].render_status, DiagramRenderStatus::Ok);
+        assert!(!after.transient);
+    }
+
+    /// The session caches a note's blocks, but not a refusal at the cap: once
+    /// the earlier renders end, the same note renders.
+    #[test]
+    fn a_refusal_at_the_cap_is_not_cached_by_the_session() {
+        let _guard = renderer_test_guard();
+        let released = std::sync::Arc::new(AtomicBool::new(false));
+        let calls = std::sync::Arc::new(AtomicUsize::new(0));
+        let (gate, counted) = (
+            std::sync::Arc::clone(&released),
+            std::sync::Arc::clone(&calls),
+        );
+        let _seam = render_seam(move |_| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            while !gate.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Ok(SEAM_SVG.to_string())
+        });
+        let _gate = GateGuard(std::sync::Arc::clone(&released));
+        for _ in 0..MAX_ABANDONED_RENDERS {
+            let _ = render_diagram_within(&flowchart(), budgets_with(Duration::from_millis(50)));
+        }
+        assert!(reaches(&calls, MAX_ABANDONED_RENDERS));
+
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("note.md"),
+            "```mermaid\nflowchart LR\nA --> B\n```\n",
+        )
+        .unwrap();
+        let session =
+            crate::session::VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+        session
+            .scan_initial(&crate::session::CancelToken::new())
+            .unwrap();
+        let busy = DiagramRenderStatus::RenderFailed {
+            message: render_time_exceeded_message(
+                "busy",
+                budget_seconds(MAX_RENDER_TIME_PER_DIAGRAM),
+            ),
+        };
+        assert_eq!(
+            session.get_diagram_blocks("note.md").unwrap()[0].render_status,
+            busy
+        );
+
+        released.store(true, Ordering::SeqCst);
+        assert!(abandoned_renders_settle());
+        assert_eq!(
+            session.get_diagram_blocks("note.md").unwrap()[0].render_status,
+            DiagramRenderStatus::Ok,
+            "the refusal was cached"
+        );
+    }
+
+    /// An abandoned render that panics releases its slot all the same, and
+    /// its panic poisons the renderer as a waited-on render's does.
+    #[test]
+    fn an_abandoned_render_that_panics_still_releases_its_slot() {
+        let _guard = renderer_test_guard();
+        let _seam = render_seam(|_| {
+            std::thread::sleep(Duration::from_secs(1));
+            panic!("slate-1580: an abandoned render panics");
+        });
+        let block = render_diagram_within(&flowchart(), budgets_with(Duration::from_millis(50)));
+        assert_eq!(
+            block.render_status,
+            DiagramRenderStatus::RenderFailed {
+                message: render_time_exceeded_message("diagram", 1)
+            }
+        );
+        assert!(
+            abandoned_renders_settle(),
+            "the panicking render never released its slot"
+        );
+        assert!(RENDERER_POISONED.load(Ordering::SeqCst));
+    }
+
+    /// The sentences both hosts show verbatim as the failed state's reason.
+    #[test]
+    fn render_time_exceeded_message_has_its_four_forms() {
+        assert_eq!(
+            render_time_exceeded_message("diagram", 5),
+            "Diagram not drawn: rendering took longer than 5 seconds. The source follows."
+        );
+        assert_eq!(
+            render_time_exceeded_message("note", 20),
+            "Diagram not drawn: this note's diagrams used their 20-second render budget. \
+             The source follows."
+        );
+        assert_eq!(
+            render_time_exceeded_message("busy", 5),
+            "Diagram not drawn: earlier diagrams are still rendering past their 5-second \
+             budget. The source follows."
+        );
+        assert_eq!(
+            render_time_exceeded_message("image", 3),
+            "Image not shown: decoding took longer than 3 seconds."
+        );
+        assert_eq!(
+            render_time_exceeded_message("diagram", 1),
+            "Diagram not drawn: rendering took longer than 1 second. The source follows."
+        );
+        assert_eq!(
+            render_time_exceeded_message("something else", 5),
+            render_time_exceeded_message("diagram", 5)
+        );
+        assert_eq!(budget_seconds(Duration::from_millis(100)), 1);
+        assert_eq!(budget_seconds(Duration::from_secs(5)), 5);
+    }
+
+    /// XD3's settled values, and the defaults every render uses.
+    #[test]
+    fn the_render_time_budgets_are_the_settled_values() {
+        assert_eq!(MAX_RENDER_TIME_PER_DIAGRAM, Duration::from_secs(5));
+        assert_eq!(MAX_RENDER_TIME_PER_NOTE, Duration::from_secs(20));
+        assert_eq!(MAX_ABANDONED_RENDERS, 2);
+        let budgets = DiagramBudgets::default();
+        assert_eq!(
+            budgets.max_render_time_per_diagram,
+            MAX_RENDER_TIME_PER_DIAGRAM
+        );
+        assert_eq!(budgets.max_render_time_per_note, MAX_RENDER_TIME_PER_NOTE);
+        assert_eq!(budgets.max_abandoned_renders, MAX_ABANDONED_RENDERS);
+    }
+
+    /// `BENCHMARKS.md`'s "diagram render budget" sample: a 500-step chain
+    /// through the real renderer, which must stay under half the
+    /// per-diagram budget. Run in release:
+    /// `cargo test --release -p slate-core --lib -- --ignored --nocapture
+    /// diagram::tests::render_budget_sample`.
+    #[test]
+    #[ignore = "a release-build timing sample, recorded in BENCHMARKS.md"]
+    #[allow(
+        clippy::disallowed_macros,
+        reason = "the sample prints its own timing to the test's stdout; no note text"
+    )]
+    fn render_budget_sample_a_500_step_chain() {
+        let _guard = renderer_test_guard();
+        let source: String = std::iter::once("flowchart TD\n".to_string())
+            .chain((0..500).map(|i| format!("n{i}-->n{}\n", i + 1)))
+            .collect();
+        let raw = mermaid(source);
+        let mut samples: Vec<Duration> = (0..5)
+            .map(|_| {
+                let started = Instant::now();
+                let block = render_diagram(&raw);
+                assert_eq!(block.render_status, DiagramRenderStatus::Ok);
+                started.elapsed()
+            })
+            .collect();
+        samples.sort();
+        let median = samples[samples.len() / 2];
+        println!("diagram render budget sample: 500-step chain, median {median:?} of {samples:?}");
+        assert!(
+            median < MAX_RENDER_TIME_PER_DIAGRAM / 2,
+            "a 500-step chain took {median:?}, over half the per-diagram budget"
+        );
     }
 }

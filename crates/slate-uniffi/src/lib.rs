@@ -7707,6 +7707,15 @@ pub fn code_block_preamble(language: Option<String>, source: String) -> String {
     core::code::code_block_preamble(language.as_deref(), &source)
 }
 
+/// The sentence a diagram block shows when a render time budget stopped
+/// it (#1580), and the one an SVG preview's decode budget will (#1581):
+/// `what` is `"diagram"`, `"note"`, `"busy"` or `"image"`. Composed in
+/// core so both hosts show identical text.
+#[uniffi::export]
+pub fn render_time_exceeded_message(what: String, seconds: u64) -> String {
+    core::diagram::render_time_exceeded_message(&what, seconds)
+}
+
 /// FFI mirror of [`core::reading::ReadingTableCells`] (#510). `rows` is a
 /// list of rows, each a list of cell strings — uniffi carries `Vec<Vec<String>>`
 /// directly, so no row wrapper record is needed. Every row equals `header.len()`

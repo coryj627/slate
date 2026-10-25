@@ -1368,3 +1368,28 @@ files; past the limit a window is `TooLarge` and reads nothing.
 **No guard.** Design §4.8 names no perf guard, so this PR adds none; the
 facts pin the bounds instead (`a_window_over_the_row_limit_is_too_large_and_reads_nothing`,
 `pages_are_bounded_removal_first_and_resume_by_keyset`).
+
+## Plan 45 XB-10a — the diagram render budget — 2026-10-24 (#1580)
+
+A diagram render is waited on for at most `MAX_RENDER_TIME_PER_DIAGRAM`
+(5 s), a note's renders for at most `MAX_RENDER_TIME_PER_NOTE` (20 s),
+and at most `MAX_ABANDONED_RENDERS` (2) abandoned renders run on in the
+background (XD3). The sample a real diagram must stay under is half the
+per-diagram budget: a 500-step `flowchart TD` chain through
+`render_diagram`, which runs mermaid-rs-renderer 0.3.1 on its render
+thread behind the budgeted wait.
+`cargo test --release -p slate-core --lib -- --ignored --nocapture
+diagram::tests::render_budget_sample` (the fact asserts the bound). This
+box: x64, Windows 11, release, five renders, run at Idle priority beside
+the CI VMs.
+
+| Diagram | Median | Range | Bound | Result |
+|---|---:|---:|---:|---|
+| 500-step chain | **1.130 s** | 1.124–1.155 s | 2.5 s (half the 5 s budget) | PASS |
+
+**Where the budget bites.** The render is super-linear in its input
+(#1580's measurements, release, Linux): 500 steps about 1 s, 1,000 steps
+3.6 s, 2,000 steps 7.6 s, a 64 KiB chain 17 s and a single-line chain
+34 s. A diagram past roughly 1,300 steps degrades with core's sentence
+("Diagram not drawn: rendering took longer than 5 seconds. The source
+follows."), and both hosts show its source in range.
