@@ -741,20 +741,26 @@ fn latex_to_mathml(latex: &str) -> String {
 /// or two primes that follows a free element into exactly the events
 /// pulldown-latex itself yields for `v^{\prime}` (or `v^{\dprime}`): the
 /// superscript script, the element, then a group holding `′` or `″`. A
-/// script or fraction that carries the primes is grouped first, as for
-/// `{\sin^2}^{\prime}`: pulldown-latex writes a function's application mark
-/// after its script, and inside a bare `msup` that mark gives MathCAT a
-/// four-child superscript it rejects.
+/// function name, script or visual that carries the primes is grouped
+/// first, as for `{\sin^2}^{\prime}`: pulldown-latex writes a function's
+/// application mark after its script, and the thin space before a function
+/// name that follows an ordinary atom (`2\sin`) inside the script it opens,
+/// and either gives MathCAT a superscript of three or four children, which
+/// it rejects.
 ///
 /// Three or more primes stay as parsed: no superscript MathCAT 0.7.7 reads
 /// gives correct Nemeth for them (`‴` brailles a stray `.`, and a run of `′`
-/// gains a level indicator), while the loose run keeps the braille right.
+/// gains a level indicator), while the loose run keeps the braille right
+/// (#1628).
 ///
-/// An element is free when it is not an argument a script or a fraction is
-/// still waiting for. A prime there is itself that argument, and stays. A
-/// letter, a function name, a number, a group or a whole script or fraction
-/// can carry primes; a delimiter or an operator cannot (`(fg)'` keeps its
-/// loose prime). A prime with nothing before it stays loose too.
+/// An element is free when it is not an argument a script or visual is
+/// still waiting for. A prime there is itself that argument, and stays. An
+/// ordinary character (a letter, or `|` and `/` typed as themselves), a
+/// function name, a number, a plain `{...}` group or a whole script or
+/// visual (root, fraction, negation) can carry primes; a delimiter or an
+/// operator pulldown-latex classes as one, a `\left...\right` group and an
+/// environment cannot (`(fg)'`, `\left(fg\right)'` and `\vert x\vert'` keep
+/// their loose prime). A prime with nothing before it stays loose too.
 fn fold_primes_into_superscripts(
     events: Vec<pulldown_latex::event::Event<'_>>,
 ) -> Vec<pulldown_latex::event::Event<'_>> {
@@ -769,12 +775,12 @@ fn fold_primes_into_superscripts(
     }
 
     /// The element that just completed at a free position and can carry
-    /// primes: where it starts in `out`, and whether it is a whole script or
-    /// visual (grouped before it is scripted).
+    /// primes: where it starts in `out`, and whether it is grouped before it
+    /// is scripted (a function name, or a whole script or visual).
     #[derive(Clone, Copy)]
     struct Carrier {
         start: usize,
-        construct: bool,
+        grouped: bool,
     }
 
     fn primes_in(event: &Event<'_>) -> Option<usize> {
@@ -792,11 +798,13 @@ fn fold_primes_into_superscripts(
 
     /// One element completed: count it against the construct waiting for
     /// it, and answer the element now free, if it can carry primes.
-    fn complete(stack: &mut Vec<Open>, start: usize, carriable: bool) -> Option<Carrier> {
-        let mut carrier = carriable.then_some(Carrier {
-            start,
-            construct: false,
-        });
+    fn complete(
+        stack: &mut Vec<Open>,
+        start: usize,
+        carriable: bool,
+        grouped: bool,
+    ) -> Option<Carrier> {
+        let mut carrier = carriable.then_some(Carrier { start, grouped });
         loop {
             match stack.last_mut() {
                 Some(Open::Construct {
@@ -809,7 +817,7 @@ fn fold_primes_into_superscripts(
                     }
                     carrier = Some(Carrier {
                         start: *construct,
-                        construct: true,
+                        grouped: true,
                     });
                     stack.pop();
                 }
@@ -827,8 +835,9 @@ fn fold_primes_into_superscripts(
     let mut previous: Option<Carrier> = None;
     let mut events = events.into_iter().peekable();
     while let Some(event) = events.next() {
+        // A carrier is only ever free: `complete` answers one only when no
+        // construct is left waiting, and every push clears it.
         if let Some(primes) = primes_in(&event)
-            && !matches!(stack.last(), Some(Open::Construct { .. }))
             && let Some(carrier) = previous
         {
             let mut run = vec![event];
@@ -854,7 +863,7 @@ fn fold_primes_into_superscripts(
                     position: ScriptPosition::Right,
                 },
             );
-            if carrier.construct {
+            if carrier.grouped {
                 out.insert(carrier.start + 1, Event::Begin(Grouping::Normal));
                 out.push(Event::End);
             }
@@ -901,18 +910,23 @@ fn fold_primes_into_superscripts(
                     // leave it exactly as parsed.
                     return original;
                 };
+                // Only a plain `{...}` group carries: a `\left...\right` group
+                // or an environment is bracketed, and keeps its prime loose as
+                // a delimiter does.
+                let plain = matches!(out.get(start), Some(Event::Begin(Grouping::Normal)));
                 out.push(event);
-                previous = complete(&mut stack, start, true);
+                previous = complete(&mut stack, start, plain, false);
                 continue;
             }
             Event::Content(content) => {
+                let function = matches!(content, Content::Function(_));
                 let carriable = match content {
                     Content::Function(_) | Content::Number(_) => true,
                     Content::Ordinary { .. } => primes_in(&event).is_none(),
                     _ => false,
                 };
                 out.push(event);
-                previous = complete(&mut stack, index, carriable);
+                previous = complete(&mut stack, index, carriable, function);
                 continue;
             }
             _ => {
@@ -922,7 +936,7 @@ fn fold_primes_into_superscripts(
                 // and carries no prime.
                 out.push(event);
                 previous = if matches!(stack.last(), Some(Open::Construct { .. })) {
-                    complete(&mut stack, index, false)
+                    complete(&mut stack, index, false, false)
                 } else {
                     None
                 };
@@ -1119,9 +1133,10 @@ mod tests {
             latex_to_mathml("f'(g(x)) \\cdot g'(x)"),
             latex_to_mathml("f^{\\prime}(g(x)) \\cdot g^{\\prime}(x)")
         );
+        // A function name is grouped before it is scripted (see the fold).
         assert_eq!(
             latex_to_mathml("\\sin'(x)"),
-            latex_to_mathml("\\sin^{\\prime}(x)")
+            latex_to_mathml("{\\sin}^{\\prime}(x)")
         );
         assert_eq!(latex_to_mathml("{u}'v"), latex_to_mathml("{u}^{\\prime}v"));
     }
@@ -1142,12 +1157,19 @@ mod tests {
         }
     }
 
-    /// A prime with no element before it, a prime after a delimiter, and a
-    /// prime that is itself an argument a script or fraction still waits for
-    /// are left as pulldown-latex parsed them.
+    /// A prime with no element before it, a prime after a delimiter, a
+    /// `\left...\right` group or an environment, and a prime that is itself
+    /// an argument a script or fraction still waits for are left as
+    /// pulldown-latex parsed them.
     #[test]
     fn a_prime_with_no_free_element_before_it_is_left_alone() {
-        for source in ["'x", "(f g)'(x)", "\\frac a'"] {
+        for source in [
+            "'x",
+            "(f g)'(x)",
+            "\\left(f g\\right)'(x)",
+            "\\begin{matrix} a \\end{matrix}'",
+            "\\frac a'",
+        ] {
             let mathml = latex_to_mathml(source);
             assert!(!mathml.is_empty(), "{source} did not render");
             assert!(!mathml.contains("<msup>"), "{source}: {mathml}");
@@ -1190,6 +1212,55 @@ mod tests {
             );
             assert!(!block.braille.is_empty(), "{source} has no braille");
         }
+    }
+
+    /// A primed function after a letter, a number, a closing bracket or a
+    /// group renders and is spoken as a function: pulldown-latex writes a
+    /// thin space before a function name after such an atom, and inside a
+    /// bare `msup` that space gave MathCAT a three-child superscript it
+    /// rejected, so the whole formula fell back to its source.
+    #[test]
+    fn a_primed_function_after_an_ordinary_atom_still_renders() {
+        for source in [
+            "2\\sin'(x)",
+            "x\\cos'(x)",
+            "-\\sin'(x)",
+            "\\sin'(x)\\cos'(x)",
+            "x\\operatorname{erf}'(x)",
+        ] {
+            let raw = RawMathBlock {
+                source: source.to_string(),
+                display_style: MathDisplayStyle::Block,
+                line: 1,
+                byte_offset: 0,
+            };
+            let block = render_math(&raw, MathPrefs::default());
+            assert!(
+                !block.speech.starts_with("Math expression"),
+                "{source} fell back: {}",
+                block.speech
+            );
+            assert!(!block.braille.is_empty(), "{source} has no braille");
+            assert!(block.speech.contains("of x"), "{source}: {}", block.speech);
+        }
+    }
+
+    /// A number, a whole fraction and a function inside an environment's cell
+    /// carry primes too; and an arity the walker cannot follow leaves the
+    /// formula exactly as parsed rather than mis-nesting it.
+    #[test]
+    fn every_kind_of_free_element_carries_its_prime() {
+        assert!(latex_to_mathml("2'").contains("<msup><mn>2</mn>"));
+        assert_eq!(
+            latex_to_mathml("\\frac{a}{b}'"),
+            latex_to_mathml("{\\frac{a}{b}}^{\\prime}")
+        );
+        assert!(
+            latex_to_mathml("\\begin{matrix} f'(x) \\end{matrix}").contains("<msup><mi>f</mi>")
+        );
+        // `\sqrt[]` takes an empty index the walker does not count: the
+        // stream is handed on unchanged, and still renders.
+        assert!(!latex_to_mathml("{\\sqrt[]{x}}'").is_empty());
     }
 
     /// A state change (`\rm`) a script or root is waiting for is that

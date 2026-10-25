@@ -2255,7 +2255,7 @@ Nemeth: ⠭⠂⠐⠄
 UEB: ⠭⠰⠢⠼⠁⠶
 === extra-expressions.txt:71
 source: \sin'(x)
-MathML: <math display="inline"><msup><mi>sin</mi><mrow><mi>′</mi></mrow></msup><mo>⁡</mo><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo></math>
+MathML: <math display="inline"><msup><mrow><mi>sin</mi></mrow><mrow><mi>′</mi></mrow></msup><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo></math>
 ClearSpeak Terse: sine prime, x
 ClearSpeak Medium: sine prime, of x
 ClearSpeak Verbose: sine prime, of x
@@ -2275,3 +2275,58 @@ SimpleSpeak Medium: sine squared prime, of x
 SimpleSpeak Verbose: sine squared prime, of x
 Nemeth: ⠎⠊⠝⠘⠆⠐⠄⠀⠷⠭⠾
 UEB: ⠎⠔⠰⠔⠼⠃⠶⠐⠣⠭⠐⠜
+=== extra-expressions.txt:73
+source: 2\sin'(x)
+MathML: <math display="inline"><mn>2</mn><msup><mrow><mi>sin</mi></mrow><mrow><mi>′</mi></mrow></msup><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo></math>
+ClearSpeak Terse: 2 sine prime, x
+ClearSpeak Medium: 2 sine prime, of x
+ClearSpeak Verbose: 2 sine prime, of x
+SimpleSpeak Terse: 2 sine prime, x
+SimpleSpeak Medium: 2 sine prime, of x
+SimpleSpeak Verbose: 2 sine prime, of x
+Nemeth: ⠼⠆⠎⠊⠝⠄⠀⠷⠭⠾
+UEB: ⠼⠃⠎⠊⠝⠶⠐⠣⠭⠐⠜
+=== extra-expressions.txt:74
+source: |x|'
+MathML: <math display="inline"><mi>|</mi><mi>x</mi><msup><mi>|</mi><mrow><mi>′</mi></mrow></msup></math>
+ClearSpeak Terse: absolute value of x, prime
+ClearSpeak Medium: the absolute value of x, prime
+ClearSpeak Verbose: the absolute value of x, end absolute value, prime
+SimpleSpeak Terse: absolute value x prime
+SimpleSpeak Medium: the absolute value of x prime
+SimpleSpeak Verbose: the absolute value of x prime
+Nemeth: ⠳⠭⠳⠄
+UEB: ⠰⠰⠣⠸⠳⠭⠸⠳⠜⠶
+=== extra-expressions.txt:75
+source: \left(fg\right)'(x)
+MathML: <math display="inline"><mrow><mo stretchy="true">(</mo><mi>f</mi><mi>g</mi><mo stretchy="true">)</mo></mrow><mi>′</mi><mo symmetric="false" stretchy="false">(</mo><mi>x</mi><mo symmetric="false" stretchy="false">)</mo></math>
+ClearSpeak Terse: f g prime, times x
+ClearSpeak Medium: f g prime, times x
+ClearSpeak Verbose: f g prime, times x
+SimpleSpeak Terse: f g prime, times x
+SimpleSpeak Medium: f g prime, times x
+SimpleSpeak Verbose: f g prime, times x
+Nemeth: ⠷⠋⠛⠾⠄⠷⠭⠾
+UEB: ⠐⠣⠋⠛⠐⠜⠰⠶⠐⠣⠭⠐⠜
+=== extra-expressions.txt:76
+source: \sum_{n}' a_n
+MathML: <math display="inline"><msup><mrow><msub><mo movablelimits="false">∑</mo><mrow><mi>n</mi></mrow></msub></mrow><mrow><mi>′</mi></mrow></msup><msub><mi>a</mi><mi>n</mi></msub></math>
+ClearSpeak Terse: sum over n of prime; eigh sub n
+ClearSpeak Medium: the sum over n of prime; eigh sub n
+ClearSpeak Verbose: the sum over n of prime; eigh sub n
+SimpleSpeak Terse: sum over n of prime; eigh sub n
+SimpleSpeak Medium: the sum over n of prime; eigh sub n
+SimpleSpeak Verbose: the sum over n of prime; eigh sub n
+Nemeth: ⠨⠠⠎⠰⠝⠐⠄⠁⠰⠝
+UEB: ⠰⠰⠠⠨⠎⠢⠝⠶⠁⠢⠝
+=== extra-expressions.txt:77
+source: y''^2
+MathML: <math display="inline"><msup><mi>y</mi><mrow><mi>′</mi></mrow></msup><msup><mi>′</mi><mn>2</mn></msup></math>
+ClearSpeak Terse: y prime, prime squared
+ClearSpeak Medium: y prime, prime squared
+ClearSpeak Verbose: y prime, prime squared
+SimpleSpeak Terse: y prime, prime squared
+SimpleSpeak Medium: y prime, prime squared
+SimpleSpeak Verbose: y prime, prime squared
+Nemeth: ⠽⠄⠄⠘⠆
+UEB: ⠰⠰⠽⠶⠶⠔⠼⠃
