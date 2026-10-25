@@ -54,8 +54,13 @@ on:
 
 # Superseded pushes to the same PR cancel the in-flight run (a rapid
 # fix-up push shouldn't stack full pipelines). Runs on main never cancel.
+# #1565: GitHub keeps one pending run per group, and a third run cancels
+# the pending one, so a push to main could drop the run of the commit
+# before it. Pull requests still group by branch and cancel superseded
+# pushes; a push or dispatch groups by its commit, so no main run ever
+# waits behind another.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:

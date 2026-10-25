@@ -432,6 +432,25 @@ Describe 'pr-gate.yml' {
     }
 }
 
+Describe 'main runs' {
+    # #1565: one pending run per concurrency group, and a later push cancels
+    # it, so a lane that groups pushes by branch can drop a main run.
+    It 'every lane that runs on a push to main groups pushes by commit and pull requests by branch: <Lane>' -ForEach @(
+        @{ Lane = 'a11y-check' }, @{ Lane = 'audit' }, @{ Lane = 'license-headers' }, @{ Lane = 'mac-runner-tests' },
+        @{ Lane = 'rust' }, @{ Lane = 'swift-tests' }, @{ Lane = 'windows-runner-tests' }, @{ Lane = 'windows' }
+    ) {
+        $text = Get-Content -Raw (Join-Path $PSScriptRoot '..' '..' '..' '.github' 'workflows' "$Lane.yml")
+        $text | Should -Match '(?m)^concurrency:\r?\n  group: \$\{\{ github\.workflow \}\}-\$\{\{ github\.event_name == ''pull_request'' && github\.ref \|\| github\.sha \}\}\r?\n  cancel-in-progress: \$\{\{ github\.event_name == ''pull_request'' \}\}'
+    }
+    It 'no workflow that runs on a push to main groups pushes by ref alone' {
+        foreach ($file in Get-ChildItem (Join-Path $PSScriptRoot '..' '..' '..' '.github' 'workflows') -Filter '*.yml') {
+            $text = Get-Content -Raw $file.FullName
+            if ($text -notmatch '(?m)^  push:') { continue }
+            $text | Should -Not -Match '(?m)^  group: \$\{\{ github\.workflow \}\}-\$\{\{ github\.ref \}\}\s*$' -Because "$($file.Name) would let a push to main drop a queued main run"
+        }
+    }
+}
+
 Describe 'dependabot.yml' {
     # Version updates are paused (#1564). A Dependabot PR cannot run CI under the owner-only Actions policy
     # (plan 42), so it could only merge untested, and admitting Dependabot through allowlist.json would run
