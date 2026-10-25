@@ -28,6 +28,13 @@ public partial class MainWindow : Window
     private FilesSidebarViewModel? _observedFileSidebar;
     private bool _quickSwitcherCommitted;
 
+    /// <summary>XB-11: true while the window's own close decides. That close
+    /// can pump (saves settling, a tree read awaited, #1590) with the window
+    /// enabled, and File > Exit from inside that frame would call
+    /// <see cref="Window.Close"/> on a window that is closing, which throws
+    /// before the unsaved-changes prompt.</summary>
+    private bool _windowClosing;
+
     public MainWindow()
         : this(paletteRecentsStore: null, paletteLane: null)
     {
@@ -83,7 +90,14 @@ public partial class MainWindow : Window
         // it (and found by the windows it owns), so the launch phase, its
         // queue and its provider exist once per window.
         AccessibilityNotificationDispatcher.SetAnnouncer(this, _announcer);
-        CommandBindings.Add(new CommandBinding(ApplicationCommands.Close, (_, _) => Close()));
+        CommandBindings.Add(new CommandBinding(ApplicationCommands.Close, (_, _) =>
+        {
+            // The close already deciding answers this one (XB-11).
+            if (!_windowClosing)
+            {
+                Close();
+            }
+        }));
         _viewModel = new VaultLifecycleViewModel(
             PickVaultAsync,
             action => _ = Dispatcher.InvokeAsync(action),
@@ -1981,6 +1995,21 @@ public partial class MainWindow : Window
     private void Window_SourceInitialized(object? sender, EventArgs e)
     {
         _windowPlacement.Restore();
+    }
+
+    /// <summary>Every <c>Closing</c> handler, <see cref="Window_Closing"/>
+    /// included, runs inside this, with <see cref="_windowClosing"/> set.</summary>
+    protected override void OnClosing(CancelEventArgs e)
+    {
+        _windowClosing = true;
+        try
+        {
+            base.OnClosing(e);
+        }
+        finally
+        {
+            _windowClosing = false;
+        }
     }
 
     private void Window_Closing(object? sender, CancelEventArgs e)

@@ -708,6 +708,49 @@ Facts in `SidebarWriteJournalTests`:
 - settled lines are reclaimed and only live entries stay;
 - a test process never journals into the user's app data.
 
+## Close-after-save amendment (#1573, #1590, plan 45 XD1, 2026-10-24)
+
+The owner decided XD1 on 2026-10-24, as recommended (plan 45 §3). On
+Windows, a vault close used to refuse whenever a file-tree read was in
+flight. That includes the read Slate's own save schedules 150 ms later. The
+refusal spoke `ReportTerminalStatus`'s host-composed sentence "File tree
+refresh cancellation requested. Close the vault again after the current
+directory read finishes." (`VaultLifecycleViewModel.cs#VaultLifecycleViewModel.ReportTerminalStatus@1`,
+Medium). So the user had to close twice for a refresh Slate started itself.
+
+Since XB-11:
+
+- **The save's own refresh.** A close that has begun skips the tree refresh
+  a file change would schedule (`HandleFileChange`, immediate or debounced).
+- **A read already in flight.** The close cancels it and waits for it,
+  pumping where it has a dispatcher, for at most
+  `TreeRefreshCloseBound` (5 s). That holds whoever started the read: a user
+  who pressed Refresh and then Close wants the close.
+- **When the sentence is spoken.** Only when the read outlives the bound.
+  The words and the priority are unchanged, and no new speech is added.
+- **A close that stays open.** For a later reason (the dirty-tab prompt's
+  Cancel included), it re-issues the one refresh it skipped or cancelled.
+  A close refused past the bound re-issues nothing, as before: a vault
+  whose reads are slow would only hand the next close another one.
+- **A rescan's refresh.** It still refreshes at once inside a close
+  (W7-7 PR 7, F2), so a rescan's sentence never precedes a Slate write.
+- **Unchanged.** Folder expansion, import and filter still refuse the close
+  with their own sentences, because those are work the user started.
+  Cancelling a tree read also cancels its bulk and child expansions, as it
+  always did.
+
+Facts:
+
+- `CloseAfterSaveTests`: `ACloseInsideTheSavesDebounceWindowClosesWithoutARefusal`,
+  `ACloseDuringTheSavesTreeReadAwaitsTheReadThenCloses`,
+  `ACloseWhoseTreeReadOutlivesTheBoundIsRefusedWithTheSentence` (the
+  sentence word for word, at Medium) and
+  `ARefusedCloseReissuesTheRefreshItSkipped`, and
+  `FileExitInsideTheWindowsOwnCloseDoesNotThrow` (the close's wait pumps with
+  the window enabled, so File > Exit inside it is answered by the close
+  already deciding).
+- `W1HardeningTests.APendingTreeRefreshIsAwaitedByApplicationClose`.
+
 <!-- a11y-trigger-ledger:start -->
 
 ## Whole-corpus trigger ledger (D-7)

@@ -321,8 +321,11 @@ public sealed class W1VaultCloseBarrierTests
         }
     }
 
+    /// <summary>XB-11 (#1590; plan 45 XD1): the application close cancels a
+    /// tree read in flight and waits for it (headless here, so it blocks,
+    /// bounded) instead of refusing; the session closes after the read.</summary>
     [Fact]
-    public async Task PendingTreeRefreshMustFinishBeforeTheVaultSessionCloses()
+    public async Task APendingTreeRefreshIsAwaitedByApplicationClose()
     {
         using FixtureVault fixture = FixtureVault.Create(2, "tree-close-barrier");
         using var providerStarted = new ManualResetEventSlim();
@@ -343,12 +346,12 @@ public sealed class W1VaultCloseBarrierTests
         Assert.True(providerStarted.Wait(TimeSpan.FromSeconds(5)));
         FilesSidebarViewModel sidebar = Assert.IsType<FilesSidebarViewModel>(lifecycle.FileSidebar);
 
-        Assert.False(lifecycle.PrepareForApplicationClose());
-        Assert.Contains("tree refresh cancellation requested", lifecycle.StatusText, StringComparison.OrdinalIgnoreCase);
+        // The provider ends while the close waits for it.
+        using var release = new Timer(_ => releaseProvider.Set(), null, TimeSpan.FromMilliseconds(200), Timeout.InfiniteTimeSpan);
 
-        releaseProvider.Set();
-        await sidebar.TreeRefreshCompletion.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.True(lifecycle.PrepareForApplicationClose());
+        Assert.True(lifecycle.PrepareForApplicationClose(), "the application close was refused while the tree read was in flight");
+        Assert.True(sidebar.TreeRefreshCompletion.IsCompleted, "the close returned before the read ended");
+        Assert.DoesNotContain("tree refresh cancellation requested", lifecycle.StatusText, StringComparison.OrdinalIgnoreCase);
         lifecycle.Dispose();
     }
 
