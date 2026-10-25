@@ -16,19 +16,35 @@ import json
 import sys
 
 
+def _entries(data, key):
+    """An allow-list's entries under `key`, each an object with an integer
+    id. A malformed list stops the policy with a clear error before anything
+    is written: dropping a bad entry could write a policy without the owner."""
+    entries = data.get(key, [])
+    if not isinstance(entries, list):
+        raise ValueError("allow-list %s is not a list" % key)
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("id"), int) or isinstance(entry.get("id"), bool):
+            raise ValueError("allow-list %s entry %r has no integer id" % (key, entry))
+    return list(entries)
+
+
 def allowed_actors(data):
     """`actors` then `policy_only_actors`, by id and type, each id once. A
     policy-only entry must name its type, and no id may be in both lists:
     the hook would trust what the routers send away."""
-    policy_only = list(data.get("policy_only_actors", []))
-    trusted_ids = {int(a["id"]) for a in data["actors"]}
+    actors = _entries(data, "actors")
+    if not actors:
+        raise ValueError("allow-list actors is empty")
+    policy_only = _entries(data, "policy_only_actors")
+    trusted_ids = {int(a["id"]) for a in actors}
     for actor in policy_only:
         if not actor.get("type"):
             raise ValueError("policy_only_actors entry %s names no type" % actor.get("login", actor.get("id")))
         if int(actor["id"]) in trusted_ids:
             raise ValueError("actor %s is in both actors and policy_only_actors" % actor["id"])
     out, seen = [], set()
-    for actor in list(data["actors"]) + policy_only:
+    for actor in actors + policy_only:
         actor_id = int(actor["id"])
         if actor_id in seen:
             continue

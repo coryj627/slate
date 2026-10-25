@@ -43,6 +43,17 @@ class BuildPolicy(unittest.TestCase):
         with self.assertRaises(ValueError):
             policy.build_policy(data, "p")
 
+    def test_a_malformed_allowlist_stops_the_policy_with_a_clear_error(self):
+        # Never a policy with an entry silently dropped: the owner could be the one missing.
+        for data in ({"policy_events": ["push"]},
+                     {"actors": [], "policy_events": ["push"]},
+                     {"actors": [{"login": "coryj627"}], "policy_events": ["push"]},
+                     {"actors": ["933688"], "policy_events": ["push"]},
+                     {"actors": [OWNER], "policy_only_actors": [{"id": "49699333", "type": "Bot"}], "policy_events": ["push"]},
+                     {"actors": [OWNER], "policy_only_actors": {"id": 49699333}, "policy_events": ["push"]}):
+            with self.assertRaises(ValueError, msg=data):
+                policy.build_policy(data, "p")
+
     def test_the_events_and_the_name_come_from_the_allowlist(self):
         data = {"actors": [OWNER], "policy_events": ["push", "schedule"]}
         body = policy.build_policy(data, "slate")

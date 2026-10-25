@@ -707,6 +707,10 @@ Describe 'Get-PublishedState' {
 }
 
 Describe 'Test-TrustedRun' {
+    BeforeAll {
+        # The entries the host loads, so the tests and the validated config share one shape.
+        $script:policyOnly = @((Get-CiHostConfig -Path (Join-Path $PSScriptRoot '..' 'config.json')).PolicyOnlyActors)
+    }
     It 'is <Expected> for <Case>' -ForEach @(
         @{ Case = 'the trusted repository'; Expected = $true; Run = [pscustomobject]@{ head_repository = [pscustomobject]@{ full_name = 'coryj627/slate' } } }
         @{ Case = 'the trusted repository in another case'; Expected = $true; Run = [pscustomobject]@{ head_repository = [pscustomobject]@{ full_name = 'CoryJ627/SLATE' } } }
@@ -737,7 +741,6 @@ Describe 'Test-TrustedRun' {
         if ($Actor) { $run | Add-Member -NotePropertyName actor -NotePropertyValue ([pscustomobject]$Actor) }
         if ($Trigger) { $run | Add-Member -NotePropertyName triggering_actor -NotePropertyValue ([pscustomobject]$Trigger) }
         if ($Branch) { $run | Add-Member -NotePropertyName head_branch -NotePropertyValue $Branch }
-        $policyOnly = @(@{ Id = 49699333; Login = 'dependabot[bot]'; HeadPrefix = 'dependabot/' })
         Test-TrustedRun -Run $run -TrustedRepo 'coryj627/slate' -PolicyOnlyActors $policyOnly | Should -Be $Expected
     }
     It 'refuses a Bot actor even with no policy-only actors configured' {
@@ -745,7 +748,6 @@ Describe 'Test-TrustedRun' {
         Test-TrustedRun -Run $run -TrustedRepo 'coryj627/slate' | Should -BeFalse
     }
     It 'names why it refuses a run' {
-        $policyOnly = @(@{ Id = 49699333; Login = 'dependabot[bot]'; HeadPrefix = 'dependabot/' })
         $owner = [pscustomobject]@{ login = 'coryj627'; id = 933688; type = 'User' }
         $bot = [pscustomobject]@{ login = 'dependabot[bot]'; id = 49699333; type = 'Bot' }
         $fork = [pscustomobject]@{ head_repository = [pscustomobject]@{ full_name = 'someone/slate' }; actor = $owner; triggering_actor = $owner }
@@ -770,7 +772,7 @@ Describe 'Test-TrustedRun' {
     }
     It 'refuses another repository whatever the actor' {
         $run = [pscustomobject]@{ head_repository = [pscustomobject]@{ full_name = 'someone/slate' }; actor = [pscustomobject]@{ login = 'coryj627'; id = 933688 }; triggering_actor = [pscustomobject]@{ login = 'coryj627'; id = 933688 } }
-        Test-TrustedRun -Run $run -TrustedRepo 'coryj627/slate' -PolicyOnlyActors @(@{ Id = 49699333; Login = 'dependabot[bot]' }) | Should -BeFalse
+        Test-TrustedRun -Run $run -TrustedRepo 'coryj627/slate' -PolicyOnlyActors $policyOnly | Should -BeFalse
     }
 }
 
