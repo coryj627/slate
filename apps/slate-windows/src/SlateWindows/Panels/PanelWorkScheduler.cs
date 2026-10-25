@@ -250,6 +250,11 @@ internal abstract class PanelWorkScheduler : BindableBase
         WatchTracked(work);
     }
 
+    /// <summary>Test seam (#1603): runs in a tracked task's removal, on the
+    /// pool, with the task that ended and before it leaves the set, so a fact
+    /// can keep an ended task listed. A seam that throws leaves it listed.</summary>
+    internal Action<Task>? BeforeUntrackForTests { get; set; }
+
     /// <summary>The tracked task's removal, and its fault counted, once
     /// it completes.</summary>
     private void WatchTracked(Task work)
@@ -261,6 +266,7 @@ internal abstract class PanelWorkScheduler : BindableBase
                 {
                     _ = Interlocked.Increment(ref _faultedWork);
                 }
+                BeforeUntrackForTests?.Invoke(completed);
                 lock (_workLock)
                 {
                     _ = _pendingWork.Remove(completed);
@@ -542,8 +548,19 @@ internal abstract class PanelWorkScheduler : BindableBase
     /// snapshots the tracked set once, so a body an apply enqueued after the
     /// snapshot — the silent replacement pair A-2 requires — could still be
     /// running when it returned. This waits, re-snapshots, and returns only
-    /// when nothing tracked remains.
+    /// when nothing tracked is still running.
     /// </summary>
+    /// <remarks>#1603: a task leaves the tracked set in a continuation on
+    /// the pool (<see cref="WatchTracked"/>), so the set can still list a
+    /// task that has ended. A drain awaiting that task resumes on the same
+    /// pool thread, ahead of the removal queued there (a worker runs its
+    /// own queue last in, first out), and a snapshot of ended tasks
+    /// completes at once: the loop spun with the removal underneath it
+    /// until another worker stole it, which a saturated pool does not do,
+    /// and every other caller (the teardown, on the dispatcher) spun with
+    /// it. So a snapshot skips only work that succeeded: a running task is
+    /// awaited, a faulted or cancelled one faults the drain as before, and
+    /// one that succeeded is done whether or not it has left the set.</remarks>
     internal async Task WhenAllWorkDrained()
     {
         while (true)
@@ -551,7 +568,7 @@ internal abstract class PanelWorkScheduler : BindableBase
             Task[] snapshot;
             lock (_workLock)
             {
-                snapshot = [.. _pendingWork];
+                snapshot = [.. _pendingWork.Where(task => !task.IsCompletedSuccessfully)];
             }
             if (snapshot.Length == 0)
             {
