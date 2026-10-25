@@ -234,8 +234,8 @@ class TheTripwireIsWired(unittest.TestCase):
     def test_the_facts_run_on_hosted_linux_and_the_lane_starts_when_they_change(self):
         workflow = (REPO / ".github" / "workflows" / "swift-tests.yml").read_text(encoding="utf-8")
         for path in ("scripts/check_mac_bundle_resources.py", "scripts/tests/test_mac_bundle_resources.py"):
-            # Once under on.pull_request.paths, once under on.push.paths.
-            self.assertEqual(2, workflow.count(f"      - '{path}'\n"), path)
+            # Once, under on.push.paths: lane-changes.yml decides pull requests from the same list (#1565).
+            self.assertEqual(1, workflow.count(f"      - '{path}'\n"), path)
         self.assertIn("python3 -I -m unittest discover -v -s scripts/tests -p test_mac_bundle_resources.py", workflow)
 
 

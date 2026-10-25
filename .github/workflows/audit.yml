@@ -10,18 +10,9 @@
 name: Security audit
 
 on:
+  # Every pull request: the changes job decides from on.push.paths, the
+  # lane's one path list, whether it touches the lane (#1565).
   pull_request:
-    paths:
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'rust-toolchain.toml'
-      - 'crates/**/Cargo.toml'
-      - '.github/workflows/audit.yml'
-      # Re-run the gate when the ignore list changes, so a newly-added
-      # advisory ignore is validated (and a removed one re-checked).
-      - '.cargo/audit.toml'
-      - 'scripts/verify_citation_dependency.py'
-      - 'scripts/test_citation_dependency.py'
   push:
     branches: [main]
     paths:
@@ -54,8 +45,21 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # #1565: does this pull request touch the lane? Each job below is skipped
+  # when it does not (a skipped job reports as passed), and runs when the
+  # decision failed (.github/workflows/lane-changes.yml).
+  changes:
+    name: changes
+    uses: ./.github/workflows/lane-changes.yml
+    permissions:
+      contents: read
+    with:
+      workflow: .github/workflows/audit.yml
+
   audit:
     name: cargo audit
+    needs: [changes]
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     # Lockfile audit is platform-independent; no native build volume is needed.
     runs-on: ubuntu-latest
     timeout-minutes: 10

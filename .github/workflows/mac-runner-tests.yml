@@ -6,13 +6,9 @@
 name: Mac runner tests
 
 on:
+  # Every pull request: the changes job decides from on.push.paths, the
+  # lane's one path list, whether it touches the lane (#1565).
   pull_request:
-    paths:
-      - 'ci/mac-runner/**'
-      - '.github/workflows/mac-runner-tests.yml'
-      # The workflow guards must run when a routed workflow changes.
-      - '.github/workflows/swift-tests.yml'
-      - '.github/workflows/a11y-check.yml'
   push:
     branches: [main]
     paths:
@@ -35,8 +31,21 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # #1565: does this pull request touch the lane? Each job below is skipped
+  # when it does not (a skipped job reports as passed), and runs when the
+  # decision failed (.github/workflows/lane-changes.yml).
+  changes:
+    name: changes
+    uses: ./.github/workflows/lane-changes.yml
+    permissions:
+      contents: read
+    with:
+      workflow: .github/workflows/mac-runner-tests.yml
+
   tests:
     name: hook, route, scripts
+    needs: [changes]
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

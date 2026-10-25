@@ -1,7 +1,9 @@
-# Windows frontend CI (w0_spec §W0-2 item 3, #603): path-filtered so a
-# Windows PR doesn't block on mac checks and vice versa (the per-area
-# pattern of a11y-check.yml / swift-tests.yml). Parallel build/test lanes
-# and required aggregation:
+# Windows frontend CI (w0_spec §W0-2 item 3, #603): runs its jobs only for
+# the paths in on.push.paths, so a Windows PR doesn't wait on mac checks
+# and vice versa (the per-area pattern of a11y-check.yml / swift-tests.yml).
+# On a pull request the changes job decides from that list, and the jobs
+# report as skipped when it does not match (#1565). Parallel build/test
+# lanes and required aggregation:
 #
 #   rust-tests — the deliberate platform witnesses (slate-core, slate-cli
 #     suites: MoveFileExW no-clobber, reserved-name validation,
@@ -112,48 +114,9 @@
 name: windows
 
 on:
+  # Every pull request: the changes job decides from on.push.paths, the
+  # lane's one path list, whether it touches the lane (#1565).
   pull_request:
-    paths:
-      - 'apps/slate-windows/**'
-      - 'crates/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'rust-toolchain.toml'
-      # The .NET SDK pin every dotnet in the lane reads (#1568).
-      - 'global.json'
-      - '.github/workflows/windows.yml'
-      - 'ci/windows-runner/route/**'
-      - 'scripts/verify_windows_model_shards.py'
-      - 'scripts/tests/test_windows_model_shards.py'
-      # W6-2 PR F (IPJ-5-1): the lane's censuses read the plan documents,
-      # the generators read the scripts, the help catalog and the mac
-      # sources — a change to any of them must run the lane. Only the plan
-      # documents the censuses read are listed, top-level ones by name:
-      # the ten contracts documents a check reads, the Windows port
-      # folder, and one spec a ledger decision cites. Every other plan
-      # document (the unread contracts, plans 43 and 44, any design or
-      # planning folder) does not start the lane. scripts/
-      # check_windows_docs_trigger.py fails the lane if a check reads a
-      # docs path this list misses; keep both lists identical.
-      - 'docs/plans/22_property_panel_contracts.md'
-      - 'docs/plans/23_citation_surfaces_contracts.md'
-      - 'docs/plans/25_bases_grid_contracts.md'
-      - 'docs/plans/29_search_overlay_contracts.md'
-      - 'docs/plans/34_canvas_contracts.md'
-      - 'docs/plans/35_graph_contracts.md'
-      - 'docs/plans/37_editor_peer_contracts.md'
-      - 'docs/plans/38_notification_dispatcher_contracts.md'
-      - 'docs/plans/39_at_navigation_contracts.md'
-      - 'docs/plans/40_nvda_matrix_remediation_contracts.md'
-      - 'docs/plans/18_windows_port/**'
-      - 'docs/plans/15_files_sidebar/specs/fl4_spec.md'
-      - 'docs/help/**'
-      - 'scripts/**'
-      - 'apps/slate-mac/**'
-      # IPJ-6-1: the roll-up the §K census reads, and the corpus and
-      # parity fixtures the censuses read.
-      - 'BENCHMARKS.md'
-      - 'tests/fixtures/**'
   push:
     branches: [main]
     paths:
@@ -177,7 +140,7 @@ on:
       # document (the unread contracts, plans 43 and 44, any design or
       # planning folder) does not start the lane. scripts/
       # check_windows_docs_trigger.py fails the lane if a check reads a
-      # docs path this list misses; keep both lists identical.
+      # docs path this list misses.
       - 'docs/plans/22_property_panel_contracts.md'
       - 'docs/plans/23_citation_surfaces_contracts.md'
       - 'docs/plans/25_bases_grid_contracts.md'
@@ -212,6 +175,17 @@ permissions:
   contents: read
 
 jobs:
+  # #1565: does this pull request touch the lane? Each job below is skipped
+  # when it does not (a skipped job reports as passed), and runs when the
+  # decision failed (.github/workflows/lane-changes.yml).
+  changes:
+    name: changes
+    uses: ./.github/workflows/lane-changes.yml
+    permissions:
+      contents: read
+    with:
+      workflow: .github/workflows/windows.yml
+
   # The rule lives in ci/windows-runner/route/route.py (spec §3–§5): it
   # reads the state the host publishes (vars) and decides a pool per lane.
   # It runs only when the mode is home or home-only and never fails the
@@ -222,7 +196,8 @@ jobs:
   # by an earlier attempt.
   route:
     name: Route Windows lanes
-    if: ${{ vars.WINDOWS_RUNNER_MODE == 'home' || vars.WINDOWS_RUNNER_MODE == 'home-only' }}
+    needs: [changes]
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' && (vars.WINDOWS_RUNNER_MODE == 'home' || vars.WINDOWS_RUNNER_MODE == 'home-only') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     continue-on-error: true
@@ -268,8 +243,8 @@ jobs:
 
   rust-tests:
     name: rust tests (windows x64)
-    needs: [route]
-    if: ${{ !cancelled() }}
+    needs: [changes, route]
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     runs-on: ${{ (needs.route.outputs.attempt == github.run_attempt && needs.route.outputs.rust-pool == 'home') && 'slate-win-rust' || format('namespace-profile-winx64-fast{0};overrides.cache-tag=slate-windows-rust', github.ref != 'refs/heads/main' && '-pr' || '') }}
     timeout-minutes: 60
     steps:
@@ -443,8 +418,8 @@ jobs:
 
   windows:
     name: app build + test (windows x64)
-    needs: [route]
-    if: ${{ !cancelled() }}
+    needs: [changes, route]
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     runs-on: ${{ (needs.route.outputs.attempt == github.run_attempt && needs.route.outputs.app-pool == 'home') && 'slate-win-app' || format('namespace-profile-winx64-fast{0};overrides.cache-tag=slate-windows-app', github.ref != 'refs/heads/main' && '-pr' || '') }}
     timeout-minutes: 60
     steps:
@@ -674,8 +649,8 @@ jobs:
 
   windows-model-shard:
     name: app model (windows x64, shard ${{ matrix.shard }})
-    needs: [route]
-    if: ${{ !cancelled() }}
+    needs: [changes, route]
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     runs-on: ${{ (needs.route.outputs.attempt == github.run_attempt && ((matrix.shard == 0 && needs.route.outputs.model-0-pool == 'home') || (matrix.shard == 1 && needs.route.outputs.model-1-pool == 'home'))) && 'slate-win-model' || format('namespace-profile-winx64-fast{0};overrides.cache-tag=slate-windows-model', github.ref != 'refs/heads/main' && '-pr' || '') }}
     strategy:
       fail-fast: false
@@ -849,8 +824,8 @@ jobs:
 
   windows-model:
     name: app model (windows x64)
-    needs: [windows-model-shard]
-    if: ${{ always() }}
+    needs: [changes, windows-model-shard]
+    if: ${{ always() && needs.changes.outputs.run != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -891,8 +866,8 @@ jobs:
   # desktop, drive UIA3 and run axe-windows using the app lane's binaries.
   flaui:
     name: shell accessibility gate (windows x64)
-    needs: [windows]
-    if: ${{ !cancelled() && needs.windows.result == 'success' }}
+    needs: [changes, windows]
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' && needs.windows.result == 'success' }}
     runs-on: ${{ (vars.WINDOWS_RUNNER_MODE == 'home-only' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && github.event.pull_request.user.login != 'dependabot[bot]' && !startsWith(github.head_ref || github.ref_name, 'dependabot/')) && 'slate-win-shell' || 'windows-latest' }}
     timeout-minutes: 20
     steps:
@@ -953,7 +928,7 @@ jobs:
   # succeed, so "build + test (windows x64)" green still means what it
   # meant when the lanes were one serial job. It evaluates the lane
   # results on a standard hosted runner without an attached paid cache.
-  # The path trigger above lists only the plan documents the censuses read.
+  # The lane's path list above names only the plan documents the censuses read.
   # This proves the list is complete: every docs path the lane reads (in
   # the Windows sources, the trigger ledger's decisions, the AT navigation
   # map's links and the scripts this workflow runs) must start the lane, so
@@ -962,6 +937,8 @@ jobs:
   # runner tests pin them (ci/windows-runner/tests/Workflows.Tests.ps1).
   docs-trigger:
     name: windows docs trigger census
+    needs: [changes]
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -976,8 +953,10 @@ jobs:
 
   gate:
     name: build + test (windows x64)
-    needs: [route, rust-tests, windows, windows-model, flaui]
-    if: ${{ always() }}
+    needs: [changes, route, rust-tests, windows, windows-model, flaui]
+    # Skipped, and so passed, only when changes decided that the pull request
+    # touches none of the lane's paths (#1565).
+    if: ${{ always() && needs.changes.outputs.run != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

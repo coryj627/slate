@@ -8,14 +8,9 @@
 name: License headers
 
 on:
+  # Every pull request: the changes job decides from on.push.paths, the
+  # lane's one path list, whether it touches the lane (#1565).
   pull_request:
-    paths:
-      - '**/*.rs'
-      - '**/*.swift'
-      - '**/*.cs'
-      - 'scripts/check-license-headers.sh'
-      - 'scripts/apply-license-header.py'
-      - '.github/workflows/license-headers.yml'
   push:
     branches: [main]
     paths:
@@ -40,8 +35,21 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # #1565: does this pull request touch the lane? Each job below is skipped
+  # when it does not (a skipped job reports as passed), and runs when the
+  # decision failed (.github/workflows/lane-changes.yml).
+  changes:
+    name: changes
+    uses: ./.github/workflows/lane-changes.yml
+    permissions:
+      contents: read
+    with:
+      workflow: .github/workflows/license-headers.yml
+
   check:
     name: SPDX header present on every .rs/.swift
+    needs: [changes]
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     # No native toolchain or paid cache needed: bash + grep + git suffice.
     runs-on: ubuntu-latest
     timeout-minutes: 5

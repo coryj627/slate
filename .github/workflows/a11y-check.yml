@@ -17,10 +17,9 @@
 name: Accessibility Check
 
 on:
+  # Every pull request: the changes job decides from on.push.paths, the
+  # lane's one path list, whether it touches the lane (#1565).
   pull_request:
-    paths:
-      - 'apps/slate-mac/**/*.swift'
-      - '.github/workflows/a11y-check.yml'
   push:
     branches: [main]
     paths:
@@ -59,8 +58,21 @@ env:
   XCODE_BUILD: 27A266a
 
 jobs:
+  # #1565: does this pull request touch the lane? Each job below is skipped
+  # when it does not (a skipped job reports as passed), and runs when the
+  # decision failed (.github/workflows/lane-changes.yml).
+  changes:
+    name: changes
+    uses: ./.github/workflows/lane-changes.yml
+    permissions:
+      contents: read
+    with:
+      workflow: .github/workflows/a11y-check.yml
+
   route:
     name: Route mac jobs
+    needs: [changes]
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -192,11 +204,11 @@ jobs:
   # "<workflow file>:<job id>", so this keeps the alert history continuous.
   a11y-check:
     name: Report and enforce the floor
-    needs: analyze
+    needs: [changes, analyze]
     # Runs after the analysis whether it passed or failed, so a drop below
     # the floor still gets its comment and its red check; only a cancelled
-    # run skips it.
-    if: ${{ !cancelled() && needs.analyze.result != 'skipped' }}
+    # run, or a pull request that touches none of the lane's paths, skips it.
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' && needs.analyze.result != 'skipped' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # actions: read is only needed by codeql-action/upload-sarif within

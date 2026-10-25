@@ -20,7 +20,11 @@
 name: Swift Tests
 
 on:
+  # Every pull request: the changes job decides from on.push.paths, the
+  # lane's one path list, whether it touches the lane (#1565).
   pull_request:
+  push:
+    branches: [main]
     paths:
       - 'apps/slate-mac/**'
       - 'crates/slate-uniffi/**'
@@ -40,28 +44,6 @@ on:
       - 'scripts/check_mac_sdk.py'
       - 'scripts/tests/test_mac_sdk.py'
       # The #1589 resource bundle tripwire its --bundle step runs, and its facts.
-      - 'scripts/check_mac_bundle_resources.py'
-      - 'scripts/tests/test_mac_bundle_resources.py'
-      - 'scripts/build-swift-cli.sh'
-      - 'Makefile'
-  push:
-    branches: [main]
-    paths:
-      - 'apps/slate-mac/**'
-      - 'crates/slate-uniffi/**'
-      - 'crates/slate-core/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'rust-toolchain.toml'
-      # macOS rustflags (rustc stripping disabled) live here.
-      - '.cargo/config.toml'
-      - '.github/workflows/swift-tests.yml'
-      - 'examples/swift-cli/**'
-      - 'docs/help/**'
-      - 'tests/fixtures/**'
-      - 'scripts/build-mac-app.sh'
-      - 'scripts/check_mac_sdk.py'
-      - 'scripts/tests/test_mac_sdk.py'
       - 'scripts/check_mac_bundle_resources.py'
       - 'scripts/tests/test_mac_bundle_resources.py'
       - 'scripts/build-swift-cli.sh'
@@ -90,8 +72,21 @@ env:
   XCODE_BUILD: 27A266a
 
 jobs:
+  # #1565: does this pull request touch the lane? Each job below is skipped
+  # when it does not (a skipped job reports as passed), and runs when the
+  # decision failed (.github/workflows/lane-changes.yml).
+  changes:
+    name: changes
+    uses: ./.github/workflows/lane-changes.yml
+    permissions:
+      contents: read
+    with:
+      workflow: .github/workflows/swift-tests.yml
+
   route:
     name: Route mac jobs
+    needs: [changes]
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -203,6 +198,8 @@ jobs:
   # inside the build step above.
   sdk-tripwire-facts:
     name: SDK tripwire facts (#1460)
+    needs: [changes]
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -222,6 +219,8 @@ jobs:
   # mac lane builds the .app bundle.
   bundle-resources-facts:
     name: Resource bundle tripwire facts (#1589)
+    needs: [changes]
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
