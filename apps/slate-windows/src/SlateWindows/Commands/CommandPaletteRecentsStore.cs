@@ -53,9 +53,8 @@ internal sealed class CommandPaletteRecentsStore
         _filePath = filePath;
     }
 
-    public static string DefaultFilePath { get; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "Slate",
+    public static string DefaultFilePath => Path.Combine(
+        SlateDeviceState.Root,
         "command-palette-recents.json");
 
     /// <summary>The last persistence failure, or <see langword="null"/>.

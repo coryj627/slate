@@ -59,8 +59,7 @@ internal sealed class AppPreferencesStore
     }
 
     public static string DefaultFilePath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "Slate",
+        SlateDeviceState.Root,
         "preferences.json");
 
     /// <summary>Never null and never throws: any unreadable state is the

@@ -30,11 +30,14 @@ internal sealed class FileRecentsStore
             : $"{identity.Device}-{identity.Inode}";
         string key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identityText)));
         string root = localAppDataRoot ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Slate",
+            SlateDeviceState.Root,
             "file-recents");
         _path = Path.Combine(root, $"{key}.json");
     }
+
+    /// <summary>Test seam (#1331): the file this store reads and
+    /// writes.</summary>
+    internal string FilePathForTests => _path;
 
     public IReadOnlyList<string> Load()
     {

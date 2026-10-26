@@ -53,6 +53,12 @@
              Exclude="..\..\..\..\demo-vault\canvas\large_2000.canvas"
              Link="fixtures\canvas\%(Filename)%(Extension)"
              CopyToOutputDirectory="PreserveNewest" />
+
+    <!-- #1331: the gate step runs under the whole-run device-state guard,
+         and the gate runner has no checkout, so the guard travels in the
+         output directory with the binaries, as the fixtures above do
+         (windows.yml runs it from tools\). -->
+    <Content Include="..\..\..\..\scripts\windows\guard-device-state.ps1" Link="tools\guard-device-state.ps1" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

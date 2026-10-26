@@ -90,7 +90,8 @@ public sealed class W1ReleaseEvidenceContractTests
         Assert.Contains("SLATE_ACCESSIBILITY_EVIDENCE_DIR:", workflow, StringComparison.Ordinal);
         Assert.Contains("--logger \"trx;LogFileName=slate-windows-accessibility.trx\"", workflow, StringComparison.Ordinal);
         Assert.Contains("if: ${{ always() }}", workflow, StringComparison.Ordinal);
-        Assert.Contains("slate-windows-accessibility-${{ github.sha }}", workflow, StringComparison.Ordinal);
+        // Named by attempt too (#1648): a rerun keeps the failed attempt's evidence.
+        Assert.Contains("name: slate-windows-accessibility-${{ github.sha }}-${{ github.run_attempt }}\n", workflow.Replace("\r\n", "\n", StringComparison.Ordinal), StringComparison.Ordinal);
         Assert.Contains("retention-days: 30", workflow, StringComparison.Ordinal);
     }
 

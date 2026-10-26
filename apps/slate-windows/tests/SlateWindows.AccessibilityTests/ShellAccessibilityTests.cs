@@ -122,6 +122,7 @@ public sealed partial class ShellAccessibilityTests
             RedirectStandardOutput = true,
             UseShellExecute = false,
         };
+        ShellLaunch.ApplyDeviceState(startInfo);
         startInfo.ArgumentList.Add(vaultRoot);
         startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
             $"slate-accessibility-{Guid.NewGuid():N}";
@@ -929,7 +930,8 @@ public sealed partial class ShellAccessibilityTests
             Assert.True(openVault.IsEnabled);
             Assert.True(openVault.Patterns.Invoke.IsSupported);
             Assert.Contains("Open Vault", openVault.Name, StringComparison.Ordinal);
-            // W7-7 PR 3 (#1246): the recents list is device-wide, and a
+            // W7-7 PR 3 (#1246): the recents list is shared by every launch
+            // of the run (under ShellLaunch.Root, #1331), and a
             // display name another recent vault shares carries its path
             // (RecentVault.SpokenName), so the name starts with it.
             Assert.Contains(
@@ -1397,6 +1399,7 @@ public sealed partial class ShellAccessibilityTests
                 RedirectStandardOutput = true,
                 UseShellExecute = false,
             };
+            ShellLaunch.ApplyDeviceState(startInfo);
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
                 $"slate-identity-{Guid.NewGuid():N}";
@@ -1549,6 +1552,7 @@ public sealed partial class ShellAccessibilityTests
                 RedirectStandardOutput = true,
                 UseShellExecute = false,
             };
+            ShellLaunch.ApplyDeviceState(startInfo);
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] = $"slate-editor-semantics-{Guid.NewGuid():N}";
             startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
@@ -1736,6 +1740,7 @@ public sealed partial class ShellAccessibilityTests
                 RedirectStandardOutput = true,
                 UseShellExecute = false,
             };
+            ShellLaunch.ApplyDeviceState(startInfo);
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
                 $"slate-rangefromchild-{Guid.NewGuid():N}";
@@ -2693,6 +2698,7 @@ public sealed partial class ShellAccessibilityTests
                 RedirectStandardOutput = true,
                 UseShellExecute = false,
             };
+            ShellLaunch.ApplyDeviceState(startInfo);
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
                 $"slate-panels-{Guid.NewGuid():N}";
@@ -2892,6 +2898,7 @@ public sealed partial class ShellAccessibilityTests
                 RedirectStandardOutput = true,
                 UseShellExecute = false,
             };
+            ShellLaunch.ApplyDeviceState(startInfo);
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
                 $"slate-tasks-{Guid.NewGuid():N}";
@@ -3117,6 +3124,7 @@ public sealed partial class ShellAccessibilityTests
                 RedirectStandardOutput = true,
                 UseShellExecute = false,
             };
+            ShellLaunch.ApplyDeviceState(startInfo);
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
                 $"slate-props-{Guid.NewGuid():N}";
@@ -3390,6 +3398,7 @@ public sealed partial class ShellAccessibilityTests
                 RedirectStandardOutput = true,
                 UseShellExecute = false,
             };
+            ShellLaunch.ApplyDeviceState(startInfo);
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
                 $"slate-citations-{Guid.NewGuid():N}";
@@ -4042,6 +4051,7 @@ public sealed partial class ShellAccessibilityTests
                 RedirectStandardOutput = true,
                 UseShellExecute = false,
             };
+            ShellLaunch.ApplyDeviceState(startInfo);
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
                 $"slate-degraded-{Guid.NewGuid():N}";
@@ -4201,6 +4211,7 @@ public sealed partial class ShellAccessibilityTests
             {
                 UseShellExecute = false,
             };
+            ShellLaunch.ApplyDeviceState(startInfo);
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
                 $"slate-bases-surfaces-{Guid.NewGuid():N}";
@@ -4695,6 +4706,7 @@ public sealed partial class ShellAccessibilityTests
             {
                 UseShellExecute = false,
             };
+            ShellLaunch.ApplyDeviceState(startInfo);
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
                 $"slate-history-surfaces-{Guid.NewGuid():N}";
@@ -5094,6 +5106,7 @@ public sealed partial class ShellAccessibilityTests
             {
                 UseShellExecute = false,
             };
+            ShellLaunch.ApplyDeviceState(startInfo);
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
                 $"slate-sync-diagnostics-{Guid.NewGuid():N}";
@@ -5357,6 +5370,7 @@ public sealed partial class ShellAccessibilityTests
             {
                 UseShellExecute = false,
             };
+            ShellLaunch.ApplyDeviceState(startInfo);
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
                 $"slate-command-palette-{Guid.NewGuid():N}";
@@ -5800,6 +5814,7 @@ public sealed partial class ShellAccessibilityTests
             {
                 UseShellExecute = false,
             };
+            ShellLaunch.ApplyDeviceState(startInfo);
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
                 $"slate-search-overlay-{Guid.NewGuid():N}";
@@ -6330,6 +6345,7 @@ public sealed partial class ShellAccessibilityTests
             {
                 UseShellExecute = false,
             };
+            ShellLaunch.ApplyDeviceState(startInfo);
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
                 $"slate-templates-{Guid.NewGuid():N}";
@@ -6697,6 +6713,7 @@ public sealed partial class ShellAccessibilityTests
             {
                 UseShellExecute = false,
             };
+            ShellLaunch.ApplyDeviceState(startInfo);
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
                 $"slate-filemgmt-{Guid.NewGuid():N}";
@@ -6990,6 +7007,7 @@ public sealed partial class ShellAccessibilityTests
         try
         {
             var startInfo = new ProcessStartInfo(SlateWindowsExe()) { UseShellExecute = false };
+            ShellLaunch.ApplyDeviceState(startInfo);
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] = $"trash-cancel-{Guid.NewGuid():N}";
             startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
@@ -7289,6 +7307,7 @@ public sealed partial class ShellAccessibilityTests
             {
                 UseShellExecute = false,
             };
+            ShellLaunch.ApplyDeviceState(startInfo);
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
                 $"slate-canvas-authoring-{Guid.NewGuid():N}";
@@ -7550,6 +7569,7 @@ public sealed partial class ShellAccessibilityTests
             {
                 UseShellExecute = false,
             };
+            ShellLaunch.ApplyDeviceState(startInfo);
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
                 $"slate-canvas-marks-{Guid.NewGuid():N}";
@@ -7814,6 +7834,7 @@ public sealed partial class ShellAccessibilityTests
             {
                 UseShellExecute = false,
             };
+            ShellLaunch.ApplyDeviceState(startInfo);
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
                 $"slate-canvas-verbs-{Guid.NewGuid():N}";
@@ -8416,6 +8437,7 @@ public sealed partial class ShellAccessibilityTests
             {
                 UseShellExecute = false,
             };
+            ShellLaunch.ApplyDeviceState(startInfo);
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
                 $"slate-canvas-modes-{Guid.NewGuid():N}";
@@ -8596,6 +8618,7 @@ public sealed partial class ShellAccessibilityTests
             {
                 UseShellExecute = false,
             };
+            ShellLaunch.ApplyDeviceState(startInfo);
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
                 $"slate-canvas-outline-{Guid.NewGuid():N}";
@@ -8849,6 +8872,7 @@ public sealed partial class ShellAccessibilityTests
             {
                 UseShellExecute = false,
             };
+            ShellLaunch.ApplyDeviceState(startInfo);
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
                 $"slate-canvas-table-{Guid.NewGuid():N}";
@@ -9116,6 +9140,7 @@ public sealed partial class ShellAccessibilityTests
             {
                 UseShellExecute = false,
             };
+            ShellLaunch.ApplyDeviceState(startInfo);
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
                 $"slate-canvas-navigator-{Guid.NewGuid():N}";
@@ -9290,6 +9315,7 @@ public sealed partial class ShellAccessibilityTests
             {
                 UseShellExecute = false,
             };
+            ShellLaunch.ApplyDeviceState(startInfo);
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
                 $"slate-canvas-visual-{Guid.NewGuid():N}";
@@ -9642,6 +9668,7 @@ public sealed partial class ShellAccessibilityTests
             {
                 UseShellExecute = false,
             };
+            ShellLaunch.ApplyDeviceState(startInfo);
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
                 $"slate-canvas-menus-{Guid.NewGuid():N}";
@@ -9939,6 +9966,7 @@ public sealed partial class ShellAccessibilityTests
             {
                 UseShellExecute = false,
             };
+            ShellLaunch.ApplyDeviceState(startInfo);
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
                 $"slate-graph-table-{Guid.NewGuid():N}";
@@ -10210,6 +10238,7 @@ public sealed partial class ShellAccessibilityTests
             {
                 UseShellExecute = false,
             };
+            ShellLaunch.ApplyDeviceState(startInfo);
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
                 $"slate-graph-navigator-{Guid.NewGuid():N}";
@@ -10538,6 +10567,7 @@ public sealed partial class ShellAccessibilityTests
             {
                 UseShellExecute = false,
             };
+            ShellLaunch.ApplyDeviceState(startInfo);
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
                 $"slate-graph-inspector-{Guid.NewGuid():N}";
@@ -10898,6 +10928,7 @@ public sealed partial class ShellAccessibilityTests
             {
                 UseShellExecute = false,
             };
+            ShellLaunch.ApplyDeviceState(startInfo);
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
                 $"slate-graph-diagram-{Guid.NewGuid():N}";
@@ -11323,6 +11354,7 @@ public sealed partial class ShellAccessibilityTests
             {
                 UseShellExecute = false,
             };
+            ShellLaunch.ApplyDeviceState(startInfo);
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
                 $"slate-graph-connections-{Guid.NewGuid():N}";
