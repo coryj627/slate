@@ -154,9 +154,9 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
         // That is a claim about SCHEDULING, and without a controllable
         // seam it is a coin flip — a cold run can stall the test thread
         // long enough for the worker to finish, which failed this suite
-        // once in three. The interleaving assertion returns with the
-        // manually-released scheduler seam; until then these tests pin
-        // the END STATE only.
+        // once in three. The interleaving assertion can return through a
+        // HeldWork hold on the bibliography's own seam (the WB-4 pattern);
+        // until then these tests pin the END STATE only.
         await QuiesceAsync(workspace);
 
         Assert.Equal("knuth1984", workspace.Bibliography.ConsumeKeyFocusRequest());
@@ -330,17 +330,30 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
         workspace.OpenPath("cited.md");
         await QuiesceAsync(workspace);
 
-        workspace.OpenFilesCiting("knuth1984");
+        using var held = new HeldWork(hook => workspace.FilesCitingInterleaveForTests = hook);
+        try
+        {
+            workspace.OpenFilesCiting("knuth1984");
+            held.WaitUntilEntered();
 
-        // Not yet: the answer is still in flight, and a sheet shown now
-        // would speak a count nothing has counted.
-        Assert.Null(workspace.FilesCiting);
+            // Not yet: the lookup is held, and a sheet shown now would
+            // speak a count nothing has counted.
+            Assert.Null(workspace.FilesCiting);
+        }
+        finally
+        {
+            held.Release();
+        }
 
-        for (int round = 0; round < 40; round++)
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        // Past the hold's own 10 s bound, so a hold that ran out is reported
+        // as one rather than as a missing sheet.
+        while (workspace.FilesCiting is null && clock.Elapsed < TimeSpan.FromSeconds(30))
         {
             await workspace.Citations.DrainForTests();
-            await Task.Delay(2);
+            await Task.Delay(5);
         }
+        held.AssertHeldUntilReleased();
 
         Assert.NotNull(workspace.FilesCiting);
         Assert.False(workspace.FilesCiting!.IsLoading);
@@ -349,6 +362,37 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
             CitationPhrase.FilesCitingContainerLabel(workspace.FilesCiting.Paths.Count),
             workspace.FilesCiting.AutomationName);
         Assert.Contains("1 file", workspace.FilesCiting.AutomationName, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// WB-4: the Files Citing seam sits after the lookup, whichever way the
+    /// lookup ended, so a failed lookup is held exactly as an answered one
+    /// is — here every lookup fails, the session already disposed — and,
+    /// released, it publishes the empty answer (mac parity: empty, not an
+    /// error).
+    /// </summary>
+    [Fact]
+    public async Task TheFilesCitingSeamHoldsAFailedLookupToo()
+    {
+        VaultSession session = OpenScanned();
+        session.Dispose();
+        var sheet = new FilesCitingViewModel(session, "knuth1984", synchronousForTests: false);
+        using var held = new HeldWork(hook => sheet.InterleaveForTests = hook);
+        try
+        {
+            sheet.Load();
+            held.WaitUntilEntered();
+            Assert.True(sheet.IsLoading, "a held lookup published before its release");
+        }
+        finally
+        {
+            held.Release();
+        }
+
+        await sheet.DrainForTests();
+        held.AssertHeldUntilReleased();
+        Assert.False(sheet.IsLoading);
+        Assert.Empty(sheet.Paths);
     }
 
     /// <summary>
@@ -369,7 +413,7 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
     /// was left.
     /// </summary>
     [Fact]
-    public void TheCitationsLeafDoesNotClaimEmptinessWhileLoading()
+    public async Task TheCitationsLeafDoesNotClaimEmptinessWhileLoading()
     {
         using VaultSession session = OpenScanned();
         var leaf = new CitationsPanelViewModel(
@@ -384,13 +428,24 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
             }
         };
 
-        leaf.NoteChanged("cited.md");
+        using var held = new HeldWork(hook => leaf.InterleaveForTests = hook);
+        try
+        {
+            leaf.NoteChanged("cited.md");
+            held.WaitUntilEntered();
 
-        // Deterministic: the publish is posted to this thread's
-        // context and cannot run until the test yields.
-        Assert.True(leaf.IsLoading);
-        Assert.False(leaf.ShowEmptyState);
-        Assert.False(lastToldShowEmpty ?? true);
+            // A held publish cannot land: this is the loading state.
+            Assert.True(leaf.IsLoading);
+            Assert.False(leaf.ShowEmptyState);
+            Assert.False(lastToldShowEmpty ?? true);
+        }
+        finally
+        {
+            held.Release();
+        }
+
+        await leaf.DrainForTests();
+        held.AssertHeldUntilReleased();
     }
 
     /// <summary>
@@ -406,6 +461,16 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
     /// answer. Worse, a superseded publish is discarded before the
     /// event is raised, so the answer is guaranteed to come from a
     /// LATER, unrelated load.
+    ///
+    /// cited.md's load is HELD — read, and parked before its publish —
+    /// until the user has moved on. In the fact's earlier unpumped shape
+    /// "the answer has not arrived yet" was a bet on scheduling: when
+    /// cited.md published before the move (3 runs in 9 on a busy
+    /// machine) the summary rightly answered the note it was asked about,
+    /// and the last assertion failed on cited.md's own counts. The pumped
+    /// context now also orders the publish behind this turn; the hold
+    /// makes the pre-move assertions true on its own, without leaning on
+    /// that ordering.
     /// </summary>
     [Fact]
     public void ADeferredSummaryDoesNotAnswerForADifferentNote()
@@ -417,18 +482,27 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
             var announced = new List<A11yEvent>();
             using VaultSession session = OpenScanned();
             using var workspace = MakeAsyncWorkspace(session, announced);
+            using var held = new HeldWork(hook => workspace.Citations.InterleaveForTests = hook);
 
-            workspace.OpenPath("cited.md");
-            // The owner dispatcher cannot apply a queued publication
-            // until this turn pumps; the note switch precedes its answer.
-            Assert.True(workspace.Citations.IsLoading);
+            try
+            {
+                workspace.OpenPath("cited.md");
+                held.WaitUntilEntered();
+                // Deterministic: a held load cannot publish.
+                Assert.True(workspace.Citations.IsLoading);
 
-            workspace.OpenCitationSummary();
-            Assert.Null(workspace.CitationSummary);
+                workspace.OpenCitationSummary();
+                Assert.Null(workspace.CitationSummary);
 
-            // The user moves on before the answer arrives.
-            workspace.OpenPath("other.md");
+                // The user moves on before the answer arrives.
+                workspace.OpenPath("other.md");
+            }
+            finally
+            {
+                held.Release();
+            }
             PumpedDispatcher.PumpUntilDrained(QuiesceAsync(workspace));
+            held.AssertHeldUntilReleased();
 
             // No sheet, because the question was about cited.md and the
             // only answer available is about other.md.
@@ -440,7 +514,9 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
     /// <summary>The defer must still DELIVER for the note it was asked
     /// about — a fix that simply stopped opening the sheet would pass
     /// the wrong-note test and reintroduce the dead keypress the defer
-    /// exists to prevent.</summary>
+    /// exists to prevent. Held like its sibling, so the press is parked
+    /// behind a load that is really in flight, never answered on the spot
+    /// by one that has already landed.</summary>
     [Fact]
     public void ADeferredSummaryStillAnswersForTheNoteItWasAskedAbout()
     {
@@ -451,13 +527,22 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
             var announced = new List<A11yEvent>();
             using VaultSession session = OpenScanned();
             using var workspace = MakeAsyncWorkspace(session, announced);
+            using var held = new HeldWork(hook => workspace.Citations.InterleaveForTests = hook);
 
-            workspace.OpenPath("cited.md");
-            Assert.True(workspace.Citations.IsLoading);
-            workspace.OpenCitationSummary();
-            Assert.Null(workspace.CitationSummary);
-
+            try
+            {
+                workspace.OpenPath("cited.md");
+                held.WaitUntilEntered();
+                Assert.True(workspace.Citations.IsLoading);
+                workspace.OpenCitationSummary();
+                Assert.Null(workspace.CitationSummary);
+            }
+            finally
+            {
+                held.Release();
+            }
             PumpedDispatcher.PumpUntilDrained(QuiesceAsync(workspace));
+            held.AssertHeldUntilReleased();
 
             Assert.NotNull(workspace.CitationSummary);
             // cited.md's own counts, not some other note's.
@@ -525,17 +610,26 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
         // The seed has settled, so the command is available.
         Assert.True(workspace.ReloadBibliographyCommand.CanExecute(null));
 
-        workspace.ReloadBibliography();
+        using var held = new HeldWork(hook => workspace.SeedInterleaveForTests = hook);
+        try
+        {
+            workspace.ReloadBibliography();
+            held.WaitUntilEntered();
 
-        // Deterministic: the completion is posted to this thread's
-        // context, which cannot run until we yield.
-        Assert.False(workspace.ReloadBibliographyCommand.CanExecute(null));
+            // A held reload cannot complete: the first is still running.
+            Assert.False(workspace.ReloadBibliographyCommand.CanExecute(null));
+        }
+        finally
+        {
+            held.Release();
+        }
 
         for (int round = 0; round < 40; round++)
         {
             await workspace.SeedWorkForTests;
             await Task.Delay(2);
         }
+        held.AssertHeldUntilReleased();
         Assert.True(workspace.ReloadBibliographyCommand.CanExecute(null));
     }
 
