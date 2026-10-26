@@ -89,10 +89,12 @@ public sealed class W1ChildExpansionTests
 
     /// <summary>Plan 44 WB-6 (the red team's L3): the selection on the
     /// root's overflow row — a placeholder, never a kept row — survives a
-    /// refresh that lists the root again: the fresh overflow row takes it,
-    /// on both halves. Placeholders are keyed by the folder they are in and
-    /// their text, so a selected one is re-seated, never resolved as gone
-    /// (which moved the keys to the row before it on every run).</summary>
+    /// refresh that lists the root again: the fresh overflow row is the
+    /// sidebar's selection and holds its node's IsSelected (headless; a
+    /// container needs the hosted tree). Placeholders are keyed by the folder
+    /// they are in and their text, so a selected one is re-seated, never
+    /// resolved as gone (which moved the keys to the row before it on every
+    /// run).</summary>
     [Fact]
     [Trait("census", "moderate")]
     public async Task ASelectedOverflowRowStaysSelectedThroughARefresh()
@@ -117,7 +119,7 @@ public sealed class W1ChildExpansionTests
         FileTreeNodeViewModel fresh = Assert.Single(sidebar.RootNodes, node => node.IsPlaceholder);
         Assert.Equal(overflow.Name, fresh.Name);
         Assert.Same(fresh, sidebar.SelectedNode);
-        Assert.True(fresh.IsSelected, "the fresh overflow row does not hold the selection");
+        Assert.True(fresh.IsSelected, "the fresh overflow row's node does not hold the selection");
     }
 
     [Fact]

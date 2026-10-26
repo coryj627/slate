@@ -664,38 +664,54 @@ internal sealed partial class FilesSidebarViewModel
     {
         if (place is not null && !(SelectedNode is { } current && InTree(current)))
         {
-            // A selection that was not a tree row (a list's row) is re-bound
-            // silently, as main always did: the keys were not on its row.
             if (RowWithKey(RootNodes, place.SelectedKey, string.Empty) is { } replacement)
             {
-                SelectSilently(replacement, reseatOf: place.SelectedPath);
                 if (place.InTree)
                 {
+                    SelectSilently(replacement, reseatOf: place.SelectedPath);
                     RecordSelectionLanding(ShownRowHolding(replacement, RootNodes));
+                    return;
                 }
 
-                return;
-            }
-
-            if (SetField(ref _selectedNode, null, nameof(SelectedNode)))
-            {
-                RaiseCommandStates();
-            }
-
-            if (place.InTree)
-            {
-                FileTreeNodeViewModel? survivor = NearestSurvivor(place);
-                if (survivor is not null || treeRow is null)
+                // A selection that was not a tree row (a list's row) is
+                // re-bound by path, as main always did, on the sidebar's half
+                // only (Codex round 2): its node's IsSelected would select the
+                // row's container, and WPF moves the keys to a container it
+                // selects while they are in the tree. The tree's own row and
+                // the keys are resolved below.
+                if (SetField(ref _selectedNode, replacement, nameof(SelectedNode)))
                 {
-                    RecordSelectionLanding(survivor);
-                    return;
+                    RaiseCommandStates();
+                }
+            }
+            else
+            {
+                if (SetField(ref _selectedNode, null, nameof(SelectedNode)))
+                {
+                    RaiseCommandStates();
+                }
+
+                if (place.InTree)
+                {
+                    FileTreeNodeViewModel? survivor = NearestSurvivor(place);
+                    if (survivor is not null || treeRow is null)
+                    {
+                        RecordSelectionLanding(survivor);
+                        return;
+                    }
                 }
             }
         }
 
+        // The tree's own row, when it was not the selection: a row of the
+        // same key the publication rebuilt takes the keys (unselected — the
+        // selection is the list's), else its nearest survivor does.
         if (treeRow is not null && !InTree(treeRow.Row))
         {
-            RecordSelectionLanding(NearestSurvivor(treeRow));
+            RecordSelectionLanding(
+                RowWithKey(RootNodes, treeRow.SelectedKey, string.Empty) is { } rebuilt
+                    ? ShownRowHolding(rebuilt, RootNodes)
+                    : NearestSurvivor(treeRow));
         }
     }
 

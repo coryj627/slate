@@ -674,6 +674,8 @@ public sealed partial class ShellAccessibilityTests
             AssertFocusStaysOnRow(automation, tree, reader, $"The {reader} row did not keep the keys before the change.");
             AutomationElement readerRow = WaitForTreeItemStartingWith(tree, automation, reader);
             string readerName = readerRow.Name;
+            AutomationElement tabStrip = WaitForElement(window, "WorkspaceTabs", TimeSpan.FromSeconds(10));
+            string[] tabsBefore = TabNames(tabStrip, automation);
             int[] readerId = readerRow.Properties.RuntimeId.Value;
             var rows = new List<(string After, AutomationElement Row, int[] Id)>();
             foreach ((string before, string after) in held)
@@ -734,6 +736,9 @@ public sealed partial class ShellAccessibilityTests
             {
                 AssertTheTreeShowsTheHeldRow(tree, automation, row, id, after);
             }
+
+            // Nothing opened: the tab strip holds what it held (WB-6).
+            Assert.Equal(tabsBefore, TabNames(tabStrip, automation));
 
             // Right after the reconcile, the item-name census included.
             AssertAxeClean(process, surface);

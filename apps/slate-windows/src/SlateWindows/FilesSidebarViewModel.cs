@@ -735,10 +735,29 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         get => _selectedNode;
         set
         {
-            if (!SetField(ref _selectedNode, value)
-                || value is null
-                || value.IsPlaceholder
-                || value.IsGroupHeader)
+            FileTreeNodeViewModel? previous = _selectedNode;
+            if (!SetField(ref _selectedNode, value))
+            {
+                return;
+            }
+
+            // WB-6 (Codex round 2): the row that held the selection lets go of
+            // it when another tree row takes it. WPF lets go of a realized
+            // container itself; a row the tree hides (a note a publication
+            // moved into a collapsed date group) has none, and would keep its
+            // IsSelected — expanded later, its container would come back
+            // selected and reopen the note. A list's row (the filter results,
+            // the dual pane) taking the selection leaves the tree's own row
+            // alone.
+            if (value is not null
+                && previous is { IsSelected: true }
+                && !ReferenceEquals(previous, value)
+                && !IsListRow(value))
+            {
+                previous.IsSelected = false;
+            }
+
+            if (value is null || value.IsPlaceholder || value.IsGroupHeader)
             {
                 return;
             }
@@ -767,6 +786,11 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             RaiseCommandStates();
         }
     }
+
+    /// <summary>A row of a list's own listing — the filter results or the
+    /// dual pane — rather than of the tree.</summary>
+    private bool IsListRow(FileTreeNodeViewModel row) =>
+        FilterResults.Contains(row) || DualPaneFiles.Contains(row);
 
     /// <summary>W5-4 (red team, a11y 2): selection RESTORATION after a
     /// mutation's tree publication — the setter's open-on-select and

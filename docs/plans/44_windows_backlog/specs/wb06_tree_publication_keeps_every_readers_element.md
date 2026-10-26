@@ -18,7 +18,11 @@ This section outranks the text below it.
   - **A pending successor takes the keys, or the collapsed row holding it does,** wherever the keys are in the tree. A duplicate's original is kept now, so the keys no longer fall to the selection on their own.
   - **A placeholder is keyed** (its folder and its text), so a selected overflow row is re-seated on its fresh row instead of being resolved as gone on every run.
   - **A place that was not a tree row records no landing.** A list's row is re-bound silently, as main did.
-- **Accepted, and filed as a follow-up:** a row the sort moves gets a new container (20b's rule), and Pin's re-sort rebuilds the rows in place. Neither is a publication, and main replaced the whole tree on a sort change.
+- **Review round 2 (Codex) changed it in two more places:**
+  - **A row the tree hides lets go of the selection when another tree row takes it.** A note a publication moved into a collapsed date group holds the selection without a container; when the reader then selected another row, it kept its `IsSelected`, and expanding the group re-selected and reopened it. The setter now clears the previous node's half when a tree row takes the selection; a list's row taking it leaves the tree's own row alone.
+  - **A list's selection beside the tree's own row.** A list's selection is re-bound by path as main did, but on the sidebar's half only: selecting the tree node's container would let WPF move the keys to it. The tree's own row resolves its landing after that, onto a rebuilt row of the same key or its nearest survivor.
+  - **The facts check containers as well as peers:** a peer, keyed by its item, outlives a container WPF regenerates.
+- **Accepted, and filed as #1668:** a row the sort moves gets a new container (20b's rule), and Pin's re-sort rebuilds the rows in place. Neither is a publication, and main replaced the whole tree on a sort change.
 - **One fact passes on main by design.** `ARemovedSelectedRowWithNoSurvivorLandsOnTheTree` takes the replace path: no root row survives, so `kept.Count == 0`. Main resolves it the same way. The fact pins that the one resolver keeps serving that path.
 
 ## Goal
