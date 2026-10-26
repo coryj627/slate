@@ -703,6 +703,9 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
             SaveReport? report = null;
             bool conflict = false;
             string? failure = null;
+            // Core renders a VaultException's detail; any other fault
+            // speaks its own message (#1467).
+            VaultException? vaultFailure = null;
             string? postFailureDiskHash = null;
             // Round 19: the LEASE brackets the session write — the
             // stale-index interval starts at the file write, not at
@@ -732,6 +735,7 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
                 _repairs.EndMutation(path, indexConsistent: false);
                 leaseSettled = true;
                 failure = exception.Message;
+                vaultFailure = exception as VaultException;
                 // Round 11: the core writes the FILE before
                 // committing the index, so a non-conflict failure
                 // does NOT mean disk is unchanged — read it back.
@@ -772,10 +776,10 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
                 }
                 if (failure is not null)
                 {
-                    // W0.5-3 residue: matches the tab toggle's failure string.
-                    _announce(new A11yEvent.HostComposed(
-                        $"Task could not be toggled: {failure}",
-                        A11yPriority.High));
+                    _announce(new A11yEvent.TaskToggleFailed(
+                        vaultFailure is not null
+                            ? SlateUniffiMethods.VaultErrorDetail(vaultFailure)
+                            : failure));
                     // The write may have landed before the failure
                     // (round 12: the real window leaves the index
                     // uncommitted). Hash moved → certain; hash
@@ -807,11 +811,9 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
                 // file in the meantime and loaded pre-write content —
                 // the workspace re-checks now that the disk moved.
                 DiskWriteLanded?.Invoke(path, report!.NewContentHash);
-                // W0.5-3 residue: the Windows toggle-success strings —
-                // the editor precedent (mac is silent on success).
-                _announce(new A11yEvent.HostComposed(
-                    task.Completed ? "Task reopened." : "Task completed.",
-                    A11yPriority.Medium));
+                // The editor precedent (mac is silent on success);
+                // task.Completed is the state before the toggle.
+                _announce(new A11yEvent.TaskToggled(!task.Completed));
                 LoadFirstPage();
             });
         });

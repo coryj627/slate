@@ -191,10 +191,7 @@ public sealed class TasksReviewTests : IDisposable
         // directly, success is spoken, and page one re-queries —
         // completing the overdue task drops it from Overdue.
         review.ToggleTask(row);
-        var composed = announced.OfType<A11yEvent.HostComposed>()
-            .Select(c => c.Text)
-            .ToList();
-        Assert.Contains("Task completed.", composed);
+        Assert.True(Assert.Single(announced.OfType<A11yEvent.TaskToggled>()).Completed);
         Assert.Empty(review.Rows);
 
         string content = File.ReadAllText(Path.Combine(_fixture.Root, "a.md"));
@@ -275,9 +272,7 @@ public sealed class TasksReviewTests : IDisposable
         review.ToggleTask(row);
 
         _ = Assert.Single(announced.OfType<A11yEvent.TaskToggleConflict>());
-        Assert.DoesNotContain(
-            announced.OfType<A11yEvent.HostComposed>(),
-            composed => composed.Text == "Task completed.");
+        Assert.Empty(announced.OfType<A11yEvent.TaskToggled>());
         // Nothing beyond the pre-existing done task was completed.
         string content = File.ReadAllText(Path.Combine(_fixture.Root, "a.md"));
         Assert.DoesNotContain(
@@ -618,11 +613,10 @@ public sealed class TasksReviewTests : IDisposable
             "- [x] overdue one",
             File.ReadAllText(Path.Combine(_fixture.Root, "a.md")));
         // …the failure is spoken, with no success verb…
-        _ = announced.OfType<A11yEvent.HostComposed>().Single(composed =>
-            composed.Text == "Task could not be toggled: index commit failed");
-        Assert.DoesNotContain(
-            announced.OfType<A11yEvent.HostComposed>(),
-            composed => composed.Text == "Task completed.");
+        _ = announced.OfType<A11yEvent.TaskToggleFailed>().Single(failed =>
+            SlateUniffiMethods.A11yRender(failed).Text
+                == "Task could not be toggled: index commit failed.");
+        Assert.Empty(announced.OfType<A11yEvent.TaskToggled>());
         // …and the surfaces reconcile instead of assuming unchanged:
         // the workspace seam heard the moved hash and the snapshot
         // re-queried, so the toggled row reads Done and a retry
@@ -635,6 +629,61 @@ public sealed class TasksReviewTests : IDisposable
             r => r.Path == "a.md"
                 && r.Task.Text == "overdue one"
                 && r.Task.Completed);
+    }
+
+    /// <summary>WB-3 (#1467): a review toggle with no open tab speaks core's
+    /// typed events. Success is <c>TaskToggled</c>. A failure is
+    /// <c>TaskToggleFailed</c>: its detail is a non-vault exception's own
+    /// message, or core's detail of a <c>VaultException</c> (never the
+    /// binding's "@message=" dump), and its rendering closes with a
+    /// period.</summary>
+    [Fact]
+    public void AReviewToggleSpeaksCoresEvents()
+    {
+        using var _envLock = EnvFaultLock.Acquire();
+        _ = _session.SaveText("fault-review-words.md", "- [ ] flip me\n", null);
+        var announced = new List<A11yEvent>();
+        var review = MakeReview(announced);
+        review.EnsureLoaded();
+
+        review.ToggleTask(review.Rows.First(r => r.Path == "a.md" && r.Task.Text == "due today"));
+        A11yEvent.TaskToggled toggled = Assert.Single(announced.OfType<A11yEvent.TaskToggled>());
+        Assert.True(toggled.Completed);
+        Assert.Equal("Task completed.", SlateUniffiMethods.A11yRender(toggled).Text);
+
+        announced.Clear();
+        review.DirectToggleFaultForTests = () =>
+            throw new InvalidOperationException("index commit failed");
+        review.ToggleTask(review.Rows.First(r => r.Path == "a.md" && r.Task.Text == "undated"));
+        review.DirectToggleFaultForTests = null;
+        A11yEvent.TaskToggleFailed failed = Assert.Single(announced.OfType<A11yEvent.TaskToggleFailed>());
+        Assert.Equal("index commit failed", failed.Detail);
+        Assert.Equal(
+            "Task could not be toggled: index commit failed.",
+            SlateUniffiMethods.A11yRender(failed).Text);
+
+        announced.Clear();
+        review.ForceReload();
+        ReviewTaskRowViewModel faulting = review.Rows.First(r => r.Path == "fault-review-words.md");
+        Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", "fault-review-words");
+        try
+        {
+            review.ToggleTask(faulting);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", null);
+        }
+        A11yEvent.TaskToggleFailed vault = Assert.Single(announced.OfType<A11yEvent.TaskToggleFailed>());
+        string rendered = SlateUniffiMethods.A11yRender(vault).Text;
+        // Core's detail of the landed-but-unindexed error, never the
+        // binding's field-labelled Message ("@newContentHash=…, @detail=…").
+        Assert.StartsWith(
+            "Task could not be toggled: Saved, but not indexed yet: ", rendered, StringComparison.Ordinal);
+        Assert.EndsWith(".", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("@message=", rendered, StringComparison.Ordinal);
+        Assert.Empty(announced.OfType<A11yEvent.TaskToggled>());
+        Assert.DoesNotContain(announced, e => e is A11yEvent.HostComposed);
     }
 
     [Fact]
@@ -669,13 +718,9 @@ public sealed class TasksReviewTests : IDisposable
         // Disk flipped, the failure spoke with no success verb…
         string diskPath = Path.Combine(_fixture.Root, "fault-pre-commit.md");
         Assert.Contains("- [x] flip me", File.ReadAllText(diskPath));
-        _ = announced.OfType<A11yEvent.HostComposed>().Single(composed =>
-            composed.Text.StartsWith(
-                "Task could not be toggled:", StringComparison.Ordinal)
-            && composed.Text.Contains("test fault"));
-        Assert.DoesNotContain(
-            announced.OfType<A11yEvent.HostComposed>(),
-            composed => composed.Text == "Task completed.");
+        _ = announced.OfType<A11yEvent.TaskToggleFailed>().Single(failed =>
+            failed.Detail.Contains("test fault"));
+        Assert.Empty(announced.OfType<A11yEvent.TaskToggled>());
 
         // …and the reload shows DISK truth, not the rolled-back
         // index's ghost: the repair ran first.
@@ -863,9 +908,7 @@ public sealed class TasksReviewTests : IDisposable
         review.ForceReload();
         Assert.Null(review.EmptyMessage);
         Assert.DoesNotContain(review.Rows, r => r.Path == "fault-unknown.md");
-        Assert.DoesNotContain(
-            announced.OfType<A11yEvent.HostComposed>(),
-            composed => composed.Text == "Task completed.");
+        Assert.Empty(announced.OfType<A11yEvent.TaskToggled>());
 
         // The note returns via an indexed write: rows show it again.
         _ = _session.SaveText("fault-unknown.md", "- [x] flip me\n", null);
