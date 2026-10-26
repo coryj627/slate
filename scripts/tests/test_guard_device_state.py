@@ -42,7 +42,10 @@ def fake_slate(folder: Path) -> Path:
 @unittest.skipUnless(RUNNABLE, "the wrapper is a Windows PowerShell 7 script")
 class GuardDeviceStateTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.temp = Path(tempfile.mkdtemp(prefix="guard-device-state-"))
+        # The long form: on a runner whose TEMP is an 8.3 path
+        # (C:\Users\RUNNER~1) the short spelling would never equal the long
+        # one the wrapper prints.
+        self.temp = Path(tempfile.mkdtemp(prefix="guard-device-state-")).resolve()
         # A cleanup, not tearDown: cleanups run last-in-first-out, so a fake
         # Slate a case registers is killed before its folder goes.
         self.addCleanup(shutil.rmtree, self.temp, ignore_errors=True)
