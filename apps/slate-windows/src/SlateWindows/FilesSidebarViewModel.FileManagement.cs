@@ -666,23 +666,18 @@ internal sealed partial class FilesSidebarViewModel
         {
             if (RowWithKey(RootNodes, place.SelectedKey, string.Empty) is { } replacement)
             {
+                // WB-6 (S2): a list's selection (the publication replaced the
+                // tree for it) is re-bound by path on both halves, exactly as
+                // main did. WPF focuses the container it selects while the
+                // keys are in the tree, so they follow it, as on main, and the
+                // tree's own row records no second landing.
+                SelectSilently(replacement, reseatOf: place.SelectedPath);
                 if (place.InTree)
                 {
-                    SelectSilently(replacement, reseatOf: place.SelectedPath);
                     RecordSelectionLanding(ShownRowHolding(replacement, RootNodes));
-                    return;
                 }
 
-                // A selection that was not a tree row (a list's row) is
-                // re-bound by path, as main always did, on the sidebar's half
-                // only (Codex round 2): its node's IsSelected would select the
-                // row's container, and WPF moves the keys to a container it
-                // selects while they are in the tree. The tree's own row and
-                // the keys are resolved below.
-                if (SetField(ref _selectedNode, replacement, nameof(SelectedNode)))
-                {
-                    RaiseCommandStates();
-                }
+                return;
             }
             else
             {
@@ -967,11 +962,7 @@ internal sealed partial class FilesSidebarViewModel
     /// container lets go of it.</summary>
     private void SelectOnBothHalves(FileTreeNodeViewModel node)
     {
-        if (_selectedNode is { } previous && !ReferenceEquals(previous, node))
-        {
-            previous.IsSelected = false;
-        }
-
+        ClearOtherTreeSelections(node);
         SelectedNode = node;
         node.IsSelected = true;
     }

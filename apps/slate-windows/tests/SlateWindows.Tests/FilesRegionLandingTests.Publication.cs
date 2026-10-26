@@ -167,7 +167,8 @@ public sealed partial class FilesRegionLandingTests
 
         FileTreeNodeViewModel renamed = host.Sidebar.RootNodes.Single(node => node.Path == "renamed.md");
         Assert.Same(renamed, host.Sidebar.SelectedNode);
-        Assert.True(renamed.IsSelected, "the renamed row's container was not selected");
+        Assert.True(renamed.IsSelected, "the renamed row's node is not selected");
+        Assert.True(ContainerOf(host, renamed).IsSelected, "the renamed row's container is not selected");
         Dictionary<string, AutomationPeer> shown = ShownRowElements(tree);
         foreach ((string key, AutomationPeer row) in held.Where(pair => pair.Key != "note1.md"))
         {
@@ -527,20 +528,21 @@ public sealed partial class FilesRegionLandingTests
         Assert.DoesNotContain(host.Announced, item => item is A11yEvent.RowSelected or A11yEvent.TreeFolderSelected);
     });
 
-    /// <summary>Codex round 2: the tree's selected row deleted outside Slate
-    /// while a list's row — another note, which survives — holds the
-    /// selection, with the keys on the tree's row. The keys land on the
-    /// tree row's nearest survivor in one move, unselected, and nothing opens
-    /// or is announced; the list's selection is re-bound as before.</summary>
+    /// <summary>Codex round 2, under the design pass's S2: the tree's
+    /// selected row deleted outside Slate while a list's row — another note,
+    /// which survives — holds the selection, with the keys on the tree's row.
+    /// The publication replaces the tree and re-binds the list's selection by
+    /// path on both halves, as main did, and the keys follow it in one move;
+    /// nothing opens or is announced. Landing them on the tree row's own
+    /// survivor instead is the filed follow-up.</summary>
     [Fact]
-    public void ARemovedTreeRowBesideASurvivingListSelectionLandsTheKeysOnItsNeighbour() => RunSta(() =>
+    public void ARemovedTreeRowBesideASurvivingListSelectionFollowsTheReboundSelection() => RunSta(() =>
     {
         using var host = new Host();
         SeedNotes(host, ("a.md", DateTime.Now), ("c.md", DateTime.Now), ("z.md", DateTime.Now));
         host.Initialize();
         var opened = new List<string>();
         FileTreeNodeViewModel treeRow = LandOnSelected(host, "a.md", opened);
-        FileTreeNodeViewModel next = host.Sidebar.RootNodes.Single(node => node.Path == "c.md");
         HoldAListSelection(host, "z.md");
         Assert.True(treeRow.IsSelected, "premise: the tree's row let go of its selection");
         Assert.Same(treeRow, FocusedNode());
@@ -551,19 +553,22 @@ public sealed partial class FilesRegionLandingTests
         File.Delete(Path.Combine(host.Root, "a.md"));
         RescanAndRefresh(host);
 
-        AssertKeysOnUnselected(next);
-        Assert.Single(host.FocusChanges);
+        FileTreeNodeViewModel rebound = host.Sidebar.RootNodes.Single(node => node.Path == "z.md");
+        Assert.Same(rebound, host.Sidebar.SelectedNode);
+        Assert.True(rebound.IsSelected, "the re-bound selection does not hold the tree's selection");
+        Assert.Same(ContainerOf(host, rebound), Assert.Single(host.FocusChanges));
         Assert.Empty(opened);
         Assert.DoesNotContain(host.Announced, item => item is A11yEvent.RowSelected or A11yEvent.TreeFolderSelected);
     });
 
-    /// <summary>Codex round 2: the tree's selected row rebuilt — its date
-    /// group changed — while a list's row holds the selection, with the keys
-    /// on the tree's row. The keys land on the rebuilt row, not on a
-    /// neighbour as if it were gone, and it is not selected: the selection
-    /// is the list's; nothing opens or is announced.</summary>
+    /// <summary>Codex round 2, under the design pass's S2: the tree's
+    /// selected row rebuilt — its date group changed — while a list's row
+    /// holds the selection, with the keys on the tree's row. The publication
+    /// replaces the tree and re-binds the list's selection on both halves, as
+    /// main did; nothing opens or is announced, and exactly one tree row
+    /// holds the selection.</summary>
     [Fact]
-    public void ARebuiltTreeRowBesideAListSelectionTakesTheKeysOnItsNewRow() => RunSta(() =>
+    public void ARebuiltTreeRowBesideAListSelectionFollowsTheReboundSelection() => RunSta(() =>
     {
         using var host = new Host();
         SeedNotes(host, ("t.md", DateTime.Today.AddMinutes(1)), ("n.md", DaysBack(60)), ("o.md", DaysBack(61)));
@@ -578,7 +583,9 @@ public sealed partial class FilesRegionLandingTests
         RewriteOutsideSlate(host, "n.md", DateTime.Now);
         RescanAndRefresh(host);
 
-        AssertKeysOnUnselected(RowIn(GroupHeader(host, "Today"), "n.md"));
+        FileTreeNodeViewModel rebound = RowIn(GroupHeader(host, "Today"), "t.md");
+        Assert.Same(rebound, host.Sidebar.SelectedNode);
+        Assert.Same(rebound, Assert.Single(EveryRow(host.Sidebar.RootNodes), node => node.IsSelected));
         Assert.Empty(opened);
         Assert.DoesNotContain(host.Announced, item => item is A11yEvent.RowSelected or A11yEvent.TreeFolderSelected);
     });
@@ -652,15 +659,16 @@ public sealed partial class FilesRegionLandingTests
         Assert.DoesNotContain(host.Announced, item => item is A11yEvent.RowSelected or A11yEvent.TreeFolderSelected);
     });
 
-    /// <summary>The red team's M1: the tree's selected row is not the
-    /// sidebar's selection — a list's row holds it (the filter results, the
-    /// dual pane; a node outside the tree stands in for one) — and the tree's
-    /// row is edited outside Slate so that the sort would move it. It is
-    /// anchored like the reader's row, so it stays: its container never
-    /// leaves selected, WPF selects no first row, and nothing opens or is
-    /// announced.</summary>
+    /// <summary>The red team's M1, under the design pass's S2: the tree's
+    /// selected row is not the sidebar's selection — a list's row holds it
+    /// (a dual-pane row of its own listing) — and the tree's row is edited
+    /// outside Slate so that the sort moves it. While a list's row holds the
+    /// selection the publication replaces the tree, as main did, so no
+    /// selected container leaves in place: WPF selects no first row, nothing
+    /// opens or is announced, and the keys land on the tree row's rebuilt
+    /// row, unselected.</summary>
     [Fact]
-    public void ATreeRowSelectedBesideAListsSelectionStaysThroughAMoveAndOpensNothing() => RunSta(() =>
+    public void AListSelectionBesideTheTreesRowPublishesWithoutOpeningAnything() => RunSta(() =>
     {
         using var host = new Host();
         SeedNotes(host, ("d.md", DateTime.Today.AddMinutes(4)), ("c.md", DateTime.Today.AddMinutes(3)), ("b.md", DateTime.Today.AddMinutes(2)), ("a.md", DateTime.Today.AddMinutes(1)));
@@ -678,9 +686,75 @@ public sealed partial class FilesRegionLandingTests
         RewriteOutsideSlate(host, "b.md", DateTime.Today.AddMinutes(5));
         RescanAndRefresh(host);
 
-        Assert.Same(treeRow, host.Tree.SelectedItem);
+        Assert.Null(host.Tree.SelectedItem);
+        AssertKeysOnUnselected(host.Sidebar.RootNodes.Single(node => node.Path == "b.md"));
         Assert.Empty(opened);
         Assert.DoesNotContain(host.Announced, item => item is A11yEvent.RowSelected or A11yEvent.TreeFolderSelected);
+    });
+
+    /// <summary>Codex round 3 (high): two publications beside a list's
+    /// selection. The first re-binds the list's selection by path — on both
+    /// halves, as main did — and the second edits the tree's former row so
+    /// the sort moves it. Neither publication lets a selected container
+    /// leave, so nothing opens and no selection is announced.</summary>
+    [Fact]
+    public void TwoPublicationsBesideAListSelectionNeverOpenAnything() => RunSta(() =>
+    {
+        using var host = new Host();
+        SeedNotes(host, ("d.md", DateTime.Today.AddMinutes(4)), ("c.md", DateTime.Today.AddMinutes(3)), ("b.md", DateTime.Today.AddMinutes(2)), ("a.md", DateTime.Today.AddMinutes(1)));
+        host.Initialize();
+        host.Sidebar.SortMode = SidebarSortMode.ModifiedNewest;
+        Settle(host);
+        var opened = new List<string>();
+        _ = LandOnSelected(host, "b.md", opened);
+        HoldAListSelection(host, "d.md");
+        opened.Clear();
+        host.Announced.Clear();
+
+        RescanAndRefresh(host);
+        RewriteOutsideSlate(host, "b.md", DateTime.Today.AddMinutes(5));
+        RescanAndRefresh(host);
+
+        Assert.Empty(opened);
+        Assert.DoesNotContain(host.Announced, item => item is A11yEvent.RowSelected or A11yEvent.TreeFolderSelected);
+        Assert.True(
+            EveryRow(host.Sidebar.RootNodes).Count(node => node.IsSelected) <= 1,
+            "more than one tree row holds the selection");
+    });
+
+    /// <summary>Codex round 3: a note a publication moved into a collapsed
+    /// group holds the hidden selection; the reader selects a list's row,
+    /// then a visible tree row. The tree row taking the selection clears
+    /// every other selected tree node — the hidden one too — so the group
+    /// opened later shows the note unselected and nothing reopens.</summary>
+    [Fact]
+    public void AHiddenSelectionLetsGoWhenATreeRowTakesItAfterAListRow() => RunSta(() =>
+    {
+        using var host = new Host();
+        SeedNotes(host, ("m.md", DateTime.Today.AddMinutes(2)), ("n.md", DateTime.Today.AddMinutes(1)), ("o.md", DaysBack(60)));
+        host.Initialize();
+        UseDateGroups(host);
+        FileTreeNodeViewModel older = GroupHeader(host, "Older");
+        older.IsExpanded = false;
+        Settle(host);
+        var opened = new List<string>();
+        _ = LandOnRow(host, RowIn(GroupHeader(host, "Today"), "n.md"), opened);
+        RewriteOutsideSlate(host, "n.md", DaysBack(60));
+        RescanAndRefresh(host);
+        FileTreeNodeViewModel hidden = RowIn(older, "n.md");
+        Assert.True(hidden.IsSelected, "premise: the moved note does not hold the hidden selection");
+
+        HoldAListSelection(host, "elsewhere.md");
+        Assert.True(hidden.IsSelected, "a list's row took the tree's own selection");
+        var later = new List<string>();
+        FileTreeNodeViewModel other = LandOnRow(host, RowIn(GroupHeader(host, "Today"), "m.md"), later);
+        Assert.False(hidden.IsSelected, "the hidden note kept its selection when a tree row took it");
+        older.IsExpanded = true;
+        Settle(host);
+
+        Assert.Same(other, host.Sidebar.SelectedNode);
+        Assert.False(ContainerOf(host, hidden).IsSelected, "the expanded group shows the abandoned note selected");
+        Assert.Empty(later);
     });
 
     /// <summary>Codex round 1: a note created through the sidebar from a
@@ -776,8 +850,7 @@ public sealed partial class FilesRegionLandingTests
         TreeViewItem container = ContainerOf(host, renamed);
         Assert.True(container.IsSelected, "the renamed row is not selected");
         Assert.Same(container, Keyboard.FocusedElement);
-        Assert.NotEmpty(host.FocusChanges);
-        Assert.All(host.FocusChanges, focus => Assert.Same(container, focus));
+        Assert.Same(container, Assert.Single(host.FocusChanges));
         Dictionary<string, AutomationPeer> shown = ShownRowElements(tree);
         Assert.True(ReferenceEquals(held["a.md"], shown["a.md"]), "the rename gave a.md's row a new element");
         Assert.True(ReferenceEquals(held["c.md"], shown["c.md"]), "the rename gave c.md's row a new element");
@@ -803,6 +876,9 @@ public sealed partial class FilesRegionLandingTests
             File.SetLastWriteTime(full, modified);
         }
     }
+
+    private static IEnumerable<FileTreeNodeViewModel> EveryRow(IEnumerable<FileTreeNodeViewModel> level) =>
+        level.SelectMany(node => EveryRow(node.Children).Prepend(node));
 
     /// <summary>A list's row holds the selection, as when the reader selects
     /// a dual-pane row: a row of the dual pane's own listing, at
@@ -933,8 +1009,5 @@ public sealed partial class FilesRegionLandingTests
         Assert.Null(host.Sidebar.SelectedNode);
         Assert.DoesNotContain(ShownRowContainers(host), pair => pair.Value.IsSelected);
         Assert.DoesNotContain(EveryRow(host.Sidebar.RootNodes), node => node.IsSelected);
-
-        static IEnumerable<FileTreeNodeViewModel> EveryRow(IEnumerable<FileTreeNodeViewModel> level) =>
-            level.SelectMany(node => EveryRow(node.Children).Prepend(node));
     }
 }

@@ -741,20 +741,12 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 return;
             }
 
-            // WB-6 (Codex round 2): the row that held the selection lets go of
-            // it when another tree row takes it. WPF lets go of a realized
-            // container itself; a row the tree hides (a note a publication
-            // moved into a collapsed date group) has none, and would keep its
-            // IsSelected — expanded later, its container would come back
-            // selected and reopen the note. A list's row (the filter results,
-            // the dual pane) taking the selection leaves the tree's own row
-            // alone.
-            if (value is not null
-                && previous is { IsSelected: true }
-                && !ReferenceEquals(previous, value)
-                && !IsListRow(value))
+            // WB-6 (S1): a tree row taking the selection clears every other
+            // selected tree node; a list's row (the filter results, the dual
+            // pane) taking it leaves the tree's own row alone.
+            if (value is not null && !IsListRow(value))
             {
-                previous.IsSelected = false;
+                ClearOtherTreeSelections(value);
             }
 
             if (value is null || value.IsPlaceholder || value.IsGroupHeader)
@@ -792,6 +784,21 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     private bool IsListRow(FileTreeNodeViewModel row) =>
         FilterResults.Contains(row) || DualPaneFiles.Contains(row);
 
+    /// <summary>WB-6 (S1): at most one tree node holds the tree's selection.
+    /// A tree row taking it — through the setter, <c>SelectSilently</c> or
+    /// <c>SelectOnBothHalves</c> — clears every other selected tree node
+    /// first, shown or hidden. WPF lets go of a realized container itself; a
+    /// row the tree hides (a note a publication moved into a collapsed date
+    /// group) has none, and expanded later would come back selected and
+    /// reopen its note (Codex rounds 2 and 3).</summary>
+    private void ClearOtherTreeSelections(FileTreeNodeViewModel keep)
+    {
+        foreach (FileTreeNodeViewModel row in Flatten(RootNodes).Where(row => row.IsSelected && !ReferenceEquals(row, keep)).ToList())
+        {
+            row.IsSelected = false;
+        }
+    }
+
     /// <summary>W5-4 (red team, a11y 2): selection RESTORATION after a
     /// mutation's tree publication — the setter's open-on-select and
     /// selection announcements must not fire for a re-seat (the
@@ -806,13 +813,10 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         FileTreeNodeViewModel? previous = _selectedNode;
         if (SetField(ref _selectedNode, node, nameof(SelectedNode)))
         {
-            // WB-6 (Codex round 1): the publication keeps rows now, so the
-            // row that held the selection may still be shown; its container
-            // lets go of it.
-            if (previous is not null && !ReferenceEquals(previous, node))
-            {
-                previous.IsSelected = false;
-            }
+            // WB-6 (S1): the publication keeps rows now, so the row that held
+            // the selection may still be shown, or hidden in a collapsed
+            // group; every other selected tree node lets go of it.
+            ClearOtherTreeSelections(node);
 
             // The view half (verification 1): without the container's
             // IsSelected, the restore was invisible and the next arrow

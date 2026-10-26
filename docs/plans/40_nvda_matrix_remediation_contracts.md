@@ -976,6 +976,10 @@ PR #1262 (`claude/w7-7-pr11-connections-doc`, base 937dd3dd). Delivered: chord r
 - **A selected row the reconcile could not keep.** It is deselected, node and container, before its container leaves, so WPF selects nothing. That holds for the tree's own selected row too, when it is not the sidebar's selection: a delete lets go of the selection before its refresh, and a list's row (the filter results, the dual pane) can hold it. The tree's selected row anchors its level like the reader's, so it never moves.
 - **Where the selection goes.** A mutation's named successor is seated first, on both halves. It takes the keys wherever they are in the tree, or the collapsed row holding it does. A row the tree hides (a note moved into a collapsed group) lets go of the selection when another tree row takes it, so a group opened later never re-selects it. A row of the same key that the publication rebuilt (its date group changed, the grouping changed, its folder was rebuilt) is re-selected silently and takes the keys, or the collapsed group now holding it does. Only a row that is gone lands the keys on the nearest survivor, without a selection.
 - **Finding the survivor.** It is read from the row's place before the publication moves anything, at any depth, and a surviving date group header is a row that can take the keys. A selected placeholder (the overflow row) is re-seated on its fresh row, never resolved as gone.
-- **Not kept.** A publication that keeps no root row still replaces the tree, and there a collapsed date group reopens. A row the sort moves still gets a new container: the sort's reorder and Pin's re-sort are #1668.
+- **One tree selection.** At most one tree node holds the tree's selection: a tree row taking it clears every other, hidden ones included. A list's row (the filter results, the dual pane) taking the sidebar's selection leaves the tree's own row alone.
+- **Not kept.**
+  - A publication that keeps no root row still replaces the tree, and there a collapsed date group reopens.
+  - While a list's row holds the selection, a publication replaces the tree and re-binds it by path, as before; the keys follow the re-bound row (#1669).
+  - A row the sort moves still gets a new container: the sort's reorder and Pin's re-sort are #1668.
 
 The frozen R-9 row above is unchanged.

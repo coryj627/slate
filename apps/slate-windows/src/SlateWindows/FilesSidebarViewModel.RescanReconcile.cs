@@ -89,7 +89,12 @@ internal sealed partial class FilesSidebarViewModel
         // published tree as it was.
         var kept = new Dictionary<FileTreeNodeViewModel, FileTreeNodeViewModel>(ReferenceEqualityComparer.Instance);
         PlanLevel(RootNodes, fresh, kept);
-        if (kept.Count == 0)
+        // WB-6 (S2): the keep path needs the sidebar's selection to be a tree
+        // row, or nothing. While a list's row holds it (the filter results,
+        // the dual pane), the publication replaces the tree as main did:
+        // re-binding a list's selection onto kept rows made later
+        // publications mistake it for a tree row (Codex round 3).
+        if (kept.Count == 0 || (SelectedNode is { } selected && !InTree(selected)))
         {
             RootNodes = fresh;
             return;

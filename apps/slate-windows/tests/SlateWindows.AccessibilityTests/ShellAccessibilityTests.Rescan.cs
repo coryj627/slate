@@ -494,6 +494,7 @@ public sealed partial class ShellAccessibilityTests
             AssertFocusStaysOnRow(automation, tree, "b.md", "The b.md row did not keep the keys before the change.");
             AutomationElement tabs = WaitForElement(window, "WorkspaceTabs", TimeSpan.FromSeconds(10));
             string[] tabsBefore = TabNames(tabs, automation);
+            string? activeBefore = ActiveTabName(tabs, automation);
             AutomationElement alphaRow = WaitForTreeItemStartingWith(tree, automation, "alpha.md");
             int[] alphaId = alphaRow.Properties.RuntimeId.Value;
             AutomationElement nextRow = WaitForTreeItemStartingWith(tree, automation, "c.md");
@@ -562,6 +563,8 @@ public sealed partial class ShellAccessibilityTests
             {
                 Assert.StartsWith(tabsBefore[index], tabsAfter[index], StringComparison.Ordinal);
             }
+
+            Assert.StartsWith(activeBefore ?? "<none>", ActiveTabName(tabs, automation) ?? "<none>", StringComparison.Ordinal);
             // Right after the landing, the item-name census included.
             AssertAxeClean(process, "rescan-watcher-removed-reader");
         }
@@ -588,6 +591,12 @@ public sealed partial class ShellAccessibilityTests
             }
         }
     }
+
+    /// <summary>The active tab's name, or null with none selected.</summary>
+    private static string? ActiveTabName(AutomationElement tabs, UIA3Automation automation) =>
+        tabs.FindAllDescendants(automation.ConditionFactory.ByControlType(ControlType.TabItem))
+            .FirstOrDefault(tab => tab.Patterns.SelectionItem.IsSupported && tab.Patterns.SelectionItem.Pattern.IsSelected.ValueOrDefault)
+            ?.Properties.Name.ValueOrDefault;
 
     /// <summary>The workspace tab strip's tab names, in order.</summary>
     private static string[] TabNames(AutomationElement tabs, UIA3Automation automation) =>
@@ -676,6 +685,7 @@ public sealed partial class ShellAccessibilityTests
             string readerName = readerRow.Name;
             AutomationElement tabStrip = WaitForElement(window, "WorkspaceTabs", TimeSpan.FromSeconds(10));
             string[] tabsBefore = TabNames(tabStrip, automation);
+            string? activeBefore = ActiveTabName(tabStrip, automation);
             int[] readerId = readerRow.Properties.RuntimeId.Value;
             var rows = new List<(string After, AutomationElement Row, int[] Id)>();
             foreach ((string before, string after) in held)
@@ -737,8 +747,10 @@ public sealed partial class ShellAccessibilityTests
                 AssertTheTreeShowsTheHeldRow(tree, automation, row, id, after);
             }
 
-            // Nothing opened: the tab strip holds what it held (WB-6).
+            // Nothing opened or activated: the tab strip holds what it held,
+            // with the same tab active (WB-6).
             Assert.Equal(tabsBefore, TabNames(tabStrip, automation));
+            Assert.Equal(activeBefore, ActiveTabName(tabStrip, automation));
 
             // Right after the reconcile, the item-name census included.
             AssertAxeClean(process, surface);
