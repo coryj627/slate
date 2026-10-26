@@ -59,14 +59,13 @@ namespace SlateWindows;
 /// navigation never moves on it — so the fence takes no key at all.
 /// </para>
 /// <para>
-/// <b>The edge's own gestures.</b> A binding's command carries its key
-/// gestures, so the sheet itself maps every fenced command's chords —
-/// Ctrl+Z, Ctrl+Y, Ctrl+X, Ctrl+V, Ctrl+A, Delete, Shift+Delete,
-/// Shift+Insert, and <see cref="EditingCommands"/>' own (the arrows,
-/// Ctrl+E, Ctrl+B and the other formatting chords). A press that reaches
-/// the sheet unanswered meets the same refusal and routes on
-/// (<c>ContinueRouting</c>), so the window's key bindings and the modal
-/// routing still see it as before.
+/// <b>The edge's own gestures.</b> The six application commands carry
+/// their key gestures on the command, so the sheet itself maps Ctrl+Z,
+/// Ctrl+Y, Ctrl+X, Ctrl+V, Ctrl+A, Delete, Shift+Delete and Shift+Insert
+/// to them. (<see cref="EditingCommands"/> carry none; a TextBox binds
+/// their keys on its own class.) A press that reaches the sheet unanswered
+/// meets the same refusal and routes on (<c>ContinueRouting</c>), so the
+/// window's key bindings and the modal routing still see it as before.
 /// </para>
 /// <para>
 /// <b>An Execute that never asked.</b> <c>RoutedCommand.Execute</c> raises
