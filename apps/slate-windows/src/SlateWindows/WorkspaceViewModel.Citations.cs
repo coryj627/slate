@@ -497,8 +497,14 @@ internal sealed partial class WorkspaceViewModel
             synchronousForTests: !_startInteractionBackgroundWork);
         _pendingFilesCiting = sheet;
         sheet.Loaded += OnFilesCitingLoaded;
+        sheet.InterleaveForTests = FilesCitingInterleaveForTests;
         sheet.Load();
     }
+
+    /// <summary>WB-4 test seam: copied onto each Files Citing sheet before
+    /// its lookup starts (the sheet is unreachable until then), so a fact
+    /// holds the lookup between its read and its publish.</summary>
+    internal Action? FilesCitingInterleaveForTests { get; set; }
 
     /// <summary>Present the settled sheet, unless a later invocation
     /// has already superseded this one.</summary>

@@ -76,6 +76,11 @@ internal sealed class FilesCitingViewModel : PanelWorkScheduler
 
     internal int RequestIdForTests => _requestId;
 
+    /// <summary>WB-4 test seam: runs on the worker between the lookup and
+    /// its publish, on the success and the failure path alike, so a fact
+    /// holds the lookup instead of racing it.</summary>
+    internal Action? InterleaveForTests { get; set; }
+
     public void Load()
     {
         int requestId = Interlocked.Increment(ref _requestId);
@@ -95,6 +100,7 @@ internal sealed class FilesCitingViewModel : PanelWorkScheduler
                 // Empty, not an error (mac parity).
                 paths = [];
             }
+            InterleaveForTests?.Invoke();
             Post(() => Publish(requestId, paths));
         });
     }
