@@ -676,7 +676,10 @@ public sealed class TasksReviewTests : IDisposable
         }
         A11yEvent.TaskToggleFailed vault = Assert.Single(announced.OfType<A11yEvent.TaskToggleFailed>());
         string rendered = SlateUniffiMethods.A11yRender(vault).Text;
-        Assert.StartsWith("Task could not be toggled: ", rendered, StringComparison.Ordinal);
+        // Core's detail of the landed-but-unindexed error, never the
+        // binding's field-labelled Message ("@newContentHash=…, @detail=…").
+        Assert.StartsWith(
+            "Task could not be toggled: Saved, but not indexed yet: ", rendered, StringComparison.Ordinal);
         Assert.EndsWith(".", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("@message=", rendered, StringComparison.Ordinal);
         Assert.Empty(announced.OfType<A11yEvent.TaskToggled>());

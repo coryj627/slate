@@ -1994,6 +1994,15 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         TaskItem? task = cachedTask ?? CachedTaskAt(utf16Offset, origin);
         if (task is null)
         {
+            // The task cache describes the SAVED text: with unsaved edits it
+            // cannot vouch for this line (a task typed since the save is not
+            // in it), so the key asks for the save first rather than saying
+            // nothing is there (WB-3 red team).
+            if (_tab.IsDirty && origin is EditorInteractionOrigin.Keyboard)
+            {
+                AnnounceSaveBeforeInteraction();
+                return true;
+            }
             return NothingToActivate(origin);
         }
         if (!RequireCurrentSavedNote())

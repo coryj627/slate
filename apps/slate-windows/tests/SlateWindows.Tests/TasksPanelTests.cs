@@ -525,11 +525,9 @@ public sealed class TasksPanelTests : IDisposable
             () => announced.OfType<A11yEvent.TaskToggleFailed>().Any(),
             () => "the failure never announced; announced: " + AnnouncementDump(announced));
         A11yEvent.TaskToggleFailed failed = Assert.Single(announced.OfType<A11yEvent.TaskToggleFailed>());
-        string rendered = SlateUniffiMethods.A11yRender(failed).Text;
-        Assert.StartsWith("Task could not be toggled: ", rendered, StringComparison.Ordinal);
-        Assert.Contains("index commit failed", rendered, StringComparison.Ordinal);
-        Assert.EndsWith(".", rendered, StringComparison.Ordinal);
-        Assert.DoesNotContain("@message=", rendered, StringComparison.Ordinal);
+        Assert.Equal(
+            "Task could not be toggled: index commit failed.",
+            SlateUniffiMethods.A11yRender(failed).Text);
         Assert.Empty(announced.OfType<A11yEvent.TaskToggled>());
     }
 
@@ -597,6 +595,10 @@ public sealed class TasksPanelTests : IDisposable
         A11yEvent.TaskToggleFailed failed = Assert.Single(failures.OfType<A11yEvent.TaskToggleFailed>());
         string rendered = SlateUniffiMethods.A11yRender(failed).Text;
         Assert.Equal(rendered, statusWhenSpoken);
+        // Core's detail of the landed-but-unindexed error, never the
+        // binding's field-labelled Message ("@newContentHash=…, @detail=…").
+        Assert.StartsWith(
+            "Task could not be toggled: Saved, but not indexed yet: ", rendered, StringComparison.Ordinal);
         Assert.EndsWith(".", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("@message=", rendered, StringComparison.Ordinal);
     }

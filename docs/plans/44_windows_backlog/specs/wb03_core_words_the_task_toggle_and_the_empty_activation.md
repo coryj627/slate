@@ -11,6 +11,16 @@ This section outranks the text below it.
 - **`AReviewToggleSpeaksCoresEvents` also covers a `VaultException`.** The core's fault seam triggers it, and the rendered sentence carries core's detail, not the "@message=" dump.
 - **The residue keys:** `PublishTaskToggleThroughTab`'s four identical entries became two (`@1`, `@2`, the two mid-path sentences), the same result as removing `@1` and `@4` and renumbering.
 - **WB-2 overlap:** WB-2 (#1659) touches the same designations file and contract 38's ledger. Whichever lands second merges `main` and regenerates the ledger.
+- **Unsaved edits ask for the save first (red team).**
+  - The task cache describes the saved text. In a note with unsaved edits it cannot vouch for the caret's line: a task typed since the save is not in it.
+  - So when no task is found and the tab is dirty, Ctrl+Enter (keyboard origin only) speaks the save-first sentence an unsaved link already gets ("Save <note> before using this interaction.") and returns true, instead of "Nothing to activate at cursor." A Ctrl+click stays silent.
+  - Mac still says nothing is there; filed as #1662. The fact is `CtrlEnterOnALineTheUnsavedEditsChangedAsksForTheSaveFirst`.
+- **The pointer fact covers every arm** (prose, display math, a bare `#`). The panel failure fact pins the whole sentence.
+- **The core-fault facts pin core's wording.** The binding's `Message` for the seam's error (`SavedButUnindexed`) is "@newContentHash=…, @detail=…", which has no "@message=" in it. So `ATabToggleSpeaksCoresEvents` and `AReviewToggleSpeaksCoresEvents` also require the rendering to begin "Task could not be toggled: Saved, but not indexed yet: ". Without that, the "pass `error.Message`" mutation survived both. The run-on tail is #1660's.
+- **Mutations:** 12 run, 11 killed. The survivor is the bare-`#` arm, which no input can reach (above).
+- **Filed, not delivered:**
+  - #1660: core renders a toggle that landed but was not indexed (`SavedButUnindexed`) as a failure, in a run-on sentence.
+  - #1661: Activate at Cursor acts on the hidden caret in reading mode, and a Ctrl+click speaks while the cache loads.
 
 ## Goal
 
