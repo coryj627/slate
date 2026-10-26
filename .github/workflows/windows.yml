@@ -555,8 +555,9 @@ jobs:
         run: dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release
 
       # The Connections model (W6-2 PR B2, B2-8) runs in its own lane below.
-      # An STA fact that times out without pumping writes a minidump into the
-      # uploaded results folder (StaThread.DumpDirectory, #1603).
+      # An STA fact that times out without pumping has the runtime's
+      # createdump write a heap dump of the test process into the uploaded
+      # results folder (StaThread.DumpDirectory, #1603, #1641).
       - name: Test
         env:
           SLATE_STA_DUMP_DIR: '${{ runner.temp }}\slate-app-results'
@@ -568,11 +569,13 @@ jobs:
           --results-directory "${{ runner.temp }}\slate-app-results"
           --blame-hang-timeout 10m --blame-hang-dump-type mini
 
+      # Named by attempt too (#1641): "Re-run failed jobs" keeps its run id,
+      # and its upload would otherwise replace the failed attempt's evidence.
       - name: Upload app test results and hang evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
-          name: slate-windows-app-results-${{ github.run_id }}
+          name: slate-windows-app-results-${{ github.run_id }}-${{ github.run_attempt }}
           overwrite: true
           path: '${{ runner.temp }}\slate-app-results\**\*'
           if-no-files-found: warn

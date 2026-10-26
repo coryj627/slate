@@ -35,87 +35,324 @@ public sealed class StaThreadTests : IDisposable
 
     /// <summary>#1603: a body that does not pump gives no stack, so with a
     /// dump folder named (CI's app job names its results folder) the timeout
-    /// writes a minidump of the process there and says where; the dump
-    /// carries every thread, the body's included.</summary>
+    /// writes a dump of the process there and says where. #1641: the dump is
+    /// the runtime's createdump's, taken from outside the process, and it is
+    /// full: it lists the timed-out body's thread with its stack, and it
+    /// holds the bytes of an object on the managed heap. A dump the process
+    /// took of itself came out partial on CI (2 MB, error 0x80070057).</summary>
     [Fact]
-    public void ATimedOutBodyThatDoesNotPumpLeavesAMinidumpWhereTheFolderSays()
+    public void ATimedOutBodyThatDoesNotPumpLeavesAFullDumpWhereTheFolderSays()
     {
         string folder = Path.Combine(Path.GetTempPath(), $"sta-dump-{Guid.NewGuid():N}");
         Directory.CreateDirectory(folder);
         StaThread.DumpDirectory = folder;
+        byte[] marker = System.Security.Cryptography.RandomNumberGenerator.GetBytes(64);
+        GCHandle pinned = GCHandle.Alloc(marker, GCHandleType.Pinned);
+        uint bodyThread = 0;
         try
         {
             Xunit.Sdk.XunitException timedOut = Assert.Throws<Xunit.Sdk.XunitException>(() => StaThread.Run(
-                () => Thread.Sleep(TimeSpan.FromMilliseconds(600)),
+                () =>
+                {
+                    Volatile.Write(ref bodyThread, GetCurrentThreadId());
+                    Thread.Sleep(TimeSpan.FromMilliseconds(600));
+                },
                 TimeSpan.FromMilliseconds(200),
                 "the body only slept",
-                unwindGrace: TimeSpan.FromSeconds(10)));
+                unwindGrace: TimeSpan.FromSeconds(30)));
 
             // The message first: a write that fails says why (CI on 3d4aa90d
             // failed here with an empty folder and no message to read).
-            Assert.Contains("minidump of the test process is at ", timedOut.Message, StringComparison.Ordinal);
+            Assert.Contains("A full dump of the test process is at ", timedOut.Message, StringComparison.Ordinal);
             string dump = Assert.Single(Directory.GetFiles(folder, "*.dmp"));
-            Assert.Contains($"minidump of the test process is at {dump}", timedOut.Message, StringComparison.Ordinal);
-            byte[] signature = new byte[4];
-            using (FileStream stream = File.OpenRead(dump))
-            {
-                stream.ReadExactly(signature);
-            }
-            Assert.Equal("MDMP", System.Text.Encoding.ASCII.GetString(signature));
+            Assert.Contains($"A full dump of the test process is at {dump} (", timedOut.Message, StringComparison.Ordinal);
+            Assert.Contains(" MB private", timedOut.Message, StringComparison.Ordinal);
+            Minidump read = Minidump.Read(dump, pinned.AddrOfPinnedObject(), marker.Length);
+            Assert.True(
+                read.ThreadStacks.TryGetValue(Volatile.Read(ref bodyThread), out uint stack) && stack > 0,
+                $"the dump lists the body's thread {bodyThread} with its stack");
+            Assert.Equal(marker, read.Marker);
         }
         finally
         {
+            pinned.Free();
             Directory.Delete(folder, recursive: true);
         }
     }
 
-    /// <summary>Dumping its own process while threads run, the writer can
-    /// report a failure — a partial copy — after it wrote most of the dump:
-    /// that file is kept and named with the error, not deleted.</summary>
+    /// <summary>#1641: the dumper is a process of its own, the runtime's
+    /// createdump, started directly (it dumps the process that started it,
+    /// so a shell between them would be dumped instead) with a full dump
+    /// into the folder.</summary>
     [Fact]
-    public void AMinidumpTheWriterReportsAsPartialIsKeptAndNamed()
+    public void TheDumpIsTheRuntimesCreatedumpStartedByThisProcess()
     {
         string folder = Path.Combine(Path.GetTempPath(), $"sta-dump-{Guid.NewGuid():N}");
         Directory.CreateDirectory(folder);
         StaThread.DumpDirectory = folder;
-        StaThread.DumpWriterForTests = file =>
+        System.Diagnostics.ProcessStartInfo? started = null;
+        StaThread.RunDumperForTests = start =>
         {
-            RandomAccess.Write(file, "MDMP"u8, 0);
-            System.Runtime.InteropServices.Marshal.SetLastPInvokeError(unchecked((int)0x8007012B));
-            return false;
+            started = start;
+            File.WriteAllBytes(start.ArgumentList[2], "MDMP"u8.ToArray());
+            return (0, string.Empty);
         };
         try
         {
-            Xunit.Sdk.XunitException timedOut = Assert.Throws<Xunit.Sdk.XunitException>(() => StaThread.Run(
-                () => Thread.Sleep(TimeSpan.FromMilliseconds(600)),
-                TimeSpan.FromMilliseconds(200),
-                "the body only slept",
-                unwindGrace: TimeSpan.FromSeconds(10)));
+            Xunit.Sdk.XunitException timedOut = TimeOutASleepingBody();
 
-            Assert.Contains("A partial minidump of the test process is at ", timedOut.Message, StringComparison.Ordinal);
-            Assert.Contains("0x8007012B", timedOut.Message, StringComparison.Ordinal);
+            Assert.NotNull(started);
+            Assert.Equal(Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(), "createdump.exe"), started.FileName);
+            Assert.True(File.Exists(started.FileName), "createdump ships with the runtime");
+            Assert.False(started.UseShellExecute);
+            Assert.True(started.CreateNoWindow);
             string dump = Assert.Single(Directory.GetFiles(folder, "*.dmp"));
-            Assert.Contains(dump, timedOut.Message, StringComparison.Ordinal);
+            Assert.Equal(new[] { "--full", "--name", dump }, started.ArgumentList);
+            Assert.Contains($"A full dump of the test process is at {dump} (", timedOut.Message, StringComparison.Ordinal);
         }
         finally
         {
-            StaThread.DumpWriterForTests = null;
+            StaThread.RunDumperForTests = null;
             Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    /// <summary>createdump reads % as a specifier (%p, %e, %h, %t): a folder
+    /// with one in its name reaches it doubled.</summary>
+    [Fact]
+    public void APercentInTheDumpFolderReachesCreatedumpDoubled()
+    {
+        string folder = Path.Combine(Path.GetTempPath(), $"sta-dump-100%-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(folder);
+        StaThread.DumpDirectory = folder;
+        string? named = null;
+        StaThread.RunDumperForTests = start =>
+        {
+            named = start.ArgumentList[2];
+            return (1, "[createdump] not run");
+        };
+        try
+        {
+            _ = TimeOutASleepingBody();
+
+            Assert.NotNull(named);
+            Assert.StartsWith(Path.Combine(Path.GetTempPath(), "sta-dump-100%%-"), named, StringComparison.Ordinal);
+        }
+        finally
+        {
+            StaThread.RunDumperForTests = null;
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    /// <summary>createdump opens the dump through an ANSI path: a folder that
+    /// is not ASCII is refused in words, and createdump is never started.</summary>
+    [Fact]
+    public void ANonAsciiDumpFolderIsRefusedInWords()
+    {
+        string folder = Path.Combine(Path.GetTempPath(), $"sta-dump-é-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(folder);
+        StaThread.DumpDirectory = folder;
+        bool started = false;
+        StaThread.RunDumperForTests = _ =>
+        {
+            started = true;
+            return (0, string.Empty);
+        };
+        try
+        {
+            Xunit.Sdk.XunitException timedOut = TimeOutASleepingBody();
+
+            Assert.False(started, "createdump was started on a path it cannot open");
+            Assert.Contains("No dump was written: createdump needs an ASCII path, and ", timedOut.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            StaThread.RunDumperForTests = null;
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    /// <summary>A createdump that fails after writing part of the dump: the
+    /// file is kept and named, with its exit code and what it said.</summary>
+    [Fact]
+    public void ADumpCreatedumpReportsAsFailedIsKeptAndNamed()
+    {
+        string folder = Path.Combine(Path.GetTempPath(), $"sta-dump-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(folder);
+        StaThread.DumpDirectory = folder;
+        StaThread.RunDumperForTests = start =>
+        {
+            File.WriteAllBytes(start.ArgumentList[2], "MDMP"u8.ToArray());
+            return (1, "[createdump] Writing minidump FAILED 8007012B");
+        };
+        try
+        {
+            Xunit.Sdk.XunitException timedOut = TimeOutASleepingBody();
+
+            string dump = Assert.Single(Directory.GetFiles(folder, "*.dmp"));
+            Assert.Contains($"A partial dump of the test process is at {dump} (4 bytes, ", timedOut.Message, StringComparison.Ordinal);
+            Assert.Contains(
+                " MB private; createdump exited 1: [createdump] Writing minidump FAILED 8007012B).",
+                timedOut.Message,
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            StaThread.RunDumperForTests = null;
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    /// <summary>A createdump that fails without writing says so, with its
+    /// exit code and what it said, and leaves no file.</summary>
+    [Fact]
+    public void ACreatedumpThatWritesNothingIsNamedWithWhatItSaid()
+    {
+        string folder = Path.Combine(Path.GetTempPath(), $"sta-dump-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(folder);
+        StaThread.DumpDirectory = folder;
+        StaThread.RunDumperForTests = _ => (2, "[createdump] The pid argument is no longer supported");
+        try
+        {
+            Xunit.Sdk.XunitException timedOut = TimeOutASleepingBody();
+
+            Assert.Empty(Directory.GetFiles(folder, "*.dmp"));
+            Assert.Contains(
+                "No dump was written: createdump exited 2: [createdump] The pid argument is no longer supported.",
+                timedOut.Message,
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            StaThread.RunDumperForTests = null;
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    /// <summary>A createdump that runs past its bound is stopped, and the
+    /// timeout says so rather than waiting on it.</summary>
+    [Fact]
+    public void ACreatedumpPastItsBoundIsStoppedAndNamed()
+    {
+        string folder = Path.Combine(Path.GetTempPath(), $"sta-dump-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(folder);
+        StaThread.DumpDirectory = folder;
+        StaThread.RunDumperForTests = _ => (null, string.Empty);
+        try
+        {
+            Xunit.Sdk.XunitException timedOut = TimeOutASleepingBody();
+
+            Assert.Contains(
+                $"No dump was written: createdump ran past its {StaThread.DumpBound.TotalSeconds:0} s bound and was stopped.",
+                timedOut.Message,
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            StaThread.RunDumperForTests = null;
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    private static Xunit.Sdk.XunitException TimeOutASleepingBody() =>
+        Assert.Throws<Xunit.Sdk.XunitException>(() => StaThread.Run(
+            () => Thread.Sleep(TimeSpan.FromMilliseconds(600)),
+            TimeSpan.FromMilliseconds(200),
+            "the body only slept",
+            unwindGrace: TimeSpan.FromSeconds(10)));
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
+
+    /// <summary>What a fact reads from a minidump (MINIDUMP_HEADER, then one
+    /// MINIDUMP_DIRECTORY per stream): each listed thread's stack size
+    /// (ThreadListStream, 3), and the bytes at one address, found in the
+    /// memory a heap dump lists (MemoryListStream, 5) or a full one does
+    /// (Memory64ListStream, 9). Null when no range holds them whole.</summary>
+    private sealed record Minidump(IReadOnlyDictionary<uint, uint> ThreadStacks, byte[]? Marker)
+    {
+        public static Minidump Read(string path, IntPtr address, int length)
+        {
+            using FileStream stream = File.OpenRead(path);
+            using var reader = new BinaryReader(stream);
+            Assert.Equal("MDMP", System.Text.Encoding.ASCII.GetString(reader.ReadBytes(4)));
+            _ = reader.ReadUInt32();
+            uint streams = reader.ReadUInt32();
+            uint directory = reader.ReadUInt32();
+            ulong wanted = (ulong)address.ToInt64();
+            var threads = new Dictionary<uint, uint>();
+            byte[]? marker = null;
+            for (uint index = 0; index < streams; index++)
+            {
+                stream.Position = directory + (index * 12L);
+                uint type = reader.ReadUInt32();
+                _ = reader.ReadUInt32();
+                uint rva = reader.ReadUInt32();
+                stream.Position = rva;
+                if (type == 3)
+                {
+                    // MINIDUMP_THREAD: id, suspend count, priority class,
+                    // priority, TEB, then the stack's descriptor.
+                    uint count = reader.ReadUInt32();
+                    for (uint thread = 0; thread < count; thread++)
+                    {
+                        long entry = rva + 4 + (thread * 48L);
+                        stream.Position = entry;
+                        uint id = reader.ReadUInt32();
+                        stream.Position = entry + 24 + 8;
+                        threads[id] = reader.ReadUInt32();
+                    }
+                }
+                else if (type == 5)
+                {
+                    uint count = reader.ReadUInt32();
+                    for (uint range = 0; range < count && marker is null; range++)
+                    {
+                        stream.Position = rva + 4 + (range * 16L);
+                        ulong start = reader.ReadUInt64();
+                        uint size = reader.ReadUInt32();
+                        uint data = reader.ReadUInt32();
+                        marker = Within(stream, reader, start, size, data, wanted, length);
+                    }
+                }
+                else if (type == 9)
+                {
+                    ulong count = reader.ReadUInt64();
+                    long data = (long)reader.ReadUInt64();
+                    for (ulong range = 0; range < count && marker is null; range++)
+                    {
+                        stream.Position = rva + 16 + ((long)range * 16L);
+                        ulong start = reader.ReadUInt64();
+                        ulong size = reader.ReadUInt64();
+                        marker = Within(stream, reader, start, size, data, wanted, length);
+                        data += (long)size;
+                    }
+                }
+            }
+            return new Minidump(threads, marker);
+        }
+
+        private static byte[]? Within(
+            FileStream stream, BinaryReader reader, ulong start, ulong size, long data, ulong wanted, int length)
+        {
+            if (wanted < start || wanted + (ulong)length > start + size)
+            {
+                return null;
+            }
+            stream.Position = data + (long)(wanted - start);
+            return reader.ReadBytes(length);
         }
     }
 
     /// <summary>With no folder named, nothing is written and the message
     /// says nothing of a dump.</summary>
     [Fact]
-    public void WithNoDumpFolderATimeoutWritesNoMinidump()
+    public void WithNoDumpFolderATimeoutWritesNoDump()
     {
-        Xunit.Sdk.XunitException timedOut = Assert.Throws<Xunit.Sdk.XunitException>(() => StaThread.Run(
-            () => Thread.Sleep(TimeSpan.FromMilliseconds(600)),
-            TimeSpan.FromMilliseconds(200),
-            "the body only slept",
-            unwindGrace: TimeSpan.FromSeconds(10)));
+        Xunit.Sdk.XunitException timedOut = TimeOutASleepingBody();
 
-        Assert.DoesNotContain("minidump", timedOut.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("dump", timedOut.Message, StringComparison.Ordinal);
     }
 
     /// <summary>The body neither pumps nor returns before its bound, so the

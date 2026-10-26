@@ -168,6 +168,18 @@ Describe 'windows.yml routing through the router' {
     }
 }
 
+Describe 'windows.yml app results' {
+    # #1641: "Re-run failed jobs" uploads its results under the same run id, and a name without the attempt let the
+    # rerun's upload replace the failed attempt's, the STA timeout's dump with it (run 40169134314).
+    It 'names the app job''s results artifact by run and attempt, so a rerun keeps the failed attempt''s dump' {
+        $windows | Should -Match (Get-Lines @(
+                '          name: slate-windows-app-results-${{ github.run_id }}-${{ github.run_attempt }}',
+                '          overwrite: true',
+                "          path: '`${{ runner.temp }}\slate-app-results\**\*'"))
+        $windows | Should -Match (Get-Lines @("          SLATE_STA_DUMP_DIR: '`${{ runner.temp }}\slate-app-results'"))
+    }
+}
+
 Describe 'windows.yml rust lint' {
     # rust.yml lints on Linux, where cfg(windows) code never compiles (#1570); this lane lints what Windows builds.
     It 'the windows rust lane runs clippy with warnings as errors, rust.yml''s invocation verbatim, unconditionally, after both suites' {
