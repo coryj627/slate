@@ -590,8 +590,18 @@ internal sealed partial class FilesSidebarViewModel
     /// waiting for its folder's rows, so the publication honours only the
     /// mutation and the keys move once. Kept, the Reveal would take the
     /// selection from the mutation's row and open its own note.</summary>
-    private void DropWaitingReveal() =>
-        _pendingSurfaceSelectPath = null;
+    /// <param name="revealRequestsAtGesture">For a mutation that awaited
+    /// between its gesture and its request (a trash, whose work runs on a
+    /// worker behind its progress bar): the Reveal count it read at its
+    /// gesture. A Reveal asked since is newer than the mutation and stays.
+    /// Null for a mutation that requests in its gesture.</param>
+    private void DropWaitingReveal(long? revealRequestsAtGesture = null)
+    {
+        if (revealRequestsAtGesture is null || revealRequestsAtGesture == _revealRequests)
+        {
+            _pendingSurfaceSelectPath = null;
+        }
+    }
 
     /// <summary>Raised at tree publication after a mutation that asked
     /// for selection/focus reconciliation — the window restores
@@ -607,11 +617,13 @@ internal sealed partial class FilesSidebarViewModel
     /// <summary>Ask the NEXT publication to re-seat selection at
     /// <paramref name="vaultPath"/> (null = no selection — just the
     /// focus restore; deletes have no successor to name).</summary>
-    private void RequestSelectionAt(string? vaultPath)
+    /// <param name="revealRequestsAtGesture">See
+    /// <see cref="DropWaitingReveal"/>.</param>
+    private void RequestSelectionAt(string? vaultPath, long? revealRequestsAtGesture = null)
     {
         _pendingSelectPath = vaultPath;
         _pendingTreeFocusRestore = true;
-        DropWaitingReveal();
+        DropWaitingReveal(revealRequestsAtGesture);
     }
 
     /// <summary>Publication half of <see cref="RequestSelectionAt"/>:

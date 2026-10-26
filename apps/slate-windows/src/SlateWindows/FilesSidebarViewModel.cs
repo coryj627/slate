@@ -1862,6 +1862,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             return;
         }
 
+        long revealRequests = _revealRequests;
         TrashWorkOwner owner = BeginTrash();
         StagedTrash? staged = null;
         try
@@ -1902,7 +1903,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             if (ReferenceEquals(SelectedNode, node))
             {
                 SelectedNode = null;
-                RequestSelectionAt(null);
+                RequestSelectionAt(null, revealRequests);
             }
             Refresh();
             ReportMutationResult($"Moved {node.DisplayName} to the Recycle Bin.");
@@ -2229,6 +2230,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     {
         StructuralBatchItem[] items = SelectedBatchItems();
         if (IsTrashing || SessionShutdownStarted || StructuralMutationBlocked is not null || items.Length == 0) { return; }
+        long revealRequests = _revealRequests;
         TrashWorkOwner owner = BeginTrash();
         StagedTrash? staged = null;
         try
@@ -2273,7 +2275,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 selected.Path == item.Path || (item.IsDirectory &&
                     selected.Path.StartsWith(item.Path + "/", StringComparison.Ordinal))))
             {
-                RequestSelectionAt(null);
+                RequestSelectionAt(null, revealRequests);
             }
             Refresh();
             ReportMutationResult(BatchTrashSummary(report));

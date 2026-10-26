@@ -849,6 +849,11 @@ public sealed partial class FilesRegionLandingTests
         Assert.Same(ContainerOf(host, copy), Assert.Single(host.FocusChanges));
         Assert.DoesNotContain("docs/n.md", opened);
         Assert.DoesNotContain(host.Announced, item => item is A11yEvent.RowSelected or A11yEvent.TreeFolderSelected);
+
+        // Dropped, not deferred: a later publication seats nothing either.
+        RescanAndRefresh(host);
+        Assert.False(RevealedRow(host).IsSelected, "the waiting Reveal seated at a later publication");
+        Assert.DoesNotContain("docs/n.md", opened);
     });
 
     /// <summary>Codex round 4's sibling: a note created through the sidebar
@@ -871,6 +876,51 @@ public sealed partial class FilesRegionLandingTests
         Assert.True(created.IsSelected, "the new row's node does not hold the selection");
         Assert.False(RevealedRow(host).IsSelected, "the waiting Reveal selected its note after the create");
         Assert.DoesNotContain("docs/n.md", opened);
+
+        // Dropped, not deferred: a later publication seats nothing either.
+        RescanAndRefresh(host);
+        Assert.False(RevealedRow(host).IsSelected, "the waiting Reveal seated at a later publication");
+        Assert.DoesNotContain("docs/n.md", opened);
+    });
+
+    /// <summary>The round-4 fix's red team: a trash's work runs on a worker
+    /// behind its progress bar, and the reader asks for a Reveal in File Tree
+    /// from another surface while it runs, into a folder that has not listed
+    /// its rows. That Reveal is newer than the trash, so the trash's focus
+    /// restore keeps it and the trash's publication seats it: the revealed
+    /// note takes the selection, as a Reveal does, and the keys move at most
+    /// once.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ARevealAskedDuringATrashSeatsWhenTheTrashPublishes(bool batch) => RunSta(() =>
+    {
+        using var host = new Host();
+        SeedNotes(host, ("docs/n.md", DateTime.Now), ("a.md", DateTime.Now), ("b.md", DateTime.Now));
+        host.Initialize();
+        var opened = new List<string>();
+        FileTreeNodeViewModel trashed = LandOnSelected(host, "a.md", opened);
+        trashed.IsBatchSelected = batch;
+        bool waited = false;
+        host.Sidebar.TrashStagedForTesting = _ =>
+        {
+            Assert.True(host.Above.Focus());
+            host.ForgetFocusChanges();
+            host.Sidebar.SelectPathFromSurface("docs/n.md");
+            waited = ReferenceEquals(trashed, host.Sidebar.SelectedNode);
+        };
+
+        (batch ? host.Sidebar.BatchTrashCommand : host.Sidebar.DeleteCommand).Execute(null);
+        Assert.True(PumpedDispatcher.PumpUntil(() => host.Sidebar.TrashCompletion.IsCompleted), "the trash never finished");
+        Settle(host);
+
+        Assert.True(waited, "premise: the Reveal seated before the trash finished");
+        Assert.False(File.Exists(Path.Combine(host.Root, "a.md")), "premise: the trash left the note");
+        FileTreeNodeViewModel revealed = RevealedRow(host);
+        Assert.Same(revealed, host.Sidebar.SelectedNode);
+        Assert.True(revealed.IsSelected, "the revealed note's node does not hold the selection");
+        Assert.Contains("docs/n.md", opened);
+        Assert.True(host.FocusChanges.Count <= 1, $"the keys moved {host.FocusChanges.Count} times");
     });
 
     /// <summary>A Reveal in File Tree of <c>docs/n.md</c> asked while its
