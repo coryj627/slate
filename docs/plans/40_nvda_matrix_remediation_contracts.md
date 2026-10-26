@@ -961,3 +961,9 @@ PR #1262 (`claude/w7-7-pr11-connections-doc`, base 937dd3dd). Delivered: chord r
 **Round 2 (2026-09-26; codex `gpt-5.6-sol`, xhigh).** `approve` — "no behavior or contract blocker found for #1273/#1274." One low note, this record, taken.
 
 **Approved head.** 9a6f4cae on f035ab26. Gates: a clean build (main's CS0108 at `MainWindow.ShellRegions.cs:270` the app's only warning); the unit project on CI's filter 3404/3409 — the five machine-only symlink, long-path and reparse-point facts; `W77RemediationDocsCensus` 30/30; the chords.json projection current; the trigger ledger (214 keys) and parity `--check`s; `dotnet format --verify-no-changes --include` clean on every touched C# file; `GraphConnections_LeafWalkDepthAndReRoot_AreClean` and `SpokenChords_MenusPaletteAndOverlays_MatchTheTable` under the FlaUI lock.
+
+### Plan 44 WB-5 — #1281 + #1259 (2026-10-26)
+
+**W7-6 §4, the editor popover (#1281).** The Ctrl+E embed and citation popover counts as a modal for the F6 ring. `IShellRegionHost.ModalSurfaceOpen` also reads the active tab's `IsPopoverOpen`, so F6 and Shift+F6 over the popover are a no-op: focus stays in it and nothing is spoken. The popover does not join `ModalSurface`. It paints inside the content pane, and the admission tables, the menu, the rescan deferral and the watcher's sentence keep their answers while it is open.
+
+**The sheet fence, widened (R-6, #1259).** The fence refuses every editing command a sheet's field cannot answer, not only the two Tab commands: `Undo`, `Redo`, `Cut`, `Paste`, `Delete`, `SelectAll` and every static command on `EditingCommands`. The direct-`Execute` guard covers the same set. `Copy` is excepted, because it changes nothing behind the sheet. A field that answers keeps its command: one with undo history still undoes inside. The R-6 row above is unchanged.

@@ -2,6 +2,25 @@
 
 Issues: Closes #1281, Closes #1259. Size S–M. Lanes: windows. AT: NVDA spot (F6 on the popover says nothing; Ctrl+Z in a sheet field changes nothing behind it). Wave: W2. Depends on: nothing. Parallel with: WB-4, WB-6. Decision: none.
 
+## Amended at implementation (2026-10-26)
+
+This section outranks the text below it.
+
+- **#1281 takes the spec's own fallback, the narrow form.** `IShellRegionHost.ModalSurfaceOpen` also reads the active tab's `IsPopoverOpen`. Nothing else moves: no `ModalSurface` member, no admission or census change. The full form reaches much further than this spec counted:
+  - seven decision tables would see the popover as the topmost surface, not three (`Template`, `MoveTo`, `BulkRename` and `CitationSummary` too);
+  - about ten other `OpenModalSurface` consumers would change: five focus-restore checks, Trash progress, the canvas overlay probe, the rescan and watcher gates, the presentation observer and the menu census.
+
+  The issue asks only for the ring's no-op, and this form delivers it. Whether the popover should join `ModalSurface` is filed as #1665, with that inventory.
+- **The ring fact runs an unshown shipped shell.** `ThePopoverIsAModalSurfaceForTheRing` opens a note's popover with `PreviewEmbedAt`. It asserts the shell's own `ModalSurfaceOpen` answer and that F6 and Shift+F6 speak nothing, then that the answer clears once the popover closes. The ring's response to a true answer is `AModalSurfaceMakesThePressANoOp`. Real focus staying on Close is the NVDA spot's.
+- **The fence facts use a harness that can leak.** Each chord meets a note armed for it: an undoable edit, a redoable one, a selection, clipboard text (Paste; the previous text is restored), or a caret. A read-only field declines all five chords. A control theory without the fence shows each chord changing the note, so the fenced theory is evidence.
+- **The overlay fact uses a decoy behind the boxes, and Cut and Select All.**
+  - The decoy is an unbound box added to the shell's own tree, made the window's logical focus. It stands in for a note editor, which the unshown shell does not realize. It holds text and a selection.
+  - Each of the three overlays' empty boxes gets Ctrl+X and Ctrl+A, and the decoy's text and selection must be unchanged.
+  - The unshown shell keeps no undo history at all, so Undo and Redo at a sheet's edge are pinned by the harness facts, which run in a shown window.
+  - In the harness, Delete from a read-only field never leaves the field (the box answers the query itself), so the no-fence control covers Undo, Redo, Cut and Paste.
+- **The FlaUI journey types one character first,** so a leaked Undo has something to take back. It also runs the item-name census that every journey owes (`AnnouncementNameCensus`).
+- **Registers:** contract 40 gains a WB-5 section; the frozen R-6 row is untouched. The matrix's popover row gains the F6 note.
+
 ## Goal
 
 Two routes still carry keys from a modal surface to the note behind it.

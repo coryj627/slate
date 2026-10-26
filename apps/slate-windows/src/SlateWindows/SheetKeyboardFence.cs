@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Reflection;
 using System.Windows;
 using System.Windows.Documents;
 using System.Windows.Input;
@@ -8,12 +9,15 @@ using System.Windows.Input;
 namespace SlateWindows;
 
 /// <summary>
-/// W7-7 (#1248, contract R-6): a sheet fences Tab. The
+/// W7-7 (#1248, contract R-6): a sheet fences Tab — and, since WB-5
+/// (#1259), every editing command its fields cannot answer. The
 /// <see cref="EditingCommands.TabForward"/> and
 /// <see cref="EditingCommands.TabBackward"/> a key or a command source
 /// raises inside a sheet are answered inside it or not at all — never
 /// handed to the element behind it — so Tab and Shift+Tab traverse the
-/// sheet's own <c>Cycle</c> scope.
+/// sheet's own <c>Cycle</c> scope; Undo, Redo, Cut, Paste and Delete that
+/// no field in the sheet answers are refused the same way, so they never
+/// edit the note behind it (<see cref="FencedCommands"/>).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -60,8 +64,10 @@ namespace SlateWindows;
 /// the execution is swallowed.
 /// </para>
 /// <para>
-/// <b>Nothing else is intercepted.</b> The sheet's own editing chords reach
-/// its fields, and suppressing shell chords while a sheet is open stays
+/// <b>Nothing a field answers is intercepted.</b> The sheet's own editing
+/// chords reach its fields — a field with undo history undoes inside, and a
+/// read-only field's Copy (not fenced) still copies — and suppressing shell
+/// chords while a sheet is open stays
 /// the shipped modal routing's job (<see cref="ModalSurfaces"/>, contract
 /// 30 TR-7). <c>SheetFenceCensus</c> pins that every focus-scope overlay
 /// in the shell's XAML carries this fence and cycles.
@@ -76,13 +82,45 @@ internal static class SheetKeyboardFence
             typeof(SheetKeyboardFence),
             new PropertyMetadata(false, OnIsEnabledChanged));
 
-    /// <summary>The edge: one refusal per Tab command. Shared — a binding
+    /// <summary>
+    /// WB-5 (#1259): every editing command a sheet's field may decline —
+    /// <c>Undo</c>, <c>Redo</c>, <c>Cut</c>, <c>Paste</c>, <c>Delete</c> and
+    /// <c>SelectAll</c>, and every static command on
+    /// <see cref="EditingCommands"/> (the two Tab commands among them),
+    /// enumerated once by reflection so a new member is covered without an
+    /// edit. <c>Copy</c> is left out: it changes nothing behind the sheet,
+    /// and a read-only field's Copy answers inside it anyway.
+    /// </summary>
+    internal static readonly ICommand[] FencedCommands = Fenced();
+
+    /// <summary>The edge: one refusal per fenced command. Shared — a binding
     /// holds no reference to the element whose collection holds it.</summary>
-    private static readonly CommandBinding[] Edge =
-    [
-        Refusal(EditingCommands.TabForward),
-        Refusal(EditingCommands.TabBackward),
-    ];
+    private static readonly CommandBinding[] Edge = [.. FencedCommands.Select(Refusal)];
+
+    private static readonly HashSet<ICommand> FencedSet = [.. FencedCommands];
+
+    private static ICommand[] Fenced()
+    {
+        var commands = new List<ICommand>
+        {
+            ApplicationCommands.Undo,
+            ApplicationCommands.Redo,
+            ApplicationCommands.Cut,
+            ApplicationCommands.Paste,
+            ApplicationCommands.Delete,
+            ApplicationCommands.SelectAll,
+        };
+        foreach (PropertyInfo property in typeof(EditingCommands).GetProperties(
+            BindingFlags.Public | BindingFlags.Static))
+        {
+            if (property.GetValue(null) is RoutedUICommand command && !commands.Contains(command))
+            {
+                commands.Add(command);
+            }
+        }
+
+        return [.. commands];
+    }
 
     public static bool GetIsEnabled(DependencyObject element) =>
         (bool)element.GetValue(IsEnabledProperty);
@@ -130,11 +168,11 @@ internal static class SheetKeyboardFence
         e.Handled = true;
     }
 
-    /// <summary>A Tab command executed inside the sheet runs only if
+    /// <summary>A fenced command executed inside the sheet runs only if
     /// something inside the sheet answers it.</summary>
     private static void OnPreviewExecuted(object sender, ExecutedRoutedEventArgs e)
     {
-        if (IsTabCommand(e.Command)
+        if (IsFencedCommand(e.Command)
             && e.Command is RoutedCommand command
             && e.OriginalSource is IInputElement target
             && !command.CanExecute(e.Parameter, target))
@@ -143,7 +181,5 @@ internal static class SheetKeyboardFence
         }
     }
 
-    private static bool IsTabCommand(ICommand command) =>
-        ReferenceEquals(command, EditingCommands.TabForward)
-        || ReferenceEquals(command, EditingCommands.TabBackward);
+    private static bool IsFencedCommand(ICommand command) => FencedSet.Contains(command);
 }

@@ -16,8 +16,15 @@ namespace SlateWindows;
 /// are the view model's (<see cref="WorkspaceViewModel.ShellRegionHost"/>).</summary>
 public partial class MainWindow : IShellRegionHost
 {
+    /// <remarks>WB-5 (#1281; W7-6 §4): the editor's Ctrl+E popover is a
+    /// dialog over the note too, so a press over it is a no-op like one
+    /// over a shell sheet. It is not a <see cref="ModalSurface"/>: it paints
+    /// inside the content pane, and the admission tables, the menu, the
+    /// rescan deferral and the watcher's sentence keep their answers while
+    /// it is open — only the ring asks about it.</remarks>
     bool IShellRegionHost.ModalSurfaceOpen =>
-        ModalSurfaces.TopmostOpen(CurrentModalSurfaceState) is not null;
+        ModalSurfaces.TopmostOpen(CurrentModalSurfaceState) is not null
+        || _viewModel.Workspace?.ActiveGroup.ActiveTab?.EditorInteractions?.IsPopoverOpen == true;
 
     string IShellRegionHost.StatusText => _viewModel.StatusText ?? string.Empty;
 

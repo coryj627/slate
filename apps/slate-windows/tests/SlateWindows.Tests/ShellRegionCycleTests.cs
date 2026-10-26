@@ -273,15 +273,19 @@ public sealed class ShellRegionCycleTests
         {
             SetWorkspace(shell, workspace);
             var host = (IShellRegionHost)shell;
-            Assert.Same(shell, workspace.ShellRegionHost);
+            // What the shell's WorkspaceReady handler does once an open lands.
+            workspace.ShellRegionHost = host;
             workspace.OpenPath("source.md");
             WorkspaceTabViewModel tab = workspace.ActiveGroup.ActiveTab!;
             EditorInteractionCoordinator interactions = Assert.IsType<EditorInteractionCoordinator>(tab.EditorInteractions);
+            interactions.RefreshMathRangesForTests();
             interactions.RefreshArtifactCacheForTests();
             Assert.False(host.ModalSurfaceOpen, "premise: a modal was reported before the popover opened");
 
-            Assert.True(interactions.PreviewEmbedAt(tab.Text.IndexOf("![[target]]", StringComparison.Ordinal) + 3));
-            Assert.True(interactions.IsPopoverOpen, "premise: Ctrl+E on the embed did not open the popover");
+            Assert.True(interactions.PreviewEmbedAt(tab.Text.IndexOf("![[target]]", StringComparison.Ordinal) + 2));
+            Assert.True(
+                PumpedDispatcher.PumpUntil(() => interactions.IsPopoverOpen, TimeSpan.FromSeconds(10)),
+                "premise: Ctrl+E on the embed did not open the popover");
             Assert.True(host.ModalSurfaceOpen, "the shell did not count the open popover as a modal surface");
             announced.Clear();
 

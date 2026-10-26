@@ -317,16 +317,17 @@ public sealed class SheetKeyboardFenceTests
 
     /// <summary>
     /// The harness reproduces #1259 without the fence: from the read-only
-    /// field, each of the five chords reaches the note behind the sheet and
-    /// changes it. This is what makes the fenced theory evidence rather than
-    /// a harness that could not have leaked.
+    /// field, Undo, Redo, Cut and Paste each reach the note behind the sheet
+    /// and change it. This is what makes the fenced theory evidence rather
+    /// than a harness that could not have leaked. Delete is not among them:
+    /// a read-only box answers the Delete query itself, so in this harness
+    /// it never leaves the field; the fence refuses it all the same.
     /// </summary>
     [Theory]
     [InlineData("Undo")]
     [InlineData("Redo")]
     [InlineData("Cut")]
     [InlineData("Paste")]
-    [InlineData("Delete")]
     public void WithoutTheFenceTheEditingCommandsReachTheEditorBehindTheSheet(string chord) => RunSta(() =>
     {
         using var harness = new Harness(fenced: false, withReference: true);
@@ -339,6 +340,42 @@ public sealed class SheetKeyboardFenceTests
         });
         Assert.NotEqual(before, NoteState.Of(harness.Editor));
     });
+
+    /// <summary>
+    /// WB-5 (#1259): the edge refuses every command on
+    /// <see cref="EditingCommands"/> and the six application editing
+    /// commands, and leaves Copy alone. The set is enumerated, so a command
+    /// the framework adds is refused without an edit; this pins that it is
+    /// the whole set, not a hand-kept list of the commands seen leaking.
+    /// </summary>
+    [Fact]
+    public void TheEdgeFencesEveryEditingCommandAndLeavesCopyAlone()
+    {
+        ICommand[] fenced = SheetKeyboardFence.FencedCommands;
+        RoutedUICommand[] editing =
+        [
+            .. typeof(EditingCommands).GetProperties(BindingFlags.Public | BindingFlags.Static)
+                .Select(property => property.GetValue(null))
+                .OfType<RoutedUICommand>(),
+        ];
+        Assert.True(editing.Length > 40, $"premise: EditingCommands lists only {editing.Length} commands");
+        foreach (RoutedUICommand command in editing)
+        {
+            Assert.Contains(command, fenced);
+        }
+
+        foreach (RoutedUICommand command in new[]
+        {
+            ApplicationCommands.Undo, ApplicationCommands.Redo, ApplicationCommands.Cut,
+            ApplicationCommands.Paste, ApplicationCommands.Delete, ApplicationCommands.SelectAll,
+        })
+        {
+            Assert.Contains(command, fenced);
+        }
+
+        Assert.DoesNotContain(ApplicationCommands.Copy, fenced);
+        Assert.Equal(fenced.Length, fenced.Distinct().Count());
+    }
 
     /// <summary>
     /// WB-5 (#1259): a field with its own undo history still undoes inside
@@ -386,11 +423,13 @@ public sealed class SheetKeyboardFenceTests
 
     /// <summary>
     /// WB-5 (#1259): the three overlays with a query box — Quick Open, the
-    /// search overlay and the palette — carry the fence too, so Ctrl+Z,
-    /// Ctrl+Y and Ctrl+X in an empty box never reach what the window's focus
-    /// scope holds behind them (here the sidebar filter, armed with an
-    /// undo, a redo and a selection). Pins the shipped XAML: an overlay
-    /// that loses its fence fails its row.
+    /// search overlay and the palette — carry the fence too. Ctrl+Z, Ctrl+Y,
+    /// Ctrl+X and Ctrl+V in an empty box never reach what the window's focus
+    /// scope holds behind them. Behind them here is an element in the shell's
+    /// own tree that answers every one of those commands and records what
+    /// reaches it — the unshown shell keeps no undo history, so a real editor
+    /// could not show a leaked Undo. Pins the shipped XAML: an overlay that
+    /// loses its fence fails its row.
     /// </summary>
     [Theory]
     [InlineData("QuickSwitcherSearchTextBox")]
@@ -401,24 +440,32 @@ public sealed class SheetKeyboardFenceTests
         using var host = new ShellHost();
         TextBox box = host.Element<TextBox>(boxName);
         Assert.Equal(string.Empty, box.Text);
-        foreach ((Key key, string what) in new[] { (Key.Z, "undo"), (Key.Y, "redo"), (Key.X, "cut") })
+        var reached = new List<string>();
+        var behind = new Border { Name = "BehindTheOverlays", Focusable = true };
+        foreach (RoutedUICommand command in new[]
         {
-            TextBox behind = host.Element<TextBox>("SidebarFilterTextBox");
-            behind.Text = string.Empty;
-            TextCompositionManager.StartComposition(new TextComposition(InputManager.Current, behind, "filter"));
-            TextCompositionManager.StartComposition(new TextComposition(InputManager.Current, behind, " more"));
-            Assert.True(behind.Undo(), "premise: the box behind had nothing to undo");
-            behind.SelectAll();
-            Assert.True(behind.CanUndo && behind.CanRedo, "premise: the box behind was not armed");
-            FocusManager.SetFocusedElement(host.Shell, behind);
-            string text = behind.Text;
-
-            host.Press(box, key, ModifierKeys.Control);
-
-            Assert.Equal(text, behind.Text);
-            Assert.True(behind.CanUndo, $"the {what} in {boxName} undid the box behind it");
-            Assert.True(behind.CanRedo, $"the {what} in {boxName} redid the box behind it");
+            ApplicationCommands.Undo, ApplicationCommands.Redo, ApplicationCommands.Cut, ApplicationCommands.Paste,
+        })
+        {
+            behind.CommandBindings.Add(new CommandBinding(
+                command,
+                (_, _) => reached.Add(command.Name),
+                (_, e) => e.CanExecute = true));
         }
+
+        _ = ((DockPanel)host.Shell.Content).Children.Add(behind);
+        FocusManager.SetFocusedElement(host.Shell, behind);
+        Assert.True(ApplicationCommands.Undo.CanExecute(null, behind), "premise: the element behind does not answer Undo");
+
+        WithClipboardTextFor("Paste", () =>
+        {
+            foreach (Key key in new[] { Key.Z, Key.Y, Key.X, Key.V })
+            {
+                host.Press(box, key, ModifierKeys.Control);
+            }
+        });
+
+        Assert.Empty(reached);
     });
 
     /// <summary>
@@ -510,7 +557,8 @@ public sealed class SheetKeyboardFenceTests
                 return (Key.Z, ModifierKeys.Control);
             case "Redo":
                 document.Insert(document.TextLength, "typed");
-                Assert.True(document.UndoStack.Undo(), "premise: the note had nothing to undo");
+                document.UndoStack.Undo();
+                Assert.True(document.UndoStack.CanRedo, "premise: the note had nothing to redo");
                 return (Key.Y, ModifierKeys.Control);
             case "Cut":
                 harness.Editor.Select(1, 8);

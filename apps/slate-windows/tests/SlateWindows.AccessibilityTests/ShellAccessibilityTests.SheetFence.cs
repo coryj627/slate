@@ -160,6 +160,102 @@ public sealed partial class ShellAccessibilityTests
         }
     }
 
+    /// <summary>
+    /// WB-5 (#1259): Ctrl+Z in a template prompt field with nothing to undo
+    /// stays in the sheet. The note behind holds one typed character — an
+    /// edit a leaked Undo would take back — while the empty Topic field
+    /// declines Undo; after Ctrl+Z and Escape the character is still there,
+    /// and the file on disk is untouched.
+    /// </summary>
+    [Fact]
+    public void Templates_PromptUndoLeavesTheNoteAlone()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "slate-sheet-undo-" + Guid.NewGuid().ToString("N"));
+        string vault = Path.Combine(root, "Fence Vault");
+        string logs = Path.Combine(root, "logs");
+        Directory.CreateDirectory(Path.Combine(vault, "Templates"));
+        const string Note = "Agenda line\n\nBody paragraph.\n";
+        File.WriteAllText(Path.Combine(vault, "agenda.md"), Note);
+        File.WriteAllText(
+            Path.Combine(vault, "Templates", "meeting-note.md"),
+            "---\ndescription: Two prompts\n---\n# {{title}}\n\n"
+            + "Topic: {{prompt:Topic}}\nAttendees: {{prompt:Attendees}}\n");
+
+        Process? process = null;
+        try
+        {
+            var start = new ProcessStartInfo(SlateWindowsExe()) { UseShellExecute = false };
+            ShellLaunch.ApplyDeviceState(start);
+            start.ArgumentList.Add(vault);
+            start.Environment["SLATE_CENSUS_INSTANCE_ID"] = "sheet-undo-" + Guid.NewGuid().ToString("N");
+            start.Environment["SLATE_LOG_DIR"] = logs;
+            process = Process.Start(start) ?? throw new Xunit.Sdk.XunitException("Slate did not start.");
+            if (!HasInteractiveDesktop(process, "sheet-undo"))
+            {
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process, automation, Path.Combine(logs, "slate-windows.log"), TimeSpan.FromSeconds(30));
+            window.SetForeground();
+            _ = WaitForElement(window, "RightPaneLeaves", TimeSpan.FromSeconds(30));
+
+            AutomationElement tree = WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(10));
+            WaitForTreeItemStartingWith(tree, automation, "agenda.md").Patterns.SelectionItem.Pattern.Select();
+            AutomationElement editor = WaitForEditor(window, automation, "agenda.md editor", TimeSpan.FromSeconds(10));
+
+            // One typed character: the edit a leaked Undo would take back.
+            FocusTheEditor(window, editor);
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.END);
+            Keyboard.Type("x");
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            string typed = Note + "x";
+            Assert.True(
+                SpinWait.SpinUntil(() => EditorText(editor) == typed, TimeSpan.FromSeconds(10)),
+                $"premise: the typed character did not reach the note; it reads '{EditorText(editor)}'.");
+
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_N);
+            _ = WaitForElement(window, "TemplatePickerSheet", TimeSpan.FromSeconds(10));
+            AutomationElement pickerList = WaitForElement(window, "TemplatePickerList", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => pickerList.FindFirstDescendant(automation.ConditionFactory.ByControlType(ControlType.ListItem))
+                        ?.Properties.HasKeyboardFocus.ValueOrDefault == true,
+                    TimeSpan.FromSeconds(10)),
+                $"the picker did not focus its meeting-note row. {FocusDiagnosis()}");
+            PressKey(VirtualKeyShort.RETURN);
+            AutomationElement flow = WaitForElement(window, "TemplateFlowSheet", TimeSpan.FromSeconds(10));
+            AutomationElement topic = PromptField(flow, automation, "Topic");
+            AssertEventuallyFocused(topic, "the prompt step did not focus Topic (T4).");
+            // R-4 (#1246): the runtime item-name census at this journey's
+            // representative state.
+            AssertItemNamesAreSpeakable(process, "template-prompt-undo");
+
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_Z);
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(500));
+            AssertEventuallyFocused(topic, "Ctrl+Z in Topic moved focus out of the sheet.");
+            Assert.True(
+                EditorText(editor) == typed,
+                $"Ctrl+Z in the sheet undid the note behind it (#1259): '{EditorText(editor)}'.");
+
+            PressKey(VirtualKeyShort.ESCAPE);
+            AssertElementDisappears(window, automation, "TemplateFlowSheet");
+            Assert.True(
+                EditorText(editor) == typed,
+                $"The note behind the sheet changed: '{EditorText(editor)}'.");
+            Assert.Equal(Note, File.ReadAllText(Path.Combine(vault, "agenda.md")));
+        }
+        finally
+        {
+            try { process?.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        }
+    }
+
+    private static string EditorText(AutomationElement editor) =>
+        (editor.Patterns.Value.Pattern.Value.ValueOrDefault ?? string.Empty).Replace("\r\n", "\n", StringComparison.Ordinal);
+
     /// <summary>The note editor holds keyboard focus — it is then the
     /// window scope's logical focus, the element a sheet's focus scope
     /// hands an unanswered command to.</summary>
