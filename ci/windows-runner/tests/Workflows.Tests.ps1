@@ -180,6 +180,20 @@ Describe 'windows.yml app results' {
     }
 }
 
+Describe 'windows.yml FlaUI handoff' {
+    # #1643: the shell gate's binaries are named by run id alone. A rerun of only the failed shell gate downloads what
+    # the app job built in an earlier attempt (a failed-jobs rerun keeps an earlier attempt's artifacts, #1646), and a
+    # rerun of the app job replaces them (overwrite) before its gate runs again. An attempt in the name would send a
+    # rerun of the gate alone looking for an artifact no attempt of it uploaded.
+    It 'downloads the binaries by the very name the app job uploads, run id only, the upload replacing an earlier one' {
+        $upload = [regex]::Match($windows, '(?s)      - name: Upload FlaUI gate binaries\r?\n.*?(?=\r?\n      - name:|\r?\n  \S|\z)').Value
+        $upload | Should -Match (Get-Lines @('          name: flaui-binaries-${{ github.run_id }}', '          overwrite: true'))
+        $download = [regex]::Match($windows, '(?s)      - name: Download FlaUI gate binaries\r?\n.*?(?=\r?\n      - name:|\z)').Value
+        $download | Should -Match (Get-Lines @('          name: flaui-binaries-${{ github.run_id }}'))
+        ($upload + $download) | Should -Not -Match 'run_attempt' -Because 'a rerun of the gate alone would look for an attempt the app job never uploaded'
+    }
+}
+
 Describe 'windows.yml rust lint' {
     # rust.yml lints on Linux, where cfg(windows) code never compiles (#1570); this lane lints what Windows builds.
     It 'the windows rust lane runs clippy with warnings as errors, rust.yml''s invocation verbatim, unconditionally, after both suites' {
