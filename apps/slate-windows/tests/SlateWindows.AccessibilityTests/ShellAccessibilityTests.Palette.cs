@@ -65,6 +65,7 @@ public sealed partial class ShellAccessibilityTests
         try
         {
             var startInfo = new ProcessStartInfo(SlateWindowsExe()) { UseShellExecute = false };
+            ShellLaunch.ApplyDeviceState(startInfo);
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
                 $"slate-palette-typing-{Guid.NewGuid():N}";

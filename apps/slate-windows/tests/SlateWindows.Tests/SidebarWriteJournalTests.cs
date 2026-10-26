@@ -700,13 +700,17 @@ public sealed class SidebarWriteJournalTests : IDisposable
     public void ATestProcessNeverJournalsIntoTheUsersAppData()
     {
         // Only the app installs the production location (App.OnStartup); a
-        // test host keeps the process's private temporary folder.
+        // test host keeps the process's private temporary folder. And the
+        // production location is under the device-state root (#1331), which
+        // this process points away from the developer's profile.
         Assert.Equal(
-            Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "Slate",
-                "sidebar-write-journal"),
+            Path.Combine(SlateDeviceState.Root, "sidebar-write-journal"),
             SidebarWriteJournal.ProductionDirectory);
+        Assert.False(
+            Path.GetFullPath(SidebarWriteJournal.ProductionDirectory).StartsWith(
+                Path.TrimEndingDirectorySeparator(SlateDeviceState.Resolve(null)) + Path.DirectorySeparatorChar,
+                StringComparison.OrdinalIgnoreCase),
+            "a test process's production journal location is under the developer's profile.");
         Assert.NotEqual(
             Path.GetFullPath(SidebarWriteJournal.ProductionDirectory),
             SidebarWriteJournal.Shared.JournalDirectory,

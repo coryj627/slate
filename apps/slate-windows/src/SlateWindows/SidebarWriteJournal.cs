@@ -296,10 +296,11 @@ internal sealed class SidebarWriteJournal
     /// app installs the production location at launch.</summary>
     internal static SidebarWriteJournal Shared { get; private set; } = new(TemporaryDirectory());
 
-    /// <summary><c>%LOCALAPPDATA%\Slate\sidebar-write-journal</c>.</summary>
+    /// <summary>The device-state root's <c>sidebar-write-journal</c>
+    /// (<c>%LOCALAPPDATA%\Slate\sidebar-write-journal</c> unless
+    /// <c>SLATE_LOCAL_APP_DATA</c> moves the root).</summary>
     internal static string ProductionDirectory => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "Slate",
+        SlateDeviceState.Root,
         "sidebar-write-journal");
 
     internal string JournalDirectory { get; }

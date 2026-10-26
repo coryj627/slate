@@ -557,17 +557,41 @@ jobs:
       # The Connections model (W6-2 PR B2, B2-8) runs in its own lane below.
       # An STA fact that times out without pumping has the runtime's
       # createdump write a full dump of the test process into the uploaded
-      # results folder (StaThread.DumpDirectory, #1603, #1641).
+      # results folder (StaThread.DumpDirectory, #1603, #1641). The run is
+      # under the device-state guard (#1331): it fails if the suite wrote
+      # the runner's %LOCALAPPDATA%\Slate, and keeps the suite's own exit
+      # code otherwise.
       - name: Test
         env:
           SLATE_STA_DUMP_DIR: '${{ runner.temp }}\slate-app-results'
         run: >-
+          pwsh -NoProfile -File scripts/windows/guard-device-state.ps1 --
           dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj
           --configuration Release --no-build
           --filter "FullyQualifiedName!~ConnectionsLeafTests.TheModelOf"
           --logger "trx;LogFileName=slate-windows-app.trx"
           --results-directory "${{ runner.temp }}\slate-app-results"
           --blame-hang-timeout 10m --blame-hang-dump-type mini
+
+      # #1331: the device-state guard both test steps run under, and the
+      # field-pass launcher, are tested where they run: on Windows, through
+      # `pwsh -NoProfile -File`. SLATE_REQUIRE_DEVICE_STATE_SCRIPT_TESTS
+      # turns a skip (no pwsh) into a failure. The home image carries Python
+      # 3.13 in the tool cache, so setup-python installs nothing there. They
+      # run even when the unit Test step failed, so both results show.
+      - name: Set up Python (device-state script tests)
+        if: ${{ !cancelled() }}
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Test the device-state scripts
+        if: ${{ !cancelled() }}
+        env:
+          SLATE_REQUIRE_DEVICE_STATE_SCRIPT_TESTS: '1'
+        run: |
+          python -I -m unittest discover -v -s scripts/tests -p test_guard_device_state.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -I -m unittest discover -v -s scripts/tests -p test_launch_for_field_pass.py
 
       # Named by attempt too (#1641): "Re-run failed jobs" keeps its run id,
       # and its upload would otherwise replace the failed attempt's evidence.
@@ -903,9 +927,15 @@ jobs:
       # single-instance identity. VSTest assembly mode: the adapters
       # ship in the bin folder, so no project file and no source are
       # needed on this runner; the one source file the artifact carries
-      # is global.json, the SDK pin.
+      # is global.json, the SDK pin. The device-state guard (#1331)
+      # travels in the artifact too, as tools\guard-device-state.ps1 in
+      # the gate's output: it fails the run if a launch wrote the runner's
+      # %LOCALAPPDATA%\Slate, waiting first for every SlateWindows.exe the
+      # gate started to exit.
       - name: Shell accessibility gate (FlaUI + axe-windows)
         run: >-
+          pwsh -NoProfile -File
+          apps/slate-windows/tests/SlateWindows.AccessibilityTests/bin/Release/net10.0-windows/tools/guard-device-state.ps1 --
           dotnet test
           apps/slate-windows/tests/SlateWindows.AccessibilityTests/bin/Release/net10.0-windows/SlateWindows.AccessibilityTests.dll
           --logger "trx;LogFileName=slate-windows-accessibility.trx"
@@ -918,11 +948,14 @@ jobs:
       # Keep both the runner result and the per-surface axe summaries. This
       # runs after a failing gate as well so an accessibility regression leaves
       # actionable evidence instead of only an ephemeral console transcript.
+      # Named by attempt too (#1648, as #1641 did for the app's results):
+      # "Re-run failed jobs" would otherwise replace the failed attempt's
+      # evidence; nothing downloads it by name.
       - name: Upload shell accessibility evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
-          name: slate-windows-accessibility-${{ github.sha }}
+          name: slate-windows-accessibility-${{ github.sha }}-${{ github.run_attempt }}
           overwrite: true
           path: |
             ${{ runner.temp }}\slate-accessibility-results\**\*

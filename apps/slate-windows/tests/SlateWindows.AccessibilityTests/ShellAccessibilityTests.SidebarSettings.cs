@@ -45,6 +45,7 @@ public sealed partial class ShellAccessibilityTests
                 RedirectStandardOutput = true,
                 UseShellExecute = false,
             };
+            ShellLaunch.ApplyDeviceState(startInfo);
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
                 $"slate-sidebar-settings-{Guid.NewGuid():N}";

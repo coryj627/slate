@@ -30,6 +30,7 @@ public sealed partial class ShellAccessibilityTests
         try
         {
             var start = new ProcessStartInfo(SlateWindowsExe()) { UseShellExecute = false };
+            ShellLaunch.ApplyDeviceState(start);
             start.ArgumentList.Add(vault);
             start.Environment["SLATE_CENSUS_INSTANCE_ID"] = "shell-regions-" + Guid.NewGuid().ToString("N");
             start.Environment["SLATE_LOG_DIR"] = logs;

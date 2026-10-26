@@ -469,12 +469,23 @@ public sealed class CommandRegistrationTests
     [Fact]
     public void DefaultRecentsPath_IsTheGlobalDeviceLocalLocation()
     {
-        // Global, device-local, never per-vault.
-        string expected = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Slate",
-            "command-palette-recents.json");
+        // Global, device-local, never per-vault: under the device-state root
+        // (#1331), which this process points at its own temporary folder.
+        string expected = Path.Combine(SlateDeviceState.Root, "command-palette-recents.json");
         Assert.Equal(expected, CommandPaletteRecentsStore.DefaultFilePath);
+    }
+
+    [Fact]
+    public void DefaultRecentsPath_UnsetIsTheProfilesSlateFolder()
+    {
+        // With SLATE_LOCAL_APP_DATA unset, the root is the profile's Slate
+        // folder, as it was before the root existed (#1331).
+        Assert.Equal(
+            Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Slate",
+                "command-palette-recents.json"),
+            Path.Combine(SlateDeviceState.Resolve(null), "command-palette-recents.json"));
     }
 
     [Fact]

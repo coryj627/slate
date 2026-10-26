@@ -24,6 +24,7 @@ public sealed class SidebarAnnouncementEtiquetteTests
             return delay.Task.WaitAsync(token);
         }
         var sidebar = new FilesSidebarViewModel(session, announcements.Add,
+            localAppDataRoot: DeviceStateForTests.FreshFileRecentsRoot(),
             filterUiContext: context, filterDelay: Delay,
             filterWorker: (work, token) => { token.ThrowIfCancellationRequested(); work(); return Task.CompletedTask; });
         announcements.Clear();
@@ -117,6 +118,7 @@ public sealed class SidebarAnnouncementEtiquetteTests
             return delay.Task.WaitAsync(token);
         }
         var sidebar = new FilesSidebarViewModel(session, announcements.Add,
+            localAppDataRoot: DeviceStateForTests.FreshFileRecentsRoot(),
             filterUiContext: context, filterDelay: Delay,
             filterWorker: (work, token) => { token.ThrowIfCancellationRequested(); work(); return Task.CompletedTask; });
         announcements.Clear();

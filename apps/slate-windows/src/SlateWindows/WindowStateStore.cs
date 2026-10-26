@@ -151,8 +151,7 @@ internal sealed class WindowStateStore
     }
 
     public static string DefaultFilePath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "Slate",
+        SlateDeviceState.Root,
         "window-state.json");
 
     public WindowPlacementState? Load()

@@ -104,6 +104,23 @@ dotnet test apps/slate-windows/SlateWindows.slnx --configuration Release
 dotnet format apps/slate-windows/SlateWindows.slnx  # pre-push; CI enforces --verify-no-changes
 ```
 
+The app keeps its device state (recent vaults, window placement,
+preferences, palette and file recents, the sidebar write journal and, unless
+`SLATE_LOG_DIR` says otherwise, the logs) under `%LOCALAPPDATA%\Slate`, or
+under `SLATE_LOCAL_APP_DATA` when that is set (#1331). The test suites set it
+to a temporary folder of their own, so `dotnet test` never touches yours, and
+two scripts under `scripts/windows/` build on it:
+
+- `pwsh -NoProfile -File scripts/windows/guard-device-state.ps1 -- <command…>`
+  runs a command (any `dotnet test`) and fails if it, or a `SlateWindows.exe`
+  it started, changed `%LOCALAPPDATA%\Slate`; CI runs both Windows test steps
+  under it.
+- `pwsh -NoProfile -File scripts/windows/launch-for-field-pass.ps1 -Vault '<folder>' -Seed`
+  starts the Release app on a fresh device-state root (printed as `Root:`),
+  seeded with that vault as a recent; several vaults go in as one
+  `|`-joined `-Vault` string, `-Keep` keeps the root and `-Root <it>`
+  relaunches on it. Screen-reader field passes launch through it.
+
 Rust-side checks (`cargo fmt --all -- --check`, `cargo clippy --all-targets
 --workspace -- -D warnings`, `cargo test --workspace`) run the same commands
 as `make ci` and work unchanged in PowerShell. The Windows lane runs the

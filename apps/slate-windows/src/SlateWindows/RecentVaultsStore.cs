@@ -67,8 +67,7 @@ internal sealed class RecentVaultsStore
     }
 
     public static string DefaultFilePath => System.IO.Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "Slate",
+        SlateDeviceState.Root,
         "recent-vaults.json");
 
     public IReadOnlyList<RecentVault> Load()

@@ -110,13 +110,13 @@ internal static class HostLog
 
     /// <summary>
     /// The app-log directory: SLATE_LOG_DIR when set (censuses point it
-    /// at a temp dir), else %LOCALAPPDATA%\Slate\logs.
+    /// at a temp dir), else the device-state root's <c>logs</c>
+    /// (<see cref="SlateDeviceState.Root"/>, %LOCALAPPDATA%\Slate\logs
+    /// unless SLATE_LOCAL_APP_DATA moves it).
     /// </summary>
     public static string LogDirectory =>
         Environment.GetEnvironmentVariable("SLATE_LOG_DIR")
-        ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Slate", "logs");
+        ?? Path.Combine(SlateDeviceState.Root, "logs");
 
     /// <summary>
     /// Redirect native stderr (fd 2) into the durable app log so
