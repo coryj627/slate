@@ -2,6 +2,18 @@
 
 Issues: #1522 #1515 (both close here). Size M. Lanes: windows + FlaUI. AT: NVDA spot. Wave: W2 (slot 3). Depends on: nothing (20b and #1523 are on `main`). Parallel with: WB-4, WB-5. Decision: WD3 (pending; recommended "yes, cases 1 and 3 ship now with #1522"; under the other answer: #1522 alone ships, the organic replace and the selected-row fallback stay, the PR writes `Refs #1515` and the issue stays open with a comment naming the two cases).
 
+## Amended at implementation (2026-10-26)
+
+This section outranks the text below it.
+
+- **WD3 answered yes** (the owner's approval of the plan 44 run, 2026-10-26): cases 1 and 3 of #1515 ship with #1522, so the PR closes both.
+- **Drift from main at 809f5734:**
+  - **`FocusChanges` already exists.** The host's accessor lives in `FilesRegionLandingTests.Rescan.cs`; no new accessor is added.
+  - **`TakeRowStateOf` never copied expansion.** It copies the summary and the folder-note state only, so the group's guard is in `IsTheSameRow`: a group's expansion is the published row's.
+  - **No predicate clause was needed.** `KeysOnARemovedFilesRow` keeps its form. Every removed-row fact lands the keys through the window's restore without the issue's second clause, measured.
+- **The facts live in a new partial,** `FilesRegionLandingTests.Publication.cs`, beside `.Reconcile.cs`. Its row helpers key a date group's header as `group:` and its label, since every header's path is empty.
+- **One fact passes on main by design.** `ARemovedSelectedRowWithNoSurvivorLandsOnTheTree` takes the replace path: no root row survives, so `kept.Count == 0`. Main resolves it the same way. The fact pins that the one resolver keeps serving that path.
+
 ## Goal
 
 Since 20b (#1507) and #1523, a rescan's publication of the Files tree keeps every row it did not change, so a screen reader or a scan holding a row's UI Automation element still holds a live row. Three holes remain, and this chunk closes them: with Group by date on, every date group and every row under it is replaced on every run (#1522); an organic publication (after Slate's own create, rename, duplicate, move, delete or a settings change) still replaces the whole tree (#1515 case 1); and when the publication removes the selected row the whole tree is replaced because WPF's `TreeView.OnItemsChanged` would otherwise select the first row, which opens its note (#1515 case 3). After this chunk the rule is total: a reader's row never gets a new element for a change elsewhere, and a vanished selected row lands the keys on the nearest survivor focused without selection, with no note opened and no selection announced, while a selected note the publication only rebuilt (it changed date group, or the grouping changed) stays selected on its new row.

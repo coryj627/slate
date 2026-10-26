@@ -774,7 +774,10 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     /// mutation already spoke, and re-opening the just-renamed note
     /// would churn recents/history for a gesture the user never
     /// made).</summary>
-    private void SelectSilently(FileTreeNodeViewModel node)
+    /// <param name="reseatOf">WB-6: the path of the row a publication let go
+    /// of, when <paramref name="node"/> is its rebuilt row — the selection was
+    /// let go of first, so no previous node names it.</param>
+    private void SelectSilently(FileTreeNodeViewModel node, string? reseatOf = null)
     {
         FileTreeNodeViewModel? previous = _selectedNode;
         if (SetField(ref _selectedNode, node, nameof(SelectedNode)))
@@ -792,7 +795,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             // journey flaked on exactly this). Only a DIFFERENT logical
             // node — a mutation's pending selection landing on its new
             // path — carries its name into the field.
-            if (!string.Equals(previous?.Path, node.Path, StringComparison.Ordinal))
+            if (!string.Equals(reseatOf ?? previous?.Path, node.Path, StringComparison.Ordinal))
             {
                 MutationName = node.Name;
             }
