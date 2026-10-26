@@ -503,7 +503,8 @@ internal sealed partial class WorkspaceViewModel
 
     /// <summary>WB-4 test seam: copied onto each Files Citing sheet before
     /// its lookup starts (the sheet is unreachable until then), so a fact
-    /// holds the lookup between its read and its publish.</summary>
+    /// holds the lookup between its read and its publish. The sheet keeps
+    /// its copy; clearing this one affects only later sheets.</summary>
     internal Action? FilesCitingInterleaveForTests { get; set; }
 
     /// <summary>Present the settled sheet, unless a later invocation

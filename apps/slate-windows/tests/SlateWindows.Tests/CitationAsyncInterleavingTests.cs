@@ -154,9 +154,9 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
         // That is a claim about SCHEDULING, and without a controllable
         // seam it is a coin flip — a cold run can stall the test thread
         // long enough for the worker to finish, which failed this suite
-        // once in three. The interleaving assertion returns with the
-        // manually-released scheduler seam; until then these tests pin
-        // the END STATE only.
+        // once in three. The interleaving assertion can return through a
+        // HeldWork hold on the bibliography's own seam (the WB-4 pattern);
+        // until then these tests pin the END STATE only.
         await QuiesceAsync(workspace);
 
         Assert.Equal("knuth1984", workspace.Bibliography.ConsumeKeyFocusRequest());
@@ -334,6 +334,7 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
         try
         {
             workspace.OpenFilesCiting("knuth1984");
+            held.WaitUntilEntered();
 
             // Not yet: the lookup is held, and a sheet shown now would
             // speak a count nothing has counted.
@@ -345,7 +346,9 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
         }
 
         var clock = System.Diagnostics.Stopwatch.StartNew();
-        while (workspace.FilesCiting is null && clock.Elapsed < TimeSpan.FromSeconds(10))
+        // Past the hold's own 10 s bound, so a hold that ran out is reported
+        // as one rather than as a missing sheet.
+        while (workspace.FilesCiting is null && clock.Elapsed < TimeSpan.FromSeconds(30))
         {
             await workspace.Citations.DrainForTests();
             await Task.Delay(5);
@@ -398,6 +401,7 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
         try
         {
             leaf.NoteChanged("cited.md");
+            held.WaitUntilEntered();
 
             // A held publish cannot land: this is the loading state.
             Assert.True(leaf.IsLoading);
@@ -427,13 +431,15 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
     /// event is raised, so the answer is guaranteed to come from a
     /// LATER, unrelated load.
     ///
-    /// cited.md's load is HELD until the user has moved on. Unheld,
-    /// "the answer has not arrived yet" was a bet on scheduling: the
-    /// seed settles on its own schedule, the load it releases runs on
-    /// the pool, and nothing ordered either against this thread. When
-    /// cited.md published before the move — 3 runs in 9 on a busy
-    /// machine — the summary rightly answered the note it was asked
-    /// about, and the last assertion failed on cited.md's own counts.
+    /// cited.md's load is HELD — read, and parked before its publish —
+    /// until the user has moved on. In the fact's earlier unpumped shape
+    /// "the answer has not arrived yet" was a bet on scheduling: when
+    /// cited.md published before the move (3 runs in 9 on a busy
+    /// machine) the summary rightly answered the note it was asked about,
+    /// and the last assertion failed on cited.md's own counts. The pumped
+    /// context now also orders the publish behind this turn; the hold
+    /// makes the pre-move assertions true on its own, without leaning on
+    /// that ordering.
     /// </summary>
     [Fact]
     public void ADeferredSummaryDoesNotAnswerForADifferentNote()
@@ -450,6 +456,7 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
             try
             {
                 workspace.OpenPath("cited.md");
+                held.WaitUntilEntered();
                 // Deterministic: a held load cannot publish.
                 Assert.True(workspace.Citations.IsLoading);
 
@@ -476,9 +483,9 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
     /// <summary>The defer must still DELIVER for the note it was asked
     /// about — a fix that simply stopped opening the sheet would pass
     /// the wrong-note test and reintroduce the dead keypress the defer
-    /// exists to prevent. Held like its sibling, so the press is really
-    /// parked rather than answered on the spot by a load that won the
-    /// race.</summary>
+    /// exists to prevent. Held like its sibling, so the press is parked
+    /// behind a load that is really in flight, never answered on the spot
+    /// by one that has already landed.</summary>
     [Fact]
     public void ADeferredSummaryStillAnswersForTheNoteItWasAskedAbout()
     {
@@ -494,6 +501,7 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
             try
             {
                 workspace.OpenPath("cited.md");
+                held.WaitUntilEntered();
                 Assert.True(workspace.Citations.IsLoading);
                 workspace.OpenCitationSummary();
                 Assert.Null(workspace.CitationSummary);
@@ -575,6 +583,7 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
         try
         {
             workspace.ReloadBibliography();
+            held.WaitUntilEntered();
 
             // A held reload cannot complete: the first is still running.
             Assert.False(workspace.ReloadBibliographyCommand.CanExecute(null));

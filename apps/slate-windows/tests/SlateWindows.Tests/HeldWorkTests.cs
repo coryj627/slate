@@ -26,13 +26,29 @@ public sealed class HeldWorkTests
 
         // A hold released while the work waits on it.
         Action? second = null;
-        using var released = new HeldWork(hook => second = hook, TimeSpan.FromSeconds(10));
+        int installs = 0;
+        using var released = new HeldWork(
+            hook =>
+            {
+                installs++;
+                second = hook;
+            },
+            TimeSpan.FromSeconds(10));
         Task held = Task.Run(released.Hook);
-        Assert.True(SpinWait.SpinUntil(() => released.Entered, TimeSpan.FromSeconds(10)), "the work never reached the hold");
+        released.WaitUntilEntered();
         Assert.False(held.Wait(TimeSpan.FromMilliseconds(200)), "the hold let the work go before it was released");
         released.Release();
         Assert.True(held.Wait(TimeSpan.FromSeconds(10)), "the released work never ran on");
         released.AssertHeldUntilReleased();
         Assert.Null(second);
+
+        // Released is released: a worker that reaches the hook afterwards
+        // runs straight through, and Release and Dispose take the hook off
+        // its seam once.
+        Assert.True(Task.Run(released.Hook).Wait(TimeSpan.FromSeconds(1)), "a hook reached after release still held");
+        released.Release();
+        released.Dispose();
+        Assert.Equal(2, installs);
+        released.AssertHeldUntilReleased();
     }
 }
