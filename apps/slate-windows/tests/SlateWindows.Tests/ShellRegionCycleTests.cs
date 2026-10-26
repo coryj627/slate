@@ -1,6 +1,9 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows.Tests;
@@ -239,6 +242,109 @@ public sealed class ShellRegionCycleTests
             Assert.Empty(announced);
         }
     }
+
+    /// <summary>WB-5 (#1281; W7-6 §4): F6 and Shift+F6 from inside the
+    /// editor's Ctrl+E popover are a no-op — the ring is modal while keyboard
+    /// focus is in an open popover — and only then. With focus elsewhere and
+    /// the popover still open (a hovered citation's popover never takes
+    /// focus, and focus can leave an open one) the ring keeps working, and a
+    /// closed popover never counts. A context menu opened on a field in the
+    /// popover (Shift+F10) is inside it too, though its popup's tree ends at
+    /// the popup. A real coordinator's popover, its host
+    /// in a shown window, asked through the shipped shell's own answer
+    /// (<see cref="IShellRegionHost.ModalSurfaceOpen"/>, which reads the
+    /// keyboard focus); the ring's response to a modal answer is
+    /// <see cref="AModalSurfaceMakesThePressANoOp"/>.</summary>
+    [Fact]
+    public void ThePopoverIsAModalSurfaceForTheRing() => StaThread.RunPumped(() =>
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "shell-region-popover");
+        File.WriteAllText(Path.Combine(fixture.Root, "target.md"), "# Target\n\nBody.\n");
+        File.WriteAllText(Path.Combine(fixture.Root, "source.md"), "# Source\n\n![[target]]\n");
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using (var cancel = new CancelToken())
+        {
+            session.ScanInitial(cancel);
+        }
+
+        using var tab = new WorkspaceTabViewModel(
+            session,
+            new WorkspaceTabState(Guid.NewGuid(), new WorkspaceItemState(WorkspaceItemKind.Markdown, "source.md")),
+            navigate: _ => { },
+            activateTag: _ => { },
+            announce: _ => { },
+            startInteractionBackgroundWork: false);
+        EditorInteractionCoordinator interactions = Assert.IsType<EditorInteractionCoordinator>(tab.EditorInteractions);
+        interactions.RefreshMathRangesForTests();
+        interactions.RefreshArtifactCacheForTests();
+
+        var inside = new Button { Content = "Inside the popover" };
+        var menuItem = new MenuItem { Header = "Copy" };
+        var field = new TextBox { Text = "Preview text", IsReadOnly = true, ContextMenu = new ContextMenu() };
+        _ = field.ContextMenu.Items.Add(menuItem);
+        var content = new StackPanel();
+        _ = content.Children.Add(inside);
+        _ = content.Children.Add(field);
+        var popover = new EditorInteractionPopoverHost { InteractionSession = interactions, Content = content };
+        var elsewhere = new Button { Content = "Elsewhere" };
+        var panel = new StackPanel();
+        _ = panel.Children.Add(popover);
+        _ = panel.Children.Add(elsewhere);
+        var window = new Window
+        {
+            Content = panel,
+            Width = 400,
+            Height = 300,
+            ShowInTaskbar = false,
+            ShowActivated = false,
+            WindowStyle = WindowStyle.None,
+            Left = -10_000,
+            Top = -10_000,
+            WindowStartupLocation = WindowStartupLocation.Manual,
+        };
+        window.Show();
+        Func<bool> priorOverlayProbe = Canvas.CanvasSurfaceView.ShellOverlayIsOpen;
+        var shell = new MainWindow();
+        bool RingIsModalWithFocusOn(UIElement element)
+        {
+            Assert.True(element.Focus(), "premise: the element did not take keyboard focus");
+            Assert.Same(element, Keyboard.FocusedElement);
+            return ((IShellRegionHost)shell).ModalSurfaceOpen;
+        }
+
+        try
+        {
+            Assert.False(RingIsModalWithFocusOn(inside), "premise: a closed popover made the ring modal");
+
+            Assert.True(interactions.PreviewEmbedAt(tab.Text.IndexOf("![[target]]", StringComparison.Ordinal) + 2));
+            Assert.True(
+                PumpedDispatcher.PumpUntil(() => interactions.IsPopoverOpen, TimeSpan.FromSeconds(10)),
+                "premise: Ctrl+E on the embed did not open the popover");
+
+            Assert.True(RingIsModalWithFocusOn(inside), "focus inside the open popover did not make F6 a no-op");
+            Assert.False(RingIsModalWithFocusOn(elsewhere), "the open popover silenced F6 with focus outside it");
+
+            // The field's context menu, open on it the way Shift+F10 opens it.
+            field.ContextMenu.PlacementTarget = field;
+            field.ContextMenu.IsOpen = true;
+            Assert.True(
+                PumpedDispatcher.PumpUntil(() => menuItem.IsLoaded, TimeSpan.FromSeconds(10)),
+                "premise: the field's context menu did not open");
+            Assert.False(popover.IsAncestorOf(menuItem), "premise: the context menu sits in the popover's own visual tree");
+            Assert.True(RingIsModalWithFocusOn(menuItem), "a context menu on a popover field let F6 leave the popover");
+            field.ContextMenu.IsOpen = false;
+
+            interactions.ClosePopoverCommand.Execute(null);
+            Assert.False(interactions.IsPopoverOpen);
+            Assert.False(RingIsModalWithFocusOn(inside), "a closed popover still made the ring modal");
+        }
+        finally
+        {
+            shell.Close();
+            Canvas.CanvasSurfaceView.ShellOverlayIsOpen = priorOverlayProbe;
+            window.Close();
+        }
+    }, TimeSpan.FromSeconds(60), "STA test body timed out.");
 
     [Fact]
     public void LandingOnFilesAnnouncesFilesRegionFocused()

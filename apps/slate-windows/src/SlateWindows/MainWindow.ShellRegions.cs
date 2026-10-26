@@ -17,7 +17,41 @@ namespace SlateWindows;
 public partial class MainWindow : IShellRegionHost
 {
     bool IShellRegionHost.ModalSurfaceOpen =>
-        ModalSurfaces.TopmostOpen(CurrentModalSurfaceState) is not null;
+        RingIsModal(CurrentModalSurfaceState, Keyboard.FocusedElement as DependencyObject);
+
+    /// <summary>Whether an F6 press is a no-op (W7-6 §4): a shell modal
+    /// surface is open, or keyboard focus is inside an open editor
+    /// popover.</summary>
+    /// <remarks>WB-5 (#1281): the editor's Ctrl+E popover is a dialog over
+    /// the note, so a press from inside it is a no-op like one over a shell
+    /// sheet. Only focus inside it counts, not the popover merely being
+    /// open: a hovered citation's popover never takes focus, and focus can
+    /// leave an open Ctrl+E popover (a mouse click, Ctrl+Alt+F, the reading
+    /// toggle) — F6 from there keeps working. It is not a
+    /// <see cref="ModalSurface"/>: it paints inside the content pane, and
+    /// the admission tables, the menu, the rescan deferral and the watcher's
+    /// sentence keep their answers while it is open — only the ring asks
+    /// about it (#1665).</remarks>
+    private static bool RingIsModal(ModalSurfaceState state, DependencyObject? focused) =>
+        ModalSurfaces.TopmostOpen(state) is not null || FocusIsInAnOpenEditorPopover(focused);
+
+    /// <remarks>A context menu opened on a field in the popover (a TextBox's
+    /// Shift+F10 menu) lives in a popup of its own, whose tree ends at the
+    /// popup's root: the walk goes on from the field it was opened on, the
+    /// way WPF routes the menu's keys.</remarks>
+    private static bool FocusIsInAnOpenEditorPopover(DependencyObject? focused)
+    {
+        for (DependencyObject? current = focused; current is not null;
+             current = current is ContextMenu { PlacementTarget: { } target } ? target : ParentOf(current))
+        {
+            if (current is EditorInteractionPopoverHost host)
+            {
+                return host.InteractionSession?.IsPopoverOpen == true;
+            }
+        }
+
+        return false;
+    }
 
     string IShellRegionHost.StatusText => _viewModel.StatusText ?? string.Empty;
 
