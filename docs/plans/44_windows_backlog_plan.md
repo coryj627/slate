@@ -434,7 +434,9 @@ elsewhere or on a gate:
 
 ## 6. Delivery order
 
-At most three agents at once (`subagent-parallelism`). Chunks in one
+At most three agents at once (`subagent-parallelism`); the run process
+of 2026-10-26 (§3.1) implements one chunk at a time and overlaps only
+CI, so a wave's slots are the order its chunks start in. Chunks in one
 wave share no files except `WorkspaceViewModel*.cs` (different partials)
 and core's `a11y.rs` and corpus (independent variants); a merge of `main`
 is expected inside a wave.
@@ -564,9 +566,13 @@ first, twin names where a mac twin exists; registers closed in the same
 PR; commit messages `type(scope): one lower-case sentence saying what is
 now true`; PR bodies list `Closes #N`, the facts, the registers, the
 field-pass phrases and "not delivered: <reason>" for anything left).
-Every chunk has its spec under `44_windows_backlog/specs/`, written
-2026-10-20 with every file-and-line claim re-verified against the tree.
-Each spec ends with a "Brief" that, with this section, is all an
+Every chunk but WB-29a (whose spec is written when its wave starts) has
+its spec under `44_windows_backlog/specs/`, written 2026-10-20 with every
+file-and-line claim re-verified against the tree. Where a spec's
+acceptance asks for a Codex review (WB-6, WB-7, WB-9, WB-12, WB-15,
+WB-20), §4 rule 5 as amended on 2026-10-26 decides instead: every chunk
+gets a Claude red team before its PR, and Codex reviews only the chunks
+rule 5 names. Each spec ends with a "Brief" that, with this section, is all an
 implementing agent needs; where a Brief asks for an NVDA or Narrator pass without naming a
 launch command, the pass launches through WB-1's launcher per §4 rule 4. WB-10's spec reads with the change-feed
 design's §6–§7, WB-28's with the descriptor-relative design's §7 row
@@ -642,8 +648,9 @@ before code.
   OneDrive may redirect a placeholder path (then Trash stays fail-closed
   with a better reason).
 - **Four chunks regenerate the C# binding from new FFI** (WB-8, WB-21b,
-  WB-25, WB-30): never a dylib with mismatched bindings; the Swift lane
-  compiles each.
+  WB-25, WB-30), and so do WB-28 (the identity record), WB-26 under
+  either design answer and WB-29a (the hot-exit store's FFI): never a
+  dylib with mismatched bindings; the Swift lane compiles each.
 - **One chunk may edit a mac test file blind** (WB-8's corpus mirror
   entry, under WD23's new-event answer only); the mac lane is the only
   check, so that PR waits for it green before merge — and WB-8 waits for

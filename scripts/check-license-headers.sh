@@ -46,6 +46,10 @@ while IFS= read -r -d '' path; do
     line=''
     while (( count < 20 )) && { IFS= read -r line || [[ -n "$line" ]]; }; do
         count=$((count + 1))
+        # A UTF-8 byte-order mark is not part of the first line's text.
+        if (( count == 1 )); then
+            line="${line#$'\xEF\xBB\xBF'}"
+        fi
         # The whole line, compared literally, so `AGPL-3.0-or-later-foo`
         # never passes; trailing white space (a CRLF file's \r) is dropped.
         line="${line%"${line##*[![:space:]]}"}"

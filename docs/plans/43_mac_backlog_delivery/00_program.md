@@ -439,7 +439,7 @@ design-first.
 | 26 | Canvas: untrusted link and file targets (one link allowlist shared with notes and the reading view; containment that resolves symlinks against the vault root) | #1367 #1368 #1369 | M | swift, a11y | W1 |
 | 27 | Editor: an undo or redo before the first highlight reaches the buffer | #1503 | S–M | swift, a11y/VO | W1 |
 | 28 | Tests stop writing the developer's files; two flakes; the benchmark command | #1423 #1408 #1432 (Refs #1323) | S–M | swift | W1, slot 3 first |
-| 29 | Unsaved buffers survive closing the window, quitting and a crash, and come back unsaved when the vault reopens (hot exit; explicit save stands; design first, both hosts in scope) | #1525 #1402 | L (design first) | rust, swift, a11y/VO, windows | W1, slot 3 after 29a (design), then sized by its design (RD1) → plan 44 WB-29a (not PR 29a above) for the shared design and the core store (the owner's call, 2026-10-26), and WB-29 for the Windows half; the mac half stays here (WD1) |
+| 29 | Unsaved buffers survive closing the window, quitting and a crash, and come back unsaved when the vault reopens (hot exit; explicit save stands; design first, both hosts in scope) | #1525 #1402 | L (design first) | rust, swift, a11y/VO, windows | W1, slot 3 after 29a (design), then sized by its design (RD1) → plan 44 WB-29a (not PR 29a above) for the shared design and the core store (the owner's call, 2026-10-26), and WB-29 for the Windows half; the mac half stays here and waits for WB-29a's core store on `main`, plan 44 W11 (WD1) |
 | 29a | Close Vault with one dirty note speaks its close line | #1403 | S | swift, a11y/VO | W1, slot 3 after 28 |
 | 22c | The provider's reads beneath the held root; the re-arm switched on; the FFI doc | #1513 #1510 | L | rust, swift, windows | W2, first → plan 44 WB-17 for #1510's doc sentence; the code stays here (WD1) |
 | 30 | Palette and Quick Open keyboard (bare arrows, the key monitors' window gate, hover on open, the field hint) | #1379 #1380 #1413 #1382 | M | swift, a11y/VO (+ rust, windows with RD7) | W2 |
@@ -476,13 +476,13 @@ and core's `a11y.rs` and corpus (independent variants).
 
 | Wave | Slot 1 | Slot 2 | Slot 3 |
 |---|---|---|---|
-| W1 | 26 | 27 | 28, then 29a, then 29's mac half (its design and core store are plan 44's WB-29a since 2026-10-26) |
-| W2 | 22c | 30 | 21b |
+| W1 | 26 | 27 | 28, then 29a (29's design and core store are plan 44's WB-29a since 2026-10-26; 29's mac half waits for that store on `main`, plan 44 W11) |
+| W2 | 22c | 30 | 21b (moved: plan 44 WB-10) |
 | W3 | 22b (31 is retired: plan 44's WB-10a, 2026-10-26) | 32 | 33 |
 | W4 | 34 | 35 | 36 |
 | W5 | 37, then 38 | 39 | 40 |
 | W6 | 41 | 42 | 43 |
-| W7 | 44, then 45 | 46 | 47 |
+| W7 | 44, then 45 (both moved: plan 44 WB-18, WB-19) | 46 | 47 (moved: plan 44 WB-17) |
 | W8 | 48 | 49 | 50 |
 | W9 | 51 | 52 | 53 |
 
@@ -499,7 +499,7 @@ and core's `a11y.rs` and corpus (independent variants).
 | Contract 38's generated ledger | 39 and 46 kept apart |
 
 When an S PR frees its slot early, the next PR in the same row takes
-it, or 47 does.
+it.
 
 **VoiceOver passes run one at a time,** under the shared UI lock on the
 owner's unlocked Mac. W1 has three (26, 27 and 29a); plan for them to
@@ -548,8 +548,9 @@ needed by the wave named.
     RD1), #1526 (core preamble verbosity, RD6) and #1527 (the rest of
     the host's failure text, RD8).
 - **The queue stays paused** until the owner says to start W1, which
-  is 26, 27, 28, 29a, then 29's design (since 2026-10-26 the design
-  and the core store are plan 44's WB-29a, and 29 keeps the mac half).
+  is 26, 27, 28, then 29a (since 2026-10-26 29's design and core store
+  are plan 44's WB-29a; 29 keeps the mac half, which waits for that
+  store on `main`, plan 44 W11).
 - **Dated item:** the zip exception (#1457) must be renewed or upgraded
   before 2026-11-17. *2026-10-26:* no longer dated — #1537 moved to
   MathCAT 0.7.7, on zip 9, and the issue is closed.
