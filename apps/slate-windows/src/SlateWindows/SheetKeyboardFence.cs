@@ -47,10 +47,11 @@ namespace SlateWindows;
 /// key: <c>ContinueRouting=true</c> leaves an unanswered key to WPF's own
 /// handling — KeyboardNavigation's traversal in the sheet's <c>Cycle</c>
 /// scope, a grid's <c>OnTabKeyDown</c>, the IME — none of which reaches
-/// the element behind the sheet. So an arrow key a caret-hidden read-only
-/// field declines (the canvas card inspection sheet's) moves focus in the
-/// sheet's <c>Contained</c> directional scope instead of being handed to
-/// the element behind it. A control that owns Tab keeps it: an
+/// the element behind the sheet. So an arrow key that a caret-hidden
+/// read-only field declines (the canvas card inspection sheet's) is no
+/// longer handed to the element behind it, and it moves nothing: focus
+/// stays on the field (measured in <c>SheetKeyboardFenceTests</c>). A
+/// control that owns Tab keeps it: an
 /// <c>AcceptsTab</c> field answers the command itself and never reaches
 /// the edge, and an editing grid cell handles its own key first. An
 /// IME-processed Tab stays the IME's: <c>Key.ImeProcessed</c> means the IME
@@ -64,8 +65,11 @@ namespace SlateWindows;
 /// Ctrl+Y, Ctrl+X, Ctrl+V, Ctrl+A, Delete, Shift+Delete and Shift+Insert
 /// to them. (<see cref="EditingCommands"/> carry none; a TextBox binds
 /// their keys on its own class.) A press that reaches the sheet unanswered
-/// meets the same refusal and routes on (<c>ContinueRouting</c>), so the
-/// window's key bindings and the modal routing still see it as before.
+/// meets the same refusal and routes on (<c>ContinueRouting</c>). Before
+/// WB-5, a press whose command the element behind declined was swallowed
+/// there; it now reaches the window's key bindings and keyboard
+/// navigation. The modal routing (contract 30 TR-7) still refuses the
+/// shell chords beneath a sheet.
 /// </para>
 /// <para>
 /// <b>An Execute that never asked.</b> <c>RoutedCommand.Execute</c> raises
@@ -75,10 +79,13 @@ namespace SlateWindows;
 /// handler only after its own CanExecute answers yes). The PreviewExecuted
 /// guard asks CanExecute on the command's target: something inside that
 /// answers keeps the execution; otherwise the edge's refusal answers and
-/// the execution is swallowed. For Paste that ask reads the clipboard, as
-/// the field's own binding does again before it pastes (a
-/// <c>CommandBinding</c> re-asks its CanExecute ahead of every Executed),
-/// so the guard adds no failure a busy clipboard did not already have.
+/// the execution is swallowed. For Paste that ask is one more clipboard
+/// read: the key's own query reads it first, and the field's binding reads
+/// it again before it pastes (a <c>CommandBinding</c> re-asks its
+/// CanExecute ahead of every Executed). WPF retries a clipboard another
+/// process holds for about a second on each read. So the guard drops a
+/// paste only when the clipboard is held through its whole retry and freed
+/// before the field's own read.
 /// </para>
 /// <para>
 /// <b>Nothing a field answers is intercepted.</b> The sheet's own editing

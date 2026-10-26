@@ -10,7 +10,9 @@ namespace SlateWindows;
 /// through a fake.</summary>
 internal interface IShellRegionHost
 {
-    /// <summary>A sheet, overlay or palette is up: F6 is a no-op (spec §4).</summary>
+    /// <summary>A sheet, overlay or palette is up, or keyboard focus is
+    /// inside an open editor popover (WB-5, #1281): F6 is a no-op (spec
+    /// §4).</summary>
     bool ModalSurfaceOpen { get; }
 
     /// <summary>The shown right-pane leaf has a focusable first stop.</summary>

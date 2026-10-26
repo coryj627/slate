@@ -35,9 +35,14 @@ public partial class MainWindow : IShellRegionHost
     private static bool RingIsModal(ModalSurfaceState state, DependencyObject? focused) =>
         ModalSurfaces.TopmostOpen(state) is not null || FocusIsInAnOpenEditorPopover(focused);
 
+    /// <remarks>A context menu opened on a field in the popover (a TextBox's
+    /// Shift+F10 menu) lives in a popup of its own, whose tree ends at the
+    /// popup's root: the walk goes on from the field it was opened on, the
+    /// way WPF routes the menu's keys.</remarks>
     private static bool FocusIsInAnOpenEditorPopover(DependencyObject? focused)
     {
-        for (DependencyObject? current = focused; current is not null; current = ParentOf(current))
+        for (DependencyObject? current = focused; current is not null;
+             current = current is ContextMenu { PlacementTarget: { } target } ? target : ParentOf(current))
         {
             if (current is EditorInteractionPopoverHost host)
             {

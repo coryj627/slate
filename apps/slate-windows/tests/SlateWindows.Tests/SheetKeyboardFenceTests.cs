@@ -285,13 +285,14 @@ public sealed class SheetKeyboardFenceTests
 
     /// <summary>
     /// WB-5 (#1259): Undo, Redo, Cut and Paste that a sheet's field cannot
-    /// answer are refused at the sheet's edge, so they never edit the note
-    /// behind it. Each chord meets a note armed for it — an undoable edit, a
-    /// redoable one, a selection, clipboard text — from each field that
-    /// declines it: the prompt's empty Topic field declines Undo and Redo
-    /// (it has no history), and a read-only field declines all four. The
-    /// note's text, its undo and redo state and its selection are unchanged.
-    /// Every row leaks without the fence
+    /// answer are refused at the sheet's edge, so they never reach the
+    /// editor behind it. Each chord comes from each field that declines it:
+    /// the prompt's empty Topic field declines Undo and Redo (it has no
+    /// history), and a read-only field declines all four. No query for the
+    /// chord's command reaches the editor (<see cref="Harness.ReachedTheEditor"/>),
+    /// and the note, armed for the chord — an undoable edit, a redoable one,
+    /// a selection — keeps its text, its undo and redo state and its
+    /// selection. Every row leaks without the fence
     /// (<see cref="WithoutTheFenceTheEditingCommandsReachTheEditorBehindTheSheet"/>).
     /// The rows a field answers itself are not here: Topic's Cut is refused
     /// inside the field and its Paste pastes into it, and a TextBox answers
@@ -307,21 +308,24 @@ public sealed class SheetKeyboardFenceTests
     public void UndoRedoCutAndPasteInsideASheetNeverReachTheEditor(string chord, bool readOnlyField) => RunSta(() =>
     {
         using var harness = new Harness(fenced: true, withReference: true);
-        (Key key, ModifierKeys modifiers) = ArmTheNoteFor(harness, chord);
+        (Key key, ModifierKeys modifiers, RoutedUICommand command) = ArmTheNoteFor(harness, chord);
         NoteState before = NoteState.Of(harness.Editor);
-        WithClipboardTextFor(chord, () =>
-        {
-            harness.FocusAfterTheEditor(readOnlyField ? harness.Reference! : harness.Topic);
-            harness.Press(key, modifiers);
-        });
+        harness.FocusAfterTheEditor(readOnlyField ? harness.Reference! : harness.Topic);
+        harness.ReachedTheEditor.Clear();
+
+        harness.Press(key, modifiers);
+
+        Assert.DoesNotContain(command, harness.ReachedTheEditor);
         Assert.Equal(before, NoteState.Of(harness.Editor));
     });
 
     /// <summary>
     /// The harness reproduces #1259 without the fence: every row of the
-    /// fenced theory reaches the note behind the sheet and changes it. This
+    /// fenced theory hands its command to the editor behind the sheet. This
     /// is what makes the fenced theory evidence rather than a harness that
-    /// could not have leaked.
+    /// could not have leaked. A leaked Undo or Redo changes the note; a
+    /// leaked Cut or Paste is stopped at the editor before it reads or
+    /// writes the clipboard, which is the developer's.
     /// </summary>
     [Theory]
     [InlineData("Undo", false)]
@@ -333,25 +337,30 @@ public sealed class SheetKeyboardFenceTests
     public void WithoutTheFenceTheEditingCommandsReachTheEditorBehindTheSheet(string chord, bool readOnlyField) => RunSta(() =>
     {
         using var harness = new Harness(fenced: false, withReference: true);
-        (Key key, ModifierKeys modifiers) = ArmTheNoteFor(harness, chord);
+        (Key key, ModifierKeys modifiers, RoutedUICommand command) = ArmTheNoteFor(harness, chord);
         NoteState before = NoteState.Of(harness.Editor);
-        WithClipboardTextFor(chord, () =>
+        harness.FocusAfterTheEditor(readOnlyField ? harness.Reference! : harness.Topic);
+        harness.ReachedTheEditor.Clear();
+
+        harness.Press(key, modifiers);
+
+        Assert.Contains(command, harness.ReachedTheEditor);
+        if (chord is "Undo" or "Redo")
         {
-            harness.FocusAfterTheEditor(readOnlyField ? harness.Reference! : harness.Topic);
-            harness.Press(key, modifiers);
-        });
-        Assert.NotEqual(before, NoteState.Of(harness.Editor));
+            Assert.NotEqual(before, NoteState.Of(harness.Editor));
+        }
     });
 
     /// <summary>
     /// WB-5 (#1259): a read-only field that hides its caret declines caret
     /// navigation, so without the fence its arrow keys were handed to the
     /// editor behind the sheet and moved the note's caret. Fenced, Down
-    /// leaves the note's caret where it was and keeps focus inside the
-    /// sheet — the sheet's contained directional navigation, as every shell
-    /// overlay has, decides where it goes. The canvas card inspection
-    /// sheet's read-only field is the shipped case: over the canvas, its
-    /// arrows were handed to the canvas.
+    /// moves nothing: the note's caret stays where it was, and focus stays
+    /// on the field, though a control sits below it in the sheet's
+    /// contained directional scope (measured: the refused key does not move
+    /// focus). The canvas card inspection sheet's read-only field is the
+    /// shipped case; its hidden caret, which no route makes readable, is
+    /// #1666.
     /// </summary>
     [Theory]
     [InlineData(true)]
@@ -360,6 +369,11 @@ public sealed class SheetKeyboardFenceTests
     {
         using var harness = new Harness(fenced, withReference: true);
         Assert.False(harness.Reference!.IsReadOnlyCaretVisible, "premise: the read-only field shows its caret");
+        // A control below the field, where directional navigation could
+        // take focus.
+        var below = new Button { Name = "Below", Content = "Below" };
+        _ = ((Panel)harness.Sheet.Child).Children.Add(below);
+        harness.Sheet.UpdateLayout();
         harness.FocusAfterTheEditor(harness.Reference);
         int caret = harness.Editor.CaretOffset;
 
@@ -368,9 +382,7 @@ public sealed class SheetKeyboardFenceTests
         if (fenced)
         {
             Assert.Equal(caret, harness.Editor.CaretOffset);
-            Assert.True(
-                Keyboard.FocusedElement is DependencyObject focused && harness.Sheet.IsAncestorOf(focused),
-                "Down took focus out of the sheet");
+            Assert.Same(harness.Reference, Keyboard.FocusedElement);
         }
         else
         {
@@ -464,7 +476,8 @@ public sealed class SheetKeyboardFenceTests
     /// unshown shell keeps no undo history, so a real editor could not show
     /// a leaked Undo. Cut and Paste are not driven: an empty editable box
     /// answers both itself. Pins the shipped XAML: an overlay that loses its
-    /// fence fails its row.
+    /// fence fails its row. Its control is
+    /// <see cref="WithoutItsFenceAnOverlaysBoxHandsUndoAndRedoBehindIt"/>.
     /// </summary>
     [Theory]
     [InlineData("QuickSwitcherSearchTextBox")]
@@ -473,6 +486,30 @@ public sealed class SheetKeyboardFenceTests
     public void ThePaletteSearchAndQuickOpenBoxesFenceTheEditingCommandsToo(string boxName) => RunSta(() =>
     {
         using var host = new ShellHost();
+        Assert.Empty(PressUndoAndRedoInAnOverlaysBox(host, boxName, removeTheFence: false));
+    });
+
+    /// <summary>
+    /// The overlay fact's control: with its overlay's fence taken off, the
+    /// same box hands Ctrl+Z and Ctrl+Y to the element behind it. This is
+    /// what makes the overlay rows evidence — the box answers neither
+    /// command itself, and the presses reach the command system.
+    /// </summary>
+    [Theory]
+    [InlineData("QuickSwitcherSearchTextBox")]
+    [InlineData("SearchOverlaySearchTextBox")]
+    [InlineData("CommandPaletteSearchTextBox")]
+    public void WithoutItsFenceAnOverlaysBoxHandsUndoAndRedoBehindIt(string boxName) => RunSta(() =>
+    {
+        using var host = new ShellHost();
+        Assert.Equal(["Undo", "Redo"], PressUndoAndRedoInAnOverlaysBox(host, boxName, removeTheFence: true));
+    });
+
+    /// <summary>Ctrl+Z then Ctrl+Y in the shipped shell's empty
+    /// <paramref name="boxName"/>, over a recording element the window's
+    /// focus scope holds behind the overlays; returns what reached it.</summary>
+    private static List<string> PressUndoAndRedoInAnOverlaysBox(ShellHost host, string boxName, bool removeTheFence)
+    {
         TextBox box = host.Element<TextBox>(boxName);
         Assert.Equal(string.Empty, box.Text);
         var reached = new List<string>();
@@ -488,12 +525,22 @@ public sealed class SheetKeyboardFenceTests
         _ = ((DockPanel)host.Shell.Content).Children.Add(behind);
         FocusManager.SetFocusedElement(host.Shell, behind);
         Assert.True(ApplicationCommands.Undo.CanExecute(null, behind), "premise: the element behind does not answer Undo");
+        if (removeTheFence)
+        {
+            DependencyObject overlay = box;
+            while (!SheetKeyboardFence.GetIsEnabled(overlay))
+            {
+                overlay = LogicalTreeHelper.GetParent(overlay)
+                    ?? throw new InvalidOperationException($"no fenced overlay holds {boxName}");
+            }
+
+            SheetKeyboardFence.SetIsEnabled(overlay, false);
+        }
 
         host.Press(box, Key.Z, ModifierKeys.Control);
         host.Press(box, Key.Y, ModifierKeys.Control);
-
-        Assert.Empty(reached);
-    });
+        return reached;
+    }
 
     /// <summary>
     /// The fence widened, not loosened: an editing chord typed in the
@@ -572,122 +619,28 @@ public sealed class SheetKeyboardFenceTests
     }
 
     /// <summary>Gives the note behind the sheet the state a leaked
-    /// <paramref name="chord"/> would visibly change, and returns its
-    /// key.</summary>
-    private static (Key Key, ModifierKeys Modifiers) ArmTheNoteFor(Harness harness, string chord)
+    /// <paramref name="chord"/> would visibly change, and returns its key
+    /// and its command.</summary>
+    private static (Key Key, ModifierKeys Modifiers, RoutedUICommand Command) ArmTheNoteFor(Harness harness, string chord)
     {
         TextDocument document = harness.Editor.Document;
         switch (chord)
         {
             case "Undo":
                 document.Insert(document.TextLength, "typed");
-                return (Key.Z, ModifierKeys.Control);
+                return (Key.Z, ModifierKeys.Control, ApplicationCommands.Undo);
             case "Redo":
                 document.Insert(document.TextLength, "typed");
                 document.UndoStack.Undo();
                 Assert.True(document.UndoStack.CanRedo, "premise: the note had nothing to redo");
-                return (Key.Y, ModifierKeys.Control);
+                return (Key.Y, ModifierKeys.Control, ApplicationCommands.Redo);
             case "Cut":
                 harness.Editor.Select(1, 8);
-                return (Key.X, ModifierKeys.Control);
+                return (Key.X, ModifierKeys.Control, ApplicationCommands.Cut);
             case "Paste":
-                return (Key.V, ModifierKeys.Control);
+                return (Key.V, ModifierKeys.Control, ApplicationCommands.Paste);
             default:
                 throw new ArgumentOutOfRangeException(nameof(chord), chord, "not an editing chord this suite drives");
-        }
-    }
-
-    /// <summary>Paste needs text on the clipboard to leak. The clipboard is
-    /// the developer's: every format on it is copied out first and put back
-    /// afterwards, and neither the test's text nor the restore is offered to
-    /// clipboard history or clipboard monitors. Other chords run as they
-    /// are.</summary>
-    private static void WithClipboardTextFor(string chord, Action body)
-    {
-        if (chord != "Paste")
-        {
-            body();
-            return;
-        }
-
-        DataObject? saved = null;
-        Clipboarded(() => saved = Snapshot(Clipboard.GetDataObject()));
-        Clipboarded(() => Clipboard.SetDataObject(OffTheRecord(new DataObject(DataFormats.UnicodeText, "PASTED")), copy: true));
-        try
-        {
-            body();
-        }
-        finally
-        {
-            Clipboarded(() =>
-            {
-                if (saved is null)
-                {
-                    Clipboard.Clear();
-                }
-                else
-                {
-                    Clipboard.SetDataObject(OffTheRecord(saved), copy: true);
-                }
-            });
-        }
-    }
-
-    /// <summary>A copy of every format <paramref name="live"/> renders now.
-    /// The object the clipboard hands out reads the clipboard as it is when
-    /// asked, so it cannot be put back once the clipboard has changed. A
-    /// format its owner will not render is left behind.</summary>
-    private static DataObject? Snapshot(IDataObject? live)
-    {
-        if (live is null)
-        {
-            return null;
-        }
-
-        var copy = new DataObject();
-        foreach (string format in live.GetFormats(autoConvert: false))
-        {
-            try
-            {
-                if (live.GetData(format, autoConvert: false) is { } data)
-                {
-                    copy.SetData(format, data, autoConvert: false);
-                }
-            }
-            catch (ExternalException)
-            {
-                // Its owner would not render it; the rest still go back.
-            }
-        }
-
-        return copy.GetFormats(autoConvert: false).Length == 0 ? null : copy;
-    }
-
-    /// <summary>Marks <paramref name="data"/> the way Windows asks a
-    /// clipboard writer to keep an entry out of clipboard history and away
-    /// from clipboard monitors.</summary>
-    private static DataObject OffTheRecord(DataObject data)
-    {
-        data.SetData("CanIncludeInClipboardHistory", new MemoryStream(BitConverter.GetBytes(0)), autoConvert: false);
-        data.SetData("ExcludeClipboardContentFromMonitorProcessing", new MemoryStream(new byte[1]), autoConvert: false);
-        return data;
-    }
-
-    /// <summary>The clipboard is shared with every other process, which may
-    /// hold it open for a moment (CLIPBRD_E_CANT_OPEN): retry briefly.</summary>
-    private static void Clipboarded(Action use)
-    {
-        for (int attempt = 0; ; attempt++)
-        {
-            try
-            {
-                use();
-                return;
-            }
-            catch (COMException) when (attempt < 20)
-            {
-                Thread.Sleep(50);
-            }
         }
     }
 
@@ -709,6 +662,19 @@ public sealed class SheetKeyboardFenceTests
 
             Editor = new SlateTextEditor();
             ResetNote();
+            // What a leak hands the editor: every command query that reaches
+            // its text area. A Cut or Paste is refused there, before the
+            // editor's own handler reads or writes the clipboard, which is
+            // the developer's; the rest go on to the editor.
+            CommandManager.AddPreviewCanExecuteHandler(Editor.TextArea, (_, e) =>
+            {
+                ReachedTheEditor.Add(e.Command);
+                if (e.Command == ApplicationCommands.Cut || e.Command == ApplicationCommands.Paste)
+                {
+                    e.CanExecute = false;
+                    e.Handled = true;
+                }
+            });
             Topic = new TextBox { Name = "Topic" };
             Attendees = new TextBox { Name = "Attendees" };
             Done = new Button { Name = "Done", Content = "Done" };
@@ -760,6 +726,10 @@ public sealed class SheetKeyboardFenceTests
         }
 
         public SlateTextEditor Editor { get; }
+
+        /// <summary>Every command whose query reached the editor's text area
+        /// since it was last cleared, in order.</summary>
+        public List<ICommand> ReachedTheEditor { get; } = [];
 
         public Border Sheet { get; }
 

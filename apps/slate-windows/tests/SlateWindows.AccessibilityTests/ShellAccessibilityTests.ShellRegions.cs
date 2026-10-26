@@ -1,9 +1,11 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Definitions;
+using FlaUI.Core.Input;
 using FlaUI.Core.WindowsAPI;
 using FlaUI.UIA3;
 
@@ -126,6 +128,94 @@ public sealed partial class ShellAccessibilityTests
             try { process?.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
             try { Directory.Delete(root, recursive: true); } catch (IOException) { }
         }
+    }
+
+    /// <summary>WB-5 (#1281; W7-6 §4): F6 and Shift+F6 from inside the
+    /// editor's Ctrl+E popover are a no-op. Focus stays on the popover's
+    /// Close button, and the desktop listener hears nothing from Slate. With
+    /// focus moved out of the still-open popover (Ctrl+Alt+F, the Files
+    /// filter), F6 walks the ring again, to the tab bar.</summary>
+    [Fact]
+    public void EditorPopover_F6AndShiftF6StayInsideIt()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "slate-popover-ring-" + Guid.NewGuid().ToString("N"));
+        string vault = Path.Combine(root, "Vault");
+        string logs = Path.Combine(root, "logs");
+        Directory.CreateDirectory(vault);
+        File.WriteAllText(Path.Combine(vault, "target.md"), "# Target\n\nThe embedded body.\n");
+        File.WriteAllText(Path.Combine(vault, "source.md"), "# Source\n\n![[target]]\n\nAfter the embed.\n");
+
+        Process? process = null;
+        try
+        {
+            var start = new ProcessStartInfo(SlateWindowsExe()) { UseShellExecute = false };
+            ShellLaunch.ApplyDeviceState(start);
+            start.ArgumentList.Add(vault);
+            start.Environment["SLATE_CENSUS_INSTANCE_ID"] = "popover-ring-" + Guid.NewGuid().ToString("N");
+            start.Environment["SLATE_LOG_DIR"] = logs;
+            process = Process.Start(start) ?? throw new Xunit.Sdk.XunitException("Slate did not start.");
+            if (!HasInteractiveDesktop(process, "popover-ring")) { return; }
+            using var automation = new UIA3Automation();
+            string log = Path.Combine(logs, "slate-windows.log");
+            Window window = WaitForMainWindow(process, automation, log, TimeSpan.FromSeconds(30));
+            window.SetForeground();
+            _ = WaitForElement(window, "RightPaneLeaves", TimeSpan.FromSeconds(30));
+            var heard = new ConcurrentQueue<ReceivedNotification>();
+            using DesktopNotificationListener listener = ListenOnTheDesktop(automation, heard);
+
+            AutomationElement tree = WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(10));
+            WaitForTreeItemStartingWith(tree, automation, "source.md").Patterns.SelectionItem.Pattern.Select();
+            AutomationElement editor = WaitForEditor(window, automation, "source.md editor", TimeSpan.FromSeconds(10));
+            FocusTheEditor(window, editor);
+            PlaceCaretAtText(editor, "![[target]]");
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_E);
+            _ = WaitForElement(window, "EditorInteractionPopover", TimeSpan.FromSeconds(10));
+            AutomationElement close = WaitForElement(window, "EditorPopoverClose", TimeSpan.FromSeconds(10));
+            AssertEventuallyFocused(close, "Ctrl+E on the embed did not focus the popover's Close button.");
+            AssertItemNamesAreSpeakable(process, "editor-popover-ring");
+
+            // Whatever opening the popover raised has arrived; the presses
+            // below must add nothing.
+            int mark = QuietMark(heard, process.Id);
+            PressKey(VirtualKeyShort.F6);
+            AssertKeepsFocus(automation, close, "F6 inside the popover moved focus (W7-6 §4, #1281).");
+            PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.F6);
+            AssertKeepsFocus(automation, close, "Shift+F6 inside the popover moved focus (W7-6 §4, #1281).");
+            AwaitHeard(
+                () => [.. HeardFrom(heard, process.Id).Skip(mark).Select(notification => notification.DisplayString)],
+                [],
+                TimeSpan.FromSeconds(1),
+                log);
+
+            // Focus leaves the popover without closing it: the ring works again.
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_F);
+            AssertEventuallyFocused(
+                WaitForElement(window, "SidebarFilter", TimeSpan.FromSeconds(10)),
+                "Ctrl+Alt+F did not move focus to the Files filter.");
+            Assert.NotNull(window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("EditorInteractionPopover")));
+            PressKey(VirtualKeyShort.F6);
+            AutomationElement tabs = WaitForElement(window, "WorkspaceTabs", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(() => automation.FocusedElement() is { } focused && IsDescendantOf(focused, tabs), TimeSpan.FromSeconds(10)),
+                $"F6 with focus outside the open popover did not move to the tab bar. {FocusDiagnosis()}");
+        }
+        finally
+        {
+            try { process?.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    /// <summary>A press that must move nothing: once the input is processed
+    /// and a moment has passed for a landing to arrive, focus is still on
+    /// <paramref name="element"/>.</summary>
+    private static void AssertKeepsFocus(UIA3Automation automation, AutomationElement element, string message)
+    {
+        Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+        Thread.Sleep(750);
+        Assert.True(
+            automation.FocusedElement() is { } focused && focused.Equals(element),
+            $"{message} {FocusDiagnosis()}");
     }
 
     /// <summary>Focuses the Files tree row starting with <paramref

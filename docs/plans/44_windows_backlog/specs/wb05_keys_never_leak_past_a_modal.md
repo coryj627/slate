@@ -15,27 +15,40 @@ This section outranks the text below it.
 - **The ring fact asks the shipped shell's answer.**
   - **Why the unshown-workspace form went.** On an unshown shell no region holds focus, so every landing refuses: F6 and Shift+F6 were silent with or without the fix, and those presses could not fail.
   - **Setup.** `ThePopoverIsAModalSurfaceForTheRing` opens a real coordinator's popover with `PreviewEmbedAt`. Its host sits in a shown window beside another button.
-  - **Assertions.** It asks the unshown shell's own `ModalSurfaceOpen`, which reads the keyboard focus: false before the popover opens, true with focus inside it, false with focus on the other button, and false once it closes. A shell surface counts on its own.
-  - **What it leaves to others.** The ring's response to a true answer is `AModalSurfaceMakesThePressANoOp`. Real silence, and focus staying on Close, are the NVDA spot's.
+  - **Assertions.** It asks the unshown shell's own `ModalSurfaceOpen`, which reads the keyboard focus: false before the popover opens, true with focus inside it, false with focus on the other button, and false once it closes.
+  - **A context menu on a popover field counts too.** A TextBox's Shift+F10 menu lives in a popup whose tree ends at the popup's root, so the walk goes on from the menu's placement target, the way WPF routes the menu's keys (round 2's finding).
+  - **What it leaves to others.** The ring's response to a true answer is `AModalSurfaceMakesThePressANoOp`.
+- **The FlaUI journey `EditorPopover_F6AndShiftF6StayInsideIt` is #1281's own fact, end to end.**
+  - **Inside.** Ctrl+E on an embed, then F6 and Shift+F6: focus stays on Close, and the desktop listener hears nothing from Slate.
+  - **Outside.** Ctrl+Alt+F moves focus out of the still-open popover, and F6 then reaches the tab bar.
 - **The fence facts use a harness that can leak, and only the rows that can.**
-  - **Arming.** Each chord meets a note armed for it: an undoable edit, a redoable one, a selection, or clipboard text.
+  - **Arming.** Each chord meets a note armed for it: an undoable edit, a redoable one, or a selection.
+  - **The evidence.** A recorder on the editor's text area sees every command query handed to it. A fenced row asserts that its command never arrives and that the note is unchanged.
   - **Rows.** Each row is a field that declines its chord. The empty Topic field has no history, so it declines Undo and Redo. A caret-hidden read-only field declines Undo, Redo, Cut and Paste.
-  - **Control.** A control theory runs the same six rows unfenced, and each changes the note.
+  - **Control.** A control theory runs the same six rows unfenced. Each hands its command to the editor, and a leaked Undo or Redo changes the note.
   - **Rows dropped.** Topic's Cut and Paste are answered inside the field. A TextBox answers Delete even when read-only. Delete stays fenced, but no TextBox in a harness can show it leaking.
   - **The theory is renamed** `UndoRedoCutAndPasteInsideASheetNeverReachTheEditor`.
 - **Caret navigation is a leak closed, and is pinned.**
   - **The leak.** A read-only field that hides its caret declines caret navigation. Unfenced, its arrow keys were handed to the element behind the sheet. Over a note, they moved the note's caret.
-  - **Fenced.** The arrows route on to the sheet's `Contained` directional navigation, as every shell overlay has.
-  - **The shipped case** is the canvas card inspection sheet, over the canvas. Its arrows were handed to the canvas and swallowed there. Down now reaches "Close card text".
+  - **Fenced, measured.** Down moves nothing: the note's caret stays, and focus stays on the field, though a control sits below it in the sheet's `Contained` directional scope.
+  - **The red team's reading was wrong.** Round 2 read the code as routing the arrow on to directional navigation, so that focus would move to the control below. The fact measures that it does not.
+  - **The shipped case** is the canvas card inspection sheet, over the canvas. Its arrows were handed to the canvas and swallowed there. The sheet has the harness's shape (a read-only field above its Close button) and was not driven.
   - **The fact.** `ACaretHiddenFieldsArrowsNeverMoveTheNoteBehindTheSheet` has its unfenced control row. The harness sheet now carries `DirectionalNavigation="Contained"`, as the shell's do.
-- **The Paste rows leave the developer's clipboard as it was.** Every format on it is copied out and put back. The test's text and the restore are both marked to stay out of clipboard history and away from clipboard monitors.
+  - **Not reading the card either way.** The inspection field hides its caret, so neither the old route nor the new one reads the card's text by line. That defect is filed as #1666.
+- **No fact touches the clipboard.**
+  - **Why not the real clipboard.** It is the developer's and every other process's. The first form set text for Paste and saved and restored the clipboard around it. Under load on this desktop, one row then met CLIPBRD_E_CANT_OPEN for 30 seconds, and another found nothing to paste.
+  - **The recorder.** It refuses a leaked Cut or Paste at the editor's text area, before AvalonEdit's handler reads or writes the clipboard. The query arriving there is the leak itself.
 - **The overlay fact uses a recording element behind the boxes.**
   - **Setup.** The element is added to the shell's own tree and made the window's logical focus. It answers Undo and Redo and records what reaches it.
   - **Assertions.** Ctrl+Z and Ctrl+Y in each of the three overlays' empty boxes reach nothing.
   - **Not driven.** Cut and Paste: an empty editable box answers both itself.
   - **Why not a real editor behind.** The unshown shell keeps no undo history, so a real editor could not show a leak there.
+  - **Its control.** `WithoutItsFenceAnOverlaysBoxHandsUndoAndRedoBehindIt` takes each overlay's fence off, and both presses then reach the element behind.
 - **The direct-execute fact drives Undo only.** A Delete executed in a TextBox never leaves it, so those lines could not fail.
-- **The guard still covers Paste.** The red team asked whether the guard's extra clipboard read could drop a paste. It cannot add a failure: a `CommandBinding` re-asks its CanExecute before every Executed, so a field's own Paste binding reads the clipboard again anyway. Measured with Paste taken out of the guard: a binding that answers yes once and then no was asked twice and never pasted.
+- **The guard still covers Paste.** The red team asked whether the guard's extra clipboard read could drop a paste.
+  - **The reads.** The key's query reads the clipboard first. A `CommandBinding` re-asks its CanExecute before every Executed, so the field's own Paste binding reads it again; measured with Paste taken out of the guard, a binding that answers yes once and then no was asked twice and never pasted. The guard's ask is one read more.
+  - **When it can drop a paste.** WPF retries a clipboard another process holds for about a second on each read. So the guard drops a paste only when the clipboard is held through its whole retry and freed before the field's own read.
+  - **Why it stays.** Without it, a directly executed Paste inside a sheet would reach the note behind.
 - **The FlaUI journey types one character first,** so a leaked Undo has something to take back. It also runs the item-name census that every journey owes (`AnnouncementNameCensus`).
 - **Registers:** contract 40 gains a WB-5 section; the frozen R-6 row is untouched. The matrix's popover row gains the F6 note.
 
