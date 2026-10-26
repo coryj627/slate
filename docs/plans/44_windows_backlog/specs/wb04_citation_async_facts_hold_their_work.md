@@ -2,6 +2,22 @@
 
 Issues: #1316 #1285 #1315. Size S–M. Lanes: windows. AT: — (test-only). Wave: W2, slot 1. Depends on: nothing. Parallel with: WB-5, WB-6. Decision: none.
 
+## Amended at implementation (2026-10-26)
+
+This section outranks the text below it.
+
+- **`HeldWork` waits on a `TaskCompletionSource`, not a `ManualResetEventSlim`.** That leaves nothing to dispose while a worker may still be leaving the hook. Its constructor takes the seam's setter, installs the hook, and `Release()` nulls it.
+- **Each fact first shows its work entered the hold (`WaitUntilEntered`, red team).** Without that, a hook on the wrong object, or a worker that had not reached the seam yet, would pass silently. The deferred-summary facts' load is gated on a 5,000-entry seed, so it often had not reached the seam.
+- **`AssertHeldUntilReleased` waits for every worker to leave the hook** before it reads the timeout. A fact that calls it early, or one whose `Release()` is removed, still reports "the hold timed out before the fact released it".
+- **The Files Citing fact polls for its sheet for up to 30 s**, past the hold's 10 s, instead of 40 fixed rounds. A hold that ran out is then reported as one.
+- **The loaded run uses `DOTNET_PROCESSOR_COUNT=1`, not a parallel `cargo build`.** This desktop hosts the CI runners, which the CDESK rule says not to load; the variable starves the test host's thread pool instead.
+- **That run alone does not force the race, so a forced-order probe records the evidence.** A 250 ms sleep was put on the test thread after each start call:
+  - The held facts pass, 15 of 15.
+  - Main's unheld facts with the same sleeps fail the three #1315 facts.
+  - Main's two pumped deferred-summary facts survive the sleeps, because the dispatcher context orders their publish. Their hold makes the pre-move assertions true without that ordering.
+- **The ported doc paragraph describes the pumped shape**, not the unpumped one 21cfc8e fixed. The comment over `JumpToBibliography`'s unheld fact now points at `HeldWork` rather than a future scheduler seam.
+- **`WorkspaceViewModel.Citations.cs` keeps its three CRLF lines.** An editor flattened them and `dotnet format --include` restored them.
+
 ## Goal
 
 `CitationAsyncInterleavingTests` passes 50 consecutive isolated runs on Windows and asserts nothing about what "has not landed yet" without first holding that work on a seam. #1285's fact and its sibling carry 21cfc8e's hold; #1315's three facts get theirs, one of them through a new `FilesCitingViewModel` seam; and the three issues close in one PR. No product behaviour changes.
