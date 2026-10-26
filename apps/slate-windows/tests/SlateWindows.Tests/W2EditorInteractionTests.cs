@@ -1390,6 +1390,82 @@ public sealed class W2EditorInteractionTests
         Assert.Single(navigation);
     }
 
+    private const string NothingToActivate = """
+        # Source
+
+        Plain prose with nothing to act on.
+
+        $$
+        x + y
+        $$
+
+        A lone # sign.
+        """;
+
+    /// <summary>WB-3 (#1465): Ctrl+Enter (the keyboard origin) with nothing
+    /// to activate under the caret says so with core's event, once per
+    /// press: on plain prose, inside display math, and on a bare <c>#</c>
+    /// (core makes no tag of it, so it is plain prose to the activation).
+    /// <c>ActivateAt</c> still answers false.</summary>
+    [Fact]
+    public void CtrlEnterWithNothingUnderTheCaretSaysSo()
+    {
+        using InteractionFixture fixture = InteractionFixture.Create(NothingToActivate);
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using var cancel = new CancelToken();
+        session.ScanInitial(cancel);
+        var announcements = new List<A11yEvent>();
+        using WorkspaceTabViewModel tab = SourceTab(session, announcements);
+        EditorInteractionCoordinator interactions = Assert.IsType<EditorInteractionCoordinator>(
+            tab.EditorInteractions);
+        interactions.RefreshMathRangesForTests();
+        interactions.RefreshArtifactCacheForTests();
+
+        int bareHash = tab.Text.IndexOf("A lone #", StringComparison.Ordinal) + "A lone ".Length;
+        foreach ((string what, int offset) in new[]
+        {
+            ("plain prose", Inside(tab.Text, "Plain prose")),
+            ("display math", Inside(tab.Text, "x + y")),
+            ("a bare #", bareHash),
+        })
+        {
+            announcements.Clear();
+            Assert.False(interactions.ActivateAt(offset, EditorInteractionOrigin.Keyboard), what);
+            Assert.IsType<A11yEvent.NothingToActivateAtCursor>(Assert.Single(announcements));
+        }
+    }
+
+    /// <summary>WB-3 (#1465): a Ctrl+click (the pointer origin) on plain
+    /// prose stays silent — only the key says nothing is there.</summary>
+    [Fact]
+    public void ACtrlClickOnPlainProseStaysSilent()
+    {
+        using InteractionFixture fixture = InteractionFixture.Create(NothingToActivate);
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using var cancel = new CancelToken();
+        session.ScanInitial(cancel);
+        var announcements = new List<A11yEvent>();
+        using WorkspaceTabViewModel tab = SourceTab(session, announcements);
+        EditorInteractionCoordinator interactions = Assert.IsType<EditorInteractionCoordinator>(
+            tab.EditorInteractions);
+        interactions.RefreshMathRangesForTests();
+        interactions.RefreshArtifactCacheForTests();
+
+        Assert.False(interactions.ActivateAt(Inside(tab.Text, "Plain prose"), EditorInteractionOrigin.Pointer));
+        Assert.Empty(announcements);
+    }
+
+    private static WorkspaceTabViewModel SourceTab(VaultSession session, List<A11yEvent> announcements) =>
+        new(
+            session,
+            new WorkspaceTabState(
+                Guid.NewGuid(),
+                new WorkspaceItemState(WorkspaceItemKind.Markdown, "source.md")),
+            navigate: _ => { },
+            activateTag: _ => { },
+            announce: announcements.Add,
+            startInteractionBackgroundWork: false);
+
     private static int Inside(string text, string needle)
     {
         int start = text.IndexOf(needle, StringComparison.Ordinal);
