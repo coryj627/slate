@@ -556,7 +556,21 @@ public sealed class TasksPanelTests : IDisposable
                 () => "the tab toggle never announced; announced: " + AnnouncementDump(announced));
             A11yEvent.TaskToggled toggled = Assert.Single(announced.OfType<A11yEvent.TaskToggled>());
             Assert.True(toggled.Completed);
+            Assert.Equal("Task completed.", SlateUniffiMethods.A11yRender(toggled).Text);
             Assert.Equal(SlateUniffiMethods.A11yRender(toggled).Text, tab.Status);
+
+            // The other direction: the done task toggled back.
+            PumpDispatcherUntil(
+                () => workspace.Panels.DoneTasks.Any(r => r.Task.Text == "first open"),
+                () => "the completed task never reached the done rows; announced: " + AnnouncementDump(announced));
+            workspace.Panels.ToggleTask(workspace.Panels.DoneTasks.First(r => r.Task.Text == "first open"));
+            PumpDispatcherUntil(
+                () => announced.OfType<A11yEvent.TaskToggled>().Count() == 2,
+                () => "the reopen never announced; announced: " + AnnouncementDump(announced));
+            A11yEvent.TaskToggled reopened = announced.OfType<A11yEvent.TaskToggled>().Last();
+            Assert.False(reopened.Completed);
+            Assert.Equal("Task reopened.", SlateUniffiMethods.A11yRender(reopened).Text);
+            Assert.Equal("Task reopened.", tab.Status);
             Assert.DoesNotContain(announced, e => e is A11yEvent.HostComposed);
         }
 
