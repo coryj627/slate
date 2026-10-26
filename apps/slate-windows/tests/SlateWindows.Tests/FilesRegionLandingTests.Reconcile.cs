@@ -321,8 +321,8 @@ public sealed partial class FilesRegionLandingTests
         Assert.Empty(host.Announced);
     });
 
-    /// <summary>Every row the tree SHOWS, by path, with its
-    /// container.</summary>
+    /// <summary>Every row the tree SHOWS, by its key (<see cref="RowKeyOf"/>),
+    /// with its container.</summary>
     private static Dictionary<string, TreeViewItem> ShownRowContainers(Host host)
     {
         var rows = new Dictionary<string, TreeViewItem>(StringComparer.Ordinal);
@@ -335,7 +335,7 @@ public sealed partial class FilesRegionLandingTests
             {
                 if (owner.ItemContainerGenerator.ContainerFromItem(node) is TreeViewItem container)
                 {
-                    rows[node.Path] = container;
+                    rows[RowKeyOf(node)] = container;
                     if (node.IsExpanded)
                     {
                         Visit(container, node.Children);
@@ -357,9 +357,10 @@ public sealed partial class FilesRegionLandingTests
         PumpedDispatcher.Drain();
     }
 
-    /// <summary>Every row the tree SHOWS, by path, as a UI Automation client
-    /// reaches it after a change: the tree's item peers and each open
-    /// folder's, every level's children read afresh.</summary>
+    /// <summary>Every row the tree SHOWS, by its key (<see cref="RowKeyOf"/>),
+    /// as a UI Automation client reaches it after a change: the tree's item
+    /// peers and each open folder's and date group's, every level's children
+    /// read afresh.</summary>
     private static Dictionary<string, AutomationPeer> ShownRowElements(AutomationPeer tree)
     {
         var rows = new Dictionary<string, AutomationPeer>(StringComparer.Ordinal);
@@ -373,7 +374,7 @@ public sealed partial class FilesRegionLandingTests
             {
                 if (child is ItemAutomationPeer { Item: FileTreeNodeViewModel { IsPlaceholder: false } node })
                 {
-                    rows[node.Path] = child;
+                    rows[RowKeyOf(node)] = child;
                     if (node.IsExpanded)
                     {
                         Visit(child);
@@ -382,6 +383,12 @@ public sealed partial class FilesRegionLandingTests
             }
         }
     }
+
+    /// <summary>A row's key in these facts: a file's or a folder's path, and
+    /// <c>group:</c> and the label for a date group's header, whose path is
+    /// empty.</summary>
+    private static string RowKeyOf(FileTreeNodeViewModel node) =>
+        node.IsGroupHeader ? "group:" + node.Name : node.Path;
 
     /// <summary>The row reads as one the tree shows: on screen, with a
     /// rectangle, a place in its set and its row's name. A row the tree let

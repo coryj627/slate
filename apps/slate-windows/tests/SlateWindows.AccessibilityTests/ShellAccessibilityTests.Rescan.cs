@@ -400,6 +400,154 @@ public sealed partial class ShellAccessibilityTests
             arrival: "0-top.md",
             surface: "rescan-watcher-row-at-top");
 
+    /// <summary>
+    /// Plan 44 WB-6 (#1522): the shared journey with Group by date on (the
+    /// vault's own sidebar settings, newest first), the reader on a note in
+    /// "Today", and a watcher run for a note created outside Slate, which
+    /// joins "Today" at its top. The reader's row and the "Today" header are
+    /// the elements held before the run, and so is every other row; the keys
+    /// never moved, and the window scans clean right after. Until WB-6 no date
+    /// group was kept, so every header and every row under one had a new
+    /// element on every run.
+    /// </summary>
+    [Fact]
+    public void ExternalFiles_AChangeUnderADateGroupKeepsTheReadersRow() =>
+        AssertAWatcherRunKeepsTheReadersRow(
+            journey: "watched-date-group",
+            seed: vault =>
+            {
+                SeedDateGroupedSidebar(vault);
+                File.WriteAllText(Path.Combine(vault, "note.md"), "# Note\n");
+                File.WriteAllText(Path.Combine(vault, "alpha.md"), "# Alpha\n");
+                File.WriteAllText(Path.Combine(vault, "beta.md"), "# Beta\n");
+            },
+            openFolders: [],
+            reader: "alpha.md",
+            held: [("Today", "Today"), ("note.md", "note.md"), ("beta.md", "beta.md")],
+            change: vault => File.WriteAllText(Path.Combine(vault, "0-top.md"), "# Top\n"),
+            arrival: "0-top.md",
+            surface: "rescan-watcher-date-group",
+            firstRow: "Today");
+
+    /// <summary>The vault's own sidebar settings, grouped by date and newest
+    /// first, written before the launch reads them.</summary>
+    private static void SeedDateGroupedSidebar(string vault)
+    {
+        Directory.CreateDirectory(Path.Combine(vault, ".slate"));
+        File.WriteAllText(
+            Path.Combine(vault, ".slate", "sidebar.json"),
+            "{\"version\":1,\"sort\":{\"field\":\"modified\",\"direction\":\"desc\"},\"grouping\":\"dateBuckets\"}");
+    }
+
+    /// <summary>
+    /// Plan 44 WB-6 (#1515 case 3): the reader on b.md, and b.md deleted
+    /// outside Slate — a watcher run, no Refresh. The keys are on c.md's row,
+    /// which is not selected; the tree selects nothing; no tab opens (the tab
+    /// strip holds what it held); and the window scans clean right after.
+    /// Until WB-6 a publication that removed the selected row replaced the
+    /// whole tree, because WPF's tree selects its first row — and opens its
+    /// note — when the selected container leaves in place.
+    /// </summary>
+    [Fact]
+    public void ExternalFiles_TheReadersRowRemovedUnderThemLandsTheKeysBeside()
+    {
+        string testRoot = Path.Combine(Path.GetTempPath(), $"slate-watched-removed-reader-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Watched Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        File.WriteAllText(Path.Combine(vaultRoot, "alpha.md"), "# Alpha\n");
+        File.WriteAllText(Path.Combine(vaultRoot, "b.md"), "# B\n");
+        File.WriteAllText(Path.Combine(vaultRoot, "c.md"), "# C\n");
+        string logFile = Path.Combine(logDirectory, "slate-windows.log");
+
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe()) { UseShellExecute = false };
+            ShellLaunch.ApplyDeviceState(startInfo);
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] = $"slate-watched-removed-reader-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            // The rescan's route line.
+            startInfo.Environment["SLATE_UIA_DIAGNOSTICS"] = "1";
+            // The real watcher, whatever the runner's environment holds.
+            _ = startInfo.Environment.Remove(VaultWatcherSwitch);
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+            if (!HasInteractiveDesktop(process, "watched-removed-reader"))
+            {
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(process, automation, logFile, TimeSpan.FromSeconds(30));
+            window.SetForeground();
+            WaitForVaultOpen(window);
+            AutomationElement tree = WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(10));
+            AssertFocusStaysOnRow(automation, tree, "alpha.md", "Opening the vault did not land the keys on the Files tree's first row.");
+            WaitForTreeItemStartingWith(tree, automation, "b.md").Focus();
+            _ = WaitForEditor(window, automation, "b.md editor", TimeSpan.FromSeconds(10));
+            AssertFocusStaysOnRow(automation, tree, "b.md", "The b.md row did not keep the keys before the change.");
+            AutomationElement tabs = WaitForElement(window, "WorkspaceTabs", TimeSpan.FromSeconds(10));
+            string[] tabsBefore = TabNames(tabs, automation);
+
+            File.Delete(Path.Combine(vaultRoot, "b.md"));
+            Assert.True(
+                SpinWait.SpinUntil(() => !TreeListedItemStartingWith(tree, automation, "b.md"), TimeSpan.FromSeconds(30)),
+                "the deletion never reached the files tree without a Refresh. Rescans: "
+                + string.Join(" | ", DiagnosticLines(logFile, "VaultRescanStarted")));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => automation.FocusedElement() is { } focused
+                        && (focused.Properties.Name.ValueOrDefault ?? string.Empty).StartsWith("c.md", StringComparison.Ordinal),
+                    TimeSpan.FromSeconds(10)),
+                $"the keys did not land on c.md's row; they are on {DescribeFocus(automation)}.");
+            // Any focus event the publication raised arrives.
+            Thread.Sleep(FocusSettle);
+
+            string[] runs = DiagnosticLines(logFile, "VaultRescanStarted");
+            Assert.True(
+                runs.Contains("SlateWindows.VaultRescanStarted (Watcher)") && !runs.Any(run => run.EndsWith("(Explicit)", StringComparison.Ordinal)),
+                "the deletion must arrive through a Watcher run, with no Refresh; the log names: " + string.Join(" | ", runs));
+            AutomationElement landed = automation.FocusedElement();
+            Assert.StartsWith("c.md", landed.Properties.Name.Value, StringComparison.Ordinal);
+            Assert.False(landed.Patterns.SelectionItem.Pattern.IsSelected.Value, "the landing selected c.md's row.");
+            Assert.Empty(tree.Patterns.Selection.Pattern.Selection.Value);
+            Assert.Equal(tabsBefore, TabNames(tabs, automation));
+            // Right after the landing, the item-name census included.
+            AssertAxeClean(process, "rescan-watcher-removed-reader");
+        }
+        finally
+        {
+            if (process is not null && !process.HasExited)
+            {
+                process.CloseMainWindow();
+                if (!process.WaitForExit(5_000))
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    /// <summary>The workspace tab strip's tab names, in order.</summary>
+    private static string[] TabNames(AutomationElement tabs, UIA3Automation automation) =>
+    [
+        .. tabs.FindAllDescendants(automation.ConditionFactory.ByControlType(ControlType.TabItem))
+            .Select(tab => tab.Properties.Name.ValueOrDefault ?? string.Empty),
+    ];
+
     /// <summary>#1515: launch the vault <paramref name="seed"/> writes, open
     /// <paramref name="openFolders"/>, put the keys on
     /// <paramref name="reader"/>'s row and hold its element and each
@@ -417,7 +565,8 @@ public sealed partial class ShellAccessibilityTests
         (string Before, string After)[] held,
         Action<string> change,
         string arrival,
-        string surface)
+        string surface,
+        string firstRow = "alpha.md")
     {
         string testRoot = Path.Combine(Path.GetTempPath(), $"slate-{journey}-{Guid.NewGuid():N}");
         string vaultRoot = Path.Combine(testRoot, "Watched Vault");
@@ -456,8 +605,9 @@ public sealed partial class ShellAccessibilityTests
             AutomationElement tree = WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(10));
             // The launch lands the keys on the first row once the vault has
             // published its rows (W7-5); a step before that races it. Each
-            // journey's vault sorts alpha.md first.
-            AssertFocusStaysOnRow(automation, tree, "alpha.md", "Opening the vault did not land the keys on the Files tree's first row.");
+            // journey's vault sorts alpha.md first, or, grouped by date, the
+            // Today header.
+            AssertFocusStaysOnRow(automation, tree, firstRow, "Opening the vault did not land the keys on the Files tree's first row.");
             foreach (string folder in openFolders)
             {
                 AutomationElement folderRow = WaitForTreeItemStartingWith(tree, automation, folder, requireItems: true);
