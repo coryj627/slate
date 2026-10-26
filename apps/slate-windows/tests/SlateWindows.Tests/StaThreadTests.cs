@@ -32,18 +32,22 @@ public sealed class StaThreadTests : IDisposable
     public void Dispose()
     {
         StaThread.DumpDirectory = _dumpDirectory;
+        StaThread.DumpKindForTests = null;
         StaThread.ResetDumpsForTests();
     }
 
     /// <summary>#1603: a body that does not pump gives no stack, so with a
     /// dump folder named (CI's app job names its results folder) the timeout
     /// writes a dump of the process there and says where. #1641: the dump is
-    /// the runtime's createdump's, taken from outside the process, and it is
-    /// full: it lists the timed-out body's thread with its stack, and it
-    /// holds the bytes of an object on the managed heap. A dump the process
-    /// took of itself came out partial on CI (2 MB, error 0x80070057).</summary>
+    /// the runtime's createdump's, taken from outside the process, of THIS
+    /// process: it lists the timed-out body's thread with its stack. A dump
+    /// the process took of itself came out partial on CI (2 MB, error
+    /// 0x80070057). The real createdump writes a normal dump here: a full
+    /// one of the test host mid-suite was 4.7 GB and 12.5 s on CI, on every
+    /// run. Production's <c>--full</c> is pinned by the command fact below,
+    /// and #1644's probe read CI's full dumps with <c>clrstack -all</c>.</summary>
     [Fact]
-    public void ATimedOutBodyThatDoesNotPumpLeavesAFullDumpWhereTheFolderSays()
+    public void ATimedOutBodyThatDoesNotPumpLeavesADumpOfThisProcessWhereTheFolderSays()
     {
         // Under CI's own dump folder when it names one (the runner's work
         // folder, so a failing fact's dump is uploaded as its evidence).
@@ -51,8 +55,7 @@ public sealed class StaThreadTests : IDisposable
             Environment.GetEnvironmentVariable("SLATE_STA_DUMP_DIR") ?? Path.GetTempPath(), $"sta-dump-{Guid.NewGuid():N}");
         Directory.CreateDirectory(folder);
         StaThread.DumpDirectory = folder;
-        byte[] marker = System.Security.Cryptography.RandomNumberGenerator.GetBytes(64);
-        GCHandle pinned = GCHandle.Alloc(marker, GCHandleType.Pinned);
+        StaThread.DumpKindForTests = "normal";
         uint bodyThread = 0;
         bool passed = false;
         try
@@ -78,22 +81,20 @@ public sealed class StaThreadTests : IDisposable
 
             // The message first: a write that fails says why (CI on 3d4aa90d
             // failed here with an empty folder and no message to read).
-            Assert.Contains("A full dump of the test process is at ", timedOut.Message, StringComparison.Ordinal);
+            Assert.Contains("A normal dump of the test process is at ", timedOut.Message, StringComparison.Ordinal);
             string dump = Assert.Single(Directory.GetFiles(folder, "*.dmp"));
-            Assert.Contains($"A full dump of the test process is at {dump} (", timedOut.Message, StringComparison.Ordinal);
+            Assert.Contains($"A normal dump of the test process is at {dump} (", timedOut.Message, StringComparison.Ordinal);
             Assert.Contains(" MB private", timedOut.Message, StringComparison.Ordinal);
             _output.WriteLine($"{new FileInfo(dump).Length} bytes in {clock.Elapsed.TotalSeconds:0.0} s:{timedOut.Message}");
-            Minidump read = Minidump.Read(dump, pinned.AddrOfPinnedObject(), marker.Length);
-            Assert.True(read.IsFull, "a full dump lists its memory in a Memory64ListStream");
+            Minidump read = Minidump.Read(dump);
             Assert.True(
                 read.ThreadStacks.TryGetValue(Volatile.Read(ref bodyThread), out uint stack) && stack > 0,
-                $"the dump lists the body's thread {bodyThread} with its stack");
-            Assert.Equal(marker, read.Marker);
+                $"the dump lists the body's thread {bodyThread} with its stack: it is this process's");
             passed = true;
         }
         finally
         {
-            pinned.Free();
+            StaThread.DumpKindForTests = null;
             if (passed)
             {
                 try
@@ -293,13 +294,11 @@ public sealed class StaThreadTests : IDisposable
     private static extern uint GetCurrentThreadId();
 
     /// <summary>What a fact reads from a minidump (MINIDUMP_HEADER, then one
-    /// MINIDUMP_DIRECTORY per stream): each listed thread's stack size
-    /// (ThreadListStream, 3), and the bytes at one address, found in the
-    /// memory a heap dump lists (MemoryListStream, 5) or a full one does
-    /// (Memory64ListStream, 9). Null when no range holds them whole.</summary>
-    private sealed record Minidump(IReadOnlyDictionary<uint, uint> ThreadStacks, byte[]? Marker, bool IsFull)
+    /// MINIDUMP_DIRECTORY per stream): each listed thread's stack size, by
+    /// its OS id (ThreadListStream, 3).</summary>
+    private sealed record Minidump(IReadOnlyDictionary<uint, uint> ThreadStacks)
     {
-        public static Minidump Read(string path, IntPtr address, int length)
+        public static Minidump Read(string path)
         {
             using FileStream stream = File.OpenRead(path);
             using var reader = new BinaryReader(stream);
@@ -307,70 +306,32 @@ public sealed class StaThreadTests : IDisposable
             _ = reader.ReadUInt32();
             uint streams = reader.ReadUInt32();
             uint directory = reader.ReadUInt32();
-            ulong wanted = (ulong)address.ToInt64();
             var threads = new Dictionary<uint, uint>();
-            byte[]? marker = null;
-            bool full = false;
             for (uint index = 0; index < streams; index++)
             {
                 stream.Position = directory + (index * 12L);
                 uint type = reader.ReadUInt32();
                 _ = reader.ReadUInt32();
                 uint rva = reader.ReadUInt32();
+                if (type != 3)
+                {
+                    continue;
+                }
+                // MINIDUMP_THREAD, 48 bytes: id, suspend count, priority
+                // class, priority, TEB, then the stack's descriptor (start,
+                // then its size at +32).
                 stream.Position = rva;
-                if (type == 3)
+                uint count = reader.ReadUInt32();
+                for (uint thread = 0; thread < count; thread++)
                 {
-                    // MINIDUMP_THREAD: id, suspend count, priority class,
-                    // priority, TEB, then the stack's descriptor.
-                    uint count = reader.ReadUInt32();
-                    for (uint thread = 0; thread < count; thread++)
-                    {
-                        long entry = rva + 4 + (thread * 48L);
-                        stream.Position = entry;
-                        uint id = reader.ReadUInt32();
-                        stream.Position = entry + 24 + 8;
-                        threads[id] = reader.ReadUInt32();
-                    }
-                }
-                else if (type == 5)
-                {
-                    uint count = reader.ReadUInt32();
-                    for (uint range = 0; range < count && marker is null; range++)
-                    {
-                        stream.Position = rva + 4 + (range * 16L);
-                        ulong start = reader.ReadUInt64();
-                        uint size = reader.ReadUInt32();
-                        uint data = reader.ReadUInt32();
-                        marker = Within(stream, reader, start, size, data, wanted, length);
-                    }
-                }
-                else if (type == 9)
-                {
-                    full = true;
-                    ulong count = reader.ReadUInt64();
-                    long data = (long)reader.ReadUInt64();
-                    for (ulong range = 0; range < count && marker is null; range++)
-                    {
-                        stream.Position = rva + 16 + ((long)range * 16L);
-                        ulong start = reader.ReadUInt64();
-                        ulong size = reader.ReadUInt64();
-                        marker = Within(stream, reader, start, size, data, wanted, length);
-                        data += (long)size;
-                    }
+                    long entry = rva + 4 + (thread * 48L);
+                    stream.Position = entry;
+                    uint id = reader.ReadUInt32();
+                    stream.Position = entry + 32;
+                    threads[id] = reader.ReadUInt32();
                 }
             }
-            return new Minidump(threads, marker, full);
-        }
-
-        private static byte[]? Within(
-            FileStream stream, BinaryReader reader, ulong start, ulong size, long data, ulong wanted, int length)
-        {
-            if (wanted < start || wanted + (ulong)length > start + size)
-            {
-                return null;
-            }
-            stream.Position = data + (long)(wanted - start);
-            return reader.ReadBytes(length);
+            return new Minidump(threads);
         }
     }
 

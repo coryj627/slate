@@ -195,6 +195,12 @@ internal static class StaThread
     /// <see cref="DumpBound"/> and was stopped) and what it wrote.</summary>
     internal static Func<System.Diagnostics.ProcessStartInfo, (int? ExitCode, string Said)>? RunDumperForTests { get; set; }
 
+    /// <summary>Test seam (#1641): the dump createdump writes, by its option's
+    /// name (<c>normal</c>, <c>withheap</c>, <c>triage</c>, <c>full</c>);
+    /// null is <c>full</c>. The real-createdump fact writes a normal one: a
+    /// full dump of the test host mid-suite was 4.7 GB on CI.</summary>
+    internal static string? DumpKindForTests { get; set; }
+
     /// <summary>Write a full dump of the test process into
     /// <see cref="DumpDirectory"/>, answering the sentence that names it
     /// (empty when no folder is named or the cap is reached). The dump keeps
@@ -246,7 +252,8 @@ internal static class StaThread
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
-        start.ArgumentList.Add("--full");
+        string kind = DumpKindForTests ?? "full";
+        start.ArgumentList.Add($"--{kind}");
         start.ArgumentList.Add("--name");
         start.ArgumentList.Add(path.Replace("%", "%%", StringComparison.Ordinal));
         long privateBytes;
@@ -279,8 +286,8 @@ internal static class StaThread
             return $" No dump was written: {outcome}, but nothing is at {path}.";
         }
         return said.Length > 0
-            ? $" A full dump of the test process is at {path} ({memory}; {said})."
-            : $" A full dump of the test process is at {path} ({memory}).";
+            ? $" A {kind} dump of the test process is at {path} ({memory}; {said})."
+            : $" A {kind} dump of the test process is at {path} ({memory}).";
     }
 
     /// <summary>Run createdump to its end, answering its exit code (null
@@ -295,8 +302,16 @@ internal static class StaThread
             && !(File.Exists(path) && new FileInfo(path).Length > 0 && process.WaitForExit(DumpBound)))
         {
             // createdump has no children; Kill returns quietly if it has
-            // just ended.
+            // just ended. Its reads end with its pipes: drained briefly, and
+            // a read that faults is observed, never left unobserved.
             process.Kill();
+            try
+            {
+                _ = Task.WaitAll([output, errors], DumpOutputBound);
+            }
+            catch (AggregateException)
+            {
+            }
             return (null, string.Empty);
         }
         // The reads finish once createdump has closed its end of the pipes;
