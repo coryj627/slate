@@ -244,6 +244,16 @@ internal sealed partial class WorkspaceViewModel
             {
                 failure = exception.Message;
             }
+            catch (Exception exception) when (
+                exception is not OutOfMemoryException
+                    and not StackOverflowException
+                    and not AccessViolationException)
+            {
+                // An admitted restore always ends: a fault outside
+                // VaultException (a core panic) is a failed restore, never
+                // a ticket left holding the note's chain.
+                failure = exception.Message;
+            }
             RunOnSaveDispatcher(() =>
             {
                 try

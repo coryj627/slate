@@ -774,7 +774,9 @@ Since WB-2:
   Its continuation reloads through `ReloadOpenTabFromDiskAdmitted`, which
   keeps a save queued behind it by re-stamping it to the reloaded item
   (`ReloadKeepingQueuedSave`). The guarded `ReloadOpenTabFromDisk` keeps the
-  D-10 guard for unadmitted callers.
+  D-10 guard for unadmitted callers. The restore always ends: a fault its
+  worker meets outside `VaultException` (a core panic) is a failed restore,
+  the existing "Restore failed" alert, never a ticket left holding the chain.
 - **The template sweep** is an admitted operation too: it re-checks a tab's
   dirtiness and text when it runs, and reloads keeping the queued save.
 - **A property write** is admitted behind the save. A first write then
@@ -792,11 +794,12 @@ Since WB-2:
   `PropertyEditConflict`, `PropertyEditFailed`, `PropertyChanged` and the
   sheet's `AddFailedDraftKept`.
 - **Teardown.** Every admitted operation's worker is tracked, so
-  `CloseAndJoinWorkers` joins it before the session goes. A write waiting on
-  its header ends abandoned when the tab's header shuts down.
+  `CloseAndJoinWorkers` joins it, without a bound, before the session goes.
+  A write waiting on its header ends abandoned when the tab's header shuts
+  down.
 
-Facts: `SaveChainAdmissionTests` (sixteen), `WorkspaceSaveCoordinatorTests`
-(three), `NotePropertiesTests.WhenPublished…` (three) and
+Facts: `SaveChainAdmissionTests` (seventeen), `WorkspaceSaveCoordinatorTests`
+(three), `NotePropertiesTests.WhenPublished…` (four) and
 `HistoryPanelTests.BaseFileRestoreWithItsTabOpenKeepsTheStagedHeadHash`.
 
 <!-- a11y-trigger-ledger:start -->

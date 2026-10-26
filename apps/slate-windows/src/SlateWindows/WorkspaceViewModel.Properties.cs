@@ -1100,12 +1100,15 @@ internal sealed partial class WorkspaceViewModel
                 exception =>
                 {
                     ReleasePropertyWriteLease(path);
+                    sheet?.MarkAddFailed();
                     _ = done.TrySetException(exception);
                 });
         }
         catch (Exception exception)
         {
+            // The commit was accepted, so its sheet says the add did not land.
             ReleasePropertyWriteLease(path);
+            sheet?.MarkAddFailed();
             _ = done.TrySetException(exception);
         }
         return done.Task;

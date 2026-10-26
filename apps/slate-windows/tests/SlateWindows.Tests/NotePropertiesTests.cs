@@ -248,6 +248,48 @@ public sealed class NotePropertiesTests
         properties.Shutdown();
     }
 
+    /// <summary>WB-2: the disk moved past the save. Another writer replaced
+    /// the saved bytes before any read could hold them, so the first read
+    /// requested after the wait began ends it Published — those bytes are
+    /// the saved ones or newer, and the caller's gates take a mismatch to the
+    /// conflict path — and the header does not ask again.</summary>
+    [Fact]
+    public void WhenPublishedEndsPublishedOnAReadRequestedAfterTheWaitBegan()
+    {
+        using FixtureVault fixture = MakeVault("props-when-published-moved");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var queue = new QueueingSynchronizationContext();
+        NotePropertiesViewModel properties = UnderContext(
+            queue,
+            () => new NotePropertiesViewModel(
+                session, _ => { }, _ => { }, _ => { }, synchronousForTests: false));
+        properties.Load("props.md");
+        properties.DrainForTests().GetAwaiter().GetResult();
+        queue.Drain();
+        string file = Path.Combine(fixture.Root, "props.md");
+        string h1 = session.SaveText(
+            "props.md",
+            File.ReadAllText(file) + "\nSaved.\n",
+            expectedContentHash: properties.ContentHash).NewContentHash;
+        string h2 = session.SaveText(
+            "props.md",
+            File.ReadAllText(file) + "Moved on.\n",
+            expectedContentHash: h1).NewContentHash;
+
+        Task<HeaderRefreshOutcome> wait = properties.WhenPublished("props.md", h1);
+        Assert.False(wait.IsCompleted);
+        Assert.True(properties.IsLoading, "a wait with no refresh in flight did not request one");
+
+        properties.DrainForTests().GetAwaiter().GetResult();
+        queue.Drain();
+        Assert.True(wait.IsCompleted, "a read requested after the wait began did not answer it");
+        Assert.Equal(HeaderRefreshOutcome.Published, wait.Result);
+        Assert.Equal(h2, properties.ContentHash);
+        Assert.False(properties.IsLoading, "the header asked again past a read made after the wait began");
+        Assert.Equal(0, properties.PublishWaitersForTests);
+        properties.Shutdown();
+    }
+
     /// <summary>WB-2: a wait with no refresh in flight requests one; a failed
     /// read ends it Failed, with the header's LoadError set.</summary>
     [Fact]

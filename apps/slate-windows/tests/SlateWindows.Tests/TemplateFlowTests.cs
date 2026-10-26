@@ -563,10 +563,7 @@ public sealed class TemplateFlowTests
     [Fact]
     public void TheRealLifecycleWiresTheDestinationTheVaultNameAndTheSidebarRefresh()
     {
-        // Pumped, as the app runs (WB-2): the open resumes on this thread, so
-        // the workspace it builds belongs to this thread's dispatcher, the one
-        // the create's save-chain admission runs on.
-        StaThread.RunPumped(() =>
+        RunSta(() =>
         {
             using FixtureVault fixture = FixtureVault.Create(1, "tpl-lifecycle");
             WriteTemplate(fixture.Root, "Vaulty.md", "In {{vault}}.\n");
@@ -576,7 +573,14 @@ public sealed class TemplateFlowTests
                 enqueueUi: action => action(),
                 recentVaultsStore: new RecentVaultsStore(
                     Path.Combine(fixture.Root, "device-state", "recent-vaults.json")));
-            PumpedDispatcher.PumpUntilDrained(lifecycle.OpenVaultAsync(fixture.Root));
+            // The open resumes on this thread (WB-2), so the workspace it
+            // builds belongs to this thread's dispatcher — the one the
+            // create's save-chain admission runs on. Headless, as before: the
+            // queue is drained for the open alone, so nothing posted later
+            // (the watcher's debounced refresh) can stand in for the wiring.
+            var context = new RescanTests.SerialContext();
+            SynchronizationContext.SetSynchronizationContext(context);
+            context.Await(lifecycle.OpenVaultAsync(fixture.Root), "the vault open");
             WorkspaceViewModel workspace = lifecycle.Workspace!;
             FilesSidebarViewModel sidebar = lifecycle.FileSidebar!;
 
@@ -584,15 +588,9 @@ public sealed class TemplateFlowTests
             // the frozen destination is the sidebar's creation-parent
             // rule — deleting the provider assignment in the lifecycle
             // would land this create at the vault root instead.
-            Assert.True(
-                PumpedDispatcher.PumpUntil(() => sidebar.RootNodes.Any(node => node.Path == "sub")),
-                "the sidebar's tree never published");
             sidebar.SelectedNode = Assert.Single(
                 sidebar.RootNodes, node => node.Path == "sub");
             workspace.OpenTemplatePicker();
-            Assert.True(
-                PumpedDispatcher.PumpUntil(() => workspace.TemplatePickerSheet is { Rows.Count: > 0 }),
-                "the picker's rows never published");
             TemplatePickerViewModel picker = workspace.TemplatePickerSheet!;
             picker.ActivateCommand.Execute(Assert.Single(picker.Rows));
             workspace.TemplateFlowSheet!.NoteName = "First";
@@ -612,17 +610,13 @@ public sealed class TemplateFlowTests
             // outside it).
             sidebar.SelectedNode = null;
             workspace.OpenTemplatePicker();
-            Assert.True(
-                PumpedDispatcher.PumpUntil(() => workspace.TemplatePickerSheet is { Rows.Count: > 0 }),
-                "the second picker's rows never published");
             TemplatePickerViewModel second = workspace.TemplatePickerSheet!;
             second.ActivateCommand.Execute(Assert.Single(second.Rows));
             workspace.TemplateFlowSheet!.NoteName = "Second";
             workspace.TemplateFlowSheet.CreateCommand.Execute(null);
-            Assert.True(
-                PumpedDispatcher.PumpUntil(() => sidebar.RootNodes.Any(node => node.Path == "Second.md")),
-                "the sidebar never listed the second create");
-        }, TimeSpan.FromSeconds(120), "STA test body timed out.");
+            Assert.Contains(
+                sidebar.RootNodes, node => node.Path == "Second.md");
+        });
     }
 
     // ---- The pure rules (T6, T8) --------------------------------------

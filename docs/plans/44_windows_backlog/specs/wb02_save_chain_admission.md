@@ -11,7 +11,18 @@ This section outranks the text below it.
 - **The template's caret request moved into the sweep's operation**, after the reloads, so a deferred sweep's caret lands on the reloaded text. It is guarded on the landed tab: it must still be open on the path, clean, and not externally stale.
 - **The restore's continuation runs on the save chain's dispatcher** (`RunOnSaveDispatcher`, inline when already there). Main used `Application.Current`'s dispatcher, which a headless host does not have. The restore's worker is tracked by `TrackWorker` and by the bounded history drain.
 - **The D-14 line is built in one place.** `AnnounceRestoreNeedsSave` builds it, for staging and for the admitted start. Its designation is re-keyed to `WorkspaceViewModel.History.cs#WorkspaceViewModel.AnnounceRestoreNeedsSave@1` and the ledger regenerated.
-- **Found on the way, not delivered here:** a Bases grid cell edit on an open note writes its property outside the save chain, so it races an admitted save the same way. Filed as #1657.
+- **The restore's worker catches every fault but the fatal three** (out of memory, stack overflow, access violation). Main caught only `VaultException`. A core panic (uniffi's `PanicException`) or any other fault would escape the worker, leave the admitted ticket open, and hold the note's chain, and with it Close Vault's save settle, for good. Now it is a failed restore with the existing "Restore failed" alert (`AHistoryRestoreWhoseWorkerFaultsEndsAndFreesTheNotesChain`).
+- **Teardown is pinned per worker.** `WorkspaceSaveCoordinator.TrackedWorkersForTests` (new test seam) counts the workers the unbounded join will wait for. The teardown fact asserts that the parked restore is among them; `Dispose`'s 5 s drain of retired work would otherwise hide a missing `TrackWorker`. It also gains a third scenario, a property write parked on its worker.
+- **One more `WhenPublished` fact**, for the disk-moved arm: a read requested after the wait began ends it `Published` (`WhenPublishedEndsPublishedOnAReadRequestedAfterTheWaitBegan`). Without that arm the header would re-read without end and the write would hold the chain.
+- **An existing template fact changed its hosting.** `TemplateFlowTests.TheRealLifecycleWiresTheDestinationTheVaultNameAndTheSidebarRefresh` opened its vault with no synchronization context, so the lifecycle built the workspace on a pool thread, and the fact then drove it from its own thread. The create's admission now checks the dispatcher, so the fact opens on a serial context drained for the open alone. It stays headless and still pins the `TemplateNoteWritten` refresh.
+- **An add's fault paths mark the sheet failed**, as its other non-write outcomes do. No seam can fault them, so no fact pins this.
+- **Kept as designed:**
+  - A row write whose header is abandoned says nothing (4c), even with another tab still open on the note. The window is a save's duration.
+  - A failed read ends the wait `Failed`, even one at or below the floor (4b).
+  - The restore's live-tab CAS basis applies on an idle chain too (item 2), so an external change that reloaded the clean tab during the confirmation is restored over rather than refused. It stays recoverable from history.
+- **Found on the way, not delivered here:**
+  - A Bases grid cell edit on an open note writes its property outside the save chain, so it races an admitted save the same way. Filed as #1657.
+  - A task toggle on an open note writes outside the chain the same way; the bulk-rename apply, `RecoverDeletedFile` and the rescan's reload guard are listed there to check. Filed as #1658.
 
 ## Goal
 

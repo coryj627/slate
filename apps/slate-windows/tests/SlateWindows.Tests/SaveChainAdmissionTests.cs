@@ -126,6 +126,8 @@ public sealed class SaveChainAdmissionTests
             h.Events.Clear();
             h.Workspace.RequestRestoreVersion(v1);
             tab.Text = Edit;
+            h.Settle();
+            Assert.False(restoreParked.IsSet, "the restore started beside the save it was admitted behind");
 
             saveRelease.Set();
             h.PumpUntil(() => save.IsCompleted, "the save's publication");
@@ -133,7 +135,6 @@ public sealed class SaveChainAdmissionTests
             Assert.True(save.Result);
             _ = Assert.Single(h.Events, e => e is A11yEvent.NoteSaved);
             Assert.Equal(document, tab.ItemIdentity);
-            Assert.True(tab.SettleSaves());
             Assert.DoesNotContain(h.Events, e => e is A11yEvent.RestoredVersionFrom);
 
             restoreRelease.Set();
@@ -200,6 +201,38 @@ public sealed class SaveChainAdmissionTests
         h.PumpUntil(() => later.IsCompleted, "a save after the refused restore");
         Assert.True(later.Result);
         Assert.Equal(V2, h.Read("a.md"));
+    });
+
+    /// <summary>An admitted restore always ends: a fault outside
+    /// VaultException on its worker (a core panic) is a failed restore —
+    /// "Restore failed" with its message, nothing written — and its ticket
+    /// ends, so a save of the note requested after it still writes.</summary>
+    [Fact]
+    public void AHistoryRestoreWhoseWorkerFaultsEndsAndFreesTheNotesChain() => RunSta(() =>
+    {
+        using var h = new Vault("restore-faults", ("a.md", "v0\n"));
+        (WorkspaceTabViewModel tab, HistoryVersionRow v1, List<string> alerts) = RestoreSetup(h);
+        h.Workspace.HistoryRestoreHookForTests = () =>
+            throw new InvalidOperationException("the restore's core call panicked (test seam)");
+        try
+        {
+            h.Events.Clear();
+            h.Workspace.RequestRestoreVersion(v1);
+            h.PumpUntil(() => alerts.Count > 0 && h.Workspace.SavesIdle, "the faulted restore ending");
+            Assert.Equal("Restore failed: the restore's core call panicked (test seam)", Assert.Single(alerts));
+            Assert.DoesNotContain(h.Events, e => e is A11yEvent.RestoredVersionFrom);
+            Assert.Equal(V2, h.Read("a.md"));
+        }
+        finally
+        {
+            h.Workspace.HistoryRestoreHookForTests = null;
+        }
+
+        tab.Text = Edit;
+        Task<bool> later = tab.SaveAsync(announce: true);
+        h.PumpUntil(() => later.IsCompleted, "a save after the faulted restore");
+        Assert.True(later.Result);
+        Assert.Equal(Edit, h.Read("a.md"));
     });
 
     /// <summary>Queue direction 2, a save behind a restore: the restore's
@@ -741,7 +774,9 @@ public sealed class SaveChainAdmissionTests
     // ---- Teardown -------------------------------------------------------------
 
     /// <summary>Contract 35 A-1: teardown joins an admitted restore's worker
-    /// before the session goes, and a property write waiting on its header
+    /// and a running property write's worker before the session goes — each
+    /// is among the workers the save coordinator joins without a bound, not
+    /// left to a bounded drain — and a property write waiting on its header
     /// ends abandoned when the tab's header shuts down, so the chain goes
     /// idle and nothing is spoken.</summary>
     [Fact]
@@ -783,10 +818,16 @@ public sealed class SaveChainAdmissionTests
             Thread.Sleep(200);
             Volatile.Write(ref workerFinished, true);
         };
-        restoring.SavesForTests.BeforeJoinForTests = release.Set;
+        int trackedAtJoin = -1;
+        restoring.SavesForTests.BeforeJoinForTests = () =>
+        {
+            trackedAtJoin = restoring.SavesForTests.TrackedWorkersForTests;
+            release.Set();
+        };
         restoring.RequestRestoreVersion(target);
         Assert.True(PumpedDispatcher.PumpUntil(() => parked.IsSet, Hold), "premise: the restore never parked before its write");
         restoring.Dispose();
+        Assert.Equal(1, trackedAtJoin);
         Assert.True(Volatile.Read(ref workerFinished), "teardown returned while the restore's worker still ran");
 
         // The property write, parked in its header wait when teardown begins.
@@ -836,6 +877,45 @@ public sealed class SaveChainAdmissionTests
         {
             saveRelease.Set();
             readRelease.Set();
+        }
+
+        // The property write, running on its worker when teardown begins.
+        var committing = new WorkspaceViewModel(session, fixture.Root, () => [], _ => { }, startInteractionBackgroundWork: true);
+        committing.OpenPath("b.md");
+        WorkspaceTabViewModel c = committing.ActiveGroup.ActiveTab!;
+        NotePropertiesViewModel committed = committing.EnsureActiveTabProperties()!;
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => committed.Rows.Count > 0 && !committed.IsLoading, TimeSpan.FromSeconds(20)),
+            "premise: the header never loaded");
+        using var writeParked = new ManualResetEventSlim();
+        using var writeRelease = new ManualResetEventSlim();
+        bool writeFinished = false;
+        c.PropertyWriteHookForTests = () =>
+        {
+            writeParked.Set();
+            _ = writeRelease.Wait(TimeSpan.FromSeconds(30));
+            Thread.Sleep(200);
+            Volatile.Write(ref writeFinished, true);
+        };
+        int writesAtJoin = -1;
+        committing.SavesForTests.BeforeJoinForTests = () =>
+        {
+            writesAtJoin = committing.SavesForTests.TrackedWorkersForTests;
+            writeRelease.Set();
+        };
+        try
+        {
+            PropertyRowViewModel draft = committed.Rows.Single(row => row.Key == "status");
+            draft.EditorText = "done";
+            Assert.True(committing.SetPanelProperty(draft));
+            Assert.True(PumpedDispatcher.PumpUntil(() => writeParked.IsSet, Hold), "premise: the property write never parked before its write");
+            committing.Dispose();
+            Assert.Equal(1, writesAtJoin);
+            Assert.True(Volatile.Read(ref writeFinished), "teardown returned while the property write's worker still ran");
+        }
+        finally
+        {
+            writeRelease.Set();
         }
     }, TimeSpan.FromSeconds(120), "STA test body timed out.");
 

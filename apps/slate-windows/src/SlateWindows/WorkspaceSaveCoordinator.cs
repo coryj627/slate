@@ -239,6 +239,20 @@ internal sealed class WorkspaceSaveCoordinator
         }
     }
 
+    /// <summary>WB-2 test seam: the workers tracked and not yet finished —
+    /// read at <see cref="BeforeJoinForTests"/>, the workers teardown
+    /// joins without a bound.</summary>
+    internal int TrackedWorkersForTests
+    {
+        get
+        {
+            lock (_workersGate)
+            {
+                return _workers.Count;
+            }
+        }
+    }
+
     /// <summary>Track a save's worker until it finishes, whatever the
     /// dispatcher does with its publication.</summary>
     internal void TrackWorker(Task worker)
