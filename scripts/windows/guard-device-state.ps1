@@ -47,6 +47,17 @@ $index++
 if ($tokens.Count -le $index) { Write-Usage }
 $command = @($tokens[$index..($tokens.Count - 1)] | ForEach-Object { [string]$_ })
 
+# How long the run's SlateWindows.exe launches get to exit after the command:
+# 60 s, unless the guard's own tests set SLATE_DEVICE_STATE_GUARD_EXIT_WAIT_SECONDS
+# to reach the survivor branch quickly.
+$waitSeconds = 60
+if ($env:SLATE_DEVICE_STATE_GUARD_EXIT_WAIT_SECONDS) {
+    if (-not [int]::TryParse($env:SLATE_DEVICE_STATE_GUARD_EXIT_WAIT_SECONDS, [ref]$waitSeconds) -or $waitSeconds -lt 0) {
+        [Console]::Error.WriteLine("guard-device-state: SLATE_DEVICE_STATE_GUARD_EXIT_WAIT_SECONDS is not a whole number of seconds: '$env:SLATE_DEVICE_STATE_GUARD_EXIT_WAIT_SECONDS'")
+        exit 2
+    }
+}
+
 if ($null -eq $profileFolder) {
     if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
         [Console]::Error.WriteLine('guard-device-state: LOCALAPPDATA is not set, so there is no profile to guard')
@@ -107,12 +118,8 @@ catch {
     $commandExit = 1
 }
 
-# The shell gate's launches outlive `dotnet test` only by accident; give each
-# up to 60 s in all to exit before the second snapshot. (Its own tests set
-# SLATE_DEVICE_STATE_GUARD_EXIT_WAIT_SECONDS to reach the survivor branch
-# quickly.)
-$waitSeconds = 60
-if ($env:SLATE_DEVICE_STATE_GUARD_EXIT_WAIT_SECONDS) { $waitSeconds = [int]$env:SLATE_DEVICE_STATE_GUARD_EXIT_WAIT_SECONDS }
+# The shell gate's launches outlive `dotnet test` only by accident; give them
+# $waitSeconds in all to exit before the second snapshot.
 $deadline = [DateTime]::UtcNow.AddSeconds($waitSeconds)
 $survivors = @()
 do {

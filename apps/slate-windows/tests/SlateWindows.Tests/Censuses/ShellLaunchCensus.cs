@@ -37,13 +37,13 @@ public sealed class ShellLaunchCensus
     /// Fewer means the walk missed files, not that launches went away.</summary>
     private const int LaunchesAtLeast = 42;
 
-    /// <summary>Calls that only read the executable's path.</summary>
+    /// <summary>Calls that only read the executable's path and return
+    /// nothing a launch could start (not <c>GetFullPath</c>, whose result is
+    /// the executable again).</summary>
     private static readonly HashSet<string> PathReads = new(StringComparer.Ordinal)
     {
         "GetFileName",
         "GetFileNameWithoutExtension",
-        "GetDirectoryName",
-        "GetFullPath",
         "Exists",
     };
 

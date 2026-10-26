@@ -44,14 +44,14 @@ with open(os.path.join(os.environ["FIELD_PASS_TEST_OUT"], "launched.json"), "w",
 class LaunchForFieldPassTests(unittest.TestCase):
     def setUp(self) -> None:
         self.t = Path(tempfile.mkdtemp(prefix="field-pass-"))
+        # A cleanup, not tearDown: cleanups run last-in-first-out, so a fake
+        # Slate a case registers is killed before its folder goes.
+        self.addCleanup(shutil.rmtree, self.t, ignore_errors=True)
         self.v1 = self.t / "My Documents" / "Notes"
         self.v2 = self.t / "Drop box" / "Notes"
         self.v1.mkdir(parents=True)
         self.v2.mkdir(parents=True)
         (self.v1 / "__main__.py").write_text(RECORDER, encoding="utf-8")
-
-    def tearDown(self) -> None:
-        shutil.rmtree(self.t, ignore_errors=True)
 
     def launch(self, *tokens: str) -> subprocess.CompletedProcess:
         env = dict(os.environ, TEMP=str(self.t), TMP=str(self.t), FIELD_PASS_TEST_OUT=str(self.t))
@@ -147,14 +147,15 @@ class LaunchForFieldPassTests(unittest.TestCase):
         self.assertEqual(self.roots(), [])
 
     def test_the_profile_is_never_a_root(self) -> None:
+        # Refused whether or not the folder exists (CI's runners have none).
+        # No -Seed: were the check missing, the launch would write nothing there.
         profile = Path(os.environ["LOCALAPPDATA"]) / "Slate"
-        if not profile.is_dir():
-            self.skipTest("no profile Slate folder on this machine to refuse")
-        # No -Seed: were the check missing, the launch would still write nothing there.
-        run = self.launch("-Vault", str(self.v1), "-Root", str(profile), "-Exe", sys.executable)
-        self.assertEqual(run.returncode, 2, run.stdout + run.stderr)
-        self.assertIn("your own device state", run.stderr)
-        self.assertFalse((self.t / "launched.json").exists())
+        for root in (profile, Path(str(profile) + "\\"), profile / "logs"):
+            with self.subTest(str(root)):
+                run = self.launch("-Vault", str(self.v1), "-Root", str(root), "-Exe", sys.executable)
+                self.assertEqual(run.returncode, 2, run.stdout + run.stderr)
+                self.assertIn("your own device state", run.stderr)
+                self.assertFalse((self.t / "launched.json").exists())
 
     def test_a_reused_root_is_kept_and_read_again(self) -> None:
         root = self.t / "kept-root"

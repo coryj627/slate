@@ -19,9 +19,10 @@ namespace SlateWindows.AccessibilityTests;
 /// Made on first use, so a run that launches nothing makes no folder. One
 /// root per run, shared by every journey, as the profile was: a journey that
 /// relaunches reads what the previous launch wrote. Creating it also sets the
-/// variable for this test process, so a launch that forgot
-/// <see cref="ApplyDeviceState"/> still inherits the run's root rather than
-/// the profile; the census is what keeps every launch explicit.
+/// variable for this test process, so once it exists a launch that forgot
+/// <see cref="ApplyDeviceState"/> inherits the run's root rather than the
+/// profile — but not a forgetful launch before the first use. The unit
+/// project's <c>ShellLaunchCensus</c> is what keeps every launch explicit.
 /// </remarks>
 internal static class ShellLaunch
 {

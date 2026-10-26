@@ -43,9 +43,9 @@ def fake_slate(folder: Path) -> Path:
 class GuardDeviceStateTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = Path(tempfile.mkdtemp(prefix="guard-device-state-"))
-
-    def tearDown(self) -> None:
-        shutil.rmtree(self.temp, ignore_errors=True)
+        # A cleanup, not tearDown: cleanups run last-in-first-out, so a fake
+        # Slate a case registers is killed before its folder goes.
+        self.addCleanup(shutil.rmtree, self.temp, ignore_errors=True)
 
     def kill_later(self, pid: int) -> None:
         self.addCleanup(lambda: subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True))
@@ -123,6 +123,14 @@ class GuardDeviceStateTests(unittest.TestCase):
         self.kill_later(pid)
         self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
         self.assertIn(f"pid {pid} was still running", run.stdout)
+
+    def test_an_invalid_wait_runs_nothing(self) -> None:
+        marker = self.temp / "marker.txt"
+        run = self.guard(
+            "-Profile", str(self.temp / "Slate"), "--", sys.executable, "-c", f"open(r'{marker}', 'w')",
+            extra_env={"SLATE_DEVICE_STATE_GUARD_EXIT_WAIT_SECONDS": "abc"})
+        self.assertEqual(run.returncode, 2, run.stdout + run.stderr)
+        self.assertFalse(marker.exists())
 
     def test_a_slate_already_running_is_named_and_not_blamed_on_the_run(self) -> None:
         surrogate = self.temp / "Slate"

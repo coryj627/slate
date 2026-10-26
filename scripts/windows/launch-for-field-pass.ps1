@@ -74,14 +74,13 @@ if (-not $Exe) {
 if (-not (Test-Path -LiteralPath $Exe -PathType Leaf)) {
     Stop-Launch "-Exe '$Exe' does not exist (build the Release app first)"
 }
-# Slate runs one instance per user: a launch while one is open hands its
-# vault to that instance and exits, and the pass would run on the instance's
-# own device state, the developer's profile.
-if ([IO.Path]::GetFileName($Exe) -ieq 'SlateWindows.exe') {
-    $open = @(Get-Process -Name 'SlateWindows' -ErrorAction SilentlyContinue)
-    if ($open.Count -gt 0) {
-        Stop-Launch "close Slate first: pid $(($open | ForEach-Object Id) -join ', ') would receive this launch and run it on your own device state"
-    }
+# Slate runs one instance per user and session, whatever its file is named:
+# a launch while one is open hands its vault to that instance and exits, and
+# the pass would run on the instance's own device state, the developer's
+# profile. So no launch while any Slate runs.
+$open = @(Get-Process -Name 'SlateWindows' -ErrorAction SilentlyContinue)
+if ($open.Count -gt 0) {
+    Stop-Launch "close Slate first: pid $(($open | ForEach-Object Id) -join ', ') would receive this launch and run it on your own device state"
 }
 $profileSlate = [IO.Path]::TrimEndingDirectorySeparator([IO.Path]::Combine(
     [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData), 'Slate'))
@@ -90,13 +89,18 @@ $deviceStores = @(
     'file-recents', 'sidebar-write-journal', 'logs')
 $reused = $PSBoundParameters.ContainsKey('Root')
 if ($reused) {
-    if ([string]::IsNullOrWhiteSpace($Root) -or -not (Test-Path -LiteralPath $Root -PathType Container)) {
-        Stop-Launch "-Root '$Root' is not an existing folder"
+    if ([string]::IsNullOrWhiteSpace($Root)) {
+        Stop-Launch "-Root is empty"
     }
+    # The profile first, whether or not it exists yet: a field pass never
+    # runs on the developer's own device state.
     $Root = [IO.Path]::GetFullPath($Root)
     $trimmed = [IO.Path]::TrimEndingDirectorySeparator($Root)
     if ($trimmed -ieq $profileSlate -or $trimmed.StartsWith($profileSlate + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
         Stop-Launch "-Root '$Root' is your own device state ($profileSlate); a field pass needs a root of its own"
+    }
+    if (-not (Test-Path -LiteralPath $Root -PathType Container)) {
+        Stop-Launch "-Root '$Root' is not an existing folder"
     }
     $foreign = @(Get-ChildItem -LiteralPath $Root -Force | Where-Object { $deviceStores -notcontains $_.Name })
     if ($foreign.Count -gt 0) {
