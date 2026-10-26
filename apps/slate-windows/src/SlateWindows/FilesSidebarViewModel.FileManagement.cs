@@ -579,8 +579,19 @@ internal sealed partial class FilesSidebarViewModel
         }
     }
 
-    private void RequestInlineRenameAt(string vaultPath) =>
+    private void RequestInlineRenameAt(string vaultPath)
+    {
         _pendingRenameArmPath = vaultPath;
+        DropWaitingReveal();
+    }
+
+    /// <summary>WB-6 (Codex round 4): a mutation's named row, or a delete's
+    /// focus restore, is a newer intent than a Reveal in File Tree still
+    /// waiting for its folder's rows, so the publication honours only the
+    /// mutation and the keys move once. Kept, the Reveal would take the
+    /// selection from the mutation's row and open its own note.</summary>
+    private void DropWaitingReveal() =>
+        _pendingSurfaceSelectPath = null;
 
     /// <summary>Raised at tree publication after a mutation that asked
     /// for selection/focus reconciliation — the window restores
@@ -600,6 +611,7 @@ internal sealed partial class FilesSidebarViewModel
     {
         _pendingSelectPath = vaultPath;
         _pendingTreeFocusRestore = true;
+        DropWaitingReveal();
     }
 
     /// <summary>Publication half of <see cref="RequestSelectionAt"/>:
@@ -957,12 +969,10 @@ internal sealed partial class FilesSidebarViewModel
 
     /// <summary>WB-6 (Codex round 1): a mutation's or a surface's named row
     /// takes the selection through the setter — it opens and announces as a
-    /// selection does — and on both halves: the publication keeps rows now,
-    /// so the row that held the selection may still be shown, and its
-    /// container lets go of it.</summary>
+    /// selection does, and every other selected tree row lets go of it (S1)
+    /// — and on both halves.</summary>
     private void SelectOnBothHalves(FileTreeNodeViewModel node)
     {
-        ClearOtherTreeSelections(node);
         SelectedNode = node;
         node.IsSelected = true;
     }

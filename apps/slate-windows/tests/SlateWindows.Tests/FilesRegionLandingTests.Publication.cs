@@ -824,6 +824,113 @@ public sealed partial class FilesRegionLandingTests
         Assert.Empty(later);
     });
 
+    /// <summary>Codex round 4: a Reveal in File Tree waits for a note whose
+    /// folder has not listed its rows yet, and the reader then duplicates
+    /// another note. The duplicate's named successor is the newer intent, so
+    /// the waiting Reveal is dropped: the copy takes the selection and the
+    /// keys in one move, and the revealed note is not selected, opened or
+    /// announced.</summary>
+    [Fact]
+    public void ADuplicateAfterAWaitingRevealSeatsTheCopyAndDropsTheReveal() => RunSta(() =>
+    {
+        using var host = new Host();
+        WaitForAReveal(host);
+        var opened = new List<string>();
+        FileTreeNodeViewModel original = LandOnSelected(host, "a.md", opened);
+
+        host.Sidebar.DuplicateCommand.Execute(null);
+        Settle(host);
+
+        FileTreeNodeViewModel copy = Assert.Single(host.Sidebar.RootNodes, node => node.Path is not ("a.md" or "b.md" or "docs"));
+        Assert.Same(copy, host.Sidebar.SelectedNode);
+        Assert.True(copy.IsSelected, "the copy's node does not hold the selection");
+        Assert.False(original.IsSelected, "the original still holds the selection");
+        Assert.False(RevealedRow(host).IsSelected, "the waiting Reveal selected its note after the duplicate");
+        Assert.Same(ContainerOf(host, copy), Assert.Single(host.FocusChanges));
+        Assert.DoesNotContain("docs/n.md", opened);
+        Assert.DoesNotContain(host.Announced, item => item is A11yEvent.RowSelected or A11yEvent.TreeFolderSelected);
+    });
+
+    /// <summary>Codex round 4's sibling: a note created through the sidebar
+    /// while a Reveal waits. The create's rename arm is the newer intent: the
+    /// new row takes the selection and its name field, and the revealed note
+    /// is not selected or opened.</summary>
+    [Fact]
+    public void ACreateAfterAWaitingRevealSeatsTheNewRowAndDropsTheReveal() => RunSta(() =>
+    {
+        using var host = new Host();
+        WaitForAReveal(host);
+        var opened = new List<string>();
+        _ = LandOnSelected(host, "a.md", opened);
+
+        host.Sidebar.CreateNoteCommand.Execute(null);
+        Settle(host);
+
+        FileTreeNodeViewModel created = host.Sidebar.RootNodes.Single(node => node.Path == "Untitled.md");
+        Assert.Same(created, host.Sidebar.SelectedNode);
+        Assert.True(created.IsSelected, "the new row's node does not hold the selection");
+        Assert.False(RevealedRow(host).IsSelected, "the waiting Reveal selected its note after the create");
+        Assert.DoesNotContain("docs/n.md", opened);
+    });
+
+    /// <summary>A Reveal in File Tree of <c>docs/n.md</c> asked while its
+    /// folder is collapsed and unlisted: the folder opens and lists its rows,
+    /// and the Reveal waits for a later publication.</summary>
+    private static void WaitForAReveal(Host host)
+    {
+        SeedNotes(host, ("docs/n.md", DateTime.Now), ("a.md", DateTime.Now), ("b.md", DateTime.Now));
+        host.Initialize();
+        FileTreeNodeViewModel docs = host.Sidebar.RootNodes.Single(node => node.Path == "docs");
+        Assert.False(docs.IsExpanded, "premise: the folder starts open");
+        host.Sidebar.SelectPathFromSurface("docs/n.md");
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => docs.Children.Any(node => node.Path == "docs/n.md")),
+            "premise: the folder never listed its rows");
+        Settle(host);
+        Assert.False(RevealedRow(host).IsSelected, "premise: the folder's own load seated the Reveal");
+    }
+
+    private static FileTreeNodeViewModel RevealedRow(Host host) =>
+        host.Sidebar.RootNodes.Single(node => node.Path == "docs").Children.Single(node => node.Path == "docs/n.md");
+
+    /// <summary>A delete through the dual pane lets go of the sidebar's
+    /// selection before its refresh, and the tree's own row stays selected.
+    /// A later edit outside Slate makes the sort move that row. With nothing
+    /// selected the publication keeps rows (S2), and the tree's selected row
+    /// is anchored like the reader's row (S3): its container stays, so WPF
+    /// selects no first row and nothing opens or is announced.</summary>
+    [Fact]
+    public void AfterADualPaneDeleteTheTreesSelectedRowStaysWhereTheSortWouldMoveIt() => RunSta(() =>
+    {
+        using var host = new Host();
+        SeedNotes(host, ("e.md", DateTime.Today.AddMinutes(5)), ("d.md", DateTime.Today.AddMinutes(4)), ("c.md", DateTime.Today.AddMinutes(3)), ("b.md", DateTime.Today.AddMinutes(2)), ("a.md", DateTime.Today.AddMinutes(1)));
+        host.Initialize();
+        host.Sidebar.SortMode = SidebarSortMode.ModifiedNewest;
+        Settle(host);
+        var opened = new List<string>();
+        FileTreeNodeViewModel treeRow = LandOnSelected(host, "b.md", opened);
+        TreeViewItem container = ContainerOf(host, treeRow);
+        HoldAListSelection(host, "e.md");
+        host.Sidebar.DeleteCommand.Execute(null);
+        Assert.True(PumpedDispatcher.PumpUntil(() => host.Sidebar.TrashCompletion.IsCompleted), "the delete never finished");
+        Settle(host);
+        Assert.False(File.Exists(Path.Combine(host.Root, "e.md")), "premise: the delete left the note");
+        Assert.Null(host.Sidebar.SelectedNode);
+        Assert.True(treeRow.IsSelected, "premise: the tree's row let go of its selection");
+        opened.Clear();
+        host.Announced.Clear();
+
+        RewriteOutsideSlate(host, "b.md", DateTime.Today.AddMinutes(6));
+        RescanAndRefresh(host);
+
+        Assert.Equal(["b.md", "d.md", "c.md", "a.md"], host.Sidebar.RootNodes.Select(node => node.Path));
+        Assert.Same(treeRow, host.Sidebar.RootNodes[0]);
+        Assert.Same(container, ContainerOf(host, treeRow));
+        Assert.Same(treeRow, host.Tree.SelectedItem);
+        Assert.Empty(opened);
+        Assert.DoesNotContain(host.Announced, item => item is A11yEvent.RowSelected or A11yEvent.TreeFolderSelected);
+    });
+
     /// <summary>The reader's selected note renamed through the sidebar: the
     /// rename names its successor, the publication's pending selection seats
     /// it, and the keys go to the renamed row in one move — the focus log

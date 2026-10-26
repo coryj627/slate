@@ -785,9 +785,9 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         FilterResults.Contains(row) || DualPaneFiles.Contains(row);
 
     /// <summary>WB-6 (S1): at most one tree node holds the tree's selection.
-    /// A tree row taking it — through the setter, <c>SelectSilently</c> or
-    /// <c>SelectOnBothHalves</c> — clears every other selected tree node
-    /// first, shown or hidden. WPF lets go of a realized container itself; a
+    /// A tree row taking it — through the setter (which
+    /// <c>SelectOnBothHalves</c> goes through) or <c>SelectSilently</c> —
+    /// clears every other selected tree node first, shown or hidden. WPF lets go of a realized container itself; a
     /// row the tree hides (a note a publication moved into a collapsed date
     /// group) has none, and expanded later would come back selected and
     /// reopen its note (Codex rounds 2 and 3).</summary>
