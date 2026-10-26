@@ -556,7 +556,7 @@ jobs:
 
       # The Connections model (W6-2 PR B2, B2-8) runs in its own lane below.
       # An STA fact that times out without pumping has the runtime's
-      # createdump write a heap dump of the test process into the uploaded
+      # createdump write a full dump of the test process into the uploaded
       # results folder (StaThread.DumpDirectory, #1603, #1641).
       - name: Test
         env:

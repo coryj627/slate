@@ -171,17 +171,19 @@ internal static class StaThread
     internal static string? DumpDirectory { get; set; } = Environment.GetEnvironmentVariable("SLATE_STA_DUMP_DIR");
 
     /// <summary>At most this many dumps per test process: one wedged body
-    /// fails every fact beside it, and each dump is the process's size.</summary>
+    /// fails every fact beside it, and a full dump is several times the
+    /// process's private memory.</summary>
     internal const int MaxDumps = 2;
 
     private static int s_dumps;
 
     internal static void ResetDumpsForTests() => Volatile.Write(ref s_dumps, 0);
 
-    /// <summary>How long createdump gets to start and end (#1641). It cannot
-    /// stop createdump mid-write: while createdump writes, every thread of
-    /// this process is suspended, the one waiting here included, so a write
-    /// that hangs is stopped only by the job's blame-hang timeout.</summary>
+    /// <summary>How long createdump gets to end (#1641). While it writes,
+    /// every thread of this process is suspended, the one waiting here
+    /// included, so the bound cannot stop a write midway: a wait that ends
+    /// with a dump already on disk gets a second bound, and a write that
+    /// hangs is stopped only by the job's blame-hang timeout.</summary>
     internal static readonly TimeSpan DumpBound = TimeSpan.FromMinutes(2);
 
     /// <summary>How long createdump's redirected output gets to be read to
@@ -197,7 +199,9 @@ internal static class StaThread
     /// <see cref="DumpDirectory"/>, answering the sentence that names it
     /// (empty when no folder is named or the cap is reached). The dump keeps
     /// every thread, module and byte of memory a debugger needs to walk
-    /// managed stacks (<c>dotnet-dump analyze</c>, then <c>clrstack -all</c>).</summary>
+    /// managed stacks (<c>dotnet-dump analyze</c>, then <c>clrstack -all</c>).
+    /// A failure is a sentence too: a diagnostic never changes the timeout's
+    /// path (the dispatcher's shutdown, the unwind join, the class cleanup).</summary>
     /// <remarks>#1641: the runtime's own createdump writes it, from outside
     /// this process. On Windows createdump dumps the process that started
     /// it and takes no process id (dotnet/runtime#68877, .NET 7), so it is
@@ -215,6 +219,18 @@ internal static class StaThread
         {
             return string.Empty;
         }
+        try
+        {
+            return WriteDump(folder, name);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            return $" No dump was written: {exception.GetType().Name}: {exception.Message}";
+        }
+    }
+
+    private static string WriteDump(string folder, string name)
+    {
         string path = Path.Combine(folder, $"{name}-{DateTime.UtcNow:yyyyMMddTHHmmss}.dmp");
         // createdump opens the file through an ANSI path and reads % as a
         // specifier (%p, %e, %h, %t): an ASCII path, with % doubled.
@@ -239,19 +255,8 @@ internal static class StaThread
             privateBytes = self.PrivateMemorySize64;
         }
         string memory = $"{privateBytes / (1024 * 1024)} MB private";
-        int? exitCode;
-        string said;
-        try
-        {
-            Directory.CreateDirectory(folder);
-            (exitCode, said) = (RunDumperForTests ?? RunDumper)(start);
-        }
-        catch (Exception exception) when (
-            exception is IOException or UnauthorizedAccessException or InvalidOperationException
-                or System.ComponentModel.Win32Exception)
-        {
-            return $" No dump was written: {exception.Message}";
-        }
+        Directory.CreateDirectory(folder);
+        (int? exitCode, string said) = RunDumperForTests is { } fake ? fake(start) : RunDumper(start, path);
         long length = File.Exists(path) ? new FileInfo(path).Length : 0;
         if (exitCode is null)
         {
@@ -278,32 +283,34 @@ internal static class StaThread
             : $" A full dump of the test process is at {path} ({memory}).";
     }
 
-    /// <summary>Run createdump to its end within <see cref="DumpBound"/>,
-    /// answering its exit code (null when it was stopped) and its output on
-    /// one line.</summary>
-    private static (int? ExitCode, string Said) RunDumper(System.Diagnostics.ProcessStartInfo start)
+    /// <summary>Run createdump to its end, answering its exit code (null
+    /// when it was stopped) and its output on one line.</summary>
+    private static (int? ExitCode, string Said) RunDumper(System.Diagnostics.ProcessStartInfo start, string path)
     {
         using System.Diagnostics.Process process = System.Diagnostics.Process.Start(start)
             ?? throw new InvalidOperationException("createdump did not start.");
         Task<string> output = process.StandardOutput.ReadToEndAsync();
         Task<string> errors = process.StandardError.ReadToEndAsync();
-        if (!process.WaitForExit(DumpBound))
+        if (!process.WaitForExit(DumpBound)
+            && !(File.Exists(path) && new FileInfo(path).Length > 0 && process.WaitForExit(DumpBound)))
         {
-            try
-            {
-                process.Kill(entireProcessTree: true);
-            }
-            catch (InvalidOperationException)
-            {
-                // It ended between the wait and the kill.
-            }
+            // createdump has no children; Kill returns quietly if it has
+            // just ended.
+            process.Kill();
             return (null, string.Empty);
         }
         // The reads finish once createdump has closed its end of the pipes;
         // bounded, so a stuck read cannot hold the timeout's report.
-        if (!Task.WaitAll([output, errors], DumpOutputBound))
+        try
         {
-            return (process.ExitCode, "(its output was not read to its end)");
+            if (!Task.WaitAll([output, errors], DumpOutputBound))
+            {
+                return (process.ExitCode, "(its output was not read to its end)");
+            }
+        }
+        catch (AggregateException failure)
+        {
+            return (process.ExitCode, $"(its output could not be read: {failure.InnerException?.Message})");
         }
         string said = string.Join(
             " ",

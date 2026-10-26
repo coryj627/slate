@@ -18,11 +18,13 @@ namespace SlateWindows.Tests;
 public sealed class StaThreadTests : IDisposable
 {
     private readonly string? _dumpDirectory = StaThread.DumpDirectory;
+    private readonly ITestOutputHelper _output;
 
     /// <summary>These facts time out on purpose: none of them writes CI's
-    /// minidump unless it names a folder of its own.</summary>
-    public StaThreadTests()
+    /// dump unless it names a folder of its own.</summary>
+    public StaThreadTests(ITestOutputHelper output)
     {
+        _output = output;
         StaThread.DumpDirectory = null;
         StaThread.ResetDumpsForTests();
     }
@@ -43,23 +45,36 @@ public sealed class StaThreadTests : IDisposable
     [Fact]
     public void ATimedOutBodyThatDoesNotPumpLeavesAFullDumpWhereTheFolderSays()
     {
-        string folder = Path.Combine(Path.GetTempPath(), $"sta-dump-{Guid.NewGuid():N}");
+        // Under CI's own dump folder when it names one (the runner's work
+        // folder, so a failing fact's dump is uploaded as its evidence).
+        string folder = Path.Combine(
+            Environment.GetEnvironmentVariable("SLATE_STA_DUMP_DIR") ?? Path.GetTempPath(), $"sta-dump-{Guid.NewGuid():N}");
         Directory.CreateDirectory(folder);
         StaThread.DumpDirectory = folder;
         byte[] marker = System.Security.Cryptography.RandomNumberGenerator.GetBytes(64);
         GCHandle pinned = GCHandle.Alloc(marker, GCHandleType.Pinned);
         uint bodyThread = 0;
+        bool passed = false;
         try
         {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
             Xunit.Sdk.XunitException timedOut = Assert.Throws<Xunit.Sdk.XunitException>(() => StaThread.Run(
                 () =>
                 {
                     Volatile.Write(ref bodyThread, GetCurrentThreadId());
-                    Thread.Sleep(TimeSpan.FromMilliseconds(600));
+                    // Alive until the dump is on disk: createdump suspends
+                    // this thread for the whole write, so a length is seen
+                    // only once the write has ended.
+                    var alive = System.Diagnostics.Stopwatch.StartNew();
+                    while (alive.Elapsed < TimeSpan.FromSeconds(60)
+                        && !Directory.EnumerateFiles(folder, "*.dmp").Any(file => new FileInfo(file).Length > 0))
+                    {
+                        Thread.Sleep(20);
+                    }
                 },
                 TimeSpan.FromMilliseconds(200),
-                "the body only slept",
-                unwindGrace: TimeSpan.FromSeconds(30)));
+                "the body waited for its dump",
+                unwindGrace: TimeSpan.FromSeconds(90)));
 
             // The message first: a write that fails says why (CI on 3d4aa90d
             // failed here with an empty folder and no message to read).
@@ -67,16 +82,28 @@ public sealed class StaThreadTests : IDisposable
             string dump = Assert.Single(Directory.GetFiles(folder, "*.dmp"));
             Assert.Contains($"A full dump of the test process is at {dump} (", timedOut.Message, StringComparison.Ordinal);
             Assert.Contains(" MB private", timedOut.Message, StringComparison.Ordinal);
+            _output.WriteLine($"{new FileInfo(dump).Length} bytes in {clock.Elapsed.TotalSeconds:0.0} s:{timedOut.Message}");
             Minidump read = Minidump.Read(dump, pinned.AddrOfPinnedObject(), marker.Length);
+            Assert.True(read.IsFull, "a full dump lists its memory in a Memory64ListStream");
             Assert.True(
                 read.ThreadStacks.TryGetValue(Volatile.Read(ref bodyThread), out uint stack) && stack > 0,
                 $"the dump lists the body's thread {bodyThread} with its stack");
             Assert.Equal(marker, read.Marker);
+            passed = true;
         }
         finally
         {
             pinned.Free();
-            Directory.Delete(folder, recursive: true);
+            if (passed)
+            {
+                try
+                {
+                    Directory.Delete(folder, recursive: true);
+                }
+                catch (IOException)
+                {
+                }
+            }
         }
     }
 
@@ -184,7 +211,7 @@ public sealed class StaThreadTests : IDisposable
         StaThread.RunDumperForTests = start =>
         {
             File.WriteAllBytes(start.ArgumentList[2], "MDMP"u8.ToArray());
-            return (1, "[createdump] Writing minidump FAILED 8007012B");
+            return (-1, "[createdump] MiniDumpWriteDump - Only part of a ReadProcessMemory request was completed. (0x8007012b)");
         };
         try
         {
@@ -193,7 +220,7 @@ public sealed class StaThreadTests : IDisposable
             string dump = Assert.Single(Directory.GetFiles(folder, "*.dmp"));
             Assert.Contains($"A partial dump of the test process is at {dump} (4 bytes, ", timedOut.Message, StringComparison.Ordinal);
             Assert.Contains(
-                " MB private; createdump exited 1: [createdump] Writing minidump FAILED 8007012B).",
+                " MB private; createdump exited -1: [createdump] MiniDumpWriteDump - Only part of a ReadProcessMemory request was completed. (0x8007012b)).",
                 timedOut.Message,
                 StringComparison.Ordinal);
         }
@@ -212,14 +239,14 @@ public sealed class StaThreadTests : IDisposable
         string folder = Path.Combine(Path.GetTempPath(), $"sta-dump-{Guid.NewGuid():N}");
         Directory.CreateDirectory(folder);
         StaThread.DumpDirectory = folder;
-        StaThread.RunDumperForTests = _ => (2, "[createdump] The pid argument is no longer supported");
+        StaThread.RunDumperForTests = _ => (-1, "[createdump] The pid argument is no longer supported");
         try
         {
             Xunit.Sdk.XunitException timedOut = TimeOutASleepingBody();
 
             Assert.Empty(Directory.GetFiles(folder, "*.dmp"));
             Assert.Contains(
-                "No dump was written: createdump exited 2: [createdump] The pid argument is no longer supported.",
+                "No dump was written: createdump exited -1: [createdump] The pid argument is no longer supported.",
                 timedOut.Message,
                 StringComparison.Ordinal);
         }
@@ -270,7 +297,7 @@ public sealed class StaThreadTests : IDisposable
     /// (ThreadListStream, 3), and the bytes at one address, found in the
     /// memory a heap dump lists (MemoryListStream, 5) or a full one does
     /// (Memory64ListStream, 9). Null when no range holds them whole.</summary>
-    private sealed record Minidump(IReadOnlyDictionary<uint, uint> ThreadStacks, byte[]? Marker)
+    private sealed record Minidump(IReadOnlyDictionary<uint, uint> ThreadStacks, byte[]? Marker, bool IsFull)
     {
         public static Minidump Read(string path, IntPtr address, int length)
         {
@@ -283,6 +310,7 @@ public sealed class StaThreadTests : IDisposable
             ulong wanted = (ulong)address.ToInt64();
             var threads = new Dictionary<uint, uint>();
             byte[]? marker = null;
+            bool full = false;
             for (uint index = 0; index < streams; index++)
             {
                 stream.Position = directory + (index * 12L);
@@ -318,6 +346,7 @@ public sealed class StaThreadTests : IDisposable
                 }
                 else if (type == 9)
                 {
+                    full = true;
                     ulong count = reader.ReadUInt64();
                     long data = (long)reader.ReadUInt64();
                     for (ulong range = 0; range < count && marker is null; range++)
@@ -330,7 +359,7 @@ public sealed class StaThreadTests : IDisposable
                     }
                 }
             }
-            return new Minidump(threads, marker);
+            return new Minidump(threads, marker, full);
         }
 
         private static byte[]? Within(
