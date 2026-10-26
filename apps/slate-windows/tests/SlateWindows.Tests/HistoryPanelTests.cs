@@ -709,6 +709,40 @@ public sealed class HistoryPanelTests : IDisposable
             StringComparison.Ordinal);
     }
 
+    /// <summary>WB-2: the admitted restore's start-time CAS basis is a live
+    /// MARKDOWN tab's saved hash — a <c>.base</c> tab has none (its saved
+    /// hash is null), so its restore keeps the head hash staged for the
+    /// path, and a stale one still alerts instead of reaching core as an
+    /// unconditional save.</summary>
+    [Fact]
+    public void BaseFileRestoreWithItsTabOpenKeepsTheStagedHeadHash()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        _ = SaveVersion("Guard.base", "views:\n  - type: table\n    name: One\n");
+        _ = SaveVersion("Guard.base", "views:\n  - type: table\n    name: Two\n");
+        workspace.OpenPath("Guard.base");
+        WorkspaceTabViewModel tab = Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        Assert.Equal("Guard.base", tab.Path);
+        Assert.False(tab.IsMarkdown);
+        Assert.Null(tab.SavedContentHash);
+        workspace.History.NoteChanged("Guard.base");
+        HistoryVersionRow oldest = workspace.History.DayGroups
+            .SelectMany(group => group.Rows).Where(row => !row.IsMarker).Last();
+        _ = SaveVersion("Guard.base", "views:\n  - type: table\n    name: Three\n");
+        _announced.Clear();
+        _alerts.Clear();
+
+        workspace.RequestRestoreVersion(oldest);
+
+        string alert = Assert.Single(_alerts);
+        Assert.StartsWith("Restore failed: ", alert, StringComparison.Ordinal);
+        Assert.DoesNotContain(_announced, e => e is A11yEvent.RestoredVersionFrom);
+        Assert.Contains(
+            "name: Three",
+            File.ReadAllText(Path.Combine(_root, "Guard.base")),
+            StringComparison.Ordinal);
+    }
+
     [Fact]
     public void ShowHistoryPanelAnnouncesOnlyOnAnActualSwitch()
     {

@@ -264,26 +264,44 @@ internal sealed partial class WorkspaceViewModel
             // buffer needs no change, but its missing-status and saved
             // content hash are stale bookkeeping that would raise a
             // spurious WriteConflict on the first save.
-            foreach (WorkspaceTabViewModel samePath in Groups
-                .SelectMany(group => group.Tabs)
-                .Where(candidate => candidate.IsMarkdown
-                    && string.Equals(candidate.Path, path, StringComparison.Ordinal)
-                    && !candidate.IsDirty
-                    && (!string.Equals(
-                            candidate.Text, rendered.Body, StringComparison.Ordinal)
-                        || candidate.IsMissingFromDisk)))
+            //
+            // WB-2 (#1322; contract 38 D-10): the sweep is admitted into the
+            // note's save chain, so it never reloads a tab under a save of
+            // the note that is still writing; idle, it runs in this turn as
+            // before. It re-reads what it acts on when it runs (the save may
+            // have made a tab's text equal the render, or left an unsaved
+            // change behind the saved bytes), and reloads keeping any save a
+            // tab queued while it waited — a bare ReplaceItem would retire
+            // that save's publication.
+            _ = _saves.Admit(path, _ =>
             {
-                samePath.ReplaceItem(samePath.Item);
-            }
+                foreach (WorkspaceTabViewModel samePath in Groups
+                    .SelectMany(group => group.Tabs)
+                    .Where(candidate => candidate.IsMarkdown
+                        && string.Equals(candidate.Path, path, StringComparison.Ordinal)
+                        && !candidate.IsDirty
+                        && (!string.Equals(
+                                candidate.Text, rendered.Body, StringComparison.Ordinal)
+                            || candidate.IsMissingFromDisk))
+                    .ToArray())
+                {
+                    samePath.ReloadKeepingQueuedSave();
+                }
 
-            // The Search_OpenRequested posture: a dirty or externally
-            // stale buffer no longer matches the bytes the offset was
-            // rendered from, so the caret stays put.
-            if (!tab.IsDirty && !tab.IsExternallyStale)
-            {
-                tab.EditorInteractions?.RequestCaret(
-                    TemplateCursor.CaretIndex(rendered.Body, rendered.CursorByteOffset));
-            }
+                // The Search_OpenRequested posture: a dirty or externally
+                // stale buffer no longer matches the bytes the offset was
+                // rendered from, so the caret stays put. After the sweep, so
+                // a deferred sweep's caret lands on the reloaded text.
+                if (!tab.IsDisposed
+                    && string.Equals(tab.Path, path, StringComparison.Ordinal)
+                    && !tab.IsDirty
+                    && !tab.IsExternallyStale)
+                {
+                    tab.EditorInteractions?.RequestCaret(
+                        TemplateCursor.CaretIndex(rendered.Body, rendered.CursorByteOffset));
+                }
+                return Task.CompletedTask;
+            });
         }
 
         // else: the dirty-navigation prompt refused the open (TD-3) —

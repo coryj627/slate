@@ -202,6 +202,117 @@ public sealed class NotePropertiesTests
         properties.Shutdown();
     }
 
+    /// <summary>WB-2 (WD2's answer): a header holding the saved bytes answers
+    /// at once; a publication of other bytes from a read that may predate
+    /// the save re-arms the wait and asks for a fresh read, which answers it.</summary>
+    [Fact]
+    public void WhenPublishedWaitsPastAReadOlderThanTheSaveAndAsksAgain()
+    {
+        using FixtureVault fixture = MakeVault("props-when-published-floor");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var queue = new QueueingSynchronizationContext();
+        NotePropertiesViewModel properties = UnderContext(
+            queue,
+            () => new NotePropertiesViewModel(
+                session, _ => { }, _ => { }, _ => { }, synchronousForTests: false));
+        properties.Load("props.md");
+        properties.DrainForTests().GetAwaiter().GetResult();
+        queue.Drain();
+        string h0 = properties.ContentHash;
+        Assert.NotEmpty(h0);
+        Task<HeaderRefreshOutcome> atOnce = properties.WhenPublished("props.md", h0);
+        Assert.True(atOnce.IsCompleted, "a header holding the saved bytes did not answer at once");
+        Assert.Equal(HeaderRefreshOutcome.Published, atOnce.Result);
+
+        // A refresh whose read lands before the rewrite: its publish, queued,
+        // holds H0.
+        properties.RefreshProperties();
+        properties.DrainForTests().GetAwaiter().GetResult();
+        string h1 = session.SaveText(
+            "props.md",
+            File.ReadAllText(Path.Combine(fixture.Root, "props.md")) + "\nRewritten.\n",
+            expectedContentHash: h0).NewContentHash;
+        Task<HeaderRefreshOutcome> wait = properties.WhenPublished("props.md", h1);
+        Assert.False(wait.IsCompleted);
+
+        queue.Drain();
+        Assert.False(wait.IsCompleted, "a read that may predate the save answered the wait");
+        Assert.True(properties.IsLoading, "the header did not ask for a fresh read");
+
+        properties.DrainForTests().GetAwaiter().GetResult();
+        queue.Drain();
+        Assert.True(wait.IsCompleted);
+        Assert.Equal(HeaderRefreshOutcome.Published, wait.Result);
+        Assert.Equal(h1, properties.ContentHash);
+        Assert.Equal(0, properties.PublishWaitersForTests);
+        properties.Shutdown();
+    }
+
+    /// <summary>WB-2: a wait with no refresh in flight requests one; a failed
+    /// read ends it Failed, with the header's LoadError set.</summary>
+    [Fact]
+    public void WhenPublishedEndsFailedWhenTheReadFails()
+    {
+        using FixtureVault fixture = MakeVault("props-when-published-failed");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var queue = new QueueingSynchronizationContext();
+        NotePropertiesViewModel properties = UnderContext(
+            queue,
+            () => new NotePropertiesViewModel(
+                session, _ => { }, _ => { }, _ => { }, synchronousForTests: false));
+        properties.Load("props.md");
+        properties.DrainForTests().GetAwaiter().GetResult();
+        queue.Drain();
+        File.Delete(Path.Combine(fixture.Root, "props.md"));
+
+        Task<HeaderRefreshOutcome> wait = properties.WhenPublished("props.md", "not-the-header's-hash");
+        Assert.False(wait.IsCompleted);
+        Assert.True(properties.IsLoading, "a wait with no refresh in flight did not request one");
+
+        properties.DrainForTests().GetAwaiter().GetResult();
+        queue.Drain();
+        Assert.True(wait.IsCompleted, "the failed read never ended the wait");
+        Assert.Equal(HeaderRefreshOutcome.Failed, wait.Result);
+        Assert.NotNull(properties.LoadError);
+        properties.Shutdown();
+    }
+
+    /// <summary>WB-2: a wait ends Abandoned when the header goes to another
+    /// note (its in-flight read is discarded) or shuts down, and at once on a
+    /// shut-down header or for a path it no longer shows.</summary>
+    [Fact]
+    public void WhenPublishedEndsAbandonedOnShutdownAndOnAnotherNote()
+    {
+        using FixtureVault fixture = MakeVault("props-when-published-abandoned");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var queue = new QueueingSynchronizationContext();
+        NotePropertiesViewModel properties = UnderContext(
+            queue,
+            () => new NotePropertiesViewModel(
+                session, _ => { }, _ => { }, _ => { }, synchronousForTests: false));
+        properties.Load("props.md");
+        properties.DrainForTests().GetAwaiter().GetResult();
+        queue.Drain();
+
+        properties.RefreshProperties();
+        Task<HeaderRefreshOutcome> moved = properties.WhenPublished("props.md", "a-later-hash");
+        Assert.False(moved.IsCompleted);
+        properties.Load("other.md");
+        Assert.True(moved.IsCompleted, "another note's load left the wait registered");
+        Assert.Equal(HeaderRefreshOutcome.Abandoned, moved.Result);
+        Assert.Equal(HeaderRefreshOutcome.Abandoned, properties.WhenPublished("props.md", "a-later-hash").Result);
+
+        Task<HeaderRefreshOutcome> closed = properties.WhenPublished("other.md", "a-later-hash");
+        Assert.False(closed.IsCompleted);
+        properties.Shutdown();
+        Assert.True(closed.IsCompleted, "shutdown left the wait registered");
+        Assert.Equal(HeaderRefreshOutcome.Abandoned, closed.Result);
+        Assert.Equal(HeaderRefreshOutcome.Abandoned, properties.WhenPublished("other.md", "a-later-hash").Result);
+        Assert.Equal(0, properties.PublishWaitersForTests);
+        properties.DrainForTests().GetAwaiter().GetResult();
+        queue.Drain();
+    }
+
     private static T UnderContext<T>(SynchronizationContext context, Func<T> create)
     {
         SynchronizationContext? previous = SynchronizationContext.Current;

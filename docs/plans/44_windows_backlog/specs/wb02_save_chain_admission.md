@@ -2,6 +2,17 @@
 
 Issues: Closes #1322, Closes #1325. Size S–M. Lanes: windows. AT: none (no speech changes). Wave: W1. Depends on: nothing. Parallel with: WB-1, WB-3. Decision: WD2 (answered 2026-10-21: wait; the property write waits for the header refresh).
 
+## Amended at implementation (2026-10-26)
+
+This section outranks the text below it.
+
+- **The facts run in the app's mode, not on the rescan harness.** `RescanTests.Harness` builds its workspace headless. Its serial context is not a dispatcher context, so `startInteractionBackgroundWork` resolves false. The restore's worker then runs inline, and the properties header that activation attaches is synchronous. A fact that parks either one parks the thread that has to pump. `SaveChainAdmissionTests` instead builds its own vault and a `WorkspaceViewModel(…, startInteractionBackgroundWork: true)` under `StaThread.RunPumped`, and it waits for every park by pumping. The property facts' peer save is `B.SaveAsync` with the Save command's `onSaved` and `announce: true`, because `SaveActiveCommand` returns no task to wait on.
+- **The template fact's parked save conflicts.** A template create refuses an existing note, so the only same-path tab it can sweep is a ghost. The save parked before its write is therefore a ghost's create, and the template's create takes the path first. After release that save finds the note and is refused with `NoteSaveBlocked` ("Something named Ghost.md already exists there."); it never overwrites the note. Then the sweep reloads the tab once, and the save queued behind it publishes `NoteSaved` once.
+- **The template's caret request moved into the sweep's operation**, after the reloads, so a deferred sweep's caret lands on the reloaded text. It is guarded on the landed tab: it must still be open on the path, clean, and not externally stale.
+- **The restore's continuation runs on the save chain's dispatcher** (`RunOnSaveDispatcher`, inline when already there). Main used `Application.Current`'s dispatcher, which a headless host does not have. The restore's worker is tracked by `TrackWorker` and by the bounded history drain.
+- **The D-14 line is built in one place.** `AnnounceRestoreNeedsSave` builds it, for staging and for the admitted start. Its designation is re-keyed to `WorkspaceViewModel.History.cs#WorkspaceViewModel.AnnounceRestoreNeedsSave@1` and the ledger regenerated.
+- **Found on the way, not delivered here:** a Bases grid cell edit on an open note writes its property outside the save chain, so it races an admitted save the same way. Filed as #1657.
+
 ## Goal
 
 Since #1280 a save's write runs off the dispatcher, and #1309 made the two

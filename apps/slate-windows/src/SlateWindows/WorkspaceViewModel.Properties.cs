@@ -207,11 +207,15 @@ internal sealed partial class WorkspaceViewModel
             AnnounceWriteInFlightRefusal();
             return false;
         }
-        tab.WriteProperty(
-            intent.ContentHash,
-            expectedHash => _session.SetProperty(intent.Path, key, value, expectedHash),
-            WithLeaseRelease(
-                intent.Path, AddWriteCompletion(intent.Path, sheet, key, value)));
+        string path = intent.Path;
+        AdmitPropertyWrite(
+            path,
+            () => AddAdmitted(path, sheet, key, value, freshHash: false),
+            abandoned: () =>
+            {
+                ReleasePropertyWriteLease(path);
+                sheet?.MarkAddFailed();
+            });
         return true;
     }
 
@@ -237,7 +241,7 @@ internal sealed partial class WorkspaceViewModel
     private void RetryAddWithFreshHash(
         string path, AddPropertyViewModel? sheet, string key, PropertyValue value)
     {
-        if (FindTabForPath(path) is not { IsMarkdown: true } tab)
+        if (FindTabForPath(path) is not { IsMarkdown: true })
         {
             return;
         }
@@ -246,14 +250,14 @@ internal sealed partial class WorkspaceViewModel
             AnnounceWriteInFlightRefusal();
             return;
         }
-        tab.WriteProperty(
-            null,
-            _ =>
+        AdmitPropertyWrite(
+            path,
+            () => AddAdmitted(path, sheet, key, value, freshHash: true),
+            abandoned: () =>
             {
-                string freshHash = _session.ReadNoteParts(path).ContentHash;
-                return _session.SetProperty(path, key, value, freshHash);
-            },
-            WithLeaseRelease(path, AddWriteCompletion(path, sheet, key, value)));
+                ReleasePropertyWriteLease(path);
+                sheet?.MarkAddFailed();
+            });
     }
 
     private Action<SaveReport?, VaultException?, string?> AddWriteCompletion(
@@ -430,10 +434,10 @@ internal sealed partial class WorkspaceViewModel
             PropertyValue value = PropertyValueCodec.Encode(dispatched);
             write = expectedHash => _session.SetPropertyByIdentity(path, row.KeyIdentity, value, expectedHash);
         }
-        tab.WriteProperty(
-            row.ContentHash,
-            write,
-            WithLeaseRelease(path, PropertyWriteCompletion(path, row, deleted, dispatched)));
+        AdmitPropertyWrite(
+            path,
+            () => RowWriteAdmitted(path, row, deleted, dispatched, write, freshHash: false),
+            abandoned: () => EndRowWrite(path, row));
     }
 
     /// <summary>The shared refusal gates. True = refused (announced
@@ -459,6 +463,15 @@ internal sealed partial class WorkspaceViewModel
             AnnounceWriteInFlightRefusal();
             return true;
         }
+        return RefuseHeldPropertyWrite(tab, row, deleted);
+    }
+
+    /// <summary>WB-2: the refusal gates without the in-flight gate, which an
+    /// admitted write's own lease would trip — the dirty tab, then a stale
+    /// tab or a row hash that is not the tab's saved hash.</summary>
+    private bool RefuseHeldPropertyWrite(
+        WorkspaceTabViewModel tab, PropertyRowViewModel row, bool deleted)
+    {
         if (tab.IsDirty)
         {
             AnnounceDirtyTabPropertyRefusal(tab);
@@ -497,7 +510,7 @@ internal sealed partial class WorkspaceViewModel
     /// explicit choice.</summary>
     private void RetryPropertyEditWithFreshHash(PropertyRowViewModel row, bool deleted)
     {
-        if (FindTabForPath(row.OwnerPath) is not { IsMarkdown: true } tab
+        if (FindTabForPath(row.OwnerPath) is not { IsMarkdown: true }
             || (!deleted && !row.ValidateForCommit())
             || row.WriteInFlight)
         {
@@ -529,10 +542,10 @@ internal sealed partial class WorkspaceViewModel
                 return _session.SetPropertyByIdentity(path, row.KeyIdentity, value, freshHash);
             };
         }
-        tab.WriteProperty(
-            null,
-            write,
-            WithLeaseRelease(path, PropertyWriteCompletion(path, row, deleted, dispatched)));
+        AdmitPropertyWrite(
+            path,
+            () => RowWriteAdmitted(path, row, deleted, dispatched, write, freshHash: true),
+            abandoned: () => EndRowWrite(path, row));
     }
 
     /// <summary>Reload-from-disk resolution: the outcome is spoken
@@ -733,5 +746,368 @@ internal sealed partial class WorkspaceViewModel
             }
         }
         return null;
+    }
+
+    // ---- WB-2: admitted property writes (#1325; WD2, answered 2026-10-21) ----
+    //
+    // A property write rewrites the note's file, so it joins the note's save
+    // chain: it never writes beside a save admitted before it, and a save
+    // requested after it waits for its publication. A write admitted behind
+    // a save also waits until a header has re-read the saved bytes and takes
+    // its CAS token from that fresh read — the header stays the single hash
+    // authority (contract 4) — and re-validates the edited row there. The
+    // lease is held from dispatch to the operation's end. Every outcome that
+    // writes nothing releases the lease and the in-flight flag BEFORE it
+    // speaks or opens the conflict dialog (Keep Mine re-acquires the lease
+    // and is admitted behind this operation), then ends the operation; a
+    // closed coordinator counts as abandoned at every step.
+
+    /// <summary>Admit <paramref name="operation"/> into the note's chain.
+    /// <paramref name="abandoned"/> runs when the operation never ran: the
+    /// coordinator was closed when it was admitted, or closed before its
+    /// turn came.</summary>
+    private void AdmitPropertyWrite(string path, Func<Task> operation, Action abandoned)
+    {
+        bool started = false;
+        Task<bool> admitted = _saves.Admit(path, _ =>
+        {
+            started = true;
+            return operation();
+        });
+        if (admitted.IsCompleted)
+        {
+            if (!started)
+            {
+                abandoned();
+            }
+            return;
+        }
+        admitted.ContinueWith(
+            _ => _saves.Dispatcher.BeginInvoke(
+                System.Windows.Threading.DispatcherPriority.Normal,
+                new Action(() =>
+                {
+                    if (!started)
+                    {
+                        abandoned();
+                    }
+                })),
+            CancellationToken.None,
+            TaskContinuationOptions.None,
+            TaskScheduler.Default);
+    }
+
+    private void ReleasePropertyWriteLease(string path) =>
+        _ = _propertyWritePaths.Remove(path);
+
+    /// <summary>A row write that writes nothing: the lease and the row's
+    /// in-flight flag go before anything is spoken.</summary>
+    private void EndRowWrite(string path, PropertyRowViewModel row)
+    {
+        ReleasePropertyWriteLease(path);
+        row.WriteInFlight = false;
+    }
+
+    /// <summary>The header of the first open tab on <paramref name="path"/>
+    /// that shows it — every same-path header reads the same bytes.</summary>
+    private NotePropertiesViewModel? HeaderFor(string path) =>
+        Groups.SelectMany(group => group.Tabs)
+            .Where(tab => string.Equals(tab.Path, path, StringComparison.Ordinal))
+            .Select(tab => tab.Properties)
+            .FirstOrDefault(header => header is not null
+                && string.Equals(header.Path, path, StringComparison.Ordinal));
+
+    /// <summary>Run <paramref name="next"/> with the wait's outcome on the
+    /// dispatcher the save chain runs on: in this turn when the wait is
+    /// already over (an idle chain), else posted there when it ends.</summary>
+    private void AfterHeaderWait(
+        Task<HeaderRefreshOutcome> wait, Action<HeaderRefreshOutcome> next, Action<Exception> fault)
+    {
+        void Run()
+        {
+            try
+            {
+                next(wait.Result);
+            }
+            catch (Exception exception)
+            {
+                fault(exception);
+            }
+        }
+        if (wait.IsCompleted)
+        {
+            Run();
+            return;
+        }
+        wait.ContinueWith(
+            _ => _saves.Dispatcher.BeginInvoke(
+                System.Windows.Threading.DispatcherPriority.Normal,
+                new Action(Run)),
+            CancellationToken.None,
+            TaskContinuationOptions.None,
+            TaskScheduler.Default);
+    }
+
+    /// <summary>A write completion that ends the operation once it has run
+    /// (published, or its failure spoken).</summary>
+    private static Action<SaveReport?, VaultException?, string?> EndingWith(
+        Action<SaveReport?, VaultException?, string?> completion, TaskCompletionSource done) =>
+        (report, failure, postFailureDiskHash) =>
+        {
+            try
+            {
+                completion(report, failure, postFailureDiskHash);
+            }
+            catch (Exception exception)
+            {
+                _ = done.TrySetException(exception);
+                return;
+            }
+            _ = done.TrySetResult();
+        };
+
+    /// <summary>The admitted row write (set or delete). A first write waits
+    /// for the header; a Keep Mine retry (<paramref name="freshHash"/>)
+    /// does not — admitted behind the save, its worker-side disk read
+    /// already sees the saved bytes.</summary>
+    private Task RowWriteAdmitted(
+        string path,
+        PropertyRowViewModel row,
+        bool deleted,
+        PropertyDraft dispatched,
+        Func<string?, SaveReport> write,
+        bool freshHash)
+    {
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            if (_saves.IsClosed || FindTabForPath(path) is not { IsMarkdown: true } tab)
+            {
+                EndRowWrite(path, row);
+                done.TrySetResult();
+                return done.Task;
+            }
+            if (tab.IsDirty)
+            {
+                // A taken-back edit is an unsaved change once the save it
+                // waited for published.
+                EndRowWrite(path, row);
+                AnnounceDirtyTabPropertyRefusal(tab);
+                done.TrySetResult();
+                return done.Task;
+            }
+            if (freshHash)
+            {
+                StartRowWrite(tab, path, row, row, deleted, dispatched, write, expectedHash: null, done);
+                return done.Task;
+            }
+            if (row.Owner is not { } owner)
+            {
+                EndRowWrite(path, row);
+                done.TrySetResult();
+                return done.Task;
+            }
+            AfterHeaderWait(
+                owner.WhenPublished(path, tab.SavedContentHash),
+                outcome => RowWriteAfterHeaderWait(path, row, owner, deleted, dispatched, write, outcome, done),
+                exception =>
+                {
+                    EndRowWrite(path, row);
+                    _ = done.TrySetException(exception);
+                });
+        }
+        catch (Exception exception)
+        {
+            EndRowWrite(path, row);
+            _ = done.TrySetException(exception);
+        }
+        return done.Task;
+    }
+
+    private void RowWriteAfterHeaderWait(
+        string path,
+        PropertyRowViewModel row,
+        NotePropertiesViewModel owner,
+        bool deleted,
+        PropertyDraft dispatched,
+        Func<string?, SaveReport> write,
+        HeaderRefreshOutcome outcome,
+        TaskCompletionSource done)
+    {
+        if (_saves.IsClosed
+            || outcome == HeaderRefreshOutcome.Abandoned
+            || FindTabForPath(path) is not { IsMarkdown: true } tab)
+        {
+            // The header and the draft in it are gone: nothing to say (the
+            // row seam's "finds no tab and does nothing" posture).
+            EndRowWrite(path, row);
+            done.TrySetResult();
+            return;
+        }
+        if (outcome == HeaderRefreshOutcome.Failed)
+        {
+            EndRowWrite(path, row);
+            _announce(new A11yEvent.PropertyEditFailed(owner.LoadError ?? "unknown failure"));
+            done.TrySetResult();
+            return;
+        }
+        // The held gates on the fresh header: the row it rebuilt for the
+        // edited key (carrying the reader's draft, parked by key), its hash
+        // the tab's saved hash, and its committed value the one the edit
+        // was made against.
+        PropertyRowViewModel? fresh = owner.Rows.FirstOrDefault(candidate =>
+            string.Equals(candidate.KeyIdentity, row.KeyIdentity, StringComparison.Ordinal));
+        bool writes = fresh is not null
+            && !tab.IsDirty
+            && !tab.IsExternallyStale
+            && string.Equals(fresh.ContentHash, tab.SavedContentHash, StringComparison.Ordinal)
+            && PropertyDraft.ValueEquals(fresh.CommittedBaseline, row.CommittedBaseline);
+        if (!writes)
+        {
+            EndRowWrite(path, row);
+            if (fresh is null)
+            {
+                // The saved bytes removed the key: the committed-from row's
+                // pre-save hash fails the hash gate.
+                if (!RefuseHeldPropertyWrite(tab, row, deleted))
+                {
+                    AnnouncePropertyConflict(tab, row, deleted);
+                }
+            }
+            else if (!RefuseHeldPropertyWrite(tab, fresh, deleted))
+            {
+                // The saved bytes changed the edited key's value.
+                AnnouncePropertyConflict(tab, fresh, deleted);
+            }
+            done.TrySetResult();
+            return;
+        }
+        StartRowWrite(tab, path, row, fresh!, deleted, dispatched, write, fresh!.ContentHash, done);
+    }
+
+    /// <summary>Dispatch the write on <paramref name="target"/>, the row the
+    /// header shows now; the committed-from row is no longer in flight.</summary>
+    private void StartRowWrite(
+        WorkspaceTabViewModel tab,
+        string path,
+        PropertyRowViewModel committedFrom,
+        PropertyRowViewModel target,
+        bool deleted,
+        PropertyDraft dispatched,
+        Func<string?, SaveReport> write,
+        string? expectedHash,
+        TaskCompletionSource done)
+    {
+        committedFrom.WriteInFlight = false;
+        target.WriteInFlight = true;
+        _saves.TrackWorker(tab.WriteProperty(
+            expectedHash,
+            write,
+            WithLeaseRelease(path, EndingWith(PropertyWriteCompletion(path, target, deleted, dispatched), done))));
+    }
+
+    /// <summary>The admitted add. A first add waits for a header and adds on
+    /// its fresh hash; a Keep Mine retry (<paramref name="freshHash"/>)
+    /// writes on the disk hash its worker reads.</summary>
+    private Task AddAdmitted(
+        string path, AddPropertyViewModel? sheet, string key, PropertyValue value, bool freshHash)
+    {
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void EndUnwritten(Action? speak = null)
+        {
+            ReleasePropertyWriteLease(path);
+            speak?.Invoke();
+            done.TrySetResult();
+        }
+        try
+        {
+            if (_saves.IsClosed || FindTabForPath(path) is not { IsMarkdown: true } tab)
+            {
+                EndUnwritten(() => sheet?.MarkAddFailed());
+                return done.Task;
+            }
+            if (tab.IsDirty)
+            {
+                EndUnwritten(() =>
+                {
+                    AnnounceDirtyTabPropertyRefusal(tab);
+                    sheet?.MarkAddFailed();
+                });
+                return done.Task;
+            }
+            if (freshHash)
+            {
+                _saves.TrackWorker(tab.WriteProperty(
+                    null,
+                    _ =>
+                    {
+                        string fresh = _session.ReadNoteParts(path).ContentHash;
+                        return _session.SetProperty(path, key, value, fresh);
+                    },
+                    WithLeaseRelease(path, EndingWith(AddWriteCompletion(path, sheet, key, value), done))));
+                return done.Task;
+            }
+            if (HeaderFor(path) is not { } header)
+            {
+                EndUnwritten(() => sheet?.MarkAddFailed());
+                return done.Task;
+            }
+            AfterHeaderWait(
+                header.WhenPublished(path, tab.SavedContentHash),
+                outcome =>
+                {
+                    if (_saves.IsClosed
+                        || outcome == HeaderRefreshOutcome.Abandoned
+                        || FindTabForPath(path) is not { IsMarkdown: true } live)
+                    {
+                        EndUnwritten(() => sheet?.MarkAddFailed());
+                        return;
+                    }
+                    if (outcome == HeaderRefreshOutcome.Failed)
+                    {
+                        EndUnwritten(() =>
+                        {
+                            _announce(new A11yEvent.PropertyEditFailed(header.LoadError ?? "unknown failure"));
+                            sheet?.MarkAddFailed();
+                        });
+                        return;
+                    }
+                    if (live.IsDirty)
+                    {
+                        EndUnwritten(() =>
+                        {
+                            AnnounceDirtyTabPropertyRefusal(live);
+                            sheet?.MarkAddFailed();
+                        });
+                        return;
+                    }
+                    // The add's gates against the fresh header: its hash the
+                    // tab's saved hash, and the key not added by the saved
+                    // bytes (ordinal, the sheet's own collision rule).
+                    if (live.IsExternallyStale
+                        || !string.Equals(live.SavedContentHash, header.ContentHash, StringComparison.Ordinal)
+                        || header.TopLevelKeys.Contains(key, StringComparer.Ordinal))
+                    {
+                        EndUnwritten(() => AnnounceAddConflict(path, sheet, key, value));
+                        return;
+                    }
+                    string expected = header.ContentHash;
+                    _saves.TrackWorker(live.WriteProperty(
+                        expected,
+                        expectedHash => _session.SetProperty(path, key, value, expectedHash),
+                        WithLeaseRelease(path, EndingWith(AddWriteCompletion(path, sheet, key, value), done))));
+                },
+                exception =>
+                {
+                    ReleasePropertyWriteLease(path);
+                    _ = done.TrySetException(exception);
+                });
+        }
+        catch (Exception exception)
+        {
+            ReleasePropertyWriteLease(path);
+            _ = done.TrySetException(exception);
+        }
+        return done.Task;
     }
 }
