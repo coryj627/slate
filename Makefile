@@ -17,7 +17,7 @@ help:
 	@echo "  make fmt-check     cargo fmt --check (fails if unformatted)"
 	@echo "  make clippy        cargo clippy --all-targets --workspace -- -D warnings"
 	@echo "  make bench-check   cargo bench --no-run (compile benches without executing)"
-	@echo "  make check-license-headers   verify every tracked .rs/.swift carries an SPDX header"
+	@echo "  make check-license-headers   verify every tracked .rs/.swift/.cs carries the repository's SPDX line"
 	@echo "  make ci            fmt-check + clippy + test + bench-check + check-license-headers"
 	@echo "  make regenerate-bindings   rebuild slate-uniffi + regenerate/stage Swift FFI bindings"
 	@echo "  make regenerate-bindings-windows   rebuild slate-uniffi + regenerate the C# FFI bindings"

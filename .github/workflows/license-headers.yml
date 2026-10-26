@@ -1,9 +1,10 @@
 # License-header guard.
 #
-# Fails any PR that introduces a tracked .rs or .swift file without an
-# `SPDX-License-Identifier` line in its first 20 lines. The fixer is
-# `scripts/apply-license-header.py` — idempotent, safe to re-run. See
-# issue #266 for the rationale and the chosen header format.
+# Fails any PR whose tracked .rs, .swift or .cs files do not all carry the
+# repository's `SPDX-License-Identifier: AGPL-3.0-or-later` line in their
+# first 20 lines; another identifier fails unless the script names that file
+# (#1618). The fixer is `scripts/apply-license-header.py` — idempotent, safe
+# to re-run. See issue #266 for the rationale and the chosen header format.
 
 name: License headers
 
@@ -50,7 +51,7 @@ jobs:
     name: SPDX header present on every .rs/.swift
     needs: [changes]
     if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
-    # No native toolchain or paid cache needed: bash + grep + git suffice.
+    # No native toolchain or paid cache needed: bash and git suffice.
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

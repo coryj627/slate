@@ -134,9 +134,10 @@ CI mirrors these; running them locally avoids a round-trip
 
 - **`make ci`** — `fmt-check` + `clippy` (warnings are errors) + `test` +
   `bench-check` + license-header check. Run this before every push.
-- **License headers.** Every tracked `.rs`/`.swift`/`.cs` file needs an
-  `SPDX-License-Identifier` header. Add them with
-  `python3 scripts/apply-license-header.py`.
+- **License headers.** Every tracked `.rs`/`.swift`/`.cs` file needs the
+  repository's header, whose `// SPDX-License-Identifier: AGPL-3.0-or-later`
+  line the check requires exactly, with no other SPDX line in the first 20
+  lines. Add them with `python3 scripts/apply-license-header.py`.
 - **Accessibility (Mac frontend).** SwiftUI changes are checked by
   `a11y-check` (the [a11y-check workflow](.github/workflows/a11y-check.yml)
   enforces a minimum score). Accessibility is a hard requirement here, not a

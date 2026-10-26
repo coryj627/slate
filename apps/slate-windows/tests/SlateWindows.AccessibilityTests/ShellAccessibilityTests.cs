@@ -9732,10 +9732,9 @@ public sealed partial class ShellAccessibilityTests
             // the first. The seat the outline left is "Unfiled thought";
             // Up reads back to "Image: architecture diagram" and then to
             // "jsoncanvas.org" (R-12's reading-order move). Their marks are
-            // read back from the OUTLINE rather than from the cards' peers:
-            // the board's peer tree is not refreshed after an install, so a
-            // peer outside the board's first child list cannot be reached
-            // through UIA.
+            // read back from the OUTLINE: R-12's marks are the outline's own
+            // status column; the board's children are refreshed per install
+            // (#1261, c247b865).
             AutomationElement visualChoice = WaitForElement(
                 window, "CanvasShowVisual", TimeSpan.FromSeconds(10));
             visualChoice.AsRadioButton().IsChecked = true;

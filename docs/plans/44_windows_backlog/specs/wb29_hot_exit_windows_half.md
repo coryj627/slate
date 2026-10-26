@@ -20,6 +20,8 @@ mirroring the design's schema, its persistent-identity key and its
 weak-root policy, the FFI calls become local file IO, and
 `parity_matrix.md` records the parity debt).
 
+**Owner's call of 2026-10-26** (plan §3.1, WD20 and "Review calls") outranks this spec where they differ: the shared hot-exit design and the core store are plan 44's WB-29a, not plan 43 PR 29's — read every "PR 29's design" or "PR 29's store" below as WB-29a's; WB-29 starts after WB-29a's store is on `main`; and a vault whose root identity is weak (FAT32, exFAT) gets no hot exit: closing falls back to today's prompt with core's reason.
+
 ## Goal
 
 Closing the main window or quitting Slate on Windows with unsaved edits

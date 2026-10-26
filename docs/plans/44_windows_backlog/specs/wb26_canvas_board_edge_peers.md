@@ -2,6 +2,8 @@
 
 Issues: Closes #1277. Size L (design first). Lanes: windows + FlaUI (shell gate), rust, swift (compile) — all three under EITHER D-A answer, as plan §5 lists them: the recommended answer changes an FFI record (Swift literals edited), the alternative exports a new core function (both bindings regenerated, the Swift binding compiles unchanged). AT: NVDA (full pass). Wave: W9. Depends on: WB-13 (last on `Canvas/CanvasRendererView.cs` and `CanvasOutlineView.cs`, after plan 43 PR 32, §6). Parallel with: WB-25, WB-27. Decision: none in the plan; the design section below carries two choices for the reviewer.
 
+**Owner's call of 2026-10-26** (plan §3.1, "Review calls") outranks this spec where they differ: WB-26 does not wait for plan 43 PR 32 (#1370) — they share no Windows file; only core's `a11y.rs` and `lib.rs` may need a rebase.
+
 ## Goal
 
 Locked contract 34 D5 says a labelled edge is a peer in the board's name

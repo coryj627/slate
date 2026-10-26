@@ -393,19 +393,24 @@ The other eight leave the mac plan:
 
 Of the 67:
 - **#1474 can close now that #1518 has merged (RD18).** Its leftovers
-  are #1513 on macOS and Linux, and 22W and #1475 on Windows.
+  are #1513 on macOS and Linux, and 22W and #1475 on Windows. 22W and
+  #1475's identity half are plan 44's WB-28 (WD1).
 - **Four go on a watch list**, because each is blocked by an upstream
   release:
   - #480: a registry release of citationberg;
   - #998: a uniffi-bindgen-cs build for uniffi 0.32;
   - #1457: MathCAT taking zip 9. The audit exception's review-by date
-    is **2026-11-17**, so it needs renewing or upgrading before then;
+    is **2026-11-17**, so it needs renewing or upgrading before then
+    (*2026-10-26:* done — #1537 moved to MathCAT 0.7.7, on zip 9, and
+    the issue is closed; no exception remains);
   - #1493: notify 9.0.0.
 - **One is a feature:** #1414 (copy a canvas media card). It goes to a
   milestone (RD14).
 - **The other 61 fall into the 31 PRs below.** They close 59 issues;
   #940 moves to Milestone W after 22b, and #1323 is narrowed to its
-  Windows items.
+  Windows items. *Since 2026-10-26* (plan 44's adoption, WD1), the
+  rows whose Wave cell points at plan 44 have their Windows or core
+  part delivered there, and PR 31 is retired.
 
 What matters most:
 - **Security:** canvas link and file cards hand untrusted targets to the
@@ -434,34 +439,34 @@ design-first.
 | 26 | Canvas: untrusted link and file targets (one link allowlist shared with notes and the reading view; containment that resolves symlinks against the vault root) | #1367 #1368 #1369 | M | swift, a11y | W1 |
 | 27 | Editor: an undo or redo before the first highlight reaches the buffer | #1503 | S–M | swift, a11y/VO | W1 |
 | 28 | Tests stop writing the developer's files; two flakes; the benchmark command | #1423 #1408 #1432 (Refs #1323) | S–M | swift | W1, slot 3 first |
-| 29 | Unsaved buffers survive closing the window, quitting and a crash, and come back unsaved when the vault reopens (hot exit; explicit save stands; design first, both hosts in scope) | #1525 #1402 | L (design first) | rust, swift, a11y/VO, windows | W1, slot 3 after 29a (design), then sized by its design (RD1) |
+| 29 | Unsaved buffers survive closing the window, quitting and a crash, and come back unsaved when the vault reopens (hot exit; explicit save stands; design first, both hosts in scope) | #1525 #1402 | L (design first) | rust, swift, a11y/VO, windows | W1, slot 3 after 29a (design), then sized by its design (RD1) → plan 44 WB-29a (not PR 29a above) for the shared design and the core store (the owner's call, 2026-10-26), and WB-29 for the Windows half; the mac half stays here and waits for WB-29a's core store on `main`, plan 44 W11 (WD1) |
 | 29a | Close Vault with one dirty note speaks its close line | #1403 | S | swift, a11y/VO | W1, slot 3 after 28 |
-| 22c | The provider's reads beneath the held root; the re-arm switched on; the FFI doc | #1513 #1510 | L | rust, swift, windows | W2, first |
+| 22c | The provider's reads beneath the held root; the re-arm switched on; the FFI doc | #1513 #1510 | L | rust, swift, windows | W2, first → plan 44 WB-17 for #1510's doc sentence; the code stays here (WD1) |
 | 30 | Palette and Quick Open keyboard (bare arrows, the key monitors' window gate, hover on open, the field hint) | #1379 #1380 #1413 #1382 | M | swift, a11y/VO (+ rust, windows with RD7) | W2 |
-| 21b | Windows host of the change feed | #1293 | L | windows | W2 (Windows files only) |
+| 21b | Windows host of the change feed | #1293 | L | windows | W2 (Windows files only) → plan 44 WB-10 (WD1) |
 | 22b | Mac host half of the descriptor-relative session | #940 (Refs) | S–M | swift, a11y | W3, after 22c |
-| 31 | Core: another session's link changes reach the graph | #1519 | S–M | rust, swift, windows | W3, after 22b in its slot; ideally before 21b's graph facts |
+| 31 | Retired on plan 44's adoption (WD1): #1519 is core-only and is WB-10a | #1519 | — | — | — |
 | 32 | Canvas outline: VoiceOver's press, and the file-card hint by target | #1411 #1370 | S–M | swift, a11y/VO (+ rust, windows with RD7) | W3 |
 | 33 | Canvas: failure speech through core, reload selection, connection paint order | #1364 #1363 #1365 | M | swift, a11y/VO | W3, after 26; needs RD2, RD3, RD8 |
 | 34 | Identity-checked structural undo (#1125 decision 2) | #1469 | L | rust, swift, windows | W4, after 22c |
 | 35 | Bases: failure speech, pane targeting, unreadable YAML | #1399 #1400 #1398 | M | rust, swift, a11y/VO, windows | W4; needs RD5, RD8 |
 | 36 | Sidebar: selection after mutations, shortcut verbs never silent, a race-safe lock | #1407 #1409 #1405 #1521 | M | swift, a11y/VO | W4 |
-| 37 | Core test infrastructure: the real-Trash facts in the mac lane, a poison-proof fault guard | #1479 #1481 (Refs #1323) | S–M | rust (mac lane) | W5, slot 1 first |
-| 38 | No-replace renames on weak volumes (exFAT, SMB, NFS, FAT32) | #1434 #1470 | M | rust, swift | W5, slot 1 after 37 and 34; needs RD9 |
+| 37 | Core test infrastructure: the real-Trash facts in the mac lane, a poison-proof fault guard | #1479 #1481 (Refs #1323) | S–M | rust (mac lane) | W5, slot 1 first → plan 44 WB-18 for #1481; #1479 stays here (WD1) |
+| 38 | No-replace renames on weak volumes (exFAT, SMB, NFS, FAT32) | #1434 #1470 | M | rust, swift | W5, slot 1 after 37 and 34; needs RD9 → plan 44 WB-27 for the Windows proof (WD1) |
 | 39 | Landed-but-unindexed creates, and the caveat's punctuation | #1394 #1395 | S–M | rust, swift, a11y, windows | W5, after 33 |
 | 40 | Open-scan and rescan follow-ups | #1462 #1446 | M | swift, a11y | W5 (diagnose #1462 with one fact first) |
-| 41 | Trash: verify what arrived (T2) | #1468 | L | rust, swift, windows | W6, after 37 and 34; needs the `~/.Trash` read check on the owner's unlocked Mac |
+| 41 | Trash: verify what arrived (T2) | #1468 | L | rust, swift, windows | W6, after 37 and 34; needs the `~/.Trash` read check on the owner's unlocked Mac → plan 44 WB-30 for the shared outcome contract and the Windows back end; the macOS Rust half and the mac host stay here (WD1) |
 | 42 | R-9 re-sync, complete on mac (canvas and base tabs, Bases, dashboards, an open Quick Open, the filter, feed renames of every tab kind) | #1445 #1416 | L | swift, a11y | W6, after 30, 33, 35, 36 and 40 |
 | 43 | Search overlay: the selection model, and the stray phrase | #1377 #1497 | M | swift, a11y/VO | W6; needs RD4 |
-| 44 | Core: bounded link resolution, the rest | #1427 #1485 #1486 | M | rust, swift | W7, slot 1 |
-| 45 | Core: the create heal without whole-table reads | #1426 | M | rust, swift, windows | W7, slot 1 after 44 |
-| 46 | Embeds: live-buffer keys survive; base-card titles from core | #1393 #1388 #1390 | M | rust, swift, a11y/VO, windows | W7, after 35, 42 and 39 |
-| 47 | Generated register tables back in step, and checked in CI | #1376 #1386 | S | windows | W7 (docs; any free slot) |
+| 44 | Core: bounded link resolution, the rest | #1427 #1485 #1486 | M | rust, swift | W7, slot 1 → plan 44 WB-18 (WD1) |
+| 45 | Core: the create heal without whole-table reads | #1426 | M | rust, swift, windows | W7, slot 1 after 44 → plan 44 WB-19 (WD1) |
+| 46 | Embeds: live-buffer keys survive; base-card titles from core | #1393 #1388 #1390 | M | rust, swift, a11y/VO, windows | W7, after 35, 42 and 39 → plan 44 WB-17 for #1390's text; #1393 and #1388 stay here (WD1) |
+| 47 | Generated register tables back in step, and checked in CI | #1376 #1386 | S | windows | W7 (docs; any free slot) → plan 44 WB-17 (WD1) |
 | 48 | Bases: queries off the main actor | #1436 | M–L | swift, a11y/VO | W8, after 35 and 42; needs RD10 |
 | 49 | Static accessibility: a11y-check 0.7.0, and doubled names | #1371 #1372 | M | swift, a11y/VO (spot) | W8; needs RD11 |
 | 50 | Organization facts on the async seam | #1490 | M | swift | W8, after 36 and 42 |
 | 51 | Reading-view links VoiceOver can press on any SDK | #1460 | L (spike first) | swift, a11y/VO on both builds | W9, and before any move to an Xcode project or `--build-system native`; needs RD12 |
-| 52 | Code preamble verbosity: remove the two modes that do nothing, on both hosts (the real modes are #1526) | #1389 | S | swift, a11y/VO, windows | W9 (RD6) |
+| 52 | Code preamble verbosity: remove the two modes that do nothing, on both hosts (the real modes are #1526) | #1389 | S | swift, a11y/VO, windows | W9 (RD6) → plan 44 WB-21 for #1389's Windows half (WD1) |
 | 53 | Editor ⌘-click activates in the current tab by default, with a setting for a new tab, honoured by Windows' Ctrl+click too | #1466 | M | swift, a11y, windows | W9, after 27 (RD13) |
 
 **Waves.** At most three delivery agents run at once
@@ -471,13 +476,13 @@ and core's `a11y.rs` and corpus (independent variants).
 
 | Wave | Slot 1 | Slot 2 | Slot 3 |
 |---|---|---|---|
-| W1 | 26 | 27 | 28, then 29a, then 29 (design) |
-| W2 | 22c | 30 | 21b |
-| W3 | 22b, then 31 | 32 | 33 |
+| W1 | 26 | 27 | 28, then 29a (29's design and core store are plan 44's WB-29a since 2026-10-26; 29's mac half waits for that store on `main`, plan 44 W11) |
+| W2 | 22c | 30 | 21b (moved: plan 44 WB-10) |
+| W3 | 22b (31 is retired: plan 44's WB-10a, 2026-10-26) | 32 | 33 |
 | W4 | 34 | 35 | 36 |
 | W5 | 37, then 38 | 39 | 40 |
 | W6 | 41 | 42 | 43 |
-| W7 | 44, then 45 | 46 | 47 |
+| W7 | 44, then 45 (both moved: plan 44 WB-18, WB-19) | 46 | 47 (moved: plan 44 WB-17) |
 | W8 | 48 | 49 | 50 |
 | W9 | 51 | 52 | 53 |
 
@@ -494,7 +499,7 @@ and core's `a11y.rs` and corpus (independent variants).
 | Contract 38's generated ledger | 39 and 46 kept apart |
 
 When an S PR frees its slot early, the next PR in the same row takes
-it, or 47 does.
+it.
 
 **VoiceOver passes run one at a time,** under the shared UI lock on the
 owner's unlocked Mac. W1 has three (26, 27 and 29a); plan for them to
@@ -543,9 +548,12 @@ needed by the wave named.
     RD1), #1526 (core preamble verbosity, RD6) and #1527 (the rest of
     the host's failure text, RD8).
 - **The queue stays paused** until the owner says to start W1, which
-  is 26, 27, 28, 29a, then 29's design.
+  is 26, 27, 28, then 29a (since 2026-10-26 29's design and core store
+  are plan 44's WB-29a; 29 keeps the mac half, which waits for that
+  store on `main`, plan 44 W11).
 - **Dated item:** the zip exception (#1457) must be renewed or upgraded
-  before 2026-11-17.
+  before 2026-11-17. *2026-10-26:* no longer dated — #1537 moved to
+  MathCAT 0.7.7, on zip 9, and the issue is closed.
 
 ### 11.7 Owner answers (2026-10-19)
 
