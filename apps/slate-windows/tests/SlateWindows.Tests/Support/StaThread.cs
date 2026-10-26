@@ -165,81 +165,174 @@ internal static class StaThread
         return result;
     }
 
-    /// <summary>The folder a timed-out body's minidump goes to (#1603): CI's
+    /// <summary>The folder a timed-out body's dump goes to (#1603): CI's
     /// app job names its uploaded results folder through
     /// <c>SLATE_STA_DUMP_DIR</c>; null writes none.</summary>
     internal static string? DumpDirectory { get; set; } = Environment.GetEnvironmentVariable("SLATE_STA_DUMP_DIR");
 
-    /// <summary>At most this many minidumps per test process: one wedged body
-    /// fails every fact beside it, and each dump is the process's size.</summary>
+    /// <summary>At most this many dumps per test process: one wedged body
+    /// fails every fact beside it, and a full dump is several times the
+    /// process's private memory.</summary>
     internal const int MaxDumps = 2;
 
     private static int s_dumps;
 
     internal static void ResetDumpsForTests() => Volatile.Write(ref s_dumps, 0);
 
-    /// <summary>Test seam: replaces the dump call over the open file, so a
-    /// fact can make it report a failure after writing.</summary>
-    internal static Func<Microsoft.Win32.SafeHandles.SafeFileHandle, bool>? DumpWriterForTests { get; set; }
+    /// <summary>How long createdump gets to end (#1641). While it writes,
+    /// every thread of this process is suspended, the one waiting here
+    /// included, so the bound cannot stop a write midway: a wait that ends
+    /// with a dump already on disk gets a second bound, and a write that
+    /// hangs is stopped only by the job's blame-hang timeout.</summary>
+    internal static readonly TimeSpan DumpBound = TimeSpan.FromMinutes(2);
 
-    /// <summary>Write a minidump of the test process into
+    /// <summary>How long createdump's redirected output gets to be read to
+    /// its end once it has exited.</summary>
+    private static readonly TimeSpan DumpOutputBound = TimeSpan.FromSeconds(5);
+
+    /// <summary>Test seam (#1641): runs in place of the dumper's process,
+    /// answering its exit code (null when it ran past
+    /// <see cref="DumpBound"/> and was stopped) and what it wrote.</summary>
+    internal static Func<System.Diagnostics.ProcessStartInfo, (int? ExitCode, string Said)>? RunDumperForTests { get; set; }
+
+    /// <summary>Test seam (#1641): the dump createdump writes, by its option's
+    /// name (<c>normal</c>, <c>withheap</c>, <c>triage</c>, <c>full</c>);
+    /// null is <c>full</c>. The real-createdump fact writes a normal one: a
+    /// full dump of the test host mid-suite was 4.7 GB on CI.</summary>
+    internal static string? DumpKindForTests { get; set; }
+
+    /// <summary>Write a full dump of the test process into
     /// <see cref="DumpDirectory"/>, answering the sentence that names it
     /// (empty when no folder is named or the cap is reached). The dump keeps
-    /// every thread and the memory a debugger needs to walk managed stacks
-    /// (<c>dotnet-dump analyze</c>, then <c>clrstack -all</c>).</summary>
+    /// every thread, module and byte of memory a debugger needs to walk
+    /// managed stacks (<c>dotnet-dump analyze</c>, then <c>clrstack -all</c>).
+    /// A failure is a sentence too: a diagnostic never changes the timeout's
+    /// path (the dispatcher's shutdown, the unwind join, the class cleanup).</summary>
+    /// <remarks>#1641: the runtime's own createdump writes it, from outside
+    /// this process. On Windows createdump dumps the process that started
+    /// it and takes no process id (dotnet/runtime#68877, .NET 7), so it is
+    /// started directly, never through a shell, which would become its
+    /// parent. A process that dumped itself (MiniDumpWriteDump on its own
+    /// handle) raced its own running threads: CI's dump came out partial,
+    /// 2 MB with error 0x80070057. The dump is <c>--full</c>, not
+    /// <c>--withheap</c>: a heap dump leans on the runtime's registration
+    /// to include JIT code and on matching binaries for the modules, and
+    /// CI's runtime is installed unregistered by dotnet-install. A full dump
+    /// carries both, and writes faster.</remarks>
     private static string DumpOnTimeout(string name)
     {
         if (DumpDirectory is not { Length: > 0 } folder || Interlocked.Increment(ref s_dumps) > MaxDumps)
         {
             return string.Empty;
         }
-        string path = Path.Combine(folder, $"{name}-{DateTime.UtcNow:yyyyMMddTHHmmss}.dmp");
         try
         {
-            Directory.CreateDirectory(folder);
-            using var process = System.Diagnostics.Process.GetCurrentProcess();
-            using FileStream file = File.Create(path);
-            bool written = DumpWriterForTests is { } writer
-                ? writer(file.SafeFileHandle)
-                : MiniDumpWriteDump(process.Handle, (uint)process.Id, file.SafeFileHandle, DumpType, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
-            if (!written)
-            {
-                // Dumping its own running process, the writer can report a
-                // failure (a partial copy, 0x8007012B) after it wrote most of
-                // the dump: a file with content is kept, and the error named
-                // (CI on 3d4aa90d deleted one and said nothing).
-                int error = System.Runtime.InteropServices.Marshal.GetLastPInvokeError();
-                long length = file.Length;
-                if (length > 0)
-                {
-                    return $" A partial minidump of the test process is at {path} ({length} bytes; MiniDumpWriteDump reported error 0x{error:X8}).";
-                }
-                file.Close();
-                File.Delete(path);
-                return $" No minidump was written: MiniDumpWriteDump failed with error 0x{error:X8}.";
-            }
+            return WriteDump(folder, name);
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        catch (Exception exception) when (exception is not OutOfMemoryException)
         {
-            return $" No minidump was written: {exception.Message}";
+            return $" No dump was written: {exception.GetType().Name}: {exception.Message}";
         }
-        return $" A minidump of the test process is at {path}.";
     }
 
-    /// <summary>MiniDumpWithDataSegs | WithHandleData | WithUnloadedModules
-    /// | WithPrivateReadWriteMemory | WithFullMemoryInfo | WithThreadInfo:
-    /// .NET's own "heap" dump, enough for managed stacks.</summary>
-    private const int DumpType = 0x1 | 0x4 | 0x20 | 0x200 | 0x800 | 0x1000;
+    private static string WriteDump(string folder, string name)
+    {
+        string path = Path.Combine(folder, $"{name}-{DateTime.UtcNow:yyyyMMddTHHmmss}.dmp");
+        // createdump opens the file through an ANSI path and reads % as a
+        // specifier (%p, %e, %h, %t): an ASCII path, with % doubled.
+        if (!path.All(char.IsAscii))
+        {
+            return $" No dump was written: createdump needs an ASCII path, and {path} is not one.";
+        }
+        var start = new System.Diagnostics.ProcessStartInfo(
+            Path.Combine(System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory(), "createdump.exe"))
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        string kind = DumpKindForTests ?? "full";
+        start.ArgumentList.Add($"--{kind}");
+        start.ArgumentList.Add("--name");
+        start.ArgumentList.Add(path.Replace("%", "%%", StringComparison.Ordinal));
+        long privateBytes;
+        using (System.Diagnostics.Process self = System.Diagnostics.Process.GetCurrentProcess())
+        {
+            privateBytes = self.PrivateMemorySize64;
+        }
+        string memory = $"{privateBytes / (1024 * 1024)} MB private";
+        Directory.CreateDirectory(folder);
+        (int? exitCode, string said) = RunDumperForTests is { } fake ? fake(start) : RunDumper(start, path);
+        long length = File.Exists(path) ? new FileInfo(path).Length : 0;
+        if (exitCode is null)
+        {
+            return length > 0
+                ? $" createdump ran past its {DumpBound.TotalSeconds:0} s bound and was stopped; what it wrote is at {path} ({length} bytes, {memory})."
+                : $" No dump was written: createdump ran past its {DumpBound.TotalSeconds:0} s bound and was stopped.";
+        }
+        string outcome = said.Length > 0 ? $"createdump exited {exitCode}: {said}" : $"createdump exited {exitCode}";
+        if (exitCode != 0)
+        {
+            // A dump createdump reports as failed is kept when it has
+            // content, and named with the exit code and what it said (CI on
+            // 3d4aa90d deleted one and said nothing).
+            return length > 0
+                ? $" A partial dump of the test process is at {path} ({length} bytes, {memory}; {outcome})."
+                : $" No dump was written: {outcome}.";
+        }
+        if (length == 0)
+        {
+            return $" No dump was written: {outcome}, but nothing is at {path}.";
+        }
+        return said.Length > 0
+            ? $" A {kind} dump of the test process is at {path} ({memory}; {said})."
+            : $" A {kind} dump of the test process is at {path} ({memory}).";
+    }
 
-    [System.Runtime.InteropServices.DllImport("dbghelp.dll", SetLastError = true)]
-    private static extern bool MiniDumpWriteDump(
-        IntPtr process,
-        uint processId,
-        Microsoft.Win32.SafeHandles.SafeFileHandle file,
-        int dumpType,
-        IntPtr exceptionParam,
-        IntPtr userStreamParam,
-        IntPtr callbackParam);
+    /// <summary>Run createdump to its end, answering its exit code (null
+    /// when it was stopped) and its output on one line.</summary>
+    private static (int? ExitCode, string Said) RunDumper(System.Diagnostics.ProcessStartInfo start, string path)
+    {
+        using System.Diagnostics.Process process = System.Diagnostics.Process.Start(start)
+            ?? throw new InvalidOperationException("createdump did not start.");
+        Task<string> output = process.StandardOutput.ReadToEndAsync();
+        Task<string> errors = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(DumpBound)
+            && !(File.Exists(path) && new FileInfo(path).Length > 0 && process.WaitForExit(DumpBound)))
+        {
+            // createdump has no children; Kill returns quietly if it has
+            // just ended. Its reads end with its pipes: drained briefly, and
+            // a read that faults is observed, never left unobserved.
+            process.Kill();
+            try
+            {
+                _ = Task.WaitAll([output, errors], DumpOutputBound);
+            }
+            catch (AggregateException)
+            {
+            }
+            return (null, string.Empty);
+        }
+        // The reads finish once createdump has closed its end of the pipes;
+        // bounded, so a stuck read cannot hold the timeout's report.
+        try
+        {
+            if (!Task.WaitAll([output, errors], DumpOutputBound))
+            {
+                return (process.ExitCode, "(its output was not read to its end)");
+            }
+        }
+        catch (AggregateException failure)
+        {
+            return (process.ExitCode, $"(its output could not be read: {failure.InnerException?.Message})");
+        }
+        string said = string.Join(
+            " ",
+            (output.Result + "\n" + errors.Result)
+                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        return (process.ExitCode, said);
+    }
 
     /// <summary>How long a timed-out body gets to pump the operation that
     /// takes its stack.</summary>
