@@ -2,6 +2,21 @@
 
 Issues: #1331. Size M. Lanes: windows (unit project and the FlaUI shell gate). AT: — (no speech changes). Wave: W1, slot 1. Depends on: nothing. Parallel with: WB-2, WB-3 (no shared files). Decision: none.
 
+## Amended at implementation (2026-10-26)
+
+This section outranks the text below it.
+
+- **`Resolve` treats a white-space-only override as unset**, as an empty one; `GetFullPath("  ")` would throw or name the working directory. The test hosts write a preset override back as its absolute form, so children inherit an absolute root.
+- **Both snapshots count folders too** (the profile's own as `.`), so "a folder that does not exist snapshots as empty, so creating it is a difference" holds for a folder created empty.
+- **`ShellLaunch` sets the variable for the gate's own process** when it makes the root, and deletes a root it made when the run ends; the census still requires every launch to apply it explicitly. The census accounts for every use of `SlateWindowsExe()`: a `ProcessStartInfo` built on it (constructor argument or initializer, explicit or target-typed) is a launch, a path read (`GetFileName` and the like) is not, and anything else fails. `DeviceStateCensus` treats `null!`, a cast of `null` and a conditional with a `null` branch as no root.
+- **The four bare constructions pass `DeviceStateForTests.FreshFileRecentsRoot()`**, a folder under the run's root, not one inside the fixture vault (which its files tree would list).
+- **The guard** prints any `SlateWindows.exe` already running before the command (its writes count), starts the command from `$LASTEXITCODE = 0` (a cmdlet sets none), and reads `SLATE_DEVICE_STATE_GUARD_EXIT_WAIT_SECONDS` (its own tests' seam) in place of the 60 s wait.
+- **The launcher** also refuses, before anything is made: an `-Exe` that does not exist; a launch of `SlateWindows.exe` while one is running (Slate is single-instance per user, so the running instance would take the launch onto the developer's own device state); and a `-Root` that is, or is inside, the profile's `Slate` folder.
+- **CI runs both Python suites** in the `windows` job (`Set up Python` at the repository's setup-python v7.0.0 pin, then `Test the device-state scripts` with `SLATE_REQUIRE_DEVICE_STATE_SCRIPT_TESTS=1`, which turns a skip into a failure). They gained cases for a cmdlet command, a launch outliving the wait, an already-running Slate, the CI step's own pwsh hop, a reused root, an open Slate, a missing app and the profile as a root.
+- **The gate journey** runs the item-name census (`AssertItemNamesAreSpeakable`, as `AnnouncementNameCensus` requires of every journey) and asserts the recents name its own uniquely named vault; its mutation points launches at another temporary root, never the profile.
+- **Docs:** no developer doc named `SLATE_LOG_DIR`, so the rows went to CONTRIBUTING's Windows section; the NVDA report had no "back up" sentence, so its launch paragraph is new. `FileRecentsStore.FilePathForTests` is a new test seam.
+- **Rider #1648:** the gate's evidence artifact is named by attempt (`…-${{ github.sha }}-${{ github.run_attempt }}`), with the pin in `W1ReleaseEvidenceContractTests` and the `w_c_matrix.md` sentence updated.
+
 ## Goal
 
 A developer who runs `dotnet test` on either Windows project, or launches the app for an NVDA field pass, finds their own recent vaults, window placement, preferences, palette recents, per-vault file recents and sidebar write journal exactly as they left them. One device-state root, `SlateDeviceState.Root`, honours `SLATE_LOCAL_APP_DATA` the way `HostLog.LogDirectory` already honours `SLATE_LOG_DIR`; every store resolves through it; the test hosts and the shell gate point it at a per-run temporary root; a wrapper proves, after the whole run and its child processes have ended, that the real profile did not change; and a launch script seeds such a root for field passes (plan §4 rule 4). Production behaviour with the variable unset is byte-for-byte unchanged.

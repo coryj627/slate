@@ -41,6 +41,9 @@ public sealed partial class ShellAccessibilityTests
                     Path.Combine(logDirectory, "slate-windows.log"),
                     TimeSpan.FromSeconds(30));
                 _ = WaitForElement(window, "WorkspaceView", TimeSpan.FromSeconds(30));
+                // R-4's runtime witness runs in every shell journey
+                // (AnnouncementNameCensus).
+                AssertItemNamesAreSpeakable(process, "device-state");
             }
             else if (string.Equals(
                 Environment.GetEnvironmentVariable("SLATE_REQUIRE_UI_AUTOMATION"),

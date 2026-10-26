@@ -52,7 +52,10 @@ internal static class DeviceStateForTests
         string? preset = Environment.GetEnvironmentVariable(SlateDeviceState.Variable);
         if (!string.IsNullOrWhiteSpace(preset))
         {
+            // Absolute from here on, for this process and every child it
+            // starts, whatever the working directory becomes.
             Root = SlateDeviceState.Resolve(preset);
+            Environment.SetEnvironmentVariable(SlateDeviceState.Variable, Root);
             return;
         }
         string root = Path.Combine(

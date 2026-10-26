@@ -86,14 +86,21 @@ function Get-SlateProcessIds {
 
 $before = Get-Snapshot $profileFolder
 $runningBefore = Get-SlateProcessIds
+foreach ($id in $runningBefore) {
+    # Not the run's: a Slate the developer has open writes the profile too,
+    # and those writes count.
+    Write-Output "guard-device-state: SlateWindows.exe pid $id was already running; its writes to the profile count too"
+}
 
 $commandExit = 0
 try {
     $rest = @()
     if ($command.Count -gt 1) { $rest = @($command[1..($command.Count - 1)]) }
+    # A cmdlet or script sets no exit code; start from success, not from
+    # whatever ran before.
+    $global:LASTEXITCODE = 0
     & $command[0] @rest
-    $commandExit = $LASTEXITCODE
-    if ($null -eq $commandExit) { $commandExit = 0 }
+    $commandExit = $global:LASTEXITCODE
 }
 catch {
     [Console]::Error.WriteLine("guard-device-state: the command did not run: $($_.Exception.Message)")
@@ -101,8 +108,12 @@ catch {
 }
 
 # The shell gate's launches outlive `dotnet test` only by accident; give each
-# up to 60 s in all to exit before the second snapshot.
-$deadline = [DateTime]::UtcNow.AddSeconds(60)
+# up to 60 s in all to exit before the second snapshot. (Its own tests set
+# SLATE_DEVICE_STATE_GUARD_EXIT_WAIT_SECONDS to reach the survivor branch
+# quickly.)
+$waitSeconds = 60
+if ($env:SLATE_DEVICE_STATE_GUARD_EXIT_WAIT_SECONDS) { $waitSeconds = [int]$env:SLATE_DEVICE_STATE_GUARD_EXIT_WAIT_SECONDS }
+$deadline = [DateTime]::UtcNow.AddSeconds($waitSeconds)
 $survivors = @()
 do {
     $survivors = @(Get-SlateProcessIds | Where-Object { $runningBefore -notcontains $_ })
@@ -123,7 +134,7 @@ foreach ($key in $before.Keys) {
 $changes.Sort([StringComparer]::OrdinalIgnoreCase)
 
 foreach ($change in $changes) { Write-Output "guard-device-state: $change" }
-foreach ($id in $survivors) { Write-Output "guard-device-state: SlateWindows.exe pid $id was still running 60 s after the command ended" }
+foreach ($id in $survivors) { Write-Output "guard-device-state: SlateWindows.exe pid $id was still running $waitSeconds s after the command ended" }
 if ($changes.Count -gt 0) {
     Write-Output "guard-device-state: the run changed $($changes.Count) file(s) under $profileFolder"
 }

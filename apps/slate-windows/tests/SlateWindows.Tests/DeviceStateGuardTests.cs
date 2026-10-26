@@ -24,9 +24,21 @@ public sealed class DeviceStateGuardTests
         List<string> changes = DeviceStateForTests.Differences(
             DeviceStateForTests.ProfileAtLoad,
             DeviceStateForTests.Snapshot(DeviceStateForTests.Profile));
-        Assert.True(
-            changes.Count == 0,
-            $"{changes.Count} change(s) in {DeviceStateForTests.Profile} since the test assembly loaded "
-            + $"(a Slate left running writes there too): {string.Join("; ", changes.Take(20))}");
+        if (changes.Count == 0)
+        {
+            return;
+        }
+        System.Diagnostics.Process[] running = System.Diagnostics.Process.GetProcessesByName("SlateWindows");
+        int[] open = [.. running.Select(process => process.Id)];
+        foreach (System.Diagnostics.Process process in running)
+        {
+            process.Dispose();
+        }
+        Assert.Fail(
+            $"{changes.Count} change(s) in {DeviceStateForTests.Profile} since the test assembly loaded: "
+            + string.Join("; ", changes.Take(20))
+            + (open.Length > 0
+                ? $". SlateWindows.exe is running as pid {string.Join(", ", open)}; a Slate left open writes there too."
+                : "."));
     }
 }

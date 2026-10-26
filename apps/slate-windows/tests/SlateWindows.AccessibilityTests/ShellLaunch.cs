@@ -16,11 +16,12 @@ namespace SlateWindows.AccessibilityTests;
 /// <c>ShellLaunchCensus</c> keeps it so.
 /// </summary>
 /// <remarks>
-/// Lazy rather than a module initializer: the gate also runs in VSTest
-/// assembly mode on a runner that holds only the built binaries, and the
-/// first launch creates the root whatever loaded the assembly. One root per
-/// run, shared by every journey, as the profile was: a journey that relaunches
-/// reads what the previous launch wrote.
+/// Made on first use, so a run that launches nothing makes no folder. One
+/// root per run, shared by every journey, as the profile was: a journey that
+/// relaunches reads what the previous launch wrote. Creating it also sets the
+/// variable for this test process, so a launch that forgot
+/// <see cref="ApplyDeviceState"/> still inherits the run's root rather than
+/// the profile; the census is what keeps every launch explicit.
 /// </remarks>
 internal static class ShellLaunch
 {
@@ -30,7 +31,7 @@ internal static class ShellLaunch
 
     /// <summary>The variable when the run already sets it, else a
     /// <c>%TEMP%\slate-gate-&lt;pid&gt;-&lt;guid&gt;</c> folder made on first
-    /// use.</summary>
+    /// use and removed when the run ends.</summary>
     internal static string Root => RunRoot.Value;
 
     /// <summary>Points a shell launch's device state at <see cref="Root"/>.</summary>
@@ -42,12 +43,30 @@ internal static class ShellLaunch
         string? preset = Environment.GetEnvironmentVariable(Variable);
         if (!string.IsNullOrWhiteSpace(preset))
         {
-            return Path.GetFullPath(preset);
+            string resolved = Path.GetFullPath(preset);
+            Environment.SetEnvironmentVariable(Variable, resolved);
+            return resolved;
         }
         string root = Path.Combine(
             Path.GetTempPath(),
             $"slate-gate-{Environment.ProcessId}-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
+        Environment.SetEnvironmentVariable(Variable, root);
+        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+        {
+            try
+            {
+                Directory.Delete(root, recursive: true);
+            }
+            catch (IOException)
+            {
+                // Best effort: a launch still closing may hold a file, and a
+                // leaked temp folder is harmless.
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        };
         return root;
     }
 }

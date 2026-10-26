@@ -164,7 +164,18 @@ public sealed class DeviceStateCensus
         _ => null,
     };
 
-    private static bool IsNothing(ExpressionSyntax expression) =>
-        expression is LiteralExpressionSyntax literal
-            && (literal.IsKind(SyntaxKind.NullLiteralExpression) || literal.IsKind(SyntaxKind.DefaultLiteralExpression));
+    /// <summary>An argument that can be null: a <c>null</c> or <c>default</c>
+    /// literal, seen through parentheses, casts and <c>!</c>, or a conditional
+    /// either of whose branches is one.</summary>
+    private static bool IsNothing(ExpressionSyntax expression) => expression switch
+    {
+        LiteralExpressionSyntax literal =>
+            literal.IsKind(SyntaxKind.NullLiteralExpression) || literal.IsKind(SyntaxKind.DefaultLiteralExpression),
+        DefaultExpressionSyntax => true,
+        ParenthesizedExpressionSyntax parenthesized => IsNothing(parenthesized.Expression),
+        CastExpressionSyntax cast => IsNothing(cast.Expression),
+        PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression } suppressed => IsNothing(suppressed.Operand),
+        ConditionalExpressionSyntax conditional => IsNothing(conditional.WhenTrue) || IsNothing(conditional.WhenFalse),
+        _ => false,
+    };
 }

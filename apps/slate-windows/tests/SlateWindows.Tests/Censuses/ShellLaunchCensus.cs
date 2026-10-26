@@ -9,16 +9,25 @@ namespace SlateWindows.Tests.Censuses;
 
 /// <summary>
 /// #1331: every shell-gate launch carries the run's own device-state root.
-/// The gate's journeys start the production executable from
-/// <c>new ProcessStartInfo(SlateWindowsExe())</c>; each such start info must
-/// pass through <c>ShellLaunch.ApplyDeviceState</c> before anything else
-/// takes it (<c>Process.Start</c> or a helper), or that launch writes the
+/// The gate's journeys start the production executable from a
+/// <c>ProcessStartInfo</c> built on <c>SlateWindowsExe()</c>; each such start
+/// info must pass through <c>ShellLaunch.ApplyDeviceState</c> before anything
+/// else takes it (<c>Process.Start</c> or a helper), or that launch writes the
 /// developer's <c>%LOCALAPPDATA%\Slate</c>.
 /// </summary>
 /// <remarks>
+/// <para>
+/// Every use of <c>SlateWindowsExe()</c> is accounted for: a start info built
+/// on it (its constructor argument or its initializer, explicitly or
+/// target-typed), or a read of the path that starts nothing
+/// (<see cref="PathReads"/>). Anything else — <c>Process.Start(SlateWindowsExe())</c>,
+/// a field assigned later — fails, because the census cannot follow it.
+/// </para>
+/// <para>
 /// It lives here, not in the gate's project: the gate also runs from its
 /// binaries alone on a runner with no source, and only this project carries
 /// Roslyn. It reads the gate's sources from the checkout.
+/// </para>
 /// </remarks>
 public sealed class ShellLaunchCensus
 {
@@ -27,6 +36,16 @@ public sealed class ShellLaunchCensus
     /// them), 3 in <c>.Rescan.cs</c> and one in each of eight other partials.
     /// Fewer means the walk missed files, not that launches went away.</summary>
     private const int LaunchesAtLeast = 42;
+
+    /// <summary>Calls that only read the executable's path.</summary>
+    private static readonly HashSet<string> PathReads = new(StringComparer.Ordinal)
+    {
+        "GetFileName",
+        "GetFileNameWithoutExtension",
+        "GetDirectoryName",
+        "GetFullPath",
+        "Exists",
+    };
 
     [Fact]
     public void EveryShellLaunchAppliesTheDeviceState()
@@ -43,14 +62,25 @@ public sealed class ShellLaunchCensus
                 continue;
             }
             CompilationUnitSyntax root = CSharpSyntaxTree.ParseText(File.ReadAllText(file)).GetCompilationUnitRoot();
-            foreach (ObjectCreationExpressionSyntax creation in root.DescendantNodes().OfType<ObjectCreationExpressionSyntax>())
+            foreach (InvocationExpressionSyntax exe in root.DescendantNodes().OfType<InvocationExpressionSyntax>().Where(IsSlateWindowsExe))
             {
-                if (!IsShellStartInfo(creation))
+                string where = $"{relative}:{exe.GetLocation().GetLineSpan().StartLinePosition.Line + 1}";
+                BaseObjectCreationExpressionSyntax? creation = exe.Ancestors()
+                    .TakeWhile(node => node is not StatementSyntax and not MemberDeclarationSyntax)
+                    .OfType<BaseObjectCreationExpressionSyntax>()
+                    .FirstOrDefault(IsStartInfo);
+                if (creation is null)
                 {
+                    if (exe.Parent is ArgumentSyntax { Parent.Parent: InvocationExpressionSyntax reader }
+                        && NameOf(reader) is { } read
+                        && PathReads.Contains(read))
+                    {
+                        continue;
+                    }
+                    failures.Add($"{where}: SlateWindowsExe() is used outside a ProcessStartInfo the census can follow");
                     continue;
                 }
                 launches++;
-                string where = $"{relative}:{creation.GetLocation().GetLineSpan().StartLinePosition.Line + 1}";
                 if (creation.Parent is not EqualsValueClauseSyntax { Parent: VariableDeclaratorSyntax declarator })
                 {
                     failures.Add($"{where}: the start info is not held in a local, so nothing can be checked about it");
@@ -87,10 +117,29 @@ public sealed class ShellLaunchCensus
         Assert.True(failures.Count == 0, "shell launches without the run's device-state root (#1331):\n" + string.Join("\n", failures));
     }
 
-    private static bool IsShellStartInfo(ObjectCreationExpressionSyntax creation) =>
-        creation.Type is IdentifierNameSyntax { Identifier.ValueText: "ProcessStartInfo" }
-            or QualifiedNameSyntax { Right.Identifier.ValueText: "ProcessStartInfo" }
-        && creation.ArgumentList is { Arguments: [{ Expression: InvocationExpressionSyntax { Expression: IdentifierNameSyntax { Identifier.ValueText: "SlateWindowsExe" } } }] };
+    private static bool IsSlateWindowsExe(InvocationExpressionSyntax invocation) =>
+        invocation.ArgumentList.Arguments.Count == 0 && NameOf(invocation) == "SlateWindowsExe";
+
+    private static string? NameOf(InvocationExpressionSyntax invocation) => invocation.Expression switch
+    {
+        IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
+        MemberAccessExpressionSyntax member => member.Name.Identifier.ValueText,
+        _ => null,
+    };
+
+    private static bool IsStartInfo(BaseObjectCreationExpressionSyntax creation) => creation switch
+    {
+        ObjectCreationExpressionSyntax { Type: var type } => IsStartInfoType(type),
+        ImplicitObjectCreationExpressionSyntax
+        {
+            Parent: EqualsValueClauseSyntax { Parent: VariableDeclaratorSyntax { Parent: VariableDeclarationSyntax { Type: var declared } } },
+        } => IsStartInfoType(declared),
+        _ => false,
+    };
+
+    private static bool IsStartInfoType(TypeSyntax type) =>
+        type is IdentifierNameSyntax { Identifier.ValueText: "ProcessStartInfo" }
+            or QualifiedNameSyntax { Right.Identifier.ValueText: "ProcessStartInfo" };
 
     private static bool IsApplyDeviceState(InvocationExpressionSyntax invocation) =>
         invocation.Expression is MemberAccessExpressionSyntax

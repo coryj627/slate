@@ -573,6 +573,23 @@ jobs:
           --results-directory "${{ runner.temp }}\slate-app-results"
           --blame-hang-timeout 10m --blame-hang-dump-type mini
 
+      # #1331: the device-state guard both test steps run under, and the
+      # field-pass launcher, are tested where they run: on Windows, through
+      # `pwsh -NoProfile -File`. SLATE_REQUIRE_DEVICE_STATE_SCRIPT_TESTS
+      # turns a skip (no pwsh) into a failure. The home image carries Python
+      # 3.13 in the tool cache, so setup-python installs nothing there.
+      - name: Set up Python (device-state script tests)
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Test the device-state scripts
+        env:
+          SLATE_REQUIRE_DEVICE_STATE_SCRIPT_TESTS: '1'
+        run: |
+          python -I -m unittest discover -v -s scripts/tests -p test_guard_device_state.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -I -m unittest discover -v -s scripts/tests -p test_launch_for_field_pass.py
+
       # Named by attempt too (#1641): "Re-run failed jobs" keeps its run id,
       # and its upload would otherwise replace the failed attempt's evidence.
       - name: Upload app test results and hang evidence

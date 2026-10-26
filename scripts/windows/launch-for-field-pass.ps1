@@ -66,11 +66,25 @@ if ($Seed -and $vaults.Count -eq 0) {
     Stop-Launch '-Seed needs -Vault: there is nothing to seed'
 }
 
-# ---- the device-state root ----
+# ---- the app, and the root it will run on, checked before anything is made ----
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 if (-not $Exe) {
     $Exe = Join-Path $repoRoot 'apps\slate-windows\src\SlateWindows\bin\Release\net10.0-windows\SlateWindows.exe'
 }
+if (-not (Test-Path -LiteralPath $Exe -PathType Leaf)) {
+    Stop-Launch "-Exe '$Exe' does not exist (build the Release app first)"
+}
+# Slate runs one instance per user: a launch while one is open hands its
+# vault to that instance and exits, and the pass would run on the instance's
+# own device state, the developer's profile.
+if ([IO.Path]::GetFileName($Exe) -ieq 'SlateWindows.exe') {
+    $open = @(Get-Process -Name 'SlateWindows' -ErrorAction SilentlyContinue)
+    if ($open.Count -gt 0) {
+        Stop-Launch "close Slate first: pid $(($open | ForEach-Object Id) -join ', ') would receive this launch and run it on your own device state"
+    }
+}
+$profileSlate = [IO.Path]::TrimEndingDirectorySeparator([IO.Path]::Combine(
+    [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData), 'Slate'))
 $deviceStores = @(
     'recent-vaults.json', 'window-state.json', 'preferences.json', 'command-palette-recents.json',
     'file-recents', 'sidebar-write-journal', 'logs')
@@ -80,6 +94,10 @@ if ($reused) {
         Stop-Launch "-Root '$Root' is not an existing folder"
     }
     $Root = [IO.Path]::GetFullPath($Root)
+    $trimmed = [IO.Path]::TrimEndingDirectorySeparator($Root)
+    if ($trimmed -ieq $profileSlate -or $trimmed.StartsWith($profileSlate + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+        Stop-Launch "-Root '$Root' is your own device state ($profileSlate); a field pass needs a root of its own"
+    }
     $foreign = @(Get-ChildItem -LiteralPath $Root -Force | Where-Object { $deviceStores -notcontains $_.Name })
     if ($foreign.Count -gt 0) {
         Stop-Launch "-Root '$Root' holds more than device state: $(($foreign | ForEach-Object Name) -join ', ')"

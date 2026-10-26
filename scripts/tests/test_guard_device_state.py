@@ -20,6 +20,9 @@ import unittest
 
 GUARD = Path(__file__).resolve().parent.parent / "windows" / "guard-device-state.ps1"
 PWSH = shutil.which("pwsh")
+RUNNABLE = sys.platform == "win32" and PWSH is not None
+if not RUNNABLE and os.environ.get("SLATE_REQUIRE_DEVICE_STATE_SCRIPT_TESTS") == "1":
+    raise RuntimeError("CI runs these facts on Windows with PowerShell 7; this runner has neither.")
 
 RECORDER = (
     "import json, sys\n"
@@ -28,7 +31,15 @@ RECORDER = (
 )
 
 
-@unittest.skipUnless(sys.platform == "win32" and PWSH, "the wrapper is a Windows PowerShell 7 script")
+def fake_slate(folder: Path) -> Path:
+    """A process named SlateWindows: a copy of ping, which waits as long as it is told to."""
+    folder.mkdir(parents=True, exist_ok=True)
+    fake = folder / "SlateWindows.exe"
+    shutil.copyfile(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "PING.EXE", fake)
+    return fake
+
+
+@unittest.skipUnless(RUNNABLE, "the wrapper is a Windows PowerShell 7 script")
 class GuardDeviceStateTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = Path(tempfile.mkdtemp(prefix="guard-device-state-"))
@@ -36,8 +47,12 @@ class GuardDeviceStateTests(unittest.TestCase):
     def tearDown(self) -> None:
         shutil.rmtree(self.temp, ignore_errors=True)
 
-    def guard(self, *tokens: str, localappdata: Path | None = None) -> subprocess.CompletedProcess:
+    def kill_later(self, pid: int) -> None:
+        self.addCleanup(lambda: subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True))
+
+    def guard(self, *tokens: str, localappdata: Path | None = None, extra_env: dict | None = None) -> subprocess.CompletedProcess:
         env = dict(os.environ)
+        env.update(extra_env or {})
         if localappdata is not None:
             env["LOCALAPPDATA"] = str(localappdata)
         return subprocess.run(
@@ -81,6 +96,44 @@ class GuardDeviceStateTests(unittest.TestCase):
         surrogate.mkdir()
         run = self.guard("-Profile", str(surrogate), "--", sys.executable, "-c", "raise SystemExit(3)")
         self.assertEqual(run.returncode, 3, run.stdout + run.stderr)
+
+    def test_a_cmdlet_command_that_succeeds_exits_0(self) -> None:
+        # A cmdlet sets no exit code; the guard must not read that as a failure.
+        surrogate = self.temp / "Slate"
+        surrogate.mkdir()
+        run = self.guard("-Profile", str(surrogate), "--", "Write-Output", "hello")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertIn("hello", run.stdout)
+
+    def test_a_launch_that_outlives_the_wait_exits_1_and_names_it(self) -> None:
+        surrogate = self.temp / "Slate"
+        surrogate.mkdir()
+        fake = fake_slate(self.temp / "fake")
+        pid_file = self.temp / "fake.pid"
+        start = (
+            "import subprocess, sys\n"
+            f"p = subprocess.Popen([r'{fake}', '-n', '120', '127.0.0.1'], stdin=subprocess.DEVNULL,"
+            " stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=subprocess.DETACHED_PROCESS)\n"
+            f"open(r'{pid_file}', 'w').write(str(p.pid))\n"
+        )
+        run = self.guard(
+            "-Profile", str(surrogate), "--", sys.executable, "-c", start,
+            extra_env={"SLATE_DEVICE_STATE_GUARD_EXIT_WAIT_SECONDS": "2"})
+        pid = int(pid_file.read_text())
+        self.kill_later(pid)
+        self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
+        self.assertIn(f"pid {pid} was still running", run.stdout)
+
+    def test_a_slate_already_running_is_named_and_not_blamed_on_the_run(self) -> None:
+        surrogate = self.temp / "Slate"
+        surrogate.mkdir()
+        fake = subprocess.Popen([str(fake_slate(self.temp / "fake")), "-n", "120", "127.0.0.1"], stdout=subprocess.DEVNULL)
+        self.kill_later(fake.pid)
+        run = self.guard(
+            "-Profile", str(surrogate), "--", sys.executable, "-c", "pass",
+            extra_env={"SLATE_DEVICE_STATE_GUARD_EXIT_WAIT_SECONDS": "2"})
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertIn(f"pid {fake.pid} was already running", run.stdout)
 
     # ---- CI's exact default-profile shape -------------------------------
 

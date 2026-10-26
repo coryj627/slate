@@ -23,6 +23,9 @@ import unittest
 
 LAUNCHER = Path(__file__).resolve().parent.parent / "windows" / "launch-for-field-pass.ps1"
 PWSH = shutil.which("pwsh")
+RUNNABLE = sys.platform == "win32" and PWSH is not None
+if not RUNNABLE and os.environ.get("SLATE_REQUIRE_DEVICE_STATE_SCRIPT_TESTS") == "1":
+    raise RuntimeError("CI runs these facts on Windows with PowerShell 7; this runner has neither.")
 
 RECORDER = """\
 import json, os, sys
@@ -37,7 +40,7 @@ with open(os.path.join(os.environ["FIELD_PASS_TEST_OUT"], "launched.json"), "w",
 """
 
 
-@unittest.skipUnless(sys.platform == "win32" and PWSH, "the launcher is a Windows PowerShell 7 script")
+@unittest.skipUnless(RUNNABLE, "the launcher is a Windows PowerShell 7 script")
 class LaunchForFieldPassTests(unittest.TestCase):
     def setUp(self) -> None:
         self.t = Path(tempfile.mkdtemp(prefix="field-pass-"))
@@ -122,6 +125,36 @@ class LaunchForFieldPassTests(unittest.TestCase):
         self.assertFalse((self.t / "launched.json").exists())
         self.assertEqual(self.roots(), [])
         self.assertFalse((self.v2 / "recent-vaults.json").exists())
+
+    def test_an_open_slate_refuses_the_launch(self) -> None:
+        # Slate runs one instance per user: a launch while one is open would
+        # hand its vault to it, on the developer's own device state.
+        fake = self.t / "fake" / "SlateWindows.exe"
+        fake.parent.mkdir()
+        shutil.copyfile(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "PING.EXE", fake)
+        running = subprocess.Popen([str(fake), "-n", "120", "127.0.0.1"], stdout=subprocess.DEVNULL)
+        self.addCleanup(lambda: subprocess.run(["taskkill", "/PID", str(running.pid), "/F"], capture_output=True))
+        run = self.launch("-Vault", str(self.v1), "-Seed", "-Exe", str(fake))
+        self.assertEqual(run.returncode, 2, run.stdout + run.stderr)
+        self.assertIn("close Slate first", run.stderr)
+        self.assertIn(str(running.pid), run.stderr)
+        self.assertEqual(self.roots(), [])
+
+    def test_a_missing_app_exits_2_and_makes_no_root(self) -> None:
+        run = self.launch("-Vault", str(self.v1), "-Seed", "-Exe", str(self.t / "missing" / "SlateWindows.exe"))
+        self.assertEqual(run.returncode, 2, run.stdout + run.stderr)
+        self.assertIn("does not exist", run.stderr)
+        self.assertEqual(self.roots(), [])
+
+    def test_the_profile_is_never_a_root(self) -> None:
+        profile = Path(os.environ["LOCALAPPDATA"]) / "Slate"
+        if not profile.is_dir():
+            self.skipTest("no profile Slate folder on this machine to refuse")
+        # No -Seed: were the check missing, the launch would still write nothing there.
+        run = self.launch("-Vault", str(self.v1), "-Root", str(profile), "-Exe", sys.executable)
+        self.assertEqual(run.returncode, 2, run.stdout + run.stderr)
+        self.assertIn("your own device state", run.stderr)
+        self.assertFalse((self.t / "launched.json").exists())
 
     def test_a_reused_root_is_kept_and_read_again(self) -> None:
         root = self.t / "kept-root"
