@@ -838,7 +838,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         int clamped = Math.Clamp(utf16Offset, 0, _tab.EditorDocument!.TextLength);
         if (IsInsideMathRegion(clamped))
         {
-            return false;
+            return NothingToActivate(origin);
         }
 
         if (!TryGetActionableSpan(
@@ -850,7 +850,20 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             return TryToggleTaskAt(utf16Offset, origin);
         }
 
-        return ActivateCanonicalSpan(span);
+        return ActivateCanonicalSpan(span, origin);
+    }
+
+    /// <summary>WB-3 (#1465): the key was received and there is nothing to
+    /// act on — Ctrl+Enter says so in core's words (mac's verb); a pointer
+    /// activation stays silent. Always false, so a caller's reading of the
+    /// answer is unchanged.</summary>
+    private bool NothingToActivate(EditorInteractionOrigin origin)
+    {
+        if (origin is EditorInteractionOrigin.Keyboard)
+        {
+            _announce(new A11yEvent.NothingToActivateAtCursor());
+        }
+        return false;
     }
 
     internal bool ActivateSpan(EditorSemanticSpan requested)
@@ -867,17 +880,18 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         }
         if (!EnsureMathRangesReady(announceWhenUnavailable: true)
             || IsInsideMathRegion(span.StartUtf16)) { return false; }
-        return ActivateCanonicalSpan(span);
+        // No origin of its own: it stays silent on a bare `#`, as before.
+        return ActivateCanonicalSpan(span, EditorInteractionOrigin.Pointer);
     }
 
-    private bool ActivateCanonicalSpan(EditorSemanticSpan span)
+    private bool ActivateCanonicalSpan(EditorSemanticSpan span, EditorInteractionOrigin origin)
     {
         if (span.Kind is EditorSpanKind.Tag)
         {
             string authored = _tab.EditorDocument!.GetText(span.StartUtf16, span.LengthUtf16);
             if (authored.Length <= 1 || authored[0] != '#')
             {
-                return false;
+                return NothingToActivate(origin);
             }
 
             // The core span owns recognition and boundaries. Removing its one
@@ -1980,7 +1994,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         TaskItem? task = cachedTask ?? CachedTaskAt(utf16Offset, origin);
         if (task is null)
         {
-            return false;
+            return NothingToActivate(origin);
         }
         if (!RequireCurrentSavedNote())
         {

@@ -186,21 +186,6 @@
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "recorded"
       },
-      "NothingToActivateAtCursor": {
-        "reason": "#1465: Windows' Ctrl+Enter with nothing actionable under the caret returns false from EditorInteractionCoordinator.ActivateAt and speaks nothing. The mac activate-at-cursor verb (#1431) speaks this core sentence instead; adopting it for the Windows keyboard origin is proposed there.",
-        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
-        "status": "proposed"
-      },
-      "TaskToggled": {
-        "reason": "#1467: Windows composes these words host-side (WorkspaceTabViewModel.PublishTaskToggleThroughTab, WorkspaceViewModel.TaskToggleCompletion, TasksReviewViewModel), as HostComposed residue. The mac editor's activate-at-cursor verb (#1431) posts these core events; moving the Windows sites onto them is proposed there.",
-        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
-        "status": "proposed"
-      },
-      "TaskToggleFailed": {
-        "reason": "#1467: Windows composes these words host-side (WorkspaceTabViewModel.PublishTaskToggleThroughTab, WorkspaceViewModel.TaskToggleCompletion, TasksReviewViewModel), as HostComposed residue. The mac editor's activate-at-cursor verb (#1431) posts these core events; moving the Windows sites onto them is proposed there.",
-        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
-        "status": "proposed"
-      },
       "VaultRescanFinishedUncounted": {
         "reason": "Plan 43 PR 21a (#1293, AR-76): core's uncounted rescan sentence ships with the change feed and no Windows rescan speaks it yet; PR 21b posts it from the Windows rescan when its change-feed window is a gap or too large.",
         "decision": "docs/plans/40_nvda_matrix_remediation_contracts.md",
@@ -480,16 +465,6 @@
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "recorded"
       },
-      "Panels/TasksReviewViewModel.cs#TasksReviewViewModel.ToggleTask@1": {
-        "engine": "Task write/reconciliation/readiness and stale/dirty navigation outcomes",
-        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
-        "status": "recorded"
-      },
-      "Panels/TasksReviewViewModel.cs#TasksReviewViewModel.ToggleTask@2": {
-        "engine": "Task write/reconciliation/readiness and stale/dirty navigation outcomes",
-        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
-        "status": "recorded"
-      },
       "QuickSwitcherViewModel.cs#QuickSwitcherViewModel.RankAsync@1": {
         "engine": "Quick Open ranking terminal failure",
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
@@ -635,16 +610,6 @@
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "recorded"
       },
-      "WorkspaceViewModel.cs#WorkspaceTabViewModel.PublishTaskToggleThroughTab@3": {
-        "engine": "Task write/reconciliation/readiness and stale/dirty navigation outcomes",
-        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
-        "status": "recorded"
-      },
-      "WorkspaceViewModel.cs#WorkspaceTabViewModel.PublishTaskToggleThroughTab@4": {
-        "engine": "Task write/reconciliation/readiness and stale/dirty navigation outcomes",
-        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
-        "status": "recorded"
-      },
       "WorkspaceViewModel.cs#WorkspaceTabViewModel.ReconcileAfterExternalTaskWrite@1": {
         "engine": "Task write/reconciliation/readiness and stale/dirty navigation outcomes",
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
@@ -661,16 +626,6 @@
         "status": "recorded"
       },
       "WorkspaceViewModel.cs#WorkspaceViewModel.ScrollToPanelTaskIfCurrent@1": {
-        "engine": "Task write/reconciliation/readiness and stale/dirty navigation outcomes",
-        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
-        "status": "recorded"
-      },
-      "WorkspaceViewModel.cs#WorkspaceViewModel.TaskToggleCompletion@1": {
-        "engine": "Task write/reconciliation/readiness and stale/dirty navigation outcomes",
-        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
-        "status": "recorded"
-      },
-      "WorkspaceViewModel.cs#WorkspaceViewModel.TaskToggleCompletion@2": {
         "engine": "Task write/reconciliation/readiness and stale/dirty navigation outcomes",
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "recorded"

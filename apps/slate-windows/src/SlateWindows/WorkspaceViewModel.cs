@@ -1497,8 +1497,12 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         }
         if (outcome.Error is VaultException error)
         {
-            Status = $"Task could not be toggled: {error.Message}";
-            announce(new A11yEvent.HostComposed(Status, A11yPriority.High));
+            // Core's words (#1467): the status shows the sentence that is
+            // spoken, with core's detail of the error, never the binding's
+            // field-labelled message ("@message=…").
+            var failed = new A11yEvent.TaskToggleFailed(SlateUniffiMethods.VaultErrorDetail(error));
+            Status = SlateUniffiMethods.A11yRender(failed).Text;
+            announce(failed);
             return;
         }
 
@@ -1542,9 +1546,11 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
                 report.NewContentHash),
             revision + 1);
         IsDirty = false;
-        Status = task.Completed ? "Task reopened." : "Task completed.";
+        // task.Completed is the state before the toggle.
+        var toggled = new A11yEvent.TaskToggled(!task.Completed);
+        Status = SlateUniffiMethods.A11yRender(toggled).Text;
         _documentChanged?.Invoke(this, null);
-        announce(new A11yEvent.HostComposed(Status, A11yPriority.Medium));
+        announce(toggled);
     }
 
     /// <summary>True when the vault change stream reported this
@@ -3412,19 +3418,15 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                     }
                     else
                     {
-                        _announce(new A11yEvent.HostComposed(
-                            $"Task could not be toggled: {error!.Message}",
-                            A11yPriority.High));
+                        _announce(new A11yEvent.TaskToggleFailed(
+                            SlateUniffiMethods.VaultErrorDetail(error!)));
                     }
                 }
                 return;
             }
             if (!publishedThroughTab)
             {
-                // W0.5-3 residue: WorkspaceTabViewModel.PublishTaskToggle
-                _announce(new A11yEvent.HostComposed(
-                    task.Completed ? "Task reopened." : "Task completed.",
-                    A11yPriority.Medium));
+                _announce(new A11yEvent.TaskToggled(!task.Completed));
             }
             // Refreshes are completion-driven, independent of the
             // tab's lifetime: the panel save funnel and the review

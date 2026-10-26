@@ -2,6 +2,16 @@
 
 Issues: Closes #1467, Closes #1465. Size S–M. Lanes: windows (docs census; ledger regenerated). AT: NVDA spot (the three sentences are already core's words; only the new Ctrl+Enter refusal is new speech). Wave: W1. Depends on: nothing. Parallel with: WB-1, WB-2. Decision: none.
 
+## Amended at implementation (2026-10-26)
+
+This section outranks the text below it.
+
+- **No fact can reach the bare-`#` arm of `ActivateCanonicalSpan`.** Core never makes a tag span of `#` alone: a tag's first character must be an ASCII letter (`scan_tags`, `crates/slate-core/src/editor_spans.rs`). So a bare `#` in a note is plain prose to the activation, and Ctrl+Enter there reaches the no-task arm. The arm still posts the event, so every refusal speaks alike if core ever changes. Its one-arm mutation survives by construction. `CtrlEnterWithNothingUnderTheCaretSaysSo`'s third case is a real bare `#`, through the no-task arm.
+- **The two panel facts pin the completion's own arm.** In `AToggledTaskSpeaksCoresTaskToggledEvent` and `AFailedToggleSpeaksCoresDetailWithAClosingPeriod`, the originating tab closes before the publish, so `TaskToggleCompletion` speaks. `ATabToggleSpeaksCoresEvents` pins the tab's own arms.
+- **`AReviewToggleSpeaksCoresEvents` also covers a `VaultException`.** The core's fault seam triggers it, and the rendered sentence carries core's detail, not the "@message=" dump.
+- **The residue keys:** `PublishTaskToggleThroughTab`'s four identical entries became two (`@1`, `@2`, the two mid-path sentences), the same result as removing `@1` and `@4` and renumbering.
+- **WB-2 overlap:** WB-2 (#1659) touches the same designations file and contract 38's ledger. Whichever lands second merges `main` and regenerates the ledger.
+
 ## Goal
 
 Three Windows sites still compose "Task completed." / "Task reopened." /
