@@ -43,7 +43,10 @@ with open(os.path.join(os.environ["FIELD_PASS_TEST_OUT"], "launched.json"), "w",
 @unittest.skipUnless(RUNNABLE, "the launcher is a Windows PowerShell 7 script")
 class LaunchForFieldPassTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.t = Path(tempfile.mkdtemp(prefix="field-pass-"))
+        # The long form: on a runner whose TEMP is an 8.3 path
+        # (C:\Users\RUNNER~1) the short spelling would never equal the long
+        # one the launcher prints.
+        self.t = Path(tempfile.mkdtemp(prefix="field-pass-")).resolve()
         # A cleanup, not tearDown: cleanups run last-in-first-out, so a fake
         # Slate a case registers is killed before its folder goes.
         self.addCleanup(shutil.rmtree, self.t, ignore_errors=True)

@@ -425,8 +425,8 @@ public sealed class TasksPanelTests : IDisposable
         // The completion outlives the tab: the success announcement
         // still fires and the review re-snapshots.
         PumpDispatcherUntil(
-            () => announced.OfType<A11yEvent.HostComposed>()
-                .Any(composed => composed.Text == "Task completed."),
+            () => announced.OfType<A11yEvent.TaskToggled>()
+                .Any(toggled => toggled.Completed),
             "the disposed-tab completion never announced");
         Assert.Contains(
             workspace.TasksReview.Rows,
@@ -466,9 +466,155 @@ public sealed class TasksPanelTests : IDisposable
         // The terminal completion outlives the tab: the success
         // still announces instead of vanishing silently.
         PumpDispatcherUntil(
-            () => announced.OfType<A11yEvent.HostComposed>()
-                .Any(composed => composed.Text == "Task completed."),
+            () => announced.OfType<A11yEvent.TaskToggled>()
+                .Any(toggled => toggled.Completed),
             "the disposed-tab panel completion never announced");
+    }
+
+    /// <summary>WB-3 (#1467): a panel toggle's success is core's typed
+    /// <c>TaskToggled</c>, never host-composed text: here from the
+    /// completion's own arm (the originating tab closed before the publish,
+    /// so the toggle did not publish through it).</summary>
+    [Fact]
+    public void AToggledTaskSpeaksCoresTaskToggledEvent()
+    {
+        var announced = new List<A11yEvent>();
+        using var workspace = new WorkspaceViewModel(
+            _session,
+            _fixture.Root,
+            () => [],
+            announced.Add,
+            startInteractionBackgroundWork: false);
+        workspace.OpenPath("todo.md");
+        workspace.Panels.ToggleTask(workspace.Panels.OpenTasks.First(r => r.Task.Text == "first open"));
+        workspace.CloseTabCommand.Execute(Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab));
+
+        PumpDispatcherUntil(
+            () => announced.OfType<A11yEvent.TaskToggled>().Any(),
+            () => "the toggle never announced; announced: " + AnnouncementDump(announced));
+        A11yEvent.TaskToggled toggled = Assert.Single(announced.OfType<A11yEvent.TaskToggled>());
+        Assert.True(toggled.Completed);
+        Assert.Equal("Task completed.", SlateUniffiMethods.A11yRender(toggled).Text);
+        Assert.DoesNotContain(
+            announced.OfType<A11yEvent.HostComposed>(),
+            composed => composed.Text.StartsWith("Task ", StringComparison.Ordinal));
+    }
+
+    /// <summary>WB-3 (#1467): a faulted write on the completion's own arm
+    /// speaks core's <c>TaskToggleFailed</c> with core's detail of the
+    /// error. Its rendering is "Task could not be toggled: …" closed with a
+    /// period, and never the binding's "@message=" dump.</summary>
+    [Fact]
+    public void AFailedToggleSpeaksCoresDetailWithAClosingPeriod()
+    {
+        var announced = new List<A11yEvent>();
+        using var workspace = new WorkspaceViewModel(
+            _session,
+            _fixture.Root,
+            () => [],
+            announced.Add,
+            startInteractionBackgroundWork: false);
+        workspace.OpenPath("todo.md");
+        WorkspaceTabViewModel tab = Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        tab.TaskToggleFaultForTests = () =>
+            throw new InvalidOperationException("index commit failed");
+        workspace.Panels.ToggleTask(workspace.Panels.OpenTasks.First(r => r.Task.Text == "first open"));
+        workspace.CloseTabCommand.Execute(tab);
+
+        PumpDispatcherUntil(
+            () => announced.OfType<A11yEvent.TaskToggleFailed>().Any(),
+            () => "the failure never announced; announced: " + AnnouncementDump(announced));
+        A11yEvent.TaskToggleFailed failed = Assert.Single(announced.OfType<A11yEvent.TaskToggleFailed>());
+        Assert.Equal(
+            "Task could not be toggled: index commit failed.",
+            SlateUniffiMethods.A11yRender(failed).Text);
+        Assert.Empty(announced.OfType<A11yEvent.TaskToggled>());
+    }
+
+    /// <summary>WB-3 (#1467): the tab route. A toggle the open, clean tab
+    /// publishes itself sets the tab's status to the sentence it speaks:
+    /// core's <c>TaskToggled</c> on success, and on a failure (core's fault
+    /// seam, after the write) core's <c>TaskToggleFailed</c>, closed with a
+    /// period and free of the "@message=" dump.</summary>
+    [Fact]
+    public void ATabToggleSpeaksCoresEvents()
+    {
+        using var _envLock = EnvFaultLock.Acquire();
+        var announced = new List<A11yEvent>();
+        using (var workspace = new WorkspaceViewModel(
+            _session,
+            _fixture.Root,
+            () => [],
+            announced.Add,
+            startInteractionBackgroundWork: false))
+        {
+            workspace.OpenPath("todo.md");
+            WorkspaceTabViewModel tab = Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+            workspace.Panels.ToggleTask(workspace.Panels.OpenTasks.First(r => r.Task.Text == "first open"));
+            PumpDispatcherUntil(
+                () => announced.OfType<A11yEvent.TaskToggled>().Any(),
+                () => "the tab toggle never announced; announced: " + AnnouncementDump(announced));
+            A11yEvent.TaskToggled toggled = Assert.Single(announced.OfType<A11yEvent.TaskToggled>());
+            Assert.True(toggled.Completed);
+            Assert.Equal("Task completed.", SlateUniffiMethods.A11yRender(toggled).Text);
+            Assert.Equal(SlateUniffiMethods.A11yRender(toggled).Text, tab.Status);
+
+            // The other direction: the done task toggled back.
+            PumpDispatcherUntil(
+                () => workspace.Panels.DoneTasks.Any(r => r.Task.Text == "first open"),
+                () => "the completed task never reached the done rows; announced: " + AnnouncementDump(announced));
+            workspace.Panels.ToggleTask(workspace.Panels.DoneTasks.First(r => r.Task.Text == "first open"));
+            PumpDispatcherUntil(
+                () => announced.OfType<A11yEvent.TaskToggled>().Count() == 2,
+                () => "the reopen never announced; announced: " + AnnouncementDump(announced));
+            A11yEvent.TaskToggled reopened = announced.OfType<A11yEvent.TaskToggled>().Last();
+            Assert.False(reopened.Completed);
+            Assert.Equal("Task reopened.", SlateUniffiMethods.A11yRender(reopened).Text);
+            Assert.Equal("Task reopened.", tab.Status);
+            Assert.DoesNotContain(announced, e => e is A11yEvent.HostComposed);
+        }
+
+        _ = _session.SaveText("fault-tab-words.md", "- [ ] flip me\n", null);
+        var failures = new List<A11yEvent>();
+        WorkspaceTabViewModel? faulted = null;
+        string? statusWhenSpoken = null;
+        using var failing = new WorkspaceViewModel(
+            _session,
+            _fixture.Root,
+            () => [],
+            spoken =>
+            {
+                failures.Add(spoken);
+                if (spoken is A11yEvent.TaskToggleFailed)
+                {
+                    statusWhenSpoken = faulted?.Status;
+                }
+            },
+            startInteractionBackgroundWork: false);
+        failing.OpenPath("fault-tab-words.md");
+        faulted = Assert.IsType<WorkspaceTabViewModel>(failing.ActiveGroup.ActiveTab);
+        NoteTaskRowViewModel row = failing.Panels.OpenTasks.First(r => r.Task.Text == "flip me");
+        Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", "fault-tab-words");
+        try
+        {
+            failing.Panels.ToggleTask(row);
+            PumpDispatcherUntil(
+                () => failures.OfType<A11yEvent.TaskToggleFailed>().Any(),
+                () => "the injected failure never published; announced: " + AnnouncementDump(failures));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("SLATE_TEST_FAULT_AFTER_WRITE", null);
+        }
+        A11yEvent.TaskToggleFailed failed = Assert.Single(failures.OfType<A11yEvent.TaskToggleFailed>());
+        string rendered = SlateUniffiMethods.A11yRender(failed).Text;
+        Assert.Equal(rendered, statusWhenSpoken);
+        // Core's detail of the landed-but-unindexed error, never the
+        // binding's field-labelled Message ("@newContentHash=…, @detail=…").
+        Assert.StartsWith(
+            "Task could not be toggled: Saved, but not indexed yet: ", rendered, StringComparison.Ordinal);
+        Assert.EndsWith(".", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("@message=", rendered, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -663,9 +809,7 @@ public sealed class TasksPanelTests : IDisposable
         workspace.TasksReview.ToggleTask(staleReviewRow);
         workspace.Panels.ToggleTask(stalePanelRow);
         Assert.Equal(2, announced.OfType<A11yEvent.TaskToggleConflict>().Count());
-        Assert.DoesNotContain(
-            announced.OfType<A11yEvent.HostComposed>(),
-            composed => composed.Text == "Task completed.");
+        Assert.Empty(announced.OfType<A11yEvent.TaskToggled>());
         Assert.Contains(
             "- [ ] rewritten externally",
             File.ReadAllText(Path.Combine(_fixture.Root, "todo.md")));
@@ -726,8 +870,8 @@ public sealed class TasksPanelTests : IDisposable
         Assert.Empty(announced.OfType<A11yEvent.TaskToggleConflict>());
         PumpDispatcherUntil(
             () => DiskContains(densePath, "- [x] task 1\n")
-                && announced.OfType<A11yEvent.HostComposed>()
-                    .Any(composed => composed.Text == "Task completed."),
+                && announced.OfType<A11yEvent.TaskToggled>()
+                    .Any(toggled => toggled.Completed),
             () => "the panel toggle never completed; announced: "
                 + AnnouncementDump(announced));
 
@@ -787,13 +931,11 @@ public sealed class TasksPanelTests : IDisposable
             () => DiskContains(diskPath, "- [x] first open"),
             () => "the write never landed; announced: "
                 + AnnouncementDump(announced));
-        // (The wrapped VaultException renders its message with the
-        // generated "@message=" prefix — match on both halves.)
+        // (Core's detail of the wrapped VaultException, never the
+        // binding's "@message=" dump — WB-3.)
         PumpDispatcherUntil(
-            () => announced.OfType<A11yEvent.HostComposed>().Any(composed =>
-                composed.Text.StartsWith(
-                    "Task could not be toggled:", StringComparison.Ordinal)
-                && composed.Text.Contains("index commit failed")),
+            () => announced.OfType<A11yEvent.TaskToggleFailed>().Any(failed =>
+                failed.Detail.Contains("index commit failed")),
             "the failure never published");
 
         // The completion reconciled: divergence honesty on the tab,
@@ -802,9 +944,7 @@ public sealed class TasksPanelTests : IDisposable
         _ = announced.OfType<A11yEvent.HostComposed>().Single(composed =>
             composed.Text
                 == "Task toggled on disk, but the editor no longer matches it. Reopen the note before editing.");
-        Assert.DoesNotContain(
-            announced.OfType<A11yEvent.HostComposed>(),
-            composed => composed.Text == "Task completed.");
+        Assert.Empty(announced.OfType<A11yEvent.TaskToggled>());
         Assert.Contains(
             workspace.Panels.DoneTasks, r => r.Task.Text == "first open");
 
@@ -844,10 +984,8 @@ public sealed class TasksPanelTests : IDisposable
         {
             workspace.Panels.ToggleTask(row);
             PumpDispatcherUntil(
-                () => announced.OfType<A11yEvent.HostComposed>().Any(composed =>
-                    composed.Text.StartsWith(
-                        "Task could not be toggled:", StringComparison.Ordinal)
-                    && composed.Text.Contains("test fault")),
+                () => announced.OfType<A11yEvent.TaskToggleFailed>().Any(failed =>
+                    failed.Detail.Contains("test fault")),
                 () => "the injected failure never published; announced: "
                     + AnnouncementDump(announced));
         }
@@ -867,9 +1005,7 @@ public sealed class TasksPanelTests : IDisposable
         _ = announced.OfType<A11yEvent.HostComposed>().Single(composed =>
             composed.Text
                 == "Task toggled on disk, but the editor no longer matches it. Reopen the note before editing.");
-        Assert.DoesNotContain(
-            announced.OfType<A11yEvent.HostComposed>(),
-            composed => composed.Text == "Task completed.");
+        Assert.Empty(announced.OfType<A11yEvent.TaskToggled>());
 
         // Retrying through the obsolete tab refuses with a conflict
         // (the tab never re-baselined) instead of writing blind.
@@ -914,9 +1050,7 @@ public sealed class TasksPanelTests : IDisposable
         {
             workspace.Panels.ToggleTask(row);
             PumpDispatcherUntil(
-                () => announced.OfType<A11yEvent.HostComposed>().Any(composed =>
-                    composed.Text.StartsWith(
-                        "Task could not be toggled:", StringComparison.Ordinal)),
+                () => announced.OfType<A11yEvent.TaskToggleFailed>().Any(),
                 () => "the injected failure never published; announced: "
                     + AnnouncementDump(announced));
 
@@ -1010,9 +1144,7 @@ public sealed class TasksPanelTests : IDisposable
         };
         workspace.Panels.ToggleTask(row);
         PumpDispatcherUntil(
-            () => announced.OfType<A11yEvent.HostComposed>().Any(composed =>
-                composed.Text.StartsWith(
-                    "Task could not be toggled:", StringComparison.Ordinal)),
+            () => announced.OfType<A11yEvent.TaskToggleFailed>().Any(),
             () => "the injected failure never published; announced: "
                 + AnnouncementDump(announced));
 
@@ -1029,9 +1161,7 @@ public sealed class TasksPanelTests : IDisposable
                     && workspace.Panels.TasksEmptyMessage != "Loading tasks…",
                 TimeSpan.FromSeconds(20)),
             "the converged reload never settled");
-        Assert.DoesNotContain(
-            announced.OfType<A11yEvent.HostComposed>(),
-            composed => composed.Text == "Task completed.");
+        Assert.Empty(announced.OfType<A11yEvent.TaskToggled>());
 
         // The note returns via an indexed write: the panel shows
         // disk truth again.

@@ -2,6 +2,26 @@
 
 Issues: Closes #1467, Closes #1465. Size S–M. Lanes: windows (docs census; ledger regenerated). AT: NVDA spot (the three sentences are already core's words; only the new Ctrl+Enter refusal is new speech). Wave: W1. Depends on: nothing. Parallel with: WB-1, WB-2. Decision: none.
 
+## Amended at implementation (2026-10-26)
+
+This section outranks the text below it.
+
+- **No fact can reach the bare-`#` arm of `ActivateCanonicalSpan`.** Core never makes a tag span of `#` alone: a tag's first character must be an ASCII letter (`scan_tags`, `crates/slate-core/src/editor_spans.rs`). So a bare `#` in a note is plain prose to the activation, and Ctrl+Enter there reaches the no-task arm. The arm still posts the event, so every refusal speaks alike if core ever changes. Its one-arm mutation survives by construction. `CtrlEnterWithNothingUnderTheCaretSaysSo`'s third case is a real bare `#`, through the no-task arm.
+- **The two panel facts pin the completion's own arm.** In `AToggledTaskSpeaksCoresTaskToggledEvent` and `AFailedToggleSpeaksCoresDetailWithAClosingPeriod`, the originating tab closes before the publish, so `TaskToggleCompletion` speaks. `ATabToggleSpeaksCoresEvents` pins the tab's own arms.
+- **`AReviewToggleSpeaksCoresEvents` also covers a `VaultException`.** The core's fault seam triggers it, and the rendered sentence carries core's detail, not the "@message=" dump.
+- **The residue keys:** `PublishTaskToggleThroughTab`'s four identical entries became two (`@1`, `@2`, the two mid-path sentences), the same result as removing `@1` and `@4` and renumbering.
+- **WB-2 overlap:** WB-2 (#1659) touches the same designations file and contract 38's ledger. Whichever lands second merges `main` and regenerates the ledger.
+- **Unsaved edits ask for the save first (red team).**
+  - The task cache describes the saved text. In a note with unsaved edits it cannot vouch for the caret's line: a task typed since the save is not in it.
+  - So when no task is found and the tab is dirty, Ctrl+Enter (keyboard origin only) speaks the save-first sentence an unsaved link already gets ("Save <note> before using this interaction.") and returns true, instead of "Nothing to activate at cursor." A Ctrl+click stays silent.
+  - Mac still says nothing is there; filed as #1662. The fact is `CtrlEnterOnALineTheUnsavedEditsChangedAsksForTheSaveFirst`.
+- **The pointer fact covers every arm** (prose, display math, a bare `#`). The panel failure fact pins the whole sentence.
+- **The core-fault facts pin core's wording.** The binding's `Message` for the seam's error (`SavedButUnindexed`) is "@newContentHash=…, @detail=…", which has no "@message=" in it. So `ATabToggleSpeaksCoresEvents` and `AReviewToggleSpeaksCoresEvents` also require the rendering to begin "Task could not be toggled: Saved, but not indexed yet: ". Without that, the "pass `error.Message`" mutation survived both. The run-on tail is #1660's.
+- **Mutations:** 12 run, 11 killed. The survivor is the bare-`#` arm, which no input can reach (above).
+- **Filed, not delivered:**
+  - #1660: core renders a toggle that landed but was not indexed (`SavedButUnindexed`) as a failure, in a run-on sentence.
+  - #1661: Activate at Cursor acts on the hidden caret in reading mode, and a Ctrl+click speaks while the cache loads.
+
 ## Goal
 
 Three Windows sites still compose "Task completed." / "Task reopened." /

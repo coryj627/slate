@@ -1390,6 +1390,126 @@ public sealed class W2EditorInteractionTests
         Assert.Single(navigation);
     }
 
+    private const string NothingToActivate = """
+        # Source
+
+        Plain prose with nothing to act on.
+
+        $$
+        x + y
+        $$
+
+        A lone # sign.
+        """;
+
+    /// <summary>WB-3 (#1465): Ctrl+Enter (the keyboard origin) with nothing
+    /// to activate under the caret says so with core's event, once per
+    /// press: on plain prose, inside display math, and on a bare <c>#</c>
+    /// (core makes no tag of it, so it is plain prose to the activation).
+    /// <c>ActivateAt</c> still answers false.</summary>
+    [Fact]
+    public void CtrlEnterWithNothingUnderTheCaretSaysSo()
+    {
+        using InteractionFixture fixture = InteractionFixture.Create(NothingToActivate);
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using var cancel = new CancelToken();
+        session.ScanInitial(cancel);
+        var announcements = new List<A11yEvent>();
+        using WorkspaceTabViewModel tab = SourceTab(session, announcements);
+        EditorInteractionCoordinator interactions = Assert.IsType<EditorInteractionCoordinator>(
+            tab.EditorInteractions);
+        interactions.RefreshMathRangesForTests();
+        interactions.RefreshArtifactCacheForTests();
+
+        int bareHash = tab.Text.IndexOf("A lone #", StringComparison.Ordinal) + "A lone ".Length;
+        foreach ((string what, int offset) in new[]
+        {
+            ("plain prose", Inside(tab.Text, "Plain prose")),
+            ("display math", Inside(tab.Text, "x + y")),
+            ("a bare #", bareHash),
+        })
+        {
+            announcements.Clear();
+            Assert.False(interactions.ActivateAt(offset, EditorInteractionOrigin.Keyboard), what);
+            Assert.IsType<A11yEvent.NothingToActivateAtCursor>(Assert.Single(announcements));
+        }
+    }
+
+    /// <summary>WB-3 (#1465): a Ctrl+click (the pointer origin) with nothing
+    /// under it stays silent — on plain prose, inside display math and on a
+    /// bare <c>#</c>; only the key says nothing is there.</summary>
+    [Fact]
+    public void ACtrlClickOnPlainProseStaysSilent()
+    {
+        using InteractionFixture fixture = InteractionFixture.Create(NothingToActivate);
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using var cancel = new CancelToken();
+        session.ScanInitial(cancel);
+        var announcements = new List<A11yEvent>();
+        using WorkspaceTabViewModel tab = SourceTab(session, announcements);
+        EditorInteractionCoordinator interactions = Assert.IsType<EditorInteractionCoordinator>(
+            tab.EditorInteractions);
+        interactions.RefreshMathRangesForTests();
+        interactions.RefreshArtifactCacheForTests();
+
+        int bareHash = tab.Text.IndexOf("A lone #", StringComparison.Ordinal) + "A lone ".Length;
+        foreach ((string what, int offset) in new[]
+        {
+            ("plain prose", Inside(tab.Text, "Plain prose")),
+            ("display math", Inside(tab.Text, "x + y")),
+            ("a bare #", bareHash),
+        })
+        {
+            Assert.False(interactions.ActivateAt(offset, EditorInteractionOrigin.Pointer), what);
+            Assert.Empty(announcements);
+        }
+    }
+
+    /// <summary>WB-3 (#1465, red team): the task cache describes the SAVED
+    /// text, so in a note with unsaved edits it cannot vouch for the line
+    /// under the caret — a task typed since the save is not in it. Ctrl+Enter
+    /// there asks for the save first (the dirty link's sentence) instead of
+    /// saying nothing is there; a Ctrl+click stays silent.</summary>
+    [Fact]
+    public void CtrlEnterOnALineTheUnsavedEditsChangedAsksForTheSaveFirst()
+    {
+        using InteractionFixture fixture = InteractionFixture.Create("# Source\n\n- [ ] buy milk\n");
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using var cancel = new CancelToken();
+        session.ScanInitial(cancel);
+        var announcements = new List<A11yEvent>();
+        using WorkspaceTabViewModel tab = SourceTab(session, announcements);
+        EditorInteractionCoordinator interactions = Assert.IsType<EditorInteractionCoordinator>(
+            tab.EditorInteractions);
+        interactions.RefreshMathRangesForTests();
+        interactions.RefreshArtifactCacheForTests();
+        tab.Text += "- [ ] call mom\n";
+        Assert.True(tab.IsDirty, "premise: the typed task left the tab clean");
+        // The math ranges follow the live buffer; the task cache stays on the
+        // saved text, as it does until the save.
+        interactions.RefreshMathRangesForTests();
+
+        Assert.True(interactions.ActivateAt(Inside(tab.Text, "- [ ] call mom"), EditorInteractionOrigin.Keyboard));
+        A11yEvent.HostComposed spoken = Assert.IsType<A11yEvent.HostComposed>(Assert.Single(announcements));
+        Assert.Equal("Save source.md before using this interaction.", spoken.Text);
+
+        announcements.Clear();
+        Assert.False(interactions.ActivateAt(Inside(tab.Text, "- [ ] call mom"), EditorInteractionOrigin.Pointer));
+        Assert.Empty(announcements);
+        Assert.DoesNotContain("- [x]", File.ReadAllText(fixture.SourcePath), StringComparison.Ordinal);
+    }
+
+    private static WorkspaceTabViewModel SourceTab(VaultSession session, List<A11yEvent> announcements) =>
+        new(
+            session,
+            new WorkspaceTabState(
+                Guid.NewGuid(),
+                new WorkspaceItemState(WorkspaceItemKind.Markdown, "source.md")),
+            navigate: _ => { },
+            activateTag: _ => { },
+            announce: announcements.Add,
+            startInteractionBackgroundWork: false);
+
     private static int Inside(string text, string needle)
     {
         int start = text.IndexOf(needle, StringComparison.Ordinal);
