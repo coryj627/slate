@@ -365,6 +365,37 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
     }
 
     /// <summary>
+    /// WB-4: the Files Citing seam sits after the lookup, whichever way the
+    /// lookup ended, so a failed lookup is held exactly as an answered one
+    /// is — here every lookup fails, the session already disposed — and,
+    /// released, it publishes the empty answer (mac parity: empty, not an
+    /// error).
+    /// </summary>
+    [Fact]
+    public async Task TheFilesCitingSeamHoldsAFailedLookupToo()
+    {
+        VaultSession session = OpenScanned();
+        session.Dispose();
+        var sheet = new FilesCitingViewModel(session, "knuth1984", synchronousForTests: false);
+        using var held = new HeldWork(hook => sheet.InterleaveForTests = hook);
+        try
+        {
+            sheet.Load();
+            held.WaitUntilEntered();
+            Assert.True(sheet.IsLoading, "a held lookup published before its release");
+        }
+        finally
+        {
+            held.Release();
+        }
+
+        await sheet.DrainForTests();
+        held.AssertHeldUntilReleased();
+        Assert.False(sheet.IsLoading);
+        Assert.Empty(sheet.Paths);
+    }
+
+    /// <summary>
     /// The leaf must not say "no citations" while it is still loading.
     ///
     /// NoteChanged raises the empty state while IsLoading is still
