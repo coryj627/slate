@@ -240,6 +240,78 @@ public sealed class ShellRegionCycleTests
         }
     }
 
+    /// <summary>WB-5 (#1281; W7-6 §4): the editor's Ctrl+E popover is a
+    /// dialog, so F6 and Shift+F6 over it are a no-op as over any shell
+    /// sheet — nothing is spoken. This is the shipped shell's own answer
+    /// (<see cref="IShellRegionHost.ModalSurfaceOpen"/>), over a workspace
+    /// whose active note has the popover open; the ring's response to that
+    /// answer is <see cref="AModalSurfaceMakesThePressANoOp"/>. Once the
+    /// popover closes, the shell no longer reports a modal.</summary>
+    [Fact]
+    public void ThePopoverIsAModalSurfaceForTheRing() => StaThread.RunPumped(() =>
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "shell-region-popover");
+        File.WriteAllText(Path.Combine(fixture.Root, "target.md"), "# Target\n\nBody.\n");
+        File.WriteAllText(Path.Combine(fixture.Root, "source.md"), "# Source\n\n![[target]]\n");
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using (var cancel = new CancelToken())
+        {
+            session.ScanInitial(cancel);
+        }
+
+        var announced = new List<A11yEvent>();
+        using var workspace = new WorkspaceViewModel(
+            session,
+            fixture.Root,
+            () => [],
+            announced.Add,
+            startInteractionBackgroundWork: false,
+            preferencesStore: new AppPreferencesStore(Path.Combine(fixture.Root, "preferences.json")));
+        Func<bool> priorOverlayProbe = Canvas.CanvasSurfaceView.ShellOverlayIsOpen;
+        var shell = new MainWindow();
+        try
+        {
+            SetWorkspace(shell, workspace);
+            var host = (IShellRegionHost)shell;
+            Assert.Same(shell, workspace.ShellRegionHost);
+            workspace.OpenPath("source.md");
+            WorkspaceTabViewModel tab = workspace.ActiveGroup.ActiveTab!;
+            EditorInteractionCoordinator interactions = Assert.IsType<EditorInteractionCoordinator>(tab.EditorInteractions);
+            interactions.RefreshArtifactCacheForTests();
+            Assert.False(host.ModalSurfaceOpen, "premise: a modal was reported before the popover opened");
+
+            Assert.True(interactions.PreviewEmbedAt(tab.Text.IndexOf("![[target]]", StringComparison.Ordinal) + 3));
+            Assert.True(interactions.IsPopoverOpen, "premise: Ctrl+E on the embed did not open the popover");
+            Assert.True(host.ModalSurfaceOpen, "the shell did not count the open popover as a modal surface");
+            announced.Clear();
+
+            workspace.FocusNextPaneCommand.Execute(null);
+            workspace.FocusPreviousPaneCommand.Execute(null);
+
+            Assert.Empty(announced);
+            Assert.True(interactions.IsPopoverOpen);
+
+            interactions.ClosePopoverCommand.Execute(null);
+            Assert.False(interactions.IsPopoverOpen);
+            Assert.False(host.ModalSurfaceOpen, "the shell still reported a modal once the popover closed");
+        }
+        finally
+        {
+            SetWorkspace(shell, null);
+            shell.Close();
+            Canvas.CanvasSurfaceView.ShellOverlayIsOpen = priorOverlayProbe;
+        }
+    }, TimeSpan.FromSeconds(60), "STA test body timed out.");
+
+    /// <summary>The lifecycle's real setter, so the shell's own observation
+    /// wires the workspace (its ring host included).</summary>
+    private static void SetWorkspace(MainWindow shell, WorkspaceViewModel? workspace) =>
+        (typeof(VaultLifecycleViewModel).GetProperty(
+                nameof(VaultLifecycleViewModel.Workspace),
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
+            ?? throw new InvalidOperationException("VaultLifecycleViewModel.Workspace is gone"))
+        .SetValue(Assert.IsType<VaultLifecycleViewModel>(shell.DataContext), workspace);
+
     [Fact]
     public void LandingOnFilesAnnouncesFilesRegionFocused()
     {
