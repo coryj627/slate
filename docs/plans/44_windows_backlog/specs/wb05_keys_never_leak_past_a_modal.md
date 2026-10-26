@@ -6,18 +6,36 @@ Issues: Closes #1281, Closes #1259. Size S–M. Lanes: windows. AT: NVDA spot (F
 
 This section outranks the text below it.
 
-- **#1281 takes the spec's own fallback, the narrow form.** `IShellRegionHost.ModalSurfaceOpen` also reads the active tab's `IsPopoverOpen`. Nothing else moves: no `ModalSurface` member, no admission or census change. The full form reaches much further than this spec counted:
+- **#1281 takes the spec's own fallback, the narrow form.** `IShellRegionHost.ModalSurfaceOpen` also answers true while keyboard focus is inside an open editor popover (`MainWindow.RingIsModal`). Nothing else moves: no `ModalSurface` member, no admission or census change. The full form reaches much further than this spec counted:
   - seven decision tables would see the popover as the topmost surface, not three (`Template`, `MoveTo`, `BulkRename` and `CitationSummary` too);
   - about ten other `OpenModalSurface` consumers would change: five focus-restore checks, Trash progress, the canvas overlay probe, the rescan and watcher gates, the presentation observer and the menu census.
 
   The issue asks only for the ring's no-op, and this form delivers it. Whether the popover should join `ModalSurface` is filed as #1665, with that inventory.
-- **The ring fact runs an unshown shipped shell.** `ThePopoverIsAModalSurfaceForTheRing` opens a note's popover with `PreviewEmbedAt`. It asserts the shell's own `ModalSurfaceOpen` answer and that F6 and Shift+F6 speak nothing, then that the answer clears once the popover closes. The ring's response to a true answer is `AModalSurfaceMakesThePressANoOp`. Real focus staying on Close is the NVDA spot's.
-- **The fence facts use a harness that can leak.** Each chord meets a note armed for it: an undoable edit, a redoable one, a selection, clipboard text (Paste; the previous text is restored), or a caret. A read-only field declines all five chords. A control theory without the fence shows each chord changing the note, so the fenced theory is evidence.
-- **The overlay fact uses a decoy behind the boxes, and Cut and Select All.**
-  - The decoy is an unbound box added to the shell's own tree, made the window's logical focus. It stands in for a note editor, which the unshown shell does not realize. It holds text and a selection.
-  - Each of the three overlays' empty boxes gets Ctrl+X and Ctrl+A, and the decoy's text and selection must be unchanged.
-  - The unshown shell keeps no undo history at all, so Undo and Redo at a sheet's edge are pinned by the harness facts, which run in a shown window.
-  - In the harness, Delete from a read-only field never leaves the field (the box answers the query itself), so the no-fence control covers Undo, Redo, Cut and Paste.
+- **Focus inside, not the popover merely open.** W7-6 §4's no-op assumes focus stays in the modal. A hovered citation's popover opens without taking focus, and focus can leave an open Ctrl+E popover without closing it: a mouse click, Ctrl+Alt+F, the reading toggle, the menu. Gated on `IsPopoverOpen` alone, F6 went silent from every region in those states (the red team's finding). Gated on focus, F6 keeps working from them.
+- **The ring fact asks the shipped shell's answer.**
+  - **Why the unshown-workspace form went.** On an unshown shell no region holds focus, so every landing refuses: F6 and Shift+F6 were silent with or without the fix, and those presses could not fail.
+  - **Setup.** `ThePopoverIsAModalSurfaceForTheRing` opens a real coordinator's popover with `PreviewEmbedAt`. Its host sits in a shown window beside another button.
+  - **Assertions.** It asks the unshown shell's own `ModalSurfaceOpen`, which reads the keyboard focus: false before the popover opens, true with focus inside it, false with focus on the other button, and false once it closes. A shell surface counts on its own.
+  - **What it leaves to others.** The ring's response to a true answer is `AModalSurfaceMakesThePressANoOp`. Real silence, and focus staying on Close, are the NVDA spot's.
+- **The fence facts use a harness that can leak, and only the rows that can.**
+  - **Arming.** Each chord meets a note armed for it: an undoable edit, a redoable one, a selection, or clipboard text.
+  - **Rows.** Each row is a field that declines its chord. The empty Topic field has no history, so it declines Undo and Redo. A caret-hidden read-only field declines Undo, Redo, Cut and Paste.
+  - **Control.** A control theory runs the same six rows unfenced, and each changes the note.
+  - **Rows dropped.** Topic's Cut and Paste are answered inside the field. A TextBox answers Delete even when read-only. Delete stays fenced, but no TextBox in a harness can show it leaking.
+  - **The theory is renamed** `UndoRedoCutAndPasteInsideASheetNeverReachTheEditor`.
+- **Caret navigation is a leak closed, and is pinned.**
+  - **The leak.** A read-only field that hides its caret declines caret navigation. Unfenced, its arrow keys were handed to the element behind the sheet. Over a note, they moved the note's caret.
+  - **Fenced.** The arrows route on to the sheet's `Contained` directional navigation, as every shell overlay has.
+  - **The shipped case** is the canvas card inspection sheet, over the canvas. Its arrows were handed to the canvas and swallowed there. Down now reaches "Close card text".
+  - **The fact.** `ACaretHiddenFieldsArrowsNeverMoveTheNoteBehindTheSheet` has its unfenced control row. The harness sheet now carries `DirectionalNavigation="Contained"`, as the shell's do.
+- **The Paste rows leave the developer's clipboard as it was.** Every format on it is copied out and put back. The test's text and the restore are both marked to stay out of clipboard history and away from clipboard monitors.
+- **The overlay fact uses a recording element behind the boxes.**
+  - **Setup.** The element is added to the shell's own tree and made the window's logical focus. It answers Undo and Redo and records what reaches it.
+  - **Assertions.** Ctrl+Z and Ctrl+Y in each of the three overlays' empty boxes reach nothing.
+  - **Not driven.** Cut and Paste: an empty editable box answers both itself.
+  - **Why not a real editor behind.** The unshown shell keeps no undo history, so a real editor could not show a leak there.
+- **The direct-execute fact drives Undo only.** A Delete executed in a TextBox never leaves it, so those lines could not fail.
+- **The guard still covers Paste.** The red team asked whether the guard's extra clipboard read could drop a paste. It cannot add a failure: a `CommandBinding` re-asks its CanExecute before every Executed, so a field's own Paste binding reads the clipboard again anyway. Measured with Paste taken out of the guard: a binding that answers yes once and then no was asked twice and never pasted.
 - **The FlaUI journey types one character first,** so a leaked Undo has something to take back. It also runs the item-name census that every journey owes (`AnnouncementNameCensus`).
 - **Registers:** contract 40 gains a WB-5 section; the frozen R-6 row is untouched. The matrix's popover row gains the F6 note.
 
@@ -151,7 +169,7 @@ Not changed: TR-7's shell-chord swallow; `ModalSurfaceDescriptor.OwnsTextField`.
   `EditorPopover`); `ModalSurfaceOrderMatchesTheXamlDeclarationOrder`
   gains the two-file form and a new negative assertion that the popover's
   AutomationId is not in `MainWindow.xaml`.
-- `SheetKeyboardFenceTests.UndoRedoCutPasteAndDeleteInsideASheetNeverReachTheEditor`
+- `SheetKeyboardFenceTests.UndoRedoCutAndPasteInsideASheetNeverReachTheEditor`
   — a Theory over the five chords from the template prompt's Topic field
   and from a read-only field: the note's text and undo stack are unchanged
   and the tab stays clean. Mutation: remove a command from the edge → that
@@ -182,7 +200,7 @@ Not changed: TR-7's shell-chord swallow; `ModalSurfaceDescriptor.OwnsTextField`.
 $env:CARGO_TARGET_DIR='C:\dev\slate\target-wb05'; ./apps/slate-windows/generate-bindings.ps1 -Locked
 dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release   # Error(s)=0 before reading counts
 $filter = "FullyQualifiedName~ShellRegionCycleTests|FullyQualifiedName~ModalSurfaceTests|FullyQualifiedName~SheetKeyboardFenceTests|FullyQualifiedName~SheetFenceCensus|FullyQualifiedName~CommandPaletteTests"
-dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --no-build --configuration Release --list-tests --filter $filter | Select-String "ThePopoverIsAModalSurfaceForTheRing|UndoRedoCutPasteAndDeleteInsideASheetNeverReachTheEditor|ASheetFieldWithItsOwnUndoStillUndoesInside|ThePaletteSearchAndQuickOpenBoxesFenceTheEditingCommandsToo|ExecutingAFencedEditingCommandDirectlyInsideASheetLeavesTheEditorAlone" | Measure-Object | ForEach-Object { if ($_.Count -lt 5) { throw "new facts not discovered: $($_.Count)" } }
+dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --no-build --configuration Release --list-tests --filter $filter | Select-String "ThePopoverIsAModalSurfaceForTheRing|UndoRedoCutAndPasteInsideASheetNeverReachTheEditor|ASheetFieldWithItsOwnUndoStillUndoesInside|ThePaletteSearchAndQuickOpenBoxesFenceTheEditingCommandsToo|ExecutingAFencedEditingCommandDirectlyInsideASheetLeavesTheEditorAlone" | Measure-Object | ForEach-Object { if ($_.Count -lt 5) { throw "new facts not discovered: $($_.Count)" } }
 dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --no-build --configuration Release --filter $filter
 # desktop free, NVDA closed:
 dotnet test apps/slate-windows/tests/SlateWindows.AccessibilityTests/SlateWindows.AccessibilityTests.csproj --no-build --configuration Release --filter "FullyQualifiedName~Templates_PromptUndoLeavesTheNoteAlone|FullyQualifiedName~Templates_PromptTabTraversalStaysInTheSheet"
@@ -241,7 +259,7 @@ enumerated by reflection, with the direct-`Execute` guard
 shell, Ctrl+E on an embed, F6 and Shift+F6: focus stays on
 `EditorPopoverClose`, nothing announced); the extended `ModalSurfaceTests`
 censuses with a negative assertion that the popover id is absent from
-`MainWindow.xaml`; `SheetKeyboardFenceTests.UndoRedoCutPasteAndDeleteInsideASheetNeverReachTheEditor`
+`MainWindow.xaml`; `SheetKeyboardFenceTests.UndoRedoCutAndPasteInsideASheetNeverReachTheEditor`
 (Theory over the five chords from an editable and a read-only sheet
 field: note text and undo stack unchanged, tab clean),
 `ASheetFieldWithItsOwnUndoStillUndoesInside`,

@@ -16,15 +16,37 @@ namespace SlateWindows;
 /// are the view model's (<see cref="WorkspaceViewModel.ShellRegionHost"/>).</summary>
 public partial class MainWindow : IShellRegionHost
 {
-    /// <remarks>WB-5 (#1281; W7-6 §4): the editor's Ctrl+E popover is a
-    /// dialog over the note too, so a press over it is a no-op like one
-    /// over a shell sheet. It is not a <see cref="ModalSurface"/>: it paints
-    /// inside the content pane, and the admission tables, the menu, the
-    /// rescan deferral and the watcher's sentence keep their answers while
-    /// it is open — only the ring asks about it.</remarks>
     bool IShellRegionHost.ModalSurfaceOpen =>
-        ModalSurfaces.TopmostOpen(CurrentModalSurfaceState) is not null
-        || _viewModel.Workspace?.ActiveGroup.ActiveTab?.EditorInteractions?.IsPopoverOpen == true;
+        RingIsModal(CurrentModalSurfaceState, Keyboard.FocusedElement as DependencyObject);
+
+    /// <summary>Whether an F6 press is a no-op (W7-6 §4): a shell modal
+    /// surface is open, or keyboard focus is inside an open editor
+    /// popover.</summary>
+    /// <remarks>WB-5 (#1281): the editor's Ctrl+E popover is a dialog over
+    /// the note, so a press from inside it is a no-op like one over a shell
+    /// sheet. Only focus inside it counts, not the popover merely being
+    /// open: a hovered citation's popover never takes focus, and focus can
+    /// leave an open Ctrl+E popover (a mouse click, Ctrl+Alt+F, the reading
+    /// toggle) — F6 from there keeps working. It is not a
+    /// <see cref="ModalSurface"/>: it paints inside the content pane, and
+    /// the admission tables, the menu, the rescan deferral and the watcher's
+    /// sentence keep their answers while it is open — only the ring asks
+    /// about it (#1665).</remarks>
+    private static bool RingIsModal(ModalSurfaceState state, DependencyObject? focused) =>
+        ModalSurfaces.TopmostOpen(state) is not null || FocusIsInAnOpenEditorPopover(focused);
+
+    private static bool FocusIsInAnOpenEditorPopover(DependencyObject? focused)
+    {
+        for (DependencyObject? current = focused; current is not null; current = ParentOf(current))
+        {
+            if (current is EditorInteractionPopoverHost host)
+            {
+                return host.InteractionSession?.IsPopoverOpen == true;
+            }
+        }
+
+        return false;
+    }
 
     string IShellRegionHost.StatusText => _viewModel.StatusText ?? string.Empty;
 

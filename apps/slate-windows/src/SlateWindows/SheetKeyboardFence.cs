@@ -15,9 +15,11 @@ namespace SlateWindows;
 /// <see cref="EditingCommands.TabBackward"/> a key or a command source
 /// raises inside a sheet are answered inside it or not at all — never
 /// handed to the element behind it — so Tab and Shift+Tab traverse the
-/// sheet's own <c>Cycle</c> scope; Undo, Redo, Cut, Paste and Delete that
-/// no field in the sheet answers are refused the same way, so they never
-/// edit the note behind it (<see cref="FencedCommands"/>).
+/// sheet's own <c>Cycle</c> scope. Every other command in
+/// <see cref="FencedCommands"/> (Undo, Redo, Cut, Paste, Delete, Select
+/// All, caret navigation, the rest of <see cref="EditingCommands"/>) that
+/// no field in the sheet answers is refused the same way, so it never
+/// edits or moves the note behind it.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -37,21 +39,34 @@ namespace SlateWindows;
 /// </para>
 /// <para>
 /// <b>The fence is the sheet's edge, not a key hook.</b> One
-/// <see cref="CommandBinding"/> per Tab command sits on the sheet. The
+/// <see cref="CommandBinding"/> per fenced command sits on the sheet. The
 /// class handler consults the sheet's own bindings BEFORE it hands a
 /// command on, and a query reaches the sheet only when nothing inside
 /// answered it — so the binding refuses exactly what would have left:
 /// <c>CanExecute=false, Handled=true</c>. It stops the COMMAND, not the
-/// key: <c>ContinueRouting=true</c> leaves an unanswered Tab to WPF's own
+/// key: <c>ContinueRouting=true</c> leaves an unanswered key to WPF's own
 /// handling — KeyboardNavigation's traversal in the sheet's <c>Cycle</c>
 /// scope, a grid's <c>OnTabKeyDown</c>, the IME — none of which reaches
-/// the element behind the sheet. A control that owns Tab keeps it: an
+/// the element behind the sheet. So an arrow key a caret-hidden read-only
+/// field declines (the canvas card inspection sheet's) moves focus in the
+/// sheet's <c>Contained</c> directional scope instead of being handed to
+/// the element behind it. A control that owns Tab keeps it: an
 /// <c>AcceptsTab</c> field answers the command itself and never reaches
 /// the edge, and an editing grid cell handles its own key first. An
 /// IME-processed Tab stays the IME's: <c>Key.ImeProcessed</c> means the IME
 /// claimed the key, TSF delivers it to the IME only while the preview is
 /// unhandled (TextServicesManager.PostProcessInput), and WPF's own
 /// navigation never moves on it — so the fence takes no key at all.
+/// </para>
+/// <para>
+/// <b>The edge's own gestures.</b> A binding's command carries its key
+/// gestures, so the sheet itself maps every fenced command's chords —
+/// Ctrl+Z, Ctrl+Y, Ctrl+X, Ctrl+V, Ctrl+A, Delete, Shift+Delete,
+/// Shift+Insert, and <see cref="EditingCommands"/>' own (the arrows,
+/// Ctrl+E, Ctrl+B and the other formatting chords). A press that reaches
+/// the sheet unanswered meets the same refusal and routes on
+/// (<c>ContinueRouting</c>), so the window's key bindings and the modal
+/// routing still see it as before.
 /// </para>
 /// <para>
 /// <b>An Execute that never asked.</b> <c>RoutedCommand.Execute</c> raises
@@ -61,7 +76,10 @@ namespace SlateWindows;
 /// handler only after its own CanExecute answers yes). The PreviewExecuted
 /// guard asks CanExecute on the command's target: something inside that
 /// answers keeps the execution; otherwise the edge's refusal answers and
-/// the execution is swallowed.
+/// the execution is swallowed. For Paste that ask reads the clipboard, as
+/// the field's own binding does again before it pastes (a
+/// <c>CommandBinding</c> re-asks its CanExecute ahead of every Executed),
+/// so the guard adds no failure a busy clipboard did not already have.
 /// </para>
 /// <para>
 /// <b>Nothing a field answers is intercepted.</b> The sheet's own editing
