@@ -441,12 +441,15 @@ public sealed partial class ShellAccessibilityTests
 
     /// <summary>
     /// Plan 44 WB-6 (#1515 case 3): the reader on b.md, and b.md deleted
-    /// outside Slate — a watcher run, no Refresh. The keys are on c.md's row,
-    /// which is not selected; the tree selects nothing; no tab opens (the tab
-    /// strip holds what it held); and the window scans clean right after.
-    /// Until WB-6 a publication that removed the selected row replaced the
-    /// whole tree, because WPF's tree selects its first row — and opens its
-    /// note — when the selected container leaves in place.
+    /// outside Slate — a watcher run, no Refresh. The keys are on c.md's row —
+    /// the element held before the run, not a new one — which is not
+    /// selected; alpha.md's row is its held element too; the tree selects
+    /// nothing; no tab opens (the deleted note's tab is marked missing, and
+    /// that is all); and the window scans clean right after. Until WB-6 a
+    /// publication that removed the selected row replaced the whole tree,
+    /// because WPF's tree selects its first row — and opens its note — when
+    /// the selected container leaves in place: every row then had a new
+    /// element.
     /// </summary>
     [Fact]
     public void ExternalFiles_TheReadersRowRemovedUnderThemLandsTheKeysBeside()
@@ -490,6 +493,10 @@ public sealed partial class ShellAccessibilityTests
             AssertFocusStaysOnRow(automation, tree, "b.md", "The b.md row did not keep the keys before the change.");
             AutomationElement tabs = WaitForElement(window, "WorkspaceTabs", TimeSpan.FromSeconds(10));
             string[] tabsBefore = TabNames(tabs, automation);
+            AutomationElement alphaRow = WaitForTreeItemStartingWith(tree, automation, "alpha.md");
+            int[] alphaId = alphaRow.Properties.RuntimeId.Value;
+            AutomationElement nextRow = WaitForTreeItemStartingWith(tree, automation, "c.md");
+            int[] nextId = nextRow.Properties.RuntimeId.Value;
 
             File.Delete(Path.Combine(vaultRoot, "b.md"));
             Assert.True(
@@ -510,10 +517,19 @@ public sealed partial class ShellAccessibilityTests
                 runs.Contains("SlateWindows.VaultRescanStarted (Watcher)") && !runs.Any(run => run.EndsWith("(Explicit)", StringComparison.Ordinal)),
                 "the deletion must arrive through a Watcher run, with no Refresh; the log names: " + string.Join(" | ", runs));
             AutomationElement landed = automation.FocusedElement();
-            Assert.StartsWith("c.md", landed.Properties.Name.Value, StringComparison.Ordinal);
+            Assert.True(
+                landed.Properties.RuntimeId.Value.SequenceEqual(nextId),
+                "the keys landed on a new c.md element: the publication replaced the tree.");
             Assert.False(landed.Patterns.SelectionItem.Pattern.IsSelected.Value, "the landing selected c.md's row.");
             Assert.Empty(tree.Patterns.Selection.Pattern.Selection.Value);
-            Assert.Equal(tabsBefore, TabNames(tabs, automation));
+            AssertTheTreeShowsTheHeldRow(tree, automation, alphaRow, alphaId, "alpha.md");
+            AssertTheTreeShowsTheHeldRow(tree, automation, nextRow, nextId, "c.md");
+            string[] tabsAfter = TabNames(tabs, automation);
+            Assert.Equal(tabsBefore.Length, tabsAfter.Length);
+            for (int index = 0; index < tabsBefore.Length; index++)
+            {
+                Assert.StartsWith(tabsBefore[index], tabsAfter[index], StringComparison.Ordinal);
+            }
             // Right after the landing, the item-name census included.
             AssertAxeClean(process, "rescan-watcher-removed-reader");
         }
