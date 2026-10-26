@@ -5859,6 +5859,71 @@ public sealed class CanvasDocumentTests : IDisposable
         }
     });
 
+    /// <summary>
+    /// #1261: a client that read the board's children before layout reads
+    /// every card after it, with no <c>ResetChildrenCache</c>. The first read
+    /// is held, not timed: the surface is in no window, so its renderer was
+    /// never measured, the engine's committed view keeps the seed's zero
+    /// size, and that view windows no card of a grid clear of the origin.
+    /// Hosting is the release; the laid-out install refreshes the cached
+    /// child list and announces the change once.
+    /// </summary>
+    [Fact]
+    public void TheBoardsChildListReadBeforeLayoutNamesEveryCardAfterItWithoutAReset() => RunSta(() =>
+    {
+        WriteGridCanvas();
+        CanvasDocumentViewModel document = NewDocument("grid.canvas");
+        var surface = new CanvasSurfaceView { Model = document };
+        CanvasRendererView renderer = surface.VisualForTests;
+        try
+        {
+            document.Load();
+            document.ShowSurface(CanvasSurfaceKind.Visual);
+            bool Settled() => renderer.Engine.Current is { Source.Loaded: not null } state
+                && state.Viewport.SameGeometry(renderer.Engine.CommittedViewport);
+            PumpUntil(Settled);
+
+            // The hold: never measured, a zero-sized view, nothing windowed.
+            Assert.Equal(0, renderer.ActualWidth);
+            Assert.Equal(0, renderer.Engine.CommittedViewport.ViewWidth);
+            Assert.Equal(0, renderer.Engine.CommittedViewport.ViewHeight);
+            Assert.Equal(Visibility.Visible, renderer.Visibility);
+            Assert.Empty(MaterializedCards(renderer.Engine.Current!));
+
+            var board = Assert.IsType<CanvasRendererAutomationPeer>(
+                UIElementAutomationPeer.CreatePeerForElement(renderer));
+            Assert.Empty(board.GetChildren() ?? []);
+            int announced = CanvasRendererAutomationPeer.ChildrenInvalidatedForTests;
+
+            // The release: shown and laid out.
+            using HostedWindow host = Host(surface);
+            PumpUntil(() => Settled() && MaterializedCards(renderer.Engine.Current!).Count == 9);
+
+            CanvasCardAutomationPeer[] cards = [.. (board.GetChildren() ?? [])
+                .Select(peer => Assert.IsType<CanvasCardAutomationPeer>(peer))];
+            Assert.Equal(
+                Enumerable.Range(0, 9).Select(index => $"Card {index}"),
+                cards.Select(card => card.GetName()));
+            Assert.Equal(MaterializedCards(renderer.Engine.Current!), cards.Select(card => card.Key));
+            Assert.Equal(announced + 1, CanvasRendererAutomationPeer.ChildrenInvalidatedForTests);
+        }
+        finally
+        {
+            renderer.Shutdown();
+            document.Shutdown();
+        }
+
+        // The installed state's materialized cards, in the population's
+        // scene order (the board's own child order).
+        static List<CanvasPeerKey> MaterializedCards(CanvasPresentationState state) =>
+        [
+            .. state.Source.Loaded!.Population.SceneNodes
+                .Select(node => CanvasPeerKey.Card(node.NodeId))
+                .Where(key => state.Topology.Placements.TryGetValue(key, out CanvasPeerPlacement? placement)
+                    && placement.Cell == CanvasPeerCell.Materialized),
+        ];
+    });
+
     /// <summary>Cards in one row 1,000 units apart: the window and its
     /// margin hold a few at a time.</summary>
     private void WriteRowCanvas(int cards) => File.WriteAllText(
@@ -5866,6 +5931,17 @@ public sealed class CanvasDocumentTests : IDisposable
         "{\"nodes\":[" + string.Join(",", Enumerable.Range(0, cards).Select(index =>
             $"{{\"id\":\"c{index}\",\"type\":\"text\",\"text\":\"Card {index}\","
             + $"\"x\":{index * 1000},\"y\":0,\"width\":200,\"height\":100}}"))
+        + "],\"edges\":[]}");
+
+    /// <summary>Nine 200×100 cards in a 3×3 grid clear of the origin: a
+    /// zero-sized view windows none of them, and a renderer of at least
+    /// 280×180 windows all nine (the window is the view widened by one view
+    /// on every side).</summary>
+    private void WriteGridCanvas() => File.WriteAllText(
+        Path.Combine(_fixture.Root, "grid.canvas"),
+        "{\"nodes\":[" + string.Join(",", Enumerable.Range(0, 9).Select(index =>
+            $"{{\"id\":\"c{index}\",\"type\":\"text\",\"text\":\"Card {index}\","
+            + $"\"x\":{40 + (260 * (index % 3))},\"y\":{40 + (160 * (index / 3))},\"width\":200,\"height\":100}}"))
         + "],\"edges\":[]}");
 
     private static void CollectGarbage()
