@@ -586,8 +586,11 @@ jobs:
       # layout. upload-artifact stores paths relative to the least common
       # ancestor, which global.json (the SDK pin the job has no checkout
       # to read, #1568) makes the repository root; the job downloads to
-      # the workspace root. Named per run attempt so a re-run can't
-      # collide with a prior attempt's artifact.
+      # the workspace root. Named by run id, not by attempt (#1643): a
+      # rerun of only the failed shell gate downloads what this job built
+      # in an earlier attempt (run 39873324510's attempt 2 did), within the
+      # artifact's one-day retention; a rerun of this job replaces it
+      # (overwrite) before its gate runs again.
       - name: Upload FlaUI gate binaries
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
