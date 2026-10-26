@@ -131,12 +131,7 @@ internal sealed partial class WorkspaceViewModel
         WorkspaceTabViewModel? tab = FindPathBackedTab(path);
         if (tab is { IsDirty: true })
         {
-            _announce(new A11yEvent.HostComposed(
-                // W0.5-3 residue: the D-14 refusal family, restore
-                // verb (divergence HD-1).
-                "Save the note before restoring a version. The editor has "
-                + $"unsaved changes in {System.IO.Path.GetFileName(path)}.",
-                A11yPriority.High));
+            AnnounceRestoreNeedsSave(path);
             return;
         }
         // The CAS basis (H7): a markdown tab stages its loaded buffer
@@ -168,21 +163,74 @@ internal sealed partial class WorkspaceViewModel
         PerformRestore(request);
     }
 
+    /// <summary>The D-14 refusal for a restore over unsaved changes —
+    /// at staging, and again when an admitted restore starts.</summary>
+    private void AnnounceRestoreNeedsSave(string path) =>
+        _announce(new A11yEvent.HostComposed(
+            // W0.5-3 residue: the D-14 refusal family, restore
+            // verb (divergence HD-1).
+            "Save the note before restoring a version. The editor has "
+            + $"unsaved changes in {System.IO.Path.GetFileName(path)}.",
+            A11yPriority.High));
+
+    /// <summary>WB-2 test seam: runs on the history worker before the
+    /// restore's core write — a fact parks the restore there.</summary>
+    internal Action? HistoryRestoreHookForTests { get; set; }
+
+    /// <summary>WB-2 (#1322; contract 38 D-10): a restore IS a save of the
+    /// note, so it joins the file's chain. It never writes beside a save
+    /// admitted before it, and a save requested after it waits for its
+    /// publication — its write and the reload of the tab.</summary>
     private void PerformRestore(HistoryRestoreRequest request)
     {
         if (_workspaceDisposed)
         {
             return;
         }
-        RunHistoryWork(() =>
+        _ = _saves.Admit(request.Path, ticket => RestoreAdmitted(request, ticket));
+    }
+
+    /// <summary>The admitted restore: its write and its continuation, as one
+    /// operation whose Task completes at the end of the continuation.</summary>
+    private Task RestoreAdmitted(
+        HistoryRestoreRequest request, WorkspaceSaveCoordinator.SaveTicket ticket)
+    {
+        if (_workspaceDisposed)
+        {
+            return Task.CompletedTask;
+        }
+        // The stage-time rules again, for a restore that starts later than
+        // it was staged. A reader's edit made while the save it waited for
+        // wrote stays an unsaved change behind the saved bytes, and the
+        // buffer outranks the restore.
+        WorkspaceTabViewModel? tab = FindPathBackedTab(request.Path);
+        if (tab is { IsDirty: true })
+        {
+            AnnounceRestoreNeedsSave(request.Path);
+            return Task.CompletedTask;
+        }
+        // The CAS basis by the stage-time rule, re-applied to what is live
+        // now: a Markdown tab's saved hash, which the save just published,
+        // so a restore admitted behind a save lands on the saved bytes; in
+        // every other case the hash staged for this path (a non-Markdown
+        // tab has no saved editor hash, and the History panel may show
+        // another path by now). Never null, so never core's unconditional
+        // save.
+        string? expectedHash = tab is { IsMarkdown: true, SavedContentHash: { } saved }
+            ? saved
+            : request.ExpectedContentHash;
+        var restored = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Action? hook = HistoryRestoreHookForTests;
+        RunAdmittedHistoryWork(() =>
         {
             string? failure = null;
             bool conflict = false;
             bool unavailable = false;
             try
             {
+                hook?.Invoke();
                 _ = _session.RestoreVersion(
-                    request.Path, request.VersionHash, request.ExpectedContentHash);
+                    request.Path, request.VersionHash, expectedHash);
             }
             catch (VaultException.WriteConflict)
             {
@@ -196,44 +244,102 @@ internal sealed partial class WorkspaceViewModel
             {
                 failure = exception.Message;
             }
-            RunOnDispatcher(() =>
+            catch (Exception exception) when (
+                exception is not OutOfMemoryException
+                    and not StackOverflowException
+                    and not AccessViolationException)
             {
-                if (_workspaceDisposed)
+                // An admitted restore always ends: a fault outside
+                // VaultException (a core panic) is a failed restore, never
+                // a ticket left holding the note's chain.
+                failure = exception.Message;
+            }
+            RunOnSaveDispatcher(() =>
+            {
+                try
                 {
-                    return;
+                    FinishRestore(request, ticket, conflict, unavailable, failure);
+                    restored.TrySetResult();
                 }
-                if (conflict)
+                catch (Exception exception)
                 {
-                    HistoryAlert(
-                        "Restore failed",
-                        "The file changed after history was loaded. The list "
-                        + "will reload — try again.");
-                    History.Reload();
-                    return;
+                    _ = restored.TrySetException(exception);
                 }
-                if (unavailable)
-                {
-                    HistoryAlert(
-                        "Restore failed",
-                        "This version can't be restored: its history failed an "
-                        + "integrity check.");
-                    return;
-                }
-                if (failure is not null)
-                {
-                    HistoryAlert("Restore failed", failure);
-                    return;
-                }
-                _announce(new A11yEvent.RestoredVersionFrom(request.FormattedDate));
-                ReloadOpenTabFromDisk(request.Path);
-                // A restore IS a save (core fires Modified): route the
-                // ONE post-save funnel so tasks/links/citations panels
-                // never show the pre-restore snapshot (red team round
-                // 1) — it reloads the history list too.
-                NotePersisted(request.Path);
-                History.RequestFocusHead();
             });
         });
+        return restored.Task;
+    }
+
+    private void FinishRestore(
+        HistoryRestoreRequest request,
+        WorkspaceSaveCoordinator.SaveTicket ticket,
+        bool conflict,
+        bool unavailable,
+        string? failure)
+    {
+        if (_workspaceDisposed)
+        {
+            return;
+        }
+        if (conflict)
+        {
+            HistoryAlert(
+                "Restore failed",
+                "The file changed after history was loaded. The list "
+                + "will reload — try again.");
+            History.Reload();
+            return;
+        }
+        if (unavailable)
+        {
+            HistoryAlert(
+                "Restore failed",
+                "This version can't be restored: its history failed an "
+                + "integrity check.");
+            return;
+        }
+        if (failure is not null)
+        {
+            HistoryAlert("Restore failed", failure);
+            return;
+        }
+        _announce(new A11yEvent.RestoredVersionFrom(request.FormattedDate));
+        ReloadOpenTabFromDiskAdmitted(request.Path, ticket);
+        // A restore IS a save (core fires Modified): route the
+        // ONE post-save funnel so tasks/links/citations panels
+        // never show the pre-restore snapshot (red team round
+        // 1) — it reloads the history list too.
+        NotePersisted(request.Path);
+        History.RequestFocusHead();
+    }
+
+    /// <summary>The admitted restore's worker: tracked by the save
+    /// coordinator, so teardown joins it before the session goes, and by
+    /// the bounded drain as any history work is. Inline in synchronous test
+    /// mode.</summary>
+    private void RunAdmittedHistoryWork(Action body)
+    {
+        if (!_startInteractionBackgroundWork)
+        {
+            body();
+            return;
+        }
+        Task worker = Task.Run(body);
+        _saves.TrackWorker(worker);
+        TrackRetiredBasesWork(worker);
+    }
+
+    /// <summary>Run on the dispatcher the save chain completes on (the
+    /// workspace's own): inline when already there.</summary>
+    private void RunOnSaveDispatcher(Action action)
+    {
+        System.Windows.Threading.Dispatcher dispatcher = _saves.Dispatcher;
+        if (dispatcher.CheckAccess())
+        {
+            action();
+            return;
+        }
+        _ = dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Normal, action);
     }
 
     /// <summary>The reload site itself, for the fact that pins its
@@ -252,10 +358,16 @@ internal sealed partial class WorkspaceViewModel
     /// reload does). An open canvas reloads through the registry
     /// (W6-1 B2) — a hit would otherwise return the pre-restore
     /// document untouched.</summary>
+    /// <remarks>WB-2 (contract 38 D-10): an UNADMITTED reload — this seam's
+    /// callers — never replaces a tab under a save admitted for its file: a
+    /// tab with a save pending, or any save admitted under the path, keeps
+    /// its buffer and its document, and the save publishes to it.</remarks>
     private void ReloadOpenTabFromDisk(string path)
     {
         WorkspaceTabViewModel? tab = FindPathBackedTab(path);
-        if (tab is { IsDirty: false })
+        if (tab is { IsDirty: false }
+            && !tab.HasPendingSaves
+            && !_saves.HasAdmittedSaveFor(path))
         {
             tab.ReplaceItem(tab.Item);
             AttachTabDocumentsIfNeeded(tab);
@@ -264,6 +376,27 @@ internal sealed partial class WorkspaceViewModel
             // named "reload open tab from disk" left the outline
             // rendering the PRE-restore rows, contradicting the restore
             // this shell had just announced. The reload is explicit.
+            ReloadCanvasDocumentAt(path);
+        }
+    }
+
+    /// <summary>WB-2: the admitted restore's reload, run inside its ticket.
+    /// <paramref name="admittedBy"/> is the proof of admission: while the
+    /// restore's operation runs, the saves pending on the path are its own
+    /// ticket and the saves queued behind it — never an earlier save — so
+    /// neither <see cref="WorkspaceSaveCoordinator.HasAdmittedSaveFor"/> nor
+    /// a tab's pending save may block this reload (both are always true
+    /// here). A dirty tab is not reloaded (the buffer outranks the restore);
+    /// a clean one reloads keeping its queued save.</summary>
+    private void ReloadOpenTabFromDiskAdmitted(
+        string path, WorkspaceSaveCoordinator.SaveTicket admittedBy)
+    {
+        System.Diagnostics.Debug.Assert(!admittedBy.Task.IsCompleted, "the admitted reload ran outside its ticket");
+        WorkspaceTabViewModel? tab = FindPathBackedTab(path);
+        if (tab is { IsDirty: false })
+        {
+            tab.ReloadKeepingQueuedSave();
+            AttachTabDocumentsIfNeeded(tab);
             ReloadCanvasDocumentAt(path);
         }
     }

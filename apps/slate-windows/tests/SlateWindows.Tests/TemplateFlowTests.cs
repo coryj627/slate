@@ -573,7 +573,14 @@ public sealed class TemplateFlowTests
                 enqueueUi: action => action(),
                 recentVaultsStore: new RecentVaultsStore(
                     Path.Combine(fixture.Root, "device-state", "recent-vaults.json")));
-            lifecycle.OpenVaultAsync(fixture.Root).GetAwaiter().GetResult();
+            // The open resumes on this thread (WB-2), so the workspace it
+            // builds belongs to this thread's dispatcher — the one the
+            // create's save-chain admission runs on. Headless, as before: the
+            // queue is drained for the open alone, so nothing posted later
+            // (the watcher's debounced refresh) can stand in for the wiring.
+            var context = new RescanTests.SerialContext();
+            SynchronizationContext.SetSynchronizationContext(context);
+            context.Await(lifecycle.OpenVaultAsync(fixture.Root), "the vault open");
             WorkspaceViewModel workspace = lifecycle.Workspace!;
             FilesSidebarViewModel sidebar = lifecycle.FileSidebar!;
 

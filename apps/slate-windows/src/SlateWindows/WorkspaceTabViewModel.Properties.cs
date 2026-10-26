@@ -38,6 +38,11 @@ internal sealed partial class WorkspaceTabViewModel
     /// the completion publishes (the W4-3 fault pattern).</summary>
     internal Action? PropertyWriteFaultForTests { get; set; }
 
+    /// <summary>WB-2 test seam: runs on the property write's worker before
+    /// the core write — a fact parks the write there, or counts the writes
+    /// that started.</summary>
+    internal Action? PropertyWriteHookForTests { get; set; }
+
     internal NotePropertiesViewModel EnsureProperties(
         Action<PropertyRowViewModel> commit,
         Action<PropertyRowViewModel> revertAnnounce,
@@ -142,15 +147,18 @@ internal sealed partial class WorkspaceTabViewModel
     /// caller owns announcements, reconciliation, and the
     /// NOTE-scoped write lease (the workspace acquires it before
     /// calling and releases it in the wrapped completion — round 2:
-    /// per-path exclusion survives this tab closing mid-flight).</summary>
-    internal void WriteProperty(
+    /// per-path exclusion survives this tab closing mid-flight). Returns
+    /// the worker (WB-2): an admitted write hands it to the save
+    /// coordinator, so teardown joins it before the session goes.</summary>
+    internal Task WriteProperty(
         string? expectedHash,
         Func<string?, SaveReport> write,
         Action<SaveReport?, VaultException?, string?> completion)
     {
         string path = Path;
         Panels.TaskIndexRepairCoordinator? repairs = TaskRepairs;
-        _ = Task.Run(() =>
+        Action? hook = PropertyWriteHookForTests;
+        return Task.Run(() =>
         {
             SaveReport? report = null;
             VaultException? failure = null;
@@ -168,6 +176,7 @@ internal sealed partial class WorkspaceTabViewModel
             {
                 try
                 {
+                    hook?.Invoke();
                     report = write(expectedHash);
                     PropertyWriteFaultForTests?.Invoke();
                     repairs?.EndMutation(path, indexConsistent: true);

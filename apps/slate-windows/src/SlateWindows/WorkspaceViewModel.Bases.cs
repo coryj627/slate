@@ -1140,10 +1140,11 @@ internal sealed partial class WorkspaceViewModel
 
     /// <summary>
     /// ONE attach funnel for every site that gives a tab its item.
-    /// The FIVE call sites, by their enclosing methods:
+    /// The SIX call sites, by their enclosing methods:
     /// <c>ReplaceTabItem</c> (the in-place replace of the current or transient tab),
     /// <c>AddTab</c>, <c>DuplicateActiveTab</c>, <c>RestoreNode</c>,
-    /// <c>ReloadOpenTabFromDisk</c> (the history retarget).
+    /// <c>ReloadOpenTabFromDisk</c> (the unadmitted history reload) and
+    /// <c>ReloadOpenTabFromDiskAdmitted</c> (the admitted restore's, WB-2).
     /// </summary>
     /// <remarks>
     /// The W4-6 lesson was that two sweeps missed sites — the duplicate

@@ -131,6 +131,61 @@ internal sealed class WorkspaceSaveCoordinator
     }
 
     /// <summary>
+    /// WB-2 (#1322, #1325; contract 38 D-10): admit an operation that is not
+    /// a tab's save but changes <paramref name="path"/>'s file or reloads a
+    /// tab on it — a History restore, a template's reload, a property write
+    /// — into the file's chain. It ALWAYS takes a ticket under the path, an
+    /// idle chain included, so a save admitted after it waits for it exactly
+    /// as it waits for an earlier save, and it runs only once every save
+    /// admitted before it has completed. <paramref name="operation"/> runs on
+    /// the dispatcher; the ticket completes when the Task it returns does —
+    /// after the operation's publication or its terminal outcome, never when
+    /// the call returns — and fails if that Task faults. The operation hands
+    /// any worker it starts to <see cref="TrackWorker"/>. A closed
+    /// coordinator returns false and the operation never runs.
+    /// </summary>
+    /// <remarks>While the operation runs, <see cref="HasAdmittedSaveFor"/>
+    /// is true for its path because of its own ticket (or a save queued behind
+    /// it): an admitted operation never asks it about the path it holds.</remarks>
+    internal Task<bool> Admit(string path, Func<SaveTicket, Task> operation)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(path);
+        ArgumentNullException.ThrowIfNull(operation);
+        return Enqueue([PathKey(path)], ticket =>
+        {
+            Task done = operation(ticket);
+            if (done.IsCompleted)
+            {
+                Finish(ticket, done);
+                return;
+            }
+            done.ContinueWith(
+                finished => _dispatcher.BeginInvoke(
+                    DispatcherPriority.Normal,
+                    new Action(() => Finish(ticket, finished))),
+                CancellationToken.None,
+                TaskContinuationOptions.None,
+                TaskScheduler.Default);
+        });
+    }
+
+    private static void Finish(SaveTicket ticket, Task done)
+    {
+        if (done.IsFaulted)
+        {
+            ticket.Fail(done.Exception!.GetBaseException());
+        }
+        else
+        {
+            ticket.Complete(done.IsCompletedSuccessfully);
+        }
+    }
+
+    /// <summary>The dispatcher every admission and completion runs on — an
+    /// admitted operation posts its continuations here.</summary>
+    internal Dispatcher Dispatcher => _dispatcher;
+
+    /// <summary>
     /// A barrier that completes when <paramref name="task"/> does, however
     /// it ends, and never faults (codex round 3). A chain waits for earlier
     /// saves to FINISH, not to succeed; a failed save's fault is observed
@@ -181,6 +236,20 @@ internal sealed class WorkspaceSaveCoordinator
         catch (Exception exception)
         {
             ticket.Fail(exception);
+        }
+    }
+
+    /// <summary>WB-2 test seam: the workers tracked and not yet finished —
+    /// read at <see cref="BeforeJoinForTests"/>, the workers teardown
+    /// joins without a bound.</summary>
+    internal int TrackedWorkersForTests
+    {
+        get
+        {
+            lock (_workersGate)
+            {
+                return _workers.Count;
+            }
         }
     }
 
