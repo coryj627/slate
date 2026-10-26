@@ -57,6 +57,7 @@ public sealed partial class ShellAccessibilityTests
         try
         {
             var startInfo = new ProcessStartInfo(SlateWindowsExe()) { UseShellExecute = false };
+            ShellLaunch.ApplyDeviceState(startInfo);
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
                 $"slate-external-files-{Guid.NewGuid():N}";
@@ -221,6 +222,7 @@ public sealed partial class ShellAccessibilityTests
         try
         {
             var startInfo = new ProcessStartInfo(SlateWindowsExe()) { UseShellExecute = false };
+            ShellLaunch.ApplyDeviceState(startInfo);
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
                 $"slate-watched-files-{Guid.NewGuid():N}";
@@ -428,6 +430,7 @@ public sealed partial class ShellAccessibilityTests
         try
         {
             var startInfo = new ProcessStartInfo(SlateWindowsExe()) { UseShellExecute = false };
+            ShellLaunch.ApplyDeviceState(startInfo);
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] = $"slate-{journey}-{Guid.NewGuid():N}";
             startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;

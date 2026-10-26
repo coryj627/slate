@@ -57,8 +57,9 @@ public sealed partial class ShellAccessibilityTests
     public void Announcements_ReachADesktopScopedListenerFromLaunch()
     {
         // The vault's display name is this run's own. The recents list is
-        // device-wide (%LOCALAPPDATA%\Slate\recent-vaults.json, one store for
-        // every launch), every shell-gate journey opens an "Accessible Vault"
+        // shared by every launch of the run (recent-vaults.json under the
+        // run's own device-state root, ShellLaunch.Root, #1331; before that,
+        // %LOCALAPPDATA%\Slate), every shell-gate journey opens an "Accessible Vault"
         // of its own, and VaultOpened speaks a recent vault as its welcome
         // button names it (W7-7 PR 3, OD-9: RecentVault.SpokenName) — with
         // its path when another recent's display name reads alike. A name no

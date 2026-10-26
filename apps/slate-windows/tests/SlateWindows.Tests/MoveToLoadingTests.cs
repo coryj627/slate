@@ -288,7 +288,9 @@ public sealed class MoveToLoadingTests
             session.ScanInitial(cancel);
             var context = new QueuedContext();
             var announcements = new ConcurrentQueue<A11yEvent>();
-            var sidebar = new FilesSidebarViewModel(session, announcements.Enqueue, treeUiContext: context);
+            var sidebar = new FilesSidebarViewModel(
+                session, announcements.Enqueue, treeUiContext: context,
+                localAppDataRoot: DeviceStateForTests.FreshFileRecentsRoot());
             var rig = new Rig(fixture, session, context, sidebar, announcements);
             await rig.Drain(sidebar.TreeRefreshCompletion);
             sidebar.SelectedNode = sidebar.RootNodes.Single(node => node.Path == "a.md");

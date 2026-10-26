@@ -351,6 +351,7 @@ public sealed class SidebarTagFilterTests
             Sidebar = new FilesSidebarViewModel(
                 session,
                 announced.Add,
+                localAppDataRoot: DeviceStateForTests.FreshFileRecentsRoot(),
                 filterUiContext: Filter,
                 treeUiContext: Tree,
                 treeWorker: (work, token) =>
