@@ -2,6 +2,8 @@
 
 Issues: Closes #1317. Size M–L. Lanes: windows + FlaUI (shell gate). AT: NVDA (full pass). Wave: W7. Depends on: WB-11 (first on `Reading/ReadingSurface.cs` and `ReadingDocumentBuilder.cs`; WB-21b follows, §6). Parallel with: WB-19, WB-21. Decision: WD11 (pending; recommended "the first partial projection is applied; a late diagram is silent; its placeholder is named 'Diagram, rendering'").
 
+**Owner's call of 2026-10-26** (plan §3.1, "Review calls") outranks this spec where they differ: a transient refusal — core's "busy" render (#1632) or the host's "image-busy" decode (#1636) — is never landed, so the next refresh retries it as `main` does; the PR writes `Refs #1635` for that issue's diagram half.
+
 ## Goal
 
 Today the reading view is all or nothing: the fetch renders every Mermaid

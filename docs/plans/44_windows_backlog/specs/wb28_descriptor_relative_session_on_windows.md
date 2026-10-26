@@ -49,6 +49,8 @@ comparing identities, since two folders' weak identities can be equal.
 The plan's WD24 rows need a dated note saying so (this spec's report).
 Design items 0, 1, 4, 6, 7 and 9 apply it).
 
+**Owner's call of 2026-10-26** (plan §3.1, "Review calls", WD7 and WD22) outranks this spec where they differ: WD7 and WD22 are answered as recommended; WB-28 starts once its design review posts the `FsRoot` helper names on #1513, not after 22c merges; WB-29a's design (docs) may run beside it, and WB-29a's core store follows it.
+
 ## Goal
 
 On Windows, as on macOS and Linux since 22a, a filesystem session binds

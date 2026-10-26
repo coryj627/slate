@@ -29,6 +29,8 @@ losslessly"; under the other answer — the 128-bit id hashed into
 `inode` — this chunk is unchanged, because either record carries
 `persistent`, the only part of the identity it reads).
 
+**Owner's call of 2026-10-26** (plan §3.1, "Review calls" and WD16) outranks this spec where they differ: WD16 is answered as recommended; WB-30 never deletes permanently without asking — it keeps the warning trash-rs asks for today (`FOF_WANTNUKEWARNING`) — and its start is decided when W10 is reached.
+
 ## Goal
 
 Decision 1's contract (`24_decision_memo.md:63-69`) comes true on
