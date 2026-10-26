@@ -611,6 +611,25 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         OnPropertyChanged(nameof(IsMissingFromDisk));
     }
 
+    /// <summary>WB-2 (#1322; contract 38 D-10): a same-item reload that an
+    /// admitted operation makes — a History restore's, a template's — while
+    /// the file's chain is reserved for it. A save of this tab requested
+    /// meanwhile can only be queued behind the operation, never writing, so
+    /// the queued save is the whole of what the reload must not retire: it is
+    /// re-stamped to the new item epoch, and then starts against the reloaded
+    /// document (clean, it publishes NoteSaved with no write; edited after the
+    /// reload, it writes on the reloaded hash). A bare
+    /// <see cref="ReplaceItem"/> would retire it silently in
+    /// <c>StartSave</c>'s epoch check.</summary>
+    internal void ReloadKeepingQueuedSave()
+    {
+        SaveBatch? queued = _queuedSave is { } batch && batch.ItemEpoch == _itemEpoch
+            ? batch
+            : null;
+        ReplaceItem(Item);
+        queued?.Rebase(_itemEpoch);
+    }
+
     public void RetargetPath(string path)
     {
         // #1280: an in-flight save wrote the OLD path; it must not speak or
@@ -850,7 +869,12 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     {
         private readonly List<Action> _onSaved = onSaved is null ? [] : [onSaved];
 
-        internal int ItemEpoch { get; } = itemEpoch;
+        internal int ItemEpoch { get; private set; } = itemEpoch;
+
+        /// <summary>WB-2: the tab reloaded the same item under an admitted
+        /// operation (<see cref="ReloadKeepingQueuedSave"/>); this queued
+        /// save is for the reloaded document.</summary>
+        internal void Rebase(int itemEpoch) => ItemEpoch = itemEpoch;
 
         internal bool Announce { get; private set; } = announce;
 

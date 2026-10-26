@@ -530,7 +530,7 @@
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "recorded"
       },
-      "WorkspaceViewModel.History.cs#WorkspaceViewModel.RequestRestoreVersion@1": {
+      "WorkspaceViewModel.History.cs#WorkspaceViewModel.AnnounceRestoreNeedsSave@1": {
         "engine": "History D-14 dirty restore refusal and core compaction-error adapter",
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "recorded"

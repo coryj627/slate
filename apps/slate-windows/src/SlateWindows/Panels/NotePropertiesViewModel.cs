@@ -25,6 +25,22 @@ internal enum ReloadAnnounce
     SuccessAndFailure,
 }
 
+/// <summary>WB-2: how a wait for the header to publish a note's saved bytes
+/// ended (<see cref="NotePropertiesViewModel.WhenPublished"/>).</summary>
+internal enum HeaderRefreshOutcome
+{
+    /// <summary>A publication holds the saved bytes, or bytes read after the
+    /// wait began (the disk moved past the save).</summary>
+    Published,
+
+    /// <summary>The read failed: the header shows its LoadError.</summary>
+    Failed,
+
+    /// <summary>The header shut down or went to another note; nothing it
+    /// publishes is for this wait.</summary>
+    Abandoned,
+}
+
 /// <summary>
 /// W4-4 (#736): the in-note properties header — one instance PER
 /// TAB, owned by WorkspaceTabViewModel, so drafts and the expansion
@@ -54,6 +70,14 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
     private bool _isLoading;
     private string? _loadError;
     private string _path = "";
+    // WB-2: waits for a publication of a note's saved bytes, settled by
+    // every accepted publish and abandoned by a path change or shutdown.
+    private readonly List<PublishWaiter> _publishWaiters = [];
+
+    private sealed record PublishWaiter(
+        string? SavedHash,
+        int Floor,
+        TaskCompletionSource<HeaderRefreshOutcome> Completion);
 
     public NotePropertiesViewModel(
         VaultSession session,
@@ -158,6 +182,9 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
         {
             _path = path;
             Interlocked.Increment(ref _generation);
+            // The in-flight read for the old note is discarded with the
+            // generation, so a wait on it can never be answered.
+            AbandonPublishWaiters();
             Rows.Clear();
             ContentHash = "";
             LoadError = null;
@@ -193,10 +220,12 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
         long generation = Interlocked.Read(ref _generation);
         int requestId = Interlocked.Increment(ref _requestId);
         IsLoading = true;
+        Action? readHook = RefreshReadHookForTests;
         StartWork(() =>
         {
             try
             {
+                readHook?.Invoke();
                 var parts = _session.ReadNoteParts(path);
                 var properties = SlateUniffiMethods.ParseFrontmatterProperties(parts.FmSource);
                 var topLevel =
@@ -301,11 +330,109 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
         OnPropertyChanged(nameof(ShowEmptyState));
         OnPropertyChanged(nameof(HasRows));
         OnPropertyChanged(nameof(AnyRowDirty));
+        SettlePublishWaiters(requestId, contentHash, loadError);
     }
 
     internal override void Shutdown()
     {
         base.Shutdown();
         Interlocked.Increment(ref _generation);
+        AbandonPublishWaiters();
+    }
+
+    /// <summary>WB-2 test seam: runs on the refresh worker inside the read's
+    /// <c>try</c>, before <c>ReadNoteParts</c> — a fact parks a read there,
+    /// and a hook that throws presents as a failed read.</summary>
+    internal Action? RefreshReadHookForTests { get; set; }
+
+    /// <summary>WB-2 test seam: the waits registered and not yet
+    /// settled.</summary>
+    internal int PublishWaitersForTests => _publishWaiters.Count;
+
+    /// <summary>
+    /// WB-2 (#1325; WD2, answered 2026-10-21): a task that ends once this
+    /// header has published the bytes a save of <paramref name="path"/> wrote
+    /// (<paramref name="savedHash"/>), so an admitted property write takes its
+    /// CAS token from rows read AFTER the save — the header stays the single
+    /// hash authority (contract 4). It always ends: <c>Published</c> when a
+    /// publication holds the saved bytes, or bytes read after the wait began
+    /// (the disk moved; the caller's gates take that to the conflict path);
+    /// <c>Failed</c> on a failed read; <c>Abandoned</c> once the header shuts
+    /// down or goes to another note (the in-flight read is then discarded).
+    /// </summary>
+    /// <remarks>Called and settled on the header's owner thread. A refresh
+    /// already in flight — the Save command's, which speaks a failure — is
+    /// never superseded; with none in flight the wait requests one, silently.
+    /// A publication of other bytes from a request no later than the wait's
+    /// floor may predate the save, so it re-arms the wait and asks once more.
+    /// The task runs its continuations asynchronously, so a waiting operation
+    /// never resumes inside a publish.</remarks>
+    internal Task<HeaderRefreshOutcome> WhenPublished(string path, string? savedHash)
+    {
+        if (IsShutDown || !string.Equals(_path, path, StringComparison.Ordinal))
+        {
+            return Task.FromResult(HeaderRefreshOutcome.Abandoned);
+        }
+        if (_loadError is null
+            && ContentHash.Length > 0
+            && string.Equals(ContentHash, savedHash, StringComparison.Ordinal))
+        {
+            return Task.FromResult(HeaderRefreshOutcome.Published);
+        }
+        var waiter = new PublishWaiter(
+            savedHash,
+            _requestId,
+            new TaskCompletionSource<HeaderRefreshOutcome>(TaskCreationOptions.RunContinuationsAsynchronously));
+        // Registered before any request, so a synchronous header's inline
+        // publish settles it.
+        _publishWaiters.Add(waiter);
+        if (!IsLoading)
+        {
+            RefreshProperties(ReloadAnnounce.None);
+        }
+        return waiter.Completion.Task;
+    }
+
+    private void SettlePublishWaiters(int requestId, string contentHash, string? loadError)
+    {
+        if (_publishWaiters.Count == 0)
+        {
+            return;
+        }
+        PublishWaiter[] waiters = [.. _publishWaiters];
+        _publishWaiters.Clear();
+        bool askAgain = false;
+        foreach (PublishWaiter waiter in waiters)
+        {
+            if (loadError is not null)
+            {
+                _ = waiter.Completion.TrySetResult(HeaderRefreshOutcome.Failed);
+            }
+            else if (string.Equals(contentHash, waiter.SavedHash, StringComparison.Ordinal)
+                || requestId > waiter.Floor)
+            {
+                _ = waiter.Completion.TrySetResult(HeaderRefreshOutcome.Published);
+            }
+            else
+            {
+                // Other bytes from a read that may predate the save: wait on.
+                _publishWaiters.Add(waiter);
+                askAgain = true;
+            }
+        }
+        if (askAgain)
+        {
+            RefreshProperties(ReloadAnnounce.None);
+        }
+    }
+
+    private void AbandonPublishWaiters()
+    {
+        PublishWaiter[] waiters = [.. _publishWaiters];
+        _publishWaiters.Clear();
+        foreach (PublishWaiter waiter in waiters)
+        {
+            _ = waiter.Completion.TrySetResult(HeaderRefreshOutcome.Abandoned);
+        }
     }
 }
