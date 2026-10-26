@@ -445,7 +445,8 @@ public sealed partial class ShellAccessibilityTests
     /// the element held before the run, not a new one — which is not
     /// selected; alpha.md's row is its held element too; the tree selects
     /// nothing; no tab opens (the deleted note's tab is marked missing, and
-    /// that is all); and the window scans clean right after. Until WB-6 a
+    /// that is all); the keys moved once, straight there; and the window
+    /// scans clean right after. Until WB-6 a
     /// publication that removed the selected row replaced the whole tree,
     /// because WPF's tree selects its first row — and opens its note — when
     /// the selected container leaves in place: every row then had a new
@@ -498,19 +499,50 @@ public sealed partial class ShellAccessibilityTests
             AutomationElement nextRow = WaitForTreeItemStartingWith(tree, automation, "c.md");
             int[] nextId = nextRow.Properties.RuntimeId.Value;
 
-            File.Delete(Path.Combine(vaultRoot, "b.md"));
+            var focusMoves = new ConcurrentQueue<string>();
+            int slate = process.Id;
+            var recorder = automation.RegisterFocusChangedEvent(element =>
+            {
+                try
+                {
+                    if (element.Properties.ProcessId.ValueOrDefault == slate)
+                    {
+                        focusMoves.Enqueue($"{element.Properties.ControlType.ValueOrDefault} '{element.Properties.Name.ValueOrDefault}'");
+                    }
+                }
+                catch (Exception exception) when (IsTransientUiaFault(exception))
+                {
+                    focusMoves.Enqueue("<unreadable>");
+                }
+            });
+            try
+            {
+                // Registration settles; nothing before the deletion is the run's.
+                Thread.Sleep(TimeSpan.FromMilliseconds(500));
+                focusMoves.Clear();
+                File.Delete(Path.Combine(vaultRoot, "b.md"));
+                Assert.True(
+                    SpinWait.SpinUntil(() => !TreeListedItemStartingWith(tree, automation, "b.md"), TimeSpan.FromSeconds(30)),
+                    "the deletion never reached the files tree without a Refresh. Rescans: "
+                    + string.Join(" | ", DiagnosticLines(logFile, "VaultRescanStarted")));
+                Assert.True(
+                    SpinWait.SpinUntil(
+                        () => automation.FocusedElement() is { } focused
+                            && (focused.Properties.Name.ValueOrDefault ?? string.Empty).StartsWith("c.md", StringComparison.Ordinal),
+                        TimeSpan.FromSeconds(10)),
+                    $"the keys did not land on c.md's row; they are on {DescribeFocus(automation)}.");
+                // Any focus event the publication raised arrives.
+                Thread.Sleep(FocusSettle);
+            }
+            finally
+            {
+                automation.UnregisterFocusChangedEvent(recorder);
+            }
+
+            string[] moves = [.. focusMoves];
             Assert.True(
-                SpinWait.SpinUntil(() => !TreeListedItemStartingWith(tree, automation, "b.md"), TimeSpan.FromSeconds(30)),
-                "the deletion never reached the files tree without a Refresh. Rescans: "
-                + string.Join(" | ", DiagnosticLines(logFile, "VaultRescanStarted")));
-            Assert.True(
-                SpinWait.SpinUntil(
-                    () => automation.FocusedElement() is { } focused
-                        && (focused.Properties.Name.ValueOrDefault ?? string.Empty).StartsWith("c.md", StringComparison.Ordinal),
-                    TimeSpan.FromSeconds(10)),
-                $"the keys did not land on c.md's row; they are on {DescribeFocus(automation)}.");
-            // Any focus event the publication raised arrives.
-            Thread.Sleep(FocusSettle);
+                moves.Length == 1 && moves[0].Contains("'c.md", StringComparison.Ordinal),
+                $"the keys did not move once, straight to c.md: {string.Join(" → ", moves)}");
 
             string[] runs = DiagnosticLines(logFile, "VaultRescanStarted");
             Assert.True(

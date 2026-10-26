@@ -6,9 +6,10 @@ using System.Collections.ObjectModel;
 namespace SlateWindows;
 
 /// <summary>
-/// Plan 43 PR 20b (#1267) and #1515: a rescan's publication — every watcher
-/// run's, every Refresh's and every foreground rescan's — keeps every row
-/// whose file or folder is still there, at every level the tree shows.
+/// Plan 43 PR 20b (#1267), #1515 and plan 44 WB-6 (#1522): every publication
+/// of the tree — a rescan's (a watcher run's, a Refresh's, a foreground
+/// rescan's) and an organic one's — keeps every row whose file, folder or
+/// date group is still there, at every level the tree shows.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -23,7 +24,7 @@ namespace SlateWindows;
 /// open dialog.
 /// </para>
 /// <para>
-/// So a rescan's publication reconciles the tree in place, level by level. A
+/// So a publication reconciles the tree in place, level by level. A
 /// row the fresh listing still shows — the same path, name, kind, level and
 /// expansion — stays the same node, so its row stays and so does its UI
 /// Automation element, which the tree's peer, and an open folder's, key by
@@ -35,12 +36,14 @@ namespace SlateWindows;
 /// kept collapsed folder takes the fresh listing's state
 /// (<see cref="FileTreeNodeViewModel.AdoptChildStateOf"/>), since nothing
 /// below it is shown. Rows that are new or gone are inserted or removed; a
-/// placeholder (the loading, error and overflow rows) and a date group's
-/// header are never kept. A kept row moves only when its place in the fresh
+/// placeholder (the loading, error and overflow rows) is never kept, and a
+/// date group's header is kept like a folder's row (WB-6). A kept row moves
+/// only when its place in the fresh
 /// order changed — a title or a modified time it sorts by — and the rows
 /// that stay are the longest run already in that order, through the selected
-/// row and the folders it is in: a row that moves gets a new container,
-/// which the keys would not follow, so the reader's row never moves.
+/// row, the tree's own selected row and the folders they are in: a row that
+/// moves gets a new container, which the keys would not follow, so the
+/// reader's row never moves.
 /// </para>
 /// <para>
 /// The tree keeps a kept row's container through the publication's first
@@ -95,10 +98,7 @@ internal sealed partial class FilesSidebarViewModel
         // The selected row and the folders it is in anchor their levels:
         // read while the selection still names them.
         HashSet<FileTreeNodeViewModel> readerRows = ReaderRows();
-        if (SelectedNode is { } selected && !kept.ContainsKey(selected))
-        {
-            DeselectBeforeRemoval(selected);
-        }
+        DeselectBeforeRemoval(kept);
 
         bool? selectedHadFolderNote = SelectedNode?.HasFolderNote;
         ReconcileLevel(RootNodes, fresh, kept, readerRows, RootNodes);
@@ -109,17 +109,27 @@ internal sealed partial class FilesSidebarViewModel
         }
     }
 
-    /// <summary>WB-6 (#1515 case 3): the selected row the reconcile could
-    /// not keep lets go of the selection — the node's own half first, which
-    /// the container's two-way binding follows, then the sidebar's — before
-    /// its container leaves, so WPF's tree has no selected container to
-    /// replace with its first row. Where the selection lands is the
-    /// publication's last step (<c>ReconcileSelectionAfterPublication</c>),
-    /// after a mutation's named successor is seated.</summary>
-    private void DeselectBeforeRemoval(FileTreeNodeViewModel selected)
+    /// <summary>WB-6 (#1515 case 3): every selected row the reconcile could
+    /// not keep lets go of the selection before its container leaves — the
+    /// node's own half first, which the container's two-way binding follows,
+    /// then the sidebar's — so WPF's tree has no selected container to
+    /// replace with its first row. The tree's own selected row is not always
+    /// the sidebar's selection (Codex round 1): a delete lets go of the
+    /// sidebar's selection before its refresh, and the dual pane's selection
+    /// is a row of its own listing, while the tree's container stays
+    /// selected. Where the selection and the keys land is the publication's
+    /// last step (<c>ReconcileSelectionAfterPublication</c>), after a
+    /// mutation's named successor is seated.</summary>
+    private void DeselectBeforeRemoval(Dictionary<FileTreeNodeViewModel, FileTreeNodeViewModel> kept)
     {
-        selected.IsSelected = false;
-        if (SetField(ref _selectedNode, null, nameof(SelectedNode)))
+        foreach (FileTreeNodeViewModel row in Flatten(RootNodes).Where(row => row.IsSelected && !kept.ContainsKey(row)).ToList())
+        {
+            row.IsSelected = false;
+        }
+
+        if (SelectedNode is { } selected
+            && !kept.ContainsKey(selected)
+            && SetField(ref _selectedNode, null, nameof(SelectedNode)))
         {
             RaiseCommandStates();
         }
@@ -371,13 +381,22 @@ internal sealed partial class FilesSidebarViewModel
     }
 
     /// <summary>The selected row and every folder it is in, in the published
-    /// tree; empty with nothing selected.</summary>
+    /// tree; empty with nothing selected. The tree's own selected row counts
+    /// too (WB-6, the red team's M1): when a list's row holds the sidebar's
+    /// selection (the filter results, the dual pane), the tree still shows
+    /// its own row selected, and a row that moves leaves its container —
+    /// WPF would then select its first row, which opens its note.</summary>
     private HashSet<FileTreeNodeViewModel> ReaderRows()
     {
         var rows = new HashSet<FileTreeNodeViewModel>(ReferenceEqualityComparer.Instance);
         if (SelectedNode is { } selected)
         {
             _ = Collect(RootNodes, selected, rows);
+        }
+
+        foreach (FileTreeNodeViewModel row in Flatten(RootNodes).Where(row => row.IsSelected).ToList())
+        {
+            _ = Collect(RootNodes, row, rows);
         }
 
         return rows;

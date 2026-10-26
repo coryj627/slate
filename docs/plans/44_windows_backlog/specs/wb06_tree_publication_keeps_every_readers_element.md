@@ -12,6 +12,13 @@ This section outranks the text below it.
   - **`TakeRowStateOf` never copied expansion.** It copies the summary and the folder-note state only, so the group's guard is in `IsTheSameRow`: a group's expansion is the published row's.
   - **No predicate clause was needed.** `KeysOnARemovedFilesRow` keeps its form. Every removed-row fact lands the keys through the window's restore without the issue's second clause, measured.
 - **The facts live in a new partial,** `FilesRegionLandingTests.Publication.cs`, beside `.Reconcile.cs`. Its row helpers key a date group's header as `group:` and its label, since every header's path is empty.
+- **Review round 1 (Codex and a fresh Claude red team) changed the design in five places:**
+  - **The tree's own selected row is deselected and anchored too.** A sidebar delete lets go of `SelectedNode` before its refresh, and a list's row (the filter results, the dual pane) can hold the selection while the tree still shows its own row selected. Deselecting only `SelectedNode` left that container selected. Its removal, or its move, then let WPF select the first row and open its note.
+  - **A mutation's or a surface's named row takes both halves of the selection.** The create's rename arm and a surface's reveal used the public setter, which leaves the previous row's container selected; with rows kept, that row is still shown.
+  - **A pending successor takes the keys, or the collapsed row holding it does,** wherever the keys are in the tree. A duplicate's original is kept now, so the keys no longer fall to the selection on their own.
+  - **A placeholder is keyed** (its folder and its text), so a selected overflow row is re-seated on its fresh row instead of being resolved as gone on every run.
+  - **A place that was not a tree row records no landing.** A list's row is re-bound silently, as main did.
+- **Accepted, and filed as a follow-up:** a row the sort moves gets a new container (20b's rule), and Pin's re-sort rebuilds the rows in place. Neither is a publication, and main replaced the whole tree on a sort change.
 - **One fact passes on main by design.** `ARemovedSelectedRowWithNoSurvivorLandsOnTheTree` takes the replace path: no root row survives, so `kept.Count == 0`. Main resolves it the same way. The fact pins that the one resolver keeps serving that path.
 
 ## Goal

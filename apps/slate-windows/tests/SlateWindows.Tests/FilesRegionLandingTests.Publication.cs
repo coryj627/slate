@@ -54,7 +54,8 @@ public sealed partial class FilesRegionLandingTests
     /// <summary>A date group the reader collapsed stays collapsed through a
     /// rescan: the same header, still closed. A fresh group is always built
     /// open, so the published header's expansion is the truth; opened, it
-    /// lists its rows as they are now.</summary>
+    /// lists its rows as they are now — a note that joined it while it was
+    /// closed among them.</summary>
     [Fact]
     public void ACollapsedDateGroupStaysCollapsedThroughARescan() => RunSta(() =>
     {
@@ -67,13 +68,14 @@ public sealed partial class FilesRegionLandingTests
         Settle(host);
 
         RewriteOutsideSlate(host, "a.md", DateTime.Today.AddMinutes(4));
+        SeedNote(host, "q.md", DaysBack(62));
         RescanAndRefresh(host);
 
         Assert.Same(older, GroupHeader(host, "Older"));
         Assert.False(older.IsExpanded, "the rescan reopened the collapsed date group");
         older.IsExpanded = true;
         Settle(host);
-        Assert.Equal(["o.md", "p.md"], older.Children.Select(node => node.Path));
+        Assert.Equal(["o.md", "p.md", "q.md"], older.Children.Select(node => node.Path));
     });
 
     /// <summary>A note in "Older" rewritten now leaves "Older" for "Today":
@@ -461,8 +463,171 @@ public sealed partial class FilesRegionLandingTests
         Assert.Same(header, Keyboard.FocusedElement);
         Assert.False(header.IsSelected, "the keys' landing selected the group's header");
         Assert.Null(host.Tree.SelectedItem);
+        Assert.True(moved.IsSelected, "the note's new row does not hold the selection");
         Assert.Empty(opened);
         Assert.Empty(host.Announced);
+
+        older.IsExpanded = true;
+        Settle(host);
+        Assert.Same(moved, host.Tree.SelectedItem);
+        Assert.True(ContainerOf(host, moved).IsSelected, "opened, the group does not show the note selected");
+        Assert.Empty(opened);
+    });
+
+    /// <summary>Codex round 1 (high): the reader's selected note deleted
+    /// through the sidebar. The delete lets go of the selection before its
+    /// refresh, so the tree's own selected row is what leaves: it is
+    /// deselected before its container does, and the keys land on its
+    /// neighbour, unselected. WPF's tree selects no first row, nothing opens
+    /// and no selection is announced; every other row keeps its
+    /// element.</summary>
+    [Fact]
+    public void ADeleteThroughTheSidebarLandsTheKeysOnTheNeighbourAndOpensNothing() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize();
+        var opened = new List<string>();
+        _ = LandOnSelected(host, "note1.md", opened);
+        FileTreeNodeViewModel next = host.Sidebar.RootNodes.Single(node => node.Path == "note2.md");
+        AutomationPeer tree = TreePeer(host);
+        Dictionary<string, AutomationPeer> held = ShownRowElements(tree);
+
+        host.Sidebar.DeleteCommand.Execute(null);
+        Assert.True(PumpedDispatcher.PumpUntil(() => host.Sidebar.TrashCompletion.IsCompleted), "the delete never finished");
+        Settle(host);
+
+        Assert.False(File.Exists(Path.Combine(host.Root, "note1.md")), "premise: the delete left the note");
+        AssertKeysOnUnselected(next);
+        AssertNothingSelected(host);
+        Assert.Empty(opened);
+        Assert.DoesNotContain(host.Announced, item => item is A11yEvent.RowSelected or A11yEvent.TreeFolderSelected);
+        Dictionary<string, AutomationPeer> shown = ShownRowElements(tree);
+        foreach ((string key, AutomationPeer row) in held.Where(pair => pair.Key != "note1.md"))
+        {
+            Assert.True(ReferenceEquals(row, shown[key]), $"the delete gave {key}'s row a new element");
+        }
+    });
+
+    /// <summary>Codex round 1 (high, its sibling): the tree's selected row is
+    /// a folder while the dual pane holds the selection — a note of that
+    /// folder — and the folder is deleted outside Slate. The tree's row is
+    /// deselected before its container leaves, so WPF selects no first row:
+    /// nothing opens, no selection is announced, and the tree has no
+    /// selected item.</summary>
+    [Fact]
+    public void ATreeRowSelectedBesideTheDualPanesSelectionLeavesWithoutOpeningAnything() => RunSta(() =>
+    {
+        using var host = new Host();
+        SeedNotes(host, ("docs/a.md", DateTime.Now), ("docs/b.md", DateTime.Now), ("y.md", DateTime.Now), ("z.md", DateTime.Now));
+        host.Initialize();
+        host.Sidebar.IsDualPaneEnabled = true;
+        var opened = new List<string>();
+        FileTreeNodeViewModel docs = LandOnRow(host, host.Sidebar.RootNodes.Single(node => node.Path == "docs"), opened);
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => host.Sidebar.DualPaneFiles.Any(node => node.Path == "docs/a.md")),
+            "premise: the dual pane never listed the folder");
+        host.Sidebar.SelectedNode = host.Sidebar.DualPaneFiles.Single(node => node.Path == "docs/a.md");
+        Settle(host);
+        Assert.True(docs.IsSelected, "premise: the tree's row let go of its selection");
+        opened.Clear();
+        host.Announced.Clear();
+
+        Directory.Delete(Path.Combine(host.Root, "docs"), recursive: true);
+        RescanAndRefresh(host);
+
+        Assert.Null(host.Tree.SelectedItem);
+        Assert.DoesNotContain(ShownRowContainers(host), pair => pair.Value.IsSelected);
+        Assert.Empty(opened);
+        Assert.DoesNotContain(host.Announced, item => item is A11yEvent.RowSelected or A11yEvent.TreeFolderSelected);
+    });
+
+    /// <summary>The red team's M1: the tree's selected row is not the
+    /// sidebar's selection — a list's row holds it (the filter results, the
+    /// dual pane; a node outside the tree stands in for one) — and the tree's
+    /// row is edited outside Slate so that the sort would move it. It is
+    /// anchored like the reader's row, so it stays: its container never
+    /// leaves selected, WPF selects no first row, and nothing opens or is
+    /// announced.</summary>
+    [Fact]
+    public void ATreeRowSelectedBesideAListsSelectionStaysThroughAMoveAndOpensNothing() => RunSta(() =>
+    {
+        using var host = new Host();
+        SeedNotes(host, ("d.md", DateTime.Today.AddMinutes(4)), ("c.md", DateTime.Today.AddMinutes(3)), ("b.md", DateTime.Today.AddMinutes(2)), ("a.md", DateTime.Today.AddMinutes(1)));
+        host.Initialize();
+        host.Sidebar.SortMode = SidebarSortMode.ModifiedNewest;
+        Settle(host);
+        Assert.Equal(["d.md", "c.md", "b.md", "a.md"], host.Sidebar.RootNodes.Select(node => node.Path));
+        var opened = new List<string>();
+        FileTreeNodeViewModel treeRow = LandOnSelected(host, "b.md", opened);
+        host.Sidebar.SelectedNode = new FileTreeNodeViewModel(host.Sidebar, "elsewhere.md", "elsewhere.md", isDirectory: false, level: 0, hasChildren: false);
+        Settle(host);
+        Assert.True(treeRow.IsSelected, "premise: the tree's row let go of its selection");
+        opened.Clear();
+        host.Announced.Clear();
+
+        RewriteOutsideSlate(host, "b.md", DateTime.Today.AddMinutes(5));
+        RescanAndRefresh(host);
+
+        Assert.Same(treeRow, host.Tree.SelectedItem);
+        Assert.Empty(opened);
+        Assert.DoesNotContain(host.Announced, item => item is A11yEvent.RowSelected or A11yEvent.TreeFolderSelected);
+    });
+
+    /// <summary>Codex round 1: a note created through the sidebar from a
+    /// selected row takes the selection on both halves — the tree's
+    /// selected item, its node and its container — and the row it was
+    /// created from, which the publication now keeps, lets go of
+    /// it.</summary>
+    [Fact]
+    public void CreatingFromASelectedRowMovesBothHalvesOfTheSelectionToTheNewRow() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize();
+        var opened = new List<string>();
+        FileTreeNodeViewModel from = LandOnSelected(host, "note1.md", opened);
+
+        host.Sidebar.CreateNoteCommand.Execute(null);
+        Settle(host);
+
+        FileTreeNodeViewModel created = host.Sidebar.RootNodes.Single(node => node.Path == "Untitled.md");
+        Assert.Same(created, host.Sidebar.SelectedNode);
+        Assert.Same(created, host.Tree.SelectedItem);
+        Assert.True(created.IsSelected, "the new row's node is not selected");
+        Assert.True(ContainerOf(host, created).IsSelected, "the new row's container is not selected");
+        Assert.False(from.IsSelected, "the row the note was created from still holds the selection");
+        Assert.False(ContainerOf(host, from).IsSelected, "the row the note was created from still shows selected");
+    });
+
+    /// <summary>Codex round 1: a note duplicated from "Older" while "Today"
+    /// is collapsed. The copy, modified now, joins the collapsed "Today",
+    /// and the duplicate's named successor takes the selection — the copy's
+    /// node, the original's let go of — and the keys land on the "Today"
+    /// header holding it, which stays collapsed and unselected.</summary>
+    [Fact]
+    public void ADuplicateIntoACollapsedDateGroupLandsTheKeysOnTheGroupHoldingIt() => RunSta(() =>
+    {
+        using var host = new Host();
+        SeedNotes(host, ("t.md", DateTime.Today.AddMinutes(1)), ("o.md", DaysBack(60)), ("p.md", DaysBack(61)));
+        host.Initialize();
+        UseDateGroups(host);
+        FileTreeNodeViewModel today = GroupHeader(host, "Today");
+        today.IsExpanded = false;
+        Settle(host);
+        var opened = new List<string>();
+        FileTreeNodeViewModel original = LandOnRow(host, RowIn(GroupHeader(host, "Older"), "o.md"), opened);
+
+        host.Sidebar.DuplicateCommand.Execute(null);
+        Settle(host);
+
+        Assert.Same(today, GroupHeader(host, "Today"));
+        Assert.False(today.IsExpanded, "the duplicate opened the collapsed group");
+        FileTreeNodeViewModel copy = Assert.Single(today.Children, node => node.Path != "t.md");
+        Assert.Same(copy, host.Sidebar.SelectedNode);
+        Assert.True(copy.IsSelected, "the copy's node does not hold the selection");
+        Assert.False(original.IsSelected, "the original still holds the selection");
+        TreeViewItem header = ContainerOf(host, today);
+        Assert.Same(header, Keyboard.FocusedElement);
+        Assert.False(header.IsSelected, "the keys' landing selected the group's header");
     });
 
     /// <summary>The reader's selected note renamed through the sidebar: the
@@ -515,6 +680,14 @@ public sealed partial class FilesRegionLandingTests
             File.WriteAllText(full, $"# {Path.GetFileNameWithoutExtension(path)}\n");
             File.SetLastWriteTime(full, modified);
         }
+    }
+
+    /// <summary>One more note, modified at <paramref name="modified"/>.</summary>
+    private static void SeedNote(Host host, string path, DateTime modified)
+    {
+        string full = Path.Combine(host.Root, path);
+        File.WriteAllText(full, $"# {Path.GetFileNameWithoutExtension(path)}\n");
+        File.SetLastWriteTime(full, modified);
     }
 
     /// <summary>A note rewritten outside Slate, its modified time set to

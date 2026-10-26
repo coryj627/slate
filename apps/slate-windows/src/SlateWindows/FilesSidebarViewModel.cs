@@ -782,6 +782,14 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         FileTreeNodeViewModel? previous = _selectedNode;
         if (SetField(ref _selectedNode, node, nameof(SelectedNode)))
         {
+            // WB-6 (Codex round 1): the publication keeps rows now, so the
+            // row that held the selection may still be shown; its container
+            // lets go of it.
+            if (previous is not null && !ReferenceEquals(previous, node))
+            {
+                previous.IsSelected = false;
+            }
+
             // The view half (verification 1): without the container's
             // IsSelected, the restore was invisible and the next arrow
             // key jumped to the tree top and opened the first file.

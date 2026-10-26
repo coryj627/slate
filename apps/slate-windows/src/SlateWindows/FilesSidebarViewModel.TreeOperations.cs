@@ -603,7 +603,11 @@ internal sealed partial class FilesSidebarViewModel
         // rows, so the old tree cannot be walked afterwards — and an earlier
         // removal's landing nobody took is stale. Every publication, organic
         // or a rescan's, keeps the rows it did not change.
-        SelectionPlace? place = SnapshotSelectionPlace();
+        SelectionPlace? place = SnapshotSelectionPlace(SelectedNode);
+        SelectionPlace? treeRow = Flatten(RootNodes).FirstOrDefault(row => row.IsSelected) is { } selectedRow
+            && !ReferenceEquals(selectedRow, SelectedNode)
+                ? SnapshotSelectionPlace(selectedRow)
+                : null;
         _ = TakeVanishedSelection();
         PublishKeepingUnchangedRows(outcome.RootNodes);
         if (outcome.TagGeneration == _tagGeneration)
@@ -621,7 +625,7 @@ internal sealed partial class FilesSidebarViewModel
         // W6-2 PR A (contract A-8): a surface's "Reveal in File Tree" whose
         // node the previous tree had not materialised.
         ConsumePendingSurfaceSelection();
-        ReconcileSelectionAfterPublication(place);
+        ReconcileSelectionAfterPublication(place, treeRow);
 
         // Project the AUTHORITATIVE checked set onto the published
         // nodes (codex rounds 4-5): a fresh node whose path is

@@ -89,7 +89,7 @@ internal sealed partial class FilesSidebarViewModel : ISurfaceNoteCreator
             return;
         }
         _pendingSurfaceSelectPath = null;
-        SelectedNode = target;
+        SelectOnBothHalves(target);
         TreeSelectionRestored?.Invoke();
     }
 }

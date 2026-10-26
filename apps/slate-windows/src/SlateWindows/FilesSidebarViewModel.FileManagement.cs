@@ -622,6 +622,12 @@ internal sealed partial class FilesSidebarViewModel
                 is { } fresh)
         {
             SelectSilently(fresh);
+            // WB-6 (Codex round 1): the named successor takes the keys too,
+            // when they are in the tree. The publication keeps the row they
+            // were on now (a duplicate's original), so they no longer fall to
+            // the selection on their own; a successor the tree hides hands
+            // them to the collapsed row holding it.
+            _vanishedSelection = new VanishedSelection(ShownRowHolding(fresh, RootNodes), Successor: true);
         }
 
         TreeSelectionRestored?.Invoke();
@@ -647,32 +653,54 @@ internal sealed partial class FilesSidebarViewModel
     /// to land on: the nearest one that survived
     /// (<see cref="NearestSurvivor"/>), focused without selecting it — R-5's
     /// focus-without-select, since a selection would open the note.</remarks>
-    private void ReconcileSelectionAfterPublication(SelectionPlace? place)
+    /// <param name="place">The sidebar's selection's place, read before the
+    /// publication.</param>
+    /// <param name="treeRow">The tree's own selected row's place when it is
+    /// not the sidebar's selection (Codex round 1): a delete let go of the
+    /// selection before its refresh, or the dual pane holds it. Gone, that
+    /// row hands the keys to its nearest survivor, and the selection is left
+    /// as it is.</param>
+    private void ReconcileSelectionAfterPublication(SelectionPlace? place, SelectionPlace? treeRow)
     {
-        if (place is null)
+        if (place is not null && !(SelectedNode is { } current && InTree(current)))
         {
-            return;
+            // A selection that was not a tree row (a list's row) is re-bound
+            // silently, as main always did: the keys were not on its row.
+            if (RowWithKey(RootNodes, place.SelectedKey, string.Empty) is { } replacement)
+            {
+                SelectSilently(replacement, reseatOf: place.SelectedPath);
+                if (place.InTree)
+                {
+                    RecordSelectionLanding(ShownRowHolding(replacement, RootNodes));
+                }
+
+                return;
+            }
+
+            if (SetField(ref _selectedNode, null, nameof(SelectedNode)))
+            {
+                RaiseCommandStates();
+            }
+
+            if (place.InTree)
+            {
+                FileTreeNodeViewModel? survivor = NearestSurvivor(place);
+                if (survivor is not null || treeRow is null)
+                {
+                    RecordSelectionLanding(survivor);
+                    return;
+                }
+            }
         }
 
-        if (SelectedNode is { } current && Flatten(RootNodes).Any(node => ReferenceEquals(node, current)))
+        if (treeRow is not null && !InTree(treeRow.Row))
         {
-            return;
+            RecordSelectionLanding(NearestSurvivor(treeRow));
         }
-
-        if (RowWithKey(RootNodes, place.SelectedKey, string.Empty) is { } replacement)
-        {
-            SelectSilently(replacement, reseatOf: place.SelectedPath);
-            RecordSelectionLanding(ShownRowHolding(replacement, RootNodes));
-            return;
-        }
-
-        if (SetField(ref _selectedNode, null, nameof(SelectedNode)))
-        {
-            RaiseCommandStates();
-        }
-
-        RecordSelectionLanding(NearestSurvivor(place));
     }
+
+    private bool InTree(FileTreeNodeViewModel row) =>
+        Flatten(RootNodes).Any(node => ReferenceEquals(node, row));
 
     /// <summary>Records where the keys go after a publication moved the
     /// selected row — <paramref name="landing"/>, or the tree's own landing
@@ -689,13 +717,21 @@ internal sealed partial class FilesSidebarViewModel
     /// would land on if it is gone, nearest first: its next siblings in
     /// order, then its previous ones nearest first, then its parent, and the
     /// same around the parent, up to the root.</summary>
-    private sealed record SelectionPlace(string SelectedKey, string SelectedPath, IReadOnlyList<string> CandidateKeys);
+    /// <param name="InTree">Whether the published tree held the row: a
+    /// list's row (the filter results, the dual pane) has no place in
+    /// it.</param>
+    private sealed record SelectionPlace(
+        FileTreeNodeViewModel Row,
+        string SelectedKey,
+        string SelectedPath,
+        IReadOnlyList<string> CandidateKeys,
+        bool InTree);
 
-    /// <summary>The selected row's <see cref="SelectionPlace"/> in the
-    /// published tree; null with nothing selected.</summary>
-    private SelectionPlace? SnapshotSelectionPlace()
+    /// <summary><paramref name="selected"/>'s <see cref="SelectionPlace"/> in
+    /// the published tree; null with nothing selected.</summary>
+    private SelectionPlace? SnapshotSelectionPlace(FileTreeNodeViewModel? selected)
     {
-        if (SelectedNode is not { } selected)
+        if (selected is null)
         {
             return null;
         }
@@ -703,7 +739,7 @@ internal sealed partial class FilesSidebarViewModel
         var ancestry = new List<(IList<FileTreeNodeViewModel> Level, FileTreeNodeViewModel Row, string FolderPath)>();
         if (!Find(RootNodes, string.Empty))
         {
-            return new SelectionPlace(RowKey(selected, string.Empty) ?? selected.Path, selected.Path, []);
+            return new SelectionPlace(selected, RowKey(selected, string.Empty), selected.Path, [], InTree: false);
         }
 
         var candidates = new List<string>();
@@ -713,20 +749,20 @@ internal sealed partial class FilesSidebarViewModel
             int index = level.IndexOf(row);
             foreach (FileTreeNodeViewModel sibling in level.Skip(index + 1).Concat(level.Take(index).Reverse()))
             {
-                if (RowKey(sibling, folderPath) is { } key)
+                if (!sibling.IsPlaceholder)
                 {
-                    candidates.Add(key);
+                    candidates.Add(RowKey(sibling, folderPath));
                 }
             }
 
-            if (depth > 0 && RowKey(ancestry[depth - 1].Row, ancestry[depth - 1].FolderPath) is { } parent)
+            if (depth > 0)
             {
-                candidates.Add(parent);
+                candidates.Add(RowKey(ancestry[depth - 1].Row, ancestry[depth - 1].FolderPath));
             }
         }
 
         (_, FileTreeNodeViewModel self, string selfFolder) = ancestry[^1];
-        return new SelectionPlace(RowKey(self, selfFolder) ?? self.Path, selected.Path, candidates);
+        return new SelectionPlace(selected, RowKey(self, selfFolder), selected.Path, candidates, InTree: true);
 
         bool Find(IList<FileTreeNodeViewModel> level, string folderPath)
         {
@@ -748,11 +784,13 @@ internal sealed partial class FilesSidebarViewModel
     /// <summary>WB-6: a row's key across the whole tree — a file's or a
     /// folder's path; a date group's header, whose path is empty, by the
     /// folder it is in (<paramref name="folderPath"/>, empty at the root) and
-    /// its label, as the reconcile keys it within its level; null for a
-    /// placeholder, which never takes the keys.</summary>
-    private static string? RowKey(FileTreeNodeViewModel row, string folderPath) => row switch
+    /// its label, as the reconcile keys it within its level; a placeholder
+    /// (the loading, error and overflow rows) by its folder and its text, so
+    /// a selected one is re-seated on its fresh row (the red team's L3). A
+    /// placeholder is never a candidate for the keys.</summary>
+    private static string RowKey(FileTreeNodeViewModel row, string folderPath) => row switch
     {
-        { IsPlaceholder: true } => null,
+        { IsPlaceholder: true } => folderPath + "\u0000placeholder:" + row.Name,
         { IsGroupHeader: true } => folderPath + LevelKey(row),
         _ => row.Path,
     };
@@ -817,10 +855,13 @@ internal sealed partial class FilesSidebarViewModel
         }
     }
 
-    /// <summary>A selected row a publication removed, and the row its keys
-    /// land on — null for the tree's own landing (its first row, or the
-    /// empty tree, the region's stop).</summary>
-    internal sealed record VanishedSelection(FileTreeNodeViewModel? Survivor);
+    /// <summary>A selected row a publication removed or rebuilt, and the row
+    /// its keys land on — null for the tree's own landing (its first row, or
+    /// the empty tree, the region's stop). A mutation's named successor
+    /// (<paramref name="Successor"/>) takes the keys wherever they are in the
+    /// tree; any other landing only when they were on a row the publication
+    /// removed.</summary>
+    internal sealed record VanishedSelection(FileTreeNodeViewModel? Survivor, bool Successor = false);
 
     private VanishedSelection? _vanishedSelection;
 
@@ -862,9 +903,9 @@ internal sealed partial class FilesSidebarViewModel
         {
             foreach (FileTreeNodeViewModel row in level)
             {
-                if (RowKey(row, folderPath) is { } key)
+                if (!row.IsPlaceholder)
                 {
-                    _ = shown.TryAdd(key, row);
+                    _ = shown.TryAdd(RowKey(row, folderPath), row);
                 }
 
                 if (row.IsExpanded)
@@ -899,8 +940,24 @@ internal sealed partial class FilesSidebarViewModel
             return;
         }
 
-        SelectedNode = created;
+        SelectOnBothHalves(created);
         InlineRenameRequested?.Invoke();
+    }
+
+    /// <summary>WB-6 (Codex round 1): a mutation's or a surface's named row
+    /// takes the selection through the setter — it opens and announces as a
+    /// selection does — and on both halves: the publication keeps rows now,
+    /// so the row that held the selection may still be shown, and its
+    /// container lets go of it.</summary>
+    private void SelectOnBothHalves(FileTreeNodeViewModel node)
+    {
+        if (_selectedNode is { } previous && !ReferenceEquals(previous, node))
+        {
+            previous.IsSelected = false;
+        }
+
+        SelectedNode = node;
+        node.IsSelected = true;
     }
 
     // ---- The Move-To picker (F4) ---------------------------------

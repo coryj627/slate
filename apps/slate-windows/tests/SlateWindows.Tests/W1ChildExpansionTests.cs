@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Collections.Concurrent;
+using System.Collections.ObjectModel;
 using SlateWindows;
 using uniffi.slate_uniffi;
 
@@ -84,6 +85,39 @@ public sealed class W1ChildExpansionTests
         Assert.Equal(0, collectionMutations);
         Assert.Equal(2, Volatile.Read(ref workerInvocation));
         Assert.Contains("Showing the first 5,000 items", sidebar.Status, StringComparison.Ordinal);
+    }
+
+    /// <summary>Plan 44 WB-6 (the red team's L3): the selection on the
+    /// root's overflow row — a placeholder, never a kept row — survives a
+    /// refresh that lists the root again: the fresh overflow row takes it,
+    /// on both halves. Placeholders are keyed by the folder they are in and
+    /// their text, so a selected one is re-seated, never resolved as gone
+    /// (which moved the keys to the row before it on every run).</summary>
+    [Fact]
+    [Trait("census", "moderate")]
+    public async Task ASelectedOverflowRowStaysSelectedThroughARefresh()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "overflow-selection");
+        for (int index = 0; index < FilesSidebarViewModel.MaxMaterializedDirectoryItems + 1; index++)
+        {
+            File.WriteAllText(Path.Combine(fixture.Root, $"note-{index:D5}.md"), string.Empty);
+        }
+
+        using VaultSession session = OpenScanned(fixture.Root);
+        var context = new PumpSynchronizationContext();
+        var sidebar = CreateSidebar(session, fixture.Root, context, (work, cancellationToken) => Task.Run(work, cancellationToken));
+        await DrainUntilComplete(sidebar.TreeRefreshCompletion, context, TimeSpan.FromSeconds(30));
+        FileTreeNodeViewModel overflow = Assert.Single(sidebar.RootNodes, node => node.IsPlaceholder);
+        sidebar.SelectedNode = overflow;
+        overflow.IsSelected = true;
+
+        sidebar.Refresh();
+        await DrainUntilComplete(sidebar.TreeRefreshCompletion, context, TimeSpan.FromSeconds(30));
+
+        FileTreeNodeViewModel fresh = Assert.Single(sidebar.RootNodes, node => node.IsPlaceholder);
+        Assert.Equal(overflow.Name, fresh.Name);
+        Assert.Same(fresh, sidebar.SelectedNode);
+        Assert.True(fresh.IsSelected, "the fresh overflow row does not hold the selection");
     }
 
     [Fact]
@@ -229,6 +263,9 @@ public sealed class W1ChildExpansionTests
         using FixtureVault fixture = FixtureVault.Create(0, "child-expansion-refresh");
         Directory.CreateDirectory(Path.Combine(fixture.Root, "folder"));
         File.WriteAllText(Path.Combine(fixture.Root, "folder", "child.md"), string.Empty);
+        // An unchanged root row, so the refresh keeps the published tree
+        // and lets go of the renamed folder's row alone.
+        File.WriteAllText(Path.Combine(fixture.Root, "anchor.md"), string.Empty);
         using VaultSession session = OpenScanned(fixture.Root);
         var context = new PumpSynchronizationContext();
         using var childStarted = new ManualResetEventSlim();
@@ -254,12 +291,14 @@ public sealed class W1ChildExpansionTests
         detached.IsExpanded = true;
         Task childCompletion = sidebar.ChildExpansionCompletion;
         Assert.True(childStarted.Wait(TimeSpan.FromSeconds(5)));
+        ObservableCollection<FileTreeNodeViewModel> published = sidebar.RootNodes;
         _ = session.RenameFolderWithNote("folder", "moved");
         sidebar.Refresh();
         Task refreshCompletion = sidebar.TreeRefreshCompletion;
         releaseChild.Set();
         await DrainUntilComplete(Task.WhenAll(childCompletion, refreshCompletion), context);
 
+        Assert.Same(published, sidebar.RootNodes);
         Assert.Equal(FileTreeChildLoadState.Failed, detached.ChildLoadState);
         Assert.Single(
             detached.Children,
@@ -335,6 +374,7 @@ public sealed class W1ChildExpansionTests
         using FixtureVault fixture = FixtureVault.Create(0, "child-expansion-detached");
         Directory.CreateDirectory(Path.Combine(fixture.Root, "folder"));
         File.WriteAllText(Path.Combine(fixture.Root, "folder", "child.md"), string.Empty);
+        File.WriteAllText(Path.Combine(fixture.Root, "anchor.md"), string.Empty);
         using VaultSession session = OpenScanned(fixture.Root);
         var context = new PumpSynchronizationContext();
         int workerInvocations = 0;
@@ -352,9 +392,11 @@ public sealed class W1ChildExpansionTests
             sidebar.RootNodes,
             node => node.Path == "folder");
 
+        ObservableCollection<FileTreeNodeViewModel> published = sidebar.RootNodes;
         _ = session.RenameFolderWithNote("folder", "moved");
         sidebar.Refresh();
         await DrainUntilComplete(sidebar.TreeRefreshCompletion, context);
+        Assert.Same(published, sidebar.RootNodes);
         Assert.DoesNotContain(sidebar.RootNodes, node => ReferenceEquals(node, detached));
 
         detached.IsExpanded = true;
@@ -423,6 +465,7 @@ public sealed class W1ChildExpansionTests
         using FixtureVault fixture = FixtureVault.Create(0, "bulk-expansion-refresh-precedence");
         Directory.CreateDirectory(Path.Combine(fixture.Root, "folder"));
         File.WriteAllText(Path.Combine(fixture.Root, "folder", "child.md"), string.Empty);
+        File.WriteAllText(Path.Combine(fixture.Root, "anchor.md"), string.Empty);
         using VaultSession session = OpenScanned(fixture.Root);
         var context = new PumpSynchronizationContext();
         using var refreshStarted = new ManualResetEventSlim();
@@ -447,6 +490,7 @@ public sealed class W1ChildExpansionTests
             sidebar.RootNodes,
             node => node.Path == "folder");
 
+        ObservableCollection<FileTreeNodeViewModel> published = sidebar.RootNodes;
         _ = session.RenameFolderWithNote("folder", "moved");
         sidebar.Refresh();
         Task refresh = sidebar.TreeRefreshCompletion;
@@ -458,6 +502,7 @@ public sealed class W1ChildExpansionTests
         releaseRefresh.Set();
         await DrainUntilComplete(Task.WhenAll(refresh, expansion), context);
 
+        Assert.Same(published, sidebar.RootNodes);
         FileTreeNodeViewModel current = Assert.Single(
             sidebar.RootNodes,
             node => node.Path == "moved");
