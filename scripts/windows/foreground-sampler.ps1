@@ -66,7 +66,9 @@ function Write-VisibleWindows {
         $true
     }
     [void][SlateCi.Foreground]::EnumWindows($callback, [IntPtr]::Zero)
-    foreach ($line in $windows) { [IO.File]::AppendAllText($Out, "$line`n") }
+    if ($windows.Count -gt 0) {
+        [IO.File]::AppendAllText($Out, (($windows -join "`n") + "`n"))
+    }
 }
 
 $directory = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($Out))
