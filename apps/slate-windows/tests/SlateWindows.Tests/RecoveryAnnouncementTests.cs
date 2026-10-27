@@ -226,6 +226,66 @@ public sealed class RecoveryAnnouncementTests
         Assert.Equal(A11yPriority.High, failure.Priority);
     }
 
+    /// <summary>A binding field token (<c>@path=</c>, <c>@message=</c>): a
+    /// VaultException's Message, never core's sentence (#1266).</summary>
+    private const string FieldToken = @"@\w+=";
+
+    /// <summary>Core's words for the read failure of the host's note.</summary>
+    private static string CoresDetail(Host host) =>
+        SlateUniffiMethods.VaultErrorDetail(Assert.ThrowsAny<VaultException>(() => host.Session.ReadText("note0.md")));
+
+    /// <summary>#1266: a note that cannot load is spoken once, in core's
+    /// words, by the explicit open that lands on its tab, never by the Files
+    /// selection that previews it (R-2: the row's own line is what the
+    /// reader hears); a split's new tab loads again and speaks once more.</summary>
+    [Fact]
+    public void AnExplicitOpenOfAnUnreadableNoteSpeaksItsFailureOnce()
+    {
+        using var host = new Host();
+        File.WriteAllBytes(host.NotePath, [0xff, 0xfe, 0xff]);
+        host.Announced.Clear();
+
+        host.Workspace.OpenPath("note0.md", fromSelection: true);
+        Assert.DoesNotContain(host.Rendered, r => r.Text.StartsWith("Could not ", StringComparison.Ordinal));
+
+        host.Workspace.OpenPath("note0.md");
+        WorkspaceTabViewModel tab = Assert.IsType<WorkspaceTabViewModel>(host.Workspace.ActiveGroup.ActiveTab);
+        var failed = Assert.IsType<A11yEvent.FileReopenFailed>(tab.LoadFailureEvent);
+        RenderedAnnouncement spoken = Assert.Single(host.Rendered, r => r.Text.StartsWith("Could not ", StringComparison.Ordinal));
+        Assert.Equal(SlateUniffiMethods.A11yRender(failed).Text, spoken.Text);
+        Assert.Equal(A11yPriority.High, spoken.Priority);
+        Assert.Equal(CoresDetail(host), failed.Detail);
+        Assert.DoesNotMatch(FieldToken, failed.Detail);
+
+        host.Workspace.OpenPath("note0.md", WorkspaceOpenTarget.SplitRight);
+        Assert.Equal(2, host.Rendered.Count(r => r.Text.StartsWith("Could not ", StringComparison.Ordinal)));
+    }
+
+    /// <summary>#1266: a reopened note that cannot load is spoken once, as
+    /// the reopen's own <c>FileReopenFailed</c> in core's words: the tab's
+    /// load records its failure and speaks nothing, so the reopen never
+    /// doubles.</summary>
+    [Fact]
+    public void ReopeningAnUnreadableNoteSpeaksItsFailureOnce()
+    {
+        using var host = new Host();
+        host.CloseNote();
+        File.WriteAllBytes(host.NotePath, [0xff, 0xfe, 0xff]);
+        host.Announced.Clear();
+
+        host.Workspace.ReopenClosedTabCommand.Execute(null);
+
+        WorkspaceTabViewModel tab = Assert.IsType<WorkspaceTabViewModel>(host.Workspace.ActiveGroup.ActiveTab);
+        var failed = Assert.IsType<A11yEvent.FileReopenFailed>(Assert.Single(
+            host.Announced,
+            e => SlateUniffiMethods.A11yRender(e).Text.StartsWith("Could not ", StringComparison.Ordinal)));
+        Assert.Equal(tab.LoadFailure, failed.Detail);
+        Assert.Equal(CoresDetail(host), failed.Detail);
+        Assert.DoesNotMatch(FieldToken, failed.Detail);
+        Assert.Equal(A11yPriority.High, SlateUniffiMethods.A11yRender(failed).Priority);
+        Assert.DoesNotContain(host.Announced, e => e is A11yEvent.ReopenedFile or A11yEvent.ReopenTargetMissing);
+    }
+
     [Fact]
     public void ReopeningExistingFileKeepsItsExistingAnnouncement()
     {

@@ -2,6 +2,16 @@
 
 Issues: Closes #1266, Closes #1288. Size S. Lanes: rust, windows, swift (compile) — all three under either WD23 answer, because `embed_target_kind` / `EmbedTargetKind` is a new FFI export under both and the generated Swift binding must compile it (`swift-tests.yml:23-27` runs on any `crates/slate-core/**` or `crates/slate-uniffi/**` change; plan §7: a binding change adds `swift-tests.yml`); only the `A11yEvent` mirror arms, the corpus rows, the blind mac mirror entry and the mac designation are conditional on WD23's new-event answer. AT: NVDA spot (the two Windows sentences). Wave: W3. Depends on: nothing (WB-8 is alone in its wave on core's `a11y.rs` corpus, §6). Parallel with: WB-7, WB-9. Decision: WD23 (pending; recommended "reuse `FileReopenFailed`"; under the other answer — a new `NoteOpenFailed` — the corpus, the three mirrors (the mac one a blind edit), the artifact and the mac designation join the chunk, as the alternative design below says; the Swift lane is required either way).
 
+## Amended at implementation (2026-10-27)
+
+This section outranks the text below it.
+
+- **WD23 answered as recommended:** reuse `FileReopenFailed`. The owner's approval of the plan 44 run, 2026-10-26, took every pending decision as recommended. No corpus row, mirror, artifact or mac designation changes. The Swift lane still compiles the new `EmbedTargetKind` binding.
+- **Main's load failure reads `@path=note0.md`, not `@message=…`.** That is the binding's field token for the invalid-UTF-8 read. The facts therefore pin the detail to core's own `VaultErrorDetail` for the same read failure, and they reject any `@field=` token (`@\w+=`) rather than only `@message=`. Measured: the first draft of `ReopeningAnUnreadableNoteSpeaksItsFailureOnce` passed on main because it checked only for `@message=`.
+- **`embed_target_kind` lives in `a11y.rs` and calls `session::classify_path`, now `pub(crate)`.** That is the scanner's own extension rule, so one rule decides what a base is and no copy can drift. Its fact also pins `base`, with no extension, and `folder.base/note.md` as notes.
+- **`EmbedTitleRealizedSurfaceTests`' `Resolves` helper learns a base.** A whole-file resolution matches a `Base` row when core classifies its target as a base, and it matches a `Note` row only when core says note. The flipped row needed this for its leaf check.
+- **`CtrlEOnABaseEmbedTitlesItAsABase` also reads the popover's card** (`PopoverEmbedRoot.Title`, "Embedded base: Notes"), beside the announcement, the UIA name and the header.
+
 ## Goal
 
 A note whose load fails today puts the binding's `VaultException.Message`

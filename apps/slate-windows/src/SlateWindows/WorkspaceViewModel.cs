@@ -240,6 +240,13 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
 
     private void BumpContentGeneration() => _contentGeneration++;
     internal string? LoadFailure { get; private set; }
+
+    /// <summary>#1266: the event a failed load renders in the tab's status
+    /// line — core's <c>FileReopenFailed</c>, its detail core's — for the
+    /// command that opened the tab to speak, once. The load never speaks
+    /// it: it also runs on the reopen (which speaks its own), the startup
+    /// restore, the same-item reloads and the rescan's re-seat.</summary>
+    internal A11yEvent? LoadFailureEvent { get; private set; }
     public EditorPreferencesViewModel EditorPreferences { get; }
     public string EditorAutomationName =>
         $"{System.IO.Path.GetFileName(Path)} editor";
@@ -1858,6 +1865,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     private void Load()
     {
         LoadFailure = null;
+        LoadFailureEvent = null;
         if (!IsMarkdown)
         {
             return;
@@ -1873,8 +1881,11 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         }
         catch (VaultException exception)
         {
-            LoadFailure = exception.Message;
-            Status = $"Could not open {Path}: {exception.Message}";
+            string detail = SlateUniffiMethods.VaultErrorDetail(exception);
+            var failed = new A11yEvent.FileReopenFailed(System.IO.Path.GetFileName(Path), detail);
+            LoadFailure = detail;
+            LoadFailureEvent = failed;
+            Status = SlateUniffiMethods.A11yRender(failed).Text;
         }
     }
 

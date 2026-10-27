@@ -123,6 +123,34 @@ public sealed class W1WorkspacePersistenceTests : IDisposable
 
 public sealed class W1WorkspaceModelTests
 {
+    /// <summary>#1266: a tab whose note cannot load shows core's sentence
+    /// in its status line, keeps core's detail as its load failure, and
+    /// speaks nothing: the command that opened the tab speaks it, once.</summary>
+    [Fact]
+    public void ATabThatCannotLoadShowsCoresSentenceAndSpeaksNothing()
+    {
+        using FixtureVault fixture = FixtureVault.Create(1, "workspace-load-failure");
+        File.WriteAllBytes(Path.Combine(fixture.Root, "note0.md"), [0xff, 0xfe, 0xff]);
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using var cancel = new CancelToken();
+        session.ScanInitial(cancel);
+        VaultException failure = Assert.ThrowsAny<VaultException>(() => session.ReadText("note0.md"));
+        string detail = SlateUniffiMethods.VaultErrorDetail(failure);
+        var announced = new List<A11yEvent>();
+
+        using var tab = new WorkspaceTabViewModel(
+            session,
+            new WorkspaceTabState(Guid.NewGuid(), new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+            announce: announced.Add,
+            startInteractionBackgroundWork: false);
+
+        Assert.Equal(detail, tab.LoadFailure);
+        Assert.DoesNotMatch(@"@\w+=", tab.LoadFailure);
+        Assert.Equal(new A11yEvent.FileReopenFailed("note0.md", detail), tab.LoadFailureEvent);
+        Assert.Equal(SlateUniffiMethods.A11yRender(tab.LoadFailureEvent!).Text, tab.Status);
+        Assert.Empty(announced);
+    }
+
     [Fact]
     public void TabsSplitsLeavesReopenAndPersistence_RoundTripThroughRealSession()
     {

@@ -326,6 +326,33 @@ public sealed class W2EditorInteractionTests
         Assert.Equal(row.Title, interactions.PopoverEmbedRoot!.Title);
     }
 
+    /// <summary>#1288: Ctrl+E on a <c>.base</c> embed titles it as a base, as
+    /// the reading view's card does: core classifies the resolved target
+    /// (<c>EmbedTargetKind</c>), so the announcement, the popover's UIA name,
+    /// its visible header and its card read "Embedded base: Notes", never
+    /// "Embedded note: Notes.base".</summary>
+    [Fact]
+    public void CtrlEOnABaseEmbedTitlesItAsABase()
+    {
+        using InteractionFixture fixture = InteractionFixture.Create("# Source\n\n![[Notes.base]]\n");
+        File.WriteAllText(
+            Path.Combine(fixture.Root, "Notes.base"),
+            "filters: 'file.ext == \"md\"'\nviews:\n  - type: table\n    name: Main\n");
+        using VaultSession session = ScannedSession(fixture);
+        var announcements = new List<A11yEvent>();
+        using WorkspaceTabViewModel tab = OpenSourceTab(session, announcements);
+        EditorInteractionCoordinator interactions = tab.EditorInteractions!;
+
+        Assert.True(interactions.PreviewEmbedAt(Inside(tab.Text, "![[Notes.base]]")));
+        WaitForUi(() => !interactions.PopoverTitle.StartsWith("Loading", StringComparison.Ordinal));
+
+        var shown = Assert.IsType<A11yEvent.EmbedPreviewShown>(Assert.Single(announcements));
+        Assert.Equal(new ResolvedEmbed.Base("Notes.base"), shown.Resolved);
+        Assert.Equal(SlateUniffiMethods.A11yRender(shown).Text, interactions.PopoverAutomationName);
+        Assert.StartsWith("Embedded base: Notes", interactions.PopoverTitle, StringComparison.Ordinal);
+        Assert.Equal("Embedded base: Notes", interactions.PopoverEmbedRoot!.Title);
+    }
+
     /// <summary>#1279 (locked decision 05 §4): a preview request retired
     /// while its worker is on the way to core — the popover closed, the
     /// note's interaction state invalidated, the tab disposed — cancels its

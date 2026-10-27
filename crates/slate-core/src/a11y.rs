@@ -3373,6 +3373,27 @@ pub fn resolved_embed_title(resolved: &ResolvedEmbed) -> String {
     }
 }
 
+/// What an embed's resolved target is, for the card that titles it
+/// (#1288): a `.base` file is a base (mac `BaseEmbedDocument`'s rule), never
+/// a note, and every other target is a note. A host that resolved a whole
+/// file asks this before it hands core a [`ResolvedEmbed`], so the preview,
+/// its UIA name, the embeds leaf and the reading view agree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmbedTargetKind {
+    Note,
+    Base,
+}
+
+/// The kind of an embed's resolved target (#1288), by the scanner's own
+/// extension rule (`session::classify_path`, case-folded), so a host and
+/// the index never disagree on what a base is.
+pub fn embed_target_kind(target_path: &str) -> EmbedTargetKind {
+    match crate::session::classify_path(target_path).1.as_deref() {
+        Some("base") => EmbedTargetKind::Base,
+        _ => EmbedTargetKind::Note,
+    }
+}
+
 /// Why an embed preview has nothing to show, from the resolver's own
 /// reason (W7-7, #1251). The wording is the preview card's shipped copy,
 /// moved here so the host passes the reason and never a sentence; the
@@ -6355,6 +6376,18 @@ mod tests {
             ),
         ] {
             assert_eq!(resolved_embed_title(&resolved), expected, "{resolved:?}");
+        }
+    }
+
+    /// #1288: a `.base` file is a base in any case of its extension; a note
+    /// whose name only contains "base" stays a note.
+    #[test]
+    fn embed_target_kind_is_base_only_for_the_base_extension() {
+        for path in ["Projects.base", "PROJECTS.BASE", "a/b.base"] {
+            assert_eq!(embed_target_kind(path), EmbedTargetKind::Base, "{path}");
+        }
+        for path in ["note.md", "base.md", "x.base.md", "base", "folder.base/note.md"] {
+            assert_eq!(embed_target_kind(path), EmbedTargetKind::Note, "{path}");
         }
     }
 
