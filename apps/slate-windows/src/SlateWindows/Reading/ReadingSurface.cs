@@ -199,13 +199,16 @@ internal sealed class ReadingSurface : RichTextBox
         // shown over merged content, which also pulled focus off a tab header
         // the reader had clicked or arrowed to. Hidden (the tab left reading
         // mode, another view took the cell, the surface unloaded), a held
-        // landing is withdrawn so a later merge seats nobody.
+        // landing is withdrawn so a later merge seats nobody — one a rescan
+        // reload carries too (WB-9, #1312): a hidden surface lets go of
+        // everything it holds.
         // (IsVisibleChanged is an event, not a virtual, on UIElement.)
         IsVisibleChanged += (_, args) =>
         {
             if (args.NewValue is false)
             {
                 WithdrawFocusLanding();
+                _carried = null;
             }
         };
     }
@@ -236,7 +239,9 @@ internal sealed class ReadingSurface : RichTextBox
     {
         var surface = (ReadingSurface)d;
         // A held landing (R-10) was asked of the OUTGOING projection; the
-        // incoming one's route asks again for itself.
+        // incoming one's route asks again for itself. A landing a rescan
+        // reload of the tab carries (WB-9, #1312) is not pending here: the
+        // reload's end decides it.
         surface.WithdrawFocusLanding();
         if (surface._model is { } previous)
         {
@@ -250,6 +255,7 @@ internal sealed class ReadingSurface : RichTextBox
             previous.PropertyChanged -= surface.Model_PropertyChanged;
             previous.BlocksAppended -= surface.Model_BlocksAppended;
             previous.TornDown -= surface.Model_TornDown;
+            previous.Tab.ReadingRescanReloadBegan -= surface.OnReadingRescanReloadBegan;
             // Kill the outgoing model's stream BEFORE anything else:
             // its chunk continuations hold list objects that live in
             // THIS surface's document and would keep growing them
@@ -263,6 +269,7 @@ internal sealed class ReadingSurface : RichTextBox
             model.PropertyChanged += surface.Model_PropertyChanged;
             model.BlocksAppended += surface.Model_BlocksAppended;
             model.TornDown += surface.Model_TornDown;
+            model.Tab.ReadingRescanReloadBegan += surface.OnReadingRescanReloadBegan;
             if (ReferenceEquals(surface._lastMerged, model.Document)
                 && model.Document is not null
                 && model.ProjectionComplete)
@@ -373,6 +380,21 @@ internal sealed class ReadingSurface : RichTextBox
     private object? _focusLandingToken;
     private Action? _focusLandingAnnouncement;
     private Action? _focusLandingRefusal;
+    // WB-9 (#1312): the held landing while a rescan reload of its tab runs —
+    // moved off the pending fields, so the reload's teardown and rebind
+    // cannot end it, and still the window slot's under its original token.
+    private CarriedLanding? _carried;
+
+    /// <summary>A held landing on a rescan reload of <paramref name="Tab"/>,
+    /// asked of the projection <paramref name="From"/>. The park is not
+    /// carried: it ran when the landing was asked, and a second run would be
+    /// a second focus move.</summary>
+    private sealed record CarriedLanding(
+        object Token,
+        Action? Announce,
+        Action? Refuse,
+        WorkspaceTabViewModel Tab,
+        ReadingContentViewModel From);
 
     internal IReadOnlyList<ReadingLandmark> LandmarksForTests => _landmarks;
 
@@ -493,8 +515,9 @@ internal sealed class ReadingSurface : RichTextBox
     }
 
     /// <summary>Whether a shell landing is held for this surface's first
-    /// merged projection (<see cref="RequestFocusLanding"/>).</summary>
-    internal bool IsFocusLandingPending => _focusLandingPending;
+    /// merged projection (<see cref="RequestFocusLanding"/>) — carried by a
+    /// rescan reload of its tab included (WB-9).</summary>
+    internal bool IsFocusLandingPending => _focusLandingPending || _carried is not null;
 
     /// <summary>
     /// W7-7 PR 8 (#1253, contract R-10): the shell's editor landing for a
@@ -533,6 +556,9 @@ internal sealed class ReadingSurface : RichTextBox
         Func<bool>? parkWhileUnready = null)
     {
         WithdrawFocusLanding();
+        // WB-9 (red team): a new request supersedes a carried landing as it
+        // does a held one — silently; the reload's end then resumes nothing.
+        _carried = null;
         if (!IsVisible)
         {
             return false;
@@ -573,7 +599,8 @@ internal sealed class ReadingSurface : RichTextBox
 
     /// <summary>Hold the landing, under a token of its own
     /// (<see cref="HeldFocusLanding"/>). The surface seats or refuses it and
-    /// lets go of it when it is hidden or rebinds; everything else that cancels
+    /// lets go of it when it is hidden or rebinds (a rescan reload of the same
+    /// tab carries it, WB-9); everything else that cancels
     /// it — the reader leaving where the request found them, a modal opening,
     /// a newer landing — is the window's one slot (OD-12,
     /// <see cref="EditorLandingSlot"/>), which cancels it by that token.</summary>
@@ -615,15 +642,22 @@ internal sealed class ReadingSurface : RichTextBox
             });
 
     /// <summary>The held landing's own token (R-10) — what its holder cancels
-    /// it by — or null when no landing is held.</summary>
-    internal object? HeldFocusLanding => _focusLandingPending ? _focusLandingToken : null;
+    /// it by, the same while a rescan reload carries it (WB-9) — or null when
+    /// no landing is held.</summary>
+    internal object? HeldFocusLanding => _focusLandingPending ? _focusLandingToken : _carried?.Token;
 
     /// <summary>Let go of the held landing <paramref name="token"/> names — the
     /// window's slot cancels it (a newer editor landing, the funnel, the
-    /// reader's departure, a modal opening) — and of nothing a later request
-    /// holds. Answers whether it was still held.</summary>
+    /// reader's departure, a modal opening), carried or not — and of nothing
+    /// a later request holds. Answers whether it was still held.</summary>
     internal bool CancelFocusLanding(object token)
     {
+        if (_carried is { } carried && ReferenceEquals(carried.Token, token))
+        {
+            _carried = null;
+            return true;
+        }
+
         if (!_focusLandingPending || !ReferenceEquals(_focusLandingToken, token))
         {
             return false;
@@ -641,7 +675,9 @@ internal sealed class ReadingSurface : RichTextBox
     /// still the one held (nothing cancelled or replaced it; the surface is
     /// still bound to the torn-down model), it is REFUSED and the F6 ring
     /// resumes past the editor; otherwise the callback is stale and does
-    /// nothing. One terminal transition per landing, in either order.</summary>
+    /// nothing. One terminal transition per landing, in either order. A
+    /// landing a rescan reload carries is not pending here (WB-9): the
+    /// reload's end decides it.</summary>
     private void Model_TornDown()
     {
         if (!_focusLandingPending)
@@ -649,6 +685,15 @@ internal sealed class ReadingSurface : RichTextBox
             return;
         }
 
+        RefuseHeldLandingAfterThisTurn();
+    }
+
+    /// <summary>Refuse the landing held now once the current move has run —
+    /// only if it is still the one held by then, so a cancellation before
+    /// that turn (the slot's withdraw, a rebind) still withdraws it
+    /// silently.</summary>
+    private void RefuseHeldLandingAfterThisTurn()
+    {
         object? token = _focusLandingToken;
         Action? refuse = _focusLandingRefusal;
         _ = Dispatcher.BeginInvoke(
@@ -663,6 +708,63 @@ internal sealed class ReadingSurface : RichTextBox
                 WithdrawFocusLanding();
                 refuse?.Invoke();
             });
+    }
+
+    /// <summary>WB-9 (#1312, R-9/R-10): a rescan reload of the bound
+    /// projection's tab begins — it tears that projection down and rebinds
+    /// this surface to the reloaded one, which would refuse and then withdraw
+    /// a held landing. The landing moves onto the reload instead, under its
+    /// original token (nothing is minted, so the window's slot still holds
+    /// it), and the reload's end takes it back.</summary>
+    private void OnReadingRescanReloadBegan(ReadingReloadTransaction reload)
+    {
+        if (!_focusLandingPending
+            || _model is not { } from
+            || !ReferenceEquals(from.Tab, reload.Tab))
+        {
+            return;
+        }
+
+        var carried = new CarriedLanding(
+            _focusLandingToken!, _focusLandingAnnouncement, _focusLandingRefusal, reload.Tab, from);
+        _carried = carried;
+        WithdrawFocusLanding();
+        reload.WhenEnded(() => EndCarry(carried));
+    }
+
+    /// <summary>WB-9 (#1312): the reload that carried <paramref name="carried"/>
+    /// ended, in its own turn. Unless the slot cancelled it (or the surface
+    /// was hidden) meanwhile, it is held again under its original token: with
+    /// a replacement projection of the same tab bound, that projection's
+    /// refresh settles it — seated and spoken once, or refused once if it
+    /// failed; with none (the reload threw before the rebind, or the surface
+    /// let go of the tab), no apply is coming, and it is refused once after
+    /// this turn.</summary>
+    private void EndCarry(CarriedLanding carried)
+    {
+        if (!ReferenceEquals(_carried, carried))
+        {
+            return;
+        }
+
+        _carried = null;
+        _focusLandingPending = true;
+        _focusLandingToken = carried.Token;
+        _focusLandingAnnouncement = carried.Announce;
+        _focusLandingRefusal = carried.Refuse;
+        if (_model is { } model
+            && !ReferenceEquals(model, carried.From)
+            && ReferenceEquals(model.Tab, carried.Tab))
+        {
+            // Still refreshing: its settle reaches Model_PropertyChanged.
+            if (!model.RefreshInFlight)
+            {
+                ScheduleSettledLanding();
+            }
+            return;
+        }
+
+        RefuseHeldLandingAfterThisTurn();
     }
 
     private void WithdrawFocusLanding()
@@ -688,7 +790,9 @@ internal sealed class ReadingSurface : RichTextBox
     /// found them — <see cref="EditorLandingSlot"/>), and when the surface is
     /// hidden (unloaded included) or rebinds: the view left under a move the
     /// reader or the shell made, and falling through over it would pull focus
-    /// away from where that move put it.
+    /// away from where that move put it. The one rebind with no such move — a
+    /// rescan reload of the same tab — carries it instead
+    /// (<see cref="OnReadingRescanReloadBegan"/>).
     /// </summary>
     private void DeliverFocusLanding()
     {

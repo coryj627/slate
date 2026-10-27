@@ -91,6 +91,54 @@ internal enum TabTaskToggle
     Started,
 }
 
+/// <summary>
+/// WB-9 (#1312, contract 40 R-9/R-10): one rescan reload of a tab in place
+/// (<see cref="WorkspaceTabViewModel.ReplaceItemWithReadText"/>), begun just
+/// before the reload and ended first in its <c>finally</c> — once, in the
+/// reload's own dispatcher turn, whether the reload returned or threw. A
+/// reading surface holding a landing for the tab carries it on the reload and
+/// takes it back at the end. The end reaches it through this object, never
+/// through a subscription the reload's rebind (or any unbind) could drop.
+/// </summary>
+internal sealed class ReadingReloadTransaction
+{
+    private List<Action>? _whenEnded = [];
+
+    internal ReadingReloadTransaction(WorkspaceTabViewModel tab) => Tab = tab;
+
+    /// <summary>The tab being reloaded.</summary>
+    internal WorkspaceTabViewModel Tab { get; }
+
+    /// <summary>Run <paramref name="continuation"/> when the reload ends — at
+    /// once when it already has.</summary>
+    internal void WhenEnded(Action continuation)
+    {
+        if (_whenEnded is not { } pending)
+        {
+            continuation();
+            return;
+        }
+
+        pending.Add(continuation);
+    }
+
+    /// <summary>End the reload: each registration runs once, in order; a
+    /// second end does nothing.</summary>
+    internal void End()
+    {
+        if (_whenEnded is not { } pending)
+        {
+            return;
+        }
+
+        _whenEnded = null;
+        foreach (Action continuation in pending)
+        {
+            continuation();
+        }
+    }
+}
+
 internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
 {
     private readonly VaultSession _session;
@@ -240,6 +288,31 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
 
     private void BumpContentGeneration() => _contentGeneration++;
     internal string? LoadFailure { get; private set; }
+
+    /// <summary>#1266: the event a failed load renders in the tab's status
+    /// line — core's <c>FileReopenFailed</c>, its detail core's — for the
+    /// command that opened the tab to speak, once. The load never speaks
+    /// it: it also runs on the reopen (which speaks its own), the startup
+    /// restore, the same-item reloads and the rescan's re-seat.</summary>
+    internal A11yEvent? LoadFailureEvent { get; private set; }
+
+    /// <summary>Whether an open has spoken this load's failure.</summary>
+    private bool _loadFailureSpoken;
+
+    /// <summary>#1266: the failed load's event, for the first explicit open
+    /// that lands on this tab; null after. A later open of the same tab,
+    /// not reloaded, repeats nothing — and speaks nothing stale when the
+    /// note has since been created (a ghost's tab, then its create).</summary>
+    internal A11yEvent? TakeUnspokenLoadFailure()
+    {
+        if (LoadFailureEvent is not { } failed || _loadFailureSpoken)
+        {
+            return null;
+        }
+
+        _loadFailureSpoken = true;
+        return failed;
+    }
     public EditorPreferencesViewModel EditorPreferences { get; }
     public string EditorAutomationName =>
         $"{System.IO.Path.GetFileName(Path)} editor";
@@ -639,6 +712,9 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         _editorInteractions?.InvalidateExternalState();
         IsMissingFromDisk = false;
         Status = string.Empty;
+        // #1266: the failure named the old file; the status line is cleared too.
+        LoadFailure = null;
+        LoadFailureEvent = null;
         NotifyItemChanged();
     }
 
@@ -695,6 +771,10 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
 
         _isMissingFromDisk = source._isMissingFromDisk;
         _status = source._status;
+        // #1266: the peer's load state comes with its text and status.
+        LoadFailure = source.LoadFailure;
+        LoadFailureEvent = source.LoadFailureEvent;
+        _loadFailureSpoken = false;
         AvalonDocumentBufferSession? sourceSession = source._editorSession;
         if (_editorSession is not null && sourceSession is not null)
         {
@@ -1193,6 +1273,9 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     /// the write ran, which keeps the tab dirty.</summary>
     private void AdoptLandedWrite(SaveRequest request, SaveWrite saved)
     {
+        // #1266: the file now holds the tab's bytes; a failed load is over.
+        LoadFailure = null;
+        LoadFailureEvent = null;
         _contentHash = saved.NewContentHash;
         IsExternallyStale = false;
         if (_editorSession is { } session)
@@ -1833,17 +1916,28 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         _rescanReload = rescan;
         _reloadingForRescan = true;
         RescanReadingPublication = Task.CompletedTask;
+        // WB-9 (#1312): begun before the old projection's teardown, ended
+        // before anything else in the finally — so a landing carried across
+        // the reload is settled exactly once, in this turn, even when
+        // ReplaceItem throws before the reading rebind.
+        var reload = new ReadingReloadTransaction(this);
         try
         {
+            ReadingRescanReloadBegan?.Invoke(reload);
             ReplaceItem(item);
         }
         finally
         {
+            reload.End();
             _preloadedText = null;
             _reloadingForRescan = false;
             _rescanReload = default;
         }
     }
+
+    /// <summary>WB-9 (#1312, R-9/R-10): a rescan's in-place reload of this tab
+    /// is beginning; the transaction ends when the reload does.</summary>
+    internal event Action<ReadingReloadTransaction>? ReadingRescanReloadBegan;
 
     // W7-7 PR 7 (codex PR 7 round 4, finding 3): set while a rescan replaces
     // this tab in place.
@@ -1858,6 +1952,8 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     private void Load()
     {
         LoadFailure = null;
+        LoadFailureEvent = null;
+        _loadFailureSpoken = false;
         if (!IsMarkdown)
         {
             return;
@@ -1873,8 +1969,11 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         }
         catch (VaultException exception)
         {
-            LoadFailure = exception.Message;
-            Status = $"Could not open {Path}: {exception.Message}";
+            string detail = SlateUniffiMethods.VaultErrorDetail(exception);
+            var failed = new A11yEvent.FileReopenFailed(System.IO.Path.GetFileName(Path), detail);
+            LoadFailure = detail;
+            LoadFailureEvent = failed;
+            Status = SlateUniffiMethods.A11yRender(failed).Text;
         }
     }
 
@@ -2210,7 +2309,9 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             {
                 bool navigated = false;
                 RunWorkspaceMutation(() => navigated = OpenPathCore(path, target));
-                return navigated;
+                // A note that could not load already said so: the leaf
+                // speaks no "Opened" over it.
+                return navigated && !LandedOnAFailedLoad;
             },
             _externalOpener = externalOpener ?? DefaultExternalOpener,
             (anchor, resolvedText) =>
@@ -2690,7 +2791,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             }
 
             WorkspaceTabViewModel? target = ActiveGroup.ActiveTab;
-            if (target is null)
+            if (target is null || LandedOnAFailedLoad)
             {
                 return;
             }

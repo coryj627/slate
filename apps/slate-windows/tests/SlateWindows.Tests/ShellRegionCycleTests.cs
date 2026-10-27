@@ -14,6 +14,10 @@ namespace SlateWindows.Tests;
 /// window's.</summary>
 public sealed class ShellRegionCycleTests
 {
+    private readonly ITestOutputHelper _output;
+
+    public ShellRegionCycleTests(ITestOutputHelper output) => _output = output;
+
     private sealed class FakeHost : IShellRegionHost
     {
         public bool ModalSurfaceOpen { get; set; }
@@ -331,7 +335,27 @@ public sealed class ShellRegionCycleTests
                 PumpedDispatcher.PumpUntil(() => menuItem.IsLoaded, TimeSpan.FromSeconds(10)),
                 "premise: the field's context menu did not open");
             Assert.False(popover.IsAncestorOf(menuItem), "premise: the context menu sits in the popover's own visual tree");
-            Assert.True(RingIsModalWithFocusOn(menuItem), "a context menu on a popover field let F6 leave the popover");
+            // #1680: a desktop whose session has no foreground window (the
+            // Namespace runners) does not let the menu's popup keep the keys —
+            // WPF hands them straight back to the element that held them, as
+            // CanvasNavigatorTests' TryPutTheKeysInTheMenu records. There the
+            // leg asserts the refusal: the keys stayed outside the popover, and
+            // the ring is not modal for them.
+            if (menuItem.Focus())
+            {
+                Assert.Same(menuItem, Keyboard.FocusedElement);
+                Assert.True(((IShellRegionHost)shell).ModalSurfaceOpen, "a context menu on a popover field let F6 leave the popover");
+            }
+            else
+            {
+                _output.WriteLine(
+                    "DESKTOP REFUSED THE MENU — the popover field's context menu: Focus() returned false and the keys "
+                    + $"stayed on {Keyboard.FocusedElement?.GetType().Name ?? "null"}. The menu arm cannot be exercised "
+                    + "on this desktop (#1680).");
+                Assert.Same(elsewhere, Keyboard.FocusedElement);
+                Assert.False(((IShellRegionHost)shell).ModalSurfaceOpen, "the refused menu made the ring modal with the keys outside the popover");
+            }
+
             field.ContextMenu.IsOpen = false;
 
             interactions.ClosePopoverCommand.Execute(null);

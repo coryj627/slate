@@ -49,14 +49,18 @@ public sealed class VaultErrorDetailCensus
     /// <summary>The sites where a caught failure becomes announced detail,
     /// as (file, method, constructed type, parameter, position, every
     /// catch): the save boundary's NoteSaveBlocked in each catch of both its
-    /// halves, and the embed resolver's ReadError reason in its
-    /// VaultException catch (its other catch passes a non-vault exception's
-    /// own message, mac's localizedDescription arm, by design).</summary>
+    /// halves, the embed resolver's ReadError reason in its VaultException
+    /// catch (its other catch passes a non-vault exception's own message,
+    /// mac's localizedDescription arm, by design), and a tab's load failure
+    /// and the closed-tab reopen's own failure (#1266), both
+    /// FileReopenFailed.</summary>
     public static TheoryData<string, string, string, string, int, bool> Sites() => new()
     {
         { "WorkspaceViewModel.cs", "StartSave", "A11yEvent.NoteSaveBlocked", "Detail", 1, true },
         { "WorkspaceViewModel.cs", "PublishSave", "A11yEvent.NoteSaveBlocked", "Detail", 1, true },
         { "EditorInteractions.cs", "ResolveEmbedPreview", "EmbedUnresolvedReason.ReadError", "Message", 0, false },
+        { "WorkspaceViewModel.cs", "Load", "A11yEvent.FileReopenFailed", "Detail", 1, true },
+        { "WorkspaceViewModel.Layout.cs", "ReopenFileAnnouncement", "A11yEvent.FileReopenFailed", "Detail", 1, false },
     };
 
     [Theory]

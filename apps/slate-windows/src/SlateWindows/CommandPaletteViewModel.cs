@@ -372,6 +372,11 @@ internal sealed class CommandPaletteViewModel : BindableBase
     /// <summary>Raised after the palette closes, for focus return.</summary>
     public event EventHandler? Dismissed;
 
+    /// <summary>WB-9 (#1296): the seal's last cause ended — the command
+    /// returned, or the last modal loop over the shell closed. A handoff
+    /// that arrived while sealed waits for this.</summary>
+    internal event EventHandler? SealReleased;
+
     /// <summary>
     /// Sections in the order core returned them. <b>Never sorted</b> —
     /// <c>SECTION_ORDER</c> is not the <see cref="CommandSection"/> enum
@@ -863,6 +868,10 @@ internal sealed class CommandPaletteViewModel : BindableBase
             // The seal lasts exactly as long as the command: however it
             // returns — or throws something unexpected — it ends here.
             _isInvoking = false;
+            if (!IsSealed)
+            {
+                SealReleased?.Invoke(this, EventArgs.Empty);
+            }
         }
 
         // The command's own action tore the shell down — a window close
@@ -942,6 +951,7 @@ internal sealed class CommandPaletteViewModel : BindableBase
         if (!IsSealed)
         {
             ResumeIfOwed();
+            SealReleased?.Invoke(this, EventArgs.Empty);
         }
     }
 

@@ -38,8 +38,15 @@ public partial class MainWindow
         palette.PropertyChanged += Palette_PropertyChanged;
         palette.PropertyChanged += ModalSource_PropertyChanged;
         palette.SearchFocusRequested += Palette_SearchFocusRequested;
+        // WB-9 (#1296): a handoff parked behind the seal runs once it lifts;
+        // the window detaches from this palette when it closes.
+        palette.SealReleased += ExternalActivationHold_Ended;
+        _sealReleaseSource = palette;
         _paletteResults = new CommandPaletteResultsPresenter(CommandPaletteResultsList, palette);
     }
+
+    /// <summary>The palette whose seal release the window listens to.</summary>
+    private CommandPaletteViewModel? _sealReleaseSource;
 
     private void Palette_PropertyChanged(object? sender, PropertyChangedEventArgs eventArgs)
     {
