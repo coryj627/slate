@@ -7,7 +7,8 @@
 // preview handlers run before any element's, and a key, text or pointer
 // press the check marks handled reaches no later handler, no input binding,
 // no access key and no menu mode. The census keeps that true as the shell
-// grows: the seal is read nowhere but the check; every input handler the
+// grows: the seal is read nowhere but the check (and the reviewed waits
+// that admit no input, SealReadersAllowed); every input handler the
 // window declares, in XAML or in code, is the check and nothing else (the
 // key route calls it first and returns); and nothing in the shell listens
 // past a handled input or ahead of the routed events, where the check could
@@ -99,6 +100,17 @@ public sealed class ShellSealAdmissionCensus
         [("EditorLandingSlot.cs", "Keyboard.LostKeyboardFocusEvent")] = FocusDepartureObserver,
     };
 
+    /// <summary>The shell's reads of the seal outside the admission, each
+    /// reviewed: a wait that admits no input — it runs nothing while the seal
+    /// holds, and nothing it runs is a key, text or pointer press.</summary>
+    private static readonly Dictionary<(string File, string Member), string> SealReadersAllowed = new()
+    {
+        [("MainWindow.xaml.cs", "ExternalActivationMustWait")] =
+            "WB-9 (#1296, AR-48): the single-instance handoff is no input route; it waits while the seal "
+            + "holds and runs from SealReleased once it lifts — held by "
+            + "MainWindowHandoffTests.AHandoffWhileAPaletteCommandIsSealedWaitsForTheSeal",
+    };
+
     /// <summary>W7-7 PR 8's one departure observer (contract 40 OD-12).</summary>
     private const string FocusDepartureObserver =
         "a focus-change notification, raised by a focus move — never by a key, text or pointer reaching a "
@@ -122,6 +134,14 @@ public sealed class ShellSealAdmissionCensus
             "the palette's seal is read outside the shell's one admission check (a second check is a route "
             + "the admission does not govern, and a branch that forgets it bypasses the seal):\n  "
             + string.Join("\n  ", offenders));
+        foreach ((string file, string member) in SealReadersAllowed.Keys)
+        {
+            Unit unit = Assert.Single(shell, candidate => candidate.Name == file);
+            Assert.True(
+                unit.Root.DescendantNodes().OfType<PropertyDeclarationSyntax>()
+                    .Any(p => p.Identifier.ValueText == member && p.DescendantNodes().Any(IsSealReference)),
+                $"{file}: {member} is allowed to read the seal but no longer does");
+        }
 
         // The check itself: unsealed it takes nothing; sealed it takes the
         // input — after T9's Escape — and says so.
@@ -387,10 +407,18 @@ public sealed class ShellSealAdmissionCensus
             foreach (SyntaxNode read in unit.Root.DescendantNodes().Where(IsSealReference))
             {
                 string? method = read.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault()?.Identifier.ValueText;
-                if (method != Admission || unit.Name != "MainWindow.Seal.cs")
+                if (method == Admission && unit.Name == "MainWindow.Seal.cs")
                 {
-                    offenders.Add($"{unit.Name}:{Line(read)} reads the seal in {method ?? "a non-method member"}");
+                    continue;
                 }
+
+                string? property = read.Ancestors().OfType<PropertyDeclarationSyntax>().FirstOrDefault()?.Identifier.ValueText;
+                if (method is null && property is not null && SealReadersAllowed.ContainsKey((unit.Name, property)))
+                {
+                    continue;
+                }
+
+                offenders.Add($"{unit.Name}:{Line(read)} reads the seal in {method ?? property ?? "a non-method member"}");
             }
         }
 

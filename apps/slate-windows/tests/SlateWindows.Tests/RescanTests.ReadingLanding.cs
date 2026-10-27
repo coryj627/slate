@@ -307,6 +307,103 @@ public sealed partial class RescanTests
         }
     }));
 
+    /// <summary>WB-9 (#1312, R-10): a surface hidden inside the reload lets go
+    /// of the carried landing, as it lets go of a held one: the slot's live
+    /// check no longer names it, and nothing seats, speaks or falls through
+    /// when the reload ends.</summary>
+    [Fact]
+    public void ASurfaceHiddenDuringTheReloadLetsGoOfTheCarriedLanding() => RunSta(() => PumpedDispatcher.Run(() =>
+    {
+        using var w = new BackgroundReadingWorkspace("landing-reload-hidden");
+        using var hosted = new HostedReadingSurface(w.HostTab);
+        using var parked = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        using var cancellation = new CancellationTokenSource();
+        try
+        {
+            HeldReadingLanding held = hosted.HoldTheLandingOverARefresh(parked, release);
+            w.Announced.Clear();
+            ReadingContentViewModel? reloaded = null;
+            object? heldOnceHidden = held.Token;
+            w.HostTab.ReadingCreatedForTests = model =>
+            {
+                reloaded = model;
+                hosted.Surface.Visibility = Visibility.Collapsed;
+                heldOnceHidden = hosted.Surface.HeldFocusLanding;
+            };
+
+            Task<WorkspaceViewModel.RescanDocumentsOutcome> documents = ReloadTheHostInPlace(w, cancellation.Token);
+            Assert.True(
+                PumpedDispatcher.PumpUntil(
+                    () => documents.IsCompleted
+                        && reloaded is { RefreshInFlight: false }
+                        && hosted.Text.Contains("Changed outside Slate.", StringComparison.Ordinal)),
+                "the reloaded projection's publish");
+            PumpedDispatcher.Drain();
+            PumpedDispatcher.Drain();
+            Assert.False(hosted.Surface.IsVisible);
+            Assert.Null(heldOnceHidden);
+            Assert.Equal(0UL, documents.Result.Failed);
+
+            RunOutTheTornDownFetch(held.Before, release);
+            Assert.False(hosted.Surface.IsFocusLandingPending);
+            Assert.Null(hosted.Surface.HeldFocusLanding);
+            Assert.Equal(0, held.Spoken());
+            Assert.Equal(0, held.FellThrough());
+            Assert.Empty(w.Announced);
+        }
+        finally
+        {
+            release.Set();
+        }
+    }));
+
+    /// <summary>WB-9 (#1312, red team): a new landing asked for inside the
+    /// reload supersedes the carried one, as it supersedes a held one: the
+    /// reload's end resumes nothing, and the carried landing never seats,
+    /// speaks or falls through.</summary>
+    [Fact]
+    public void ANewLandingInsideTheReloadSupersedesTheCarriedOne() => RunSta(() => PumpedDispatcher.Run(() =>
+    {
+        using var w = new BackgroundReadingWorkspace("landing-reload-superseded");
+        using var hosted = new HostedReadingSurface(w.HostTab);
+        using var parked = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        using var cancellation = new CancellationTokenSource();
+        try
+        {
+            HeldReadingLanding held = hosted.HoldTheLandingOverARefresh(parked, release);
+            w.Announced.Clear();
+            ReadingContentViewModel? reloaded = null;
+            w.HostTab.ReadingCreatedForTests = model =>
+            {
+                reloaded = model;
+                _ = hosted.Surface.RequestFocusLanding();
+            };
+
+            Task<WorkspaceViewModel.RescanDocumentsOutcome> documents = ReloadTheHostInPlace(w, cancellation.Token);
+            Assert.True(
+                PumpedDispatcher.PumpUntil(
+                    () => documents.IsCompleted
+                        && reloaded is { RefreshInFlight: false }
+                        && hosted.Text.Contains("Changed outside Slate.", StringComparison.Ordinal)),
+                "the reloaded projection's publish");
+            PumpedDispatcher.Drain();
+            PumpedDispatcher.Drain();
+            Assert.Equal(0UL, documents.Result.Failed);
+            Assert.False(ReferenceEquals(held.Token, hosted.Surface.HeldFocusLanding), "the superseded landing is still held");
+
+            RunOutTheTornDownFetch(held.Before, release);
+            Assert.Equal(0, held.Spoken());
+            Assert.Equal(0, held.FellThrough());
+            Assert.Empty(w.Announced);
+        }
+        finally
+        {
+            release.Set();
+        }
+    }));
+
     /// <summary>WB-9 (#1312): the reloaded projection's fetch fails — the
     /// rescan counts it, and the carried landing is refused once, silently:
     /// the F6 ring moves on, Reading speaks nothing.</summary>

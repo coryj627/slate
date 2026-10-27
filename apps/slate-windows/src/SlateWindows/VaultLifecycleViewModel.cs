@@ -330,6 +330,17 @@ internal sealed partial class VaultLifecycleViewModel
     /// <summary>WB-9 (#1296): a close has decided, whichever way.</summary>
     internal event EventHandler? WorkspaceCloseDecided;
 
+    /// <summary>WB-9 (#1296, red team): an open has ended, whichever way;
+    /// <see cref="IsOpening"/> is false again. A handoff that arrived during
+    /// it — or that a hold released straight into it — runs now.</summary>
+    internal event EventHandler? OpenSettled;
+
+    /// <summary>WB-9 (red team): Open or a recent vault running its own
+    /// phases before the open begins — the folder picker, the "Vault Not
+    /// Found" box, a switch's close. A second press then does nothing, as
+    /// it did while the command disabled itself.</summary>
+    private int _openCommandsRunning;
+
     /// <summary>WB-9 test seam: runs first in every
     /// <see cref="OpenVaultAsync"/>, before its busy guard.</summary>
     internal Action<string>? OpenRequestedForTests { get; set; }
@@ -650,6 +661,7 @@ internal sealed partial class VaultLifecycleViewModel
                 // Plan 43 PR 20b: a watcher request recorded while the
                 // open ran — before the workspace existed — runs now.
                 ServeRecordedRescan();
+                OpenSettled?.Invoke(this, EventArgs.Empty);
             }
         }
     }
@@ -778,10 +790,18 @@ internal sealed partial class VaultLifecycleViewModel
             return;
         }
 
-        string? path = await _pickVault();
-        if (!string.IsNullOrWhiteSpace(path))
+        _openCommandsRunning++;
+        try
         {
-            await OpenVaultAsync(path);
+            string? path = await _pickVault();
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                await OpenVaultAsync(path);
+            }
+        }
+        finally
+        {
+            _openCommandsRunning--;
         }
     }
 
@@ -792,7 +812,13 @@ internal sealed partial class VaultLifecycleViewModel
             return;
         }
 
-        if (parameter is RecentVault recent)
+        if (parameter is not RecentVault recent)
+        {
+            return;
+        }
+
+        _openCommandsRunning++;
+        try
         {
             if (!Directory.Exists(recent.Path))
             {
@@ -810,6 +836,10 @@ internal sealed partial class VaultLifecycleViewModel
             }
 
             await OpenVaultAsync(recent.Path);
+        }
+        finally
+        {
+            _openCommandsRunning--;
         }
     }
 
@@ -2043,18 +2073,23 @@ internal sealed partial class VaultLifecycleViewModel
     /// folder picker or the "Vault Not Found" box over it.</summary>
     private bool AdmitOpenCommand()
     {
-        if (!IsOpening && !IsBusy)
+        if (IsOpening || IsBusy)
         {
-            return true;
+            RestateOpeningStatus();
+            return false;
         }
 
-        RestateOpeningStatus();
-        return false;
+        // Red team: before the open begins, the command's own picker, box
+        // or close holds the keys; a press there (a chord the close's pump
+        // lets through, an automation Invoke) raises no second one.
+        return _openCommandsRunning == 0;
     }
 
-    private void RestateOpeningStatus() =>
+    private void RestateOpeningStatus()
+    {
         // W0.5-3 residue: Windows lifecycle opening-status restatement.
         _announce(new A11yEvent.HostComposed(StatusText, A11yPriority.Medium));
+    }
 
     private void ReportTerminalStatus(string message, A11yPriority priority)
     {

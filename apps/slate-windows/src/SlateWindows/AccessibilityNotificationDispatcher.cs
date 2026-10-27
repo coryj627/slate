@@ -239,6 +239,10 @@ internal sealed class AccessibilityNotificationDispatcher
         Post(SlateUniffiMethods.A11yRender(@event));
     }
 
+    /// <summary>WB-9 test seam: every rendered line the window posts, as it
+    /// is posted — the hosted open facts read the launch lines here.</summary>
+    internal Action<RenderedAnnouncement>? PostedForTests { get; set; }
+
     /// <summary>
     /// The rendered-pair primitive (W6-1 PR A, contract A5). A
     /// coalescer cannot hand back an event: the window's winner is
@@ -247,10 +251,6 @@ internal sealed class AccessibilityNotificationDispatcher
     /// shape mac's <c>CanvasAnnouncer</c> takes. Text and priority both
     /// stay core's either way.
     /// </summary>
-    /// <summary>WB-9 test seam: every rendered line the window posts, as it
-    /// is posted — the hosted open facts read the launch lines here.</summary>
-    internal Action<RenderedAnnouncement>? PostedForTests { get; set; }
-
     public void Post(RenderedAnnouncement rendered)
     {
         ArgumentNullException.ThrowIfNull(rendered);

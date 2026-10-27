@@ -134,6 +134,7 @@ public partial class MainWindow : Window
         // WB-9 (#1296, the owner's call): a handoff parked behind a close
         // runs once the close has decided.
         _viewModel.WorkspaceCloseDecided += (_, _) => RunParkedExternalActivation();
+        _viewModel.OpenSettled += (_, _) => RunParkedExternalActivation();
         DataContext = _viewModel;
         // W6-1 PR C (contract C8): the canvas mode stack's M4 rule needs
         // to tell "focus moved to another pane" (cancel) from "focus
@@ -200,8 +201,7 @@ public partial class MainWindow : Window
         {
             // WB-9 (#1296): the window comes forward, the prompt or the
             // close keeps the keys, and the request waits for them to end —
-            // the last one received wins. No focus move: a close deciding
-            // with the window enabled would lose the reader's place.
+            // the last one received wins. Focus() waits for that run too.
             _parkedExternalActivation = vaultPath;
             _externalActivationParked = true;
             return;
@@ -217,12 +217,19 @@ public partial class MainWindow : Window
 
     /// <summary>WB-9 (#1296; the owner's call of 2026-10-26): the request a
     /// second launch or a jump-list open made while a modal loop ran over the
-    /// shell, the palette's seal held, or a close decided.</summary>
+    /// shell, the palette's seal held, a close decided or an open ran (red
+    /// team: a hold that ends straight into an open — the folder picker, a
+    /// switch's close — would otherwise hand the request to the open's busy
+    /// refusal, and lose it).</summary>
     private string? _parkedExternalActivation;
     private bool _externalActivationParked;
+    private bool _windowClosed;
 
     private bool ExternalActivationMustWait =>
-        _modalLoops.IsModalLoopActive || _viewModel.Palette.IsSealed || _viewModel.IsDecidingClose;
+        _modalLoops.IsModalLoopActive
+        || _viewModel.Palette.IsSealed
+        || _viewModel.IsDecidingClose
+        || _viewModel.IsOpening;
 
     /// <summary>Run the parked request once nothing holds it: after the
     /// loop's, the seal's or the close's own teardown (Input priority), and
@@ -237,7 +244,7 @@ public partial class MainWindow : Window
         _ = Dispatcher.InvokeAsync(
             () =>
             {
-                if (!_externalActivationParked || ExternalActivationMustWait)
+                if (_windowClosed || !_externalActivationParked || ExternalActivationMustWait)
                 {
                     return;
                 }
@@ -2080,6 +2087,11 @@ public partial class MainWindow : Window
 
     private void Window_Closed(object? sender, EventArgs e)
     {
+        // WB-9 (red team): a request parked when the window closes is
+        // dropped; a release posted before the close finds the flag.
+        _windowClosed = true;
+        _parkedExternalActivation = null;
+        _externalActivationParked = false;
         _viewModel.RecentVaultsChanged -= ViewModel_RecentVaultsChanged;
         _viewModel.ReturnedToWelcome -= ViewModel_ReturnedToWelcome;
         _viewModel.WorkspaceReady -= ViewModel_WorkspaceReady;

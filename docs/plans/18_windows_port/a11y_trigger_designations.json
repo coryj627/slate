@@ -515,6 +515,11 @@
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "recorded"
       },
+      "VaultLifecycleViewModel.cs#VaultLifecycleViewModel.RestateOpeningStatus@1": {
+        "engine": "Vault lifecycle opening-status restatement for a press on Open or a recent vault during a running open",
+        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
+        "status": "recorded"
+      },
       "WorkspaceTabViewModel.Properties.cs#WorkspaceTabViewModel.MarkPropertyStale@1": {
         "engine": "Property dirty/stale/in-flight refusal, modal guidance and draft-revert builder",
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",

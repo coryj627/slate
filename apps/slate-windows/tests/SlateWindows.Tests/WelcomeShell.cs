@@ -53,7 +53,8 @@ internal sealed class WelcomeShell : IDisposable
             PickVault: () =>
             {
                 _ = Interlocked.Increment(ref _pickCount);
-                return Task.FromResult(PickAnswer);
+                DuringPick?.Invoke();
+                return Task.FromResult<string?>(PickAnswer);
             },
             OpenSession: root => Task.Run(() =>
             {
@@ -68,9 +69,10 @@ internal sealed class WelcomeShell : IDisposable
                 return ScanFault is { } fault ? throw fault : work();
             }),
             RecentVaults: RecentVaults,
-            ConfirmRemoveMissingRecent: _ =>
+            ConfirmRemoveMissingRecent: missing =>
             {
                 _ = Interlocked.Increment(ref _confirmCount);
+                DuringConfirm?.Invoke();
                 return Task.FromResult(false);
             },
             ObservePosted: Posted.Add);
@@ -142,6 +144,12 @@ internal sealed class WelcomeShell : IDisposable
     public int PickCount => Volatile.Read(ref _pickCount);
 
     public int ConfirmCount => Volatile.Read(ref _confirmCount);
+
+    /// <summary>Runs inside the folder pick, as if the picker were up.</summary>
+    public Action? DuringPick { get; set; }
+
+    /// <summary>Runs inside the missing-recent box, as if the box were up.</summary>
+    public Action? DuringConfirm { get; set; }
 
     /// <summary>When set, the scan phase throws it once released.</summary>
     public Exception? ScanFault { get; set; }

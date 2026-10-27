@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Windows;
+using System.Windows.Input;
 using System.Windows.Threading;
 using SlateWindows.Canvas;
 
@@ -34,9 +35,60 @@ public sealed class MainWindowHandoffTests
         }, () => underThePrompt = shell.OpenRequests.Count);
 
         Assert.Equal(0, underThePrompt);
+        List<IInputElement> changes = shell.RecordFocusChanges();
         WaitForOpenRequests(shell, 1);
         Assert.Equal([other.Root], shell.OpenRequests);
         shell.WaitForTheOpenToEnd();
+        // The parked run brings the window forward and opens; the keys move
+        // to the launch landing, never to the bare window (red team).
+        Assert.DoesNotContain(changes, change => ReferenceEquals(change, shell.Shell));
+    });
+
+    /// <summary>Red team: a hold that ends straight into an open — the folder
+    /// picker's loop, then the open it starts in the same turn — keeps the
+    /// request parked until that open has ended, then runs it; the open's
+    /// busy refusal never swallows it.</summary>
+    [Fact]
+    public void AHandoffParkedBehindAPromptThatEndsIntoAnOpenRunsAfterTheOpen() => RunSta(() =>
+    {
+        using var other = FixtureVault.Create(1, "handoff-into-an-open");
+        using var shell = new WelcomeShell();
+        var prompt = new CommandPaletteTests.SyntheticPrompt(shell.Shell, CommandPaletteTests.LoopSignals.DisablesShell);
+        InsideThePrompt(shell, prompt, () => _ = shell.Shell.ActivateFromExternalRequestAsync(other.Root), () => { });
+
+        // The prompt's end runs into an open in the same turn, as the
+        // picker's does.
+        shell.Lifecycle.OpenVaultCommand.Execute(null);
+        shell.WaitForTheOpenSessionPark();
+        PumpedDispatcher.Drain();
+        Assert.Equal([shell.VaultRoot], shell.OpenRequests);
+
+        shell.ReleaseParks();
+        WaitForOpenRequests(shell, 2);
+        shell.WaitForTheOpenToEnd();
+        Assert.Equal([shell.VaultRoot, other.Root], shell.OpenRequests);
+        Assert.Equal(other.Root, shell.Lifecycle.VaultPath);
+    });
+
+    /// <summary>Red team: a handoff that arrives while an open runs waits for
+    /// it, then runs — where it used to meet the open's busy refusal and be
+    /// dropped without a word.</summary>
+    [Fact]
+    public void AHandoffDuringAnOpenRunsOnceTheOpenEnds() => RunSta(() =>
+    {
+        using var other = FixtureVault.Create(1, "handoff-during-an-open");
+        using var shell = new WelcomeShell();
+        shell.Lifecycle.OpenVaultCommand.Execute(null);
+        shell.WaitForTheOpenSessionPark();
+
+        _ = shell.Shell.ActivateFromExternalRequestAsync(other.Root);
+        PumpedDispatcher.Drain();
+        Assert.Equal([shell.VaultRoot], shell.OpenRequests);
+
+        shell.ReleaseParks();
+        WaitForOpenRequests(shell, 2);
+        shell.WaitForTheOpenToEnd();
+        Assert.Equal(other.Root, shell.Lifecycle.VaultPath);
     });
 
     [Fact]
@@ -63,7 +115,7 @@ public sealed class MainWindowHandoffTests
     /// runs the parked request: the window listens for the seal's release,
     /// not only for the modal loop's end.</summary>
     [Fact]
-    public void AHandoffWhileThePaletteIsSealedWaitsForTheSeal() => RunSta(() =>
+    public void AHandoffWhileAPaletteCommandIsSealedWaitsForTheSeal() => RunSta(() =>
     {
         using var other = FixtureVault.Create(1, "handoff-sealed");
         using var shell = new WelcomeShell();
@@ -96,7 +148,7 @@ public sealed class MainWindowHandoffTests
     /// <summary>The owner's call: a close deciding with the window enabled
     /// (#1622 pumps it) — here inside its unsaved-changes prompt, answered
     /// from a nested frame that disables nothing — holds the handoff, which
-    /// runs once the close has decided.</summary>
+    /// moves no keys while it waits and runs once the close has decided.</summary>
     [Fact]
     public void AHandoffWhileACloseDecidesWaitsForTheDecision() => RunSta(() =>
     {
@@ -111,6 +163,8 @@ public sealed class MainWindowHandoffTests
         int openedBefore = shell.OpenRequests.Count;
         int duringTheClose = -1;
         bool decidingWhenItArrived = false;
+        IInputElement? keysBefore = null;
+        IInputElement? keysWhileParked = null;
         shell.Shell.ShowUnsavedClosePrompt = (_, _, _, _, _, _) =>
         {
             var frame = new DispatcherFrame();
@@ -119,10 +173,12 @@ public sealed class MainWindowHandoffTests
                 decidingWhenItArrived = shell.Lifecycle.IsDecidingClose
                     && !shell.Shell.ModalLoops.IsModalLoopActive
                     && !shell.Lifecycle.Palette.IsSealed;
+                keysBefore = Keyboard.FocusedElement;
                 _ = shell.Shell.ActivateFromExternalRequestAsync(other.Root);
                 _ = shell.Shell.Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
                 {
                     duringTheClose = shell.OpenRequests.Count;
+                    keysWhileParked = Keyboard.FocusedElement;
                     frame.Continue = false;
                 });
             });
@@ -134,6 +190,9 @@ public sealed class MainWindowHandoffTests
 
         Assert.True(decidingWhenItArrived, "premise: the handoff arrived while the close decided, with no modal and no seal");
         Assert.Equal(openedBefore, duringTheClose);
+        Assert.NotNull(keysBefore);
+        Assert.NotSame(shell.Shell, keysBefore);
+        Assert.Same(keysBefore, keysWhileParked);
         WaitForOpenRequests(shell, openedBefore + 1);
         shell.WaitForTheOpenToEnd();
         Assert.Equal(other.Root, shell.OpenRequests[^1]);

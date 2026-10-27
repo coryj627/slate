@@ -556,6 +556,9 @@ internal sealed class ReadingSurface : RichTextBox
         Func<bool>? parkWhileUnready = null)
     {
         WithdrawFocusLanding();
+        // WB-9 (red team): a new request supersedes a carried landing as it
+        // does a held one — silently; the reload's end then resumes nothing.
+        _carried = null;
         if (!IsVisible)
         {
             return false;
