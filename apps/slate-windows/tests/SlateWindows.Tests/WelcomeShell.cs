@@ -175,6 +175,16 @@ internal sealed class WelcomeShell : IDisposable
 
     public void ReleaseOpenSession() => _openSessionGate.Set();
 
+    /// <summary>Park the next open's two phases again (after a fact's first
+    /// open ran with the parks released).</summary>
+    public void ReArmParks()
+    {
+        _openSessionEntered.Reset();
+        _scanEntered.Reset();
+        _openSessionGate.Reset();
+        _scanGate.Reset();
+    }
+
     public void ReleaseScan() => _scanGate.Set();
 
     /// <summary>Pump until the open's session phase waits at its gate.</summary>

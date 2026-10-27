@@ -520,6 +520,17 @@ internal sealed partial class VaultLifecycleViewModel
         CloseSearchForVaultTransition();
 
         CloseSession();
+        if (IsVaultOpen)
+        {
+            // WB-9 (codex round 1): a switch's close lands the keys on the
+            // welcome view, as CloseVault's does, and the welcome then holds
+            // them through the new vault's open — never the stripped shell.
+            IsVaultOpen = false;
+            VaultDisplayName = string.Empty;
+            VaultPath = string.Empty;
+            ReturnedToWelcome?.Invoke(this, EventArgs.Empty);
+        }
+
         int generation = ++_generation;
         IsOpening = true;
         IsBusy = true;

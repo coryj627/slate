@@ -88,7 +88,34 @@ public sealed class MainWindowHandoffTests
         shell.ReleaseParks();
         WaitForOpenRequests(shell, 2);
         shell.WaitForTheOpenToEnd();
+        PumpedDispatcher.Drain();
+        Assert.Equal([shell.VaultRoot, other.Root], shell.OpenRequests);
         Assert.Equal(other.Root, shell.Lifecycle.VaultPath);
+    });
+
+    /// <summary>Codex round 1: a handoff that arrives after a hold has ended
+    /// but before the parked request has run is the newer request: it runs,
+    /// and the older one never does.</summary>
+    [Fact]
+    public void ANewerHandoffBeforeTheParkedOneRunsSupersedesIt() => RunSta(() =>
+    {
+        using var older = FixtureVault.Create(1, "handoff-older");
+        using var newer = FixtureVault.Create(1, "handoff-newer");
+        using var shell = new WelcomeShell();
+        shell.ReleaseParks();
+        var prompt = new CommandPaletteTests.SyntheticPrompt(shell.Shell, CommandPaletteTests.LoopSignals.DisablesShell);
+        InsideThePrompt(shell, prompt, () => _ = shell.Shell.ActivateFromExternalRequestAsync(older.Root), () => { });
+
+        // The prompt has ended and its release waits at Input priority; the
+        // pipe's next delivery runs first.
+        _ = shell.Shell.ActivateFromExternalRequestAsync(newer.Root);
+        WaitForOpenRequests(shell, 1);
+        shell.WaitForTheOpenToEnd();
+        PumpedDispatcher.Drain();
+        shell.WaitForTheOpenToEnd();
+
+        Assert.Equal([newer.Root], shell.OpenRequests);
+        Assert.Equal(newer.Root, shell.Lifecycle.VaultPath);
     });
 
     [Fact]

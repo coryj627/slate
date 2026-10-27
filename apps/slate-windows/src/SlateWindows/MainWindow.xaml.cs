@@ -207,6 +207,10 @@ public partial class MainWindow : Window
             return;
         }
 
+        // Codex round 1: a request that runs at once is the newest; one a
+        // released hold has not yet run is older, and never runs after it.
+        _parkedExternalActivation = null;
+        _externalActivationParked = false;
         Focus();
 
         if (!string.IsNullOrWhiteSpace(vaultPath))
