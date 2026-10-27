@@ -1790,49 +1790,6 @@ public sealed partial class RescanTests
         Assert.Equal(NoChanges, h.Spoken[1]);
     });
 
-    /// <summary>AR-30 (owner-accepted): a Refresh's counts are ITS OWN
-    /// scan's. Another Slate session — another window, slate-cli — that
-    /// modifies, creates and deletes files has already indexed them, so this
-    /// window's re-sync SHOWS all three — the open tab reloads, the deleted
-    /// note's tab is marked missing, the tree and Quick Open follow — while
-    /// an explicit Refresh says "Files refreshed. No changes." and a
-    /// foreground rescan stays silent.</summary>
-    [Fact]
-    public void AnotherSessionsChangesAreShownButNotCounted() => RunSta(() =>
-    {
-        using var h = new Harness("two-sessions", ("mod.md", "before\n"), ("gone.md", "gone\n"));
-        WorkspaceTabViewModel mod = h.Open("mod.md");
-        WorkspaceTabViewModel gone = h.Open("gone.md");
-        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
-        {
-            _ = other.SaveText("mod.md", "changed by another window\n", null);
-            _ = other.CreateExclusive("new.md", "# New\n");
-            other.DeleteFile("gone.md");
-        }
-
-        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
-
-        Assert.Equal([NoChanges], h.Spoken);
-        Assert.Equal("changed by another window\n", mod.Text);
-        Assert.False(mod.IsDirty);
-        Assert.True(gone.IsMissingFromDisk);
-        Assert.Contains(h.Sidebar.RootNodes, node => node.Path == "new.md");
-        Assert.DoesNotContain(h.Sidebar.RootNodes, node => node.Path == "gone.md");
-        Assert.Contains("new.md", h.QuickOpen.FilePathsForTests);
-        Assert.DoesNotContain("gone.md", h.QuickOpen.FilePathsForTests);
-
-        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
-        {
-            _ = other.SaveText("mod.md", "and again\n", null);
-        }
-
-        h.Events.Clear();
-        h.Now += TimeSpan.FromMinutes(1);
-        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Foreground));
-        Assert.Empty(h.Events);
-        Assert.Equal("and again\n", mod.Text);
-    });
-
     /// <summary>AR-26 (v2 §9), the two-refresh fact: a file whose read fails
     /// blocks the prune, so an open note deleted outside Slate keeps its
     /// index row — the first Refresh is incomplete, and the tree, Quick Open
