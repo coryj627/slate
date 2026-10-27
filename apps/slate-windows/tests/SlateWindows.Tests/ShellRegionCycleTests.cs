@@ -306,7 +306,7 @@ public sealed class ShellRegionCycleTests
         // Focus() below needs this window to be the active one. Shown
         // unactivated, it was only when the test process already held the
         // foreground, which Namespace's runners did not give it.
-        window.Activate();
+        Assert.True(window.Activate(), "premise: the test window could not be activated");
         Func<bool> priorOverlayProbe = Canvas.CanvasSurfaceView.ShellOverlayIsOpen;
         var shell = new MainWindow();
         bool RingIsModalWithFocusOn(UIElement element)
