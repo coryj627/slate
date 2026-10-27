@@ -442,6 +442,12 @@ internal static class StaThread
             {
                 (string name, Thread thread, Func<OsThreadExit?> exitOf, string fact, string what) = s_wedged[i];
                 OsThreadExit? exit = exitOf();
+                if (exit is null && !thread.IsAlive)
+                {
+                    // A late-started body can record its exit and end between
+                    // the read above and this one (Codex round 4).
+                    exit = exitOf();
+                }
                 // A thread that has recorded no exit yet is running while it
                 // is alive; one that has, until its OS thread has exited.
                 if (exit is null ? thread.IsAlive : !exit.WaitOne(0))
