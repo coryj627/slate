@@ -121,29 +121,27 @@ internal sealed partial class WorkspaceViewModel
     /// <summary>
     /// WB-10 (#1293, design §4.3; the owner's decision Q8): what a change-feed
     /// window touched, for its dependents pass. <paramref name="Paths"/> are
-    /// every record's path (a rename's origin too); <paramref name="Prefixes"/>
-    /// are the folders a record names, whose descendants are touched;
-    /// <paramref name="AnyRecord"/> — the window has a record, the trigger
-    /// WB-10a drops the graph on (folders included); <paramref name="AnyCreated"/>
-    /// — a record may name a file that was not there (an unresolved embed may
-    /// resolve). <paramref name="Retry"/> holds the dependent surfaces the
-    /// retry set carries, and <paramref name="Recover"/> is an explicit
-    /// Refresh's recovery set: both ride the run's first dependents pass,
-    /// whatever the window holds.
+    /// every record's path (a rename's origin too) — a folder another session
+    /// renamed or removed is a record for each file under it as well, so the
+    /// exact paths name every note it moved; <paramref name="AnyRecord"/> —
+    /// the window has a record, the trigger WB-10a drops the graph on
+    /// (folders included); <paramref name="AnyCreated"/> — a record may name
+    /// a file that was not there (an unresolved embed may resolve).
+    /// <paramref name="Retry"/> holds the dependent surfaces the retry set
+    /// carries, and <paramref name="Recover"/> is an explicit Refresh's
+    /// recovery set: both ride the run's first dependents pass, whatever the
+    /// window holds.
     /// </summary>
     internal sealed record RescanTouch(
         IReadOnlySet<string> Paths,
-        IReadOnlySet<string> Prefixes,
         bool AnyRecord,
         bool AnyCreated,
         IReadOnlySet<RescanSurface> Retry,
         bool Recover)
     {
-        /// <summary>Whether the window touched <paramref name="path"/>: a
-        /// record names it, or a folder above it.</summary>
-        internal bool Touches(string path) =>
-            Paths.Contains(path)
-            || Prefixes.Any(prefix => path.StartsWith(prefix + "/", StringComparison.Ordinal));
+        /// <summary>Whether a record of the window names
+        /// <paramref name="path"/>.</summary>
+        internal bool Touches(string path) => Paths.Contains(path);
     }
 
     /// <summary>
@@ -735,8 +733,8 @@ internal sealed partial class WorkspaceViewModel
     /// </summary>
     /// <remarks>WB-10 (#1293, design §4.3): with a change-feed window's
     /// <paramref name="touch"/> the pass is narrowed to the window's paths —
-    /// a reading model re-projects when a dependency is touched (exactly or
-    /// under a touched folder), an unresolved embed may have resolved, a base
+    /// a reading model re-projects when a record names a dependency, an
+    /// unresolved embed may have resolved, a base
     /// card's membership may have moved, or its own tab reloaded; the history
     /// panel reloads when its note's tab reloaded or a record touches it; the
     /// Bases re-run and the graph probe run when the window has any record —

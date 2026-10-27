@@ -291,9 +291,9 @@ public sealed partial class RescanTests
         Assert.Equal(0, Volatile.Read(ref loads));
     });
 
-    /// <summary>A folder another session renamed touches every path under
-    /// it: the reading model whose embed lived in the folder re-projects; one
-    /// that embeds a note elsewhere does not.</summary>
+    /// <summary>A folder another session renamed is a record for each note
+    /// it moved: the reading model whose embed lived in the folder
+    /// re-projects; one that embeds a note elsewhere does not.</summary>
     [Fact]
     public void AReadingModelEmbeddingANoteUnderARenamedFolderReProjects() => RunSta(() =>
     {
@@ -1036,6 +1036,35 @@ public sealed partial class RescanTests
         Assert.Equal(0UL, window.RecordCount);
         Assert.Single(seen, entry => entry == kind);
         Assert.False(Failed(), "the explicit Refresh did not re-check the failure");
+        Assert.Equal([NoChanges], h.Spoken);
+    });
+
+    /// <summary>The owner's decision Q8 for the tree: a tree showing a
+    /// failure that no rescan produced — here its tags could not load on an
+    /// ordinary refresh, so the retry set is empty — is refreshed by an
+    /// explicit Refresh with an empty window, and not by a foreground
+    /// run.</summary>
+    [Fact]
+    public void AnUnchangedRefreshReChecksATreeShowingAFailure() => RunSta(() =>
+    {
+        using var h = new Harness("feed-recover-tree", ("alpha.md", "# Alpha\n\n#topic\n"));
+        h.Sidebar.AfterTagTreeForTests = () => throw new VaultException.Io("injected tag tree failure");
+        h.Context.Await(h.Sidebar.RefreshAsync());
+        h.Sidebar.AfterTagTreeForTests = null;
+        Assert.True(h.Sidebar.ShowsFailedLevelForRescan, "premise: the tree shows its tags' failure");
+        Assert.Empty(h.Lifecycle.RetrySetForTests);
+        int refreshes = h.Sidebar.TreeGenerationForTests;
+        h.Events.Clear();
+
+        h.Now += TimeSpan.FromMinutes(1);
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Foreground));
+        Assert.Equal(refreshes, h.Sidebar.TreeGenerationForTests);
+        Assert.True(h.Sidebar.ShowsFailedLevelForRescan, "a foreground run re-checked the tree");
+
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        Assert.True(h.Sidebar.TreeGenerationForTests > refreshes, "the explicit Refresh did not refresh the tree");
+        Assert.False(h.Sidebar.ShowsFailedLevelForRescan);
+        Assert.Contains(h.Sidebar.Tags, tag => tag.Full == "topic");
         Assert.Equal([NoChanges], h.Spoken);
     });
 

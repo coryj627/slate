@@ -381,8 +381,8 @@ internal sealed partial class VaultLifecycleViewModel
     /// The record path (design §4.3, §6): an exact window's records, read in
     /// bounded pages under the run's token. Phase A, every page: Quick Open
     /// drops the removed paths and upserts the openable present ones in one
-    /// pass; renames are buffered, and the removed, touched and folder paths
-    /// gather over the whole window. Phase B, after the last page, because
+    /// pass; renames are buffered, and the removed and touched paths gather
+    /// over the whole window. Phase B, after the last page, because
     /// renames precede removals in page order: each buffered rename moves the
     /// tabs that held its file (<see cref="WorkspaceViewModel.RetargetPathForFeedRename"/>,
     /// the owner's decision Q3), with whether its origin is gone decided over
@@ -410,7 +410,6 @@ internal sealed partial class VaultLifecycleViewModel
         var renames = new List<ChangeRecord>();
         var removed = new HashSet<string>(StringComparer.Ordinal);
         var touched = new HashSet<string>(StringComparer.Ordinal);
-        var touchedPrefixes = new HashSet<string>(StringComparer.Ordinal);
         bool anyCreated = false;
         bool anyRecord = window.RecordCount > 0;
         if (anyRecord)
@@ -460,14 +459,8 @@ internal sealed partial class VaultLifecycleViewModel
 
                     if (record.Entry == ChangeEntry.Directory)
                     {
-                        // A folder created, removed or renamed: the paths
-                        // under it are touched too.
-                        _ = touchedPrefixes.Add(record.Path);
-                        if (record.RenamedFrom is string folderFrom)
-                        {
-                            _ = touchedPrefixes.Add(folderFrom);
-                        }
-
+                        // A folder created, removed or renamed: each file it
+                        // moved or removed is a record of its own.
                         continue;
                     }
 
@@ -524,7 +517,7 @@ internal sealed partial class VaultLifecycleViewModel
             }
         }
 
-        var touch = new WorkspaceViewModel.RescanTouch(touched, touchedPrefixes, anyRecord, anyCreated, retry, recover);
+        var touch = new WorkspaceViewModel.RescanTouch(touched, anyRecord, anyCreated, retry, recover);
         Task<ulong> tree = anyRecord ? ReSyncTreeAsync(reason, cancellation) : Task.FromResult(0UL);
         Task<ulong> workspaceSync = Workspace is WorkspaceViewModel open
             ? ReSyncWorkspaceAsync(open, session, cancel, cancellation, touch, failedSurfaces)
