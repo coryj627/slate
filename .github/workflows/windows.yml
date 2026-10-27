@@ -577,16 +577,6 @@ jobs:
             '-Out', "$results\foreground.log",
             '-StopFile', '${{ runner.temp }}\foreground.stop')
 
-      # #1680 diagnostic: the ring facts alone, before the suite, so a run
-      # shows whether the popover fact's focus premise fails in isolation
-      # on this runner or only eight minutes into the full suite.
-      - name: The shell ring facts alone (#1680 diagnostic)
-        continue-on-error: true
-        run: >-
-          dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj
-          --configuration Release --no-build
-          --filter "FullyQualifiedName~SlateWindows.Tests.ShellRegionCycleTests"
-
       - name: Test
         env:
           SLATE_STA_DUMP_DIR: '${{ runner.temp }}\slate-app-results'

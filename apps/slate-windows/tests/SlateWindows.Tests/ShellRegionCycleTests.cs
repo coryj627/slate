@@ -1,11 +1,9 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
-using System.Windows.Interop;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows.Tests;
@@ -16,6 +14,10 @@ namespace SlateWindows.Tests;
 /// window's.</summary>
 public sealed class ShellRegionCycleTests
 {
+    private readonly ITestOutputHelper _output;
+
+    public ShellRegionCycleTests(ITestOutputHelper output) => _output = output;
+
     private sealed class FakeHost : IShellRegionHost
     {
         public bool ModalSurfaceOpen { get; set; }
@@ -305,38 +307,11 @@ public sealed class ShellRegionCycleTests
             WindowStartupLocation = WindowStartupLocation.Manual,
         };
         window.Show();
-        // #1680: settled before the first Focus(), as every shown fixture is.
-        // With the show's activation still queued, a session with no
-        // foreground window (Namespace's runners) ran it inside that first
-        // Focus(), which then reported false with the keys already moving.
-        window.UpdateLayout();
-        PumpedDispatcher.Drain();
         Func<bool> priorOverlayProbe = Canvas.CanvasSurfaceView.ShellOverlayIsOpen;
         var shell = new MainWindow();
-        // #1680 diagnostic: every keyboard-focus event the window routes while
-        // the premise's Focus() runs.
-        var focusTrace = new List<string>();
-        void Trace(string kind, KeyboardFocusChangedEventArgs e) =>
-            focusTrace.Add($"{kind} src={Describe(e.OriginalSource)} old={Describe(e.OldFocus)} new={Describe(e.NewFocus)} handled={e.Handled}");
-        window.AddHandler(Keyboard.PreviewLostKeyboardFocusEvent, new KeyboardFocusChangedEventHandler((_, e) => Trace("PreviewLost", e)), handledEventsToo: true);
-        window.AddHandler(Keyboard.PreviewGotKeyboardFocusEvent, new KeyboardFocusChangedEventHandler((_, e) => Trace("PreviewGot", e)), handledEventsToo: true);
-        window.AddHandler(Keyboard.LostKeyboardFocusEvent, new KeyboardFocusChangedEventHandler((_, e) => Trace("Lost", e)), handledEventsToo: true);
-        window.AddHandler(Keyboard.GotKeyboardFocusEvent, new KeyboardFocusChangedEventHandler((_, e) => Trace("Got", e)), handledEventsToo: true);
         bool RingIsModalWithFocusOn(UIElement element)
         {
-            string before = $"before: focused={Describe(Keyboard.FocusedElement)} {FocusState(window, shell, element)}";
-            focusTrace.Clear();
-            bool took = element.Focus();
-            if (!took)
-            {
-                string first = string.Join(" | ", focusTrace);
-                focusTrace.Clear();
-                bool second = element.Focus();
-                Assert.Fail(
-                    $"premise: the element did not take keyboard focus. {before}. first Focus() trace: [{first}]. "
-                    + $"after: focused={Describe(Keyboard.FocusedElement)} {FocusState(window, shell, element)}. "
-                    + $"second Focus()={second}, trace: [{string.Join(" | ", focusTrace)}]");
-            }
+            Assert.True(element.Focus(), "premise: the element did not take keyboard focus");
             Assert.Same(element, Keyboard.FocusedElement);
             return ((IShellRegionHost)shell).ModalSurfaceOpen;
         }
@@ -360,7 +335,27 @@ public sealed class ShellRegionCycleTests
                 PumpedDispatcher.PumpUntil(() => menuItem.IsLoaded, TimeSpan.FromSeconds(10)),
                 "premise: the field's context menu did not open");
             Assert.False(popover.IsAncestorOf(menuItem), "premise: the context menu sits in the popover's own visual tree");
-            Assert.True(RingIsModalWithFocusOn(menuItem), "a context menu on a popover field let F6 leave the popover");
+            // #1680: a desktop whose session has no foreground window (the
+            // Namespace runners) does not let the menu's popup keep the keys —
+            // WPF hands them straight back to the element that held them, as
+            // CanvasNavigatorTests' TryPutTheKeysInTheMenu records. There the
+            // leg asserts the refusal: the keys stayed outside the popover, and
+            // the ring is not modal for them.
+            if (menuItem.Focus())
+            {
+                Assert.Same(menuItem, Keyboard.FocusedElement);
+                Assert.True(((IShellRegionHost)shell).ModalSurfaceOpen, "a context menu on a popover field let F6 leave the popover");
+            }
+            else
+            {
+                _output.WriteLine(
+                    "DESKTOP REFUSED THE MENU — the popover field's context menu: Focus() returned false and the keys "
+                    + $"stayed on {Keyboard.FocusedElement?.GetType().Name ?? "null"}. The menu arm cannot be exercised "
+                    + "on this desktop (#1680).");
+                Assert.Same(elsewhere, Keyboard.FocusedElement);
+                Assert.False(((IShellRegionHost)shell).ModalSurfaceOpen, "the refused menu made the ring modal with the keys outside the popover");
+            }
+
             field.ContextMenu.IsOpen = false;
 
             interactions.ClosePopoverCommand.Execute(null);
@@ -721,35 +716,5 @@ public sealed class ShellRegionCycleTests
             Assert.True(workspace.FocusNextPaneCommand.CanExecute(null));
             Assert.True(workspace.FocusPreviousPaneCommand.CanExecute(null));
         }
-    }
-
-    /// <summary>#1680: the thread's Win32 focus state, for a focus premise
-    /// that fails on a runner whose session has no foreground window.</summary>
-    private static string FocusState(Window window, Window shell, UIElement element) =>
-        $"window=0x{new WindowInteropHelper(window).Handle:X} active={window.IsActive} visible={window.IsVisible} "
-        + $"shellHwnd=0x{new WindowInteropHelper(shell).Handle:X} element visible={element.IsVisible} "
-        + $"enabled={element.IsEnabled} focusable={element.Focusable} "
-        + $"foreground=0x{FocusNative.GetForegroundWindow():X} threadActive=0x{FocusNative.GetActiveWindow():X} "
-        + $"threadFocus=0x{FocusNative.GetFocus():X} keyboardFocused={Keyboard.FocusedElement?.GetType().Name ?? "null"}";
-
-    private static string Describe(object? element) => element switch
-    {
-        null => "null",
-        Button { Content: var content } => $"Button('{content}')",
-        TextBox box => $"TextBox('{box.Text}')",
-        FrameworkElement { Name: { Length: > 0 } name } framework => $"{framework.GetType().Name}#{name}",
-        _ => element.GetType().Name,
-    };
-
-    private static class FocusNative
-    {
-        [DllImport("user32.dll")]
-        internal static extern IntPtr GetForegroundWindow();
-
-        [DllImport("user32.dll")]
-        internal static extern IntPtr GetActiveWindow();
-
-        [DllImport("user32.dll")]
-        internal static extern IntPtr GetFocus();
     }
 }
