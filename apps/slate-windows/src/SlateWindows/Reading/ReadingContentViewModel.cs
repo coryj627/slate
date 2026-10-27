@@ -210,6 +210,10 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         _dispatcher = synchronousForTests ? null : Dispatcher.CurrentDispatcher;
     }
 
+    /// <summary>WB-9 (#1312): the tab this projection belongs to — what a
+    /// surface's held landing follows across the tab's rescan reload.</summary>
+    internal WorkspaceTabViewModel Tab => _tab;
+
     public FlowDocument? Document
     {
         get => _document;

@@ -2121,6 +2121,11 @@
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "WelcomeOpeningStatus",
+    "Surface": "Welcome / Open Vault"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "WelcomeView",
     "Surface": "Welcome / Open Vault"
   },

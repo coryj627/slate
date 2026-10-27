@@ -239,6 +239,10 @@ internal sealed class AccessibilityNotificationDispatcher
         Post(SlateUniffiMethods.A11yRender(@event));
     }
 
+    /// <summary>WB-9 test seam: every rendered line the window posts, as it
+    /// is posted — the hosted open facts read the launch lines here.</summary>
+    internal Action<RenderedAnnouncement>? PostedForTests { get; set; }
+
     /// <summary>
     /// The rendered-pair primitive (W6-1 PR A, contract A5). A
     /// coalescer cannot hand back an event: the window's winner is
@@ -250,6 +254,7 @@ internal sealed class AccessibilityNotificationDispatcher
     public void Post(RenderedAnnouncement rendered)
     {
         ArgumentNullException.ThrowIfNull(rendered);
+        PostedForTests?.Invoke(rendered);
         AutomationNotificationProcessing processing = rendered.Priority switch
         {
             A11yPriority.High => AutomationNotificationProcessing.ImportantMostRecent,

@@ -129,7 +129,9 @@ internal sealed partial class VaultLifecycleViewModel
     /// a watcher's (design §4.2 item 3).</summary>
     private Task RequestRescan(RescanReason reason, bool honorCooldown)
     {
-        if (_session is not VaultSession session || !IsVaultOpen)
+        // WB-9 (#1319): the open's scan runs before IsVaultOpen turns true,
+        // and a watcher burst during it is still recorded and served.
+        if (_session is not VaultSession session || (!IsVaultOpen && !IsOpening))
         {
             return Task.CompletedTask;
         }
