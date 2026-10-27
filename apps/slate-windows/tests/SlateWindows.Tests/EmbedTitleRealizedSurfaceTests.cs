@@ -81,8 +81,9 @@ public sealed class EmbedTitleRealizedSurfaceTests
 
     /// <summary>One embed of the fixture note: its markdown, what it resolves
     /// to (data, never words), the nested cards it carries in order, and
-    /// whether the popover and the leaf show it (a `.base` is a card of its
-    /// own kind in the reading view only; contract C10).</summary>
+    /// whether the popover and the leaf show it (since #1288 a `.base` is a
+    /// base on every surface: core's <c>EmbedTargetKind</c> classifies the
+    /// resolved target, and the reading view's layered card stays C10's).</summary>
     private sealed record Row(string Name, string Embed, ResolvedEmbed Resolved, ResolvedEmbed[] Nested, bool OnPopoverAndLeaf);
 
     /// <summary>What outer.md embeds: every card kind a note can nest.</summary>
@@ -104,7 +105,7 @@ public sealed class EmbedTitleRealizedSurfaceTests
         new("image-alt", "![[photo.png|A bar chart]]", new ResolvedEmbed.Image("attachments/photo.png", "A bar chart"), [], true),
         new("image-corrupt", "![[broken.png]]", new ResolvedEmbed.Image("broken.png", null), [], true),
         new("nested", "![[outer]]", new ResolvedEmbed.Note("outer.md"), NestedKinds, true),
-        new("base", "![[Notes.base]]", new ResolvedEmbed.Base("Notes.base"), [], false),
+        new("base", "![[Notes.base]]", new ResolvedEmbed.Base("Notes.base"), [], true),
     ];
 
     /// <summary>The branches each surface must actually meet.</summary>
@@ -378,9 +379,16 @@ public sealed class EmbedTitleRealizedSurfaceTests
         }
     }
 
+    /// <summary>Whether the leaf's resolution is the row's card: a whole
+    /// file is a note or a base as core classifies its target (#1288).</summary>
     private static bool Resolves(EmbedResolution resolution, ResolvedEmbed resolved) => (resolution, resolved) switch
     {
-        (EmbedResolution.FullNote note, ResolvedEmbed.Note expected) => note.TargetPath == expected.TargetPath,
+        (EmbedResolution.FullNote note, ResolvedEmbed.Note expected) =>
+            note.TargetPath == expected.TargetPath
+            && SlateUniffiMethods.EmbedTargetKind(note.TargetPath) == EmbedTargetKind.Note,
+        (EmbedResolution.FullNote file, ResolvedEmbed.Base expected) =>
+            file.TargetPath == expected.TargetPath
+            && SlateUniffiMethods.EmbedTargetKind(file.TargetPath) == EmbedTargetKind.Base,
         (EmbedResolution.Section section, ResolvedEmbed.Section expected) =>
             section.TargetPath == expected.TargetPath && section.Heading == expected.Heading,
         (EmbedResolution.Block block, ResolvedEmbed.Block expected) => block.TargetPath == expected.TargetPath,

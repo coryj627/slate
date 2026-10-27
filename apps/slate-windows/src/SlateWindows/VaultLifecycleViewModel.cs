@@ -1919,6 +1919,17 @@ internal sealed partial class VaultLifecycleViewModel
             return;
         }
 
+        if (tab.LoadFailureEvent is not null)
+        {
+            // #1266: the note could not load, so that is the open's outcome:
+            // the open spoke it, unless the note was already showing.
+            if (alreadyActive && tab.TakeUnspokenLoadFailure() is { } failed)
+            {
+                _announce(failed);
+            }
+            return;
+        }
+
         int fileLine = DeriveSearchResultLine(tab, request);
         // The caret park follows the W4-3 dirty posture rather than mac's
         // unverified scroll: a dirty or externally stale buffer no longer

@@ -559,6 +559,11 @@ internal sealed partial class WorkspaceViewModel
     internal void BasesOpenRow(BaseDocumentViewModel document, BasesRow row)
     {
         OpenPath(row.FilePath);
+        if (LandedOnAFailedLoad)
+        {
+            // #1266: the note could not load, and the open said so.
+            return;
+        }
         // Task rows open their FILE here; mac lands on the task's line
         // via its task artifact. The announcement stays honest about
         // what happened (OpenedFile, not OpenedAtLine).

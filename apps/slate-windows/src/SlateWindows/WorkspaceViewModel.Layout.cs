@@ -107,6 +107,12 @@ internal sealed partial class WorkspaceViewModel
     /// activations it causes post no <c>TabFocused</c>.</summary>
     private bool _selectionOpenInProgress;
 
+    /// <summary>#1266: whether the open that just ran landed on a tab whose
+    /// note could not load. <see cref="TryOpenItem"/> has spoken its failure,
+    /// the open's outcome, so a route speaks no success line after it (a
+    /// High one would replace the failure before it is heard).</summary>
+    internal bool LandedOnAFailedLoad => ActiveGroup.ActiveTab is { LoadFailureEvent: not null };
+
     private bool TryOpenItem(
         WorkspaceItemState item,
         WorkspaceOpenTarget target,
@@ -115,7 +121,15 @@ internal sealed partial class WorkspaceViewModel
     {
         if (!fromSelection)
         {
-            return TryOpenItemCore(item, target, requestEditorFocus);
+            // #1266: an explicit open speaks the failed tab it lands on,
+            // once; every true return leaves that tab active. A selection's
+            // preview stays quiet (R-2), its sentence in the status line.
+            bool opened = TryOpenItemCore(item, target, requestEditorFocus);
+            if (opened && ActiveGroup.ActiveTab?.TakeUnspokenLoadFailure() is { } failed)
+            {
+                _announce(failed);
+            }
+            return opened;
         }
 
         bool outer = _selectionOpenInProgress;
@@ -897,8 +911,10 @@ internal sealed partial class WorkspaceViewModel
         }
         catch (VaultException failure)
         {
-            return new A11yEvent.FileReopenFailed(filename, failure.Message);
+            return new A11yEvent.FileReopenFailed(filename, SlateUniffiMethods.VaultErrorDetail(failure));
         }
+        // The reopen's own line is this load's failure, said once (#1266).
+        _ = tab.TakeUnspokenLoadFailure();
         return tab.LoadFailure is { } detail
             ? new A11yEvent.FileReopenFailed(filename, detail)
             : new A11yEvent.ReopenedFile(filename);
