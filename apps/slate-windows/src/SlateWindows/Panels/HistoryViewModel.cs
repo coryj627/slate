@@ -228,6 +228,12 @@ internal sealed class HistoryViewModel : PanelWorkScheduler
     /// interleaving facts are deterministic, never raced.</summary>
     internal Action? LoadInterleaveForTests { get; set; }
 
+    /// <summary>WB-10 (#1293) test seam: a failure the first page's load
+    /// throws on its worker, inside its <c>try</c>, so the production catch
+    /// sets <see cref="LoadError"/> — the failure state an explicit
+    /// Refresh's recovery set re-checks.</summary>
+    internal Func<VaultException?>? LoadFaultForTests { get; set; }
+
     internal Action? DiffInterleaveForTests { get; set; }
 
     internal Action? MarkInterleaveForTests { get; set; }
@@ -528,6 +534,11 @@ internal sealed class HistoryViewModel : PanelWorkScheduler
         string? failure = null;
         try
         {
+            if (LoadFaultForTests?.Invoke() is VaultException fault)
+            {
+                throw fault;
+            }
+
             page = _session.ListVersions(path, new Paging(null, FirstPageLimit));
             if (runSinceOpenFunnel)
             {

@@ -103,11 +103,15 @@ public sealed partial class RescanTests
 
     // --- (3) the close drains every rescan core call ----------------------------
 
-    /// <summary>Round 2, finding 3: the re-sync runs Quick Open's listing and
-    /// the workspace's hash read CONCURRENTLY. With the listing parked inside
-    /// its page loop after the hash read finished, a close waits for the
-    /// listing to end — cancelled by the run's token — before it disposes
-    /// the session; the listing never runs on a disposed session.</summary>
+    /// <summary>Round 2, finding 3: the full re-sync runs Quick Open's
+    /// listing and the workspace's hash read CONCURRENTLY. With the listing
+    /// parked inside its page loop after the hash read finished, a close
+    /// waits for the listing to end — cancelled by the run's token — before
+    /// it disposes the session; the listing never runs on a disposed
+    /// session. WB-10 (#1293): the full re-sync is the change feed's for a
+    /// gap, so the feed is trimmed past the cursor, and the run is a
+    /// foreground one, whose recovery set lists nothing before its
+    /// window.</summary>
     [Fact]
     public void ACloseWaitsForEveryRescanCoreCallInFlight() => RunSta(() =>
     {
@@ -119,8 +123,15 @@ public sealed partial class RescanTests
             parked.Set();
             _ = release.Wait(TimeSpan.FromSeconds(30));
         };
+        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
+        {
+            _ = other.CreateExclusive("late.md", "# Late\n");
+        }
 
-        Task run = h.Lifecycle.RescanAsync(RescanReason.Explicit);
+        CacheSql.TrimTheFeedPastTheCursor(h.Root);
+        h.Now += TimeSpan.FromMinutes(1);
+
+        Task run = h.Lifecycle.RescanAsync(RescanReason.Foreground);
         h.Context.RunUntil(
             () => parked.IsSet && h.CoreCallOutcomes.Any(outcome => outcome.Operation == "hashes"),
             "the listing parked and the hash read done");
@@ -382,12 +393,15 @@ public sealed partial class RescanTests
     /// <summary>Round 2, finding 6: a Slate write that replaces the rescan's
     /// pending tree refresh (F2) carries the rescan's silence into the
     /// replacement: a tag-tree failure in that replacement is counted — the
-    /// one sentence is "1 error" — and never spoken on its own.</summary>
+    /// one sentence is "1 error" — and never spoken on its own. WB-10
+    /// (#1293): the window has a record (a note written outside Slate), so
+    /// the run refreshes the tree.</summary>
     [Fact]
     public void AReplacementTreeRefreshKeepsTheRescansSilence() => RunSta(() =>
     {
         using Harness h = Harness.WithAsyncTree("tree-replacement-silent", ("alpha.md", "# Alpha\n\n#topic\n"));
         h.Context.RunUntil(() => !h.Sidebar.IsRefreshingTree, "the open's tree");
+        h.Write("late.md", "# Late\n");
         using var read = new ManualResetEventSlim(false);
         using var unpark = new ManualResetEventSlim(false);
         int treeReads = 0;

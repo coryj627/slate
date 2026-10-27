@@ -271,6 +271,9 @@ internal sealed class FileTreeNodeViewModel : BindableBase
         }
     }
 
+    /// <summary>WB-10 (#1293): this folder level could not be listed.</summary>
+    internal bool ChildLoadFailed => _childLoadState == FileTreeChildLoadState.Failed;
+
     internal void FailChildLoad(string label)
     {
         _childLoadState = FileTreeChildLoadState.Failed;

@@ -19,12 +19,17 @@ namespace SlateWindows;
 /// </summary>
 /// <remarks>
 /// <para>
-/// One run, in order (AR-18's fallback): rescan through the rescan core
-/// seam; re-synchronize the host's surfaces from the index; then EXACTLY
-/// ONE completion sentence — <c>VaultRescanFinished</c> from this scan's
-/// counts, or <c>VaultRescanIncomplete</c> when the walk was partial, a
-/// file or a re-sync operation failed, or the scan call threw. Nothing
-/// is retained between runs. The
+/// One run, in order: rescan through the rescan core seam; since WB-10
+/// (#1293) consume core's change feed — an exact window's records applied
+/// by path, AR-18's full re-sync from the index for a gap or an oversized
+/// window (<c>VaultLifecycleViewModel.ChangeFeed.cs</c>); then EXACTLY ONE
+/// completion sentence — <c>VaultRescanFinished</c> (an explicit Refresh
+/// with its window's counts, other sessions' changes included; a
+/// foreground or Watcher run with its own scan's), its uncounted twin for a
+/// gap or an oversized window, or <c>VaultRescanIncomplete</c> when the
+/// walk was partial, a file, a re-sync operation or a feed read failed, or
+/// the scan call threw. Between runs only the retry set is retained: the
+/// surfaces whose last re-sync failed, which the next run retries. The
 /// progress listener's Started/Finished announcements never speak for a
 /// rescan (the reason-aware progress policy).
 /// </para>
@@ -492,19 +497,27 @@ internal sealed partial class VaultLifecycleViewModel
             return;
         }
 
-        // (2) Re-synchronize the host from the index (AR-18's fallback):
-        // every re-sync operation is awaited to its publication, and each
-        // that fails counts one error in the sentence.
-        ulong failedOperations = await ReSyncFromIndexAsync(generation, reason, session, cancel, cancellation);
-        if (generation != _generation || cancellation.IsCancellationRequested)
+        // (2) WB-10 (#1293): the change feed — an exact window's records
+        // applied by path, R-9's full re-sync for a gap or an oversized
+        // window (ConsumeChangeFeedAsync). Every re-sync operation is awaited
+        // to its publication, and each that fails counts one error in the
+        // sentence and enters the retry set.
+        ChangeFeedOutcome? feed = await ConsumeChangeFeedAsync(generation, reason, session, cancel, cancellation);
+        if (feed is null || generation != _generation || cancellation.IsCancellationRequested)
         {
             return;
         }
 
-        // (3) The one sentence. The error COUNT crosses the FFI in full; its
-        // messages only as samples (rounds 25-26). A Watcher run speaks on
-        // the foreground policy, through the watcher's gate (plan 43 PR 20b,
-        // PostRescanOutcome).
+        // (3) The one sentence (design §4.7). The error COUNT crosses the FFI
+        // in full; its messages only as samples (rounds 25-26). An explicit
+        // Refresh speaks its last window's counts, which include other
+        // sessions' changes; under the owner's decision Q2 a foreground or
+        // Watcher run speaks only its own scan's, on the foreground policy,
+        // and a Watcher run through the watcher's gate (plan 43 PR 20b,
+        // PostRescanOutcome). A gap, an oversized window or an uncounted run
+        // says other sessions' changes were not counted, with this scan's own
+        // counts (AR-76).
+        ulong failedOperations = feed.Failed;
         if (!report.Complete || failedOperations > 0)
         {
             ulong errors = report.ErrorCount > ulong.MaxValue - failedOperations
@@ -512,52 +525,86 @@ internal sealed partial class VaultLifecycleViewModel
                 : report.ErrorCount + failedOperations;
             PostRescanIncomplete(reason, Math.Max(1UL, errors));
         }
+        else if (feed.Counted)
+        {
+            ulong changed = reason == RescanReason.Explicit ? feed.Changed : report.FilesChanged;
+            ulong removed = reason == RescanReason.Explicit ? feed.Removed : report.FilesRemoved;
+            if (reason == RescanReason.Explicit || changed + removed > 0)
+            {
+                PostRescanOutcome(reason, new A11yEvent.VaultRescanFinished(reason, changed, removed));
+            }
+        }
         else if (reason == RescanReason.Explicit || report.FilesChanged + report.FilesRemoved > 0)
         {
-            PostRescanOutcome(reason, new A11yEvent.VaultRescanFinished(
+            PostRescanOutcome(reason, new A11yEvent.VaultRescanFinishedUncounted(
                 reason, report.FilesChanged, report.FilesRemoved));
         }
     }
 
     /// <summary>
-    /// AR-18's fallback (contract R-9): re-synchronize every host surface
-    /// from the index after the scan — whoever indexed a change (this scan,
-    /// an earlier one, another Slate window or slate-cli), it is shown — and
-    /// return how many operations failed (each counts one error in the
-    /// sentence). Every operation is awaited to its publication, and none
-    /// speaks: the files tree (silent, <see cref="FilesSidebarViewModel.RefreshForRescanAsync"/>),
-    /// Quick Open (the index's openable documents, Slate writes replayed),
-    /// every open document (hash-compared, hash-conditioned reloads), then
-    /// the dependents once. Every core call runs through the rescan seam
-    /// with the run's native token; host-side checks read its managed twin.
-    /// A cancelled run (a close, a vault switch) stops wherever it is.
+    /// AR-18's fallback (contract R-9), since WB-10 (#1293) the change
+    /// feed's for a gap, an oversized window or a feed read that failed:
+    /// re-synchronize every host surface from the index after the scan —
+    /// whoever indexed a change (this scan, an earlier one, another Slate
+    /// window or slate-cli), it is shown — and return how many operations
+    /// failed (each counts one error in the sentence and puts its surface in
+    /// <paramref name="failedSurfaces"/>, the run's retry collector). Every
+    /// operation is awaited to its publication, and none speaks: the files
+    /// tree (silent, <see cref="FilesSidebarViewModel.RefreshForRescanAsync"/>),
+    /// Quick Open (the index's openable documents, the run's journal
+    /// replayed), every open document (hash-compared, hash-conditioned
+    /// reloads), then the dependents once, ungated. Every core call runs
+    /// through the rescan seam with the run's native token; host-side checks
+    /// read its managed twin. A cancelled run (a close, a vault switch) stops
+    /// wherever it is.
     /// </summary>
     private async Task<ulong> ReSyncFromIndexAsync(
         int generation,
         RescanReason reason,
         VaultSession session,
         CancelToken cancel,
-        CancellationToken cancellation)
+        CancellationToken cancellation,
+        QuickSwitcherViewModel.ReplacementJournal? journal,
+        ISet<RescanSurface> failedSurfaces)
     {
         Task<ulong> tree = ReSyncTreeAsync(reason, cancellation);
-        Task<ulong> quickOpen = ReSyncQuickOpenAsync(session, cancel, cancellation);
+        Task<ulong> quickOpen = ReSyncQuickOpenAsync(session, cancel, cancellation, journal);
         Task<ulong> workspace = Workspace is WorkspaceViewModel open
-            ? ReSyncWorkspaceAsync(open, session, cancel, cancellation)
+            ? ReSyncWorkspaceAsync(open, session, cancel, cancellation, touch: null, failedSurfaces)
             : Task.FromResult(0UL);
 
         // Codex PR 7 round 3, finding 4: every branch is awaited — one that
         // fails unexpectedly counts one error and never leaves a sibling
         // unawaited or the run without its sentence.
-        ulong failed = await ContainedAsync(workspace, cancellation);
-        failed += await ContainedAsync(tree, cancellation);
-        failed += await ContainedAsync(quickOpen, cancellation);
-        return generation == _generation ? failed : 0;
+        ulong failed = await ContainedAsync(workspace, cancellation, () => failedSurfaces.UnionWith(DependentSurfaces));
+        ulong treeFailed = await ContainedAsync(tree, cancellation);
+        ulong quickOpenFailed = await ContainedAsync(quickOpen, cancellation);
+        if (generation != _generation)
+        {
+            return 0;
+        }
+
+        if (treeFailed > 0)
+        {
+            _ = failedSurfaces.Add(RescanSurface.Tree);
+        }
+
+        if (quickOpenFailed > 0)
+        {
+            _ = failedSurfaces.Add(RescanSurface.QuickOpen);
+        }
+
+        return failed + treeFailed + quickOpenFailed;
     }
 
     /// <summary>One re-sync branch's failures, counted: its own count, or —
     /// when it throws anything but the run's cancellation — one error,
-    /// logged by type.</summary>
-    private static async Task<ulong> ContainedAsync(Task<ulong> branch, CancellationToken cancellation)
+    /// logged by type, and <paramref name="thrown"/> runs (which surfaces an
+    /// unexpected throw leaves unknown).</summary>
+    private static async Task<ulong> ContainedAsync(
+        Task<ulong> branch,
+        CancellationToken cancellation,
+        Action? thrown = null)
     {
         try
         {
@@ -571,6 +618,7 @@ internal sealed partial class VaultLifecycleViewModel
             }
 
             HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
+            thrown?.Invoke();
             return 1;
         }
     }
@@ -601,21 +649,24 @@ internal sealed partial class VaultLifecycleViewModel
     /// <summary>
     /// Quick Open (v2 §7): the index's openable documents, read in pages on
     /// the seam with the run's token (<c>ListFiles</c> honours it), replace
-    /// its list — the Slate-owned changes applied meanwhile replayed onto
-    /// the pages — and an open switcher re-ranks silently, awaited to that
-    /// publication.
+    /// its list — the Slate-owned changes the run's journal recorded
+    /// replayed onto the pages, and later re-read from the index
+    /// (<see cref="RereadJournalAsync"/>) — and an open switcher re-ranks
+    /// silently, awaited to that publication. The journal is the run's
+    /// (WB-10): opened before its first window, ended when it ends.
     /// </summary>
     private async Task<ulong> ReSyncQuickOpenAsync(
         VaultSession session,
         CancelToken cancel,
-        CancellationToken cancellation)
+        CancellationToken cancellation,
+        QuickSwitcherViewModel.ReplacementJournal? runJournal)
     {
         if (QuickSwitcher is not QuickSwitcherViewModel switcher)
         {
             return 0;
         }
 
-        QuickSwitcherViewModel.ReplacementJournal journal = switcher.BeginReplacement();
+        QuickSwitcherViewModel.ReplacementJournal journal = runJournal ?? switcher.BeginReplacement();
         try
         {
             SwitcherFile[] files = await RunRescanCoreAsync(
@@ -645,20 +696,30 @@ internal sealed partial class VaultLifecycleViewModel
         }
         finally
         {
-            switcher.EndReplacement(journal);
+            if (!ReferenceEquals(journal, runJournal))
+            {
+                switcher.EndReplacement(journal);
+            }
         }
     }
 
     /// <summary>
     /// The workspace: the index hashes of every document it shows, read in
     /// chunks of at most <c>MaxIndexedHashPaths()</c> under the one token
-    /// (v2 §5), then the documents re-sync and the dependents follow.
+    /// (v2 §5), then the documents re-sync and the dependents follow —
+    /// narrowed to a window's paths when <paramref name="touch"/> is given
+    /// (WB-10), ungated otherwise (R-9's fallback). A dependent that fails
+    /// puts its surface in <paramref name="failedSurfaces"/>; when the hashes
+    /// cannot be read, or the dependents throw whole, every dependent
+    /// surface does, since none of them ran.
     /// </summary>
     private async Task<ulong> ReSyncWorkspaceAsync(
         WorkspaceViewModel workspace,
         VaultSession session,
         CancelToken cancel,
-        CancellationToken cancellation)
+        CancellationToken cancellation,
+        WorkspaceViewModel.RescanTouch? touch,
+        ISet<RescanSurface> failedSurfaces)
     {
         IReadOnlyList<string> paths = workspace.RescanPathsToHash();
         IReadOnlyDictionary<string, WorkspaceViewModel.IndexedPath> indexed;
@@ -675,8 +736,10 @@ internal sealed partial class VaultLifecycleViewModel
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
-            // Without the hashes no document can be compared: one failure.
+            // Without the hashes no document can be compared and no
+            // dependent runs: one failure, and the dependents are retried.
             HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
+            failedSurfaces.UnionWith(DependentSurfaces);
             return 1;
         }
 
@@ -712,13 +775,14 @@ internal sealed partial class VaultLifecycleViewModel
 
             try
             {
-                failed += await workspace.ReSyncDependentsAsync(documents, indexed, cancellation);
+                failed += await workspace.ReSyncDependentsAsync(documents, indexed, cancellation, touch, failedSurfaces);
             }
             catch (Exception exception) when (exception is not OutOfMemoryException
                 and not OperationCanceledException
                 && !cancellation.IsCancellationRequested)
             {
                 HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
+                failedSurfaces.UnionWith(DependentSurfaces);
                 failed++;
             }
 
@@ -1138,5 +1202,6 @@ internal sealed partial class VaultLifecycleViewModel
         _rescanCompletion = Task.CompletedTask;
         _watcherRequestWhileAway = false;
         _lastWatcherSentenceAt = null;
+        _retrySet.Clear();
     }
 }

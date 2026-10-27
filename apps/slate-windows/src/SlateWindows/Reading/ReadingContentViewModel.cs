@@ -1212,6 +1212,16 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         || _publishedHasUnresolvedEmbeds
         || _publishedHasBaseEmbeds;
 
+    /// <summary>WB-10 (#1293, design §4.3): whether a change-feed window
+    /// reaches this model's published projection — a resolved embed's path
+    /// is touched (<paramref name="touches"/>: a record names it, or a folder
+    /// above it), an unresolved embed may resolve (<paramref name="anyCreated"/>),
+    /// or a base card's membership may have moved (<paramref name="anyRecord"/>).</summary>
+    internal bool DependsOnRescanTouch(Func<string, bool> touches, bool anyCreated, bool anyRecord) =>
+        _publishedEmbedDependencies.Any(touches)
+        || (_publishedHasUnresolvedEmbeds && anyCreated)
+        || (_publishedHasBaseEmbeds && anyRecord);
+
     /// <summary>
     /// W7-7 PR 7 (#1252, R-9; AR-18's fallback): the rescan's reading
     /// dependent. The re-sync carries no per-path delta, so a model whose

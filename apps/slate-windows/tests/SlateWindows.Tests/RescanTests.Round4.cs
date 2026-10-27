@@ -182,12 +182,14 @@ public sealed partial class RescanTests
     /// tree refresh holds its own status ("Created note …") for that
     /// publication; the replacement refresh's tag-tree failure is silent and
     /// counted — and it, not the held create, is what the status line shows
-    /// last.</summary>
+    /// last. WB-10 (#1293): the window has a record (a note written outside
+    /// Slate), so the run refreshes the tree.</summary>
     [Fact]
     public void ASidebarCreateDuringTheRescansTreeLeavesTheTagFailureOnTheStatusLine() => RunSta(() =>
     {
         using Harness h = Harness.WithAsyncTree("tree-create-status", ("alpha.md", "# Alpha\n\n#topic\n"));
         h.Context.RunUntil(() => !h.Sidebar.IsRefreshingTree, "the open's tree");
+        h.Write("late.md", "# Late\n");
         using var read = new ManualResetEventSlim(false);
         using var unpark = new ManualResetEventSlim(false);
         int treeReads = 0;

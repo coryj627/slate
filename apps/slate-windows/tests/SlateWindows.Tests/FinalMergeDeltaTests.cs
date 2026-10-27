@@ -190,7 +190,9 @@ public sealed class FinalMergeDeltaTests
     /// invalidates the tab (the load owes a rerun), the load ends and its
     /// publication starts the rerun, which parks too. Close Vault waits for
     /// that rerun before the session goes — the fixed point includes a
-    /// successor a worker's publication started.</summary>
+    /// successor a worker's publication started. WB-10 (#1293): a rescan
+    /// drops the editor caches only for a change-feed window with a record,
+    /// so a note is written outside Slate first.</summary>
     [Fact]
     public void TheCloseWaitsForARerunARescansInvalidationStarted()
     {
@@ -198,6 +200,7 @@ public sealed class FinalMergeDeltaTests
         using var loads = new ParkedLoads(host);
         EditorInteractionCoordinator coordinator = loads.OpenParked("note3.md");
         int generation = coordinator.ArtifactCacheGenerationForTests;
+        File.WriteAllText(Path.Combine(host.Root, "written-outside.md"), "# Written outside Slate\n");
 
         Task run = host.Lifecycle.RescanAsync(RescanReason.Explicit);
         Assert.True(PumpedDispatcher.PumpUntil(() => run.IsCompleted, TimeSpan.FromSeconds(60)), "the rescan");

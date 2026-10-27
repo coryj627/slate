@@ -84,6 +84,7 @@ internal enum HostDiagnosticEvent
     VaultEventFailed,
     VaultRescanFailed,
     VaultRescanStarted,
+    ChangeFeedRegisterFailed,
     VaultWatchUnavailable,
     VaultListenerUnregisterFailed,
     WindowPositionFailed,

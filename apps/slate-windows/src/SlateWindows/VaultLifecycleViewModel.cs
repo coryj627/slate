@@ -590,6 +590,7 @@ internal sealed partial class VaultLifecycleViewModel
             CancelToken activeCancel = _scanCancel;
             UiProgressListener activeProgressListener = _progressListener;
             Action<CancelToken>? switcherPageHook = SwitcherPageLoadingForTests;
+            Func<VaultSession, ulong>? registerChangeFeed = RegisterChangeFeedForTests;
             Task<(ScanReport Report, SwitcherFile[] SwitcherFiles)> loadTask = _runSessionLoad(() =>
             {
                 // Plan 43 PR 20b (#1267, design §4.3): the vault watcher arms
@@ -598,6 +599,9 @@ internal sealed partial class VaultLifecycleViewModel
                 // arrives as a burst.
                 StartVaultWatch(activeSession);
                 ScanReport report = activeSession.ScanInitialWithProgress(activeCancel, activeProgressListener);
+                // WB-10 (#1293, design §6): this session's change-feed cursor,
+                // after the open scan and before Quick Open's listing.
+                RegisterChangeFeed(activeSession, registerChangeFeed);
                 // W7-7 PR 7: Quick Open's listing honours the open's token
                 // too, so a close stops it mid-listing, not after it.
                 return (report, LoadSwitcherFiles(activeSession, activeCancel, switcherPageHook));

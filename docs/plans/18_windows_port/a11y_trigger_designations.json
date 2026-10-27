@@ -185,11 +185,6 @@
         "reason": "The Mac sentence promises Command-O and Open Vault focus. Windows uses native welcome controls and their focus/name semantics; do not post the platform-specific Mac sentence.",
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "recorded"
-      },
-      "VaultRescanFinishedUncounted": {
-        "reason": "Plan 43 PR 21a (#1293, AR-76): core's uncounted rescan sentence ships with the change feed and no Windows rescan speaks it yet; PR 21b posts it from the Windows rescan when its change-feed window is a gap or too large.",
-        "decision": "docs/plans/40_nvda_matrix_remediation_contracts.md",
-        "status": "recorded"
       }
     },
     "Mac": {
