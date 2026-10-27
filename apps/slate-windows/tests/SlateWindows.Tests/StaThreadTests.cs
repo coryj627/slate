@@ -588,6 +588,50 @@ public sealed class StaThreadTests : IDisposable
         }
     }
 
+    /// <summary>A fact's thread that first runs after both joins have
+    /// expired has recorded no exit yet: it is still a body running beside
+    /// the facts after it — tracked, and named, until it ends — never
+    /// residue that is reported once and then forgotten.</summary>
+    [Fact]
+    public void AWedgedBodyWhoseThreadStartedLateIsStillTracked()
+    {
+        string root = TestContext.Current.Test!.TestDisplayName;
+        using var start = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        StaThread.BeforeBodyForTests = () => start.Wait(TimeSpan.FromSeconds(30));
+        try
+        {
+            Xunit.Sdk.XunitException timedOut = Assert.Throws<Xunit.Sdk.XunitException>(() => StaThread.Run(
+                () =>
+                {
+                    var clock = System.Diagnostics.Stopwatch.StartNew();
+                    while (!release.IsSet && clock.Elapsed < TimeSpan.FromSeconds(60))
+                    {
+                        Thread.Sleep(20);
+                    }
+                },
+                TimeSpan.FromMilliseconds(200),
+                "the body started late",
+                unwindGrace: TimeSpan.FromMilliseconds(200)));
+            StaThread.BeforeBodyForTests = null;
+            Assert.Contains("has not unwound", timedOut.Message, StringComparison.Ordinal);
+
+            string? beforeItRan = StaThread.Wedged();
+            Assert.NotNull(beforeItRan);
+            Assert.Contains($"`{root}` (thread ", beforeItRan, StringComparison.Ordinal);
+            start.Set();
+            Assert.True(
+                SpinWait.SpinUntil(() => StaThread.Wedged() is { } wedged && wedged.Contains($"`{root}`", StringComparison.Ordinal), TimeSpan.FromSeconds(1)),
+                "a body that started after its joins expired was dropped from the wedged list");
+        }
+        finally
+        {
+            StaThread.BeforeBodyForTests = null;
+            start.Set();
+            Release(release);
+        }
+    }
+
     /// <summary>A body that sleeps until <paramref name="release"/> is set,
     /// never reading its token, past a 200 ms bound and a 200 ms grace. The
     /// bound starts once the body runs, so a late thread start cannot leave

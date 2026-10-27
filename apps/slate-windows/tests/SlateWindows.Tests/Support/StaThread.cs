@@ -76,7 +76,7 @@ internal static class StaThread
     /// classes are freed.</summary>
     internal static readonly TimeSpan OsExitBound = TimeSpan.FromSeconds(10);
 
-    private static readonly List<(string Name, OsThreadExit? Exit, string Fact, string What)> s_wedged = [];
+    private static readonly List<(string Name, Thread Thread, Func<OsThreadExit?> Exit, string Fact, string What)> s_wedged = [];
 
     private static int s_sequence;
 
@@ -99,6 +99,10 @@ internal static class StaThread
     /// <summary>Test seam: runs between the thread's start and the runner's
     /// Join, so a witness can make that Join late.</summary>
     internal static Action? AfterStartForTests { get; set; }
+
+    /// <summary>Test seam: runs on the fact's thread before its first line,
+    /// so a witness can make the body start after its joins have expired.</summary>
+    internal static Action? BeforeBodyForTests { get; set; }
 
     /// <summary>Run <paramref name="body"/> on a fresh STA thread, unregister
     /// the window classes it leaves behind, and rethrow whatever it threw.</summary>
@@ -140,8 +144,10 @@ internal static class StaThread
         // first runs after a wedged run has disposed the source would throw
         // reading the source's token, outside the body, and end the process.
         CancellationToken token = cancellation.Token;
+        Action? beforeBody = BeforeBodyForTests;
         var thread = new Thread(() =>
         {
+            beforeBody?.Invoke();
             t_timeout = token;
             Volatile.Write(ref owner, Thread.CurrentThread);
             try
@@ -182,7 +188,9 @@ internal static class StaThread
             }
             lock (s_wedged)
             {
-                s_wedged.Add((name, Volatile.Read(ref exit), fact, timeoutMessage ?? "an STA fact that timed out"));
+                // Its exit is read when asked: a thread that first runs after
+                // its joins have expired has recorded none yet.
+                s_wedged.Add((name, thread, () => Volatile.Read(ref exit), fact, timeoutMessage ?? "an STA fact that timed out"));
             }
             throw new Xunit.Sdk.XunitException(
                 what + ", but the body has not unwound. It runs on beside the facts after this one, so each of them fails until it ends.) " + stack);
@@ -432,8 +440,11 @@ internal static class StaThread
         {
             for (int i = s_wedged.Count - 1; i >= 0; i--)
             {
-                (string name, OsThreadExit? exit, string fact, string what) = s_wedged[i];
-                if (exit?.WaitOne(0) == false)
+                (string name, Thread thread, Func<OsThreadExit?> exitOf, string fact, string what) = s_wedged[i];
+                OsThreadExit? exit = exitOf();
+                // A thread that has recorded no exit yet is running while it
+                // is alive; one that has, until its OS thread has exited.
+                if (exit is null ? thread.IsAlive : !exit.WaitOne(0))
                 {
                     running.Add($"`{fact}` (thread {name}) is still unwinding after its timeout: {what.TrimEnd('.')}");
                     continue;

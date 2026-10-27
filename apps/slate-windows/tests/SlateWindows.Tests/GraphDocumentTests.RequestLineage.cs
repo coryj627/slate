@@ -28,6 +28,7 @@ public sealed partial class GraphDocumentTests
         private readonly ManualResetEventSlim _reached = new(false);
         private readonly HashSet<int> _parked = [];
         private int _fetches;
+        private int _resumed;
         private bool _ranOut;
 
         public Park(GraphDocumentViewModel document, int which, params int[] also)
@@ -49,6 +50,9 @@ public sealed partial class GraphDocumentTests
                 {
                     Volatile.Write(ref _ranOut, true);
                 }
+                // The outcome is recorded before the park says it resumed,
+                // so the release reads every entered park's outcome.
+                _ = Interlocked.Increment(ref _resumed);
             };
         }
 
@@ -70,11 +74,20 @@ public sealed partial class GraphDocumentTests
                     TimeSpan.FromSeconds(30)),
                 $"fetch {fetch} never reached the gate ({Volatile.Read(ref _fetches)} fetches so far)");
 
-        /// <summary>Let every parked fetch go: one that ran out its park
-        /// first published while the fact thought it held, so it fails here.</summary>
+        /// <summary>Let every parked fetch go, and wait until each that had
+        /// parked has resumed: one that ran out its park first published
+        /// while the fact thought it held, so it fails here.</summary>
         public void Release()
         {
             _release.Set();
+            int entered;
+            lock (_parked)
+            {
+                entered = _parked.Count;
+            }
+            Assert.True(
+                SpinWait.SpinUntil(() => Volatile.Read(ref _resumed) >= entered, TimeSpan.FromSeconds(30)),
+                "a parked fetch never resumed after its release");
             Assert.False(Volatile.Read(ref _ranOut), "a parked fetch ran out its 30 s park before the fact released it");
         }
 
