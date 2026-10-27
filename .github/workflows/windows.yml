@@ -560,7 +560,9 @@ jobs:
       # results folder (StaThread.DumpDirectory, #1603, #1641). The run is
       # under the device-state guard (#1331): it fails if the suite wrote
       # the runner's %LOCALAPPDATA%\Slate, and keeps the suite's own exit
-      # code otherwise.
+      # code otherwise. Facts tagged kind=benchmark hold wall-clock budgets
+      # or run for tens of seconds, so they stay out of the gate and run by
+      # hand on a quiet machine (#1323).
       - name: Test
         env:
           SLATE_STA_DUMP_DIR: '${{ runner.temp }}\slate-app-results'
@@ -568,7 +570,7 @@ jobs:
           pwsh -NoProfile -File scripts/windows/guard-device-state.ps1 --
           dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj
           --configuration Release --no-build
-          --filter "FullyQualifiedName!~ConnectionsLeafTests.TheModelOf"
+          --filter "FullyQualifiedName!~ConnectionsLeafTests.TheModelOf&kind!=benchmark"
           --logger "trx;LogFileName=slate-windows-app.trx"
           --results-directory "${{ runner.temp }}\slate-app-results"
           --blame-hang-timeout 10m --blame-hang-dump-type mini

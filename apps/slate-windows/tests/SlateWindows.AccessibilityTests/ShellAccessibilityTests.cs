@@ -11862,19 +11862,15 @@ public sealed partial class ShellAccessibilityTests
     }
 
     /// <summary>Open a canvas by selecting its row in the files tree —
-    /// the route a user takes, not a synthesized command.</summary>
+    /// the route a user takes, not a synthesized command. The tree exists
+    /// before its rows are published, so the row is waited for, never
+    /// looked for once (#1323).</summary>
     private static void OpenCanvasFromTree(
         Window window, UIA3Automation automation, string stem)
     {
         AutomationElement filesTree = WaitForElement(
             window, "FilesTree", TimeSpan.FromSeconds(30));
-        AutomationElement item = filesTree
-            .FindAllDescendants(
-                automation.ConditionFactory.ByControlType(ControlType.TreeItem))
-            .FirstOrDefault(candidate => candidate.Name.StartsWith(
-                stem, StringComparison.OrdinalIgnoreCase))
-            ?? throw new Xunit.Sdk.XunitException(
-                $"the {stem}.canvas TreeItem is absent from the files tree.");
+        AutomationElement item = WaitForTreeItemStartingWith(filesTree, automation, stem);
         item.Patterns.SelectionItem.Pattern.Select();
     }
 

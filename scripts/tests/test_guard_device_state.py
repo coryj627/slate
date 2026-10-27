@@ -154,7 +154,7 @@ class GuardDeviceStateTests(unittest.TestCase):
         return [
             sys.executable, str(recorder), str(out),
             "test", "x.csproj", "--configuration", "Release", "--no-build",
-            "--filter", "FullyQualifiedName!~ConnectionsLeafTests.TheModelOf",
+            "--filter", "FullyQualifiedName!~ConnectionsLeafTests.TheModelOf&kind!=benchmark",
             "--logger", "trx;LogFileName=slate-windows-app.trx",
             "--results-directory", str(parent / "results dir"),
             "--blame-hang-timeout", "10m", "--blame-hang-dump-type", "mini",
