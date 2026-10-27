@@ -735,10 +735,21 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         get => _selectedNode;
         set
         {
-            if (!SetField(ref _selectedNode, value)
-                || value is null
-                || value.IsPlaceholder
-                || value.IsGroupHeader)
+            FileTreeNodeViewModel? previous = _selectedNode;
+            if (!SetField(ref _selectedNode, value))
+            {
+                return;
+            }
+
+            // WB-6 (S1): a tree row taking the selection clears every other
+            // selected tree node; a list's row (the filter results, the dual
+            // pane) taking it leaves the tree's own row alone.
+            if (value is not null && !IsListRow(value))
+            {
+                ClearOtherTreeSelections(value);
+            }
+
+            if (value is null || value.IsPlaceholder || value.IsGroupHeader)
             {
                 return;
             }
@@ -768,17 +779,45 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
     }
 
+    /// <summary>A row of a list's own listing — the filter results or the
+    /// dual pane — rather than of the tree.</summary>
+    private bool IsListRow(FileTreeNodeViewModel row) =>
+        FilterResults.Contains(row) || DualPaneFiles.Contains(row);
+
+    /// <summary>WB-6 (S1): at most one tree node holds the tree's selection.
+    /// A tree row taking it — through the setter (which
+    /// <c>SelectOnBothHalves</c> goes through) or <c>SelectSilently</c> —
+    /// clears every other selected tree node first, shown or hidden. WPF lets go of a realized container itself; a
+    /// row the tree hides (a note a publication moved into a collapsed date
+    /// group) has none, and expanded later would come back selected and
+    /// reopen its note (Codex rounds 2 and 3).</summary>
+    private void ClearOtherTreeSelections(FileTreeNodeViewModel keep)
+    {
+        foreach (FileTreeNodeViewModel row in Flatten(RootNodes).Where(row => row.IsSelected && !ReferenceEquals(row, keep)).ToList())
+        {
+            row.IsSelected = false;
+        }
+    }
+
     /// <summary>W5-4 (red team, a11y 2): selection RESTORATION after a
     /// mutation's tree publication — the setter's open-on-select and
     /// selection announcements must not fire for a re-seat (the
     /// mutation already spoke, and re-opening the just-renamed note
     /// would churn recents/history for a gesture the user never
     /// made).</summary>
-    private void SelectSilently(FileTreeNodeViewModel node)
+    /// <param name="reseatOf">WB-6: the path of the row a publication let go
+    /// of, when <paramref name="node"/> is its rebuilt row — the selection was
+    /// let go of first, so no previous node names it.</param>
+    private void SelectSilently(FileTreeNodeViewModel node, string? reseatOf = null)
     {
         FileTreeNodeViewModel? previous = _selectedNode;
         if (SetField(ref _selectedNode, node, nameof(SelectedNode)))
         {
+            // WB-6 (S1): the publication keeps rows now, so the row that held
+            // the selection may still be shown, or hidden in a collapsed
+            // group; every other selected tree node lets go of it.
+            ClearOtherTreeSelections(node);
+
             // The view half (verification 1): without the container's
             // IsSelected, the restore was invisible and the next arrow
             // key jumped to the tree top and opened the first file.
@@ -792,7 +831,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             // journey flaked on exactly this). Only a DIFFERENT logical
             // node — a mutation's pending selection landing on its new
             // path — carries its name into the field.
-            if (!string.Equals(previous?.Path, node.Path, StringComparison.Ordinal))
+            if (!string.Equals(reseatOf ?? previous?.Path, node.Path, StringComparison.Ordinal))
             {
                 MutationName = node.Name;
             }
@@ -1823,6 +1862,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             return;
         }
 
+        long revealRequests = _revealRequests;
         TrashWorkOwner owner = BeginTrash();
         StagedTrash? staged = null;
         try
@@ -1863,7 +1903,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             if (ReferenceEquals(SelectedNode, node))
             {
                 SelectedNode = null;
-                RequestSelectionAt(null);
+                RequestSelectionAt(null, revealRequests);
             }
             Refresh();
             ReportMutationResult($"Moved {node.DisplayName} to the Recycle Bin.");
@@ -2190,6 +2230,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     {
         StructuralBatchItem[] items = SelectedBatchItems();
         if (IsTrashing || SessionShutdownStarted || StructuralMutationBlocked is not null || items.Length == 0) { return; }
+        long revealRequests = _revealRequests;
         TrashWorkOwner owner = BeginTrash();
         StagedTrash? staged = null;
         try
@@ -2234,7 +2275,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 selected.Path == item.Path || (item.IsDirectory &&
                     selected.Path.StartsWith(item.Path + "/", StringComparison.Ordinal))))
             {
-                RequestSelectionAt(null);
+                RequestSelectionAt(null, revealRequests);
             }
             Refresh();
             ReportMutationResult(BatchTrashSummary(report));

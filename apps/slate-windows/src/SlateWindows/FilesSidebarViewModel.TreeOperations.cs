@@ -598,21 +598,18 @@ internal sealed partial class FilesSidebarViewModel
     private void ApplyTreeRefresh(TreeRefreshOutcome outcome, bool reportCount, bool silent = false)
     {
         _settledTreeGeneration = _treeGeneration;
-        // W7-7 PR 7 (codex's merge-delta check, finding 1): the tree being
-        // replaced, where a selected row this publication removes had its
-        // neighbours — and an earlier removal's landing nobody took is stale.
-        // A copy (plan 43 PR 20b): a rescan's publication — silent — keeps
-        // the rows it did not change, reconciling the root level in place.
-        List<FileTreeNodeViewModel> previousRoots = [.. RootNodes];
+        // WB-6 (#1515): the selected row's place, read before anything moves
+        // — the reconcile removes a row from its kept folder's or group's own
+        // rows, so the old tree cannot be walked afterwards — and an earlier
+        // removal's landing nobody took is stale. Every publication, organic
+        // or a rescan's, keeps the rows it did not change.
+        SelectionPlace? place = SnapshotSelectionPlace(SelectedNode);
+        SelectionPlace? treeRow = Flatten(RootNodes).FirstOrDefault(row => row.IsSelected) is { } selectedRow
+            && !ReferenceEquals(selectedRow, SelectedNode)
+                ? SnapshotSelectionPlace(selectedRow)
+                : null;
         _ = TakeVanishedSelection();
-        if (silent)
-        {
-            PublishKeepingUnchangedRows(outcome.RootNodes);
-        }
-        else
-        {
-            RootNodes = outcome.RootNodes;
-        }
+        PublishKeepingUnchangedRows(outcome.RootNodes);
         if (outcome.TagGeneration == _tagGeneration)
         {
             ApplyTags(outcome.Tags, announce: !silent);
@@ -628,7 +625,7 @@ internal sealed partial class FilesSidebarViewModel
         // W6-2 PR A (contract A-8): a surface's "Reveal in File Tree" whose
         // node the previous tree had not materialised.
         ConsumePendingSurfaceSelection();
-        ReconcileSelectionAfterPublication(previousRoots);
+        ReconcileSelectionAfterPublication(place, treeRow);
 
         // Project the AUTHORITATIVE checked set onto the published
         // nodes (codex rounds 4-5): a fresh node whose path is

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Collections.Concurrent;
+using System.Collections.ObjectModel;
 using SlateWindows;
 using uniffi.slate_uniffi;
 
@@ -84,6 +85,41 @@ public sealed class W1ChildExpansionTests
         Assert.Equal(0, collectionMutations);
         Assert.Equal(2, Volatile.Read(ref workerInvocation));
         Assert.Contains("Showing the first 5,000 items", sidebar.Status, StringComparison.Ordinal);
+    }
+
+    /// <summary>Plan 44 WB-6 (the red team's L3): the selection on the
+    /// root's overflow row — a placeholder, never a kept row — survives a
+    /// refresh that lists the root again: the fresh overflow row is the
+    /// sidebar's selection and holds its node's IsSelected (headless; a
+    /// container needs the hosted tree). Placeholders are keyed by the folder
+    /// they are in and their text, so a selected one is re-seated, never
+    /// resolved as gone (which moved the keys to the row before it on every
+    /// run).</summary>
+    [Fact]
+    [Trait("census", "moderate")]
+    public async Task ASelectedOverflowRowStaysSelectedThroughARefresh()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "overflow-selection");
+        for (int index = 0; index < FilesSidebarViewModel.MaxMaterializedDirectoryItems + 1; index++)
+        {
+            File.WriteAllText(Path.Combine(fixture.Root, $"note-{index:D5}.md"), string.Empty);
+        }
+
+        using VaultSession session = OpenScanned(fixture.Root);
+        var context = new PumpSynchronizationContext();
+        var sidebar = CreateSidebar(session, fixture.Root, context, (work, cancellationToken) => Task.Run(work, cancellationToken));
+        await DrainUntilComplete(sidebar.TreeRefreshCompletion, context, TimeSpan.FromSeconds(30));
+        FileTreeNodeViewModel overflow = Assert.Single(sidebar.RootNodes, node => node.IsPlaceholder);
+        sidebar.SelectedNode = overflow;
+        overflow.IsSelected = true;
+
+        sidebar.Refresh();
+        await DrainUntilComplete(sidebar.TreeRefreshCompletion, context, TimeSpan.FromSeconds(30));
+
+        FileTreeNodeViewModel fresh = Assert.Single(sidebar.RootNodes, node => node.IsPlaceholder);
+        Assert.Equal(overflow.Name, fresh.Name);
+        Assert.Same(fresh, sidebar.SelectedNode);
+        Assert.True(fresh.IsSelected, "the fresh overflow row's node does not hold the selection");
     }
 
     [Fact]
@@ -216,12 +252,22 @@ public sealed class W1ChildExpansionTests
         Assert.Single(second.Children, node => node.IsPlaceholder && node.Name == "Loading…");
     }
 
+    /// <summary>A refresh that lets go of an expanded folder's row — the
+    /// folder renamed meanwhile, so the published tree no longer has it —
+    /// cancels the expansion still in flight on that row, which shows the
+    /// cancel and is never published into; the renamed folder is a fresh row.
+    /// Plan 44 WB-6: a refresh keeps every row it did not change, so only a
+    /// changed row is let go of (the kept one is
+    /// <see cref="ARefreshListsAKeptOpenFolderWhoseExpansionItCanceled"/>).</summary>
     [Fact]
     public async Task RefreshRejectsPublicationIntoTheDetachedExpandedNode()
     {
         using FixtureVault fixture = FixtureVault.Create(0, "child-expansion-refresh");
         Directory.CreateDirectory(Path.Combine(fixture.Root, "folder"));
         File.WriteAllText(Path.Combine(fixture.Root, "folder", "child.md"), string.Empty);
+        // An unchanged root row, so the refresh keeps the published tree
+        // and lets go of the renamed folder's row alone.
+        File.WriteAllText(Path.Combine(fixture.Root, "anchor.md"), string.Empty);
         using VaultSession session = OpenScanned(fixture.Root);
         var context = new PumpSynchronizationContext();
         using var childStarted = new ManualResetEventSlim();
@@ -247,28 +293,90 @@ public sealed class W1ChildExpansionTests
         detached.IsExpanded = true;
         Task childCompletion = sidebar.ChildExpansionCompletion;
         Assert.True(childStarted.Wait(TimeSpan.FromSeconds(5)));
+        ObservableCollection<FileTreeNodeViewModel> published = sidebar.RootNodes;
+        _ = session.RenameFolderWithNote("folder", "moved");
         sidebar.Refresh();
         Task refreshCompletion = sidebar.TreeRefreshCompletion;
         releaseChild.Set();
         await DrainUntilComplete(Task.WhenAll(childCompletion, refreshCompletion), context);
 
+        Assert.Same(published, sidebar.RootNodes);
         Assert.Equal(FileTreeChildLoadState.Failed, detached.ChildLoadState);
         Assert.Single(
             detached.Children,
             node => node.IsPlaceholder
                 && node.Name == "Folder loading was canceled. Collapse and expand to retry.");
-        FileTreeNodeViewModel current = Assert.Single(sidebar.RootNodes, node => node.Path == "folder");
+        Assert.DoesNotContain(sidebar.RootNodes, node => ReferenceEquals(node, detached));
+        FileTreeNodeViewModel current = Assert.Single(sidebar.RootNodes, node => node.Path == "moved");
         Assert.NotSame(detached, current);
-        Assert.True(current.IsExpanded);
-        Assert.Single(current.Children, node => node.Path == "folder/child.md");
     }
 
+    /// <summary>Plan 44 WB-6: a refresh keeps an open folder it did not
+    /// change though the folder's own expansion was in flight. The refresh
+    /// cancels the expansion — the row shows the cancel, and the in-flight
+    /// listing is never published — and then lists the kept row's rows
+    /// itself: the same node, open and loaded, with its note.</summary>
+    [Fact]
+    public async Task ARefreshListsAKeptOpenFolderWhoseExpansionItCanceled()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "child-expansion-refresh-kept");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "folder"));
+        File.WriteAllText(Path.Combine(fixture.Root, "folder", "child.md"), string.Empty);
+        using VaultSession session = OpenScanned(fixture.Root);
+        var context = new PumpSynchronizationContext();
+        using var childStarted = new ManualResetEventSlim();
+        using var releaseChild = new ManualResetEventSlim();
+        int workerInvocation = 0;
+        var sidebar = CreateSidebar(
+            session,
+            fixture.Root,
+            context,
+            (work, cancellationToken) => Task.Run(() =>
+            {
+                if (Interlocked.Increment(ref workerInvocation) == 2)
+                {
+                    childStarted.Set();
+                    releaseChild.Wait();
+                }
+
+                work();
+            }, cancellationToken));
+        await DrainUntilComplete(sidebar.TreeRefreshCompletion, context);
+        FileTreeNodeViewModel folder = Assert.Single(sidebar.RootNodes, node => node.Path == "folder");
+        var shown = new List<string>();
+        folder.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(FileTreeNodeViewModel.Children))
+            {
+                shown.Add(string.Join(" | ", folder.Children.Select(node => node.Name)));
+            }
+        };
+
+        folder.IsExpanded = true;
+        Task childCompletion = sidebar.ChildExpansionCompletion;
+        Assert.True(childStarted.Wait(TimeSpan.FromSeconds(5)));
+        sidebar.Refresh();
+        Task refreshCompletion = sidebar.TreeRefreshCompletion;
+        releaseChild.Set();
+        await DrainUntilComplete(Task.WhenAll(childCompletion, refreshCompletion), context);
+
+        Assert.Same(folder, Assert.Single(sidebar.RootNodes, node => node.Path == "folder"));
+        Assert.Contains("Folder loading was canceled. Collapse and expand to retry.", shown);
+        Assert.True(folder.IsExpanded);
+        Assert.Equal(FileTreeChildLoadState.Loaded, folder.ChildLoadState);
+        Assert.Single(folder.Children, node => node.Path == "folder/child.md");
+    }
+
+    /// <summary>A row a refresh let go of — its folder renamed, so the
+    /// published tree no longer has it (WB-6: an unchanged row is kept) —
+    /// expanded by whoever still holds it never starts a child load.</summary>
     [Fact]
     public async Task RetainedNodeExpandedAfterRefreshNeverEntersTheProviderLane()
     {
         using FixtureVault fixture = FixtureVault.Create(0, "child-expansion-detached");
         Directory.CreateDirectory(Path.Combine(fixture.Root, "folder"));
         File.WriteAllText(Path.Combine(fixture.Root, "folder", "child.md"), string.Empty);
+        File.WriteAllText(Path.Combine(fixture.Root, "anchor.md"), string.Empty);
         using VaultSession session = OpenScanned(fixture.Root);
         var context = new PumpSynchronizationContext();
         int workerInvocations = 0;
@@ -286,11 +394,12 @@ public sealed class W1ChildExpansionTests
             sidebar.RootNodes,
             node => node.Path == "folder");
 
+        ObservableCollection<FileTreeNodeViewModel> published = sidebar.RootNodes;
+        _ = session.RenameFolderWithNote("folder", "moved");
         sidebar.Refresh();
         await DrainUntilComplete(sidebar.TreeRefreshCompletion, context);
-        Assert.NotSame(
-            detached,
-            Assert.Single(sidebar.RootNodes, node => node.Path == "folder"));
+        Assert.Same(published, sidebar.RootNodes);
+        Assert.DoesNotContain(sidebar.RootNodes, node => ReferenceEquals(node, detached));
 
         detached.IsExpanded = true;
 
@@ -348,12 +457,17 @@ public sealed class W1ChildExpansionTests
             Assert.Single(sidebar.RootNodes, node => node.Path == "folder"));
     }
 
+    /// <summary>Expand Loaded pressed while a refresh is in flight waits for
+    /// its publication and opens only the published tree's rows — never a row
+    /// the refresh let go of (its folder renamed meanwhile; WB-6 keeps an
+    /// unchanged row).</summary>
     [Fact]
     public async Task BulkExpansionStartedDuringRefreshUsesOnlyThePublishedReplacementTree()
     {
         using FixtureVault fixture = FixtureVault.Create(0, "bulk-expansion-refresh-precedence");
         Directory.CreateDirectory(Path.Combine(fixture.Root, "folder"));
         File.WriteAllText(Path.Combine(fixture.Root, "folder", "child.md"), string.Empty);
+        File.WriteAllText(Path.Combine(fixture.Root, "anchor.md"), string.Empty);
         using VaultSession session = OpenScanned(fixture.Root);
         var context = new PumpSynchronizationContext();
         using var refreshStarted = new ManualResetEventSlim();
@@ -378,6 +492,8 @@ public sealed class W1ChildExpansionTests
             sidebar.RootNodes,
             node => node.Path == "folder");
 
+        ObservableCollection<FileTreeNodeViewModel> published = sidebar.RootNodes;
+        _ = session.RenameFolderWithNote("folder", "moved");
         sidebar.Refresh();
         Task refresh = sidebar.TreeRefreshCompletion;
         Assert.True(refreshStarted.Wait(TimeSpan.FromSeconds(5)));
@@ -388,13 +504,14 @@ public sealed class W1ChildExpansionTests
         releaseRefresh.Set();
         await DrainUntilComplete(Task.WhenAll(refresh, expansion), context);
 
+        Assert.Same(published, sidebar.RootNodes);
         FileTreeNodeViewModel current = Assert.Single(
             sidebar.RootNodes,
-            node => node.Path == "folder");
+            node => node.Path == "moved");
         Assert.NotSame(detached, current);
         Assert.False(detached.IsExpanded);
         Assert.True(current.IsExpanded);
-        Assert.Single(current.Children, node => node.Path == "folder/child.md");
+        Assert.Single(current.Children, node => node.Path == "moved/child.md");
         Assert.Equal(3, Volatile.Read(ref workerInvocations));
     }
 

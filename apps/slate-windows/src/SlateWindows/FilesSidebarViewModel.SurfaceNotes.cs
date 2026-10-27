@@ -15,6 +15,11 @@ internal sealed partial class FilesSidebarViewModel : ISurfaceNoteCreator
 {
     private string? _pendingSurfaceSelectPath;
 
+    /// <summary>WB-6: how many Reveals were asked, so a mutation that
+    /// awaited between its gesture and its request can tell a waiting Reveal
+    /// asked before the gesture from one asked during its work.</summary>
+    private long _revealRequests;
+
     // Explicit: the canvas seam's TryCreateNote shares the parameter list
     // and answers with its own record; both stay one implementation.
     NoteCreateResult ISurfaceNoteCreator.TryCreateNote(string path, string content)
@@ -63,6 +68,7 @@ internal sealed partial class FilesSidebarViewModel : ISurfaceNoteCreator
     {
         ArgumentNullException.ThrowIfNull(path);
         _pendingSurfaceSelectPath = path;
+        _revealRequests++;
         foreach (FileTreeNodeViewModel node in Flatten(RootNodes).ToList())
         {
             if (node.IsDirectory
@@ -89,7 +95,7 @@ internal sealed partial class FilesSidebarViewModel : ISurfaceNoteCreator
             return;
         }
         _pendingSurfaceSelectPath = null;
-        SelectedNode = target;
+        SelectOnBothHalves(target);
         TreeSelectionRestored?.Invoke();
     }
 }

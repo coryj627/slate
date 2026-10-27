@@ -579,8 +579,29 @@ internal sealed partial class FilesSidebarViewModel
         }
     }
 
-    private void RequestInlineRenameAt(string vaultPath) =>
+    private void RequestInlineRenameAt(string vaultPath)
+    {
         _pendingRenameArmPath = vaultPath;
+        DropWaitingReveal();
+    }
+
+    /// <summary>WB-6 (Codex round 4): a mutation's named row, or a delete's
+    /// focus restore, is a newer intent than a Reveal in File Tree still
+    /// waiting for its folder's rows, so the publication honours only the
+    /// mutation and the keys move once. Kept, the Reveal would take the
+    /// selection from the mutation's row and open its own note.</summary>
+    /// <param name="revealRequestsAtGesture">For a mutation that awaited
+    /// between its gesture and its request (a trash, whose work runs on a
+    /// worker behind its progress bar): the Reveal count it read at its
+    /// gesture. A Reveal asked since is newer than the mutation and stays.
+    /// Null for a mutation that requests in its gesture.</param>
+    private void DropWaitingReveal(long? revealRequestsAtGesture = null)
+    {
+        if (revealRequestsAtGesture is null || revealRequestsAtGesture == _revealRequests)
+        {
+            _pendingSurfaceSelectPath = null;
+        }
+    }
 
     /// <summary>Raised at tree publication after a mutation that asked
     /// for selection/focus reconciliation — the window restores
@@ -596,10 +617,13 @@ internal sealed partial class FilesSidebarViewModel
     /// <summary>Ask the NEXT publication to re-seat selection at
     /// <paramref name="vaultPath"/> (null = no selection — just the
     /// focus restore; deletes have no successor to name).</summary>
-    private void RequestSelectionAt(string? vaultPath)
+    /// <param name="revealRequestsAtGesture">See
+    /// <see cref="DropWaitingReveal"/>.</param>
+    private void RequestSelectionAt(string? vaultPath, long? revealRequestsAtGesture = null)
     {
         _pendingSelectPath = vaultPath;
         _pendingTreeFocusRestore = true;
+        DropWaitingReveal(revealRequestsAtGesture);
     }
 
     /// <summary>Publication half of <see cref="RequestSelectionAt"/>:
@@ -622,61 +646,257 @@ internal sealed partial class FilesSidebarViewModel
                 is { } fresh)
         {
             SelectSilently(fresh);
+            // WB-6 (Codex round 1): the named successor takes the keys too,
+            // when they are in the tree. The publication keeps the row they
+            // were on now (a duplicate's original), so they no longer fall to
+            // the selection on their own; a successor the tree hides hands
+            // them to the collapsed row holding it.
+            _vanishedSelection = new VanishedSelection(ShownRowHolding(fresh, RootNodes), Successor: true);
         }
 
         TreeSelectionRestored?.Invoke();
     }
 
     /// <summary>Every publication reconciles the selection (codex
-    /// round 3): with the null-transition guard in place, an ORGANIC
-    /// refresh (an external change, a manual refresh) left
-    /// <c>SelectedNode</c> pointing at a detached stale node —
-    /// destructive verbs then targeted whatever now lives at that
-    /// path. Rebind to the fresh same-path node when it survived;
-    /// disarm (null) when it vanished.</summary>
+    /// round 3): a selection left pointing at a node the tree no longer
+    /// holds made destructive verbs target whatever now lives at that path.
+    /// WB-6 (#1515): the one resolver, on both publication paths, and the
+    /// last selection step — after a mutation's named successor is seated,
+    /// so the keys move once. With nothing selected before the publication,
+    /// or the selection still in the tree, there is nothing to do. A row of
+    /// the same key the publication rebuilt — its date group changed, the
+    /// grouping changed, its folder was rebuilt — is re-selected silently,
+    /// and the keys land on it, or on the collapsed row now holding it
+    /// (<see cref="ShownRowHolding"/>). Only a row that is gone is
+    /// disarmed.</summary>
     /// <remarks>W7-7 PR 7 (#1252, R-9 over R-5), codex's merge-delta check
     /// (finding 1): a selected row that VANISHED — deleted or moved outside
     /// Slate, published by a rescan — took the keys with it, and WPF strands
-    /// them on the window when the focused row unloads (no fresh container is
-    /// selected to take them, as a surviving one does). The disarm now also
-    /// raises the guarded tree restore (<see cref="TreeSelectionRestored"/>)
-    /// with the row to land on: the nearest one that survived
+    /// them on the window when the focused row unloads. The disarm raises the
+    /// guarded tree restore (<see cref="TreeSelectionRestored"/>) with the row
+    /// to land on: the nearest one that survived
     /// (<see cref="NearestSurvivor"/>), focused without selecting it — R-5's
     /// focus-without-select, since a selection would open the note.</remarks>
-    private void ReconcileSelectionAfterPublication(IList<FileTreeNodeViewModel> previousRoots)
+    /// <param name="place">The sidebar's selection's place, read before the
+    /// publication.</param>
+    /// <param name="treeRow">The tree's own selected row's place when it is
+    /// not the sidebar's selection (Codex round 1): a delete let go of the
+    /// selection before its refresh, or the dual pane holds it. Gone, that
+    /// row hands the keys to its nearest survivor, and the selection is left
+    /// as it is.</param>
+    private void ReconcileSelectionAfterPublication(SelectionPlace? place, SelectionPlace? treeRow)
     {
-        if (SelectedNode is not { } current)
+        if (place is not null && !(SelectedNode is { } current && InTree(current)))
         {
-            return;
+            if (RowWithKey(RootNodes, place.SelectedKey, string.Empty) is { } replacement)
+            {
+                // WB-6 (S2): a list's selection (the publication replaced the
+                // tree for it) is re-bound by path on both halves, exactly as
+                // main did. WPF focuses the container it selects while the
+                // keys are in the tree, so they follow it, as on main, and the
+                // tree's own row records no second landing.
+                SelectSilently(replacement, reseatOf: place.SelectedPath);
+                if (place.InTree)
+                {
+                    RecordSelectionLanding(ShownRowHolding(replacement, RootNodes));
+                }
+
+                return;
+            }
+            else
+            {
+                if (SetField(ref _selectedNode, null, nameof(SelectedNode)))
+                {
+                    RaiseCommandStates();
+                }
+
+                if (place.InTree)
+                {
+                    FileTreeNodeViewModel? survivor = NearestSurvivor(place);
+                    if (survivor is not null || treeRow is null)
+                    {
+                        RecordSelectionLanding(survivor);
+                        return;
+                    }
+                }
+            }
         }
 
-        if (Flatten(RootNodes).Any(node => ReferenceEquals(node, current)))
+        // The tree's own row, when it was not the selection: a row of the
+        // same key the publication rebuilt takes the keys (unselected — the
+        // selection is the list's), else its nearest survivor does.
+        if (treeRow is not null && !InTree(treeRow.Row))
         {
-            return;
+            RecordSelectionLanding(
+                RowWithKey(RootNodes, treeRow.SelectedKey, string.Empty) is { } rebuilt
+                    ? ShownRowHolding(rebuilt, RootNodes)
+                    : NearestSurvivor(treeRow));
         }
+    }
 
-        FileTreeNodeViewModel? fresh = Flatten(RootNodes)
-            .FirstOrDefault(node => node.Path == current.Path);
-        if (fresh is not null)
-        {
-            SelectSilently(fresh);
-            return;
-        }
+    private bool InTree(FileTreeNodeViewModel row) =>
+        Flatten(RootNodes).Any(node => ReferenceEquals(node, row));
 
-        FileTreeNodeViewModel? survivor = NearestSurvivor(previousRoots, current);
-        if (SetField(ref _selectedNode, null, nameof(SelectedNode)))
-        {
-            RaiseCommandStates();
-        }
-
-        _vanishedSelection = new VanishedSelection(survivor);
+    /// <summary>Records where the keys go after a publication moved the
+    /// selected row — <paramref name="landing"/>, or the tree's own landing
+    /// for null — and raises the tree's restore once. The window lands them
+    /// there only when they were on a row the publication removed.</summary>
+    private void RecordSelectionLanding(FileTreeNodeViewModel? landing)
+    {
+        _vanishedSelection = new VanishedSelection(landing);
         TreeSelectionRestored?.Invoke();
     }
 
-    /// <summary>A selected row a publication removed, and the row its keys
-    /// land on — null for the tree's own landing (its first row, or the
-    /// empty tree, the region's stop).</summary>
-    internal sealed record VanishedSelection(FileTreeNodeViewModel? Survivor);
+    /// <summary>WB-6: the selected row's place, read before a publication
+    /// moves anything — its key and path, and the keys of the rows its keys
+    /// would land on if it is gone, nearest first: its next siblings in
+    /// order, then its previous ones nearest first, then its parent, and the
+    /// same around the parent, up to the root.</summary>
+    /// <param name="InTree">Whether the published tree held the row: a
+    /// list's row (the filter results, the dual pane) has no place in
+    /// it.</param>
+    private sealed record SelectionPlace(
+        FileTreeNodeViewModel Row,
+        string SelectedKey,
+        string SelectedPath,
+        IReadOnlyList<string> CandidateKeys,
+        bool InTree);
+
+    /// <summary><paramref name="selected"/>'s <see cref="SelectionPlace"/> in
+    /// the published tree; null with nothing selected.</summary>
+    private SelectionPlace? SnapshotSelectionPlace(FileTreeNodeViewModel? selected)
+    {
+        if (selected is null)
+        {
+            return null;
+        }
+
+        var ancestry = new List<(IList<FileTreeNodeViewModel> Level, FileTreeNodeViewModel Row, string FolderPath)>();
+        if (!Find(RootNodes, string.Empty))
+        {
+            return new SelectionPlace(selected, RowKey(selected, string.Empty), selected.Path, [], InTree: false);
+        }
+
+        var candidates = new List<string>();
+        for (int depth = ancestry.Count - 1; depth >= 0; depth--)
+        {
+            (IList<FileTreeNodeViewModel> level, FileTreeNodeViewModel row, string folderPath) = ancestry[depth];
+            int index = level.IndexOf(row);
+            foreach (FileTreeNodeViewModel sibling in level.Skip(index + 1).Concat(level.Take(index).Reverse()))
+            {
+                if (!sibling.IsPlaceholder)
+                {
+                    candidates.Add(RowKey(sibling, folderPath));
+                }
+            }
+
+            if (depth > 0)
+            {
+                candidates.Add(RowKey(ancestry[depth - 1].Row, ancestry[depth - 1].FolderPath));
+            }
+        }
+
+        (_, FileTreeNodeViewModel self, string selfFolder) = ancestry[^1];
+        return new SelectionPlace(selected, RowKey(self, selfFolder), selected.Path, candidates, InTree: true);
+
+        bool Find(IList<FileTreeNodeViewModel> level, string folderPath)
+        {
+            foreach (FileTreeNodeViewModel row in level)
+            {
+                ancestry.Add((level, row, folderPath));
+                if (ReferenceEquals(row, selected) || Find(row.Children, row.IsDirectory ? row.Path : folderPath))
+                {
+                    return true;
+                }
+
+                ancestry.RemoveAt(ancestry.Count - 1);
+            }
+
+            return false;
+        }
+    }
+
+    /// <summary>WB-6: a row's key across the whole tree — a file's or a
+    /// folder's path; a date group's header, whose path is empty, by the
+    /// folder it is in (<paramref name="folderPath"/>, empty at the root) and
+    /// its label, as the reconcile keys it within its level; a placeholder
+    /// (the loading, error and overflow rows) by its folder and its text, so
+    /// a selected one is re-seated on its fresh row (the red team's L3). A
+    /// placeholder is never a candidate for the keys.</summary>
+    private static string RowKey(FileTreeNodeViewModel row, string folderPath) => row switch
+    {
+        { IsPlaceholder: true } => folderPath + "\u0000placeholder:" + row.Name,
+        { IsGroupHeader: true } => folderPath + LevelKey(row),
+        _ => row.Path,
+    };
+
+    /// <summary>The row anywhere in the tree, shown or not, whose
+    /// <see cref="RowKey"/> is <paramref name="key"/>.</summary>
+    private static FileTreeNodeViewModel? RowWithKey(
+        IEnumerable<FileTreeNodeViewModel> level,
+        string key,
+        string folderPath)
+    {
+        foreach (FileTreeNodeViewModel row in level)
+        {
+            if (RowKey(row, folderPath) == key)
+            {
+                return row;
+            }
+
+            if (RowWithKey(row.Children, key, row.IsDirectory ? row.Path : folderPath) is { } found)
+            {
+                return found;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>The row the reader sees holding <paramref name="row"/>: the
+    /// outermost collapsed row above it, or the row itself when every
+    /// ancestor is open. A note that moved into a date group the reader
+    /// collapsed lands the keys on that group's header, and the group stays
+    /// collapsed.</summary>
+    private static FileTreeNodeViewModel ShownRowHolding(
+        FileTreeNodeViewModel row,
+        IEnumerable<FileTreeNodeViewModel> roots)
+    {
+        var path = new List<FileTreeNodeViewModel>();
+        if (!PathTo(roots, row, path))
+        {
+            return row;
+        }
+
+        return path.Take(path.Count - 1).FirstOrDefault(ancestor => !ancestor.IsExpanded) ?? row;
+
+        static bool PathTo(
+            IEnumerable<FileTreeNodeViewModel> level,
+            FileTreeNodeViewModel target,
+            List<FileTreeNodeViewModel> path)
+        {
+            foreach (FileTreeNodeViewModel node in level)
+            {
+                path.Add(node);
+                if (ReferenceEquals(node, target) || PathTo(node.Children, target, path))
+                {
+                    return true;
+                }
+
+                path.RemoveAt(path.Count - 1);
+            }
+
+            return false;
+        }
+    }
+
+    /// <summary>A selected row a publication removed or rebuilt, and the row
+    /// its keys land on — null for the tree's own landing (its first row, or
+    /// the empty tree, the region's stop). A mutation's named successor
+    /// (<paramref name="Successor"/>) takes the keys wherever they are in the
+    /// tree; any other landing only when they were on a row the publication
+    /// removed.</summary>
+    internal sealed record VanishedSelection(FileTreeNodeViewModel? Survivor, bool Successor = false);
 
     private VanishedSelection? _vanishedSelection;
 
@@ -691,87 +911,43 @@ internal sealed partial class FilesSidebarViewModel
         return taken;
     }
 
-    /// <summary>The published row nearest <paramref name="vanished"/>'s place
-    /// in the tree it was removed from: its next siblings in order, then its
-    /// previous ones nearest first, then its parent — and, when none of those
-    /// survived either, the parent's own nearest survivor. Matched by path,
-    /// and only a row the published tree SHOWS (every ancestor expanded) —
-    /// one under a collapsed folder cannot take the keys. Null when nothing
-    /// survived.</summary>
-    private FileTreeNodeViewModel? NearestSurvivor(
-        IList<FileTreeNodeViewModel> previousRoots,
-        FileTreeNodeViewModel vanished)
+    /// <summary>The published row nearest the selected row's place, read
+    /// before the publication (<paramref name="place"/>): its next siblings
+    /// in order, then its previous ones nearest first, then its parent — and,
+    /// when none of those survived either, the parent's own nearest survivor.
+    /// Matched by <see cref="RowKey"/>, and only a row the published tree
+    /// SHOWS (every ancestor expanded) — one under a collapsed folder or
+    /// group cannot take the keys. A surviving date group's header can
+    /// (WB-6): under Group by date a row's parent is its group. Null when
+    /// nothing survived.</summary>
+    private FileTreeNodeViewModel? NearestSurvivor(SelectionPlace place)
     {
         var shown = new Dictionary<string, FileTreeNodeViewModel>(StringComparer.Ordinal);
-        foreach (FileTreeNodeViewModel node in ShownRows(RootNodes))
+        Collect(RootNodes, string.Empty);
+        foreach (string key in place.CandidateKeys)
         {
-            if (node is { IsPlaceholder: false, IsGroupHeader: false, Path.Length: > 0 })
+            if (shown.TryGetValue(key, out FileTreeNodeViewModel? survivor))
             {
-                _ = shown.TryAdd(node.Path, node);
+                return survivor;
             }
-        }
-
-        for (FileTreeNodeViewModel? target = vanished; target is not null;)
-        {
-            if (FindSiblings(previousRoots, target, parent: null) is not { } found)
-            {
-                return null;
-            }
-
-            (IList<FileTreeNodeViewModel> siblings, FileTreeNodeViewModel? parent) = found;
-            int index = siblings.IndexOf(target);
-            foreach (FileTreeNodeViewModel candidate in siblings.Skip(index + 1).Concat(siblings.Take(index).Reverse()))
-            {
-                if (shown.TryGetValue(candidate.Path, out FileTreeNodeViewModel? survivor))
-                {
-                    return survivor;
-                }
-            }
-
-            if (parent is not null && shown.TryGetValue(parent.Path, out FileTreeNodeViewModel? folder))
-            {
-                return folder;
-            }
-
-            target = parent;
         }
 
         return null;
 
-        static IEnumerable<FileTreeNodeViewModel> ShownRows(IEnumerable<FileTreeNodeViewModel> level)
+        void Collect(IEnumerable<FileTreeNodeViewModel> level, string folderPath)
         {
-            foreach (FileTreeNodeViewModel node in level)
+            foreach (FileTreeNodeViewModel row in level)
             {
-                yield return node;
-                if (node.IsExpanded)
+                if (!row.IsPlaceholder)
                 {
-                    foreach (FileTreeNodeViewModel child in ShownRows(node.Children))
-                    {
-                        yield return child;
-                    }
+                    _ = shown.TryAdd(RowKey(row, folderPath), row);
+                }
+
+                if (row.IsExpanded)
+                {
+                    Collect(row.Children, row.IsDirectory ? row.Path : folderPath);
                 }
             }
-        }
-
-        static (IList<FileTreeNodeViewModel> Siblings, FileTreeNodeViewModel? Parent)? FindSiblings(
-            IList<FileTreeNodeViewModel> level,
-            FileTreeNodeViewModel target,
-            FileTreeNodeViewModel? parent)
-        {
-            if (level.Any(node => ReferenceEquals(node, target)))
-            {
-                return (level, parent);
-            }
-
-            foreach (FileTreeNodeViewModel node in level)
-            {
-                if (FindSiblings(node.Children, target, node) is { } found)
-                {
-                    return found;
-                }
-            }
-
-            return null;
         }
     }
 
@@ -799,8 +975,18 @@ internal sealed partial class FilesSidebarViewModel
             return;
         }
 
-        SelectedNode = created;
+        SelectOnBothHalves(created);
         InlineRenameRequested?.Invoke();
+    }
+
+    /// <summary>WB-6 (Codex round 1): a mutation's or a surface's named row
+    /// takes the selection through the setter — it opens and announces as a
+    /// selection does, and every other selected tree row lets go of it (S1)
+    /// — and on both halves.</summary>
+    private void SelectOnBothHalves(FileTreeNodeViewModel node)
+    {
+        SelectedNode = node;
+        node.IsSelected = true;
     }
 
     // ---- The Move-To picker (F4) ---------------------------------

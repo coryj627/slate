@@ -77,6 +77,36 @@ public sealed partial class RescanTests
         }
     });
 
+    /// <summary>Plan 44 WB-6 (#1522): Group by date on, the reader's note
+    /// selected in "Today", and another note changed outside Slate, then an
+    /// explicit Refresh. The selection is the same node, its group the same
+    /// header, and the run speaks its one sentence. Until WB-6 no date group
+    /// was kept, so the selected note under one was never kept either, and
+    /// the whole tree was replaced under it.</summary>
+    [Fact]
+    public void ARescanOverADateGroupedTreeKeepsTheSelectedRowAndItsGroup() => RunSta(() =>
+    {
+        using var h = new Harness("rescan-date-groups", ("a.md", "# A\n"), ("b.md", "# B\n"));
+        h.Sidebar.GroupByDate = true;
+        h.PumpUntil(
+            () => h.Sidebar.TreeRefreshCompletion.IsCompleted && h.Sidebar.RootNodes.Any(node => node.IsGroupHeader),
+            "the grouped publication");
+        FileTreeNodeViewModel today = Assert.Single(h.Sidebar.RootNodes, node => node is { IsGroupHeader: true, Name: "Today" });
+        FileTreeNodeViewModel reader = Assert.Single(today.Children, node => node.Path == "a.md");
+        h.Sidebar.SelectedNode = reader;
+        h.Settle();
+        h.Events.Clear();
+
+        h.Write("b.md", "# B\n\nChanged outside Slate.\n");
+        h.Sidebar.RefreshCommand.Execute(null);
+        h.Context.Await(h.Lifecycle.RescanCompletion);
+
+        Assert.Same(reader, h.Sidebar.SelectedNode);
+        Assert.Same(today, Assert.Single(h.Sidebar.RootNodes, node => node is { IsGroupHeader: true, Name: "Today" }));
+        Assert.Contains(reader, today.Children);
+        Assert.Equal(["Files refreshed. 1 new or changed, 0 removed."], h.Spoken);
+    });
+
     private static string? RowKeyOfFocusedCell() =>
         (Keyboard.FocusedElement as DataGridCell)?.DataContext is BaseGridRowViewModel row ? row.RowKey : null;
 }
