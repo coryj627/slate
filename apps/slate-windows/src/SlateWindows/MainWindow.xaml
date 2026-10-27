@@ -803,6 +803,18 @@
                 <StackPanel Grid.Column="1" Margin="0,56,0,32">
                     <TextBlock Text="Welcome to Slate" FontSize="30" FontWeight="SemiBold" AutomationProperties.HeadingLevel="Level1" />
                     <TextBlock Margin="0,8,0,24" FontSize="15" Foreground="{DynamicResource Slate.SecondaryTextBrush}" Text="Open a folder of Markdown files to start." />
+                    <!-- WB-9 (#1319, WD4): the welcome view holds the keys while a
+                         vault opens; its status says what the open is doing. Pull,
+                         not push (LiveSetting Off, as every readback here): a
+                         press on Open or a recent vault speaks it, through the
+                         lifecycle's registered restatement. -->
+                    <TextBlock x:Name="WelcomeOpeningStatus"
+                               AutomationProperties.AutomationId="WelcomeOpeningStatus"
+                               AutomationProperties.LiveSetting="Off"
+                               Margin="0,-16,0,24"
+                               TextWrapping="Wrap"
+                               Text="{Binding StatusText}"
+                               Visibility="{Binding IsOpening, Converter={StaticResource BooleanToVisibilityConverter}}" />
                     <Button x:Name="OpenVaultButton"
                             AutomationProperties.AutomationId="OpenVaultButton"
                             Content="_Open Vault…"

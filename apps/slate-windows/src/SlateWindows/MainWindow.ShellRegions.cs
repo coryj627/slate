@@ -282,6 +282,11 @@ public partial class MainWindow : IShellRegionHost
         {
             _editorLandings.ModalOpened();
         }
+        else
+        {
+            // WB-9 (#1296): a handoff parked behind the loop runs now.
+            RunParkedExternalActivation();
+        }
     }
 
     /// <summary>R-10 (OD-12): the ONE editor landing this window holds, whoever

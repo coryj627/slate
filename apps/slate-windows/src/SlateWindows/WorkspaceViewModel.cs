@@ -91,6 +91,54 @@ internal enum TabTaskToggle
     Started,
 }
 
+/// <summary>
+/// WB-9 (#1312, contract 40 R-9/R-10): one rescan reload of a tab in place
+/// (<see cref="WorkspaceTabViewModel.ReplaceItemWithReadText"/>), begun just
+/// before the reload and ended first in its <c>finally</c> — once, in the
+/// reload's own dispatcher turn, whether the reload returned or threw. A
+/// reading surface holding a landing for the tab carries it on the reload and
+/// takes it back at the end. The end reaches it through this object, never
+/// through a subscription the reload's rebind (or any unbind) could drop.
+/// </summary>
+internal sealed class ReadingReloadTransaction
+{
+    private List<Action>? _whenEnded = [];
+
+    internal ReadingReloadTransaction(WorkspaceTabViewModel tab) => Tab = tab;
+
+    /// <summary>The tab being reloaded.</summary>
+    internal WorkspaceTabViewModel Tab { get; }
+
+    /// <summary>Run <paramref name="continuation"/> when the reload ends — at
+    /// once when it already has.</summary>
+    internal void WhenEnded(Action continuation)
+    {
+        if (_whenEnded is not { } pending)
+        {
+            continuation();
+            return;
+        }
+
+        pending.Add(continuation);
+    }
+
+    /// <summary>End the reload: each registration runs once, in order; a
+    /// second end does nothing.</summary>
+    internal void End()
+    {
+        if (_whenEnded is not { } pending)
+        {
+            return;
+        }
+
+        _whenEnded = null;
+        foreach (Action continuation in pending)
+        {
+            continuation();
+        }
+    }
+}
+
 internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
 {
     private readonly VaultSession _session;
@@ -1868,17 +1916,28 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         _rescanReload = rescan;
         _reloadingForRescan = true;
         RescanReadingPublication = Task.CompletedTask;
+        // WB-9 (#1312): begun before the old projection's teardown, ended
+        // before anything else in the finally — so a landing carried across
+        // the reload is settled exactly once, in this turn, even when
+        // ReplaceItem throws before the reading rebind.
+        var reload = new ReadingReloadTransaction(this);
         try
         {
+            ReadingRescanReloadBegan?.Invoke(reload);
             ReplaceItem(item);
         }
         finally
         {
+            reload.End();
             _preloadedText = null;
             _reloadingForRescan = false;
             _rescanReload = default;
         }
     }
+
+    /// <summary>WB-9 (#1312, R-9/R-10): a rescan's in-place reload of this tab
+    /// is beginning; the transaction ends when the reload does.</summary>
+    internal event Action<ReadingReloadTransaction>? ReadingRescanReloadBegan;
 
     // W7-7 PR 7 (codex PR 7 round 4, finding 3): set while a rescan replaces
     // this tab in place.

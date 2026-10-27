@@ -267,7 +267,7 @@ public sealed partial class CommandPaletteTests
     /// <see cref="Closer"/>'s action ends it; then it undoes the signals in
     /// the prompt's order (the owner re-enabled as the box closes).
     /// </summary>
-    private sealed class SyntheticPrompt(Visual? shell, LoopSignals signals)
+    internal sealed class SyntheticPrompt(Visual? shell, LoopSignals signals)
     {
         private DispatcherFrame? _frame;
 
