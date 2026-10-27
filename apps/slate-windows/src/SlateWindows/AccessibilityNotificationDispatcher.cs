@@ -247,9 +247,14 @@ internal sealed class AccessibilityNotificationDispatcher
     /// shape mac's <c>CanvasAnnouncer</c> takes. Text and priority both
     /// stay core's either way.
     /// </summary>
+    /// <summary>WB-9 test seam: every rendered line the window posts, as it
+    /// is posted — the hosted open facts read the launch lines here.</summary>
+    internal Action<RenderedAnnouncement>? PostedForTests { get; set; }
+
     public void Post(RenderedAnnouncement rendered)
     {
         ArgumentNullException.ThrowIfNull(rendered);
+        PostedForTests?.Invoke(rendered);
         AutomationNotificationProcessing processing = rendered.Priority switch
         {
             A11yPriority.High => AutomationNotificationProcessing.ImportantMostRecent,

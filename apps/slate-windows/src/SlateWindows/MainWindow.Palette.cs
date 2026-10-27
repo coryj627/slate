@@ -38,6 +38,8 @@ public partial class MainWindow
         palette.PropertyChanged += Palette_PropertyChanged;
         palette.PropertyChanged += ModalSource_PropertyChanged;
         palette.SearchFocusRequested += Palette_SearchFocusRequested;
+        // WB-9 (#1296): a handoff parked behind the seal runs once it lifts.
+        palette.SealReleased += (_, _) => RunParkedExternalActivation();
         _paletteResults = new CommandPaletteResultsPresenter(CommandPaletteResultsList, palette);
     }
 

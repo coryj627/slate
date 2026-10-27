@@ -70,6 +70,7 @@ internal sealed partial class VaultLifecycleViewModel
     : INotifyPropertyChanged, IDisposable, ISlateCommandHost
 {
     private readonly Func<Task<string?>> _pickVault;
+    private readonly Func<string, Task<VaultSession>> _openSession;
     private readonly Func<RecentVault, Task<bool>> _confirmRemoveMissingRecent;
     private readonly Action<Action> _enqueueUi;
     private readonly Action<A11yEvent> _announce;
@@ -152,6 +153,7 @@ internal sealed partial class VaultLifecycleViewModel
     private int _generation;
     private bool _isVaultOpen;
     private bool _isBusy;
+    private bool _isOpening;
     private string _vaultDisplayName = string.Empty;
     private string _vaultPath = string.Empty;
     private string _statusText = "No vault open.";
@@ -199,9 +201,13 @@ internal sealed partial class VaultLifecycleViewModel
         Action<RenderedAnnouncement>? announceRendered = null,
         IRescanCoreWorker? rescanWorker = null,
         CommandPaletteRecentsStore? paletteRecentsStore = null,
-        ICommandPaletteWorkLane? paletteLane = null)
+        ICommandPaletteWorkLane? paletteLane = null,
+        Func<string, Task<VaultSession>>? openSession = null)
     {
         _pickVault = pickVault;
+        // WB-9 (#1319): the open's first phase, for the hosted facts that
+        // park it; production opens the folder on the pool.
+        _openSession = openSession ?? (root => Task.Run(() => VaultSession.OpenFilesystem(root)));
         // #1275: the palette's recents file and work lane, for the hosted
         // facts that park a recents write in the shipped shell — never the
         // user's %LOCALAPPDATA% file. Null in production.
@@ -247,10 +253,14 @@ internal sealed partial class VaultLifecycleViewModel
         // interleave facts, exactly like the session load above.
         _runSyncMarkerArm = syncArmWorker ?? (work => Task.Run(work));
         _syncMarkerDebounce = syncMarkerDebounce;
-        _openVaultCommand = new AsyncRelayCommand(PickAndOpenVaultAsync, () => !IsBusy);
+        // WB-9 (#1319, R-5 (h)): Open and the recent vaults stay enabled
+        // under the keys while an open runs; a press during it restates the
+        // opening status (AdmitOpenCommand), never a picker or a box.
+        _openVaultCommand = new AsyncRelayCommand(PickAndOpenVaultAsync, () => true, admitWhileExecuting: true);
         _openRecentCommand = new AsyncRelayCommand(
             OpenRecentAsync,
-            parameter => parameter is RecentVault && !IsBusy);
+            parameter => parameter is RecentVault,
+            admitWhileExecuting: true);
         _closeVaultCommand = new RelayCommand(
             _ => CloseVault(),
             _ => IsVaultOpen && !IsBusy);
@@ -301,6 +311,28 @@ internal sealed partial class VaultLifecycleViewModel
     public bool IsWelcomeVisible => !IsVaultOpen;
     public bool IsWorkspaceVisible => IsVaultOpen;
     public bool HasRecentVaults => RecentVaults.Count > 0;
+
+    /// <summary>WB-9 (#1319, WD4): true from an open's admission to its
+    /// every exit. The welcome view stays, with its live status, until the
+    /// workspace is ready, so the keys move once.</summary>
+    public bool IsOpening
+    {
+        get => _isOpening;
+        private set => SetField(ref _isOpening, value);
+    }
+
+    /// <summary>WB-9 (#1296, the owner's call of 2026-10-26): true while a
+    /// close decides (its saves settling, a tree read awaited, the
+    /// unsaved-changes prompt). A handoff that arrives then waits for
+    /// <see cref="WorkspaceCloseDecided"/>.</summary>
+    internal bool IsDecidingClose => _workspaceTeardownInProgress;
+
+    /// <summary>WB-9 (#1296): a close has decided, whichever way.</summary>
+    internal event EventHandler? WorkspaceCloseDecided;
+
+    /// <summary>WB-9 test seam: runs first in every
+    /// <see cref="OpenVaultAsync"/>, before its busy guard.</summary>
+    internal Action<string>? OpenRequestedForTests { get; set; }
 
     public bool IsBusy
     {
@@ -440,6 +472,7 @@ internal sealed partial class VaultLifecycleViewModel
 
     public async Task OpenVaultAsync(string path)
     {
+        OpenRequestedForTests?.Invoke(path);
         if (IsBusy)
         {
             return;
@@ -477,15 +510,20 @@ internal sealed partial class VaultLifecycleViewModel
 
         CloseSession();
         int generation = ++_generation;
+        IsOpening = true;
         IsBusy = true;
         IsProgressIndeterminate = true;
         ProgressValue = 0;
         StatusText = $"Opening {root}…";
 
         VaultSession? openedSession = null;
+        // Recorded with the open, published once the welcome no longer holds
+        // the keys (WB-9): regenerating the recent buttons under a held
+        // welcome would move the keys off the one the reader pressed.
+        IReadOnlyList<RecentVault>? recorded = null;
         try
         {
-            openedSession = await Task.Run(() => VaultSession.OpenFilesystem(root));
+            openedSession = await _openSession(root);
             if (generation != _generation)
             {
                 openedSession.Dispose();
@@ -517,11 +555,10 @@ internal sealed partial class VaultLifecycleViewModel
                 () => _enqueueUi(() => HandleExternalChange(generation)));
             _eventListenerToken = _session.RegisterEventListener(_eventListener);
 
-            IsVaultOpen = true;
             VaultPath = root;
             VaultDisplayName = RecentVault.FromPath(root).DisplayName;
-            AddRecentVault(root);
-            _announce(new A11yEvent.VaultOpened(RecentVaultSpokenName(root), string.Empty));
+            recorded = RecordRecentVault(root);
+            _announce(new A11yEvent.VaultOpened(RecentVaultSpokenName(root, recorded ?? RecentVaults), string.Empty));
 
             _scanCancel = new CancelToken();
             _progressListener = new UiProgressListener(
@@ -554,6 +591,14 @@ internal sealed partial class VaultLifecycleViewModel
                 ProgressMaximum = Math.Max(1, loaded.Report.FilesSeen);
                 ProgressValue = ProgressMaximum;
                 IsProgressIndeterminate = false;
+                // WB-9 (#1319, WD4): the welcome view holds the keys through
+                // every phase of the open, and gives way in the same turn the
+                // workspace is built, so the keys move once.
+                IsVaultOpen = true;
+                if (recorded is not null)
+                {
+                    ReplaceRecentVaults(recorded);
+                }
                 InitializeWorkspace(_session, root, loaded.SwitcherFiles);
                 StartSyncMarkerWatch(generation, root);
             }
@@ -566,6 +611,10 @@ internal sealed partial class VaultLifecycleViewModel
                 CloseSession();
                 IsVaultOpen = false;
                 ReturnedToWelcome?.Invoke(this, EventArgs.Empty);
+                if (recorded is not null)
+                {
+                    ReplaceRecentVaults(recorded);
+                }
             }
         }
         catch (Exception exception)
@@ -576,6 +625,10 @@ internal sealed partial class VaultLifecycleViewModel
                 CloseSession();
                 IsVaultOpen = false;
                 ReturnedToWelcome?.Invoke(this, EventArgs.Empty);
+                if (recorded is not null)
+                {
+                    ReplaceRecentVaults(recorded);
+                }
             }
         }
         finally
@@ -591,6 +644,7 @@ internal sealed partial class VaultLifecycleViewModel
                 _scanCancel?.Dispose();
                 _scanCancel = null;
                 _progressListener = null;
+                IsOpening = false;
                 IsBusy = false;
                 IsProgressIndeterminate = false;
                 // Plan 43 PR 20b: a watcher request recorded while the
@@ -719,6 +773,11 @@ internal sealed partial class VaultLifecycleViewModel
 
     private async Task PickAndOpenVaultAsync(object? _)
     {
+        if (!AdmitOpenCommand())
+        {
+            return;
+        }
+
         string? path = await _pickVault();
         if (!string.IsNullOrWhiteSpace(path))
         {
@@ -728,6 +787,11 @@ internal sealed partial class VaultLifecycleViewModel
 
     private async Task OpenRecentAsync(object? parameter)
     {
+        if (!AdmitOpenCommand())
+        {
+            return;
+        }
+
         if (parameter is RecentVault recent)
         {
             if (!Directory.Exists(recent.Path))
@@ -900,18 +964,21 @@ internal sealed partial class VaultLifecycleViewModel
         }
     }
 
-    private void AddRecentVault(string root)
+    /// <summary>WB-9 (#1319): the open's store write, without publishing the
+    /// entries (the open publishes them once the welcome gives up the keys);
+    /// null when the store could not record it, as reported here.</summary>
+    private IReadOnlyList<RecentVault>? RecordRecentVault(string root)
     {
         try
         {
-            IReadOnlyList<RecentVault> entries = _recentVaultsStore.Add(RecentVault.FromPath(root));
-            ReplaceRecentVaults(entries);
+            return _recentVaultsStore.Add(RecentVault.FromPath(root));
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             string message = $"Could not save recent vaults: {exception.Message}";
             HostLog.Write(HostDiagnosticEvent.RecentVaultsPersistFailed, exception);
             ReportTerminalStatus(message, A11yPriority.High);
+            return null;
         }
     }
 
@@ -926,11 +993,11 @@ internal sealed partial class VaultLifecycleViewModel
     /// for a recent vault): two "Notes" folders each speak their path. A
     /// vault no recent entry holds (the store could not record it) reads its
     /// bare display name.</summary>
-    private string RecentVaultSpokenName(string root) =>
+    private string RecentVaultSpokenName(string root, IReadOnlyList<RecentVault> entries) =>
         RecentVault.SpokenName(
-            RecentVaults.FirstOrDefault(entry => string.Equals(entry.Path, root, StringComparison.OrdinalIgnoreCase))
+            entries.FirstOrDefault(entry => string.Equals(entry.Path, root, StringComparison.OrdinalIgnoreCase))
                 ?? RecentVault.FromPath(root),
-            RecentVaults);
+            entries);
 
     private void RemoveRecentVault(RecentVault recent)
     {
@@ -1463,6 +1530,7 @@ internal sealed partial class VaultLifecycleViewModel
         finally
         {
             _workspaceTeardownInProgress = false;
+            WorkspaceCloseDecided?.Invoke(this, EventArgs.Empty);
             // XD1: a close that stays open re-issues the tree refresh it
             // skipped, so the tree never stays stale; one that closed drops
             // it with the workspace.
@@ -1970,6 +2038,24 @@ internal sealed partial class VaultLifecycleViewModel
         return SearchLineLocator.FirstTokenLine(tab.Text, request.Query);
     }
 
+    /// <summary>WB-9 (#1319): Open and the recent vaults run while an open
+    /// runs; a press then restates the opening status instead of raising a
+    /// folder picker or the "Vault Not Found" box over it.</summary>
+    private bool AdmitOpenCommand()
+    {
+        if (!IsOpening && !IsBusy)
+        {
+            return true;
+        }
+
+        RestateOpeningStatus();
+        return false;
+    }
+
+    private void RestateOpeningStatus() =>
+        // W0.5-3 residue: Windows lifecycle opening-status restatement.
+        _announce(new A11yEvent.HostComposed(StatusText, A11yPriority.Medium));
+
     private void ReportTerminalStatus(string message, A11yPriority priority)
     {
         StatusText = message;
@@ -2042,30 +2128,54 @@ internal sealed class RelayCommand : ICommand
     public void RaiseCanExecuteChanged() => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
 }
 
+/// <summary>WB-9: what a hosted fact supplies to the shipped window's vault
+/// open — the folder pick, the open's two phases, the recents file (never
+/// the user's), the missing-recent box and a view of every posted line.
+/// Production passes none.</summary>
+internal sealed record VaultOpenSeams(
+    Func<Task<string?>>? PickVault = null,
+    Func<string, Task<VaultSession>>? OpenSession = null,
+    Func<
+        Func<(ScanReport Report, SwitcherFile[] SwitcherFiles)>,
+        Task<(ScanReport Report, SwitcherFile[] SwitcherFiles)>>? SessionLoad = null,
+    RecentVaultsStore? RecentVaults = null,
+    Func<RecentVault, Task<bool>>? ConfirmRemoveMissingRecent = null,
+    Action<RenderedAnnouncement>? ObservePosted = null);
+
 internal sealed class AsyncRelayCommand : ICommand, Commands.IUnavailableReason
 {
     private readonly Func<object?, Task> _execute;
     private readonly Predicate<object?> _canExecute;
     private readonly Func<string?>? _unavailableReason;
+    private readonly bool _admitWhileExecuting;
     private bool _isExecuting;
-
-    public AsyncRelayCommand(Func<object?, Task> execute, Func<bool> canExecute, Func<string?>? unavailableReason = null)
-        : this(execute, _ => canExecute(), unavailableReason)
-    {
-    }
 
     public AsyncRelayCommand(
         Func<object?, Task> execute,
+        Func<bool> canExecute,
+        Func<string?>? unavailableReason = null,
+        bool admitWhileExecuting = false)
+        : this(execute, _ => canExecute(), unavailableReason, admitWhileExecuting)
+    {
+    }
+
+    /// <param name="admitWhileExecuting">WB-9 (#1319): true leaves re-entry
+    /// to the owner — the command stays enabled while it runs, and its
+    /// delegate decides what a second press does.</param>
+    public AsyncRelayCommand(
+        Func<object?, Task> execute,
         Predicate<object?> canExecute,
-        Func<string?>? unavailableReason = null)
+        Func<string?>? unavailableReason = null,
+        bool admitWhileExecuting = false)
     {
         _execute = execute;
         _canExecute = canExecute;
         _unavailableReason = unavailableReason;
+        _admitWhileExecuting = admitWhileExecuting;
     }
 
     public event EventHandler? CanExecuteChanged;
-    public bool CanExecute(object? parameter) => !_isExecuting && _canExecute(parameter);
+    public bool CanExecute(object? parameter) => (_admitWhileExecuting || !_isExecuting) && _canExecute(parameter);
 
     /// <summary>W7-7 PR 7 (codex PR 7 round 4, finding 2): why the command
     /// cannot run, when its owner knows — null leaves the generic reason.</summary>
@@ -2075,6 +2185,20 @@ internal sealed class AsyncRelayCommand : ICommand, Commands.IUnavailableReason
     {
         if (!CanExecute(parameter))
         {
+            return;
+        }
+
+        if (_admitWhileExecuting)
+        {
+            try
+            {
+                await _execute(parameter);
+            }
+            catch (Exception exception)
+            {
+                HostLog.Write(HostDiagnosticEvent.VaultCommandFailed, exception);
+            }
+
             return;
         }
 

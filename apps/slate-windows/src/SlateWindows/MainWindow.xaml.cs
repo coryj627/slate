@@ -43,12 +43,14 @@ public partial class MainWindow : Window
     /// <summary>
     /// The shipped shell over a palette whose recents file and work lane a
     /// fact supplies (#1275) — so a hosted fact can park a recents write
-    /// without touching the user's %LOCALAPPDATA% file. Production passes
-    /// neither.
+    /// without touching the user's %LOCALAPPDATA% file — and, for the open
+    /// facts (WB-9), the open's phases, its recents file and its posted
+    /// lines. Production passes none.
     /// </summary>
     internal MainWindow(
         SlateWindows.Commands.CommandPaletteRecentsStore? paletteRecentsStore,
-        ICommandPaletteWorkLane? paletteLane)
+        ICommandPaletteWorkLane? paletteLane,
+        VaultOpenSeams? openSeams = null)
     {
         InitializeComponent();
         // R-5 (#1247, as the owner amended it): a landing in the Files tree —
@@ -86,6 +88,7 @@ public partial class MainWindow : Window
         Deactivated += (_, _) => _editorLandings.WindowDeactivated();
         _windowPlacement = new WindowPlacementManager(this);
         _announcer = new AccessibilityNotificationDispatcher(StatusTextBlock);
+        _announcer.PostedForTests = openSeams?.ObservePosted;
         // OD-7: the window's one dispatcher, inherited by every surface in
         // it (and found by the windows it owns), so the launch phase, its
         // queue and its provider exist once per window.
@@ -99,9 +102,10 @@ public partial class MainWindow : Window
             }
         }));
         _viewModel = new VaultLifecycleViewModel(
-            PickVaultAsync,
+            openSeams?.PickVault ?? PickVaultAsync,
             action => _ = Dispatcher.InvokeAsync(action),
-            ConfirmRemoveMissingRecentAsync,
+            openSeams?.ConfirmRemoveMissingRecent ?? ConfirmRemoveMissingRecentAsync,
+            recentVaultsStore: openSeams?.RecentVaults,
             announce: _announcer.Post,
             copyText: CopyText,
             confirmUnsavedClose: ConfirmUnsavedClose,
@@ -117,14 +121,19 @@ public partial class MainWindow : Window
             // its own sink stays green. AnnouncementSeamCensus reads
             // this call and fails if either argument goes missing.
             announceRendered: _announcer.Post,
+            sessionLoadWorker: openSeams?.SessionLoad,
             paletteRecentsStore: paletteRecentsStore,
-            paletteLane: paletteLane);
+            paletteLane: paletteLane,
+            openSession: openSeams?.OpenSession);
         _viewModel.RecentVaultsChanged += ViewModel_RecentVaultsChanged;
         _viewModel.ReturnedToWelcome += ViewModel_ReturnedToWelcome;
         _viewModel.WorkspaceReady += ViewModel_WorkspaceReady;
         _viewModel.QuickSwitcherDismissed += ViewModel_QuickSwitcherDismissed;
         _viewModel.WorkspaceFocusBoundaryRequested += ViewModel_WorkspaceFocusBoundaryRequested;
         _viewModel.PropertyChanged += ViewModel_PropertyChanged;
+        // WB-9 (#1296, the owner's call): a handoff parked behind a close
+        // runs once the close has decided.
+        _viewModel.WorkspaceCloseDecided += (_, _) => RunParkedExternalActivation();
         DataContext = _viewModel;
         // W6-1 PR C (contract C8): the canvas mode stack's M4 rule needs
         // to tell "focus moved to another pane" (cancel) from "focus
@@ -187,12 +196,58 @@ public partial class MainWindow : Window
         Activate();
         Topmost = true;
         Topmost = false;
+        if (ExternalActivationMustWait)
+        {
+            // WB-9 (#1296): the window comes forward, the prompt or the
+            // close keeps the keys, and the request waits for them to end —
+            // the last one received wins. No focus move: a close deciding
+            // with the window enabled would lose the reader's place.
+            _parkedExternalActivation = vaultPath;
+            _externalActivationParked = true;
+            return;
+        }
+
         Focus();
 
         if (!string.IsNullOrWhiteSpace(vaultPath))
         {
             await _viewModel.OpenVaultAsync(vaultPath);
         }
+    }
+
+    /// <summary>WB-9 (#1296; the owner's call of 2026-10-26): the request a
+    /// second launch or a jump-list open made while a modal loop ran over the
+    /// shell, the palette's seal held, or a close decided.</summary>
+    private string? _parkedExternalActivation;
+    private bool _externalActivationParked;
+
+    private bool ExternalActivationMustWait =>
+        _modalLoops.IsModalLoopActive || _viewModel.Palette.IsSealed || _viewModel.IsDecidingClose;
+
+    /// <summary>Run the parked request once nothing holds it: after the
+    /// loop's, the seal's or the close's own teardown (Input priority), and
+    /// parked again if another hold began in the meantime.</summary>
+    private void RunParkedExternalActivation()
+    {
+        if (!_externalActivationParked)
+        {
+            return;
+        }
+
+        _ = Dispatcher.InvokeAsync(
+            () =>
+            {
+                if (!_externalActivationParked || ExternalActivationMustWait)
+                {
+                    return;
+                }
+
+                string? path = _parkedExternalActivation;
+                _parkedExternalActivation = null;
+                _externalActivationParked = false;
+                _ = ActivateFromExternalRequestAsync(path);
+            },
+            DispatcherPriority.Input);
     }
 
     private Task<string?> PickVaultAsync()
