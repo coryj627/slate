@@ -130,7 +130,7 @@ public sealed class W1WorkspaceModelTests
     public void ATabThatCannotLoadShowsCoresSentenceAndSpeaksNothing()
     {
         using FixtureVault fixture = FixtureVault.Create(1, "workspace-load-failure");
-        File.WriteAllBytes(Path.Combine(fixture.Root, "note0.md"), [0xff, 0xfe, 0xff]);
+        File.WriteAllBytes(Path.Combine(fixture.Root, "note0.md"), new byte[] { 0xff, 0xfe, 0xff });
         using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
         using var cancel = new CancelToken();
         session.ScanInitial(cancel);
