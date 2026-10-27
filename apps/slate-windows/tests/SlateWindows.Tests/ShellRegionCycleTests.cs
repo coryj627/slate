@@ -305,6 +305,12 @@ public sealed class ShellRegionCycleTests
             WindowStartupLocation = WindowStartupLocation.Manual,
         };
         window.Show();
+        // #1680: settled before the first Focus(), as every shown fixture is.
+        // With the show's activation still queued, a session with no
+        // foreground window (Namespace's runners) ran it inside that first
+        // Focus(), which then reported false with the keys already moving.
+        window.UpdateLayout();
+        PumpedDispatcher.Drain();
         Func<bool> priorOverlayProbe = Canvas.CanvasSurfaceView.ShellOverlayIsOpen;
         var shell = new MainWindow();
         bool RingIsModalWithFocusOn(UIElement element)
