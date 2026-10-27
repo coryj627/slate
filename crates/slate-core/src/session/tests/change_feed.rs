@@ -1710,3 +1710,256 @@ fn a_closing_session_deletes_its_cursor() {
     assert_eq!(count(&a), 1);
     assert!(cursor_of(&a).is_some());
 }
+
+// --- WB-10a (#1519): a window carrying another writer's change drops the link graph ---
+
+/// The center's edges in this session's link graph (building it if absent).
+fn edges_into(session: &VaultSession, center: &str) -> usize {
+    session
+        .graph_neighborhood(center, 1, crate::graph::GraphFilter::default())
+        .unwrap()
+        .edges
+        .len()
+}
+
+/// WB-10a (#1519): B adds a link; A's window is exact and carries B's
+/// record, so it drops A's in-memory graph: the generation moves (the
+/// hosts' probes read "changed") and the next query rebuilds from the
+/// shared index and finds the link.
+#[test]
+fn a_foreign_link_change_in_an_exact_window_drops_this_sessions_graph() {
+    let (_tmp, a, b) = two_hosts(|p| {
+        p.write_file("a.md", b"# A\n").unwrap();
+        p.write_file("b.md", b"# B\n").unwrap();
+    });
+    assert_eq!(edges_into(&a, "b.md"), 0);
+    let before = a.graph_generation();
+    assert!(before > 0, "premise: A's graph is built");
+    let hash = hash_of(&b, "a.md");
+    b.save_text("a.md", "# A\n\n[[b]]\n", Some(&hash)).unwrap();
+
+    let w = window(&a);
+    assert_eq!(w.status, ChangeFeedStatus::Exact);
+    assert!(
+        w.record_count > 0,
+        "premise: B's save is a record in A's window"
+    );
+    assert_ne!(
+        a.graph_generation(),
+        before,
+        "the probes must read a change"
+    );
+    assert_eq!(edges_into(&a, "b.md"), 1, "the rebuilt graph has B's link");
+}
+
+/// WB-10a (#1519): a folder another session renamed moves every note's path
+/// under it, and the graph is keyed by path — so a window of directory and
+/// file renames drops it. A directory record alone counts too: it still
+/// says another writer changed the tree this session's graph was built on.
+#[test]
+fn a_foreign_folder_rename_in_an_exact_window_drops_the_graph() {
+    let (_tmp, a, b) = two_hosts(|p| {
+        p.write_file("dir/linked.md", b"# Linked\n\n[[hub]]\n")
+            .unwrap();
+        p.write_file("hub.md", b"# Hub\n").unwrap();
+    });
+    assert_eq!(edges_into(&a, "hub.md"), 1);
+    let before = a.graph_generation();
+    b.rename_folder("dir", "moved").unwrap();
+
+    let w = window(&a);
+    assert_eq!(w.status, ChangeFeedStatus::Exact);
+    let seen = records(&a, &w);
+    assert!(
+        seen.iter().any(|r| r.entry == ChangeEntry::Directory),
+        "{seen:#?}"
+    );
+    assert!(
+        seen.iter().any(|r| r.entry == ChangeEntry::File),
+        "{seen:#?}"
+    );
+    assert_ne!(a.graph_generation(), before);
+    ack(&a, &w);
+
+    // A window whose only record is a directory.
+    assert_eq!(edges_into(&a, "hub.md"), 1);
+    let before_folder = a.graph_generation();
+    b.create_folder("empty").unwrap();
+    let w = window(&a);
+    let seen = records(&a, &w);
+    assert_eq!(
+        seen.iter().map(|r| r.entry).collect::<Vec<_>>(),
+        [ChangeEntry::Directory],
+        "premise: only a directory record"
+    );
+    assert_ne!(a.graph_generation(), before_folder);
+}
+
+/// WB-10a (#1519): a window of this session's own writes has no record —
+/// its graph already learned them through `graph_apply` — so it is left
+/// alone: the generation is the one the save set, and the metrics cache
+/// survives.
+#[test]
+fn an_exact_window_of_own_writes_only_leaves_the_graph_alone() {
+    let (_tmp, a, _b) = two_hosts(|p| {
+        p.write_file("a.md", b"# A\n").unwrap();
+        p.write_file("b.md", b"# B\n").unwrap();
+    });
+    assert_eq!(edges_into(&a, "b.md"), 0);
+    let hash = hash_of(&a, "a.md");
+    a.save_text("a.md", "# A\n\n[[b]]\n", Some(&hash)).unwrap();
+    assert_eq!(
+        edges_into(&a, "b.md"),
+        1,
+        "premise: the save reached the graph"
+    );
+    let _ = a.graph_metrics_snapshot().unwrap();
+    let after_save = a.graph_generation();
+
+    let w = window(&a);
+    assert_eq!(w.status, ChangeFeedStatus::Exact);
+    assert_eq!(w.record_count, 0, "premise: own writes only");
+    assert_eq!(a.graph_generation(), after_save);
+    assert!(a.graph_is_built());
+    assert!(
+        a.graph_metrics.lock().unwrap().is_some(),
+        "the metrics cache survives"
+    );
+}
+
+/// WB-10a (red team): this session's own scan writes reconcile rows, which
+/// are records in its window, but the scan already taught its graph the
+/// change (`graph_apply`): a lone session's external edit does not force a
+/// rebuild.
+#[test]
+fn a_window_of_this_sessions_own_scan_leaves_the_graph_alone() {
+    let (tmp, a, _b) = two_hosts(|p| {
+        p.write_file("a.md", b"# A\n").unwrap();
+        p.write_file("b.md", b"# B\n").unwrap();
+    });
+    assert_eq!(edges_into(&a, "b.md"), 0);
+    edit_on_disk(&tmp, "a.md", b"# A\n\n[[b]]\n");
+    a.rescan_with_progress(&CancelToken::new(), None).unwrap();
+    assert_eq!(
+        edges_into(&a, "b.md"),
+        1,
+        "premise: the scan taught the graph"
+    );
+    let _ = a.graph_metrics_snapshot().unwrap();
+    let after_scan = a.graph_generation();
+
+    let w = window(&a);
+    assert_eq!(w.status, ChangeFeedStatus::Exact);
+    assert!(
+        w.record_count > 0,
+        "premise: the own scan's row is a record"
+    );
+    assert_eq!(a.graph_generation(), after_scan);
+    assert!(a.graph_is_built());
+    assert!(
+        a.graph_metrics.lock().unwrap().is_some(),
+        "the metrics cache survives"
+    );
+}
+
+/// WB-10a (red team): an oversized window of this session's own rows reads
+/// nothing, but none of its rows is another writer's: the graph stays.
+#[test]
+fn an_oversized_window_of_this_sessions_own_rows_leaves_the_graph_alone() {
+    let (_tmp, a, _b) = two_hosts(|p| {
+        p.write_file("a.md", b"# A\n").unwrap();
+    });
+    let _ = edges_into(&a, "a.md");
+    let before = a.graph_generation();
+    indexed_rows(
+        &a,
+        "own-over-limit-",
+        crate::CHANGE_FEED_WINDOW_ROW_LIMIT as usize + 1,
+    );
+
+    let too_large = window(&a);
+    assert_eq!(too_large.status, ChangeFeedStatus::TooLarge);
+    assert_eq!(a.graph_generation(), before);
+}
+
+/// WB-10a (#1519): a trimmed cursor's window is a gap; the host's full
+/// re-sync cannot tell the graph what another session indexed, so the gap
+/// drops it.
+#[test]
+fn a_trimmed_cursor_window_drops_the_graph() {
+    let (_tmp, a, b) = two_hosts(|p| {
+        p.write_file("a.md", b"# A\n").unwrap();
+    });
+    let _ = edges_into(&a, "a.md");
+    let before = a.graph_generation();
+    let cap = crate::CHANGE_FEED_MAX_ROWS as usize;
+    indexed_rows(&b, "bulk-", cap + 5);
+    let b_window = window(&b);
+    ack(&b, &b_window);
+
+    let gap = window(&a);
+    assert_eq!(gap.status, ChangeFeedStatus::Gap(ChangeFeedGap::Trimmed));
+    assert_ne!(a.graph_generation(), before);
+}
+
+/// WB-10a (#1519): a session with no cursor gets a gap, which drops the
+/// graph like every gap.
+#[test]
+fn a_window_with_no_cursor_drops_the_graph() {
+    let (_tmp, a) = make_vault(|p| {
+        p.write_file("a.md", b"# A\n").unwrap();
+    });
+    a.scan_initial(&CancelToken::new()).unwrap();
+    let _ = edges_into(&a, "a.md");
+    let before = a.graph_generation();
+    assert!(before > 0, "premise: A's graph is built");
+
+    let gap = window(&a);
+    assert_eq!(gap.status, ChangeFeedStatus::Gap(ChangeFeedGap::NoCursor));
+    assert_ne!(a.graph_generation(), before);
+}
+
+/// WB-10a (#1519): an oversized window reads nothing, so it cannot say
+/// whether another session changed a link: it drops the graph.
+#[test]
+fn an_oversized_window_drops_the_graph() {
+    let (_tmp, a, b) = two_hosts(|p| {
+        p.write_file("a.md", b"# A\n").unwrap();
+    });
+    let _ = edges_into(&a, "a.md");
+    let before = a.graph_generation();
+    indexed_rows(
+        &b,
+        "over-limit-",
+        crate::CHANGE_FEED_WINDOW_ROW_LIMIT as usize + 1,
+    );
+
+    let too_large = window(&a);
+    assert_eq!(too_large.status, ChangeFeedStatus::TooLarge);
+    assert_ne!(a.graph_generation(), before);
+}
+
+/// WB-10a (#1519): a session that never built its graph reports the floor,
+/// so the floor itself must move on each foreign change — two in a row,
+/// with no query between, read two different generations.
+#[test]
+fn a_drop_with_no_built_index_still_moves_the_generation() {
+    let (_tmp, a, b) = two_hosts(|_| {});
+    assert_eq!(a.graph_generation(), 0);
+    assert!(!a.graph_is_built());
+
+    b.create_exclusive("one.md", "# One\n").unwrap();
+    let first = window(&a);
+    assert!(first.record_count > 0, "premise: B's create is a record");
+    assert_eq!(a.graph_generation(), 1);
+    ack(&a, &first);
+
+    b.create_exclusive("two.md", "# Two\n").unwrap();
+    let second = window(&a);
+    assert!(
+        second.record_count > 0,
+        "premise: B's second create is a record"
+    );
+    assert_eq!(a.graph_generation(), 2);
+    assert!(!a.graph_is_built(), "nothing queried the graph");
+}
