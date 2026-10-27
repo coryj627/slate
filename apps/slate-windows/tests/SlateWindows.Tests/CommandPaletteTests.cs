@@ -126,8 +126,12 @@ public sealed partial class CommandPaletteTests
     /// one pins what it costs. The two sizes alternate round by round so a
     /// burst of load elsewhere on the machine lands on both, and the
     /// warm-up rounds carry the binding and the JIT past their first calls.
+    /// Its 21 rounds take 22 s on a loaded runner, so it is a benchmark for
+    /// its runtime, not its shape: the Windows lane leaves it out (#1323)
+    /// and it runs by hand (<c>--filter kind=benchmark</c>).
     /// </remarks>
     [Fact]
+    [Trait("kind", "benchmark")]
     public void RecomputeScalesLinearlyInRowCount()
     {
         var small = new PaletteHarness(SyntheticCommands(2_000));

@@ -937,8 +937,11 @@ public sealed class GraphEndToEndTests
 
     /// <summary>1,500 notes — tier A's ceiling — through the workspace: the
     /// open under PR A's 10k ceiling (FD-9), then the renderer's four
-    /// budgets on the real document, driver and surface (FD-D2).</summary>
+    /// budgets on the real document, driver and surface (FD-D2). Wall-clock
+    /// budgets, so a benchmark: the Windows lane leaves it out (#1323) and
+    /// it runs by hand on a quiet machine (<c>--filter kind=benchmark</c>).</summary>
     [Fact]
+    [Trait("kind", "benchmark")]
     public void LargeGraphOpensLaysOutPansAndStepsUnderBudget() => RunSta(() =>
     {
         const int Notes = 1500;

@@ -468,6 +468,224 @@ public sealed class StaThreadTests : IDisposable
         Assert.Empty(WindowClasses.RegisteredFor(name));
     }
 
+    /// <summary>#1321: a timed-out body that polls
+    /// <see cref="StaThread.TimedOut"/> between its phases stops there,
+    /// inside the grace, so its timeout is one failure and the facts after it
+    /// run clean — not one slow walk failing every fact beside it.</summary>
+    [Fact]
+    public void ABodyThatPollsTimedOutUnwindsWithinTheGraceAndLaterFactsPass()
+    {
+        bool stoppedOnItsToken = false;
+        Xunit.Sdk.XunitException timedOut = Assert.Throws<Xunit.Sdk.XunitException>(() => StaThread.Run(
+            () =>
+            {
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                while (clock.Elapsed < TimeSpan.FromSeconds(30))
+                {
+                    if (StaThread.TimedOut)
+                    {
+                        Volatile.Write(ref stoppedOnItsToken, true);
+                        return;
+                    }
+                    Thread.Sleep(5);
+                }
+            },
+            TimeSpan.FromMilliseconds(200),
+            "the body polled its token",
+            unwindGrace: TimeSpan.FromSeconds(10)));
+
+        Assert.Contains("the body unwound", timedOut.Message, StringComparison.Ordinal);
+        Assert.True(Volatile.Read(ref stoppedOnItsToken), "the body ran out its own 30 s instead of stopping on its token");
+        Assert.Null(StaThread.Wedged());
+        MethodInfo next = typeof(StaThreadTests).GetMethod(nameof(ABodyThatTimesOutAndThenUnwindsLeavesNoWindowClassBehind))!;
+        new LeakedDispatcherGuardAttribute().Before(next, (Xunit.v3.IXunitTest)TestContext.Current.Test!);
+    }
+
+    /// <summary>The token a body reads is the one its own run cancels: the
+    /// joining caller owns the source, made before the thread starts, and only
+    /// its token sits in the thread's slot. A source in the slot, cancelled
+    /// from the caller, would be the caller's own empty one.</summary>
+    [Fact]
+    public void TheTokenABodyReadsIsTheOneItsRunCancels()
+    {
+        Assert.False(StaThread.Current.CanBeCanceled, "premise: outside a run there is no timeout to read");
+        CancellationToken read = default;
+        bool cancelledAtTheStart = true;
+        using var readIt = new ManualResetEventSlim(false);
+        // The bound starts once the body has read its token: a thread that
+        // first ran late would otherwise read one already cancelled.
+        StaThread.AfterStartForTests = () => Assert.True(readIt.Wait(TimeSpan.FromSeconds(30)), "the body never started");
+        try
+        {
+            _ = Assert.Throws<Xunit.Sdk.XunitException>(() => StaThread.Run(
+                () =>
+                {
+                    read = StaThread.Current;
+                    cancelledAtTheStart = read.IsCancellationRequested;
+                    readIt.Set();
+                    // Alive until its token is cancelled, however late the
+                    // caller starts its join; the cap only ends a body
+                    // whose token never is.
+                    var clock = System.Diagnostics.Stopwatch.StartNew();
+                    while (!read.IsCancellationRequested && clock.Elapsed < TimeSpan.FromSeconds(30))
+                    {
+                        Thread.Sleep(10);
+                    }
+                },
+                TimeSpan.FromMilliseconds(200),
+                "the body only slept",
+                unwindGrace: TimeSpan.FromSeconds(10)));
+        }
+        finally
+        {
+            StaThread.AfterStartForTests = null;
+        }
+
+        Assert.True(read.CanBeCanceled, "the body read no run's token");
+        Assert.False(cancelledAtTheStart, "the body's token was cancelled before its bound passed");
+        Assert.True(read.IsCancellationRequested, "the run timed out, but the token its body read was never cancelled");
+    }
+
+    /// <summary>The token is a request, not a stop: a body that never reads
+    /// it still wedges, and still fails every fact beside it until it ends.</summary>
+    [Fact]
+    public void ABodyThatIgnoresTimedOutStillWedgesAndFailsLaterFacts()
+    {
+        using var release = new ManualResetEventSlim(false);
+        try
+        {
+            (Xunit.Sdk.XunitException timedOut, string name, CancellationToken read) = WedgeABodyThatIgnoresItsToken(release);
+            Assert.Contains("has not unwound", timedOut.Message, StringComparison.Ordinal);
+            Assert.True(read.IsCancellationRequested, "premise: the body's token was cancelled");
+            string? wedged = StaThread.Wedged();
+            Assert.NotNull(wedged);
+            Assert.Contains(name, wedged, StringComparison.Ordinal);
+            MethodInfo next = typeof(StaThreadTests).GetMethod(nameof(ABodyThatTimesOutAndThenUnwindsLeavesNoWindowClassBehind))!;
+            Xunit.Sdk.XunitException refused = Assert.Throws<Xunit.Sdk.XunitException>(
+                () => new LeakedDispatcherGuardAttribute().Before(next, (Xunit.v3.IXunitTest)TestContext.Current.Test!));
+            Assert.Contains(name, refused.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Release(release);
+        }
+    }
+
+    /// <summary>#1321: the facts a wedged body fails read which fact it was,
+    /// so the one root failure is found among the hundreds after it.</summary>
+    [Fact]
+    public void TheCascadeMessageNamesTheRootFact()
+    {
+        string root = TestContext.Current.Test!.TestDisplayName;
+        using var release = new ManualResetEventSlim(false);
+        try
+        {
+            (_, string name, _) = WedgeABodyThatIgnoresItsToken(release);
+            string? wedged = StaThread.Wedged();
+            Assert.NotNull(wedged);
+            Assert.Contains($"`{root}` (thread {name}) is still unwinding after its timeout: the body ignored its token", wedged, StringComparison.Ordinal);
+            MethodInfo next = typeof(StaThreadTests).GetMethod(nameof(ABodyThatTimesOutAndThenUnwindsLeavesNoWindowClassBehind))!;
+            Xunit.Sdk.XunitException refused = Assert.Throws<Xunit.Sdk.XunitException>(
+                () => new LeakedDispatcherGuardAttribute().Before(next, (Xunit.v3.IXunitTest)TestContext.Current.Test!));
+            Assert.Contains($"`{root}`", refused.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Release(release);
+        }
+    }
+
+    /// <summary>A fact's thread that first runs after both joins have
+    /// expired has recorded no exit yet: it is still a body running beside
+    /// the facts after it — tracked, and named, until it ends — never
+    /// residue that is reported once and then forgotten.</summary>
+    [Fact]
+    public void AWedgedBodyWhoseThreadStartedLateIsStillTracked()
+    {
+        string root = TestContext.Current.Test!.TestDisplayName;
+        using var start = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        StaThread.BeforeBodyForTests = () => start.Wait(TimeSpan.FromSeconds(30));
+        try
+        {
+            Xunit.Sdk.XunitException timedOut = Assert.Throws<Xunit.Sdk.XunitException>(() => StaThread.Run(
+                () =>
+                {
+                    var clock = System.Diagnostics.Stopwatch.StartNew();
+                    while (!release.IsSet && clock.Elapsed < TimeSpan.FromSeconds(60))
+                    {
+                        Thread.Sleep(20);
+                    }
+                },
+                TimeSpan.FromMilliseconds(200),
+                "the body started late",
+                unwindGrace: TimeSpan.FromMilliseconds(200)));
+            StaThread.BeforeBodyForTests = null;
+            Assert.Contains("has not unwound", timedOut.Message, StringComparison.Ordinal);
+
+            string? beforeItRan = StaThread.Wedged();
+            Assert.NotNull(beforeItRan);
+            Assert.Contains($"`{root}` (thread ", beforeItRan, StringComparison.Ordinal);
+            start.Set();
+            Assert.True(
+                SpinWait.SpinUntil(() => StaThread.Wedged() is { } wedged && wedged.Contains($"`{root}`", StringComparison.Ordinal), TimeSpan.FromSeconds(1)),
+                "a body that started after its joins expired was dropped from the wedged list");
+        }
+        finally
+        {
+            StaThread.BeforeBodyForTests = null;
+            start.Set();
+            Release(release);
+        }
+    }
+
+    /// <summary>A body that sleeps until <paramref name="release"/> is set,
+    /// never reading its token, past a 200 ms bound and a 200 ms grace. The
+    /// bound starts once the body runs, so a late thread start cannot leave
+    /// it untracked.</summary>
+    private static (Xunit.Sdk.XunitException TimedOut, string Name, CancellationToken Read) WedgeABodyThatIgnoresItsToken(
+        ManualResetEventSlim release)
+    {
+        string? name = null;
+        CancellationToken read = default;
+        using var started = new ManualResetEventSlim(false);
+        StaThread.AfterStartForTests = () => Assert.True(started.Wait(TimeSpan.FromSeconds(30)), "the body never started");
+        Xunit.Sdk.XunitException timedOut;
+        try
+        {
+            timedOut = Assert.Throws<Xunit.Sdk.XunitException>(() => StaThread.Run(
+                () =>
+                {
+                    name = Thread.CurrentThread.Name;
+                    read = StaThread.Current;
+                    started.Set();
+                    var clock = System.Diagnostics.Stopwatch.StartNew();
+                    while (!release.IsSet && clock.Elapsed < TimeSpan.FromSeconds(60))
+                    {
+                        Thread.Sleep(20);
+                    }
+                },
+                TimeSpan.FromMilliseconds(200),
+                "the body ignored its token",
+                unwindGrace: TimeSpan.FromMilliseconds(200)));
+        }
+        finally
+        {
+            StaThread.AfterStartForTests = null;
+        }
+        Assert.NotNull(name);
+        return (timedOut, name, read);
+    }
+
+    /// <summary>Let a wedged body end, and wait until its thread has.</summary>
+    private static void Release(ManualResetEventSlim release)
+    {
+        release.Set();
+        Assert.True(
+            SpinWait.SpinUntil(() => StaThread.Wedged() is null, TimeSpan.FromSeconds(10)),
+            "the released body's thread never ended");
+    }
+
     /// <summary>The CI failure of #1310, reproduced: the runner's Join begins
     /// only after the runtime has marked the fact's thread dead, while the OS
     /// thread's exit — which is when the system destroys its windows — is

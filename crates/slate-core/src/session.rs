@@ -1148,12 +1148,13 @@ thread_local! {
 }
 
 /// Uninstalls the seam when the fact's guard drops, on success or panic.
-/// Unix only, with [`install_open_swap_seam`]: every fact that installs a
-/// seam is in `session/tests/descriptor_interior.rs`, a `#![cfg(unix)]` file.
-#[cfg(all(test, unix))]
+/// The facts that install a seam are `session/tests/descriptor_interior.rs`
+/// (Unix) and the structural-lock child in `session/tests/structural_batch.rs`
+/// (every host, #1294), whose witness is the open reaching its lock.
+#[cfg(test)]
 pub(crate) struct OpenSwapSeamGuard;
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 impl Drop for OpenSwapSeamGuard {
     fn drop(&mut self) {
         OPEN_SWAP_SEAM.with(|seam| seam.borrow_mut().take());
@@ -1162,7 +1163,7 @@ impl Drop for OpenSwapSeamGuard {
 
 /// Install `seam` for opens on THIS thread only, so parallel facts never
 /// see each other's swaps.
-#[cfg(all(test, unix))]
+#[cfg(test)]
 pub(crate) fn install_open_swap_seam(
     seam: impl FnMut(OpenSwapPoint) + 'static,
 ) -> OpenSwapSeamGuard {

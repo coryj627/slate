@@ -317,6 +317,85 @@ public sealed class ReadingFocusTests
         Assert.Same(host.Sentinel, Keyboard.FocusedElement);
     });
 
+    /// <summary>#1323: the fixture's release waits for the projection it
+    /// releases — the post its fetch's flow makes — never for another post.
+    /// One is posted, and runs, while the released fetch is still fetching:
+    /// from another thread, or from the fetch's own pool thread outside its
+    /// flow (unrelated work that thread runs while the fetch awaits a
+    /// retry). The release keeps waiting, and returns with the projection
+    /// shown.</summary>
+    [Theory]
+    [InlineData("another thread")]
+    [InlineData("the fetch's own thread, another flow")]
+    public void TheReleaseWaitsForItsOwnProjectionNotAnotherPost(string poster) => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize(readingMode: true);
+        ReadingSurface surface = host.ShownSurface();
+        // Captured here, outside any fetch's flow.
+        ExecutionContext elsewhere = ExecutionContext.Capture()!;
+        ReadingContentViewModel model = host.BindProjectionInFlight(surface);
+        Dispatcher dispatcher = Dispatcher.CurrentDispatcher;
+        using var foreignRan = new ManualResetEventSlim(false);
+        int stages = 0;
+        model.FetchStageHookForTests = _ =>
+        {
+            if (Interlocked.Increment(ref stages) != 1)
+            {
+                return;
+            }
+            if (poster == "another thread")
+            {
+                var other = new Thread(() => dispatcher.BeginInvoke(DispatcherPriority.Background, foreignRan.Set))
+                {
+                    IsBackground = true,
+                };
+                // A thread that inherited the fetch's flow would post as
+                // the fetch; another thread's work carries its own.
+                using (ExecutionContext.SuppressFlow())
+                {
+                    other.Start();
+                }
+            }
+            else
+            {
+                ExecutionContext.Run(
+                    elsewhere, _ => dispatcher.BeginInvoke(DispatcherPriority.Background, foreignRan.Set), null);
+            }
+            if (foreignRan.Wait(TimeSpan.FromSeconds(30)))
+            {
+                // Widens the window a release that took the other post for
+                // its own would return in; the right release waits anyway.
+                Thread.Sleep(TimeSpan.FromMilliseconds(500));
+            }
+        };
+
+        host.ReleaseProjection();
+
+        Assert.True(foreignRan.IsSet, $"premise: the post from {poster} ran while the released fetch was fetching");
+        Assert.False(ShowsLoadingNotice(surface), $"the release took the post from {poster} for its projection's");
+    });
+
+    /// <summary>#1323: a transient read error retries the fetch after a
+    /// delay, and the retry can resume on another pool thread. The release
+    /// follows the fetch, not the thread, and returns with the projection
+    /// shown.</summary>
+    [Fact]
+    public void TheReleaseFollowsItsFetchThroughATransientRetry() => RunSta(() =>
+    {
+        using var host = new Host();
+        host.Initialize(readingMode: true);
+        ReadingSurface surface = host.ShownSurface();
+        host.FailNextAttemptsTransiently(1);
+        ReadingContentViewModel model = host.BindProjectionInFlight(surface);
+
+        host.ReleaseProjection();
+
+        Assert.Equal(1, host.TransientFailures);
+        Assert.False(ShowsLoadingNotice(surface), "the release returned before the retried projection published");
+        Assert.Null(model.LastTerminalFailureForTests);
+    });
+
     /// <summary>The refusal path when the load fails: only the failure notice
     /// arrives, which is not the note (the failure was announced when it
     /// happened), so the held landing falls through once and says nothing —
@@ -897,8 +976,8 @@ public sealed class ReadingFocusTests
         ReadingSurface surface = host.ShownSurface();
         ReadingContentViewModel model = host.BindProjectionInFlight(surface);
         host.ReleaseProjection();
-        // Settled before the fact starts: the release returns on the first
-        // post from another thread, and a vault-wide change under the first
+        // Settled before the fact starts: the release returns on the held
+        // fetch's own first post, and a vault-wide change under the first
         // fetch costs it one more (unheld) try.
         Assert.True(PumpedDispatcher.PumpUntil(() => !model.RefreshInFlight), "the first projection never settled");
         Assert.Contains(NoteText, UiaDocumentText(surface));
@@ -3716,6 +3795,9 @@ public sealed class ReadingFocusTests
         private readonly Func<bool> _priorOverlayProbe = CanvasSurfaceView.ShellOverlayIsOpen;
         private readonly List<ManualResetEventSlim> _fetchGates = [new(false)];
         private readonly HashSet<ManualResetEventSlim> _awaitedFetchGates = [];
+        private readonly AsyncLocal<ManualResetEventSlim?> _fetchFlow = new();
+        private int _transientAttempts;
+        private int _transientFailures;
         private bool _fetchFails;
         private ReadingContentViewModel? _inFlight;
         private readonly TaskCompletionSource _canvasLoadGate =
@@ -4263,7 +4345,19 @@ public sealed class ReadingFocusTests
             {
                 FetchFaultForTests = () =>
                 {
-                    _ = GateForTheFetch().Wait(TimeSpan.FromSeconds(30));
+                    ManualResetEventSlim gate = GateForTheFetch();
+                    _ = gate.Wait(TimeSpan.FromSeconds(30));
+                    // #1323: this fetch's flow, which carries it on to its one
+                    // terminal post — the post the release waits for. A flow
+                    // value, not a thread: a transient fault retries after an
+                    // await that can resume on another pool thread, and the
+                    // thread it left can run unrelated work meanwhile.
+                    _fetchFlow.Value = gate;
+                    if (Interlocked.Decrement(ref _transientAttempts) >= 0)
+                    {
+                        _ = Interlocked.Increment(ref _transientFailures);
+                        return new IOException("The fixture's read fails once, transiently.");
+                    }
                     return Volatile.Read(ref _fetchFails)
                         ? new InvalidOperationException("The fixture's projection fails.")
                         : null;
@@ -4285,6 +4379,14 @@ public sealed class ReadingFocusTests
                 _fetchGates.Add(new ManualResetEventSlim(false));
             }
         }
+
+        /// <summary>The next <paramref name="attempts"/> fetch attempts, once
+        /// past their gate, fail with a transient read error, so the model
+        /// retries them after its delay.</summary>
+        public void FailNextAttemptsTransiently(int attempts) => Volatile.Write(ref _transientAttempts, attempts);
+
+        /// <summary>How many attempts the fixture has failed transiently.</summary>
+        public int TransientFailures => Volatile.Read(ref _transientFailures);
 
         /// <summary>Whether a held fetch let go from now on fails terminally
         /// (<see cref="HoldNextFetch"/> sets it with its gate; a fact that lets
@@ -4443,7 +4545,8 @@ public sealed class ReadingFocusTests
             Published,
 
             /// <summary>Retired while it waited: it stopped at its first stage
-            /// boundary and posted nothing (#1279).</summary>
+            /// boundary, published nothing (#1279), and its one post — the
+            /// one that settles its waiters — has run.</summary>
             Retired,
 
             /// <summary>Whichever comes (the fixture's cleanup).</summary>
@@ -4458,14 +4561,23 @@ public sealed class ReadingFocusTests
             int cancelled = model?.FetchesCancelledForTests ?? 0;
             Dispatcher dispatcher = Dispatcher.CurrentDispatcher;
             DispatcherOperation? published = null;
+            // #1323: the released fetch's own post — the first its flow makes
+            // once past this gate: its publish, its terminal failure or its
+            // cancellation. The hook runs on the posting thread, inside the
+            // poster's flow, so another thread's post — or unrelated work on
+            // the fetch's own pool thread — is never taken for it.
             void Posted(object? sender, DispatcherHookEventArgs args)
             {
-                if (!dispatcher.CheckAccess())
+                if (!dispatcher.CheckAccess() && ReferenceEquals(_fetchFlow.Value, gate))
                 {
-                    Volatile.Write(ref published, args.Operation);
+                    _ = Interlocked.CompareExchange(ref published, args.Operation, null);
                 }
             }
-            bool Published() => Volatile.Read(ref published)
+            // Every way an asynchronous fetch ends makes exactly one post in
+            // its flow (its publish, its terminal failure, its cancellation,
+            // its retirement), so each end waits for that post to have run;
+            // a retirement also counts, but the count moves before its post.
+            bool Ran() => Volatile.Read(ref published)
                 is { Status: DispatcherOperationStatus.Completed or DispatcherOperationStatus.Aborted };
             bool Retired() => model is not null && model.FetchesCancelledForTests > cancelled;
             dispatcher.Hooks.OperationPosted += Posted;
@@ -4475,9 +4587,8 @@ public sealed class ReadingFocusTests
                 Assert.True(
                     PumpedDispatcher.PumpUntil(end switch
                     {
-                        HeldFetchEnd.Published => Published,
-                        HeldFetchEnd.Retired => Retired,
-                        _ => () => Published() || Retired(),
+                        HeldFetchEnd.Retired => () => Retired() && Ran(),
+                        _ => Ran,
                     }),
                     end switch
                     {

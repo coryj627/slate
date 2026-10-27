@@ -11750,8 +11750,7 @@ public sealed partial class ShellAccessibilityTests
         AutomationElement group, UIA3Automation automation, string prefix, bool requireItems = false)
     {
         AutomationElement? found = null;
-        Assert.True(
-            SpinWait.SpinUntil(
+        if (!SpinWait.SpinUntil(
                 () =>
                 {
                     try
@@ -11772,13 +11771,26 @@ public sealed partial class ShellAccessibilityTests
                         return false;
                     }
                 },
-                TimeSpan.FromSeconds(10)),
-            $"no tree row named '{prefix}…' materialized under '{group.Properties.Name.ValueOrDefault}' "
-            + $"(expand state {group.Patterns.ExpandCollapse.PatternOrDefault?.ExpandCollapseState.ValueOrDefault}); "
-            + "descendants: ["
-            + string.Join(" | ", group.FindAllDescendants(automation.ConditionFactory.ByControlType(ControlType.TreeItem))
-                .Select(item => item.Properties.Name.ValueOrDefault ?? "<null>"))
-            + "]");
+                TimeSpan.FromSeconds(10)))
+        {
+            // Read only once the wait has failed, and best-effort: a
+            // transient fault in the diagnostic must not replace it (#1323).
+            string seen;
+            try
+            {
+                seen = $"under '{group.Properties.Name.ValueOrDefault}' "
+                    + $"(expand state {group.Patterns.ExpandCollapse.PatternOrDefault?.ExpandCollapseState.ValueOrDefault}); "
+                    + "descendants: ["
+                    + string.Join(" | ", group.FindAllDescendants(automation.ConditionFactory.ByControlType(ControlType.TreeItem))
+                        .Select(item => item.Properties.Name.ValueOrDefault ?? "<null>"))
+                    + "]";
+            }
+            catch (Exception exception) when (IsTransientUiaFault(exception))
+            {
+                seen = $"(the group could not be read: {exception.GetType().Name})";
+            }
+            throw new Xunit.Sdk.XunitException($"no tree row named '{prefix}…' materialized {seen}");
+        }
         return found!;
     }
 
@@ -11862,20 +11874,16 @@ public sealed partial class ShellAccessibilityTests
     }
 
     /// <summary>Open a canvas by selecting its row in the files tree —
-    /// the route a user takes, not a synthesized command.</summary>
+    /// the route a user takes, not a synthesized command. The tree exists
+    /// before its rows are published, so the row is waited for, never
+    /// looked for once, and found again on a transient fault: a
+    /// publication can replace its element between the lookup and the
+    /// select (#1323; <see cref="SelectTreeItem"/>).</summary>
     private static void OpenCanvasFromTree(
         Window window, UIA3Automation automation, string stem)
     {
-        AutomationElement filesTree = WaitForElement(
-            window, "FilesTree", TimeSpan.FromSeconds(30));
-        AutomationElement item = filesTree
-            .FindAllDescendants(
-                automation.ConditionFactory.ByControlType(ControlType.TreeItem))
-            .FirstOrDefault(candidate => candidate.Name.StartsWith(
-                stem, StringComparison.OrdinalIgnoreCase))
-            ?? throw new Xunit.Sdk.XunitException(
-                $"the {stem}.canvas TreeItem is absent from the files tree.");
-        item.Patterns.SelectionItem.Pattern.Select();
+        _ = WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(30));
+        _ = SelectTreeItem(window, automation, stem);
     }
 
     private static AutomationElement[] WaitForTreeItems(
