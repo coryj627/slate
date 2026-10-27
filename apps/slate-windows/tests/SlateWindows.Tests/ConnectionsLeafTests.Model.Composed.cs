@@ -306,6 +306,10 @@ public sealed partial class ConnectionsLeafTests
         return cell.Pinned ? (PinBefore(modeCell), PinBefore(modeCell)) : (null, NoteInViewBefore(modeCell)!);
     }
 
+    /// <summary>#1266 (WB-8): an open that installs a path that no longer
+    /// loads speaks core's failure, once.</summary>
+    private const string OpenFailed = "FileReopenFailed";
+
     private static string FailureLine() =>
         Render(new GraphA11yEvent.GraphBlocked(new GraphBlockedReason.ConnectionsLoadFailed(InjectedTransientFailure)));
 
@@ -337,12 +341,14 @@ public sealed partial class ConnectionsLeafTests
                 // first foreign), the key follows; the open installs the path
                 // it was built for — the OLD one (B2-D10); the probe marks the
                 // load in flight and its tree is current. No outline line: the
-                // note has no heading.
-                return new([.. reRooted, LinePlaceholder], 2, RenamedReRootTarget, Pinned(RenamedReRootTarget, target, pushed), "RightPane");
+                // note has no heading. The old path no longer loads: the open
+                // speaks core's failure once (#1266, WB-8).
+                return new([.. reRooted, OpenFailed, LinePlaceholder], 2, RenamedReRootTarget, Pinned(RenamedReRootTarget, target, pushed), "RightPane");
             case Composed.RenamePinFolderInDialog:
                 // FOLLOWING, the pin Deep from Hub's tree: the folder moves
-                // under the pin, the open installs the old path.
-                return new([ReRooted(Deep), LinePlaceholder], 2, MovedPin(), Pinned(MovedPin(), Deep, [.. stackBefore, (null, noteInView)]), "RightPane");
+                // under the pin, the open installs the old path, which fails
+                // to load (#1266).
+                return new([ReRooted(Deep), OpenFailed, LinePlaceholder], 2, MovedPin(), Pinned(MovedPin(), Deep, [.. stackBefore, (null, noteInView)]), "RightPane");
             case Composed.RenameEntryInDialog:
                 {
                     // PinnedDrifted's prior pin, Hub, renamed inside the dialog: the
@@ -368,10 +374,11 @@ public sealed partial class ConnectionsLeafTests
                 // The pin's file deleted inside the dialog: the delete hook keeps
                 // the pin (Term 16), no tab shows it yet so no missing-file line;
                 // the parked load's tree applies and speaks, then the mark's
-                // silent reload fails: Error. The open installs the path.
-                return new([.. reRooted, LinePlaceholder], 2, target, plain, "RightPane", State: ConnectionsLoadState.Error);
+                // silent reload fails: Error. The open installs the path, which
+                // no longer loads: its failure, once (#1266).
+                return new([.. reRooted, OpenFailed, LinePlaceholder], 2, target, plain, "RightPane", State: ConnectionsLoadState.Error);
             case Composed.DeletePinFolderInDialog:
-                return new([ReRooted(Deep), LinePlaceholder], 2, Deep, Pinned(Deep, Deep, [.. stackBefore, (null, noteInView)]), "RightPane", State: ConnectionsLoadState.Error);
+                return new([ReRooted(Deep), OpenFailed, LinePlaceholder], 2, Deep, Pinned(Deep, Deep, [.. stackBefore, (null, noteInView)]), "RightPane", State: ConnectionsLoadState.Error);
             case Composed.DeleteEntryInDialog:
                 // PinnedDrifted's prior pin, Hub, deleted inside the dialog: its
                 // entry pruned, no tab shows it; the mark's reload once.
@@ -392,11 +399,12 @@ public sealed partial class ConnectionsLeafTests
                     // installs the path it was built for: the top no longer names
                     // the installed note, nothing pops; the pin stands, the note in
                     // view is the installed one; the probe reloads the pin's
-                    // current tree silently (the vault moved on).
+                    // current tree silently (the vault moved on). The installed
+                    // path no longer loads: the open's failure, once (#1266).
                     (string? Pin, string Effective) top = stackBefore[^1];
                     string renamed = cell.Mode == Mode.PinnedFresh ? RenamedOrigin : RenamedHub;
                     List<(string? Pin, string Effective)> stack = [.. stackBefore[..^1], (top.Pin is null ? null : renamed, renamed)];
-                    return new([], 1, pinBefore, Pinned(pinBefore!, top.Effective, stack), null);
+                    return new([OpenFailed], 1, pinBefore, Pinned(pinBefore!, top.Effective, stack), null);
                 }
             case Composed.ReentrantReRootInDialog:
                 {

@@ -125,7 +125,7 @@ internal sealed partial class WorkspaceViewModel
             // once; every true return leaves that tab active. A selection's
             // preview stays quiet (R-2), its sentence in the status line.
             bool opened = TryOpenItemCore(item, target, requestEditorFocus);
-            if (opened && ActiveGroup.ActiveTab is { LoadFailureEvent: { } failed })
+            if (opened && ActiveGroup.ActiveTab?.TakeUnspokenLoadFailure() is { } failed)
             {
                 _announce(failed);
             }
@@ -913,6 +913,8 @@ internal sealed partial class WorkspaceViewModel
         {
             return new A11yEvent.FileReopenFailed(filename, SlateUniffiMethods.VaultErrorDetail(failure));
         }
+        // The reopen's own line is this load's failure, said once (#1266).
+        _ = tab.TakeUnspokenLoadFailure();
         return tab.LoadFailure is { } detail
             ? new A11yEvent.FileReopenFailed(filename, detail)
             : new A11yEvent.ReopenedFile(filename);

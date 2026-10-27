@@ -24,6 +24,13 @@ This section outranks the text below it.
   - when a peer's state is mirrored into the tab (`MirrorDocumentStateFrom`), which copies it along with the peer's text and status.
 
   Facts: `ARenamedFailedTabSpeaksNoStaleFailure` and `AnOpenBesideAHealthyPeerSpeaksNoFailure`. The save path has none: a deleted note's reopened tab cannot save until a rescan updates the index ("Something named note0.md already exists there").
+- **A failed load is spoken once per load (CI, the Connections model).** The first push spoke the failure on every explicit open that landed on the tab. So a ghost's tab, opened before its note was created, repeated a stale failure when a later route landed on it (`GhostCreateAlreadyOpen`, 84 cells). `WorkspaceTabViewModel.TakeUnspokenLoadFailure` now hands the event to the first open that lands on the tab, then nothing until `Load` or a mirror runs again. A reopen's own line takes it too, so the reopen still speaks once. Fact: `RecoveryAnnouncementTests.AFailedLoadIsSpokenOnceAcrossOpensOfItsTab`. Removing the flag fails it at the second open.
+
+  `LandedOnAFailedLoad` still keys on the event, not the flag. A later open of a failed tab speaks neither the failure again nor a success line over it.
+- **The Connections model learns the open's failure where it is true.** None of these cells is stale: each one's tab is a fresh load that fails.
+  - `pic.png` (an attachment) opens as a Markdown tab whose text read fails, in every entrance's re-root (88 cells). The failure comes before the leaf's line. It comes after the line only when the gate is a dirty tab's dialog and the route showed the leaf, because the dialog pumps the frames in which that leaf speaks first.
+  - The composed routes that rename or delete the pin, or its folder, inside the open's dialog install the old path, which no longer loads: `RenamePinInDialog`, `RenamePinFolderInDialog`, `DeletePinInDialog`, `DeletePinFolderInDialog`.
+  - `BackWithReservedRenamed` installs a path renamed inside Back's open, which also no longer loads.
 - **Left as is:** a reopened tab's status line names the file (`note0.md`), while the reopen's spoken line names the tab as its group does (`note0`, OD-9). `Load` cannot know the group.
 - **`CtrlEOnABaseEmbedTitlesItAsABase` also reads the popover's card** (`PopoverEmbedRoot.Title`, "Embedded base: Notes"), beside the announcement, the UIA name and the header.
 

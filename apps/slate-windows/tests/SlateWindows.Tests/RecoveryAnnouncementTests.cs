@@ -261,6 +261,31 @@ public sealed class RecoveryAnnouncementTests
         Assert.Equal(2, host.Rendered.Count(r => r.Text.StartsWith("Could not ", StringComparison.Ordinal)));
     }
 
+    /// <summary>#1266: a failed load is spoken once, by the first explicit
+    /// open that lands on its tab. A later open of that tab, not reloaded,
+    /// repeats nothing — nor, once the note reads again (a ghost's tab, then
+    /// its create), speaks the stale failure.</summary>
+    [Fact]
+    public void AFailedLoadIsSpokenOnceAcrossOpensOfItsTab()
+    {
+        using var host = new Host();
+        File.WriteAllBytes(host.NotePath, [0xff, 0xfe, 0xff]);
+        host.Announced.Clear();
+        host.Workspace.OpenPath("note0.md");
+        WorkspaceTabViewModel tab = Assert.IsType<WorkspaceTabViewModel>(host.Workspace.ActiveGroup.ActiveTab);
+        Assert.Single(host.Rendered, r => r.Text.StartsWith("Could not ", StringComparison.Ordinal));
+        host.Announced.Clear();
+
+        host.Workspace.OpenPath("note0.md");
+        Assert.Same(tab, host.Workspace.ActiveGroup.ActiveTab);
+        Assert.DoesNotContain(host.Rendered, r => r.Text.StartsWith("Could not ", StringComparison.Ordinal));
+
+        File.WriteAllText(host.NotePath, "Readable again.");
+        host.Workspace.OpenPath("note0.md");
+        Assert.Same(tab, host.Workspace.ActiveGroup.ActiveTab);
+        Assert.DoesNotContain(host.Rendered, r => r.Text.StartsWith("Could not ", StringComparison.Ordinal));
+    }
+
     /// <summary>#1266: a route that speaks its own success after an open
     /// (the connections row's <c>OpenedFile</c>) says nothing more when the
     /// note could not load: the failure is the open's outcome, spoken once.</summary>

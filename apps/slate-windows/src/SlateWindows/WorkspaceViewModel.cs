@@ -247,6 +247,24 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     /// it: it also runs on the reopen (which speaks its own), the startup
     /// restore, the same-item reloads and the rescan's re-seat.</summary>
     internal A11yEvent? LoadFailureEvent { get; private set; }
+
+    /// <summary>Whether an open has spoken this load's failure.</summary>
+    private bool _loadFailureSpoken;
+
+    /// <summary>#1266: the failed load's event, for the first explicit open
+    /// that lands on this tab; null after. A later open of the same tab,
+    /// not reloaded, repeats nothing — and speaks nothing stale when the
+    /// note has since been created (a ghost's tab, then its create).</summary>
+    internal A11yEvent? TakeUnspokenLoadFailure()
+    {
+        if (LoadFailureEvent is not { } failed || _loadFailureSpoken)
+        {
+            return null;
+        }
+
+        _loadFailureSpoken = true;
+        return failed;
+    }
     public EditorPreferencesViewModel EditorPreferences { get; }
     public string EditorAutomationName =>
         $"{System.IO.Path.GetFileName(Path)} editor";
@@ -708,6 +726,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         // #1266: the peer's load state comes with its text and status.
         LoadFailure = source.LoadFailure;
         LoadFailureEvent = source.LoadFailureEvent;
+        _loadFailureSpoken = false;
         AvalonDocumentBufferSession? sourceSession = source._editorSession;
         if (_editorSession is not null && sourceSession is not null)
         {
@@ -1875,6 +1894,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     {
         LoadFailure = null;
         LoadFailureEvent = null;
+        _loadFailureSpoken = false;
         if (!IsMarkdown)
         {
             return;

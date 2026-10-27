@@ -1919,11 +1919,11 @@ internal sealed partial class VaultLifecycleViewModel
             return;
         }
 
-        if (tab.LoadFailureEvent is { } failed)
+        if (tab.LoadFailureEvent is not null)
         {
             // #1266: the note could not load, so that is the open's outcome:
             // the open spoke it, unless the note was already showing.
-            if (alreadyActive)
+            if (alreadyActive && tab.TakeUnspokenLoadFailure() is { } failed)
             {
                 _announce(failed);
             }
