@@ -563,6 +563,20 @@ jobs:
       # code otherwise. Facts tagged kind=benchmark hold wall-clock budgets
       # or run for tens of seconds, so they stay out of the gate and run by
       # hand on a quiet machine (#1323).
+      # #1680: a focus-dependent fact fails when another process takes the
+      # foreground from the test host mid-run (Namespace's image; the home
+      # VMs' OneDrive window before #1355). The sampler logs every
+      # foreground change through the Test step, read-only, into the
+      # results folder this job uploads.
+      - name: Start the foreground sampler (#1680)
+        run: |
+          $results = '${{ runner.temp }}\slate-app-results'
+          New-Item -ItemType Directory -Force $results | Out-Null
+          Start-Process pwsh -WindowStyle Hidden -ArgumentList @(
+            '-NoProfile', '-File', 'scripts/windows/foreground-sampler.ps1',
+            '-Out', "$results\foreground.log",
+            '-StopFile', '${{ runner.temp }}\foreground.stop')
+
       - name: Test
         env:
           SLATE_STA_DUMP_DIR: '${{ runner.temp }}\slate-app-results'
@@ -594,6 +608,20 @@ jobs:
           python -I -m unittest discover -v -s scripts/tests -p test_guard_device_state.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -I -m unittest discover -v -s scripts/tests -p test_launch_for_field_pass.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -I -m unittest discover -v -s scripts/tests -p test_foreground_sampler.py
+
+      - name: Stop the foreground sampler and show what held the foreground (#1680)
+        if: ${{ always() }}
+        run: |
+          New-Item -ItemType File -Force '${{ runner.temp }}\foreground.stop' | Out-Null
+          Start-Sleep -Seconds 3
+          $log = '${{ runner.temp }}\slate-app-results\foreground.log'
+          if (Test-Path $log) {
+            Get-Content $log | Where-Object { $_ -match ' foreground pid=| sampler ' }
+          } else {
+            Write-Host '::warning::the foreground sampler wrote no log'
+          }
 
       # Named by attempt too (#1641): "Re-run failed jobs" keeps its run id,
       # and its upload would otherwise replace the failed attempt's evidence.
