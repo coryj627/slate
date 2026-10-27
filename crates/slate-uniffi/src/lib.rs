@@ -6017,6 +6017,23 @@ impl From<ResolvedEmbed> for core::a11y::ResolvedEmbed {
     }
 }
 
+/// Mirrors `slate_core::a11y::EmbedTargetKind` (#1288): what an embed's
+/// resolved target is for its card's title.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum EmbedTargetKind {
+    Note,
+    Base,
+}
+
+impl From<core::a11y::EmbedTargetKind> for EmbedTargetKind {
+    fn from(kind: core::a11y::EmbedTargetKind) -> Self {
+        match kind {
+            core::a11y::EmbedTargetKind::Note => Self::Note,
+            core::a11y::EmbedTargetKind::Base => Self::Base,
+        }
+    }
+}
+
 /// Kind of operation recorded in an op-log entry (#378, #372, O-1 #539).
 ///
 /// `WholeFileReplace`'s `payload_bytes` is the full file; `EditBatch`'s
@@ -11402,6 +11419,14 @@ pub fn resolved_embed_title(resolved: ResolvedEmbed) -> String {
     core::a11y::resolved_embed_title(&resolved.into())
 }
 
+/// What an embed's resolved target is (#1288): a `.base` file is a base,
+/// so a host titles its card as one; every other target is a note. Core's
+/// extension rule, so no host sniffs a suffix.
+#[uniffi::export]
+pub fn embed_target_kind(target_path: String) -> EmbedTargetKind {
+    core::a11y::embed_target_kind(&target_path).into()
+}
+
 /// Render an accessibility event to its canonical spoken form
 /// (`slate_core::a11y` owns every template and priority — hosts post
 /// the result verbatim and never compose announcement copy).
@@ -14486,6 +14511,24 @@ mod tests {
             20,
             "one witness per VaultError variant: {seen:?}"
         );
+    }
+
+    /// #1288: a host asks core what an embed's target is, and gets core's
+    /// answer for every case of the extension.
+    #[test]
+    fn embed_target_kind_crosses_the_ffi() {
+        for path in ["Projects.base", "PROJECTS.BASE", "note.md", "x.base.md"] {
+            assert_eq!(
+                embed_target_kind(path.into()),
+                EmbedTargetKind::from(core::a11y::embed_target_kind(path)),
+                "{path}"
+            );
+        }
+        assert_eq!(
+            embed_target_kind("Projects.base".into()),
+            EmbedTargetKind::Base
+        );
+        assert_eq!(embed_target_kind("note.md".into()), EmbedTargetKind::Note);
     }
 
     /// #1278: the card title a host gets through the FFI is core's, and it

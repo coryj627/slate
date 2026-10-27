@@ -1071,11 +1071,11 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             // ONE ephemeral execute for its summary projection — the
             // rendering branch is on the RESOLVED path (core's link
             // resolver already classified the target; this is a
-            // presentation choice, not re-classification).
+            // presentation choice, not re-classification). Core says what
+            // a base is (#1288), as it does for the preview's title.
             BaseEmbedProjection? baseProjection = null;
             if (resolution?.Resolution is EmbedResolution.FullNote fullNote
-                && fullNote.TargetPath.EndsWith(
-                    ".base", StringComparison.OrdinalIgnoreCase))
+                && SlateUniffiMethods.EmbedTargetKind(fullNote.TargetPath) == EmbedTargetKind.Base)
             {
                 baseProjection = ProjectBaseEmbed(
                     session, fullNote.TargetPath, path, cancel, BaseProjectionHookForTests);

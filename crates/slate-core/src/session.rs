@@ -12595,7 +12595,7 @@ fn refresh_text_derived_indexes_after_reclassification(
 /// Pull `(name, extension, is_markdown)` from a vault-relative path
 /// using the same rules as the scanner. Kept in one place so save
 /// and scan can't drift on what counts as a Markdown file.
-fn classify_path(path: &str) -> (String, Option<String>, bool) {
+pub(crate) fn classify_path(path: &str) -> (String, Option<String>, bool) {
     let name = std::path::Path::new(path)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())

@@ -13,10 +13,10 @@ namespace SlateWindows;
 /// <c>EmbedPreviewShown</c> announcement alike. Every title sink — the
 /// Ctrl+E popover's header and cards, the embeds leaf and the reading view's
 /// embed headers — calls core with this data directly, so no host code
-/// composes a title (EmbedPreviewTitleCensus reads each sink). The reading
-/// view's `.base` summary card (Bases contract C10) builds
-/// <see cref="ResolvedEmbed.Base"/> where that card is: a resolution alone
-/// is a note.
+/// composes a title (EmbedPreviewTitleCensus reads each sink). A whole
+/// file core classifies as a base (<see cref="SlateUniffiMethods.EmbedTargetKind"/>,
+/// #1288) is <see cref="ResolvedEmbed.Base"/> on every surface; the reading
+/// view's summary card for it is Bases contract C10's.
 /// </summary>
 internal static class ResolvedEmbeds
 {
@@ -25,6 +25,8 @@ internal static class ResolvedEmbeds
     internal static ResolvedEmbed? Of(EmbedResolution resolution) =>
         resolution switch
         {
+            EmbedResolution.FullNote full when SlateUniffiMethods.EmbedTargetKind(full.TargetPath) == EmbedTargetKind.Base =>
+                new ResolvedEmbed.Base(full.TargetPath),
             EmbedResolution.FullNote full => new ResolvedEmbed.Note(full.TargetPath),
             EmbedResolution.Section section =>
                 new ResolvedEmbed.Section(section.TargetPath, section.Heading),

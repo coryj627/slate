@@ -2,6 +2,38 @@
 
 Issues: Closes #1266, Closes #1288. Size S. Lanes: rust, windows, swift (compile) — all three under either WD23 answer, because `embed_target_kind` / `EmbedTargetKind` is a new FFI export under both and the generated Swift binding must compile it (`swift-tests.yml:23-27` runs on any `crates/slate-core/**` or `crates/slate-uniffi/**` change; plan §7: a binding change adds `swift-tests.yml`); only the `A11yEvent` mirror arms, the corpus rows, the blind mac mirror entry and the mac designation are conditional on WD23's new-event answer. AT: NVDA spot (the two Windows sentences). Wave: W3. Depends on: nothing (WB-8 is alone in its wave on core's `a11y.rs` corpus, §6). Parallel with: WB-7, WB-9. Decision: WD23 (pending; recommended "reuse `FileReopenFailed`"; under the other answer — a new `NoteOpenFailed` — the corpus, the three mirrors (the mac one a blind edit), the artifact and the mac designation join the chunk, as the alternative design below says; the Swift lane is required either way).
 
+## Amended at implementation (2026-10-27)
+
+This section outranks the text below it.
+
+- **WD23 answered as recommended:** reuse `FileReopenFailed`. The owner's approval of the plan 44 run, 2026-10-26, took every pending decision as recommended. No corpus row, mirror, artifact or mac designation changes. The Swift lane still compiles the new `EmbedTargetKind` binding.
+- **Main's load failure reads `@path=note0.md`, not `@message=…`.** That is the binding's field token for the invalid-UTF-8 read. The facts therefore pin the detail to core's own `VaultErrorDetail` for the same read failure, and they reject any `@field=` token (`@\w+=`) rather than only `@message=`. Measured: the first draft of `ReopeningAnUnreadableNoteSpeaksItsFailureOnce` passed on main because it checked only for `@message=`.
+- **`embed_target_kind` lives in `a11y.rs` and calls `session::classify_path`, now `pub(crate)`.** That is the scanner's own extension rule, so one rule decides what a base is and no copy can drift. Its fact also pins `base`, with no extension, and `folder.base/note.md` as notes.
+- **`EmbedTitleRealizedSurfaceTests`' `Resolves` helper learns a base.** A whole-file resolution matches a `Base` row when core classifies its target as a base, and it matches a `Note` row only when core says note. The flipped row needed this for its leaf check.
+- **A route speaks no success line after a failed load (red team).** The design's "speaks the failure before that route's own `InternalNavigated`, which is unchanged" was wrong. A High line is `ImportantMostRecent` under the dispatcher's shared activity ID, so the route's High `InternalNavigated` replaced the failure before it was heard. The Medium routes also followed it with a false success ("Opened x.md"). `WorkspaceViewModel.LandedOnAFailedLoad` (the landing tab has a `LoadFailureEvent`) gates every such line:
+  - the editor's wikilink and reading-link route (`OpenEditorNavigation`, before the anchor too);
+  - the right pane's opener (backlinks, outgoing links, embed sources);
+  - the graph and connections rows' `OpenedFile`;
+  - the bases row's `OpenedFile`;
+  - search's `SearchResultOpened`. When the note was already showing, search speaks the failure itself, because no open ran to speak it.
+
+  New facts: `W2EditorInteractionTests.AWikilinkToAnUnreadableNoteSpeaksOnlyItsFailure` and `RecoveryAnnouncementTests.AConnectionsRowOnAnUnreadableNoteSpeaksItsFailureAndNoSuccess`. The panel, graph, bases and search gates share the one predicate and have no fact of their own.
+- **A tab's failure ends with the failure (red team).** The cached `LoadFailure`/`LoadFailureEvent` is cleared in three places:
+  - when a save lands the tab's bytes (`AdoptLandedWrite`);
+  - on a rename (`RetargetPath`), because the failure named the old file and the status line is already cleared;
+  - when a peer's state is mirrored into the tab (`MirrorDocumentStateFrom`), which copies it along with the peer's text and status.
+
+  Facts: `ARenamedFailedTabSpeaksNoStaleFailure` and `AnOpenBesideAHealthyPeerSpeaksNoFailure`. The save path has none: a deleted note's reopened tab cannot save until a rescan updates the index ("Something named note0.md already exists there").
+- **A failed load is spoken once per load (CI, the Connections model).** The first push spoke the failure on every explicit open that landed on the tab. So a ghost's tab, opened before its note was created, repeated a stale failure when a later route landed on it (`GhostCreateAlreadyOpen`, 84 cells). `WorkspaceTabViewModel.TakeUnspokenLoadFailure` now hands the event to the first open that lands on the tab, then nothing until `Load` or a mirror runs again. A reopen's own line takes it too, so the reopen still speaks once. Fact: `RecoveryAnnouncementTests.AFailedLoadIsSpokenOnceAcrossOpensOfItsTab`. Removing the flag fails it at the second open.
+
+  `LandedOnAFailedLoad` still keys on the event, not the flag. A later open of a failed tab speaks neither the failure again nor a success line over it.
+- **The Connections model learns the open's failure where it is true.** None of these cells is stale: each one's tab is a fresh load that fails.
+  - `pic.png` (an attachment) opens as a Markdown tab whose text read fails, in every entrance's re-root (88 cells). The failure comes before the leaf's line, except behind a dirty tab's dialog on a leaf the route showed. There the dialog pumps the frames the leaf's load may speak in, so the two come in either order: a local run heard the line first, and CI's shard 1 heard the failure first. The model takes those two lines unordered.
+  - The composed routes that rename or delete the pin, or its folder, inside the open's dialog install the old path, which no longer loads: `RenamePinInDialog`, `RenamePinFolderInDialog`, `DeletePinInDialog`, `DeletePinFolderInDialog`.
+  - `BackWithReservedRenamed` installs a path renamed inside Back's open, which also no longer loads.
+- **Left as is:** a reopened tab's status line names the file (`note0.md`), while the reopen's spoken line names the tab as its group does (`note0`, OD-9). `Load` cannot know the group.
+- **`CtrlEOnABaseEmbedTitlesItAsABase` also reads the popover's card** (`PopoverEmbedRoot.Title`, "Embedded base: Notes"), beside the announcement, the UIA name and the header.
+
 ## Goal
 
 A note whose load fails today puts the binding's `VaultException.Message`

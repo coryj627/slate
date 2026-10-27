@@ -3314,8 +3314,9 @@ pub enum ResolvedEmbed {
         target_path: String,
         alt: Option<String>,
     },
-    /// A `.base` file shown as the reading view's layered summary card
-    /// (Bases contract C10) — the card names its real kind, not "note".
+    /// A `.base` file ([`embed_target_kind`], #1288): every card names its
+    /// real kind, not "note"; the reading view's card for it is the layered
+    /// summary of Bases contract C10.
     Base { target_path: String },
 }
 
@@ -3370,6 +3371,27 @@ pub fn resolved_embed_title(resolved: &ResolvedEmbed) -> String {
             };
             format!("Embedded base: {name}")
         }
+    }
+}
+
+/// What an embed's resolved target is, for the card that titles it
+/// (#1288): a `.base` file is a base (mac `BaseEmbedDocument`'s rule), never
+/// a note, and every other target is a note. A host that resolved a whole
+/// file asks this before it hands core a [`ResolvedEmbed`], so the preview,
+/// its UIA name, the embeds leaf and the reading view agree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmbedTargetKind {
+    Note,
+    Base,
+}
+
+/// The kind of an embed's resolved target (#1288), by the scanner's own
+/// extension rule (`session::classify_path`, case-folded), so a host and
+/// the index never disagree on what a base is.
+pub fn embed_target_kind(target_path: &str) -> EmbedTargetKind {
+    match crate::session::classify_path(target_path).1.as_deref() {
+        Some("base") => EmbedTargetKind::Base,
+        _ => EmbedTargetKind::Note,
     }
 }
 
@@ -6355,6 +6377,26 @@ mod tests {
             ),
         ] {
             assert_eq!(resolved_embed_title(&resolved), expected, "{resolved:?}");
+        }
+    }
+
+    /// #1288: a `.base` file is a base in any case of its extension; a note
+    /// whose name only contains "base" stays a note.
+    #[test]
+    fn embed_target_kind_is_base_only_for_the_base_extension() {
+        for path in ["Projects.base", "PROJECTS.BASE", "a/b.base"] {
+            assert_eq!(embed_target_kind(path), EmbedTargetKind::Base, "{path}");
+        }
+        // A dotfile named `.base` has no extension by the scanner's rule.
+        for path in [
+            "note.md",
+            "base.md",
+            "x.base.md",
+            "base",
+            "folder.base/note.md",
+            ".base",
+        ] {
+            assert_eq!(embed_target_kind(path), EmbedTargetKind::Note, "{path}");
         }
     }
 

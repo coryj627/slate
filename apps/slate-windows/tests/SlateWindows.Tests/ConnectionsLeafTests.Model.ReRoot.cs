@@ -411,7 +411,16 @@ public sealed partial class ConnectionsLeafTests
             ? noteInViewAtThePin
             : cell.Target is Target.Canvas or Target.Base ? null : target;
         RootMode pinned = new(target, noteInView, [.. stack], StableKey(target));
-        return new([.. address, .. reveal, ReRooted(target), .. opened, LinePlaceholder], 1, target, pinned, "RightPane");
+        // #1266 (WB-8): an attachment opens as a Markdown tab whose text read
+        // fails, and the open speaks core's failure once, before the leaf's
+        // line — or in either order behind the dirty gate's dialog when this
+        // route showed the leaf (not active before): the dialog pumps the
+        // frames the leaf's load may speak in first, and either can win.
+        string[] failed = !refused && cell.Target == Target.Attachment ? ["FileReopenFailed"] : [];
+        bool raced = failed.Length > 0 && cell.Gate == Gate.Allowed && !active;
+        return new(
+            [.. address, .. reveal, ReRooted(target), .. opened, .. failed, LinePlaceholder],
+            1, target, pinned, "RightPane", Unordered: raced ? 2 : 0);
     }
 
     /// <summary>Arrange the cell: the mode and the note in view through the
