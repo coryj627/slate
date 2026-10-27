@@ -523,7 +523,14 @@ public sealed class StaThreadTests : IDisposable
                     read = StaThread.Current;
                     cancelledAtTheStart = read.IsCancellationRequested;
                     readIt.Set();
-                    Thread.Sleep(TimeSpan.FromMilliseconds(600));
+                    // Alive until its token is cancelled, however late the
+                    // caller starts its join; the cap only ends a body
+                    // whose token never is.
+                    var clock = System.Diagnostics.Stopwatch.StartNew();
+                    while (!read.IsCancellationRequested && clock.Elapsed < TimeSpan.FromSeconds(30))
+                    {
+                        Thread.Sleep(10);
+                    }
                 },
                 TimeSpan.FromMilliseconds(200),
                 "the body only slept",
