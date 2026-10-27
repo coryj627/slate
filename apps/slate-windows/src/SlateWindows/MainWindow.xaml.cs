@@ -133,8 +133,8 @@ public partial class MainWindow : Window
         _viewModel.PropertyChanged += ViewModel_PropertyChanged;
         // WB-9 (#1296, the owner's call): a handoff parked behind a close
         // runs once the close has decided.
-        _viewModel.WorkspaceCloseDecided += (_, _) => RunParkedExternalActivation();
-        _viewModel.OpenSettled += (_, _) => RunParkedExternalActivation();
+        _viewModel.WorkspaceCloseDecided += ExternalActivationHold_Ended;
+        _viewModel.OpenSettled += ExternalActivationHold_Ended;
         DataContext = _viewModel;
         // W6-1 PR C (contract C8): the canvas mode stack's M4 rule needs
         // to tell "focus moved to another pane" (cancel) from "focus
@@ -239,6 +239,10 @@ public partial class MainWindow : Window
     private string? _parkedExternalActivation;
     private bool _externalActivationParked;
     private bool _windowClosed;
+
+    /// <summary>WB-9 (#1296): a hold a parked handoff waits on has ended —
+    /// a close decided, an open settled, the palette's seal lifted.</summary>
+    private void ExternalActivationHold_Ended(object? sender, EventArgs e) => RunParkedExternalActivation();
 
     /// <summary>WB-9 test seam: how often a handoff activated the window.</summary>
     internal int WindowActivationsForTests { get; private set; }
@@ -2147,6 +2151,13 @@ public partial class MainWindow : Window
         _viewModel.QuickSwitcherDismissed -= ViewModel_QuickSwitcherDismissed;
         _viewModel.WorkspaceFocusBoundaryRequested -= ViewModel_WorkspaceFocusBoundaryRequested;
         _viewModel.PropertyChanged -= ViewModel_PropertyChanged;
+        _viewModel.WorkspaceCloseDecided -= ExternalActivationHold_Ended;
+        _viewModel.OpenSettled -= ExternalActivationHold_Ended;
+        if (_sealReleaseSource is { } palette)
+        {
+            palette.SealReleased -= ExternalActivationHold_Ended;
+        }
+
         ObserveQuickSwitcher(null);
         ObserveWorkspace(null);
         ObserveFileSidebar(null);
