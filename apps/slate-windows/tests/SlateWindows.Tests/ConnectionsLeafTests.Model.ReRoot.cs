@@ -413,12 +413,14 @@ public sealed partial class ConnectionsLeafTests
         RootMode pinned = new(target, noteInView, [.. stack], StableKey(target));
         // #1266 (WB-8): an attachment opens as a Markdown tab whose text read
         // fails, and the open speaks core's failure once, before the leaf's
-        // line — after it when the dirty gate's dialog pumps the frames in
-        // which a leaf this route showed (not active before) speaks first.
+        // line — or in either order behind the dirty gate's dialog when this
+        // route showed the leaf (not active before): the dialog pumps the
+        // frames the leaf's load may speak in first, and either can win.
         string[] failed = !refused && cell.Target == Target.Attachment ? ["FileReopenFailed"] : [];
-        return cell.Gate == Gate.Allowed && !active
-            ? new([.. address, .. reveal, ReRooted(target), .. opened, LinePlaceholder, .. failed], 1, target, pinned, "RightPane")
-            : new([.. address, .. reveal, ReRooted(target), .. opened, .. failed, LinePlaceholder], 1, target, pinned, "RightPane");
+        bool raced = failed.Length > 0 && cell.Gate == Gate.Allowed && !active;
+        return new(
+            [.. address, .. reveal, ReRooted(target), .. opened, .. failed, LinePlaceholder],
+            1, target, pinned, "RightPane", Unordered: raced ? 2 : 0);
     }
 
     /// <summary>Arrange the cell: the mode and the note in view through the
