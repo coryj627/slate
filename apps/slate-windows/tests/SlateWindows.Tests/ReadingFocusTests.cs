@@ -4545,7 +4545,8 @@ public sealed class ReadingFocusTests
             Published,
 
             /// <summary>Retired while it waited: it stopped at its first stage
-            /// boundary and posted nothing (#1279).</summary>
+            /// boundary, published nothing (#1279), and its one post — the
+            /// one that settles its waiters — has run.</summary>
             Retired,
 
             /// <summary>Whichever comes (the fixture's cleanup).</summary>
@@ -4572,7 +4573,11 @@ public sealed class ReadingFocusTests
                     _ = Interlocked.CompareExchange(ref published, args.Operation, null);
                 }
             }
-            bool Published() => Volatile.Read(ref published)
+            // Every way an asynchronous fetch ends makes exactly one post in
+            // its flow (its publish, its terminal failure, its cancellation,
+            // its retirement), so each end waits for that post to have run;
+            // a retirement also counts, but the count moves before its post.
+            bool Ran() => Volatile.Read(ref published)
                 is { Status: DispatcherOperationStatus.Completed or DispatcherOperationStatus.Aborted };
             bool Retired() => model is not null && model.FetchesCancelledForTests > cancelled;
             dispatcher.Hooks.OperationPosted += Posted;
@@ -4582,9 +4587,8 @@ public sealed class ReadingFocusTests
                 Assert.True(
                     PumpedDispatcher.PumpUntil(end switch
                     {
-                        HeldFetchEnd.Published => Published,
-                        HeldFetchEnd.Retired => Retired,
-                        _ => () => Published() || Retired(),
+                        HeldFetchEnd.Retired => () => Retired() && Ran(),
+                        _ => Ran,
                     }),
                     end switch
                     {
