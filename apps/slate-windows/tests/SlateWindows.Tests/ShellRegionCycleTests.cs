@@ -313,9 +313,30 @@ public sealed class ShellRegionCycleTests
         PumpedDispatcher.Drain();
         Func<bool> priorOverlayProbe = Canvas.CanvasSurfaceView.ShellOverlayIsOpen;
         var shell = new MainWindow();
+        // #1680 diagnostic: every keyboard-focus event the window routes while
+        // the premise's Focus() runs.
+        var focusTrace = new List<string>();
+        void Trace(string kind, KeyboardFocusChangedEventArgs e) =>
+            focusTrace.Add($"{kind} src={Describe(e.OriginalSource)} old={Describe(e.OldFocus)} new={Describe(e.NewFocus)} handled={e.Handled}");
+        window.AddHandler(Keyboard.PreviewLostKeyboardFocusEvent, new KeyboardFocusChangedEventHandler((_, e) => Trace("PreviewLost", e)), handledEventsToo: true);
+        window.AddHandler(Keyboard.PreviewGotKeyboardFocusEvent, new KeyboardFocusChangedEventHandler((_, e) => Trace("PreviewGot", e)), handledEventsToo: true);
+        window.AddHandler(Keyboard.LostKeyboardFocusEvent, new KeyboardFocusChangedEventHandler((_, e) => Trace("Lost", e)), handledEventsToo: true);
+        window.AddHandler(Keyboard.GotKeyboardFocusEvent, new KeyboardFocusChangedEventHandler((_, e) => Trace("Got", e)), handledEventsToo: true);
         bool RingIsModalWithFocusOn(UIElement element)
         {
-            Assert.True(element.Focus(), "premise: the element did not take keyboard focus (" + FocusState(window, shell, element) + ")");
+            string before = $"before: focused={Describe(Keyboard.FocusedElement)} {FocusState(window, shell, element)}";
+            focusTrace.Clear();
+            bool took = element.Focus();
+            if (!took)
+            {
+                string first = string.Join(" | ", focusTrace);
+                focusTrace.Clear();
+                bool second = element.Focus();
+                Assert.Fail(
+                    $"premise: the element did not take keyboard focus. {before}. first Focus() trace: [{first}]. "
+                    + $"after: focused={Describe(Keyboard.FocusedElement)} {FocusState(window, shell, element)}. "
+                    + $"second Focus()={second}, trace: [{string.Join(" | ", focusTrace)}]");
+            }
             Assert.Same(element, Keyboard.FocusedElement);
             return ((IShellRegionHost)shell).ModalSurfaceOpen;
         }
@@ -710,6 +731,15 @@ public sealed class ShellRegionCycleTests
         + $"enabled={element.IsEnabled} focusable={element.Focusable} "
         + $"foreground=0x{FocusNative.GetForegroundWindow():X} threadActive=0x{FocusNative.GetActiveWindow():X} "
         + $"threadFocus=0x{FocusNative.GetFocus():X} keyboardFocused={Keyboard.FocusedElement?.GetType().Name ?? "null"}";
+
+    private static string Describe(object? element) => element switch
+    {
+        null => "null",
+        Button { Content: var content } => $"Button('{content}')",
+        TextBox box => $"TextBox('{box.Text}')",
+        FrameworkElement { Name: { Length: > 0 } name } framework => $"{framework.GetType().Name}#{name}",
+        _ => element.GetType().Name,
+    };
 
     private static class FocusNative
     {
