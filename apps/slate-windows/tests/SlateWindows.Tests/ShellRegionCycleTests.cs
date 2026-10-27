@@ -1,9 +1,11 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows.Tests;
@@ -307,7 +309,7 @@ public sealed class ShellRegionCycleTests
         var shell = new MainWindow();
         bool RingIsModalWithFocusOn(UIElement element)
         {
-            Assert.True(element.Focus(), "premise: the element did not take keyboard focus");
+            Assert.True(element.Focus(), "premise: the element did not take keyboard focus (" + FocusState(window, shell, element) + ")");
             Assert.Same(element, Keyboard.FocusedElement);
             return ((IShellRegionHost)shell).ModalSurfaceOpen;
         }
@@ -692,5 +694,26 @@ public sealed class ShellRegionCycleTests
             Assert.True(workspace.FocusNextPaneCommand.CanExecute(null));
             Assert.True(workspace.FocusPreviousPaneCommand.CanExecute(null));
         }
+    }
+
+    /// <summary>#1680: the thread's Win32 focus state, for a focus premise
+    /// that fails on a runner whose session has no foreground window.</summary>
+    private static string FocusState(Window window, Window shell, UIElement element) =>
+        $"window=0x{new WindowInteropHelper(window).Handle:X} active={window.IsActive} visible={window.IsVisible} "
+        + $"shellHwnd=0x{new WindowInteropHelper(shell).Handle:X} element visible={element.IsVisible} "
+        + $"enabled={element.IsEnabled} focusable={element.Focusable} "
+        + $"foreground=0x{FocusNative.GetForegroundWindow():X} threadActive=0x{FocusNative.GetActiveWindow():X} "
+        + $"threadFocus=0x{FocusNative.GetFocus():X} keyboardFocused={Keyboard.FocusedElement?.GetType().Name ?? "null"}";
+
+    private static class FocusNative
+    {
+        [DllImport("user32.dll")]
+        internal static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        internal static extern IntPtr GetActiveWindow();
+
+        [DllImport("user32.dll")]
+        internal static extern IntPtr GetFocus();
     }
 }
