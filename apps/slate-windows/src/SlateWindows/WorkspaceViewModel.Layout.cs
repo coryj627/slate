@@ -107,6 +107,12 @@ internal sealed partial class WorkspaceViewModel
     /// activations it causes post no <c>TabFocused</c>.</summary>
     private bool _selectionOpenInProgress;
 
+    /// <summary>#1266: whether the open that just ran landed on a tab whose
+    /// note could not load. <see cref="TryOpenItem"/> has spoken its failure,
+    /// the open's outcome, so a route speaks no success line after it (a
+    /// High one would replace the failure before it is heard).</summary>
+    internal bool LandedOnAFailedLoad => ActiveGroup.ActiveTab is { LoadFailureEvent: not null };
+
     private bool TryOpenItem(
         WorkspaceItemState item,
         WorkspaceOpenTarget target,

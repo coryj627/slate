@@ -436,7 +436,7 @@ internal sealed partial class WorkspaceViewModel
         ArgumentNullException.ThrowIfNull(path);
         bool opened = false;
         RunWorkspaceMutation(() => opened = OpenPathCore(path, target));
-        if (opened)
+        if (opened && !LandedOnAFailedLoad)
         {
             _announce(new A11yEvent.OpenedFile(System.IO.Path.GetFileName(path)));
         }

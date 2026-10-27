@@ -3314,8 +3314,9 @@ pub enum ResolvedEmbed {
         target_path: String,
         alt: Option<String>,
     },
-    /// A `.base` file shown as the reading view's layered summary card
-    /// (Bases contract C10) — the card names its real kind, not "note".
+    /// A `.base` file ([`embed_target_kind`], #1288): every card names its
+    /// real kind, not "note"; the reading view's card for it is the layered
+    /// summary of Bases contract C10.
     Base { target_path: String },
 }
 
@@ -6386,7 +6387,15 @@ mod tests {
         for path in ["Projects.base", "PROJECTS.BASE", "a/b.base"] {
             assert_eq!(embed_target_kind(path), EmbedTargetKind::Base, "{path}");
         }
-        for path in ["note.md", "base.md", "x.base.md", "base", "folder.base/note.md"] {
+        // A dotfile named `.base` has no extension by the scanner's rule.
+        for path in [
+            "note.md",
+            "base.md",
+            "x.base.md",
+            "base",
+            "folder.base/note.md",
+            ".base",
+        ] {
             assert_eq!(embed_target_kind(path), EmbedTargetKind::Note, "{path}");
         }
     }

@@ -14524,7 +14524,10 @@ mod tests {
                 "{path}"
             );
         }
-        assert_eq!(embed_target_kind("Projects.base".into()), EmbedTargetKind::Base);
+        assert_eq!(
+            embed_target_kind("Projects.base".into()),
+            EmbedTargetKind::Base
+        );
         assert_eq!(embed_target_kind("note.md".into()), EmbedTargetKind::Note);
     }
 

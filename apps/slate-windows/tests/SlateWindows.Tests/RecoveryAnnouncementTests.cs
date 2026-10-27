@@ -261,6 +261,65 @@ public sealed class RecoveryAnnouncementTests
         Assert.Equal(2, host.Rendered.Count(r => r.Text.StartsWith("Could not ", StringComparison.Ordinal)));
     }
 
+    /// <summary>#1266: a route that speaks its own success after an open
+    /// (the connections row's <c>OpenedFile</c>) says nothing more when the
+    /// note could not load: the failure is the open's outcome, spoken once.</summary>
+    [Fact]
+    public void AConnectionsRowOnAnUnreadableNoteSpeaksItsFailureAndNoSuccess()
+    {
+        using var host = new Host();
+        File.WriteAllBytes(host.NotePath, [0xff, 0xfe, 0xff]);
+        host.Announced.Clear();
+
+        Assert.True(host.Workspace.OpenConnectionsRowFromSurface("note0.md", WorkspaceOpenTarget.CurrentTab));
+
+        Assert.IsType<A11yEvent.FileReopenFailed>(Assert.Single(
+            host.Announced,
+            e => SlateUniffiMethods.A11yRender(e).Text.StartsWith("Could not ", StringComparison.Ordinal)));
+        Assert.DoesNotContain(host.Announced, e => e is A11yEvent.OpenedFile);
+    }
+
+    /// <summary>#1266: a failed tab's failure named its old file: once the
+    /// note is renamed, a later open of that tab speaks no stale failure.</summary>
+    [Fact]
+    public void ARenamedFailedTabSpeaksNoStaleFailure()
+    {
+        using var host = new Host();
+        File.WriteAllBytes(host.NotePath, [0xff, 0xfe, 0xff]);
+        host.Workspace.OpenPath("note0.md");
+        WorkspaceTabViewModel tab = Assert.IsType<WorkspaceTabViewModel>(host.Workspace.ActiveGroup.ActiveTab);
+        Assert.NotNull(tab.LoadFailureEvent);
+        File.Move(host.NotePath, Path.Combine(Path.GetDirectoryName(host.NotePath)!, "renamed.md"));
+        host.Workspace.RetargetPath("note0.md", "renamed.md");
+        host.Announced.Clear();
+
+        host.Workspace.OpenPath("renamed.md");
+
+        Assert.Same(tab, host.Workspace.ActiveGroup.ActiveTab);
+        Assert.Null(tab.LoadFailureEvent);
+        Assert.DoesNotContain(host.Rendered, r => r.Text.StartsWith("Could not ", StringComparison.Ordinal));
+    }
+
+    /// <summary>#1266: a tab opened beside a healthy peer takes the peer's
+    /// text, status and load state: its own failed read of a file that has
+    /// since become unreadable is not spoken over a full note.</summary>
+    [Fact]
+    public void AnOpenBesideAHealthyPeerSpeaksNoFailure()
+    {
+        using var host = new Host();
+        WorkspaceTabViewModel peer = host.OpenNote();
+        File.WriteAllBytes(host.NotePath, [0xff, 0xfe, 0xff]);
+        host.Announced.Clear();
+
+        host.Workspace.OpenPath("note0.md", WorkspaceOpenTarget.SplitRight);
+
+        WorkspaceTabViewModel beside = Assert.IsType<WorkspaceTabViewModel>(host.Workspace.ActiveGroup.ActiveTab);
+        Assert.NotSame(peer, beside);
+        Assert.Equal(peer.Text, beside.Text);
+        Assert.Null(beside.LoadFailureEvent);
+        Assert.DoesNotContain(host.Rendered, r => r.Text.StartsWith("Could not ", StringComparison.Ordinal));
+    }
+
     /// <summary>#1266: a reopened note that cannot load is spoken once, as
     /// the reopen's own <c>FileReopenFailed</c> in core's words: the tab's
     /// load records its failure and speaks nothing, so the reopen never

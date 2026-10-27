@@ -646,6 +646,9 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         _editorInteractions?.InvalidateExternalState();
         IsMissingFromDisk = false;
         Status = string.Empty;
+        // #1266: the failure named the old file; the status line is cleared too.
+        LoadFailure = null;
+        LoadFailureEvent = null;
         NotifyItemChanged();
     }
 
@@ -702,6 +705,9 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
 
         _isMissingFromDisk = source._isMissingFromDisk;
         _status = source._status;
+        // #1266: the peer's load state comes with its text and status.
+        LoadFailure = source.LoadFailure;
+        LoadFailureEvent = source.LoadFailureEvent;
         AvalonDocumentBufferSession? sourceSession = source._editorSession;
         if (_editorSession is not null && sourceSession is not null)
         {
@@ -1200,6 +1206,9 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     /// the write ran, which keeps the tab dirty.</summary>
     private void AdoptLandedWrite(SaveRequest request, SaveWrite saved)
     {
+        // #1266: the file now holds the tab's bytes; a failed load is over.
+        LoadFailure = null;
+        LoadFailureEvent = null;
         _contentHash = saved.NewContentHash;
         IsExternallyStale = false;
         if (_editorSession is { } session)
@@ -2221,7 +2230,9 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             {
                 bool navigated = false;
                 RunWorkspaceMutation(() => navigated = OpenPathCore(path, target));
-                return navigated;
+                // A note that could not load already said so: the leaf
+                // speaks no "Opened" over it.
+                return navigated && !LandedOnAFailedLoad;
             },
             _externalOpener = externalOpener ?? DefaultExternalOpener,
             (anchor, resolvedText) =>
@@ -2701,7 +2712,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             }
 
             WorkspaceTabViewModel? target = ActiveGroup.ActiveTab;
-            if (target is null)
+            if (target is null || LandedOnAFailedLoad)
             {
                 return;
             }

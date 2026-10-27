@@ -10,6 +10,21 @@ This section outranks the text below it.
 - **Main's load failure reads `@path=note0.md`, not `@message=…`.** That is the binding's field token for the invalid-UTF-8 read. The facts therefore pin the detail to core's own `VaultErrorDetail` for the same read failure, and they reject any `@field=` token (`@\w+=`) rather than only `@message=`. Measured: the first draft of `ReopeningAnUnreadableNoteSpeaksItsFailureOnce` passed on main because it checked only for `@message=`.
 - **`embed_target_kind` lives in `a11y.rs` and calls `session::classify_path`, now `pub(crate)`.** That is the scanner's own extension rule, so one rule decides what a base is and no copy can drift. Its fact also pins `base`, with no extension, and `folder.base/note.md` as notes.
 - **`EmbedTitleRealizedSurfaceTests`' `Resolves` helper learns a base.** A whole-file resolution matches a `Base` row when core classifies its target as a base, and it matches a `Note` row only when core says note. The flipped row needed this for its leaf check.
+- **A route speaks no success line after a failed load (red team).** The design's "speaks the failure before that route's own `InternalNavigated`, which is unchanged" was wrong. A High line is `ImportantMostRecent` under the dispatcher's shared activity ID, so the route's High `InternalNavigated` replaced the failure before it was heard. The Medium routes also followed it with a false success ("Opened x.md"). `WorkspaceViewModel.LandedOnAFailedLoad` (the landing tab has a `LoadFailureEvent`) gates every such line:
+  - the editor's wikilink and reading-link route (`OpenEditorNavigation`, before the anchor too);
+  - the right pane's opener (backlinks, outgoing links, embed sources);
+  - the graph and connections rows' `OpenedFile`;
+  - the bases row's `OpenedFile`;
+  - search's `SearchResultOpened`. When the note was already showing, search speaks the failure itself, because no open ran to speak it.
+
+  New facts: `W2EditorInteractionTests.AWikilinkToAnUnreadableNoteSpeaksOnlyItsFailure` and `RecoveryAnnouncementTests.AConnectionsRowOnAnUnreadableNoteSpeaksItsFailureAndNoSuccess`. The panel, graph, bases and search gates share the one predicate and have no fact of their own.
+- **A tab's failure ends with the failure (red team).** The cached `LoadFailure`/`LoadFailureEvent` is cleared in three places:
+  - when a save lands the tab's bytes (`AdoptLandedWrite`);
+  - on a rename (`RetargetPath`), because the failure named the old file and the status line is already cleared;
+  - when a peer's state is mirrored into the tab (`MirrorDocumentStateFrom`), which copies it along with the peer's text and status.
+
+  Facts: `ARenamedFailedTabSpeaksNoStaleFailure` and `AnOpenBesideAHealthyPeerSpeaksNoFailure`. The save path has none: a deleted note's reopened tab cannot save until a rescan updates the index ("Something named note0.md already exists there").
+- **Left as is:** a reopened tab's status line names the file (`note0.md`), while the reopen's spoken line names the tab as its group does (`note0`, OD-9). `Load` cannot know the group.
 - **`CtrlEOnABaseEmbedTitlesItAsABase` also reads the popover's card** (`PopoverEmbedRoot.Title`, "Embedded base: Notes"), beside the announcement, the UIA name and the header.
 
 ## Goal

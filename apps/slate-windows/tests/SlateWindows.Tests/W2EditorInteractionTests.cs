@@ -326,6 +326,40 @@ public sealed class W2EditorInteractionTests
         Assert.Equal(row.Title, interactions.PopoverEmbedRoot!.Title);
     }
 
+    /// <summary>#1266: following a wikilink to a note that cannot load speaks
+    /// its failure and nothing after it: the route's own High
+    /// <c>InternalNavigated</c> would replace the failure before a screen
+    /// reader spoke it.</summary>
+    [Fact]
+    public void AWikilinkToAnUnreadableNoteSpeaksOnlyItsFailure()
+    {
+        using InteractionFixture fixture = InteractionFixture.Create();
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using var cancel = new CancelToken();
+        session.ScanInitial(cancel);
+        var announcements = new List<A11yEvent>();
+        using var workspace = new WorkspaceViewModel(
+            session,
+            fixture.Root,
+            () => [],
+            announcements.Add,
+            startInteractionBackgroundWork: false);
+        workspace.OpenPath("source.md");
+        WorkspaceTabViewModel source = Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        source.EditorInteractions!.RefreshMathRangesForTests();
+        source.EditorInteractions.RefreshArtifactCacheForTests();
+        File.WriteAllBytes(Path.Combine(fixture.Root, "target.md"), [0xff, 0xfe, 0xff]);
+        announcements.Clear();
+
+        Assert.True(source.EditorInteractions!.ActivateAt(Inside(source.Text, "[[target#Destination]]")));
+
+        WorkspaceTabViewModel target = Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        Assert.Equal("target.md", target.Path);
+        var failed = Assert.IsType<A11yEvent.FileReopenFailed>(target.LoadFailureEvent);
+        Assert.Equal(failed, announcements.Last(e => SlateUniffiMethods.A11yRender(e).Priority == A11yPriority.High));
+        Assert.DoesNotContain(announcements, e => e is A11yEvent.InternalNavigated);
+    }
+
     /// <summary>#1288: Ctrl+E on a <c>.base</c> embed titles it as a base, as
     /// the reading view's card does: core classifies the resolved target
     /// (<c>EmbedTargetKind</c>), so the announcement, the popover's UIA name,
