@@ -676,7 +676,9 @@ public sealed class ReadingViewTests
     /// preview can legally exceed, hiding later quotes/headings from
     /// both GetAttributeValue and FindAttribute). 10,050 plain
     /// paragraphs precede the only quote; every synthetic answer must
-    /// still see it.</summary>
+    /// still see it. Each phase is a full walk, so the body stops between
+    /// them once its bound has passed (#1321): one slow walk is one
+    /// failure, not every fact after it.</summary>
     [Fact]
     public void SyntheticAttributeWalkSurvivesHugeDocuments()
     {
@@ -697,11 +699,13 @@ public sealed class ReadingViewTests
                 System.Windows.Automation.Peers.PatternInterface.Text)
                 as System.Windows.Automation.Provider.ITextProvider;
             var whole = provider!.DocumentRange;
+            StaThread.Current.ThrowIfCancellationRequested();
 
             Assert.Same(
                 System.Windows.Automation.TextPattern.MixedAttributeValue,
                 whole.GetAttributeValue(
                     HeadingStyleTextProvider.StyleNameAttribute));
+            StaThread.Current.ThrowIfCancellationRequested();
 
             var forward = whole.FindAttribute(
                 HeadingStyleTextProvider.StyleNameAttribute,
@@ -710,6 +714,7 @@ public sealed class ReadingViewTests
             Assert.NotNull(forward);
             Assert.Contains(
                 "a quoted line", forward!.GetText(-1), StringComparison.Ordinal);
+            StaThread.Current.ThrowIfCancellationRequested();
 
             var backward = whole.FindAttribute(
                 HeadingStyleTextProvider.StyleIdAttribute,
@@ -725,7 +730,8 @@ public sealed class ReadingViewTests
     /// Budget the actual three full-document queries from #1320, excluding
     /// document construction and text extraction. The allocation bound is
     /// the stable regression signal. Record time without imposing an
-    /// unmeasured hardware-specific CI gate; the existing STA bound remains.</summary>
+    /// unmeasured hardware-specific CI gate; the existing STA bound remains,
+    /// and the body stops between queries once it has passed (#1321).</summary>
     [Fact]
     public void HugeDocumentSyntheticQueriesHaveBoundedCost()
     {
@@ -745,14 +751,17 @@ public sealed class ReadingViewTests
                 System.Windows.Automation.Provider.ITextProvider>(peer!.GetPattern(
                     System.Windows.Automation.Peers.PatternInterface.Text));
             var whole = provider.DocumentRange;
+            StaThread.Current.ThrowIfCancellationRequested();
 
             long allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
             var timer = System.Diagnostics.Stopwatch.StartNew();
             object? style = whole.GetAttributeValue(
                 HeadingStyleTextProvider.StyleNameAttribute);
+            StaThread.Current.ThrowIfCancellationRequested();
             var forward = whole.FindAttribute(
                 HeadingStyleTextProvider.StyleNameAttribute,
                 HeadingStyleTextProvider.QuoteStyleName, false);
+            StaThread.Current.ThrowIfCancellationRequested();
             var backward = whole.FindAttribute(
                 HeadingStyleTextProvider.StyleIdAttribute,
                 HeadingStyleTextProvider.StyleIdQuote, true);
@@ -3424,7 +3433,9 @@ public sealed class ReadingViewTests
     /// <summary>
     /// W3-4: the Copy button copies the exact source as plain text and
     /// announces core's "Code copied."; it is marked so the click
-    /// router never confuses it with an embed card.
+    /// router never confuses it with an embed card. The copy reaches the
+    /// reading model's clipboard seam, never the machine's clipboard,
+    /// which another process can hold or change mid-fact (#1323).
     /// </summary>
     [Fact]
     public void CodeCopyButtonCopiesTheSourceAndAnnounces()
@@ -3449,6 +3460,8 @@ public sealed class ReadingViewTests
                 startInteractionBackgroundWork: false);
             tab.ToggleViewMode();
             var surface = new ReadingSurface { Model = tab.Reading };
+            string? copied = null;
+            tab.Reading!.ClipboardForTests = text => copied = text;
 
             System.Windows.Documents.Hyperlink copy =
                 FindCopyLinks(surface.Document).Single();
@@ -3461,9 +3474,7 @@ public sealed class ReadingViewTests
             // The LIVE fence interior (round-1 fix: never the saved
             // artifact) — the reading parser's authoritative form,
             // which strips the single trailing newline.
-            Assert.Equal(
-                "fn copied() -> u8 { 7 }",
-                System.Windows.Clipboard.GetText());
+            Assert.Equal("fn copied() -> u8 { 7 }", copied);
             Assert.Equal(
                 "Code copied.",
                 SlateUniffiMethods.A11yRender(Assert.Single(announced)).Text);

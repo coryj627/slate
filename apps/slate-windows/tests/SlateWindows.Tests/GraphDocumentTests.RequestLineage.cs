@@ -18,37 +18,83 @@ namespace SlateWindows.Tests;
 public sealed partial class GraphDocumentTests
 {
     /// <summary>A fetch parked in the worker after its crossings — the
-    /// N-th fetch since arming — until released; the test thread pumps
-    /// meanwhile (the gated superseding-pair fact's shape).</summary>
+    /// N-th fetch since arming, and any others named — until released; the
+    /// test thread pumps meanwhile (the gated superseding-pair fact's
+    /// shape). A replacing pair's fetch parked too cannot publish, and
+    /// clear the token, while the fact reads it (#1323).</summary>
     private sealed class Park : IDisposable
     {
         private readonly ManualResetEventSlim _release = new(false);
         private readonly ManualResetEventSlim _reached = new(false);
+        private readonly HashSet<int> _parked = [];
         private int _fetches;
+        private int _resumed;
+        private bool _ranOut;
 
-        public Park(GraphDocumentViewModel document, int which)
+        public Park(GraphDocumentViewModel document, int which, params int[] also)
         {
+            HashSet<int> parks = [which, .. also];
             document.FetchGateForTests = () =>
             {
-                if (Interlocked.Increment(ref _fetches) == which)
+                int fetch = Interlocked.Increment(ref _fetches);
+                if (!parks.Contains(fetch))
                 {
-                    _reached.Set();
-                    _release.Wait(TimeSpan.FromSeconds(10));
+                    return;
                 }
+                lock (_parked)
+                {
+                    _ = _parked.Add(fetch);
+                }
+                _reached.Set();
+                if (!_release.Wait(TimeSpan.FromSeconds(30)))
+                {
+                    Volatile.Write(ref _ranOut, true);
+                }
+                // The outcome is recorded before the park says it resumed,
+                // so the release reads every entered park's outcome.
+                _ = Interlocked.Increment(ref _resumed);
             };
         }
 
         public void WaitReached() =>
             Assert.True(_reached.Wait(TimeSpan.FromSeconds(10)), "the parked fetch never reached the gate");
 
-        public void Release() => _release.Set();
+        /// <summary>Pump until the fetch numbered <paramref name="fetch"/>
+        /// is parked.</summary>
+        public void WaitParked(int fetch) =>
+            Assert.True(
+                PumpedDispatcher.PumpUntil(
+                    () =>
+                    {
+                        lock (_parked)
+                        {
+                            return _parked.Contains(fetch);
+                        }
+                    },
+                    TimeSpan.FromSeconds(30)),
+                $"fetch {fetch} never reached the gate ({Volatile.Read(ref _fetches)} fetches so far)");
 
-        public void Dispose()
+        /// <summary>Let every parked fetch go, and wait until each that had
+        /// parked has resumed: one that ran out its park first published
+        /// while the fact thought it held, so it fails here.</summary>
+        public void Release()
         {
             _release.Set();
-            _release.Dispose();
-            _reached.Dispose();
+            int entered;
+            lock (_parked)
+            {
+                entered = _parked.Count;
+            }
+            Assert.True(
+                SpinWait.SpinUntil(() => Volatile.Read(ref _resumed) >= entered, TimeSpan.FromSeconds(30)),
+                "a parked fetch never resumed after its release");
+            Assert.False(Volatile.Read(ref _ranOut), "a parked fetch ran out its 30 s park before the fact released it");
         }
+
+        /// <summary>Releases; the events are left to the collector — a parked
+        /// pool thread may still be waking from the gate when the fact's
+        /// block ends (GraphDiagramTests' park).</summary>
+        public void Dispose() => _release.Set();
     }
 
     private static readonly GraphTableSort ByNote = new(GraphTableColumn.Note, true);
@@ -479,7 +525,9 @@ public sealed partial class GraphDocumentTests
             GraphDocumentViewModel document = Quiescent(host);
             RelayGridSortedOnAdoption(document);
             int snapshots = document.CrossingsForTests["graph_snapshot"];
-            using var park = new Park(document, 1);
+            // The preset's pair parks; the sort's rows (the second fetch) land;
+            // the receiver's replacing pair (the third) parks too.
+            using var park = new Park(document, 1, 3);
             // Orphans changes the backend filter: the held snapshot is another filter's.
             document.ViewState.ApplyQuery(SlateUniffiMethods.GraphPresetQuery(GraphPreset.Orphans));
             Assert.True(document.Request(new GraphRequest.Preset(GraphPreset.Orphans)));
@@ -489,10 +537,10 @@ public sealed partial class GraphDocumentTests
             Assert.Equal(GraphLoadKind.RowsOnly, sort.Kind);
             // The rows land over the wrong filter's snapshot: the receiver's
             // replacing pair carries the sort and speaks the count (Term Q9).
-            Assert.True(
-                PumpedDispatcher.PumpUntil(() => document.CurrentForTests is { Kind: GraphLoadKind.Pair } replacing && replacing.Seq > sort.Seq),
-                "the receiver never issued the replacing pair");
-            GraphLoadToken replacing = document.CurrentForTests!;
+            park.WaitParked(3);
+            GraphLoadToken replacing = Assert.IsType<GraphLoadToken>(document.CurrentForTests);
+            Assert.Equal(GraphLoadKind.Pair, replacing.Kind);
+            Assert.True(replacing.Seq > sort.Seq, "the token read is not the receiver's replacing pair");
             Assert.Equal(ByNote, replacing.Request.Sort);
             Assert.True(replacing.UserSort);
             Assert.Equal(GraphAnnouncePolicy.FilterCount, replacing.Announce);
@@ -882,7 +930,8 @@ public sealed partial class GraphDocumentTests
             using var host = new Host(vault.Root);
             var lines = new List<string>();
             GraphDocumentViewModel document = BareQuiescent(host, lines);
-            using var park = new Park(document, 1);
+            // The preset's pair parks, and so does the probe's replacing pair.
+            using var park = new Park(document, 1, 2);
             document.ViewState.ApplyQuery(SlateUniffiMethods.GraphPresetQuery(GraphPreset.MostLinked));
             Assert.True(document.Request(new GraphRequest.Preset(GraphPreset.MostLinked)));
             GraphLoadToken preset = document.CurrentForTests!;
@@ -892,7 +941,9 @@ public sealed partial class GraphDocumentTests
             Assert.True(
                 PumpedDispatcher.PumpUntil(() => document.SeqForTests > preset.Seq),
                 "the probe never superseded the preset's pair");
-            GraphLoadToken replacing = document.CurrentForTests!;
+            park.WaitParked(2);
+            GraphLoadToken replacing = Assert.IsType<GraphLoadToken>(document.CurrentForTests);
+            Assert.True(replacing.Seq > preset.Seq, "the token read is not the probe's replacing pair");
             Assert.Equal(GraphAnnouncePolicy.Preset, replacing.Announce);
             Assert.Equal(GraphPreset.MostLinked, replacing.Preset);
             park.Release();
@@ -913,7 +964,8 @@ public sealed partial class GraphDocumentTests
             using var host = new Host(vault.Root);
             var lines = new List<string>();
             GraphDocumentViewModel document = BareQuiescent(host, lines);
-            using var park = new Park(document, 1);
+            // The activation's pair parks, and so does the probe's replacing pair.
+            using var park = new Park(document, 1, 2);
             GraphLoadToken activation = document.Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Summary);
             park.WaitReached();
             _ = host.Session.CreateExclusive("iota.md", "# Iota\n\n[[hub]]\n");
@@ -921,7 +973,10 @@ public sealed partial class GraphDocumentTests
             Assert.True(
                 PumpedDispatcher.PumpUntil(() => document.SeqForTests > activation.Seq),
                 "the probe never superseded the activation's pair");
-            Assert.Equal(GraphAnnouncePolicy.Summary, document.CurrentForTests!.Announce);
+            park.WaitParked(2);
+            GraphLoadToken replacing = Assert.IsType<GraphLoadToken>(document.CurrentForTests);
+            Assert.True(replacing.Seq > activation.Seq, "the token read is not the probe's replacing pair");
+            Assert.Equal(GraphAnnouncePolicy.Summary, replacing.Announce);
             park.Release();
             Drain(document);
             Assert.Contains(document.Publication.Rows, row => row.Path == "iota.md");
@@ -939,8 +994,9 @@ public sealed partial class GraphDocumentTests
             using var host = new Host(vault.Root);
             var lines = new List<string>();
             GraphDocumentViewModel document = BareQuiescent(host, lines, load: false);
-            // The initial pair lands; the needle's FilterCount pair (the second fetch) parks.
-            using var park = new Park(document, 2);
+            // The initial pair lands; the needle's FilterCount pair (the second
+            // fetch) parks, and so does the probe's replacing pair (the third).
+            using var park = new Park(document, 2, 3);
             _ = document.Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Summary);
             Drain(document);
             lines.Clear();
@@ -954,7 +1010,9 @@ public sealed partial class GraphDocumentTests
             Assert.True(
                 PumpedDispatcher.PumpUntil(() => document.SeqForTests > needle.Seq),
                 "the probe never superseded the needle's token");
-            GraphLoadToken replacing = document.CurrentForTests!;
+            park.WaitParked(3);
+            GraphLoadToken replacing = Assert.IsType<GraphLoadToken>(document.CurrentForTests);
+            Assert.True(replacing.Seq > needle.Seq, "the token read is not the probe's replacing pair");
             Assert.Equal(GraphLoadKind.Pair, replacing.Kind);
             Assert.Equal(GraphAnnouncePolicy.FilterCount, replacing.Announce);
             park.Release();
@@ -976,7 +1034,8 @@ public sealed partial class GraphDocumentTests
             var lines = new List<string>();
             GraphDocumentViewModel document = BareQuiescent(host, lines);
             RelayGridSortedOnAdoption(document);
-            using var park = new Park(document, 1);
+            // The sort's fetch parks, and so does the probe's replacing pair.
+            using var park = new Park(document, 1, 2);
             Assert.True(document.Request(new GraphRequest.Sort(ByNote)));
             GraphLoadToken sort = document.CurrentForTests!;
             park.WaitReached();
@@ -985,7 +1044,9 @@ public sealed partial class GraphDocumentTests
             Assert.True(
                 PumpedDispatcher.PumpUntil(() => document.SeqForTests > sort.Seq),
                 "the probe never superseded the sort's token");
-            GraphLoadToken replacing = document.CurrentForTests!;
+            park.WaitParked(2);
+            GraphLoadToken replacing = Assert.IsType<GraphLoadToken>(document.CurrentForTests);
+            Assert.True(replacing.Seq > sort.Seq, "the token read is not the probe's replacing pair");
             Assert.Equal(ByNote, replacing.Request.Sort);
             Assert.True(replacing.UserSort);
             park.Release();
@@ -1007,7 +1068,8 @@ public sealed partial class GraphDocumentTests
             using var host = new Host(vault.Root);
             var lines = new List<string>();
             GraphDocumentViewModel document = BareQuiescent(host, lines);
-            using var park = new Park(document, 1);
+            // The silent pair parks, and so does the probe's replacing pair.
+            using var park = new Park(document, 1, 2);
             GraphLoadToken silent = document.Load(GraphLoadKind.Pair, GraphAnnouncePolicy.Silent);
             park.WaitReached();
             _ = host.Session.CreateExclusive("iota.md", "# Iota\n\n[[hub]]\n");
@@ -1015,7 +1077,10 @@ public sealed partial class GraphDocumentTests
             Assert.True(
                 PumpedDispatcher.PumpUntil(() => document.SeqForTests > silent.Seq),
                 "the probe never superseded the silent pair");
-            Assert.Equal(GraphAnnouncePolicy.Silent, document.CurrentForTests!.Announce);
+            park.WaitParked(2);
+            GraphLoadToken replacing = Assert.IsType<GraphLoadToken>(document.CurrentForTests);
+            Assert.True(replacing.Seq > silent.Seq, "the token read is not the probe's replacing pair");
+            Assert.Equal(GraphAnnouncePolicy.Silent, replacing.Announce);
             park.Release();
             Drain(document);
             Flush(document);

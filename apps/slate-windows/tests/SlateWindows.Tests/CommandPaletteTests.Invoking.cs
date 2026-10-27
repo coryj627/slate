@@ -533,6 +533,20 @@ public sealed partial class CommandPaletteTests
         string? selectedBefore = palette.SelectedId;
         using var modalLoops = new ShellModalLoopMonitor(new Border(), palette.SetModalLoop);
 
+        // A close refuses before its prompt while the files tree still reads
+        // (#1323: the open's tree read outlived a loaded runner's wait, and
+        // the close never prompted). The tree settles first, a debounced
+        // refresh included (it would start a read without a pump), and
+        // nothing from here to the close pumps.
+        FilesSidebarViewModel sidebar = Assert.IsType<FilesSidebarViewModel>(lifecycle.FileSidebar);
+        Assert.True(
+            PumpedDispatcher.PumpUntil(
+                () => sidebar is { IsRefreshingTree: false, IsExpandingLoaded: false, IsLoadingChildren: false }
+                    && !lifecycle.DebouncedSidebarRefreshPendingForTests
+                    && !lifecycle.IsBusy,
+                TimeSpan.FromSeconds(30)),
+            "the files tree never settled after the open");
+
         // A query whose rank is parked behind a held lane item.
         using var running = new ManualResetEventSlim(false);
         _ = lane.Run(
@@ -552,7 +566,10 @@ public sealed partial class CommandPaletteTests
         int heardBeforeClose = announced.Count;
         Assert.False(lifecycle.PrepareForApplicationClose());
 
-        Assert.NotNull(duringPrompt);
+        Assert.True(
+            duringPrompt is not null,
+            "the close was refused before its unsaved-changes prompt: "
+            + string.Join(" | ", announced.Skip(heardBeforeClose).Select(heard => SlateUniffiMethods.A11yRender(heard).Text)));
         Assert.True(duringPrompt.Value.Sealed, "the palette was not sealed while the prompt was up");
         Assert.True(
             duringPrompt.Value is (0, 0, _, _) && duringPrompt.Value.Selected == selectedBefore,

@@ -25,6 +25,14 @@ use std::time::Duration;
 /// does in bounded time. The NEGATIVE probes below ("must still be
 /// blocked", `recv_timeout(from_millis(..))`) deliberately keep their
 /// short windows: a slow runner can only make those more convincing.
+/// Since #1294 each window opens only after a POSITIVE witness, a signal
+/// that the blocked party has reached its wait, awaited with `LIVENESS`
+/// through [`await_rendezvous`]. Without one, a runner too slow to start
+/// the second thread inside the window passed a lock that never blocked.
+/// The spawned child's witness comes from inside its open (the
+/// `CacheDirAnchored` seam, the statement before the structural lock);
+/// the in-process waits have no seam at their lock, so each blocked
+/// thread signals immediately before its call.
 const LIVENESS: Duration = Duration::from_secs(30);
 
 /// Runs a fixture body and, if it panics, prints `context()` with the original
@@ -42,15 +50,77 @@ fn report_fixture_panic<T>(context: impl FnOnce() -> String, body: impl FnOnce()
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
         Ok(value) => value,
         Err(payload) => {
-            let message = payload
-                .downcast_ref::<String>()
-                .map(String::as_str)
-                .or_else(|| payload.downcast_ref::<&str>().copied())
-                .unwrap_or("non-string panic payload");
+            let message = panic_text(&*payload);
             eprintln!("{}: {message}", context());
             std::panic::resume_unwind(payload);
         }
     }
+}
+
+/// A panic payload's message, as `panic!` and `assert!` leave it.
+fn panic_text(payload: &(dyn std::any::Any + Send)) -> &str {
+    payload
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| payload.downcast_ref::<&str>().copied())
+        .unwrap_or("non-string panic payload")
+}
+
+/// #1294: waits `LIVENESS` for a rendezvous the test cannot go on without,
+/// and names it if it never comes. CI run 36334818219 failed three of these
+/// tests with no panic text at all. `context` is what the fixture can still
+/// say ([`vault_context`]), read at the timeout, before the unwind drops the
+/// fixture's tempdir.
+fn await_rendezvous<T>(rx: &mpsc::Receiver<T>, name: &str, context: impl FnOnce() -> String) -> T {
+    await_rendezvous_within(rx, name, LIVENESS, context)
+}
+
+/// [`await_rendezvous`] with its bound spelled out. Only the diagnostics
+/// fact passes a bound shorter than `LIVENESS`, so it fails in milliseconds.
+fn await_rendezvous_within<T>(
+    rx: &mpsc::Receiver<T>,
+    name: &str,
+    bound: Duration,
+    context: impl FnOnce() -> String,
+) -> T {
+    match rx.recv_timeout(bound) {
+        Ok(value) => value,
+        Err(mpsc::RecvTimeoutError::Timeout) => rendezvous_timed_out(name, bound, context()),
+        Err(mpsc::RecvTimeoutError::Disconnected) => panic!(
+            "rendezvous `{name}` can never arrive: its sender was dropped first; {}",
+            context()
+        ),
+    }
+}
+
+/// [`await_rendezvous`] for a marker file a spawned child writes. A child
+/// that exits without writing it fails at once, with its status.
+fn await_child_marker(
+    child: &mut std::process::Child,
+    marker: &std::path::Path,
+    name: &str,
+    context: impl FnOnce() -> String,
+) {
+    let deadline = std::time::Instant::now() + LIVENESS;
+    while !marker.exists() {
+        if let Some(status) = child.try_wait().unwrap() {
+            if marker.exists() {
+                return;
+            }
+            panic!(
+                "rendezvous `{name}` can never arrive: the child exited first ({status}); {}",
+                context()
+            );
+        }
+        if std::time::Instant::now() >= deadline {
+            rendezvous_timed_out(name, LIVENESS, context());
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn rendezvous_timed_out(name: &str, bound: Duration, context: String) -> ! {
+    panic!("rendezvous `{name}` timed out after {bound:?}; {context}")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1043,6 +1113,62 @@ fn structural_inflight_count(root: &std::path::Path) -> i64 {
     .unwrap()
 }
 
+/// What a failure can still say about one vault (#1294): the fault-injecting
+/// provider's call log, when the fixture keeps one, and the durable batch
+/// intent its cache holds. Never panics: it runs while a panic is built.
+fn vault_context(root: &std::path::Path, state: Option<&Mutex<FaultState>>) -> String {
+    let calls = match state {
+        Some(state) => format!(
+            "{:?}",
+            state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .calls
+        ),
+        None => "not recorded (a from_filesystem session has no fault-injecting provider)".into(),
+    };
+    format!(
+        "provider calls: {calls}; inflight: {}",
+        inflight_listing(root)
+    )
+}
+
+/// The `structural_batch_inflight` rows (there is no inflight directory: the
+/// intent lives in the cache), read on a connection of its own. WAL readers
+/// never wait on the blocked writer.
+fn inflight_listing(root: &std::path::Path) -> String {
+    let read = || -> rusqlite::Result<String> {
+        let conn = rusqlite::Connection::open_with_flags(
+            root.join(".slate/cache.sqlite"),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        conn.busy_timeout(Duration::from_secs(1))?;
+        let rewrites: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM structural_batch_inflight_rewrites",
+            [],
+            |row| row.get(0),
+        )?;
+        let mut statement = conn.prepare(
+            "SELECT renames_completed, index_committed, path_markers_completed, payload
+             FROM structural_batch_inflight",
+        )?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok(format!(
+                    "{{renames_completed: {}, index_committed: {}, path_markers_completed: {}, \
+                     rewrite rows: {rewrites}, plan: {}}}",
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(format!("[{}]", rows.join(", ")))
+    };
+    read().unwrap_or_else(|error| format!("unreadable ({error})"))
+}
+
 fn latest_structural_kind(root: &std::path::Path) -> Option<String> {
     let conn = rusqlite::Connection::open(root.join(".slate/cache.sqlite")).unwrap();
     conn.query_row(
@@ -1060,6 +1186,7 @@ fn two_sessions_serialize_child_and_parent_moves_before_preflight() {
         &[("folder/child.md", "child")],
         &["folder", "child-dest", "folder-dest"],
     );
+    let context = || vault_context(tmp.path(), None);
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
     let (child_tx, child_rx) = mpsc::channel();
@@ -1078,32 +1205,28 @@ fn two_sessions_serialize_child_and_parent_moves_before_preflight() {
         );
         let _ = child_tx.send(result);
     });
-    entered_rx
-        .recv_timeout(LIVENESS)
-        .expect("child move reached the post-rename barrier");
+    // The child move stands at its post-rename barrier.
+    await_rendezvous(&entered_rx, "child-entered", context);
 
+    let (folder_entered_tx, folder_entered_rx) = mpsc::channel();
     let (folder_tx, folder_rx) = mpsc::channel();
     std::thread::spawn(move || {
+        let _ = folder_entered_tx.send(());
         let result = folder_session.batch_move(BatchMoveRequest {
             items: vec![folder("folder")],
             new_parent: "folder-dest".into(),
         });
         let _ = folder_tx.send(result);
     });
+    await_rendezvous(&folder_entered_rx, "folder-entered", context);
 
     let early_folder = folder_rx.recv_timeout(Duration::from_millis(200));
     let serialized = early_folder.is_err();
     release_tx.send(()).unwrap();
-    let child_report = child_rx
-        .recv_timeout(LIVENESS)
-        .expect("child move completed after release")
-        .unwrap();
+    let child_report = await_rendezvous(&child_rx, "child-result", context).unwrap();
     let folder_report = match early_folder {
         Ok(result) => result.unwrap(),
-        Err(_) => folder_rx
-            .recv_timeout(LIVENESS)
-            .expect("folder move completed after child")
-            .unwrap(),
+        Err(_) => await_rendezvous(&folder_rx, "folder-result", context).unwrap(),
     };
 
     assert!(
@@ -1134,6 +1257,7 @@ fn two_sessions_serialize_batch_and_legacy_folder_move_before_preflight() {
         &[("folder/child.md", "child")],
         &["folder", "child-dest", "legacy-dest"],
     );
+    let context = || vault_context(tmp.path(), None);
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
     let (batch_tx, batch_rx) = mpsc::channel();
@@ -1151,24 +1275,28 @@ fn two_sessions_serialize_batch_and_legacy_folder_move_before_preflight() {
         );
         let _ = batch_tx.send(result);
     });
-    entered_rx
-        .recv_timeout(LIVENESS)
-        .expect("batch reached the post-rename barrier");
+    // The batch stands at its post-rename barrier.
+    await_rendezvous(&entered_rx, "batch-entered", context);
 
+    let (legacy_entered_tx, legacy_entered_rx) = mpsc::channel();
     let (legacy_tx, legacy_rx) = mpsc::channel();
     std::thread::spawn(move || {
+        let _ = legacy_entered_tx.send(());
         let _ = legacy_tx.send(legacy_session.move_folder("folder", "legacy-dest"));
     });
+    await_rendezvous(&legacy_entered_rx, "legacy-entered", context);
     let early_legacy = legacy_rx.recv_timeout(Duration::from_millis(200));
     let serialized = early_legacy.is_err();
     release_tx.send(()).unwrap();
     assert_eq!(
-        batch_rx.recv_timeout(LIVENESS).unwrap().unwrap().state,
+        await_rendezvous(&batch_rx, "batch-result", context)
+            .unwrap()
+            .state,
         BatchMoveState::Succeeded
     );
     let legacy_report = match early_legacy {
         Ok(report) => report.unwrap(),
-        Err(_) => legacy_rx.recv_timeout(LIVENESS).unwrap().unwrap(),
+        Err(_) => await_rendezvous(&legacy_rx, "legacy-result", context).unwrap(),
     };
 
     assert!(
@@ -1198,8 +1326,15 @@ fn structural_operations_in_different_vaults_remain_independent() {
     };
     report_fixture_panic(failure, || {
         mark("opening and scanning fixtures");
-        let (_first_tmp, first, _first_state) = fixture(&[("a.md", "a")], &["dest"]);
-        let (second_tmp, second, _second_state) = fixture(&[("b.md", "b")], &["dest"]);
+        let (first_tmp, first, first_state) = fixture(&[("a.md", "a")], &["dest"]);
+        let (second_tmp, second, second_state) = fixture(&[("b.md", "b")], &["dest"]);
+        let context = || {
+            format!(
+                "first vault: {}; second vault: {}",
+                vault_context(first_tmp.path(), Some(&first_state)),
+                vault_context(second_tmp.path(), Some(&second_state))
+            )
+        };
         let first = Arc::new(first);
         let (entered_tx, entered_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
@@ -1229,9 +1364,7 @@ fn structural_operations_in_different_vaults_remain_independent() {
             });
         });
         mark("waiting for first vault barrier");
-        entered_rx
-            .recv_timeout(LIVENESS)
-            .expect("first vault reached its barrier");
+        await_rendezvous(&entered_rx, "first-vault-entered", context);
 
         let (second_tx, second_rx) = mpsc::channel();
         mark("spawning second vault worker");
@@ -1250,10 +1383,8 @@ fn structural_operations_in_different_vaults_remain_independent() {
             });
         });
         mark("waiting for independent second vault result");
-        let second_report = second_rx
-            .recv_timeout(LIVENESS)
-            .expect("a different vault must not wait on the first vault's sidecar")
-            .unwrap();
+        // A different vault must not wait on the first vault's sidecar.
+        let second_report = await_rendezvous(&second_rx, "second-vault-result", context).unwrap();
         mark("checking second vault report and file");
         assert_eq!(
             second_report.state,
@@ -1265,7 +1396,7 @@ fn structural_operations_in_different_vaults_remain_independent() {
         mark("releasing first vault barrier");
         release_tx.send(()).unwrap();
         mark("waiting for and checking first vault result");
-        let first_report = first_rx.recv_timeout(LIVENESS).unwrap().unwrap();
+        let first_report = await_rendezvous(&first_rx, "first-vault-result", context).unwrap();
         assert_eq!(
             first_report.state,
             BatchMoveState::Succeeded,
@@ -1276,7 +1407,8 @@ fn structural_operations_in_different_vaults_remain_independent() {
 
 #[test]
 fn two_sessions_serialize_conflicting_batch_undo_latest_checks() {
-    let (_tmp, first, second) = shared_filesystem_sessions(&[("a.md", "a")], &["dest"]);
+    let (tmp, first, second) = shared_filesystem_sessions(&[("a.md", "a")], &["dest"]);
+    let context = || vault_context(tmp.path(), None);
     let forward = first
         .batch_move(BatchMoveRequest {
             items: vec![file("a.md")],
@@ -1299,26 +1431,24 @@ fn two_sessions_serialize_conflicting_batch_undo_latest_checks() {
         );
         let _ = first_tx.send(result);
     });
-    entered_rx
-        .recv_timeout(LIVENESS)
-        .expect("first inverse reached the post-rename barrier");
+    // The first inverse stands at its post-rename barrier.
+    await_rendezvous(&entered_rx, "first-entered", context);
 
+    let (second_entered_tx, second_entered_rx) = mpsc::channel();
     let (second_tx, second_rx) = mpsc::channel();
     std::thread::spawn(move || {
+        let _ = second_entered_tx.send(());
         let _ = second_tx.send(second.undo_batch_move(op_id));
     });
+    await_rendezvous(&second_entered_rx, "second-entered", context);
     let early_second = second_rx.recv_timeout(Duration::from_millis(200));
     let serialized = early_second.is_err();
     release_tx.send(()).unwrap();
-    let first_report = first_rx
-        .recv_timeout(LIVENESS)
-        .expect("first inverse completed after release")
-        .unwrap();
+    let first_report = await_rendezvous(&first_rx, "first-result", context).unwrap();
     let second_result = match early_second {
         Ok(result) => result,
-        Err(_) => second_rx
-            .recv_timeout(LIVENESS)
-            .expect("second inverse completed after the latest row changed"),
+        // The second inverse completes once the latest row has changed.
+        Err(_) => await_rendezvous(&second_rx, "second-result", context),
     };
 
     assert!(
@@ -1330,17 +1460,113 @@ fn two_sessions_serialize_conflicting_batch_undo_latest_checks() {
     assert!(error.to_string().contains("only the latest"));
 }
 
+/// #1294: a rendezvous that never comes names itself and what the provider
+/// was asked. The second batch queues on the structural lock the first holds
+/// at its barrier, so its own barrier (`second-entered`) cannot fire while
+/// the first's release is unsent. The short bound is this fact's alone; the
+/// releases go out only after the timeout, so no worker outlives the fact.
+#[test]
+fn rendezvous_diagnostics_name_the_wait_that_timed_out() {
+    let (tmp, session, state) = fixture(&[("a.md", "a"), ("b.md", "b")], &["dest"]);
+    let session = Arc::new(session);
+    let context = || vault_context(tmp.path(), Some(&state));
+
+    let (first_entered_tx, first_entered_rx) = mpsc::channel();
+    let (first_release_tx, first_release_rx) = mpsc::channel();
+    let (first_tx, first_rx) = mpsc::channel();
+    let first = Arc::clone(&session);
+    std::thread::spawn(move || {
+        let _ = first_tx.send(first.batch_move_with_faults(
+            BatchMoveRequest {
+                items: vec![file("a.md")],
+                new_parent: "dest".into(),
+            },
+            &BlockingBatchFault {
+                point: BatchFaultPoint::MoveIndex,
+                entered: Mutex::new(Some(first_entered_tx)),
+                release: Mutex::new(first_release_rx),
+            },
+        ));
+    });
+    await_rendezvous(&first_entered_rx, "first-entered", context);
+
+    let (second_entered_tx, second_entered_rx) = mpsc::channel();
+    let (second_release_tx, second_release_rx) = mpsc::channel();
+    let (second_tx, second_rx) = mpsc::channel();
+    let second = Arc::clone(&session);
+    std::thread::spawn(move || {
+        let _ = second_tx.send(second.batch_move_with_faults(
+            BatchMoveRequest {
+                items: vec![file("b.md")],
+                new_parent: "dest".into(),
+            },
+            &BlockingBatchFault {
+                point: BatchFaultPoint::MoveIndex,
+                entered: Mutex::new(Some(second_entered_tx)),
+                release: Mutex::new(second_release_rx),
+            },
+        ));
+    });
+    let timed_out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        await_rendezvous_within(
+            &second_entered_rx,
+            "second-entered",
+            Duration::from_millis(200),
+            context,
+        )
+    }))
+    .expect_err("a rendezvous whose release is never sent must time out");
+    let message = panic_text(&*timed_out).to_owned();
+    let calls = state.lock().unwrap().calls.clone();
+
+    first_release_tx.send(()).unwrap();
+    second_release_tx.send(()).unwrap();
+    let first_report = await_rendezvous(&first_rx, "first-result", context).unwrap();
+    let second_report = await_rendezvous(&second_rx, "second-result", context).unwrap();
+    assert_eq!(first_report.state, BatchMoveState::Succeeded);
+    assert_eq!(second_report.state, BatchMoveState::Succeeded);
+
+    assert!(
+        message.contains("rendezvous `second-entered` timed out after 200ms"),
+        "the diagnostic must name the wait: {message}"
+    );
+    assert!(
+        calls.contains(&ProviderCall::Rename("a.md".into(), "dest/a.md".into()))
+            && !format!("{calls:?}").contains("b.md"),
+        "the first batch renamed and the queued one never reached the provider: {calls:?}"
+    );
+    assert!(
+        message.contains(&format!("provider calls: {calls:?}")),
+        "the diagnostic must carry the provider calls: {message}"
+    );
+    assert!(
+        message.contains("inflight: [{renames_completed: 1,"),
+        "the diagnostic must carry the first batch's durable intent: {message}"
+    );
+}
+
 #[test]
 fn spawned_process_structural_lock_child() {
     let Ok(root) = std::env::var("SLATE_STRUCTURAL_LOCK_CHILD_ROOT") else {
         return;
     };
     let ready = std::env::var("SLATE_STRUCTURAL_LOCK_CHILD_READY").unwrap();
+    let blocked = std::env::var("SLATE_STRUCTURAL_LOCK_CHILD_BLOCKED").unwrap();
     // Signal process startup before `open`: open itself takes the same
     // sidecar so it can recover an interrupted batch before exposing a
     // session.
     std::fs::write(ready, b"ready").unwrap();
-    let session = VaultSession::from_filesystem(root.into()).unwrap();
+    // #1294's positive witness, from inside that open: `CacheDirAnchored`
+    // fires on this thread at the statement before the structural lock,
+    // where this child must wait out the parent's barrier.
+    let session = {
+        let _seam = install_open_swap_seam(move |point: OpenSwapPoint| {
+            if point == OpenSwapPoint::CacheDirAnchored {
+                std::fs::write(&blocked, b"blocked").unwrap();
+            }
+        });
+        VaultSession::from_filesystem(root.into()).unwrap()
+    };
     let report = session
         .batch_move(BatchMoveRequest {
             items: vec![folder("folder")],
@@ -1359,6 +1585,7 @@ fn spawned_process_waits_for_same_vault_structural_operation() {
     }
     let session = Arc::new(VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap());
     session.scan_initial(&CancelToken::new()).unwrap();
+    let context = || vault_context(tmp.path(), None);
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
     let (move_tx, move_rx) = mpsc::channel();
@@ -1377,36 +1604,39 @@ fn spawned_process_waits_for_same_vault_structural_operation() {
         );
         let _ = move_tx.send(result);
     });
-    entered_rx
-        .recv_timeout(LIVENESS)
-        .expect("parent process reached the post-rename barrier");
+    // This process's move stands at its post-rename barrier.
+    await_rendezvous(&entered_rx, "parent-entered", context);
 
     let ready = tmp.path().join("child-ready");
+    let blocked = tmp.path().join("child-blocked");
     let mut child = std::process::Command::new(std::env::current_exe().unwrap())
         .arg("spawned_process_structural_lock_child")
         .arg("--nocapture")
         .env("SLATE_STRUCTURAL_LOCK_CHILD_ROOT", tmp.path())
         .env("SLATE_STRUCTURAL_LOCK_CHILD_READY", &ready)
+        .env("SLATE_STRUCTURAL_LOCK_CHILD_BLOCKED", &blocked)
         .spawn()
         .unwrap();
-    let deadline = std::time::Instant::now() + LIVENESS;
-    while !ready.exists() && std::time::Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    assert!(
-        ready.exists(),
-        "child process reached the shared-vault open"
-    );
-    std::thread::sleep(Duration::from_millis(150));
-    let serialized = child.try_wait().unwrap().is_none();
+    await_child_marker(&mut child, &ready, "child-ready", context);
+    await_child_marker(&mut child, &blocked, "child-blocked", context);
+    // The child's exit becomes a channel, so the negative probe is the same
+    // short `recv_timeout` the in-process tests use, opened only now that
+    // the child stands at the lock.
+    let (exit_tx, exit_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = exit_tx.send(child.wait());
+    });
+    let early_exit = exit_rx.recv_timeout(Duration::from_millis(150));
+    let serialized = early_exit.is_err();
 
     release_tx.send(()).unwrap();
-    let parent_report = move_rx
-        .recv_timeout(LIVENESS)
-        .expect("parent move completed after release")
-        .unwrap();
-    let status = child.wait().unwrap();
-    assert!(status.success());
+    let parent_report = await_rendezvous(&move_rx, "parent-result", context).unwrap();
+    let status = match early_exit {
+        Ok(status) => status,
+        Err(_) => await_rendezvous(&exit_rx, "child-exit", context),
+    }
+    .unwrap();
+    assert!(status.success(), "child: {status}");
     assert!(
         serialized,
         "a separately spawned process must wait on the same vault-scoped structural lock"
@@ -1684,22 +1914,32 @@ fn successful_batch_finalizes_one_undo_row_and_no_inflight_residue() {
     let failure = || "successful batch finalization failure".to_owned();
     report_fixture_panic(failure, || {
         let (tmp, session, state) = fixture(&[("a.md", "a"), ("b.md", "b")], &["dest"]);
+        // #1294: no wait here to name, so every check carries the provider
+        // calls and the durable intent instead.
+        let context = || vault_context(tmp.path(), Some(&state));
         let report = session
             .batch_move(BatchMoveRequest {
                 items: vec![file("a.md"), file("b.md")],
                 new_parent: "dest".into(),
             })
-            .expect("the successful batch fixture must complete without a session error");
+            .unwrap_or_else(|error| {
+                panic!(
+                    "the successful batch fixture must complete without a session error: \
+                     {error}; {}",
+                    context()
+                )
+            });
         assert_eq!(
             report.state,
             BatchMoveState::Succeeded,
-            "batch report: {report:#?}; provider calls: {:?}",
-            state.lock().unwrap().calls
+            "batch report: {report:#?}; {}",
+            context()
         );
         assert_eq!(
             structural_inflight_count(tmp.path()),
             0,
-            "a successful batch must consume its inflight journal; report: {report:#?}"
+            "a successful batch must consume its inflight journal; report: {report:#?}; {}",
+            context()
         );
         let rows: i64 = session
             .conn
@@ -1712,8 +1952,10 @@ fn successful_batch_finalizes_one_undo_row_and_no_inflight_residue() {
             )
             .expect("read the finalized structural undo rows");
         assert_eq!(
-            rows, 1,
-            "a successful batch must finalize exactly one undo row"
+            rows,
+            1,
+            "a successful batch must finalize exactly one undo row; {}",
+            context()
         );
     });
 }
@@ -3245,10 +3487,11 @@ fn structural_undo_waits_for_failed_recovery_barrier_then_fails_closed() {
 }
 
 fn structural_undo_recovery_barrier_fixture() {
-    let (_tmp, session, state) = fixture(
+    let (tmp, session, state) = fixture(
         &[("prior.md", "p"), ("a.md", "a"), ("b.md", "b")],
         &["prior-dest", "dest"],
     );
+    let context = || vault_context(tmp.path(), Some(&state));
     let session = Arc::new(session);
     let prior = session
         .batch_move(BatchMoveRequest {
@@ -3285,26 +3528,25 @@ fn structural_undo_recovery_barrier_fixture() {
         );
         let _ = failed_tx.send(result);
     });
-    entered_rx
-        .recv_timeout(LIVENESS)
-        .expect("recovery reached the blocked barrier");
+    // Recovery stands at the blocked barrier.
+    await_rendezvous(&entered_rx, "barrier-entered", context);
 
     let undo_session = Arc::clone(&session);
     let prior_op = prior.op_id.unwrap();
+    let (undo_entered_tx, undo_entered_rx) = mpsc::channel();
     let (undo_tx, undo_rx) = mpsc::channel();
     std::thread::spawn(move || {
+        let _ = undo_entered_tx.send(());
         let _ = undo_tx.send(undo_session.undo_batch_move(prior_op));
     });
+    await_rendezvous(&undo_entered_rx, "undo-entered", context);
     assert!(
         undo_rx.recv_timeout(Duration::from_millis(100)).is_err(),
         "undo must wait behind the in-flight structural recovery"
     );
 
     release_tx.send(()).unwrap();
-    let failed = failed_rx
-        .recv_timeout(LIVENESS)
-        .expect("failing batch completed")
-        .unwrap();
+    let failed = await_rendezvous(&failed_rx, "failing-batch-result", context).unwrap();
     assert_eq!(failed.state, BatchMoveState::RollbackIncomplete);
     assert!(
         failed
@@ -3312,10 +3554,7 @@ fn structural_undo_recovery_barrier_fixture() {
             .iter()
             .any(|failure| failure.stage == crate::BatchFailureStage::RecoveryBarrier)
     );
-    let undo_error = undo_rx
-        .recv_timeout(LIVENESS)
-        .expect("waiting undo completed after recovery")
-        .unwrap_err();
+    let undo_error = await_rendezvous(&undo_rx, "undo-result", context).unwrap_err();
     assert!(undo_error.to_string().contains("history is unavailable"));
 }
 

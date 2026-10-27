@@ -47,13 +47,15 @@ namespace SlateWindows.Tests;
 /// <para>
 /// Bounded and fail-fast. The thread is a background thread, so a wedged
 /// body can never hold the test host open past the run. On timeout its
-/// dispatcher is told to shut down, so a pump wedged in a frame unwinds
-/// through the body's own disposals, and the fact fails here instead of at
-/// the job's limit: a body that unwinds within <see cref="UnwindGrace"/>
-/// still has its classes unregistered; one that does not is running beside
-/// every later fact, so <see cref="LeakedDispatcherGuardAttribute"/> fails
-/// each of them (<see cref="Wedged"/>) until it ends, and then frees its
-/// classes.
+/// token is cancelled (<see cref="TimedOut"/>), so a body that polls it
+/// between phases stops there, and its dispatcher is told to shut down, so
+/// a pump wedged in a frame unwinds through the body's own disposals; the
+/// fact fails here instead of at the job's limit. A body that unwinds
+/// within <see cref="UnwindGrace"/> still has its classes unregistered; one
+/// that does not is running beside every later fact, so
+/// <see cref="LeakedDispatcherGuardAttribute"/> fails each of them
+/// (<see cref="Wedged"/>, which names the fact it came from, #1321) until
+/// it ends, and then frees its classes.
 /// </para>
 /// </remarks>
 internal static class StaThread
@@ -74,13 +76,33 @@ internal static class StaThread
     /// classes are freed.</summary>
     internal static readonly TimeSpan OsExitBound = TimeSpan.FromSeconds(10);
 
-    private static readonly List<(string Name, OsThreadExit? Exit, string What)> s_wedged = [];
+    private static readonly List<(string Name, Thread Thread, Func<OsThreadExit?> Exit, string Fact, string What)> s_wedged = [];
 
     private static int s_sequence;
+
+    /// <summary>The running body's timeout (#1321): cancelled once its bound
+    /// has passed, so a body that polls it between phases stops there and
+    /// its timeout is one failure, not every fact beside it. Outside a body
+    /// it is <see cref="CancellationToken.None"/>.</summary>
+    internal static CancellationToken Current => t_timeout;
+
+    /// <summary>Whether the running body's bound has passed: see
+    /// <see cref="Current"/>.</summary>
+    internal static bool TimedOut => t_timeout.IsCancellationRequested;
+
+    /// <summary>The body's own copy of its run's token. The joining caller
+    /// owns the source and cancels it; the slot holds only the token, so the
+    /// cancel reaches the body and never the caller's own empty slot.</summary>
+    [ThreadStatic]
+    private static CancellationToken t_timeout;
 
     /// <summary>Test seam: runs between the thread's start and the runner's
     /// Join, so a witness can make that Join late.</summary>
     internal static Action? AfterStartForTests { get; set; }
+
+    /// <summary>Test seam: runs on the fact's thread before its first line,
+    /// so a witness can make the body start after its joins have expired.</summary>
+    internal static Action? BeforeBodyForTests { get; set; }
 
     /// <summary>Run <paramref name="body"/> on a fresh STA thread, unregister
     /// the window classes it leaves behind, and rethrow whatever it threw.</summary>
@@ -113,8 +135,20 @@ internal static class StaThread
         Thread? owner = null;
         OsThreadExit? exit = null;
         string name = ThreadNamePrefix + Interlocked.Increment(ref s_sequence).ToString(CultureInfo.InvariantCulture);
+        // Read here, on the caller's thread, where xUnit keeps the running
+        // test: the helpers that forward to this runner would all be named
+        // by a caller-member name.
+        string fact = TestContext.Current.Test?.TestDisplayName ?? "a caller outside a test";
+        using var cancellation = new CancellationTokenSource();
+        // The token is taken here, before the thread starts: a thread that
+        // first runs after a wedged run has disposed the source would throw
+        // reading the source's token, outside the body, and end the process.
+        CancellationToken token = cancellation.Token;
+        Action? beforeBody = BeforeBodyForTests;
         var thread = new Thread(() =>
         {
+            beforeBody?.Invoke();
+            t_timeout = token;
             Volatile.Write(ref owner, Thread.CurrentThread);
             try
             {
@@ -142,8 +176,11 @@ internal static class StaThread
             {
                 stack += DumpOnTimeout(name);
             }
+            // After the stack and the dump, so a body that stops on its token
+            // has not left before either is taken.
+            string cancelled = Cancel(cancellation);
             dispatcher?.BeginInvokeShutdown(DispatcherPriority.Send);
-            string what = $"{timeoutMessage ?? "The STA fact timed out."} (thread {name}, bound {limit.TotalSeconds:0.#} s; its dispatcher was told to shut down";
+            string what = $"{timeoutMessage ?? "The STA fact timed out."} (thread {name}, bound {limit.TotalSeconds:0.#} s; its timeout token was cancelled{cancelled} and its dispatcher was told to shut down";
             if (thread.Join(unwindGrace ?? UnwindGrace))
             {
                 string? left = FreeClasses(name, Volatile.Read(ref exit));
@@ -151,7 +188,9 @@ internal static class StaThread
             }
             lock (s_wedged)
             {
-                s_wedged.Add((name, Volatile.Read(ref exit), timeoutMessage ?? "an STA fact that timed out"));
+                // Its exit is read when asked: a thread that first runs after
+                // its joins have expired has recorded none yet.
+                s_wedged.Add((name, thread, () => Volatile.Read(ref exit), fact, timeoutMessage ?? "an STA fact that timed out"));
             }
             throw new Xunit.Sdk.XunitException(
                 what + ", but the body has not unwound. It runs on beside the facts after this one, so each of them fails until it ends.) " + stack);
@@ -163,6 +202,22 @@ internal static class StaThread
             throw new Xunit.Sdk.XunitException(residue);
         }
         return result;
+    }
+
+    /// <summary>Cancel a timed-out body's token, answering what a callback on
+    /// it threw (empty when none did): a callback that throws never keeps the
+    /// dispatcher from being told to shut down.</summary>
+    private static string Cancel(CancellationTokenSource cancellation)
+    {
+        try
+        {
+            cancellation.Cancel();
+            return string.Empty;
+        }
+        catch (AggregateException thrown)
+        {
+            return $", though a callback on it threw {thrown.InnerException?.GetType().Name}: {thrown.InnerException?.Message},";
+        }
     }
 
     /// <summary>The folder a timed-out body's dump goes to (#1603): CI's
@@ -385,10 +440,19 @@ internal static class StaThread
         {
             for (int i = s_wedged.Count - 1; i >= 0; i--)
             {
-                (string name, OsThreadExit? exit, string what) = s_wedged[i];
-                if (exit?.WaitOne(0) == false)
+                (string name, Thread thread, Func<OsThreadExit?> exitOf, string fact, string what) = s_wedged[i];
+                OsThreadExit? exit = exitOf();
+                if (exit is null && !thread.IsAlive)
                 {
-                    running.Add($"{name} ({what})");
+                    // A late-started body can record its exit and end between
+                    // the read above and this one (Codex round 4).
+                    exit = exitOf();
+                }
+                // A thread that has recorded no exit yet is running while it
+                // is alive; one that has, until its OS thread has exited.
+                if (exit is null ? thread.IsAlive : !exit.WaitOne(0))
+                {
+                    running.Add($"`{fact}` (thread {name}) is still unwinding after its timeout: {what.TrimEnd('.')}");
                     continue;
                 }
                 s_wedged.RemoveAt(i);
@@ -404,7 +468,7 @@ internal static class StaThread
         }
         return string.Join(
             " ",
-            (running.Count == 0 ? [] : new[] { $"An earlier fact's STA thread never unwound after its timeout and is still running beside this fact: {string.Join(", ", running)}." })
+            (running.Count == 0 ? [] : new[] { $"This fact failed because {string.Join("; ", running)}. A timed-out body still running beside this fact means it is not isolated." })
                 .Concat(residue));
     }
 

@@ -171,7 +171,7 @@ public class CanonicalHighlightCensus
                 RunDispatcherFor(TimeSpan.FromMilliseconds(200));
                 AvalonHighlightingCoordinator coordinator = Assert.IsType<AvalonHighlightingCoordinator>(
                     editor.HighlightingForCensus);
-                Assert.True(coordinator.RefreshCountForCensus > 0);
+                PumpUntilRefreshed(coordinator, 0, "show");
                 Assert.Same(session.LatestHighlightWindow, coordinator.ColorizerWindowForCensus);
 
                 int settled = coordinator.RefreshCountForCensus;
@@ -181,21 +181,18 @@ public class CanonicalHighlightCensus
                 session.Document.Insert(0, "x");
                 Assert.Null(session.LatestHighlightWindow);
                 Assert.Null(coordinator.ColorizerWindowForCensus);
-                RunDispatcherFor(TimeSpan.FromMilliseconds(100));
-                Assert.True(coordinator.RefreshCountForCensus > settled);
+                PumpUntilRefreshed(coordinator, settled, "edit");
                 Assert.Same(session.LatestHighlightWindow, coordinator.ColorizerWindowForCensus);
 
                 int afterEdit = coordinator.RefreshCountForCensus;
                 editor.ScrollToLine(120);
                 window.UpdateLayout();
-                RunDispatcherFor(TimeSpan.FromMilliseconds(100));
-                Assert.True(coordinator.RefreshCountForCensus > afterEdit);
+                PumpUntilRefreshed(coordinator, afterEdit, "scroll");
 
                 int afterScroll = coordinator.RefreshCountForCensus;
                 window.Width += 80;
                 window.UpdateLayout();
-                RunDispatcherFor(TimeSpan.FromMilliseconds(100));
-                Assert.True(coordinator.RefreshCountForCensus > afterScroll);
+                PumpUntilRefreshed(coordinator, afterScroll, "resize");
 
                 int afterResize = coordinator.RefreshCountForCensus;
                 RunDispatcherFor(TimeSpan.FromMilliseconds(160));
@@ -269,6 +266,19 @@ public class CanonicalHighlightCensus
             Assert.True(end < document.TextLength);
         });
     }
+
+    /// <summary>#1306: pump until the coordinator has refreshed past
+    /// <paramref name="baseline"/> and has no refresh pending (its debounce
+    /// is idle), so the next step's baseline is read after this step's
+    /// refresh, never before it. A loaded runner only takes longer; the
+    /// quiescence checks keep their fixed windows.</summary>
+    private static void PumpUntilRefreshed(AvalonHighlightingCoordinator coordinator, int baseline, string step) =>
+        Assert.True(
+            PumpedDispatcher.PumpUntil(
+                () => coordinator.RefreshCountForCensus > baseline && !coordinator.TimerEnabledForCensus,
+                TimeSpan.FromSeconds(5)),
+            $"the coordinator did not refresh after the {step} within 5 s "
+            + $"(refreshes {coordinator.RefreshCountForCensus}, before the {step} {baseline}, debounce pending {coordinator.TimerEnabledForCensus}).");
 
     private static void RunDispatcherFor(TimeSpan duration)
     {

@@ -1092,9 +1092,12 @@ four budgets by exit code):**
 **End to end (PR F's row):** measured by
 `GraphEndToEndTests.LargeGraphOpensLaysOutPansAndStepsUnderBudget` (the
 real `VaultSession` + `WorkspaceViewModel` + the hosted surface,
-`Stopwatch`; the fact asserts every budget so a regression fails CI, and
-the recorded values show the headroom) over a 1,500-note linked vault —
-tier A's ceiling:
+`Stopwatch`; the fact asserts every budget, and the recorded values show
+the headroom) over a 1,500-note linked vault — tier A's ceiling. Since
+plan 44 WB-7 (#1323) the fact is tagged `kind=benchmark`: a loaded CI
+runner failed its wall-clock budgets, so it stays out of the Windows gate
+and runs by hand on a quiet machine
+(`dotnet test … --filter kind=benchmark`):
 
 | Measure | Recorded | Budget | Notes |
 |---|---:|---:|---|
