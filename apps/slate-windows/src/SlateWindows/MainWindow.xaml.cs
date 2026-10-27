@@ -184,6 +184,18 @@ public partial class MainWindow : Window
 
     internal async Task ActivateFromExternalRequestAsync(string? vaultPath)
     {
+        if (_modalLoops.IsModalLoopActive)
+        {
+            // WB-9 (NVDA pass): a prompt or a picker runs over the shell and
+            // has disabled it. Activating the window would raise it over its
+            // own prompt and hand the reader the dead shell beneath (NVDA
+            // read "Slate window" and the editor), so the prompt itself
+            // comes forward, keeps the keys, and the request waits.
+            ParkExternalActivation(vaultPath);
+            BringTheModalPromptForward();
+            return;
+        }
+
         if (!IsVisible)
         {
             Show();
@@ -194,16 +206,15 @@ public partial class MainWindow : Window
             WindowState = WindowState.Normal;
         }
 
+        WindowActivationsForTests++;
         Activate();
         Topmost = true;
         Topmost = false;
         if (ExternalActivationMustWait)
         {
-            // WB-9 (#1296): the window comes forward, the prompt or the
-            // close keeps the keys, and the request waits for them to end —
-            // the last one received wins. Focus() waits for that run too.
-            _parkedExternalActivation = vaultPath;
-            _externalActivationParked = true;
+            // WB-9 (#1296): the window comes forward; the palette's command,
+            // the close or the open keeps the keys, and the request waits.
+            ParkExternalActivation(vaultPath);
             return;
         }
 
@@ -228,6 +239,40 @@ public partial class MainWindow : Window
     private string? _parkedExternalActivation;
     private bool _externalActivationParked;
     private bool _windowClosed;
+
+    /// <summary>WB-9 test seam: how often a handoff activated the window.</summary>
+    internal int WindowActivationsForTests { get; private set; }
+
+    /// <summary>WB-9 (#1296): the hold keeps the keys and the request waits
+    /// for it to end — the last one received wins. Focus() waits for that
+    /// run too.</summary>
+    private void ParkExternalActivation(string? vaultPath)
+    {
+        _parkedExternalActivation = vaultPath;
+        _externalActivationParked = true;
+    }
+
+    /// <summary>The window's last active popup — the prompt or picker the
+    /// modal loop runs — to the foreground; nothing when there is none.</summary>
+    private void BringTheModalPromptForward()
+    {
+        IntPtr window = new WindowInteropHelper(this).Handle;
+        IntPtr prompt = window == IntPtr.Zero ? IntPtr.Zero : ModalPromptNative.GetLastActivePopup(window);
+        if (prompt != IntPtr.Zero && prompt != window)
+        {
+            _ = ModalPromptNative.SetForegroundWindow(prompt);
+        }
+    }
+
+    private static class ModalPromptNative
+    {
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        internal static extern IntPtr GetLastActivePopup(IntPtr window);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        internal static extern bool SetForegroundWindow(IntPtr window);
+    }
 
     private bool ExternalActivationMustWait =>
         _modalLoops.IsModalLoopActive

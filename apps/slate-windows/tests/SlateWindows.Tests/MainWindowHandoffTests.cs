@@ -28,13 +28,21 @@ public sealed class MainWindowHandoffTests
         shell.ReleaseParks();
         var prompt = new CommandPaletteTests.SyntheticPrompt(shell.Shell, CommandPaletteTests.LoopSignals.DisablesShell);
         int underThePrompt = -1;
+        int activationsUnderThePrompt = -1;
         InsideThePrompt(shell, prompt, () =>
         {
             Assert.True(shell.Shell.ModalLoops.IsModalLoopActive, "premise: the prompt is a modal loop over the shell");
             _ = shell.Shell.ActivateFromExternalRequestAsync(other.Root);
-        }, () => underThePrompt = shell.OpenRequests.Count);
+        }, () =>
+        {
+            underThePrompt = shell.OpenRequests.Count;
+            activationsUnderThePrompt = shell.Shell.WindowActivationsForTests;
+        });
 
         Assert.Equal(0, underThePrompt);
+        // The NVDA pass: activating the window under its own prompt raised the
+        // disabled shell over the prompt; the prompt keeps the keys instead.
+        Assert.Equal(0, activationsUnderThePrompt);
         List<IInputElement> changes = shell.RecordFocusChanges();
         WaitForOpenRequests(shell, 1);
         Assert.Equal([other.Root], shell.OpenRequests);
