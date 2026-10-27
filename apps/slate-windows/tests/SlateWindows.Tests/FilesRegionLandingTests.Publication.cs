@@ -528,6 +528,41 @@ public sealed partial class FilesRegionLandingTests
         Assert.DoesNotContain(host.Announced, item => item is A11yEvent.RowSelected or A11yEvent.TreeFolderSelected);
     });
 
+    /// <summary>PR review (Codoki): the row taking the selection from a
+    /// hidden selected note is a date group's header, which opens nothing
+    /// itself. The header holds the tree's selection now, so the hidden
+    /// note lets go of it all the same (S1). Expanding its group later shows
+    /// the note unselected, and nothing reopens.</summary>
+    [Fact]
+    public void AHiddenSelectedNoteLetsGoWhenAGroupHeaderIsSelected() => RunSta(() =>
+    {
+        using var host = new Host();
+        SeedNotes(host, ("m.md", DateTime.Today.AddMinutes(2)), ("n.md", DateTime.Today.AddMinutes(1)), ("o.md", DaysBack(60)));
+        host.Initialize();
+        UseDateGroups(host);
+        FileTreeNodeViewModel older = GroupHeader(host, "Older");
+        older.IsExpanded = false;
+        Settle(host);
+        var opened = new List<string>();
+        _ = LandOnRow(host, RowIn(GroupHeader(host, "Today"), "n.md"), opened);
+        RewriteOutsideSlate(host, "n.md", DaysBack(60));
+        RescanAndRefresh(host);
+        FileTreeNodeViewModel hidden = RowIn(older, "n.md");
+        Assert.True(hidden.IsSelected, "premise: the moved note does not hold the hidden selection");
+
+        var later = new List<string>();
+        FileTreeNodeViewModel today = LandOnRow(host, GroupHeader(host, "Today"), later);
+        Assert.False(hidden.IsSelected, "the hidden note kept its selection when a group header took it");
+        older.IsExpanded = true;
+        Settle(host);
+
+        Assert.Same(today, host.Sidebar.SelectedNode);
+        Assert.Same(today, host.Tree.SelectedItem);
+        Assert.False(ContainerOf(host, hidden).IsSelected, "the expanded group shows the abandoned note selected");
+        Assert.Empty(later);
+        Assert.DoesNotContain(host.Announced, item => item is A11yEvent.RowSelected or A11yEvent.TreeFolderSelected);
+    });
+
     /// <summary>Codex round 2, under the design pass's S2: the tree's
     /// selected row deleted outside Slate while a list's row — another note,
     /// which survives — holds the selection, with the keys on the tree's row.
