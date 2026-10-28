@@ -538,7 +538,7 @@ public sealed class W1ChildExpansionTests
 
                 work();
             }, cancellationToken));
-        await lifecycle.OpenVaultAsync(fixture.Root);
+        await OpenDrainingAsync(lifecycle, fixture.Root, context);
         FilesSidebarViewModel sidebar = Assert.IsType<FilesSidebarViewModel>(
             lifecycle.FileSidebar);
         await DrainUntilComplete(sidebar.TreeRefreshCompletion, context);
@@ -588,7 +588,7 @@ public sealed class W1ChildExpansionTests
 
                 work();
             }, cancellationToken));
-        await lifecycle.OpenVaultAsync(fixture.Root);
+        await OpenDrainingAsync(lifecycle, fixture.Root, context);
         FilesSidebarViewModel sidebar = Assert.IsType<FilesSidebarViewModel>(
             lifecycle.FileSidebar);
         await DrainUntilComplete(sidebar.TreeRefreshCompletion, context);
@@ -722,7 +722,7 @@ public sealed class W1ChildExpansionTests
 
                 work();
             }, cancellationToken));
-        await lifecycle.OpenVaultAsync(fixture.Root);
+        await OpenDrainingAsync(lifecycle, fixture.Root, context);
         FilesSidebarViewModel sidebar = Assert.IsType<FilesSidebarViewModel>(lifecycle.FileSidebar);
         await DrainUntilComplete(sidebar.TreeRefreshCompletion, context);
         FileTreeNodeViewModel folder = Assert.Single(sidebar.RootNodes, node => node.Path == "folder");
@@ -773,7 +773,7 @@ public sealed class W1ChildExpansionTests
 
                 work();
             }, cancellationToken));
-        await lifecycle.OpenVaultAsync(fixture.Root);
+        await OpenDrainingAsync(lifecycle, fixture.Root, context);
         FilesSidebarViewModel sidebar = Assert.IsType<FilesSidebarViewModel>(lifecycle.FileSidebar);
         await DrainUntilComplete(sidebar.TreeRefreshCompletion, context);
         FileTreeNodeViewModel folder = Assert.Single(sidebar.RootNodes, node => node.Path == "folder");
@@ -822,6 +822,15 @@ public sealed class W1ChildExpansionTests
         session.ScanInitial(cancellation);
         return session;
     }
+
+    /// <summary>#1684: the open publishes its workspace once the Files tree's
+    /// first rows have arrived, and this queued context delivers them, so it
+    /// is drained while the open runs.</summary>
+    private static Task OpenDrainingAsync(
+        VaultLifecycleViewModel lifecycle,
+        string root,
+        PumpSynchronizationContext context) =>
+        DrainUntilComplete(lifecycle.OpenVaultAsync(root), context, TimeSpan.FromSeconds(30));
 
     private static async Task DrainUntilComplete(
         Task completion,

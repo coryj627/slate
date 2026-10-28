@@ -324,11 +324,14 @@ public sealed class W1VaultCloseBarrierTests
 
     /// <summary>XB-11 (#1590; plan 45 XD1): the application close cancels a
     /// tree read in flight and waits for it (headless here, so it blocks,
-    /// bounded) instead of refusing; the session closes after the read.</summary>
+    /// bounded) instead of refusing; the session closes after the read.
+    /// (#1684: the open publishes after its own first read, so the read in
+    /// flight is a later refresh's.)</summary>
     [Fact]
     public async Task APendingTreeRefreshIsAwaitedByApplicationClose()
     {
         using FixtureVault fixture = FixtureVault.Create(2, "tree-close-barrier");
+        using var holdReads = new ManualResetEventSlim();
         using var providerStarted = new ManualResetEventSlim();
         using var releaseProvider = new ManualResetEventSlim();
         var lifecycle = new VaultLifecycleViewModel(
@@ -339,13 +342,19 @@ public sealed class W1VaultCloseBarrierTests
             treeUiContext: new PumpSynchronizationContext(),
             treeWorker: (work, _) => Task.Run(() =>
             {
-                providerStarted.Set();
-                releaseProvider.Wait();
+                if (holdReads.IsSet)
+                {
+                    providerStarted.Set();
+                    releaseProvider.Wait();
+                }
+
                 work();
             }));
         await lifecycle.OpenVaultAsync(fixture.Root);
-        Assert.True(providerStarted.Wait(TimeSpan.FromSeconds(5)));
         FilesSidebarViewModel sidebar = Assert.IsType<FilesSidebarViewModel>(lifecycle.FileSidebar);
+        holdReads.Set();
+        sidebar.Refresh();
+        Assert.True(providerStarted.Wait(TimeSpan.FromSeconds(5)));
 
         // The provider ends while the close waits for it.
         using var release = new Timer(_ => releaseProvider.Set(), null, TimeSpan.FromMilliseconds(200), Timeout.InfiniteTimeSpan);
@@ -360,6 +369,49 @@ public sealed class W1VaultCloseBarrierTests
     public async Task DirectDisposalJoinsAPendingTreeRefreshBeforeReleasingTheSession()
     {
         using FixtureVault fixture = FixtureVault.Create(2, "tree-dispose-barrier");
+        using var holdReads = new ManualResetEventSlim();
+        using var providerStarted = new ManualResetEventSlim();
+        using var releaseProvider = new ManualResetEventSlim();
+        var lifecycle = new VaultLifecycleViewModel(
+            pickVault: () => Task.FromResult<string?>(fixture.Root),
+            enqueueUi: action => action(),
+            recentVaultsStore: new RecentVaultsStore(
+                Path.Combine(fixture.Root, "device-state", "recent-vaults.json")),
+            treeUiContext: new PumpSynchronizationContext(),
+            treeWorker: (work, _) => Task.Run(() =>
+            {
+                if (holdReads.IsSet)
+                {
+                    providerStarted.Set();
+                    releaseProvider.Wait();
+                }
+
+                work();
+            }));
+        await lifecycle.OpenVaultAsync(fixture.Root);
+        FilesSidebarViewModel sidebar = Assert.IsType<FilesSidebarViewModel>(lifecycle.FileSidebar);
+        holdReads.Set();
+        sidebar.Refresh();
+        Assert.True(providerStarted.Wait(TimeSpan.FromSeconds(5)));
+
+        Task dispose = Task.Run(lifecycle.Dispose);
+        Assert.True(SpinWait.SpinUntil(
+            () => sidebar.SessionShutdownStarted,
+            TimeSpan.FromSeconds(5)));
+        Assert.False(dispose.IsCompleted);
+
+        releaseProvider.Set();
+        await dispose.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    /// <summary>#1684: the open publishes its workspace only after the Files
+    /// tree's first read. A disposal while that read is in flight takes the
+    /// unpublished workspace down with the session — it joins the read
+    /// before the session goes — and the open publishes nothing.</summary>
+    [Fact]
+    public async Task DirectDisposalDuringTheOpensFirstTreeReadJoinsItAndPublishesNothing()
+    {
+        using FixtureVault fixture = FixtureVault.Create(2, "tree-dispose-opening");
         using var providerStarted = new ManualResetEventSlim();
         using var releaseProvider = new ManualResetEventSlim();
         var lifecycle = new VaultLifecycleViewModel(
@@ -371,21 +423,68 @@ public sealed class W1VaultCloseBarrierTests
             treeWorker: (work, _) => Task.Run(() =>
             {
                 providerStarted.Set();
-                releaseProvider.Wait();
+                releaseProvider.Wait(TimeSpan.FromSeconds(30));
                 work();
             }));
-        await lifecycle.OpenVaultAsync(fixture.Root);
-        Assert.True(providerStarted.Wait(TimeSpan.FromSeconds(5)));
-        FilesSidebarViewModel sidebar = Assert.IsType<FilesSidebarViewModel>(lifecycle.FileSidebar);
+        Task open = lifecycle.OpenVaultAsync(fixture.Root);
+        Assert.True(providerStarted.Wait(TimeSpan.FromSeconds(30)), "the open's first tree read never started");
+        // The read can start before the open stores its assembly.
+        Assert.True(
+            SpinWait.SpinUntil(() => lifecycle.AssembledSidebarForTests is not null, TimeSpan.FromSeconds(5)),
+            "the open never stored its assembly");
+        Assert.Null(lifecycle.FileSidebar);
+        FilesSidebarViewModel sidebar = Assert.IsType<FilesSidebarViewModel>(lifecycle.AssembledSidebarForTests);
 
         Task dispose = Task.Run(lifecycle.Dispose);
         Assert.True(SpinWait.SpinUntil(
             () => sidebar.SessionShutdownStarted,
-            TimeSpan.FromSeconds(5)));
+            TimeSpan.FromSeconds(5)), "the disposal never shut the unpublished sidebar down");
         Assert.False(dispose.IsCompleted);
 
         releaseProvider.Set();
         await dispose.WaitAsync(TimeSpan.FromSeconds(5));
+        await open.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Null(lifecycle.Workspace);
+        Assert.Null(lifecycle.FileSidebar);
+        Assert.Null(lifecycle.QuickSwitcher);
+        Assert.False(lifecycle.IsVaultOpen);
+    }
+
+    /// <summary>#1684 (contract 38 XD1): the open waits for its tree's first
+    /// read no longer than a close waits for one. A read that outlives the
+    /// bound is published around — the workspace opens over a tree still
+    /// reading — and the application close then cancels and awaits that read
+    /// as XD1 has it, instead of being refused for as long as it lasts.</summary>
+    [Fact]
+    public async Task AnOpenWhoseFirstTreeReadOutlivesTheBoundPublishesAndTheCloseAwaitsTheRead()
+    {
+        using FixtureVault fixture = FixtureVault.Create(2, "tree-open-bound");
+        using var providerStarted = new ManualResetEventSlim();
+        using var releaseProvider = new ManualResetEventSlim();
+        var lifecycle = new VaultLifecycleViewModel(
+            pickVault: () => Task.FromResult<string?>(fixture.Root),
+            enqueueUi: action => action(),
+            recentVaultsStore: new RecentVaultsStore(
+                Path.Combine(fixture.Root, "device-state", "recent-vaults.json")),
+            treeUiContext: new PumpSynchronizationContext(),
+            treeWorker: (work, _) => Task.Run(() =>
+            {
+                providerStarted.Set();
+                releaseProvider.Wait(TimeSpan.FromSeconds(30));
+                work();
+            }));
+        lifecycle.FirstTreePublicationBound = TimeSpan.FromMilliseconds(200);
+
+        await lifecycle.OpenVaultAsync(fixture.Root).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(providerStarted.IsSet, "premise: the open's first tree read started");
+        Assert.True(lifecycle.IsVaultOpen, "the open waited past its bound");
+        FilesSidebarViewModel sidebar = Assert.IsType<FilesSidebarViewModel>(lifecycle.FileSidebar);
+        Assert.True(sidebar.IsRefreshingTree, "premise: the first read is still in flight");
+
+        using var release = new Timer(_ => releaseProvider.Set(), null, TimeSpan.FromMilliseconds(50), Timeout.InfiniteTimeSpan);
+        Assert.True(lifecycle.PrepareForApplicationClose(), "the application close was refused while the tree read was in flight");
+        Assert.True(sidebar.TreeRefreshCompletion.IsCompleted, "the close returned before the read ended");
+        lifecycle.Dispose();
     }
 
     [Fact]

@@ -750,6 +750,7 @@ Facts:
   the window enabled, so File > Exit inside it is answered by the close
   already deciding).
 - `W1HardeningTests.APendingTreeRefreshIsAwaitedByApplicationClose`.
+- *Addendum 2026-10-27 (#1684):* an open builds its workspace and publishes it once the Files tree's first read has published, so that read runs inside the open, while the close is still refused as it is during the scan. The open waits for it no longer than this bound (`VaultLifecycleViewModel.FirstTreePublicationBound`, 5 s): a slower read is published around, and the close then cancels and awaits it as above. `APendingTreeRefreshIsAwaitedByApplicationClose` now holds a later refresh; `AnOpenWhoseFirstTreeReadOutlivesTheBoundPublishesAndTheCloseAwaitsTheRead` holds the open's own.
 
 ## Save-chain admission amendment (#1322, #1325, plan 44 WB-2, 2026-10-26)
 
