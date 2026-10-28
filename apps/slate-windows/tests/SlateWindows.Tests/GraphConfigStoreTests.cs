@@ -101,7 +101,8 @@ public sealed class GraphConfigStoreTests : IDisposable
         // it then leaves behind.
         IOException refusal = Assert.Throws<IOException>(
             () => store.Write(SlateUniffiMethods.GraphConfigDefault() with { ConnectionsDepth = 3 }));
-        Assert.Contains(GraphConfigStore.FileName, refusal.Message, StringComparison.Ordinal);
+        // The anchored store's refusal to open the existing file: the read's own.
+        Assert.Equal("Could not safely open a vault store file.", refusal.Message);
         Assert.True(Directory.Exists(path), "the write destroyed the target it could not read");
         Assert.Empty(Directory.EnumerateFileSystemEntries(path));
         Assert.Empty(Directory.EnumerateFiles(Path.GetDirectoryName(path)!, "*.tmp"));

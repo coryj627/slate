@@ -720,15 +720,20 @@ internal sealed partial class WorkspaceViewModel
         {
             return;
         }
-        if (VaultPaths.IsInside(_vaultRoot, targetPath))
+        // A path the scanner hides (a dot-prefixed folder or file) is never
+        // indexed, so its write is no watcher noise, and core refuses it as a
+        // save path: it keeps the direct write, as before.
+        if (VaultPaths.IsInside(_vaultRoot, targetPath)
+            && !VaultPaths.IsHiddenFromTheScanner(VaultPaths.Relative(_vaultRoot, targetPath)))
         {
             DeliverBasesExportIntoTheVault(
                 document, format, includeFilter, targetPath, VaultPaths.Relative(_vaultRoot, targetPath));
             return;
         }
 
-        // Outside the vault: not the vault's own write, so the file system
-        // directly, as before; the app's question replaces the dialog's.
+        // Outside the vault, or hidden inside it: not the vault's own write,
+        // so the file system directly, as before; the app's question
+        // replaces the dialog's.
         if (System.IO.File.Exists(targetPath) && !ConfirmBasesExportOverwrite(targetPath))
         {
             return;
@@ -809,6 +814,12 @@ internal sealed partial class WorkspaceViewModel
         {
             return (null, failure.Message);
         }
+        catch (ObjectDisposedException)
+        {
+            // The vault closed under the observation; its continuation is
+            // gated on the workspace and says nothing.
+            return (null, "the vault was closed");
+        }
     }
 
     /// <summary>The publication, on a worker, under the observation taken
@@ -842,13 +853,24 @@ internal sealed partial class WorkspaceViewModel
         {
             return failure.Message;
         }
+        catch (ObjectDisposedException)
+        {
+            return "the vault was closed";
+        }
     }
 
     /// <summary>Runs an export step off the dispatcher and its continuation
     /// back on it; headless (no UI dispatcher, the facts' synchronous mode)
-    /// both run inline, as the Bases documents' own work does.</summary>
+    /// both run inline, as the Bases documents' own work does. The worker is
+    /// TRACKED into the bounded teardown drain (red team, WB-12): the session
+    /// is never disposed under the export's core call, and a continuation
+    /// that lands after Dispose neither asks nor announces.</summary>
     private void RunBasesExportWork<T>(Func<T> work, Action<T> then)
     {
+        if (_workspaceDisposed)
+        {
+            return;
+        }
         if (!_startInteractionBackgroundWork)
         {
             then(work());
@@ -856,16 +878,22 @@ internal sealed partial class WorkspaceViewModel
         }
         System.Windows.Threading.Dispatcher dispatcher =
             System.Windows.Threading.Dispatcher.CurrentDispatcher;
-        _ = Task.Run(() =>
+        TrackRetiredBasesWork(Task.Run(() =>
         {
             T result = work();
             if (!dispatcher.HasShutdownStarted && !dispatcher.HasShutdownFinished)
             {
                 _ = dispatcher.BeginInvoke(
                     System.Windows.Threading.DispatcherPriority.Background,
-                    new Action(() => then(result)));
+                    new Action(() =>
+                    {
+                        if (!_workspaceDisposed)
+                        {
+                            then(result);
+                        }
+                    }));
             }
-        });
+        }));
     }
 
     internal void RaiseBasesCommandStates()

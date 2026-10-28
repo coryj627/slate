@@ -11,7 +11,7 @@ namespace SlateWindows;
 /// <see cref="Directory.Exists(string)"/> answer false on access and I/O
 /// errors too, so they cannot prove absence. Here a name is absent only
 /// when its folder's listing succeeded without it, and every failure, every
-/// reparse point on the way and every unexpected shape proves nothing.
+/// link on the way and every unexpected shape proves nothing.
 /// </summary>
 internal static class VaultAbsence
 {
@@ -19,8 +19,8 @@ internal static class VaultAbsence
     /// children of the vault-relative <paramref name="folder"/> ("" is the
     /// root) — that are definitely absent. One walk of the folder's
     /// components from the root down, never statting a candidate leaf, and at
-    /// most one listing; any exception or reparse point answers the empty
-    /// set.</summary>
+    /// most one listing; any exception or link (a junction or symbolic link,
+    /// never a cloud placeholder) answers the empty set.</summary>
     /// <param name="getAttributes">The stat each component takes (a fact
     /// records the paths it was asked for).</param>
     internal static IReadOnlySet<string> AbsentAmong(
@@ -63,8 +63,8 @@ internal static class VaultAbsence
                         : Nothing();
                 }
 
-                if ((attributes & FileAttributes.ReparsePoint) != 0
-                    || (attributes & FileAttributes.Directory) == 0)
+                if ((attributes & FileAttributes.Directory) == 0
+                    || ((attributes & FileAttributes.ReparsePoint) != 0 && IsLink(next)))
                 {
                     return Nothing();
                 }
@@ -88,6 +88,24 @@ internal static class VaultAbsence
         {
             _ = exception;
             return Nothing();
+        }
+    }
+
+    /// <summary>Whether a reparse-point folder is a link — a junction or a
+    /// symbolic link, which leads out of the vault as core's walk refuses
+    /// it — rather than a cloud placeholder (OneDrive Files On-Demand), which
+    /// core reads as an ordinary folder (red team, WB-12). Unreadable is a
+    /// link: it proves nothing.</summary>
+    private static bool IsLink(string folder)
+    {
+        try
+        {
+            return new DirectoryInfo(folder).LinkTarget is not null;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            _ = exception;
+            return true;
         }
     }
 

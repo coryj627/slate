@@ -26,6 +26,12 @@ internal static class VaultPaths
                 StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>Whether core's scanner hides a vault-relative path: any
+    /// component that starts with a dot (<c>.slate</c>, <c>.obsidian</c>,
+    /// <c>.git</c>, dot files), at any depth.</summary>
+    internal static bool IsHiddenFromTheScanner(string relative) =>
+        relative.Split('/').Any(component => component.StartsWith('.'));
+
     /// <summary><paramref name="absolutePath"/> relative to the vault root,
     /// with forward slashes.</summary>
     internal static string Relative(string vaultRoot, string absolutePath) =>

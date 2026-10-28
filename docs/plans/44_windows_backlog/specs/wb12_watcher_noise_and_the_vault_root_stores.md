@@ -18,6 +18,17 @@ This section outranks the text below it. WD5, WD6 and WD7 took the recommended a
   - `AnInaccessibleCandidateIsNeverPruned` denies listing on the folder that holds the candidate, the vault root.
   - `AMissingCandidateIsProbedWithoutStattingTheLeaf` calls `VaultAbsence.AbsentAmong` with a recording stat.
 - **WD7's probe** is `VaultLifecycleViewModel.HoldsOnlySlateData`, an internal static method, so no `RecentFolderHoldsOnlySlateDataForTests` seam is needed. It needs `.slate` present: an empty folder opens as before, and a folder it cannot list opens and reports its own failure.
+- **Red team round 1 (2026-10-28), what changed:**
+  - **WD7 asks before it refuses.** A vault opened and left empty is also a folder holding only `.slate`. Windows records no root identity (22W, WB-28), so a terminal refusal would lock such a vault out of Open Recent for good. Open Recent mirrors mac's alert for an entry without an identity (`RecentVault.launchRestoreMismatch`, Open Anyway). It asks "Open it anyway?" in a "Vault Not Found" box, default No; No speaks the sentence above and keeps the entry, and Yes opens the vault. `HoldsOnlySlateData` is mac's `holdsOnlySlateFolder`: `.slate` must be a real folder (not a file, not a link), and the shell's `desktop.ini` and `Thumbs.db` are ignored as mac ignores `.DS_Store`. New facts: `ARecentFolderThatHoldsOnlySlateDataOpensWhenTheReaderSaysSo`, `OnlyARealSlateFolderAloneIsAsked`.
+  - **The export's workers are tracked into the workspace's teardown drain**, as every other Bases worker is. A continuation that lands after Dispose neither asks nor announces, and `ObjectDisposedException` is caught. New fact: `AnExportStillPublishingAtCloseIsDrainedAndSaysNothingAfter`.
+  - **A path the scanner hides keeps the direct write.** Core refuses dot-prefixed save paths, and the scanner never indexes them, so writing one directly makes no watcher noise. New fact: `AnExportIntoAHiddenVaultFolderWritesDirectly`.
+  - **`VaultAbsence` treats only a link as proving nothing.** A junction or symbolic link, which `DirectoryInfo.LinkTarget` names, proves nothing; a cloud placeholder folder (OneDrive Files On-Demand), which core reads as an ordinary folder, is listed like any other.
+  - **AR-74's addendum names a folder's own security and attribute changes.**
+- **Red team round 1, what is unchanged, and why:**
+  - **The commit's locked re-probe still lists the folder.** The spec accepts that cost: one level, complete and so at most 5,000 indexed entries, once per folder per session. In .NET a per-name search pattern filters the whole listing anyway.
+  - **A folder joins `_prunedFolders` only when something was removed, as on mac** (`acknowledge` marks the ledger only when `prunedPinCount > 0`).
+  - **An export into a vault subfolder that is a junction is refused by core's anchored walk**, as every core save is.
+  - **Replacing a vault file that is not UTF-8, or that is over core's size cap, is refused** ("Slate never replaces bytes it could not observe"). Before WB-12 it was overwritten unread.
 
 ## Goal
 

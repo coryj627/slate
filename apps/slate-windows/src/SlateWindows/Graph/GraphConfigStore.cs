@@ -104,7 +104,7 @@ internal sealed class GraphConfigStore
         // recreated at its old path; `.slate` is made only inside a root
         // that exists.
         using AnchoredVaultStore store = AnchoredVaultStore.Open(_vaultRoot, createDirectory: true)
-            ?? throw new DirectoryNotFoundException($"{FileName}'s folder could not be opened.");
+            ?? throw new DirectoryNotFoundException("The vault's .slate folder could not be opened.");
         string? existing = null;
         try
         {
@@ -126,19 +126,12 @@ internal sealed class GraphConfigStore
 
     /// <summary>The existing file through the anchored store: null when it
     /// is absent; a file that exists but cannot be opened (denied, held, a
-    /// directory at its path) throws an <see cref="IOException"/> naming
-    /// it; invalid UTF-8 throws the strict decoder's exception.</summary>
+    /// directory at its path) throws the anchored store's
+    /// <see cref="IOException"/>; invalid UTF-8 throws the strict decoder's
+    /// exception. Only the exception's type is ever logged.</summary>
     private static string? ReadExisting(AnchoredVaultStore store)
     {
-        byte[]? bytes;
-        try
-        {
-            bytes = store.ReadAllBytesBounded(FileName, MaxReadBytes);
-        }
-        catch (IOException exception) when (exception is not (FileNotFoundException or DirectoryNotFoundException))
-        {
-            throw new IOException($"{FileName} is unreadable: {exception.Message}", exception);
-        }
+        byte[]? bytes = store.ReadAllBytesBounded(FileName, MaxReadBytes);
         if (bytes is null)
         {
             return null;

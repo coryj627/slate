@@ -126,6 +126,8 @@ public partial class MainWindow : Window
             paletteLane: paletteLane,
             openSession: openSeams?.OpenSession,
             treeWorker: openSeams?.TreeWorker);
+        _viewModel.ConfirmOpenSlateOnlyRecent =
+            openSeams?.ConfirmOpenSlateOnlyRecent ?? ConfirmOpenSlateOnlyRecentAsync;
         _viewModel.RecentVaultsChanged += ViewModel_RecentVaultsChanged;
         _viewModel.ReturnedToWelcome += ViewModel_ReturnedToWelcome;
         _viewModel.WorkspaceReady += ViewModel_WorkspaceReady;
@@ -319,6 +321,20 @@ public partial class MainWindow : Window
             Multiselect = false,
         };
         return Task.FromResult(dialog.ShowDialog(this) == true ? dialog.FolderName : null);
+    }
+
+    /// <summary>WD7 (WB-12): mac's "Vault Not Found" alert with Open
+    /// Anyway, for a recent vault whose folder holds only Slate's data.</summary>
+    private Task<bool> ConfirmOpenSlateOnlyRecentAsync(RecentVault recent)
+    {
+        MessageBoxResult result = MessageBox.Show(
+            this,
+            $"The folder at {recent.Path} holds only Slate's data (.slate); the vault's files are not here.\n\nOpen it anyway?",
+            "Vault Not Found",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning,
+            MessageBoxResult.No);
+        return Task.FromResult(result == MessageBoxResult.Yes);
     }
 
     private Task<bool> ConfirmRemoveMissingRecentAsync(RecentVault recent)

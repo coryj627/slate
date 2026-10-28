@@ -275,6 +275,66 @@ public sealed class BasesExportTests : IDisposable
         }
     }
 
+    /// <summary>Red team: a dot-prefixed folder is hidden from the scanner,
+    /// so its write is no watcher noise, and core refuses it as a save path.
+    /// The export writes it directly, as before WB-12.</summary>
+    [Fact]
+    public void AnExportIntoAHiddenVaultFolderWritesDirectly()
+    {
+        string target = Path.Combine(_root, ".exports", "x.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        using WorkspaceViewModel workspace = Workspace(target, confirm: true);
+        string expected = ExpectedText(workspace, "md");
+
+        Export(workspace, "md");
+
+        Assert.Equal(expected, File.ReadAllText(target));
+        Assert.Single(_announced, e => e is A11yEvent.BasesViewExported);
+        Assert.Empty(_confirmed);
+    }
+
+    /// <summary>Red team: with the production scheduling, the export's core
+    /// call is tracked into the workspace's teardown drain, so Dispose waits
+    /// it out before the session can go; and its continuation, landing after
+    /// Dispose, neither asks nor announces.</summary>
+    [Fact]
+    public void AnExportStillPublishingAtCloseIsDrainedAndSaysNothingAfter() => StaThread.RunPumped(() =>
+    {
+        string target = Path.Combine(_root, "export.md");
+        var workspace = new WorkspaceViewModel(
+            _session, _root, () => [], _announced.Add, startInteractionBackgroundWork: true);
+        workspace.OpenPath("Status.base");
+        BaseDocumentViewModel document = Assert.IsType<BaseDocumentViewModel>(workspace.ActiveBaseDocument);
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => document.State == BaseLoadState.Ready, TimeSpan.FromSeconds(10)),
+            "the base never loaded");
+        workspace.PickBasesExportDestination = (_, _) => target;
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        workspace.BasesExportPublishingForTests = relative =>
+        {
+            entered.Set();
+            _ = release.Wait(TimeSpan.FromSeconds(10));
+        };
+        _announced.Clear();
+
+        workspace.BasesExportMarkdownCommand.Execute(null);
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => entered.IsSet, TimeSpan.FromSeconds(10)),
+            "the publication never started");
+        _ = Task.Run(() =>
+        {
+            Thread.Sleep(TimeSpan.FromSeconds(1));
+            release.Set();
+        });
+        workspace.Dispose();
+
+        Assert.True(release.IsSet, "Dispose returned while the export's core call was in flight");
+        PumpedDispatcher.Drain();
+        Assert.True(File.Exists(target), "the publication the drain waited for did not land");
+        Assert.DoesNotContain(_announced, e => e is A11yEvent.BasesViewExported or A11yEvent.BasesViewExportFailed);
+    }, TimeSpan.FromSeconds(60), "STA test body timed out.");
+
     private string? IndexedHash(string relative)
     {
         using var cancel = new CancelToken();
