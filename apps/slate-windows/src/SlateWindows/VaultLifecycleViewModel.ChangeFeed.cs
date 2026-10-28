@@ -700,6 +700,11 @@ internal sealed partial class VaultLifecycleViewModel
         var held = new HashSet<string>(
             _feedProvenance.Values.Where(entry => entry.Tabs).Select(entry => entry.At),
             StringComparer.Ordinal);
+        // Codex round 6: where only a remembered file's followers are, another
+        // record moves the tabs and leaves the followers to that file.
+        var followersHeld = new HashSet<string>(
+            _feedProvenance.Values.Where(entry => !entry.Tabs).Select(entry => entry.At),
+            StringComparer.Ordinal);
         var renamedFrom = new HashSet<string>(StringComparer.Ordinal);
         var next = new Dictionary<string, (string At, bool Tabs)>(StringComparer.Ordinal);
         foreach (ChangeRecord rename in renames)
@@ -727,7 +732,12 @@ internal sealed partial class VaultLifecycleViewModel
             else if (!held.Contains(from))
             {
                 owners[moves.Count] = from;
-                moves.Add(new(from, rename.Path, rename.FromHash, removed.Contains(from)));
+                moves.Add(new(
+                    from,
+                    rename.Path,
+                    rename.FromHash,
+                    removed.Contains(from),
+                    KeepFollowers: followersHeld.Contains(from)));
             }
         }
 

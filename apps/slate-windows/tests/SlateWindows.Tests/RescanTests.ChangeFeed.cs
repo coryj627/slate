@@ -1530,6 +1530,71 @@ public sealed partial class RescanTests
         Assert.Equal("a.md", h.Workspace.Connections.Pin);
     });
 
+    /// <summary>Codex round 6 (medium, F4): Connections pins a, neither note
+    /// open. Another session renames b to c and then a to b; the run moves the
+    /// pin to b and cannot acknowledge. That session renames b to d. Read
+    /// again, b's own record (b to c) comes first, but the pin at b is a's: it
+    /// stays for a's record, which takes it to d.</summary>
+    [Fact]
+    public void AnotherFilesRecordLeavesARememberedPinToItsOwnFile() => RunSta(() =>
+    {
+        using var h = new Harness("feed-unacked-pin-collision", ("a.md", "pinned\n"), ("b.md", "the other\n"));
+        Assert.True(h.Workspace.Connections.PinTo("a.md"), "premise: Connections pins the note");
+        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
+        {
+            _ = other.RenameFile("b.md", "c.md");
+            _ = other.RenameFile("a.md", "b.md");
+        }
+
+        bool fail = true;
+        h.Lifecycle.ChangeFeedFaultForTests = called => called == "acknowledge" && fail;
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        fail = false;
+        Assert.Equal("b.md", h.Workspace.Connections.Pin);
+
+        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
+        {
+            _ = other.RenameFile("b.md", "d.md");
+        }
+
+        h.Events.Clear();
+        h.Now += TimeSpan.FromMinutes(1);
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+        Assert.Equal("d.md", h.Workspace.Connections.Pin);
+    });
+
+    /// <summary>The sibling: the pinned note comes home instead (b back to a);
+    /// b's own record leaves the pin, and it goes home with a.</summary>
+    [Fact]
+    public void AnotherFilesRecordLeavesARememberedPinThatComesHome() => RunSta(() =>
+    {
+        using var h = new Harness("feed-unacked-pin-collision-home", ("a.md", "pinned\n"), ("b.md", "the other\n"));
+        Assert.True(h.Workspace.Connections.PinTo("a.md"), "premise: Connections pins the note");
+        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
+        {
+            _ = other.RenameFile("b.md", "c.md");
+            _ = other.RenameFile("a.md", "b.md");
+        }
+
+        bool fail = true;
+        h.Lifecycle.ChangeFeedFaultForTests = called => called == "acknowledge" && fail;
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        fail = false;
+        Assert.Equal("b.md", h.Workspace.Connections.Pin);
+
+        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
+        {
+            _ = other.RenameFile("b.md", "a.md");
+        }
+
+        h.Events.Clear();
+        h.Now += TimeSpan.FromMinutes(1);
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+        Assert.Equal("a.md", h.Workspace.Connections.Pin);
+    });
+
     /// <summary>Codex round 3 (medium, F4): another session renames a to b,
     /// the run moves the tab and cannot acknowledge; this session's user
     /// renames b to c, and the other session renames c to d. Core reads one

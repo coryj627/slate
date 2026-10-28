@@ -169,14 +169,17 @@ internal sealed partial class WorkspaceViewModel
     /// baseline has become. <paramref name="FollowersOnly"/> (codex round 5)
     /// — only the Connections pin and the closed tabs at
     /// <paramref name="From"/> go, which an unacknowledged run moved there;
-    /// no tab is touched.</summary>
+    /// no tab is touched. <paramref name="KeepFollowers"/> (codex round 6) —
+    /// the pin and the closed tabs at <paramref name="From"/> are another
+    /// file's, put there by an unacknowledged run, so only tabs move.</summary>
     internal readonly record struct FeedRename(
         string From,
         string To,
         string? FromHash,
         bool OldIsGone,
         bool Provenance = false,
-        bool FollowersOnly = false);
+        bool FollowersOnly = false,
+        bool KeepFollowers = false);
 
     /// <summary>What <see cref="RetargetPathsForFeedRenames"/> moved, by the
     /// renames' indexes: the renames that moved a tab, and those that moved
@@ -249,7 +252,7 @@ internal sealed partial class WorkspaceViewModel
                 }
             }
 
-            if (rename.OldIsGone && !stayed)
+            if (rename.OldIsGone && !stayed && !rename.KeepFollowers)
             {
                 follows.Add((index, source, destination, false));
             }
