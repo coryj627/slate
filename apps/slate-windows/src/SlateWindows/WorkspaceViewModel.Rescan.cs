@@ -878,15 +878,17 @@ internal sealed partial class WorkspaceViewModel
     /// window has a record and an embed is unresolved or a base card's
     /// membership may have moved, or its own tab reloaded; the history panel
     /// reloads when its note's tab reloaded or a record names the note; the
-    /// Bases re-run and the graph probe run when the window has any record;
-    /// the editor caches drop for a record — and each also runs for its retry
-    /// entry or, on an explicit Refresh, when it shows a failure state (the
-    /// owner's decision Q8: a reading model whose last refresh failed
-    /// re-projects even with no dependency on other files). On an explicit
-    /// Refresh the Bases re-run, the graph probe and the caches' drop always
-    /// run: a STALE or Error graph recovers there, and dashboards and saved
-    /// queries live in the cache, outside the feed, so another session's
-    /// change to one has no record. A null <paramref name="touch"/> or an
+    /// Bases re-run and the graph probe run when the window has any record —
+    /// and each also runs for its retry entry or, on an explicit Refresh,
+    /// when it shows a failure state (the owner's decision Q8: a reading model
+    /// whose last refresh failed re-projects even with no dependency on other
+    /// files). On an explicit Refresh the Bases re-run and the graph probe
+    /// always run: a STALE or Error graph recovers there, and dashboards and
+    /// saved queries live in the cache, outside the feed, so another session's
+    /// change to one has no record. The editor caches drop on every run, as
+    /// R-9's re-sync always dropped them: the shell gate's citation popover
+    /// opens only after a run's drop, which an empty foreground window
+    /// withheld when this was narrowed. A null <paramref name="touch"/> or an
     /// <see cref="RescanTouch.Ungated"/> one is R-9's full pass, the latter
     /// with the run's retries and recovery set. A dependent that fails puts
     /// its surface in <paramref name="failedSurfaces"/>.</remarks>
@@ -897,11 +899,7 @@ internal sealed partial class WorkspaceViewModel
         RescanTouch? touch = null,
         ISet<RescanSurface>? failedSurfaces = null)
     {
-        if (touch is null || touch.AnyRecord || touch.Recover)
-        {
-            InvalidateAllInteractionStates();
-        }
-
+        InvalidateAllInteractionStates();
         foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
         {
             TrackTabRescanWork(tab);
