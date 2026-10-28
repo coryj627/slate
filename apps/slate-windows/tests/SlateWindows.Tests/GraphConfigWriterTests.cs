@@ -100,6 +100,32 @@ public sealed class GraphConfigWriterTests : IDisposable
         Assert.Null(writer.Newest(_root));
     }
 
+    /// <summary>WB-12 (#1475 bullet 1): a write for a vault whose root is
+    /// gone is logged as <c>GraphConfigPersistFailed</c>, leaves nothing
+    /// outstanding and recreates nothing at the root's path.</summary>
+    [Fact]
+    public void AMissingRootIsLoggedAsGraphConfigPersistFailed()
+    {
+        string gone = Path.Combine(_root, "renamed-away");
+        var writer = new GraphConfigWriter();
+        using var output = new StringWriter();
+        TextWriter original = Console.Error;
+        try
+        {
+            Console.SetError(output);
+            Assert.True(writer.Enqueue(gone, WithDepth(3), writer.Reserve(gone)).Wait(TimeSpan.FromSeconds(10)));
+        }
+        finally
+        {
+            Console.SetError(original);
+        }
+
+        Assert.Equal($"SlateWindows.GraphConfigPersistFailed (DirectoryNotFoundException){Environment.NewLine}", output.ToString());
+        Assert.Equal(1, writer.FailedForTests);
+        Assert.Null(writer.Newest(gone));
+        Assert.False(Directory.Exists(gone), "the write recreated a root that was gone");
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
