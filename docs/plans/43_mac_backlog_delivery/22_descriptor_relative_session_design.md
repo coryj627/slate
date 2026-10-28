@@ -658,7 +658,10 @@ would want the shared `fs_root` convention to reach next.
   `FileRecentsStore` under `%LOCALAPPDATA%` keyed by the upper-cased root
   path (identity is always null on Windows,
   `W/FileRecentsStore.cs:22-37`); `RecentVaultsStore`
-  (`W/RecentVaultsStore.cs:16-160`). Three `FileSystemWatcher`s on the
+  (`W/RecentVaultsStore.cs:16-160`). (2026-10-28, WB-12, #1475 bullet 1:
+  `GraphConfigStore.Write` now goes through `AnchoredVaultStore`, so a
+  renamed or deleted root is refused and never recreated. The identity
+  comparison stays with 22W, plan 44's WB-28.) Three `FileSystemWatcher`s on the
   root/`.obsidian`/`.obsidian\plugins` fixed at construction
   (`W/SyncMarkerWatcher.cs:115-148`, each event re-checks
   `Directory.Exists`). Reveal via `Process.Start("explorer.exe",

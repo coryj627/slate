@@ -546,6 +546,14 @@ Outcomes, all Medium and all core vocabulary:
   failed is not a divergence: its entry carries it to the next write that
   lands, or to the retry's replay. No existence probing of pins or
   shortcuts: that would be a host rule with no mac twin.
+- (2026-10-28, WB-12, #1505) The retry still probes nothing. Outside it, a
+  stale pin is now pruned lazily on a complete level fetch: once per folder
+  per session, never on a read-only file. A worker proves absence with an
+  error-aware probe. A commit on the dispatcher re-checks it under the
+  store lock, in one turn with its memory publication, and only while no
+  pin edit has landed since the fetch, so the file and memory always agree.
+  This is the Windows twin of mac's `pruneStaleSidebarPins`, so the rule
+  above no longer lacks a mac twin. Shortcuts are not pruned.
 
 The three events become both-host rows in the ledger; their Windows
 designations are removed. The construction sites are the three arms of

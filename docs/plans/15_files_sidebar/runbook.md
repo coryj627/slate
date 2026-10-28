@@ -173,6 +173,9 @@ cargo test -p slate-core --release -- session::tests::dir_tree    # perf guards 
 - **Stale pins/shortcuts after external file moves**: pins/shortcuts follow
   structural transforms only for in-app operations; externally-moved paths
   are pruned lazily on the next level fetch (announced once per session).
+  Stale pins are pruned on both hosts. Windows has done so since WB-12
+  (#1505), on a complete level fetch, once per folder per session. Its
+  prune is silent, and it never runs on a read-only `.slate/sidebar.json`.
 - **Import interrupted**: the Finder-import flow is copy-then-index with
   per-item reports; re-running the import is safe (exclusive creation
   refuses to clobber and reports per item).
