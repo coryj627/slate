@@ -43,15 +43,23 @@ internal sealed partial class VaultLifecycleViewModel
     // found it; a close or a vault switch clears it (ResetRescanState).
     private readonly HashSet<RescanSurface> _retrySet = [];
 
-    // The feed renames this session applied since its cursor last moved,
-    // origin to destination: a run that applied a window and then could not
-    // acknowledge it (cancelled, a feed read or the acknowledgment failed)
-    // leaves its tabs moved while the next run reads from the same cursor,
-    // where core composes a later rename with the earlier one (A→B, then
-    // B→C, is one record A→C) or cancels a rename that came home. Cleared by
-    // an acknowledgment and by a close or a vault switch.
-    private readonly Dictionary<string, (string To, string? FromHash)> _appliedFeedRenames =
-        new(StringComparer.Ordinal);
+    // The provenance of the files whose feed renames this session applied
+    // since its cursor last moved (codex round 2): each file's path at the
+    // cursor, and the path its tabs were moved to. A run that applied a
+    // window and then could not acknowledge it (a feed read or the
+    // acknowledgment failed) leaves its tabs moved while the next run reads
+    // from the same cursor again. Only a run's first window is read from the
+    // cursor, and its records name each file by its path there: core composes
+    // a later rename with the earlier one (A→B, then B→C, is one record A→C)
+    // and drops a rename that came home, and the records of a rename already
+    // applied come again. So that window moves a file's tabs by this map,
+    // from where they are, whatever their baseline has become since, and
+    // leaves the tabs at a path the map moved a file to to that file's own
+    // record. A further pass reads from the window before it, whose records
+    // name each file by its path now: it moves tabs by path and only carries
+    // the map forward. Cleared by an acknowledgment and by a close or a vault
+    // switch.
+    private readonly Dictionary<string, string> _feedProvenance = new(StringComparer.Ordinal);
 
     /// <summary>The retry set, for the facts.</summary>
     internal IReadOnlySet<RescanSurface> RetrySetForTests => _retrySet;
@@ -267,7 +275,7 @@ internal sealed partial class VaultLifecycleViewModel
                 if (window.Status is ChangeFeedStatus.Exact)
                 {
                     WindowApplication? applied = await ApplyChangeFeedWindowAsync(
-                        generation, reason, session, window, cancel, cancellation, journal, retry, recover, failedSurfaces);
+                        generation, reason, session, window, fromCursor: from is null, cancel, cancellation, journal, retry, recover, failedSurfaces);
                     if (applied is null)
                     {
                         return null;
@@ -393,7 +401,7 @@ internal sealed partial class VaultLifecycleViewModel
 
             if (acknowledged)
             {
-                _appliedFeedRenames.Clear();
+                _feedProvenance.Clear();
                 if (last is { Status: ChangeFeedStatus.Exact, Counted: true })
                 {
                     outcome.Counted = true;
@@ -430,8 +438,10 @@ internal sealed partial class VaultLifecycleViewModel
     /// tabs that held their files in one planned batch
     /// (<see cref="WorkspaceViewModel.RetargetPathsForFeedRenames"/>, the
     /// owner's decision Q3), each with whether its origin is gone decided over
-    /// the complete window, and the renames an unacknowledged run applied are
-    /// followed on. Then, whatever the window holds, every open tab is
+    /// the complete window, and the files an unacknowledged run moved are
+    /// moved by their provenance when the window is read from the cursor
+    /// (<paramref name="fromCursor"/>, <see cref="PlanFeedRenames"/>). Then,
+    /// whatever the window holds, every open tab is
     /// compared with the index and the dependents follow, narrowed to the
     /// window's paths (<see cref="WorkspaceViewModel.RescanTouch"/>), beside
     /// the tree's one silent refresh when the window has a record. Null when
@@ -442,6 +452,7 @@ internal sealed partial class VaultLifecycleViewModel
         RescanReason reason,
         VaultSession session,
         ChangeFeedWindow window,
+        bool fromCursor,
         CancelToken cancel,
         CancellationToken cancellation,
         QuickSwitcherViewModel.ReplacementJournal? journal,
@@ -554,7 +565,7 @@ internal sealed partial class VaultLifecycleViewModel
         }
 
         if (Workspace is WorkspaceViewModel workspace
-            && PlanFeedRenames(renames, removed, present) is { Count: > 0 } moves)
+            && PlanFeedRenames(renames, removed, present, fromCursor) is { Count: > 0 } moves)
         {
             try
             {
@@ -591,21 +602,67 @@ internal sealed partial class VaultLifecycleViewModel
     }
 
     /// <summary>
-    /// The window's moves: each <c>Renamed</c> record's, and for a record whose
-    /// origin an unacknowledged run already moved on, the move from wherever
-    /// that run left its tabs (the chain's every stop) to the record's
-    /// destination; and for a rename an unacknowledged run applied that came
-    /// home since — its destination gone, its origin back, no record of its
-    /// own — the move back. The applied renames are kept until the cursor
-    /// moves (<see cref="_appliedFeedRenames"/>).
+    /// The window's moves, by the files' provenance
+    /// (<see cref="_feedProvenance"/>; codex round 2).
+    /// <para>A window read from the cursor names each file by its path
+    /// there. A record whose origin the map holds moves that file's tabs from
+    /// the path the map put them at to the record's destination, whatever
+    /// their baseline has become (a provenance move, no hash test); a record
+    /// whose origin is a path the map put another file's tabs at leaves them
+    /// to that file's own record; any other record moves the tabs at its
+    /// origin by the baseline rule. A file the map holds that came home since
+    /// — the path its tabs are at gone, its origin back, no record of its own
+    /// — goes back. The map then holds this window's renames.</para>
+    /// <para>A further pass names each file by its path now: every record
+    /// moves the tabs at its origin by the baseline rule, and the map's entry
+    /// for a file it moved follows it; a file the map does not hold enters it
+    /// when its origin is not already another file's origin there.</para>
     /// </summary>
     private List<WorkspaceViewModel.FeedRename> PlanFeedRenames(
         IReadOnlyList<ChangeRecord> renames,
         IReadOnlySet<string> removed,
-        IReadOnlySet<string> present)
+        IReadOnlySet<string> present,
+        bool fromCursor)
     {
         var moves = new List<WorkspaceViewModel.FeedRename>();
+        if (!fromCursor)
+        {
+            var originAt = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach ((string origin, string at) in _feedProvenance)
+            {
+                originAt[at] = origin;
+            }
+
+            var carried = new List<(string Origin, string To)>();
+            foreach (ChangeRecord rename in renames)
+            {
+                if (rename.RenamedFrom is not string from)
+                {
+                    continue;
+                }
+
+                moves.Add(new(from, rename.Path, rename.FromHash, removed.Contains(from)));
+                if (originAt.TryGetValue(from, out string? origin))
+                {
+                    carried.Add((origin, rename.Path));
+                }
+                else if (!_feedProvenance.ContainsKey(from))
+                {
+                    carried.Add((from, rename.Path));
+                }
+            }
+
+            foreach ((string origin, string to) in carried)
+            {
+                _feedProvenance[origin] = to;
+            }
+
+            return moves;
+        }
+
+        var held = new HashSet<string>(_feedProvenance.Values, StringComparer.Ordinal);
         var renamedFrom = new HashSet<string>(StringComparer.Ordinal);
+        var next = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (ChangeRecord rename in renames)
         {
             if (rename.RenamedFrom is not string from)
@@ -614,36 +671,29 @@ internal sealed partial class VaultLifecycleViewModel
             }
 
             _ = renamedFrom.Add(from);
-            moves.Add(new(from, rename.Path, rename.FromHash, removed.Contains(from)));
-            var visited = new HashSet<string>(StringComparer.Ordinal) { from };
-            string at = from;
-            while (_appliedFeedRenames.TryGetValue(at, out (string To, string? FromHash) applied)
-                && visited.Add(applied.To))
+            next[from] = rename.Path;
+            if (_feedProvenance.TryGetValue(from, out string? at))
             {
-                if (!string.Equals(applied.To, rename.Path, StringComparison.Ordinal))
-                {
-                    moves.Add(new(applied.To, rename.Path, rename.FromHash, removed.Contains(applied.To)));
-                }
-
-                at = applied.To;
+                moves.Add(new(at, rename.Path, rename.FromHash, !present.Contains(at), Provenance: true));
+            }
+            else if (!held.Contains(from))
+            {
+                moves.Add(new(from, rename.Path, rename.FromHash, removed.Contains(from)));
             }
         }
 
-        foreach ((string from, (string to, string? fromHash)) in _appliedFeedRenames.ToList())
+        foreach ((string origin, string at) in _feedProvenance)
         {
-            if (!renamedFrom.Contains(from) && removed.Contains(to) && present.Contains(from))
+            if (!renamedFrom.Contains(origin) && removed.Contains(at) && present.Contains(origin))
             {
-                moves.Add(new(to, from, fromHash, OldIsGone: true));
-                _ = _appliedFeedRenames.Remove(from);
+                moves.Add(new(at, origin, FromHash: null, OldIsGone: true, Provenance: true));
             }
         }
 
-        foreach (ChangeRecord rename in renames)
+        _feedProvenance.Clear();
+        foreach ((string origin, string to) in next)
         {
-            if (rename.RenamedFrom is string from)
-            {
-                _appliedFeedRenames[from] = (rename.Path, rename.FromHash);
-            }
+            _feedProvenance[origin] = to;
         }
 
         return moves;
@@ -658,8 +708,10 @@ internal sealed partial class VaultLifecycleViewModel
     /// that committed before it is already in them. The reads run on the
     /// worker under the run's token; an own event journaled while they ran
     /// (a rename the read predates) makes the re-read run again, at most three
-    /// times. Returns the failed operations (one, and Quick Open enters the
-    /// retry set), or null when cancelled.
+    /// times; a journal still moving after the third leaves Quick Open in the
+    /// retry set, with no error (codex round 2): the next run's full reload
+    /// settles it. Returns the failed operations (one, and Quick Open enters
+    /// the retry set), or null when cancelled.
     /// </summary>
     private async Task<ulong?> RereadJournalAsync(
         int generation,
@@ -740,6 +792,7 @@ internal sealed partial class VaultLifecycleViewModel
             }
         }
 
+        _ = failedSurfaces.Add(RescanSurface.QuickOpen);
         return 0;
     }
 }

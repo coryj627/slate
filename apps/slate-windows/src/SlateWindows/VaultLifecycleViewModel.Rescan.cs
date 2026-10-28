@@ -782,6 +782,14 @@ internal sealed partial class VaultLifecycleViewModel
                 _ = failedSurfaces.Add(RescanSurface.Bases);
             }
 
+            if (documents.ReadingFailed)
+            {
+                // Codex round 2 (F2): so is a reloaded or re-seated note whose
+                // projection failed — the Reading retry re-checks a model
+                // whose last refresh failed.
+                _ = failedSurfaces.Add(RescanSurface.Reading);
+            }
+
             try
             {
                 failed += await workspace.ReSyncDependentsAsync(documents, indexed, cancellation, touch, failedSurfaces);
@@ -1212,6 +1220,6 @@ internal sealed partial class VaultLifecycleViewModel
         _watcherRequestWhileAway = false;
         _lastWatcherSentenceAt = null;
         _retrySet.Clear();
-        _appliedFeedRenames.Clear();
+        _feedProvenance.Clear();
     }
 }

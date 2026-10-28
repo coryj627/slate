@@ -105,13 +105,17 @@ internal sealed partial class WorkspaceViewModel
     /// whose baseline, a board whose basis, a base whose definition hash
     /// differed), the base documents it reopened, which open paths it
     /// actually reloaded (WB-10: a dirty tab only marked stale is changed,
-    /// not reloaded), and whether a base's reopen failed.</summary>
+    /// not reloaded), whether a base's reopen or load failed (a re-seated
+    /// base's included), and whether a reloaded or re-seated note's reading
+    /// projection failed (WB-10, codex round 2): each is its surface's to
+    /// retry, since the document reads as current on the next run.</summary>
     internal sealed record RescanDocumentsOutcome(
         ulong Failed,
         IReadOnlySet<string> ChangedOpenPaths,
         IReadOnlySet<BaseDocumentViewModel> ReopenedBases,
         IReadOnlySet<string> ReloadedOpenPaths,
-        bool BasesFailed = false)
+        bool BasesFailed = false,
+        bool ReadingFailed = false)
     {
         /// <summary>What the dependents see when the document re-sync
         /// itself failed (codex PR 7 round 3, finding 4): nothing changed,
@@ -159,8 +163,16 @@ internal sealed partial class WorkspaceViewModel
     /// tabs that held the file at <paramref name="From"/> (its baseline
     /// <paramref name="FromHash"/>) go to <paramref name="To"/>;
     /// <paramref name="OldIsGone"/> — nothing is at <paramref name="From"/>
-    /// at the window's target.</summary>
-    internal readonly record struct FeedRename(string From, string To, string? FromHash, bool OldIsGone);
+    /// at the window's target. <paramref name="Provenance"/> (codex round 2)
+    /// — the tabs at <paramref name="From"/> are the file's because an
+    /// unacknowledged run moved them there, so they go whatever their
+    /// baseline has become.</summary>
+    internal readonly record struct FeedRename(
+        string From,
+        string To,
+        string? FromHash,
+        bool OldIsGone,
+        bool Provenance = false);
 
     /// <summary>
     /// WB-10 (#1293, design §4.3; the owner's decision Q3, AR-8 amended): a
@@ -253,6 +265,11 @@ internal sealed partial class WorkspaceViewModel
 
     private static bool FollowsFeedRename(WorkspaceTabViewModel tab, FeedRename rename)
     {
+        if (rename.Provenance)
+        {
+            return true;
+        }
+
         if (!tab.IsMarkdown || tab.SavedContentHash is not string baseline)
         {
             return rename.OldIsGone;
@@ -349,7 +366,9 @@ internal sealed partial class WorkspaceViewModel
         // round 4, finding 1): the run's load is their one load (round 5,
         // fix 3) — the passes below and the Bases dependent skip them.
         var reseated = new HashSet<object>(ReferenceEqualityComparer.Instance);
-        failed += await ReseatMissingTabsAsync(probeReseatOnWorker, reseated, cancellation);
+        // The surfaces whose publications failed here (codex round 2).
+        var failedSurfaces = new HashSet<RescanSurface>();
+        failed += await ReseatMissingTabsAsync(probeReseatOnWorker, reseated, failedSurfaces, cancellation);
 
         var changed = new HashSet<string>(StringComparer.Ordinal);
         var reloaded = new HashSet<string>(StringComparer.Ordinal);
@@ -386,7 +405,7 @@ internal sealed partial class WorkspaceViewModel
             work.Add(RunCountedReload(
                 "markdown",
                 path,
-                () => ReloadMarkdownPathAsync(path, indexHash, tickets, readOnWorker, reloaded, cancellation)));
+                () => ReloadMarkdownPathAsync(path, indexHash, tickets, readOnWorker, reloaded, failedSurfaces, cancellation)));
         }
 
         foreach (CanvasDocumentViewModel canvas in _canvasDocuments.Values.Distinct())
@@ -447,8 +466,15 @@ internal sealed partial class WorkspaceViewModel
         failed += await CountRescanFailuresAsync(work, cancellation);
         // WB-10 (#1293): a base whose reopen failed is the Bases surface's to
         // retry — its definition hash may already read as current.
-        bool basesFailed = baseReopens.Any(reopen => !reopen.IsCompletedSuccessfully);
-        return new RescanDocumentsOutcome(failed, changed, reopened, reloaded, basesFailed);
+        bool basesFailed = failedSurfaces.Contains(RescanSurface.Bases)
+            || baseReopens.Any(reopen => !reopen.IsCompletedSuccessfully);
+        return new RescanDocumentsOutcome(
+            failed,
+            changed,
+            reopened,
+            reloaded,
+            basesFailed,
+            failedSurfaces.Contains(RescanSurface.Reading));
     }
 
     /// <summary>
@@ -464,11 +490,14 @@ internal sealed partial class WorkspaceViewModel
     /// shows bytes the index does not vouch for; any other clean Markdown
     /// tab stays missing and counts one error (the next rescan re-seats
     /// it); a tab of another kind re-seats as before. A failed probe keeps
-    /// the tab missing and counts one error. Returns the errors.
+    /// the tab missing and counts one error. Returns the errors; a re-seated
+    /// base whose load failed, or a note whose projection did, puts its
+    /// surface in <paramref name="failedSurfaces"/>.
     /// </summary>
     private async Task<ulong> ReseatMissingTabsAsync(
         Func<IReadOnlyList<(string Path, bool Markdown)>, Task<IReadOnlyDictionary<string, ReseatProbe>>> probeOnWorker,
         ISet<object> reseated,
+        ISet<RescanSurface> failedSurfaces,
         CancellationToken cancellation)
     {
         TabTicket[] tickets =
@@ -514,8 +543,11 @@ internal sealed partial class WorkspaceViewModel
             new(Groups.SelectMany(group => group.Tabs), ReferenceEqualityComparer.Instance);
         var failedPaths = new HashSet<string>(StringComparer.Ordinal);
         // The re-seated documents' publications (a board's or base's load, a
-        // reading-mode note's projection), each counted.
+        // reading-mode note's projection), each counted; the bases' and the
+        // projections' also kept apart, for their surfaces' retries.
         var documents = new List<Task>();
+        var baseLoads = new List<Task>();
+        var projections = new List<Task>();
         foreach (TabTicket ticket in tickets)
         {
             WorkspaceTabViewModel tab = ticket.Tab;
@@ -597,12 +629,14 @@ internal sealed partial class WorkspaceViewModel
                 }
                 else if (tab.Base is { } document && reseated.Add(document))
                 {
-                    documents.Add(RunKindReload("base", tab.Path, () =>
+                    Task load = RunKindReload("base", tab.Path, () =>
                     {
                         Task reopen = document.LoadAsync(cancellation);
                         TouchRescanScheduler(document);
                         return reopen;
-                    }));
+                    });
+                    documents.Add(load);
+                    baseLoads.Add(load);
                 }
 
                 continue;
@@ -632,10 +666,22 @@ internal sealed partial class WorkspaceViewModel
 
             tab.ReplaceItemWithReadText(tab.Item, probe.Read!.Value.Text, cancellation);
             documents.Add(tab.RescanReadingPublication);
+            projections.Add(tab.RescanReadingPublication);
             TrackTabRescanWork(tab);
         }
 
-        return (ulong)failedPaths.Count + await CountRescanFailuresAsync(documents, cancellation);
+        ulong documentsFailed = await CountRescanFailuresAsync(documents, cancellation);
+        if (baseLoads.Any(load => !load.IsCompletedSuccessfully))
+        {
+            _ = failedSurfaces.Add(RescanSurface.Bases);
+        }
+
+        if (projections.Any(projection => !projection.IsCompletedSuccessfully))
+        {
+            _ = failedSurfaces.Add(RescanSurface.Reading);
+        }
+
+        return (ulong)failedPaths.Count + documentsFailed;
     }
 
     /// <summary>
@@ -666,13 +712,17 @@ internal sealed partial class WorkspaceViewModel
     /// tab's bytes could not be vouched for, plus one per reloaded
     /// reading-mode tab whose projection failed (codex PR 7 round 4,
     /// finding 3: the projection is the rescan's — silent, under the run's
-    /// token, and awaited here).</returns>
+    /// token, and awaited here). A failed projection also puts Reading in
+    /// <paramref name="failedSurfaces"/> (WB-10, codex round 2): the reloaded
+    /// tab reads as current on the next run, so only the Reading retry
+    /// re-checks it.</returns>
     private async Task<ulong> ReloadMarkdownPathAsync(
         string path,
         string indexHash,
         IReadOnlyList<TabTicket> tickets,
         Func<string, Task<RescanRead?>> readOnWorker,
         ISet<string> reloadedPaths,
+        ISet<RescanSurface> failedSurfaces,
         CancellationToken cancellation)
     {
         RescanRead? read = await readOnWorker(path);
@@ -757,7 +807,13 @@ internal sealed partial class WorkspaceViewModel
             failed++;
         }
 
-        return failed + await CountRescanFailuresAsync(projections, cancellation);
+        ulong projectionsFailed = await CountRescanFailuresAsync(projections, cancellation);
+        if (projectionsFailed > 0)
+        {
+            _ = failedSurfaces.Add(RescanSurface.Reading);
+        }
+
+        return failed + projectionsFailed;
     }
 
     /// <summary>
