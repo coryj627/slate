@@ -724,6 +724,9 @@ internal sealed partial class FilesSidebarViewModel
         // (overflow, settings notice) returns on the next organic
         // refresh.
         ReassertStatusAfterPublication();
+        // WB-12 (#1505): the published levels' stale pins, after the
+        // publication; the prune itself is silent.
+        StartReportedPinPrunes();
     }
 
     internal bool CancelTreeRefresh()
