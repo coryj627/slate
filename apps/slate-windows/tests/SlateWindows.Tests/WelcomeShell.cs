@@ -29,6 +29,9 @@ internal sealed class WelcomeShell : IDisposable
     private readonly ManualResetEventSlim _scanGate = new(false);
     private readonly ManualResetEventSlim _openSessionEntered = new(false);
     private readonly ManualResetEventSlim _scanEntered = new(false);
+    private readonly ManualResetEventSlim _treeGate = new(false);
+    private readonly ManualResetEventSlim _treeEntered = new(false);
+    private bool _parkTheTree;
     private int _pickCount;
     private int _confirmCount;
 
@@ -75,7 +78,19 @@ internal sealed class WelcomeShell : IDisposable
                 DuringConfirm?.Invoke();
                 return Task.FromResult(false);
             },
-            ObservePosted: Posted.Add);
+            ObservePosted: Posted.Add,
+            TreeWorker: (work, token) => Task.Run(
+                () =>
+                {
+                    if (Volatile.Read(ref _parkTheTree))
+                    {
+                        _treeEntered.Set();
+                        Park(_treeGate, "the tree's read");
+                    }
+
+                    work();
+                },
+                token));
 
         // Registers the pack: scheme and its application authority without
         // constructing an Application (TextBoxAccessibilityTests explains).
@@ -187,6 +202,22 @@ internal sealed class WelcomeShell : IDisposable
 
     public void ReleaseScan() => _scanGate.Set();
 
+    /// <summary>#1684: park the Files tree's reads on their worker from here
+    /// until <see cref="ReleaseTheTree"/>.</summary>
+    public void ParkTheTree() => Volatile.Write(ref _parkTheTree, true);
+
+    public void ReleaseTheTree()
+    {
+        Volatile.Write(ref _parkTheTree, false);
+        _treeGate.Set();
+    }
+
+    /// <summary>Pump until a Files tree read waits at its gate.</summary>
+    public void WaitForTheTreePark() =>
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => _treeEntered.IsSet, ParkBound),
+            "the Files tree never read on its worker");
+
     /// <summary>Pump until the open's session phase waits at its gate.</summary>
     public void WaitForTheOpenSessionPark() =>
         Assert.True(
@@ -236,6 +267,7 @@ internal sealed class WelcomeShell : IDisposable
         try
         {
             ReleaseParks();
+            ReleaseTheTree();
             // A window whose open still runs refuses its own close.
             _ = PumpedDispatcher.PumpUntil(() => !Lifecycle.IsBusy, ParkBound);
             Shell.Close();
