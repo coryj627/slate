@@ -151,8 +151,9 @@ public sealed class FilesSidebarPinTests
             UseShellExecute = false,
             CreateNoWindow = true,
         };
-        using (var mklink = System.Diagnostics.Process.Start(start)!)
+        using (System.Diagnostics.Process? mklink = System.Diagnostics.Process.Start(start))
         {
+            Assert.True(mklink is not null, "premise: cmd.exe started to run mklink /J");
             Assert.True(mklink.WaitForExit(10_000) && mklink.ExitCode == 0, "premise: mklink /J made the junction");
         }
         Assert.NotNull(new DirectoryInfo(junction).LinkTarget);
