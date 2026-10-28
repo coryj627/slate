@@ -87,6 +87,10 @@ public sealed partial class ShellAccessibilityTests
                     small.Zip(big, (s, b) => $"{b.Key}: {b.Elapsed.TotalMilliseconds:F0} ms (small {s.Elapsed.TotalMilliseconds:F0} ms)"));
                 TestContext.Current.TestOutputHelper?.WriteLine($"WB-11 reading list moves ({heard} events heard): {table}");
                 var slow = new List<string>();
+                // The median of each kind of move on the small note is that
+                // kind's cost on this runner, now; 5× it leaves room for a
+                // loaded runner's noise while a per-item cost (main: about
+                // 300× on every move) still fails.
                 foreach (ReadingMove move in big)
                 {
                     double median = Median(small.Where(s => s.Kind == move.Kind).Select(s => s.Elapsed.TotalMilliseconds));

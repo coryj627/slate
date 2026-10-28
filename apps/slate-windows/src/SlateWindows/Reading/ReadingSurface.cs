@@ -856,6 +856,11 @@ internal sealed class ReadingSurface : RichTextBox
     /// carried the complete note while the child list held two
     /// elements for the full 90-second wait). No-op unless a UIA
     /// client is attached — that is when a peer exists.
+    ///
+    /// Called only from <see cref="InvalidateStructuralPeers"/>: on its own
+    /// it would rebuild the surface's children from the peers' caches of the
+    /// previous structural generation, so a change to the document's
+    /// blocks calls that entry, never this one (WB-11, #1329).
     /// </summary>
     private void InvalidateAutomationChildren()
     {
