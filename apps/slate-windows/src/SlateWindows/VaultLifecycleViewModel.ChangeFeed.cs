@@ -64,6 +64,10 @@ internal sealed partial class VaultLifecycleViewModel
     /// <summary>The retry set, for the facts.</summary>
     internal IReadOnlySet<RescanSurface> RetrySetForTests => _retrySet;
 
+    /// <summary>The files' provenance, origin to the path their tabs are at,
+    /// for the facts.</summary>
+    internal IReadOnlyDictionary<string, string> FeedProvenanceForTests => _feedProvenance;
+
     /// <summary>Test seam: a smaller page than the host's 1,000 (within
     /// core's bound), so a fact proves the paging with a few records.</summary>
     internal uint? ChangeFeedPageLimitForTests { get; set; }
@@ -682,11 +686,15 @@ internal sealed partial class VaultLifecycleViewModel
             }
         }
 
+        // Codex round 3: a remembered file with no rename of its own, whose
+        // origin was not removed, is at its origin again — come home, or a
+        // swap or a chain undone — and its tabs go back, all planned as one
+        // batch.
         foreach ((string origin, string at) in _feedProvenance)
         {
-            if (!renamedFrom.Contains(origin) && removed.Contains(at) && present.Contains(origin))
+            if (!renamedFrom.Contains(origin) && !removed.Contains(origin))
             {
-                moves.Add(new(at, origin, FromHash: null, OldIsGone: true, Provenance: true));
+                moves.Add(new(at, origin, FromHash: null, !present.Contains(at), Provenance: true));
             }
         }
 
@@ -697,6 +705,25 @@ internal sealed partial class VaultLifecycleViewModel
         }
 
         return moves;
+    }
+
+    /// <summary>Codex round 3 (F4): a Slate-owned rename of a path the
+    /// provenance put a file's tabs at moved those tabs, so the provenance
+    /// follows it; a folder's rename moves every remembered path under it. A
+    /// deletion event is not followed: a scan reports another session's rename
+    /// of that path as one too, and the file's record decides it.</summary>
+    private void FollowOwnRenameInFeedProvenance(string from, string to)
+    {
+        foreach ((string origin, string at) in _feedProvenance.ToList())
+        {
+            bool under = at.Length > from.Length
+                && at.StartsWith(from, StringComparison.Ordinal)
+                && at[from.Length] == '/';
+            if (under || string.Equals(at, from, StringComparison.Ordinal))
+            {
+                _feedProvenance[origin] = to + at[from.Length..];
+            }
+        }
     }
 
     /// <summary>

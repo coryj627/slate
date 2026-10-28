@@ -40,6 +40,7 @@ internal sealed partial class VaultLifecycleViewModel
             {
                 case FileChangeKind.Renamed when change.PreviousPath is string previousPath:
                     workspace?.RetargetPath(previousPath, change.Path);
+                    FollowOwnRenameInFeedProvenance(previousPath, change.Path);
                     break;
                 case FileChangeKind.Deleted:
                     workspace?.InvalidatePath(change.Path);

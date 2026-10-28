@@ -1389,6 +1389,121 @@ public sealed partial class RescanTests
         Assert.Equal("second\n", tab.Text);
     });
 
+    /// <summary>Codex round 3 (high, F4): a run swaps two tabs by another
+    /// session's swap and cannot acknowledge, and that session swaps the notes
+    /// back before the next run. Read from the same cursor nothing was
+    /// renamed, so each tab goes back to its own file, with its own unsaved
+    /// words.</summary>
+    [Fact]
+    public void AnUnacknowledgedSwapUndoneBeforeTheReplayPutsEachTabBack() => RunSta(() =>
+    {
+        using var h = new Harness("feed-unacked-swap-undone", ("a.md", "same\n"), ("b.md", "same\n"));
+        WorkspaceTabViewModel a = h.Open("a.md");
+        WorkspaceTabViewModel b = h.Open("b.md");
+        a.Text = "a's unsaved words\n";
+        b.Text = "b's unsaved words\n";
+        void Swap()
+        {
+            using VaultSession other = VaultSession.OpenFilesystem(h.Root);
+            _ = other.RenameFile("a.md", "swap.md");
+            _ = other.RenameFile("b.md", "a.md");
+            _ = other.RenameFile("swap.md", "b.md");
+        }
+
+        Swap();
+        bool fail = true;
+        h.Lifecycle.ChangeFeedFaultForTests = called => called == "acknowledge" && fail;
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        fail = false;
+        Assert.Equal("b.md", a.Path);
+        Assert.Equal("a.md", b.Path);
+
+        Swap();
+        h.Events.Clear();
+        h.Now += TimeSpan.FromMinutes(1);
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+        Assert.Equal("a.md", a.Path);
+        Assert.Equal("b.md", b.Path);
+        Assert.Equal("a's unsaved words\n", a.Text);
+        Assert.Equal("b's unsaved words\n", b.Text);
+    });
+
+    /// <summary>Codex round 3 (medium, F4): another session renames a to b,
+    /// the run moves the tab and cannot acknowledge; this session's user
+    /// renames b to c, and the other session renames c to d. Core reads one
+    /// record from a to d; the own rename carried the tab's provenance to c,
+    /// so the tab follows to d.</summary>
+    [Fact]
+    public void AnOwnRenameAfterAnUnacknowledgedRenameCarriesTheTabsProvenance() => RunSta(() =>
+    {
+        using var h = new Harness("feed-unacked-own-rename", ("a.md", "the note\n"));
+        WorkspaceTabViewModel tab = h.Open("a.md");
+        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
+        {
+            _ = other.RenameFile("a.md", "b.md");
+        }
+
+        bool fail = true;
+        h.Lifecycle.ChangeFeedFaultForTests = called => called == "acknowledge" && fail;
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        fail = false;
+        Assert.Equal("b.md", tab.Path);
+
+        Assert.Equal("b.md", h.Lifecycle.FeedProvenanceForTests["a.md"]);
+        _ = h.Lifecycle.SessionForTests!.RenameFile("b.md", "c.md");
+        h.Context.Drain();
+        Assert.Equal("c.md", tab.Path);
+        Assert.Equal("c.md", h.Lifecycle.FeedProvenanceForTests["a.md"]);
+        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
+        {
+            _ = other.RenameFile("c.md", "d.md");
+        }
+
+        h.Events.Clear();
+        h.Now += TimeSpan.FromMinutes(1);
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+        Assert.Equal("d.md", tab.Path);
+        Assert.False(tab.IsMissingFromDisk);
+        Assert.Equal("the note\n", tab.Text);
+    });
+
+    /// <summary>Codex round 3 (medium, F4): a duplicate of a dirty tab an
+    /// earlier window marked stale carries the hash it was marked against, so
+    /// both tabs follow another session's later rename with their unsaved
+    /// words.</summary>
+    [Fact]
+    public void ADuplicateOfAStaleDirtyTabFollowsAForeignRename() => RunSta(() =>
+    {
+        using var h = new Harness("feed-stale-duplicate", ("x.md", "x one\n"));
+        WorkspaceTabViewModel tab = h.Open("x.md");
+        tab.Text = "my unsaved words\n";
+        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
+        {
+            _ = other.SaveText("x.md", "x two, by another window\n", null);
+        }
+
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        Assert.True(tab.IsExternallyStale, "premise: the dirty tab is marked stale");
+        h.Workspace.DuplicateTabCommand.Execute(null);
+        WorkspaceTabViewModel duplicate = Assert.IsType<WorkspaceTabViewModel>(h.Workspace.ActiveGroup.ActiveTab);
+        Assert.NotSame(tab, duplicate);
+        Assert.Equal("x.md", duplicate.Path);
+        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
+        {
+            _ = other.RenameFile("x.md", "y.md");
+        }
+
+        h.Now += TimeSpan.FromMinutes(1);
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+        Assert.Equal("y.md", tab.Path);
+        Assert.Equal("y.md", duplicate.Path);
+        Assert.False(duplicate.IsMissingFromDisk);
+        Assert.Equal("my unsaved words\n", duplicate.Text);
+    });
+
     /// <summary>Codex round 2 (low, F6): a journal that still moves after its
     /// third re-read leaves Quick Open in the retry set, with no error, and
     /// the next run's full reload brings every own file in.</summary>

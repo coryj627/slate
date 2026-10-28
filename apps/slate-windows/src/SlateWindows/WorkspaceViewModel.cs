@@ -763,6 +763,9 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         _text = source._text;
         _contentHash = source._contentHash;
         IsExternallyStale = source.IsExternallyStale;
+        // WB-10 (codex round 3): with the hash it was marked against, so a
+        // duplicate follows another session's rename as its source does.
+        _staleAgainstHash = source._staleAgainstHash;
         _isDirty = source._isDirty;
         if (_isDirty)
         {
