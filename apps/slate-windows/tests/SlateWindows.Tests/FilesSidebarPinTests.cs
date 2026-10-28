@@ -143,6 +143,16 @@ public sealed class FilesSidebarPinTests
 
         Assert.Empty(VaultAbsence.AbsentAmong(fixture.Root, "link", ["link/gone.md"]));
         Assert.False(VaultAbsence.IsDefinitelyAbsent(fixture.Root, "link/gone.md"));
+
+        // A junction (an NTFS mount point) is a link too: LinkTarget names it.
+        string junction = Path.Combine(fixture.Root, "junction");
+        using (var mklink = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+            "cmd.exe", $"/c mklink /J \"{junction}\" \"{target}\"") { UseShellExecute = false, CreateNoWindow = true })!)
+        {
+            Assert.True(mklink.WaitForExit(10_000) && mklink.ExitCode == 0, "premise: mklink /J made the junction");
+        }
+        Assert.NotNull(new DirectoryInfo(junction).LinkTarget);
+        Assert.False(VaultAbsence.IsDefinitelyAbsent(fixture.Root, "junction/gone.md"));
         Assert.True(VaultAbsence.IsDefinitelyAbsent(fixture.Root, "real/gone.md"), "premise: the same shape without the link is absent");
     }
 
