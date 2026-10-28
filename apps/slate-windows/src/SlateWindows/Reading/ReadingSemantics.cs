@@ -19,6 +19,7 @@ internal static class ReadingSemantics
         Heading,
         List,
         ListItem,
+        ListMarker,
         Table,
         Embed,
         CodeBlock,
@@ -89,6 +90,16 @@ internal static class ReadingSemantics
 
     public static void MarkListItem(ListItem item) =>
         item.SetValue(MarkerProperty, Marker.ListItem);
+
+    /// <summary>WB-11 (#1422): the run of an ordered item's authored marker
+    /// ("3.", "12)"), which leads its first paragraph so the reader sees and
+    /// hears what the author wrote; marked so later code can tell it from
+    /// the item's content.</summary>
+    public static void MarkListMarker(Run run) =>
+        run.SetValue(MarkerProperty, Marker.ListMarker);
+
+    public static bool IsListMarker(Run run) =>
+        Equals(run.GetValue(MarkerProperty), Marker.ListMarker);
 
     public static void MarkTable(System.Windows.Documents.Table table) =>
         table.SetValue(MarkerProperty, Marker.Table);

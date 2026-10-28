@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Automation.Peers;
@@ -31,6 +32,11 @@ internal sealed class ReadingSurface : RichTextBox
 {
     public ReadingSurface()
     {
+        Structure = new ReadingStructureGeneration(this);
+        // WB-11 (#1329): the viewport's text range is read again after any
+        // layout pass or scroll.
+        LayoutUpdated += (_, _) => _visibleRangeRead = false;
+        AddHandler(ScrollViewer.ScrollChangedEvent, new ScrollChangedEventHandler((_, _) => _visibleRangeRead = false));
         IsReadOnly = true;
         IsReadOnlyCaretVisible = true;
         // A read-only viewer records no undo — and it MUST not: undo
@@ -339,6 +345,9 @@ internal sealed class ReadingSurface : RichTextBox
         _landmarks = Array.Empty<ReadingLandmark>();
         _navigator?.SetLandmarks(_landmarks);
         _lastMerged = null;
+        // WB-11 (#1329): the cached children would otherwise serve the previous
+        // note's lists and elements under the new tab until the incoming merge.
+        InvalidateStructuralPeers();
     }
 
     private void Model_PropertyChanged(
@@ -371,7 +380,8 @@ internal sealed class ReadingSurface : RichTextBox
         }
         _landmarks = ReadingDocumentBuilder.CollectLandmarks(Document);
         _navigator?.SetLandmarks(_landmarks);
-        InvalidateAutomationChildren();
+        // A chunk can append items to a list opened in an earlier one.
+        InvalidateStructuralPeers();
     }
 
     private FlowDocument? _lastMerged;
@@ -463,7 +473,7 @@ internal sealed class ReadingSurface : RichTextBox
         }
         _landmarks = ReadingDocumentBuilder.CollectLandmarks(Document);
         _navigator?.SetLandmarks(_landmarks);
-        InvalidateAutomationChildren();
+        InvalidateStructuralPeers();
 
         if (caretAnchor is { } anchor && anchor != (0, 0))
         {
@@ -821,6 +831,83 @@ internal sealed class ReadingSurface : RichTextBox
         }
     }
 
+    /// <summary>WB-11 (#1329): the document's structural generation, which
+    /// the peers' caches are kept for.</summary>
+    internal ReadingStructureGeneration Structure { get; }
+
+    /// <summary>
+    /// WB-11 (#1329): the one entry for a change to the document's blocks —
+    /// the merge, the streamed append and the model-switch clear today, and
+    /// any later change that adds or removes a block, an embedded element or
+    /// a hyperlink. It drops the peers' caches (the surface's children and
+    /// each list's index), has every kept list peer rebuild its children,
+    /// and brings the surface peer's children current. A change that only edits <c>Run</c>s inside a
+    /// top-level paragraph, keeping its elements and their peers, needs no
+    /// call: no cached child changes and no list reads that text.
+    /// </summary>
+    internal void InvalidateStructuralPeers()
+    {
+        Structure.Bump();
+        (UIElementAutomationPeer.FromElement(this) as ReadingSurfacePeer)?.ResetListPeers();
+        InvalidateAutomationChildren();
+    }
+
+    private (TextPointer First, TextPointer Last)? _visibleRange;
+    private bool _visibleRangeRead;
+
+    /// <summary>
+    /// WB-11 (#1329): whether a range lies wholly outside the viewport, from
+    /// the viewport's text range read once per layout pass; null when that
+    /// range cannot be read, and the caller asks WPF instead. With a client
+    /// listening, WPF asks every list item's peer after every layout pass,
+    /// and its own answer finds the item's geometry in the laid-out
+    /// document — about a millisecond an item at the 2,000-block cap
+    /// (measured 2026-10-28), so a streamed note's entry grew with the
+    /// square of its length.
+    /// </summary>
+    internal bool? IsRangeOffscreen(TextPointer start, TextPointer end)
+    {
+        if (!IsVisible || ActualWidth <= 0 || ActualHeight <= 0
+            || Window.GetWindow(this) is { WindowState: WindowState.Minimized })
+        {
+            return true;
+        }
+        if (!_visibleRangeRead)
+        {
+            _visibleRange = ReadVisibleRange();
+            _visibleRangeRead = true;
+        }
+        if (_visibleRange is not { } visible)
+        {
+            return null;
+        }
+        try
+        {
+            return end.CompareTo(visible.First) < 0 || start.CompareTo(visible.Last) > 0;
+        }
+        catch (ArgumentException)
+        {
+            // A range outside this document: WPF answers for it.
+            return null;
+        }
+    }
+
+    private (TextPointer First, TextPointer Last)? ReadVisibleRange()
+    {
+        try
+        {
+            return GetPositionFromPoint(new Point(0, 0), snapToText: true) is { } first
+                && GetPositionFromPoint(new Point(ActualWidth, ActualHeight), snapToText: true) is { } last
+                    ? (first, last)
+                    : null;
+        }
+        catch (InvalidOperationException)
+        {
+            // No valid layout to read the viewport from.
+            return null;
+        }
+    }
+
     /// <summary>
     /// Bring the surface peer's child list current after a content
     /// merge. WPF refreshes peer children on render-driven automation
@@ -853,13 +940,23 @@ internal sealed class ReadingSurface : RichTextBox
             List<AutomationPeer>? rebuilt = peer.GetChildren();
             peer.RaiseAutomationEvent(AutomationEvents.StructureChanged);
             peer.InvalidatePeer();
-            CensusDiag($"invalidate: children={rebuilt?.Count ?? -1}");
+            if (CensusDiagEnabled)
+            {
+                CensusDiag($"invalidate: children={rebuilt?.Count ?? -1}");
+            }
         }
         else
         {
             CensusDiag("invalidate: no peer");
         }
     }
+
+    /// <summary>Whether <see cref="CensusDiag"/> writes: checked before a
+    /// caller builds an interpolated message, so production formats
+    /// nothing (WB-11, #1329).</summary>
+    internal static bool CensusDiagEnabled =>
+        Environment.GetEnvironmentVariable("SLATE_CENSUS_INSTANCE_ID") is { Length: > 0 }
+        && Environment.GetEnvironmentVariable("SLATE_LOG_DIR") is { Length: > 0 };
 
     /// <summary>
     /// Census-run diagnostics (SLATE_CENSUS_INSTANCE_ID gates it, so
@@ -869,13 +966,8 @@ internal sealed class ReadingSurface : RichTextBox
     /// </summary>
     internal static void CensusDiag(string message)
     {
-        if (Environment.GetEnvironmentVariable("SLATE_CENSUS_INSTANCE_ID")
-            is not { Length: > 0 })
-        {
-            return;
-        }
-        if (Environment.GetEnvironmentVariable("SLATE_LOG_DIR")
-            is not { Length: > 0 } directory)
+        if (!CensusDiagEnabled
+            || Environment.GetEnvironmentVariable("SLATE_LOG_DIR") is not { Length: > 0 } directory)
         {
             return;
         }
@@ -1215,8 +1307,24 @@ internal sealed class ReadingSurface : RichTextBox
 /// </summary>
 internal sealed class ReadingSurfacePeer : RichTextBoxAutomationPeer
 {
+    private readonly ReadingSurface _surface;
+    // WB-11 (#1329): the children a screen reader's every query asks for,
+    // built once per structural generation, and one peer per list for the
+    // list's life, so its item peers (and their names) outlive a streamed
+    // chunk: with a client listening, WPF walks every peer after every layout
+    // pass, and fresh peers for 2,000 items per chunk made a streamed note's
+    // entry grow with the square of its length (measured 2026-10-28).
+    private List<AutomationPeer>? _children;
+    private int _childrenGeneration;
+    private readonly ConditionalWeakTable<WpfList, ReadingListPeer> _lists = new();
+    // WB-11 (#1330): one Text pattern provider per inner provider, so a
+    // client's provider identity is stable across its queries and events.
+    private System.Windows.Automation.Provider.ITextProvider? _innerText;
+    private HeadingStyleTextProvider? _text;
+
     public ReadingSurfacePeer(ReadingSurface owner) : base(owner)
     {
+        _surface = owner;
     }
 
     /// <summary>
@@ -1231,31 +1339,93 @@ internal sealed class ReadingSurfacePeer : RichTextBoxAutomationPeer
         if (patternInterface == PatternInterface.Text
             && pattern is System.Windows.Automation.Provider.ITextProvider text)
         {
-            return new HeadingStyleTextProvider(text);
+            if (_text is null || !ReferenceEquals(_innerText, text))
+            {
+                _innerText = text;
+                _text = new HeadingStyleTextProvider(text);
+            }
+            return _text;
         }
         return pattern;
     }
 
+    /// <summary>How many times the children were built — once per
+    /// structural generation however often they are asked for.</summary>
+    internal int ChildrenBuildsForTests { get; private set; }
+
+    /// <summary>
+    /// The base's children (embedded elements — diagram, math and embed
+    /// elements, check boxes — and hyperlinks) plus the structural peers,
+    /// cached per structural generation: every change that adds or removes
+    /// a block, an embedded element or a hyperlink goes through
+    /// <see cref="ReadingSurface.InvalidateStructuralPeers"/>. WPF asks for
+    /// these on a client's text-range queries, so building them per query
+    /// cost a 2,000-block note seconds per arrow (#1329).
+    /// </summary>
     protected override List<AutomationPeer> GetChildrenCore()
+    {
+        int generation = _surface.Structure.Value;
+        if (_children is null || _childrenGeneration != generation)
+        {
+            _children = BuildChildren();
+            _childrenGeneration = generation;
+            ChildrenBuildsForTests++;
+        }
+        return new List<AutomationPeer>(_children);
+    }
+
+    private List<AutomationPeer> BuildChildren()
     {
         List<AutomationPeer> children = base.GetChildrenCore() ?? new List<AutomationPeer>();
         int baseCount = children.Count;
         if (((RichTextBox)Owner).Document is not FlowDocument document)
         {
-            ReadingSurface.CensusDiag($"peer-children base={baseCount} no-flowdoc");
+            if (ReadingSurface.CensusDiagEnabled)
+            {
+                ReadingSurface.CensusDiag($"peer-children base={baseCount} no-flowdoc");
+            }
             return children;
         }
         foreach (Block block in document.Blocks)
         {
-            AppendStructural(block, children);
+            AppendStructural(block, children, ListPeerFor);
         }
-        ReadingSurface.CensusDiag(
-            $"peer-children base={baseCount} total={children.Count} "
-            + $"blocks={document.Blocks.Count}");
+        if (ReadingSurface.CensusDiagEnabled)
+        {
+            ReadingSurface.CensusDiag(
+                $"peer-children base={baseCount} total={children.Count} "
+                + $"blocks={document.Blocks.Count}");
+        }
         return children;
     }
 
-    private static void AppendStructural(Block block, List<AutomationPeer> children)
+    private ReadingListPeer ListPeerFor(WpfList list) =>
+        _lists.GetValue(list, key => new ReadingListPeer(key, _surface.Structure));
+
+    /// <summary>
+    /// A new structural generation: every list peer still in the document
+    /// rebuilds its children now. WPF caches a peer's children and nothing
+    /// else resets a kept list peer's cache, so without this a list a later
+    /// chunk grows would go on serving its old items to clients and to
+    /// WPF's own walk.
+    /// </summary>
+    internal void ResetListPeers()
+    {
+        if (_children is null || ((RichTextBox)Owner).Document is not FlowDocument document)
+        {
+            return;
+        }
+        foreach (AutomationPeer child in _children)
+        {
+            if (child is ReadingListPeer list)
+            {
+                list.ResetWithin(document);
+            }
+        }
+    }
+
+    private static void AppendStructural(
+        Block block, List<AutomationPeer> children, Func<WpfList, ReadingListPeer> listPeer)
     {
         switch (block)
         {
@@ -1269,21 +1439,49 @@ internal sealed class ReadingSurfacePeer : RichTextBoxAutomationPeer
                 break;
 
             case WpfList list when ReadingSemantics.IsList(list):
-                children.Add(new ReadingListPeer(list));
+                children.Add(listPeer(list));
                 break;
 
             case Section section:
                 foreach (Block inner in section.Blocks)
                 {
-                    AppendStructural(inner, children);
+                    AppendStructural(inner, children, listPeer);
                 }
                 break;
         }
     }
 
-    /// <summary>Shared by the list peer for its nested lists.</summary>
-    internal static void AppendStructuralForTest(Block block, List<AutomationPeer> children) =>
-        AppendStructural(block, children);
+    /// <summary>The structural walk over one block, with list peers of a
+    /// fresh generation.</summary>
+    internal static void AppendStructuralForTest(Block block, List<AutomationPeer> children)
+    {
+        var structure = new ReadingStructureGeneration();
+        AppendStructural(block, children, list => new ReadingListPeer(list, structure));
+    }
+}
+
+/// <summary>
+/// WB-11 (#1329): the reading document's structural generation. Every
+/// change to the document's blocks bumps it through
+/// <see cref="ReadingSurface.InvalidateStructuralPeers"/>, and the peers'
+/// caches — the surface's children and each list's index — are kept for
+/// one generation.
+/// </summary>
+internal sealed class ReadingStructureGeneration
+{
+    internal ReadingStructureGeneration(ReadingSurface? surface = null)
+    {
+        Surface = surface;
+    }
+
+    /// <summary>The surface whose document this generation counts, which
+    /// answers whether a range is in its viewport; null for peers built
+    /// without one.</summary>
+    internal ReadingSurface? Surface { get; }
+
+    internal int Value { get; private set; }
+
+    internal void Bump() => Value++;
 }
 
 /// <summary>
@@ -1398,72 +1596,159 @@ internal static class ReadingStructuralPeer
 internal sealed class ReadingListPeer : TextElementAutomationPeer
 {
     private readonly WpfList _list;
+    private readonly ReadingStructureGeneration _structure;
+    // WB-11 (#1329): one peer per item and per nested list, for their lives,
+    // so a client's per-arrow queries and WPF's walks mint nothing.
+    private readonly ConditionalWeakTable<ListItem, ReadingListItemPeer> _items = new();
+    private readonly ConditionalWeakTable<WpfList, ReadingListPeer> _nested = new();
+    private ListSnapshot? _snapshot;
 
-    public ReadingListPeer(WpfList list) : base(list)
+    public ReadingListPeer(WpfList list, ReadingStructureGeneration structure) : base(list)
     {
         _list = list;
+        _structure = structure;
     }
+
+    /// <summary>How many times this list was walked — once per structural
+    /// generation however often it is asked about.</summary>
+    internal int WalkProbeForTests { get; private set; }
 
     protected override AutomationControlType GetAutomationControlTypeCore() =>
         AutomationControlType.List;
 
-    protected override string GetNameCore() =>
-        _list.ListItems.Count == 1 ? "1 entry" : $"{_list.ListItems.Count} entries";
+    protected override string GetNameCore() => Snapshot().Name;
 
     protected override bool IsControlElementCore() => true;
 
     protected override bool IsContentElementCore() => true;
 
-    protected override List<AutomationPeer> GetChildrenCore()
+    protected override List<AutomationPeer> GetChildrenCore() =>
+        new(Snapshot().Children);
+
+    /// <summary>
+    /// The list's one walk per structural generation: its items' positions,
+    /// its count and name, and its children. Every read of the list's items
+    /// comes here — WPF computes <c>ListItems.Count</c> by walking the
+    /// collection (measured 2026-10-21: 2,000 reads on a 2,000-item list,
+    /// 176 ms), so a per-query count or position walk keeps every query
+    /// linear in the list (#1329).
+    /// </summary>
+    internal ListSnapshot Snapshot()
     {
+        int generation = _structure.Value;
+        if (_snapshot is { } current && current.Generation == generation)
+        {
+            return current;
+        }
+        var positions = new Dictionary<ListItem, int>(ReferenceEqualityComparer.Instance);
         var children = new List<AutomationPeer>();
         foreach (ListItem item in _list.ListItems)
         {
-            children.Add(new ReadingListItemPeer(item));
+            positions[item] = positions.Count + 1;
+            children.Add(_items.GetValue(item, key => new ReadingListItemPeer(key, this, _structure)));
             // Nested lists stay under their owning item's sibling peer —
             // structure mirrors the document, so depth is enumerable.
             foreach (Block inner in item.Blocks)
             {
                 if (inner is WpfList nested && ReadingSemantics.IsList(nested))
                 {
-                    children.Add(new ReadingListPeer(nested));
+                    children.Add(_nested.GetValue(nested, key => new ReadingListPeer(key, _structure)));
                 }
             }
         }
-        return children;
+        WalkProbeForTests++;
+        int count = positions.Count;
+        _snapshot = new ListSnapshot(
+            generation, positions, count, count == 1 ? "1 entry" : $"{count} entries", children);
+        return _snapshot;
     }
+
+    /// <summary>Rebuilds this list's children, and its nested lists', for
+    /// the current generation (<see cref="ReadingSurfacePeer.ResetListPeers"/>);
+    /// a list no longer in <paramref name="document"/> is left alone.</summary>
+    internal void ResetWithin(FlowDocument document)
+    {
+        if (!_list.ContentStart.IsInSameDocument(document.ContentStart))
+        {
+            return;
+        }
+        ResetChildrenCache();
+        foreach (AutomationPeer child in Snapshot().Children)
+        {
+            if (child is ReadingListPeer nested)
+            {
+                nested.ResetWithin(document);
+            }
+        }
+    }
+
+    internal sealed record ListSnapshot(
+        int Generation,
+        Dictionary<ListItem, int> Positions,
+        int Count,
+        string Name,
+        List<AutomationPeer> Children);
 }
 
-/// <summary>One list item's peer.</summary>
+/// <summary>One list item's peer. Its position and its set's size come
+/// from its list's snapshot; its name is read once per structural
+/// generation.</summary>
 internal sealed class ReadingListItemPeer : TextElementAutomationPeer
 {
     private readonly ListItem _item;
+    private readonly ReadingListPeer _list;
+    private readonly ReadingStructureGeneration _structure;
+    private string? _name;
+    private int _nameLength;
 
-    public ReadingListItemPeer(ListItem item) : base(item)
+    public ReadingListItemPeer(ListItem item, ReadingListPeer list, ReadingStructureGeneration structure)
+        : base(item)
     {
         _item = item;
+        _list = list;
+        _structure = structure;
     }
 
     protected override AutomationControlType GetAutomationControlTypeCore() =>
         AutomationControlType.ListItem;
 
-    protected override string GetNameCore() =>
-        new TextRange(_item.ContentStart, _item.ContentEnd).Text.Trim();
+    /// <summary>
+    /// WB-11 (#1329): whether the item is outside the viewport, from the
+    /// surface's visible text range (<see cref="ReadingSurface.IsRangeOffscreen"/>),
+    /// WPF's own answer when that range cannot be read or the item sets its
+    /// own behaviour. WPF asks every item after every layout pass while a
+    /// client listens, and its answer costs about a millisecond an item at
+    /// the 2,000-block cap.
+    /// </summary>
+    protected override bool IsOffscreenCore() =>
+        AutomationProperties.GetIsOffscreenBehavior(_item) == IsOffscreenBehavior.Default
+        && _structure.Surface?.IsRangeOffscreen(_item.ContentStart, _item.ContentEnd) is { } offscreen
+            ? offscreen
+            : base.IsOffscreenCore();
 
-    protected override int GetPositionInSetCore()
+    /// <summary>The item's text, an ordered item's authored marker first
+    /// ("4. Fourth", #1422), read again only when the item's content length
+    /// changes: the reading document changes an item in place only when a
+    /// later chunk nests a list into it, and a merge replaces every item.</summary>
+    protected override string GetNameCore()
     {
-        if (_item.Parent is not WpfList list) { return -1; }
-        int position = 0;
-        foreach (ListItem item in list.ListItems)
+        int length = _item.ContentStart.GetOffsetToPosition(_item.ContentEnd);
+        if (_name is null || _nameLength != length)
         {
-            position++;
-            if (ReferenceEquals(item, _item)) { return position; }
+            _name = new TextRange(_item.ContentStart, _item.ContentEnd).Text.Trim();
+            _nameLength = length;
         }
-        return -1;
+        return _name;
     }
 
-    protected override int GetSizeOfSetCore() =>
-        _item.Parent is WpfList list ? list.ListItems.Count : -1;
+    protected override int GetPositionInSetCore() =>
+        _list.Snapshot().Positions.TryGetValue(_item, out int position) ? position : -1;
+
+    protected override int GetSizeOfSetCore()
+    {
+        ReadingListPeer.ListSnapshot snapshot = _list.Snapshot();
+        return snapshot.Positions.ContainsKey(_item) ? snapshot.Count : -1;
+    }
 
     protected override bool IsControlElementCore() => true;
 

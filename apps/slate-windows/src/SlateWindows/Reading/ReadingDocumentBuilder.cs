@@ -23,8 +23,9 @@ namespace SlateWindows.Reading;
 internal sealed class ReadingListBuildContext
 {
     /// <summary>Stack[d] holds the open list accepting items at depth
-    /// d and the last item added to it (the parent of depth d+1).</summary>
-    internal List<(WpfList List, ListItem? LastItem)> Stack { get; } = new();
+    /// d, whether it is ordered, and the last item added to it (the
+    /// parent of depth d+1).</summary>
+    internal List<(WpfList List, bool Ordered, ListItem? LastItem)> Stack { get; } = new();
 
     /// <summary>
     /// The PROJECTION-WIDE highlight budget (W3-4 adversarial round
@@ -184,7 +185,7 @@ internal static class ReadingDocumentBuilder
         };
         document.SetResourceReference(FlowDocument.FontFamilyProperty, "Slate.ReadingFontFamily");
 
-        List<(WpfList List, ListItem? LastItem)> stack = context.Stack;
+        List<(WpfList List, bool Ordered, ListItem? LastItem)> stack = context.Stack;
 
         foreach ((ReadingBlock block, ReadingBlockInlines inlines) in model)
         {
@@ -232,7 +233,7 @@ internal static class ReadingDocumentBuilder
     /// </summary>
     private static void AppendListItem(
         FlowDocument document,
-        List<(WpfList List, ListItem? LastItem)> stack,
+        List<(WpfList List, bool Ordered, ListItem? LastItem)> stack,
         ReadingBlockKind.ListItem kind,
         ReadingBlock block,
         ReadingBlockInlines inlines)
@@ -249,17 +250,19 @@ internal static class ReadingDocumentBuilder
         }
 
         // Marker change at this level: close and replace this level only.
-        if (stack.Count == depth + 1
-            && (stack[depth].List.MarkerStyle == TextMarkerStyle.Decimal) != kind.Ordered)
+        if (stack.Count == depth + 1 && stack[depth].Ordered != kind.Ordered)
         {
             stack.RemoveAt(depth);
         }
 
         if (stack.Count == depth)
         {
+            // WB-11 (#1422): an ordered list draws no marker of its own —
+            // WPF's Decimal renumbered `3. 4. 5.` from 1 — and each item leads
+            // with the marker its author wrote, as mac renders it.
             var list = new WpfList
             {
-                MarkerStyle = kind.Ordered ? TextMarkerStyle.Decimal : TextMarkerStyle.Disc,
+                MarkerStyle = kind.Ordered ? TextMarkerStyle.None : TextMarkerStyle.Disc,
             };
             ReadingSemantics.MarkList(list);
             if (depth > 0 && stack[depth - 1].LastItem is { } parent)
@@ -270,16 +273,32 @@ internal static class ReadingDocumentBuilder
             {
                 document.Blocks.Add(list);
             }
-            stack.Add((list, null));
+            stack.Add((list, kind.Ordered, null));
         }
 
         Paragraph content = InlineParagraph(
             inlines,
             taskRange: kind.Task is not null ? (block.ByteStart, block.ByteEnd) : null);
+        if (kind.Ordered)
+        {
+            // Core carries the authored marker so neither host re-derives or
+            // renumbers it; "1." only if it ever carries none, mac's fallback.
+            // The item's name reads it first: "4. Fourth".
+            var marker = new Run((inlines.ListMarker ?? "1.") + " ");
+            ReadingSemantics.MarkListMarker(marker);
+            if (content.Inlines.FirstInline is { } first)
+            {
+                content.Inlines.InsertBefore(first, marker);
+            }
+            else
+            {
+                content.Inlines.Add(marker);
+            }
+        }
         var item = new ListItem(content);
         ReadingSemantics.MarkListItem(item);
         stack[depth].List.ListItems.Add(item);
-        stack[depth] = (stack[depth].List, item);
+        stack[depth] = (stack[depth].List, stack[depth].Ordered, item);
     }
 
     private static Block NonListBlock(
@@ -1936,7 +1955,15 @@ internal static class ReadingDocumentBuilder
         // presentation, not content; a short prefix ending in a tab is
         // exactly it.
         int tab = text.IndexOf('	');
-        return tab >= 0 && tab <= 4 ? text[(tab + 1)..].TrimStart() : text;
+        text = tab >= 0 && tab <= 4 ? text[(tab + 1)..].TrimStart() : text;
+        // WB-11 (#1422): an ordered item's authored marker is a run of its
+        // first paragraph; the landing names the list by its first item's
+        // content, as it does a bullet list's.
+        return paragraph.Inlines.FirstInline is Run marker
+            && ReadingSemantics.IsListMarker(marker)
+            && text.StartsWith(marker.Text.TrimEnd(), StringComparison.Ordinal)
+                ? text[marker.Text.TrimEnd().Length..].TrimStart()
+                : text;
     }
 
     private static string FirstCellText(WpfTable table)

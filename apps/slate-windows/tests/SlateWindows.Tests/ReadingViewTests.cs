@@ -4,6 +4,7 @@
 using System.Windows.Documents;
 using SlateWindows.Reading;
 using uniffi.slate_uniffi;
+using AutomationPeer = System.Windows.Automation.Peers.AutomationPeer;
 using ITextRangeProvider = System.Windows.Automation.Provider.ITextRangeProvider;
 using IRawElementProviderSimple = System.Windows.Automation.Provider.IRawElementProviderSimple;
 using TextPatternRangeEndpoint = System.Windows.Automation.Text.TextPatternRangeEndpoint;
@@ -2370,7 +2371,12 @@ public sealed class ReadingViewTests
             Assert.Equal(2, outerItems.Length);
             System.Windows.Documents.List sublist = Assert.Single(
                 outerItems[0].Blocks.OfType<System.Windows.Documents.List>());
-            Assert.Equal(System.Windows.TextMarkerStyle.Decimal, sublist.MarkerStyle);
+            // WB-11 (#1422): an ordered list draws no marker of its own; each
+            // item leads with the authored one.
+            Assert.Equal(System.Windows.TextMarkerStyle.None, sublist.MarkerStyle);
+            Assert.Equal(
+                new[] { "1. ", "2. " },
+                sublist.ListItems.Select(item => AuthoredMarkerOf(item)).ToArray());
             Assert.Equal(2, sublist.ListItems.Count);
             Assert.Empty(outerItems[1].Blocks.OfType<System.Windows.Documents.List>());
 
@@ -2387,6 +2393,385 @@ public sealed class ReadingViewTests
             Assert.Single(level2.ListItems.Cast<ListItem>());
         });
     }
+
+    /// <summary>WB-11 (#1422): an ordered list renders and reads the marker
+    /// its author wrote — core carries it so neither host renumbers it, and
+    /// mac reads it with the item ("4. Fourth"). A start index taken from the
+    /// first item would renumber <c>1. 1. 1.</c> and lose <c>)</c>.</summary>
+    [Fact]
+    public void AnOrderedListRendersAndReadsItsAuthoredMarkers()
+    {
+        RunSta(() =>
+        {
+            var surface = new ReadingSurface();
+            var peer = System.Windows.Automation.Peers.UIElementAutomationPeer
+                .CreatePeerForElement(surface)!;
+            surface.ApplyBuiltDocument(BuildSource(
+                "3. Third\n4. Fourth\n5. Fifth\n\nBetween.\n\n"
+                + "1. one\n1. two\n1. three\n\nAnd again.\n\n"
+                + "12) Twelfth\n13) Thirteenth\n"));
+            ReadingListPeer[] lists = peer.GetChildren().OfType<ReadingListPeer>().ToArray();
+            Assert.Equal(3, lists.Length);
+            System.Windows.Documents.List[] wpfLists =
+                surface.Document.Blocks.OfType<System.Windows.Documents.List>().ToArray();
+            Assert.All(
+                wpfLists,
+                list => Assert.Equal(System.Windows.TextMarkerStyle.None, list.MarkerStyle));
+
+            Assert.Equal(
+                new[] { "3. Third", "4. Fourth", "5. Fifth" },
+                lists[0].GetChildren().Select(item => item.GetName()).ToArray());
+            Assert.Equal(
+                new[] { "1. one", "1. two", "1. three" },
+                lists[1].GetChildren().Select(item => item.GetName()).ToArray());
+            Assert.Equal(
+                new[] { "12) Twelfth", "13) Thirteenth" },
+                lists[2].GetChildren().Select(item => item.GetName()).ToArray());
+            Assert.Equal(
+                new[] { "3. ", "4. ", "5. " },
+                wpfLists[0].ListItems.Select(item => AuthoredMarkerOf(item)).ToArray());
+
+            // Positions are unchanged: the set, not the marker.
+            AutomationPeer fourth = lists[0].GetChildren()[1];
+            Assert.Equal(2, fourth.GetPositionInSet());
+            Assert.Equal(3, fourth.GetSizeOfSet());
+            Assert.Equal("3 entries", lists[0].GetName());
+
+            // A bullet list keeps WPF's disc and gains no run.
+            System.Windows.Documents.List bullets = Assert.Single(
+                BuildSource("- dash\n- dash two\n").Blocks.OfType<System.Windows.Documents.List>());
+            Assert.Equal(System.Windows.TextMarkerStyle.Disc, bullets.MarkerStyle);
+            Assert.All(bullets.ListItems, item => Assert.Null(AuthoredMarkerOf(item)));
+        });
+    }
+
+    /// <summary>WB-11 (#1329): a list peer hands back the same item peer for
+    /// an item on every call — a screen reader's per-arrow queries no longer
+    /// mint a peer per item.</summary>
+    [Fact]
+    public void ListItemPeersAreStableAcrossQueries()
+    {
+        RunSta(() =>
+        {
+            var surface = new ReadingSurface();
+            var peer = System.Windows.Automation.Peers.UIElementAutomationPeer
+                .CreatePeerForElement(surface)!;
+            surface.ApplyBuiltDocument(BuildSource("- alpha\n  - nested\n- beta\n- gamma\n"));
+            ReadingListPeer list = Assert.Single(peer.GetChildren().OfType<ReadingListPeer>());
+
+            List<AutomationPeer> first = list.GetChildren();
+            list.ResetChildrenCache();
+            List<AutomationPeer> second = list.GetChildren();
+
+            Assert.Equal(4, first.Count);
+            Assert.Equal(first.Count, second.Count);
+            for (int i = 0; i < first.Count; i++)
+            {
+                Assert.Same(first[i], second[i]);
+            }
+            Assert.IsType<ReadingListPeer>(first[1]);
+        });
+    }
+
+    /// <summary>WB-11 (#1329): the last of 2,000 items answers its position,
+    /// its set's size and its list's name from one indexed walk — never a
+    /// walk from the list's start per query, nor WPF's <c>ListItems.Count</c>,
+    /// which itself walks the collection. Built through core's blocks directly,
+    /// so the view model's 2,000-block cap does not apply. A ratio against a
+    /// 20-item list keeps the bound in the lane.</summary>
+    [Fact]
+    public void PositionInSetOnTheLastOf2000ItemsIsIndexed()
+    {
+        RunSta(() =>
+        {
+            (TimeSpan small, _, _) = MeasureLastItemQueries(20);
+            (TimeSpan large, long allocated, int walks) = MeasureLastItemQueries(2_000);
+            string measurement = $"3,000 queries: 20 items {small.TotalMilliseconds:F1} ms; "
+                + $"2,000 items {large.TotalMilliseconds:F1} ms, {allocated:N0} allocated bytes, "
+                + $"{walks} walk(s)";
+            _output.WriteLine(measurement);
+
+            Assert.Equal(1, walks);
+            Assert.True(allocated < 256 * 1024, measurement);
+            TimeSpan bound = TimeSpan.FromMilliseconds(Math.Max(20, 3 * small.TotalMilliseconds));
+            Assert.True(large <= bound, $"{measurement}; bound {bound.TotalMilliseconds:F1} ms");
+        });
+    }
+
+    private static (TimeSpan Elapsed, long Allocated, int Walks) MeasureLastItemQueries(int count)
+    {
+        var source = new System.Text.StringBuilder();
+        for (int i = 1; i <= count; i++)
+        {
+            source.Append("- item ").Append(i).Append('\n');
+        }
+        var surface = new ReadingSurface();
+        var peer = System.Windows.Automation.Peers.UIElementAutomationPeer
+            .CreatePeerForElement(surface)!;
+        surface.ApplyBuiltDocument(BuildSource(source.ToString()));
+        ReadingListPeer list = Assert.Single(peer.GetChildren().OfType<ReadingListPeer>());
+        AutomationPeer last = list.GetChildren()[^1];
+        Assert.Equal(count, last.GetPositionInSet());
+        Assert.Equal(count, last.GetSizeOfSet());
+        Assert.Equal($"{count} entries", list.GetName());
+        StaThread.Current.ThrowIfCancellationRequested();
+
+        long allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        var timer = System.Diagnostics.Stopwatch.StartNew();
+        int sink = 0;
+        for (int i = 0; i < 1_000; i++)
+        {
+            sink += last.GetPositionInSet();
+            sink += last.GetSizeOfSet();
+            sink += list.GetName().Length;
+        }
+        timer.Stop();
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+        Assert.True(sink > 0);
+        return (timer.Elapsed, allocated, list.WalkProbeForTests);
+    }
+
+    /// <summary>WB-11 (#1329): a list a later chunk grows is indexed again —
+    /// the streamed append drops the list's snapshot, so the item peers
+    /// answer the grown set, the one a client held from before included.
+    /// The <see cref="ChunkBoundariesNeverSplitAList"/> fixture, pumped as
+    /// <see cref="LargeNoteStreamsInChunksIntoTheSurface"/> pumps it.</summary>
+    [Fact]
+    public void AListThatGrowsInALaterChunkReindexes()
+    {
+        RunSta(() =>
+        {
+            var text = new System.Text.StringBuilder();
+            for (int i = 0; i < 240; i++)
+            {
+                text.Append("Paragraph ").Append(i).Append(".\n\n");
+            }
+            for (int i = 0; i < 30; i++)
+            {
+                text.Append("- item ").Append(i).Append('\n');
+            }
+
+            using var fixture = FixtureVault.Create(1, "reading-chunk-reindex");
+            File.WriteAllText(Path.Combine(fixture.Root, "note0.md"), text.ToString());
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            using var reading = new SlateWindows.Reading.ReadingContentViewModel(
+                session, tab, _ => { });
+            var surface = new ReadingSurface { Model = reading };
+            var peer = System.Windows.Automation.Peers.UIElementAutomationPeer
+                .CreatePeerForElement(surface)!;
+
+            reading.Refresh();
+            WaitForUi(() => reading.Document is not null);
+            ReadingListPeer list = Assert.Single(peer.GetChildren().OfType<ReadingListPeer>());
+            AutomationPeer heldLast = list.GetChildren()[^1];
+            int before = heldLast.GetSizeOfSet();
+            Assert.True(before < 30, $"the list did not straddle the chunk boundary: {before} items in the first projection");
+            Assert.Equal(before, heldLast.GetPositionInSet());
+
+            WaitForUi(() => surface.Document.Blocks.OfType<System.Windows.Documents.List>()
+                .SingleOrDefault()?.ListItems.Count == 30);
+            ReadingListPeer grown = Assert.Single(peer.GetChildren().OfType<ReadingListPeer>());
+            AutomationPeer last = grown.GetChildren()[^1];
+            Assert.Equal(30, last.GetPositionInSet());
+            Assert.Equal(30, last.GetSizeOfSet());
+            Assert.Equal("30 entries", grown.GetName());
+            Assert.Equal(before, heldLast.GetPositionInSet());
+            Assert.Equal(30, heldLast.GetSizeOfSet());
+        });
+    }
+
+    /// <summary>WB-11 (#1329): the surface peer builds its children once per
+    /// structural change — repeated queries reuse them, a merge rebuilds them,
+    /// and a model switch's loading placeholder exposes none of the previous
+    /// note's peers before the incoming note merges.</summary>
+    [Fact]
+    public void SurfaceChildrenAreCachedUntilTheNextMerge()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-children-cache");
+            File.WriteAllText(Path.Combine(fixture.Root, "second.md"), "# Second\n\nBody.\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var secondTab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "second.md")),
+                startInteractionBackgroundWork: false);
+            var surface = new ReadingSurface();
+            var peer = Assert.IsType<ReadingSurfacePeer>(
+                System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(surface));
+            surface.ApplyBuiltDocument(BuildSource("- alpha\n- beta\n"));
+
+            int builds = peer.ChildrenBuildsForTests;
+            ReadingListPeer list = Assert.Single(peer.GetChildren().OfType<ReadingListPeer>());
+            for (int i = 0; i < 5; i++)
+            {
+                peer.ResetChildrenCache();
+                Assert.Same(list, Assert.Single(peer.GetChildren().OfType<ReadingListPeer>()));
+            }
+            Assert.Equal(builds, peer.ChildrenBuildsForTests);
+
+            surface.ApplyBuiltDocument(BuildSource("- gamma\n"));
+            Assert.Equal(builds + 1, peer.ChildrenBuildsForTests);
+            ReadingListPeer merged = Assert.Single(peer.GetChildren().OfType<ReadingListPeer>());
+            Assert.NotSame(list, merged);
+            Assert.EndsWith("gamma", Assert.Single(merged.GetChildren()).GetName(), StringComparison.Ordinal);
+
+            // The first note again, then a switch to a second note whose fetch
+            // is parked: only the loading placeholder is in the document.
+            surface.ApplyBuiltDocument(BuildSource("- alpha\n- beta\n\n- [ ] a task\n"));
+            Assert.Contains(peer.GetChildren(), child => child is ReadingListPeer);
+            Assert.Contains(peer.GetChildren(), child => child is System.Windows.Automation.Peers.CheckBoxAutomationPeer);
+            using var reading = new SlateWindows.Reading.ReadingContentViewModel(
+                session, secondTab, _ => { });
+            using var parked = new ManualResetEventSlim(false);
+            using var release = new ManualResetEventSlim(false);
+            reading.FetchFaultForTests = () =>
+            {
+                parked.Set();
+                _ = release.Wait(TimeSpan.FromSeconds(30));
+                return null;
+            };
+            try
+            {
+                surface.Model = reading;
+                WaitForUi(() => parked.IsSet);
+                Assert.True(parked.IsSet, "the second note's fetch parking");
+                Assert.Contains("Loading reading view", SurfaceText(surface), StringComparison.Ordinal);
+                List<AutomationPeer> children = peer.GetChildren() ?? new List<AutomationPeer>();
+                Assert.DoesNotContain(children, child => child is ReadingListPeer);
+                Assert.DoesNotContain(children, child => child is System.Windows.Automation.Peers.CheckBoxAutomationPeer);
+            }
+            finally
+            {
+                release.Set();
+            }
+            WaitForUi(() => SurfaceText(surface).Contains("Body.", StringComparison.Ordinal));
+        });
+    }
+
+    /// <summary>WB-11 (#1330): the surface hands every client one Text pattern
+    /// provider, so its identity is stable across the queries and the
+    /// selection event that follow.</summary>
+    [Fact]
+    public void TheTextPatternProviderIsOnePerPeer()
+    {
+        RunSta(() =>
+        {
+            var surface = new ReadingSurface();
+            var peer = System.Windows.Automation.Peers.UIElementAutomationPeer
+                .CreatePeerForElement(surface)!;
+            surface.ApplyBuiltDocument(BuildSource("body\n\n#\n"));
+            object first = peer.GetPattern(System.Windows.Automation.Peers.PatternInterface.Text);
+            object second = peer.GetPattern(System.Windows.Automation.Peers.PatternInterface.Text);
+            Assert.IsType<HeadingStyleTextProvider>(first);
+            Assert.Same(first, second);
+        });
+    }
+
+    /// <summary>WB-11 (#1329): a list item is offscreen exactly when it lies
+    /// outside the viewport — answered from the viewport's text range, read
+    /// once per layout pass and again after a scroll, instead of WPF's
+    /// per-item geometry, which WPF asks of every item after every layout
+    /// pass while a client listens.</summary>
+    [Fact]
+    public void AListItemIsOffscreenOnlyOutsideTheViewport()
+    {
+        RunSta(() =>
+        {
+            var source = new System.Text.StringBuilder();
+            for (int i = 1; i <= 200; i++)
+            {
+                source.Append("- item ").Append(i).Append('\n');
+            }
+            var surface = new ReadingSurface();
+            var window = new System.Windows.Window
+            {
+                Content = surface,
+                Width = 400,
+                Height = 300,
+                ShowActivated = false,
+                ShowInTaskbar = false,
+                WindowStyle = System.Windows.WindowStyle.None,
+            };
+            try
+            {
+                window.Show();
+                var peer = System.Windows.Automation.Peers.UIElementAutomationPeer
+                    .CreatePeerForElement(surface)!;
+                surface.ApplyBuiltDocument(BuildSource(source.ToString()));
+                surface.UpdateLayout();
+                ReadingListPeer list = Assert.Single(peer.GetChildren().OfType<ReadingListPeer>());
+                List<AutomationPeer> items = list.GetChildren();
+                Assert.False(items[0].IsOffscreen(), "the first item, at the top of the viewport");
+                Assert.True(items[^1].IsOffscreen(), "the last item, far below the viewport");
+
+                surface.ScrollToEnd();
+                surface.UpdateLayout();
+                Assert.True(items[0].IsOffscreen(), "the first item, scrolled away");
+                Assert.False(items[^1].IsOffscreen(), "the last item, scrolled to");
+
+                window.Hide();
+                Assert.True(items[^1].IsOffscreen(), "an item of a hidden surface");
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
+    /// <summary>WB-11 (#1329): an item's name is read once and kept while its
+    /// content is unchanged, but a list a later chunk nests into it (the only
+    /// in-place change the reading document makes to an item) is in its
+    /// name.</summary>
+    [Fact]
+    public void AListItemsNameFollowsAListNestedIntoItLater()
+    {
+        RunSta(() =>
+        {
+            var surface = new ReadingSurface();
+            var peer = System.Windows.Automation.Peers.UIElementAutomationPeer
+                .CreatePeerForElement(surface)!;
+            surface.ApplyBuiltDocument(BuildSource("- alpha\n- beta\n"));
+            ReadingListPeer list = Assert.Single(peer.GetChildren().OfType<ReadingListPeer>());
+            AutomationPeer beta = list.GetChildren()[^1];
+            Assert.EndsWith("beta", beta.GetName(), StringComparison.Ordinal);
+
+            System.Windows.Documents.List wpfList = Assert.Single(
+                surface.Document.Blocks.OfType<System.Windows.Documents.List>());
+            var nested = new System.Windows.Documents.List();
+            ReadingSemantics.MarkList(nested);
+            nested.ListItems.Add(new ListItem(new Paragraph(new Run("gamma"))));
+            wpfList.ListItems.LastListItem!.Blocks.Add(nested);
+            surface.InvalidateStructuralPeers();
+
+            Assert.Contains("gamma", beta.GetName(), StringComparison.Ordinal);
+            Assert.Same(beta, list.GetChildren()[1]);
+            Assert.IsType<ReadingListPeer>(list.GetChildren()[2]);
+        });
+    }
+
+    /// <summary>The authored marker run that leads an ordered item's first
+    /// paragraph, or null when the item has none.</summary>
+    private static string? AuthoredMarkerOf(ListItem item) =>
+        item.Blocks.FirstBlock is Paragraph { Inlines.FirstInline: Run run }
+            && ReadingSemantics.IsListMarker(run)
+                ? run.Text
+                : null;
 
     /// <summary>
     /// Adversarial-review fix: the ceiling is ABSOLUTE. An all-list
