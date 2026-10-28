@@ -199,6 +199,7 @@ public sealed partial class ShellAccessibilityTests
         string vaultRoot = Path.Combine(testRoot, "Another Session Vault");
         string logDirectory = Path.Combine(testRoot, "logs");
         Directory.CreateDirectory(vaultRoot);
+        Directory.CreateDirectory(logDirectory);
         File.WriteAllText(Path.Combine(vaultRoot, "note.md"), "# Note\n\nOriginal body.\n");
         File.WriteAllText(Path.Combine(vaultRoot, "gone.md"), "# Gone\n");
 

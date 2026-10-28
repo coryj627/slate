@@ -30,7 +30,9 @@ internal static class CacheSql
         try
         {
             Assert.True(opened == Ok, $"winsqlite3 could not open the cache: {Message(db)}");
-            _ = sqlite3_busy_timeout(db, 10_000);
+            Assert.True(
+                sqlite3_busy_timeout(db, 10_000) == Ok,
+                $"winsqlite3 could not set the busy timeout: {Message(db)}");
             int ran = sqlite3_exec(db, Utf8(sql), IntPtr.Zero, IntPtr.Zero, out IntPtr error);
             string? detail = error == IntPtr.Zero ? null : Marshal.PtrToStringUTF8(error);
             sqlite3_free(error);
