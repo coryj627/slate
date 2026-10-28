@@ -123,12 +123,17 @@ public sealed class NavigationHelpTests
             var second = new System.Windows.Documents.ListItem(new System.Windows.Documents.Paragraph(new System.Windows.Documents.Run("Second")));
             list.ListItems.Add(first);
             list.ListItems.Add(second);
-            var listPeer = new ReadingListPeer(list);
-            var itemPeer = new ReadingListItemPeer(second);
+            // WB-11 (#1329): a list's set is indexed once per structural
+            // generation; every change to the reading document's blocks bumps
+            // it (ReadingSurface.InvalidateStructuralPeers).
+            var structure = new ReadingStructureGeneration();
+            var listPeer = new ReadingListPeer(list, structure);
+            AutomationPeer itemPeer = listPeer.GetChildren()[1];
             Assert.Equal("2 entries", listPeer.GetName());
             Assert.Equal(2, itemPeer.GetPositionInSet());
             Assert.Equal(2, itemPeer.GetSizeOfSet());
             list.ListItems.Remove(first);
+            structure.Bump();
             Assert.Equal("1 entry", listPeer.GetName());
             Assert.Equal(1, itemPeer.GetPositionInSet());
             Assert.Equal(1, itemPeer.GetSizeOfSet());

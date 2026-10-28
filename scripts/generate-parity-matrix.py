@@ -1220,6 +1220,7 @@ def main() -> int:
     a(f"| Editor canonical spans | #381 span API consumers | #381 (W2-2) | {issue_delivery_status('#381 (W2-2)', delivery_evidence)} |")
     a(f"| In-editor interactions (links, tags, citations, embeds, checkboxes) | `NoteEditorView.swift` | #725 (W2-3) | {issue_delivery_status('#725 (W2-3)', delivery_evidence)} |")
     a("| Reading view (block model, mode toggle, heading/link AT nav, print) | `Reading/` | #728 (W3-1) | implemented (PR #1052, merged 2026-07-27; NVDA field-verified 2026-07-26/27; print §W-F-waived) |")
+    a("| Reading list marker: authored ordinal rendered and read | `Reading/ReadingView.swift` (core `list_marker`) | #1422 (plan 44 WB-11) | implemented both hosts (mac since plan 43 PR 16, #1048; Windows: plan 44 WB-11) |")
     a("| Math rendering + canonical speech/braille artifact | core `math.rs` consumers | #729 (W3-2) | implemented (PR #1057, merged 2026-07-28; human AT pending) |")
     a("| Diagrams (canonical Rust SVG + description) | core `diagram.rs` consumers | #730 (W3-3) | implemented (PR #1058, merged 2026-07-29; human AT pending) |")
     a("| Code blocks (canonical tokens + AT preamble) | `CodeBlockView.swift` | #731 (W3-4) | implemented (PR #1054, merged 2026-07-27; human AT pending) |")
