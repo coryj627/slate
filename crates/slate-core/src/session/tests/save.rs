@@ -292,6 +292,56 @@ fn save_text_returns_write_conflict_on_stale_expected_hash() {
     assert_eq!(session.read_text("note.md").unwrap(), "external write");
 }
 
+/// WB-12 (#1508): a Bases export saved inside the vault goes through
+/// `save_text` under the hash the host observed. `save_text` accepts a
+/// non-Markdown path, the host's observation (`canonical_path` and
+/// `read_note_parts`' whole-file hash) answers for one, and under
+/// `Some(hash)` it refuses a destination rewritten on disk that no scan has
+/// reindexed, leaving the rewrite.
+#[test]
+fn save_text_on_a_non_markdown_path() {
+    let (tmp, session) = make_vault(|p| {
+        p.write_file("export.csv", b"a,b\n1,2\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    assert_eq!(
+        session.canonical_path("export.csv").unwrap().as_deref(),
+        Some("export.csv")
+    );
+    let observed = session.read_note_parts("export.csv").unwrap().content_hash;
+    assert_eq!(observed, crate::vault::content_hash(b"a,b\n1,2\n"));
+    let report = session
+        .save_text("export.csv", "a,b\n3,4\n", Some(&observed))
+        .unwrap();
+    assert_eq!(session.read_text("export.csv").unwrap(), "a,b\n3,4\n");
+    let indexed = session.get_file_metadata("export.csv").unwrap().unwrap();
+    assert!(!indexed.is_markdown);
+    assert_eq!(indexed.content_hash, report.new_content_hash);
+
+    // Rewritten outside the session, with no scan: the index still holds
+    // the hash the save reported.
+    std::fs::write(tmp.path().join("export.csv"), b"theirs\n").unwrap();
+    match session.save_text("export.csv", "mine\n", Some(&report.new_content_hash)) {
+        Err(VaultError::WriteConflict {
+            current_content_hash,
+            expected_content_hash,
+            ..
+        }) => {
+            assert_eq!(
+                current_content_hash,
+                crate::vault::content_hash(b"theirs\n")
+            );
+            assert_eq!(expected_content_hash, report.new_content_hash);
+        }
+        other => panic!("expected WriteConflict, got {other:?}"),
+    }
+    assert_eq!(
+        std::fs::read(tmp.path().join("export.csv")).unwrap(),
+        b"theirs\n"
+    );
+}
+
 #[test]
 fn save_text_with_empty_expected_hash_creates_new_file() {
     // "I expect this file to NOT exist yet" → expected_hash="".

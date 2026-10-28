@@ -609,8 +609,15 @@ fn is_root_change(kind: &EventKind) -> bool {
     )
 }
 
-/// One notify delivery as the session's [`FileEvent`]s (design §4.1). Pure,
-/// so the platform rules are pinned without a platform.
+/// #1516: whether `path` names a directory now. A path that cannot be read
+/// (gone, denied) is not proved a directory, so its event is kept.
+fn is_existing_directory(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir())
+}
+
+/// One notify delivery as the session's [`FileEvent`]s (design §4.1). Pure
+/// but for #1516's one `symlink_metadata` of a modified path, so the
+/// platform rules are pinned without a platform.
 pub(super) fn translate(root: &Path, result: notify::Result<notify::Event>) -> Vec<FileEvent> {
     let event = match result {
         Ok(event) => event,
@@ -679,6 +686,20 @@ pub(super) fn translate(root: &Path, result: notify::Result<notify::Event>) -> V
                     }];
                 }
             }
+            // #1516: NTFS updates a folder's own entry when a handle in it
+            // closes; nothing the scanner reads changed, so that `Modify` is
+            // dropped. A rename (`Name`, any side) is never dropped: it is
+            // how the scanner hears of a folder renamed one side at a time.
+            Classified::Visible(_)
+                if matches!(
+                    event.kind,
+                    EventKind::Modify(
+                        ModifyKind::Any
+                            | ModifyKind::Data(_)
+                            | ModifyKind::Metadata(_)
+                            | ModifyKind::Other
+                    )
+                ) && is_existing_directory(path) => {}
             Classified::Visible(relative) => out.push(match event.kind {
                 EventKind::Create(_) => FileEvent::Created { relative },
                 EventKind::Remove(_) => FileEvent::Deleted { relative },
@@ -1320,5 +1341,168 @@ mod tests {
         std::fs::remove_dir(&root).unwrap();
         std::fs::rename(outer.path().join("moved"), &root).unwrap();
         assert!(handle.root_still_anchored(), "the anchored folder is back");
+    }
+
+    // --- #1516 (WB-12): a folder's own non-rename `Modify` is dropped. ---
+
+    /// Every `ModifyKind` that is not a rename, as notify spells them.
+    fn non_rename_modifies() -> [EventKind; 4] {
+        [
+            EventKind::Modify(ModifyKind::Any),
+            EventKind::Modify(ModifyKind::Data(DataChange::Any)),
+            EventKind::Modify(ModifyKind::Metadata(notify::event::MetadataKind::Any)),
+            EventKind::Modify(ModifyKind::Other),
+        ]
+    }
+
+    /// Every one-sided rename shape, which reaches the per-path arm.
+    fn one_sided_renames() -> [EventKind; 3] {
+        [
+            EventKind::Modify(ModifyKind::Name(RenameMode::From)),
+            EventKind::Modify(ModifyKind::Name(RenameMode::To)),
+            EventKind::Modify(ModifyKind::Name(RenameMode::Any)),
+        ]
+    }
+
+    /// #1516: NTFS updates a folder's own entry lazily, when a handle in it
+    /// closes, and ReadDirectoryChangesW reports that as the folder's
+    /// `Modify`. Nothing the scanner reads changed, so `translate` drops a
+    /// non-rename `Modify` of an existing directory, and the real watch never
+    /// delivers the folder's `Modified` while the child's own events arrive.
+    /// The sentinel is written last, after the folder's notification.
+    #[test]
+    fn a_directorys_own_modify_is_dropped() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("Folder")).unwrap();
+        for kind in non_rename_modifies() {
+            assert_eq!(
+                translate(tmp.path(), event(kind, &[tmp.path().join("Folder")])),
+                Vec::new(),
+                "{kind:?}"
+            );
+        }
+
+        // #1516's shape: a child written just before the watch arms, then
+        // the first open of its folder (the open scan's enumeration), which
+        // is when NTFS updates the folder's own entry; then a child of the
+        // watch's own, written and removed.
+        let (tmp, sink, _handle) = watched_after(|root| {
+            std::fs::create_dir(root.join("Folder")).unwrap();
+            std::fs::write(root.join("Folder").join("seeded.md"), b"x").unwrap();
+        });
+        for entry in std::fs::read_dir(tmp.path().join("Folder")).unwrap() {
+            std::fs::read(entry.unwrap().path()).unwrap();
+        }
+        let child = tmp.path().join("Folder").join("child.md");
+        std::fs::write(&child, b"x").unwrap();
+        std::fs::remove_file(&child).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        std::fs::write(tmp.path().join("sentinel.md"), b"s").unwrap();
+        assert!(
+            sink.wait_for("sentinel.md", DELIVERY),
+            "{:?}",
+            sink.snapshot()
+        );
+        assert!(
+            sink.wait_for("Folder/child.md", DELIVERY),
+            "the child's own events arrive: {:?}",
+            sink.snapshot()
+        );
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(
+            !sink.snapshot().contains(&modified("Folder")),
+            "the folder's own modify reached the sink: {:?}",
+            sink.snapshot()
+        );
+    }
+
+    /// #1516: every rename shape the `Both` arm does not take — `From`,
+    /// `To`, `Any` — still names a visible folder as `Modified`: it is the
+    /// signal that makes the scanner notice a directory rename.
+    #[test]
+    fn a_one_sided_directory_rename_is_still_modified() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("Folder")).unwrap();
+        for kind in one_sided_renames() {
+            assert_eq!(
+                translate(tmp.path(), event(kind, &[tmp.path().join("Folder")])),
+                vec![modified("Folder")],
+                "{kind:?}"
+            );
+        }
+    }
+
+    /// #1516: a `Both` rename whose other side is hidden is not a visible
+    /// rename, so the per-path arm must keep the visible folder's `Modified`.
+    #[test]
+    fn a_directory_rename_whose_other_side_is_hidden_is_still_modified() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("Folder")).unwrap();
+        std::fs::create_dir(tmp.path().join(".slate")).unwrap();
+        let both = EventKind::Modify(ModifyKind::Name(RenameMode::Both));
+        assert_eq!(
+            translate(
+                tmp.path(),
+                event(
+                    both,
+                    &[
+                        tmp.path().join("Folder"),
+                        tmp.path().join(".slate").join("x")
+                    ]
+                )
+            ),
+            vec![modified("Folder")]
+        );
+        assert_eq!(
+            translate(
+                tmp.path(),
+                event(
+                    both,
+                    &[
+                        tmp.path().join(".slate").join("x"),
+                        tmp.path().join("Folder")
+                    ]
+                )
+            ),
+            vec![modified("Folder")]
+        );
+    }
+
+    /// #1516: a `Modify` whose path no longer exists cannot be proved a
+    /// folder, so it still asks for a rescan.
+    #[test]
+    fn a_modify_on_a_missing_path_is_still_modified() {
+        let root = root();
+        for kind in non_rename_modifies() {
+            assert_eq!(
+                translate(&root, event(kind, &[at("gone")])),
+                vec![modified("gone")],
+                "{kind:?}"
+            );
+        }
+    }
+
+    /// #1516: a file's `Modify` is its content or attributes, so it is kept,
+    /// synthetic and through the real watch.
+    #[test]
+    fn a_modify_on_a_file_is_still_modified() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.md"), b"x").unwrap();
+        for kind in non_rename_modifies() {
+            assert_eq!(
+                translate(tmp.path(), event(kind, &[tmp.path().join("a.md")])),
+                vec![modified("a.md")],
+                "{kind:?}"
+            );
+        }
+
+        let (tmp, sink, _handle) =
+            watched_after(|root| std::fs::write(root.join("a.md"), b"x").unwrap());
+        std::fs::write(tmp.path().join("a.md"), b"changed").unwrap();
+        assert!(
+            sink.wait_for("a.md", DELIVERY),
+            "a file's modify arrives: {:?}",
+            sink.snapshot()
+        );
     }
 }
