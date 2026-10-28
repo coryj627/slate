@@ -2682,58 +2682,6 @@ public sealed class ReadingViewTests
         });
     }
 
-    /// <summary>WB-11 (#1329): a list item is offscreen exactly when it lies
-    /// outside the viewport — answered from the viewport's text range, read
-    /// once per layout pass and again after a scroll, instead of WPF's
-    /// per-item geometry, which WPF asks of every item after every layout
-    /// pass while a client listens.</summary>
-    [Fact]
-    public void AListItemIsOffscreenOnlyOutsideTheViewport()
-    {
-        RunSta(() =>
-        {
-            var source = new System.Text.StringBuilder();
-            for (int i = 1; i <= 200; i++)
-            {
-                source.Append("- item ").Append(i).Append('\n');
-            }
-            var surface = new ReadingSurface();
-            var window = new System.Windows.Window
-            {
-                Content = surface,
-                Width = 400,
-                Height = 300,
-                ShowActivated = false,
-                ShowInTaskbar = false,
-                WindowStyle = System.Windows.WindowStyle.None,
-            };
-            try
-            {
-                window.Show();
-                var peer = System.Windows.Automation.Peers.UIElementAutomationPeer
-                    .CreatePeerForElement(surface)!;
-                surface.ApplyBuiltDocument(BuildSource(source.ToString()));
-                surface.UpdateLayout();
-                ReadingListPeer list = Assert.Single(peer.GetChildren().OfType<ReadingListPeer>());
-                List<AutomationPeer> items = list.GetChildren();
-                Assert.False(items[0].IsOffscreen(), "the first item, at the top of the viewport");
-                Assert.True(items[^1].IsOffscreen(), "the last item, far below the viewport");
-
-                surface.ScrollToEnd();
-                surface.UpdateLayout();
-                Assert.True(items[0].IsOffscreen(), "the first item, scrolled away");
-                Assert.False(items[^1].IsOffscreen(), "the last item, scrolled to");
-
-                window.Hide();
-                Assert.True(items[^1].IsOffscreen(), "an item of a hidden surface");
-            }
-            finally
-            {
-                window.Close();
-            }
-        });
-    }
-
     /// <summary>WB-11 (#1329): an item's name is read once and kept while its
     /// content is unchanged, but a list a later chunk nests into it (the only
     /// in-place change the reading document makes to an item) is in its
@@ -2750,6 +2698,17 @@ public sealed class ReadingViewTests
             ReadingListPeer list = Assert.Single(peer.GetChildren().OfType<ReadingListPeer>());
             AutomationPeer beta = list.GetChildren()[^1];
             Assert.EndsWith("beta", beta.GetName(), StringComparison.Ordinal);
+            ReadingListItemPeer betaPeer = Assert.IsType<ReadingListItemPeer>(beta);
+            Assert.EndsWith("beta", beta.GetName(), StringComparison.Ordinal);
+            Assert.Equal(1, betaPeer.NameReadsForTests);
+
+            // Another generation keeps the list's peer, its items' peers and
+            // their names: nothing in the list changed.
+            surface.InvalidateStructuralPeers();
+            Assert.Same(list, Assert.Single(peer.GetChildren().OfType<ReadingListPeer>()));
+            Assert.Same(beta, list.GetChildren()[^1]);
+            Assert.EndsWith("beta", beta.GetName(), StringComparison.Ordinal);
+            Assert.Equal(1, betaPeer.NameReadsForTests);
 
             System.Windows.Documents.List wpfList = Assert.Single(
                 surface.Document.Blocks.OfType<System.Windows.Documents.List>());
@@ -2760,8 +2719,62 @@ public sealed class ReadingViewTests
             surface.InvalidateStructuralPeers();
 
             Assert.Contains("gamma", beta.GetName(), StringComparison.Ordinal);
+            Assert.Equal(2, betaPeer.NameReadsForTests);
             Assert.Same(beta, list.GetChildren()[1]);
-            Assert.IsType<ReadingListPeer>(list.GetChildren()[2]);
+            ReadingListPeer nestedPeer = Assert.IsType<ReadingListPeer>(list.GetChildren()[2]);
+            surface.InvalidateStructuralPeers();
+            Assert.Same(nestedPeer, list.GetChildren()[2]);
+        });
+    }
+
+    /// <summary>WB-11 (#1422, red team): Enter on an ordered item that opens
+    /// with a link activates the link from the line's start, as it does on a
+    /// bullet item — the authored marker run before the link does not put the
+    /// caret out of the link's reach.</summary>
+    [Fact]
+    public void EnterAtTheStartOfAnOrderedItemOpeningWithALinkActivatesIt()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-ordered-link");
+            File.WriteAllText(Path.Combine(fixture.Root, "target.md"), "# Target\n");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"),
+                "3. [[target]] first\n4. second\n\n- [[target]] bullet\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+            System.Windows.Documents.List[] lists =
+                surface.Document.Blocks.OfType<System.Windows.Documents.List>().ToArray();
+            Assert.Equal(2, lists.Length);
+
+            Paragraph ordered = Assert.IsType<Paragraph>(lists[0].ListItems.FirstListItem!.Blocks.FirstBlock);
+            Assert.Equal("3. ", AuthoredMarkerOf(lists[0].ListItems.FirstListItem!));
+            surface.CaretPosition = ordered.ContentStart;
+            Assert.True(surface.TryActivateAtCaret(), "Enter at the start of '3. [[target]] first'");
+
+            Paragraph bullet = Assert.IsType<Paragraph>(lists[1].ListItems.FirstListItem!.Blocks.FirstBlock);
+            surface.CaretPosition = bullet.ContentStart;
+            Assert.True(surface.TryActivateAtCaret(), "Enter at the start of '- [[target]] bullet'");
+
+            Paragraph second = Assert.IsType<Paragraph>(lists[0].ListItems.LastListItem!.Blocks.FirstBlock);
+            surface.CaretPosition = second.ContentStart;
+            Assert.False(surface.TryActivateAtCaret(), "Enter at the start of '4. second', which holds no link");
+
+            // A copy keeps the authored ordinals (main's copy renumbered them
+            // "1.\t"); WPF writes a tab before each item for any marker style.
+            string copied = new TextRange(lists[0].ContentStart, lists[0].ContentEnd).Text;
+            Assert.Contains("3. target first", copied, StringComparison.Ordinal);
+            Assert.Contains("4. second", copied, StringComparison.Ordinal);
         });
     }
 

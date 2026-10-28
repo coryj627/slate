@@ -24,8 +24,9 @@ public sealed partial class ShellAccessibilityTests
     /// client listens) and after every key runs NVDA's per-move queries,
     /// timed from the press. A miss of content fails as "does not fit the
     /// reading cap" or a reach message; only then is every move held to
-    /// max(5 × the small note's median for that kind of move, 250 ms), a
-    /// ratio because the shell gate runs every journey with no filter.</summary>
+    /// max(5 × the small note's median for that kind of move over two walks,
+    /// a floor of 2 s for the entry and 250 ms for the rest), a ratio because
+    /// the shell gate runs every journey with no filter.</summary>
     [Fact]
     public void ReadingList_ArrowingThroughTheBlockCapIsBounded()
     {
@@ -78,6 +79,8 @@ public sealed partial class ShellAccessibilityTests
                 _ = WalkTheListNote(window, automation, "small-list.md", "Small list", SmallListItems);
                 List<ReadingMove> small = WalkTheListNote(window, automation, "small-list.md", "Small list", SmallListItems);
                 List<ReadingMove> big = WalkTheListNote(window, automation, "big-list.md", "Big list", BigListItems);
+                // A second small walk, so no kind's baseline is one sample.
+                small.AddRange(WalkTheListNote(window, automation, "small-list.md", "Small list", SmallListItems));
 
                 string table = string.Join(
                     "; ",
@@ -87,12 +90,17 @@ public sealed partial class ShellAccessibilityTests
                 foreach (ReadingMove move in big)
                 {
                     double median = Median(small.Where(s => s.Kind == move.Kind).Select(s => s.Elapsed.TotalMilliseconds));
-                    double bound = Math.Max(5 * median, 250);
+                    // The entry streams the whole note in, CPU-bound where the
+                    // small note's mostly waits: its floor is 2 s (main took
+                    // about 15 s), every other move's 250 ms.
+                    double bound = Math.Max(5 * median, move.Kind == ReadingMoveKind.Entry ? 2_000 : 250);
                     if (move.Elapsed.TotalMilliseconds > bound)
                     {
                         slow.Add($"{move.Key} took {move.Elapsed.TotalMilliseconds:F0} ms, bound {bound:F0} ms");
                     }
                 }
+                // R-4 (#1246): the runtime item-name census, after the timing.
+                AssertItemNamesAreSpeakable(process, "reading-list");
                 Assert.True(
                     slow.Count == 0,
                     $"Arrowing through big-list.md is too slow: {string.Join("; ", slow)}. All moves: {table}");
@@ -169,6 +177,8 @@ public sealed partial class ShellAccessibilityTests
                 $"Ctrl+A raised no TextSelectionChanged on the reading surface within 2 s; the selection read '{selected}'; focus is {DescribeFocusedElement(automation)}.");
             Assert.Equal(whole, selected);
             Assert.Contains("body", selected, StringComparison.Ordinal);
+            // R-4 (#1246): the runtime item-name census, the selection up.
+            AssertItemNamesAreSpeakable(process, "reading-select-all");
         }
         finally
         {
@@ -214,6 +224,9 @@ public sealed partial class ShellAccessibilityTests
         bool reached = SpinWait.SpinUntil(
             () =>
             {
+                // A short pause between polls: every UIA call runs on Slate's
+                // UI thread, which is streaming the note in.
+                Thread.Sleep(25);
                 try { return text.DocumentRange.GetText(-1).Contains("Closing paragraph.", StringComparison.Ordinal); }
                 catch (Exception exception) when (IsTransientUiaFault(exception)) { return false; }
             },

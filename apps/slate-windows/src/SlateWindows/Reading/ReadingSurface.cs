@@ -32,11 +32,6 @@ internal sealed class ReadingSurface : RichTextBox
 {
     public ReadingSurface()
     {
-        Structure = new ReadingStructureGeneration(this);
-        // WB-11 (#1329): the viewport's text range is read again after any
-        // layout pass or scroll.
-        LayoutUpdated += (_, _) => _visibleRangeRead = false;
-        AddHandler(ScrollViewer.ScrollChangedEvent, new ScrollChangedEventHandler((_, _) => _visibleRangeRead = false));
         IsReadOnly = true;
         IsReadOnlyCaretVisible = true;
         // A read-only viewer records no undo — and it MUST not: undo
@@ -833,7 +828,7 @@ internal sealed class ReadingSurface : RichTextBox
 
     /// <summary>WB-11 (#1329): the document's structural generation, which
     /// the peers' caches are kept for.</summary>
-    internal ReadingStructureGeneration Structure { get; }
+    internal ReadingStructureGeneration Structure { get; } = new();
 
     /// <summary>
     /// WB-11 (#1329): the one entry for a change to the document's blocks —
@@ -850,62 +845,6 @@ internal sealed class ReadingSurface : RichTextBox
         Structure.Bump();
         (UIElementAutomationPeer.FromElement(this) as ReadingSurfacePeer)?.ResetListPeers();
         InvalidateAutomationChildren();
-    }
-
-    private (TextPointer First, TextPointer Last)? _visibleRange;
-    private bool _visibleRangeRead;
-
-    /// <summary>
-    /// WB-11 (#1329): whether a range lies wholly outside the viewport, from
-    /// the viewport's text range read once per layout pass; null when that
-    /// range cannot be read, and the caller asks WPF instead. With a client
-    /// listening, WPF asks every list item's peer after every layout pass,
-    /// and its own answer finds the item's geometry in the laid-out
-    /// document — about a millisecond an item at the 2,000-block cap
-    /// (measured 2026-10-28), so a streamed note's entry grew with the
-    /// square of its length.
-    /// </summary>
-    internal bool? IsRangeOffscreen(TextPointer start, TextPointer end)
-    {
-        if (!IsVisible || ActualWidth <= 0 || ActualHeight <= 0
-            || Window.GetWindow(this) is { WindowState: WindowState.Minimized })
-        {
-            return true;
-        }
-        if (!_visibleRangeRead)
-        {
-            _visibleRange = ReadVisibleRange();
-            _visibleRangeRead = true;
-        }
-        if (_visibleRange is not { } visible)
-        {
-            return null;
-        }
-        try
-        {
-            return end.CompareTo(visible.First) < 0 || start.CompareTo(visible.Last) > 0;
-        }
-        catch (ArgumentException)
-        {
-            // A range outside this document: WPF answers for it.
-            return null;
-        }
-    }
-
-    private (TextPointer First, TextPointer Last)? ReadVisibleRange()
-    {
-        try
-        {
-            return GetPositionFromPoint(new Point(0, 0), snapToText: true) is { } first
-                && GetPositionFromPoint(new Point(ActualWidth, ActualHeight), snapToText: true) is { } last
-                    ? (first, last)
-                    : null;
-        }
-        catch (InvalidOperationException)
-        {
-            // No valid layout to read the viewport from.
-            return null;
-        }
     }
 
     /// <summary>
@@ -1000,12 +939,24 @@ internal sealed class ReadingSurface : RichTextBox
     /// </summary>
     internal bool TryActivateAtCaret() => TryActivateAtCaret(brailleRequested: false);
 
+    /// <summary>The end of the authored marker run that opens the caret's
+    /// paragraph when the caret is at or inside it; otherwise the caret.</summary>
+    private static TextPointer PastListMarker(TextPointer caret) =>
+        caret.Paragraph is { Inlines.FirstInline: Run marker }
+            && ReadingSemantics.IsListMarker(marker)
+            && caret.CompareTo(marker.ElementEnd) <= 0
+                ? marker.ElementEnd
+                : caret;
+
     internal bool TryActivateAtCaret(bool brailleRequested)
     {
         if (_model is not { } model || CaretPosition is not { } caret)
         {
             return false;
         }
+        // WB-11 (#1422): an ordered item's line opens with its authored
+        // marker run, and a caret at the line's start is at what follows it.
+        caret = PastListMarker(caret);
         foreach (ReadingLandmark landmark in _landmarks)
         {
             if (landmark.Kind == ReadingLandmarkKind.Link
@@ -1469,16 +1420,6 @@ internal sealed class ReadingSurfacePeer : RichTextBoxAutomationPeer
 /// </summary>
 internal sealed class ReadingStructureGeneration
 {
-    internal ReadingStructureGeneration(ReadingSurface? surface = null)
-    {
-        Surface = surface;
-    }
-
-    /// <summary>The surface whose document this generation counts, which
-    /// answers whether a range is in its viewport; null for peers built
-    /// without one.</summary>
-    internal ReadingSurface? Surface { get; }
-
     internal int Value { get; private set; }
 
     internal void Bump() => Value++;
@@ -1701,6 +1642,9 @@ internal sealed class ReadingListItemPeer : TextElementAutomationPeer
     private string? _name;
     private int _nameLength;
 
+    /// <summary>How many times the item's text was read for its name.</summary>
+    internal int NameReadsForTests { get; private set; }
+
     public ReadingListItemPeer(ListItem item, ReadingListPeer list, ReadingStructureGeneration structure)
         : base(item)
     {
@@ -1711,20 +1655,6 @@ internal sealed class ReadingListItemPeer : TextElementAutomationPeer
 
     protected override AutomationControlType GetAutomationControlTypeCore() =>
         AutomationControlType.ListItem;
-
-    /// <summary>
-    /// WB-11 (#1329): whether the item is outside the viewport, from the
-    /// surface's visible text range (<see cref="ReadingSurface.IsRangeOffscreen"/>),
-    /// WPF's own answer when that range cannot be read or the item sets its
-    /// own behaviour. WPF asks every item after every layout pass while a
-    /// client listens, and its answer costs about a millisecond an item at
-    /// the 2,000-block cap.
-    /// </summary>
-    protected override bool IsOffscreenCore() =>
-        AutomationProperties.GetIsOffscreenBehavior(_item) == IsOffscreenBehavior.Default
-        && _structure.Surface?.IsRangeOffscreen(_item.ContentStart, _item.ContentEnd) is { } offscreen
-            ? offscreen
-            : base.IsOffscreenCore();
 
     /// <summary>The item's text, an ordered item's authored marker first
     /// ("4. Fourth", #1422), read again only when the item's content length
@@ -1737,6 +1667,7 @@ internal sealed class ReadingListItemPeer : TextElementAutomationPeer
         {
             _name = new TextRange(_item.ContentStart, _item.ContentEnd).Text.Trim();
             _nameLength = length;
+            NameReadsForTests++;
         }
         return _name;
     }
