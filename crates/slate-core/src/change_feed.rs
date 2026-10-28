@@ -542,6 +542,24 @@ fn has_foreign_row(conn: &Connection, from: u64, to: u64, me: &str) -> rusqlite:
     })
 }
 
+/// WB-10a (#1519): whether a row in `(from, to]` was written by another
+/// session, whatever its origin. One streaming pass; stops at the first.
+fn has_other_writers_row(
+    conn: &Connection,
+    from: u64,
+    to: u64,
+    me: &str,
+) -> rusqlite::Result<bool> {
+    conn.prepare_cached(
+        "SELECT EXISTS(
+            SELECT 1 FROM change_feed
+             WHERE seq > ?1 AND seq <= ?2 AND writer <> ?3)",
+    )?
+    .query_row(rusqlite::params![to_i64(from), to_i64(to), me], |row| {
+        row.get::<_, bool>(0)
+    })
+}
+
 /// Stream the rows of `(from, to]` in `seq` order into `derivation`.
 fn derive_range(
     conn: &Connection,
@@ -796,7 +814,14 @@ fn gap_of(start: &WindowStart, after: Option<u64>) -> Result<Option<ChangeFeedGa
 /// What [`open_window`] found: a window, or a gap whose cursor the caller
 /// re-creates in a fenced write ([`record_gap`], then [`gap_window`]).
 pub(crate) enum OpenedWindow {
-    Window(ChangeFeedWindow),
+    /// `another_writer` (WB-10a, #1519): a row in the window's range was
+    /// written by another session — a change this session's link graph
+    /// cannot have learned (its own rows, saves, scans and re-indexes alike,
+    /// reached it through `graph_apply`).
+    Window {
+        window: ChangeFeedWindow,
+        another_writer: bool,
+    },
     Gap(PendingGap),
 }
 
@@ -884,27 +909,34 @@ pub(crate) fn open_window(
         .as_ref()
         .map(|derivation| derivation.records(counts.as_ref()))
         .unwrap_or_default();
+    // A window of no records holds no other writer's row (each one is a
+    // record); an oversized one read none, so it asks.
+    let another_writer = (status == ChangeFeedStatus::TooLarge || !records.is_empty())
+        && has_other_writers_row(&read, from, to, me)?;
     clear_materialization(&read)?;
     let summaries = present_file_summaries(&read, &records, cancel)?;
     materialize(&read, &records, &summaries, cancel)?;
     read.commit()?;
     let generation = seat.next_generation();
-    Ok(OpenedWindow::Window(ChangeFeedWindow {
-        token: WindowToken {
-            nonce: seat.nonce,
-            from,
-            to,
-            generation,
-        }
-        .encode(),
-        from_seq: from,
-        to_seq: to,
-        status,
-        counted: counts.is_some(),
-        changed: counts.as_ref().map_or(0, |counts| counts.changed),
-        removed: counts.as_ref().map_or(0, |counts| counts.removed),
-        record_count: records.len() as u64,
-    }))
+    Ok(OpenedWindow::Window {
+        another_writer,
+        window: ChangeFeedWindow {
+            token: WindowToken {
+                nonce: seat.nonce,
+                from,
+                to,
+                generation,
+            }
+            .encode(),
+            from_seq: from,
+            to_seq: to,
+            status,
+            counted: counts.is_some(),
+            changed: counts.as_ref().map_or(0, |counts| counts.changed),
+            removed: counts.as_ref().map_or(0, |counts| counts.removed),
+            record_count: records.len() as u64,
+        },
+    })
 }
 
 /// A gap's write (design §4.3), inside the caller's fenced transaction:

@@ -651,7 +651,9 @@ token, never on the UI thread:
   order of events and records.
 - Then, once per window that has records: the tree's silent refresh, the
   Bases and dashboard re-runs and the graph probe (when any file record
-  exists). Reading models are notified with the window's paths and
+  exists; since WB-10a, #1519, the window itself drops the session's link
+  graph when it holds another session's row or is a gap, so a probe that
+  follows the window finds the change; mac's probe precedes it, #1679). Reading models are notified with the window's paths and
   re-project only when their reverse-dependency filter matches one (or
   when their own tab reloaded); the history panel reloads only when a
   record names its note. This is the spec's "reading and history notified

@@ -2035,6 +2035,19 @@ impl VaultSession {
             .take();
     }
 
+    /// WB-10a (#1519): another session changed the vault behind this
+    /// session's graph — a change-feed window holds its row, or cannot say
+    /// (a gap). The graph learns only this session's own commits
+    /// ([`Self::graph_apply`]), so it is dropped; the floor moves whether or
+    /// not an index was built, because the hosts' probes compare
+    /// generations and two foreign changes with no query between must read
+    /// two. Caller holds the connection lock (LOCK ORDER: conn → graph →
+    /// graph_metrics).
+    fn graph_invalidate_locked_conn(&self) {
+        let mut guard = self.graph.lock().expect("graph index mutex");
+        self.graph_drop_locked(&mut guard);
+    }
+
     /// Build the index if absent, seating its generation at
     /// `floor + 1` — a rebuilt index must never reuse an
     /// already-observed generation (review round 1 finding 2). Caller
@@ -3399,8 +3412,25 @@ impl VaultSession {
             crate::change_feed::open_window(&conn, &self.change_feed, after, cancel)
         })?;
         match opened {
-            crate::change_feed::OpenedWindow::Window(window) => Ok(window),
+            crate::change_feed::OpenedWindow::Window {
+                window,
+                another_writer,
+            } => {
+                // WB-10a (#1519): another session's row — a file's or a
+                // directory's, since the graph is keyed by path — is a change
+                // this session's graph never learned. This session's own
+                // rows (its saves, its scans, its re-indexes) already reached
+                // it, so a window of those alone leaves it be.
+                if another_writer {
+                    self.graph_invalidate_locked_conn();
+                }
+                Ok(window)
+            }
             crate::change_feed::OpenedWindow::Gap(pending) => {
+                // WB-10a (#1519): the host's full re-sync cannot tell the
+                // graph what another session indexed behind the gap. Dropped
+                // first, so a failed fenced write below cannot skip it.
+                self.graph_invalidate_locked_conn();
                 // The gap re-creates this session's cursor at the head in a
                 // fenced write (design §4.3), so the triggers stay on during
                 // the host's full re-sync.

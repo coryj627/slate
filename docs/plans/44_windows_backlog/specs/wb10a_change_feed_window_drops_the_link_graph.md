@@ -2,6 +2,21 @@
 
 Issues: #1519 (closes here). Size S–M. Lanes: rust, windows (`cargo test -p slate-core` runs on the Windows lane too, `windows.yml:228-346`). AT: none (no speech changes). Wave: W4 (slot 1, before WB-10). Depends on: nothing (21a is on `main`). Parallel with: WB-11, WB-12. Decision: none.
 
+## Amended at implementation (2026-10-27)
+
+This section outranks the text below it. A fresh Claude subagent red-teamed the first draft, which was the design as written.
+
+- **The trigger is another session's row, not any record.** The design keyed the drop on `record_count > 0`, but this session's own scans and re-indexes write reconcile rows (`origin` not `Write`), and those are records in its window (`a_change_one_session_scanned_is_counted_by_both`). They already reached its graph through `graph_apply`: the scan, `ensure_open_base_indexed` and `open_canvas` all stage graph ops. So the draft dropped a correct graph on every watcher run that picked up an external edit, even in a lone session. A full rebuild is 35 ms at 10k notes and 175 ms at 50k (`BENCHMARKS.md`), under the conn and graph locks.
+  - `open_window` now reports, inside its own read snapshot, whether a row in the window's range is another writer's (`writer <> me`, any origin). It asks only when the window holds records or is oversized; a window with no records holds no such row.
+  - `change_feed_window` drops on that, or on any gap.
+  - New facts: `a_window_of_this_sessions_own_scan_leaves_the_graph_alone` and `an_oversized_window_of_this_sessions_own_rows_leaves_the_graph_alone`. A directory row still counts, as the design asks, because the graph is keyed by path.
+- **A gap drops before its fenced write**, so a failed `record_gap` cannot skip the drop.
+- **The helper is one call.** `graph_drop_locked` already moves the floor whether or not an index exists, and the metrics cache is empty whenever no index is.
+- **Mac's half is not in core.** Mac probes its graph surfaces on `ScanFinished`, which runs inside `rescan` before the window opens. On mac the drop is therefore seen at the next run's probe, not this run's. Filed as #1679 (a probe after the window, with an XCTest witness). #1519's core defect, the graph never learning another session's change, closes here.
+- **Accepted:**
+  - A directory-only window drops the graph although it has no folder nodes. The design asks for this, and it is rare and cheap.
+  - A run's later passes, and a re-read window after a cancelled run, may drop again. That costs time, never a wrong answer.
+
 ## Goal
 
 A session's in-memory link graph learns only its own commits, so after another Slate session adds or removes a link, this session's Connections leaf and graph views stay on the old links even though a Refresh, a watcher run or a change-feed window applied the change everywhere else (the SQL-backed backlinks are current). After this chunk, opening a change-feed window that carries any record from another writer — or that cannot say what changed (a `Gap` or a `TooLarge` window, behind which the host's full re-sync cannot see links another session already indexed) — drops the graph index and bumps the generation floor, so the hosts' existing `graph_generation()` probes (Windows R-9 (d), mac's three `refresh…IfGraphChanged`) see "changed" and rebuild lazily. No FFI and no host change; a window with only this session's own writes (no records) leaves the graph alone.
