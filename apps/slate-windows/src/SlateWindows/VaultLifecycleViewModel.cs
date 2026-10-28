@@ -147,6 +147,7 @@ internal sealed partial class VaultLifecycleViewModel
 
     private VaultSession? _session;
     private CancelToken? _scanCancel;
+    private WorkspaceAssembly? _assembling;
     private ulong? _eventListenerToken;
     private UiProgressListener? _progressListener;
     private UiVaultEventListener? _eventListener;
@@ -613,42 +614,32 @@ internal sealed partial class VaultLifecycleViewModel
                 ProgressMaximum = Math.Max(1, loaded.Report.FilesSeen);
                 ProgressValue = ProgressMaximum;
                 IsProgressIndeterminate = false;
-                InitializeWorkspace(_session, root, loaded.SwitcherFiles);
-                // #1684: the Files tree's first rows before the welcome view
-                // gives way. A tree still reading when the keys land has no
-                // row to take them: its bare tree would hold them and hand
-                // them on when the rows arrive, two moves where WB-9 promises
-                // one. The refresh publishes its rows, or its failure, before
-                // it completes; a close or quit meanwhile cancels it, and the
-                // generation check below then finds the open superseded.
-                if (FileSidebar is FilesSidebarViewModel sidebar && sidebar.IsRefreshingTree)
+                // #1684: the workspace is built here and published only once
+                // the Files tree's first refresh has published its rows, or
+                // its failure. Until then none of it is live: the welcome
+                // view holds the keys and the commands, as it does through the
+                // rest of the open, and the launch landing then finds the
+                // rows. A tree with no rows yet would hold the keys itself and
+                // hand them on when the rows arrive: two moves, not one.
+                WorkspaceAssembly assembled = AssembleWorkspace(_session, root, loaded.SwitcherFiles);
+                _assembling = assembled;
+                await AwaitFirstTreePublicationAsync(assembled.Sidebar);
+                // A teardown meanwhile took the assembly down with the
+                // session (CloseSession).
+                if (generation == _generation && ReferenceEquals(_assembling, assembled))
                 {
-                    try
+                    _assembling = null;
+                    // WB-9 (#1319, WD4): the welcome view holds the keys through
+                    // every phase of the open, and gives way in the same turn the
+                    // workspace is published, so the keys move once.
+                    IsVaultOpen = true;
+                    if (recorded is not null)
                     {
-                        await sidebar.TreeRefreshCompletion;
+                        ReplaceRecentVaults(recorded);
                     }
-                    catch (Exception exception)
-                    {
-                        // The refresh reports its own failures; a fault past
-                        // them still leaves a workspace to land in.
-                        HostLog.Write(HostDiagnosticEvent.SidebarTreeRefreshFailed, exception);
-                    }
+                    PublishWorkspace(assembled);
+                    StartSyncMarkerWatch(generation, root);
                 }
-            }
-
-            if (generation == _generation)
-            {
-                // WB-9 (#1319, WD4): the welcome view holds the keys through
-                // every phase of the open, and gives way in the same turn the
-                // workspace is ready, so the keys move once.
-                IsVaultOpen = true;
-                if (recorded is not null)
-                {
-                    ReplaceRecentVaults(recorded);
-                }
-
-                WorkspaceReady?.Invoke(this, EventArgs.Empty);
-                StartSyncMarkerWatch(generation, root);
             }
         }
         catch (VaultException exception)
@@ -1125,6 +1116,14 @@ internal sealed partial class VaultLifecycleViewModel
         // a signal already queued is dropped by its generation.
         StopVaultWatch();
 
+        // #1684: a workspace the open built and has not yet published goes
+        // down with the session like a published one.
+        WorkspaceAssembly? assembling = _assembling;
+        _assembling = null;
+        WorkspaceViewModel? workspace = Workspace ?? assembling?.Workspace;
+        FilesSidebarViewModel? fileSidebar = FileSidebar ?? assembling?.Sidebar;
+        QuickSwitcherViewModel? quickSwitcher = QuickSwitcher ?? assembling?.Switcher;
+
         // W7-7 PR 7 (codex AR-18 review round 2, finding 3): the rescan's
         // core-call admission closes FIRST, then the run is cancelled — its
         // managed twin (host-side checks, F5), then its native token through
@@ -1155,7 +1154,7 @@ internal sealed partial class VaultLifecycleViewModel
             }
         }
 
-        if (FileSidebar is FilesSidebarViewModel sidebar)
+        if (fileSidebar is FilesSidebarViewModel sidebar)
         {
             SidebarSessionShutdown shutdown = sidebar.BeginSessionShutdownAndCaptureWork();
             try
@@ -1243,32 +1242,32 @@ internal sealed partial class VaultLifecycleViewModel
         _progressListener = null;
         ResetRescanState();
 
-        if (QuickSwitcher is not null)
+        if (quickSwitcher is not null)
         {
-            QuickSwitcher.OpenRequested -= QuickSwitcher_OpenRequested;
-            QuickSwitcher.Dismissed -= QuickSwitcher_Dismissed;
-            QuickSwitcher.Dispose();
+            quickSwitcher.OpenRequested -= QuickSwitcher_OpenRequested;
+            quickSwitcher.Dismissed -= QuickSwitcher_Dismissed;
+            quickSwitcher.Dispose();
         }
 
-        if (FileSidebar is not null)
+        if (fileSidebar is not null)
         {
-            FileSidebar.OpenTargetRequested -= FileSidebar_OpenTargetRequested;
-            FileSidebar.PropertyChanged -= FileSidebar_SheetPresented;
-            FileSidebar.PropertyChanged -= FileSidebar_RescanBlockersChanged;
-            FileSidebar.RescanRequested = null;
-            FileSidebar.RescanUnavailableReason = null;
-            FileSidebar.StructuralMutationBlockedReason = null;
+            fileSidebar.OpenTargetRequested -= FileSidebar_OpenTargetRequested;
+            fileSidebar.PropertyChanged -= FileSidebar_SheetPresented;
+            fileSidebar.PropertyChanged -= FileSidebar_RescanBlockersChanged;
+            fileSidebar.RescanRequested = null;
+            fileSidebar.RescanUnavailableReason = null;
+            fileSidebar.StructuralMutationBlockedReason = null;
         }
 
-        if (Workspace is not null)
+        if (workspace is not null)
         {
-            Workspace.FileOpened -= Workspace_FileOpened;
-            Workspace.EditorTagActivated -= Workspace_EditorTagActivated;
-            Workspace.ReadingTagActivated -= Workspace_ReadingTagActivated;
-            Workspace.FocusBoundaryRequested -= Workspace_FocusBoundaryRequested;
-            Workspace.TemplateNoteWritten -= Workspace_TemplateNoteWritten;
-            Workspace.PropertyChanged -= Workspace_SheetPresented;
-            Workspace.Dispose();
+            workspace.FileOpened -= Workspace_FileOpened;
+            workspace.EditorTagActivated -= Workspace_EditorTagActivated;
+            workspace.ReadingTagActivated -= Workspace_ReadingTagActivated;
+            workspace.FocusBoundaryRequested -= Workspace_FocusBoundaryRequested;
+            workspace.TemplateNoteWritten -= Workspace_TemplateNoteWritten;
+            workspace.PropertyChanged -= Workspace_SheetPresented;
+            workspace.Dispose();
         }
 
         QuickSwitcher = null;
@@ -1353,7 +1352,36 @@ internal sealed partial class VaultLifecycleViewModel
     /// fact can wait for a save's change to land inside a close.</summary>
     internal int FileChangesHandledForTests => Volatile.Read(ref _fileChangesHandled);
 
-    private void InitializeWorkspace(
+    /// <summary>#1684: a workspace the open has built and not yet
+    /// published, while the Files tree reads its first rows.</summary>
+    private sealed record WorkspaceAssembly(
+        WorkspaceViewModel Workspace,
+        FilesSidebarViewModel Sidebar,
+        QuickSwitcherViewModel Switcher);
+
+    /// <summary>#1684: wait until the tree's first refresh has published
+    /// its rows or its failure. A refresh that supersedes it ends it
+    /// unpublished, so the newer one is waited for in turn; a teardown
+    /// cancels them.</summary>
+    private static async Task AwaitFirstTreePublicationAsync(FilesSidebarViewModel sidebar)
+    {
+        while (sidebar.IsRefreshingTree)
+        {
+            try
+            {
+                await sidebar.TreeRefreshCompletion;
+            }
+            catch (Exception exception)
+            {
+                // The refresh reports its own failures; a fault past them
+                // still leaves a workspace to land in.
+                HostLog.Write(HostDiagnosticEvent.SidebarTreeRefreshFailed, exception);
+                return;
+            }
+        }
+    }
+
+    private WorkspaceAssembly AssembleWorkspace(
         VaultSession session,
         string root,
         IEnumerable<SwitcherFile> switcherFiles)
@@ -1426,7 +1454,12 @@ internal sealed partial class VaultLifecycleViewModel
         workspace.GraphRevealInSidebar = capturedSidebar.SelectPathFromSurface;
         switcher.OpenRequested += QuickSwitcher_OpenRequested;
         switcher.Dismissed += QuickSwitcher_Dismissed;
+        return new WorkspaceAssembly(workspace, capturedSidebar, switcher);
+    }
 
+    private void PublishWorkspace(WorkspaceAssembly assembled)
+    {
+        (WorkspaceViewModel workspace, FilesSidebarViewModel sidebar, QuickSwitcherViewModel switcher) = assembled;
         Workspace = workspace;
 
         // Subscribed AFTER the Workspace assignment on purpose: the
@@ -1456,12 +1489,17 @@ internal sealed partial class VaultLifecycleViewModel
         sidebar.StructuralMutationBlockedReason = StructuralMutationBlockedReason;
         sidebar.PropertyChanged += FileSidebar_RescanBlockersChanged;
         QuickSwitcher = switcher;
+        WorkspaceReady?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>W4-8 test seam: the marker watch currently owned by
     /// this lifecycle, so a fact can prove the arm/teardown race opens
     /// no directory handles.</summary>
     internal SyncMarkerWatcher? SyncMarkerWatchForTests => _syncMarkerWatcher;
+
+    /// <summary>#1684 test seam: the Files sidebar of a workspace the open
+    /// has built and not yet published.</summary>
+    internal FilesSidebarViewModel? AssembledSidebarForTests => _assembling?.Sidebar;
 
     /// <summary>The announce-gate key for a vault root. The root is
     /// already <c>Path.GetFullPath</c>'d by <see cref="OpenVaultAsync"/>
@@ -1490,7 +1528,7 @@ internal sealed partial class VaultLifecycleViewModel
     ///
     /// The generation is re-checked TWICE: once here, and once on the
     /// arming thread immediately before the handles open. A teardown
-    /// can land while <see cref="InitializeWorkspace"/> is still
+    /// can land while <see cref="PublishWorkspace"/> is still
     /// running, in which case <see cref="CloseSession"/> reads a
     /// still-null <c>_syncMarkerWatcher</c> and tears everything down —
     /// and without these checks this method would then arm three
