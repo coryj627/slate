@@ -166,13 +166,25 @@ internal sealed partial class WorkspaceViewModel
     /// at the window's target. <paramref name="Provenance"/> (codex round 2)
     /// — the tabs at <paramref name="From"/> are the file's because an
     /// unacknowledged run moved them there, so they go whatever their
-    /// baseline has become.</summary>
+    /// baseline has become. <paramref name="FollowersOnly"/> (codex round 5)
+    /// — only the Connections pin and the closed tabs at
+    /// <paramref name="From"/> go, which an unacknowledged run moved there;
+    /// no tab is touched.</summary>
     internal readonly record struct FeedRename(
         string From,
         string To,
         string? FromHash,
         bool OldIsGone,
-        bool Provenance = false);
+        bool Provenance = false,
+        bool FollowersOnly = false);
+
+    /// <summary>What <see cref="RetargetPathsForFeedRenames"/> moved, by the
+    /// renames' indexes: the renames that moved a tab, and those that moved
+    /// the Connections pin or a closed tab.</summary>
+    internal readonly record struct FeedRetarget(IReadOnlySet<int> MovedTabs, IReadOnlySet<int> MovedFollowers)
+    {
+        internal static FeedRetarget None { get; } = new(new HashSet<int>(), new HashSet<int>());
+    }
 
     /// <summary>
     /// WB-10 (#1293, design §4.3; the owner's decision Q3, AR-8 amended): a
@@ -189,16 +201,15 @@ internal sealed partial class WorkspaceViewModel
     /// window's target. The closed tabs, the Connections pin and the board
     /// and base registries follow only when the file left the origin and no
     /// open tab stayed there. <see cref="RetargetPath(string, string)"/>
-    /// stays for Slate's own renames. Returns the indexes of the renames that
-    /// moved a tab (codex round 4: the lifecycle's provenance holds only
-    /// those).
+    /// stays for Slate's own renames. Returns what each rename moved (codex
+    /// rounds 4 and 5: the lifecycle's provenance holds only those).
     /// </summary>
-    internal IReadOnlySet<int> RetargetPathsForFeedRenames(IReadOnlyList<FeedRename> renames)
+    internal FeedRetarget RetargetPathsForFeedRenames(IReadOnlyList<FeedRename> renames)
     {
         WorkspaceTabViewModel[] tabs = [.. Groups.SelectMany(group => group.Tabs)];
         var claimed = new HashSet<WorkspaceTabViewModel>(ReferenceEqualityComparer.Instance);
         var moves = new List<(WorkspaceTabViewModel Tab, string Destination)>();
-        var follows = new List<(string Source, string Destination)>();
+        var follows = new List<(int Index, string Source, string Destination, bool FollowersOnly)>();
         var moved = new HashSet<int>();
         for (int index = 0; index < renames.Count; index++)
         {
@@ -207,6 +218,12 @@ internal sealed partial class WorkspaceViewModel
             string destination = NormalizeWorkspacePath(rename.To);
             if (source.Length == 0 || destination.Length == 0 || string.Equals(source, destination, StringComparison.Ordinal))
             {
+                continue;
+            }
+
+            if (rename.FollowersOnly)
+            {
+                follows.Add((index, source, destination, true));
                 continue;
             }
 
@@ -234,7 +251,7 @@ internal sealed partial class WorkspaceViewModel
 
             if (rename.OldIsGone && !stayed)
             {
-                follows.Add((source, destination));
+                follows.Add((index, source, destination, false));
             }
         }
 
@@ -244,21 +261,38 @@ internal sealed partial class WorkspaceViewModel
             tab.RetargetPath(destination);
         }
 
-        foreach ((string source, string destination) in follows)
+        var followed = new HashSet<int>();
+        foreach ((int index, string source, string destination, bool followersOnly) in follows)
         {
-            for (int index = 0; index < _closedTabs.Count; index++)
+            bool any = false;
+            for (int closed = 0; closed < _closedTabs.Count; closed++)
             {
-                (WorkspaceItemState item, Guid group) = _closedTabs[index];
+                (WorkspaceItemState item, Guid group) = _closedTabs[closed];
                 if (IsPathBacked(item)
                     && string.Equals(NormalizeWorkspacePath(item.Path), source, StringComparison.Ordinal))
                 {
-                    _closedTabs[index] = (item with { Path = destination }, group);
+                    _closedTabs[closed] = (item with { Path = destination }, group);
+                    any = true;
                 }
             }
 
+            string? pin = Connections.Pin;
+            (string? Pin, string Effective)[] backStack = [.. Connections.BackStack];
             Connections.Retarget(source, destination, ConnectionsActiveAndMounted());
-            RetargetBaseDocuments(source, destination);
-            RetargetCanvasDocuments(source, destination);
+            any |= !string.Equals(pin, Connections.Pin, StringComparison.Ordinal)
+                || !backStack.SequenceEqual(Connections.BackStack);
+            if (!followersOnly)
+            {
+                // The registries can hold a tab's own document, so only a
+                // rename that moved its tabs, or found none, moves them.
+                RetargetBaseDocuments(source, destination);
+                RetargetCanvasDocuments(source, destination);
+            }
+
+            if (any)
+            {
+                _ = followed.Add(index);
+            }
         }
 
         if (moves.Count > 0 || follows.Count > 0)
@@ -267,7 +301,7 @@ internal sealed partial class WorkspaceViewModel
             SyncPanels();
         }
 
-        return moved;
+        return new FeedRetarget(moved, followed);
     }
 
     private static bool FollowsFeedRename(WorkspaceTabViewModel tab, FeedRename rename)

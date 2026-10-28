@@ -59,14 +59,18 @@ internal sealed partial class VaultLifecycleViewModel
     // name each file by its path now: it moves tabs by path and only carries
     // the map forward. Cleared by an acknowledgment and by a close or a vault
     // switch.
-    private readonly Dictionary<string, string> _feedProvenance = new(StringComparer.Ordinal);
+    // Each entry also says whether the run moved the file's tabs, or only its
+    // followers — the Connections pin, the closed tabs (codex round 5): an
+    // entry of followers alone moves only those and never claims a tab.
+    private readonly Dictionary<string, (string At, bool Tabs)> _feedProvenance = new(StringComparer.Ordinal);
 
     /// <summary>The retry set, for the facts.</summary>
     internal IReadOnlySet<RescanSurface> RetrySetForTests => _retrySet;
 
     /// <summary>The files' provenance, origin to the path their tabs are at,
     /// for the facts.</summary>
-    internal IReadOnlyDictionary<string, string> FeedProvenanceForTests => _feedProvenance;
+    internal IReadOnlyDictionary<string, string> FeedProvenanceForTests =>
+        _feedProvenance.ToDictionary(entry => entry.Key, entry => entry.Value.At, StringComparer.Ordinal);
 
     /// <summary>Test seam: a smaller page than the host's 1,000 (within
     /// core's bound), so a fact proves the paging with a few records.</summary>
@@ -571,7 +575,7 @@ internal sealed partial class VaultLifecycleViewModel
         if (Workspace is WorkspaceViewModel workspace)
         {
             FeedRenamePlan plan = PlanFeedRenames(renames, removed, present, fromCursor);
-            IReadOnlySet<int> moved = new HashSet<int>();
+            WorkspaceViewModel.FeedRetarget moved = WorkspaceViewModel.FeedRetarget.None;
             if (plan.Moves.Count > 0)
             {
                 try
@@ -627,11 +631,14 @@ internal sealed partial class VaultLifecycleViewModel
     /// moves the tabs at its origin by the baseline rule, and the map's entry
     /// for a file it moved follows it; a file the map does not hold enters it
     /// when its origin is not already another file's origin there.</para>
-    /// <para>Codex round 4: the map holds only files whose tabs a run really
-    /// moved — a tab that stayed (a board whose origin was refilled, a dirty
-    /// tab whose baseline the record's hash rejects) is not that file's, so
-    /// its path is never claimed. <see cref="FeedRenamePlan.Commit"/> takes
-    /// the indexes of the moves that moved a tab.</para>
+    /// <para>Codex round 4: an entry is the file's tabs only when a run really
+    /// moved them — a tab that stayed (a board whose origin was refilled, a
+    /// dirty tab whose baseline the record's hash rejects) is not that file's,
+    /// so its path is never claimed. Codex round 5: a rename that moved no tab
+    /// but moved the file's followers (the Connections pin, the closed tabs)
+    /// leaves an entry of followers alone, whose replay moves those and claims
+    /// no tab. <see cref="FeedRenamePlan.Commit"/> takes what each move
+    /// moved.</para>
     /// </summary>
     private FeedRenamePlan PlanFeedRenames(
         IReadOnlyList<ChangeRecord> renames,
@@ -640,18 +647,18 @@ internal sealed partial class VaultLifecycleViewModel
         bool fromCursor)
     {
         var moves = new List<WorkspaceViewModel.FeedRename>();
-        // Each move's provenance once it moves a tab: the origin, and where
-        // the file's tabs then are.
-        var owners = new Dictionary<int, (string Origin, string To)>();
+        // Each move's origin, for the provenance it leaves once it moved
+        // something.
+        var owners = new Dictionary<int, string>();
         if (!fromCursor)
         {
             var originAt = new Dictionary<string, string>(StringComparer.Ordinal);
-            foreach ((string origin, string at) in _feedProvenance)
+            foreach ((string origin, (string at, _)) in _feedProvenance)
             {
                 originAt[at] = origin;
             }
 
-            var followed = new Dictionary<int, string>();
+            var tracked = new HashSet<int>();
             foreach (ChangeRecord rename in renames)
             {
                 if (rename.RenamedFrom is not string from)
@@ -661,38 +668,40 @@ internal sealed partial class VaultLifecycleViewModel
 
                 if (originAt.TryGetValue(from, out string? origin))
                 {
-                    followed[moves.Count] = origin;
-                    owners[moves.Count] = (origin, rename.Path);
+                    _ = tracked.Add(moves.Count);
+                    owners[moves.Count] = origin;
                 }
                 else if (!_feedProvenance.ContainsKey(from))
                 {
-                    owners[moves.Count] = (from, rename.Path);
+                    owners[moves.Count] = from;
                 }
 
                 moves.Add(new(from, rename.Path, rename.FromHash, removed.Contains(from)));
             }
 
-            return new FeedRenamePlan(moves, moved =>
+            return new FeedRenamePlan(moves, retarget =>
             {
-                foreach ((int index, (string origin, string to)) in owners)
+                foreach ((int index, string origin) in owners)
                 {
-                    if (moved.Contains(index))
+                    if (Moved(retarget, index) is bool tabs)
                     {
-                        _feedProvenance[origin] = to;
+                        _feedProvenance[origin] = (moves[index].To, tabs);
                     }
-                    else if (followed.ContainsKey(index))
+                    else if (tracked.Contains(index))
                     {
-                        // The remembered file's tabs stayed: no longer
-                        // known to be its own.
+                        // The remembered file's tabs and followers stayed:
+                        // no longer known to be its own.
                         _ = _feedProvenance.Remove(origin);
                     }
                 }
             });
         }
 
-        var held = new HashSet<string>(_feedProvenance.Values, StringComparer.Ordinal);
+        var held = new HashSet<string>(
+            _feedProvenance.Values.Where(entry => entry.Tabs).Select(entry => entry.At),
+            StringComparer.Ordinal);
         var renamedFrom = new HashSet<string>(StringComparer.Ordinal);
-        var next = new Dictionary<string, string>(StringComparer.Ordinal);
+        var next = new Dictionary<string, (string At, bool Tabs)>(StringComparer.Ordinal);
         foreach (ChangeRecord rename in renames)
         {
             if (rename.RenamedFrom is not string from)
@@ -701,61 +710,71 @@ internal sealed partial class VaultLifecycleViewModel
             }
 
             _ = renamedFrom.Add(from);
-            if (_feedProvenance.TryGetValue(from, out string? at))
+            if (_feedProvenance.TryGetValue(from, out (string At, bool Tabs) entry))
             {
-                if (string.Equals(at, rename.Path, StringComparison.Ordinal))
+                if (string.Equals(entry.At, rename.Path, StringComparison.Ordinal))
                 {
-                    // Its tabs are already there (a rename read again).
-                    next[from] = rename.Path;
+                    // Already there (a rename read again).
+                    next[from] = entry;
                     continue;
                 }
 
-                owners[moves.Count] = (from, rename.Path);
-                moves.Add(new(at, rename.Path, rename.FromHash, !present.Contains(at), Provenance: true));
+                owners[moves.Count] = from;
+                moves.Add(entry.Tabs
+                    ? new(entry.At, rename.Path, rename.FromHash, !present.Contains(entry.At), Provenance: true)
+                    : new(entry.At, rename.Path, rename.FromHash, OldIsGone: true, FollowersOnly: true));
             }
             else if (!held.Contains(from))
             {
-                owners[moves.Count] = (from, rename.Path);
+                owners[moves.Count] = from;
                 moves.Add(new(from, rename.Path, rename.FromHash, removed.Contains(from)));
             }
         }
 
         // Codex round 3: a remembered file with no rename of its own, whose
         // origin was not removed, is at its origin again — come home, or a
-        // swap or a chain undone — and its tabs go back, all planned as one
-        // batch; it has no provenance after.
-        foreach ((string origin, string at) in _feedProvenance)
+        // swap or a chain undone — and its tabs, or its followers, go back,
+        // all planned as one batch; it has no provenance after.
+        foreach ((string origin, (string at, bool tabs)) in _feedProvenance)
         {
             if (!renamedFrom.Contains(origin) && !removed.Contains(origin))
             {
-                moves.Add(new(at, origin, FromHash: null, !present.Contains(at), Provenance: true));
+                moves.Add(tabs
+                    ? new(at, origin, FromHash: null, !present.Contains(at), Provenance: true)
+                    : new(at, origin, FromHash: null, OldIsGone: true, FollowersOnly: true));
             }
         }
 
-        return new FeedRenamePlan(moves, moved =>
+        return new FeedRenamePlan(moves, retarget =>
         {
-            foreach ((int index, (string origin, string to)) in owners)
+            foreach ((int index, string origin) in owners)
             {
-                if (moved.Contains(index))
+                if (Moved(retarget, index) is bool tabs)
                 {
-                    next[origin] = to;
+                    next[origin] = (moves[index].To, tabs);
                 }
             }
 
             _feedProvenance.Clear();
-            foreach ((string origin, string to) in next)
+            foreach ((string origin, (string At, bool Tabs) entry) in next)
             {
-                _feedProvenance[origin] = to;
+                _feedProvenance[origin] = entry;
             }
         });
     }
 
+    /// <summary>What move <paramref name="index"/> moved: true — tabs;
+    /// false — followers alone; null — nothing.</summary>
+    private static bool? Moved(WorkspaceViewModel.FeedRetarget retarget, int index) =>
+        retarget.MovedTabs.Contains(index) ? true
+        : retarget.MovedFollowers.Contains(index) ? false
+        : null;
+
     /// <summary>A window's planned moves, and the provenance they leave once
-    /// applied: <see cref="Commit"/> takes the indexes of the moves that moved
-    /// a tab.</summary>
+    /// applied: <see cref="Commit"/> takes what the moves moved.</summary>
     private sealed record FeedRenamePlan(
         IReadOnlyList<WorkspaceViewModel.FeedRename> Moves,
-        Action<IReadOnlySet<int>> Commit);
+        Action<WorkspaceViewModel.FeedRetarget> Commit);
 
     /// <summary>Codex round 3 (F4): a Slate-owned rename of a path the
     /// provenance put a file's tabs at moved those tabs, so the provenance
@@ -764,14 +783,14 @@ internal sealed partial class VaultLifecycleViewModel
     /// of that path as one too, and the file's record decides it.</summary>
     private void FollowOwnRenameInFeedProvenance(string from, string to)
     {
-        foreach ((string origin, string at) in _feedProvenance.ToList())
+        foreach ((string origin, (string at, bool tabs)) in _feedProvenance.ToList())
         {
             bool under = at.Length > from.Length
                 && at.StartsWith(from, StringComparison.Ordinal)
                 && at[from.Length] == '/';
             if (under || string.Equals(at, from, StringComparison.Ordinal))
             {
-                _feedProvenance[origin] = to + at[from.Length..];
+                _feedProvenance[origin] = (to + at[from.Length..], tabs);
             }
         }
     }
