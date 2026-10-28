@@ -1069,6 +1069,402 @@ public sealed partial class RescanTests
     });
 
     // ---------------------------------------------------------------------
+    // Review rounds (red team and codex round 1)
+    // ---------------------------------------------------------------------
+
+    /// <summary>A feed read or the acknowledgment that fails is one error and
+    /// leaves the cursor where it was (F1): the next run reads the same
+    /// window again and counts it, once; the run after that counts nothing.
+    /// A window or page that cannot be read takes the full re-sync, so
+    /// another session's note still reaches Quick Open.</summary>
+    [Theory]
+    [InlineData("window")]
+    [InlineData("page")]
+    [InlineData("head")]
+    [InlineData("acknowledge")]
+    public void AFailedFeedReadOrAcknowledgmentIsOneErrorAndTheWindowIsReadAgain(string operation) => RunSta(() =>
+    {
+        using var h = new Harness($"feed-fault-{operation}", ("alpha.md", "# Alpha\n"));
+        List<ChangeFeedWindow> windows = RecordWindows(h);
+        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
+        {
+            _ = other.CreateExclusive("new.md", "# New\n");
+        }
+
+        bool fail = true;
+        h.Lifecycle.ChangeFeedFaultForTests = called =>
+        {
+            if (called != operation || !fail)
+            {
+                return false;
+            }
+
+            fail = false;
+            return true;
+        };
+
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        Assert.Equal([OneError], h.Spoken);
+        Assert.Contains("new.md", h.QuickOpen.FilePathsForTests);
+
+        h.Events.Clear();
+        h.Now += TimeSpan.FromMinutes(1);
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        Assert.Equal([Explicit1], h.Spoken);
+        if (windows.Count > 1)
+        {
+            Assert.Equal(windows[0].FromSeq, windows[^1].FromSeq);
+        }
+
+        h.Events.Clear();
+        h.Now += TimeSpan.FromMinutes(1);
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        Assert.Equal([NoChanges], h.Spoken);
+    });
+
+    /// <summary>Codex round 1 (high, F1/F4): a run that moved a tab by another
+    /// session's rename and then could not acknowledge its window leaves the
+    /// cursor behind. When that session renames the file again, core reads
+    /// both renames from the same cursor as one record from the first name to
+    /// the last; the tab, already at the middle name, still follows it.</summary>
+    [Fact]
+    public void AnUnacknowledgedRenameIsFollowedByALaterRenameOfItsDestination() => RunSta(() =>
+    {
+        using var h = new Harness("feed-unacked-chain", ("a.md", "the note\n"));
+        WorkspaceTabViewModel tab = h.Open("a.md");
+        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
+        {
+            _ = other.RenameFile("a.md", "b.md");
+        }
+
+        bool fail = true;
+        h.Lifecycle.ChangeFeedFaultForTests = called => called == "acknowledge" && fail;
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        fail = false;
+        Assert.Equal([OneError], h.Spoken);
+        Assert.Equal("b.md", tab.Path);
+
+        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
+        {
+            _ = other.RenameFile("b.md", "c.md");
+        }
+
+        h.Events.Clear();
+        h.Now += TimeSpan.FromMinutes(1);
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+        Assert.Equal("c.md", tab.Path);
+        Assert.False(tab.IsMissingFromDisk);
+        Assert.Equal("the note\n", tab.Text);
+        Assert.Equal(["c.md"], h.QuickOpen.FilePathsForTests);
+    });
+
+    /// <summary>The sibling: the rename came home before the next run. Read
+    /// from the same cursor the note never moved — there is no record of a
+    /// rename at all — and the tab the unacknowledged run moved goes back to
+    /// it.</summary>
+    [Fact]
+    public void AnUnacknowledgedRenameThatCameHomeMovesTheTabBack() => RunSta(() =>
+    {
+        using var h = new Harness("feed-unacked-home", ("a.md", "the note\n"));
+        WorkspaceTabViewModel tab = h.Open("a.md");
+        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
+        {
+            _ = other.RenameFile("a.md", "b.md");
+        }
+
+        bool fail = true;
+        h.Lifecycle.ChangeFeedFaultForTests = called => called == "acknowledge" && fail;
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        fail = false;
+        Assert.Equal("b.md", tab.Path);
+
+        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
+        {
+            _ = other.RenameFile("b.md", "a.md");
+        }
+
+        h.Events.Clear();
+        h.Now += TimeSpan.FromMinutes(1);
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+        Assert.Equal("a.md", tab.Path);
+        Assert.False(tab.IsMissingFromDisk);
+        Assert.Equal(["a.md"], h.QuickOpen.FilePathsForTests);
+    });
+
+    /// <summary>Red team 3 / codex round 1: a foreground run reloads no
+    /// Quick Open list, so its records alone bring another session's
+    /// creations, deletion and rename to Quick Open, page after page.</summary>
+    [Fact]
+    public void AForegroundRunAppliesQuickOpensRecordsWithoutReloadingItsList() => RunSta(() =>
+    {
+        using var h = new Harness(
+            "feed-quick-open-records",
+            ("edit.md", "edit one\n"),
+            ("drop.md", "# Drop\n"),
+            ("move.md", "move me\n"));
+        h.Lifecycle.ChangeFeedPageLimitForTests = 2;
+        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
+        {
+            _ = other.CreateExclusive("one.md", "# One\n");
+            _ = other.CreateExclusive("two.md", "# Two\n");
+            other.DeleteFile("drop.md");
+            _ = other.RenameFile("move.md", "moved.md");
+        }
+
+        h.CoreCalls.Clear();
+        h.Now += TimeSpan.FromMinutes(1);
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Foreground));
+
+        Assert.DoesNotContain("list", Operations(h));
+        Assert.True(Operations(h).Count(operation => operation == "page") >= 3, "the records in pages of two");
+        Assert.Equal(["edit.md", "moved.md", "one.md", "two.md"], h.QuickOpen.FilePathsForTests.Order(StringComparer.Ordinal));
+        Assert.Empty(h.Events);
+    });
+
+    /// <summary>Red team 4 (Q3): a dirty tab an earlier window marked stale
+    /// keeps its older baseline, while core names the file's content as this
+    /// session last saw it — the hash the tab was marked against — as the
+    /// rename's <c>from_hash</c>. The tab follows another session's later
+    /// rename with its unsaved words.</summary>
+    [Fact]
+    public void AForeignRenameMovesADirtyTabThatAnEarlierWindowMarkedStale() => RunSta(() =>
+    {
+        using var h = new Harness("feed-stale-rename", ("x.md", "x one\n"));
+        WorkspaceTabViewModel tab = h.Open("x.md");
+        tab.Text = "my unsaved words\n";
+        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
+        {
+            _ = other.SaveText("x.md", "x two, by another window\n", null);
+        }
+
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        Assert.True(tab.IsExternallyStale, "premise: the dirty tab is marked stale");
+
+        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
+        {
+            _ = other.RenameFile("x.md", "y.md");
+        }
+
+        h.Now += TimeSpan.FromMinutes(1);
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+        Assert.Equal("y.md", tab.Path);
+        Assert.False(tab.IsMissingFromDisk);
+        Assert.True(tab.IsDirty);
+        Assert.Equal("my unsaved words\n", tab.Text);
+    });
+
+    /// <summary>Red team 1: a base whose reopen fails after its definition
+    /// opened (its views could not be read) reads as current on the next run,
+    /// so no reopen is due there; the Bases surface's retry re-runs it, and a
+    /// foreground run with an empty window brings it back.</summary>
+    [Fact]
+    public void AFailedBaseReopenIsRetriedByTheNextForegroundRun() => RunSta(() =>
+    {
+        using var h = new Harness("feed-base-retry", ("Notes.base", MainBase), ("n.md", "# N\n"));
+        WorkspaceTabViewModel tab = h.Open("Notes.base");
+        h.PumpUntil(() => tab.Base?.State == BaseLoadState.Ready, "the base's first load");
+        BaseDocumentViewModel document = Assert.IsType<BaseDocumentViewModel>(tab.Base);
+        int fail = 1;
+        document.AfterOpenForTests = () =>
+        {
+            if (Interlocked.Exchange(ref fail, 0) == 1)
+            {
+                throw new VaultException.Io("injected views failure");
+            }
+        };
+        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
+        {
+            _ = other.SaveText("Notes.base", MainBase.Replace("name: Main", "name: Renamed", StringComparison.Ordinal), null);
+        }
+
+        Task run = h.Lifecycle.RescanAsync(RescanReason.Explicit);
+        h.PumpUntil(() => run.IsCompleted, "the rescan ending");
+        Assert.Equal(BaseLoadState.Failed, document.State);
+        Assert.IsType<A11yEvent.VaultRescanIncomplete>(Assert.Single(h.Events));
+        Assert.Contains(RescanSurface.Bases, h.Lifecycle.RetrySetForTests);
+
+        h.Events.Clear();
+        h.Now += TimeSpan.FromMinutes(1);
+        run = h.Lifecycle.RescanAsync(RescanReason.Foreground);
+        h.PumpUntil(() => run.IsCompleted, "the next rescan ending");
+
+        Assert.Equal(BaseLoadState.Ready, document.State);
+        Assert.Equal("Renamed", document.ActiveViewName);
+        Assert.Empty(h.Events);
+    });
+
+    /// <summary>Codex round 1 (F5): a dirty note another session edited stays
+    /// marked stale, its index hash unlike its baseline, run after run; the
+    /// history panel showing it reloads for the record, not for every later
+    /// empty window.</summary>
+    [Fact]
+    public void AnEmptyForegroundWindowLeavesAStaleDirtyNotesHistoryAlone() => RunSta(() =>
+    {
+        using var h = new Harness("feed-stale-history", ("x.md", "x0\n"));
+        WorkspaceTabViewModel x = h.Open("x.md");
+        x.Text = "x0\nmine\n";
+        h.Workspace.History.NoteChanged("x.md");
+        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
+        {
+            _ = other.SaveText("x.md", "x1, by another window\n", null);
+        }
+
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        h.Settle();
+        Assert.True(x.IsExternallyStale, "premise: the dirty tab is marked stale");
+        int loads = 0;
+        h.Workspace.History.LoadInterleaveForTests = () => Interlocked.Increment(ref loads);
+
+        h.Now += TimeSpan.FromMinutes(1);
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Foreground));
+        h.Settle();
+
+        Assert.Equal(0, Volatile.Read(ref loads));
+        Assert.Equal("x0\nmine\n", x.Text);
+    });
+
+    /// <summary>Codex round 1 (F2): the retry set rides the full re-sync too.
+    /// History fails, its window is acknowledged, and the next window is a
+    /// gap: its ungated dependents pass still retries History, whose note's
+    /// tab is current, so nothing but the retry reloads the panel.</summary>
+    [Fact]
+    public void AFullReSyncStillRetriesAFailedHistory() => RunSta(() =>
+    {
+        using Harness h = DependentsHarness("feed-retry-history-gap");
+        _ = h.Open("embedded.md");
+        h.Workspace.History.NoteChanged("embedded.md");
+        h.Settle();
+        bool fail = true;
+        h.Workspace.RescanPublicationForTests = async (kind, _, publish) =>
+        {
+            if (kind == "history" && fail)
+            {
+                fail = false;
+                throw new IOException("injected history publication failure");
+            }
+
+            await publish();
+        };
+        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
+        {
+            _ = other.SaveText("embedded.md", "Embedded after, by another window.\n", null);
+        }
+
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        h.Settle();
+        Assert.Contains(RescanSurface.History, h.Lifecycle.RetrySetForTests);
+        int loads = 0;
+        h.Workspace.History.LoadInterleaveForTests = () => Interlocked.Increment(ref loads);
+        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
+        {
+            _ = other.CreateExclusive("late.md", "# Late\n");
+        }
+
+        CacheSql.TrimTheFeedPastTheCursor(h.Root);
+        List<ChangeFeedWindow> windows = RecordWindows(h);
+        h.Now += TimeSpan.FromMinutes(1);
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Foreground));
+        h.Settle();
+
+        Assert.IsType<ChangeFeedStatus.Gap>(Assert.Single(windows).Status);
+        Assert.True(Volatile.Read(ref loads) > 0, "the full re-sync dropped History's retry");
+        Assert.DoesNotContain(RescanSurface.History, h.Lifecycle.RetrySetForTests);
+    });
+
+    /// <summary>Codex round 1 / red team 2 (Q8): a reading model whose own
+    /// projection failed — a note with no embeds, so it depends on no other
+    /// file — is re-checked by an unchanged explicit Refresh, and not by a
+    /// foreground run.</summary>
+    [Fact]
+    public void AnUnchangedRefreshReChecksAReadingModelWhoseOwnProjectionFailed() => RunSta(() =>
+    {
+        using var h = new Harness("feed-recover-own-reading", ("plain.md", "# Plain\n\nNo embeds.\n"));
+        WorkspaceTabViewModel plain = h.Open("plain.md");
+        plain.ToggleViewMode();
+        h.PumpUntil(() => ReadingText(plain).Contains("No embeds.", StringComparison.Ordinal), "the first projection");
+        plain.ReadingCreatedForTests = model => model.FetchFaultForTests = () => new VaultException.Io("injected projection failure");
+        h.Write("plain.md", "# Plain\n\nChanged outside Slate.\n");
+
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        h.Settle();
+        ReadingContentViewModel reading = plain.Reading!;
+        Assert.True(reading.LastRefreshFailed, "premise: the reloaded tab's projection failed");
+        plain.ReadingCreatedForTests = null;
+        reading.FetchFaultForTests = null;
+        reading.BlocksAppended += _ => { };
+        h.Events.Clear();
+
+        h.Now += TimeSpan.FromMinutes(1);
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Foreground));
+        h.Settle();
+        Assert.True(reading.LastRefreshFailed, "a foreground run re-checked the projection");
+
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        h.Settle();
+        Assert.False(reading.LastRefreshFailed, "the explicit Refresh did not re-check the projection");
+        Assert.Equal([NoChanges], h.Spoken);
+    });
+
+    /// <summary>Red team 2 / codex round 1 (F5): an embed whose target could
+    /// not be read names no path, so no record names it; a window with any
+    /// record re-projects a model holding an unresolved embed, and the card
+    /// follows once its target is readable and changed.</summary>
+    [Fact]
+    public void AnEmbedThatCouldNotBeReadReProjectsWhenItsTargetChanges() => RunSta(() =>
+    {
+        using var h = new Harness(
+            "feed-unreadable-embed",
+            ("host.md", "# Host\n\n![[target]]\n"),
+            ("target.md", "Target before.\n"));
+        WorkspaceTabViewModel host;
+        using (DenyAccess.To(Path.Combine(h.Root, "target.md"), FileSystemRights.ReadData))
+        {
+            host = h.Open("host.md");
+            host.ToggleViewMode();
+            h.PumpUntil(() => host.Reading?.Document is not null && !ReadingText(host).Contains("Target before.", StringComparison.Ordinal) && ReadingText(host).Length > 0, "the host's projection with an unreadable embed");
+        }
+
+        Assert.False(host.Reading!.HasPendingDependencyRefresh);
+        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
+        {
+            _ = other.SaveText("target.md", "Target after, by another window.\n", null);
+        }
+
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        h.Settle();
+
+        Assert.True(host.Reading!.HasPendingDependencyRefresh, "the unresolved embed was never re-projected");
+    });
+
+    /// <summary>Red team 5 (Q3): another session swaps two notes with the
+    /// same bytes, so both renames carry the same <c>from_hash</c>. Every
+    /// move is planned against the tabs as they were, so each tab follows its
+    /// own file once, and neither lands on the other's.</summary>
+    [Fact]
+    public void AForeignSwapOfTwoNotesMovesEachTabOnce() => RunSta(() =>
+    {
+        using var h = new Harness("feed-swap", ("a.md", "same\n"), ("b.md", "same\n"));
+        WorkspaceTabViewModel a = h.Open("a.md");
+        WorkspaceTabViewModel b = h.Open("b.md");
+        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
+        {
+            _ = other.RenameFile("a.md", "swap.md");
+            _ = other.RenameFile("b.md", "a.md");
+            _ = other.RenameFile("swap.md", "b.md");
+        }
+
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+
+        Assert.Equal("b.md", a.Path);
+        Assert.Equal("a.md", b.Path);
+        Assert.False(a.IsMissingFromDisk);
+        Assert.False(b.IsMissingFromDisk);
+    });
+
+    // ---------------------------------------------------------------------
     // The watcher and the graph
     // ---------------------------------------------------------------------
 

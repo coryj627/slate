@@ -85,6 +85,21 @@ internal sealed partial class FilesSidebarViewModel
         StartAwaitedRefresh(reportCount, cancellation, silent: false);
 
     /// <summary>
+    /// WB-10 (#1293, the owner's decision Q8): whether the tree shows a
+    /// failure an explicit Refresh's recovery set re-checks — its latest
+    /// refresh could not list the root or load the tags, or a folder level
+    /// could not be listed ("Could not load folder").
+    /// </summary>
+    internal bool ShowsFailedLevelForRescan =>
+        Volatile.Read(ref _treeShowsFailure) || Flatten(RootNodes).Any(node => node.ChildLoadFailed);
+
+    // Written where a refresh settles, which can be its worker's thread.
+    private bool _treeShowsFailure;
+
+    /// <summary>How many tree refreshes have begun — for the facts.</summary>
+    internal int TreeGenerationForTests => _treeGeneration;
+
+    /// <summary>
     /// W7-7 PR 7 (#1252, R-9; v2 §3, §6): the rescan's OWN tree refresh —
     /// <see cref="RefreshAsync"/> made silent, with a structured outcome.
     /// Nothing it hears speaks: a root-list failure ("Could not load
@@ -93,20 +108,6 @@ internal sealed partial class FilesSidebarViewModel
     /// operations (0, 1 or 2) for the rescan's one sentence to count. The
     /// run's token is linked in (F5); a cancellation throws.
     /// </summary>
-    /// <summary>
-    /// WB-10 (#1293, the owner's decision Q8): whether the tree shows a
-    /// failure an explicit Refresh's recovery set re-checks — its latest
-    /// refresh could not list the root or load the tags, or a folder level
-    /// could not be listed ("Could not load folder").
-    /// </summary>
-    internal bool ShowsFailedLevelForRescan =>
-        _treeShowsFailure || Flatten(RootNodes).Any(node => node.ChildLoadFailed);
-
-    private bool _treeShowsFailure;
-
-    /// <summary>How many tree refreshes have begun — for the facts.</summary>
-    internal int TreeGenerationForTests => _treeGeneration;
-
     internal async Task<ulong> RefreshForRescanAsync(bool reportCount, CancellationToken cancellation)
     {
         try
@@ -177,7 +178,7 @@ internal sealed partial class FilesSidebarViewModel
         if (!cancelled && generation == _treeGeneration)
         {
             // WB-10 (#1293): what the latest refresh left the tree showing.
-            _treeShowsFailure = failure is not null || tagTreeFailed;
+            Volatile.Write(ref _treeShowsFailure, failure is not null || tagTreeFailed);
         }
 
         List<TreeRefreshWaiter> settled;

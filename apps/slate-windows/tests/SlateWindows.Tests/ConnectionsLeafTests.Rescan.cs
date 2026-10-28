@@ -48,7 +48,8 @@ public sealed partial class ConnectionsLeafTests
                     new WorkspaceViewModel.RescanDocumentsOutcome(
                         0,
                         new HashSet<string>(StringComparer.Ordinal),
-                        new HashSet<Bases.BaseDocumentViewModel>()),
+                        new HashSet<Bases.BaseDocumentViewModel>(),
+                        new HashSet<string>(StringComparer.Ordinal)),
                     new Dictionary<string, WorkspaceViewModel.IndexedPath>(StringComparer.Ordinal),
                     cancellation.Token);
                 Assert.True(PumpedDispatcher.PumpUntil(() => parked.IsSet), "the probe's reload parking");
@@ -141,7 +142,8 @@ public sealed partial class ConnectionsLeafTests
             new WorkspaceViewModel.RescanDocumentsOutcome(
                 0,
                 new HashSet<string>(StringComparer.Ordinal),
-                new HashSet<Bases.BaseDocumentViewModel>()),
+                new HashSet<Bases.BaseDocumentViewModel>(),
+                new HashSet<string>(StringComparer.Ordinal)),
             new Dictionary<string, WorkspaceViewModel.IndexedPath>(StringComparer.Ordinal),
             cancellation);
         Assert.True(PumpedDispatcher.PumpUntil(() => parked.IsSet), "the probe's tree query parking");
@@ -241,7 +243,8 @@ public sealed partial class ConnectionsLeafTests
             new WorkspaceViewModel.RescanDocumentsOutcome(
                 0,
                 new HashSet<string>(StringComparer.Ordinal),
-                new HashSet<Bases.BaseDocumentViewModel>()),
+                new HashSet<Bases.BaseDocumentViewModel>(),
+                new HashSet<string>(StringComparer.Ordinal)),
             new Dictionary<string, WorkspaceViewModel.IndexedPath>(StringComparer.Ordinal),
             cancellation);
         Assert.True(PumpedDispatcher.PumpUntil(() => parked.IsSet), "the probe's graph query parking");

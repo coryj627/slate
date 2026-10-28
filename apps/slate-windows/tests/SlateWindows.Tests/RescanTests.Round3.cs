@@ -333,7 +333,8 @@ public sealed partial class RescanTests
                 new WorkspaceViewModel.RescanDocumentsOutcome(
                     0,
                     new HashSet<string>(StringComparer.Ordinal),
-                    new HashSet<BaseDocumentViewModel>()),
+                    new HashSet<BaseDocumentViewModel>(),
+                    new HashSet<string>(StringComparer.Ordinal)),
                 new Dictionary<string, WorkspaceViewModel.IndexedPath>(StringComparer.Ordinal),
                 cancellation);
 

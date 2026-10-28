@@ -105,7 +105,7 @@ public sealed class ConnectionsLeafCensus
             ("RepairSharedKey", ["WorkspaceViewModel.Connections.cs:ReRootConnectionsOn"]),
             // WB-10 (#1293): the rename hook's second caller is the change
             // feed's — another Slate session's rename (a `Renamed` record).
-            ("Retarget", ["WorkspaceViewModel.cs:RetargetPath", "WorkspaceViewModel.Rescan.cs:RetargetPathForFeedRename"]),
+            ("Retarget", ["WorkspaceViewModel.cs:RetargetPath", "WorkspaceViewModel.Rescan.cs:RetargetPathsForFeedRenames"]),
             ("Prune", ["WorkspaceViewModel.cs:InvalidatePath"]),
             ("Probe", ["WorkspaceViewModel.Connections.cs:ProbeConnections"]),
             ("Deeper", ["WorkspaceViewModel.Connections.cs:ConnectionsDeeperCommand"]),

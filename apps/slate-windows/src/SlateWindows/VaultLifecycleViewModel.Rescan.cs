@@ -565,12 +565,13 @@ internal sealed partial class VaultLifecycleViewModel
         CancelToken cancel,
         CancellationToken cancellation,
         QuickSwitcherViewModel.ReplacementJournal? journal,
-        ISet<RescanSurface> failedSurfaces)
+        ISet<RescanSurface> failedSurfaces,
+        WorkspaceViewModel.RescanTouch fullPass)
     {
         Task<ulong> tree = ReSyncTreeAsync(reason, cancellation);
         Task<ulong> quickOpen = ReSyncQuickOpenAsync(session, cancel, cancellation, journal);
         Task<ulong> workspace = Workspace is WorkspaceViewModel open
-            ? ReSyncWorkspaceAsync(open, session, cancel, cancellation, touch: null, failedSurfaces)
+            ? ReSyncWorkspaceAsync(open, session, cancel, cancellation, fullPass, failedSurfaces)
             : Task.FromResult(0UL);
 
         // Codex PR 7 round 3, finding 4: every branch is awaited — one that
@@ -771,6 +772,14 @@ internal sealed partial class VaultLifecycleViewModel
                 HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
                 documents = WorkspaceViewModel.RescanDocumentsOutcome.Empty;
                 failed++;
+            }
+
+            if (documents.BasesFailed)
+            {
+                // WB-10 (#1293): a base whose reopen failed is retried by the
+                // Bases dependent's re-run (its RefreshAsync reopens a Failed
+                // base), whatever the next run's window holds.
+                _ = failedSurfaces.Add(RescanSurface.Bases);
             }
 
             try
@@ -1203,5 +1212,6 @@ internal sealed partial class VaultLifecycleViewModel
         _watcherRequestWhileAway = false;
         _lastWatcherSentenceAt = null;
         _retrySet.Clear();
+        _appliedFeedRenames.Clear();
     }
 }
