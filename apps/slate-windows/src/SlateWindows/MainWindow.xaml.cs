@@ -124,7 +124,8 @@ public partial class MainWindow : Window
             sessionLoadWorker: openSeams?.SessionLoad,
             paletteRecentsStore: paletteRecentsStore,
             paletteLane: paletteLane,
-            openSession: openSeams?.OpenSession);
+            openSession: openSeams?.OpenSession,
+            treeWorker: openSeams?.TreeWorker);
         _viewModel.RecentVaultsChanged += ViewModel_RecentVaultsChanged;
         _viewModel.ReturnedToWelcome += ViewModel_ReturnedToWelcome;
         _viewModel.WorkspaceReady += ViewModel_WorkspaceReady;

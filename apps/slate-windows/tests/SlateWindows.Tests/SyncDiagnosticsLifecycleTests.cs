@@ -251,8 +251,8 @@ public sealed class SyncDiagnosticsLifecycleTests : IDisposable
     /// the opening thread then arms three <see cref="FileSystemWatcher"/>
     /// instances with no owner left to stop them. They would live for
     /// the rest of the PROCESS and hold the vault directory
-    /// undeletable. <c>WorkspaceReady</c> is the last statement of
-    /// <c>InitializeWorkspace</c>, so disposing from a handler on it
+    /// undeletable. The open raises <c>WorkspaceReady</c> straight
+    /// before it arms the watch, so disposing from a handler on it
     /// reproduces exactly that interleave with no timing bet at all.
     /// </summary>
     [Fact]

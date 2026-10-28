@@ -613,15 +613,41 @@ internal sealed partial class VaultLifecycleViewModel
                 ProgressMaximum = Math.Max(1, loaded.Report.FilesSeen);
                 ProgressValue = ProgressMaximum;
                 IsProgressIndeterminate = false;
+                InitializeWorkspace(_session, root, loaded.SwitcherFiles);
+                // #1684: the Files tree's first rows before the welcome view
+                // gives way. A tree still reading when the keys land has no
+                // row to take them: its bare tree would hold them and hand
+                // them on when the rows arrive, two moves where WB-9 promises
+                // one. The refresh publishes its rows, or its failure, before
+                // it completes; a close or quit meanwhile cancels it, and the
+                // generation check below then finds the open superseded.
+                if (FileSidebar is FilesSidebarViewModel sidebar && sidebar.IsRefreshingTree)
+                {
+                    try
+                    {
+                        await sidebar.TreeRefreshCompletion;
+                    }
+                    catch (Exception exception)
+                    {
+                        // The refresh reports its own failures; a fault past
+                        // them still leaves a workspace to land in.
+                        HostLog.Write(HostDiagnosticEvent.SidebarTreeRefreshFailed, exception);
+                    }
+                }
+            }
+
+            if (generation == _generation)
+            {
                 // WB-9 (#1319, WD4): the welcome view holds the keys through
                 // every phase of the open, and gives way in the same turn the
-                // workspace is built, so the keys move once.
+                // workspace is ready, so the keys move once.
                 IsVaultOpen = true;
                 if (recorded is not null)
                 {
                     ReplaceRecentVaults(recorded);
                 }
-                InitializeWorkspace(_session, root, loaded.SwitcherFiles);
+
+                WorkspaceReady?.Invoke(this, EventArgs.Empty);
                 StartSyncMarkerWatch(generation, root);
             }
         }
@@ -1430,7 +1456,6 @@ internal sealed partial class VaultLifecycleViewModel
         sidebar.StructuralMutationBlockedReason = StructuralMutationBlockedReason;
         sidebar.PropertyChanged += FileSidebar_RescanBlockersChanged;
         QuickSwitcher = switcher;
-        WorkspaceReady?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>W4-8 test seam: the marker watch currently owned by
@@ -2197,7 +2222,8 @@ internal sealed record VaultOpenSeams(
         Task<(ScanReport Report, SwitcherFile[] SwitcherFiles)>>? SessionLoad = null,
     RecentVaultsStore? RecentVaults = null,
     Func<RecentVault, Task<bool>>? ConfirmRemoveMissingRecent = null,
-    Action<RenderedAnnouncement>? ObservePosted = null);
+    Action<RenderedAnnouncement>? ObservePosted = null,
+    Func<Action, CancellationToken, Task>? TreeWorker = null);
 
 internal sealed class AsyncRelayCommand : ICommand, Commands.IUnavailableReason
 {
