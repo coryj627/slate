@@ -869,11 +869,49 @@ internal sealed partial class VaultLifecycleViewModel
                 return;
             }
 
+            if (HoldsOnlySlateData(recent.Path))
+            {
+                // WD7 (WB-12): what the folder holds, never a guess at why.
+                ReportTerminalStatus(
+                    $"This folder holds only Slate's data (.slate); the vault's files are not here: {recent.Path}",
+                    A11yPriority.High);
+                return;
+            }
+
             await OpenVaultAsync(recent.Path);
         }
         finally
         {
             _openCommandsRunning--;
+        }
+    }
+
+    /// <summary>WD7 (WB-12): whether <paramref name="folder"/>'s top level
+    /// holds <c>.slate</c> and nothing else — a vault whose files were moved
+    /// or deleted, which would otherwise open as an empty vault. One pass that
+    /// stops at the first other entry; a folder that cannot be listed is not
+    /// judged here, and its open reports its own failure.</summary>
+    internal static bool HoldsOnlySlateData(string folder)
+    {
+        try
+        {
+            bool sawSlate = false;
+            foreach (string entry in Directory.EnumerateFileSystemEntries(folder))
+            {
+                if (!string.Equals(Path.GetFileName(entry), ".slate", StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+
+                sawSlate = true;
+            }
+
+            return sawSlate;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            _ = exception;
+            return false;
         }
     }
 
