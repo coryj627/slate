@@ -151,13 +151,18 @@ public sealed class FilesSidebarPinTests
             UseShellExecute = false,
             CreateNoWindow = true,
         };
-        using (System.Diagnostics.Process? mklink = System.Diagnostics.Process.Start(start))
+        using (System.Diagnostics.Process mklink = System.Diagnostics.Process.Start(start)
+            ?? throw new InvalidOperationException("premise: cmd.exe did not start to run mklink /J"))
         {
-            Assert.True(mklink is not null, "premise: cmd.exe started to run mklink /J");
             Assert.True(mklink.WaitForExit(10_000) && mklink.ExitCode == 0, "premise: mklink /J made the junction");
         }
-        Assert.NotNull(new DirectoryInfo(junction).LinkTarget);
         Assert.False(VaultAbsence.IsDefinitelyAbsent(fixture.Root, "junction/gone.md"));
+
+        // The rule is the reparse tag's name-surrogate bit, as core's walk
+        // reads it: both links carry it, a plain folder is no reparse point.
+        Assert.True(VaultAbsence.IsLink(link));
+        Assert.True(VaultAbsence.IsLink(junction));
+        Assert.False(VaultAbsence.IsLink(target));
         Assert.True(VaultAbsence.IsDefinitelyAbsent(fixture.Root, "real/gone.md"), "premise: the same shape without the link is absent");
     }
 

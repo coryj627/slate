@@ -91,23 +91,70 @@ internal static class VaultAbsence
         }
     }
 
-    /// <summary>Whether a reparse-point folder is a link — a junction or a
-    /// symbolic link, which leads out of the vault as core's walk refuses
-    /// it — rather than a cloud placeholder (OneDrive Files On-Demand), which
-    /// core reads as an ordinary folder (red team, WB-12). Unreadable is a
-    /// link: it proves nothing.</summary>
-    private static bool IsLink(string folder)
+    /// <summary>Whether a reparse-point folder is a link: its reparse tag is
+    /// a name surrogate — a symbolic link, a junction or mount point, a WSL
+    /// symbolic link — which leads elsewhere, and which core's walk refuses
+    /// (<c>crates/slate-core/src/vault/mod.rs</c>). A cloud placeholder
+    /// (OneDrive Files On-Demand) carries a tag that is no name surrogate, and
+    /// core reads it as an ordinary folder (red team, WB-12). A tag that
+    /// cannot be read is a link: it proves nothing. The tag is the folder's
+    /// own, read without following it.</summary>
+    internal static bool IsLink(string folder)
     {
-        try
+        using Microsoft.Win32.SafeHandles.SafeFileHandle handle = CreateFileW(
+            WindowsNativePath.ForCreateFile(folder),
+            FileReadAttributes,
+            FileShare.ReadWrite | FileShare.Delete,
+            IntPtr.Zero,
+            FileMode.Open,
+            FileFlagBackupSemantics | FileFlagOpenReparsePoint,
+            IntPtr.Zero);
+        if (handle.IsInvalid
+            || !GetFileInformationByHandleEx(
+                handle,
+                FileAttributeTagInfoClass,
+                out FileAttributeTagInfo info,
+                (uint)System.Runtime.InteropServices.Marshal.SizeOf<FileAttributeTagInfo>()))
         {
-            return new DirectoryInfo(folder).LinkTarget is not null;
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-            _ = exception;
             return true;
         }
+
+        return (info.FileAttributes & (uint)FileAttributes.ReparsePoint) != 0
+            && (info.ReparseTag & NameSurrogateBit) != 0;
     }
+
+    private const uint FileReadAttributes = 0x00000080;
+    private const uint FileFlagBackupSemantics = 0x02000000;
+    private const uint FileFlagOpenReparsePoint = 0x00200000;
+    private const int FileAttributeTagInfoClass = 9;
+
+    /// <summary><c>IsReparseTagNameSurrogate</c>: bit 29 of the tag.</summary>
+    private const uint NameSurrogateBit = 0x20000000;
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct FileAttributeTagInfo
+    {
+        public uint FileAttributes;
+        public uint ReparseTag;
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+    private static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFileW(
+        string fileName,
+        uint desiredAccess,
+        FileShare shareMode,
+        IntPtr securityAttributes,
+        FileMode creationDisposition,
+        uint flagsAndAttributes,
+        IntPtr templateFile);
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool GetFileInformationByHandleEx(
+        Microsoft.Win32.SafeHandles.SafeFileHandle file,
+        int informationClass,
+        out FileAttributeTagInfo information,
+        uint bufferSize);
 
     /// <summary>Whether the one vault-relative entry is definitely absent.</summary>
     internal static bool IsDefinitelyAbsent(string vaultRoot, string relative) =>
