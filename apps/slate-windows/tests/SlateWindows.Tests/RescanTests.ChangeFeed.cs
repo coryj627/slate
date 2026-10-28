@@ -1429,6 +1429,44 @@ public sealed partial class RescanTests
         Assert.Equal("b's unsaved words\n", b.Text);
     });
 
+    /// <summary>Codex round 4 (high, F4): another session renames board b to
+    /// c and then board a to b. b's tab stays — a board moves only when its old
+    /// path is gone, and a's board took it — and the run cannot acknowledge;
+    /// the run moved no tab, so it remembers no file. That session then renames
+    /// b back to a. Read from the same cursor, b's own rename moves its tab to
+    /// c, and the board that came home claims no tab.</summary>
+    [Fact]
+    public void ATabARunLeftInPlaceIsNotClaimedByAFileThatCameHome() => RunSta(() =>
+    {
+        using var h = new Harness("feed-unmoved-board", ("a.canvas", OneNodeCanvas), ("b.canvas", TwoNodeCanvas));
+        WorkspaceTabViewModel board = h.Open("b.canvas");
+        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
+        {
+            _ = other.RenameFile("b.canvas", "c.canvas");
+            _ = other.RenameFile("a.canvas", "b.canvas");
+        }
+
+        bool fail = true;
+        h.Lifecycle.ChangeFeedFaultForTests = called => called == "acknowledge" && fail;
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        h.Settle();
+        fail = false;
+        Assert.Equal("b.canvas", board.Path);
+        Assert.Empty(h.Lifecycle.FeedProvenanceForTests);
+
+        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
+        {
+            _ = other.RenameFile("b.canvas", "a.canvas");
+        }
+
+        h.Events.Clear();
+        h.Now += TimeSpan.FromMinutes(1);
+        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
+        h.Settle();
+
+        Assert.Equal("c.canvas", board.Path);
+    });
+
     /// <summary>Codex round 3 (medium, F4): another session renames a to b,
     /// the run moves the tab and cannot acknowledge; this session's user
     /// renames b to c, and the other session renames c to d. Core reads one

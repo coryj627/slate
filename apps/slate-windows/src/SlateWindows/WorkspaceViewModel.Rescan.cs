@@ -189,16 +189,20 @@ internal sealed partial class WorkspaceViewModel
     /// window's target. The closed tabs, the Connections pin and the board
     /// and base registries follow only when the file left the origin and no
     /// open tab stayed there. <see cref="RetargetPath(string, string)"/>
-    /// stays for Slate's own renames.
+    /// stays for Slate's own renames. Returns the indexes of the renames that
+    /// moved a tab (codex round 4: the lifecycle's provenance holds only
+    /// those).
     /// </summary>
-    internal void RetargetPathsForFeedRenames(IReadOnlyList<FeedRename> renames)
+    internal IReadOnlySet<int> RetargetPathsForFeedRenames(IReadOnlyList<FeedRename> renames)
     {
         WorkspaceTabViewModel[] tabs = [.. Groups.SelectMany(group => group.Tabs)];
         var claimed = new HashSet<WorkspaceTabViewModel>(ReferenceEqualityComparer.Instance);
         var moves = new List<(WorkspaceTabViewModel Tab, string Destination)>();
         var follows = new List<(string Source, string Destination)>();
-        foreach (FeedRename rename in renames)
+        var moved = new HashSet<int>();
+        for (int index = 0; index < renames.Count; index++)
         {
+            FeedRename rename = renames[index];
             string source = NormalizeWorkspacePath(rename.From);
             string destination = NormalizeWorkspacePath(rename.To);
             if (source.Length == 0 || destination.Length == 0 || string.Equals(source, destination, StringComparison.Ordinal))
@@ -220,6 +224,7 @@ internal sealed partial class WorkspaceViewModel
                 {
                     _ = claimed.Add(tab);
                     moves.Add((tab, destination));
+                    _ = moved.Add(index);
                 }
                 else
                 {
@@ -261,6 +266,8 @@ internal sealed partial class WorkspaceViewModel
             Persist();
             SyncPanels();
         }
+
+        return moved;
     }
 
     private static bool FollowsFeedRename(WorkspaceTabViewModel tab, FeedRename rename)
