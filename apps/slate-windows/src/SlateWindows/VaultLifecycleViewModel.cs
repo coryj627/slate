@@ -869,11 +869,68 @@ internal sealed partial class VaultLifecycleViewModel
                 return;
             }
 
+            // WD7 (WB-12): a folder holding only Slate's data is what a
+            // renamed or moved vault leaves behind, but it is also a vault
+            // opened and left empty. Windows records no identity yet (22W,
+            // WB-28), so it asks, as mac's alert does for an entry without
+            // one (Open Anyway); No keeps the entry and says what the folder
+            // holds, never a guess at why.
+            if (HoldsOnlySlateData(recent.Path) && !await ConfirmOpenSlateOnlyRecent(recent))
+            {
+                ReportTerminalStatus(
+                    $"This folder holds only Slate's data (.slate); the vault's files are not here: {recent.Path}",
+                    A11yPriority.High);
+                return;
+            }
+
             await OpenVaultAsync(recent.Path);
         }
         finally
         {
             _openCommandsRunning--;
+        }
+    }
+
+    /// <summary>WD7 (WB-12): asked when a recent vault's folder holds only
+    /// Slate's data; true opens it anyway. The shell installs its "Vault Not
+    /// Found" box (default No); without a shell nothing is opened.</summary>
+    internal Func<RecentVault, Task<bool>> ConfirmOpenSlateOnlyRecent { get; set; } =
+        _ => Task.FromResult(false);
+
+    /// <summary>WD7 (WB-12): whether <paramref name="folder"/>'s top level
+    /// holds a real <c>.slate</c> folder and nothing else, mac's
+    /// <c>holdsOnlySlateFolder</c>. The shell's own <c>desktop.ini</c> and
+    /// <c>Thumbs.db</c> are ignored, as mac ignores <c>.DS_Store</c>: they
+    /// appear when someone looks at the folder. One pass that stops at the
+    /// first other entry; a folder that cannot be listed, or a <c>.slate</c>
+    /// that is a file or a link, is not judged here, and the open goes ahead.</summary>
+    internal static bool HoldsOnlySlateData(string folder)
+    {
+        try
+        {
+            string? slate = null;
+            foreach (string entry in Directory.EnumerateFileSystemEntries(folder))
+            {
+                string name = Path.GetFileName(entry);
+                if (string.Equals(name, ".slate", StringComparison.OrdinalIgnoreCase))
+                {
+                    slate = entry;
+                }
+                else if (!string.Equals(name, "desktop.ini", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(name, "Thumbs.db", StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+            }
+
+            return slate is not null
+                && (File.GetAttributes(slate) & (FileAttributes.Directory | FileAttributes.ReparsePoint))
+                    == FileAttributes.Directory;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            _ = exception;
+            return false;
         }
     }
 
@@ -2278,6 +2335,7 @@ internal sealed record VaultOpenSeams(
         Task<(ScanReport Report, SwitcherFile[] SwitcherFiles)>>? SessionLoad = null,
     RecentVaultsStore? RecentVaults = null,
     Func<RecentVault, Task<bool>>? ConfirmRemoveMissingRecent = null,
+    Func<RecentVault, Task<bool>>? ConfirmOpenSlateOnlyRecent = null,
     Action<RenderedAnnouncement>? ObservePosted = null,
     Func<Action, CancellationToken, Task>? TreeWorker = null);
 

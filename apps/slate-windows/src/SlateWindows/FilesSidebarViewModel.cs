@@ -536,7 +536,8 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         Func<Action, CancellationToken, Task>? importWorker = null,
         Func<Action, CancellationToken, Task>? moveToWorker = null,
         Func<CancellationToken, Task>? filterDelay = null,
-        SidebarWriteJournal? writeJournal = null)
+        SidebarWriteJournal? writeJournal = null,
+        Func<Action, CancellationToken, Task>? pinPruneWorker = null)
     {
         _session = session;
         _announce = announce;
@@ -552,6 +553,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         _filterDelay = filterDelay ?? (token => Task.Delay(FilterDebounceMilliseconds, token));
         _runImportWorker = importWorker ?? ((work, token) => Task.Run(work, token));
         _runMoveToWorker = moveToWorker ?? ((work, token) => Task.Run(work, token));
+        _runPinPruneWorker = pinPruneWorker ?? ((work, token) => Task.Run(work, token));
         _vaultRoot = vaultRoot;
         JournalReplay? journalReplay = null;
         if (vaultRoot is not null)
@@ -570,6 +572,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             _sortMode = settings.SortMode;
             _groupByDate = settings.GroupByDate;
             _pinned.UnionWith(journalReplay.Pins);
+            _pinGeneration++;
             foreach (SidebarShortcutState shortcut in journalReplay.Shortcuts)
             {
                 Shortcuts.Add(new SidebarShortcutViewModel(shortcut.Kind, shortcut.Path));
@@ -1271,6 +1274,14 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
 
         truncated |= filesTaken < fileRows.Count;
+        if (includeDirectories && !truncated)
+        {
+            // WB-12 (#1505): only a complete level can show a pin is unlisted.
+            ReportStalePins(
+                parentPath,
+                ordering.Pinned,
+                directoryRows.Select(directory => directory.Path).Concat(fileRows.Select(file => file.Path)));
+        }
 
         IEnumerable<FileTreeNodeViewModel> sortedDirectories = SortNodes(directories, ordering);
         IEnumerable<FileTreeNodeViewModel> nodes;
@@ -2032,6 +2043,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         if (SelectedNode is { IsDirectory: false } node)
         {
             _pinned.Add(node.Path);
+            _pinGeneration++;
             bool saved = PersistPins();
             ResortMaterializedTree();
             if (saved)
@@ -2046,6 +2058,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         if (SelectedNode is { IsDirectory: false } node)
         {
             _pinned.Remove(node.Path);
+            _pinGeneration++;
             bool saved = PersistPins();
             ResortMaterializedTree();
             if (saved)
@@ -2061,6 +2074,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             ? SelectedNode.Path
             : ParentPath(SelectedNode?.Path);
         _pinned.RemoveWhere(path => string.Equals(ParentPath(path), folder, StringComparison.Ordinal));
+        _pinGeneration++;
         bool saved = PersistPins();
         Refresh();
         if (saved)
@@ -2631,6 +2645,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         OnPropertyChanged(nameof(GroupByDate));
         _pinned.Clear();
         _pinned.UnionWith(settings.Pins);
+        _pinGeneration++;
         // The selection stays on its own occurrence (codex PR 3 round 7,
         // OD-9): the slot at its place when that slot still targets the same
         // note, else the first slot that does.
@@ -2831,6 +2846,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             .ToArray();
         _pinned.Clear();
         _pinned.UnionWith(transformedPins);
+        _pinGeneration++;
 
         // W7-7 PR 3 (#1246, R-4; codex PR 3 round 7, OD-9): every slot keeps
         // its place and follows its note — two slots that target one note

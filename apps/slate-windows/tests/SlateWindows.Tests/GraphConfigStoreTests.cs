@@ -99,9 +99,10 @@ public sealed class GraphConfigStoreTests : IDisposable
         // a later collision: an existence-probe gate reaches the atomic
         // replace, which fails too, but only after writing a temporary file
         // it then leaves behind.
-        UnauthorizedAccessException refusal = Assert.Throws<UnauthorizedAccessException>(
+        IOException refusal = Assert.Throws<IOException>(
             () => store.Write(SlateUniffiMethods.GraphConfigDefault() with { ConnectionsDepth = 3 }));
-        Assert.Contains(GraphConfigStore.FileName, refusal.Message, StringComparison.Ordinal);
+        // The anchored store's refusal to open the existing file: the read's own.
+        Assert.Equal("Could not safely open a vault store file.", refusal.Message);
         Assert.True(Directory.Exists(path), "the write destroyed the target it could not read");
         Assert.Empty(Directory.EnumerateFileSystemEntries(path));
         Assert.Empty(Directory.EnumerateFiles(Path.GetDirectoryName(path)!, "*.tmp"));
@@ -299,6 +300,34 @@ public sealed class GraphConfigStoreTests : IDisposable
         store.Write(changed);
         Assert.Equal(SlateUniffiMethods.GraphConfigEncode(changed, null), File.ReadAllText(ConfigPath));
         GraphConfigs.AssertEqual(changed, store.Read().Config);
+    }
+
+    /// <summary>WB-12 (#1475 bullet 1): the write is anchored to the root as
+    /// it is now. After the vault folder is renamed under an open store, the
+    /// write throws <see cref="DirectoryNotFoundException"/> (which the
+    /// writer logs) and nothing is recreated at the old path: main's
+    /// <c>Directory.CreateDirectory</c> rebuilt the old root and its
+    /// <c>.slate</c> there.</summary>
+    [Fact]
+    public void AWriteAfterTheVaultRootIsGoneRefusesAndRecreatesNothing()
+    {
+        var store = new GraphConfigStore(_root);
+        store.Write(SlateUniffiMethods.GraphConfigDefault());
+        string moved = _root + "-moved";
+        Directory.Move(_root, moved);
+        try
+        {
+            Assert.Throws<DirectoryNotFoundException>(
+                () => store.Write(SlateUniffiMethods.GraphConfigDefault() with { ConnectionsDepth = 3 }));
+            Assert.False(Directory.Exists(_root), "the write recreated the renamed vault's old root");
+            Assert.Equal(
+                SlateUniffiMethods.GraphConfigDefault().ConnectionsDepth,
+                new GraphConfigStore(moved).Read().Config.ConnectionsDepth);
+        }
+        finally
+        {
+            Directory.Move(moved, _root);
+        }
     }
 
     [Fact]

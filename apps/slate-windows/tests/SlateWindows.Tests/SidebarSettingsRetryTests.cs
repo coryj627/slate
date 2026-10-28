@@ -275,7 +275,11 @@ public sealed class SidebarSettingsRetryTests : IDisposable
 
         Assert.Null(sidebar.SettingsNotice);
         Assert.IsType<A11yEvent.SidebarSettingsReloadedStaleRefs>(announced[0]);
-        Assert.Equal(["note0.md"], RootPins(fixture));
+        // Adopted as authored, the pin names the OLD path, which holds no
+        // note: the retry's republished root level prunes it (WB-12, #1505).
+        // Carried over, it would read renamed.md.
+        Assert.Empty(RootPins(fixture));
+        Assert.True(File.Exists(Path.Combine(fixture.Root, "renamed.md")), "premise: the note lives on under its new name");
         // The journal that could not record is said after the outcome.
         Assert.Contains(FilesSidebarViewModel.UnreadableJournalReason, Spoken(announced));
     }

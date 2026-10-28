@@ -525,7 +525,10 @@ public sealed class SidebarWriteJournalTests : IDisposable
         }
 
         Assert.Contains(FilesSidebarViewModel.AgedOutJournalReason(1, 30), Spoken(announced));
-        Assert.Equal(["note0.md"], PinsOnDisk(fixture));
+        // Not replayed: the pin still names the OLD path, which holds no
+        // note, so the open's complete root level prunes it (WB-12, #1505;
+        // mac prunes it the same way). Replayed, it would read renamed.md.
+        Assert.Empty(PinsOnDisk(fixture));
         Idle();
         Assert.False(File.Exists(journalFile), "once said it is settled, never said twice");
     }

@@ -22,8 +22,9 @@ internal sealed record GraphConfigLoad(GraphConfig Config, bool Writable, string
 /// clobbering it), core's merge through <c>graph_config_encode</c> (an
 /// unparseable existing file never clobbered, a newer version never
 /// downgraded, unknown keys preserved, the bytes canonical — 0b-12), the
-/// bytes to a temporary file beside the target and one
-/// <c>File.Move</c> over it, <c>.slate</c> created when missing. The
+/// bytes published atomically through <see cref="AnchoredVaultStore"/>,
+/// <c>.slate</c> created when missing inside a root that exists (WB-12,
+/// #1475: a gone root is refused, never recreated). The
 /// writer census (C-15 xv) walls this class as the ONE writer of the
 /// file and this constant as the one place its name appears.
 /// </summary>
@@ -35,11 +36,17 @@ internal sealed class GraphConfigStore
     private static readonly UTF8Encoding StrictUtf8 =
         new(encoderShouldEmitUTF8Identifier: true, throwOnInvalidBytes: true);
 
+    /// <summary>The existing file's read bound on the write (WB-12): a
+    /// larger file refuses the write rather than being read whole.</summary>
+    internal const int MaxReadBytes = 1024 * 1024;
+
+    private readonly string _vaultRoot;
     private readonly string _path;
 
     public GraphConfigStore(string vaultRoot)
     {
         ArgumentNullException.ThrowIfNull(vaultRoot);
+        _vaultRoot = vaultRoot;
         _path = Path.Combine(vaultRoot, ".slate", FileName);
     }
 
@@ -86,17 +93,18 @@ internal sealed class GraphConfigStore
     }
 
     /// <summary>The write: read-merge-write through core's codec, atomic
-    /// over the target. Throws — an unreadable existing file, core's
-    /// refusal, a filesystem failure — and the writer logs (rule W, Term
-    /// W2); nothing here swallows.</summary>
+    /// over the target. Throws — a vault root that is gone, an unreadable
+    /// existing file, core's refusal, a filesystem failure — and the writer
+    /// logs (rule W, Term W2); nothing here swallows.</summary>
     public void Write(GraphConfig config)
     {
         ArgumentNullException.ThrowIfNull(config);
-        string? directory = Path.GetDirectoryName(_path);
-        if (!string.IsNullOrEmpty(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
+        // #1475 (WB-12): anchored to the root as it is now. A renamed or
+        // deleted root throws DirectoryNotFoundException and nothing is
+        // recreated at its old path; `.slate` is made only inside a root
+        // that exists.
+        using AnchoredVaultStore store = AnchoredVaultStore.Open(_vaultRoot, createDirectory: true)
+            ?? throw new DirectoryNotFoundException("The vault's .slate folder could not be opened.");
         string? existing = null;
         try
         {
@@ -106,23 +114,31 @@ internal sealed class GraphConfigStore
             // other failure propagates and refuses the write (IPG-8). An
             // `File.Exists` gate let a denied ACL through as "absent" and
             // then clobbered the file it had never read.
-            existing = ReadExistingForTests is { } read ? read(_path) : ReadText();
+            existing = ReadExistingForTests is { } read ? read(_path) : ReadExisting(store);
         }
         catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
         {
             _ = exception;
         }
         string text = SlateUniffiMethods.GraphConfigEncode(config, existing);
-        string temporary = $"{_path}.{Guid.NewGuid():N}.tmp";
-        try
+        store.WriteAtomically(FileName, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetBytes(text));
+    }
+
+    /// <summary>The existing file through the anchored store: null when it
+    /// is absent; a file that exists but cannot be opened (denied, held, a
+    /// directory at its path) throws the anchored store's
+    /// <see cref="IOException"/>; invalid UTF-8 throws the strict decoder's
+    /// exception. Only the exception's type is ever logged.</summary>
+    private static string? ReadExisting(AnchoredVaultStore store)
+    {
+        byte[]? bytes = store.ReadAllBytesBounded(FileName, MaxReadBytes);
+        if (bytes is null)
         {
-            File.WriteAllText(temporary, text, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-            File.Move(temporary, _path, overwrite: true);
+            return null;
         }
-        finally
-        {
-            SafeFile.TryDelete(temporary);
-        }
+        ReadOnlySpan<byte> text = bytes;
+        ReadOnlySpan<byte> preamble = StrictUtf8.Preamble;
+        return StrictUtf8.GetString(text.StartsWith(preamble) ? text[preamble.Length..] : text);
     }
 
     private string ReadText()

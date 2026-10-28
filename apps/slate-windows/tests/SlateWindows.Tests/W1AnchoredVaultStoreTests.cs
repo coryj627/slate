@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Text;
+using SlateWindows.Search;
 
 namespace SlateWindows.Tests;
 
@@ -59,6 +60,53 @@ public sealed class W1AnchoredVaultStoreTests
         WorkspaceSnapshot loaded = Assert.IsType<WorkspaceSnapshot>(
             new WorkspacePersistence(local.Root).Load());
         Assert.Equal("local", loaded.ActiveLeaf);
+    }
+
+    /// <summary>WB-12 (#1475): every store that writes into a vault's
+    /// <c>.slate</c> refuses a write once the vault folder is renamed away,
+    /// and none recreates the old root. <c>GraphConfigStore</c> joins them in
+    /// <c>GraphConfigStoreTests</c>.</summary>
+    [Theory]
+    [InlineData("workspace")]
+    [InlineData("search-recents")]
+    [InlineData("sidebar")]
+    public void TheAnchoredStoresRefuseAWriteAfterTheRootIsGone(string kind)
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, $"anchor-gone-{kind}");
+        string root = Path.Combine(fixture.Root, "vault");
+        Directory.CreateDirectory(root);
+        Func<Exception?> write = kind switch
+        {
+            "workspace" => Writer(() => new WorkspacePersistence(root).Save(Snapshot("before"))),
+            "search-recents" => SearchRecentsWriter(new SearchRecentsStore(root)),
+            _ => Writer(() => new SidebarSettingsStore(root).SetOrganization(SidebarSortMode.CreatedNewest, groupByDate: true)),
+        };
+        Assert.Null(write());
+        Directory.Move(root, root + "-moved");
+
+        Exception? refusal = write();
+
+        Assert.IsAssignableFrom<IOException>(refusal);
+        Assert.False(Directory.Exists(root), $"the {kind} store recreated the renamed vault's old root");
+
+        static Func<Exception?> Writer(Action action) => () =>
+        {
+            try
+            {
+                action();
+                return null;
+            }
+            catch (Exception exception)
+            {
+                return exception;
+            }
+        };
+
+        static Func<Exception?> SearchRecentsWriter(SearchRecentsStore store) => () =>
+        {
+            _ = store.Add("query");
+            return store.LastSaveError;
+        };
     }
 
     [Fact]

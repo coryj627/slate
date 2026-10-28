@@ -34,6 +34,7 @@ internal sealed class WelcomeShell : IDisposable
     private bool _parkTheTree;
     private int _pickCount;
     private int _confirmCount;
+    private int _slateOnlyAsks;
 
     /// <summary>In a <c>recents</c> list, the fixture vault itself.</summary>
     public const string TheFixtureVault = "<the fixture vault>";
@@ -77,6 +78,11 @@ internal sealed class WelcomeShell : IDisposable
                 _ = Interlocked.Increment(ref _confirmCount);
                 DuringConfirm?.Invoke();
                 return Task.FromResult(false);
+            },
+            ConfirmOpenSlateOnlyRecent: slateOnly =>
+            {
+                _ = Interlocked.Increment(ref _slateOnlyAsks);
+                return Task.FromResult(OpenSlateOnlyAnyway);
             },
             ObservePosted: Posted.Add,
             TreeWorker: (work, token) => Task.Run(
@@ -159,6 +165,12 @@ internal sealed class WelcomeShell : IDisposable
     public int PickCount => Volatile.Read(ref _pickCount);
 
     public int ConfirmCount => Volatile.Read(ref _confirmCount);
+
+    /// <summary>WD7: how often the ".slate only" question was asked.</summary>
+    public int SlateOnlyAsks => Volatile.Read(ref _slateOnlyAsks);
+
+    /// <summary>WD7: what the ".slate only" question answers (default No).</summary>
+    public bool OpenSlateOnlyAnyway { get; set; }
 
     /// <summary>Runs inside the folder pick, as if the picker were up.</summary>
     public Action? DuringPick { get; set; }

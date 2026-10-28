@@ -375,17 +375,8 @@ internal sealed partial class FilesSidebarViewModel
         throw new IOException($"Could not reserve a name for {originalName}.");
     }
 
-    private bool IsInsideVault(string absolutePath)
-    {
-        string root = Path.GetFullPath(_vaultRoot!).TrimEnd(Path.DirectorySeparatorChar)
-            + Path.DirectorySeparatorChar;
-        string candidate = Path.GetFullPath(absolutePath);
-        return candidate.StartsWith(root, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(
-                candidate.TrimEnd(Path.DirectorySeparatorChar),
-                root.TrimEnd(Path.DirectorySeparatorChar),
-                StringComparison.OrdinalIgnoreCase);
-    }
+    private bool IsInsideVault(string absolutePath) =>
+        VaultPaths.IsInside(_vaultRoot!, absolutePath);
 
     internal static bool TryReserveImportEntry(ref int visitedEntries)
     {

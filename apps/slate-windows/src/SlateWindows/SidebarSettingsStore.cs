@@ -243,7 +243,76 @@ internal sealed class SidebarSettingsStore
         });
     }
 
-    private void Update(Action<JsonObject> mutation)
+    /// <summary>WB-12 (#1505): removes from <paramref name="folder"/>'s pins
+    /// the <paramref name="candidates"/> the file still holds there and that
+    /// <paramref name="absentAmong"/>, asked now — under the file's lock,
+    /// after the file is re-read — proves gone (mac re-checks at mutation
+    /// time too). Returns exactly what it removed; the file is not rewritten
+    /// when that is nothing. Throws as every write does.</summary>
+    public IReadOnlySet<string> PruneStalePins(
+        string folder,
+        IReadOnlyCollection<string> candidates,
+        Func<IReadOnlyCollection<string>, IReadOnlySet<string>> absentAmong)
+    {
+        var removed = new HashSet<string>(StringComparer.Ordinal);
+        if (candidates.Count == 0)
+        {
+            return removed;
+        }
+
+        Update(root =>
+        {
+            if (root["pins"] is not JsonObject pins || pins[folder] is not JsonArray paths)
+            {
+                return false;
+            }
+
+            var held = new HashSet<string>(
+                paths.Select(StringValue).OfType<string>(),
+                StringComparer.Ordinal);
+            string[] stillPinned = candidates.Where(held.Contains).Distinct(StringComparer.Ordinal).ToArray();
+            if (stillPinned.Length == 0)
+            {
+                return false;
+            }
+
+            IReadOnlySet<string> absent = absentAmong(stillPinned);
+            removed.UnionWith(stillPinned.Where(absent.Contains));
+            if (removed.Count == 0)
+            {
+                return false;
+            }
+
+            foreach (JsonNode? entry in paths.Where(entry => StringValue(entry) is { } path && removed.Contains(path)).ToArray())
+            {
+                paths.Remove(entry);
+            }
+
+            if (paths.Count == 0)
+            {
+                pins.Remove(folder);
+            }
+
+            if (pins.Count == 0)
+            {
+                root.Remove("pins");
+            }
+
+            return true;
+        });
+        return removed;
+    }
+
+    private void Update(Action<JsonObject> mutation) =>
+        Update(root =>
+        {
+            mutation(root);
+            return true;
+        });
+
+    /// <summary>The locked read-mutate-write; a mutation that answers false
+    /// changed nothing, and the file is left as it is.</summary>
+    private void Update(Func<JsonObject, bool> mutation)
     {
         if (_readOnlyReason is not null)
         {
@@ -265,7 +334,11 @@ internal sealed class SidebarSettingsStore
             throw new InvalidOperationException(blocked);
         }
 
-        mutation(current);
+        if (!mutation(current))
+        {
+            return;
+        }
+
         current["version"] = SchemaVersion;
         byte[] output = JsonSerializer.SerializeToUtf8Bytes(
             current,

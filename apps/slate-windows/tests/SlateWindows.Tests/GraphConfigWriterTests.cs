@@ -100,6 +100,39 @@ public sealed class GraphConfigWriterTests : IDisposable
         Assert.Null(writer.Newest(_root));
     }
 
+    /// <summary>WB-12 (#1475 bullet 1): a write for a vault whose root is
+    /// gone is logged as <c>GraphConfigPersistFailed</c>, leaves nothing
+    /// outstanding and recreates nothing at the root's path.</summary>
+    [Fact]
+    public void AMissingRootIsLoggedAsGraphConfigPersistFailed()
+    {
+        string gone = Path.Combine(_root, "renamed-away");
+        var writer = new GraphConfigWriter();
+        // HostLog's observer, chained and restored, not a Console.Error swap:
+        // facts in other classes swap Console.Error in parallel (Codoki).
+        var logged = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        Action<string>? previous = HostLog.ObserverForTests;
+        HostLog.ObserverForTests = line =>
+        {
+            previous?.Invoke(line);
+            logged.Enqueue(line);
+        };
+        try
+        {
+            Assert.True(writer.Enqueue(gone, WithDepth(3), writer.Reserve(gone)).Wait(TimeSpan.FromSeconds(10)));
+        }
+        finally
+        {
+            HostLog.ObserverForTests = previous;
+        }
+
+        Assert.Contains("SlateWindows.GraphConfigPersistFailed (DirectoryNotFoundException)", logged);
+        Assert.DoesNotContain(logged, line => line.Contains(_root, StringComparison.Ordinal));
+        Assert.Equal(1, writer.FailedForTests);
+        Assert.Null(writer.Newest(gone));
+        Assert.False(Directory.Exists(gone), "the write recreated a root that was gone");
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
