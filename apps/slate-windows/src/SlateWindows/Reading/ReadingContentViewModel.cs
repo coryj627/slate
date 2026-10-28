@@ -1212,6 +1212,16 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         || _publishedHasUnresolvedEmbeds
         || _publishedHasBaseEmbeds;
 
+    /// <summary>WB-10 (#1293, design §4.3): whether a change-feed window
+    /// reaches this model's published projection — a record names a resolved
+    /// embed's path (<paramref name="touches"/>), or the window has a record
+    /// (<paramref name="anyRecord"/>) and an unresolved embed may now resolve
+    /// (a file created, renamed or made readable; an unreadable embed names
+    /// no path) or a base card's membership may have moved.</summary>
+    internal bool DependsOnRescanTouch(Func<string, bool> touches, bool anyRecord) =>
+        _publishedEmbedDependencies.Any(touches)
+        || ((_publishedHasUnresolvedEmbeds || _publishedHasBaseEmbeds) && anyRecord);
+
     /// <summary>
     /// W7-7 PR 7 (#1252, R-9; AR-18's fallback): the rescan's reading
     /// dependent. The re-sync carries no per-path delta, so a model whose
@@ -1226,9 +1236,13 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     /// returned Task WITH that failure, for the rescan to count, and is not
     /// spoken here) and cancelled by the run's
     /// <paramref name="cancellation"/> at the fetch's worker boundary.</remarks>
-    internal Task NotifyRescanAsync(CancellationToken cancellation = default)
+    /// <remarks>WB-10 (#1293, the owner's decision Q8):
+    /// <paramref name="recheckFailure"/> — an explicit Refresh's recovery
+    /// set, or the reading surface's retry — also re-projects a model whose
+    /// last refresh failed, whatever it depends on.</remarks>
+    internal Task NotifyRescanAsync(CancellationToken cancellation = default, bool recheckFailure = false)
     {
-        if (_disposed || !HasOtherFileDependencies)
+        if (_disposed || !(HasOtherFileDependencies || (recheckFailure && LastRefreshFailed)))
         {
             return Task.CompletedTask;
         }

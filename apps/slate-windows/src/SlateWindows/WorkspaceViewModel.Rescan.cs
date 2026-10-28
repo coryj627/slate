@@ -103,11 +103,19 @@ internal sealed partial class WorkspaceViewModel
     /// <summary>What the document re-sync did, for the dependents: how many
     /// operations failed, which open paths the index showed changed (a tab
     /// whose baseline, a board whose basis, a base whose definition hash
-    /// differed), and the base documents it reopened.</summary>
+    /// differed), the base documents it reopened, which open paths it
+    /// actually reloaded (WB-10: a dirty tab only marked stale is changed,
+    /// not reloaded), whether a base's reopen or load failed (a re-seated
+    /// base's included), and whether a reloaded or re-seated note's reading
+    /// projection failed (WB-10, codex round 2): each is its surface's to
+    /// retry, since the document reads as current on the next run.</summary>
     internal sealed record RescanDocumentsOutcome(
         ulong Failed,
         IReadOnlySet<string> ChangedOpenPaths,
-        IReadOnlySet<BaseDocumentViewModel> ReopenedBases)
+        IReadOnlySet<BaseDocumentViewModel> ReopenedBases,
+        IReadOnlySet<string> ReloadedOpenPaths,
+        bool BasesFailed = false,
+        bool ReadingFailed = false)
     {
         /// <summary>What the dependents see when the document re-sync
         /// itself failed (codex PR 7 round 3, finding 4): nothing changed,
@@ -115,7 +123,204 @@ internal sealed partial class WorkspaceViewModel
         internal static RescanDocumentsOutcome Empty { get; } = new(
             0,
             new HashSet<string>(StringComparer.Ordinal),
-            new HashSet<BaseDocumentViewModel>(ReferenceEqualityComparer.Instance));
+            new HashSet<BaseDocumentViewModel>(ReferenceEqualityComparer.Instance),
+            new HashSet<string>(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// WB-10 (#1293, design §4.3; the owner's decision Q8): what a change-feed
+    /// window touched, for its dependents pass. <paramref name="Paths"/> are
+    /// every record's path (a rename's origin too) — a folder another session
+    /// renamed or removed is a record for each file under it as well, so the
+    /// exact paths name every note it moved; <paramref name="AnyRecord"/> —
+    /// the window has a record, the trigger WB-10a drops the graph on
+    /// (folders included). <paramref name="Retry"/> holds the dependent
+    /// surfaces the retry set carries, and <paramref name="Recover"/> is an
+    /// explicit Refresh's recovery set: both ride the run's first dependents
+    /// pass, whatever the window holds. <paramref name="Ungated"/> is R-9's
+    /// full re-sync (a gap, an oversized window, a feed read that failed):
+    /// every dependent runs as before WB-10, and the retries and the
+    /// recovery set still ride it.
+    /// </summary>
+    internal sealed record RescanTouch(
+        IReadOnlySet<string> Paths,
+        bool AnyRecord,
+        IReadOnlySet<RescanSurface> Retry,
+        bool Recover,
+        bool Ungated = false)
+    {
+        /// <summary>The full re-sync's pass, carrying the run's retries and
+        /// recovery set.</summary>
+        internal static RescanTouch Full(IReadOnlySet<RescanSurface> retry, bool recover) =>
+            new(new HashSet<string>(StringComparer.Ordinal), AnyRecord: true, retry, recover, Ungated: true);
+
+        /// <summary>Whether a record of the window names
+        /// <paramref name="path"/>.</summary>
+        internal bool Touches(string path) => Paths.Contains(path);
+    }
+
+    /// <summary>One move a change-feed <c>Renamed</c> record asks for: the
+    /// tabs that held the file at <paramref name="From"/> (its baseline
+    /// <paramref name="FromHash"/>) go to <paramref name="To"/>;
+    /// <paramref name="OldIsGone"/> — nothing is at <paramref name="From"/>
+    /// at the window's target. <paramref name="Provenance"/> (codex round 2)
+    /// — the tabs at <paramref name="From"/> are the file's because an
+    /// unacknowledged run moved them there, so they go whatever their
+    /// baseline has become. <paramref name="FollowersOnly"/> (codex round 5)
+    /// — only the Connections pin and the closed tabs at
+    /// <paramref name="From"/> go, which an unacknowledged run moved there;
+    /// no tab is touched. <paramref name="KeepFollowers"/> (codex round 6) —
+    /// the pin and the closed tabs at <paramref name="From"/> are another
+    /// file's, put there by an unacknowledged run, so only tabs move.</summary>
+    internal readonly record struct FeedRename(
+        string From,
+        string To,
+        string? FromHash,
+        bool OldIsGone,
+        bool Provenance = false,
+        bool FollowersOnly = false,
+        bool KeepFollowers = false);
+
+    /// <summary>What <see cref="RetargetPathsForFeedRenames"/> moved, by the
+    /// renames' indexes: the renames that moved a tab, and those that moved
+    /// the Connections pin or a closed tab.</summary>
+    internal readonly record struct FeedRetarget(IReadOnlySet<int> MovedTabs, IReadOnlySet<int> MovedFollowers)
+    {
+        internal static FeedRetarget None { get; } = new(new HashSet<int>(), new HashSet<int>());
+    }
+
+    /// <summary>
+    /// WB-10 (#1293, design §4.3; the owner's decision Q3, AR-8 amended): a
+    /// window's <c>Renamed</c> records — another Slate session renamed or
+    /// moved files — move the tabs that held those files, buffers kept,
+    /// dirty or not. Every move is planned against the tabs as they were
+    /// before any of them moves, so a swap or a chain moves each tab once.
+    /// A loaded Markdown tab moves when its saved baseline, or the hash it
+    /// was marked stale against, is the record's <c>from_hash</c>; one whose
+    /// baseline differs stays, as a note the user has since put at that path
+    /// does, and the run's tab comparison decides it from the index. A tab
+    /// with no baseline of its own — a Markdown tab whose load failed, a
+    /// board, a base — moves only when nothing is at the origin at the
+    /// window's target. The closed tabs, the Connections pin and the board
+    /// and base registries follow only when the file left the origin and no
+    /// open tab stayed there. <see cref="RetargetPath(string, string)"/>
+    /// stays for Slate's own renames. Returns what each rename moved (codex
+    /// rounds 4 and 5: the lifecycle's provenance holds only those).
+    /// </summary>
+    internal FeedRetarget RetargetPathsForFeedRenames(IReadOnlyList<FeedRename> renames)
+    {
+        WorkspaceTabViewModel[] tabs = [.. Groups.SelectMany(group => group.Tabs)];
+        var claimed = new HashSet<WorkspaceTabViewModel>(ReferenceEqualityComparer.Instance);
+        var moves = new List<(WorkspaceTabViewModel Tab, string Destination)>();
+        var follows = new List<(int Index, string Source, string Destination, bool FollowersOnly)>();
+        var moved = new HashSet<int>();
+        for (int index = 0; index < renames.Count; index++)
+        {
+            FeedRename rename = renames[index];
+            string source = NormalizeWorkspacePath(rename.From);
+            string destination = NormalizeWorkspacePath(rename.To);
+            if (source.Length == 0 || destination.Length == 0 || string.Equals(source, destination, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (rename.FollowersOnly)
+            {
+                follows.Add((index, source, destination, true));
+                continue;
+            }
+
+            bool stayed = false;
+            foreach (WorkspaceTabViewModel tab in tabs)
+            {
+                if (!IsPathBacked(tab.Item)
+                    || claimed.Contains(tab)
+                    || !string.Equals(NormalizeWorkspacePath(tab.Path), source, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (FollowsFeedRename(tab, rename))
+                {
+                    _ = claimed.Add(tab);
+                    moves.Add((tab, destination));
+                    _ = moved.Add(index);
+                }
+                else
+                {
+                    stayed = true;
+                }
+            }
+
+            if (rename.OldIsGone && !stayed && !rename.KeepFollowers)
+            {
+                follows.Add((index, source, destination, false));
+            }
+        }
+
+        foreach ((WorkspaceTabViewModel tab, string destination) in moves)
+        {
+            _saves.ContinueChain(tab.Path, destination);
+            tab.RetargetPath(destination);
+        }
+
+        var followed = new HashSet<int>();
+        foreach ((int index, string source, string destination, bool followersOnly) in follows)
+        {
+            bool any = false;
+            for (int closed = 0; closed < _closedTabs.Count; closed++)
+            {
+                (WorkspaceItemState item, Guid group) = _closedTabs[closed];
+                if (IsPathBacked(item)
+                    && string.Equals(NormalizeWorkspacePath(item.Path), source, StringComparison.Ordinal))
+                {
+                    _closedTabs[closed] = (item with { Path = destination }, group);
+                    any = true;
+                }
+            }
+
+            string? pin = Connections.Pin;
+            (string? Pin, string Effective)[] backStack = [.. Connections.BackStack];
+            Connections.Retarget(source, destination, ConnectionsActiveAndMounted());
+            any |= !string.Equals(pin, Connections.Pin, StringComparison.Ordinal)
+                || !backStack.SequenceEqual(Connections.BackStack);
+            if (!followersOnly)
+            {
+                // The registries can hold a tab's own document, so only a
+                // rename that moved its tabs, or found none, moves them.
+                RetargetBaseDocuments(source, destination);
+                RetargetCanvasDocuments(source, destination);
+            }
+
+            if (any)
+            {
+                _ = followed.Add(index);
+            }
+        }
+
+        if (moves.Count > 0 || follows.Count > 0)
+        {
+            Persist();
+            SyncPanels();
+        }
+
+        return new FeedRetarget(moved, followed);
+    }
+
+    private static bool FollowsFeedRename(WorkspaceTabViewModel tab, FeedRename rename)
+    {
+        if (rename.Provenance)
+        {
+            return true;
+        }
+
+        if (!tab.IsMarkdown || tab.SavedContentHash is not string baseline)
+        {
+            return rename.OldIsGone;
+        }
+
+        return string.Equals(baseline, rename.FromHash, StringComparison.Ordinal)
+            || (tab.StaleAgainstHash is string stale && string.Equals(stale, rename.FromHash, StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -205,9 +410,13 @@ internal sealed partial class WorkspaceViewModel
         // round 4, finding 1): the run's load is their one load (round 5,
         // fix 3) — the passes below and the Bases dependent skip them.
         var reseated = new HashSet<object>(ReferenceEqualityComparer.Instance);
-        failed += await ReseatMissingTabsAsync(probeReseatOnWorker, reseated, cancellation);
+        // The surfaces whose publications failed here (codex round 2).
+        var failedSurfaces = new HashSet<RescanSurface>();
+        failed += await ReseatMissingTabsAsync(probeReseatOnWorker, reseated, failedSurfaces, cancellation);
 
         var changed = new HashSet<string>(StringComparer.Ordinal);
+        var reloaded = new HashSet<string>(StringComparer.Ordinal);
+        var baseReopens = new List<Task>();
         var reopened = new HashSet<BaseDocumentViewModel>(
             reseated.OfType<BaseDocumentViewModel>(),
             ReferenceEqualityComparer.Instance);
@@ -240,7 +449,7 @@ internal sealed partial class WorkspaceViewModel
             work.Add(RunCountedReload(
                 "markdown",
                 path,
-                () => ReloadMarkdownPathAsync(path, indexHash, tickets, readOnWorker, cancellation)));
+                () => ReloadMarkdownPathAsync(path, indexHash, tickets, readOnWorker, reloaded, failedSurfaces, cancellation)));
         }
 
         foreach (CanvasDocumentViewModel canvas in _canvasDocuments.Values.Distinct())
@@ -264,6 +473,7 @@ internal sealed partial class WorkspaceViewModel
             if (stale)
             {
                 _ = changed.Add(path);
+                _ = reloaded.Add(path);
                 work.Add(RunKindReload("canvas", path, () =>
                 {
                     Task reload = canvas.ReloadAsync(cancellation);
@@ -285,17 +495,30 @@ internal sealed partial class WorkspaceViewModel
             }
 
             _ = changed.Add(path);
+            _ = reloaded.Add(path);
             _ = reopened.Add(document);
-            work.Add(RunKindReload("base", path, () =>
+            Task reopen = RunKindReload("base", path, () =>
             {
-                Task reopen = document.LoadAsync(cancellation);
+                Task load = document.LoadAsync(cancellation);
                 TouchRescanScheduler(document);
-                return reopen;
-            }));
+                return load;
+            });
+            baseReopens.Add(reopen);
+            work.Add(reopen);
         }
 
         failed += await CountRescanFailuresAsync(work, cancellation);
-        return new RescanDocumentsOutcome(failed, changed, reopened);
+        // WB-10 (#1293): a base whose reopen failed is the Bases surface's to
+        // retry — its definition hash may already read as current.
+        bool basesFailed = failedSurfaces.Contains(RescanSurface.Bases)
+            || baseReopens.Any(reopen => !reopen.IsCompletedSuccessfully);
+        return new RescanDocumentsOutcome(
+            failed,
+            changed,
+            reopened,
+            reloaded,
+            basesFailed,
+            failedSurfaces.Contains(RescanSurface.Reading));
     }
 
     /// <summary>
@@ -311,11 +534,14 @@ internal sealed partial class WorkspaceViewModel
     /// shows bytes the index does not vouch for; any other clean Markdown
     /// tab stays missing and counts one error (the next rescan re-seats
     /// it); a tab of another kind re-seats as before. A failed probe keeps
-    /// the tab missing and counts one error. Returns the errors.
+    /// the tab missing and counts one error. Returns the errors; a re-seated
+    /// base whose load failed, or a note whose projection did, puts its
+    /// surface in <paramref name="failedSurfaces"/>.
     /// </summary>
     private async Task<ulong> ReseatMissingTabsAsync(
         Func<IReadOnlyList<(string Path, bool Markdown)>, Task<IReadOnlyDictionary<string, ReseatProbe>>> probeOnWorker,
         ISet<object> reseated,
+        ISet<RescanSurface> failedSurfaces,
         CancellationToken cancellation)
     {
         TabTicket[] tickets =
@@ -361,8 +587,11 @@ internal sealed partial class WorkspaceViewModel
             new(Groups.SelectMany(group => group.Tabs), ReferenceEqualityComparer.Instance);
         var failedPaths = new HashSet<string>(StringComparer.Ordinal);
         // The re-seated documents' publications (a board's or base's load, a
-        // reading-mode note's projection), each counted.
+        // reading-mode note's projection), each counted; the bases' and the
+        // projections' also kept apart, for their surfaces' retries.
         var documents = new List<Task>();
+        var baseLoads = new List<Task>();
+        var projections = new List<Task>();
         foreach (TabTicket ticket in tickets)
         {
             WorkspaceTabViewModel tab = ticket.Tab;
@@ -444,12 +673,14 @@ internal sealed partial class WorkspaceViewModel
                 }
                 else if (tab.Base is { } document && reseated.Add(document))
                 {
-                    documents.Add(RunKindReload("base", tab.Path, () =>
+                    Task load = RunKindReload("base", tab.Path, () =>
                     {
                         Task reopen = document.LoadAsync(cancellation);
                         TouchRescanScheduler(document);
                         return reopen;
-                    }));
+                    });
+                    documents.Add(load);
+                    baseLoads.Add(load);
                 }
 
                 continue;
@@ -479,10 +710,22 @@ internal sealed partial class WorkspaceViewModel
 
             tab.ReplaceItemWithReadText(tab.Item, probe.Read!.Value.Text, cancellation);
             documents.Add(tab.RescanReadingPublication);
+            projections.Add(tab.RescanReadingPublication);
             TrackTabRescanWork(tab);
         }
 
-        return (ulong)failedPaths.Count + await CountRescanFailuresAsync(documents, cancellation);
+        ulong documentsFailed = await CountRescanFailuresAsync(documents, cancellation);
+        if (baseLoads.Any(load => !load.IsCompletedSuccessfully))
+        {
+            _ = failedSurfaces.Add(RescanSurface.Bases);
+        }
+
+        if (projections.Any(projection => !projection.IsCompletedSuccessfully))
+        {
+            _ = failedSurfaces.Add(RescanSurface.Reading);
+        }
+
+        return (ulong)failedPaths.Count + documentsFailed;
     }
 
     /// <summary>
@@ -513,12 +756,17 @@ internal sealed partial class WorkspaceViewModel
     /// tab's bytes could not be vouched for, plus one per reloaded
     /// reading-mode tab whose projection failed (codex PR 7 round 4,
     /// finding 3: the projection is the rescan's — silent, under the run's
-    /// token, and awaited here).</returns>
+    /// token, and awaited here). A failed projection also puts Reading in
+    /// <paramref name="failedSurfaces"/> (WB-10, codex round 2): the reloaded
+    /// tab reads as current on the next run, so only the Reading retry
+    /// re-checks it.</returns>
     private async Task<ulong> ReloadMarkdownPathAsync(
         string path,
         string indexHash,
         IReadOnlyList<TabTicket> tickets,
         Func<string, Task<RescanRead?>> readOnWorker,
+        ISet<string> reloadedPaths,
+        ISet<RescanSurface> failedSurfaces,
         CancellationToken cancellation)
     {
         RescanRead? read = await readOnWorker(path);
@@ -584,6 +832,7 @@ internal sealed partial class WorkspaceViewModel
 
         if (reload.Count > 0)
         {
+            _ = reloadedPaths.Add(path);
             // The whole-document refresh a clean re-baseline owes its
             // panels (the MirrorSamePathDocumentState precedent): the
             // outline, tasks and citations re-read the new bytes.
@@ -602,7 +851,13 @@ internal sealed partial class WorkspaceViewModel
             failed++;
         }
 
-        return failed + await CountRescanFailuresAsync(projections, cancellation);
+        ulong projectionsFailed = await CountRescanFailuresAsync(projections, cancellation);
+        if (projectionsFailed > 0)
+        {
+            _ = failedSurfaces.Add(RescanSurface.Reading);
+        }
+
+        return failed + projectionsFailed;
     }
 
     /// <summary>
@@ -617,10 +872,32 @@ internal sealed partial class WorkspaceViewModel
     /// graph probes (a STALE or Error graph recovers on an unchanged
     /// Refresh — finding 8). Returns how many publications failed.
     /// </summary>
+    /// <remarks>WB-10 (#1293, design §4.3): with a change-feed window's
+    /// <paramref name="touch"/> the pass is narrowed to the window's paths —
+    /// a reading model re-projects when a record names a dependency, the
+    /// window has a record and an embed is unresolved or a base card's
+    /// membership may have moved, or its own tab reloaded; the history panel
+    /// reloads when its note's tab reloaded or a record names the note; the
+    /// Bases re-run and the graph probe run when the window has any record —
+    /// and each also runs for its retry entry or, on an explicit Refresh,
+    /// when it shows a failure state (the owner's decision Q8: a reading model
+    /// whose last refresh failed re-projects even with no dependency on other
+    /// files). On an explicit Refresh the Bases re-run and the graph probe
+    /// always run: a STALE or Error graph recovers there, and dashboards and
+    /// saved queries live in the cache, outside the feed, so another session's
+    /// change to one has no record. The editor caches drop on every run, as
+    /// R-9's re-sync always dropped them: the shell gate's citation popover
+    /// opens only after a run's drop, which an empty foreground window
+    /// withheld when this was narrowed. A null <paramref name="touch"/> or an
+    /// <see cref="RescanTouch.Ungated"/> one is R-9's full pass, the latter
+    /// with the run's retries and recovery set. A dependent that fails puts
+    /// its surface in <paramref name="failedSurfaces"/>.</remarks>
     internal async Task<ulong> ReSyncDependentsAsync(
         RescanDocumentsOutcome documents,
         IReadOnlyDictionary<string, IndexedPath> indexed,
-        CancellationToken cancellation)
+        CancellationToken cancellation,
+        RescanTouch? touch = null,
+        ISet<RescanSurface>? failedSurfaces = null)
     {
         InvalidateAllInteractionStates();
         foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
@@ -628,38 +905,88 @@ internal sealed partial class WorkspaceViewModel
             TrackTabRescanWork(tab);
         }
 
-        var work = new List<Task>();
-        foreach (ReadingContentViewModel reading in Groups.SelectMany(group => group.Tabs)
-            .Select(tab => tab.Reading)
-            .OfType<ReadingContentViewModel>()
-            .Distinct())
+        var work = new List<(RescanSurface Surface, Task Task)>();
+        var notified = new HashSet<ReadingContentViewModel>(ReferenceEqualityComparer.Instance);
+        foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
         {
+            if (tab.Reading is not ReadingContentViewModel reading
+                || notified.Contains(reading)
+                || !ReadingFollowsRescan(reading, tab, documents, touch))
+            {
+                continue;
+            }
+
             // Finding 5: the re-projection is the rescan's — silent, and
             // its failure faults this Task for the count.
-            work.Add(RunKindReload("reading", string.Empty, () =>
+            _ = notified.Add(reading);
+            bool recheckFailure = touch is not null && (touch.Recover || touch.Retry.Contains(RescanSurface.Reading));
+            work.Add((RescanSurface.Reading, RunKindReload("reading", string.Empty, () =>
             {
-                Task projection = reading.NotifyRescanAsync(cancellation);
+                Task projection = reading.NotifyRescanAsync(cancellation, recheckFailure);
                 TouchRescanReading(reading);
                 return projection;
-            }));
+            })));
         }
 
         if (History.Path is string historyPath
             && NormalizeWorkspacePath(historyPath) is { Length: > 0 } shown
-            && HistoryNoteChanged(shown, documents, indexed))
+            && ((touch is null || touch.Ungated
+                    ? HistoryNoteChanged(shown, documents, indexed)
+                    : documents.ReloadedOpenPaths.Contains(shown) || touch.Touches(shown))
+                || (touch is not null
+                    && (touch.Retry.Contains(RescanSurface.History)
+                        || (touch.Recover && History.LoadError is not null)))))
         {
-            work.Add(RunKindReload("history", shown, () =>
+            work.Add((RescanSurface.History, RunKindReload("history", shown, () =>
             {
                 Task reload = History.NoteSavedAsync(historyPath);
                 TouchRescanScheduler(History);
                 return reload;
-            }));
+            })));
         }
 
-        work.Add(RunCountedReload("bases", string.Empty, () => ReSyncBasesAsync(documents.ReopenedBases, cancellation)));
-        work.Add(RunCountedReload("graph", string.Empty, () => NotifyGraphOfRescanAsync(cancellation)));
-        return await CountRescanFailuresAsync(work, cancellation);
+        if (touch is null || touch.AnyRecord || touch.Retry.Contains(RescanSurface.Bases) || touch.Recover)
+        {
+            work.Add((RescanSurface.Bases, RunCountedReload("bases", string.Empty, () => ReSyncBasesAsync(documents.ReopenedBases, cancellation))));
+        }
+
+        if (touch is null || touch.AnyRecord || touch.Retry.Contains(RescanSurface.Graph) || touch.Recover)
+        {
+            work.Add((RescanSurface.Graph, RunCountedReload("graph", string.Empty, () => NotifyGraphOfRescanAsync(cancellation))));
+        }
+
+        ulong failed = await CountRescanFailuresAsync([.. work.Select(entry => entry.Task)], cancellation);
+        if (failedSurfaces is not null)
+        {
+            foreach ((RescanSurface surface, Task task) in work)
+            {
+                if (task is Task<ulong> { IsCompletedSuccessfully: true } counted
+                    ? counted.Result > 0
+                    : !task.IsCompletedSuccessfully)
+                {
+                    _ = failedSurfaces.Add(surface);
+                }
+            }
+        }
+
+        return failed;
     }
+
+    /// <summary>WB-10 (#1293): whether a reading model re-projects in this
+    /// dependents pass — always on R-9's ungated pass, else by the window's
+    /// paths, its own tab's reload, its retry entry or, on an explicit
+    /// Refresh, its failure state.</summary>
+    private static bool ReadingFollowsRescan(
+        ReadingContentViewModel reading,
+        WorkspaceTabViewModel tab,
+        RescanDocumentsOutcome documents,
+        RescanTouch? touch) =>
+        touch is null
+        || touch.Ungated
+        || reading.DependsOnRescanTouch(touch.Touches, touch.AnyRecord)
+        || documents.ReloadedOpenPaths.Contains(NormalizeWorkspacePath(tab.Path))
+        || touch.Retry.Contains(RescanSurface.Reading)
+        || (touch.Recover && reading.LastRefreshFailed);
 
     /// <summary>Whether the history panel's note changed: an open note's
     /// tab baseline differed from the index (the document re-sync saw it);
@@ -1103,5 +1430,15 @@ internal sealed partial class WorkspaceTabViewModel
 
         IsExternallyStale = indexedHash.Length > 0
             && !string.Equals(SavedContentHash, indexedHash, StringComparison.Ordinal);
+        _staleAgainstHash = indexedHash;
     }
+
+    // WB-10 (#1293): the index hash this tab was last marked stale against.
+    private string? _staleAgainstHash;
+
+    /// <summary>WB-10 (#1293): while the tab is marked stale, the index hash
+    /// it was marked against — the file's content as this session last saw
+    /// it, which a later change-feed rename names as its <c>from_hash</c>
+    /// (a dirty tab keeps its older baseline).</summary>
+    internal string? StaleAgainstHash => IsExternallyStale ? _staleAgainstHash : null;
 }

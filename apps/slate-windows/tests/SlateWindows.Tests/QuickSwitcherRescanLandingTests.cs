@@ -45,6 +45,7 @@ public sealed class QuickSwitcherRescanLandingTests
                 journal,
                 CancellationToken.None);
             Assert.True(PumpedDispatcher.PumpUntil(() => replaced.IsCompleted, TimeSpan.FromSeconds(10)), "the silent re-rank");
+            host.Switcher.EndReplacement(journal);
             host.Settle();
 
             Assert.Contains(host.Switcher.Results, row => row.Path == "a-created-outside.md");

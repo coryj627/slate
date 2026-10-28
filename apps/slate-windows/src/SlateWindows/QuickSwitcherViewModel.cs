@@ -326,9 +326,31 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
     /// (<see cref="Applied"/> is idempotent, so a change the pages already
     /// reflect replays as nothing).
     /// </summary>
+    /// <remarks>WB-10 (#1293, design §4.3 :674-690): a rescan's journal is
+    /// open for the whole run, from before its first change-feed window;
+    /// after each window the run re-reads every path it names from the index
+    /// (<see cref="ApplyJournaledPathsAsync"/>) rather than replaying its
+    /// events.</remarks>
     internal sealed class ReplacementJournal
     {
         internal List<(FileChangeEvent Change, bool Openable)> Changes { get; } = [];
+
+        /// <summary>Every path the journaled changes name: each change's,
+        /// and a rename's previous one.</summary>
+        internal IReadOnlySet<string> Paths()
+        {
+            var paths = new HashSet<string>(StringComparer.Ordinal);
+            foreach ((FileChangeEvent change, _) in Changes)
+            {
+                _ = paths.Add(change.Path);
+                if (change.PreviousPath is string previous)
+                {
+                    _ = paths.Add(previous);
+                }
+            }
+
+            return paths;
+        }
     }
 
     internal ReplacementJournal BeginReplacement()
@@ -357,14 +379,14 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
     /// and the Task completes INSIDE the publication of that rank (or of a
     /// later one), faults on its terminal failure (counted by the rescan,
     /// never spoken here), completes when the switcher closes (F7), and is
-    /// cancelled with <paramref name="cancellation"/>.
+    /// cancelled with <paramref name="cancellation"/>. The journal stays
+    /// open: its owner ends it (WB-10: the rescan run's, at the run's end).
     /// </summary>
     internal Task ReplaceFilesAsync(
         SwitcherFile[] files,
         ReplacementJournal journal,
         CancellationToken cancellation)
     {
-        EndReplacement(journal);
         if (cancellation.IsCancellationRequested)
         {
             return Task.FromCanceled(cancellation);
@@ -377,6 +399,133 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
         }
 
         _files = replayed;
+        return RepublishSilentlyAsync(cancellation);
+    }
+
+    /// <summary>
+    /// WB-10 (#1293, design §4.3): one page of a change-feed window, applied
+    /// in one pass over a path index — a removed file is dropped, a present
+    /// openable one is upserted from its summary (a present file that is not
+    /// openable is dropped); folders are not listed. An open switcher
+    /// re-ranks silently, awaited as <see cref="ReplaceFilesAsync"/> is.
+    /// </summary>
+    internal Task ApplyRecordsAsync(IReadOnlyList<ChangeRecord> records, CancellationToken cancellation)
+    {
+        var upserts = new Dictionary<string, SwitcherFile>(StringComparer.Ordinal);
+        var removals = new HashSet<string>(StringComparer.Ordinal);
+        foreach (ChangeRecord record in records)
+        {
+            if (record.Entry != ChangeEntry.File)
+            {
+                continue;
+            }
+
+            switch (record.Effect)
+            {
+                case ChangeEffect.Removed:
+                    _ = upserts.Remove(record.Path);
+                    _ = removals.Add(record.Path);
+                    break;
+                case ChangeEffect.Present when record.Summary is FileSummary summary && record.Openable:
+                    _ = removals.Remove(record.Path);
+                    upserts[record.Path] = new SwitcherFile(summary.Path, summary.Name);
+                    break;
+                case ChangeEffect.Present:
+                    _ = upserts.Remove(record.Path);
+                    _ = removals.Add(record.Path);
+                    break;
+            }
+        }
+
+        return ApplyInventoryAsync(upserts, removals, cancellation);
+    }
+
+    /// <summary>
+    /// WB-10 (#1293, design §4.3 :674-690): the run's journal re-read — each
+    /// journaled path as the index holds it now: present and openable, it is
+    /// upserted from its summary; otherwise it is dropped. Awaited as
+    /// <see cref="ReplaceFilesAsync"/> is.
+    /// </summary>
+    internal Task ApplyJournaledPathsAsync(
+        IReadOnlyList<(string Path, FileSummary? Summary)> reads,
+        CancellationToken cancellation)
+    {
+        var upserts = new Dictionary<string, SwitcherFile>(StringComparer.Ordinal);
+        var removals = new HashSet<string>(StringComparer.Ordinal);
+        foreach ((string path, FileSummary? summary) in reads)
+        {
+            if (summary is not null && IsOpenablePath(summary.Path))
+            {
+                upserts[path] = new SwitcherFile(summary.Path, summary.Name);
+            }
+            else
+            {
+                _ = removals.Add(path);
+            }
+        }
+
+        return ApplyInventoryAsync(upserts, removals, cancellation);
+    }
+
+    /// <summary>Removals and upserts in one pass over a path index; an open
+    /// switcher re-ranks silently when the list changed.</summary>
+    private Task ApplyInventoryAsync(
+        IReadOnlyDictionary<string, SwitcherFile> upserts,
+        IReadOnlySet<string> removals,
+        CancellationToken cancellation)
+    {
+        if (cancellation.IsCancellationRequested)
+        {
+            return Task.FromCanceled(cancellation);
+        }
+
+        var files = new List<SwitcherFile>(_files.Length + upserts.Count);
+        var listed = new HashSet<string>(StringComparer.Ordinal);
+        bool changed = false;
+        foreach (SwitcherFile file in _files)
+        {
+            if (removals.Contains(file.Path))
+            {
+                changed = true;
+                continue;
+            }
+
+            if (upserts.TryGetValue(file.Path, out SwitcherFile? upsert))
+            {
+                changed |= upsert != file;
+                files.Add(upsert);
+            }
+            else
+            {
+                files.Add(file);
+            }
+
+            _ = listed.Add(file.Path);
+        }
+
+        foreach ((string path, SwitcherFile upsert) in upserts)
+        {
+            if (listed.Add(path))
+            {
+                files.Add(upsert);
+                changed = true;
+            }
+        }
+
+        if (!changed)
+        {
+            return Task.CompletedTask;
+        }
+
+        _files = [.. files];
+        return RepublishSilentlyAsync(cancellation);
+    }
+
+    /// <summary>The list changed under a rescan: a closed switcher
+    /// completes at once; an open one re-runs its query silently, and the
+    /// Task completes inside that rank's publication (or a later one).</summary>
+    private Task RepublishSilentlyAsync(CancellationToken cancellation)
+    {
         if (!IsOpen || _disposed)
         {
             return Task.CompletedTask;

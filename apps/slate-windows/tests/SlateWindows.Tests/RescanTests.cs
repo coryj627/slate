@@ -597,8 +597,13 @@ public sealed partial class RescanTests
     /// worker wins. The write's own event marks the tab stale before the read
     /// comes back, which moves the tab's content generation past the ticket
     /// the read captured, so the tab is never re-baselined on the bytes the
-    /// worker read before the write; it keeps its text, marked stale. The
-    /// scan's own count stands: it found the external change.</summary>
+    /// worker read before the write; it is marked stale. WB-10 (#1293,
+    /// AR-31): the write moved the feed's head past the run's window, so the
+    /// run makes a further pass, whose tab comparison finds the tab clean and
+    /// the index vouching for the write's bytes, and reloads it onto them —
+    /// never onto the bytes the first read took. The explicit Refresh speaks
+    /// the last window's counts (design §4.3): the note ends at this
+    /// session's own write, which the tab shows, so nothing is counted.</summary>
     [Fact]
     public void ASlateWriteDuringAReloadsReadWinsOverIt() => RunSta(() =>
     {
@@ -606,6 +611,13 @@ public sealed partial class RescanTests
         WorkspaceTabViewModel x = h.Open("x.md");
         h.Write("x.md", "x1 external\n");
         bool wrote = false;
+        bool sawStale = false;
+        var texts = new List<string>();
+        x.PropertyChanged += (_, changed) =>
+        {
+            texts.Add(x.Text);
+            sawStale |= x.IsExternallyStale;
+        };
         h.AfterCoreCall = operation =>
         {
             if (operation == "read" && !wrote)
@@ -621,11 +633,13 @@ public sealed partial class RescanTests
         h.Settle();
 
         Assert.True(wrote, "the reload never read x.md on the worker");
-        Assert.Equal("x0\n", x.Text);
+        Assert.True(sawStale, "the write's own event never reconciled the tab");
+        Assert.DoesNotContain("x1 external\n", texts);
+        Assert.Equal("x2 through Slate\n", x.Text);
         Assert.False(x.IsDirty);
-        Assert.True(x.IsExternallyStale, "the write's own event never reconciled the tab");
+        Assert.False(x.IsExternallyStale);
         Assert.Equal("x2 through Slate\n", File.ReadAllText(Path.Combine(h.Root, "x.md")));
-        Assert.Equal([Explicit1], h.Spoken);
+        Assert.Equal([NoChanges], h.Spoken);
     });
 
     /// <summary>Rounds 26-27: the host's document classification — the
@@ -1173,12 +1187,15 @@ public sealed partial class RescanTests
     /// the tree the run settles on — BEFORE its sentence. The write's event
     /// refreshes the tree at once while the rescan's tree publication is
     /// pending, so the stale snapshot fails its generation check; the
-    /// ordinary 150 ms debounce would land after the sentence.</summary>
+    /// ordinary 150 ms debounce would land after the sentence. WB-10
+    /// (#1293): the window has a record (a note written outside Slate), so
+    /// the run refreshes the tree.</summary>
     [Fact]
     public void ASlateWriteDuringAParkedTreeApplyIsInTheTreeBeforeTheSentence() => RunSta(() =>
     {
         using Harness h = Harness.WithAsyncTree("tree-slate-write", ("alpha.md", "# Alpha\n"));
         h.Context.RunUntil(() => !h.Sidebar.IsRefreshingTree, "the open's tree");
+        h.Write("late.md", "# Late\n");
         using var read = new ManualResetEventSlim(false);
         using var unpark = new ManualResetEventSlim(false);
         int treeReads = 0;
@@ -1211,7 +1228,7 @@ public sealed partial class RescanTests
         h.Context.Await(run);
 
         Assert.True(writeShownAtTheSentence, "the tree the sentence settled on lacked the Slate write");
-        Assert.Equal([NoChanges], h.Spoken);
+        Assert.Equal([Explicit1], h.Spoken);
     });
 
     /// <summary>F5 (codex PR 7 design pass 2, mitigation): a caller's
@@ -1741,11 +1758,15 @@ public sealed partial class RescanTests
     /// <summary>v2 §6 (codex design pass 1, high 6), the tag arm: a tag-tree
     /// failure during the rescan's own tree refresh is shown on the
     /// sidebar's status line and counted — "1 error" — never spoken on its
-    /// own. The root list's arm is <see cref="AFailedTreeRefreshSpeaksIncompleteAndTheNextRescanCompletesIt"/>.</summary>
+    /// own. The root list's arm is <see cref="AFailedTreeRefreshSpeaksIncompleteAndTheNextRescanCompletesIt"/>.
+    /// WB-10 (#1293): the first window has a record, so that run refreshes
+    /// the tree; the next, unchanged Refresh refreshes it again because it
+    /// shows the failure (the recovery set) and the retry set holds it.</summary>
     [Fact]
     public void ATagTreeFailureIsCountedSilently() => RunSta(() =>
     {
         using var h = new Harness("tags-fail", ("alpha.md", "# Alpha\n\n#topic\n"));
+        h.Write("late.md", "# Late\n");
         h.Sidebar.AfterTagTreeForTests = () => throw new VaultException.Io("injected tag tree failure");
 
         h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
@@ -1788,49 +1809,6 @@ public sealed partial class RescanTests
             first => Assert.IsType<A11yEvent.BasesDashboardLoadFailed>(first),
             second => Assert.IsType<A11yEvent.VaultRescanFinished>(second));
         Assert.Equal(NoChanges, h.Spoken[1]);
-    });
-
-    /// <summary>AR-30 (owner-accepted): a Refresh's counts are ITS OWN
-    /// scan's. Another Slate session — another window, slate-cli — that
-    /// modifies, creates and deletes files has already indexed them, so this
-    /// window's re-sync SHOWS all three — the open tab reloads, the deleted
-    /// note's tab is marked missing, the tree and Quick Open follow — while
-    /// an explicit Refresh says "Files refreshed. No changes." and a
-    /// foreground rescan stays silent.</summary>
-    [Fact]
-    public void AnotherSessionsChangesAreShownButNotCounted() => RunSta(() =>
-    {
-        using var h = new Harness("two-sessions", ("mod.md", "before\n"), ("gone.md", "gone\n"));
-        WorkspaceTabViewModel mod = h.Open("mod.md");
-        WorkspaceTabViewModel gone = h.Open("gone.md");
-        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
-        {
-            _ = other.SaveText("mod.md", "changed by another window\n", null);
-            _ = other.CreateExclusive("new.md", "# New\n");
-            other.DeleteFile("gone.md");
-        }
-
-        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
-
-        Assert.Equal([NoChanges], h.Spoken);
-        Assert.Equal("changed by another window\n", mod.Text);
-        Assert.False(mod.IsDirty);
-        Assert.True(gone.IsMissingFromDisk);
-        Assert.Contains(h.Sidebar.RootNodes, node => node.Path == "new.md");
-        Assert.DoesNotContain(h.Sidebar.RootNodes, node => node.Path == "gone.md");
-        Assert.Contains("new.md", h.QuickOpen.FilePathsForTests);
-        Assert.DoesNotContain("gone.md", h.QuickOpen.FilePathsForTests);
-
-        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
-        {
-            _ = other.SaveText("mod.md", "and again\n", null);
-        }
-
-        h.Events.Clear();
-        h.Now += TimeSpan.FromMinutes(1);
-        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Foreground));
-        Assert.Empty(h.Events);
-        Assert.Equal("and again\n", mod.Text);
     });
 
     /// <summary>AR-26 (v2 §9), the two-refresh fact: a file whose read fails
@@ -2125,7 +2103,8 @@ public sealed partial class RescanTests
             Func<Task<IReadOnlyList<string>>>? pickImportSources,
             bool asyncTree = false,
             Action<Harness>? whileOpening = null,
-            bool parkBeforeTheScan = false)
+            bool parkBeforeTheScan = false,
+            Action<VaultLifecycleViewModel>? beforeOpen = null)
         {
             Root = root;
             Seed(root, files);
@@ -2145,6 +2124,7 @@ public sealed partial class RescanTests
                 treeWorker: asyncTree ? RunTreeWorker : null);
             Lifecycle.WindowIsActive = () => WindowActive;
             Lifecycle.ModalSurfaceOpen = () => ModalOpen;
+            beforeOpen?.Invoke(Lifecycle);
             if (whileOpening is null)
             {
                 Context.Await(Lifecycle.OpenVaultAsync(Root), "the vault open");
@@ -2243,6 +2223,11 @@ public sealed partial class RescanTests
 
         public static Harness OpenExisting(string root) =>
             new(root, [], null);
+
+        /// <summary>WB-10: <see cref="OpenExisting"/>, with the lifecycle's
+        /// seams set by <paramref name="beforeOpen"/> before the open.</summary>
+        public static Harness OpenExistingWith(string root, Action<VaultLifecycleViewModel> beforeOpen) =>
+            new(root, [], null, beforeOpen: beforeOpen);
 
         /// <summary>Plan 43 PR 20b: a harness whose open parks after its scan
         /// and its Quick Open listing — the open still busy, no workspace yet

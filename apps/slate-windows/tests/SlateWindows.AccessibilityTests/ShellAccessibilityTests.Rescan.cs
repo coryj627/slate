@@ -178,6 +178,163 @@ public sealed partial class ShellAccessibilityTests
     }
 
     /// <summary>
+    /// WB-10 (#1293, the owner's decisions Q2 and Q7; AR-30 retired): another
+    /// Slate session's changes are applied by record and counted exactly on
+    /// an explicit Refresh. This test process is the other session — a
+    /// second <see cref="VaultSession"/> on the app's vault, its own
+    /// connection to the shared cache, as a second Slate window or
+    /// <c>slate-cli</c> is — opened once the app's launch has settled. It
+    /// edits the open note, creates one and deletes another; one Refresh is
+    /// heard as exactly one line, core's rendering of
+    /// <c>VaultRescanFinished(Explicit, 2, 1)</c> ("Files refreshed. 2 new or
+    /// changed, 1 removed."), the editor shows the edit and the tree follows;
+    /// the next Refresh says "Files refreshed. No changes.": the first one's
+    /// window was acknowledged.
+    /// </summary>
+    [Fact]
+    public void AnotherSession_ChangesCountedOnRefresh()
+    {
+        string testRoot = Path.Combine(
+            Path.GetTempPath(), $"slate-another-session-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Another Session Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        Directory.CreateDirectory(logDirectory);
+        File.WriteAllText(Path.Combine(vaultRoot, "note.md"), "# Note\n\nOriginal body.\n");
+        File.WriteAllText(Path.Combine(vaultRoot, "gone.md"), "# Gone\n");
+
+        string logFile = Path.Combine(logDirectory, "slate-windows.log");
+        var heard = new ConcurrentQueue<ReceivedNotification>();
+        RenderedAnnouncement Refreshed(ulong changed, ulong removed) => SlateUniffiMethods.A11yRender(
+            new A11yEvent.VaultRescanFinished(RescanReason.Explicit, changed, removed));
+
+        Process? process = null;
+        string registered = NotRegistered;
+        ListenerOutcome outcome = ListenerOutcome.Aborted;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe()) { UseShellExecute = false };
+            ShellLaunch.ApplyDeviceState(startInfo);
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
+                $"slate-another-session-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            startInfo.Environment["SLATE_UIA_DIAGNOSTICS"] = "1";
+            // The count lands on the Refresh: a Watcher run would apply the
+            // other session's changes first, and speak only its own scan's
+            // (Q2).
+            startInfo.Environment[VaultWatcherSwitch] = "1";
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+            if (!HasInteractiveDesktop(process, "another-session"))
+            {
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process,
+                automation,
+                logFile,
+                TimeSpan.FromSeconds(30));
+            using DesktopNotificationListener listener = ListenOnTheDesktop(automation, heard);
+            (registered, outcome) = (RegisteredAfterTheWindow, ListenerOutcome.Failed);
+            window.SetForeground();
+            WaitForVaultOpen(window);
+            AutomationElement filesTree = WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(10));
+            _ = SelectTreeItem(window, automation, "note");
+            _ = WaitForEditor(window, automation, "note.md editor", TimeSpan.FromSeconds(10));
+            WaitForEditorText(window, automation, "note.md editor", "Original body.");
+
+            // --- the other session's edit, create and delete -----------------
+            int changes = LaunchSettledMark(heard, process.Id, logFile);
+            InAnotherSession(vaultRoot, other =>
+            {
+                _ = other.SaveText("note.md", "# Note\n\nChanged by another session.\n", null);
+                _ = other.CreateExclusive("new.md", "# New\n");
+                other.DeleteFile("gone.md");
+            });
+            InvokeFilesSidebarRefreshFromTheMenu(window);
+
+            _ = WaitForTreeItemStartingWith(filesTree, automation, "new");
+            WaitForEditorText(window, automation, "note.md editor", "Changed by another session.");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => !TreeListsItemStartingWith(filesTree, automation, "gone"),
+                    TimeSpan.FromSeconds(15)),
+                "gone.md stayed in the files tree after another session deleted it and Refresh ran.");
+            AwaitHeardSince(heard, process.Id, changes, [Refreshed(2, 1)], TimeSpan.FromSeconds(15), logFile);
+            // The rows the change feed's records republished are named
+            // speakably (W7-7 PR 3, #1246, R-4).
+            AssertItemNamesAreSpeakable(process, "rescan-another-session");
+
+            // --- the window was acknowledged ---------------------------------
+            int again = QuietMark(heard, process.Id);
+            InvokeRefreshButton(window);
+            AwaitHeardSince(heard, process.Id, again, [Refreshed(0, 0)], TimeSpan.FromSeconds(15), logFile);
+            outcome = ListenerOutcome.Completed;
+        }
+        finally
+        {
+            int slateId = process?.Id ?? -1;
+            WriteAnnouncementEvidence(
+                "rescan-another-session",
+                registered,
+                outcome,
+                HeardFrom(heard, slateId),
+                heard.Count(notification => notification.ProcessId != slateId),
+                AnnouncementDiagnostics(logFile));
+            if (process is not null && !process.HasExited)
+            {
+                process.CloseMainWindow();
+                if (!process.WaitForExit(5_000))
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    /// <summary>WB-10: <paramref name="work"/> as another Slate session on
+    /// the vault at <paramref name="vaultRoot"/>, on an STA thread of its
+    /// own (a delete goes to the OS trash, whose COM apartment wants
+    /// one).</summary>
+    private static void InAnotherSession(string vaultRoot, Action<VaultSession> work)
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                using VaultSession other = VaultSession.OpenFilesystem(vaultRoot);
+                work(other);
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(60)), "the other session never finished");
+        if (failure is not null)
+        {
+            throw new Xunit.Sdk.XunitException($"the other session failed: {failure}");
+        }
+    }
+
+    /// <summary>
     /// Plan 43 PR 20b (#1267, design §4.7): core's vault watcher, end to end —
     /// ReadDirectoryChangesW, core's coalescer, the listener, the lifecycle's
     /// Watcher run. With the main window active and no Refresh, a file created

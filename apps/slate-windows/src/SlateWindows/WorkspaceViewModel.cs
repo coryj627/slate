@@ -763,6 +763,9 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         _text = source._text;
         _contentHash = source._contentHash;
         IsExternallyStale = source.IsExternallyStale;
+        // WB-10 (codex round 3): with the hash it was marked against, so a
+        // duplicate follows another session's rename as its source does.
+        _staleAgainstHash = source._staleAgainstHash;
         _isDirty = source._isDirty;
         if (_isDirty)
         {
@@ -1702,6 +1705,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         }
         IsExternallyStale = indexedHash.Length > 0
             && !string.Equals(_contentHash, indexedHash, StringComparison.Ordinal);
+        _staleAgainstHash = indexedHash;
     }
 
     /// <summary>A task toggle wrote this tab's file WITHOUT
@@ -1728,6 +1732,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         // Definitionally stale against the just-written hash: the
         // identity guards refuse until the tab re-baselines (round 9).
         IsExternallyStale = true;
+        _staleAgainstHash = newContentHash;
         _editorInteractions?.InvalidateExternalState();
         Status = "Task toggled on disk, but the editor no longer matches it. Reopen the note before editing.";
         announce(new A11yEvent.HostComposed(Status, A11yPriority.High));

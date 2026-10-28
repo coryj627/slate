@@ -133,6 +133,11 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     /// immediately before the definition is opened.</summary>
     internal Action? BeforeOpenForTests { get; set; }
 
+    /// <summary>Test seam (WB-10, #1293): runs on the load's worker right
+    /// after the definition opened and its hash was recorded, before its
+    /// views are read — a failure there leaves the hash current.</summary>
+    internal Action? AfterOpenForTests { get; set; }
+
     private int _opensForTests;
 
     /// <summary>Test seam (W7-7 PR 7 round 3): the definitions this document
@@ -911,6 +916,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                 _handle = handle;
                 _ = Interlocked.Increment(ref _opensForTests);
                 Volatile.Write(ref _loadedDefinitionHash, definitionHash);
+                AfterOpenForTests?.Invoke();
                 views = _session.BaseViews(handle);
             }
         }
