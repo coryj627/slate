@@ -108,19 +108,26 @@ public sealed class GraphConfigWriterTests : IDisposable
     {
         string gone = Path.Combine(_root, "renamed-away");
         var writer = new GraphConfigWriter();
-        using var output = new StringWriter();
-        TextWriter original = Console.Error;
+        // HostLog's observer, chained and restored, not a Console.Error swap:
+        // facts in other classes swap Console.Error in parallel (Codoki).
+        var logged = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        Action<string>? previous = HostLog.ObserverForTests;
+        HostLog.ObserverForTests = line =>
+        {
+            previous?.Invoke(line);
+            logged.Enqueue(line);
+        };
         try
         {
-            Console.SetError(output);
             Assert.True(writer.Enqueue(gone, WithDepth(3), writer.Reserve(gone)).Wait(TimeSpan.FromSeconds(10)));
         }
         finally
         {
-            Console.SetError(original);
+            HostLog.ObserverForTests = previous;
         }
 
-        Assert.Equal($"SlateWindows.GraphConfigPersistFailed (DirectoryNotFoundException){Environment.NewLine}", output.ToString());
+        Assert.Contains("SlateWindows.GraphConfigPersistFailed (DirectoryNotFoundException)", logged);
+        Assert.DoesNotContain(logged, line => line.Contains(_root, StringComparison.Ordinal));
         Assert.Equal(1, writer.FailedForTests);
         Assert.Null(writer.Newest(gone));
         Assert.False(Directory.Exists(gone), "the write recreated a root that was gone");
