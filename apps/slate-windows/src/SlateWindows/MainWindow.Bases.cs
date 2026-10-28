@@ -49,6 +49,10 @@ public partial class MainWindow
         // #1275: the scope question is owned by the shell, like every
         // other prompt it raises.
         workspace.BasesExportScopePrompt = verb => WorkspaceViewModel.AskBasesExportScope(this, verb);
+        // WB-12 (#1508): the export's overwrite question, asked by the app
+        // after it observed the destination (the dialog's own prompt is off).
+        workspace.ConfirmBasesExportOverwrite = path =>
+            ConfirmDestructive($"Replace {System.IO.Path.GetFileName(path)}? It already exists.");
     }
 
     private bool ConfirmBasesDelete(string message) => MessageBox.Show(

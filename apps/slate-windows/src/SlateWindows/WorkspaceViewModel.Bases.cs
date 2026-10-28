@@ -654,9 +654,49 @@ internal sealed partial class WorkspaceViewModel
         }
     }
 
-    /// <summary>Export delivery (contract C14): the scope choice, a
-    /// save panel, then core's bytes composed OFF the dispatcher;
-    /// success/failure announce the canonical events.</summary>
+    /// <summary>WB-12: where an export goes — (suggested file name,
+    /// extension) → the chosen absolute path, or null when the reader
+    /// cancelled. The default is the save dialog with its own overwrite
+    /// prompt OFF: the app asks after it has observed the destination
+    /// (<see cref="ConfirmBasesExportOverwrite"/>), so the reader agrees to
+    /// replace the bytes the publication is then bound to.</summary>
+    internal Func<string, string, string?> PickBasesExportDestination { get; set; } =
+        (suggested, extension) =>
+        {
+            var dialog = new Microsoft.Win32.SaveFileDialog
+            {
+                FileName = suggested,
+                DefaultExt = extension,
+                OverwritePrompt = false,
+            };
+            return dialog.ShowDialog() == true ? dialog.FileName : null;
+        };
+
+    /// <summary>WB-12: the app's own overwrite question for an existing
+    /// destination (its absolute path); true replaces it. Outside a shell
+    /// there is no window to own a box, so nothing is replaced; the shell
+    /// installs its Yes/No box, default No.</summary>
+    internal Func<string, bool> ConfirmBasesExportOverwrite { get; set; } = _ => false;
+
+    /// <summary>WB-12 test seam: runs on the publication's worker with the
+    /// vault-relative destination, before anything is written.</summary>
+    internal Action<string>? BasesExportPublishingForTests { get; set; }
+
+    /// <summary>What the destination held when the export observed it, before
+    /// the reader was asked: nothing (<see cref="Hash"/> null), or the
+    /// whole file's hash on disk under its stored spelling.</summary>
+    private sealed record ExportDestination(string Path, string? Hash);
+
+    /// <summary>Export delivery (contract C14): the scope choice, a save
+    /// panel, then core's bytes composed OFF the dispatcher; success/failure
+    /// announce the canonical events. WB-12 (#1508): a destination inside
+    /// the open vault is written through core, as this session's own write —
+    /// the watcher sees an echo, so "Exported." is the one sentence. It is
+    /// observed on disk before the reader is asked to replace it, and
+    /// published under that observation: created exclusively when it was
+    /// absent, saved under its observed hash when it was present (core
+    /// re-reads the disk bytes in its writer lock), never replaced when it
+    /// could not be observed.</summary>
     private void BasesDeliverExport(
         BaseDocumentViewModel document, ExportFormat format)
     {
@@ -674,16 +714,25 @@ internal sealed partial class WorkspaceViewModel
         }
         string extension = format == ExportFormat.Csv ? "csv" : "md";
         string viewName = document.ActiveViewName ?? "View";
-        var dialog = new Microsoft.Win32.SaveFileDialog
-        {
-            FileName = document.DisplayName + " - " + viewName + "." + extension,
-            DefaultExt = extension,
-        };
-        if (dialog.ShowDialog() != true)
+        string? targetPath = PickBasesExportDestination(
+            document.DisplayName + " - " + viewName + "." + extension, extension);
+        if (targetPath is null)
         {
             return;
         }
-        string targetPath = dialog.FileName;
+        if (VaultPaths.IsInside(_vaultRoot, targetPath))
+        {
+            DeliverBasesExportIntoTheVault(
+                document, format, includeFilter, targetPath, VaultPaths.Relative(_vaultRoot, targetPath));
+            return;
+        }
+
+        // Outside the vault: not the vault's own write, so the file system
+        // directly, as before; the app's question replaces the dialog's.
+        if (System.IO.File.Exists(targetPath) && !ConfirmBasesExportOverwrite(targetPath))
+        {
+            return;
+        }
         document.ExportText(format, includeFilter, text =>
         {
             if (text is null)
@@ -703,6 +752,119 @@ internal sealed partial class WorkspaceViewModel
                 return;
             }
             document.AnnounceEvent(new A11yEvent.BasesViewExported());
+        });
+    }
+
+    private void DeliverBasesExportIntoTheVault(
+        BaseDocumentViewModel document,
+        ExportFormat format,
+        bool includeFilter,
+        string targetPath,
+        string relative)
+    {
+        RunBasesExportWork(
+            () => ObserveExportDestination(relative),
+            observed =>
+            {
+                if (observed.Failure is { } unobservable)
+                {
+                    // Slate never replaces bytes it could not observe.
+                    document.AnnounceEvent(new A11yEvent.BasesViewExportFailed(unobservable));
+                    return;
+                }
+                ExportDestination destination = observed.Destination!;
+                if (destination.Hash is not null && !ConfirmBasesExportOverwrite(targetPath))
+                {
+                    return;
+                }
+                document.ExportText(format, includeFilter, text =>
+                {
+                    if (text is null)
+                    {
+                        // The compose failure already announced.
+                        return;
+                    }
+                    RunBasesExportWork(
+                        () => PublishBasesExport(destination, text),
+                        failure => document.AnnounceEvent(failure is null
+                            ? new A11yEvent.BasesViewExported()
+                            : new A11yEvent.BasesViewExportFailed(failure)));
+                });
+            });
+    }
+
+    /// <summary>The destination on disk, on a worker: absent, or present
+    /// with the whole file's hash under its stored spelling. Any refusal —
+    /// not UTF-8, too large, a hidden path, an I/O error, the file gone
+    /// between the two reads — is the failure.</summary>
+    private (ExportDestination? Destination, string? Failure) ObserveExportDestination(string relative)
+    {
+        try
+        {
+            return _session.CanonicalPath(relative) is not { } stored
+                ? (new ExportDestination(relative, null), null)
+                : (new ExportDestination(stored, _session.ReadNoteParts(stored).ContentHash), null);
+        }
+        catch (VaultException failure)
+        {
+            return (null, failure.Message);
+        }
+    }
+
+    /// <summary>The publication, on a worker, under the observation taken
+    /// before the reader was asked: null on success, else the failure's
+    /// words. The hash is the observed one, never re-read here.</summary>
+    private string? PublishBasesExport(ExportDestination destination, string text)
+    {
+        BasesExportPublishingForTests?.Invoke(destination.Path);
+        try
+        {
+            if (destination.Hash is not { } observed)
+            {
+                _session.CreateExclusiveBytes(
+                    destination.Path, new System.Text.UTF8Encoding(false).GetBytes(text));
+            }
+            else
+            {
+                _ = _session.SaveText(destination.Path, text, observed);
+            }
+            return null;
+        }
+        catch (VaultException.DestinationExists)
+        {
+            return "the file appeared after you chose it; nothing was replaced";
+        }
+        catch (VaultException.WriteConflict)
+        {
+            return "the file changed after you confirmed replacing it; nothing was replaced";
+        }
+        catch (VaultException failure)
+        {
+            return failure.Message;
+        }
+    }
+
+    /// <summary>Runs an export step off the dispatcher and its continuation
+    /// back on it; headless (no UI dispatcher, the facts' synchronous mode)
+    /// both run inline, as the Bases documents' own work does.</summary>
+    private void RunBasesExportWork<T>(Func<T> work, Action<T> then)
+    {
+        if (!_startInteractionBackgroundWork)
+        {
+            then(work());
+            return;
+        }
+        System.Windows.Threading.Dispatcher dispatcher =
+            System.Windows.Threading.Dispatcher.CurrentDispatcher;
+        _ = Task.Run(() =>
+        {
+            T result = work();
+            if (!dispatcher.HasShutdownStarted && !dispatcher.HasShutdownFinished)
+            {
+                _ = dispatcher.BeginInvoke(
+                    System.Windows.Threading.DispatcherPriority.Background,
+                    new Action(() => then(result)));
+            }
         });
     }
 
