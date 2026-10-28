@@ -621,14 +621,13 @@ internal sealed partial class VaultLifecycleViewModel
                 // rest of the open, and the launch landing then finds the
                 // rows. A tree with no rows yet would hold the keys itself and
                 // hand them on when the rows arrive: two moves, not one.
-                WorkspaceAssembly assembled = AssembleWorkspace(_session, root, loaded.SwitcherFiles);
+                WorkspaceAssembly assembled = InitializeWorkspace(_session, root, loaded.SwitcherFiles);
                 _assembling = assembled;
-                await AwaitFirstTreePublicationAsync(assembled.Sidebar);
+                await AwaitFirstTreePublicationAsync(assembled.Sidebar, FirstTreePublicationBound);
                 // A teardown meanwhile took the assembly down with the
                 // session (CloseSession).
                 if (generation == _generation && ReferenceEquals(_assembling, assembled))
                 {
-                    _assembling = null;
                     // WB-9 (#1319, WD4): the welcome view holds the keys through
                     // every phase of the open, and gives way in the same turn the
                     // workspace is published, so the keys move once.
@@ -638,6 +637,9 @@ internal sealed partial class VaultLifecycleViewModel
                         ReplaceRecentVaults(recorded);
                     }
                     PublishWorkspace(assembled);
+                    // Only now: a throw above leaves the assembly for the
+                    // catch arm's CloseSession to take down.
+                    _assembling = null;
                     StartSyncMarkerWatch(generation, root);
                 }
             }
@@ -1362,16 +1364,22 @@ internal sealed partial class VaultLifecycleViewModel
     /// <summary>#1684: wait until the tree's first refresh has published
     /// its rows or its failure. A refresh that supersedes it ends it
     /// unpublished, so the newer one is waited for in turn; a teardown
-    /// cancels them.</summary>
-    private static async Task AwaitFirstTreePublicationAsync(FilesSidebarViewModel sidebar)
+    /// cancels them. At most <paramref name="bound"/>, the bound a close
+    /// gives a tree read (contract 38, XD1): a read that slow is published
+    /// around, as before #1684, so a stalled read never holds the open, or
+    /// the window's close, longer than it holds a close.</summary>
+    private static async Task AwaitFirstTreePublicationAsync(FilesSidebarViewModel sidebar, TimeSpan bound)
     {
+        Task deadline = Task.Delay(bound);
         while (sidebar.IsRefreshingTree)
         {
-            try
+            Task read = sidebar.TreeRefreshCompletion;
+            if (await Task.WhenAny(read, deadline) != read)
             {
-                await sidebar.TreeRefreshCompletion;
+                return;
             }
-            catch (Exception exception)
+
+            if (read.Exception is { } exception)
             {
                 // The refresh reports its own failures; a fault past them
                 // still leaves a workspace to land in.
@@ -1381,7 +1389,7 @@ internal sealed partial class VaultLifecycleViewModel
         }
     }
 
-    private WorkspaceAssembly AssembleWorkspace(
+    private WorkspaceAssembly InitializeWorkspace(
         VaultSession session,
         string root,
         IEnumerable<SwitcherFile> switcherFiles)
@@ -1500,6 +1508,12 @@ internal sealed partial class VaultLifecycleViewModel
     /// <summary>#1684 test seam: the Files sidebar of a workspace the open
     /// has built and not yet published.</summary>
     internal FilesSidebarViewModel? AssembledSidebarForTests => _assembling?.Sidebar;
+
+    /// <summary>#1684: how long an open waits for the Files tree's first
+    /// publication before it publishes the workspace around a slower read —
+    /// the bound a close gives a tree read (<see cref="TreeRefreshCloseBound"/>,
+    /// contract 38 XD1), per lifecycle so a fact can shorten it.</summary>
+    internal TimeSpan FirstTreePublicationBound { get; set; } = TimeSpan.FromSeconds(5);
 
     /// <summary>The announce-gate key for a vault root. The root is
     /// already <c>Path.GetFullPath</c>'d by <see cref="OpenVaultAsync"/>

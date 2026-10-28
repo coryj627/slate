@@ -1224,13 +1224,15 @@ public sealed class ModalSurfaceTests
                 candidate => CSharpSource.Normalize(candidate) == dismissal);
         }
 
+        // #1684: the open builds the workspace in InitializeWorkspace and
+        // wires the sheet observers when it publishes it.
         Assert.True(
-            source.Method("InitializeWorkspace").DescendantNodes()
+            source.Method("PublishWorkspace").DescendantNodes()
                 .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax>()
                 .Any(assignment => CSharpSource.Normalize(assignment)
                     == "sidebar.PropertyChanged+=FileSidebar_SheetPresented"),
-            "the sidebar twin is never subscribed at sidebar creation — "
-            + "its arms are unreachable.");
+            "the sidebar twin is never subscribed when the sidebar is "
+            + "published — its arms are unreachable.");
 
         // The dismissals exist and EVERY one is control-dependent on a
         // presented sheet (red team A2: the first draft ordered the
@@ -1266,21 +1268,21 @@ public sealed class ModalSurfaceTests
         }
 
         // Reachability AND position: subscribed when the workspace is
-        // created, AFTER the Workspace assignment (so the shell's sheet
-        // handlers subscribe first and the sheet's focus grab queues
+        // published (#1684), AFTER the Workspace assignment (so the shell's
+        // sheet handlers subscribe first and the sheet's focus grab queues
         // before any restore the dismissals queue — red team B4: this
         // ordering was previously comment-only), and unsubscribed at
         // teardown.
-        Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax initialize =
-            source.Method("InitializeWorkspace");
+        Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax publish =
+            source.Method("PublishWorkspace");
         Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionStatementSyntax assignment =
             Assert.Single(
-                initialize.DescendantNodes()
+                publish.DescendantNodes()
                     .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionStatementSyntax>(),
                 candidate => CSharpSource.Normalize(candidate) == "Workspace=workspace;");
         Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionStatementSyntax subscription =
             Assert.Single(
-                initialize.DescendantNodes()
+                publish.DescendantNodes()
                     .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionStatementSyntax>(),
                 candidate => CSharpSource.Normalize(candidate)
                     == "workspace.PropertyChanged+=Workspace_SheetPresented;");
@@ -1295,7 +1297,7 @@ public sealed class ModalSurfaceTests
                 source.Root.DescendantNodes()
                     .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionStatementSyntax>(),
                 candidate => CSharpSource.Normalize(candidate)
-                    == "Workspace.PropertyChanged-=Workspace_SheetPresented;");
+                    == "workspace.PropertyChanged-=Workspace_SheetPresented;");
         Assert.NotNull(unsubscription);
     }
 

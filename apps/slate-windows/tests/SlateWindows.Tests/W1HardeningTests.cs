@@ -428,6 +428,10 @@ public sealed class W1VaultCloseBarrierTests
             }));
         Task open = lifecycle.OpenVaultAsync(fixture.Root);
         Assert.True(providerStarted.Wait(TimeSpan.FromSeconds(30)), "the open's first tree read never started");
+        // The read can start before the open stores its assembly.
+        Assert.True(
+            SpinWait.SpinUntil(() => lifecycle.AssembledSidebarForTests is not null, TimeSpan.FromSeconds(5)),
+            "the open never stored its assembly");
         Assert.Null(lifecycle.FileSidebar);
         FilesSidebarViewModel sidebar = Assert.IsType<FilesSidebarViewModel>(lifecycle.AssembledSidebarForTests);
 
@@ -444,6 +448,43 @@ public sealed class W1VaultCloseBarrierTests
         Assert.Null(lifecycle.FileSidebar);
         Assert.Null(lifecycle.QuickSwitcher);
         Assert.False(lifecycle.IsVaultOpen);
+    }
+
+    /// <summary>#1684 (contract 38 XD1): the open waits for its tree's first
+    /// read no longer than a close waits for one. A read that outlives the
+    /// bound is published around — the workspace opens over a tree still
+    /// reading — and the application close then cancels and awaits that read
+    /// as XD1 has it, instead of being refused for as long as it lasts.</summary>
+    [Fact]
+    public async Task AnOpenWhoseFirstTreeReadOutlivesTheBoundPublishesAndTheCloseAwaitsTheRead()
+    {
+        using FixtureVault fixture = FixtureVault.Create(2, "tree-open-bound");
+        using var providerStarted = new ManualResetEventSlim();
+        using var releaseProvider = new ManualResetEventSlim();
+        var lifecycle = new VaultLifecycleViewModel(
+            pickVault: () => Task.FromResult<string?>(fixture.Root),
+            enqueueUi: action => action(),
+            recentVaultsStore: new RecentVaultsStore(
+                Path.Combine(fixture.Root, "device-state", "recent-vaults.json")),
+            treeUiContext: new PumpSynchronizationContext(),
+            treeWorker: (work, _) => Task.Run(() =>
+            {
+                providerStarted.Set();
+                releaseProvider.Wait(TimeSpan.FromSeconds(30));
+                work();
+            }));
+        lifecycle.FirstTreePublicationBound = TimeSpan.FromMilliseconds(200);
+
+        await lifecycle.OpenVaultAsync(fixture.Root).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(providerStarted.IsSet, "premise: the open's first tree read started");
+        Assert.True(lifecycle.IsVaultOpen, "the open waited past its bound");
+        FilesSidebarViewModel sidebar = Assert.IsType<FilesSidebarViewModel>(lifecycle.FileSidebar);
+        Assert.True(sidebar.IsRefreshingTree, "premise: the first read is still in flight");
+
+        using var release = new Timer(_ => releaseProvider.Set(), null, TimeSpan.FromMilliseconds(50), Timeout.InfiniteTimeSpan);
+        Assert.True(lifecycle.PrepareForApplicationClose(), "the application close was refused while the tree read was in flight");
+        Assert.True(sidebar.TreeRefreshCompletion.IsCompleted, "the close returned before the read ended");
+        lifecycle.Dispose();
     }
 
     [Fact]
