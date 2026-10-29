@@ -39,7 +39,9 @@
 
 use std::collections::HashMap;
 
-use crate::link_resolver::{ResolvedLink, VaultIndex, resolve_link};
+use crate::link_resolver::{
+    CandidateProbe, LinkCandidateSelector, ResolvedLink, VaultIndex, final_component, resolve_link,
+};
 use crate::links::{LinkAnchor, LinkKind, ParsedLink, extract_links};
 
 /// Old-path → new-path mapping for every file whose path changes in one
@@ -95,6 +97,37 @@ impl VaultIndex for PreMoveIndex<'_> {
                 .all_paths()
                 .map(|path| self.mapping.old_path_of(path)),
         )
+    }
+
+    /// The post-move index's own candidates, not every path (#1485). The
+    /// probe gains, for each moved file whose pre-move path it names, the
+    /// key its post-move path answers; the post index returns those
+    /// candidates in its own order, and each is offered mapped back — the
+    /// sequence [`Self::all_paths`]' interleaving gives, so the first
+    /// offered of two equal exact matches is today's winner.
+    fn offer_candidates(&self, selector: &mut LinkCandidateSelector) {
+        let moved_keys = |key_of: fn(&str) -> String| {
+            self.mapping
+                .forward
+                .iter()
+                .filter(|(old, _)| selector.probe_names(old))
+                .map(|(_, new)| key_of(new))
+                .collect::<Vec<String>>()
+        };
+        let probe = match selector.probe() {
+            CandidateProbe::None => return,
+            CandidateProbe::Paths(mut keys) => {
+                keys.extend(moved_keys(|new| new.to_lowercase()));
+                CandidateProbe::Paths(keys)
+            }
+            CandidateProbe::Names(mut keys) => {
+                keys.extend(moved_keys(|new| final_component(new).to_lowercase()));
+                CandidateProbe::Names(keys)
+            }
+        };
+        for path in self.post.candidate_paths(&probe) {
+            selector.offer(self.mapping.old_path_of(path));
+        }
     }
 }
 
@@ -776,6 +809,146 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// The winner `pre`'s candidate lookup gives for `target` from `source`,
+    /// and the winner the default — every pre-move path, in the post index's
+    /// mapped order — gives. `None` for a target that can name nothing.
+    fn both_winners(
+        pre: &PreMoveIndex<'_>,
+        target: &str,
+        source: &str,
+    ) -> Option<(Option<String>, Option<String>)> {
+        let mut looked_up = LinkCandidateSelector::new(target, source)?;
+        pre.offer_candidates(&mut looked_up);
+        let mut every = LinkCandidateSelector::new(target, source)?;
+        for path in pre.all_paths() {
+            every.offer(path);
+        }
+        Some((looked_up.into_winner(), every.into_winner()))
+    }
+
+    /// #1485: the pre-move index's candidate lookup picks the winner offering
+    /// it every pre-move path picks — for a rename, a move, a folder move, a
+    /// case-only rename and a rename onto a case twin, every shared fixture
+    /// target from every source, with the post index as written and in path
+    /// order.
+    #[test]
+    fn the_pre_move_index_offers_the_same_winner_as_every_path() {
+        use crate::link_resolver::census_fixtures::{INDEXED_PATHS, SOURCES, TARGETS};
+        let folder_move: Vec<(String, String)> = INDEXED_PATHS
+            .iter()
+            .filter_map(|path| path.strip_prefix("notes/"))
+            .map(|rest| (format!("notes/{rest}"), format!("moved/{rest}")))
+            .collect();
+        let shapes: [(&str, Vec<(String, String)>); 5] = [
+            (
+                "rename",
+                vec![("notes/shared.md".into(), "notes/renamed.md".into())],
+            ),
+            ("move", vec![("alpha.md".into(), "archive/alpha.md".into())]),
+            ("folder move", folder_move),
+            (
+                "case-only rename",
+                vec![("alpha.md".into(), "Alpha.md".into())],
+            ),
+            (
+                "onto a case twin",
+                vec![("a/shared.md".into(), "z/Shared.md".into())],
+            ),
+        ];
+        let mut moved_winners = 0;
+        for (shape, pairs) in shapes {
+            let mapping = MoveMapping::new(pairs);
+            let as_written: Vec<String> = INDEXED_PATHS
+                .iter()
+                .map(|path| mapping.new_path_of(path).to_string())
+                .collect();
+            let mut in_path_order = as_written.clone();
+            in_path_order.sort();
+            for (order, post_paths) in [("as written", as_written), ("path order", in_path_order)] {
+                let post = InMemoryVaultIndex::new(post_paths);
+                let pre = PreMoveIndex {
+                    post: &post,
+                    mapping: &mapping,
+                };
+                for source in SOURCES {
+                    for target in TARGETS {
+                        let Some((looked_up, every)) = both_winners(&pre, target, source) else {
+                            continue;
+                        };
+                        assert_eq!(
+                            looked_up, every,
+                            "{shape}, {order}: {target:?} from {source:?}"
+                        );
+                        if looked_up
+                            .as_deref()
+                            .is_some_and(|winner| mapping.new_path_of(winner) != winner)
+                        {
+                            moved_winners += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            moved_winners > 0,
+            "no target resolved to a moved file: the census proves nothing about moves"
+        );
+    }
+
+    /// #1485 (the tie rule): two equal exact matches go to the first offered,
+    /// so the lookup must offer in the post index's mapped order. Each
+    /// fixture first proves it is a witness — offered the two pre-move paths
+    /// in post order the moved one wins, reversed the unmoved one — then the
+    /// lookup's winner is the default's, and the moved one.
+    #[test]
+    fn a_case_colliding_rename_keeps_todays_tie_winner() {
+        let source = "notes/x.md";
+        for (shape, post_paths, (old, new), target, unmoved) in [
+            (
+                "rename",
+                ["A.md", "foo.md"],
+                ("Foo.md", "A.md"),
+                "/foo",
+                "foo.md",
+            ),
+            (
+                "folder move",
+                ["other/A.md", "sub/foo.md"],
+                ("sub/Foo.md", "other/A.md"),
+                "sub/foo",
+                "sub/foo.md",
+            ),
+        ] {
+            let winner_offered = |order: [&str; 2]| {
+                let mut selector = LinkCandidateSelector::new(target, source).unwrap();
+                for path in order {
+                    selector.offer(path);
+                }
+                selector.into_winner()
+            };
+            assert_eq!(
+                winner_offered([old, unmoved]).as_deref(),
+                Some(old),
+                "{shape}: not a witness (post order)"
+            );
+            assert_eq!(
+                winner_offered([unmoved, old]).as_deref(),
+                Some(unmoved),
+                "{shape}: not a witness (reversed)"
+            );
+
+            let mapping = moved(&[(old, new)]);
+            let post = index(&post_paths);
+            let pre = PreMoveIndex {
+                post: &post,
+                mapping: &mapping,
+            };
+            let (looked_up, every) = both_winners(&pre, target, source).unwrap();
+            assert_eq!(looked_up, every, "{shape}");
+            assert_eq!(looked_up.as_deref(), Some(old), "{shape}");
         }
     }
 }

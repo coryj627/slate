@@ -22346,6 +22346,7 @@ mod tests {
     mod descriptor_interior;
 
     mod fault_guard;
+    mod rename_planning;
 }
 
 /// FL5-3a: one refused file in a batch tag edit — deliberate skips

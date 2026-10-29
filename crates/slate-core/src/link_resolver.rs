@@ -69,6 +69,26 @@ pub trait VaultIndex {
             selector.offer(path);
         }
     }
+
+    /// The indexed paths `probe` names (#1485): at least every path whose
+    /// lowercased whole path ([`CandidateProbe::Paths`]) or final component
+    /// ([`CandidateProbe::Names`]) is one of its keys, each once, in index
+    /// order — so a caller offering them in turn keeps the first-offered
+    /// tie that [`Self::all_paths`] gives. The default filters every path;
+    /// [`InMemoryVaultIndex`] looks them up.
+    fn candidate_paths(&self, probe: &CandidateProbe) -> Vec<&str> {
+        match probe {
+            CandidateProbe::None => Vec::new(),
+            CandidateProbe::Paths(keys) => self
+                .all_paths()
+                .filter(|path| keys.contains(&path.to_lowercase()))
+                .collect(),
+            CandidateProbe::Names(keys) => self
+                .all_paths()
+                .filter(|path| keys.contains(&final_component(path).to_lowercase()))
+                .collect(),
+        }
+    }
 }
 
 /// Trivial in-memory `VaultIndex` over an owned `Vec<String>`.
@@ -149,6 +169,31 @@ impl CandidateTable {
             }
         }
     }
+
+    /// The positions of every run `probe` names, each once and sorted
+    /// (#1485): the union in index order, not in key-hash order. Two keys
+    /// that share a hash add only paths a selector rejects.
+    fn positions(&self, probe: &CandidateProbe) -> Vec<usize> {
+        let (table, keys) = match probe {
+            CandidateProbe::None => return Vec::new(),
+            CandidateProbe::Paths(keys) => (&self.by_path, keys),
+            CandidateProbe::Names(keys) => (&self.by_name, keys),
+        };
+        let mut positions = Vec::new();
+        for key in keys {
+            let hash = key_hash(key);
+            let start = table.partition_point(|&(entry, _)| entry < hash);
+            positions.extend(
+                table[start..]
+                    .iter()
+                    .take_while(|(entry, _)| *entry == hash)
+                    .map(|&(_, position)| position),
+            );
+        }
+        positions.sort_unstable();
+        positions.dedup();
+        positions
+    }
 }
 
 /// One fixed hasher for a [`CandidateTable`]'s keys and its probes, so a
@@ -182,6 +227,15 @@ impl VaultIndex for InMemoryVaultIndex {
         self.candidates
             .get_or_init(|| CandidateTable::build(&self.paths))
             .offer(&self.paths, selector);
+    }
+
+    fn candidate_paths(&self, probe: &CandidateProbe) -> Vec<&str> {
+        self.candidates
+            .get_or_init(|| CandidateTable::build(&self.paths))
+            .positions(probe)
+            .into_iter()
+            .map(|position| self.paths[position].as_str())
+            .collect()
     }
 }
 
@@ -526,6 +580,24 @@ impl LinkCandidateSelector {
         }
     }
 
+    /// Whether this target's probe names `path` (#1485): its lowercased
+    /// whole path is an exact key, or its final component matches the
+    /// basename — [`Self::offer`]'s own matching, without the ranking.
+    pub fn probe_names(&self, path: &str) -> bool {
+        match &self.mode {
+            SelectorMode::Exact { keys } => keys.contains(&path.to_lowercase()),
+            SelectorMode::Basename {
+                basename,
+                has_extension,
+                ..
+            } => basename_matches(
+                &final_component(path).to_lowercase(),
+                basename,
+                *has_extension,
+            ),
+        }
+    }
+
     /// Consider one indexed path; a path that cannot match is ignored.
     pub fn offer(&mut self, path: &str) {
         #[cfg(test)]
@@ -650,7 +722,7 @@ fn dir_components(path: &str) -> Vec<&str> {
 }
 
 /// Last `/`-delimited component of `path` (the file name).
-fn final_component(path: &str) -> &str {
+pub(crate) fn final_component(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
@@ -1412,5 +1484,52 @@ mod tests {
             ResolvedLink::External
         ));
         assert_eq!(CANDIDATE_TABLES_BUILT.with(Cell::get), built_before);
+    }
+
+    /// #1485: a probe's candidates come back as one union in index order —
+    /// two keys whose matches interleave stay interleaved, not grouped by
+    /// key — from the table and from the default alike.
+    #[test]
+    fn candidate_paths_returns_the_union_in_index_order() {
+        struct EveryPath(Vec<String>);
+        impl VaultIndex for EveryPath {
+            fn all_paths(&self) -> Box<dyn Iterator<Item = &str> + '_> {
+                Box::new(self.0.iter().map(String::as_str))
+            }
+        }
+        let paths: Vec<String> = [
+            "a/foo.md",
+            "b/bar.md",
+            "c/foo.md",
+            "d/other.md",
+            "e/bar.md",
+            "f/foo.md",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        let names = CandidateProbe::Names(vec!["foo.md".into(), "bar.md".into()]);
+        let exact = CandidateProbe::Paths(vec!["e/bar.md".into(), "a/foo.md".into()]);
+        let table = InMemoryVaultIndex::new(paths.clone());
+        let every = EveryPath(paths);
+        for (index, label) in [
+            (&table as &dyn VaultIndex, "the table"),
+            (&every as &dyn VaultIndex, "the default"),
+        ] {
+            assert_eq!(
+                index.candidate_paths(&names),
+                ["a/foo.md", "b/bar.md", "c/foo.md", "e/bar.md", "f/foo.md"],
+                "{label}: names"
+            );
+            assert_eq!(
+                index.candidate_paths(&exact),
+                ["a/foo.md", "e/bar.md"],
+                "{label}: paths"
+            );
+            assert!(
+                index.candidate_paths(&CandidateProbe::None).is_empty(),
+                "{label}: none"
+            );
+        }
     }
 }
