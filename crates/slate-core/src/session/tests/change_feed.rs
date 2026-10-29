@@ -1333,14 +1333,14 @@ fn the_feed_row_commits_with_the_index_mutation() {
     }
     let before = hash_of(&b, "feed-fault-keep.md");
     let faulted = {
-        let _env = ENV_FAULT_GUARD.lock().unwrap();
-        unsafe { std::env::set_var("SLATE_TEST_FAULT_AFTER_WRITE", "feed-fault-keep.md") };
+        let mut _env = fault_guard();
+        _env.set("SLATE_TEST_FAULT_AFTER_WRITE", "feed-fault-keep.md");
         let faulted = b.save_text(
             "feed-fault-keep.md",
             "saved, never indexed\n",
             Some(&before),
         );
-        unsafe { std::env::remove_var("SLATE_TEST_FAULT_AFTER_WRITE") };
+        _env.clear("SLATE_TEST_FAULT_AFTER_WRITE");
         faulted
     };
     assert!(

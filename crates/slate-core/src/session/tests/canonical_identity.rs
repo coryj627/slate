@@ -163,7 +163,7 @@ fn a_delete_of_a_folder_through_an_alias_removes_the_stored_subtree() {
 /// key is observable.
 #[test]
 fn a_marker_planted_through_an_alias_is_keyed_by_the_stored_spelling() {
-    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    let mut _env = fault_guard();
     let Some((_tmp, session)) = aliasing_vault() else {
         return;
     };
@@ -181,16 +181,16 @@ fn a_marker_planted_through_an_alias_is_keyed_by_the_stored_spelling() {
         .new_content_hash;
     // The trigger matches BOTH spellings, so it cannot itself decide the
     // outcome.
-    unsafe { std::env::set_var("SLATE_TEST_FAULT_PRE_WRITE", "lpha.md") };
-    unsafe { std::env::set_var("SLATE_TEST_FAULT_INTENT_CLEAR", "lpha.md") };
+    _env.set("SLATE_TEST_FAULT_PRE_WRITE", "lpha.md");
+    _env.set("SLATE_TEST_FAULT_INTENT_CLEAR", "lpha.md");
     let result = session.save_text(
         "notes/alpha.md",
         "# edited
 ",
         Some(&current_hash),
     );
-    unsafe { std::env::remove_var("SLATE_TEST_FAULT_INTENT_CLEAR") };
-    unsafe { std::env::remove_var("SLATE_TEST_FAULT_PRE_WRITE") };
+    _env.clear("SLATE_TEST_FAULT_INTENT_CLEAR");
+    _env.clear("SLATE_TEST_FAULT_PRE_WRITE");
     assert!(result.is_err(), "the pre-write fault refuses the save");
     assert_eq!(
         index_paths(&session, "text_write_intents"),

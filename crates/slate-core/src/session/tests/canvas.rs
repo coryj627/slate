@@ -1367,7 +1367,7 @@ fn canvas_editor_seed_pairs_text_with_its_basis() {
 fn canvas_apply_reports_a_landed_write_whose_index_failed() {
     use crate::canvas::apply::{CanvasAction, CanvasNodeContent, CanvasOp};
 
-    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    let mut _env = fault_guard();
     let (_tmp, session) = make_vault(|p| {
         p.write_file("faulted-c6.canvas", SAMPLE.as_bytes())
             .unwrap();
@@ -1391,9 +1391,9 @@ fn canvas_apply_reports_a_landed_write_whose_index_failed() {
     // The index step fails AFTER the bytes land: the apply reports a
     // COMMIT with `indexed: false` (IE-6) — never an error inviting a
     // double apply.
-    unsafe { std::env::set_var("SLATE_TEST_FAULT_AFTER_WRITE", "faulted-c6") };
+    _env.set("SLATE_TEST_FAULT_AFTER_WRITE", "faulted-c6");
     let unindexed = session.canvas_apply(info.handle, action("First"));
-    unsafe { std::env::remove_var("SLATE_TEST_FAULT_AFTER_WRITE") };
+    _env.clear("SLATE_TEST_FAULT_AFTER_WRITE");
     let unindexed = unindexed.unwrap();
     assert!(!unindexed.indexed, "the index commit was made to fail");
 

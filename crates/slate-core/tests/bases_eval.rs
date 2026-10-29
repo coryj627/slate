@@ -1224,8 +1224,8 @@ struct TestVault {
 }
 
 impl VaultLookup for TestVault {
-    fn resolve_link(&self, target: &str) -> Option<String> {
-        self.resolved.get(target).cloned()
+    fn resolve_link(&self, target: &str) -> Result<Option<String>, EvalError> {
+        Ok(self.resolved.get(target).cloned())
     }
 
     fn links_for(&self, path: &str) -> Vec<LinkValue> {

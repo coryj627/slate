@@ -8336,9 +8336,10 @@ impl VaultSession {
             "UPDATE files SET mtime_ms = -1, size_bytes = -1, ctime_ms = -1 WHERE path = ?1",
             rusqlite::params![path],
         )?;
-        let mut indexed_paths = crate::links_db::indexed_paths_in_path_order(&tx)?;
-        indexed_paths.push(path.to_string());
-        let vault_index = crate::InMemoryVaultIndex::new(indexed_paths);
+        // #1427: the note's own targets' candidate rows, not a snapshot of
+        // every path. `index_file` upserts this path's row before resolving
+        // any link of it, so the lookup sees the row in this transaction.
+        let links = crate::links_db::FoldedNameLookup;
         let mut report = ScanReport::default();
         let (name, _, _) = classify_path(path);
         let mut graph_sink = self.graph_sink();
@@ -8354,7 +8355,7 @@ impl VaultSession {
             self.config.parser_version,
             now_ms(),
             &mut report,
-            &vault_index,
+            &links,
             self.config.large_file_refuse_bytes,
             None,
             &mut graph_sink,
@@ -22343,6 +22344,9 @@ mod tests {
     mod change_feed;
 
     mod descriptor_interior;
+
+    mod fault_guard;
+    mod rename_planning;
 }
 
 /// FL5-3a: one refused file in a batch tag edit — deliberate skips

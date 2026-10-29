@@ -495,3 +495,61 @@ fn the_save_lookup_resolves_exactly_as_the_whole_index_does() {
         assert_eq!(winner(&resolved), *expected, "{target:?} from {source:?}");
     }
 }
+
+fn path_order_snapshot_paths() -> usize {
+    crate::links_db::PATH_ORDER_SNAPSHOT_PATHS.with(std::cell::Cell::get)
+}
+
+/// #1427: `reindex_path`'s repair resolves the note's links through the
+/// folded-name lookup, as a save does: only its own targets' candidate
+/// rows, and no snapshot of `files` — neither materialized nor read
+/// through the path-order helper.
+#[test]
+fn a_repair_through_reindex_path_reads_no_snapshot_of_the_vault() {
+    let (_tmp, session) = vault_with_targets(|provider| {
+        provider
+            .write_file("notes/host.md", linking_body("host").as_bytes())
+            .unwrap();
+    });
+
+    reset_counters();
+    crate::links_db::PATH_ORDER_SNAPSHOT_PATHS.with(|paths| paths.set(0));
+    session.reindex_path("notes/host.md").unwrap();
+
+    assert_eq!(
+        snapshot_paths(),
+        0,
+        "the repair read a snapshot of the vault"
+    );
+    assert_eq!(
+        path_order_snapshot_paths(),
+        0,
+        "the repair read every path through the path-order helper"
+    );
+    assert!(
+        resolution_rows_visited() <= LINKING_BODY_CANDIDATE_ROWS,
+        "the repair visited {} rows, beyond its targets' {LINKING_BODY_CANDIDATE_ROWS} candidates",
+        resolution_rows_visited()
+    );
+    assert_eq!(
+        outgoing_targets(&session, "notes/host.md"),
+        linking_body_targets("notes/host.md")
+    );
+}
+
+/// #1427 (the equivalence census, repair path): the links a repair writes
+/// are the links a scan writes for the same note — every column of every
+/// row, from three depths.
+#[test]
+fn a_repair_writes_the_links_a_scan_writes() {
+    let (_tmp, session) = census_vault(&CENSUS_HOSTS);
+    for host in CENSUS_HOSTS {
+        let scanned = link_rows(&session, host);
+        assert!(
+            scanned.iter().any(|row| row.target_path.is_some()),
+            "{host}: the scan resolved nothing"
+        );
+        session.reindex_path(host).unwrap();
+        assert_eq!(link_rows(&session, host), scanned, "{host}");
+    }
+}
