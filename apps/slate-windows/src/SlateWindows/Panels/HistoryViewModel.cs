@@ -458,9 +458,13 @@ internal sealed class HistoryViewModel : PanelWorkScheduler
         await WhenPublishedAsync();
     }
 
+    /// <summary>Reloads (test-only, WB-16 #1305).</summary>
+    internal int ReloadCountForTests { get; private set; }
+
     /// <summary>Explicit reload of the current note's list.</summary>
     public void Reload()
     {
+        ReloadCountForTests++;
         if (_path is not null)
         {
             LoadFirstPage(runSinceOpenFunnel: false);

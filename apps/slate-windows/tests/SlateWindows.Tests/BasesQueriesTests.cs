@@ -172,6 +172,127 @@ public sealed class BasesQueriesTests : IDisposable
         Assert.Empty(workspace.PinnedSavedQueryIdsForTests);
     }
 
+    /// <summary>WB-16 (#1301, contract 40 AR-56): creating, updating and
+    /// renaming a saved query speak it as the Saved queries list names it.
+    /// "draft" and "DRAFT." read alike, so the list reads each by its place;
+    /// the announcements spoke the bare name the user typed.</summary>
+    [Fact]
+    public void SavedQueryCreateUpdateAndRenameSpeakTheListsComposedName() => RunSta(() =>
+    {
+        string queryJson = _session.GetSavedQuery(_savedQueryId).QueryJson;
+        _ = _session.SaveQuery("draft", null, queryJson, SavedQuerySourceSyntax.Builder);
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.RefreshBaseQueries();
+
+        _announced.Clear();
+        workspace.BasesNewQueryCommand.Execute(null);
+        Assert.True(workspace.BaseQueryBuilderSheet!.SaveAsSavedQuery("DRAFT.", null), "premise: the builder did not save");
+        string created = Assert.Single(_announced.OfType<A11yEvent.BasesSavedQueryCreated>()).Name;
+        workspace.RefreshBaseQueries();
+        string id = Assert.Single(workspace.SavedQueries, query => query.Name == "DRAFT.").Id;
+        Assert.Equal(ListedSavedQueryName(workspace, id), created);
+
+        _announced.Clear();
+        workspace.EditSavedQueryInBuilder(id);
+        workspace.BuilderUpdateSavedQuery();
+        Assert.Equal(
+            ListedSavedQueryName(workspace, id),
+            Assert.Single(_announced.OfType<A11yEvent.BasesSavedQueryUpdated>()).Name);
+
+        _announced.Clear();
+        workspace.RenameSavedQuery(id, "Draft");
+        string renamed = Assert.Single(_announced.OfType<A11yEvent.BasesSavedQueryRenamed>()).Name;
+        workspace.RefreshBaseQueries();
+        Assert.Equal(ListedSavedQueryName(workspace, id), renamed);
+        Assert.NotEqual("Draft", renamed);
+    });
+
+    /// <summary>WB-16 red team: the new-query chord runs from anywhere, and
+    /// the Saved queries list fills only when its leaf is shown. A query
+    /// created before the list was ever loaded is named as the list will read
+    /// it — among the registry's queries, not alone.</summary>
+    [Fact]
+    public void ASavedQueryCreatedBeforeTheListLoadsSpeaksTheListsComposedName() => RunSta(() =>
+    {
+        string queryJson = _session.GetSavedQuery(_savedQueryId).QueryJson;
+        _ = _session.SaveQuery("draft", null, queryJson, SavedQuerySourceSyntax.Builder);
+        using WorkspaceViewModel workspace = NewWorkspace();
+        // The list stays unloaded through the save, as it is in production
+        // until its worker's refresh publishes, after the announcement: every
+        // refresh meanwhile fails before it reads.
+        workspace.QueriesRefreshReadForTests = static () => throw new VaultException.Db("the list is not loaded yet");
+        Assert.Empty(workspace.SavedQueries);
+
+        _announced.Clear();
+        workspace.BasesNewQueryCommand.Execute(null);
+        Assert.True(workspace.BaseQueryBuilderSheet!.SaveAsSavedQuery("Draft", null), "premise: the builder did not save");
+        string created = Assert.Single(_announced.OfType<A11yEvent.BasesSavedQueryCreated>()).Name;
+        Assert.True(workspace.SavedQueries.Count == 0, $"premise: the list loaded before the announcement ({workspace.SavedQueries.Count})");
+
+        workspace.QueriesRefreshReadForTests = null;
+        workspace.RefreshBaseQueries();
+        string id = Assert.Single(workspace.SavedQueries, query => query.Name == "Draft").Id;
+        Assert.Equal(ListedSavedQueryName(workspace, id), created);
+        Assert.NotEqual("Draft", created);
+    });
+
+    /// <summary>WB-16 (#1301, contract 40 AR-57): saving and updating a
+    /// dashboard speak it as the Dashboards list names it, read-alike names
+    /// told apart by place.</summary>
+    [Fact]
+    public void DashboardSaveAndUpdateSpeakTheListsComposedName() => RunSta(() =>
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.RefreshBaseQueries();
+        SaveDashboard(workspace, dashboardId: null, "draft");
+
+        _announced.Clear();
+        SaveDashboard(workspace, dashboardId: null, "DRAFT.");
+        string saved = Assert.Single(_announced.OfType<A11yEvent.BasesDashboardSaved>()).Name;
+        string id = Assert.Single(workspace.Dashboards, dashboard => dashboard.Name == "DRAFT.").Id;
+        Assert.Equal(ListedDashboardName(workspace, id), saved);
+        Assert.NotEqual("DRAFT.", saved);
+
+        _announced.Clear();
+        SaveDashboard(workspace, id, "DRAFT.");
+        Assert.Equal(
+            ListedDashboardName(workspace, id),
+            Assert.Single(_announced.OfType<A11yEvent.BasesDashboardUpdated>()).Name);
+    });
+
+    private void SaveDashboard(WorkspaceViewModel workspace, string? dashboardId, string name)
+    {
+        workspace.OpenDashboardEditor(dashboardId);
+        DashboardEditorViewModel editor = Assert.IsType<DashboardEditorViewModel>(workspace.DashboardEditorSheet);
+        if (editor.Sections.Count == 0)
+        {
+            editor.Sections.Add(new DashboardEditorSection(_savedQueryId, "All notes"));
+        }
+
+        editor.Name = name;
+        workspace.SaveDashboardEditor();
+        Assert.Null(workspace.DashboardEditorSheet);
+    }
+
+    /// <summary>The UIA name the shipped Saved queries list gives the query
+    /// <paramref name="id"/>.</summary>
+    private static string ListedSavedQueryName(WorkspaceViewModel workspace, string id) =>
+        ListedName("QueriesSavedList", workspace, [.. workspace.SavedQueries.Select(query => query.Id)], id);
+
+    private static string ListedDashboardName(WorkspaceViewModel workspace, string id) =>
+        ListedName("QueriesDashboardsList", workspace, [.. workspace.Dashboards.Select(dashboard => dashboard.Id)], id);
+
+    private static string ListedName(string list, WorkspaceViewModel workspace, string[] ids, string id)
+    {
+        string[] listed = [];
+        SharedNameTests.HostedNames(list, workspace, names => listed = names);
+        Assert.Equal(ids.Length, listed.Length);
+        return listed[Array.IndexOf(ids, id)];
+    }
+
+    private static void RunSta(Action body) =>
+        StaThread.Run(body, TimeSpan.FromSeconds(60), "STA test body timed out.");
+
     [Fact]
     public void DashboardEditorSavesLoadsAndDeletes()
     {

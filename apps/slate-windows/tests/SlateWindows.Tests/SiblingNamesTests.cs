@@ -19,6 +19,29 @@ namespace SlateWindows.Tests;
 /// </summary>
 public sealed class SiblingNamesTests
 {
+    /// <summary>WB-16 (#1311): the full path is the distinguisher only where
+    /// no folder reads apart — two paths told apart by case alone. A path
+    /// whose leaf collides with no other's has none.</summary>
+    [Fact]
+    public void ShortestDistinguishingAncestorsFallsBackToTheFullPathOnlyWhenNothingShorterSeparates()
+    {
+        Assert.Equal(
+            [@"C:\Work\Notes", @"C:\work\notes", "in Home", null],
+            SiblingNames.ShortestDistinguishingAncestors(
+                [@"C:\Work\Notes", @"C:\work\notes", @"C:\Home\Notes", @"C:\Vaults\Alpha"]));
+        Assert.Equal(
+            [@"in C:\", "in D:\\"],
+            SiblingNames.ShortestDistinguishingAncestors([@"C:\Notes", @"D:\Notes"]));
+        Assert.Equal([null, null], SiblingNames.ShortestDistinguishingAncestors([null, @"C:\Notes"]));
+
+        // WB-16 red team: a folder one namesake has nearest and another has
+        // further up names neither alone.
+        string?[] three = SiblingNames.ShortestDistinguishingAncestors(
+            [@"C:\Dropbox\Notes", @"C:\Dropbox\Work\Notes", @"D:\Work\Notes"]);
+        Assert.Equal(3, three.Distinct(SiblingNames.ReadAlike).Count());
+        Assert.Equal(@"in Dropbox\Work", three[1]);
+    }
+
     [Fact]
     public void DistinctNamesReadBare() =>
         Assert.Equal(

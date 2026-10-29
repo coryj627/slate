@@ -216,12 +216,14 @@ internal sealed partial class WorkspaceViewModel
 
         try
         {
-            _persistence.Save(new WorkspaceSnapshot(
+            var snapshot = new WorkspaceSnapshot(
                 WorkspacePersistence.SchemaVersion,
                 ActiveGroup.Id,
                 SnapshotNode(Root),
                 ActiveLeaf.Id,
-                _expandedDirectoryPaths()));
+                _expandedDirectoryPaths());
+            _persistence.Save(snapshot);
+            PersistedForTests?.Invoke(snapshot);
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException or InvalidOperationException)

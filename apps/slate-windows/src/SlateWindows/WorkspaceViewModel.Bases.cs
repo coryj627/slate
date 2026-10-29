@@ -75,6 +75,12 @@ internal sealed partial class WorkspaceViewModel
                 retired.Shutdown();
                 TrackRetiredBasesWork(retired.WhenWorkDrained());
             }
+            if (value is not null)
+            {
+                // The builder names a saved query as the list does (#1301,
+                // AR-56); it does not hold the list.
+                value.SavedQueryNamer = SavedQuerySpokenName;
+            }
             SetField(ref _queryBuilder, value);
         }
     }
@@ -217,22 +223,77 @@ internal sealed partial class WorkspaceViewModel
     /// query <paramref name="id"/> as the Saved queries list names it — its
     /// name among the listed queries, which the store lets differ only in case
     /// or punctuation ("draft", "DRAFT."), told apart by place — the ONE
-    /// spoken-name authority for a saved query; <paramref name="name"/>, bare,
-    /// when the list does not hold it.</summary>
+    /// spoken-name authority for a saved query. Composed over the registry as
+    /// the next refresh publishes it (WB-16, #1301 AR-56): <paramref name="id"/>
+    /// named <paramref name="name"/> in the list's own order, so a query just
+    /// created, renamed or updated is named as the list will read it, though
+    /// the refresh lands after the announcement — and whether or not the list
+    /// was ever loaded.</summary>
     internal string SavedQuerySpokenName(string id, string name)
     {
-        int index = -1;
-        for (int position = 0; position < SavedQueries.Count && index < 0; position++)
+        // The registry, not the shown list (WB-16 red team): the list fills
+        // only when the Queries leaf is shown or after a write, and the
+        // new-query chord runs from anywhere.
+        (string Id, string Name)[] registry;
+        try
         {
-            if (string.Equals(SavedQueries[position].Id, id, StringComparison.Ordinal))
-            {
-                index = position;
-            }
+            registry = [.. _session.ListSavedQueries().Select(query => (query.Id, query.Name))];
         }
-        return index < 0
-            ? name
-            : SiblingNames.Compose([.. SavedQueries.Select(query => (string?)query.Name)], [], "query")[index];
+        catch (Exception failure) when (failure is VaultException or ObjectDisposedException)
+        {
+            registry = [.. SavedQueries.Select(query => (query.Id, query.Name))];
+        }
+
+        (string Id, string Name)[] listed =
+        [
+            .. SavedQueriesInListOrder(registry
+                .Where(query => !string.Equals(query.Id, id, StringComparison.Ordinal))
+                .Append((id, name))),
+        ];
+        int index = Array.FindIndex(listed, entry => string.Equals(entry.Id, id, StringComparison.Ordinal));
+        return SiblingNames.Compose([.. listed.Select(entry => (string?)entry.Name)], [], "query")[index];
     }
+
+    /// <summary>The Saved queries list's order: pinned first in pin order,
+    /// then case-insensitive name with id tiebreak (the mac ordering).</summary>
+    private IEnumerable<(string Id, string Name)> SavedQueriesInListOrder(IEnumerable<(string Id, string Name)> queries) =>
+        queries
+            .OrderBy(query => _pinnedSavedQueryIds.Contains(query.Id) ? 0 : 1)
+            .ThenBy(query => query.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(query => query.Id, StringComparer.Ordinal);
+
+    /// <summary>WB-16 (#1301, AR-57): the dashboard <paramref name="id"/> as the
+    /// Dashboards list names it — its name among the listed dashboards, told
+    /// apart by place — composed over the list as the next refresh publishes
+    /// it, as <see cref="SavedQuerySpokenName"/> is.</summary>
+    internal string DashboardSpokenName(string id, string name)
+    {
+        (string Id, string Name)[] registry;
+        try
+        {
+            registry = [.. _session.ListDashboards().Select(dashboard => (dashboard.Id, dashboard.Name))];
+        }
+        catch (Exception failure) when (failure is VaultException or ObjectDisposedException)
+        {
+            registry = [.. Dashboards.Select(dashboard => (dashboard.Id, dashboard.Name))];
+        }
+
+        (string Id, string Name)[] listed =
+        [
+            .. DashboardsInListOrder(registry
+                .Where(dashboard => !string.Equals(dashboard.Id, id, StringComparison.Ordinal))
+                .Append((id, name))),
+        ];
+        int index = Array.FindIndex(listed, entry => string.Equals(entry.Id, id, StringComparison.Ordinal));
+        return SiblingNames.Compose([.. listed.Select(entry => (string?)entry.Name)], [], "dashboard")[index];
+    }
+
+    /// <summary>The Dashboards list's order: case-insensitive name with id
+    /// tiebreak.</summary>
+    private static IEnumerable<(string Id, string Name)> DashboardsInListOrder(IEnumerable<(string Id, string Name)> dashboards) =>
+        dashboards
+            .OrderBy(dashboard => dashboard.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(dashboard => dashboard.Id, StringComparer.Ordinal);
 
     internal void CloseQueryBuilder() => BaseQueryBuilderSheet = null;
 
@@ -1138,13 +1199,14 @@ internal sealed partial class WorkspaceViewModel
                     return;
                 }
                 _session.UpdateDashboard(id, name, sections);
-                _announce(new A11yEvent.BasesDashboardUpdated(name));
+                // As the Dashboards list will name it (#1301, AR-57).
+                _announce(new A11yEvent.BasesDashboardUpdated(DashboardSpokenName(id, name)));
                 RefreshDashboardDependents(id, name);
             }
             else
             {
-                _ = _session.SaveDashboard(name, sections);
-                _announce(new A11yEvent.BasesDashboardSaved(name));
+                string created = _session.SaveDashboard(name, sections);
+                _announce(new A11yEvent.BasesDashboardSaved(DashboardSpokenName(created, name)));
             }
         }
         catch (VaultException failure)
@@ -1473,6 +1535,7 @@ internal sealed partial class WorkspaceViewModel
 
     internal void RefreshBaseQueries()
     {
+        BaseQueriesRefreshCountForTests++;
         if (_workspaceDisposed)
         {
             return;
@@ -1539,15 +1602,13 @@ internal sealed partial class WorkspaceViewModel
             // rebuild disabled (every action button follows the selection)
             // or removed (a row).
             BaseQueriesRepublishing?.Invoke();
-            // Pinned first in pin order, then case-insensitive name
-            // with id tiebreak (the mac ordering).
+            // The list's order, which the spoken-name authority composes
+            // over too (SavedQueriesInListOrder).
             SavedQueries.Clear();
-            foreach (SavedQuerySummary summary in savedQueries
-                .OrderBy(s => _pinnedSavedQueryIds.Contains(s.Id) ? 0 : 1)
-                .ThenBy(s => s.Name, StringComparer.OrdinalIgnoreCase)
-                .ThenBy(s => s.Id, StringComparer.Ordinal))
+            Dictionary<string, SavedQuerySummary> savedById = savedQueries.ToDictionary(s => s.Id, StringComparer.Ordinal);
+            foreach ((string id, string _) in SavedQueriesInListOrder(savedQueries.Select(s => (s.Id, s.Name))))
             {
-                SavedQueries.Add(summary);
+                SavedQueries.Add(savedById[id]);
             }
             BaseFiles.Clear();
             foreach (BaseFileSummary file in baseFiles
@@ -1556,11 +1617,10 @@ internal sealed partial class WorkspaceViewModel
                 BaseFiles.Add(file);
             }
             Dashboards.Clear();
-            foreach (DashboardSummary dashboard in dashboards
-                .OrderBy(d => d.Name, StringComparer.OrdinalIgnoreCase)
-                .ThenBy(d => d.Id, StringComparer.Ordinal))
+            Dictionary<string, DashboardSummary> dashboardById = dashboards.ToDictionary(d => d.Id, StringComparer.Ordinal);
+            foreach ((string id, string _) in DashboardsInListOrder(dashboards.Select(d => (d.Id, d.Name))))
             {
-                Dashboards.Add(dashboard);
+                Dashboards.Add(dashboardById[id]);
             }
             // Pins prune to live ids (the mac rule).
             _pinnedSavedQueryIds.RemoveWhere(id =>
@@ -1619,7 +1679,8 @@ internal sealed partial class WorkspaceViewModel
             _announce(new A11yEvent.BasesSavedQueryRenameFailed(failure.Message));
             return;
         }
-        _announce(new A11yEvent.BasesSavedQueryRenamed(trimmed));
+        // As the Saved queries list will name it (#1301, AR-56).
+        _announce(new A11yEvent.BasesSavedQueryRenamed(SavedQuerySpokenName(id, trimmed)));
         // Live surfaces retitle with the registry (red team round 1):
         // open saved-query tabs, their shared document, and the dock.
         foreach (WorkspaceTabViewModel tab in Groups

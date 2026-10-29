@@ -228,7 +228,7 @@ public sealed class ItemContainerNameCensus
         {
             // --- authored XAML: MainWindow.xaml ---
             ["Recent vaults"] = new ContainerNaming.Layout(
-                "each button's name carries its vault's path when another recent vault shares its display name (RecentVault.SpokenName)"),
+                "each button's name carries the shortest folder that tells its vault apart when another recent vault shares its display name (RecentVault.SpokenName, #1311)"),
             ["SidebarSortOrder"] = new ContainerNaming.Bound(
                 typeof(SidebarSortMode), string.Empty, "SidebarSortModeLabelConverter")
             {
@@ -867,7 +867,7 @@ public sealed class ItemContainerNameCensus
             ["MainWindow.Citations.cs"] =
             [
                 "((BibliographyRowViewModel)row).TitleLine | ((BibliographyRowViewModel)row).Key",
-                "((UnresolvedRowViewModel)row).Key | ((UnresolvedRowViewModel)row).Path",
+                "((UnresolvedRowViewModel)row).Key | ((UnresolvedRowViewModel)row).Path + \"\\u001F\" + ((UnresolvedRowViewModel)row).Key",
             ],
             ["MainWindow.Properties.cs"] = ["((BulkRenameViewModel.PreviewRow)row).Path | ((BulkRenameViewModel.PreviewRow)row).Path"],
             ["Reading/ReadingTableGrid.cs"] = ["CellText(row, 0) | SourceRowKey(sourceRows[row])"],

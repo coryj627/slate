@@ -62,7 +62,8 @@ public sealed partial class ShellAccessibilityTests
         // %LOCALAPPDATA%\Slate), every shell-gate journey opens an "Accessible Vault"
         // of its own, and VaultOpened speaks a recent vault as its welcome
         // button names it (W7-7 PR 3, OD-9: RecentVault.SpokenName) — with
-        // its path when another recent's display name reads alike. A name no
+        // the folder that tells it apart when another recent's display name
+        // reads alike (#1311). A name no
         // other recent can share is announced bare, whatever the recents hold.
         string vaultName = $"Announcements Vault {Guid.NewGuid():N}"[..28];
         // Core's own sentences, rendered through the binding before launch:

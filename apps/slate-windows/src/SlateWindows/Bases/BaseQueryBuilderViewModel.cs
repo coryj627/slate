@@ -298,6 +298,16 @@ internal sealed class BaseQueryBuilderViewModel : PanelWorkScheduler
 
     public BuilderEditContext Context { get; }
 
+    /// <summary>The workspace's saved-query spoken-name authority
+    /// (<c>WorkspaceViewModel.SavedQuerySpokenName</c>), handed in when the
+    /// builder opens (WB-16, #1301 AR-56): the builder does not hold the Saved
+    /// queries list. A builder no workspace opened speaks the bare
+    /// name.</summary>
+    internal Func<string, string, string> SavedQueryNamer { private get; set; } = static (_, name) => name;
+
+    /// <summary>A saved query as the Saved queries list names it.</summary>
+    private string SavedQuerySpokenName(string id, string name) => SavedQueryNamer(id, name);
+
     public string Title =>
         Context.SavedQueryId is not null ? $"Edit saved query: {Context.SavedQueryName}"
         : Context.ViewPath is not null ? "Edit view filters"
@@ -733,9 +743,10 @@ internal sealed class BaseQueryBuilderViewModel : PanelWorkScheduler
         {
             return false;
         }
+        string created;
         try
         {
-            _ = _session.SaveQuery(
+            created = _session.SaveQuery(
                 trimmed, description, _document.ToJsonString(),
                 SavedQuerySourceSyntax.Builder);
         }
@@ -744,7 +755,7 @@ internal sealed class BaseQueryBuilderViewModel : PanelWorkScheduler
             _announce(new A11yEvent.BasesSavedQueryCreateFailed(failure.Message));
             return false;
         }
-        _announce(new A11yEvent.BasesSavedQueryCreated(trimmed));
+        _announce(new A11yEvent.BasesSavedQueryCreated(SavedQuerySpokenName(created, trimmed)));
         return true;
     }
 
@@ -769,8 +780,17 @@ internal sealed class BaseQueryBuilderViewModel : PanelWorkScheduler
             _announce(new A11yEvent.BasesSavedQueryUpdateFailed(failure.Message));
             return false;
         }
-        _announce(new A11yEvent.BasesSavedQueryUpdated(
-            Context.SavedQueryName ?? string.Empty));
+        // Its name now, not the one it had when the builder opened (WB-16
+        // red team: a rename meanwhile).
+        string current = Context.SavedQueryName ?? string.Empty;
+        try
+        {
+            current = _session.GetSavedQuery(id).Name;
+        }
+        catch (VaultException)
+        {
+        }
+        _announce(new A11yEvent.BasesSavedQueryUpdated(SavedQuerySpokenName(id, current)));
         return true;
     }
 

@@ -39,10 +39,21 @@ internal sealed record RecentVault(
     /// SiblingUniqueAndFocusable error. Named by the one sibling rule and its
     /// one culture-independent comparison (codex PR 3 round 5): under tr-TR
     /// the current culture read "FILE" and "file" as different names and
-    /// left both bare.
+    /// left both bare. The distinguisher is the shortest differing ancestor
+    /// (WB-16, #1311): "Notes, in Documents" beside "Notes, in Dropbox", not
+    /// two full paths.
     /// </summary>
-    public static string SpokenName(RecentVault vault, IEnumerable<RecentVault> all) =>
-        SiblingNames.SpokenAmong([.. all], vault, other => other.DisplayName, other => other.Path, "vault");
+    public static string SpokenName(RecentVault vault, IEnumerable<RecentVault> all)
+    {
+        RecentVault[] entries = [.. all];
+        string?[] ancestors = SiblingNames.ShortestDistinguishingAncestors([.. entries.Select(entry => (string?)entry.Path)]);
+        return SiblingNames.SpokenAmong(
+            entries,
+            vault,
+            other => other.DisplayName,
+            other => ancestors[Array.FindIndex(entries, entry => ReferenceEquals(entry, other))],
+            "vault");
+    }
 }
 
 /// <summary>

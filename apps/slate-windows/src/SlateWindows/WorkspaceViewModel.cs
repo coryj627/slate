@@ -2280,6 +2280,13 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             ?? ((_, _) => WorkspaceDirtyNavigationDecision.Cancel);
         _dirtyCloseDecision = dirtyCloseDecision
             ?? (_ => WorkspaceDirtyNavigationDecision.Cancel);
+        // WB-16 (#1305): the seams are read through lambdas, so a fact can
+        // set them after construction.
+        RailSettle = new RailSettle(
+            System.Windows.Threading.Dispatcher.CurrentDispatcher,
+            () => RailSettleInterval(),
+            key => RailKeyIsDown(key),
+            OnLeafSettled);
         EditorPreferences = new EditorPreferencesViewModel(
             _announce, preferencesStore: preferencesStore);
         // W6-1 PR C (#745), contract C13: app-level canvas verbosity,
@@ -2631,6 +2638,50 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     /// window answers; null (no window) answers no.</summary>
     internal Func<bool>? IsChoosingLeafByArrow { get; set; }
 
+    /// <summary>WB-16 (#1305): the rail arrows' settle. An arrow commits the
+    /// leaf at once and defers its reload, the queries refresh and the
+    /// workspace write to the settle (<see cref="OnLeafSettled"/>); the window
+    /// forwards the rail's presses, releases and focus loss.</summary>
+    internal RailSettle RailSettle { get; }
+
+    /// <summary>The settle's poll interval, a backstop for a release the
+    /// rail never saw.</summary>
+    internal Func<TimeSpan> RailSettleInterval { get; set; } = static () => TimeSpan.FromMilliseconds(250);
+
+    /// <summary>Whether a key is down in the thread's key state, which a
+    /// release the seal took still updates.</summary>
+    internal Func<Key, bool> RailKeyIsDown { get; set; } = Keyboard.IsKeyDown;
+
+    /// <summary>Each workspace write, after it lands (test-only).</summary>
+    internal Action<WorkspaceSnapshot>? PersistedForTests { get; set; }
+
+    /// <summary>The Queries leaf's refreshes (test-only).</summary>
+    internal int BaseQueriesRefreshCountForTests { get; private set; }
+
+    /// <summary>The arrows settled on <paramref name="leaf"/>: its deferred
+    /// work runs once — only if it is still the shown leaf (a non-arrow route
+    /// that chose another meanwhile did its own work) and the workspace is
+    /// live.</summary>
+    private void OnLeafSettled(WorkspaceLeafOption leaf)
+    {
+        if (_workspaceDisposed || !ReferenceEquals(ActiveLeaf, leaf))
+        {
+            return;
+        }
+
+        if (string.Equals(leaf.Id, "queries", StringComparison.Ordinal))
+        {
+            RefreshBaseQueries();
+        }
+
+        if (string.Equals(leaf.Id, "history", StringComparison.Ordinal))
+        {
+            History.Reload();
+        }
+
+        Persist();
+    }
+
     public WorkspaceLeafOption ActiveLeaf
     {
         get => _activeLeaf;
@@ -2638,8 +2689,9 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         {
             if (value is not null && SetField(ref _activeLeaf, value))
             {
+                bool byArrow = IsChoosingLeafByArrow?.Invoke() == true;
                 // Silent on the rail's arrow route only (G21, AR-59).
-                if (IsChoosingLeafByArrow?.Invoke() != true)
+                if (!byArrow)
                 {
                     _announce(new A11yEvent.LeafPanelShown(value.Title));
                 }
@@ -2660,7 +2712,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 }
                 // W4-6: revealing the queries leaf refreshes its lists
                 // (the mac onAppear refresh) - idempotent reads only.
-                if (string.Equals(value.Id, "queries", StringComparison.Ordinal))
+                if (!byArrow && string.Equals(value.Id, "queries", StringComparison.Ordinal))
                 {
                     RefreshBaseQueries();
                 }
@@ -2668,14 +2720,23 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 // reload of the active note's list, idempotent; the
                 // ShowHistoryPanel command covers the already-active
                 // re-invoke.
-                if (string.Equals(value.Id, "history", StringComparison.Ordinal))
+                if (!byArrow && string.Equals(value.Id, "history", StringComparison.Ordinal))
                 {
                     History.Reload();
                 }
                 // W6-2 PR B (rule C, Term 3(b)): the leaf-shown transition,
                 // after the shell's line — a switch loads only when stale.
                 OnLeafShown(value);
-                Persist();
+                // WB-16 (#1305): an arrow's reload, refresh and write wait for
+                // the arrows to settle; every other route does them now.
+                if (byArrow)
+                {
+                    RailSettle.Arm(value);
+                }
+                else
+                {
+                    Persist();
+                }
             }
         }
     }
@@ -3224,6 +3285,9 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
 
     public void Dispose()
     {
+        // WB-16 (#1305): a pending rail settle is cancelled, never run — the
+        // one write below carries the leaf an arrow chose.
+        RailSettle.Dispose();
         // #1280 (contract 35 A-1, close-before-session): no save starts
         // from here on, and every save worker already writing is JOINED
         // before this returns — the vault lifecycle disposes the session
