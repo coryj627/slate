@@ -258,11 +258,11 @@ fn snapshot_reads(operation: impl FnOnce()) -> (usize, usize) {
 /// `links_db::indexed_paths_in_path_order` — the one statement whose path
 /// order `links_db::tests::the_whole_table_snapshot_reads_in_path_order`
 /// pins — and through nothing else: a cold scan and its dangling-link pass,
-/// a rescan with a changed linked note, `wikilink_for_path`, a Bases query
-/// whose rows carry a link-valued property, a rename's heal and link
-/// rewrite, and a rename that reclassifies a note. The save lookup — and
-/// the one-path repair, which reads no snapshot (#1427) — reads a path
-/// target's rows in the same order through its own statement
+/// a rescan with a changed linked note, `wikilink_for_path`, a rename's
+/// heal and link rewrite, and a rename that reclassifies a note. The save
+/// lookup — and the one-path repair (#1427) and a Bases query whose rows
+/// carry a link-valued property (#1486), which read no snapshot — reads a
+/// path target's rows in the same order through its own statement
 /// (`links_db::candidate_rows_sql`); the embed lookup's unordered rows are
 /// #1428.
 #[test]
@@ -335,15 +335,17 @@ fn every_resolution_snapshot_is_read_through_the_path_order_helper() {
             None,
         )
         .unwrap();
-    read_through_the_helper(
-        "a Bases query",
+    // #1486: a Bases query whose rows carry a link-valued property resolves
+    // it through the folded-name lookup and reads no snapshot at all.
+    assert_eq!(
         snapshot_reads(|| {
             let result = session
                 .base_execute(handle, 0, None, None, &CancelToken::new())
                 .unwrap();
             assert_eq!(result.view_error, None, "{result:?}");
         }),
-        0,
+        (0, 0),
+        "a Bases query read a snapshot"
     );
     read_through_the_helper(
         "a rename",

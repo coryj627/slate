@@ -339,8 +339,11 @@ pub struct RowContext {
 }
 
 pub trait VaultLookup {
-    fn resolve_link(&self, _target: &str) -> Option<String> {
-        None
+    /// The path `target` resolves to, `Ok(None)` when it names nothing.
+    /// A lookup that could not read its candidates is
+    /// [`EvalError::LinkLookupFailed`], never an unresolved link (#1486).
+    fn resolve_link(&self, _target: &str) -> Result<Option<String>, EvalError> {
+        Ok(None)
     }
 
     fn file_matches(&self, _path: &str, _query: &str) -> Result<bool, EvalError> {
@@ -416,8 +419,10 @@ pub trait VaultLookup {
         })
     }
 
-    fn row_for_path(&self, _path: &str) -> Option<RowContext> {
-        None
+    /// The assembled row at `path`, `Ok(None)` when there is none; a
+    /// link lookup that fails while assembling it is an error (#1486).
+    fn row_for_path(&self, _path: &str) -> Result<Option<RowContext>, EvalError> {
+        Ok(None)
     }
 
     fn links_for(&self, _path: &str) -> Vec<LinkValue> {
@@ -497,6 +502,10 @@ pub enum EvalError {
     FilterOnly { function: String },
     #[error("operation cancelled")]
     Cancelled,
+    /// A link's candidates could not be read (#1486): a storage failure
+    /// that fails the whole query, never an expression's own error.
+    #[error("link lookup failed: {message}")]
+    LinkLookupFailed { message: String },
 }
 
 #[derive(Default)]
@@ -1211,7 +1220,7 @@ fn eval_global(
                 Value::File(file) => (file.path.clone(), Some(file.path.clone())),
                 value => {
                     let target = expect_text_like("link", value)?;
-                    let resolved_path = ctx.vault.resolve_link(&target);
+                    let resolved_path = ctx.vault.resolve_link(&target)?;
                     (target, resolved_path)
                 }
             };
@@ -1711,7 +1720,7 @@ fn eval_method(
         }
         MethodName::HasProperty => {
             expect_arity("hasProperty", args.len(), 1, 1)?;
-            let row = row_from_value(&receiver, ctx);
+            let row = row_from_value(&receiver, ctx)?;
             let key = expect_text_like("hasProperty", &args[0])?;
             Ok(Value::Bool(
                 row.properties.iter().any(|(got, _)| got == &key)
@@ -1720,7 +1729,7 @@ fn eval_method(
         }
         MethodName::HasTag => {
             expect_arity("hasTag", args.len(), 1, usize::MAX)?;
-            let row = row_from_value(&receiver, ctx);
+            let row = row_from_value(&receiver, ctx)?;
             let tags = args
                 .iter()
                 .map(|arg| expect_text("hasTag", arg))
@@ -1731,7 +1740,7 @@ fn eval_method(
         }
         MethodName::InFolder => {
             expect_arity("inFolder", args.len(), 1, 1)?;
-            let row = row_from_value(&receiver, ctx);
+            let row = row_from_value(&receiver, ctx)?;
             let folder = value_to_string(&args[0]).trim_matches('/').to_string();
             Ok(Value::Bool(
                 row.file_fields.folder == folder
@@ -1761,7 +1770,7 @@ fn eval_method(
                 ));
             }
             if let Some(Value::Text(path)) = dql_object_value(&receiver, DQL_ALIASES_OBJECT_KEY) {
-                let row = row_for_path(ctx, path);
+                let row = row_for_path(ctx, path)?;
                 return Ok(Value::List(dql_alias_values(&row)?));
             }
             if let Some(Value::Text(path)) = dql_object_value(&receiver, DQL_OUTLINKS_OBJECT_KEY) {
@@ -2248,7 +2257,7 @@ fn dql_link(
             } else {
                 (target.as_str(), "file", None)
             };
-            let resolved_path = ctx.vault.resolve_link(path);
+            let resolved_path = ctx.vault.resolve_link(path)?;
             Ok(Value::Link(LinkValue {
                 target: resolved_path.clone().unwrap_or_else(|| path.to_string()),
                 resolved_path,
@@ -2773,7 +2782,7 @@ fn index_value(base: &Value, index: &Value, ctx: &EvalCtx<'_>) -> Result<Value, 
             .map(|ch| Value::Text(ch.to_string()))
             .unwrap_or(Value::Null),
         (Value::File(file), index) => {
-            let row = row_for_path(ctx, &file.path);
+            let row = row_for_path(ctx, &file.path)?;
             row_property(&row, &value_to_string(index))
         }
         _ => Value::Null,
@@ -2819,7 +2828,7 @@ fn field_value(base: &Value, name: &str, ctx: &EvalCtx<'_>) -> Result<Value, Eva
         Value::Date(date) => date_field(*date, name)?,
         Value::DqlDate(date) => dql_date_field(*date, name)?,
         Value::File(file) => {
-            let row = row_for_path(ctx, &file.path);
+            let row = row_for_path(ctx, &file.path)?;
             file_field_by_name(name)
                 .map(|field| file_field_value(&row, field, ctx))
                 .unwrap_or_else(|| row_property(&row, name))
@@ -3677,7 +3686,7 @@ fn flatten(values: Vec<Value>, depth: usize) -> Vec<Value> {
     out
 }
 
-fn row_from_value(value: &Value, ctx: &EvalCtx<'_>) -> RowContext {
+fn row_from_value(value: &Value, ctx: &EvalCtx<'_>) -> Result<RowContext, EvalError> {
     match value {
         Value::File(file) => row_for_path(ctx, &file.path),
         Value::Link(link) => row_for_path(
@@ -3686,25 +3695,25 @@ fn row_from_value(value: &Value, ctx: &EvalCtx<'_>) -> RowContext {
                 .as_deref()
                 .unwrap_or(link.target.as_str()),
         ),
-        _ => ctx.file.clone(),
+        _ => Ok(ctx.file.clone()),
     }
 }
 
-fn row_for_path(ctx: &EvalCtx<'_>, path: &str) -> RowContext {
+fn row_for_path(ctx: &EvalCtx<'_>, path: &str) -> Result<RowContext, EvalError> {
     if ctx.file.file_path == path {
-        return ctx.file.clone();
+        return Ok(ctx.file.clone());
     }
     if let Some(this) = ctx.this
         && this.file_path == path
     {
-        return this.clone();
+        return Ok(this.clone());
     }
-    ctx.vault.row_for_path(path).unwrap_or_else(|| RowContext {
+    Ok(ctx.vault.row_for_path(path)?.unwrap_or_else(|| RowContext {
         file_path: path.to_string(),
         file_fields: FileFields::for_path(path),
         properties: Vec::new(),
         task: None,
-    })
+    }))
 }
 
 fn file_path_from_value(value: &Value) -> Result<String, EvalError> {
@@ -4788,12 +4797,12 @@ fn dql_link_page_day(
 ) -> Result<Option<DqlDateValue>, EvalError> {
     let Some(path) = ctx
         .vault
-        .resolve_link(&link.target)
+        .resolve_link(&link.target)?
         .or_else(|| link.resolved_path.clone())
     else {
         return Ok(None);
     };
-    let Some(row) = ctx.vault.row_for_path(&path) else {
+    let Some(row) = ctx.vault.row_for_path(&path)? else {
         return Ok(None);
     };
     let (inline, incomplete) = ctx.vault.dql_inline_fields_for(&path, ctx.now_ms)?;

@@ -1495,7 +1495,7 @@ fn dql_inline_links_resolve_from_the_owning_row_without_changing_query_link_cont
                 id, path, name, extension, size_bytes, mtime_ms, ctime_ms,
                 content_hash, parser_version, indexed_at_ms, is_markdown
              )
-             VALUES (?1, ?2, ?2, ?3, 0, 0, 0, ?4, 1, 0, ?5)",
+             VALUES (?1, ?2, replace(?2, rtrim(?2, replace(?2, '/', '')), ''), ?3, 0, 0, 0, ?4, 1, 0, ?5)",
             params![
                 id,
                 path,
@@ -2134,7 +2134,7 @@ fn dql_date_link_falls_back_to_query_resolved_page_day() {
                 id, path, name, extension, size_bytes, mtime_ms, ctime_ms,
                 content_hash, parser_version, indexed_at_ms, is_markdown
              )
-             VALUES (?1, ?2, ?2, ?3, 0, 0, 0, ?4, 1, 0, ?5)",
+             VALUES (?1, ?2, replace(?2, rtrim(?2, replace(?2, '/', '')), ''), ?3, 0, 0, 0, ?4, 1, 0, ?5)",
             params![id, path, extension, format!("date-link-{id}"), is_markdown],
         )
         .expect("insert date(Link) fallback fixture file");
@@ -4906,7 +4906,7 @@ fn dql_fixture_conn() -> Connection {
                 id, path, name, extension, size_bytes, mtime_ms, ctime_ms,
                 content_hash, parser_version, indexed_at_ms, is_markdown
              )
-             VALUES (?1, ?2, ?2, 'md', 0, 0, 0, ?3, 1, 0, 1)",
+             VALUES (?1, ?2, replace(?2, rtrim(?2, replace(?2, '/', '')), ''), 'md', 0, 0, 0, ?3, 1, 0, 1)",
             params![id, path, format!("hash-{id}")],
         )
         .expect("insert DQL fixture file");
@@ -5118,7 +5118,7 @@ fn dql_embed_fixture_conn() -> Connection {
                 id, path, name, extension, size_bytes, mtime_ms, ctime_ms,
                 content_hash, parser_version, indexed_at_ms, is_markdown
              )
-             VALUES (?1, ?2, ?2, 'md', 0, 0, 0, ?3, 1, 0, 1)",
+             VALUES (?1, ?2, replace(?2, rtrim(?2, replace(?2, '/', '')), ''), 'md', 0, 0, 0, ?3, 1, 0, 1)",
             params![id, path, format!("embed-hash-{id}")],
         )
         .expect("insert embed DQL fixture file");

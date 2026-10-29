@@ -196,6 +196,42 @@ struct CandidateLoadDeps<'a> {
 enum CandidateLoadError {
     Vault(VaultError),
     View(String),
+    /// A candidate's link-valued property whose lookup failed (#1486).
+    LinkLookup {
+        error: EvalError,
+        row_path: String,
+    },
+}
+
+/// Why a row could not be assembled (#1486): a vault failure, or a
+/// link-valued property whose lookup failed, at the row being assembled.
+#[derive(Debug)]
+enum RowAssemblyError {
+    Vault(VaultError),
+    LinkLookup { error: EvalError, row_path: String },
+}
+
+impl From<VaultError> for RowAssemblyError {
+    fn from(error: VaultError) -> Self {
+        Self::Vault(error)
+    }
+}
+
+impl From<DbError> for RowAssemblyError {
+    fn from(error: DbError) -> Self {
+        Self::Vault(error.into())
+    }
+}
+
+impl From<RowAssemblyError> for CandidateLoadError {
+    fn from(error: RowAssemblyError) -> Self {
+        match error {
+            RowAssemblyError::Vault(error) => Self::Vault(error),
+            RowAssemblyError::LinkLookup { error, row_path } => {
+                Self::LinkLookup { error, row_path }
+            }
+        }
+    }
 }
 
 impl From<VaultError> for CandidateLoadError {
@@ -528,21 +564,25 @@ pub fn execute(
         fts: &fts,
         cancel,
         source_path: ctx.this_path.as_deref().unwrap_or_default(),
-        link_index: RefCell::new(None),
         link_resolutions: RefCell::new(BTreeMap::new()),
         deleted_content_regexes: RefCell::new(BTreeMap::new()),
     };
     let mut resolved_query = None;
     if let QuerySource::Linked { from_path, depth } = &query.source
         && authored_link_path_is_extensionless(from_path)
-        && let Some(resolved_path) = vault.resolve_link(from_path)
     {
-        let mut canonical = query.clone();
-        canonical.source = QuerySource::Linked {
-            from_path: resolved_path,
-            depth: *depth,
-        };
-        resolved_query = Some(canonical);
+        match vault.resolve_link(from_path) {
+            Ok(Some(resolved_path)) => {
+                let mut canonical = query.clone();
+                canonical.source = QuerySource::Linked {
+                    from_path: resolved_path,
+                    depth: *depth,
+                };
+                resolved_query = Some(canonical);
+            }
+            Ok(None) => {}
+            Err(error) => return Ok(error_result(query, ctx, error.to_string(), "")),
+        }
     }
     let query = resolved_query.as_ref().unwrap_or(query);
     let formula_plan = FormulaPlan::new(query);
@@ -551,11 +591,18 @@ pub fn execute(
         warnings: &warnings,
         cancel,
     };
-    let this = ctx
+    let this = match ctx
         .this_path
         .as_deref()
-        .and_then(|path| assemble_row_for_path(conn, path, &vault).transpose())
-        .transpose()?;
+        .map(|path| assemble_row_for_path(conn, path, &vault))
+        .transpose()
+    {
+        Ok(this) => this.flatten(),
+        Err(RowAssemblyError::Vault(error)) => return Err(error),
+        Err(RowAssemblyError::LinkLookup { error, row_path }) => {
+            return Ok(error_result(query, ctx, error.to_string(), &row_path));
+        }
+    };
 
     let mut rows = Vec::new();
     let mut offset = 0usize;
@@ -569,6 +616,9 @@ pub fn execute(
             Err(CandidateLoadError::Vault(error)) => return Err(error),
             Err(CandidateLoadError::View(error)) => {
                 return Ok(error_result(query, ctx, error, ""));
+            }
+            Err(CandidateLoadError::LinkLookup { error, row_path }) => {
+                return Ok(error_result(query, ctx, error.to_string(), &row_path));
             }
         };
         if batch.is_empty() {
@@ -587,6 +637,20 @@ pub fn execute(
                 &vault,
                 &warnings,
             );
+            // #1486: a formula's failed link lookup fails the query, whether
+            // a filter, a column, a sort or nothing reads the formula.
+            if let Some(error) = formulas
+                .errors
+                .values()
+                .find(|error| matches!(error, EvalError::LinkLookupFailed { .. }))
+            {
+                return Ok(error_result(
+                    query,
+                    ctx,
+                    error.to_string(),
+                    &candidate.row.file_path,
+                ));
+            }
             if let Some(filters) = &query.filters {
                 if let Some((name, error)) = first_formula_error(filters, &formulas.errors) {
                     return Ok(error_result(
@@ -649,7 +713,7 @@ pub fn execute(
     let group_slices = group_rows(query, &mut rows);
     let total_count = rows.len();
     let mut result_warnings = warnings.messages();
-    let summaries = compute_summaries(
+    let summaries = match compute_summaries(
         query,
         &rows,
         0..rows.len(),
@@ -657,8 +721,11 @@ pub fn execute(
         &vault,
         &warnings,
         &mut result_warnings,
-    );
-    let group_summaries = group_slices
+    ) {
+        Ok(summaries) => summaries,
+        Err(error) => return Ok(error_result(query, ctx, error.to_string(), "")),
+    };
+    let group_summaries = match group_slices
         .iter()
         .map(|group| {
             compute_summaries(
@@ -671,7 +738,11 @@ pub fn execute(
                 &mut result_warnings,
             )
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(group_summaries) => group_summaries,
+        Err(error) => return Ok(error_result(query, ctx, error.to_string(), "")),
+    };
     let shown_count = query
         .limit
         .map(|limit| (limit as usize).min(total_count))
@@ -1568,7 +1639,7 @@ fn assemble_row(
     task_counts: TaskCounts,
     task: Option<IndexedTaskRow>,
     vault: &SqlVaultLookup<'_>,
-) -> Result<RowContext, VaultError> {
+) -> Result<RowContext, RowAssemblyError> {
     let mut file_fields = FileFields::for_path(&file.path);
     file_fields.name = file.name.clone();
     file_fields.ext = file.ext.clone();
@@ -1590,7 +1661,12 @@ fn assemble_row(
     file_fields.in_degree = file_fields.backlinks.len() as u64;
     let mut properties = load_properties(conn, file.id)?;
     for (_, value) in &mut properties {
-        resolve_property_links(value, &file.path, vault);
+        resolve_property_links(value, &file.path, vault).map_err(|error| {
+            RowAssemblyError::LinkLookup {
+                error,
+                row_path: file.path.clone(),
+            }
+        })?;
     }
     for (key, value) in &properties {
         file_fields.properties.insert(key.clone(), value.clone());
@@ -1630,7 +1706,7 @@ fn assemble_row_for_path(
     conn: &Connection,
     path: &str,
     vault: &SqlVaultLookup<'_>,
-) -> Result<Option<RowContext>, VaultError> {
+) -> Result<Option<RowContext>, RowAssemblyError> {
     let row = conn
         .query_row(
             "SELECT id, path, name, extension, size_bytes, mtime_ms, ctime_ms FROM files WHERE path = ?1",
@@ -1852,21 +1928,25 @@ fn json_to_value(value: &serde_json::Value) -> Value {
     }
 }
 
-fn resolve_property_links(value: &mut Value, owner_path: &str, vault: &SqlVaultLookup<'_>) {
+fn resolve_property_links(
+    value: &mut Value,
+    owner_path: &str,
+    vault: &SqlVaultLookup<'_>,
+) -> Result<(), EvalError> {
     match value {
         Value::Link(link) => {
             if link.resolved_path.is_none() {
-                link.resolved_path = vault.resolve_link_from(&link.target, owner_path);
+                link.resolved_path = vault.resolve_link_from(&link.target, owner_path)?;
             }
         }
         Value::List(values) => {
             for value in values {
-                resolve_property_links(value, owner_path, vault);
+                resolve_property_links(value, owner_path, vault)?;
             }
         }
         Value::Object(values) => {
             for value in values.values_mut() {
-                resolve_property_links(value, owner_path, vault);
+                resolve_property_links(value, owner_path, vault)?;
             }
         }
         Value::Null
@@ -1880,6 +1960,7 @@ fn resolve_property_links(value: &mut Value, owner_path: &str, vault: &SqlVaultL
         | Value::File(_)
         | Value::Regex(_, _) => {}
     }
+    Ok(())
 }
 
 fn parse_date_value(text: &str) -> Option<DateValue> {
@@ -2237,7 +2318,8 @@ fn materialize_row(
         .columns
         .iter()
         .map(|column| eval_column(column, row, formulas, this, ctx, vault, warnings))
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
     let mut summary_values = BTreeMap::new();
     for (index, column) in query.columns.iter().enumerate() {
         summary_values.insert(column.id.clone(), cells[index].clone());
@@ -2250,7 +2332,8 @@ fn materialize_row(
             };
             summary_values.insert(
                 column_id.clone(),
-                eval_column(&column, row, formulas, this, ctx, vault, warnings),
+                eval_column(&column, row, formulas, this, ctx, vault, warnings)
+                    .map_err(|error| error.to_string())?,
             );
         }
     }
@@ -2538,7 +2621,7 @@ fn compute_summaries(
     vault: &dyn VaultLookup,
     warnings: &WarningSink,
     result_warnings: &mut Vec<String>,
-) -> Vec<BasesSummaryCell> {
+) -> Result<Vec<BasesSummaryCell>, EvalError> {
     query
         .summaries
         .iter()
@@ -2548,9 +2631,9 @@ fn compute_summaries(
             };
             let (summary_name, kind) = match summary_kind(summary) {
                 Ok(summary) => summary,
-                Err(error) => return summary_error_cell(column_id, &fallback_name, error),
+                Err(error) => return Ok(summary_error_cell(column_id, &fallback_name, error)),
             };
-            compute_summary(
+            match compute_summary(
                 query,
                 rows,
                 range.clone(),
@@ -2561,10 +2644,28 @@ fn compute_summaries(
                 vault,
                 warnings,
                 result_warnings,
-            )
-            .unwrap_or_else(|error| summary_error_cell(column_id, &summary_name, error))
+            ) {
+                Ok(cell) => Ok(cell),
+                Err(SummaryError::Cell(error)) => {
+                    Ok(summary_error_cell(column_id, &summary_name, error))
+                }
+                Err(SummaryError::LinkLookup(error)) => Err(error),
+            }
         })
         .collect()
+}
+
+/// Why a summary could not be computed (#1486): its own error, shown as
+/// the summary's cell, or a failed link lookup, which fails the query.
+enum SummaryError {
+    Cell(String),
+    LinkLookup(EvalError),
+}
+
+impl From<String> for SummaryError {
+    fn from(error: String) -> Self {
+        Self::Cell(error)
+    }
 }
 
 fn summary_error_cell(column_id: &str, summary_name: &str, error: String) -> BasesSummaryCell {
@@ -2615,7 +2716,7 @@ fn compute_summary(
     vault: &dyn VaultLookup,
     warnings: &WarningSink,
     result_warnings: &mut Vec<String>,
-) -> Result<BasesSummaryCell, String> {
+) -> Result<BasesSummaryCell, SummaryError> {
     let value = match kind {
         SummaryKind::Count => CellValue::Value(Value::Number(range.len() as f64)),
         SummaryKind::Filled => CellValue::Value(Value::Number(
@@ -2820,13 +2921,13 @@ fn custom_summary(
     column_id: &str,
     name: &str,
     deps: SummaryEvalDeps<'_, '_>,
-) -> Result<CellValue, String> {
+) -> Result<CellValue, SummaryError> {
     let Some((_, expr)) = query
         .custom_summaries
         .iter()
         .find(|(summary_name, _)| summary_name == name)
     else {
-        return Err(format!("summary.{name}: missing custom summary formula"));
+        return Err(format!("summary.{name}: missing custom summary formula").into());
     };
     let values = range
         .map(|index| {
@@ -2855,9 +2956,11 @@ fn custom_summary(
         warnings: deps.warnings,
         filter_position: false,
     };
-    eval(expr, &eval_ctx)
-        .map(CellValue::Value)
-        .map_err(|error| format!("summary.{name}: {error}"))
+    match eval(expr, &eval_ctx) {
+        Ok(value) => Ok(CellValue::Value(value)),
+        Err(error @ EvalError::LinkLookupFailed { .. }) => Err(SummaryError::LinkLookup(error)),
+        Err(error) => Err(SummaryError::Cell(format!("summary.{name}: {error}"))),
+    }
 }
 
 fn value_key(value: &Value) -> String {
@@ -3207,18 +3310,22 @@ fn eval_column(
     ctx: &EngineCtx<'_>,
     vault: &dyn VaultLookup,
     warnings: &WarningSink,
-) -> CellValue {
+) -> Result<CellValue, EvalError> {
     if let Some(name) = column.id.strip_prefix("formula.") {
         if let Some(error) = formulas.errors.get(name) {
-            return CellValue::Error(error.to_string());
+            return Ok(CellValue::Error(error.to_string()));
         }
-        return CellValue::Value(formulas.values.get(name).cloned().unwrap_or(Value::Null));
+        return Ok(CellValue::Value(
+            formulas.values.get(name).cloned().unwrap_or(Value::Null),
+        ));
     }
     let expr = column_expr(&column.id);
     let eval_ctx = eval_ctx(row, this, &formulas.values, ctx, vault, warnings);
     match eval(&expr, &eval_ctx) {
-        Ok(value) => CellValue::Value(value),
-        Err(error) => CellValue::Error(error.to_string()),
+        Ok(value) => Ok(CellValue::Value(value)),
+        // #1486: a failed link lookup fails the query, not the cell.
+        Err(error @ EvalError::LinkLookupFailed { .. }) => Err(error),
+        Err(error) => Ok(CellValue::Error(error.to_string())),
     }
 }
 
@@ -3566,7 +3673,7 @@ struct SqlVaultLookup<'a> {
     fts: &'a FtsMatchCache,
     cancel: &'a CancelToken,
     source_path: &'a str,
-    link_index: RefCell<Option<crate::InMemoryVaultIndex>>,
+    /// Answers only: a failed lookup is never remembered as unresolved.
     link_resolutions: RefCell<BTreeMap<(String, String), Option<String>>>,
     /// #800: compiled patterns for `oplog.deleted_content_matches_regex`,
     /// memoized per query — row-eval calls this once per candidate row
@@ -3612,7 +3719,7 @@ impl SqlVaultLookup<'_> {
             DqlInlineValue::Date(value) => crate::bases::eval::dql_inline_date_value(value, now_ms),
             DqlInlineValue::Duration(value) => crate::bases::eval::dql_inline_duration_value(value),
             DqlInlineValue::Link(link) => {
-                let resolved_path = self.resolve_link_from(&link.target, owner_path);
+                let resolved_path = self.resolve_link_from(&link.target, owner_path)?;
                 Ok(Value::Link(LinkValue {
                     target: resolved_path.clone().unwrap_or_else(|| link.target.clone()),
                     display: link.display.clone(),
@@ -3635,31 +3742,45 @@ impl SqlVaultLookup<'_> {
         }
     }
 
-    fn resolve_link_from(&self, target: &str, source_path: &str) -> Option<String> {
+    /// The path `target` resolves to from `source_path` (#1486): the
+    /// target's own candidate rows through the folded-name lookup, on the
+    /// query's connection — no snapshot of `files`. A lookup that could
+    /// not read its candidates is [`EvalError::LinkLookupFailed`].
+    fn resolve_link_from(
+        &self,
+        target: &str,
+        source_path: &str,
+    ) -> Result<Option<String>, EvalError> {
+        use crate::links_db::LinkCandidates as _;
         let cache_key = (source_path.to_string(), target.to_string());
         if let Some(resolved) = self.link_resolutions.borrow().get(&cache_key) {
-            return resolved.clone();
+            return Ok(resolved.clone());
         }
-        if self.link_index.borrow().is_none() {
-            // The snapshot every resolution reads, in path order (#1429). A
-            // failed read still reads as unresolved here: #1486.
-            let paths = crate::links_db::indexed_paths_in_path_order(self.conn).ok()?;
-            *self.link_index.borrow_mut() = Some(crate::InMemoryVaultIndex::new(paths));
-        }
-        let index = self.link_index.borrow();
-        let resolved = match crate::resolve_link(target, None, source_path, index.as_ref()?) {
+        let resolved = crate::link_resolver::resolve_link_through(
+            target,
+            None,
+            source_path,
+            |mut selector| {
+                crate::links_db::FoldedNameLookup.offer_to(self.conn, &mut selector)?;
+                Ok::<_, VaultError>(selector.into_winner())
+            },
+        )
+        .map_err(|error| EvalError::LinkLookupFailed {
+            message: error.to_string(),
+        })?;
+        let resolved = match resolved {
             crate::ResolvedLink::Resolved { target_path, .. } => Some(target_path),
             crate::ResolvedLink::Unresolved { .. } | crate::ResolvedLink::External => None,
         };
         self.link_resolutions
             .borrow_mut()
             .insert(cache_key, resolved.clone());
-        resolved
+        Ok(resolved)
     }
 }
 
 impl VaultLookup for SqlVaultLookup<'_> {
-    fn resolve_link(&self, target: &str) -> Option<String> {
+    fn resolve_link(&self, target: &str) -> Result<Option<String>, EvalError> {
         self.resolve_link_from(target, self.source_path)
     }
 
@@ -3805,8 +3926,14 @@ impl VaultLookup for SqlVaultLookup<'_> {
         }
     }
 
-    fn row_for_path(&self, path: &str) -> Option<RowContext> {
-        assemble_row_for_path(self.conn, path, self).ok().flatten()
+    fn row_for_path(&self, path: &str) -> Result<Option<RowContext>, EvalError> {
+        match assemble_row_for_path(self.conn, path, self) {
+            Ok(row) => Ok(row),
+            // #1486: a failed link lookup fails the query. Any other failure
+            // assembling a looked-up row still reads as no row.
+            Err(RowAssemblyError::LinkLookup { error, .. }) => Err(error),
+            Err(RowAssemblyError::Vault(_)) => Ok(None),
+        }
     }
 
     fn links_for(&self, path: &str) -> Vec<LinkValue> {

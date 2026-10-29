@@ -4591,3 +4591,375 @@ fn collect_vault_content(root: &Path, dir: &Path, out: &mut Vec<(String, Vec<u8>
         }
     }
 }
+
+// --- Plan 44 WB-18 (#1486): a Bases or DQL link resolves through the
+// folded-name lookup, and a lookup that fails fails the query. ---
+
+use crate::bases::engine::{BasesResultSet as EngineResultSet, CellValue};
+
+/// A files query over `source` showing `columns`, nothing else set.
+fn link_lookup_query(
+    source: crate::bases::QuerySource,
+    columns: &[&str],
+) -> crate::bases::SlateQuery {
+    crate::bases::SlateQuery {
+        source,
+        row_source: crate::bases::RowSource::Files,
+        filters: None,
+        formulas: Vec::new(),
+        custom_summaries: Vec::new(),
+        group_by: None,
+        sort: Vec::new(),
+        columns: columns
+            .iter()
+            .map(|id| crate::bases::ColumnSelection {
+                id: id.to_string(),
+                display_name: None,
+            })
+            .collect(),
+        summaries: Vec::new(),
+        limit: None,
+        view: crate::bases::ViewSpec::Table {
+            fallback_from: None,
+        },
+    }
+}
+
+fn link_lookup_expr(source: &str) -> crate::bases::expr::Expr {
+    crate::bases::expr::parse_expr(source).unwrap()
+}
+
+/// Run `query` on the test thread (so the thread-local seams reach its
+/// lookup), from `this_path`.
+fn execute_link_lookup_query(
+    session: &VaultSession,
+    query: &crate::bases::SlateQuery,
+    this_path: Option<&str>,
+) -> EngineResultSet {
+    let conn = session.conn.lock().expect("session connection mutex");
+    crate::bases::engine::execute(
+        query,
+        &conn,
+        &crate::bases::engine::EngineCtx {
+            this_path: this_path.map(str::to_string),
+            ..crate::bases::engine::EngineCtx::default()
+        },
+        &CancelToken::new(),
+    )
+    .unwrap()
+}
+
+/// [`execute_link_lookup_query`] with the folded-name lookup failing.
+fn execute_with_lookup_fault(
+    session: &VaultSession,
+    query: &crate::bases::SlateQuery,
+    this_path: Option<&str>,
+) -> EngineResultSet {
+    crate::links_db::LOOKUP_FAULT.with(|fault| fault.set(true));
+    let result = execute_link_lookup_query(session, query, this_path);
+    crate::links_db::LOOKUP_FAULT.with(|fault| fault.set(false));
+    result
+}
+
+/// The failure shape every failed link lookup takes: the public failed
+/// result, naming the lookup and `row_path`, with no rows.
+fn assert_link_lookup_failure(result: &EngineResultSet, row_path: &str, context: &str) {
+    let error = result.error.as_ref().unwrap_or_else(|| {
+        panic!(
+            "{context}: the query did not fail; rows {:?}, summaries {:?}",
+            result.rows, result.summaries
+        )
+    });
+    assert!(
+        error.construct.contains("link lookup failed: "),
+        "{context}: {error:?}"
+    );
+    assert_eq!(error.row_path, row_path, "{context}: {error:?}");
+    assert!(
+        result.rows.is_empty(),
+        "{context}: rows survived the failure"
+    );
+}
+
+/// `Notes/A.md` and `Notes/B.md` (neither with a link-valued property), the
+/// target `Target.md`, and whatever `extra` writes, scanned.
+fn link_lookup_vault(extra: impl FnOnce(&FsVaultProvider)) -> (tempfile::TempDir, VaultSession) {
+    let (tmp, session) = make_vault(|provider| {
+        provider.write_file("Notes/A.md", b"# A\n").unwrap();
+        provider.write_file("Notes/B.md", b"# B\n").unwrap();
+        provider.write_file("Target.md", b"# Target\n").unwrap();
+        extra(provider);
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    (tmp, session)
+}
+
+/// #1486: a query whose rows resolve links reads each link's candidate rows
+/// through the folded-name lookup — no snapshot of every `files` row, no
+/// candidate table built from one.
+#[test]
+fn a_query_that_resolves_links_materializes_no_snapshot() {
+    let (_tmp, session) = make_vault(|provider| {
+        provider.write_file("Target.md", b"# Target\n").unwrap();
+        for n in 0..200 {
+            provider
+                .write_file(&format!("Notes/n{n:03}.md"), b"# note\n")
+                .unwrap();
+        }
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let mut query = link_lookup_query(
+        crate::bases::QuerySource::Folder("Notes".to_string()),
+        &["formula.up"],
+    );
+    query.formulas = vec![("up".to_string(), link_lookup_expr(r#"link("Target")"#))];
+
+    crate::link_resolver::SNAPSHOT_PATHS.with(|paths| paths.set(0));
+    crate::link_resolver::CANDIDATE_TABLES_BUILT.with(|built| built.set(0));
+    let result = execute_link_lookup_query(&session, &query, None);
+
+    assert_eq!(result.error, None);
+    assert_eq!(result.rows.len(), 200);
+    match &result.rows[0].cells[0] {
+        CellValue::Value(crate::bases::eval::Value::Link(link)) => {
+            assert_eq!(link.resolved_path.as_deref(), Some("Target.md"));
+        }
+        other => panic!("premise: the formula resolved no link: {other:?}"),
+    }
+    assert_eq!(
+        crate::link_resolver::SNAPSHOT_PATHS.with(std::cell::Cell::get),
+        0,
+        "the query read a snapshot of the vault"
+    );
+    assert_eq!(
+        crate::link_resolver::CANDIDATE_TABLES_BUILT.with(std::cell::Cell::get),
+        0,
+        "the query built a candidate table"
+    );
+}
+
+/// #1486 (never silent): a link lookup that fails in a filter fails the
+/// query at the first candidate, instead of filtering as if the link were
+/// unresolved; without the fault the same query runs.
+#[test]
+fn a_failed_link_lookup_fails_the_query_instead_of_reading_as_unresolved() {
+    let (_tmp, session) = link_lookup_vault(|_| {});
+    let mut query = link_lookup_query(
+        crate::bases::QuerySource::Folder("Notes".to_string()),
+        &["file.name"],
+    );
+    query.filters = Some(crate::bases::FilterNode::Stmt(link_lookup_expr(
+        r#"link("Target") == link("Target")"#,
+    )));
+
+    let failed = execute_with_lookup_fault(&session, &query, None);
+    assert_link_lookup_failure(&failed, "Notes/A.md", "the filter");
+
+    let control = execute_link_lookup_query(&session, &query, None);
+    assert_eq!(control.error, None, "control: the fault is what fails it");
+    assert_eq!(control.rows.len(), 2, "control");
+}
+
+/// #1486: in a column, the failed lookup fails the query, not the cell.
+#[test]
+fn a_failed_link_lookup_in_a_column_fails_the_query_not_the_cell() {
+    let (_tmp, session) = link_lookup_vault(|_| {});
+    let query = link_lookup_query(
+        crate::bases::QuerySource::Folder("Notes".to_string()),
+        &[r#"link("Target")"#],
+    );
+
+    let failed = execute_with_lookup_fault(&session, &query, None);
+    assert!(
+        !failed
+            .rows
+            .iter()
+            .flat_map(|row| &row.cells)
+            .any(|cell| matches!(cell, CellValue::Error(_))),
+        "the failure became a cell's error"
+    );
+    assert_link_lookup_failure(&failed, "Notes/A.md", "the column");
+}
+
+/// #1486: a formula's failed lookup fails the query even where only a
+/// column shows the formula.
+#[test]
+fn a_failed_link_lookup_in_a_formula_fails_the_query() {
+    let (_tmp, session) = link_lookup_vault(|_| {});
+    let mut query = link_lookup_query(
+        crate::bases::QuerySource::Folder("Notes".to_string()),
+        &["formula.up"],
+    );
+    query.formulas = vec![("up".to_string(), link_lookup_expr(r#"link("Target")"#))];
+
+    let failed = execute_with_lookup_fault(&session, &query, None);
+    assert_link_lookup_failure(&failed, "Notes/A.md", "the formula");
+}
+
+/// #1486: a custom summary's failed lookup fails the query, not the
+/// summary cell; every row materializes first, so the row path is empty.
+#[test]
+fn a_failed_link_lookup_in_a_custom_summary_fails_the_query() {
+    let (_tmp, session) = link_lookup_vault(|_| {});
+    let mut query = link_lookup_query(
+        crate::bases::QuerySource::Folder("Notes".to_string()),
+        &["file.name"],
+    );
+    query.custom_summaries = vec![("probe".to_string(), link_lookup_expr(r#"link("Target")"#))];
+    query.summaries = vec![(
+        "file.name".to_string(),
+        crate::bases::SummaryRef::Custom("probe".to_string()),
+    )];
+
+    let failed = execute_with_lookup_fault(&session, &query, None);
+    assert_link_lookup_failure(&failed, "", "the custom summary");
+}
+
+/// #1486: a link-valued property's failed lookup, while its row is
+/// assembled, fails the query at that row.
+#[test]
+fn a_failed_property_link_lookup_fails_the_query_at_its_row() {
+    let (_tmp, session) = link_lookup_vault(|provider| {
+        provider
+            .write_file("Notes/A.md", b"---\nup: \"[[Target]]\"\n---\n# A\n")
+            .unwrap();
+    });
+    let query = link_lookup_query(
+        crate::bases::QuerySource::Folder("Notes".to_string()),
+        &["up"],
+    );
+
+    let failed = execute_with_lookup_fault(&session, &query, None);
+    assert_link_lookup_failure(&failed, "Notes/A.md", "the property");
+}
+
+/// #1486: `this`'s link-valued property, failing its lookup, fails the
+/// query at `this`'s path.
+#[test]
+fn a_failed_property_link_lookup_of_this_fails_the_query() {
+    let (_tmp, session) = link_lookup_vault(|provider| {
+        provider
+            .write_file("Notes/Here.md", b"---\nup: \"[[Target]]\"\n---\n# Here\n")
+            .unwrap();
+        provider.write_file("Other/C.md", b"# C\n").unwrap();
+    });
+    let query = link_lookup_query(
+        crate::bases::QuerySource::Folder("Other".to_string()),
+        &["file.name"],
+    );
+
+    let failed = execute_with_lookup_fault(&session, &query, Some("Notes/Here.md"));
+    assert_link_lookup_failure(&failed, "Notes/Here.md", "this");
+}
+
+/// #1486: a row looked up from a link (`file.links[0]`) whose own
+/// link-valued property fails its lookup fails the query at the row that
+/// looked it up.
+#[test]
+fn a_failed_property_link_lookup_of_a_looked_up_row_fails_the_query() {
+    let (_tmp, session) = link_lookup_vault(|provider| {
+        provider
+            .write_file("Notes/A.md", b"# A\n\n[[Other/B]]\n")
+            .unwrap();
+        provider
+            .write_file("Notes/B.md", b"# B\n\n[[Other/B]]\n")
+            .unwrap();
+        provider
+            .write_file("Other/B.md", b"---\nup: \"[[Target]]\"\n---\n# B\n")
+            .unwrap();
+    });
+    let query = link_lookup_query(
+        crate::bases::QuerySource::Folder("Notes".to_string()),
+        &[r#"file.links[0].hasProperty("up")"#],
+    );
+
+    let control = execute_link_lookup_query(&session, &query, None);
+    assert_eq!(control.error, None, "control");
+    assert_eq!(
+        control.rows[0].cells[0],
+        CellValue::Value(crate::bases::eval::Value::Bool(true)),
+        "premise: the column looks the linked row up"
+    );
+
+    let failed = execute_with_lookup_fault(&session, &query, None);
+    assert_link_lookup_failure(&failed, "Notes/A.md", "the looked-up row");
+}
+
+/// #1486: an extensionless linked source whose lookup fails fails the
+/// query, instead of running on the unresolved source.
+#[test]
+fn a_failed_lookup_of_an_extensionless_linked_source_fails_the_query() {
+    let (_tmp, session) = link_lookup_vault(|provider| {
+        provider
+            .write_file("Hub.md", b"# Hub\n\n[[Notes/A]]\n")
+            .unwrap();
+    });
+    let query = link_lookup_query(
+        crate::bases::QuerySource::Linked {
+            from_path: "Hub".to_string(),
+            depth: 1,
+        },
+        &["file.name"],
+    );
+
+    let control = execute_link_lookup_query(&session, &query, None);
+    assert_eq!(control.error, None, "control");
+    assert_eq!(control.rows.len(), 1, "control: the hub links one note");
+
+    let failed = execute_with_lookup_fault(&session, &query, None);
+    assert_link_lookup_failure(&failed, "", "the linked source");
+}
+
+/// #1486: a DQL inline field's link resolves through the lookup from its
+/// owner — the owner-relative answer, not the query's `this` — and the
+/// query reads no snapshot.
+#[test]
+fn a_dql_inline_link_field_resolves_through_the_lookup() {
+    let (_tmp, session) = make_vault(|provider| {
+        for path in crate::link_resolver::census_fixtures::INDEXED_PATHS {
+            provider.write_file(path, b"# t\n\n## Intro\n").unwrap();
+        }
+        provider
+            .write_file("notes/owner.md", b"# Owner\n\nsibling:: [[shared]]\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let (query, _warnings) =
+        crate::bases::dql::parse_dql("TABLE WITHOUT ID sibling\nFROM \"notes\"\n");
+
+    crate::link_resolver::SNAPSHOT_PATHS.with(|paths| paths.set(0));
+    let result = execute_link_lookup_query(&session, &query, Some("a/view.base"));
+
+    assert_eq!(result.error, None);
+    let owner = result
+        .rows
+        .iter()
+        .find(|row| row.path == "notes/owner.md")
+        .expect("the owner's row");
+    match &owner.cells[0] {
+        CellValue::Value(crate::bases::eval::Value::Link(link)) => {
+            assert_eq!(link.resolved_path.as_deref(), Some("notes/shared.md"));
+        }
+        other => panic!("premise: the inline field is no link: {other:?}"),
+    }
+    assert_eq!(
+        crate::link_resolver::SNAPSHOT_PATHS.with(std::cell::Cell::get),
+        0,
+        "the query read a snapshot of the vault"
+    );
+}
+
+/// #1486: a DQL inline field's failed lookup fails the query at its owner.
+#[test]
+fn a_failed_dql_inline_link_lookup_fails_the_query() {
+    let (_tmp, session) = link_lookup_vault(|provider| {
+        provider
+            .write_file("Notes/A.md", b"# A\n\nsibling:: [[Target]]\n")
+            .unwrap();
+    });
+    let (query, _warnings) =
+        crate::bases::dql::parse_dql("TABLE WITHOUT ID sibling\nFROM \"Notes\"\n");
+
+    let failed = execute_with_lookup_fault(&session, &query, None);
+    assert_link_lookup_failure(&failed, "Notes/A.md", "the inline field");
+}
