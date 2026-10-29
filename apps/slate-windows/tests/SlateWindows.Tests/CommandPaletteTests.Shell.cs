@@ -99,9 +99,12 @@ public sealed partial class CommandPaletteTests
         private readonly string _recentsPath;
         private WorkspaceViewModel? _workspace;
 
-        public PaletteShellHost()
+        /// <param name="seed">Writes extra files into the fixture vault before
+        /// it is opened and scanned.</param>
+        public PaletteShellHost(Action<string>? seed = null)
         {
             Assert.Null(Application.Current);
+            seed?.Invoke(_fixture.Root);
             _session = VaultSession.OpenFilesystem(_fixture.Root);
             using (var cancel = new CancelToken())
             {
@@ -217,6 +220,52 @@ public sealed partial class CommandPaletteTests
             _workspace.ActiveGroup.ActiveTab!.Text += "\nUnsaved.";
             Assert.True(_workspace.HasDirtyTabs);
             return _workspace;
+        }
+
+        /// <summary>A workspace with the canvas at <paramref name="path"/> open
+        /// as the active tab — its document synchronous, as a workspace
+        /// without interaction background work makes it — attached through
+        /// the lifecycle's own setter so the shell shows it; every canvas
+        /// sentence goes to <paramref name="announced"/>.</summary>
+        public CanvasDocumentViewModel AttachCanvasWorkspace(
+            string path, Action<RenderedAnnouncement> announced)
+        {
+            _workspace = new WorkspaceViewModel(
+                _session,
+                _fixture.Root,
+                () => [],
+                _ => { },
+                startInteractionBackgroundWork: false,
+                preferencesStore: new AppPreferencesStore(Path.Combine(_fixture.Root, "preferences.json")),
+                announceRendered: announced);
+            SetProperty(nameof(VaultLifecycleViewModel.Workspace), _workspace);
+            _workspace.OpenPath(path);
+            Settle();
+            return Assert.IsType<CanvasDocumentViewModel>(_workspace.ActiveGroup.ActiveTab?.Canvas);
+        }
+
+        /// <summary>The one canvas surface the shell shows.</summary>
+        public CanvasSurfaceView CanvasSurface()
+        {
+            var found = new List<CanvasSurfaceView>();
+            void Walk(DependencyObject parent)
+            {
+                for (int index = 0; index < System.Windows.Media.VisualTreeHelper.GetChildrenCount(parent); index++)
+                {
+                    DependencyObject child = System.Windows.Media.VisualTreeHelper.GetChild(parent, index);
+                    if (child is CanvasSurfaceView surface)
+                    {
+                        found.Add(surface);
+                    }
+                    else
+                    {
+                        Walk(child);
+                    }
+                }
+            }
+
+            Walk(_window);
+            return Assert.Single(found);
         }
 
         /// <summary>Every element that took keyboard focus since the last

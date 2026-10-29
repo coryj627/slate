@@ -179,6 +179,31 @@ public sealed partial class CanvasNavigatorTests : IDisposable
               "edges": []
             }
             """);
+        // WB-13 (#1260): three flat cards with no connections, so the
+        // outline's rows are exactly A, B, C in reading order — and a canvas
+        // of one card, whose delete leaves the outline empty.
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "trio.canvas"),
+            """
+            {
+              "nodes": [
+                {"id":"alpha","type":"text","text":"Alpha","x":0,"y":0,"width":200,"height":100},
+                {"id":"beta","type":"text","text":"Beta","x":300,"y":0,"width":200,"height":100},
+                {"id":"gamma","type":"text","text":"Gamma","x":600,"y":0,"width":200,"height":100}
+              ],
+              "edges": []
+            }
+            """);
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "solo.canvas"),
+            """
+            {
+              "nodes": [
+                {"id":"only","type":"text","text":"Only","x":0,"y":0,"width":200,"height":100}
+              ],
+              "edges": []
+            }
+            """);
         File.WriteAllText(Path.Combine(_fixture.Root, "empty.canvas"), "{}");
         File.WriteAllText(
             Path.Combine(_fixture.Root, "broken.canvas"), "{ this is not json");

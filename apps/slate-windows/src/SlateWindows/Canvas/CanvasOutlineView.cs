@@ -358,6 +358,29 @@ internal sealed class CanvasOutlineView : UserControl
     private readonly Dictionary<string, bool> _expansion =
         new(StringComparer.Ordinal);
 
+    /// <summary>WB-13 (#1260): the node whose row last held the keys — a
+    /// connection row's source node — kept while something layered over the
+    /// tab holds them (a shell overlay such as the palette, a menu), since
+    /// those give the keys back; ended when the keys land on another element
+    /// outside the outline (<see cref="OnWindowGotKeyboardFocus"/>).</summary>
+    private string? _keysRowId;
+
+    /// <summary>The previous rebuild's reading order — every node id of
+    /// its population — where the successor of a vanished row is
+    /// found.</summary>
+    private List<string> _lastOrder = [];
+
+    /// <summary>A successor seated for an overlay's restore to land on,
+    /// with the receipt that landing marks.</summary>
+    private PendingReturn? _pendingReturn;
+
+    private sealed record PendingReturn(string NodeId, CanvasOperationCompletion? Receipt);
+
+    /// <summary>The window whose focus changes end a kept lineage, and the
+    /// handler watching it.</summary>
+    private Window? _keysWindow;
+    private readonly KeyboardFocusChangedEventHandler _keysElsewhere;
+
     public CanvasOutlineView()
     {
         _tree = new CanvasOutlineTree
@@ -410,6 +433,10 @@ internal sealed class CanvasOutlineView : UserControl
                 () => ContainersRealized?.Invoke());
         };
         _tree.SelectedItemChanged += OnTreeSelectionChanged;
+        _tree.GotKeyboardFocus += OnTreeGotKeyboardFocus;
+        _keysElsewhere = OnWindowGotKeyboardFocus;
+        Loaded += (_, _) => WatchTheWindow(Window.GetWindow(this));
+        Unloaded += (_, _) => WatchTheWindow(null);
         _tree.KeyDown += OnTreeKeyDown;
         _tree.MouseDoubleClick += OnTreeDoubleClick;
         Content = _tree;
@@ -494,9 +521,19 @@ internal sealed class CanvasOutlineView : UserControl
             {
                 return LandingSeat.NotYet;
             }
-            return container.Focus() ? LandingSeat.Seated
-                : container.IsVisible ? LandingSeat.Refused
-                : LandingSeat.NotYet;
+            if (!container.Focus())
+            {
+                return container.IsVisible ? LandingSeat.Refused : LandingSeat.NotYet;
+            }
+            // WB-13 (#1260): the overlay's restore landed on the successor
+            // seated for it — the operation's one focus return.
+            if (_pendingReturn is { } pending
+                && string.Equals(pending.NodeId, nodeId, StringComparison.Ordinal))
+            {
+                _pendingReturn = null;
+                _ = pending.Receipt?.TryMarkFocusReturned();
+            }
+            return LandingSeat.Seated;
         }
         finally
         {
@@ -693,10 +730,57 @@ internal sealed class CanvasOutlineView : UserControl
             model.OutlinePublished += view.OnOutlinePublished;
             model.Selection.PropertyChanged += view.OnSelectionChanged;
         }
+        // Another document's rows: nothing the previous one's keys held is
+        // in them.
+        view._keysRowId = null;
+        view._lastOrder = [];
+        view._pendingReturn = null;
         view.Rebuild();
     }
 
-    private void OnOutlinePublished(object? sender, EventArgs e) => Rebuild();
+    private void OnOutlinePublished(object? sender, EventArgs e) =>
+        Rebuild((e as CanvasOutlinePublishedEventArgs)?.Receipt);
+
+    /// <summary>WB-13 (#1260): the keys' lineage follows the row that takes
+    /// them.</summary>
+    private void OnTreeGotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (KeysNodeOf((e.NewFocus as CanvasOutlineItem)?.DataContext as CanvasOutlineRowViewModel) is { } node)
+        {
+            _keysRowId = node;
+        }
+    }
+
+    /// <summary>WB-13 (#1260): the lineage ends when the keys land on another
+    /// element outside the outline, classified as the surface classifies a
+    /// loss (contract C8) — another pane, or an overlay's restore that put
+    /// them elsewhere (red team H1) — so a later publication never seats a
+    /// row for keys that are not coming back. An overlay or a menu is
+    /// layered over the tab and still holds them; the window itself is no
+    /// landing (focus falling while an overlay collapses), and a window
+    /// deactivation lands nowhere.</summary>
+    private void OnWindowGotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (_keysRowId is null
+            || _tree.IsKeyboardFocusWithin
+            || e.NewFocus is null or Window
+            || CanvasSurfaceView.ClassifyFocusLoss() != CanvasFocusDeparture.PaneFocus)
+        {
+            return;
+        }
+        _keysRowId = null;
+        _pendingReturn = null;
+    }
+
+    private void WatchTheWindow(Window? window)
+    {
+        _keysWindow?.RemoveHandler(Keyboard.GotKeyboardFocusEvent, _keysElsewhere);
+        _keysWindow = window;
+        _keysWindow?.AddHandler(Keyboard.GotKeyboardFocusEvent, _keysElsewhere, handledEventsToo: true);
+    }
+
+    private static string? KeysNodeOf(CanvasOutlineRowViewModel? row) =>
+        row is null ? null : row.IsConnection ? row.SourceNodeId : row.Id;
 
     private void OnSelectionChanged(
         object? sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -735,8 +819,17 @@ internal sealed class CanvasOutlineView : UserControl
     /// from the UNFILTERED rows, then the displayed rows are attached to
     /// it (CD-45). With no needle the second pass walks the same rows,
     /// which is the same shape rather than a special case.</summary>
-    private void Rebuild()
+    private void Rebuild(CanvasOperationCompletion? receipt = null)
     {
+        // WB-13 (#1260): where the keys are, and which row they belong to,
+        // BEFORE the rows are torn down — the row may be gone from the next
+        // ones, and its container with it.
+        bool keysHere = HasKeyboardFocus;
+        string? keysRow = keysHere ? KeysNodeOf(FocusedRow()) ?? _keysRowId : _keysRowId;
+        List<string> lastOrder = _lastOrder;
+        PendingReturn? pending = _pendingReturn;
+        _pendingReturn = null;
+
         // E15: remember what the reader expanded BEFORE the rows are
         // torn down — a funnel republish rebuilds every row, and the
         // default-open rule below would otherwise undo every collapse.
@@ -761,6 +854,7 @@ internal sealed class CanvasOutlineView : UserControl
         _connectionCount = 0;
         if (Model is not { } model)
         {
+            _lastOrder = [];
             return;
         }
         // CONTAINMENT COMES FROM THE WHOLE CANVAS, not from the rows
@@ -784,6 +878,7 @@ internal sealed class CanvasOutlineView : UserControl
         // with the depth-gap fix only in the copy that documented it,
         // until the cleanup pass folded the two.
         CanvasPopulation? population = model.AppliedPopulation;
+        _lastOrder = population is null ? [] : [.. population.Outline.Select(row => row.NodeId)];
 
         // ED-4's drop rule, against the POPULATION rather than the
         // displayed rows: a group hidden by a filter keeps its remembered
@@ -848,6 +943,129 @@ internal sealed class CanvasOutlineView : UserControl
             _byNode[row.NodeId] = line;
         }
         ApplySelection();
+        if (!ReturnTheKeys(keysHere, keysRow, lastOrder, receipt)
+            && pending is not null
+            && string.Equals(_selectedRow?.Id, pending.NodeId, StringComparison.Ordinal))
+        {
+            // A republish before the overlay's restore ran (the posted apply
+            // after a synchronous one): the successor is still the seat, and
+            // the restore still owes it the keys.
+            _pendingReturn = pending;
+        }
+    }
+
+    /// <summary>
+    /// WB-13 (#1260): the row that held the keys is gone from the rebuilt
+    /// outline (deleted, ungrouped away) and nothing is
+    /// seated — the operation cleared the seat. Find its successor in the
+    /// previous reading order — the next surviving row, else the previous,
+    /// else none — and land it by where the keys are now. Returns whether
+    /// a return was made or set up.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The outline holds the keys (their row was deleted under them): the
+    /// successor is delivered at once — seated silently inside the sync
+    /// guard, contract C12 / CD-40, so the operation's own confirmation is
+    /// the one utterance — and with no successor the tree's own landing
+    /// takes them (the tree itself when it has no rows, AR-6). Without the
+    /// return WPF dropped the keys on the window: "Slate, window", and the
+    /// canvas chords dead until F6.
+    /// </para>
+    /// <para>
+    /// A shell overlay or a menu holds the keys (the palette's Delete, its
+    /// publication arriving while the palette is open, or after it closed
+    /// and before its posted restore ran): the successor is SEATED without
+    /// taking the keys. The overlay gives them back through its own
+    /// restore, whose token is the deleted row's dead container; the region
+    /// guard lands that token on its rows' own landing, which is the seated
+    /// row (contract 40 R-5 (h)). Taking the keys out of an open palette
+    /// would be read under a palette still on screen, and the restore would
+    /// stand down for it.
+    /// </para>
+    /// </remarks>
+    private bool ReturnTheKeys(
+        bool keysHere, string? keysRow, List<string> lastOrder, CanvasOperationCompletion? receipt)
+    {
+        if (keysRow is null || _byNode.ContainsKey(keysRow) || _selectedRow is not null)
+        {
+            return false;
+        }
+        string? successor = SuccessorOf(keysRow, lastOrder);
+        if (keysHere)
+        {
+            bool landed = successor is not null ? DeliverFocus(successor) is not null : FocusTree();
+            if (landed)
+            {
+                _ = receipt?.TryMarkFocusReturned();
+            }
+            return true;
+        }
+        // Only a mutation's rows, on the outline the reader is coming back
+        // to (red team H1): a filter or a reload is selection-neutral, and a
+        // hidden outline seating its successor would pan the visual board or
+        // move the table's row to it.
+        if (successor is null
+            || receipt is null
+            || !IsVisible
+            || Model?.Selection.ActiveSurface != CanvasSurfaceKind.Outline)
+        {
+            return false;
+        }
+        SeatWithoutKeys(successor);
+        _pendingReturn = new PendingReturn(successor, receipt);
+        return true;
+    }
+
+    /// <summary>The first row after <paramref name="gone"/> in the previous
+    /// reading order that the rebuilt outline still shows, else the last one
+    /// before it, else none. A group counts; a connection row never, it is
+    /// not in the order.</summary>
+    private string? SuccessorOf(string gone, List<string> order)
+    {
+        int at = order.IndexOf(gone);
+        if (at < 0)
+        {
+            return null;
+        }
+        for (int index = at + 1; index < order.Count; index++)
+        {
+            if (_byNode.ContainsKey(order[index]))
+            {
+                return order[index];
+            }
+        }
+        for (int index = at - 1; index >= 0; index--)
+        {
+            if (_byNode.ContainsKey(order[index]))
+            {
+                return order[index];
+            }
+        }
+        return null;
+    }
+
+    /// <summary>The seat a delivery makes — the row and the shared selection,
+    /// silently, inside the sync guard — without taking the keys.</summary>
+    private void SeatWithoutKeys(string nodeId)
+    {
+        if (Model is not { } model || !_byNode.TryGetValue(nodeId, out CanvasOutlineRowViewModel? row))
+        {
+            return;
+        }
+        bool outer = _syncingSelection;
+        _syncingSelection = true;
+        try
+        {
+            SetSelectedRow(row);
+            model.SeatSelectionSilently(nodeId);
+        }
+        finally
+        {
+            _syncingSelection = outer;
+        }
+        // The keys come back here, through the overlay's restore.
+        _keysRowId = nodeId;
     }
 
     /// <summary>

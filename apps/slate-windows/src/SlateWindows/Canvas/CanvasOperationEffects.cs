@@ -123,6 +123,20 @@ internal sealed class CanvasOperationCompletion(CanvasOperationId operation)
 }
 
 /// <summary>
+/// WB-13 (#1260): what an outline publication carries — the receipt of
+/// the mutation whose rows it publishes, so the outline that returns the
+/// keys after the operation removed their row marks that return once.
+/// Loads and filters publish <see cref="EventArgs.Empty"/>. The mark is
+/// TE-4's at-most-once record of the return; the outline also uses the
+/// receipt's presence to tell a mutation's rows from a selection-neutral
+/// publication.
+/// </summary>
+internal sealed class CanvasOutlinePublishedEventArgs(CanvasOperationCompletion? receipt) : EventArgs
+{
+    internal CanvasOperationCompletion? Receipt { get; } = receipt;
+}
+
+/// <summary>
 /// W6-1 §E TE-4 (IE-34): one audible busy refusal per gate hold. The
 /// held OPERATION is the epoch — key repeat during one slow apply
 /// announces once, and a NEW hold announces again. No timer: two

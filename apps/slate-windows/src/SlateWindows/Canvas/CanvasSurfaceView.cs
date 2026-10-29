@@ -807,7 +807,7 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     /// (and PR E/F's context menus, which are the M6 visible controls for
     /// every mode verb, would inherit that).
     /// </remarks>
-    private static CanvasFocusDeparture ClassifyFocusLoss()
+    internal static CanvasFocusDeparture ClassifyFocusLoss()
     {
         if (ShellOverlayIsOpen())
         {

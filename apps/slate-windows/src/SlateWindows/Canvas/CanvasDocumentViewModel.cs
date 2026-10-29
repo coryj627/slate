@@ -1870,7 +1870,14 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
         {
             _announcedRecoveredLoad = false;
         }
-        OutlinePublished?.Invoke(this, EventArgs.Empty);
+        // WB-13 (#1260): a mutation's rows carry its receipt, so the outline
+        // that returns the keys after the operation removed their row marks
+        // that return; a load publishes no receipt.
+        OutlinePublished?.Invoke(
+            this,
+            Funnel.TakePublishedReceipt() is { } receipt
+                ? new CanvasOutlinePublishedEventArgs(receipt)
+                : EventArgs.Empty);
         AnnounceDegradedLoadIfNeeded();
     }
 
@@ -2626,7 +2633,7 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
             selected,
             basis,
             CanvasMutationEffect.ClearSelection);
-        _ = Funnel.Apply(
+        void ApplyDelete() => _ = Funnel.Apply(
             operation,
             _ => new CanvasAction(
                 $"delete \"{row.Title}\"",
@@ -2636,7 +2643,19 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
                 new CanvasDeleteTarget.Card(row.Kind, row.Title),
                 _verbosity(),
                 CanvasPhrase.UndoChord));
+        if (HoldMutationForTests is { } hold)
+        {
+            hold(ApplyDelete);
+            return;
+        }
+        ApplyDelete();
     }
+
+    /// <summary>WB-13 (#1260) test seam: when set, the delete hands its apply
+    /// (with its confirmation) here instead of running it, so a fact can
+    /// place the publication after the palette's dismissal or after its
+    /// restore. Production never sets it.</summary>
+    internal Action<Action>? HoldMutationForTests { get; set; }
 
     private string TitleOf(string nodeId) =>
         _rows.TryGetValue(nodeId, out CanvasOutlineRow? row) ? row.Title : nodeId;

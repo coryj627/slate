@@ -509,7 +509,12 @@ internal sealed class CanvasMutationFunnel(
                 MarkUnpresented(operation);
                 return;
             }
-            CanvasRefreshOutcome refreshed;
+            CanvasRefreshOutcome refreshed = CanvasRefreshOutcome.Refused;
+            // WB-13 (#1260): the receipt rides the publication this refresh
+            // installs — set BEFORE the install, so whichever dispatcher
+            // apply first sees the new rows carries it, and withdrawn when
+            // nothing was installed, whatever ended the refresh.
+            Volatile.Write(ref _publishingReceipt, operation.Receipt);
             try
             {
                 refreshed = RefreshAndPublish(operation);
@@ -519,6 +524,13 @@ internal sealed class CanvasMutationFunnel(
                 // §G TG-3 (IG-47): a post-commit read that throws is a
                 // refused refresh — the write landed unpresented.
                 refreshed = CanvasRefreshOutcome.Refused;
+            }
+            finally
+            {
+                if (refreshed != CanvasRefreshOutcome.Installed)
+                {
+                    _ = Interlocked.CompareExchange(ref _publishingReceipt, null, operation.Receipt);
+                }
             }
             outcome = refreshed == CanvasRefreshOutcome.Installed
                 ? CanvasOperationOutcome.Installed
@@ -557,6 +569,14 @@ internal sealed class CanvasMutationFunnel(
     }
 
     private CanvasMutationOperation? _unpresented;
+
+    private CanvasOperationCompletion? _publishingReceipt;
+
+    /// <summary>WB-13 (#1260): the receipt of the operation whose refresh
+    /// installed the rows being published, taken once — the document's
+    /// outline publication hands it to the outline.</summary>
+    internal CanvasOperationCompletion? TakePublishedReceipt() =>
+        Interlocked.Exchange(ref _publishingReceipt, null);
 
     /// <summary>§G TG-3 (IG-46): the retained committed-unpresented
     /// receipt, or null — the operation whose identity the publication
