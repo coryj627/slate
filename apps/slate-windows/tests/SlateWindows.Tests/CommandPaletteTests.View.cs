@@ -204,7 +204,8 @@ public sealed partial class CommandPaletteTests
 
     /// <summary>
     /// With the list no longer synchronized to its current item, every
-    /// keyboard move still reaches it: Up, Down, Home and End (PD-1) each
+    /// keyboard move still reaches it: Up, Down, Home and End (PD-1 was
+    /// retired by #1105; both hosts handle these keys) each
     /// highlight the view model's row and scroll it into view, each says
     /// one sentence, and Enter runs the row the list shows.
     /// </summary>

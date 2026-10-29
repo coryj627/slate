@@ -161,9 +161,10 @@ public partial class MainWindow
 
     /// <summary>
     /// The search overlay's keyboard route. Arrows move the result
-    /// selection (divergence SD-1); Home/End/Page keys are deliberately
-    /// NOT handled — mac's overlay has none and SD-1 covers arrows only,
-    /// so those keys keep their TextBox caret meaning.
+    /// selection (SD-1, retired by #1113: both hosts' arrows walk the
+    /// results); Home/End/Page keys are deliberately NOT handled — mac's
+    /// overlay handles none of them either, so those keys keep their
+    /// TextBox caret meaning.
     /// </summary>
     private void HandleSearchOverlayKey(KeyEventArgs e, ModifierKeys modifiers)
     {

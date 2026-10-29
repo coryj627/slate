@@ -1012,8 +1012,8 @@ public sealed class SearchOverlayViewModelTests
         var harness = new OverlayHarness();
         harness.Overlay.Open();
 
-        // SD-1: arrows drive the list on Windows; mac has no arrow
-        // handling at all. Empty list: a no-op, never a throw.
+        // SD-1, retired by #1113: both hosts' arrows walk the results
+        // (Windows moves a selection). Empty list: a no-op, never a throw.
         harness.Overlay.MoveSelection(1);
         Assert.Equal(-1, harness.Overlay.SelectedIndex);
 
@@ -1051,8 +1051,9 @@ public sealed class SearchOverlayViewModelTests
 
         harness.Overlay.MoveSelection(1);
 
-        // Basename only, mac parity (SearchOverlay.swift:537-552): the
-        // full "{basename}: {snippet}" label stays on the element; the
+        // Basename only (contract 29 S8; mac's on-focus announcement was
+        // removed by #1412, VoiceOver's read of the focused row is its
+        // voice): the full "{basename}: {snippet}" label stays on the element; the
         // move announcement must not read a paragraph of snippet.
         A11yEvent.RowSelected selected =
             Assert.IsType<A11yEvent.RowSelected>(harness.Announcements[^1]);

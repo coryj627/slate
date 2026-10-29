@@ -258,9 +258,8 @@ public partial class MainWindow
                     e.Handled = true;
                     return;
 
-                // PD-1: Home / End / Page keys navigate on Windows, where
-                // mac deliberately handles none of them. A recorded
-                // platform-convention divergence, vetoable at PR.
+                // Home / End / Page keys navigate (PD-1, retired by #1105:
+                // both hosts handle these keys).
                 case Key.Home:
                     palette.SelectFirst();
                     e.Handled = true;
