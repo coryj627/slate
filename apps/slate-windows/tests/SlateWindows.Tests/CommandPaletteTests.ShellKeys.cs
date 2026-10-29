@@ -699,8 +699,9 @@ public sealed partial class CommandPaletteTests
 
     /// <summary>#1701: captures the mouse to <paramref name="element"/>,
     /// trying five times — a desktop busy with another window can refuse
-    /// SetCapture for a moment — and says whether it held. A null element
-    /// would release capture, which Mouse.Capture reports as success.</summary>
+    /// SetCapture for a moment — and says whether it held. Throws
+    /// <see cref="ArgumentNullException"/> for a null element: Mouse.Capture
+    /// would take it as a release and report success.</summary>
     private static bool CaptureMouse(IInputElement element)
     {
         ArgumentNullException.ThrowIfNull(element);
