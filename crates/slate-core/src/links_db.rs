@@ -213,7 +213,9 @@ impl LinkCandidates for FoldedNameLookup {
 
 /// Every row `probe` names, read through the fold indexes in the order
 /// [`FoldedNameLookup`] offers them, handed to `each` — for a caller that
-/// resolves one target from many sources and keeps the rows (#1486).
+/// resolves one target from many sources and keeps the rows (#1486). Each
+/// call runs one (cached) SQL statement, so a caller resolving one target
+/// many times should keep the rows rather than call again.
 pub(crate) fn for_each_folded_candidate(
     conn: &Connection,
     probe: &CandidateProbe,
