@@ -565,6 +565,7 @@ pub fn execute(
         cancel,
         source_path: ctx.this_path.as_deref().unwrap_or_default(),
         link_resolutions: RefCell::new(BTreeMap::new()),
+        link_candidates: RefCell::new(BTreeMap::new()),
         deleted_content_regexes: RefCell::new(BTreeMap::new()),
     };
     let mut resolved_query = None;
@@ -3675,6 +3676,10 @@ struct SqlVaultLookup<'a> {
     source_path: &'a str,
     /// Answers only: a failed lookup is never remembered as unresolved.
     link_resolutions: RefCell<BTreeMap<(String, String), Option<String>>>,
+    /// Each target's candidate rows, read once per query (#1486): the rows
+    /// depend on the target alone, only their ranking on the source, so a
+    /// link every row carries costs one read, not one per row.
+    link_candidates: RefCell<BTreeMap<String, Vec<String>>>,
     /// #800: compiled patterns for `oplog.deleted_content_matches_regex`,
     /// memoized per query — row-eval calls this once per candidate row
     /// and must not recompile each time.
@@ -3751,7 +3756,6 @@ impl SqlVaultLookup<'_> {
         target: &str,
         source_path: &str,
     ) -> Result<Option<String>, EvalError> {
-        use crate::links_db::LinkCandidates as _;
         let cache_key = (source_path.to_string(), target.to_string());
         if let Some(resolved) = self.link_resolutions.borrow().get(&cache_key) {
             return Ok(resolved.clone());
@@ -3761,7 +3765,22 @@ impl SqlVaultLookup<'_> {
             None,
             source_path,
             |mut selector| {
-                crate::links_db::FoldedNameLookup.offer_to(self.conn, &mut selector)?;
+                if let Some(paths) = self.link_candidates.borrow().get(target) {
+                    for path in paths {
+                        selector.offer(path);
+                    }
+                    return Ok(selector.into_winner());
+                }
+                let mut paths = Vec::new();
+                crate::links_db::for_each_folded_candidate(self.conn, &selector.probe(), |path| {
+                    paths.push(path.to_string());
+                })?;
+                for path in &paths {
+                    selector.offer(path);
+                }
+                self.link_candidates
+                    .borrow_mut()
+                    .insert(target.to_string(), paths);
                 Ok::<_, VaultError>(selector.into_winner())
             },
         )

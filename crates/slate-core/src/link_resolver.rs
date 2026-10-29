@@ -580,24 +580,6 @@ impl LinkCandidateSelector {
         }
     }
 
-    /// Whether this target's probe names `path` (#1485): its lowercased
-    /// whole path is an exact key, or its final component matches the
-    /// basename — [`Self::offer`]'s own matching, without the ranking.
-    pub fn probe_names(&self, path: &str) -> bool {
-        match &self.mode {
-            SelectorMode::Exact { keys } => keys.contains(&path.to_lowercase()),
-            SelectorMode::Basename {
-                basename,
-                has_extension,
-                ..
-            } => basename_matches(
-                &final_component(path).to_lowercase(),
-                basename,
-                *has_extension,
-            ),
-        }
-    }
-
     /// Consider one indexed path; a path that cannot match is ignored.
     pub fn offer(&mut self, path: &str) {
         #[cfg(test)]

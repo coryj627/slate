@@ -51,17 +51,38 @@ use crate::links::{LinkAnchor, LinkKind, ParsedLink, extract_links};
 pub struct MoveMapping {
     forward: HashMap<String, String>,
     reverse: HashMap<String, String>,
+    /// #1485: each moved file's post-move key, under the pre-move key it
+    /// answered — its lowercased whole path, and its lowercased final
+    /// component — so a probe finds its moved files by key, not by walking
+    /// every move.
+    moved_by_path: HashMap<String, Vec<String>>,
+    moved_by_name: HashMap<String, Vec<String>>,
 }
 
 impl MoveMapping {
     pub fn new(pairs: impl IntoIterator<Item = (String, String)>) -> Self {
         let mut forward = HashMap::new();
         let mut reverse = HashMap::new();
+        let mut moved_by_path: HashMap<String, Vec<String>> = HashMap::new();
+        let mut moved_by_name: HashMap<String, Vec<String>> = HashMap::new();
         for (old, new) in pairs {
+            moved_by_path
+                .entry(old.to_lowercase())
+                .or_default()
+                .push(new.to_lowercase());
+            moved_by_name
+                .entry(final_component(&old).to_lowercase())
+                .or_default()
+                .push(final_component(&new).to_lowercase());
             reverse.insert(new.clone(), old.clone());
             forward.insert(old, new);
         }
-        Self { forward, reverse }
+        Self {
+            forward,
+            reverse,
+            moved_by_path,
+            moved_by_name,
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -100,29 +121,30 @@ impl VaultIndex for PreMoveIndex<'_> {
     }
 
     /// The post-move index's own candidates, not every path (#1485). The
-    /// probe gains, for each moved file whose pre-move path it names, the
-    /// key its post-move path answers; the post index returns those
-    /// candidates in its own order, and each is offered mapped back — the
+    /// probe gains, for each moved file whose pre-move path one of its keys
+    /// names, the key its post-move path answers — looked up by key, so a
+    /// link costs its keys, not the moves. The post index returns those
+    /// candidates in its own order, and each is offered mapped back: the
     /// sequence [`Self::all_paths`]' interleaving gives, so the first
     /// offered of two equal exact matches is today's winner.
     fn offer_candidates(&self, selector: &mut LinkCandidateSelector) {
-        let moved_keys = |key_of: fn(&str) -> String| {
-            self.mapping
-                .forward
+        let with_moved_keys = |mut keys: Vec<String>, moved: &HashMap<String, Vec<String>>| {
+            let added: Vec<String> = keys
                 .iter()
-                .filter(|(old, _)| selector.probe_names(old))
-                .map(|(_, new)| key_of(new))
-                .collect::<Vec<String>>()
+                .filter_map(|key| moved.get(key))
+                .flatten()
+                .cloned()
+                .collect();
+            keys.extend(added);
+            keys
         };
         let probe = match selector.probe() {
             CandidateProbe::None => return,
-            CandidateProbe::Paths(mut keys) => {
-                keys.extend(moved_keys(|new| new.to_lowercase()));
-                CandidateProbe::Paths(keys)
+            CandidateProbe::Paths(keys) => {
+                CandidateProbe::Paths(with_moved_keys(keys, &self.mapping.moved_by_path))
             }
-            CandidateProbe::Names(mut keys) => {
-                keys.extend(moved_keys(|new| final_component(new).to_lowercase()));
-                CandidateProbe::Names(keys)
+            CandidateProbe::Names(keys) => {
+                CandidateProbe::Names(with_moved_keys(keys, &self.mapping.moved_by_name))
             }
         };
         for path in self.post.candidate_paths(&probe) {
@@ -831,7 +853,7 @@ mod tests {
 
     /// #1485: the pre-move index's candidate lookup picks the winner offering
     /// it every pre-move path picks — for a rename, a move, a folder move, a
-    /// case-only rename and a rename onto a case twin, every shared fixture
+    /// case-only rename, a rename onto a case twin and a swap, every shared fixture
     /// target from every source, with the post index as written and in path
     /// order.
     #[test]
@@ -842,7 +864,7 @@ mod tests {
             .filter_map(|path| path.strip_prefix("notes/"))
             .map(|rest| (format!("notes/{rest}"), format!("moved/{rest}")))
             .collect();
-        let shapes: [(&str, Vec<(String, String)>); 5] = [
+        let shapes: [(&str, Vec<(String, String)>); 6] = [
             (
                 "rename",
                 vec![("notes/shared.md".into(), "notes/renamed.md".into())],
@@ -856,6 +878,13 @@ mod tests {
             (
                 "onto a case twin",
                 vec![("a/shared.md".into(), "z/Shared.md".into())],
+            ),
+            (
+                "a swap",
+                vec![
+                    ("alpha.md".into(), "gamma.md".into()),
+                    ("gamma.md".into(), "alpha.md".into()),
+                ],
             ),
         ];
         let mut moved_winners = 0;

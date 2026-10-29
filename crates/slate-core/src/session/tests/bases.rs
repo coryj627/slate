@@ -4738,6 +4738,53 @@ fn a_query_that_resolves_links_materializes_no_snapshot() {
     );
 }
 
+/// #1486: a link every row carries — a property such as `up: [[Target]]` —
+/// reads its candidate rows once per query, not once per row: the rows
+/// depend on the target alone, only their ranking on the row.
+#[test]
+fn a_property_link_every_row_carries_reads_its_candidates_once() {
+    let (_tmp, session) = make_vault(|provider| {
+        provider.write_file("Target.md", b"# Target\n").unwrap();
+        for n in 0..50 {
+            provider
+                .write_file(
+                    &format!("Notes/d{}/n{n:02}.md", n % 5),
+                    b"---\nup: \"[[Target]]\"\n---\n# note\n",
+                )
+                .unwrap();
+        }
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let query = link_lookup_query(
+        crate::bases::QuerySource::Folder("Notes".to_string()),
+        &["up"],
+    );
+
+    crate::links_db::FOLDED_CANDIDATE_READS.with(|reads| reads.set(0));
+    let result = execute_link_lookup_query(&session, &query, None);
+
+    assert_eq!(result.error, None);
+    assert_eq!(result.rows.len(), 50);
+    for row in &result.rows {
+        match &row.cells[0] {
+            CellValue::Value(crate::bases::eval::Value::Link(link)) => {
+                assert_eq!(
+                    link.resolved_path.as_deref(),
+                    Some("Target.md"),
+                    "{}",
+                    row.path
+                );
+            }
+            other => panic!("{}: premise: no link: {other:?}", row.path),
+        }
+    }
+    assert_eq!(
+        crate::links_db::FOLDED_CANDIDATE_READS.with(std::cell::Cell::get),
+        1,
+        "the query read the one target's candidates more than once"
+    );
+}
+
 /// #1486 (never silent): a link lookup that fails in a filter fails the
 /// query at the first candidate, instead of filtering as if the link were
 /// unresolved; without the fault the same query runs.

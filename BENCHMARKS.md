@@ -1299,12 +1299,16 @@ opened first.
 
 ## Plan 44 WB-18 — every link resolution reads its own candidate rows (#1427, #1485, #1486)
 
-Three resolutions still read a snapshot of every `files` row: the one-path
-repair (`reindex_path`), the pre-move half of a rename's rewrite plan, and
-a Bases or DQL query. Each now reads only its links' candidate rows. The
-repair and the query use the folded-name lookup the save already uses. The
-rename plan asks the post-move snapshot's candidate table for the probe's
-keys plus the keys its moved files now answer.
+Three resolutions still read every `files` row. The one-path repair
+(`reindex_path`) and a Bases or DQL query each read a snapshot of every
+row; they now read only their links' candidate rows, through the
+folded-name lookup the save already uses. A query reads each distinct
+target's rows once, however many rows carry the link. The pre-move half of
+a rename's rewrite plan offered every path to every link it planned. The
+rename still captures the post-move snapshot it always has (#1429 decided
+it keeps it). The plan now asks that snapshot's candidate table for the
+probe's keys, plus the keys its moved files now answer. It finds those
+moved files by key, not by walking the move.
 
 Counted 2026-10-29 with the test-only row counters, on the facts' own
 fixtures (`cargo test -p slate-core`, Windows 11, debug profile). "Before"
@@ -1313,17 +1317,22 @@ These are row counts, not timings.
 
 | Resolution (fixture) | Counter | Before | After |
 |---|---|---:|---:|
-| Repair of a note with 10 links over 8 distinct targets (307 indexed files) | paths materialized into a snapshot | 309 | 0 |
+| Repair of a note with 10 links over 8 distinct targets (308 indexed files) | paths materialized into a snapshot | 309 | 0 |
 | The same repair | rows its link resolution offered | 10 | 9 |
 | Rename of a note linked by 5 sources, 3 distinct targets each (307 files) | paths offered to the resolver | 4,630 | 40 |
 | Bases query whose formula calls `link()`, over 200 notes (201 files) | paths materialized into a snapshot | 201 | 0 |
 | DQL table of an inline link field (28 census files) | paths materialized into a snapshot | 28 | 0 |
+| Bases column of a property every row carries (`up: [[Target]]`, 50 rows) | candidate reads | 50 | 1 |
 
-The rename count was bounded by files × links planned. It is now bounded
-by links × their candidates: the fact allows 60 (sources × distinct targets
-× four resolutions) where the vault holds 307 files. A failed lookup in a
-query now fails the query as the public failed result ("link lookup
-failed: …"). It used to read as an unresolved link.
+The repair's "before" is the 308 rows plus the repaired path, which the old
+code appended. The rename's offers were bounded by files × links planned.
+They are now bounded by links × their candidates: the fact allows 60
+(sources × distinct targets × four resolutions) where the vault holds 307
+files. The last row compares this branch's lookup before and after its
+per-query candidate cache.
+
+A failed lookup in a query now fails the query as the public failed result
+("link lookup failed: …"). It used to read as an unresolved link.
 
 ## Plan 43 PR 21a — the change feed's trigger cost (#1293)
 

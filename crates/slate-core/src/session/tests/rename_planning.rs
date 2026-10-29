@@ -55,6 +55,10 @@ fn a_rename_plans_its_rewrites_from_candidate_rows_only() {
         .rename_file("notes/target.md", "Renamed.md")
         .unwrap();
     let offered = paths_offered() - before;
+    assert!(
+        offered > 0,
+        "premise: the rename's resolutions ran on another thread; the counter saw none"
+    );
 
     let bound = SOURCES * DISTINCT_TARGETS * RESOLUTIONS_PER_TARGET;
     assert!(

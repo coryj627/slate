@@ -86,37 +86,52 @@ fn the_fault_guard_clears_every_fault_variable_on_acquisition() {
 
 /// The census: a fault-seam variable is set only through the guard. The
 /// watcher's own switch is no fault seam, and its fact sets it under its
-/// own lock. Its ceiling: it reads literal names only.
+/// own lock. It reads every source under `src`, so an inline test module
+/// beside the code is held to the same rule. Its ceiling: it reads literal
+/// names only.
 #[test]
 fn no_test_sets_a_fault_variable_outside_the_guard() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/session/tests");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let pattern = regex::Regex::new(r#"set_var\(\s*"SLATE_TEST_\w+""#).unwrap();
     let mut found = Vec::new();
     let mut watcher_switches = 0;
     let mut sources = 0;
-    for entry in std::fs::read_dir(&root).unwrap() {
-        let path = entry.unwrap().path();
-        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
-            continue;
-        }
-        sources += 1;
-        let name = path.file_name().unwrap().to_string_lossy().into_owned();
-        if name == "common.rs" {
-            continue;
-        }
-        let text = std::fs::read_to_string(&path).unwrap();
-        for hit in pattern.find_iter(&text) {
-            if name == "watch.rs" && hit.as_str().contains("SLATE_TEST_DISABLE_VAULT_WATCHER") {
-                watcher_switches += 1;
+    let mut folders = vec![root.clone()];
+    while let Some(folder) = folders.pop() {
+        for entry in std::fs::read_dir(&folder).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                folders.push(path);
                 continue;
             }
-            let line = text[..hit.start()].matches('\n').count() + 1;
-            found.push(format!("{name}:{line}: {}", hit.as_str()));
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            sources += 1;
+            let name = path
+                .strip_prefix(&root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            if name == "session/tests/common.rs" {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            for hit in pattern.find_iter(&text) {
+                if name == "session/tests/watch.rs"
+                    && hit.as_str().contains("SLATE_TEST_DISABLE_VAULT_WATCHER")
+                {
+                    watcher_switches += 1;
+                    continue;
+                }
+                let line = text[..hit.start()].matches('\n').count() + 1;
+                found.push(format!("{name}:{line}: {}", hit.as_str()));
+            }
         }
     }
     assert!(
-        sources > 20,
-        "the census found {sources} test sources — the walk is broken"
+        sources > 100,
+        "the census found {sources} sources under src — the walk is broken"
     );
     assert_eq!(
         watcher_switches, 2,

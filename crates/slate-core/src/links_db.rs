@@ -108,6 +108,10 @@ thread_local! {
     /// through the path-order helper and through nothing else.
     pub(crate) static PATH_ORDER_SNAPSHOT_PATHS: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
+    /// #1486 test seam: candidate reads [`for_each_folded_candidate`] ran
+    /// on this thread — one statement each.
+    pub(crate) static FOLDED_CANDIDATE_READS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
 }
 
 /// Where [`replace_links_for_file`] draws a target's candidate paths from
@@ -203,27 +207,40 @@ impl LinkCandidates for FoldedNameLookup {
         conn: &Connection,
         selector: &mut LinkCandidateSelector,
     ) -> Result<(), VaultError> {
-        let (column, keys) = match selector.probe() {
-            CandidateProbe::None => return Ok(()),
-            CandidateProbe::Paths(keys) => (CandidateColumn::Path, keys),
-            CandidateProbe::Names(keys) => (CandidateColumn::Name, keys),
-        };
-        #[cfg(test)]
-        if LOOKUP_FAULT.with(std::cell::Cell::get) {
-            conn.prepare("SELECT path FROM slate_test_lookup_fault")?;
-        }
-        let folded: Vec<String> = keys
-            .iter()
-            .map(|key| crate::db::tree_sort_key(key))
-            .collect();
-        let mut statement = conn.prepare_cached(&candidate_rows_sql(column, folded.len()))?;
-        let mut rows = statement.query(rusqlite::params_from_iter(folded.iter()))?;
-        while let Some(row) = rows.next()? {
-            let path: String = row.get(0)?;
-            selector.offer(&path);
-        }
-        Ok(())
+        for_each_folded_candidate(conn, &selector.probe(), |path| selector.offer(path))
     }
+}
+
+/// Every row `probe` names, read through the fold indexes in the order
+/// [`FoldedNameLookup`] offers them, handed to `each` — for a caller that
+/// resolves one target from many sources and keeps the rows (#1486).
+pub(crate) fn for_each_folded_candidate(
+    conn: &Connection,
+    probe: &CandidateProbe,
+    mut each: impl FnMut(&str),
+) -> Result<(), VaultError> {
+    let (column, keys) = match probe {
+        CandidateProbe::None => return Ok(()),
+        CandidateProbe::Paths(keys) => (CandidateColumn::Path, keys),
+        CandidateProbe::Names(keys) => (CandidateColumn::Name, keys),
+    };
+    #[cfg(test)]
+    FOLDED_CANDIDATE_READS.with(|reads| reads.set(reads.get() + 1));
+    #[cfg(test)]
+    if LOOKUP_FAULT.with(std::cell::Cell::get) {
+        conn.prepare("SELECT path FROM slate_test_lookup_fault")?;
+    }
+    let folded: Vec<String> = keys
+        .iter()
+        .map(|key| crate::db::tree_sort_key(key))
+        .collect();
+    let mut statement = conn.prepare_cached(&candidate_rows_sql(column, folded.len()))?;
+    let mut rows = statement.query(rusqlite::params_from_iter(folded.iter()))?;
+    while let Some(row) = rows.next()? {
+        let path: String = row.get(0)?;
+        each(&path);
+    }
+    Ok(())
 }
 
 /// `target_raw`, authored in `source_path`, resolved under [`resolve_link`]'s
