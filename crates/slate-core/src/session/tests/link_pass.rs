@@ -258,12 +258,13 @@ fn snapshot_reads(operation: impl FnOnce()) -> (usize, usize) {
 /// `links_db::indexed_paths_in_path_order` — the one statement whose path
 /// order `links_db::tests::the_whole_table_snapshot_reads_in_path_order`
 /// pins — and through nothing else: a cold scan and its dangling-link pass,
-/// a rescan with a changed linked note, the one-path repair (which adds its
-/// own path), `wikilink_for_path`, a Bases query whose rows carry a
-/// link-valued property, a rename's heal and link rewrite, and a rename
-/// that reclassifies a note. The save lookup reads a path target's rows in
-/// the same order through its own statement (`links_db::candidate_rows_sql`);
-/// the embed lookup's unordered rows are #1428.
+/// a rescan with a changed linked note, `wikilink_for_path`, a Bases query
+/// whose rows carry a link-valued property, a rename's heal and link
+/// rewrite, and a rename that reclassifies a note. The save lookup — and
+/// the one-path repair, which reads no snapshot (#1427) — reads a path
+/// target's rows in the same order through its own statement
+/// (`links_db::candidate_rows_sql`); the embed lookup's unordered rows are
+/// #1428.
 #[test]
 fn every_resolution_snapshot_is_read_through_the_path_order_helper() {
     let (tmp, session) = make_vault(|provider| {
@@ -311,10 +312,12 @@ fn every_resolution_snapshot_is_read_through_the_path_order_helper() {
         }),
         0,
     );
-    read_through_the_helper(
-        "the one-path repair",
+    // #1427: the one-path repair resolves through the folded-name lookup,
+    // as a save does, and reads no snapshot at all.
+    assert_eq!(
         snapshot_reads(|| session.reindex_path("Projects/Note.md").unwrap()),
-        1,
+        (0, 0),
+        "the one-path repair read a snapshot"
     );
     read_through_the_helper(
         "wikilink_for_path",
