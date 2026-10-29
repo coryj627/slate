@@ -574,6 +574,47 @@ base views were found." with no repair sentence and no Edit button.
 - [ ] NVDA pass recorded in the PR body (the phrases above).
 - [ ] PR body: `Closes #1397`; names the three `BasePhrase` literals for PR 35. Not delivered: core-owned failed-state copy (PR 35's); repairing a docked base from the dock (open it in a tab) or a failed saved query from its group.
 
+## Amended at implementation (2026-10-28)
+
+- **WD8** was answered as recommended when the owner approved the run (every pending WD), so the group is built.
+- **No Windows retarget.** Windows has no base retarget, so the spec's "reopening" and "retarget failed" reasons have no trigger. `DefinitionEditingDisabledReason` is saved query → null, Loading → mac's opening sentence (`BasePhrase.DefinitionOpening`, "This Base is still opening. Wait for it to finish before making changes."), definition unavailable → mac's unavailable sentence, else null. `AMissingBaseFileStillDisablesEditingWithTheUnavailableReason` drops the failed-reopen-keeps-the-retarget-reason leg. A failed reopen is unavailable, as mac's failed state without a read definition is.
+- **One check, in `ExecuteBody`.** The no-executable-view check lives there (an empty view list publishes `PublishFailed(NoExecutableViews)` without executing, handle kept), so the load, `Refresh`, a builder apply and a save-sort all classify a view-less definition the same way. `ClampedViewIndex` is unchanged.
+- **The availability field** is a bool, `_definitionUnavailable`, published on the UI thread at every open (false), failed open (true), failed probe (true) and apply (false). The probe is `DefinitionStillReadable` in `Refresh` for `!IsSavedQuery`, reading `ReadNoteParts(Path)` under the FFI lock.
+- **The reopen.** `ViewEditQueryJson` reopens a detached file-backed definition through `LoadBody` on its worker, then fetches. A failed reopen's continuation reports the published state message (the open's sentence). A definition with no view gets `BaseQueryBuilderViewModel.NewQuerySeedJson`, the new-query seed now shared with `NewQuery`.
+- **`BasePhrase.Message`** now renders `SlateUniffiMethods.VaultErrorDetail`. It was `exception.Message`, the binding's "@message=…" field dump, in every base open and execute sentence; the unloadable-view twin asserts the detail.
+- **`SaveToView` on a view-less definition** writes `AddView("type: table")`, then only the edits a new view needs. There is no `RemoveViewKey` for filters a new view does not have.
+- **The surface.**
+  - **When the group shows:** for Failed, and for Degraded with no result (an execute that failed before any rows landed). Windows keeps a failed refresh Degraded under its retained rows (contract C9), and with no rows to keep the content area showed "No base results.", a blank surface by another name. That is `NoBlankSurfaceForAFailedBase`'s "unloadable" case: on Windows, a base whose first execute fails, Degraded with no result.
+  - **The banner:** the state banner is empty while the group shows, so the message is read once, under the heading.
+  - **The landing:** a failed base that offers repair lands on its Edit.
+  - **The control:** the group is `BaseLoadFailedGroup`, a `StackPanel` whose peer is a UIA Group named by the heading.
+  - **"The loading line":** there is no loading line on the Windows surface; the fact asserts that a loading base shows no group.
+- **The palette command's mutation** keeps the `ReasonedCommand` and makes it speak the generic sentence ("the generic reason, not the definition's"), since a text mutation cannot swap the field's type.
+- **The tab-surface-bound-to-the-workspace-command mutation** is not run as a text mutation: the surface holds no workspace. The split fact's own two cases pin it: the inactive group's Edit is enabled while the workspace command is disabled, and disabled while it is enabled.
+- **The detached reopen** is `ADetachedDefinitionReopensForTheEditWhenItsFileIsReadable`. `EditFromTheErrorStateOpensTheBuilder` covers the empty base's repair only.
+- **Registers.** `parity_matrix.md` is generated from the command list and has no `.base` recovery row; this chunk adds no command, so it is unchanged.
+- **Red team round 1** (a fresh Claude subagent, read-only):
+  - **H1, taken.** The AutomationId register (`w_c_automation_ids.json`: `BaseLoadFailedEdit`, `BaseLoadFailedGroup`, the dock/tab group expression) and the focus-integrity manifest (`RenderFailedGroup`'s four visibility writes, `guard: BaseSurfaceView`) gain the new sites.
+  - **M1, taken: the probe runs only on an explicit `Refresh()`**, not on the rescan's `RefreshAsync`. A base deleted outside Slate would otherwise be a counted rescan error on that rescan and every later one. Detecting the deletion is the explicit refresh's, as on mac, which matches this spec's own not-delivered line. The Bases refresh command and the header Refresh already reload through `Load`, whose failed open sets the definition unavailable. A vault Refresh does not, and the NVDA pass is adjusted to match. New fact `TheRescansReRunDoesNotProbeTheDefinition`.
+  - **M2, taken: a base Failed for having no executable view keeps its handle and is re-run by the rescan, not reloaded** (`_failedWithItsHandle`). A reload passed through Loading, whose disabled Edit and collapsed group moved a reader off Edit on every rescan. New fact `ARescanReRunsAViewlessBaseWithoutReopeningIt`; the view-less rescan facts still count it.
+  - **M3, taken.** A failed probe's Failed publication is not generation-gated, as the C6 rollback detach's is not: the handle is closed, and a dropped publish left a Ready-looking base with no handle.
+  - **Lows, taken:**
+    - L1: builder-apply and save-sort failures speak core's detail. A definition core cannot edit — YAML that does not parse, the truncated flavour — refuses the repair with core's sentence and is #1398's (PR 35's).
+    - L6: the edit's reopen clears the transient filter, as `Load` does.
+    - L7: facts assert the banner is empty while the group shows and that the surface lands on Edit.
+    - L8: initializer style.
+  - **Lows, declined:**
+    - L2: "first view" is decided at save time, as mac's `baseBuilderSaveEdits` does.
+    - L3: a transient execute failure's group invites an edit, as mac's failed view does.
+    - L4: "Choose Refresh" names the Bases Refresh command (the palette's and the menu's), whose failed-state action is the reload.
+    - L5: the group is named by its heading and the heading is level 2, as the spec designs it. Focus lands on Edit, so the group's name is the context NVDA reads with the button.
+- **The NVDA pass** found that a focus landing on Edit read only the group's name and the button, never why. The group's HelpText is now its message and repair line (the message alone where no repair is offered). NVDA reads "This base could not be loaded grouping No executable base views were found. Edit the base definition to repair it. | Edit button Opens the base definition in the query builder." `NoBlankSurfaceForAFailedBase` asserts it.
+- **The NVDA pass's other legs, against this spec's list:**
+  - "a vault Refresh shows the reason" is not delivered: the rescan does not probe (M1 above).
+  - The docked saved query and the docked empty base are covered by `ASavedQueryInTheBasesDockIsReRunByARescanWithItsHandleKept` and `AFailedDockBesideAnEditableBaseOffersNoEdit`, not by the agent's NVDA run.
+  - Two defects from `main` were filed: #1692 ("Base refreshed." after a failed reload) and #1690 ("unavailable" spoken on opening the palette and Quick Open).
+- **Mutations: 20**, all in `wb14_mutations.py`: the spec's list, the ones for this implementation's own behaviours, the dropped failed-open availability (`MissingFileFailsWithTheRecoveryPosture`) and the four the red team round added. Per-mutation results are in the PR body.
+
 ## Brief
 
 Read `Bases/BaseDocumentViewModel.cs:26-32, 509-600, 604-612, 867-930,

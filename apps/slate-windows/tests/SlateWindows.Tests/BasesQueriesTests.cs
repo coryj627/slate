@@ -59,6 +59,35 @@ public sealed class BasesQueriesTests : IDisposable
         new(_session, _fixture.Root, () => [], _announced.Add,
             startInteractionBackgroundWork: false);
 
+    /// <summary>WB-14 (#1397): the definition probe is a file-backed base's. A
+    /// saved query has no definition file — its Path is empty — so a refresh
+    /// (the dock's follow, a Slate-owned change, the quick filter's clear)
+    /// re-runs its query handle as before: never probed, never closed, never
+    /// reopened, and its Edit View Filters keeps its own admission.</summary>
+    [Fact]
+    public void ASavedQueryRefreshSkipsTheDefinitionProbeAndKeepsItsHandle()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.RefreshBaseQueries();
+        workspace.RunSavedQuery(Assert.Single(workspace.SavedQueries).Id);
+        BaseDocumentViewModel document =
+            Assert.IsType<BaseDocumentViewModel>(workspace.ActiveGroup.ActiveTab?.Base);
+        Assert.True(document.IsSavedQuery);
+        Assert.Equal(BaseLoadState.Ready, document.State);
+        string[] rows = [.. document.Result!.Rows.Select(row => row.FilePath)];
+        Assert.Equal(3, rows.Length);
+        Assert.Equal(1, document.OpensForTests);
+        document.DefinitionReadFaultForTests = () => throw new VaultException.Io("a probe ran");
+
+        document.Refresh();
+
+        Assert.Equal(BaseLoadState.Ready, document.State);
+        Assert.Equal(rows, document.Result!.Rows.Select(row => row.FilePath));
+        Assert.Equal(1, document.OpensForTests);
+        Assert.Null(document.DefinitionEditingDisabledReason);
+        Assert.True(workspace.BasesEditViewFiltersCommand.CanExecute(null));
+    }
+
     /// <summary>W7-7 PR 4b (AR-59, owner-decided): the rail's arrows reveal
     /// the Queries leaf as they pass it, and its refresh runs; a refresh that
     /// failed after the reader had arrowed on spoke over the next leaf. The

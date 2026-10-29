@@ -63,6 +63,48 @@ public sealed class BasesDocumentTests : IDisposable
             "views:\n" +
             "  - type: table\n" +
             "    name: Main\n");
+        // WB-14 (#1397): definitions with no executable view — saved empty,
+        // saved before any view was added, saved mid-edit — and a one-view
+        // base the facts delete or make unreadable.
+        File.WriteAllText(Path.Combine(_fixture.Root, "Blank.base"), string.Empty);
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "FiltersOnly.base"),
+            "filters: 'file.ext == \"md\"'\n");
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "Truncated.base"),
+            "views:\n  - type: table\n    name: [Reading\n");
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "Reading.base"),
+            "filters: 'file.ext == \"md\"'\n" +
+            "views:\n" +
+            "  - type: table\n" +
+            "    name: Reading\n" +
+            "    order:\n" +
+            "      - file.name\n");
+    }
+
+    private WorkspaceViewModel NewWorkspace() =>
+        new(_session, _fixture.Root, () => [], _announced.Add,
+            startInteractionBackgroundWork: false);
+
+    private static BaseDocumentViewModel OpenInTab(WorkspaceViewModel workspace, string path)
+    {
+        workspace.OpenPath(path);
+        return Assert.IsType<BaseDocumentViewModel>(workspace.ActiveGroup.ActiveTab?.Base);
+    }
+
+    /// <summary>The C6 rollback detach: a sort whose execute fails and whose
+    /// rollback fails too closes the handle and leaves the document
+    /// Failed.</summary>
+    private static void DetachBySortRollback(BaseDocumentViewModel document)
+    {
+        document.ExecuteFaultForTests = () => new VaultException.Db("execute fault");
+        document.RollbackFaultForTests = () => new VaultException.Db("rollback fault");
+        Assert.True(document.ApplySortFromGrid(0, ascending: true));
+        document.ExecuteFaultForTests = null;
+        document.RollbackFaultForTests = null;
+        Assert.False(document.HasHandleForTests, "premise: the rollback detach closed the handle");
+        Assert.Equal(BaseLoadState.Failed, document.State);
     }
 
     private BaseDocumentViewModel NewDocument(string path) =>
@@ -118,7 +160,257 @@ public sealed class BasesDocumentTests : IDisposable
             document.StateMessage,
             StringComparison.Ordinal);
         Assert.Null(document.Result);
+        // WB-14 (#1397): the definition could not be read, so editing it is
+        // unavailable, and says so.
+        Assert.Equal(BasePhrase.DefinitionUnavailable, document.DefinitionEditingDisabledReason);
         document.Shutdown();
+    }
+
+    /// <summary>WB-14 (#1397; mac's twin): a base saved empty has no
+    /// executable view. It loads Failed with core's sentence — never an
+    /// execute of view 0 that core refuses as out of range — keeps its
+    /// handle, since the definition was read, and stays editable.</summary>
+    [Fact]
+    public void ASavedEmptyBaseOpensInARecoverableStateWithEditingEnabled()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        BaseDocumentViewModel document = OpenInTab(workspace, "Blank.base");
+
+        Assert.Equal(BaseLoadState.Failed, document.State);
+        Assert.Equal(BasePhrase.NoExecutableViews, document.StateMessage);
+        Assert.True(document.HasHandleForTests, "the definition was read: its handle stays open");
+        Assert.Null(document.DefinitionEditingDisabledReason);
+        Assert.True(workspace.BasesEditViewFiltersCommand.CanExecute(null));
+    }
+
+    /// <summary>WB-14 (mac's twin): saved before any view was added, and saved
+    /// mid-edit with the view list never closed — the same sentence, core's,
+    /// never parser internals, and editing enabled.</summary>
+    [Theory]
+    [InlineData("FiltersOnly.base")]
+    [InlineData("Truncated.base")]
+    public void AnIncompleteDefinitionShowsTheErrorAndKeepsEditingEnabled(string path)
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        BaseDocumentViewModel document = OpenInTab(workspace, path);
+
+        Assert.Equal(BaseLoadState.Failed, document.State);
+        Assert.Equal(BasePhrase.NoExecutableViews, document.StateMessage);
+        Assert.DoesNotContain("YAML", document.StateMessage, StringComparison.Ordinal);
+        Assert.True(document.HasHandleForTests);
+        Assert.Null(document.DefinitionEditingDisabledReason);
+        Assert.True(workspace.BasesEditViewFiltersCommand.CanExecute(null));
+    }
+
+    /// <summary>WB-14 (mac's twin): a selected view whose execute fails says
+    /// why in core's words — the detail, never the binding's "@message=" field
+    /// label — keeps the definition open and editable, and the view picker
+    /// still works: another view may load.</summary>
+    [Fact]
+    public void AnUnloadableSelectedViewExplainsItselfAndKeepsEditingEnabled()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        BaseDocumentViewModel document = OpenInTab(workspace, "Notes.base");
+        Assert.Equal(BaseLoadState.Ready, document.State);
+
+        document.ExecuteFaultForTests = () => new VaultException.Db("unknown function frobnicate");
+        document.SelectView(1);
+
+        Assert.Equal("Gallery", document.ActiveViewName);
+        Assert.Equal("Base view could not be executed: unknown function frobnicate", document.StateMessage);
+        Assert.DoesNotContain("@message", document.StateMessage, StringComparison.Ordinal);
+        Assert.True(document.HasHandleForTests);
+        Assert.Null(document.DefinitionEditingDisabledReason);
+        Assert.True(workspace.BasesEditViewFiltersCommand.CanExecute(null));
+
+        document.ExecuteFaultForTests = null;
+        document.SelectView(0);
+        Assert.Equal(BaseLoadState.Ready, document.State);
+        Assert.Equal("Main", document.ActiveViewName);
+    }
+
+    /// <summary>WB-14 (mac's twin): Edit on the empty base opens the builder on
+    /// view 0 over an empty draft; Save to View writes the draft as the
+    /// definition's first view — AddView first — and the repaired base loads
+    /// Ready.</summary>
+    [Fact]
+    public void EditFromTheErrorStateOpensTheBuilder()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        BaseDocumentViewModel document = OpenInTab(workspace, "Blank.base");
+        IReadOnlyList<BaseEdit>? batch = null;
+        document.ApplyEditsHookForTests = edits => batch = edits;
+        _announced.Clear();
+
+        workspace.BasesEditViewFiltersCommand.Execute(null);
+
+        BaseQueryBuilderViewModel builder =
+            Assert.IsType<BaseQueryBuilderViewModel>(workspace.BaseQueryBuilderSheet);
+        Assert.Equal("Blank.base", builder.Context.ViewPath);
+        Assert.Equal(0, builder.Context.ViewIndex);
+        Assert.Contains(_announced, e => e is A11yEvent.BasesEditingFilters);
+
+        workspace.BuilderSaveToView();
+
+        Assert.IsType<BaseEdit.AddView>(Assert.IsAssignableFrom<IReadOnlyList<BaseEdit>>(batch)[0]);
+        Assert.Contains(_announced, e => e is A11yEvent.BasesBuilderSaved);
+        Assert.Contains("views:", File.ReadAllText(Path.Combine(_fixture.Root, "Blank.base")), StringComparison.Ordinal);
+        Assert.Single(document.Views);
+        Assert.Equal(BaseLoadState.Ready, document.State);
+        Assert.Null(document.StateMessage);
+    }
+
+    /// <summary>WB-14 (mac's twin): a definition that cannot be reached is not
+    /// editable, and says why. Deleted while its handle was retained, then
+    /// refreshed: the availability probe fails, the handle closes, the base is
+    /// Failed with the open's sentence, and Edit View Filters is disabled with
+    /// the definition's reason — the command's own reason and the palette
+    /// resolver's — and runs nothing. The same for a definition the read
+    /// refuses; and a definition detached after a read and then deleted fails
+    /// its reopen, says why, and becomes unavailable.</summary>
+    [Fact]
+    public void AMissingBaseFileStillDisablesEditingWithTheUnavailableReason()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        BaseDocumentViewModel reading = OpenInTab(workspace, "Reading.base");
+        Assert.Equal(BaseLoadState.Ready, reading.State);
+        File.Delete(Path.Combine(_fixture.Root, "Reading.base"));
+        _announced.Clear();
+
+        reading.Refresh();
+
+        Assert.Equal(BaseLoadState.Failed, reading.State);
+        Assert.StartsWith("This Base could not be opened:", reading.StateMessage, StringComparison.Ordinal);
+        Assert.False(reading.HasHandleForTests, "the failed probe closes the retained handle");
+        Assert.Equal(BasePhrase.DefinitionUnavailable, reading.DefinitionEditingDisabledReason);
+        AssertEditViewFiltersUnavailable(workspace, BasePhrase.DefinitionUnavailable);
+
+        // A definition the read refuses.
+        BaseDocumentViewModel notes = OpenInTab(workspace, "Notes.base");
+        Assert.Equal(BaseLoadState.Ready, notes.State);
+        notes.DefinitionReadFaultForTests = () => throw new VaultException.Io("probe refused");
+        notes.Refresh();
+        Assert.Equal(BaseLoadState.Failed, notes.State);
+        Assert.Equal("This Base could not be opened: probe refused", notes.StateMessage);
+        Assert.False(notes.HasHandleForTests);
+        AssertEditViewFiltersUnavailable(workspace, BasePhrase.DefinitionUnavailable);
+
+        // Detached after a read, then deleted: the edit's reopen fails and
+        // says why.
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "Reading.base"),
+            "views:\n  - type: table\n    name: Reading\n    order:\n      - file.name\n");
+        BaseDocumentViewModel detached = OpenInTab(workspace, "Reading.base");
+        detached.Load();
+        Assert.Equal(BaseLoadState.Ready, detached.State);
+        DetachBySortRollback(detached);
+        Assert.Null(detached.DefinitionEditingDisabledReason);
+        File.Delete(Path.Combine(_fixture.Root, "Reading.base"));
+        _announced.Clear();
+
+        workspace.BasesEditViewFiltersCommand.Execute(null);
+
+        Assert.Null(workspace.BaseQueryBuilderSheet);
+        A11yEvent.BasesFiltersOpenFailed failed =
+            Assert.IsType<A11yEvent.BasesFiltersOpenFailed>(Assert.Single(_announced));
+        Assert.StartsWith("This Base could not be opened:", failed.Detail, StringComparison.Ordinal);
+        Assert.Equal(BasePhrase.DefinitionUnavailable, detached.DefinitionEditingDisabledReason);
+    }
+
+    /// <summary>WB-14 red team (M2): a base Failed for having no executable
+    /// view keeps its handle, so the rescan re-runs it rather than reopening
+    /// it — it never passes through Loading, whose disabled Edit and collapsed
+    /// group would take the keys off its Edit — and it is still counted.</summary>
+    [Fact]
+    public void ARescanReRunsAViewlessBaseWithoutReopeningIt()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        BaseDocumentViewModel document = OpenInTab(workspace, "Blank.base");
+        Assert.Equal(BaseLoadState.Failed, document.State);
+        int opens = document.OpensForTests;
+        var states = new List<BaseLoadState>();
+        document.PropertyChanged += (_, changed) =>
+        {
+            if (changed.PropertyName == nameof(BaseDocumentViewModel.State))
+            {
+                states.Add(document.State);
+            }
+        };
+
+        Task run = document.RefreshAsync();
+        PumpedDispatcher.PumpUntilDrained(run.ContinueWith(_ => { }, TaskScheduler.Default));
+
+        Assert.IsType<BasePublicationFailedException>(run.Exception?.InnerException);
+        Assert.Equal(opens, document.OpensForTests);
+        Assert.DoesNotContain(BaseLoadState.Loading, states);
+        Assert.Equal(BaseLoadState.Failed, document.State);
+        Assert.Equal(BasePhrase.NoExecutableViews, document.StateMessage);
+        Assert.True(document.HasHandleForTests);
+    }
+
+    /// <summary>WB-14 red team (M1): the rescan's re-run does not probe the
+    /// definition — a base deleted outside Slate would be a counted rescan
+    /// error then and on every later rescan; detecting the deletion is the
+    /// explicit Refresh's, as on mac.</summary>
+    [Fact]
+    public void TheRescansReRunDoesNotProbeTheDefinition()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        BaseDocumentViewModel reading = OpenInTab(workspace, "Reading.base");
+        File.Delete(Path.Combine(_fixture.Root, "Reading.base"));
+
+        Task run = reading.RefreshAsync();
+        PumpedDispatcher.PumpUntilDrained(run.ContinueWith(_ => { }, TaskScheduler.Default));
+
+        Assert.True(run.IsCompletedSuccessfully);
+        Assert.Equal(BaseLoadState.Ready, reading.State);
+        Assert.True(reading.HasHandleForTests);
+
+        reading.Refresh();
+        Assert.Equal(BaseLoadState.Failed, reading.State);
+        Assert.Equal(BasePhrase.DefinitionUnavailable, reading.DefinitionEditingDisabledReason);
+    }
+
+    private void AssertEditViewFiltersUnavailable(WorkspaceViewModel workspace, string reason)
+    {
+        System.Windows.Input.ICommand command = workspace.BasesEditViewFiltersCommand;
+        Assert.False(command.CanExecute(null));
+        Assert.Equal(reason, ((Commands.IUnavailableReason)command).UnavailableReason);
+        Assert.Equal(
+            reason,
+            Commands.SlateCommandRegistrar.DisabledReason(
+                new CanvasDocumentTests.CanvasCommandHost(workspace), Commands.ChordTable.Ids.BasesEditViewFilters));
+        int heard = _announced.Count;
+        command.Execute(null);
+        Assert.Null(workspace.BaseQueryBuilderSheet);
+        Assert.Equal(heard, _announced.Count);
+    }
+
+    /// <summary>WB-14 (mac's twin): the C6 rollback detach closed the handle
+    /// but the file is intact — the data verbs stay unavailable, the
+    /// definition stays editable, and Edit reopens it before the builder
+    /// opens on its view.</summary>
+    [Fact]
+    public void ADetachedDefinitionReopensForTheEditWhenItsFileIsReadable()
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        BaseDocumentViewModel reading = OpenInTab(workspace, "Reading.base");
+        Assert.Equal(BaseLoadState.Ready, reading.State);
+        DetachBySortRollback(reading);
+        int opens = reading.OpensForTests;
+
+        Assert.False(workspace.BasesWhereAmICommand.CanExecute(null), "the data verbs need the handle");
+        Assert.Null(reading.DefinitionEditingDisabledReason);
+        Assert.True(workspace.BasesEditViewFiltersCommand.CanExecute(null));
+
+        workspace.BasesEditViewFiltersCommand.Execute(null);
+
+        Assert.True(reading.HasHandleForTests, "the edit reopened the definition first");
+        Assert.Equal(opens + 1, reading.OpensForTests);
+        BaseQueryBuilderViewModel builder =
+            Assert.IsType<BaseQueryBuilderViewModel>(workspace.BaseQueryBuilderSheet);
+        Assert.Equal("Reading.base", builder.Context.ViewPath);
+        Assert.Equal(0, builder.Context.ViewIndex);
     }
 
     [Fact]

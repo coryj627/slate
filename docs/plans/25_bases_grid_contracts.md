@@ -55,6 +55,20 @@ still renders (mac wording verbatim: "Using fallback view for {name}.",
 "View {name} has errors.", "No executable base views were found."). Banners
 are captions with accessibility labels, never dialogs, never focus steals.
 
+**C4 amendment (WD8, the owner's recommended answer; WB-14 #1397, mac #1401).**
+A definition with no executable view — saved empty, filters-only, or
+mid-edit — loads as Failed with "No executable base views were found.",
+never as an execute of view 0, and stays editable: Edit opens an empty
+draft, and Save to View writes it as the definition's first view
+(`BaseEdit::AddView`). A base with nothing to show (Failed, or on Windows
+Degraded by an execute that failed before any rows landed) renders a group
+in the content area instead of the banner: a heading "This base could not
+be loaded", core's message, the repair sentence "Edit the base definition
+to repair it." or the reason editing is unavailable, and an Edit button —
+on both hosts. A docked base and a failed saved query show the heading and
+the message only. C4's banners stand for every base that still renders
+content.
+
 **C5 — Quick filter is transient, four ways.** Filter text lives only on the
 document VM and is passed as `base_execute`'s `quickFilter` argument — never
 written to the file; cleared on load, on view switch, on tab open/replace,

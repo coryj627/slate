@@ -64,6 +64,50 @@ public sealed partial class RescanTests
         Assert.True(h.Sidebar.DeleteCommand.CanExecute(null));
     });
 
+    /// <summary>WB-14 (#1397): the rescan's Bases dependent re-runs the dock
+    /// whatever it holds; a saved query docked there is re-run on its own
+    /// query handle — never probed as a definition file, which it does not
+    /// have, so no handle is closed, nothing fails and the run is not
+    /// counted incomplete.</summary>
+    [Fact]
+    public void ASavedQueryInTheBasesDockIsReRunByARescanWithItsHandleKept() => RunSta(() =>
+    {
+        using var h = new Harness(
+            "docked-saved-query",
+            ("Notes.base", "filters: 'file.ext == \"md\"'\nviews:\n  - type: table\n    name: Main\n    order:\n      - file.name\n"),
+            ("a.md", "# A\n"),
+            ("b.md", "# B\n"));
+        VaultSession session = h.Lifecycle.SessionForTests!;
+        ulong scratch = session.OpenBase("Notes.base");
+        string queryJson;
+        try
+        {
+            queryJson = session.BaseViewQueryJson(scratch, 0);
+        }
+        finally
+        {
+            session.CloseBase(scratch);
+        }
+        string id = session.SaveQuery("All notes", description: null, queryJson, SavedQuerySourceSyntax.Builder);
+        h.Workspace.DockSavedQueryToSidebar(id, "All notes");
+        h.PumpUntil(
+            () => h.Workspace.BasesDockDocument is { IsSavedQuery: true, State: BaseLoadState.Ready },
+            "the docked query's first run");
+        BaseDocumentViewModel dock = h.Workspace.BasesDockDocument!;
+        Assert.Equal(1, dock.OpensForTests);
+        dock.DefinitionReadFaultForTests = () => throw new VaultException.Io("a probe ran");
+        h.Write("c.md", "# C\n");
+        h.Events.Clear();
+
+        Task run = h.Lifecycle.RescanAsync(RescanReason.Explicit);
+        h.PumpUntil(() => run.IsCompleted, "the rescan ending");
+
+        Assert.IsType<A11yEvent.VaultRescanFinished>(Assert.Single(h.Events));
+        Assert.Equal(BaseLoadState.Ready, dock.State);
+        Assert.Contains(dock.Result!.Rows, row => row.FilePath == "c.md");
+        Assert.Equal(1, dock.OpensForTests);
+    });
+
     /// <summary>Round 5, finding 1 (replacing round 4's seam-thrown fact):
     /// two open bases whose re-runs really fail are two counted
     /// operations — "2 errors".</summary>

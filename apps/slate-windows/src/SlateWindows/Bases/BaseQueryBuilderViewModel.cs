@@ -237,26 +237,32 @@ internal sealed class BaseQueryBuilderViewModel : PanelWorkScheduler
         Action<A11yEvent> announce,
         bool synchronousForTests = false)
     {
-        ulong handle = session.OpenDql("TABLE file.name", thisPath: null);
-        string seed;
-        try
-        {
-            seed = session.BaseViewQueryJson(handle, 0);
-        }
-        finally
-        {
-            session.CloseBase(handle);
-        }
         // The seed keeps core's own serialization untouched — every
         // field is schema-required, and the file.name column default
         // is an honest starting projection.
-        var document = (JsonObject)JsonNode.Parse(seed)!;
+        var document = (JsonObject)JsonNode.Parse(NewQuerySeedJson(session))!;
         return new BaseQueryBuilderViewModel(
             session,
             document,
             new BuilderEditContext(null, 0, null, null),
             announce,
             synchronousForTests);
+    }
+
+    /// <summary>The new-query seed: core's serialization of a minimal DQL
+    /// query. Also the empty draft a definition with no executable view opens
+    /// on (WB-14, #1397).</summary>
+    internal static string NewQuerySeedJson(VaultSession session)
+    {
+        ulong handle = session.OpenDql("TABLE file.name", thisPath: null);
+        try
+        {
+            return session.BaseViewQueryJson(handle, 0);
+        }
+        finally
+        {
+            session.CloseBase(handle);
+        }
     }
 
     /// <summary>Edit a view's filters (slate.bases.editViewFilters):
@@ -784,7 +790,16 @@ internal sealed class BaseQueryBuilderViewModel : PanelWorkScheduler
             completed(false);
             return;
         }
+        // WB-14 (#1397; mac's baseBuilderSaveEdits): a definition with no view
+        // yet (saved empty, filters-only or mid-edit) gains the draft as its
+        // first view — AddView, then every edit addressed to view 0.
+        bool firstView = target.Views.Count == 0;
+        uint view = firstView ? 0 : (uint)Context.ViewIndex;
         var edits = new List<BaseEdit>();
+        if (firstView)
+        {
+            edits.Add(new BaseEdit.AddView("type: table"));
+        }
         var expressions = new List<(bool IsGroup, List<string> Members)>();
         JsonNode? preserved = null;
         foreach (BuilderConditionRow row in ConditionRows)
@@ -842,14 +857,17 @@ internal sealed class BaseQueryBuilderViewModel : PanelWorkScheduler
             {
                 // Reached only when every row is deliberately blank or
                 // deleted — an intentional clear-all (typos refuse
-                // above, so a mistake can no longer strip the view).
-                edits.Add(new BaseEdit.RemoveViewKey(
-                    (uint)Context.ViewIndex, "filters"));
+                // above, so a mistake can no longer strip the view). A
+                // new first view has no filters to remove.
+                if (!firstView)
+                {
+                    edits.Add(new BaseEdit.RemoveViewKey(view, "filters"));
+                }
             }
             else
             {
                 edits.Add(new BaseEdit.SetViewFilters(
-                    (uint)Context.ViewIndex, FiltersYaml(expressions)));
+                    view, FiltersYaml(expressions)));
             }
         }
         foreach (BuilderFormulaRow formula in FormulaRows)
