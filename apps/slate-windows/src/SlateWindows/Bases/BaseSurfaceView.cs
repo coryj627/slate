@@ -3,9 +3,11 @@
 
 using System.Windows;
 using System.Windows.Automation;
+using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Threading;
+using SlateWindows.Commands;
 using SlateWindows.Grids;
 using uniffi.slate_uniffi;
 
@@ -51,6 +53,16 @@ internal sealed class BaseSurfaceView : UserControl
     private readonly TextBlock _stateBanner;
     private readonly LayoutItemsControl _warningBanners;
     private readonly TextBlock _emptyState;
+
+    /// <summary>WB-14 (#1397; mac's BaseLoadFailedView): the failed state's
+    /// content — a heading, core's message, the repair sentence or why
+    /// editing is unavailable, and Edit; the last two only where this
+    /// surface offers repair.</summary>
+    private readonly BaseLoadFailedGroup _failedGroup;
+    private readonly TextBlock _failedMessage;
+    private readonly TextBlock _failedRepair;
+    private readonly Button _failedEdit;
+    private readonly ReasonedCommand _editDefinitionCommand;
     private readonly AccessibleDataGrid _grid;
     private readonly ListBox _list;
     private readonly DispatcherTimer _filterDebounce;
@@ -181,6 +193,52 @@ internal sealed class BaseSurfaceView : UserControl
             TextBlock.ForegroundProperty, "Slate.SecondaryTextBrush");
         AutomationProperties.SetAutomationId(_emptyState, "BaseEmptyState");
 
+        var failedHeading = new TextBlock
+        {
+            Text = BasePhrase.LoadFailedHeading,
+            FontSize = 15,
+            FontWeight = FontWeights.SemiBold,
+            TextWrapping = TextWrapping.Wrap,
+        };
+        AutomationProperties.SetHeadingLevel(failedHeading, AutomationHeadingLevel.Level2);
+        _failedMessage = new TextBlock
+        {
+            Margin = new Thickness(0, 6, 0, 0),
+            TextWrapping = TextWrapping.Wrap,
+        };
+        _failedRepair = new TextBlock
+        {
+            Margin = new Thickness(0, 6, 0, 0),
+            TextWrapping = TextWrapping.Wrap,
+        };
+        _failedRepair.SetResourceReference(
+            TextBlock.ForegroundProperty, "Slate.SecondaryTextBrush");
+        _editDefinitionCommand = new ReasonedCommand(
+            EditDefinitionFromThisSurface, EditDefinitionUnavailableReason);
+        _failedEdit = new Button
+        {
+            Content = "Edit",
+            Margin = new Thickness(0, 10, 0, 0),
+            Padding = new Thickness(14, 3, 14, 3),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Command = _editDefinitionCommand,
+        };
+        AutomationProperties.SetAutomationId(_failedEdit, "BaseLoadFailedEdit");
+        AutomationProperties.SetHelpText(_failedEdit, BasePhrase.RepairEditHelp);
+        _failedGroup = new BaseLoadFailedGroup
+        {
+            Margin = new Thickness(32),
+            MaxWidth = 560,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Visibility = Visibility.Collapsed,
+        };
+        AutomationProperties.SetAutomationId(_failedGroup, "BaseLoadFailedGroup");
+        AutomationProperties.SetName(_failedGroup, BasePhrase.LoadFailedHeading);
+        _failedGroup.Children.Add(failedHeading);
+        _failedGroup.Children.Add(_failedMessage);
+        _failedGroup.Children.Add(_failedRepair);
+        _failedGroup.Children.Add(_failedEdit);
+
         _grid = new AccessibleDataGrid
         {
             GridAutomationId = "BaseTabGrid",
@@ -219,9 +277,11 @@ internal sealed class BaseSurfaceView : UserControl
         DockPanel.SetDock(header, Dock.Top);
         DockPanel.SetDock(_banners, Dock.Top);
         DockPanel.SetDock(_emptyState, Dock.Top);
+        DockPanel.SetDock(_failedGroup, Dock.Top);
         layout.Children.Add(header);
         layout.Children.Add(_banners);
         layout.Children.Add(_emptyState);
+        layout.Children.Add(_failedGroup);
         var contentHost = new Grid();
         contentHost.Children.Add(_grid);
         contentHost.Children.Add(_list);
@@ -245,7 +305,7 @@ internal sealed class BaseSurfaceView : UserControl
             nameof(Tab),
             typeof(WorkspaceTabViewModel),
             typeof(BaseSurfaceView),
-            new PropertyMetadata(null));
+            new PropertyMetadata(null, (d, _) => ((BaseSurfaceView)d).RenderFailedGroup()));
 
     public WorkspaceTabViewModel? Tab
     {
@@ -268,8 +328,81 @@ internal sealed class BaseSurfaceView : UserControl
             _grid.GridAutomationId = value ? "BasesDockGrid" : "BaseTabGrid";
             AutomationProperties.SetAutomationId(
                 _list, value ? "BasesDockList" : "BaseTabList");
+            AutomationProperties.SetAutomationId(
+                _failedGroup, value ? "BasesDockLoadFailedGroup" : "BaseLoadFailedGroup");
+            RenderFailedGroup();
         }
     }
+
+    /// <summary>WB-14 (#1397): whether the failed group offers repair — a
+    /// tab surface over a file-backed base. The read-only dock's document is
+    /// not the active tab's and has no editing seam, so it reads as mac's
+    /// docked failed base does, heading and message; a saved query has no
+    /// definition to repair.</summary>
+    private bool OffersRepair => !IsReadOnlySurface && Model is { IsSavedQuery: false };
+
+    /// <summary>The failed group's Edit, addressed to THIS surface's tab: one
+    /// document can be hosted by base tabs in two split groups, and the
+    /// workspace command acts on the active tab's base — bound to it, the
+    /// inactive group's button would read and edit the other document.</summary>
+    private string? EditDefinitionUnavailableReason() =>
+        OffersRepair && Tab is not null && Model is { EditDefinitionFromSurface: not null } model
+            ? model.DefinitionEditingDisabledReason
+            : SlateCommandRegistrar.UnavailableReason;
+
+    private void EditDefinitionFromThisSurface()
+    {
+        if (Tab is { } tab && Model?.EditDefinitionFromSurface is { } edit)
+        {
+            edit(tab);
+        }
+    }
+
+    internal BaseLoadFailedGroup FailedGroupForTests => _failedGroup;
+
+    internal TextBlock EmptyStateForTests => _emptyState;
+
+    internal TextBlock StateBannerForTests => _stateBanner;
+
+    internal TextBlock FailedRepairForTests => _failedRepair;
+
+    internal Button FailedEditForTests => _failedEdit;
+
+    /// <summary>The group's text and Edit follow the model's message and
+    /// reason; the repair line and Edit exist only where repair is
+    /// offered.</summary>
+    private void RenderFailedGroup()
+    {
+        bool shows = Model is { } model && ShowsFailedGroup(model);
+        string? reason = Model?.DefinitionEditingDisabledReason;
+        _failedMessage.Text = Model?.StateMessage ?? string.Empty;
+        _failedRepair.Text = reason ?? BasePhrase.RepairSentence;
+        Visibility repair = OffersRepair ? Visibility.Visible : Visibility.Collapsed;
+        _failedRepair.Visibility = repair;
+        _failedEdit.Visibility = repair;
+        _failedGroup.Visibility = shows ? Visibility.Visible : Visibility.Collapsed;
+        // The group's description is what it says — core's message and the
+        // repair line where there is one — so a screen reader landing on Edit
+        // hears why with the group's name, not only "Edit" (NVDA pass: the
+        // text children are not read on a focus entry).
+        AutomationProperties.SetHelpText(
+            _failedGroup,
+            OffersRepair ? $"{_failedMessage.Text} {_failedRepair.Text}" : _failedMessage.Text);
+        if (shows)
+        {
+            _emptyState.Visibility = Visibility.Collapsed;
+        }
+        _editDefinitionCommand.RaiseCanExecuteChanged();
+    }
+
+    /// <summary>WB-14 (#1397): a base with nothing to show shows why — Failed,
+    /// or Degraded by an execute that failed before any rows landed (a failed
+    /// refresh keeps the rows it had, contract C9, and shows them under its
+    /// banner instead). Never the blank area, nor "No base results." for a
+    /// base that produced none.</summary>
+    private static bool ShowsFailedGroup(BaseDocumentViewModel model) =>
+        model.State == BaseLoadState.Failed
+        || (model.State == BaseLoadState.Degraded && model.Result is null);
 
     private bool _isReadOnlySurface;
 
@@ -524,6 +657,16 @@ internal sealed class BaseSurfaceView : UserControl
             return true;
         }
 
+        // WB-14 (#1397): a failed base that offers repair lands on its Edit,
+        // the group's one action, read with the group around it.
+        if (_failedGroup.Visibility == Visibility.Visible
+            && _failedEdit.Visibility == Visibility.Visible
+            && _failedEdit.IsEnabled
+            && _failedEdit.Focus())
+        {
+            return true;
+        }
+
         return (_quickFilter.IsEnabled && _quickFilter.Focus()) || _refresh.Focus();
     }
 
@@ -534,7 +677,8 @@ internal sealed class BaseSurfaceView : UserControl
     {
         if (e.PropertyName is nameof(BaseDocumentViewModel.State)
             or nameof(BaseDocumentViewModel.StateMessage)
-            or nameof(BaseDocumentViewModel.QuickFilterActive))
+            or nameof(BaseDocumentViewModel.QuickFilterActive)
+            or nameof(BaseDocumentViewModel.DefinitionEditingDisabledReason))
         {
             RenderChrome();
         }
@@ -629,8 +773,14 @@ internal sealed class BaseSurfaceView : UserControl
                 ? "Attempts to reopen the Base at its current path."
                 : "Reload the base and re-run its current view.");
 
-        _stateBanner.Text = model.StateMessage ?? string.Empty;
+        // WB-14 (#1397): the message of a base showing its failed group is
+        // the group's, read once there under the heading — never also as a
+        // banner above it.
+        _stateBanner.Text = ShowsFailedGroup(model)
+            ? string.Empty
+            : model.StateMessage ?? string.Empty;
         AutomationProperties.SetName(_stateBanner, _stateBanner.Text);
+        RenderFailedGroup();
         _stateBanner.Visibility = _stateBanner.Text.Length > 0
             ? Visibility.Visible
             : Visibility.Collapsed;
@@ -698,11 +848,12 @@ internal sealed class BaseSurfaceView : UserControl
 
             _grid.Visibility = Visibility.Collapsed;
             _list.Visibility = Visibility.Collapsed;
-            _emptyState.Visibility = model.State == BaseLoadState.Failed
+            // WB-14 (#1397; contract 25 C4 as amended): a base with nothing
+            // to show shows its failed group (RenderFailedGroup) — never a
+            // blank content area, nor the empty-results line.
+            _emptyState.Visibility = model.State == BaseLoadState.Loading || ShowsFailedGroup(model)
                 ? Visibility.Collapsed
-                : model.State == BaseLoadState.Loading
-                    ? Visibility.Collapsed
-                    : Visibility.Visible;
+                : Visibility.Visible;
             return;
         }
         if (result.Rows.Length == 0)
@@ -1331,4 +1482,21 @@ internal static class BaseSummaryFormatter
         }
         return columnId;
     }
+}
+
+/// <summary>WB-14 (#1397; mac's <c>.accessibilityElement(children:
+/// .contain)</c>): the failed state's group, a UIA Group named by its
+/// heading that contains the heading, the message, the repair line and
+/// Edit — a plain panel has no automation peer.</summary>
+internal sealed class BaseLoadFailedGroup : StackPanel
+{
+    protected override AutomationPeer OnCreateAutomationPeer() => new BaseLoadFailedGroupAutomationPeer(this);
+}
+
+internal sealed class BaseLoadFailedGroupAutomationPeer(BaseLoadFailedGroup owner)
+    : FrameworkElementAutomationPeer(owner)
+{
+    protected override AutomationControlType GetAutomationControlTypeCore() => AutomationControlType.Group;
+
+    protected override string GetClassNameCore() => nameof(BaseLoadFailedGroup);
 }

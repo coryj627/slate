@@ -60,6 +60,21 @@
     "Surface": "Bases surfaces (W4-6)"
   },
   {
+    "Source": "Bases/BaseSurfaceView.cs",
+    "Expression": "\"BaseLoadFailedEdit\"",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "Bases/BaseSurfaceView.cs",
+    "Expression": "\"BaseLoadFailedGroup\"",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
+    "Source": "Bases/BaseSurfaceView.cs",
+    "Expression": "value ? \"BasesDockLoadFailedGroup\" : \"BaseLoadFailedGroup\"",
+    "Surface": "Bases surfaces (W4-6)"
+  },
+  {
     "Source": "Bases/DashboardSurfaceView.cs",
     "Expression": "\"Dashboard\"",
     "Surface": "Bases surfaces (W4-6)"

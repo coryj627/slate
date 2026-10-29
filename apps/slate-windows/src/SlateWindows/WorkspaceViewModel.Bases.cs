@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using SlateWindows.Bases;
+using SlateWindows.Commands;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows;
@@ -39,7 +40,7 @@ internal sealed partial class WorkspaceViewModel
         ActiveGroup.ActiveTab?.Base;
 
     private RelayCommand? _basesNewQueryCommand;
-    private RelayCommand? _basesEditViewFiltersCommand;
+    private ReasonedCommand? _basesEditViewFiltersCommand;
     private RelayCommand? _basesRefreshCommand;
     private RelayCommand? _basesWhereAmICommand;
     private RelayCommand? _basesResultsCommand;
@@ -124,47 +125,72 @@ internal sealed partial class WorkspaceViewModel
             },
             _ => true);
 
+    /// <summary>WB-14 (#1397): reasoned, so the palette and the failed state's
+    /// group say why it cannot run — the definition's own sentence, not the
+    /// generic one. A file-backed base is editable exactly when its definition
+    /// is (a Failed base whose definition was read included); a saved query
+    /// keeps the data commands' admission, having no definition to
+    /// repair.</summary>
     public System.Windows.Input.ICommand BasesEditViewFiltersCommand =>
-        _basesEditViewFiltersCommand ??= BasesCommand(document =>
-        {
-            // ONE dispatch-time view capture feeds both the fetch and
-            // the builder's save context (codex round 5: re-reading
-            // the active index in the continuation could seed from
-            // one view and save to another).
-            int viewIndex = document.ActiveViewIndex;
-            // The view as the picker names it (codex PR 3 round 8, OD-9): a
-            // base may repeat a view, and "Editing filters for Open tasks"
-            // spoke the bare name for either.
-            string viewName = document.ActiveViewSpokenName ?? document.DisplayName;
-            // The edit-JSON fetch shares the FFI lock with executes,
-            // so it runs off the dispatcher and the overlay opens in
-            // the continuation (INV-6; red team round 1).
-            document.ViewEditQueryJson(viewIndex, (json, failure) =>
+        _basesEditViewFiltersCommand ??= new ReasonedCommand(
+            () =>
             {
-                if (json is null)
+                if (ActiveBaseDocument is { } document)
                 {
-                    _announce(new A11yEvent.BasesFiltersOpenFailed(
-                        failure ?? "The base is not open."));
-                    return;
+                    EditViewFilters(document);
                 }
-                try
-                {
-                    BaseQueryBuilderSheet = BaseQueryBuilderViewModel.ForView(
-                        _session, json, document.Path, viewIndex,
-                        _announce,
-                        synchronousForTests: !_startInteractionBackgroundWork);
-                }
-                catch (Exception openFailure) when (openFailure
-                    is VaultException or InvalidOperationException
-                        or InvalidCastException or System.Text.Json.JsonException)
-                {
-                    _announce(new A11yEvent.BasesFiltersOpenFailed(
-                        openFailure.Message));
-                    return;
-                }
-                _announce(new A11yEvent.BasesEditingFilters(viewName));
-            });
+            },
+            EditViewFiltersUnavailableReason);
+
+    private string? EditViewFiltersUnavailableReason() => ActiveBaseDocument switch
+    {
+        null => SlateCommandRegistrar.UnavailableReason,
+        { IsSavedQuery: true } document => BasesDocumentInteractive(document)
+            ? null
+            : SlateCommandRegistrar.UnavailableReason,
+        { } document => document.DefinitionEditingDisabledReason,
+    };
+
+    private void EditViewFilters(BaseDocumentViewModel document)
+    {
+        // ONE dispatch-time view capture feeds both the fetch and
+        // the builder's save context (codex round 5: re-reading
+        // the active index in the continuation could seed from
+        // one view and save to another).
+        int viewIndex = document.ActiveViewIndex;
+        // The view as the picker names it (codex PR 3 round 8, OD-9): a
+        // base may repeat a view, and "Editing filters for Open tasks"
+        // spoke the bare name for either.
+        string viewName = document.ActiveViewSpokenName ?? document.DisplayName;
+        // The edit-JSON fetch shares the FFI lock with executes,
+        // so it runs off the dispatcher and the overlay opens in
+        // the continuation (INV-6; red team round 1).
+        document.ViewEditQueryJson(viewIndex, (json, failure) =>
+        {
+            if (json is null)
+            {
+                _announce(new A11yEvent.BasesFiltersOpenFailed(
+                    failure ?? "The base is not open."));
+                return;
+            }
+            try
+            {
+                BaseQueryBuilderSheet = BaseQueryBuilderViewModel.ForView(
+                    _session, json, document.Path, viewIndex,
+                    _announce,
+                    synchronousForTests: !_startInteractionBackgroundWork);
+            }
+            catch (Exception openFailure) when (openFailure
+                is VaultException or InvalidOperationException
+                    or InvalidCastException or System.Text.Json.JsonException)
+            {
+                _announce(new A11yEvent.BasesFiltersOpenFailed(
+                    openFailure.Message));
+                return;
+            }
+            _announce(new A11yEvent.BasesEditingFilters(viewName));
         });
+    }
 
     internal void EditSavedQueryInBuilder(string id)
     {
@@ -419,6 +445,36 @@ internal sealed partial class WorkspaceViewModel
             owner.ActiveTab = source;
         }
         return ReRootConnectionsOn(row.FilePath);
+    }
+
+    /// <summary>WB-14 (#1397): the failed state's Edit, from the surface of
+    /// <paramref name="source"/> — <see cref="BasesShowConnectionsFor"/>'s
+    /// addressed shape. One document can be hosted by base tabs in two split
+    /// groups, and the workspace's Edit View Filters acts on the ACTIVE tab's
+    /// base, so the source's group and tab are made active first; then the
+    /// command runs if it can, now resolving this document and re-checking
+    /// its reason. A source that is gone, no longer hosts the document, or
+    /// hosts a saved query runs nothing.</summary>
+    internal bool BasesEditDefinitionFor(WorkspaceTabViewModel source, BaseDocumentViewModel document)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(document);
+        WorkspaceGroupViewModel? owner = Groups.FirstOrDefault(group => group.Tabs.Contains(source));
+        if (owner is null || !ReferenceEquals(source.Base, document) || document.IsSavedQuery)
+        {
+            return false;
+        }
+        if (!ReferenceEquals(ActiveGroup, owner) || !ReferenceEquals(owner.ActiveTab, source))
+        {
+            ActiveGroup = owner;
+            owner.ActiveTab = source;
+        }
+        if (!BasesEditViewFiltersCommand.CanExecute(null))
+        {
+            return false;
+        }
+        BasesEditViewFiltersCommand.Execute(null);
+        return true;
     }
 
     /// <summary>Bases' Show backlinks — the ONE route for both of its sites
@@ -900,7 +956,7 @@ internal sealed partial class WorkspaceViewModel
     {
         foreach (RelayCommand? command in new[]
         {
-            _basesNewQueryCommand, _basesEditViewFiltersCommand,
+            _basesNewQueryCommand,
             _basesRefreshCommand, _basesWhereAmICommand, _basesResultsCommand,
             _basesNextViewCommand, _basesPreviousViewCommand,
             _basesViewSwitcherCommand, _basesViewAsTableCommand,
@@ -914,6 +970,7 @@ internal sealed partial class WorkspaceViewModel
         {
             command?.RaiseCanExecuteChanged();
         }
+        _basesEditViewFiltersCommand?.RaiseCanExecuteChanged();
     }
 
     private int _basesWriteFunnelId;
@@ -1667,7 +1724,8 @@ internal sealed partial class WorkspaceViewModel
         // without waiting for a tab switch (codex round 2).
         document.PropertyChanged += (_, changed) =>
         {
-            if (changed.PropertyName == nameof(BaseDocumentViewModel.State))
+            if (changed.PropertyName is nameof(BaseDocumentViewModel.State)
+                or nameof(BaseDocumentViewModel.DefinitionEditingDisabledReason))
             {
                 RaiseBasesCommandStates();
             }
@@ -1681,6 +1739,8 @@ internal sealed partial class WorkspaceViewModel
                 DisplayNameWithoutExtension(row.FilePath))));
         // W6-2 PR B2 (B2-5): the seam and the action's core title.
         document.ShowConnectionsFromSurface = (source, row) => _ = BasesShowConnectionsFor(source, document, row);
+        // WB-14 (#1397): the failed state's Edit, addressed to its tab.
+        document.EditDefinitionFromSurface = source => _ = BasesEditDefinitionFor(source, document);
         document.ShowConnectionsTitle = Connections.ActionTitle(GraphRowAction.ShowConnections);
     }
 

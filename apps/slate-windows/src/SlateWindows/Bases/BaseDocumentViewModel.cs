@@ -144,6 +144,74 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     /// has opened.</summary>
     internal int OpensForTests => Volatile.Read(ref _opensForTests);
 
+    /// <summary>Test seam (WB-14, #1397): an execute fault, thrown where
+    /// <c>BaseExecute</c> runs — the view's own execute and the sort's.</summary>
+    internal Func<VaultException>? ExecuteFaultForTests { get; set; }
+
+    /// <summary>Test seam (WB-14): a fault thrown where a failed sort rolls
+    /// the engine back — the C6 rollback detach.</summary>
+    internal Func<VaultException>? RollbackFaultForTests { get; set; }
+
+    /// <summary>Test seam (WB-14): sees the builder's edit batch just before
+    /// <c>BaseApplyEdits</c> applies it.</summary>
+    internal Action<IReadOnlyList<BaseEdit>>? ApplyEditsHookForTests { get; set; }
+
+    /// <summary>Test seam (WB-14): runs inside <see cref="Refresh()"/>'s
+    /// availability probe, just before the core read of the definition; a
+    /// throw is that read's failure.</summary>
+    internal Action? DefinitionReadFaultForTests { get; set; }
+
+    /// <summary>Test seam (WB-14): whether a native handle is open.</summary>
+    internal bool HasHandleForTests
+    {
+        get
+        {
+            lock (_ffiLock)
+            {
+                return _handle is not null;
+            }
+        }
+    }
+
+    /// <summary>WB-14 (#1397): whether this file-backed document's definition
+    /// can be reached, as the last terminal outcome left it — published on
+    /// the UI thread at every open, failed open, apply and availability
+    /// probe. Never derived from the handle alone: a retained handle outlives
+    /// its file (a refresh executes it; a failed execute keeps it), and a
+    /// handle detached by the C6 rollback leaves a definition that is
+    /// still there.</summary>
+    private bool _definitionUnavailable;
+
+    private void PublishDefinitionAvailability(bool unavailable)
+    {
+        if (_definitionUnavailable != unavailable)
+        {
+            _definitionUnavailable = unavailable;
+            OnPropertyChanged(nameof(DefinitionEditingDisabledReason));
+        }
+    }
+
+    /// <summary>
+    /// WB-14 (#1397; mac's <c>baseDefinitionEditingDisabledReason</c>): why
+    /// the definition cannot be edited now, or null. Editing the definition
+    /// needs only the definition — not a view that executes, nor an attached
+    /// handle — so a base with no executable view, one whose view fails, and
+    /// one the C6 rollback detached all stay editable, and the last reopens
+    /// for the edit. A saved query has no definition file: null, its Edit
+    /// View Filters keeps its own admission.
+    /// </summary>
+    public string? DefinitionEditingDisabledReason =>
+        IsSavedQuery ? null
+        : State == BaseLoadState.Loading ? BasePhrase.DefinitionOpening
+        : _definitionUnavailable ? BasePhrase.DefinitionUnavailable
+        : null;
+
+    /// <summary>WB-14: the failed state's Edit — the invoking surface's tab
+    /// — installed by the workspace beside
+    /// <see cref="ShowConnectionsFromSurface"/>; a dock document gets
+    /// none.</summary>
+    internal Action<WorkspaceTabViewModel>? EditDefinitionFromSurface { get; set; }
+
     /// <summary>Vault-relative path — the source identity for
     /// file-backed documents (empty for saved queries). Compared
     /// byte-exact (Ordinal) everywhere, never culture-aware.</summary>
@@ -160,6 +228,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
             if (SetField(ref _state, value))
             {
                 NotifyStateChanged();
+                OnPropertyChanged(nameof(DefinitionEditingDisabledReason));
             }
         }
     }
@@ -480,7 +549,8 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                 {
                     if (Volatile.Read(ref _generation) == generation)
                     {
-                        _announce(new A11yEvent.BasesSortSaveFailed(failure.Message));
+                        _announce(new A11yEvent.BasesSortSaveFailed(
+                            SlateUniffiMethods.VaultErrorDetail(failure)));
                         // No publish follows a failed save — queued
                         // funnel outcomes settle here (round 2).
                         SettleFunnelOutcomes(null);
@@ -518,6 +588,12 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
             continuation(null, "The base is not open.");
             return;
         }
+        if (State == BaseLoadState.Failed)
+        {
+            // The reopen below is a load: like Load, it starts without the
+            // transient filter a Failed base cannot apply (red team).
+            ClearQuickFilterState();
+        }
         // The view identity is the CALLER'S dispatch-time capture
         // (codex round 5): reading the mutable active index on the
         // worker could seed the builder from a view the user had
@@ -525,28 +601,53 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         // the wrong view's filters.
         StartWork(() =>
         {
+            // WB-14 (#1397; mac's baseDefinitionBuilder): a definition the
+            // C6 rollback detached after core read it reopens first, through
+            // the full load — its failure, if the file is gone, is published
+            // and is what the continuation reports.
+            bool detached;
+            lock (_ffiLock)
+            {
+                detached = _handle is null;
+            }
+            if (detached && !IsSavedQuery)
+            {
+                LoadBody(Interlocked.Increment(ref _generation), CancellationToken.None);
+            }
             string? json = null;
             string? failure = null;
+            bool noViews = false;
             try
             {
                 lock (_ffiLock)
                 {
                     if (_handle is { } handle)
                     {
-                        json = _session.BaseViewEditQueryJson(
-                            handle, (uint)viewIndex);
+                        // A definition without an executable view (saved
+                        // empty, filters-only or mid-edit) opens an empty
+                        // draft, which Save to View writes as its first view.
+                        noViews = _session.BaseViews(handle).Length == 0;
+                        if (!noViews)
+                        {
+                            json = _session.BaseViewEditQueryJson(
+                                handle, (uint)viewIndex);
+                        }
                     }
-                    else
-                    {
-                        failure = "The base is not open.";
-                    }
+                }
+                if (noViews)
+                {
+                    json = BaseQueryBuilderViewModel.NewQuerySeedJson(_session);
                 }
             }
             catch (VaultException exception)
             {
-                failure = exception.Message;
+                failure = SlateUniffiMethods.VaultErrorDetail(exception);
             }
-            Post(() => continuation(json, failure));
+            // Posted behind the reopen's own publication: a failed reopen's
+            // sentence is the state message by then.
+            Post(() => continuation(
+                json,
+                json is null ? failure ?? StateMessage ?? "The base is not open." : null));
         });
     }
 
@@ -559,9 +660,12 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     /// silent no-op (red team round 1).</summary>
     public void ApplyBuilderEdits(IReadOnlyList<BaseEdit> edits, Action<bool> completed)
     {
+        // WB-14 (#1397): a Failed document whose definition was read accepts
+        // edits — that is how a base with no executable view is repaired.
         if (IsShutDown
             || IsSavedQuery
-            || State is BaseLoadState.Failed or BaseLoadState.Loading)
+            || State == BaseLoadState.Loading
+            || DefinitionEditingDisabledReason is not null)
         {
             _announce(new A11yEvent.BasesViewSaveFailed(
                 "the base is not ready to accept edits"));
@@ -587,6 +691,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                         });
                         return;
                     }
+                    ApplyEditsHookForTests?.Invoke(batch);
                     _session.BaseApplyEdits(handle, batch);
                     Volatile.Write(ref _loadedDefinitionHash, _session.BaseDefinitionHash(handle));
                     views = _session.BaseViews(handle);
@@ -596,7 +701,11 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
             {
                 Post(() =>
                 {
-                    _announce(new A11yEvent.BasesViewSaveFailed(failure.Message));
+                    // WB-14 (red team): core's detail, never the binding's
+                    // "@message=" field label — a repair core refuses (YAML
+                    // that does not parse, #1398) says why in its words.
+                    _announce(new A11yEvent.BasesViewSaveFailed(
+                        SlateUniffiMethods.VaultErrorDetail(failure)));
                     completed(false);
                 });
                 return;
@@ -607,6 +716,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
             {
                 if (Volatile.Read(ref _generation) == generation)
                 {
+                    PublishDefinitionAvailability(unavailable: false);
                     Views = views;
                     SortState = null;
                 }
@@ -930,6 +1040,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                     return;
                 }
                 Views = [];
+                PublishDefinitionAvailability(unavailable: true);
                 PublishFailed(BasePhrase.OpenFailed(exception));
             });
             return;
@@ -941,6 +1052,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
             {
                 return;
             }
+            PublishDefinitionAvailability(unavailable: false);
             Views = views;
             if (ActiveViewIndex >= views.Length)
             {
@@ -977,13 +1089,17 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         PublicationAsync(
             () =>
             {
-                if (State == BaseLoadState.Failed)
+                // WB-14 (red team M2): a base Failed for having no executable
+                // view keeps its handle and re-runs like a Ready one — a
+                // reload would pass through Loading and take the keys off its
+                // Edit on every rescan.
+                if (State == BaseLoadState.Failed && !_failedWithItsHandle)
                 {
                     Load(cancellation);
                 }
                 else
                 {
-                    Refresh(cancellation);
+                    Refresh(cancellation, probe: false);
                 }
             },
             cancellation);
@@ -997,16 +1113,82 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
     /// stranding the document in Loading forever. The in-flight load
     /// executes against current data anyway, so the refresh is
     /// redundant there (the RefreshForFunnel guard's precedent).</summary>
-    public void Refresh() => Refresh(CancellationToken.None);
+    public void Refresh() => Refresh(CancellationToken.None, probe: true);
 
-    private void Refresh(CancellationToken cancellation)
+    /// <param name="probe">WB-14 (#1397): whether a file-backed document first
+    /// asks if its definition is still there — the retained handle would
+    /// execute the parsed definition of a deleted file. The explicit
+    /// refreshes probe; the rescan's re-run does not (red team M1): a base
+    /// deleted outside Slate would be a counted error on that rescan and on
+    /// every later one, and detecting the deletion is the explicit Refresh's,
+    /// as on mac. A saved query has no definition file (its Path is empty)
+    /// and is never probed.</param>
+    private void Refresh(CancellationToken cancellation, bool probe)
     {
         if (IsShutDown || State == BaseLoadState.Loading)
         {
             return;
         }
         int generation = Interlocked.Increment(ref _generation);
-        StartWork(() => ExecuteBody(generation, (uint)_activeViewIndex, cancellation: cancellation));
+        probe = probe && !IsSavedQuery;
+        StartWork(() =>
+        {
+            if (probe && !DefinitionStillReadable(generation, cancellation))
+            {
+                return;
+            }
+            ExecuteBody(generation, (uint)_activeViewIndex, cancellation: cancellation);
+        });
+    }
+
+    /// <summary>WB-14 (#1397): the availability probe — a core read of the
+    /// definition under the FFI lock. A read that fails closes the handle
+    /// and publishes the document Failed with the open's sentence and its
+    /// definition unavailable; false means the run is over (failed, or
+    /// superseded and its successor publishes).</summary>
+    private bool DefinitionStillReadable(int generation, CancellationToken cancellation)
+    {
+        try
+        {
+            lock (_ffiLock)
+            {
+                if (Volatile.Read(ref _generation) != generation
+                    || cancellation.IsCancellationRequested)
+                {
+                    return false;
+                }
+                DefinitionReadFaultForTests?.Invoke();
+                _ = _session.ReadNoteParts(Path);
+            }
+            return true;
+        }
+        catch (VaultException exception)
+        {
+            try
+            {
+                lock (_ffiLock)
+                {
+                    CloseHandleLocked();
+                }
+            }
+            catch (Exception closeFailure) when (closeFailure
+                is VaultException or ObjectDisposedException)
+            {
+                // The handle field is already nulled; the failure below is
+                // published whatever the close said.
+            }
+            // NOT generation-gated (red team M3; the C6 rollback detach's
+            // rule): the handle is CLOSED — a superseding run can only decline
+            // on it, and skipping this publish would strand a Ready-looking
+            // base with no handle and its definition still "available".
+            Post(() =>
+            {
+                Views = [];
+                PublishDefinitionAvailability(unavailable: true);
+                PublishFailed(BasePhrase.OpenFailed(exception));
+            });
+            return false;
+        }
     }
 
     /// <summary>Switch the active view (the mac selectView twin):
@@ -1075,6 +1257,16 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                     return;
                 }
                 IReadOnlyList<BaseViewSummary> viewList = freshViews ?? _views;
+                if (viewList.Count == 0)
+                {
+                    // WB-14 (#1397; contract 25 C4 as amended): a definition
+                    // with no executable view is a failed load — nothing is
+                    // executed (core would refuse view 0 as out of range), and
+                    // the handle stays open, since the definition was read
+                    // and is what the repair edits.
+                    PostNoExecutableViews(generation, cancellation);
+                    return;
+                }
                 summary = viewList.Count > view ? viewList[(int)view] : null;
                 DrainPendingSortClearsLocked(handle);
                 using var cancel = new CancelToken();
@@ -1086,6 +1278,10 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                 using CancellationTokenRegistration link = cancellation.Register(cancel.Cancel);
                 try
                 {
+                    if (ExecuteFaultForTests?.Invoke() is { } fault)
+                    {
+                        throw fault;
+                    }
                     result = _session.BaseExecute(
                         handle, view, ThisPath, quickFilter, cancel);
                 }
@@ -1137,6 +1333,22 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
         });
     }
 
+    private void PostNoExecutableViews(int generation, CancellationToken cancellation) =>
+        Post(() =>
+        {
+            if (Volatile.Read(ref _generation) == generation
+                && !cancellation.IsCancellationRequested)
+            {
+                PublishFailed(BasePhrase.NoExecutableViews);
+                _failedWithItsHandle = true;
+            }
+        });
+
+    /// <summary>WB-14: Failed for having no executable view, with the handle
+    /// open — the one Failed a rescan re-runs instead of reloading. UI
+    /// thread; every other publication clears it.</summary>
+    private bool _failedWithItsHandle;
+
     /// <summary>Codex PR 7 round 5, fix 1: a current run with no open
     /// handle (the open failed, or a failed sort rollback closed it) has
     /// nothing to execute — a terminal outcome all the same, and an
@@ -1165,6 +1377,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
 
     private void PublishResult(BasesResultSet result, BaseViewSummary? summary)
     {
+        _failedWithItsHandle = false;
         Result = result;
         // Mac's executeActiveView precedence, verbatim wording
         // (contract C4): fallback status, then error status, then the
@@ -1200,12 +1413,14 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
 
     private void PublishDegraded(string message)
     {
+        _failedWithItsHandle = false;
         StateMessage = message;
         State = BaseLoadState.Degraded;
     }
 
     private void PublishFailed(string message)
     {
+        _failedWithItsHandle = false;
         StateMessage = message;
         State = BaseLoadState.Failed;
         SortState = null;
@@ -1279,6 +1494,10 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                     _executeCancel = cancel;
                     try
                     {
+                        if (ExecuteFaultForTests?.Invoke() is { } fault)
+                        {
+                            throw fault;
+                        }
                         result = _session.BaseExecute(
                             handle, view, ThisPath, NormalizedFilter(), cancel);
                     }
@@ -1293,6 +1512,10 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
                     // arrive in an order that was never announced.
                     try
                     {
+                        if (RollbackFaultForTests?.Invoke() is { } rollbackFault)
+                        {
+                            throw rollbackFault;
+                        }
                         _session.BaseSetTransientSort(
                             handle, view,
                             previousSort is null ? null : previousColumnId,
@@ -1506,10 +1729,28 @@ internal static class BasePhrase
     public static string ExecuteFailed(VaultException exception) =>
         $"Base view could not be executed: {Message(exception)}";
 
-    /// <summary>The uniffi exception's payload without the type
-    /// prefix — the same detail string core put in the variant.</summary>
+    /// <summary>WB-14 (#1397): the failed state's group — mac's
+    /// <c>BaseLoadFailedView</c> copy verbatim, host literals until plan 43
+    /// PR 35 (#1398) moves the failed-state copy into core.</summary>
+    public const string LoadFailedHeading = "This base could not be loaded";
+
+    public const string RepairSentence = "Edit the base definition to repair it.";
+
+    public const string RepairEditHelp = "Opens the base definition in the query builder.";
+
+    /// <summary>WB-14: why the definition cannot be edited — mac's
+    /// <c>baseDocumentOpeningDisabledReason</c> and
+    /// <c>baseDocumentUnavailableDisabledReason</c> verbatim.</summary>
+    public const string DefinitionOpening =
+        "This Base is still opening. Wait for it to finish before making changes.";
+
+    public const string DefinitionUnavailable =
+        "This Base is no longer available. Choose Refresh if the file is restored.";
+
+    /// <summary>The detail core put in the variant, without the binding's
+    /// field label (WB-14: <c>Message</c> was "@message=…").</summary>
     private static string Message(VaultException exception) =>
-        exception.Message;
+        SlateUniffiMethods.VaultErrorDetail(exception);
 }
 
 /// <summary>W7-7 PR 7 (codex PR 7 round 5, fix 1): an awaited base
