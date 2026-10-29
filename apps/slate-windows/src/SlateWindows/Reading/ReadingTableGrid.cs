@@ -25,8 +25,10 @@ internal static class ReadingTableGrid
 {
     /// <summary>Null when core cannot derive cells (Enter falls
     /// through); otherwise the shown window, so hosts can observe its
-    /// lifecycle.</summary>
-    internal static Window? Show(string source, Window? owner)
+    /// lifecycle. <paramref name="activate"/> is false only for a hosted
+    /// fact, whose window must not take the desktop's foreground from the
+    /// facts running beside it.</summary>
+    internal static Window? Show(string source, Window? owner, bool activate = true)
     {
         AccessibleDataGrid? grid = Build(source);
         if (grid is null)
@@ -40,7 +42,11 @@ internal static class ReadingTableGrid
             Height = 520,
             Owner = owner,
             Content = grid,
+            ShowActivated = activate,
         };
+        // WB-15 (contract 28 I3): the shell's seal holds in a window it
+        // owns, first on every route — ahead of the Escape-close below.
+        ShellSeal.Admit(window);
         window.SetResourceReference(Window.BackgroundProperty, "Slate.SurfaceBrush");
         AutomationProperties.SetAutomationId(window, "ReadingTableGridWindow");
         // Escape returns to the reading caret — closing an owned

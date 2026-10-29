@@ -90,9 +90,11 @@ public partial class MainWindow
     /// The seal's one admission check. Returns whether the seal took the
     /// input — marked handled, so nothing after this handler acts on it —
     /// after letting an unmodified Escape dismiss an open palette (T9).
-    /// Unsealed, it takes nothing.
+    /// Unsealed, it takes nothing. <paramref name="inTheShellsWindow"/> is
+    /// false for a window the shell owns (<see cref="ShellSeal"/>): an
+    /// Escape there is not on the palette, so it is taken like any key.
     /// </summary>
-    private bool SealTakes(RoutedEventArgs input)
+    internal bool SealTakes(RoutedEventArgs input, bool inTheShellsWindow = true)
     {
         if (!_viewModel.Palette.IsSealed)
         {
@@ -101,7 +103,8 @@ public partial class MainWindow
 
         // T9: Escape dismisses an open palette, sealed or not — the one key
         // that acts. With the palette closed it has nothing to dismiss.
-        if (input is KeyEventArgs { Key: Key.Escape } escape
+        if (inTheShellsWindow
+            && input is KeyEventArgs { Key: Key.Escape } escape
             && input.RoutedEvent == Keyboard.PreviewKeyDownEvent
             && Keyboard.Modifiers == ModifierKeys.None)
         {
@@ -122,11 +125,12 @@ public partial class MainWindow
 
     private void Window_PreviewMouseWheel(object sender, MouseWheelEventArgs e) => _ = SealTakes(e);
 
-    /// <summary>A double-click on a control in a shell goes through that
+    /// <summary>A double-click on a control in a shell — or in a modeless
+    /// window it admitted (<see cref="ShellSeal"/>) — goes through that
     /// shell's admission; one anywhere else is not the shell's.</summary>
     private static void OnDoubleClickUnderTheSeal(object sender, MouseButtonEventArgs e)
     {
-        if (sender is DependencyObject element && GetWindow(element) is MainWindow shell)
+        if (sender is DependencyObject element && ShellSeal.ShellOf(element) is MainWindow shell)
         {
             _ = shell.SealTakes(e);
         }

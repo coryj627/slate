@@ -13,6 +13,14 @@
 // key route calls it first and returns); and nothing in the shell listens
 // past a handled input or ahead of the routed events, where the check could
 // not reach it.
+//
+// A past-handled class handler on a BUBBLING mouse event is unreachable
+// under the seal: WPF's MouseDevice raises no bubbling twin for a preview the
+// admission handled (dotnet/wpf MouseDevice.cs, the PostProcessInput arms
+// that raise MouseDown/MouseUp/MouseWheel only for an unhandled preview), so
+// only preview-side class handlers need the seal's own (MainWindow.Seal.cs).
+// WB-15 (#1313, #1307) adds the departure observer's call graph, the one
+// HWND hook, the window's input overrides and the owned-window guard.
 
 using System.Reflection;
 using System.Windows;
@@ -21,6 +29,7 @@ using System.Xml.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Operations;
 
 namespace SlateWindows.Tests.Censuses;
 
@@ -59,6 +68,8 @@ public sealed class ShellSealAdmissionCensus
     {
         [("MainWindow.xaml.cs", "AccessKeyManager.AccessKeyPressedEvent")] =
             "the seal's own access-key gate: it must see a candidate a menu item already answered",
+        [("ShellSeal.cs", "AccessKeyManager.AccessKeyPressedEvent")] =
+            "the owned window's access-key gate: the shell's own reason, in a modeless window the shell admitted (WB-15)",
         [("SlateTextEditor.cs", "TextCompositionManager.PreviewTextInputStartEvent")] =
             "IME composition tracking only (IsComposing); a taken key never reaches the IME",
         [("SlateTextEditor.cs", "TextCompositionManager.TextInputEvent")] =
@@ -217,7 +228,7 @@ public sealed class ShellSealAdmissionCensus
                 $"typeof(Control),{routed},newMouseButtonEventHandler(OnDoubleClickUnderTheSeal),handledEventsToo:true"),
             registered);
         Assert.Equal(
-            "if(senderisDependencyObjectelement&&GetWindow(element)isMainWindowshell){_=shell.SealTakes(e);}",
+            "if(senderisDependencyObjectelement&&ShellSeal.ShellOf(element)isMainWindowshell){_=shell.SealTakes(e);}",
             CSharpSource.Normalize(Assert.Single(seal.Method("OnDoubleClickUnderTheSeal").Body!.Statements)));
 
         List<string> offenders = DoubleClickOffenders(ShellUnits());
@@ -254,8 +265,60 @@ public sealed class ShellSealAdmissionCensus
     [InlineData("click-count-read", "class Other { void Pressed(object s, MouseButtonEventArgs e) { if (e.ClickCount == 2) Run(); } }")]
     [InlineData("reviewed-bubble-past-handled", "class SelectorFocus { static void M() { EventManager.RegisterClassHandler(typeof(ListBox), Mouse.MouseDownEvent, new MouseButtonEventHandler(X), handledEventsToo: true); } }")]
     [InlineData("focus-allowance-other-input", "class RegionFocusGuard { static void M() { EventManager.RegisterClassHandler(typeof(Window), Keyboard.PreviewKeyDownEvent, new KeyEventHandler(X), true); } }")]
+    [InlineData("transition-side-effect", "        Keyboard.ClearFocus();\n        if (Held is not { } held)")]
+    [InlineData("transition-delegate-side-effect", "                    withdraw: () => { Keyboard.ClearFocus(); return surface.CancelFocusLanding(held); },")]
+    [InlineData("transition-focus-api", "        held.Detach();\n        FocusManager.SetFocusedElement(held.Target()!, null);")]
+    [InlineData("hwnd-hook-reads-keys", "        if (message == WmEnable)\n        {\n            Recompute();\n        }\n\n        if (message == 0x0100)\n        {\n            Recompute();\n        }")]
+    [InlineData("hwnd-hook-second", "class Other { void M(HwndSource source) { source.AddHook(Hook); } }")]
+    [InlineData("input-override-key", "partial class MainWindow { protected override void OnPreviewKeyDown(KeyEventArgs e) => Run(); }")]
+    [InlineData("input-override-pointer", "partial class MainWindow { protected override void OnPreviewMouseDown(MouseButtonEventArgs e) => Run(); }")]
+    [InlineData("owned-window-route-missing", "        owned.PreviewMouseWheel += Take;\n")]
+    [InlineData("owned-window-unadmitted", "internal static class Planted { internal static void Open(Window owner) { var window = new Window { Owner = owner }; window.Show(); } }")]
+    [InlineData("owned-window-admitted-late", "internal static class Planted { internal static void Open(Window owner) { var window = new Window { Owner = owner }; window.PreviewKeyDown += (_, _) => { }; ShellSeal.Admit(window); window.Show(); } }")]
+    [InlineData("owned-window-conditional-show", "internal static class Planted { internal static void Open(Window owner) { Window? window = new Window { Owner = owner }; window?.Show(); } }")]
+    [InlineData("owned-window-shown-elsewhere", "internal static class Planted { static Window Build(Window owner) { var window = new Window { Owner = owner }; ShellSeal.Admit(window); return window; } internal static void Open(Window owner) => Build(owner).Show(); }")]
+    [InlineData("owned-window-show-method-group", "internal static class Planted { internal static void Open(Window owner) { var window = new Window { Owner = owner }; window.Dispatcher.BeginInvoke(new System.Action(window.Show)); } }")]
+    [InlineData("modal-dialog-admitted", "internal static class Planted { internal static void Ask(Window owner) { var dialog = new Window(); dialog.Owner = owner; ShellSeal.Admit(dialog); _ = dialog.ShowDialog(); } }")]
+    [InlineData("shell-of-follows-owner", "    internal static MainWindow? ShellOf(DependencyObject element)\n    {\n        for (Window? window = Window.GetWindow(element); window is not null; window = window.Owner)\n        {\n            if (window is MainWindow shell)\n            {\n                return shell;\n            }\n        }\n\n        return null;\n    }\n\n    internal static MainWindow? Unused(DependencyObject element) => Window.GetWindow(element) switch")]
     public void EachDetectorCatchesItsBypass(string bypass, string source)
     {
+        // The WB-15 rows plant into a real file — through the compilation
+        // where the detector binds — and the real files are clean.
+        List<string>? planted = bypass switch
+        {
+            "transition-side-effect" => TransitionCallGraphOffenders(
+                PlantInto(FocusObserverFile, "        if (Held is not { } held)", source)),
+            "transition-delegate-side-effect" => TransitionCallGraphOffenders(
+                PlantInto("MainWindow.xaml.cs", "                    withdraw: () => surface.CancelFocusLanding(held),", source)),
+            "transition-focus-api" => TransitionCallGraphOffenders(
+                PlantInto(FocusObserverFile, "        held.Detach();", source)),
+            "hwnd-hook-reads-keys" => HwndHookOffenders(ShellUnits().Select(unit => unit.Name == MonitorFile
+                ? new Unit(unit.Name, Parse(PlantedText(MonitorFile, "        if (message == WmEnable)\n        {\n            Recompute();\n        }", source)))
+                : unit)),
+            "hwnd-hook-second" => HwndHookOffenders(ShellUnits().Append(new Unit("Other.cs", Parse(source)))),
+            "input-override-key" or "input-override-pointer" =>
+                InputOverrideOffenders(WindowUnits().Append(new Unit("MainWindow.Planted.cs", Parse(source)))),
+            "owned-window-route-missing" => OwnedWindowOffenders(PlantInto(OwnedWindowGuardFile, source, string.Empty)),
+            "owned-window-unadmitted" or "owned-window-admitted-late" or "modal-dialog-admitted"
+                or "owned-window-conditional-show" or "owned-window-shown-elsewhere" or "owned-window-show-method-group" =>
+                OwnedWindowOffenders(ShellCompilation.Compilation.AddSyntaxTrees(
+                    CSharpSyntaxTree.ParseText(
+                        "using System.Windows;\nnamespace SlateWindows;\n" + source,
+                        (CSharpParseOptions)ShellCompilation.Compilation.SyntaxTrees.First().Options,
+                        path: "Planted.cs"))),
+            "shell-of-follows-owner" => OwnedWindowOffenders(PlantInto(
+                OwnedWindowGuardFile,
+                "    internal static MainWindow? ShellOf(DependencyObject element) => Window.GetWindow(element) switch",
+                source)),
+            _ => null,
+        };
+        if (planted is not null)
+        {
+            Assert.True(planted.Count > 0, $"the census missed a planted {bypass} bypass");
+            return;
+        }
+
+
         const string Handlers = """
             partial class MainWindow
             {
@@ -397,6 +460,69 @@ public sealed class ShellSealAdmissionCensus
 
         List<string> found = PastHandledOffenders([new Unit(FocusObserverFile, Parse(real.Replace(from, to, StringComparison.Ordinal)))]);
         Assert.True(found.Count > 0, $"the census admitted {bypass} in the departure observer's own file");
+    }
+
+    /// <summary>
+    /// WB-15 (#1313): OD-12's premise is that a focus transition "only
+    /// withdraws or notes the held landing". The callbacks are pinned whole,
+    /// so a side effect would hide in what they call: the observer's
+    /// <c>Transition</c> and each slot's <c>OnTransition</c> are pinned too,
+    /// <c>OnTransition</c> calls only its reviewed callees, and nothing two
+    /// calls deep from it moves the keys, runs a command or speaks.
+    /// </summary>
+    [Fact]
+    public void TheFocusObserversTransitionCallGraphHasNoSideEffects()
+    {
+        string real = File.ReadAllText(Path.Combine(SourceText.ShellSourceRoot(), FocusObserverFile));
+        Assert.Empty(FocusObserverShapeOffenders(new Unit(FocusObserverFile, Parse(real))));
+        List<string> offenders = TransitionCallGraphOffenders(ShellCompilation.Compilation);
+        Assert.True(
+            offenders.Count == 0,
+            "the departure observer's transition does more than withdraw or note the held landing (OD-12):\n  "
+            + string.Join("\n  ", offenders));
+    }
+
+    /// <summary>WB-15 (#1313): a raw HWND hook sees every window message
+    /// ahead of WPF's input routes. The shell has one — the modal-loop
+    /// monitor's, which reads WM_ENABLE and nothing else.</summary>
+    [Fact]
+    public void TheOnlyHwndHookIsTheModalLoopMonitorsAndItReadsWmEnableOnly()
+    {
+        List<string> offenders = HwndHookOffenders(ShellUnits());
+        Assert.True(offenders.Count == 0, "HWND hooks outside the modal-loop monitor's reviewed one:\n  " + string.Join("\n  ", offenders));
+    }
+
+    /// <summary>WB-15 (#1313): an override of a routed input virtual on the
+    /// window — <c>OnPreviewKeyDown</c> and its kin — runs as the window's
+    /// class handling, ahead of the window's own preview handlers and the
+    /// admission. The window's routes are instance handlers by
+    /// design.</summary>
+    [Fact]
+    public void MainWindowOverridesNoRoutedInputVirtual()
+    {
+        List<string> offenders = InputOverrideOffenders(WindowUnits());
+        Assert.True(offenders.Count == 0, "MainWindow overrides a routed input virtual:\n  " + string.Join("\n  ", offenders));
+    }
+
+    /// <summary>
+    /// WB-15 (#1307 item 3, WD9): a modeless window the shell owns admits
+    /// every route the shell's own window admits, through the same check —
+    /// <c>ShellSeal.Admit</c> subscribes exactly <see cref="RequiredGates"/>
+    /// and the access-key gate, first on the window; every modeless window
+    /// the shell shows (its own window aside) is admitted before its
+    /// <c>Show</c>, in the same method — a <c>Show</c> the census cannot
+    /// trace to an admitted local or field is an offender; no modal dialog
+    /// is admitted; and <c>ShellSeal.ShellOf</c> resolves only the shell's
+    /// window and admitted windows (one <c>Owner</c> hop, no walk), so an
+    /// unadmitted modal's double-clicks stay its own.
+    /// </summary>
+    [Fact]
+    public void TheOwnedWindowGuardHoldsEveryRouteTheShellsWindowHolds()
+    {
+        List<string> offenders = OwnedWindowOffenders(ShellCompilation.Compilation);
+        Assert.True(
+            offenders.Count == 0,
+            "a window the shell owns is not held by the seal as the shell's own window is:\n  " + string.Join("\n  ", offenders));
     }
 
     private static List<string> SealReaderOffenders(IEnumerable<Unit> shell)
@@ -814,7 +940,523 @@ public sealed class ShellSealAdmissionCensus
             }
         }
 
+        foreach ((string name, string expected) in FocusObserverTransition)
+        {
+            MethodDeclarationSyntax[] declared = unit.Root.DescendantNodes()
+                .OfType<MethodDeclarationSyntax>()
+                .Where(method => method.Identifier.ValueText == name)
+                .ToArray();
+            if (declared is not [{ Body: { } transition }] || CSharpSource.Normalize(transition) != expected)
+            {
+                offenders.Add($"{unit.Name}: the departure observer's {name} is not exactly its intended transition, "
+                    + "which only withdraws or notes the held landing");
+            }
+        }
+
         return offenders;
+    }
+
+    /// <summary>The slots' half of the transition, whole: the observer hands
+    /// it to each slot, and a slot withdraws or notes its held landing
+    /// (OD-12). Instance methods, so pinned apart from the callbacks.</summary>
+    private static readonly Dictionary<string, string> FocusObserverTransition = new()
+    {
+        ["Transition"] = "{if(t_slotsisnot{Count:>0}slots){return;}"
+            + "foreach(EditorLandingSlotslotinslots.ToArray()){slot.OnTransition(from,to);}}",
+        ["OnTransition"] = "{if(Heldisnot{}held){return;}"
+            + "if(t_parking>0||(fromisnull?_restoringActivation:!CanHoldKeys(from))){return;}"
+            + "if(held.Target()is{}target&&IsWithin(toasDependencyObject,target)&&(!held.Entered||IsTerminalSeatInto(target)))"
+            + "{held.Entered=true;return;}_=Withdraw();}",
+    };
+
+    /// <summary>What <c>OnTransition</c> may call: the held landing's
+    /// withdrawal and target, and the reads that decide between them.</summary>
+    private static readonly string[] TransitionCallees = ["Withdraw", "CanHoldKeys", "IsWithin", "IsTerminalSeatInto", "Target"];
+
+    /// <summary>
+    /// <c>OnTransition</c>'s call graph, two calls deep from it, bound
+    /// through the shell's compilation: it calls only
+    /// <see cref="TransitionCallees"/>, and no method on the way touches
+    /// <c>Keyboard</c>, executes an <c>ICommand</c>, reads an
+    /// <c>_announce</c> funnel or builds an <c>A11yEvent</c>.
+    /// </summary>
+    private static List<string> TransitionCallGraphOffenders(CSharpCompilation compilation)
+    {
+        var offenders = new List<string>();
+        SyntaxTree tree = compilation.SyntaxTrees.Single(candidate => Path.GetFileName(candidate.FilePath) == FocusObserverFile);
+        SemanticModel model = compilation.GetSemanticModel(tree);
+        MethodDeclarationSyntax root = tree.GetRoot().DescendantNodes()
+            .OfType<MethodDeclarationSyntax>()
+            .Single(method => method.Identifier.ValueText == "OnTransition");
+        foreach (InvocationExpressionSyntax call in root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+        {
+            if (model.GetSymbolInfo(call).Symbol is not IMethodSymbol callee || !TransitionCallees.Contains(callee.Name))
+            {
+                offenders.Add($"OnTransition calls {CSharpSource.Normalize(call.Expression)}, which is none of its reviewed "
+                    + $"callees ({string.Join(", ", TransitionCallees)})");
+            }
+        }
+
+        WalkTransition(compilation, root, model, 0, "OnTransition", new HashSet<ISymbol>(SymbolEqualityComparer.Default), offenders);
+        return offenders;
+    }
+
+    /// <summary>How deep the transition walk reads: <c>OnTransition</c> is
+    /// 0; the held landing's delegates count as the body of the method that
+    /// invokes them.</summary>
+    private const int TransitionWalkDepth = 3;
+
+    /// <summary>The held landing's delegate-backed members, by the
+    /// constructor parameter whose delegate each invokes (WB-15 red team:
+    /// <c>HeldEditorLanding.Withdraw()</c> is <c>_withdraw()</c>, so the walk
+    /// follows the lambdas and method groups every
+    /// <c>new HeldEditorLanding(…)</c> hands it).</summary>
+    private static readonly Dictionary<string, (string Parameter, int Position)> HeldLandingDelegates = new()
+    {
+        ["Target"] = ("target", 0),
+        ["Withdraw"] = ("withdraw", 2),
+    };
+
+    private static void WalkTransition(
+        CSharpCompilation compilation, SyntaxNode body, SemanticModel model, int depth, string path, HashSet<ISymbol> visited, List<string> offenders)
+    {
+        foreach (SyntaxNode node in body.DescendantNodes())
+        {
+            string? effect = TransitionEffect(node, model);
+            if (effect is not null)
+            {
+                offenders.Add($"{path} reaches {effect} — a focus transition only withdraws or notes the held landing");
+            }
+
+            if (depth < TransitionWalkDepth
+                && node is InvocationExpressionSyntax invocation
+                && model.GetSymbolInfo(invocation).Symbol is IMethodSymbol callee
+                && visited.Add(callee.OriginalDefinition))
+            {
+                foreach (SyntaxReference reference in callee.OriginalDefinition.DeclaringSyntaxReferences)
+                {
+                    if (reference.GetSyntax() is MethodDeclarationSyntax or LocalFunctionStatementSyntax)
+                    {
+                        WalkTransition(
+                            compilation, reference.GetSyntax(), compilation.GetSemanticModel(reference.SyntaxTree),
+                            depth + 1, $"{path} → {callee.Name}", visited, offenders);
+                    }
+                }
+
+                if (callee.ContainingType.Name == "HeldEditorLanding"
+                    && HeldLandingDelegates.TryGetValue(callee.Name, out (string Parameter, int Position) handed))
+                {
+                    WalkHeldLandingDelegates(compilation, handed, depth + 1, $"{path} → {callee.Name}", visited, offenders);
+                }
+            }
+        }
+    }
+
+    /// <summary>Every delegate handed to a <c>HeldEditorLanding</c> for
+    /// <paramref name="handed"/>: a lambda's body, or a method group's
+    /// declaration, walked as the delegate-backed member's own body.</summary>
+    private static void WalkHeldLandingDelegates(
+        CSharpCompilation compilation, (string Parameter, int Position) handed, int depth, string path, HashSet<ISymbol> visited, List<string> offenders)
+    {
+        foreach (SyntaxTree tree in compilation.SyntaxTrees.Where(tree => !tree.FilePath.EndsWith(".g.cs", StringComparison.Ordinal)))
+        {
+            SemanticModel model = compilation.GetSemanticModel(tree);
+            foreach (BaseObjectCreationExpressionSyntax creation in tree.GetRoot().DescendantNodes().OfType<BaseObjectCreationExpressionSyntax>())
+            {
+                if (model.GetTypeInfo(creation).Type?.Name != "HeldEditorLanding" || creation.ArgumentList is not { } arguments)
+                {
+                    continue;
+                }
+
+                ArgumentSyntax? argument = arguments.Arguments.FirstOrDefault(candidate => candidate.NameColon?.Name.Identifier.ValueText == handed.Parameter)
+                    ?? (arguments.Arguments.Count > handed.Position && arguments.Arguments[handed.Position].NameColon is null
+                        ? arguments.Arguments[handed.Position]
+                        : null);
+                if (argument is null)
+                {
+                    offenders.Add($"{Path.GetFileName(tree.FilePath)}:{Line(creation)} builds a HeldEditorLanding whose {handed.Parameter} the census cannot find");
+                    continue;
+                }
+
+                string where = $"{path} ({Path.GetFileName(tree.FilePath)}:{Line(argument)})";
+                if (argument.Expression is AnonymousFunctionExpressionSyntax lambda)
+                {
+                    WalkTransition(compilation, lambda, model, depth, where, visited, offenders);
+                }
+                else if (model.GetSymbolInfo(argument.Expression).Symbol is IMethodSymbol group)
+                {
+                    foreach (SyntaxReference reference in group.OriginalDefinition.DeclaringSyntaxReferences)
+                    {
+                        if (reference.GetSyntax() is MethodDeclarationSyntax declaration)
+                        {
+                            WalkTransition(
+                                compilation, declaration, compilation.GetSemanticModel(reference.SyntaxTree),
+                                depth, $"{where} → {group.Name}", visited, offenders);
+                        }
+                    }
+                }
+                else
+                {
+                    offenders.Add($"{where}: the {handed.Parameter} handed to a HeldEditorLanding is neither a lambda nor a method group");
+                }
+            }
+        }
+    }
+
+    /// <summary>What a node does that a focus transition may not: move the
+    /// keys (any <c>Keyboard</c> member, bound — <c>using static</c>
+    /// included — or <c>Focus</c>, <c>MoveFocus</c>,
+    /// <c>FocusManager.SetFocusedElement</c>), run a command, or
+    /// speak.</summary>
+    private static string? TransitionEffect(SyntaxNode node, SemanticModel model)
+    {
+        switch (node)
+        {
+            case MemberAccessExpressionSyntax access when access.Expression is IdentifierNameSyntax { Identifier.ValueText: "Keyboard" }:
+                return $"Keyboard.{access.Name.Identifier.ValueText}";
+            case IdentifierNameSyntax { Identifier.ValueText: "_announce" }:
+                return "the _announce funnel";
+            case BaseObjectCreationExpressionSyntax creation when IsA11yEvent(model.GetTypeInfo(creation).Type):
+                return "an A11yEvent";
+            case InvocationExpressionSyntax call when model.GetSymbolInfo(call).Symbol is IMethodSymbol method:
+                if (method.ContainingType.Name is "Keyboard" or "FocusManager")
+                {
+                    return $"{method.ContainingType.Name}.{method.Name}";
+                }
+
+                if (method.Name is "Focus" or "MoveFocus")
+                {
+                    return $"{method.ContainingType.Name}.{method.Name}";
+                }
+
+                if (method.Name == "Execute"
+                    && (method.ContainingType.Name == "ICommand" || method.ContainingType.AllInterfaces.Any(face => face.Name == "ICommand")))
+                {
+                    return "an ICommand's Execute";
+                }
+
+                return null;
+            default:
+                return null;
+        }
+    }
+
+    private static bool IsA11yEvent(ITypeSymbol? type)
+    {
+        for (; type is not null; type = type.BaseType)
+        {
+            if (type.Name == "A11yEvent")
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>The modal-loop monitor, whose one HWND hook reads WM_ENABLE
+    /// to learn that a native modal loop disabled the shell.</summary>
+    private const string MonitorFile = "ShellModalLoopMonitor.cs";
+
+    private const string MonitorHookBody = "{if(message==WmEnable){Recompute();}returnIntPtr.Zero;}";
+
+    /// <summary>Every <c>AddHook</c> in the shell — exactly the monitor's
+    /// one, its <c>Hook</c> pinned whole.</summary>
+    private static List<string> HwndHookOffenders(IEnumerable<Unit> shell)
+    {
+        var offenders = new List<string>();
+        int hooks = 0;
+        foreach (Unit unit in shell)
+        {
+            foreach (InvocationExpressionSyntax hook in unit.Root.DescendantNodes()
+                .OfType<InvocationExpressionSyntax>()
+                .Where(invocation => invocation.Expression switch
+                {
+                    MemberAccessExpressionSyntax access => access.Name.Identifier.ValueText == "AddHook",
+                    MemberBindingExpressionSyntax binding => binding.Name.Identifier.ValueText == "AddHook",
+                    _ => false,
+                }))
+            {
+                hooks++;
+                if (unit.Name != MonitorFile
+                    || hook.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault()?.Identifier.ValueText != "Attach"
+                    || CSharpSource.Normalize(hook.ArgumentList) != "(Hook)")
+                {
+                    offenders.Add($"{unit.Name}:{Line(hook)} adds an HWND hook — it sees every message ahead of the window's routes");
+                }
+            }
+
+            if (unit.Name == MonitorFile)
+            {
+                MethodDeclarationSyntax[] declared = unit.Root.DescendantNodes()
+                    .OfType<MethodDeclarationSyntax>()
+                    .Where(method => method.Identifier.ValueText == "Hook")
+                    .ToArray();
+                if (declared is not [{ Body: { } body }] || CSharpSource.Normalize(body) != MonitorHookBody)
+                {
+                    offenders.Add($"{unit.Name}: the modal-loop monitor's Hook is not exactly its WM_ENABLE read");
+                }
+            }
+        }
+
+        if (hooks != 1)
+        {
+            offenders.Add($"the shell adds {hooks} HWND hook(s); it adds exactly the modal-loop monitor's one");
+        }
+
+        return offenders;
+    }
+
+    /// <summary>Overrides on the window whose single parameter is a routed
+    /// input's arguments.</summary>
+    private static List<string> InputOverrideOffenders(IEnumerable<Unit> window)
+    {
+        Type[] inputArguments = typeof(InputEventArgs).Assembly.GetTypes()
+            .Concat(typeof(AccessKeyPressedEventArgs).Assembly.GetTypes())
+            .Where(type => typeof(InputEventArgs).IsAssignableFrom(type) || type == typeof(AccessKeyPressedEventArgs))
+            .ToArray();
+        var offenders = new List<string>();
+        foreach (Unit unit in window)
+        {
+            foreach (MethodDeclarationSyntax method in unit.Root.DescendantNodes()
+                .OfType<MethodDeclarationSyntax>()
+                .Where(method => method.Modifiers.Any(SyntaxKind.OverrideKeyword)
+                    && method.ParameterList.Parameters is [{ Type: { } parameter }]
+                    && inputArguments.Any(type => type.Name == CSharpSource.Normalize(parameter).Split('.').Last())))
+            {
+                offenders.Add($"{unit.Name}:{Line(method)} overrides {method.Identifier.ValueText} — the window's class "
+                    + "handling runs before its own preview handlers, so the admission cannot take that input first");
+            }
+        }
+
+        return offenders;
+    }
+
+    /// <summary>The owned-window guard.</summary>
+    private const string OwnedWindowGuardFile = "ShellSeal.cs";
+
+    private static readonly Dictionary<string, string> OwnedWindowGuardBodies = new()
+    {
+        ["ShellOf"] = "Window.GetWindow(element)switch{MainWindowshell=>shell,"
+            + "WindowwindowwhenAdmittedWindows.TryGetValue(window,out_)=>window.OwnerasMainWindow,_=>null,}",
+        ["Take"] = "_=TakesFor((Window)sender,e)",
+        ["TakeAccessKey"] = "{if(TakesFor((Window)sender,e)){e.Target=null;}}",
+        ["TakesFor"] = "ShellOf(owned)?.SealTakes(input,inTheShellsWindow:false)??false",
+    };
+
+    /// <summary>
+    /// The owned-window guard's shape, and every window the shell owns: see
+    /// <see cref="TheOwnedWindowGuardHoldsEveryRouteTheShellsWindowHolds"/>.
+    /// Bound through <paramref name="compilation"/>, so an <c>Owner</c>
+    /// assignment is a <c>Window</c>'s, not another type's property of that
+    /// name.
+    /// </summary>
+    private static List<string> OwnedWindowOffenders(CSharpCompilation compilation)
+    {
+        var offenders = new List<string>();
+        SyntaxTree guard = compilation.SyntaxTrees.Single(tree => Path.GetFileName(tree.FilePath) == OwnedWindowGuardFile);
+        var guardRoot = (CompilationUnitSyntax)guard.GetRoot();
+        MethodDeclarationSyntax Method(string name) => guardRoot.DescendantNodes()
+            .OfType<MethodDeclarationSyntax>()
+            .Single(method => method.Identifier.ValueText == name);
+
+        foreach ((string name, string expected) in OwnedWindowGuardBodies)
+        {
+            MethodDeclarationSyntax[] declared = guardRoot.DescendantNodes()
+                .OfType<MethodDeclarationSyntax>()
+                .Where(method => method.Identifier.ValueText == name)
+                .ToArray();
+            string actual = declared switch
+            {
+                [{ ExpressionBody: { } arrow }] => CSharpSource.Normalize(arrow.Expression),
+                [{ Body: { } body }] => CSharpSource.Normalize(body),
+                _ => "(not one method)",
+            };
+            if (actual != expected)
+            {
+                offenders.Add($"{OwnedWindowGuardFile}: {name} is not exactly its reviewed text — it is {actual}");
+            }
+        }
+
+        MethodDeclarationSyntax admit = Method("Admit");
+        string[] subscribed = admit.DescendantNodes()
+            .OfType<AssignmentExpressionSyntax>()
+            .Where(assignment => assignment.IsKind(SyntaxKind.AddAssignmentExpression))
+            .Select(assignment => (CSharpSource.Normalize(assignment.Left), CSharpSource.Normalize(assignment.Right)))
+            .Select(pair => pair.Item2 == "Take" && pair.Item1.StartsWith("owned.", StringComparison.Ordinal)
+                ? pair.Item1["owned.".Length..]
+                : $"{pair.Item1}+={pair.Item2}")
+            .ToArray();
+        if (!subscribed.OrderBy(route => route, StringComparer.Ordinal).SequenceEqual(RequiredGates.OrderBy(route => route, StringComparer.Ordinal)))
+        {
+            offenders.Add($"{OwnedWindowGuardFile}: Admit subscribes [{string.Join(", ", subscribed)}] — exactly "
+                + $"[{string.Join(", ", RequiredGates)}], each to Take, the shell's own window's routes");
+        }
+
+        string[] accessKeys = admit.DescendantNodes()
+            .OfType<InvocationExpressionSyntax>()
+            .Where(invocation => CSharpSource.Normalize(invocation.Expression) == "owned.AddHandler")
+            .Select(invocation => CSharpSource.Normalize(invocation.ArgumentList))
+            .ToArray();
+        if (accessKeys is not ["(AccessKeyManager.AccessKeyPressedEvent,newAccessKeyPressedEventHandler(TakeAccessKey),true)"])
+        {
+            offenders.Add($"{OwnedWindowGuardFile}: Admit's access-key gate is not exactly one past-handled registration to TakeAccessKey");
+        }
+
+        foreach (InvocationExpressionSyntax write in guardRoot.DescendantNodes()
+            .OfType<InvocationExpressionSyntax>()
+            .Where(invocation => invocation.Expression is MemberAccessExpressionSyntax
+            {
+                Expression: IdentifierNameSyntax { Identifier.ValueText: "AdmittedWindows" },
+                Name.Identifier.ValueText: not "TryGetValue",
+            }))
+        {
+            if (!ReferenceEquals(write.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault(), admit))
+            {
+                offenders.Add($"{OwnedWindowGuardFile}:{Line(write)} writes AdmittedWindows outside Admit");
+            }
+        }
+
+        // Every window the shell shows: a modeless one (the shell's own
+        // window aside) admitted first, in the method that shows it; a modal
+        // one never. Show and ShowDialog are bound through IOperation, so a
+        // conditional call and a method group are seen; a window the census
+        // cannot trace to a local or field admitted beside its Show is an
+        // offender, not a pass (WB-15 red team).
+        foreach (SyntaxTree tree in compilation.SyntaxTrees.Where(tree => tree.FilePath.EndsWith(".cs", StringComparison.Ordinal)
+            && !tree.FilePath.EndsWith(".g.cs", StringComparison.Ordinal)))
+        {
+            SemanticModel model = compilation.GetSemanticModel(tree);
+            foreach (SyntaxNode node in tree.GetRoot().DescendantNodes().Where(node => node is InvocationExpressionSyntax
+                || (node is MemberAccessExpressionSyntax && node.Parent is not InvocationExpressionSyntax)))
+            {
+                (IMethodSymbol? shown, IOperation? receiver) = model.GetOperation(node) switch
+                {
+                    IInvocationOperation call => (call.TargetMethod, call.Instance),
+                    IMethodReferenceOperation reference => (reference.Method, reference.Instance),
+                    _ => (null, null),
+                };
+                if (shown is not { Name: "Show" or "ShowDialog", Parameters.Length: 0 } || !IsWindow(shown.ContainingType))
+                {
+                    continue;
+                }
+
+                if (receiver is IConditionalAccessInstanceOperation)
+                {
+                    IOperation? up = receiver.Parent;
+                    while (up is not null and not IConditionalAccessOperation)
+                    {
+                        up = up.Parent;
+                    }
+
+                    receiver = (up as IConditionalAccessOperation)?.Operation;
+                }
+
+                if (receiver?.Type is { } receiverType && IsMainWindow(receiverType))
+                {
+                    continue;
+                }
+
+                SyntaxNode? method = node.Ancestors().FirstOrDefault(ancestor => ancestor is BaseMethodDeclarationSyntax or AccessorDeclarationSyntax);
+                ISymbol? window = receiver switch
+                {
+                    ILocalReferenceOperation local => local.Local,
+                    IFieldReferenceOperation field => field.Field,
+                    _ => null,
+                };
+                string where = $"{Path.GetFileName(tree.FilePath)}:{Line(node)} {shown.Name}";
+                if (window is null || method is null)
+                {
+                    offenders.Add($"{where}: the census cannot trace the window shown here to a local or field, so it "
+                        + "cannot see that the seal holds in it — show it from the method that builds and admits it");
+                    continue;
+                }
+
+                InvocationExpressionSyntax[] admits = method.DescendantNodes()
+                    .OfType<InvocationExpressionSyntax>()
+                    .Where(invocation => model.GetSymbolInfo(invocation).Symbol is IMethodSymbol { Name: "Admit", ContainingType.Name: "ShellSeal" }
+                        && invocation.ArgumentList.Arguments is [{ } argument]
+                        && SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(argument.Expression).Symbol, window))
+                    .ToArray();
+                if (shown.Name == "ShowDialog")
+                {
+                    if (admits.Length > 0)
+                    {
+                        offenders.Add($"{where} {window.Name}: a modal dialog is admitted — it is the prompt the seal waits on");
+                    }
+
+                    continue;
+                }
+
+                if (admits is not [{ } admitted] || admitted.SpanStart > node.SpanStart)
+                {
+                    offenders.Add($"{where} {window.Name}: a modeless window is shown without ShellSeal.Admit before it, "
+                        + "so the seal does not hold in it");
+                    continue;
+                }
+
+                SyntaxNode? earlier = method.DescendantNodes()
+                    .Where(candidate => candidate.SpanStart < admitted.SpanStart)
+                    .FirstOrDefault(candidate =>
+                        (candidate is AssignmentExpressionSyntax { Left: MemberAccessExpressionSyntax target } assignment
+                            && assignment.IsKind(SyntaxKind.AddAssignmentExpression)
+                            && SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(target.Expression).Symbol, window))
+                        || (candidate is InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax { Name.Identifier.ValueText: "AddHandler" } added }
+                            && SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(added.Expression).Symbol, window)));
+                if (earlier is not null)
+                {
+                    offenders.Add($"{where} {window.Name}: a subscription on the window (line {Line(earlier)}) runs ahead of "
+                        + "ShellSeal.Admit, so it acts before the seal's check");
+                }
+            }
+        }
+
+        return offenders;
+    }
+
+    private static bool IsMainWindow(ITypeSymbol? type)
+    {
+        for (; type is not null; type = type.BaseType)
+        {
+            if (type.Name == "MainWindow")
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsWindow(ITypeSymbol? type)
+    {
+        for (; type is not null; type = type.BaseType)
+        {
+            if (type.ToDisplayString() == "System.Windows.Window")
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>The shell's compilation with <paramref name="file"/>'s
+    /// tree replaced: its one <paramref name="anchor"/> becomes
+    /// <paramref name="replacement"/>.</summary>
+    private static CSharpCompilation PlantInto(string file, string anchor, string replacement)
+    {
+        CSharpCompilation compilation = ShellCompilation.Compilation;
+        SyntaxTree tree = compilation.SyntaxTrees.Single(candidate => Path.GetFileName(candidate.FilePath) == file);
+        return compilation.ReplaceSyntaxTree(
+            tree,
+            CSharpSyntaxTree.ParseText(PlantedText(file, anchor, replacement), (CSharpParseOptions)tree.Options, path: tree.FilePath));
+    }
+
+    private static string PlantedText(string file, string anchor, string replacement)
+    {
+        string real = File.ReadAllText(Path.Combine(SourceText.ShellSourceRoot(), file));
+        Assert.True(real.Split(anchor).Length == 2, $"the planted row no longer finds its one anchor in {file} — update the row");
+        return real.Replace(anchor, replacement, StringComparison.Ordinal);
     }
 
     /// <summary>What acts on a double-click ahead of the seal's class handler:

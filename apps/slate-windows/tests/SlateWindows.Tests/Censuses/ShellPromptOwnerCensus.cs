@@ -19,6 +19,7 @@ using System.Collections.Immutable;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Operations;
 
 namespace SlateWindows.Tests.Censuses;
 
@@ -92,7 +93,8 @@ public sealed class ShellPromptOwnerCensus
     /// <summary>The detector on planted sources: an ownerless box; a helper
     /// that is not named, called with null; a named helper handed null, or
     /// a window that is not the shell; a box whose owner is merely NAMED
-    /// "owner"; and the shipped shapes, which pass.</summary>
+    /// "owner"; an ownerless box taken as a method group (#1308); and the
+    /// shipped shapes, which pass.</summary>
     [Theory]
     [InlineData("class Other { void M() { MessageBox.Show(\"text\"); } }", 1)]
     [InlineData("class Other { static void Warn(Window? owner) { if (owner is null) { MessageBox.Show(\"t\"); return; } MessageBox.Show(owner, \"t\"); } void M() { Warn(null); } }", 2)]
@@ -100,6 +102,7 @@ public sealed class ShellPromptOwnerCensus
     [InlineData("class Other { void M(Window owner) { MessageBox.Show(owner, \"t\"); } }", 1)]
     [InlineData("partial class MainWindow { void M() { WorkspaceViewModel.ShowHistoryAlert(this, \"t\", \"m\"); MessageBox.Show(this, \"t\"); } }", 0)]
     [InlineData("partial class MainWindow { void M() { WorkspaceViewModel.ShowHistoryAlert(new MainWindow(), \"t\", \"m\"); } }", 1)]
+    [InlineData("class Other { void M() { System.Func<string, MessageBoxResult> prompt = MessageBox.Show; prompt(\"x\"); } }", 1)]
     public void TheDetectorRejectsEveryPromptTheShellDoesNotOwn(string planted, int expected) =>
         Assert.Equal(expected, Offenders(Planted(nullableOwner: false, planted)).Offenders.Count);
 
@@ -220,6 +223,46 @@ public sealed class ShellPromptOwnerCensus
                     {
                         offenders.Add($"{where} {helper} is not handed the shell");
                     }
+                }
+            }
+
+            // WB-15 (#1308): a box or helper taken as a METHOD GROUP is
+            // called through its delegate's Invoke, which the pass above
+            // never sees. Only the close prompt's display seam may hold one —
+            // the owner-taking overload, its owner checked where the seam is
+            // called.
+            foreach (ExpressionSyntax group in root.DescendantNodes()
+                .OfType<ExpressionSyntax>()
+                .Where(expression => expression is IdentifierNameSyntax or MemberAccessExpressionSyntax
+                    && !(expression.Parent is InvocationExpressionSyntax call && call.Expression == expression)
+                    && !(expression.Parent is MemberAccessExpressionSyntax outer && outer.Name == expression)))
+            {
+                if (model.GetOperation(group) is not IMethodReferenceOperation { Method: { } referenced })
+                {
+                    continue;
+                }
+
+                bool box = referenced is { Name: "Show", ContainingType.Name: "MessageBox" }
+                    && referenced.ContainingNamespace.ToDisplayString() == "System.Windows";
+                string? helper = NamedHelper(referenced);
+                if (!box && helper is null)
+                {
+                    continue;
+                }
+
+                if (box)
+                {
+                    boxes++;
+                }
+
+                bool theSeam = box
+                    && referenced.Parameters.FirstOrDefault()?.Type.Name == "Window"
+                    && group.Ancestors().OfType<PropertyDeclarationSyntax>().FirstOrDefault() is { Identifier.ValueText: DisplaySeam } seam
+                    && seam.Initializer?.Value == group;
+                if (!theSeam)
+                {
+                    offenders.Add($"{Where(tree, group)} {(box ? "MessageBox.Show" : helper)} taken as a method group — its "
+                        + "delegate's call hides the owner from this census");
                 }
             }
         }

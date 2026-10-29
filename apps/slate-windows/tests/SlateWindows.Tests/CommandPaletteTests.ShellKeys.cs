@@ -9,9 +9,11 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using SlateWindows.Canvas;
 using SlateWindows.Commands;
 using SlateWindows.Graph;
+using SlateWindows.Grids;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows.Tests;
@@ -353,6 +355,26 @@ public sealed partial class CommandPaletteTests
                     Assert.Contains(query, list.Items.Cast<object>());
                     list.SelectedItem = query;
                     bool handled = host.PressPointer(list, clickCount: 2);
+
+                    // The press itself never reaches the list's bubbling
+                    // MouseDown: WPF raises no twin for a preview the seal
+                    // handled (WpfRaisesNoBubblingTwinForAHandledPreview).
+                    // What Control raises FRESH from a press it saw past
+                    // handled is the double-click pair, on the control itself
+                    // — the route the seal's class handler exists for (WB-15
+                    // red team: without this leg, deleting that handler kept
+                    // the row green). Raised here as Control raises them;
+                    // ungated, the MouseDoubleClick runs the query.
+                    foreach (RoutedEvent doubleClick in new[] { Control.PreviewMouseDoubleClickEvent, Control.MouseDoubleClickEvent })
+                    {
+                        var fresh = new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
+                        {
+                            RoutedEvent = doubleClick,
+                        };
+                        list.RaiseEvent(fresh);
+                        handled &= fresh.Handled;
+                    }
+
                     PumpedDispatcher.Drain();
                     return (handled, workspace.ActiveGroup.Tabs.Any(tab => tab.IsSavedQueryTab)
                         ? "the saved query ran in a tab"
@@ -422,19 +444,30 @@ public sealed partial class CommandPaletteTests
     /// W7-7 PR 4's click rule (R-5, OD-11c) under the seal: a press on a
     /// populated list's EMPTY area puts the keys on one of its rows — never
     /// while the shell is sealed. The rule is a class handler for the
-    /// bubbling MouseDown, registered WITHOUT handledEventsToo
-    /// (ShellSealAdmissionCensus). Under real input a sealed press never
-    /// reaches it either way: WPF's MouseDevice raises no bubbling twin for a
-    /// preview the admission handled. This host's PressPointer raises the
-    /// twin, carrying the preview's handled state, which real input never
-    /// does (#1307) — so what the fact pins is the registration: registered
-    /// past handled, the rule moved the keys under that synthetic twin. Once
-    /// the modal section ends the same press lands them on the saved query's
-    /// row, so the route the fact drives is live.
+    /// bubbling MouseDown. WPF's MouseDevice raises no bubbling twin for a
+    /// preview the admission handled, and neither does this host's
+    /// PressPointer (#1307), so a sealed press cannot reach the rule; what
+    /// keeps it out of every other raise of the twin is its registration
+    /// WITHOUT handledEventsToo, which the fact reads from the source.
+    /// Once the modal section ends the same press lands the keys on the
+    /// saved query's row, so the route the fact drives is live.
     /// </summary>
     [Fact]
     public void AClickOnAListsEmptyAreaMovesNoKeysUnderTheSeal() => RunSta(() =>
     {
+        string[] rule = CSharpSource.Load("SelectorFocus.cs").Root.DescendantNodes()
+            .OfType<InvocationExpressionSyntax>()
+            .Where(invocation => CSharpSource.Normalize(invocation.Expression) == "EventManager.RegisterClassHandler"
+                && CSharpSource.Normalize(invocation.ArgumentList.Arguments[1].Expression) == "Mouse.MouseDownEvent")
+            .Select(invocation => CSharpSource.Normalize(invocation.ArgumentList))
+            .ToArray();
+        Assert.Equal(
+            [
+                "(typeof(ListBox),Mouse.MouseDownEvent,newMouseButtonEventHandler(ClickedEmptyArea))",
+                "(typeof(TreeView),Mouse.MouseDownEvent,newMouseButtonEventHandler(ClickedEmptyArea))",
+            ],
+            rule);
+
         using var host = new ShippedShellHost(shown: true, savedQuery: true);
         WorkspaceViewModel workspace = host.AttachDirtyWorkspace();
         workspace.ActiveLeaf = WorkspaceViewModel.Leaves.First(leaf => leaf.Id == "queries");
@@ -468,6 +501,246 @@ public sealed partial class CommandPaletteTests
         PumpedDispatcher.Drain();
         var row = Assert.IsType<ListBoxItem>(Keyboard.FocusedElement);
         Assert.Same(list, ItemsControl.ItemsControlFromItemContainer(row));
+    });
+
+    /// <summary>
+    /// #1307: with the host raising input as WPF does, a press the seal took
+    /// reaches no row — on the shipped Files tree, a press on another row
+    /// leaves the keys, the selection and the shell's speech where they
+    /// were, and once the seal lifts the same press selects and focuses
+    /// that row.
+    /// </summary>
+    [Fact]
+    public void ASealedPressOnAFilesTreeRowLeavesFocusSelectionAndSpeechAlone() => RunSta(() =>
+    {
+        using var host = new ShippedShellHost(shown: true, folder: true);
+        FilesSidebarViewModel sidebar = host.AttachFilesSidebar();
+        TreeView tree = host.Shell.FilesTree;
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => tree.IsVisible && tree.HasItems, TimeSpan.FromSeconds(10)),
+            "premise: the Files tree never showed its rows");
+        tree.UpdateLayout();
+        TreeViewItem[] rows = [.. sidebar.RootNodes.Select(node =>
+            Assert.IsAssignableFrom<TreeViewItem>(tree.ItemContainerGenerator.ContainerFromItem(node)))];
+        Assert.True(rows.Length >= 2, "premise: the tree has two rows");
+        TreeViewItem held = rows[0];
+        TreeViewItem pressed = rows[^1];
+        Assert.True(held.Focus(), "premise: the first row refused the keys");
+        PumpedDispatcher.Drain();
+        object? selected = tree.SelectedItem;
+        (int palette, int files) heard = (host.Heard.Count, host.SidebarHeard.Count);
+
+        ComponentDispatcher.PushModal();
+        try
+        {
+            Assert.True(host.Palette.IsSealed);
+            bool handled = host.PressPointer(pressed);
+            PumpedDispatcher.Drain();
+            Assert.True(handled, "the shell let a press on a tree row through under the seal");
+            Assert.Same(held, Keyboard.FocusedElement);
+            Assert.Same(selected, tree.SelectedItem);
+            Assert.Equal(heard, (host.Heard.Count, host.SidebarHeard.Count));
+        }
+        finally
+        {
+            ComponentDispatcher.PopModal();
+        }
+
+        Assert.False(host.Palette.IsSealed);
+        _ = host.PressPointer(pressed);
+        PumpedDispatcher.Drain();
+        Assert.Same(pressed, Keyboard.FocusedElement);
+        Assert.Same(pressed.DataContext, tree.SelectedItem);
+    });
+
+    /// <summary>
+    /// #1307: the same on a grid in the shell — a Bases view's cells. A
+    /// sealed press on another row's cell leaves the current cell, the keys,
+    /// the selection and the shell's speech alone; once the seal lifts the
+    /// press makes that cell current and focused.
+    /// </summary>
+    [Fact]
+    public void ASealedPressOnAGridCellLeavesFocusSelectionCurrentCellAndSpeechAlone() => RunSta(() =>
+    {
+        using var host = new ShippedShellHost(shown: true, savedQuery: true, folder: true);
+        WorkspaceViewModel workspace = host.AttachDirtyWorkspace();
+        // A new tab: the attached workspace's current tab is dirty.
+        workspace.OpenPath("Notes.base", WorkspaceOpenTarget.NewTab);
+        AccessibleDataGrid? grid = null;
+        Assert.True(
+            PumpedDispatcher.PumpUntil(
+                () => (grid = Descendants<AccessibleDataGrid>(host.Shell).FirstOrDefault(candidate => candidate.IsVisible)) is { Grid.Items.Count: >= 2 },
+                TimeSpan.FromSeconds(10)),
+            $"premise: the base never showed a grid of two rows (the active tab is {workspace.ActiveGroup.ActiveTab?.Title})");
+        DataGrid cells = grid!.Grid;
+        cells.UpdateLayout();
+        Assert.True(grid.FocusFirstCell(), "premise: the grid refused its first cell");
+        PumpedDispatcher.Drain();
+        DataGridCell held = Assert.IsType<DataGridCell>(Keyboard.FocusedElement);
+        var second = Assert.IsType<DataGridRow>(cells.ItemContainerGenerator.ContainerFromIndex(1));
+        DataGridCell pressed = Descendants<DataGridCell>(second).First();
+        DataGridCellInfo current = cells.CurrentCell;
+        object[] selection = [.. cells.SelectedItems.Cast<object>()];
+        int heard = host.Heard.Count;
+
+        ComponentDispatcher.PushModal();
+        try
+        {
+            Assert.True(host.Palette.IsSealed);
+            bool handled = host.PressPointer(pressed);
+            PumpedDispatcher.Drain();
+            Assert.True(handled, "the shell let a press on a grid cell through under the seal");
+            Assert.Same(held, Keyboard.FocusedElement);
+            Assert.Equal(current, cells.CurrentCell);
+            Assert.Equal(selection, cells.SelectedItems.Cast<object>());
+            Assert.Equal(heard, host.Heard.Count);
+        }
+        finally
+        {
+            ComponentDispatcher.PopModal();
+        }
+
+        Assert.False(host.Palette.IsSealed);
+        _ = host.PressPointer(pressed);
+        PumpedDispatcher.Drain();
+        Assert.Same(pressed, Keyboard.FocusedElement);
+        Assert.Same(second.Item, cells.CurrentCell.Item);
+    });
+
+    /// <summary>
+    /// #1307, the platform measured: through the input manager — the path
+    /// real input takes — WPF's KeyboardDevice and MouseDevice promote a
+    /// preview to its bubbling twin only when the preview stayed unhandled.
+    /// A preview handler marks the input handled; a listener past handled
+    /// on the twin hears nothing. Without the preview handler it hears the
+    /// twin once, so the input did reach the element.
+    /// </summary>
+    [Theory]
+    [InlineData("key")]
+    [InlineData("pointer")]
+    public void WpfRaisesNoBubblingTwinForAHandledPreview(string device) => RunSta(() =>
+    {
+        var target = new Border { Focusable = true, Background = Brushes.White, Width = 100, Height = 50 };
+        var window = new Window
+        {
+            Content = target,
+            Width = 200,
+            Height = 100,
+            ShowInTaskbar = false,
+            ShowActivated = false,
+            WindowStyle = WindowStyle.None,
+            Left = -10_000,
+            Top = -10_000,
+            WindowStartupLocation = WindowStartupLocation.Manual,
+        };
+        window.Show();
+        try
+        {
+            PumpedDispatcher.Drain();
+            PresentationSource source = PresentationSource.FromVisual(window)!;
+            (RoutedEvent preview, RoutedEvent twin) = device == "key"
+                ? (Keyboard.PreviewKeyDownEvent, Keyboard.KeyDownEvent)
+                : (Mouse.PreviewMouseDownEvent, Mouse.MouseDownEvent);
+            var heard = new List<bool>();
+            target.AddHandler(twin, new RoutedEventHandler((_, e) => heard.Add(e.Handled)), handledEventsToo: true);
+            bool handlePreview = true;
+            target.AddHandler(preview, new RoutedEventHandler((_, e) => e.Handled = handlePreview));
+
+            void Raise()
+            {
+                if (device == "key")
+                {
+                    Assert.True(target.Focus(), "premise: the target refused the keys");
+                    InputManager.Current.ProcessInput(new KeyEventArgs(Keyboard.PrimaryDevice, source, Environment.TickCount, Key.A)
+                    {
+                        RoutedEvent = preview,
+                    });
+                }
+                else
+                {
+                    Assert.True(Mouse.Capture(target), "premise: the target refused the mouse capture");
+                    try
+                    {
+                        InputManager.Current.ProcessInput(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
+                        {
+                            RoutedEvent = preview,
+                        });
+                    }
+                    finally
+                    {
+                        _ = Mouse.Capture(null);
+                    }
+                }
+
+                PumpedDispatcher.Drain();
+            }
+
+            Raise();
+            Assert.True(heard.Count == 0, $"WPF raised the {device} twin for a handled preview (handled: {string.Join(",", heard)})");
+            handlePreview = false;
+            Raise();
+            Assert.Equal([false], heard);
+        }
+        finally
+        {
+            window.Close();
+        }
+    });
+
+    /// <summary>#1307: the host raises a bubbling twin only for a preview
+    /// that stayed unhandled, as WPF's MouseDevice, Keyboard and
+    /// TextCompositionManager do — each helper, with a preview handler that
+    /// marks the input handled, leaves a bubbling counter at 0, and without
+    /// it reaches the counter once.</summary>
+    [Fact]
+    public void PressPointerRaisesNoTwinForAHandledPreview() => AssertNoTwinForAHandledPreview(
+        (host, target) => host.PressPointer(target),
+        [Mouse.PreviewMouseDownEvent, Mouse.PreviewMouseUpEvent],
+        [Mouse.MouseDownEvent, Mouse.MouseUpEvent]);
+
+    [Fact]
+    public void WheelRaisesNoTwinForAHandledPreview() => AssertNoTwinForAHandledPreview(
+        (host, target) => host.Wheel(target, -120, ModifierKeys.None),
+        [Mouse.PreviewMouseWheelEvent],
+        [Mouse.MouseWheelEvent]);
+
+    [Fact]
+    public void ReleaseKeyRaisesNoTwinForAHandledPreview() => AssertNoTwinForAHandledPreview(
+        (host, target) => host.ReleaseKey(target, Key.Apps),
+        [Keyboard.PreviewKeyUpEvent],
+        [Keyboard.KeyUpEvent]);
+
+    [Fact]
+    public void TypeTextRaisesNoTwinForAHandledPreview() => AssertNoTwinForAHandledPreview(
+        (_, target) => ShippedShellHost.TypeText(target, "r"),
+        [TextCompositionManager.PreviewTextInputEvent],
+        [TextCompositionManager.TextInputEvent]);
+
+    private static void AssertNoTwinForAHandledPreview(
+        Func<ShippedShellHost, UIElement, bool> raise, RoutedEvent[] previews, RoutedEvent[] twins) => RunSta(() =>
+    {
+        using var host = new ShippedShellHost();
+        foreach (bool previewHandles in new[] { true, false })
+        {
+            var target = new Border();
+            int heard = 0;
+            foreach (RoutedEvent preview in previews)
+            {
+                target.AddHandler(preview, new RoutedEventHandler((_, e) => e.Handled = previewHandles));
+            }
+
+            foreach (RoutedEvent twin in twins)
+            {
+                target.AddHandler(twin, new RoutedEventHandler((_, _) => heard++));
+            }
+
+            bool handled = raise(host, target);
+            Assert.Equal(previewHandles, handled);
+            Assert.True(
+                heard == (previewHandles ? 0 : twins.Length),
+                $"the bubbling twin was raised {heard} time(s) for a preview that "
+                + (previewHandles ? "was handled — WPF raises none" : "stayed unhandled — WPF raises one each"));
+        }
     });
 
     private static IEnumerable<T> Descendants<T>(DependencyObject root)
@@ -509,7 +782,7 @@ public sealed partial class CommandPaletteTests
     /// activated), so the access key manager — which targets only visible
     /// elements in a live source — can reach its menu.
     /// </summary>
-    private sealed class ShippedShellHost : IDisposable
+    internal sealed class ShippedShellHost : IDisposable
     {
         private readonly FixtureVault _fixture = FixtureVault.Create(1, "palette-shell-keys");
         private readonly Func<bool> _priorOverlayProbe = CanvasSurfaceView.ShellOverlayIsOpen;
@@ -519,10 +792,19 @@ public sealed partial class CommandPaletteTests
         private readonly string _recentsPath;
         private WorkspaceViewModel? _workspace;
         private QuickSwitcherViewModel? _switcher;
+        private FilesSidebarViewModel? _sidebar;
 
-        public ShippedShellHost(bool shown = false, bool savedQuery = false)
+        /// <param name="folder">Adds a collapsed folder holding one note, so
+        /// the Files tree has a row that expands.</param>
+        public ShippedShellHost(bool shown = false, bool savedQuery = false, bool folder = false)
         {
             Assert.Null(Application.Current);
+            if (folder)
+            {
+                Directory.CreateDirectory(Path.Combine(_fixture.Root, "folder"));
+                File.WriteAllText(Path.Combine(_fixture.Root, "folder", "inner.md"), "# Inner\n");
+            }
+
             if (savedQuery)
             {
                 File.WriteAllText(
@@ -649,6 +931,21 @@ public sealed partial class CommandPaletteTests
             return _switcher;
         }
 
+        /// <summary>What the Files sidebar has announced, in order.</summary>
+        public List<A11yEvent> SidebarHeard { get; } = [];
+
+        /// <summary>The shell's Files sidebar over the fixture, its tree
+        /// loaded (FilesRegionLandingTests' shape, in the shipped
+        /// window).</summary>
+        public FilesSidebarViewModel AttachFilesSidebar()
+        {
+            _sidebar = new FilesSidebarViewModel(_session, SidebarHeard.Add, localAppDataRoot: _fixture.Root);
+            PumpedDispatcher.PumpUntilDrained(_sidebar.TreeRefreshCompletion);
+            SetProperty(nameof(VaultLifecycleViewModel.FileSidebar), _sidebar);
+            PumpedDispatcher.Drain();
+            return _sidebar;
+        }
+
         public string[] PersistedRecents() => new CommandPaletteRecentsStore(_recentsPath).Load();
 
         /// <summary>The shell's unsaved-changes prompt with only its native
@@ -680,55 +977,97 @@ public sealed partial class CommandPaletteTests
                 () => _ = AccessKeyManager.ProcessKey(PresentationSource.FromVisual(Shell)!, key, false));
 
         /// <summary>A left-button press and release on
-        /// <paramref name="target"/> as the input manager raises them: each
-        /// Preview, then its bubbling twin carrying the preview's handled
-        /// state (a pair shares it), the press with
-        /// <paramref name="clickCount"/>. Returns whether both were
-        /// handled.</summary>
-        public bool PressPointer(UIElement target, int clickCount = 1)
-        {
-            bool handled = true;
-            foreach ((RoutedEvent preview, RoutedEvent bubble) in new[]
-            {
-                (Mouse.PreviewMouseDownEvent, Mouse.MouseDownEvent),
-                (Mouse.PreviewMouseUpEvent, Mouse.MouseUpEvent),
-            })
-            {
-                MouseButtonEventArgs first = PointerArgs(preview, clickCount);
-                target.RaiseEvent(first);
-                MouseButtonEventArgs second = PointerArgs(bubble, clickCount);
-                second.Handled = first.Handled;
-                target.RaiseEvent(second);
-                handled &= second.Handled;
-            }
+        /// <paramref name="target"/> as the input manager raises them
+        /// (<see cref="PressPointerDown"/>, then <see cref="ReleasePointer"/>).
+        /// Returns whether both were handled.</summary>
+        public bool PressPointer(UIElement target, int clickCount = 1) =>
+            PressPointerDown(target, clickCount) & ReleasePointer(target);
 
-            return handled;
+        /// <summary>A left-button press on <paramref name="target"/> as WPF's
+        /// MouseDevice raises it: Preview, then — only if the preview stayed
+        /// unhandled — its bubbling twin (#1307: WPF raises no twin for a
+        /// handled preview), the press with <paramref name="clickCount"/>.
+        /// Raised over <c>Mouse.PrimaryDevice</c> with its button state
+        /// unchanged, so <c>ButtonBase</c> never presses. Returns whether the
+        /// press was handled.</summary>
+        public bool PressPointerDown(UIElement target, int clickCount = 1) =>
+            RaisePair(target, PointerArgs(Mouse.PreviewMouseDownEvent, clickCount), () => PointerArgs(Mouse.MouseDownEvent, clickCount));
+
+        /// <summary>A left-button release on <paramref name="target"/>:
+        /// Preview, then — unhandled — its bubbling twin. Returns whether
+        /// the release was handled.</summary>
+        public bool ReleasePointer(UIElement target) =>
+            RaisePair(target, PointerArgs(Mouse.PreviewMouseUpEvent, 1), () => PointerArgs(Mouse.MouseUpEvent, 1));
+
+        /// <summary>A key release on <paramref name="target"/>: Preview,
+        /// then — unhandled — KeyUp, from the target's own presentation
+        /// source (so it works in a window the shell owns). Returns whether
+        /// the release was handled.</summary>
+        public bool ReleaseKey(UIElement target, Key key)
+        {
+            PresentationSource source = SourceOf(target);
+            return RaisePair(
+                target,
+                KeyArgs(source, key, system: false, Keyboard.PreviewKeyUpEvent),
+                () => KeyArgs(source, key, system: false, Keyboard.KeyUpEvent));
+        }
+
+        /// <summary>Text arriving on <paramref name="target"/> as the text
+        /// composition manager raises it: PreviewTextInput, then — unhandled
+        /// — TextInput. Returns whether the text was handled.</summary>
+        public static bool TypeText(UIElement target, string text)
+        {
+            var composition = new TextComposition(InputManager.Current, target, text);
+            return RaisePair(
+                target,
+                new TextCompositionEventArgs(Keyboard.PrimaryDevice, composition)
+                {
+                    RoutedEvent = TextCompositionManager.PreviewTextInputEvent,
+                },
+                () => new TextCompositionEventArgs(Keyboard.PrimaryDevice, composition)
+                {
+                    RoutedEvent = TextCompositionManager.TextInputEvent,
+                });
         }
 
         /// <summary>A wheel turn on <paramref name="target"/> with exactly
-        /// <paramref name="modifiers"/> held: Preview, then its bubbling
-        /// twin carrying the preview's handled state. Returns whether it was
-        /// handled.</summary>
+        /// <paramref name="modifiers"/> held: Preview, then — only if the
+        /// preview stayed unhandled — its bubbling twin. Returns whether it
+        /// was handled.</summary>
         public bool Wheel(UIElement target, int delta, ModifierKeys modifiers)
         {
             bool handled = false;
-            ThreadModifiers.Hold(modifiers, () =>
-            {
-                var preview = new MouseWheelEventArgs(Mouse.PrimaryDevice, Environment.TickCount, delta)
+            ThreadModifiers.Hold(modifiers, () => handled = RaisePair(
+                target,
+                new MouseWheelEventArgs(Mouse.PrimaryDevice, Environment.TickCount, delta)
                 {
                     RoutedEvent = Mouse.PreviewMouseWheelEvent,
-                };
-                target.RaiseEvent(preview);
-                var bubble = new MouseWheelEventArgs(Mouse.PrimaryDevice, Environment.TickCount, delta)
+                },
+                () => new MouseWheelEventArgs(Mouse.PrimaryDevice, Environment.TickCount, delta)
                 {
                     RoutedEvent = Mouse.MouseWheelEvent,
-                    Handled = preview.Handled,
-                };
-                target.RaiseEvent(bubble);
-                handled = bubble.Handled;
-            });
+                }));
             return handled;
         }
+
+        /// <summary>The input manager's shape for every pair: the preview,
+        /// then the bubbling twin only when the preview stayed
+        /// unhandled.</summary>
+        private static bool RaisePair(UIElement target, RoutedEventArgs preview, Func<RoutedEventArgs> twin)
+        {
+            target.RaiseEvent(preview);
+            if (preview.Handled)
+            {
+                return true;
+            }
+
+            RoutedEventArgs bubble = twin();
+            target.RaiseEvent(bubble);
+            return bubble.Handled;
+        }
+
+        private PresentationSource SourceOf(UIElement target) =>
+            PresentationSource.FromVisual(target) ?? PresentationSource.FromVisual(_inputSource)!;
 
         public void Dispose()
         {
@@ -741,6 +1080,12 @@ public sealed partial class CommandPaletteTests
                 {
                     SetProperty(nameof(VaultLifecycleViewModel.Workspace), null);
                     _workspace.Dispose();
+                }
+
+                if (_sidebar is not null)
+                {
+                    SetProperty(nameof(VaultLifecycleViewModel.FileSidebar), null);
+                    PumpedDispatcher.PumpUntilDrained(_sidebar.BeginSessionShutdownAndCaptureWork().SessionWork);
                 }
 
                 if (_switcher is not null)
