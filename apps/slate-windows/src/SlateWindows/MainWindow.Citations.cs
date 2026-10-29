@@ -470,7 +470,10 @@ public partial class MainWindow
     }
 
     /// <summary>The unresolved grid's one bind (R-4): a row is named by
-    /// its citation key, its row header.</summary>
+    /// its citation key, its row header. Its key is the citing file AND the
+    /// citation key (WB-16, #1301 AR-54): two unresolved citations in one note
+    /// share the path, and a republish re-seated the reader on the
+    /// first.</summary>
     internal static void BindBibliographyUnresolved(
         AccessibleDataGrid grid, IReadOnlyList<object> rows, string summary) =>
         grid.Bind(
@@ -480,7 +483,7 @@ public partial class MainWindow
             accessibilityLabel: CitationPhrase.SegmentUnresolved,
             rowAudioDescription: row => ((UnresolvedRowViewModel)row).RowDescription,
             rowAutomationName: row => ((UnresolvedRowViewModel)row).Key,
-            rowKey: static row => ((UnresolvedRowViewModel)row).Path);
+            rowKey: static row => ((UnresolvedRowViewModel)row).Path + "\u001F" + ((UnresolvedRowViewModel)row).Key);
 
     /// <summary>Ctrl+J landed. The leaf has already decided the outcome
     /// and announced it; this only moves focus, and only if the entry

@@ -38,6 +38,27 @@ public sealed class AnnouncementNameCensus
         ("uniffi.slate_uniffi.SavedQuery", "Name", "WorkspaceViewModel.SavedQuerySpokenName"),
         ("SlateWindows.RecentVault", "DisplayName", "RecentVault.SpokenName"),
         ("SlateWindows.VaultLifecycleViewModel", "VaultDisplayName", "RecentVault.SpokenName"),
+        // WB-16 (#1301, AR-57, AR-58): the dashboards list and the shortcuts
+        // list name their items among their siblings too.
+        ("uniffi.slate_uniffi.DashboardSummary", "Name", "WorkspaceViewModel.DashboardSpokenName"),
+        ("uniffi.slate_uniffi.Dashboard", "Name", "WorkspaceViewModel.DashboardSpokenName"),
+        ("SlateWindows.SidebarShortcutViewModel", "DisplayName", "FilesSidebarViewModel.ShortcutSpokenName"),
+        ("SlateWindows.SidebarShortcutViewModel", "AutomationName", "FilesSidebarViewModel.ShortcutSpokenName"),
+    ];
+
+    /// <summary>WB-16 (#1301, AR-56, AR-57): announcements whose first
+    /// argument IS an item's name, handed in as a plain string the raw-name
+    /// trace cannot see (a trimmed user entry, an editor's name field). Their
+    /// first argument must be a call to an authority, or a local assigned only
+    /// from one.</summary>
+    internal static readonly string[] NamedByAuthority =
+    [
+        "BasesSavedQueryEditing",
+        "BasesSavedQueryCreated",
+        "BasesSavedQueryUpdated",
+        "BasesSavedQueryRenamed",
+        "BasesDashboardSaved",
+        "BasesDashboardUpdated",
     ];
 
     /// <summary>The authorities, as "Type.Method": a raw name inside a call
@@ -50,6 +71,11 @@ public sealed class AnnouncementNameCensus
         "RecentVault.SpokenName",
         "WorkspaceViewModel.SavedQuerySpokenName",
         "VaultLifecycleViewModel.RecentVaultSpokenName",
+        "WorkspaceViewModel.DashboardSpokenName",
+        "FilesSidebarViewModel.ShortcutSpokenName",
+        // The builder's forward to the workspace's saved-query authority
+        // (the builder does not hold the list; the workspace hands it in).
+        "BaseQueryBuilderViewModel.SavedQuerySpokenName",
     ];
 
     [Fact]
@@ -74,6 +100,13 @@ public sealed class AnnouncementNameCensus
                 }
                 events++;
                 int line = creation.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
+                if (NamedByAuthority.Contains(eventType.Name)
+                    && (arguments.Arguments.FirstOrDefault()?.Expression is not { } named
+                        || !IsAuthoritative(named, model, [])))
+                {
+                    offenders.Add($"{file}:{line}: A11yEvent.{eventType.Name}({arguments.Arguments.FirstOrDefault()}) names "
+                        + "its item by a string no spoken-name authority composed");
+                }
                 foreach (ArgumentSyntax argument in arguments.Arguments)
                 {
                     foreach (string raw in RawNamesIn(argument.Expression, model, callers, [], depth: 0))
@@ -89,6 +122,49 @@ public sealed class AnnouncementNameCensus
             offenders.Count == 0,
             "announcements that name a sibling item by its raw name, not through its kind's spoken-name "
             + "authority (the name its list reads):\n  " + string.Join("\n  ", offenders.Distinct()));
+    }
+
+    /// <summary>A call to an authority, or a local every source of which is
+    /// one.</summary>
+    internal static bool IsAuthoritative(ExpressionSyntax expression, SemanticModel model, HashSet<ISymbol> followed)
+    {
+        switch (expression)
+        {
+            case InvocationExpressionSyntax invocation:
+                return model.GetSymbolInfo(invocation).Symbol is IMethodSymbol invoked
+                    && Authorities.Contains($"{invoked.ContainingType.Name}.{invoked.Name}");
+            case IdentifierNameSyntax identifier when model.GetSymbolInfo(identifier).Symbol is ILocalSymbol local:
+                if (!followed.Add(local))
+                {
+                    return true;
+                }
+
+                SyntaxNode[] sources = [.. SourcesOfLocal(local, identifier, model)];
+                return sources.Length > 0
+                    && sources.All(source => source is ExpressionSyntax value && IsAuthoritative(value, model, followed));
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>The event-constructor rule on planted sources: a raw string
+    /// is an offender, an authority call and a local assigned from one are
+    /// not.</summary>
+    [Theory]
+    [InlineData("class P { void M(string trimmed) => Use(new A11yEvent.BasesSavedQueryCreated(trimmed)); }", false)]
+    [InlineData("class P { void M(string id, string name) => Use(new A11yEvent.BasesDashboardSaved(name.Trim())); }", false)]
+    [InlineData("class P { void M(WorkspaceViewModel w, string id, string name) => Use(new A11yEvent.BasesSavedQueryRenamed(w.SavedQuerySpokenName(id, name))); }", true)]
+    [InlineData("class P { void M(WorkspaceViewModel w, string id, string name) { string spoken = w.DashboardSpokenName(id, name); Use(new A11yEvent.BasesDashboardUpdated(spoken)); } }", true)]
+    [InlineData("class P { void M(WorkspaceViewModel w, string id, string name) { string spoken = w.DashboardSpokenName(id, name); spoken = name; Use(new A11yEvent.BasesDashboardUpdated(spoken)); } }", false)]
+    public void TheEventConstructorRuleAdmitsOnlyAnAuthoritysName(string planted, bool admitted)
+    {
+        SyntaxTree tree = CSharpSyntaxTree.ParseText(
+            "using uniffi.slate_uniffi;\nnamespace SlateWindows;\n" + planted.Replace("class P {", "class P { static void Use(A11yEvent e) { }", StringComparison.Ordinal),
+            (CSharpParseOptions)ShellCompilation.Compilation.SyntaxTrees.First().Options);
+        CSharpCompilation compilation = ShellCompilation.Compilation.AddSyntaxTrees(tree);
+        SemanticModel model = compilation.GetSemanticModel(tree);
+        BaseObjectCreationExpressionSyntax creation = tree.GetRoot().DescendantNodes().OfType<BaseObjectCreationExpressionSyntax>().Single();
+        Assert.Equal(admitted, IsAuthoritative(creation.ArgumentList!.Arguments[0].Expression, model, []));
     }
 
     /// <summary>Every raw name <paramref name="expression"/> can carry, as

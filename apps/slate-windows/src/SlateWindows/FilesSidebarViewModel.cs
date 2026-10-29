@@ -2102,7 +2102,10 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             }
         }
 
-        ReportResult($"Added {node.DisplayName} to shortcuts.");
+        // As the Shortcuts list names the slot (OD-9; WB-16 red team): two
+        // notes called index.md read apart there by their paths.
+        SidebarShortcutViewModel added = Shortcuts.First(item => item.Kind == kind && item.Path == node.Path);
+        ReportResult($"Added {ShortcutSpokenName(added)} to shortcuts.");
         RaiseCommandStates();
     }
 
@@ -2113,13 +2116,23 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             return;
         }
 
+        // Named as the list named it, captured before it leaves (#1301,
+        // AR-58): one note in two slots is "…, shortcut 2" there.
+        string spoken = ShortcutSpokenName(shortcut);
         Shortcuts.Remove(shortcut);
         SelectedShortcut = null;
         if (PersistShortcuts())
         {
-            ReportResult($"Removed {shortcut.DisplayName} from shortcuts.");
+            ReportResult($"Removed {spoken} from shortcuts.");
         }
     }
+
+    /// <summary>WB-16 (#1301, AR-58): a shortcut as the Shortcuts list names
+    /// it — the same inputs the list's XAML composes from (its automation
+    /// name, told apart by its path) — the one spoken-name authority for a
+    /// shortcut.</summary>
+    internal string ShortcutSpokenName(SidebarShortcutViewModel shortcut) =>
+        SiblingNames.SpokenAmong(Shortcuts, shortcut, other => other.AutomationName, other => other.Path, "shortcut");
 
     private void UseVaultDefaultSort()
     {

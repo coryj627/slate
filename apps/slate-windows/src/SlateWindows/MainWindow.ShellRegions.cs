@@ -964,17 +964,49 @@ public partial class MainWindow : IShellRegionHost
     /// flag is cleared at Input priority, after it (never by a listener past
     /// handled: #1275's seal, ShellSealAdmissionCensus).
     /// </summary>
-    private void WatchRailArrows() =>
+    /// <remarks>
+    /// WB-16 (#1305): the press is also handed to the workspace's
+    /// <see cref="RailSettle"/> before the list handles it, so the leaf it
+    /// chooses is armed with the arrow held; the release, and the keys leaving
+    /// the rail, settle it. All three are ordinary handlers on the list, never
+    /// past handled (#1275's seal takes a release first, and the settle's
+    /// tick then finds the arrow up).
+    /// </remarks>
+    private void WatchRailArrows()
+    {
         RightPaneLeavesList.PreviewKeyDown += (_, e) =>
         {
             _railArrow = e.KeyboardDevice.Modifiers == ModifierKeys.None
-                && e.Key is Key.Up or Key.Down or Key.Left or Key.Right or Key.Home or Key.End or Key.PageUp or Key.PageDown
+                && IsRailArrow(e.Key)
                 && e.OriginalSource is ListBoxItem;
             if (_railArrow)
             {
+                _viewModel.Workspace?.RailSettle.Pressed(e.Key);
                 _ = Dispatcher.BeginInvoke(() => _railArrow = false, DispatcherPriority.Input);
             }
         };
+        // Modifiers ignored: releasing a held arrow ends the hold even if a
+        // modifier went down meanwhile.
+        RightPaneLeavesList.PreviewKeyUp += (_, e) =>
+        {
+            if (IsRailArrow(e.Key))
+            {
+                _viewModel.Workspace?.RailSettle.Released(e.Key);
+            }
+        };
+        // Posted, not run inside the focus change (WB-16 red team): the
+        // settle can reload History while the keys are landing in it.
+        RightPaneLeavesList.IsKeyboardFocusWithinChanged += (_, e) =>
+        {
+            if (e.NewValue is false && _viewModel.Workspace is { } workspace)
+            {
+                _ = Dispatcher.BeginInvoke(workspace.RailSettle.FocusLeft, DispatcherPriority.Input);
+            }
+        };
+    }
+
+    private static bool IsRailArrow(Key key) =>
+        key is Key.Up or Key.Down or Key.Left or Key.Right or Key.Home or Key.End or Key.PageUp or Key.PageDown;
 
     private bool LandAfterLoadMore()
     {

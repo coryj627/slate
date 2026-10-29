@@ -883,13 +883,6 @@ internal sealed partial class WorkspaceViewModel
                 new A11yEvent.ReopenedNamed(group.SpokenNameOf(tab)),
             _ => ReopenFileAnnouncement(group, tab),
         };
-        // A missing target keeps the tab and its recovery UI, without
-        // claiming success (D-11): the tab's state changes here, not
-        // inside the function that composes the announcement.
-        if (reopened is A11yEvent.ReopenTargetMissing)
-        {
-            tab.InvalidatePath();
-        }
         _announce(reopened);
         RaiseCommandStates();
         Persist();
@@ -897,21 +890,30 @@ internal sealed partial class WorkspaceViewModel
 
     private A11yEvent ReopenFileAnnouncement(WorkspaceGroupViewModel group, WorkspaceTabViewModel tab)
     {
-        // The reopened tab as its group's strip names it (codex PR 3 round
-        // 8, OD-9): the file that failed or went missing is that tab's.
-        string filename = group.SpokenNameOf(tab);
+        // The index may still contain a deleted file. Ask the live core
+        // provider (D-11) rather than trusting index metadata — FIRST: a
+        // missing target keeps the tab and its recovery UI without claiming
+        // success, and the tab is marked before it is named, so the name is
+        // the one the strip reads after the mark (WB-16, #1301 AR-55).
+        bool missing;
         try
         {
-            // The index may still contain a deleted file. Ask the live core
-            // provider (D-11) rather than trusting index metadata.
-            if (_session.CanonicalPath(tab.Path) is null)
-            {
-                return new A11yEvent.ReopenTargetMissing(filename);
-            }
+            missing = _session.CanonicalPath(tab.Path) is null;
         }
         catch (VaultException failure)
         {
-            return new A11yEvent.FileReopenFailed(filename, SlateUniffiMethods.VaultErrorDetail(failure));
+            return new A11yEvent.FileReopenFailed(group.SpokenNameOf(tab), SlateUniffiMethods.VaultErrorDetail(failure));
+        }
+        if (missing)
+        {
+            tab.InvalidatePath();
+        }
+        // The reopened tab as its group's strip names it (codex PR 3 round
+        // 8, OD-9): the file that failed or went missing is that tab's.
+        string filename = group.SpokenNameOf(tab);
+        if (missing)
+        {
+            return new A11yEvent.ReopenTargetMissing(filename);
         }
         // The reopen's own line is this load's failure, said once (#1266).
         _ = tab.TakeUnspokenLoadFailure();

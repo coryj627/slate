@@ -63,7 +63,7 @@ public sealed class WrappedStopTests
                 Assert.Equal(RecentVault.SpokenName(vaults[index], vaults), stop.GetName());
             }
             Assert.Equal(
-                [@"notes, C:\Work\notes", @"notes, D:\Home\notes", "journal"],
+                ["notes, in Work", "notes, in Home", "journal"],
                 items.Select(item => item.Stops[0].GetName()));
         });
     });

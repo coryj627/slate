@@ -137,7 +137,7 @@ public sealed class RecentVaultsStoreTests : IDisposable
     /// <summary>W7-7 PR 3 (#1246, R-4): a recent vault's button is the one
     /// stop in its row, so its name must tell it apart from its siblings.
     /// The display name alone, unless another recent vault shares it (in
-    /// any case, as speech would) — then the path too. Two "Notes" folders
+    /// any case, as speech would) — then the shortest folder that tells it apart (WB-16, #1311). Two "Notes" folders
     /// that read alike are what axe's SiblingUniqueAndFocusable failed on
     /// the welcome scan once the containers stopped separating them.</summary>
     [Fact]
@@ -149,15 +149,15 @@ public sealed class RecentVaultsStoreTests : IDisposable
         RecentVault[] all = [alpha, notes, otherNotes];
 
         Assert.Equal("Alpha", RecentVault.SpokenName(alpha, all));
-        Assert.Equal(@"Notes, C:\Work\Notes", RecentVault.SpokenName(notes, all));
-        Assert.Equal(@"notes, D:\Home\notes", RecentVault.SpokenName(otherNotes, all));
+        Assert.Equal("Notes, in Work", RecentVault.SpokenName(notes, all));
+        Assert.Equal("notes, in Home", RecentVault.SpokenName(otherNotes, all));
         Assert.Equal("Notes", RecentVault.SpokenName(notes, [alpha, notes]));
     }
 
     /// <summary>Codex PR 3 round 5: the buttons read alike by the ONE
     /// culture-independent comparison. Under tr-TR the current culture's
     /// case folding reported "FILE" and "file" as two names and left both
-    /// buttons bare; each now speaks its path.</summary>
+    /// buttons bare; each now speaks the folder that tells it apart.</summary>
     [Fact]
     public void UnderATurkishCultureCaseVariantsStillSpeakTheirPaths() => SiblingNamesTests.UnderCulture("tr-TR", () =>
     {
@@ -166,8 +166,8 @@ public sealed class RecentVaultsStoreTests : IDisposable
         var lower = new RecentVault(@"D:\Home\file", "file", 2);
         RecentVault[] all = [upper, lower];
 
-        Assert.Equal(@"FILE, C:\Work\FILE", RecentVault.SpokenName(upper, all));
-        Assert.Equal(@"file, D:\Home\file", RecentVault.SpokenName(lower, all));
+        Assert.Equal("FILE, in Work", RecentVault.SpokenName(upper, all));
+        Assert.Equal("file, in Home", RecentVault.SpokenName(lower, all));
     });
 
     private string StorePath => Path.Combine(_directory, "recent-vaults.json");

@@ -269,6 +269,100 @@ internal static class SiblingNames
             : Compose([.. siblings.Select(name)], [.. siblings.Select(distinguisher)], noun)[index];
     }
 
+    /// <summary>
+    /// WB-16 (#1311): each path's shortest distinguishing ancestor, for the
+    /// items whose leaf names read alike — "in Documents" beside "in Dropbox",
+    /// never two full paths. For a path among colliders, its parent folders are
+    /// read from the leaf upward: the first folder no other collider has at
+    /// any depth gives "in {folder}"; when no
+    /// one folder does, the folders from the leaf's parent up to the first
+    /// depth at which the whole run reads apart from every other's give
+    /// "in {run}", the run joined from the top down ("in Work\A"). Only a path
+    /// whose every folder reads alike with another's (two roots, or two paths
+    /// told apart only by case) falls back to its full path. A path whose leaf
+    /// collides with no other's has no distinguisher (null). Folders compare
+    /// by their <see cref="SpeechKey"/>s, as names do: the reader must hear
+    /// the difference.
+    /// </summary>
+    internal static string?[] ShortestDistinguishingAncestors(IReadOnlyList<string?> paths)
+    {
+        string?[] result = new string?[paths.Count];
+        List<string>?[] ancestors = [.. paths.Select(path => path is null ? null : AncestorsOf(path))];
+        SpeechKey[] leaves = [.. paths.Select(path => SpeechKey.Of(path is null ? null : LeafOf(path)))];
+        foreach (int index in Enumerable.Range(0, paths.Count))
+        {
+            if (paths[index] is not { } path || ancestors[index] is not { } own)
+            {
+                continue;
+            }
+
+            List<List<string>> others =
+            [
+                .. Enumerable.Range(0, paths.Count)
+                    .Where(other => other != index && ancestors[other] is not null && leaves[other] == leaves[index])
+                    .Select(other => ancestors[other]!),
+            ];
+            if (others.Count == 0)
+            {
+                continue;
+            }
+
+            string? Segment(List<string> folders, int depth) => depth < folders.Count ? folders[depth] : null;
+            // A single folder names the vault only when no namesake has that
+            // folder at ANY depth (WB-16 red team: "in Dropbox" for
+            // C:\Dropbox\Notes beside C:\Dropbox\Work\Notes, which met a
+            // depth-0 "Work" elsewhere and would also have taken "Dropbox").
+            int single = Enumerable.Range(0, own.Count)
+                .FirstOrDefault(
+                    depth => others.All(other => other.All(folder => SpeechKey.Of(folder) != SpeechKey.Of(own[depth]))),
+                    -1);
+            if (single >= 0)
+            {
+                result[index] = $"in {own[single]}";
+                continue;
+            }
+
+            int run = Enumerable.Range(0, own.Count)
+                .FirstOrDefault(
+                    depth => others.All(other => Enumerable.Range(0, depth + 1)
+                        .Any(level => SpeechKey.Of(Segment(other, level)) != SpeechKey.Of(own[level]))),
+                    -1);
+            result[index] = run >= 0
+                ? "in " + string.Join(System.IO.Path.DirectorySeparatorChar, own.Take(run + 1).Reverse())
+                : path;
+        }
+
+        // No two namesakes' distinguishers read alike: a folder is chosen only
+        // where no other namesake has it, and a run only where the other's run
+        // at those depths differs; two full paths that read alike are the one
+        // case left, and the sibling rule's ordinal pass tells those apart.
+        return result;
+    }
+
+    /// <summary>A path's leaf: its last segment, or the root itself.</summary>
+    private static string LeafOf(string path)
+    {
+        string trimmed = System.IO.Path.TrimEndingDirectorySeparator(path);
+        string leaf = System.IO.Path.GetFileName(trimmed);
+        return leaf.Length > 0 ? leaf : trimmed;
+    }
+
+    /// <summary>A path's parent folders, nearest first, the root last
+    /// ("C:\").</summary>
+    private static List<string> AncestorsOf(string path)
+    {
+        var folders = new List<string>();
+        for (string? parent = System.IO.Path.GetDirectoryName(System.IO.Path.TrimEndingDirectorySeparator(path));
+            !string.IsNullOrEmpty(parent);
+            parent = System.IO.Path.GetDirectoryName(parent))
+        {
+            string name = System.IO.Path.GetFileName(parent);
+            folders.Add(name.Length > 0 ? name : parent);
+        }
+
+        return folders;
+    }
+
     /// <summary>Every index whose key another index shares.</summary>
     private static List<int> Colliding(SpeechKey[] keys) =>
         [

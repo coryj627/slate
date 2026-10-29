@@ -932,8 +932,9 @@ public sealed partial class ShellAccessibilityTests
             Assert.Contains("Open Vault", openVault.Name, StringComparison.Ordinal);
             // W7-7 PR 3 (#1246): the recents list is shared by every launch
             // of the run (under ShellLaunch.Root, #1331), and a
-            // display name another recent vault shares carries its path
-            // (RecentVault.SpokenName), so the name starts with it.
+            // display name another recent vault shares carries the folder
+            // that tells it apart (RecentVault.SpokenName, #1311), so the name
+            // starts with it.
             Assert.Contains(
                 welcome.FindAllDescendants(
                     automation.ConditionFactory.ByControlType(ControlType.Button)),

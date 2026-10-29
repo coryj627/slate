@@ -234,9 +234,58 @@ public sealed class SharedNameTests
             ["note.md, file shortcut, note.md, shortcut 1", "note.md, file shortcut, note.md, shortcut 2"],
             names));
 
+        // WB-16 (#1301, AR-58): the removal names the slot as the list did.
         sidebar.SelectedShortcut = second;
         sidebar.RemoveShortcutCommand.Execute(null);
         Assert.Same(first, Assert.Single(sidebar.Shortcuts));
+        Assert.Equal("Removed note.md, file shortcut, note.md, shortcut 2 from shortcuts.", sidebar.Status);
+    });
+
+    /// <summary>WB-16 red team (OD-9): adding a shortcut names it as the
+    /// Shortcuts list does — two notes called index.md read apart there by
+    /// their paths, and "Added index.md" named neither.</summary>
+    [Fact]
+    public void AddingAShortcutNamesItAsTheListDoes() => RunSta(() =>
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "shortcut-added");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "a"));
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "b"));
+        File.WriteAllText(Path.Combine(fixture.Root, "a", "index.md"), "# A\n");
+        File.WriteAllText(Path.Combine(fixture.Root, "b", "index.md"), "# B\n");
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using (var cancel = new CancelToken())
+        {
+            session.ScanInitial(cancel);
+        }
+        var inline = new InlineContext();
+        var sidebar = new FilesSidebarViewModel(
+            session,
+            _ => { },
+            vaultRoot: fixture.Root,
+            localAppDataRoot: Path.Combine(fixture.Root, "device-state"),
+            filterUiContext: inline,
+            treeUiContext: inline,
+            treeWorker: (work, _) => { work(); return Task.CompletedTask; },
+            filterWorker: (work, _) => { work(); return Task.CompletedTask; },
+            filterDelay: _ => Task.CompletedTask);
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => sidebar.TreeRefreshCompletion.IsCompleted, TimeSpan.FromSeconds(10)),
+            "the sidebar's first tree load did not land");
+        foreach (string folder in new[] { "a", "b" })
+        {
+            FileTreeNodeViewModel directory = sidebar.RootNodes.Single(node => node.Path == folder);
+            directory.IsExpanded = true;
+            Assert.True(
+                PumpedDispatcher.PumpUntil(() => directory.Children.Any(child => child.Path == $"{folder}/index.md"), TimeSpan.FromSeconds(10)),
+                $"premise: {folder} never listed its note");
+            sidebar.SelectedNode = directory.Children.Single(child => child.Path == $"{folder}/index.md");
+            sidebar.AddShortcutCommand.Execute(null);
+        }
+
+        string[] listed = [];
+        HostedNames("SidebarShortcuts", sidebar, names => listed = names);
+        Assert.Equal($"Added {listed[1]} to shortcuts.", sidebar.Status);
+        Assert.NotEqual("index.md, file shortcut", listed[1]);
     });
 
     /// <summary>Codex PR 3 round 7, OD-9: a slot is an occurrence in the
@@ -491,14 +540,14 @@ public sealed class SharedNameTests
             await lifecycle.OpenVaultAsync(two);
             RecentVault second = Assert.Single(lifecycle.RecentVaults, entry => entry.Path == two);
             string secondName = RecentVault.SpokenName(second, lifecycle.RecentVaults);
-            Assert.Equal($"Notes, {two}", secondName);
+            Assert.Equal("Notes, in two", secondName);
             Assert.Equal(secondName, Assert.Single(announced.OfType<A11yEvent.VaultOpened>()).VaultTitle);
 
             lifecycle.CloseVault();
             Directory.Delete(one, recursive: true);
             RecentVault missing = Assert.Single(lifecycle.RecentVaults, entry => entry.Path == one);
             string missingName = RecentVault.SpokenName(missing, lifecycle.RecentVaults);
-            Assert.Equal($"Notes, {one}", missingName);
+            Assert.Equal("Notes, in one", missingName);
             announced.Clear();
             lifecycle.OpenRecentCommand.Execute(missing);
             Assert.DoesNotContain(lifecycle.RecentVaults, entry => entry.Path == one);
@@ -963,6 +1012,9 @@ public sealed class SharedNameTests
     {
         (string file, XElement element) = ItemContainerNameCensus.XamlHost(label);
         (Grid root, ItemsControl host) = ShellXamlFragments.LoadHost(element, file);
+        // Never activated: an activated window takes the desktop's
+        // foreground from the facts running beside this one (WB-15's
+        // lesson); the names are read through UIA, which needs no focus.
         var window = new Window
         {
             DataContext = dataContext,
@@ -970,6 +1022,7 @@ public sealed class SharedNameTests
             Width = 720,
             Height = 480,
             ShowInTaskbar = false,
+            ShowActivated = false,
             WindowStyle = WindowStyle.None,
         };
         window.Show();

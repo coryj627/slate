@@ -75,6 +75,10 @@ internal sealed class ShownShell : IDisposable
 
     public MainWindow Shell { get; }
 
+    /// <summary>The fixture's session, for a fact that writes history or
+    /// registries before it acts.</summary>
+    public VaultSession Session => _session;
+
     /// <summary>A note's file rewritten on disk, as another program would.</summary>
     public void Rewrite(string path, string text) => File.WriteAllText(Path.Combine(_fixture.Root, path), text);
 
