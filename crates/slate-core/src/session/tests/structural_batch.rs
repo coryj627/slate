@@ -3474,8 +3474,7 @@ fn failed_recovery_barrier_invalidates_both_undo_endpoints_in_session() {
 fn structural_undo_waits_for_failed_recovery_barrier_then_fails_closed() {
     // The marker-recovery fault fixtures below name their own paths, so their
     // process-wide triggers cannot reach this fixture's a.md/b.md batch. It
-    // takes no ENV_FAULT_GUARD: a failure here must not poison that guard for
-    // every fixture that does set a fault.
+    // takes no fault guard: it sets no fault, and its paths are its own.
     let started = std::time::Instant::now();
     let failure = || {
         format!(
@@ -4066,7 +4065,7 @@ fn batch_trash_saved_file_and_folder_descendant_keep_deleted_timestamps() {
 
 #[test]
 fn crashed_folder_recovery_marks_every_descendant_file() {
-    let _env_guard = super::common::ENV_FAULT_GUARD.lock().unwrap();
+    let mut _env = super::common::fault_guard();
     // Adversarial round 37: recovery planted markers from
     // `inflight.entries` — top-level DIRECTORY paths only — so a
     // crashed folder batch reversed its renames with every
@@ -4124,11 +4123,11 @@ fn crashed_folder_recovery_marks_every_descendant_file() {
 
     // The markers age naturally; a zero-threshold sweep converges
     // both sides by reading and the restored file serves.
-    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "crashed-folder/a.md") };
+    _env.set("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "crashed-folder/a.md");
     let page = reopened
         .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
         .expect("the query succeeds");
-    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    _env.clear("SLATE_TEST_INTENT_ABANDON_ZERO_FOR");
     assert!(
         page.items.iter().any(|r| r.path == "crashed-folder/a.md"),
         "the restored descendant serves after the read"
@@ -4137,7 +4136,7 @@ fn crashed_folder_recovery_marks_every_descendant_file() {
 
 #[test]
 fn recovery_marker_failure_defers_without_consuming_the_journal() {
-    let _env_guard = super::common::ENV_FAULT_GUARD.lock().unwrap();
+    let mut _env = super::common::fault_guard();
     // Adversarial round 37: a marker-persistence failure during
     // open-time recovery flowed into the barrier handler, which
     // DELETES the inflight journal — the next open then had nothing
@@ -4161,12 +4160,12 @@ fn recovery_marker_failure_defers_without_consuming_the_journal() {
     assert!(tmp.path().join("dest/deferred-plant.md").is_file());
     drop(session);
 
-    unsafe { std::env::set_var("SLATE_TEST_FAULT_PLANT_MARKERS", "deferred-plant.md") };
+    _env.set("SLATE_TEST_FAULT_PLANT_MARKERS", "deferred-plant.md");
     let deferred = VaultSession::open(
         Arc::clone(&provider),
         SessionConfig::new(tmp.path().join(".slate")),
     );
-    unsafe { std::env::remove_var("SLATE_TEST_FAULT_PLANT_MARKERS") };
+    _env.clear("SLATE_TEST_FAULT_PLANT_MARKERS");
     let error = deferred.err().expect("the deferred open fails");
     assert!(
         error.to_string().contains("recovery deferred"),
@@ -4192,7 +4191,7 @@ fn recovery_marker_failure_defers_without_consuming_the_journal() {
 
 #[test]
 fn recovery_marker_failures_leave_no_partial_markers() {
-    let _env_guard = super::common::ENV_FAULT_GUARD.lock().unwrap();
+    let mut _env = super::common::fault_guard();
     // Adversarial round 38: each marker insert autocommitting
     // individually let a mid-loop persistence failure strand a
     // PARTIAL marker set — durable rows another process could age
@@ -4232,12 +4231,12 @@ fn recovery_marker_failures_leave_no_partial_markers() {
         conn.execute("DELETE FROM text_write_intents", []).unwrap();
     }
 
-    unsafe { std::env::set_var("SLATE_TEST_FAULT_PLANT_MARKERS", "partial-markers/b.md") };
+    _env.set("SLATE_TEST_FAULT_PLANT_MARKERS", "partial-markers/b.md");
     let deferred = VaultSession::open(
         Arc::clone(&provider),
         SessionConfig::new(tmp.path().join(".slate")),
     );
-    unsafe { std::env::remove_var("SLATE_TEST_FAULT_PLANT_MARKERS") };
+    _env.clear("SLATE_TEST_FAULT_PLANT_MARKERS");
     let error = deferred.err().expect("the deferred open fails");
     assert!(
         error.to_string().contains("recovery deferred"),
@@ -4268,18 +4267,18 @@ fn recovery_marker_failures_leave_no_partial_markers() {
     assert!(tmp.path().join("partial-markers/b.md").is_file());
     assert!(!tmp.path().join("dest/partial-markers").exists());
     assert_eq!(structural_inflight_count(tmp.path()), 0);
-    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "partial-markers/") };
+    _env.set("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "partial-markers/");
     let page = recovered
         .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
         .expect("the query succeeds");
-    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    _env.clear("SLATE_TEST_INTENT_ABANDON_ZERO_FOR");
     assert!(page.items.iter().any(|r| r.path == "partial-markers/a.md"));
     assert!(page.items.iter().any(|r| r.path == "partial-markers/b.md"));
 }
 
 #[test]
 fn recovery_finalization_failure_defers_without_consuming_the_journal() {
-    let _env_guard = super::common::ENV_FAULT_GUARD.lock().unwrap();
+    let mut _env = super::common::fault_guard();
     // Adversarial round 40: a failure in the final marker
     // re-assertion flowed through the generic recovery handler,
     // which appends a barrier and DELETES the inflight journal —
@@ -4304,12 +4303,12 @@ fn recovery_finalization_failure_defers_without_consuming_the_journal() {
     assert_eq!(structural_inflight_count(tmp.path()), 1);
     drop(session);
 
-    unsafe { std::env::set_var("SLATE_TEST_FAULT_RECOVERY_FINALIZE", "deferred-finalize.md") };
+    _env.set("SLATE_TEST_FAULT_RECOVERY_FINALIZE", "deferred-finalize.md");
     let deferred = VaultSession::open(
         Arc::clone(&provider),
         SessionConfig::new(tmp.path().join(".slate")),
     );
-    unsafe { std::env::remove_var("SLATE_TEST_FAULT_RECOVERY_FINALIZE") };
+    _env.clear("SLATE_TEST_FAULT_RECOVERY_FINALIZE");
     let error = deferred.err().expect("the deferred open fails");
     assert!(
         error.to_string().contains("deferred at finalization"),
@@ -4334,7 +4333,7 @@ fn recovery_finalization_failure_defers_without_consuming_the_journal() {
 
 #[test]
 fn deletes_keep_rows_and_markers_for_recreated_paths() {
-    let _env_guard = super::common::ENV_FAULT_GUARD.lock().unwrap();
+    let _env = super::common::fault_guard();
     // Re-confirmation review: a concurrent save can recreate a path
     // between delete_file's filesystem delete and its index
     // transaction. Deleting the row and clearing the marker would

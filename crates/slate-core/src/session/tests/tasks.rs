@@ -182,7 +182,7 @@ fn vault_pages_bound_task_text_before_ffi() {
 
 #[test]
 fn post_write_failures_leave_disk_newer_and_reindex_path_repairs_it() {
-    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    let mut _env = fault_guard();
     // Adversarial round 12: the REAL partial-failure boundary —
     // save_text writes the file, then the index commit fails. The
     // fault seam trips only on a path containing the trigger, so
@@ -193,11 +193,11 @@ fn post_write_failures_leave_disk_newer_and_reindex_path_repairs_it() {
     });
     session.scan_initial(&CancelToken::new()).unwrap();
 
-    // SAFETY: env vars are process-global; the trigger string is
+    // Env vars are process-global; the trigger string is
     // unique to this test's fixture path.
-    unsafe { std::env::set_var("SLATE_TEST_FAULT_AFTER_WRITE", "fault-target-a1b2") };
+    _env.set("SLATE_TEST_FAULT_AFTER_WRITE", "fault-target-a1b2");
     let result = session.toggle_task_status("notes/fault-target-a1b2.md", 0, 'x', None);
-    unsafe { std::env::remove_var("SLATE_TEST_FAULT_AFTER_WRITE") };
+    _env.clear("SLATE_TEST_FAULT_AFTER_WRITE");
     assert!(result.is_err(), "the injected fault must surface");
 
     // Disk moved; the index did not.
@@ -273,7 +273,7 @@ fn tasks_index_revision_sees_other_sessions_where_the_generation_cannot() {
 
 #[test]
 fn cross_process_post_write_rollbacks_self_heal_on_other_sessions() {
-    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    let mut _env = fault_guard();
     // Adversarial round 21: process A's post-write rollback moves no
     // committed state process B could observe (`data_version` only
     // advances on commits), so B's task queries would publish A's
@@ -291,9 +291,9 @@ fn cross_process_post_write_rollbacks_self_heal_on_other_sessions() {
 
     // A fails post-write: disk flipped, A's index tx rolled back,
     // the intent row (committed pre-write) survives.
-    unsafe { std::env::set_var("SLATE_TEST_FAULT_AFTER_WRITE", "xproc-intent") };
+    _env.set("SLATE_TEST_FAULT_AFTER_WRITE", "xproc-intent");
     let result = session_a.toggle_task_status("notes/xproc-intent.md", 0, 'x', None);
-    unsafe { std::env::remove_var("SLATE_TEST_FAULT_AFTER_WRITE") };
+    _env.clear("SLATE_TEST_FAULT_AFTER_WRITE");
     assert!(result.is_err());
 
     // Fresh intent (within the liveness threshold): B reads the old
@@ -304,12 +304,12 @@ fn cross_process_post_write_rollbacks_self_heal_on_other_sessions() {
 
     // Abandoned (threshold collapsed for this path only): BOTH of
     // B's query surfaces self-heal to disk truth.
-    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "xproc-intent") };
+    _env.set("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "xproc-intent");
     let healed = session_b.note_tasks("notes/xproc-intent.md", 10).unwrap();
     let page = session_b
         .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
         .unwrap();
-    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    _env.clear("SLATE_TEST_INTENT_ABANDON_ZERO_FOR");
     assert!(
         healed.tasks[0].completed,
         "note_tasks must heal to disk truth"
@@ -328,7 +328,7 @@ fn cross_process_post_write_rollbacks_self_heal_on_other_sessions() {
 
 #[test]
 fn stale_repairs_never_erase_a_replacement_writers_intent() {
-    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    let mut _env = fault_guard();
     // Adversarial round 22: a sweep selects an abandoned intent, a
     // NEW writer replaces the row before the repair transaction, and
     // the repair's clear must miss — deleting by path alone would
@@ -342,13 +342,13 @@ fn stale_repairs_never_erase_a_replacement_writers_intent() {
     session.scan_initial(&CancelToken::new()).unwrap();
 
     // Writer 1 fails post-write: intent T1 survives, index stale.
-    unsafe { std::env::set_var("SLATE_TEST_FAULT_AFTER_WRITE", "token-race") };
+    _env.set("SLATE_TEST_FAULT_AFTER_WRITE", "token-race");
     assert!(
         session
             .toggle_task_status("notes/token-race.md", 0, 'x', None)
             .is_err()
     );
-    unsafe { std::env::remove_var("SLATE_TEST_FAULT_AFTER_WRITE") };
+    _env.clear("SLATE_TEST_FAULT_AFTER_WRITE");
     let old_token: i64 = {
         let conn = session.conn.lock().unwrap();
         conn.query_row(
@@ -405,9 +405,9 @@ fn stale_repairs_never_erase_a_replacement_writers_intent() {
     // simply ages out with the index already healed): a third
     // session's query token-safely clears it and reads disk truth.
     let third = VaultSession::from_filesystem(_tmp.path().to_path_buf()).unwrap();
-    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "token-race") };
+    _env.set("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "token-race");
     let healed = third.note_tasks("notes/token-race.md", 10).unwrap();
-    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    _env.clear("SLATE_TEST_INTENT_ABANDON_ZERO_FOR");
     assert!(healed.tasks[0].completed, "third session reads disk truth");
     {
         let conn = session.conn.lock().unwrap();
@@ -424,7 +424,7 @@ fn stale_repairs_never_erase_a_replacement_writers_intent() {
 
 #[test]
 fn deleted_file_intents_converge_instead_of_poisoning_queries() {
-    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    let mut _env = fault_guard();
     // Adversarial round 23: a conflict refusal clears its own intent
     // (provable no-write), and an intent stranded against a DELETED
     // file converges to deletion — the aged repair used to hit
@@ -457,13 +457,13 @@ fn deleted_file_intents_converge_instead_of_poisoning_queries() {
     session
         .save_text("notes/doomed-intent.md", "- [ ] back again\n", None)
         .unwrap();
-    unsafe { std::env::set_var("SLATE_TEST_FAULT_AFTER_WRITE", "doomed-intent") };
+    _env.set("SLATE_TEST_FAULT_AFTER_WRITE", "doomed-intent");
     assert!(
         session
             .toggle_task_status("notes/doomed-intent.md", 0, 'x', None)
             .is_err()
     );
-    unsafe { std::env::remove_var("SLATE_TEST_FAULT_AFTER_WRITE") };
+    _env.clear("SLATE_TEST_FAULT_AFTER_WRITE");
     std::fs::remove_file(tmp.path().join("notes/doomed-intent.md")).unwrap();
 
     // The convergence must announce as DELETED (adversarial round
@@ -480,9 +480,9 @@ fn deleted_file_intents_converge_instead_of_poisoning_queries() {
     let recorder = std::sync::Arc::new(KindRecorder(std::sync::Mutex::new(Vec::new())));
     let listener_token = session.register_event_listener(recorder.clone());
 
-    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "doomed-intent") };
+    _env.set("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "doomed-intent");
     let page = session.tasks_in_vault(crate::TaskFilter::default(), Paging::first(50));
-    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    _env.clear("SLATE_TEST_INTENT_ABANDON_ZERO_FOR");
     session.unregister_event_listener(listener_token);
     assert!(
         recorder.0.lock().unwrap().iter().any(
@@ -523,7 +523,7 @@ fn deleted_file_intents_converge_instead_of_poisoning_queries() {
 
 #[test]
 fn overlapping_writers_keep_their_own_durable_registrations() {
-    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    let mut _env = fault_guard();
     // Adversarial round 25: with `path` as the sole primary key, a
     // second writer's registration REPLACED the first's — the second
     // completed, cleared its own token, and the first writer's
@@ -571,17 +571,17 @@ fn overlapping_writers_keep_their_own_durable_registrations() {
     // A's write then fails post-write: with the marker intact, a
     // later query heals to disk truth and clears it token-safely.
     // (The simulated A resumes as a real fault-injected save.)
-    unsafe { std::env::set_var("SLATE_TEST_FAULT_AFTER_WRITE", "overlap") };
+    _env.set("SLATE_TEST_FAULT_AFTER_WRITE", "overlap");
     assert!(
         session_a
             .save_text("notes/overlap.md", "- [/] half flipped\n", None)
             .is_err()
     );
-    unsafe { std::env::remove_var("SLATE_TEST_FAULT_AFTER_WRITE") };
+    _env.clear("SLATE_TEST_FAULT_AFTER_WRITE");
 
-    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "overlap") };
+    _env.set("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "overlap");
     let healed = session_b.note_tasks("notes/overlap.md", 10).unwrap();
-    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    _env.clear("SLATE_TEST_INTENT_ABANDON_ZERO_FOR");
     assert_eq!(healed.tasks[0].status_char, '/', "healed to A's disk bytes");
     {
         let conn = session_a.conn.lock().unwrap();
@@ -598,7 +598,7 @@ fn overlapping_writers_keep_their_own_durable_registrations() {
 
 #[test]
 fn swept_registrations_are_refenced_before_the_write() {
-    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    let mut _env = fault_guard();
     // Adversarial round 26: a writer suspended past the liveness
     // threshold between its registration and its transaction can be
     // swept as abandoned — resuming to write with no durable marker
@@ -612,11 +612,11 @@ fn swept_registrations_are_refenced_before_the_write() {
     });
     session.scan_initial(&CancelToken::new()).unwrap();
 
-    unsafe { std::env::set_var("SLATE_TEST_SWEEP_AFTER_INTENT", "fence-probe") };
-    unsafe { std::env::set_var("SLATE_TEST_FAULT_AFTER_WRITE", "fence-probe") };
+    _env.set("SLATE_TEST_SWEEP_AFTER_INTENT", "fence-probe");
+    _env.set("SLATE_TEST_FAULT_AFTER_WRITE", "fence-probe");
     let result = session.save_text("notes/fence-probe.md", "- [x] flip me\n", None);
-    unsafe { std::env::remove_var("SLATE_TEST_FAULT_AFTER_WRITE") };
-    unsafe { std::env::remove_var("SLATE_TEST_SWEEP_AFTER_INTENT") };
+    _env.clear("SLATE_TEST_FAULT_AFTER_WRITE");
+    _env.clear("SLATE_TEST_SWEEP_AFTER_INTENT");
     assert!(result.is_err());
 
     // The fence's re-registration survived the rollback — without
@@ -635,9 +635,9 @@ fn swept_registrations_are_refenced_before_the_write() {
 
     // Another session heals to the written bytes.
     let other = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
-    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "fence-probe") };
+    _env.set("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "fence-probe");
     let healed = other.note_tasks("notes/fence-probe.md", 10).unwrap();
-    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    _env.clear("SLATE_TEST_INTENT_ABANDON_ZERO_FOR");
     assert!(
         healed.tasks[0].completed,
         "healed to the fenced write's bytes"
@@ -646,7 +646,7 @@ fn swept_registrations_are_refenced_before_the_write() {
 
 #[test]
 fn pre_write_failures_clear_their_own_registration() {
-    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    let mut _env = fault_guard();
     // Adversarial round 27: any error between the durable
     // registration and the file write is a PROVABLE no-write, so it
     // must clear its own token. A stranded pre-write intent on a
@@ -664,13 +664,13 @@ fn pre_write_failures_clear_their_own_registration() {
         .unwrap()
         .content_hash;
 
-    unsafe { std::env::set_var("SLATE_TEST_FAULT_PRE_WRITE", "prewrite-probe") };
+    _env.set("SLATE_TEST_FAULT_PRE_WRITE", "prewrite-probe");
     let result = session.save_text(
         "notes/prewrite-probe.md",
         "- [x] keep me\n",
         Some(&current_hash),
     );
-    unsafe { std::env::remove_var("SLATE_TEST_FAULT_PRE_WRITE") };
+    _env.clear("SLATE_TEST_FAULT_PRE_WRITE");
     assert!(result.is_err());
 
     // The provable no-write cleared its own registration.
@@ -696,11 +696,11 @@ fn pre_write_failures_clear_their_own_registration() {
     // is nothing to repair, so queries stay available even with the
     // repair path broken.
     let other = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
-    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "prewrite-probe") };
-    unsafe { std::env::set_var("SLATE_TEST_FAULT_REINDEX", "prewrite-probe") };
+    _env.set("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "prewrite-probe");
+    _env.set("SLATE_TEST_FAULT_REINDEX", "prewrite-probe");
     let page = other.tasks_in_vault(crate::TaskFilter::default(), Paging::first(50));
-    unsafe { std::env::remove_var("SLATE_TEST_FAULT_REINDEX") };
-    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    _env.clear("SLATE_TEST_FAULT_REINDEX");
+    _env.clear("SLATE_TEST_INTENT_ABANDON_ZERO_FOR");
     let page = page.expect("vault-wide task queries stay available");
     let row = page
         .items
@@ -715,7 +715,7 @@ fn pre_write_failures_clear_their_own_registration() {
 
 #[test]
 fn unclearable_markers_quarantine_instead_of_poisoning_queries() {
-    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    let mut _env = fault_guard();
     // Adversarial round 28: the pre-write cleanup DELETE can itself
     // fail (BUSY from another process's writer lock, database I/O) —
     // the same stranded-marker posture as a crash. If the stranded
@@ -746,15 +746,15 @@ fn unclearable_markers_quarantine_instead_of_poisoning_queries() {
     };
 
     // A pre-write failure whose cleanup ALSO fails: the marker strands.
-    unsafe { std::env::set_var("SLATE_TEST_FAULT_PRE_WRITE", "stuck-marker") };
-    unsafe { std::env::set_var("SLATE_TEST_FAULT_INTENT_CLEAR", "stuck-marker") };
+    _env.set("SLATE_TEST_FAULT_PRE_WRITE", "stuck-marker");
+    _env.set("SLATE_TEST_FAULT_INTENT_CLEAR", "stuck-marker");
     let result = session.save_text(
         "notes/stuck-marker.md",
         "- [x] trapped\n",
         Some(&current_hash),
     );
-    unsafe { std::env::remove_var("SLATE_TEST_FAULT_INTENT_CLEAR") };
-    unsafe { std::env::remove_var("SLATE_TEST_FAULT_PRE_WRITE") };
+    _env.clear("SLATE_TEST_FAULT_INTENT_CLEAR");
+    _env.clear("SLATE_TEST_FAULT_PRE_WRITE");
     assert!(result.is_err());
     assert_eq!(intent_count(&session), 1, "the marker stranded");
 
@@ -773,8 +773,8 @@ fn unclearable_markers_quarantine_instead_of_poisoning_queries() {
 
     // The marker ages while the path stays unreadable (the reindex
     // fault stands in for permissions / an AV lock).
-    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "stuck-marker") };
-    unsafe { std::env::set_var("SLATE_TEST_FAULT_REINDEX", "stuck-marker") };
+    _env.set("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "stuck-marker");
+    _env.set("SLATE_TEST_FAULT_REINDEX", "stuck-marker");
     for _ in 0..2 {
         let page = session
             .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
@@ -813,14 +813,14 @@ fn unclearable_markers_quarantine_instead_of_poisoning_queries() {
         1,
         "the quarantine announces once, not once per query"
     );
-    unsafe { std::env::remove_var("SLATE_TEST_FAULT_REINDEX") };
+    _env.clear("SLATE_TEST_FAULT_REINDEX");
 
     // The file reads again: the next query's sweep repairs in full —
     // rows rebuilt to disk truth, marker cleared.
     let healed = session
         .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
         .expect("the healed query succeeds");
-    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    _env.clear("SLATE_TEST_INTENT_ABANDON_ZERO_FOR");
     session.unregister_event_listener(listener_token);
     let row = healed
         .items
@@ -840,7 +840,7 @@ fn unclearable_markers_quarantine_instead_of_poisoning_queries() {
 
 #[test]
 fn resolved_candidates_skip_the_quarantine() {
-    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    let mut _env = fault_guard();
     // Adversarial round 29: the sweep selects its candidates BEFORE
     // taking the writer lock. A live writer can commit its index
     // update and clear its own aged token in that gap — its fresh
@@ -865,15 +865,15 @@ fn resolved_candidates_skip_the_quarantine() {
     // The marker ages, the repair fails (unreadable file), and the
     // 'writer' resolves — clears its token — just before the
     // quarantine takes the lock (the resolve seam).
-    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "resolved-race") };
-    unsafe { std::env::set_var("SLATE_TEST_FAULT_REINDEX", "resolved-race") };
-    unsafe { std::env::set_var("SLATE_TEST_RESOLVE_BEFORE_QUARANTINE", "resolved-race") };
+    _env.set("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "resolved-race");
+    _env.set("SLATE_TEST_FAULT_REINDEX", "resolved-race");
+    _env.set("SLATE_TEST_RESOLVE_BEFORE_QUARANTINE", "resolved-race");
     let page = session
         .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
         .expect("the query still succeeds");
-    unsafe { std::env::remove_var("SLATE_TEST_RESOLVE_BEFORE_QUARANTINE") };
-    unsafe { std::env::remove_var("SLATE_TEST_FAULT_REINDEX") };
-    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    _env.clear("SLATE_TEST_RESOLVE_BEFORE_QUARANTINE");
+    _env.clear("SLATE_TEST_FAULT_REINDEX");
+    _env.clear("SLATE_TEST_INTENT_ABANDON_ZERO_FOR");
     assert!(
         page.items
             .iter()
@@ -884,7 +884,7 @@ fn resolved_candidates_skip_the_quarantine() {
 
 #[test]
 fn newer_writers_commits_survive_a_stale_quarantine() {
-    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    let mut _env = fault_guard();
     // Adversarial rounds 30-31: a NEWER writer commits fresh rows in
     // the repair→quarantine gap, clearing only its OWN token — the
     // aged selected token survives and would vouch for quarantining
@@ -932,19 +932,17 @@ fn newer_writers_commits_survive_a_stale_quarantine() {
         (tasks, intents)
     };
 
-    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "second-writer") };
-    unsafe { std::env::set_var("SLATE_TEST_FAULT_REINDEX", "second-writer") };
-    unsafe {
-        std::env::set_var(
-            "SLATE_TEST_SECOND_WRITER_BEFORE_QUARANTINE",
-            "second-writer",
-        )
-    };
+    _env.set("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "second-writer");
+    _env.set("SLATE_TEST_FAULT_REINDEX", "second-writer");
+    _env.set(
+        "SLATE_TEST_SECOND_WRITER_BEFORE_QUARANTINE",
+        "second-writer",
+    );
     let page = session
         .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
         .expect("the query succeeds — the superseded marker resolves, nothing contains");
-    unsafe { std::env::remove_var("SLATE_TEST_SECOND_WRITER_BEFORE_QUARANTINE") };
-    unsafe { std::env::remove_var("SLATE_TEST_FAULT_REINDEX") };
+    _env.clear("SLATE_TEST_SECOND_WRITER_BEFORE_QUARANTINE");
+    _env.clear("SLATE_TEST_FAULT_REINDEX");
     assert!(
         page.items
             .iter()
@@ -962,7 +960,7 @@ fn newer_writers_commits_survive_a_stale_quarantine() {
     let per_file = session
         .note_tasks("notes/second-writer.md", 10)
         .expect("the per-file surface serves too");
-    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    _env.clear("SLATE_TEST_INTENT_ABANDON_ZERO_FOR");
     assert!(
         !per_file.tasks.is_empty() && !per_file.tasks[0].completed,
         "the note surface serves the fresh rows"
@@ -971,7 +969,7 @@ fn newer_writers_commits_survive_a_stale_quarantine() {
 
 #[test]
 fn database_failures_during_repair_still_fail_queries() {
-    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    let mut _env = fault_guard();
     // Adversarial round 29: honest-empty containment is for FILE
     // conditions. A DATABASE failure during repair — a corrupt FTS
     // trigger, a broken cache — must keep failing queries loud;
@@ -991,10 +989,10 @@ fn database_failures_during_repair_still_fail_queries() {
         .unwrap();
     }
 
-    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "db-broken") };
-    unsafe { std::env::set_var("SLATE_TEST_FAULT_REINDEX_DB", "db-broken") };
+    _env.set("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "db-broken");
+    _env.set("SLATE_TEST_FAULT_REINDEX_DB", "db-broken");
     let failed = session.tasks_in_vault(crate::TaskFilter::default(), Paging::first(50));
-    unsafe { std::env::remove_var("SLATE_TEST_FAULT_REINDEX_DB") };
+    _env.clear("SLATE_TEST_FAULT_REINDEX_DB");
     assert!(
         matches!(failed, Err(VaultError::Db(_))),
         "database failures propagate instead of quarantining"
@@ -1023,7 +1021,7 @@ fn database_failures_during_repair_still_fail_queries() {
     let healed = session
         .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
         .expect("the healed query succeeds");
-    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    _env.clear("SLATE_TEST_INTENT_ABANDON_ZERO_FOR");
     assert!(
         healed.items.iter().any(|r| r.path == "notes/db-broken.md"),
         "the repaired path serves its tasks"
@@ -1043,7 +1041,7 @@ fn database_failures_during_repair_still_fail_queries() {
 
 #[test]
 fn repair_or_contain_releases_a_permanently_unreadable_path() {
-    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    let mut _env = fault_guard();
     // Adversarial round 31 (host route): the Windows repair
     // coordinator bars EVERY task query while a pending path
     // exists, so a persistently unreadable file must resolve to an
@@ -1068,7 +1066,7 @@ fn repair_or_contain_releases_a_permanently_unreadable_path() {
     );
 
     // Persistent file condition: containment.
-    unsafe { std::env::set_var("SLATE_TEST_FAULT_REINDEX", "host-stuck") };
+    _env.set("SLATE_TEST_FAULT_REINDEX", "host-stuck");
     assert_eq!(
         session
             .repair_or_contain_path("notes/host-stuck.md")
@@ -1114,8 +1112,8 @@ fn repair_or_contain_releases_a_permanently_unreadable_path() {
     );
 
     // A DATABASE failure propagates instead of containing.
-    unsafe { std::env::set_var("SLATE_TEST_FAULT_REINDEX_DB", "host-stuck") };
-    unsafe { std::env::remove_var("SLATE_TEST_FAULT_REINDEX") };
+    _env.set("SLATE_TEST_FAULT_REINDEX_DB", "host-stuck");
+    _env.clear("SLATE_TEST_FAULT_REINDEX");
     assert!(
         matches!(
             session.repair_or_contain_path("notes/host-stuck.md"),
@@ -1123,7 +1121,7 @@ fn repair_or_contain_releases_a_permanently_unreadable_path() {
         ),
         "database failures stay loud on the host route"
     );
-    unsafe { std::env::remove_var("SLATE_TEST_FAULT_REINDEX_DB") };
+    _env.clear("SLATE_TEST_FAULT_REINDEX_DB");
 
     // The file reads again: the planted marker heals everything on
     // the next query.
@@ -1149,7 +1147,7 @@ fn repair_or_contain_releases_a_permanently_unreadable_path() {
 
 #[test]
 fn commits_in_the_registration_gap_never_orphan_the_marker() {
-    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    let mut _env = fault_guard();
     // Adversarial round 32: writer A registers (stamping epoch E),
     // writer B wins the lock and fully indexes the OLD bytes
     // (epoch E+1), then A writes the NEW bytes and fails before its
@@ -1165,11 +1163,11 @@ fn commits_in_the_registration_gap_never_orphan_the_marker() {
     });
     session.scan_initial(&CancelToken::new()).unwrap();
 
-    unsafe { std::env::set_var("SLATE_TEST_COMMIT_AFTER_INTENT", "gap-commit") };
-    unsafe { std::env::set_var("SLATE_TEST_FAULT_AFTER_WRITE", "gap-commit") };
+    _env.set("SLATE_TEST_COMMIT_AFTER_INTENT", "gap-commit");
+    _env.set("SLATE_TEST_FAULT_AFTER_WRITE", "gap-commit");
     let result = session.save_text("notes/gap-commit.md", "- [x] old truth\n", None);
-    unsafe { std::env::remove_var("SLATE_TEST_FAULT_AFTER_WRITE") };
-    unsafe { std::env::remove_var("SLATE_TEST_COMMIT_AFTER_INTENT") };
+    _env.clear("SLATE_TEST_FAULT_AFTER_WRITE");
+    _env.clear("SLATE_TEST_COMMIT_AFTER_INTENT");
     assert!(result.is_err());
 
     // The surviving marker is stamped AT the file's current epoch —
@@ -1193,12 +1191,12 @@ fn commits_in_the_registration_gap_never_orphan_the_marker() {
 
     // Un-repairable: the CURRENT marker contains (honest-empty) —
     // the stale pre-write rows must not serve.
-    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "gap-commit") };
-    unsafe { std::env::set_var("SLATE_TEST_FAULT_REINDEX", "gap-commit") };
+    _env.set("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "gap-commit");
+    _env.set("SLATE_TEST_FAULT_REINDEX", "gap-commit");
     let page = session
         .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
         .expect("queries stay available");
-    unsafe { std::env::remove_var("SLATE_TEST_FAULT_REINDEX") };
+    _env.clear("SLATE_TEST_FAULT_REINDEX");
     assert!(
         page.items.iter().all(|r| r.path != "notes/gap-commit.md"),
         "the stale rows must not serve under a live current marker"
@@ -1208,7 +1206,7 @@ fn commits_in_the_registration_gap_never_orphan_the_marker() {
     let healed = session
         .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
         .expect("the healed query succeeds");
-    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    _env.clear("SLATE_TEST_INTENT_ABANDON_ZERO_FOR");
     let row = healed
         .items
         .iter()
@@ -1219,7 +1217,7 @@ fn commits_in_the_registration_gap_never_orphan_the_marker() {
 
 #[test]
 fn recreated_files_supersede_prior_incarnation_markers() {
-    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    let mut _env = fault_guard();
     // Adversarial round 32: a per-file epoch counter resets on
     // delete/recreate, so a prior incarnation's marker could
     // compare at-or-above the recreation's epoch (ABA) and vouch
@@ -1258,13 +1256,13 @@ fn recreated_files_supersede_prior_incarnation_markers() {
     // Un-repairable moment: the old marker must resolve as
     // obsolete — the recreation's stamp is strictly greater — and
     // the second life's rows keep serving.
-    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "reborn") };
-    unsafe { std::env::set_var("SLATE_TEST_FAULT_REINDEX", "reborn") };
+    _env.set("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "reborn");
+    _env.set("SLATE_TEST_FAULT_REINDEX", "reborn");
     let page = session
         .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
         .expect("the query succeeds");
-    unsafe { std::env::remove_var("SLATE_TEST_FAULT_REINDEX") };
-    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    _env.clear("SLATE_TEST_FAULT_REINDEX");
+    _env.clear("SLATE_TEST_INTENT_ABANDON_ZERO_FOR");
     assert!(
         page.items
             .iter()
@@ -1286,7 +1284,7 @@ fn recreated_files_supersede_prior_incarnation_markers() {
 
 #[test]
 fn containment_without_an_index_row_still_plants_the_healing_marker() {
-    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    let mut _env = fault_guard();
     // Adversarial round 32: the host containment's missing-row arm
     // released the coordinator gate WITHOUT a durable marker — if
     // the file later became readable with no filesystem event, its
@@ -1303,12 +1301,12 @@ fn containment_without_an_index_row_still_plants_the_healing_marker() {
     )
     .unwrap();
 
-    unsafe { std::env::set_var("SLATE_TEST_FAULT_REINDEX", "ghostly") };
+    _env.set("SLATE_TEST_FAULT_REINDEX", "ghostly");
     assert_eq!(
         session.repair_or_contain_path("notes/ghostly.md").unwrap(),
         TaskIndexRepairOutcome::Contained,
     );
-    unsafe { std::env::remove_var("SLATE_TEST_FAULT_REINDEX") };
+    _env.clear("SLATE_TEST_FAULT_REINDEX");
     {
         let conn = session.conn.lock().unwrap();
         let intents: i64 = conn
@@ -1323,11 +1321,11 @@ fn containment_without_an_index_row_still_plants_the_healing_marker() {
 
     // The file reads fine now: the planted marker heals on the very
     // next query — no filesystem event, no full scan.
-    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "ghostly") };
+    _env.set("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "ghostly");
     let healed = session
         .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
         .expect("the healed query succeeds");
-    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    _env.clear("SLATE_TEST_INTENT_ABANDON_ZERO_FOR");
     assert!(
         healed.items.iter().any(|r| r.path == "notes/ghostly.md"),
         "the never-indexed file's tasks appear via the planted marker"
@@ -1347,7 +1345,7 @@ fn containment_without_an_index_row_still_plants_the_healing_marker() {
 
 #[test]
 fn moved_files_resolve_prior_destination_markers_by_reading() {
-    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    let mut _env = fault_guard();
     // Adversarial rounds 33-34: a marker surviving from the
     // destination path's prior incarnation must be resolved by a
     // REAL read, never by move bookkeeping — round 34 proved a
@@ -1383,12 +1381,12 @@ fn moved_files_resolve_prior_destination_markers_by_reading() {
 
     // Un-repairable moment: the marker holds — honest-empty, never
     // the moved rows served on a path a live marker still suspects.
-    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "dest") };
-    unsafe { std::env::set_var("SLATE_TEST_FAULT_REINDEX", "dest") };
+    _env.set("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "dest");
+    _env.set("SLATE_TEST_FAULT_REINDEX", "dest");
     let page = session
         .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
         .expect("the query succeeds");
-    unsafe { std::env::remove_var("SLATE_TEST_FAULT_REINDEX") };
+    _env.clear("SLATE_TEST_FAULT_REINDEX");
     assert!(
         page.items.iter().all(|r| r.path != "notes/dest.md"),
         "a still-suspect path serves nothing, not unverified rows"
@@ -1409,7 +1407,7 @@ fn moved_files_resolve_prior_destination_markers_by_reading() {
     let healed = session
         .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
         .expect("the healed query succeeds");
-    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    _env.clear("SLATE_TEST_INTENT_ABANDON_ZERO_FOR");
     assert!(
         healed
             .items
@@ -1435,7 +1433,7 @@ fn moved_files_resolve_prior_destination_markers_by_reading() {
 
 #[test]
 fn held_move_markers_are_fenced_by_the_structural_lock() {
-    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    let mut _env = fault_guard();
     // Adversarial rounds 36-40: no wall-clock stamp survives an
     // arbitrarily suspended mover, so planted markers carry the
     // HELD sentinel and never age. Sweeps honor them while the
@@ -1477,7 +1475,7 @@ fn held_move_markers_are_fenced_by_the_structural_lock() {
     // zero-threshold sweep must leave the markers alone — the
     // pre-move snapshot keeps serving.
     let lock = VaultStructuralLock::acquire(&session.interior).unwrap();
-    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "36.md") };
+    _env.set("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "36.md");
     let page = session
         .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
         .expect("the query succeeds");
@@ -1507,7 +1505,7 @@ fn held_move_markers_are_fenced_by_the_structural_lock() {
     let healed = session
         .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
         .expect("the healed query succeeds");
-    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    _env.clear("SLATE_TEST_INTENT_ABANDON_ZERO_FOR");
     assert!(
         healed.items.iter().any(|r| r.path == "notes/pinned36.md"),
         "the readable path still serves after the orphan sweep"
@@ -1530,7 +1528,7 @@ fn held_move_markers_are_fenced_by_the_structural_lock() {
 
 #[test]
 fn file_task_reads_cannot_tear_across_statements() {
-    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    let mut _env = fault_guard();
     // Design audit (post-round-41): tasks_for_file read the id and
     // the rows in two autocommit statements — SQLite recycles
     // rowids, so a cross-process delete-and-recreate between them
@@ -1545,9 +1543,9 @@ fn file_task_reads_cannot_tear_across_statements() {
     });
     session.scan_initial(&CancelToken::new()).unwrap();
 
-    unsafe { std::env::set_var("SLATE_TEST_TORN_FILE_TASKS", "torn-file") };
+    _env.set("SLATE_TEST_TORN_FILE_TASKS", "torn-file");
     let tasks = session.tasks_for_file("notes/torn-file.md").unwrap();
-    unsafe { std::env::remove_var("SLATE_TEST_TORN_FILE_TASKS") };
+    _env.clear("SLATE_TEST_TORN_FILE_TASKS");
     assert_eq!(tasks.len(), 1);
     assert!(
         tasks[0].text.contains("the real one") && !tasks[0].completed,
@@ -1557,7 +1555,7 @@ fn file_task_reads_cannot_tear_across_statements() {
 
 #[test]
 fn held_markers_are_never_epoch_superseded() {
-    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    let mut _env = fault_guard();
     // Design audit (post-round-41): epoch supersession is only
     // sound for markers whose stamp was taken under the writer lock
     // at divergence-creation time (save markers, via the round-32
@@ -1588,11 +1586,11 @@ fn held_markers_are_never_epoch_superseded() {
 
     // Un-repairable moment: the orphaned held marker must HOLD —
     // containment refuses the rows — never be retired as obsolete.
-    unsafe { std::env::set_var("SLATE_TEST_FAULT_REINDEX", "heldsafe") };
+    _env.set("SLATE_TEST_FAULT_REINDEX", "heldsafe");
     let page = session
         .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
         .expect("the query succeeds");
-    unsafe { std::env::remove_var("SLATE_TEST_FAULT_REINDEX") };
+    _env.clear("SLATE_TEST_FAULT_REINDEX");
     assert!(
         page.items.iter().all(|r| r.path != "notes/heldsafe.md"),
         "a held marker's path serves nothing while unreadable — never unverified rows"
@@ -1657,7 +1655,7 @@ fn self_referencing_path_components_are_rejected() {
 
 #[test]
 fn clock_anomaly_markers_are_sweep_eligible() {
-    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    let _env = fault_guard();
     // Model-confirmation review: a marker stamped before a backward
     // clock correction reads as NEGATIVE age — treating it as fresh
     // would defer its repair until wall time catches up, hours of
@@ -1706,7 +1704,7 @@ fn clock_anomaly_markers_are_sweep_eligible() {
 
 #[test]
 fn containment_plants_over_superseded_markers() {
-    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    let mut _env = fault_guard();
     // Model-confirmation review: an OLD aged marker whose epoch is
     // behind the file's current epoch satisfied the "aged marker
     // exists" check, so containment planted nothing — and the next
@@ -1733,14 +1731,14 @@ fn containment_plants_over_superseded_markers() {
 
     // Transient file failure: containment must plant a CURRENT
     // healing marker despite the superseded relic.
-    unsafe { std::env::set_var("SLATE_TEST_FAULT_REINDEX", "stale-trigger") };
+    _env.set("SLATE_TEST_FAULT_REINDEX", "stale-trigger");
     assert_eq!(
         session
             .repair_or_contain_path("notes/stale-trigger.md")
             .unwrap(),
         TaskIndexRepairOutcome::Contained,
     );
-    unsafe { std::env::remove_var("SLATE_TEST_FAULT_REINDEX") };
+    _env.clear("SLATE_TEST_FAULT_REINDEX");
     {
         let conn = session.conn.lock().unwrap();
         let live: i64 = conn
@@ -1761,11 +1759,11 @@ fn containment_plants_over_superseded_markers() {
 
     // The condition clears with no filesystem event: the planted
     // marker heals on the next query.
-    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "stale-trigger") };
+    _env.set("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "stale-trigger");
     let healed = session
         .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
         .expect("the healed query succeeds");
-    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    _env.clear("SLATE_TEST_INTENT_ABANDON_ZERO_FOR");
     assert!(
         healed
             .items
@@ -1830,7 +1828,7 @@ fn folder_moves_never_relocate_post_snapshot_entrants() {
 
 #[test]
 fn folder_moves_sweep_pre_rename_entrants_by_disk_truth() {
-    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    let _env = fault_guard();
     // Re-confirmation review: the frozen snapshot protects
     // POST-rename entrants, but a file committed into the source
     // folder BETWEEN the snapshot and the filesystem rename is
@@ -1914,7 +1912,7 @@ fn folder_moves_sweep_pre_rename_entrants_by_disk_truth() {
 
 #[test]
 fn crashed_deletes_leave_markers_that_heal_ghosts() {
-    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    let _env = fault_guard();
     // Model-confirmation review: deletions mutated the filesystem
     // before the index transaction with NO marker — a crash between
     // left files/tasks rows serving a deleted file's ghosts until an
@@ -1997,7 +1995,7 @@ fn completed_deletes_release_their_markers() {
 
 #[test]
 fn aged_save_tokens_defer_while_a_move_owns_the_path() {
-    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    let mut _env = fault_guard();
     // Final-confirmation review: skipping only the HELD token when
     // the structural claim failed left aged SAVE tokens on the same
     // path selectable — their repair could read a mid-move
@@ -2026,7 +2024,7 @@ fn aged_save_tokens_defer_while_a_move_owns_the_path() {
 
     // The move is ACTIVE: its lock is held.
     let lock = VaultStructuralLock::acquire(&session.interior).unwrap();
-    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "moving43") };
+    _env.set("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "moving43");
     let page = session
         .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
         .expect("the query succeeds");
@@ -2059,7 +2057,7 @@ fn aged_save_tokens_defer_while_a_move_owns_the_path() {
     let healed = session
         .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
         .expect("the healed query succeeds");
-    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    _env.clear("SLATE_TEST_INTENT_ABANDON_ZERO_FOR");
     assert!(healed.items.iter().any(|r| r.path == "notes/moving43.md"));
     {
         let conn = session.conn.lock().unwrap();
@@ -2076,7 +2074,7 @@ fn aged_save_tokens_defer_while_a_move_owns_the_path() {
 
 #[test]
 fn both_present_strays_keep_the_source_and_mark_both_sides() {
-    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    let _env = fault_guard();
     // Final-confirmation review: the source-first shortcut missed
     // the BOTH-PRESENT case — a pre-rename entrant swept to the
     // destination whose source was then recreated. The four-state
@@ -2152,7 +2150,7 @@ fn both_present_strays_keep_the_source_and_mark_both_sides() {
 
 #[test]
 fn held_orphan_sweeps_hold_the_structural_lock_through_repair() {
-    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    let mut _env = fault_guard();
     // Adversarial round 41: the round-40 probe released the lock
     // the instant it proved it free — a mover could acquire it and
     // start renaming between the probe and the sweep's orphan
@@ -2174,7 +2172,7 @@ fn held_orphan_sweeps_hold_the_structural_lock_through_repair() {
             .unwrap();
     }
 
-    unsafe { std::env::set_var("SLATE_TEST_STALL_ORPHAN_REPAIR", "guard41") };
+    _env.set("SLATE_TEST_STALL_ORPHAN_REPAIR", "guard41");
     let observed_held = std::sync::atomic::AtomicBool::new(false);
     std::thread::scope(|scope| {
         let worker = scope.spawn(|| {
@@ -2199,7 +2197,7 @@ fn held_orphan_sweeps_hold_the_structural_lock_through_repair() {
             "the fenced read serves the repaired path"
         );
     });
-    unsafe { std::env::remove_var("SLATE_TEST_STALL_ORPHAN_REPAIR") };
+    _env.clear("SLATE_TEST_STALL_ORPHAN_REPAIR");
     assert!(
         observed_held.load(std::sync::atomic::Ordering::SeqCst),
         "the orphan sweep must hold the structural lock through its repair"
@@ -2223,7 +2221,7 @@ fn held_orphan_sweeps_hold_the_structural_lock_through_repair() {
 
 #[test]
 fn consumed_move_markers_are_restored_at_index_commit() {
-    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    let _env = fault_guard();
     // Adversarial round 39: a move outliving the liveness threshold
     // can have some of its markers consumed by a sweep against the
     // mid-move topology. The index commit re-asserts the FULL set
@@ -2278,7 +2276,7 @@ fn consumed_move_markers_are_restored_at_index_commit() {
 
 #[test]
 fn moves_leave_markers_that_converge_interleaved_saves() {
-    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    let mut _env = fault_guard();
     // Adversarial round 35: a SUCCESSFUL save on the source can
     // interleave between the move's filesystem rename and its index
     // commit — the save recreates the source, indexes it, clears
@@ -2334,11 +2332,11 @@ fn moves_leave_markers_that_converge_interleaved_saves() {
     // The next query's sweep re-reads BOTH sides and converges:
     // the destination serves its disk bytes, and the recreated
     // source is discovered and indexed — no scan, no restart.
-    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "35") };
+    _env.set("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "35");
     let page = session
         .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
         .expect("the query succeeds");
-    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    _env.clear("SLATE_TEST_INTENT_ABANDON_ZERO_FOR");
     let moved = page
         .items
         .iter()
@@ -2372,7 +2370,7 @@ fn moves_leave_markers_that_converge_interleaved_saves() {
 
 #[test]
 fn renamed_over_writes_never_serve_stale_rows() {
-    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    let mut _env = fault_guard();
     // Adversarial round 34, the exact schedule: process A's save on
     // the destination registers its marker while the path has NO
     // files row (stamp 0), process B's rename lands the source's
@@ -2414,12 +2412,12 @@ fn renamed_over_writes_never_serve_stale_rows() {
     // Un-repairable moment: A's marker must HOLD (the moved row's
     // epoch vouches for nothing), so the source-content rows are
     // refused, not served against A's bytes.
-    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "landing") };
-    unsafe { std::env::set_var("SLATE_TEST_FAULT_REINDEX", "landing") };
+    _env.set("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "landing");
+    _env.set("SLATE_TEST_FAULT_REINDEX", "landing");
     let page = session
         .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
         .expect("the query succeeds");
-    unsafe { std::env::remove_var("SLATE_TEST_FAULT_REINDEX") };
+    _env.clear("SLATE_TEST_FAULT_REINDEX");
     assert!(
         page.items.iter().all(|r| r.path != "notes/landing.md"),
         "index rows describing the source must not serve over A's bytes"
@@ -2429,7 +2427,7 @@ fn renamed_over_writes_never_serve_stale_rows() {
     let healed = session
         .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
         .expect("the healed query succeeds");
-    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    _env.clear("SLATE_TEST_INTENT_ABANDON_ZERO_FOR");
     let row = healed
         .items
         .iter()
@@ -2454,7 +2452,7 @@ fn renamed_over_writes_never_serve_stale_rows() {
 
 #[test]
 fn note_task_pages_read_one_snapshot() {
-    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    let mut _env = fault_guard();
     // Adversarial round 33: hash, rows, and totals were separate
     // autocommit reads — another process committing between them
     // paired an old content_hash with new offsets, defeating the
@@ -2470,9 +2468,9 @@ fn note_task_pages_read_one_snapshot() {
     let baseline = session.note_tasks("notes/torn-read.md", 10).unwrap();
     assert_eq!(baseline.tasks.len(), 2);
 
-    unsafe { std::env::set_var("SLATE_TEST_TORN_NOTE_READ", "torn-read") };
+    _env.set("SLATE_TEST_TORN_NOTE_READ", "torn-read");
     let page = session.note_tasks("notes/torn-read.md", 10).unwrap();
-    unsafe { std::env::remove_var("SLATE_TEST_TORN_NOTE_READ") };
+    _env.clear("SLATE_TEST_TORN_NOTE_READ");
     assert_eq!(
         page.content_hash, baseline.content_hash,
         "the hash comes from the snapshot, not the racing commit"

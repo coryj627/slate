@@ -115,7 +115,7 @@ fn conditional_inverse_compound_folder_note_round_trips_and_refuses_changed_note
 
 #[test]
 fn conditional_inverse_batch_rejects_incomplete_and_replaced_selections_before_mutation() {
-    let _env_guard = super::common::ENV_FAULT_GUARD.lock().unwrap();
+    let _env = super::common::fault_guard();
     let (dir, session) = fixture();
     let (op, ids) = moved_batch(&session);
     assert!(
@@ -140,7 +140,7 @@ fn conditional_inverse_batch_rejects_incomplete_and_replaced_selections_before_m
 
 #[test]
 fn conditional_inverse_batch_round_trips_with_the_original_identities() {
-    let _env_guard = super::common::ENV_FAULT_GUARD.lock().unwrap();
+    let _env = super::common::fault_guard();
     let (dir, session) = fixture();
     let (op, ids) = moved_batch(&session);
     let undone = session
@@ -176,7 +176,7 @@ impl StructuralBatchFaultHook for ReplaceBeforeRollback {
 #[test]
 fn conditional_inverse_rollback_refuses_replacements_and_retains_recovery() {
     // Existing recovery tests install process-wide, path-matching fault seams.
-    let _env_guard = super::common::ENV_FAULT_GUARD.lock().unwrap();
+    let _env = super::common::fault_guard();
     let (dir, session) = fixture();
     let (op, ids) = moved_batch(&session);
     let report = session
@@ -200,7 +200,7 @@ fn conditional_inverse_rollback_refuses_replacements_and_retains_recovery() {
 #[test]
 fn conditional_inverse_crash_recovery_keeps_identity_conditions() {
     // Existing recovery tests install process-wide, path-matching fault seams.
-    let _env_guard = super::common::ENV_FAULT_GUARD.lock().unwrap();
+    let _env = super::common::fault_guard();
     let (dir, session) = fixture();
     let identity = session.capture_structural_identity("a.md", false).unwrap();
     let plan = crate::structural_batch::PlannedBatchMove {

@@ -22343,6 +22343,8 @@ mod tests {
     mod change_feed;
 
     mod descriptor_interior;
+
+    mod fault_guard;
 }
 
 /// FL5-3a: one refused file in a batch tag edit — deliberate skips

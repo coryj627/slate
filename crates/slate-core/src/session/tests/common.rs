@@ -14,14 +14,108 @@ use std::sync::atomic::AtomicU32;
 /// Serializes tests that mutate the process-global fault-seam env
 /// vars (`SLATE_TEST_FAULT_AFTER_WRITE` and friends): two parallel
 /// tests setting different trigger values overwrite each other and
-/// the loser's fault never fires.
+/// the loser's fault never fires. Taken only through [`fault_guard`].
 ///
 /// The guard does not isolate the many tests that never take it, and
 /// every session in the process matches a trigger as a path substring.
 /// Give each faulted fixture paths that no other test uses and set the
 /// trigger to one of them; a generic name such as `b.md` also fails
 /// unrelated batch moves running alongside the faulted open.
-pub(super) static ENV_FAULT_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static FAULT_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Every fault-seam variable a guarded fact may set (#1481). Private, so
+/// the guard's own facts write the list out rather than read it here.
+const FAULT_VARIABLES: [&str; 15] = [
+    "SLATE_TEST_FAULT_AFTER_WRITE",
+    "SLATE_TEST_FAULT_PRE_WRITE",
+    "SLATE_TEST_FAULT_REINDEX",
+    "SLATE_TEST_FAULT_REINDEX_DB",
+    "SLATE_TEST_FAULT_INTENT_CLEAR",
+    "SLATE_TEST_FAULT_PLANT_MARKERS",
+    "SLATE_TEST_FAULT_RECOVERY_FINALIZE",
+    "SLATE_TEST_INTENT_ABANDON_ZERO_FOR",
+    "SLATE_TEST_COMMIT_AFTER_INTENT",
+    "SLATE_TEST_SWEEP_AFTER_INTENT",
+    "SLATE_TEST_RESOLVE_BEFORE_QUARANTINE",
+    "SLATE_TEST_SECOND_WRITER_BEFORE_QUARANTINE",
+    "SLATE_TEST_STALL_ORPHAN_REPAIR",
+    "SLATE_TEST_TORN_FILE_TASKS",
+    "SLATE_TEST_TORN_NOTE_READ",
+];
+
+/// The one place the fault mutex is taken: a holder that panicked poisoned
+/// it, and that one real failure must not fail every guarded fact after it
+/// (#1481).
+fn lock_recovering() -> std::sync::MutexGuard<'static, ()> {
+    FAULT_MUTEX
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// The fault mutex, held, with the fault-seam variables its holder sets.
+/// Taking it clears every [`FAULT_VARIABLES`] name a holder that unwound
+/// may have left behind; dropping it — on return or while unwinding —
+/// removes every name it set, while the lock is still held.
+pub(super) struct FaultGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    set: Vec<&'static str>,
+}
+
+impl FaultGuard {
+    /// Wraps a held lock, first clearing every fault-seam variable.
+    pub(super) fn clearing(lock: std::sync::MutexGuard<'static, ()>) -> FaultGuard {
+        for name in FAULT_VARIABLES {
+            // SAFETY: the fault mutex is held; every fact that writes a
+            // fault-seam variable does so under it, as before.
+            unsafe { std::env::remove_var(name) };
+        }
+        FaultGuard {
+            _lock: lock,
+            set: Vec::new(),
+        }
+    }
+
+    /// Sets a fault-seam variable for the length of the guard.
+    pub(super) fn set(&mut self, name: &'static str, value: &str) {
+        if !self.set.contains(&name) {
+            self.set.push(name);
+        }
+        // SAFETY: the fault mutex is held (see `clearing`).
+        unsafe { std::env::set_var(name, value) };
+    }
+
+    /// Clears a variable mid-body, to prove its fault is off.
+    pub(super) fn clear(&mut self, name: &'static str) {
+        // SAFETY: the fault mutex is held (see `clearing`).
+        unsafe { std::env::remove_var(name) };
+    }
+}
+
+impl Drop for FaultGuard {
+    fn drop(&mut self) {
+        for name in &self.set {
+            // SAFETY: `drop` runs before the lock field drops, so the
+            // fault mutex is still held, on return and while unwinding.
+            unsafe { std::env::remove_var(name) };
+        }
+    }
+}
+
+/// Takes the fault guard: the mutex, recovered if a holder panicked, with
+/// every fault-seam variable cleared.
+pub(super) fn fault_guard() -> FaultGuard {
+    FaultGuard::clearing(lock_recovering())
+}
+
+/// The guard's own facts only: the lock, without clearing anything.
+pub(super) fn lock_fault_mutex_without_clearing() -> std::sync::MutexGuard<'static, ()> {
+    lock_recovering()
+}
+
+/// The guard's own facts only: whether a holder's panic poisoned the lock.
+pub(super) fn fault_mutex_is_poisoned() -> bool {
+    FAULT_MUTEX.is_poisoned()
+}
 
 pub(super) fn make_vault(
     setup: impl FnOnce(&FsVaultProvider),
