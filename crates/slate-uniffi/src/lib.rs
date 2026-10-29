@@ -5531,8 +5531,9 @@ pub trait VaultEventListener: Send + Sync {
     fn on_index_phase(&self, phase: IndexPhase, files_seen: u64);
     /// Plan 43 PR 20a (#1267): files changed outside this session — one
     /// call per coalesced burst, from the watcher's thread, no session
-    /// lock held, no paths. Answer with a Watcher-reason rescan (PRs 20b
-    /// and 20c wire it; until then a no-op).
+    /// lock held, no paths. Both hosts answer with a Watcher-reason rescan:
+    /// mac through `VaultEventAdapter.onExternalChange` (PR 20c), Windows
+    /// through `UiVaultEventListener.OnExternalChange` (PR 20b, #1507).
     fn on_external_change(&self);
 }
 

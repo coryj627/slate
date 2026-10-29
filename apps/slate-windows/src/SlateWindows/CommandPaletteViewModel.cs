@@ -447,8 +447,9 @@ internal sealed class CommandPaletteViewModel : BindableBase
     internal static TimeSpan ShutdownDrainBudget { get; } = TimeSpan.FromSeconds(5);
 
     /// <summary>
-    /// Rows moved by one Page Up / Page Down. Windows-only navigation
-    /// per divergence PD-1; the host pushes its viewport size here.
+    /// Rows moved by one Page Up / Page Down (PD-1, retired by #1105: both
+    /// hosts handle these keys): ten by default, the mac
+    /// <c>pageSize</c>'s twin.
     /// </summary>
     public int PageSize
     {
@@ -723,7 +724,7 @@ internal sealed class CommandPaletteViewModel : BindableBase
         UserSelect(_rows[next].Id);
     }
 
-    /// <summary>Home (divergence PD-1).</summary>
+    /// <summary>Home (PD-1, retired by #1105: both hosts handle these keys).</summary>
     public void SelectFirst()
     {
         if (_rows.Length > 0)
@@ -732,7 +733,7 @@ internal sealed class CommandPaletteViewModel : BindableBase
         }
     }
 
-    /// <summary>End (divergence PD-1).</summary>
+    /// <summary>End (PD-1, retired by #1105: both hosts handle these keys).</summary>
     public void SelectLast()
     {
         if (_rows.Length > 0)
@@ -743,7 +744,8 @@ internal sealed class CommandPaletteViewModel : BindableBase
 
     /// <summary>
     /// Page Down (<c>delta = 1</c>) / Page Up (<c>delta = -1</c>),
-    /// divergence PD-1. Clamped at the ends rather than wrapping —
+    /// PD-1, retired by #1105: both hosts handle these keys. Clamped at
+    /// the ends rather than wrapping —
     /// standard Windows list behaviour, and the reason these are not
     /// just <see cref="MoveSelection"/> with a bigger step.
     /// </summary>

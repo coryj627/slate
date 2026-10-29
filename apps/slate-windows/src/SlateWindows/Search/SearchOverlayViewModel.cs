@@ -213,10 +213,11 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
 
     /// <summary>
     /// The selected result row. A change onto a valid row announces
-    /// <c>RowSelected</c> with the row's <b>basename only</b> — mac's
-    /// on-focus announcement (<c>SearchOverlay.swift:537-552</c>: the
-    /// full label with snippet stays on the element; every hop must not
-    /// speak a paragraph of snippet). The publish-time auto-select is
+    /// <c>RowSelected</c> with the row's <b>basename only</b> (contract 29
+    /// S8; mac's on-focus announcement was removed by #1412, VoiceOver's
+    /// read of the focused row is its voice): the full label with snippet
+    /// stays on the element; every hop must not speak a paragraph of
+    /// snippet. The publish-time auto-select is
     /// suppressed (the palette's P10 shape) so a result set never
     /// double-speaks its top row over the summary announcement, and
     /// <see cref="BindableBase.SetField"/>'s equality gate keeps a
@@ -476,10 +477,9 @@ internal sealed class SearchOverlayViewModel : BindableBase, IDisposable
 
     /// <summary>
     /// Down (<c>delta = 1</c>) / Up (<c>delta = -1</c>), wrapping — the
-    /// palette's shape (divergence SD-1: Windows ships arrow-key result
-    /// navigation; mac has none, and matching mac's Tab-only traversal
-    /// would make search the only list surface here that arrows do not
-    /// drive).
+    /// palette's shape (SD-1, retired by #1113: both hosts' arrows walk
+    /// the results; Windows moves a selection and wraps, mac moves focus
+    /// and does not).
     /// </summary>
     public void MoveSelection(int delta)
     {

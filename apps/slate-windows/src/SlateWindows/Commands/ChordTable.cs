@@ -1696,11 +1696,12 @@ internal static class ChordTable
             + "overlay is open. Delivered imperatively from "
             + "MainWindow.HandleSearchOverlayKey, not a KeyBinding.";
         const string SearchOverlayArrowDivergence =
-            "SD-1: Windows navigates results with the arrow keys where mac has "
-            + "no arrow handling at all; mac converges under #1113.";
+            "SD-1 (contract 29, retired by #1113): both hosts' arrows walk the results. "
+            + "Mac moves keyboard focus where Windows moves a selection, so mac's list does "
+            + "not wrap, and mac's arrows need Keyboard navigation on (#1377).";
         const string PaletteKeysDivergence =
-            "PD-1: Windows navigates with the Home/End/Page keys where mac "
-            + "deliberately handles none of them; mac converges under #1105.";
+            "PD-1 (contract 28, retired by #1105): both hosts handle Home, End, "
+            + "Page Up and Page Down by the Windows rules.";
 
         rows.AddRange(
         [

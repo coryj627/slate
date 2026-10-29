@@ -554,6 +554,22 @@ jobs:
       - name: Build
         run: dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release
 
+      # WB-17 (#1376, #1386): contracts 34 and 35 carry tables their
+      # generators write from the document and the Windows tree, generated
+      # binding included — so the checks run here, after the binding exists
+      # (the ubuntu windows-model job has none). A record moved above a
+      # pointer, or a renamed symbol, fails the lane instead of drifting.
+      - name: Set up Python (the reconciliation checks)
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Verify contract 34's reconciliation tables are the generator's output
+        run: python -I scripts/canvas_reconciliation.py --check
+      - name: Verify contract 35's reconciliation tables are the generator's output
+        run: python -I scripts/graph_reconciliation.py --check
+      - name: Test that the reconciliation checks catch a stale pointer
+        run: python -I -m unittest discover -v -s scripts/tests -p test_reconciliation_check_flags_a_stale_pointer.py
+
       # The Connections model (W6-2 PR B2, B2-8) runs in its own lane below.
       # An STA fact that times out without pumping has the runtime's
       # createdump write a full dump of the test process into the uploaded

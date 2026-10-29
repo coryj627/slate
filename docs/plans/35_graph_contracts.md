@@ -18537,130 +18537,130 @@ that exists and is not keyed is not claimed as keyed.
 
 | Id | Head | Recorded |
 |---|---|---|
-| 0a-D1 | Where-am-I speaks the full row copy at every verbosity, on both hosts | §0a, line 720 |
-| 0a-D2 | The grid relay keeps core's priority | §0a, line 722 |
-| 0a-D3 | The Connections panel's empty and loading states are posted on Windows when the leaf takes focus in them | §0a, line 723 |
-| 0a-D4 | The tier message keeps mac's two sentences | §0a, line 726 |
-| 0a-D5 | The force value and the settle are two events with mac's wording | §0a, line 728 |
-| 0b-D1 | The stable key's source, fold and encoding | §0b, line 2366 |
-| 0b-D2 | Label and folder order are core's natural fold with the raw-bytes tier | §0b, line 2371 |
-| 0b-D3 | The name filter, the group matcher and the ghost path trim with Rust `trim` | §0b, line 2375 |
-| 0b-D4 | The Modified cell is `YYYY-MM-DD HH:MM` UTC | §0b, line 2381 |
-| 0b-D5 | The config file's bytes are core's canonical writer | §0b, line 2382 |
-| 0b-D6 | An invalid group element is skipped, not the whole array | §0b, line 2385 |
-| 0b-D7 | Group matching is label-only | §0b, line 2387 |
-| 0b-D8 | A `version` whose parsed value cannot be classified refuses the file | §0b, line 2389 |
-| 0b-D9 | A self-link is not a neighbour | §0b, line 2392 |
-| A-D1 | The kind badge on `ItemStatus` | §A, line 3945 |
-| A-D2 | A note opened from the table speaks `OpenedFile` on Windows | §A, line 3947 |
-| A-D3 | The Windows row's Name is the P1 row copy; the mac's rows carry no row label | §A, line 3952 |
-| A-D4 | A ghost's created note is not handed to inline rename on Windows | §A, line 3957 |
-| B-D1 | The leaf does not write `GraphViewState.SelectedKey` | §B, line 5424 |
-| B-D2 | Withdrawn | §B, line 5426 |
-| B-D3 | Speech gates on the active leaf alone | §B, line 5428 |
-| B-D4 | Depth does not persist across sessions in B1 | §B, line 5430 |
-| B-D5 | `LeafPanelShown` on a switch, the graph family's line on a Show of the active leaf | §B, line 5432 |
-| B-D6 | "Show connections is not available yet." | §B, line 5434 |
-| B-D7 | One load on a collapsed-pane Show | §B, line 5437 |
-| B-D8 | Selection, expansion and pending focus clear on a root change and are pruned on a same-root refresh or depth change | §B, line 5440 |
-| B-D9 | `RightPaneShown` on every pane reveal | §B, line 5445 |
-| B-D10 | The ghost create's open is suppressed when the leaf's root or epoch moved | §B, line 5451 |
-| B-D11 | A mounted rail switch to a STALE leaf loads | §B, line 5455; **closed on mac** by #1217 (plan 43 PR 5): the mac's mounted leaf loads on a rail switch to a STALE publication too |
-| B-D12 | The probe defers to a load IN FLIGHT | §B, line 5458 |
-| B2-D1 | The leaf's row selection does not write the shared key | §B2, line 7168 |
-| B2-D2 | No navigation-intent seam. | §B2, line 7171 |
-| B2-D3 | A rename retargets the pin and the stack; a delete prunes the stack. | §B2, line 7179 |
-| B2-D4 | The shared key survives the graph tab's close. | §B2, line 7183 |
-| B2-D5 | Back's refused open pops nothing, and a pop needs the opened note. | §B2, line 7191 |
-| B2-D6 | Back is a command. | §B2, line 7196 |
-| B2-D7 | No origin from a graph, a base or a canvas tab. | §B2, line 7200 |
-| B2-D8 | The open's shell line comes after the leaf's, before the load's result. | §B2, line 7208 |
-| B2-D9 | The Bases' list renderer carries no row actions | §B2, line 7213 |
-| B2-D11 | Back's chord needs Control alone. | §B2, line 7218 |
-| B2-D10 | An open renamed mid-dialog installs the old path | §B2, line 7224 |
-| C-D1 | No mutation-navigation gate on a preset. | §C, line 9824 |
-| C-D2 | No chord reaches the filter field but the grid's own Ctrl+F | §C, line 9828 |
-| C-D3 | An Escape ladder on the graph | §C, line 9830 |
-| C-D4 | withdrawn at revision 6 | §C, line 9831 |
-| C-D5 | The palette matches labels alone | §C, line 9833 |
-| C-D6 | A persisted `diagram` mode seeds Table in this PR | §C, line 9836 |
-| C-D7 | A needle under a transient preset does NOT persist the preset's backend filter | §C, line 9839; **retired** by #1218 (plan 43 PR 5): the mac persists by field too, and its save aggregate no longer reads the live filter |
-| C-D8 | A restored graph tab shows the persisted filter | §C, line 9843 |
-| C-D9 | Menu items for Open Graph and the presets | §C, line 9845; **retired** by #1219 and #1216 (plan 43 PR 4): the mac has the items too, in its View ▸ Graph submenu (owner decision D8), each bound to its registry id |
-| C-D10 | The count region and Clear | §C, line 9846 |
-| C-D11 | withdrawn at revision 6 | §C, line 9848 |
-| C-D12 | No first-row landing after a preset | §C, line 9852 |
-| C-D13 | The panel's Escape pre-emption reaches as far as the graph surface's handler | §C, line 9854 |
-| C-D14 | No sidebar-navigation intent on a preset | §C, line 9856 |
-| C-D15 | The field, the count region and Clear stay in the header in both modes | §C, line 9859 |
-| C-D16 | A Where-am-I panel on the graph | §C, line 9862 |
-| C-D17 | A pending user sort survives a replacing pair | §C, line 9864; **closed on mac** by #1190 and #1424 (plan 43 PR 13): both replacing pairs, the needle, a filter change and the activation carry the pending sort, and its install speaks GridSorted |
-| C-D18 | A preset lands the reader on the graph's projection in every case | §C, line 9868 |
-| C-D19 | A sort during an Orphans pair adopts with `GridSorted` alone on Windows | §C, line 9872 |
-| C-D20 | Withdrawn | §C, line 9877 |
-| C-D21 | A shell route's landing over a held publication during a slow pair can speak two row lines | §C, line 9879 |
-| D-D1 | No focus-routed menu owner. | §D, line 13186 |
-| D-D2 | The node peer's HelpText is the neighbour content; T65's activation help is not carried. | §D, line 13192 |
-| D-D3 | A keyboard selection move is the relay's `GraphRow` line, the peers taking no focus | §D, line 13199 |
-| D-D4 | Tab and Shift+Tab are consumed by the renderer as the structural step whenever a node is visible | §D, line 13204 |
-| D-D5 | No restore-time focus suppression flag | §D, line 13208 |
-| D-D6 | Type-ahead folds with OrdinalIgnoreCase | §D, line 13213 |
-| D-D7 | Ctrl+wheel zooms; no pinch. | §D, line 13216 |
-| D-D8 | The fit padding is 60 layout units | §D, line 13219 |
-| D-D9 | The diagram's peers are complete, the canvas's windowed | §D, line 13222 |
-| D-D10 | The Where-am-I panel shows the diagram's readback too | §D, line 13225 |
-| D-D11 | The drag pans | §D, line 13227 |
-| D-D12 | A persisted Diagram mode's seat speaks no mode line | §D, line 13228; **closed on mac** by #1220 (plan 43 PR 5): the mac's restore of a persisted Diagram speaks no mode line either |
-| E-D1 | The pane is a leaf, the mac's is a trailing panel inside the graph tab | §E, line 15057 |
-| E-D2 | The accessible value of a slider is numeric | §E, line 15062 |
-| E-D3 | The forces edit restarts the driver's run | §E, line 15064 |
-| E-D4 | A display change is a redraw, not an epoch | §E, line 15066 |
-| E-D5 | The pane's hide returns the keys to the projection | §E, line 15068 |
-| E-D6 | A read-only config is SHOWN in the pane | §E, line 15070 |
-| E-D7 | A forces edit under a build in flight speaks the settle | §E, line 15073 |
-| E-D8 | The pane is disabled outside an effective graph, with a notice | §E, line 15077 |
-| FD-D1 | The graph has no mutation harness. | §F, line 16603 |
-| FD-D2 | The large-graph budgets measure the driver and the renderer's rebuild on the UI thread, not the frame. | §F, line 16609 |
-| FD-D3 | Windows has no residue census. | §F, line 16615 |
-| FD-D4 | The Voice Access commands are the graph's verbs. | §F, line 16620 |
-| FD-D5 | The graph document has no "Verified during implementation" register; its task records are that register. | §F, line 16625 |
+| 0a-D1 | Where-am-I speaks the full row copy at every verbosity, on both hosts | §0a, line 721 |
+| 0a-D2 | The grid relay keeps core's priority | §0a, line 723 |
+| 0a-D3 | The Connections panel's empty and loading states are posted on Windows when the leaf takes focus in them | §0a, line 724 |
+| 0a-D4 | The tier message keeps mac's two sentences | §0a, line 727 |
+| 0a-D5 | The force value and the settle are two events with mac's wording | §0a, line 729 |
+| 0b-D1 | The stable key's source, fold and encoding | §0b, line 2376 |
+| 0b-D2 | Label and folder order are core's natural fold with the raw-bytes tier | §0b, line 2381 |
+| 0b-D3 | The name filter, the group matcher and the ghost path trim with Rust `trim` | §0b, line 2385 |
+| 0b-D4 | The Modified cell is `YYYY-MM-DD HH:MM` UTC | §0b, line 2391 |
+| 0b-D5 | The config file's bytes are core's canonical writer | §0b, line 2392 |
+| 0b-D6 | An invalid group element is skipped, not the whole array | §0b, line 2395 |
+| 0b-D7 | Group matching is label-only | §0b, line 2397 |
+| 0b-D8 | A `version` whose parsed value cannot be classified refuses the file | §0b, line 2399 |
+| 0b-D9 | A self-link is not a neighbour | §0b, line 2402 |
+| A-D1 | The kind badge on `ItemStatus` | §A, line 3983 |
+| A-D2 | A note opened from the table speaks `OpenedFile` on Windows | §A, line 3985 |
+| A-D3 | The Windows row's Name is the P1 row copy; the mac's rows carry no row label | §A, line 3990 |
+| A-D4 | A ghost's created note is not handed to inline rename on Windows | §A, line 3995 |
+| B-D1 | The leaf does not write `GraphViewState.SelectedKey` | §B, line 5489 |
+| B-D2 | Withdrawn | §B, line 5491 |
+| B-D3 | Speech gates on the active leaf alone | §B, line 5493 |
+| B-D4 | Depth does not persist across sessions in B1 | §B, line 5495 |
+| B-D5 | `LeafPanelShown` on a switch, the graph family's line on a Show of the active leaf | §B, line 5497 |
+| B-D6 | "Show connections is not available yet." | §B, line 5499 |
+| B-D7 | One load on a collapsed-pane Show | §B, line 5502 |
+| B-D8 | Selection, expansion and pending focus clear on a root change and are pruned on a same-root refresh or depth change | §B, line 5505 |
+| B-D9 | `RightPaneShown` on every pane reveal | §B, line 5510 |
+| B-D10 | The ghost create's open is suppressed when the leaf's root or epoch moved | §B, line 5516 |
+| B-D11 | A mounted rail switch to a STALE leaf loads | §B, line 5520; **closed on mac** by #1217 (plan 43 PR 5): the mac's mounted leaf loads on a rail switch to a STALE publication too |
+| B-D12 | The probe defers to a load IN FLIGHT | §B, line 5523 |
+| B2-D1 | The leaf's row selection does not write the shared key | §B2, line 7243 |
+| B2-D2 | No navigation-intent seam. | §B2, line 7246 |
+| B2-D3 | A rename retargets the pin and the stack; a delete prunes the stack. | §B2, line 7254 |
+| B2-D4 | The shared key survives the graph tab's close. | §B2, line 7258 |
+| B2-D5 | Back's refused open pops nothing, and a pop needs the opened note. | §B2, line 7266 |
+| B2-D6 | Back is a command. | §B2, line 7271 |
+| B2-D7 | No origin from a graph, a base or a canvas tab. | §B2, line 7275 |
+| B2-D8 | The open's shell line comes after the leaf's, before the load's result. | §B2, line 7283 |
+| B2-D9 | The Bases' list renderer carries no row actions | §B2, line 7288 |
+| B2-D11 | Back's chord needs Control alone. | §B2, line 7293 |
+| B2-D10 | An open renamed mid-dialog installs the old path | §B2, line 7299 |
+| C-D1 | No mutation-navigation gate on a preset. | §C, line 9901 |
+| C-D2 | No chord reaches the filter field but the grid's own Ctrl+F | §C, line 9905 |
+| C-D3 | An Escape ladder on the graph | §C, line 9907 |
+| C-D4 | withdrawn at revision 6 | §C, line 9908 |
+| C-D5 | The palette matches labels alone | §C, line 9910 |
+| C-D6 | A persisted `diagram` mode seeds Table in this PR | §C, line 9913 |
+| C-D7 | A needle under a transient preset does NOT persist the preset's backend filter | §C, line 9916; **retired** by #1218 (plan 43 PR 5): the mac persists by field too, and its save aggregate no longer reads the live filter |
+| C-D8 | A restored graph tab shows the persisted filter | §C, line 9927 |
+| C-D9 | Menu items for Open Graph and the presets | §C, line 9929; **retired** by #1219 and #1216 (plan 43 PR 4): the mac has the items too, in its View ▸ Graph submenu (owner decision D8), each bound to its registry id |
+| C-D10 | The count region and Clear | §C, line 9937 |
+| C-D11 | withdrawn at revision 6 | §C, line 9939 |
+| C-D12 | No first-row landing after a preset | §C, line 9943 |
+| C-D13 | The panel's Escape pre-emption reaches as far as the graph surface's handler | §C, line 9945 |
+| C-D14 | No sidebar-navigation intent on a preset | §C, line 9947 |
+| C-D15 | The field, the count region and Clear stay in the header in both modes | §C, line 9950 |
+| C-D16 | A Where-am-I panel on the graph | §C, line 9953 |
+| C-D17 | A pending user sort survives a replacing pair | §C, line 9955; **closed on mac** by #1190 and #1424 (plan 43 PR 13): both replacing pairs, the needle, a filter change and the activation carry the pending sort, and its install speaks GridSorted |
+| C-D18 | A preset lands the reader on the graph's projection in every case | §C, line 9968 |
+| C-D19 | A sort during an Orphans pair adopts with `GridSorted` alone on Windows | §C, line 9972 |
+| C-D20 | Withdrawn | §C, line 9977 |
+| C-D21 | A shell route's landing over a held publication during a slow pair can speak two row lines | §C, line 9979 |
+| D-D1 | No focus-routed menu owner. | §D, line 13487 |
+| D-D2 | The node peer's HelpText is the neighbour content; T65's activation help is not carried. | §D, line 13493 |
+| D-D3 | A keyboard selection move is the relay's `GraphRow` line, the peers taking no focus | §D, line 13500 |
+| D-D4 | Tab and Shift+Tab are consumed by the renderer as the structural step whenever a node is visible | §D, line 13505 |
+| D-D5 | No restore-time focus suppression flag | §D, line 13509 |
+| D-D6 | Type-ahead folds with OrdinalIgnoreCase | §D, line 13514 |
+| D-D7 | Ctrl+wheel zooms; no pinch. | §D, line 13517 |
+| D-D8 | The fit padding is 60 layout units | §D, line 13520 |
+| D-D9 | The diagram's peers are complete, the canvas's windowed | §D, line 13523 |
+| D-D10 | The Where-am-I panel shows the diagram's readback too | §D, line 13526 |
+| D-D11 | The drag pans | §D, line 13528 |
+| D-D12 | A persisted Diagram mode's seat speaks no mode line | §D, line 13529; **closed on mac** by #1220 (plan 43 PR 5): the mac's restore of a persisted Diagram speaks no mode line either |
+| E-D1 | The pane is a leaf, the mac's is a trailing panel inside the graph tab | §E, line 15364 |
+| E-D2 | The accessible value of a slider is numeric | §E, line 15369 |
+| E-D3 | The forces edit restarts the driver's run | §E, line 15371 |
+| E-D4 | A display change is a redraw, not an epoch | §E, line 15373 |
+| E-D5 | The pane's hide returns the keys to the projection | §E, line 15375 |
+| E-D6 | A read-only config is SHOWN in the pane | §E, line 15377 |
+| E-D7 | A forces edit under a build in flight speaks the settle | §E, line 15380 |
+| E-D8 | The pane is disabled outside an effective graph, with a notice | §E, line 15384 |
+| FD-D1 | The graph has no mutation harness. | §F, line 16910 |
+| FD-D2 | The large-graph budgets measure the driver and the renderer's rebuild on the UI thread, not the frame. | §F, line 16916 |
+| FD-D3 | Windows has no residue census. | §F, line 16922 |
+| FD-D4 | The Voice Access commands are the graph's verbs. | §F, line 16927 |
+| FD-D5 | The graph document has no "Verified during implementation" register; its task records are that register. | §F, line 16932 |
 
 | Id | Head | Recorded |
 |---|---|---|
-| 0aR-1 | The Swift migration is unrun on this box. | §0a, line 741 |
-| 0aR-2 | The uniffi budget. | §0a, line 743 |
-| 0bR-1 | The Swift migration is unrun on this box. | §0b, line 2399 |
-| 0bR-2 | Node ids are scan-order indices. | §0b, line 2401 |
-| 0bR-3 | Floats are out of the artifact. | §0b, line 2404 |
-| 0bR-4 | The leaf's snippets are decoration from a second payload. | §0b, line 2408 |
-| AR-1 | The FlaUI journey is CI's to arbitrate. | §A, line 3977 |
-| AR-2 | Show connections is disabled between PR A's merge and PR B's. | §A, line 3980 |
-| AR-3 | The §K numbers are unmeasured until the task loop. | §A, line 3982 |
-| AR-4 | The mac lane is unrun on this box | §A, line 3985 |
-| AR-5 | The sidebar's select-path seam is new | §A, line 3988 |
-| AR-6 | The graph document has no inline mode. | §A, line 3991 |
-| CR-1 | withdrawn at revision 6 | §C, line 9886 |
-| CR-2 | One `graph_table_rows` crossing per keystroke with a snapshot held, and a PAIR per keystroke while a pair is in flight | §C, line 9893 |
-| CR-3 | The mac migrations of C-2 and C-8 are unrun on this box | §C, line 9899 |
-| CR-4 | The config writer's atomicity is `File.Move` on one volume | §C, line 9902 |
-| CR-5 | A write past the five-second drain completes on the application writer after the workspace is gone | §C, line 9905 |
-| CR-7 | A failed write loses its aggregate | §C, line 9912 |
-| CR-6 | A vault reached through a junction or a substituted drive is a different writer key | §C, line 9916 |
-| DR-1 | The mac twin of the `layout` artifact section is unrun on this box | §D, line 13236 |
-| DR-2 | Cross-platform float drift in the position golden is a GATE FAILURE, not an accepted drift | §D, line 13240 |
-| DR-3 | A complete peer set of 1,500 Buttons. | §D, line 13250 |
-| DR-4 | A diagram select of a node the table's snapshot lacks is refused | §D, line 13254 |
-| DR-5 | The warm-tick budget is the host's | §D, line 13261 |
-| DR-6 | `SystemParameters.ClientAreaAnimation` is the animation preference on Windows 10 and 11 ("Animation effects") | §D, line 13264 |
-| ER-1 | A slider drag's writes. | §E, line 15084 |
-| ER-2 | The seed's order. | §E, line 15090 |
-| ER-3 | The right pane's other leaves. | §E, line 15093 |
-| FR-1 | The Swift fact is unrun on this box. | §F, line 16640 |
-| FR-2 | The reconciliation's contract → evidence table is generated from prose, and its structured references are review-only. | §F, line 16643 |
-| FR-3 | The trigger census resolves sites, not preconditions. | §F, line 16649 |
-| FR-4 | The budgets in F1 run on CI's runner. | §F, line 16654 |
-| FR-5 | Two large vaults in the unit suite. | §F, line 16657 |
-| FR-6 | The spatial oracle's inputs are quantised. | §F, line 16661 |
+| 0aR-1 | The Swift migration is unrun on this box. | §0a, line 751 |
+| 0aR-2 | The uniffi budget. | §0a, line 753 |
+| 0bR-1 | The Swift migration is unrun on this box. | §0b, line 2409 |
+| 0bR-2 | Node ids are scan-order indices. | §0b, line 2411 |
+| 0bR-3 | Floats are out of the artifact. | §0b, line 2414 |
+| 0bR-4 | The leaf's snippets are decoration from a second payload. | §0b, line 2418 |
+| AR-1 | The FlaUI journey is CI's to arbitrate. | §A, line 4015 |
+| AR-2 | Show connections is disabled between PR A's merge and PR B's. | §A, line 4018 |
+| AR-3 | The §K numbers are unmeasured until the task loop. | §A, line 4020 |
+| AR-4 | The mac lane is unrun on this box | §A, line 4023 |
+| AR-5 | The sidebar's select-path seam is new | §A, line 4026 |
+| AR-6 | The graph document has no inline mode. | §A, line 4029 |
+| CR-1 | withdrawn at revision 6 | §C, line 9986 |
+| CR-2 | One `graph_table_rows` crossing per keystroke with a snapshot held, and a PAIR per keystroke while a pair is in flight | §C, line 9993 |
+| CR-3 | The mac migrations of C-2 and C-8 are unrun on this box | §C, line 9999 |
+| CR-4 | The config writer's atomicity is `File.Move` on one volume | §C, line 10002 |
+| CR-5 | A write past the five-second drain completes on the application writer after the workspace is gone | §C, line 10005 |
+| CR-7 | A failed write loses its aggregate | §C, line 10012 |
+| CR-6 | A vault reached through a junction or a substituted drive is a different writer key | §C, line 10016 |
+| DR-1 | The mac twin of the `layout` artifact section is unrun on this box | §D, line 13537 |
+| DR-2 | Cross-platform float drift in the position golden is a GATE FAILURE, not an accepted drift | §D, line 13541 |
+| DR-3 | A complete peer set of 1,500 Buttons. | §D, line 13551 |
+| DR-4 | A diagram select of a node the table's snapshot lacks is refused | §D, line 13555 |
+| DR-5 | The warm-tick budget is the host's | §D, line 13562 |
+| DR-6 | `SystemParameters.ClientAreaAnimation` is the animation preference on Windows 10 and 11 ("Animation effects") | §D, line 13565 |
+| ER-1 | A slider drag's writes. | §E, line 15391 |
+| ER-2 | The seed's order. | §E, line 15397 |
+| ER-3 | The right pane's other leaves. | §E, line 15400 |
+| FR-1 | The Swift fact is unrun on this box. | §F, line 16947 |
+| FR-2 | The reconciliation's contract → evidence table is generated from prose, and its structured references are review-only. | §F, line 16950 |
+| FR-3 | The trigger census resolves sites, not preconditions. | §F, line 16956 |
+| FR-4 | The budgets in F1 run on CI's runner. | §F, line 16961 |
+| FR-5 | Two large vaults in the unit suite. | §F, line 16964 |
+| FR-6 | The spatial oracle's inputs are quantised. | §F, line 16968 |
 
 <!-- graph-reconciliation:generated:end -->
 

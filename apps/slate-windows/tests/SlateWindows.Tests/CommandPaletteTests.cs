@@ -335,7 +335,8 @@ public sealed partial class CommandPaletteTests
         Assert.False(segment.IsMatch);
     }
 
-    // --- P7 / PD-1: the keyboard model ------------------------------------
+    // --- P7: the keyboard model (PD-1 was retired by #1105; both hosts ----
+    // --- handle these keys) ---------------------------------------------
 
     [Fact]
     public void ArrowNavigationIsOneFlatCycleThatWrapsAcrossSections()
