@@ -658,7 +658,17 @@ public sealed partial class CommandPaletteTests
                 }
                 else
                 {
-                    Assert.True(Mouse.Capture(target), "premise: the target refused the mouse capture");
+                    // MouseDevice promotes the preview at its own target —
+                    // the captured or hovered element, never the args'
+                    // Source — so the press needs a real capture. A job VM's
+                    // desktop can refuse Win32 SetCapture to a window it
+                    // never activated (#1701): then WPF was not measured
+                    // here, which is a skip, not Slate's failure.
+                    if (!CaptureMouse(target))
+                    {
+                        Assert.Skip("this desktop refused Win32 SetCapture to the fact's window, so WPF's mouse promotion was not measured on it (#1701)");
+                    }
+
                     try
                     {
                         InputManager.Current.ProcessInput(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
@@ -686,6 +696,25 @@ public sealed partial class CommandPaletteTests
             window.Close();
         }
     });
+
+    /// <summary>#1701: captures the mouse to <paramref name="element"/>,
+    /// trying five times — a desktop busy with another window can refuse
+    /// SetCapture for a moment — and says whether it held.</summary>
+    private static bool CaptureMouse(IInputElement element)
+    {
+        for (int attempt = 0; attempt < 5; attempt++)
+        {
+            if (Mouse.Capture(element))
+            {
+                return true;
+            }
+
+            PumpedDispatcher.Drain();
+            Thread.Sleep(50);
+        }
+
+        return false;
+    }
 
     /// <summary>#1307: the host raises a bubbling twin only for a preview
     /// that stayed unhandled, as WPF's MouseDevice, Keyboard and
