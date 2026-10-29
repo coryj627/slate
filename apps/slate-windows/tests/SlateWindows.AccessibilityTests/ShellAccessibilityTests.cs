@@ -7778,6 +7778,57 @@ public sealed partial class ShellAccessibilityTests
                     + "; app log tail: "
                     + ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log")));
             }
+
+            // ---- WB-13 (#1260): delete the FOCUSED card ----------------
+            // Three cards, the keys on the MIDDLE row, the palette's Delete
+            // Selection: they land on the next row — the new middle one, an
+            // outline TreeItem — never on the window, and never on the first
+            // row, which is where the shell's region guard puts keys whose
+            // row died with nothing seated. Ctrl+Z answers from there with
+            // no reseat.
+            NewCardByChord(3, "the third Ctrl+Alt+T");
+            int FocusedRowIndex()
+            {
+                try
+                {
+                    return Array.FindIndex(Rows(), item => item.Properties.HasKeyboardFocus.ValueOrDefault);
+                }
+                catch (System.Runtime.InteropServices.COMException)
+                {
+                    return -1;
+                }
+            }
+
+            window.SetForeground();
+            Rows()[1].Focus();
+            Assert.True(
+                SpinWait.SpinUntil(() => FocusedRowIndex() == 1, TimeSpan.FromSeconds(10)),
+                "premise: the middle card's row never took the keys");
+            RunPaletteCommand("Delete Selection", "Canvas: Delete Selection");
+            Assert.True(
+                SpinWait.SpinUntil(() => Rows().Length == 2, TimeSpan.FromSeconds(10)),
+                "Delete Selection never removed the focused card");
+            if (!SpinWait.SpinUntil(() => FocusedRowIndex() == 1, TimeSpan.FromSeconds(10)))
+            {
+                AutomationElement? focused = null;
+                try
+                {
+                    focused = automation.FocusedElement();
+                }
+                catch (System.Runtime.InteropServices.COMException)
+                {
+                }
+                Assert.Fail(
+                    "after deleting the focused middle card the keys are not on the next row (row "
+                    + FocusedRowIndex() + " of " + Rows().Length + "); focused: "
+                    + (focused is null ? "<none>" : $"{focused.ControlType} \"{focused.Name}\"")
+                    + "; app log tail: "
+                    + ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log")));
+            }
+            Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_Z);
+            Assert.True(
+                SpinWait.SpinUntil(() => Rows().Length == 3, TimeSpan.FromSeconds(10)),
+                "Ctrl+Z from the landed row never restored the deleted card");
         }
         finally
         {

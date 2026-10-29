@@ -834,7 +834,7 @@ public sealed partial class CommandPaletteTests
     /// input can resynchronize it on a shared desktop), then restores it.
     /// SheetKeyboardFenceTests' <c>WithModifiers</c>, for these facts.
     /// </summary>
-    private static class ThreadModifiers
+    internal static class ThreadModifiers
     {
         private const int VkShift = 0x10;
         private const int VkControl = 0x11;

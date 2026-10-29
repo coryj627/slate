@@ -8830,6 +8830,27 @@ leg still pinned the staged Delete — both flipped to the TE-8/
 TE-11b truth, with the editor sheet closed inside each leg so the
 modal never swallows what follows.
 
+### Appended note — focus return after a delete (WB-13, #1260)
+
+Appended after the freeze; no D-row or TE row above is rewritten.
+Delete's card arm keeps `ClearSelection` (TE-5b), and the rebuilt
+outline then held no row for the keys. Now, when the row that held
+the keys is gone from the rebuild and nothing is seated, the outline
+returns them to the next row in reading order, else the previous,
+else the tree itself (AR-6). The return is delivered at once when the
+outline holds the keys, silently (C12 / CD-40): the operation's
+`CanvasDeleted` stays the only utterance. When a shell overlay or a
+menu holds the keys (the palette's Delete), the successor is SEATED
+without taking them, and the overlay's own restore lands its dead row
+token on that seat (contract 40 R-5 (h)). The mutation's publication
+carries its receipt (`CanvasOutlinePublishedEventArgs`), and
+`TryMarkFocusReturned` marks the one return. Any mutation that removes
+the keys' row lands the same way (ungroup, the other deletes). The
+seat-only arm acts only on a mutation's rows, on the outline when it is
+the active, visible surface; the lineage ends when the keys land on
+another element outside the outline. A filter or a reload is
+selection-neutral, and a reload reseats before it publishes.
+
 ## PR F — move and resize modes, structural placement, and the connect flow
 
 **Goal (spec §PR F).** The spatial and connection authoring that runs

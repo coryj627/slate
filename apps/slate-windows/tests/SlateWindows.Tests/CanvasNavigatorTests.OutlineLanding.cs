@@ -177,6 +177,202 @@ public sealed partial class CanvasNavigatorTests
         host.AssertTreeNeverFocused();
     });
 
+    /// <summary>WB-13 (#1260): deleting the focused row republishes the
+    /// outline with a cleared seat and every container rebuilt, so the row
+    /// that held the keys is gone. They land on the next row in reading
+    /// order, seated silently — never on the window.</summary>
+    [Fact]
+    public void DeletingTheFocusedRowSeatsTheNextRowInReadingOrder() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("trio.canvas");
+        using OutlineHost host = HostOutline(document);
+        host.FocusRow("beta");
+        host.RecordFocus();
+
+        document.CanvasDeleteSelection();
+        host.Settle();
+
+        Assert.IsType<CanvasOutlineItem>(Keyboard.FocusedElement);
+        Assert.Equal("gamma", FocusedRowId());
+        Assert.Equal("gamma", document.Selection.Selected);
+        host.AssertTreeNeverFocused();
+    });
+
+    /// <summary>With no row after it, the previous row takes the keys.</summary>
+    [Fact]
+    public void DeletingTheLastRowSeatsThePreviousOne() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("trio.canvas");
+        using OutlineHost host = HostOutline(document);
+        host.FocusRow("gamma");
+
+        document.CanvasDeleteSelection();
+        host.Settle();
+
+        Assert.Equal("beta", FocusedRowId());
+        Assert.Equal("beta", document.Selection.Selected);
+    });
+
+    /// <summary>The only card gone, the outline has no rows: the tree is its
+    /// own stop (AR-6) and takes the keys, with nothing seated.</summary>
+    [Fact]
+    public void DeletingTheOnlyRowLandsOnTheTree() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("solo.canvas");
+        using OutlineHost host = HostOutline(document);
+        host.FocusRow("only");
+
+        document.CanvasDeleteSelection();
+        host.Settle();
+
+        Assert.Same(host.Surface.OutlineForTests.TreeForTests, Keyboard.FocusedElement);
+        Assert.Null(document.Selection.Selected);
+        Assert.Empty(host.Surface.OutlineForTests.RootsForTests);
+    });
+
+    /// <summary>Contract C12 / CD-40: the landing is a delivery, so it is
+    /// silent — the delete's own sentence is the one line the reader
+    /// hears, and no move to the successor is narrated over it.</summary>
+    [Fact]
+    public void TheDeleteSpeaksOnceAndTheLandingIsSilent() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("trio.canvas");
+        using OutlineHost host = HostOutline(document);
+        host.FocusRow("beta");
+        _ = Lines(document);
+        _announced.Clear();
+
+        document.CanvasDeleteSelection();
+        host.Settle();
+
+        Assert.Equal("gamma", FocusedRowId());
+        string line = Assert.Single(Lines(document));
+        Assert.StartsWith("Deleted ", line, StringComparison.Ordinal);
+        Assert.EndsWith($"{CanvasPhrase.UndoChord} to undo", line, StringComparison.Ordinal);
+    });
+
+    /// <summary>The issue's other half: the canvas chords answer from where
+    /// the keys landed, with no F6 first — Ctrl+Z brings the card back.</summary>
+    [Fact]
+    public void UndoFromTheSeatedRowRestoresTheCard() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("trio.canvas");
+        using OutlineHost host = HostOutline(document);
+        host.FocusRow("beta");
+        document.CanvasDeleteSelection();
+        host.Settle();
+        Assert.DoesNotContain(document.Outline, row => row.NodeId == "beta");
+
+        host.Press(Key.Z, ModifierKeys.Control);
+
+        Assert.True(
+            document.Outline.Any(row => row.NodeId == "beta"),
+            "Ctrl+Z from " + FocusedRowId() + " did not restore Beta; heard: " + string.Join(" | ", Lines(document)));
+    });
+
+    /// <summary>The keys' lineage clears when the reader goes to another
+    /// pane: a delete published after that leaves the keys where the reader
+    /// put them and seats nothing (the operation's cleared seat stands).</summary>
+    [Fact]
+    public void ADeleteAfterTheKeysLeftTheOutlineLeavesThemWhereTheyAre() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("trio.canvas");
+        using OutlineHost host = HostOutline(document);
+        host.FocusRow("beta");
+        Assert.True(host.Beside.Focus());
+
+        document.CanvasDeleteSelection();
+        host.Settle();
+
+        Assert.Same(host.Beside, Keyboard.FocusedElement);
+        Assert.Null(document.Selection.Selected);
+    });
+
+    /// <summary>WB-13 red team (H1): the keys left the outline for an overlay
+    /// (the palette) whose command showed the visual board. A delete on the
+    /// board leaves the seat the operation cleared — the hidden outline seats
+    /// no successor, which would pan the board to it.</summary>
+    [Fact]
+    public void ABoardDeleteAfterAnOverlayLeftTheOutlineSeatsNothing() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("trio.canvas");
+        using OutlineHost host = HostOutline(document);
+        host.FocusRow("beta");
+        host.LeaveForAnOverlay();
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.Settle();
+        Assert.Equal("beta", document.Selection.Selected);
+
+        document.CanvasDeleteSelection();
+        host.Settle();
+
+        Assert.Null(document.Selection.Selected);
+    });
+
+    /// <summary>WB-13 red team (H1): a filter that hides the seated card is
+    /// selection-neutral — the kept lineage seats no successor for a
+    /// publication that is not a mutation's.</summary>
+    [Fact]
+    public void AFilterAfterAnOverlayLeftTheOutlineMovesNoSeat() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("trio.canvas");
+        using OutlineHost host = HostOutline(document);
+        host.FocusRow("beta");
+        host.LeaveForAnOverlay();
+
+        document.FilterText = "Alpha";
+        Drain(document);
+        host.Settle();
+
+        Assert.Equal("beta", document.Selection.Selected);
+    });
+
+    /// <summary>WB-13 red team (H1): the overlay closed and its restore put
+    /// the keys somewhere else — the lineage ends there, so a later delete
+    /// leaves them where they are and seats nothing.</summary>
+    [Fact]
+    public void TheLineageEndsWhenTheKeysLandElsewhereAfterAnOverlay() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("trio.canvas");
+        using OutlineHost host = HostOutline(document);
+        host.FocusRow("beta");
+        host.LeaveForAnOverlay();
+        Assert.True(host.Aside.Focus());
+
+        document.CanvasDeleteSelection();
+        host.Settle();
+
+        Assert.Same(host.Aside, Keyboard.FocusedElement);
+        Assert.Null(document.Selection.Selected);
+    });
+
+    /// <summary>W6-1 §E TE-4: the delete's publication carries its receipt,
+    /// and the outline's return of the keys marks it — once.</summary>
+    [Fact]
+    public void ADeleteMarksItsFocusReturnOnce() => RunSta(() =>
+    {
+        CanvasDocumentViewModel document = Open("trio.canvas");
+        using OutlineHost host = HostOutline(document);
+        host.FocusRow("beta");
+        var receipts = new List<CanvasOperationCompletion>();
+        document.OutlinePublished += (_, e) =>
+        {
+            if (e is CanvasOutlinePublishedEventArgs { Receipt: { } receipt })
+            {
+                receipts.Add(receipt);
+            }
+        };
+
+        document.CanvasDeleteSelection();
+        host.Settle();
+
+        Assert.Equal("gamma", FocusedRowId());
+        CanvasOperationCompletion published = Assert.Single(receipts);
+        Assert.False(
+            published.TryMarkFocusReturned(),
+            "the outline returned the keys without marking the operation's receipt");
+    });
+
     private static string? FocusedRowId() =>
         (Keyboard.FocusedElement as FrameworkElement)?.DataContext is CanvasOutlineRowViewModel row ? row.Id : null;
 
@@ -209,10 +405,10 @@ public sealed partial class CanvasNavigatorTests
         window.Show();
         window.UpdateLayout();
         Assert.Equal(CanvasSurfaceKind.Outline, document.Selection.ActiveSurface);
-        return new OutlineHost(window, surface, above);
+        return new OutlineHost(window, surface, above, left);
     }
 
-    private sealed class OutlineHost(Window window, CanvasSurfaceView surface, Button beside) : IDisposable
+    private sealed class OutlineHost(Window window, CanvasSurfaceView surface, Button beside, Button aside) : IDisposable
     {
         private readonly List<IInputElement> _focusChanges = [];
         private bool _recording;
@@ -221,7 +417,52 @@ public sealed partial class CanvasNavigatorTests
 
         internal Button Beside { get; } = beside;
 
+        /// <summary>A second stop outside the outline.</summary>
+        internal Button Aside { get; } = aside;
+
+        /// <summary>The keys leave the outline for a shell overlay (the
+        /// palette): the loss classifies as <c>ModalOverlay</c> while the
+        /// overlay probe answers true, and the keys sit on
+        /// <see cref="Beside"/> as they would in the overlay's field.</summary>
+        internal void LeaveForAnOverlay()
+        {
+            Func<bool> probe = CanvasSurfaceView.ShellOverlayIsOpen;
+            CanvasSurfaceView.ShellOverlayIsOpen = static () => true;
+            try
+            {
+                Assert.True(Beside.Focus());
+            }
+            finally
+            {
+                CanvasSurfaceView.ShellOverlayIsOpen = probe;
+            }
+        }
+
         internal void UpdateLayout() => window.UpdateLayout();
+
+        /// <summary>Layout, then everything queued.</summary>
+        internal void Settle()
+        {
+            window.UpdateLayout();
+            PumpedDispatcher.Drain();
+            window.UpdateLayout();
+        }
+
+        /// <summary>The card seated and its row holding the keys, as a
+        /// reader who arrowed to it has them.</summary>
+        internal void FocusRow(string nodeId)
+        {
+            Assert.True(Beside.Focus());
+            Surface.Model!.SeatSelectionSilently(nodeId);
+            window.UpdateLayout();
+            Assert.True(Surface.FocusProjection());
+            Assert.Equal(nodeId, FocusedRowId());
+        }
+
+        /// <summary>A real press through the input manager, with exactly
+        /// these modifiers held in the thread's key state.</summary>
+        internal void Press(Key key, ModifierKeys modifiers) =>
+            CommandPaletteTests.ThreadModifiers.Hold(modifiers, () => Press(key));
 
         /// <summary>Every keyboard focus change from here on is kept.</summary>
         internal void RecordFocus()
