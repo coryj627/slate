@@ -570,6 +570,88 @@ public sealed class ReadingFindSurfaceTests
         Assert.Equal("After", harness.Surface.Selection.Text);
     });
 
+    /// <summary>Codex round 2: a pane split or collapse rebuilds the reading
+    /// surface while the tab's find bar stays open. The restore point taken
+    /// on the old surface never selects in the new one's document: the new
+    /// surface takes its own, and Close neither throws nor moves its
+    /// selection.</summary>
+    [Fact]
+    public void ARestorePointFromAnotherReadingSurfaceIsNeverRestoredInto() => RunSta(() =>
+    {
+        using var harness = new Harness("reading-find-rebuilt-surface", "alpha one\n\nalpha two\n");
+        var heard = new List<A11yEvent>();
+        using var find = new FindInNoteViewModel(heard.Add);
+        find.Open();
+        find.AttachSurface(harness.Find);
+        find.Query = "alpha";
+        find.FlushPendingForTests();
+
+        // The rebuilt surface, its replacement count made equal to the old one's.
+        var rebuilt = new ReadingSurface();
+        var window = new Window { Content = rebuilt, Width = 600, Height = 400, ShowInTaskbar = false, WindowStyle = WindowStyle.None, Left = -2000, Top = -2000 };
+        window.Show();
+        try
+        {
+            do
+            {
+                rebuilt.ApplyBuiltDocument(Build("alpha three\n\nalpha four\n"));
+            }
+            while (rebuilt.ReplacedRevision < harness.Surface.ReplacedRevision);
+            Assert.Equal(harness.Surface.ReplacedRevision, rebuilt.ReplacedRevision);
+            window.UpdateLayout();
+            int caret = rebuilt.Document.ContentStart.GetOffsetToPosition(rebuilt.CaretPosition);
+            var surface = new ReadingFindSurface(rebuilt);
+            find.AttachSurface(surface);
+
+            find.Close();
+
+            Assert.False(find.IsOpen);
+            Assert.True(rebuilt.Selection.IsEmpty);
+            Assert.Equal(caret, rebuilt.Document.ContentStart.GetOffsetToPosition(rebuilt.CaretPosition));
+            surface.Detach();
+        }
+        finally
+        {
+            window.Close();
+        }
+    });
+
+    /// <summary>Codex round 2: a math element the viewport's bottom edge cuts
+    /// still has every match in its source drawn — the visible range runs to
+    /// the end of a unit it ends inside.</summary>
+    [Fact]
+    public void AMathElementCutByTheViewportKeepsEveryMatchVisible() => RunSta(() =>
+    {
+        var note = new StringBuilder();
+        for (int i = 0; i < 40; i++)
+        {
+            note.Append("Filler paragraph ").Append(i).Append(".\n\n");
+        }
+        note.Append("$$q + q + q$$\n\n");
+        for (int i = 0; i < 40; i++)
+        {
+            note.Append("Tail paragraph ").Append(i).Append(".\n\n");
+        }
+        using var harness = new Harness("reading-find-math-cut", note.ToString());
+        ReadingMathElement element = Assert.Single(LogicalDescendants<ReadingMathElement>(harness.Surface.Document));
+        List<(int Offset, int Length)> matches = harness.Matches("q");
+        Assert.Equal(3, matches.Count);
+        ScrollViewer viewer = Assert.IsType<ScrollViewer>(harness.Surface.ContentScrollViewer);
+
+        double top = element.TransformToVisual(harness.Surface).Transform(new Point()).Y;
+        viewer.ScrollToVerticalOffset(viewer.VerticalOffset + top + (element.ActualHeight / 2) - harness.Surface.ActualHeight);
+        harness.Settle();
+        double cutTop = element.TransformToVisual(harness.Surface).Transform(new Point()).Y;
+        Assert.True(
+            cutTop < harness.Surface.ActualHeight && cutTop + element.ActualHeight > harness.Surface.ActualHeight,
+            $"premise: the viewport's bottom cuts the math element (top {cutTop}, height {element.ActualHeight}, viewport {harness.Surface.ActualHeight})");
+
+        (int first, int last) = harness.Find.VisibleOffsets();
+
+        Assert.True(first <= matches[0].Offset, $"visible from {first}");
+        Assert.True(last >= matches[2].Offset, $"visible to {last}, the last match at {matches[2].Offset}");
+    });
+
     /// <summary>Two matches inside one math source are two stops, each
     /// selecting the whole element: the surface remembers which one it
     /// revealed while the selection is still the one the reveal made.</summary>

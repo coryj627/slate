@@ -145,13 +145,18 @@ internal sealed class ReadingFindSurface : IFindInNoteSurface
     {
         TextSelection selection = _surface.Selection;
         return new RestorePoint(
-            selection.Start, selection.End, _surface.ReplacedRevision,
+            _surface, selection.Start, selection.End, _surface.ReplacedRevision,
             PendingDiagramOf(selection.Start) ?? PendingDiagramOf(selection.End));
     }
 
-    /// <summary>The surface keeps one document for its whole life, so a
-    /// point taken on it stays on it.</summary>
-    public object RebaseRestorePoint(object restorePoint) => restorePoint;
+    /// <summary>A surface keeps one document for its whole life, so a point
+    /// taken on it stays on it. A point from another surface (a pane split
+    /// or collapse rebuilt it) points into another document: this surface
+    /// takes its own instead.</summary>
+    public object RebaseRestorePoint(object restorePoint) =>
+        restorePoint is RestorePoint { } point && ReferenceEquals(point.Surface, _surface)
+            ? restorePoint
+            : CaptureRestorePoint();
 
     /// <summary>Re-selects where opening found the selection unless a
     /// replacement (a merge or a model switch) moved every pointer since, or
@@ -228,7 +233,9 @@ internal sealed class ReadingFindSurface : IFindInNoteSurface
     {
         TextPointer? first = _surface.GetPositionFromPoint(new Point(0, 0), snapToText: true);
         TextPointer? last = _surface.GetPositionFromPoint(new Point(_surface.ActualWidth, _surface.ActualHeight), snapToText: true);
-        return (first is null ? 0 : Index.OffsetOf(first), last is null ? Index.Text.TextLength : Index.OffsetOf(last));
+        // A unit the bottom edge cuts is visible to its end: every match in
+        // its source rings the same element.
+        return (first is null ? 0 : Index.OffsetOf(first), last is null ? Index.Text.TextLength : Index.UnitEndAt(Index.OffsetOf(last)));
     }
 
     private void OnLayoutUpdated(object? sender, EventArgs e)
@@ -274,5 +281,6 @@ internal sealed class ReadingFindSurface : IFindInNoteSurface
     /// source it starts, and the selection the reveal made.</summary>
     private sealed record Revealed(UIElement Unit, int Within, int Length, TextPointer Start, TextPointer End);
 
-    private sealed record RestorePoint(TextPointer Start, TextPointer End, int Replacements, Paragraph? PendingDiagram);
+    private sealed record RestorePoint(
+        ReadingSurface Surface, TextPointer Start, TextPointer End, int Replacements, Paragraph? PendingDiagram);
 }
