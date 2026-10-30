@@ -269,6 +269,10 @@ public sealed partial class ReadingDiagramTests
             harness.Land();
 
             Assert.True(placeholder.IsKeyboardFocused, "the placeholder lost focus");
+            // The rendered paragraph's inlines are its one kept container.
+            Assert.Same(
+                placeholder,
+                Assert.IsType<InlineUIContainer>(Assert.Single(harness.DiagramParagraph().Inlines)).Child);
             Assert.Equal("Flowchart with 2 steps.", AutomationProperties.GetName(placeholder));
             Assert.Same(peer, UIElementAutomationPeer.FromElement(placeholder));
             Assert.Equal("Flowchart with 2 steps.", placeholder.Description);
@@ -400,6 +404,10 @@ public sealed partial class ReadingDiagramTests
             Assert.Contains("Before the diagram.", text, StringComparison.Ordinal);
             Assert.Contains("After the diagram.", text, StringComparison.Ordinal);
             Assert.Same(placeholder, harness.Placeholder());
+            // The failure shape's inlines end in the same kept container.
+            Assert.Same(
+                placeholder,
+                Assert.IsType<InlineUIContainer>(harness.DiagramParagraph().Inlines.LastInline).Child);
             Assert.Null(placeholder.Content);
             Assert.StartsWith("Mermaid diagram, source:", AutomationProperties.GetName(placeholder), StringComparison.Ordinal);
             Assert.Equal(
@@ -449,6 +457,10 @@ public sealed partial class ReadingDiagramTests
                 Assert.True(placeholder.Focus(), "premise: the placeholder takes focus");
                 harness.Land();
                 Assert.Same(placeholder, harness.Placeholder());
+                // The source shape's inlines still end in the kept container.
+                Assert.Same(
+                    placeholder,
+                    Assert.IsType<InlineUIContainer>(harness.DiagramParagraph().Inlines.LastInline).Child);
                 Assert.True(placeholder.IsKeyboardFocused);
                 Assert.Contains("flowchart LR", AutomationProperties.GetName(placeholder), StringComparison.Ordinal);
                 Assert.Contains(held, surfacePeer.GetChildren());

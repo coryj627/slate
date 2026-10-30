@@ -71,6 +71,9 @@ public sealed partial class ShellAccessibilityTests
             WaitForMenuItem(window, "EditorMenu", "EditorToggleReadingModeMenuItem", TimeSpan.FromSeconds(10))
                 .Patterns.Invoke.Pattern.Invoke();
             AutomationElement surface = WaitForElement(window, "ReadingSurface", TimeSpan.FromSeconds(10));
+            // R-4: the runtime item-name census at this journey's
+            // representative state (the reading view, diagrams pending).
+            AssertItemNamesAreSpeakable(process, "reading-diagram");
 
             // The text arrives with the first projection: math and the first
             // paragraph, within the ordinary budget.
