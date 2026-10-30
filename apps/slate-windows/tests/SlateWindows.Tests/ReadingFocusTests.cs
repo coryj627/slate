@@ -138,6 +138,59 @@ public sealed class ReadingFocusTests
         Assert.DoesNotContain("Loading reading view", read);
     });
 
+    /// <summary>WB-20 (#1317, WD11): a held landing seats on the partial
+    /// projection — the text applied, a diagram still pending as its source
+    /// and a "Diagram, rendering" placeholder — before the diagram stage
+    /// lands, and the late diagram neither re-seats nor re-speaks it.</summary>
+    [Fact]
+    public void AHeldLandingSeatsOnThePartialProjection() => RunSta(() =>
+    {
+        const string diagramNote =
+            "# Reading focus\n\nA paragraph first.\n\n```mermaid\nflowchart LR\nA --> B\n```\n";
+        using var gate = new ManualResetEventSlim(false);
+        using var host = new Host();
+        host.Initialize(readingMode: true, diagramNote);
+        ReadingSurface surface = host.ShownSurface();
+        host.BindProjectionInFlight(surface);
+        ReadingContentViewModel model = Assert.IsType<ReadingContentViewModel>(surface.Model);
+        model.DiagramStageGateForTests = gate;
+        int spoken = 0;
+        int fellThrough = 0;
+        Assert.True(host.Sentinel.Focus());
+        ShellRegionLanding landing = ((IShellRegionHost)host.Shell).TryLand(
+            ShellRegionKind.Editor, () => spoken++, () => fellThrough++);
+        PumpedDispatcher.Drain();
+        Assert.Equal(ShellRegionLanding.Pending, landing);
+        try
+        {
+            host.ReleaseProjection();
+
+            AssertFocused(surface, "the held landing on the partial projection");
+            Assert.False(surface.IsFocusLandingPending);
+            Assert.Equal(1, spoken);
+            Assert.True(model.DiagramsPendingForTests, "premise: the diagram stage has not landed");
+            Assert.Contains(
+                surface.Document.Blocks.OfType<Paragraph>().SelectMany(paragraph => paragraph.Inlines)
+                    .OfType<InlineUIContainer>().Select(container => container.Child),
+                child => child is ReadingDiagramElement element
+                    && System.Windows.Automation.AutomationProperties.GetName(element) == "Diagram, rendering");
+
+            gate.Set();
+            Assert.True(
+                PumpedDispatcher.PumpUntil(() => !model.DiagramsPendingForTests, TimeSpan.FromSeconds(30)),
+                "the diagram stage never landed");
+            PumpedDispatcher.Drain();
+            Assert.False(model.DiagramStageGateTimedOutForTests);
+            Assert.Equal(1, spoken);
+            Assert.Equal(0, fellThrough);
+            AssertFocused(surface, "the reader after the late diagram");
+        }
+        finally
+        {
+            gate.Set();
+        }
+    });
+
     /// <summary>A held landing is a request, not a claim, and a withdrawn one
     /// neither speaks nor resumes the ring: withdrawn when the reader moves
     /// focus elsewhere before the content applies — including after a

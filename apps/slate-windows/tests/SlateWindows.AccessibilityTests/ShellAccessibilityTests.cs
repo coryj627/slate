@@ -1459,13 +1459,11 @@ public sealed partial class ShellAccessibilityTests
             // project deliberately never links the app assembly.
             int mathMlPropertyId = RegisterMathMlPropertyAsClient();
             AutomationElement? math = null;
-            // The math arrives with the note's FIRST projection, which the
-            // reading fetch publishes only once the note's diagram has
-            // rendered — a cold runner's first mermaid render (bounded as
-            // the RangeFromChild journey bounds it; 2026-09-29 a run left
-            // the surface on its loading placeholder past this journey's
-            // old 10 s, and the rerun passed). A failure carries the
-            // reading pipeline's census trace: where the projection stopped.
+            // The math arrives with the note's FIRST projection, which no
+            // longer waits for the note's diagram (WB-20, #1317: the diagram
+            // completes its placeholder later), so the ordinary budget holds.
+            // A failure carries the reading pipeline's census trace: where
+            // the projection stopped.
             if (!SpinWait.SpinUntil(
                     () =>
                     {
@@ -1473,7 +1471,7 @@ public sealed partial class ShellAccessibilityTests
                             cf => cf.ByLocalizedControlType("math"));
                         return math is not null;
                     },
-                    TimeSpan.FromSeconds(300)))
+                    TimeSpan.FromSeconds(30)))
             {
                 string diag = ReadSharedLog(Path.Combine(logDirectory, "slate-census-diag.log"));
                 Assert.Fail(
@@ -1495,6 +1493,9 @@ public sealed partial class ShellAccessibilityTests
             // cross-process from the production app. Standard UIA
             // Name, no custom registration: what NVDA and JAWS speak
             // on focus is exactly what this asserts.
+            // WB-20 (#1317): the diagram arrives after the text, completing
+            // its "Diagram, rendering" placeholder in place — a cold
+            // runner's first mermaid render keeps the 300 s bound.
             AutomationElement? diagram = null;
             Assert.True(
                 SpinWait.SpinUntil(
@@ -1502,11 +1503,10 @@ public sealed partial class ShellAccessibilityTests
                     {
                         diagram = window.FindFirstDescendant(
                             cf => cf.ByLocalizedControlType("diagram"));
-                        return diagram is not null;
+                        return diagram?.Name == "Flowchart with 1 step.";
                     },
-                    TimeSpan.FromSeconds(10)),
-                "no element with localized control type 'diagram' appeared");
-            Assert.Equal("Flowchart with 1 step.", diagram!.Name);
+                    TimeSpan.FromSeconds(300)),
+                $"no diagram named by its description appeared (last: {diagram?.Name ?? "<none>"})");
         }
         finally
         {
@@ -1800,14 +1800,20 @@ public sealed partial class ShellAccessibilityTests
                     "math",
                     StringComparison.Ordinal),
                 "math element",
-                TimeSpan.FromSeconds(300),
+                // WB-20 (#1317): math no longer waits behind the diagram.
+                TimeSpan.FromSeconds(30),
                 Path.Combine(logDirectory, "slate-windows.log"));
             _ = WaitForSurfaceDescendant(
                 window,
                 element => string.Equals(
                     element.Properties.LocalizedControlType.ValueOrDefault,
                     "diagram",
-                    StringComparison.Ordinal),
+                    StringComparison.Ordinal)
+                    // WB-20: the completed diagram, not its placeholder.
+                    && !string.Equals(
+                        element.Properties.Name.ValueOrDefault,
+                        "Diagram, rendering",
+                        StringComparison.Ordinal),
                 "diagram element",
                 // Generous by design: the FIRST mermaid render pays
                 // fontdb's full system-font scan on a cold runner, and

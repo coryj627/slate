@@ -2045,6 +2045,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             DiagramStageLandingsDroppedForTests++;
             return;
         }
+        ReadingSurface.CensusDiag($"reading diagram stage landed ({outcomes.Count} diagrams)");
         _landedDiagrams = landed;
         _landedDigest = landedDigest;
         if (ReferenceEquals(_memo, pending.PublishedMemo))
