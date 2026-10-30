@@ -107,21 +107,33 @@ internal sealed class EditorFindSurface : IFindInNoteSurface
         {
             (int offset, int length) = _headlessSelection;
             return new RestorePoint(
-                _document, Anchor(offset), Anchor(offset + length), Anchor(offset + length), null);
+                _document, Anchor(offset), Anchor(offset + length), Anchor(offset + length), -1, null);
         }
         TextArea area = editor.TextArea;
         ICSharpCode.AvalonEdit.Editing.Selection selection = area.Selection;
         int caret = area.Caret.Offset;
+        // The caret's column when it sits past its line's end (virtual space).
+        int caretColumn = area.Caret.IsInVirtualSpace ? area.Caret.VisualColumn : -1;
+        // A rectangle is kept even when AvalonEdit calls it empty (one lying
+        // wholly past its lines' ends): typing into it still edits every line.
+        if (selection is RectangleSelection)
+        {
+            return new RestorePoint(
+                _document,
+                Anchor(_document.GetOffset(selection.StartPosition.Location)),
+                Anchor(_document.GetOffset(selection.EndPosition.Location)),
+                Anchor(caret),
+                caretColumn,
+                new RectangleColumns(
+                    VisualColumnOf(area, selection.StartPosition), VisualColumnOf(area, selection.EndPosition)));
+        }
         if (selection.IsEmpty)
         {
-            return new RestorePoint(_document, Anchor(caret), Anchor(caret), Anchor(caret), null);
+            return new RestorePoint(_document, Anchor(caret), Anchor(caret), Anchor(caret), caretColumn, null);
         }
         int start = _document.GetOffset(selection.StartPosition.Location);
         int end = _document.GetOffset(selection.EndPosition.Location);
-        RectangleColumns? rectangle = selection is RectangleSelection
-            ? new RectangleColumns(VisualColumnOf(area, selection.StartPosition), VisualColumnOf(area, selection.EndPosition))
-            : null;
-        return new RestorePoint(_document, Anchor(start), Anchor(end), Anchor(caret), rectangle);
+        return new RestorePoint(_document, Anchor(start), Anchor(end), Anchor(caret), caretColumn, null);
     }
 
     /// <summary>A position's visual column; one built from a line and a
@@ -159,17 +171,26 @@ internal sealed class EditorFindSurface : IFindInNoteSurface
             return;
         }
         TextArea area = editor.TextArea;
-        area.Caret.Offset = caret;
-        if (start == end)
+        if (point.CaretColumn >= 0)
         {
-            area.ClearSelection();
+            area.Caret.Position = new TextViewPosition(_document.GetLocation(caret), point.CaretColumn);
         }
-        else if (point.Rectangle is { } columns)
+        else
+        {
+            area.Caret.Offset = caret;
+        }
+        if (point.Rectangle is { } columns)
         {
             area.Selection = new RectangleSelection(
                 area,
                 new TextViewPosition(_document.GetLocation(start), columns.Start),
                 new TextViewPosition(_document.GetLocation(end), columns.End));
+        }
+        else if (start == end)
+        {
+            // An empty linear selection, or one an edit collapsed while the
+            // bar was open: nothing to give back but the caret.
+            area.ClearSelection();
         }
         else
         {
@@ -203,7 +224,12 @@ internal sealed class EditorFindSurface : IFindInNoteSurface
     /// <summary>Start is where the selection was anchored, End its active
     /// end (either may be the greater).</summary>
     private sealed record RestorePoint(
-        TextDocument Document, TextAnchor Start, TextAnchor End, TextAnchor Caret, RectangleColumns? Rectangle);
+        TextDocument Document,
+        TextAnchor Start,
+        TextAnchor End,
+        TextAnchor Caret,
+        int CaretColumn,
+        RectangleColumns? Rectangle);
 
     private sealed record RectangleColumns(int Start, int End);
 }

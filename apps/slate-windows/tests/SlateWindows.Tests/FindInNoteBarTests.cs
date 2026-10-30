@@ -462,6 +462,53 @@ public sealed class FindInNoteBarTests
         Assert.Equal(1, shell.Tab.EditorDocument!.GetOffset(area.Selection.EndPosition.Location));
     });
 
+    /// <summary>Codex round 3: a rectangle wholly past its lines' ends
+    /// (AvalonEdit calls it empty) comes back, so typing still edits every
+    /// line.</summary>
+    [Fact]
+    public void AVirtualSpaceRectangleComesBackAndStillTypesOnEveryLine() => RunSta(() =>
+    {
+        using var shell = new Shell("abcd\nefgh\nijkl");
+        ICSharpCode.AvalonEdit.Editing.TextArea area = shell.Editor.TextArea;
+        shell.FocusEditor();
+        area.Selection = new ICSharpCode.AvalonEdit.Editing.RectangleSelection(
+            area,
+            new ICSharpCode.AvalonEdit.TextViewPosition(1, 5, 6),
+            new ICSharpCode.AvalonEdit.TextViewPosition(3, 5, 6));
+        area.Caret.Position = new ICSharpCode.AvalonEdit.TextViewPosition(3, 5, 6);
+        Assert.IsType<ICSharpCode.AvalonEdit.Editing.RectangleSelection>(area.Selection);
+
+        OpenKeepingTheSelection(shell, "e");
+        shell.Press(shell.Bar.Query, Key.Escape);
+
+        Assert.IsType<ICSharpCode.AvalonEdit.Editing.RectangleSelection>(area.Selection);
+        area.PerformTextInput("X");
+        Assert.Equal("abcd  X\nefgh  X\nijkl  X", shell.Tab.Text.Replace("\r\n", "\n"));
+    });
+
+    /// <summary>Codex round 3: a caret left in virtual space keeps its
+    /// column.</summary>
+    [Fact]
+    public void ACaretInVirtualSpaceKeepsItsColumn() => RunSta(() =>
+    {
+        using var shell = new Shell("abcd\nefgh\nijkl");
+        ICSharpCode.AvalonEdit.Editing.TextArea area = shell.Editor.TextArea;
+        shell.FocusEditor();
+        area.Selection = new ICSharpCode.AvalonEdit.Editing.RectangleSelection(
+            area,
+            new ICSharpCode.AvalonEdit.TextViewPosition(1, 2, 1),
+            new ICSharpCode.AvalonEdit.TextViewPosition(3, 5, 8));
+        area.Caret.Position = new ICSharpCode.AvalonEdit.TextViewPosition(3, 5, 8);
+        Assert.True(area.Caret.IsInVirtualSpace, "premise: the caret sits past the line's end");
+
+        OpenKeepingTheSelection(shell, "e");
+        shell.Press(shell.Bar.Query, Key.Escape);
+
+        Assert.True(area.Caret.IsInVirtualSpace);
+        Assert.Equal(8, area.Caret.VisualColumn);
+        Assert.Equal(3, area.Caret.Line);
+    });
+
     [Fact]
     public void CloseAfterAShortenedDocumentRestoresAClampedCaret() => RunSta(() =>
     {
