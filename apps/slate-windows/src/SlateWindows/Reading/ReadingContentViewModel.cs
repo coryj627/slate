@@ -1921,8 +1921,16 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     /// shown projection (AR-60).</summary>
     internal int DiagramStageLandingsDroppedForTests { get; private set; }
 
+    /// <summary>Test seam: rewrites the artifacts the stage fetched, the
+    /// way a fact makes core answer "busy".</summary>
+    internal Func<DiagramBlock[], DiagramBlock[]>? DiagramBlocksOverrideForTests { get; set; }
+
     /// <summary>Set by the stage's worker right after it posts a landing.</summary>
     internal ManualResetEventSlim? DiagramStagePostedForTests { get; set; }
+
+    /// <summary>True while the shown projection has a fence its stage has
+    /// not landed yet.</summary>
+    internal bool DiagramsPendingForTests => _pendingDiagrams is not null;
 
     private sealed record PendingDiagrams(
         FlowDocument Document,
@@ -1971,6 +1979,10 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                     throw diagramFault;
                 }
                 artifacts = _session.GetDiagramBlocks(pending.Path);
+                if (DiagramBlocksOverrideForTests is { } rewrite)
+                {
+                    artifacts = rewrite(artifacts);
+                }
             }
             catch (VaultException)
             {

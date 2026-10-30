@@ -12,7 +12,7 @@ namespace SlateWindows.Tests;
 /// description as the entire AT surface (mac contract), source-visible
 /// fallbacks for every failure shape, and bounded host decode work.
 /// </summary>
-public sealed class ReadingDiagramTests
+public sealed partial class ReadingDiagramTests
 {
     /// <summary>
     /// The core rendering path over a REAL vault: a mermaid fence
@@ -44,6 +44,7 @@ public sealed class ReadingDiagramTests
                 startInteractionBackgroundWork: false);
             tab.ToggleViewMode();
             var surface = new ReadingSurface { Model = tab.Reading };
+            AwaitDiagramStage(tab.Reading!);
 
             ReadingDiagramElement element =
                 Assert.Single(FindDiagramElements(surface.Document));
@@ -91,6 +92,7 @@ public sealed class ReadingDiagramTests
                 startInteractionBackgroundWork: false);
             tab.ToggleViewMode();
             var surface = new ReadingSurface { Model = tab.Reading };
+            AwaitDiagramStage(tab.Reading!);
 
             string text = new System.Windows.Documents.TextRange(
                 surface.Document.ContentStart,
@@ -140,12 +142,14 @@ public sealed class ReadingDiagramTests
                 startInteractionBackgroundWork: false);
             tab.ToggleViewMode();
             var surface = new ReadingSurface { Model = tab.Reading };
+            AwaitDiagramStage(tab.Reading!);
             Assert.Single(FindDiagramElements(surface.Document));
 
             // Same-length, same-position unsaved edit inside the fence.
             tab.EditorDocument!.Replace(
                 tab.Text.IndexOf("A --> B", StringComparison.Ordinal), 7, "A --> Z");
             tab.Reading!.Refresh();
+            AwaitDiagramStage(tab.Reading!);
 
             Assert.Empty(FindDiagramElements(surface.Document));
             string text = new System.Windows.Documents.TextRange(
@@ -188,6 +192,7 @@ public sealed class ReadingDiagramTests
                 startInteractionBackgroundWork: false);
             tab.ToggleViewMode();
             var surface = new ReadingSurface { Model = tab.Reading };
+            AwaitDiagramStage(tab.Reading!);
 
             ReadingLandmark landmark = Assert.Single(
                 surface.LandmarksForTests,
@@ -235,6 +240,7 @@ public sealed class ReadingDiagramTests
             tab.Reading!.DiagramFaultForTests =
                 () => new VaultException.Io("diagrams unavailable");
             var surface = new ReadingSurface { Model = tab.Reading };
+            AwaitDiagramStage(tab.Reading!);
 
             Assert.Empty(FindDiagramElements(surface.Document));
             string text = new System.Windows.Documents.TextRange(
@@ -290,6 +296,7 @@ public sealed class ReadingDiagramTests
                     startInteractionBackgroundWork: false);
                 tab.ToggleViewMode();
                 var surface = new ReadingSurface { Model = tab.Reading };
+                AwaitDiagramStage(tab.Reading!);
 
                 // This harness projects twice (mode toggle, then the
                 // surface-bind re-projection); the pool is
@@ -554,7 +561,19 @@ public sealed class ReadingDiagramTests
         }
     }
 
-    /// <summary>WPF objects require STA; xunit runs MTA.</summary>
+    /// <summary>WPF objects require STA; xunit runs MTA. Pumped: the
+    /// diagram stage (WB-20) lands through the dispatcher.</summary>
     private static void RunSta(Action body) =>
-        StaThread.Run(body, TimeSpan.FromSeconds(60), "STA test body timed out.");
+        StaThread.RunPumped(body, TimeSpan.FromSeconds(60), "STA test body timed out.");
+
+    /// <summary>Pumps until <paramref name="model"/>'s diagram stage has
+    /// landed (WB-20): a fence's final shape arrives after stage 1.</summary>
+    private static void AwaitDiagramStage(ReadingContentViewModel model)
+    {
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => !model.DiagramsPendingForTests, TimeSpan.FromSeconds(30)),
+            "the diagram stage never landed");
+        PumpedDispatcher.Drain();
+        Assert.False(model.DiagramStageGateTimedOutForTests);
+    }
 }
