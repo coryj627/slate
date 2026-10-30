@@ -25,6 +25,14 @@ internal static class NavigationHelp
         + $"{Spoken("windows.reading.mathSource")} its source. "
         + "Tab moves through links and embedded controls. Enter activates.";
 
+    /// <summary>WB-22 (#1112): the find bar's query — its own keys and the
+    /// window's steps, which also work from the note's text.</summary>
+    public static string FindInNote =>
+        $"{Spoken("windows.findInNote.next")} or {Spoken("slate.editor.findNext")}: next match. "
+        + $"{Spoken("windows.findInNote.previous")} or {Spoken("slate.editor.findPrevious")}: previous match. "
+        + $"{Spoken("slate.editor.findNext")} and {Spoken("slate.editor.findPrevious")} also work from the note. "
+        + $"{Spoken("windows.findInNote.close")} closes the find bar.";
+
     public static string HorizontalSplitter =>
         $"Drag, or use {Spoken("windows.splitter.growLeading")} and {Spoken("windows.splitter.growTrailing")}, to resize adjacent editor panes.";
 

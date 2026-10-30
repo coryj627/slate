@@ -285,6 +285,11 @@
   },
   "residue": {
     "Windows": {
+      "FindInNoteViewModel.cs#FindInNoteViewModel.Speak@1": {
+        "engine": "Find in note (WB-22, #1112): the find bar's count, step, replace and refusal lines (FindInNotePhrase); no mac twin, AppKit's find bar announces nothing",
+        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
+        "status": "recorded"
+      },
       "EditorInteractions.cs#EditorInteractionCoordinator.AnnounceReloadBeforeInteraction@1": {
         "engine": "Editor interaction cache admission/publication and D-14 save/reload refusal",
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",

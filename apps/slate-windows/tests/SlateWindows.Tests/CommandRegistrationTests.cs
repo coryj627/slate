@@ -570,6 +570,11 @@ public sealed class CommandRegistrationTests
         // the modal gate lives on the chord path, not the ICommand.
         public ICommand ToggleSearchCommand =>
             new StubCommand(() => ToggleSearchInvocations++, () => true);
+
+        public ICommand FindInNoteCommand =>
+            new StubCommand(() => FindInNoteInvocations++, () => true);
+
+        public int FindInNoteInvocations { get; private set; }
     }
 
     private sealed class StubCommand : ICommand

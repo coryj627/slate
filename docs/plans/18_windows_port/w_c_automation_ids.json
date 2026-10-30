@@ -1141,6 +1141,71 @@
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "EditorFindInNoteMenuItem",
+    "Surface": "Editor semantic menu and popover"
+  },
+  {
+    "Source": "FindInNoteBar.xaml",
+    "Expression": "FindInNote",
+    "Surface": "Find in note (WB-22)"
+  },
+  {
+    "Source": "FindInNoteBar.xaml",
+    "Expression": "FindInNoteQuery",
+    "Surface": "Find in note (WB-22)"
+  },
+  {
+    "Source": "FindInNoteBar.xaml",
+    "Expression": "FindInNoteCount",
+    "Surface": "Find in note (WB-22)"
+  },
+  {
+    "Source": "FindInNoteBar.xaml",
+    "Expression": "FindInNotePrevious",
+    "Surface": "Find in note (WB-22)"
+  },
+  {
+    "Source": "FindInNoteBar.xaml",
+    "Expression": "FindInNoteNext",
+    "Surface": "Find in note (WB-22)"
+  },
+  {
+    "Source": "FindInNoteBar.xaml",
+    "Expression": "FindInNoteMatchCase",
+    "Surface": "Find in note (WB-22)"
+  },
+  {
+    "Source": "FindInNoteBar.xaml",
+    "Expression": "FindInNoteWholeWord",
+    "Surface": "Find in note (WB-22)"
+  },
+  {
+    "Source": "FindInNoteBar.xaml",
+    "Expression": "FindInNoteReplaceText",
+    "Surface": "Find in note (WB-22)"
+  },
+  {
+    "Source": "FindInNoteBar.xaml",
+    "Expression": "FindInNoteReplace",
+    "Surface": "Find in note (WB-22)"
+  },
+  {
+    "Source": "FindInNoteBar.xaml",
+    "Expression": "FindInNoteReplaceAll",
+    "Surface": "Find in note (WB-22)"
+  },
+  {
+    "Source": "FindInNoteBar.xaml",
+    "Expression": "FindInNoteClose",
+    "Surface": "Find in note (WB-22)"
+  },
+  {
+    "Source": "FindInNoteBar.xaml",
+    "Expression": "FindInNoteError",
+    "Surface": "Find in note (WB-22)"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "EditorActualSizeMenuItem",
     "Surface": "Editor semantic menu and popover"
   },

@@ -85,13 +85,10 @@ SECTION_ISSUE = {
 ID_ISSUE_OVERRIDES = {
     "slate.workspace.quickOpen": "#723 (W1-4)",
     "slate.view.toggleSearch": "#742 (W5-2)",
-    # Reassigned out of #742 at the W5-2 close-out: find-in-note shares
-    # no surface with vault search (mac ships it as the NSTextView find
-    # bar; core's SearchScope::File is reserved and unreachable), and
-    # the Windows equivalent was measured unusable as shipped — see
-    # docs/plans/29_search_overlay_contracts.md "Find-in-note is not in
-    # this issue".
-    "slate.editor.findInNote": "#1112 (find-in-note, split from #742)",
+    # Plan 44 WB-22 (#1112) delivers find in note. Without this row the
+    # editor namespace would credit it to #725 (W2-3), whose evidence
+    # aggregate it is not part of.
+    "slate.editor.findInNote": "#1112 (WB-22)",
     "slate.editor.save": "#724 (W2-1)",
     "slate.editor.toggleViewMode": "#728 (W3-1)",
     "slate.editor.addProperty": "#736 (W4-4)",
@@ -422,6 +419,11 @@ def commands() -> list[tuple[str, str, str, str, str]]:
 # defining evidence, held to chords.json's entry exactly (IPJ-3-1).
 WINDOWS_ONLY_COMMANDS: dict[str, tuple[str, str, str]] = {
     "slate.graph.connectionsBack": ("#746 (W6-2)", "⌘[", "Command Left Bracket"),
+    # Plan 44 WB-22 (#1112): Find Next / Find Previous step the find bar from
+    # the bar and the note's text; mac's ⌘G lives inside AppKit's find bar
+    # and has no SlateCommandID, so these rows carry no mac chord.
+    "slate.editor.findNext": ("#1112 (WB-22)", "", ""),
+    "slate.editor.findPrevious": ("#1112 (WB-22)", "", ""),
 }
 
 
@@ -761,6 +763,20 @@ WB_21_STATUS = (
     "interactive CI + human AT pending"
 )
 
+# Plan 44 WB-22 PR 1 (#1112): find in note in the editor — Ctrl+F (the
+# find bar, vault search when no note editor is active) and the two steps.
+# Find-in-selection: unverified on mac; not shipped.
+WB_22_STATUS = (
+    "implemented; local gates green 2026-10-30; "
+    "interactive CI + human AT pending"
+)
+
+WB_22_DELIVERED_COMMANDS = {
+    "slate.editor.findInNote",
+    "slate.editor.findNext",
+    "slate.editor.findPrevious",
+}
+
 WB_21_DELIVERED_COMMANDS = {
     "slate.graph.setVerbosityTerse",
     "slate.graph.setVerbosityStandard",
@@ -987,7 +1003,8 @@ def load_delivery_evidence(
         | W6_2_DELIVERED_COMMANDS \
         | W6_2_PR_C_DELIVERED_COMMANDS \
         | W6_2_PR_D_DELIVERED_COMMANDS \
-        | WB_21_DELIVERED_COMMANDS
+        | WB_21_DELIVERED_COMMANDS \
+        | WB_22_DELIVERED_COMMANDS
     mapped_commands = set(command_map)
     if mapped_commands != delivered_commands:
         missing = sorted(delivered_commands - mapped_commands)
@@ -1071,6 +1088,8 @@ def command_delivery_status(
         return W6_2_STATUS
     if command_id in WB_21_DELIVERED_COMMANDS:
         return WB_21_STATUS
+    if command_id in WB_22_DELIVERED_COMMANDS:
+        return WB_22_STATUS
     return (
         W2_IMPLEMENTED_STATUS
         if issue.startswith(("#381", "#724", "#725"))
@@ -1232,6 +1251,7 @@ def main() -> int:
     a(f"| Editor host (AvalonEdit ⇄ DocumentBuffer, undo, save, IME) | `NoteEditorView.swift` | #724 (W2-1) | {issue_delivery_status('#724 (W2-1)', delivery_evidence)} |")
     a(f"| Editor canonical spans | #381 span API consumers | #381 (W2-2) | {issue_delivery_status('#381 (W2-2)', delivery_evidence)} |")
     a(f"| In-editor interactions (links, tags, citations, embeds, checkboxes) | `NoteEditorView.swift` | #725 (W2-3) | {issue_delivery_status('#725 (W2-3)', delivery_evidence)} |")
+    a("| Find in note: find bar, next/previous, case, whole word, replace (editor) | `NoteEditorView.swift` (AppKit find bar, #874) | #1112 (plan 44 WB-22) | implemented in the editor (PR 1); the reading view is PR 2. Find-in-selection: unverified on mac; not shipped. Regex: not shipped (WD12) |")
     a("| Reading view (block model, mode toggle, heading/link AT nav, print) | `Reading/` | #728 (W3-1) | implemented (PR #1052, merged 2026-07-27; NVDA field-verified 2026-07-26/27; print §W-F-waived) |")
     a("| Reading list marker: authored ordinal rendered and read | `Reading/ReadingView.swift` (core `list_marker`) | #1422 (plan 44 WB-11) | implemented both hosts (mac since plan 43 PR 16, #1048; Windows: plan 44 WB-11) |")
     a("| Math rendering + canonical speech/braille artifact | core `math.rs` consumers | #729 (W3-2) | implemented (PR #1057, merged 2026-07-28; human AT pending) |")

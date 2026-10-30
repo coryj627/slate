@@ -52,6 +52,11 @@ internal interface ISlateCommandHost
     /// </summary>
     ICommand ToggleSearchCommand { get; }
 
+    /// <summary>WB-22 (#1112): Ctrl+F — the active note's find bar, or
+    /// vault search when no note editor is active (the welcome view
+    /// included, which is why the host owns it, not the workspace).</summary>
+    ICommand FindInNoteCommand { get; }
+
     bool IsVaultOpen { get; }
 }
 
@@ -454,6 +459,12 @@ internal static class SlateCommandRegistrar
             // workspace — the overlay survives vault open/close (P17)
             // and mac's action is likewise vault-lifetime-free.
             [ChordTable.Ids.ToggleSearch] = host => host.ToggleSearchCommand,
+            // WB-22 (#1112): Ctrl+F is the HOST's (the welcome view has no
+            // workspace and still reaches vault search); the steps act on the
+            // active tab's open bar.
+            [ChordTable.Ids.EditorFindInNote] = host => host.FindInNoteCommand,
+            [ChordTable.Ids.EditorFindNext] = host => host.Workspace?.FindNextInNoteCommand,
+            [ChordTable.Ids.EditorFindPrevious] = host => host.Workspace?.FindPreviousInNoteCommand,
             [ChordTable.Ids.ShowHistoryPanel] = host => host.Workspace?.ShowHistoryPanelCommand,
             [ChordTable.Ids.RefreshSyncDiagnostics] =
                 host => host.Workspace?.RefreshSyncDiagnosticsCommand,

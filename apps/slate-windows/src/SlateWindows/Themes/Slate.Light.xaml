@@ -6,6 +6,9 @@
     <Color x:Key="Slate.SurfaceColor">#FFFFFFFF</Color>
     <Color x:Key="Slate.RaisedSurfaceColor">#FFEFEFEF</Color>
     <Color x:Key="Slate.TextColor">#FF171717</Color>
+    <!-- WB-22 (#1112): the editor's find-match fill, drawn behind the text.
+         The text over it clears the APCA floor (ThemeTokenContrastTests). -->
+    <Color x:Key="Slate.FindMatchColor">#FFFFE48A</Color>
     <Color x:Key="Slate.SecondaryTextColor">#FF3A3A3A</Color>
     <Color x:Key="Slate.TertiaryTextColor">#FF555555</Color>
     <Color x:Key="Slate.BorderColor">#FF767676</Color>
@@ -68,6 +71,9 @@
                      Color="{StaticResource Slate.RaisedSurfaceColor}" />
     <SolidColorBrush x:Key="Slate.TextBrush"
                      Color="{StaticResource Slate.TextColor}" />
+    <SolidColorBrush x:Key="Slate.FindMatchBrush"
+                     Color="{StaticResource Slate.FindMatchColor}" />
+    <SolidColorBrush x:Key="Slate.FindMatchOutlineBrush" Color="Transparent" />
     <SolidColorBrush x:Key="Slate.SecondaryTextBrush"
                      Color="{StaticResource Slate.SecondaryTextColor}" />
     <SolidColorBrush x:Key="Slate.TertiaryTextBrush"

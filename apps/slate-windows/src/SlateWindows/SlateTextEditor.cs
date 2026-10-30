@@ -535,6 +535,10 @@ internal sealed class SlateTextEditorAutomationPeer : TextEditorAutomationPeer
         && _owner.TextArea.IsEnabled
         && _owner.TextArea.IsVisible;
 
+    // WB-22 (#1112): the find bar is deliberately NOT a child here. It is a
+    // sibling in the tab content (FindInNoteBar), so the Document peer keeps
+    // only its link children and its atomic text (w_c_matrix's editor row),
+    // and the matches it draws add no element anywhere in the tree.
     protected override List<AutomationPeer>? GetChildrenCore() =>
         (GetPattern(PatternInterface.Text) as EditorSemanticTextProvider)?.Links.RootChildren();
 

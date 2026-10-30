@@ -283,12 +283,19 @@ public sealed class ChordTableTests
     private static readonly Dictionary<string, string> SharedCommandChords =
         new(System.StringComparer.Ordinal)
         {
-            ["slate.bases.quickFilter | slate.canvas.filterCards"] =
-                "Ctrl+F. Disjoint on the outline (Grid scope needs a focused grid); "
-                + "on the canvas TABLE both are live, and they agree by "
-                + "construction — the substrate's FilterCommand is subscribed to "
-                + "the canvas filter (spec §7's \"table: grid FilterCommand\"), and "
-                + "the navigator stands aside there rather than shadowing it.",
+            // WB-22 (#1112, WD12 disposition 1): the whole Ctrl+F command
+            // group under one key — it REPLACES the base/canvas pair entry.
+            ["slate.bases.quickFilter | slate.canvas.filterCards | slate.editor.findInNote"] =
+                "Ctrl+F. Disjoint by DELIVERY: on a Base the grid's FilterCommand gesture "
+                + "handles it while the grid holds the keys, and on a canvas the surface's "
+                + "tunnelling handler does — on "
+                + "the canvas TABLE the grid's FilterCommand, which is subscribed to the "
+                + "canvas filter, so the Grid and Canvas rows agree by construction and "
+                + "the navigator stands aside there — both before the key bubbles to the "
+                + "window; the window's KeyBinding (Global, bubbling, never in "
+                + "Window_PreviewKeyDown) acts only on a key no surface claimed: the find "
+                + "bar for a note in either mode, vault search otherwise — a Base outside "
+                + "its grid included (mac's never-inert rule; WD12 disposition 1).",
             ["slate.canvas.cancelMode | slate.file.cancelImport"] =
                 "Escape. The import row is Global but acts only while an import is "
                 + "running, and it is delivered from Window_PreviewKeyDown, which "
@@ -327,6 +334,7 @@ public sealed class ChordTableTests
         // W6-1's canvas rows are the first COMMAND rows that need the
         // same reading, and D-2 anticipated it ("the same-string /
         // different-scope precedent Ctrl+F already sets").
+        var liveKeys = new HashSet<string>(System.StringComparer.Ordinal);
         foreach (IGrouping<string, ChordTableEntry> group in ChordTable.Entries
             .Where(row => row.IsCommandId && row.WindowsChord is not null)
             .GroupBy(row => row.WindowsChord!, System.StringComparer.OrdinalIgnoreCase))
@@ -341,6 +349,7 @@ public sealed class ChordTableTests
                 .OrderBy(id => id, System.StringComparer.Ordinal)
                 .ToArray();
             string key = string.Join(" | ", ids);
+            liveKeys.Add(key);
             Assert.True(
                 SharedCommandChords.TryGetValue(key, out string? reason),
                 $"command rows {key} all ship {group.Key}. Two commands on one "
@@ -366,6 +375,12 @@ public sealed class ChordTableTests
                     .Count() == 1,
                 $"{key} is recorded as sharing a chord, but the rows no longer "
                 + "share one — the entry is stale.");
+            // WB-22: every recorded key is a LIVE group's whole key, so a
+            // superseded entry cannot stay beside its successor.
+            Assert.True(
+                liveKeys.Contains(key),
+                $"{key} is not the key of any live command group; a group that grew "
+                + "or shrank is recorded under its new key, never beside it.");
         }
 
         // Two surface rows sharing a chord must be in different scopes.
@@ -795,6 +810,7 @@ public sealed class ChordTableTests
             [ChordScope.Graph] = GraphChords(),
             [ChordScope.FilesTree] = FilesTreeChords(),
             [ChordScope.SidebarFilter] = KeyRouteChords("SidebarFilterTextBox_PreviewKeyDown"),
+            [ChordScope.FindInNote] = FindInNoteChords(),
         };
 
     /// <summary>W7-7 (R-2): the Files rows' own key route,
@@ -869,6 +885,66 @@ public sealed class ChordTableTests
     /// delivery both ways — unregistered, claiming no mac chord, and naming
     /// the registered command it runs.</summary>
     [Fact]
+    public void FindInNoteKeysAreRowsInTheirOwnScope()
+    {
+        ChordTableEntry[] bar = ChordTable.Entries.Where(entry => entry.Scope == ChordScope.FindInNote).ToArray();
+        Assert.Equal(
+            new[]
+            {
+                ("windows.findInNote.close", "Escape"),
+                ("windows.findInNote.next", "Enter"),
+                ("windows.findInNote.previous", "Shift+Enter"),
+            },
+            bar.Select(row => (row.Id, row.WindowsChord!)).OrderBy(pair => pair.Id, System.StringComparer.Ordinal));
+        foreach (ChordTableEntry row in bar)
+        {
+            Assert.False(row.IsCommandId);
+            Assert.False(row.IsRegistered);
+            Assert.Null(row.MacChord);
+            Assert.Contains("FindInNoteBar.Bind", row.Reason, System.StringComparison.Ordinal);
+        }
+
+        foreach ((string id, string chord) in new[]
+        {
+            (ChordTable.Ids.EditorFindNext, "Ctrl+G"),
+            (ChordTable.Ids.EditorFindPrevious, "Ctrl+Shift+G"),
+        })
+        {
+            ChordTableEntry row = RequireRow(id);
+            Assert.True(row.IsCommandId);
+            Assert.True(row.IsRegistered);
+            Assert.Equal(ChordScope.Global, row.Scope);
+            Assert.Equal(chord, row.WindowsChord);
+            Assert.Null(row.MacChord);
+        }
+
+        // The G bindings are the routed commands (a {Binding ...} would
+        // swallow the key when it cannot act), with no gestures of their own.
+        string window = File.ReadAllText(Path.Combine(SourceRoot(), "MainWindow.xaml"));
+        Assert.Contains(
+            "<KeyBinding Key=\"G\" Modifiers=\"Control\" Command=\"{x:Static local:FindInNoteKeyRoute.FindNext}\" />",
+            window,
+            System.StringComparison.Ordinal);
+        Assert.Contains(
+            "<KeyBinding Key=\"G\" Modifiers=\"Control+Shift\" Command=\"{x:Static local:FindInNoteKeyRoute.FindPrevious}\" />",
+            window,
+            System.StringComparison.Ordinal);
+        Assert.Empty(FindInNoteKeyRoute.FindNext.InputGestures);
+        Assert.Empty(FindInNoteKeyRoute.FindPrevious.InputGestures);
+
+        // The editor scope keeps its one Escape row; nothing else in it
+        // shares a chord with the bar's rows.
+        Assert.Equal(
+            new[] { "windows.editor.closePopover" },
+            ChordTable.Entries
+                .Where(entry => entry.Scope == ChordScope.Editor
+                    && bar.Any(barRow => string.Equals(barRow.WindowsChord, entry.WindowsChord, System.StringComparison.OrdinalIgnoreCase)))
+                .Select(entry => entry.Id)
+                .ToArray());
+        Assert.Empty(KeyBindingChords("FindInNoteBar.xaml"));
+    }
+
+    [Fact]
     public void SidebarFilterClearIsASurfaceRowInItsOwnScope()
     {
         ChordTableEntry row = Assert.Single(ChordTable.Entries, entry => entry.Scope == ChordScope.SidebarFilter);
@@ -878,6 +954,41 @@ public sealed class ChordTableTests
         Assert.False(row.IsRegistered);
         Assert.Null(row.MacChord);
         Assert.Contains(ChordTable.Ids.SidebarClearFilter, row.Reason, System.StringComparison.Ordinal);
+    }
+
+    /// <summary>WB-22 (#1112): the find bar's own keys, scraped from
+    /// <c>FindInNoteBar.Bind</c> (the <see cref="GraphChords"/> shape).</summary>
+    private static HashSet<string> FindInNoteChords()
+    {
+        MethodDeclarationSyntax bind = CSharpSource.Load("FindInNoteBar.xaml.cs").Method("Bind");
+        var listed = new List<string>();
+        foreach (InvocationExpressionSyntax call in bind.DescendantNodes()
+            .OfType<InvocationExpressionSyntax>()
+            .Where(invocation => invocation.Expression is IdentifierNameSyntax
+            {
+                Identifier.ValueText: "AddChord",
+            })
+            .Where(invocation => invocation.ArgumentList.Arguments.Count == 3))
+        {
+            Assert.True(
+                call.ArgumentList.Arguments[0].Expression is MemberAccessExpressionSyntax key
+                && CSharpSource.Normalize(key.Expression) == "Key",
+                $"find-bar chord `{call}` does not name its key as `Key.X`; the scrape "
+                + "reads that form and would silently skip this one.");
+            var keyAccess = (MemberAccessExpressionSyntax)call.ArgumentList.Arguments[0].Expression;
+            string modifiers = CSharpSource
+                .Normalize(call.ArgumentList.Arguments[1].Expression)
+                .Replace("ModifierKeys.", string.Empty, System.StringComparison.Ordinal);
+            listed.Add(Canonical(
+                modifiers == "None" ? null : modifiers.Replace("|", "+"),
+                keyAccess.Name.Identifier.ValueText));
+        }
+        Assert.Equal(listed.Distinct(System.StringComparer.Ordinal).Count(), listed.Count);
+        Assert.True(
+            listed.Count >= 3,
+            "fewer than three find-bar chords were scraped from FindInNoteBar.Bind; "
+            + "the scrape is reading less than the truth.");
+        return listed.ToHashSet(System.StringComparer.Ordinal);
     }
 
     /// <summary>W6-2 PR C (C-11): the graph navigator's map, scraped from

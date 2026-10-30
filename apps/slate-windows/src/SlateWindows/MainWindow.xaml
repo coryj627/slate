@@ -36,6 +36,15 @@
         <KeyBinding Key="O" Modifiers="Control" Command="{Binding QuickSwitcher.OpenCommand}" />
         <KeyBinding Key="S" Modifiers="Control" Command="{Binding Workspace.SaveActiveCommand}" />
         <KeyBinding Key="E" Modifiers="Control+Shift" Command="{Binding Workspace.ToggleReadingModeCommand}" />
+        <!-- WB-22 (#1112): Ctrl+F bubbles here only when no surface claimed it
+             (a Base's grid and a canvas take it first); never a case in
+             Window_PreviewKeyDown, which tunnels ahead of every surface.
+             Ctrl+G / Ctrl+Shift+G are routed commands whose CanExecute sets
+             ContinueRouting, so they pass through when no focused note's bar
+             is open (a plain-ICommand binding would swallow the key). -->
+        <KeyBinding Key="F" Modifiers="Control" Command="{Binding FindInNoteChordCommand}" />
+        <KeyBinding Key="G" Modifiers="Control" Command="{x:Static local:FindInNoteKeyRoute.FindNext}" />
+        <KeyBinding Key="G" Modifiers="Control+Shift" Command="{x:Static local:FindInNoteKeyRoute.FindPrevious}" />
         <KeyBinding Key="W" Modifiers="Control" Command="{Binding Workspace.CloseActiveTabCommand}" />
         <KeyBinding Key="T" Modifiers="Control" Command="{Binding Workspace.DuplicateTabCommand}" />
         <KeyBinding Key="T" Modifiers="Control+Shift" Command="{Binding Workspace.ReopenClosedTabCommand}" />
@@ -434,6 +443,10 @@
             </MenuItem>
             <MenuItem Header="_Editor"
                       AutomationProperties.AutomationId="EditorMenu">
+                <MenuItem Header="_Find…"
+                          AutomationProperties.AutomationId="EditorFindInNoteMenuItem"
+                          InputGestureText="{cmd:ChordText slate.editor.findInNote}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
+                          Command="{Binding FindInNoteCommand}" />
                 <MenuItem Header="_Activate at Cursor"
                           AutomationProperties.AutomationId="EditorActivateMenuItem"
                           InputGestureText="{cmd:ChordText slate.editor.activateAtCaret}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"

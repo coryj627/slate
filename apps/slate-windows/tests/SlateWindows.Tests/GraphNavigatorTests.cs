@@ -129,6 +129,8 @@ public sealed class GraphNavigatorTests
 
         ICommand ISlateCommandHost.ToggleSearchCommand => Inert;
 
+        ICommand ISlateCommandHost.FindInNoteCommand => Inert;
+
         public void Dispose()
         {
             Workspace.Dispose();

@@ -412,6 +412,42 @@
       "registered": true
     },
     {
+      "id": "slate.editor.findInNote",
+      "label": "Find…",
+      "section": "Editor",
+      "hint": "Find and highlight text within the current note.",
+      "macChord": "⌘F",
+      "mac": "Command F",
+      "windows": "Ctrl+F",
+      "windowsSpoken": "Control F",
+      "scope": "Global",
+      "registered": true
+    },
+    {
+      "id": "slate.editor.findNext",
+      "label": "Find Next",
+      "section": "Editor",
+      "hint": "Move to the next match of the open find bar's query.",
+      "macChord": null,
+      "mac": null,
+      "windows": "Ctrl+G",
+      "windowsSpoken": "Control G",
+      "scope": "Global",
+      "registered": true
+    },
+    {
+      "id": "slate.editor.findPrevious",
+      "label": "Find Previous",
+      "section": "Editor",
+      "hint": "Move to the previous match of the open find bar's query.",
+      "macChord": null,
+      "mac": null,
+      "windows": "Ctrl+Shift+G",
+      "windowsSpoken": "Control Shift G",
+      "scope": "Global",
+      "registered": true
+    },
+    {
       "id": "slate.editor.citationSummary",
       "label": "Citation Summary",
       "section": "Editor",
@@ -2854,6 +2890,9 @@
       "slate.file.revealInFinder": "fileManagement",
       "slate.file.importFilesAndFolders": "sidebar",
       "slate.editor.save": "editorHost",
+      "slate.editor.findInNote": "editorHost",
+      "slate.editor.findNext": "editorHost",
+      "slate.editor.findPrevious": "editorHost",
       "slate.editor.activateAtCaret": "editorInteractions",
       "slate.editor.actualSize": "editorInteractions",
       "slate.editor.toggleSpellCheck": "editorInteractions",
@@ -4004,6 +4043,45 @@
       "scope": "SidebarFilter",
       "registered": false,
       "reason": "W7-7 (R-3): Escape in the Files filter field runs Clear Sidebar Filter (slate.sidebar.clearFilter) while a filter or tag scope is active, delivered by MainWindow.SidebarFilterTextBox_PreviewKeyDown; with nothing filtering the key is left to the window. A KeyBinding would not do: WPF marks a matched plain-ICommand binding handled even when it cannot execute."
+    },
+    {
+      "id": "windows.findInNote.next",
+      "label": "Find in note: next match",
+      "section": "View",
+      "hint": null,
+      "macChord": null,
+      "mac": null,
+      "windows": "Enter",
+      "windowsSpoken": "Enter",
+      "scope": "FindInNote",
+      "registered": false,
+      "reason": "WB-22: Enter in the find bar's query runs the bar's Next (the same step as Find Next, slate.editor.findNext), delivered by FindInNoteBar.Bind; elsewhere in the bar the key is left to the focused control (Enter on Replace All runs Replace All)."
+    },
+    {
+      "id": "windows.findInNote.previous",
+      "label": "Find in note: previous match",
+      "section": "View",
+      "hint": null,
+      "macChord": null,
+      "mac": null,
+      "windows": "Shift+Enter",
+      "windowsSpoken": "Shift Enter",
+      "scope": "FindInNote",
+      "registered": false,
+      "reason": "WB-22: Shift+Enter in the find bar's query runs the bar's Previous (the same step as Find Previous, slate.editor.findPrevious), delivered by FindInNoteBar.Bind."
+    },
+    {
+      "id": "windows.findInNote.close",
+      "label": "Find in note: close",
+      "section": "View",
+      "hint": null,
+      "macChord": null,
+      "mac": null,
+      "windows": "Escape",
+      "windowsSpoken": "Escape",
+      "scope": "FindInNote",
+      "registered": false,
+      "reason": "WB-22: Escape anywhere in the find bar runs its Close (clears the highlights, restores the caret and selection, returns focus to the note), delivered by FindInNoteBar.Bind in the tunnelling phase."
     },
     {
       "id": "windows.canvas.newCardLegacy",

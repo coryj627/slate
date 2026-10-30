@@ -79,6 +79,10 @@ carries the transiency ("Quick filter — temporary, does not change the
 base"). Ctrl+F reaches it ONLY when a Bases grid is the focused surface, via
 `AccessibleDataGrid.FilterRequested` (with no subscriber the gesture
 continues routing to app find).
+*Note 2026-10-30 (plan 44 WB-22, #1112, WD12 disposition 1):* the Bases
+filter keeps Ctrl+F on a Base. The window's find-in-note Ctrl+F is a bubbling
+`KeyBinding` that acts only on a key no surface claimed, so a focused grid's
+`FilterCommand` takes it first (`CtrlFOnABaseTabReachesTheQuickFilterNotTheBar`).
 
 **C6 — Sort is transactional and single-slot.** Transient sort =
 `BaseSetTransientSort` + re-execute. If the re-execute fails, the engine
