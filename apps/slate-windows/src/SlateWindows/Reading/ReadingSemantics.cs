@@ -44,6 +44,11 @@ internal static class ReadingSemantics
             "ReadingDiagramDescription", typeof(string), typeof(ReadingSemantics),
             new PropertyMetadata(null));
 
+    private static readonly DependencyProperty PendingDiagramKeyProperty =
+        DependencyProperty.RegisterAttached(
+            "ReadingPendingDiagramKey", typeof(string), typeof(ReadingSemantics),
+            new PropertyMetadata(null));
+
     private static readonly DependencyProperty EmbedNameProperty =
         DependencyProperty.RegisterAttached(
             "ReadingEmbedName", typeof(string), typeof(ReadingSemantics),
@@ -264,6 +269,22 @@ internal static class ReadingSemantics
 
     public static string DiagramDescriptionOf(Paragraph paragraph) =>
         paragraph.GetValue(DiagramDescriptionProperty) as string ?? string.Empty;
+
+    /// <summary>A diagram fence a stage-1 projection left pending (WB-20,
+    /// #1317): <paramref name="key"/> is the fence's block byte start, which
+    /// the diagram stage's outcome names when it completes the paragraph in
+    /// place.</summary>
+    public static void MarkDiagramPending(Paragraph paragraph, string key) =>
+        paragraph.SetValue(PendingDiagramKeyProperty, key);
+
+    /// <summary>The pending fence's key, or null once completed.</summary>
+    public static string? PendingDiagramKeyOf(Paragraph paragraph) =>
+        paragraph.GetValue(PendingDiagramKeyProperty) as string;
+
+    /// <summary>Clears the pending mark when the stage completes the
+    /// paragraph.</summary>
+    public static void ClearDiagramPending(Paragraph paragraph) =>
+        paragraph.ClearValue(PendingDiagramKeyProperty);
 
     public static bool IsCodeCopy(DependencyObject element) =>
         Equals(element.GetValue(MarkerProperty), Marker.CodeCopy);

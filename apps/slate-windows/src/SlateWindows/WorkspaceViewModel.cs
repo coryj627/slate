@@ -255,7 +255,9 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     }
 
     /// <summary>Test seam (W7-7 PR 7, codex PR 7 round 4 finding 3): the
-    /// Reading model an in-place replace creates, before it projects.</summary>
+    /// Reading model the mode toggle (WB-20) or an in-place replace
+    /// creates, before it projects. (The restore's is created in the
+    /// constructor, before a fact can set this.)</summary>
     internal Action<ReadingContentViewModel>? ReadingCreatedForTests { get; set; }
 
     internal int AnchorNavigationPublishCountForTests =>
@@ -369,6 +371,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
                 Reading = new ReadingContentViewModel(
                     _session, this, _announce,
                     synchronousForTests: !_startInteractionBackgroundWork);
+                ReadingCreatedForTests?.Invoke(Reading);
                 OnPropertyChanged(nameof(Reading));
             }
             if (_startInteractionBackgroundWork)

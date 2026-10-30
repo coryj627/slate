@@ -345,6 +345,9 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         _generation++;
         LiveRefreshGeneration = -1;
         RetireFetch();
+        // WB-20: the stage stops with the surface; the rebind fast path
+        // resumes it (_pendingDiagrams is kept).
+        RetireDiagramStage();
         _memo = null;
         // _projectionComplete is deliberately untouched: it is already
         // false for any in-flight stream (the case detach must poison),
@@ -828,6 +831,10 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             paragraph, "ReadingRefreshFailedNotice");
         document.Blocks.Add(paragraph);
         PublishedFailureNotice = true;
+        // WB-20: the failure notice replaces the projection the running
+        // diagram stage belongs to.
+        RetireDiagramStage();
+        _pendingDiagrams = null;
         Document = document;
         return true;
     }
@@ -921,25 +928,9 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             mathBlocks = Array.Empty<MathBlock>();
             mathFetchDegraded = true;
         }
-        FetchStage(cancel, "diagrams");
-        // Diagrams degrade identically (W3-3): a renderer failure
-        // renders source-in-range fallbacks with nav still working,
-        // never a failed projection.
-        DiagramBlock[] diagramBlocks;
-        bool diagramFetchDegraded = false;
-        try
-        {
-            if (DiagramFaultForTests?.Invoke() is { } diagramFault)
-            {
-                throw diagramFault;
-            }
-            diagramBlocks = session.GetDiagramBlocks(path);
-        }
-        catch (VaultException)
-        {
-            diagramBlocks = Array.Empty<DiagramBlock>();
-            diagramFetchDegraded = true;
-        }
+        // WB-20 (#1317): diagrams are not fetched here. Stage 1 publishes
+        // without them, each fence pending; the diagram stage renders and
+        // decodes them off the dispatcher and completes them in place.
         FetchStage(cancel, "blocks");
         ReadingBlock[] blocks = SlateUniffiMethods.ReadingBlocksSource(text);
         FetchStage(cancel, "inlines");
@@ -956,7 +947,6 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         string artifactDigest =
             CodeArtifactDigest(codeBlocks, codeFetchDegraded)
             + "|" + MathArtifactDigest(mathBlocks, mathFetchDegraded)
-            + "|" + DiagramArtifactDigest(diagramBlocks, diagramFetchDegraded)
             + "|" + EmbedArtifactDigest(embeds);
         return new FetchResult(
             text,
@@ -967,8 +957,6 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             codeFetchDegraded,
             mathBlocks,
             mathFetchDegraded,
-            diagramBlocks,
-            diagramFetchDegraded,
             embeds,
             blocks,
             inlines,
@@ -1588,7 +1576,8 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             fetched.Text,
             fetched.Citations,
             fetched.Records,
-            fetched.ArtifactDigest);
+            fetched.ArtifactDigest,
+            _landedDigest);
         if (Document is not null && _memo is { } memo && memo.Matches(key))
         {
             // Already showing exactly this projection: terminal — the
@@ -1621,7 +1610,11 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         // arrive through the session-generation drift retry.
         CodeBlock[] codeBlocks = fetched.CodeBlocks;
         MathBlock[] mathBlocks = fetched.MathBlocks;
-        DiagramBlock[] diagramBlocks = fetched.DiagramBlocks;
+        // WB-20: a fence the last stage landed builds complete; any other
+        // is left pending for this projection's own diagram stage.
+        DiagramBlock[] diagramBlocks = Array.Empty<DiagramBlock>();
+        context.LandedDiagrams = _landedDiagrams;
+        context.DiagramsPending = true;
         ReadingEmbedArtifact[] embeds = fetched.Embeds;
         OutgoingLink[] records = fetched.Records;
         ReadingDocumentModel built = ReadingDocumentBuilder.Build(
@@ -1637,11 +1630,15 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         // point into a container the surface's merge empties — the
         // surface re-collects over the live container, and a second
         // landmark source here would be a dangling-pointer trap.
+        // WB-20: this publication replaces the projection the running
+        // diagram stage belongs to.
+        RetireDiagramStage();
+        _pendingDiagrams = null;
         Document = built.Document;
 
         if (firstEnd >= renderLimit)
         {
-            FinishPublish(key, degraded, renderLimit, streamed: false, generation);
+            FinishPublish(key, degraded, renderLimit, streamed: false, generation, context);
             return;
         }
 
@@ -1659,7 +1656,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                     embeds, records);
                 index = end;
             }
-            FinishPublish(key, degraded, renderLimit, streamed: true, generation);
+            FinishPublish(key, degraded, renderLimit, streamed: true, generation, context);
             return;
         }
         _ = _dispatcher!.InvokeAsync(
@@ -1758,7 +1755,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 DispatcherPriority.Background);
             return;
         }
-        FinishPublish(key, degraded, renderLimit, streamed: true, generation);
+        FinishPublish(key, degraded, renderLimit, streamed: true, generation, context);
     }
 
     private void AppendFragment(
@@ -1782,7 +1779,8 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         bool degraded,
         int renderedBlocks,
         bool streamed,
-        int generation)
+        int generation,
+        ReadingListBuildContext context)
     {
         // The projection is complete: the refresh has landed (R-10).
         ReadingSurface.CensusDiag($"reading projection complete ({renderedBlocks} blocks)");
@@ -1802,6 +1800,20 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         _memo = key;
         _projectionComplete = true;
         _rebindRecovery = false;
+        // WB-20 (#1317): the projection is complete for its reader (WD11:
+        // a held landing seats on it); its pending diagrams are the
+        // stage's, which is not a refresh.
+        if (context.PendingDiagrams.Count > 0 && Document is { } shown)
+        {
+            _pendingDiagrams = new PendingDiagrams(
+                shown,
+                _tab.Path,
+                context.PendingDiagrams.ToList(),
+                context.MatchedLandedDiagrams.ToList(),
+                context.RemainingDiagramRenderBytes,
+                key);
+            StartDiagramStage(_pendingDiagrams);
+        }
         if (!degraded)
         {
             SettlePublicationWaiters(generation, failure: null);
@@ -1859,11 +1871,244 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         ReadingSurface.CensusDiag($"reading disposed at {_generation}");
         _disposed = true;
         RetireFetch();
+        RetireDiagramStage();
         Deactivate();
         _editDebounce = null;
         _dependencyDebounce?.Stop();
         _dependencyDebounce = null;
         TornDown?.Invoke();
+    }
+
+    // --- WB-20 (#1317): the diagram stage. ---
+
+    /// <summary>The diagrams the last completed stage landed for this path:
+    /// a fence one matches builds complete in the next projection, with no
+    /// decode on the dispatcher. Only rendered and non-transient failed
+    /// outcomes are kept.</summary>
+    private IReadOnlyList<LandedDiagram> _landedDiagrams = Array.Empty<LandedDiagram>();
+
+    /// <summary>The digest of <see cref="_landedDiagrams"/>' artifacts, folded
+    /// into the memo key; computed on the stage's worker when it lands, so
+    /// publication hashes nothing on the dispatcher.</summary>
+    private string _landedDigest = DiagramArtifactDigest(Array.Empty<DiagramBlock>(), degraded: false);
+
+    /// <summary>The fences the shown projection left pending, and what the
+    /// stage needs to complete them. The work belongs to that projection,
+    /// not to the refresh that published it.</summary>
+    private PendingDiagrams? _pendingDiagrams;
+
+    /// <summary>The running stage's own token. Stage 1's cannot serve: the
+    /// fetch task finishes (disposes) it before the dispatcher publishes.</summary>
+    private CoreRequestCancellation? _diagramCancel;
+
+    /// <summary>Raised on the dispatcher when a stage lands: the stage-1
+    /// document its outcomes complete, and the outcomes by fence key. A
+    /// surface showing that document completes it in place.</summary>
+    internal event Action<FlowDocument, IReadOnlyList<(string Key, DiagramOutcome Outcome)>>?
+        DiagramsCompleted;
+
+    /// <summary>Test seam: the stage waits on it (10 s) before fetching its
+    /// artifacts.</summary>
+    internal ManualResetEventSlim? DiagramStageGateForTests { get; set; }
+
+    /// <summary>Set when the stage's gate wait timed out.</summary>
+    internal bool DiagramStageGateTimedOutForTests { get; private set; }
+
+    /// <summary>Stages started.</summary>
+    internal int DiagramStageRunsForTests { get; private set; }
+
+    /// <summary>Landings refused because their stage no longer owns the
+    /// shown projection (AR-60).</summary>
+    internal int DiagramStageLandingsDroppedForTests { get; private set; }
+
+    /// <summary>Test seam: rewrites the artifacts the stage fetched, the
+    /// way a fact makes core answer "busy".</summary>
+    internal Func<DiagramBlock[], DiagramBlock[]>? DiagramBlocksOverrideForTests { get; set; }
+
+    /// <summary>Set by the stage's worker right after it posts a landing.</summary>
+    internal ManualResetEventSlim? DiagramStagePostedForTests { get; set; }
+
+    /// <summary>True while the shown projection has a fence its stage has
+    /// not landed yet.</summary>
+    internal bool DiagramsPendingForTests => _pendingDiagrams is not null;
+
+    private sealed record PendingDiagrams(
+        FlowDocument Document,
+        string Path,
+        IReadOnlyList<PendingFence> Fences,
+        IReadOnlyList<LandedDiagram> Kept,
+        int RemainingDiagramRenderBytes,
+        MemoKey PublishedMemo);
+
+    /// <summary>Starts (or restarts) the stage for <paramref name="pending"/>
+    /// on its own worker, tracked so a close waits for it. Runs on the
+    /// dispatcher.</summary>
+    private void StartDiagramStage(PendingDiagrams pending)
+    {
+        RetireDiagramStage();
+        var stage = new CoreRequestCancellation();
+        _diagramCancel = stage;
+        DiagramStageRunsForTests++;
+        Dispatcher dispatcher = _dispatcher ?? Dispatcher.CurrentDispatcher;
+        TrackRefreshWork(Task.Run(() => RunDiagramStage(pending, stage, dispatcher)));
+    }
+
+    /// <summary>The stage's worker: the artifacts, then each pending fence's
+    /// outcome, decoded here and frozen, posted to the dispatcher. A
+    /// cancelled stage stops silently at its next boundary.</summary>
+    private void RunDiagramStage(
+        PendingDiagrams pending, CoreRequestCancellation stage, Dispatcher dispatcher)
+    {
+        try
+        {
+            if (DiagramStageGateForTests is { } gate && !gate.Wait(TimeSpan.FromSeconds(10)))
+            {
+                DiagramStageGateTimedOutForTests = true;
+            }
+            // Census runs only (the shell journey's seam): hold the stage so
+            // the journey sees the placeholder before the diagram lands.
+            if (ReadingSurface.CensusDiagEnabled
+                && int.TryParse(
+                    Environment.GetEnvironmentVariable("SLATE_TEST_DIAGRAM_STAGE_DELAY_MS"),
+                    out int delay)
+                && delay > 0)
+            {
+                Thread.Sleep(Math.Min(delay, 30_000));
+            }
+            if (stage.Token.IsCancelled())
+            {
+                return;
+            }
+            // Diagrams degrade as they always have (W3-3): a renderer failure
+            // leaves each fence its source, never a failed projection.
+            DiagramBlock[] artifacts;
+            try
+            {
+                if (DiagramFaultForTests?.Invoke() is { } diagramFault)
+                {
+                    throw diagramFault;
+                }
+                artifacts = _session.GetDiagramBlocks(pending.Path);
+                if (DiagramBlocksOverrideForTests is { } rewrite)
+                {
+                    artifacts = rewrite(artifacts);
+                }
+            }
+            catch (VaultException)
+            {
+                artifacts = Array.Empty<DiagramBlock>();
+            }
+            int remaining = pending.RemainingDiagramRenderBytes;
+            var outcomes = new List<(string Key, DiagramOutcome Outcome)>(pending.Fences.Count);
+            var landed = new List<LandedDiagram>(pending.Kept);
+            foreach (PendingFence fence in pending.Fences)
+            {
+                if (stage.Token.IsCancelled())
+                {
+                    return;
+                }
+                DiagramBlock? matched = fence.Block.Kind is ReadingBlockKind.Diagram diagram
+                    ? artifacts.FirstOrDefault(candidate =>
+                        ReadingDocumentBuilder.ArtifactMatches(candidate, diagram, fence.Block))
+                    : null;
+                DiagramOutcome outcome =
+                    ReadingDocumentBuilder.ResolveDiagramOutcome(matched, ref remaining);
+                outcomes.Add((fence.Key, outcome));
+                if (matched is not null
+                    && outcome is DiagramOutcome.Rendered or DiagramOutcome.Failed { Transient: false })
+                {
+                    landed.Add(new LandedDiagram(matched, outcome));
+                }
+            }
+            string landedDigest = DiagramArtifactDigest(
+                landed.Select(diagram => diagram.Artifact).ToArray(), degraded: false);
+            if (stage.Token.IsCancelled())
+            {
+                return;
+            }
+            _ = dispatcher.InvokeAsync(
+                () => LandDiagramStage(pending, stage, outcomes, landed, landedDigest));
+            DiagramStagePostedForTests?.Set();
+        }
+        catch (Exception exception) when (!stage.Token.IsCancelled())
+        {
+            // A fault outside the degrade path above (a core panic, a
+            // decoder failure) never strands a placeholder: every fence
+            // keeps its source, the memo stays empty so the next refresh
+            // retries, and the fault is recorded.
+            var outcomes = pending.Fences
+                .Select(fence => (fence.Key, (DiagramOutcome)new DiagramOutcome.Unmatched()))
+                .ToList();
+            string landedDigest = DiagramArtifactDigest(
+                pending.Kept.Select(diagram => diagram.Artifact).ToArray(), degraded: false);
+            _ = dispatcher.InvokeAsync(() =>
+            {
+                RecordTerminalFailure(exception);
+                LandDiagramStage(pending, stage, outcomes, pending.Kept, landedDigest);
+            });
+            DiagramStagePostedForTests?.Set();
+        }
+        finally
+        {
+            stage.Finish();
+        }
+    }
+
+    /// <summary>Lands a stage's outcomes on the projection it belongs to, or
+    /// refuses them when that stage was retired or the projection is no
+    /// longer the one shown (AR-60). A landing never restores a memo dropped
+    /// while it ran, and leaves the memo empty when any fence is to be
+    /// retried (no artifact matched, or a transient refusal).</summary>
+    private void LandDiagramStage(
+        PendingDiagrams pending,
+        CoreRequestCancellation stage,
+        IReadOnlyList<(string Key, DiagramOutcome Outcome)> outcomes,
+        IReadOnlyList<LandedDiagram> landed,
+        string landedDigest)
+    {
+        if (_disposed
+            || !ReferenceEquals(_diagramCancel, stage)
+            || !ReferenceEquals(Document, pending.Document))
+        {
+            DiagramStageLandingsDroppedForTests++;
+            return;
+        }
+        ReadingSurface.CensusDiag($"reading diagram stage landed ({outcomes.Count} diagrams)");
+        _landedDiagrams = landed;
+        _landedDigest = landedDigest;
+        if (ReferenceEquals(_memo, pending.PublishedMemo))
+        {
+            bool retries = outcomes.Any(outcome =>
+                outcome.Outcome is DiagramOutcome.Unmatched or DiagramOutcome.Failed { Transient: true });
+            _memo = retries ? null : pending.PublishedMemo.WithLanded(landedDigest);
+        }
+        _pendingDiagrams = null;
+        _diagramCancel = null;
+        DiagramsCompleted?.Invoke(pending.Document, outcomes);
+    }
+
+    /// <summary>Cancels the running stage, whose result is then dropped.
+    /// Only when its projection stops being the one shown: replaced,
+    /// detached or disposed — never by a newer refresh or a preference
+    /// change that keeps it.</summary>
+    private void RetireDiagramStage()
+    {
+        _diagramCancel?.Cancel();
+        _diagramCancel = null;
+    }
+
+    /// <summary>The surface's rebind fast path: a detach retired the stage of
+    /// the projection it still shows, so it starts again.</summary>
+    internal void ResumePendingDiagrams()
+    {
+        if (_disposed
+            || _diagramCancel is not null
+            || _pendingDiagrams is not { } pending
+            || !ReferenceEquals(pending.Document, Document))
+        {
+            return;
+        }
+        StartDiagramStage(pending);
     }
 
     private sealed record FetchResult(
@@ -1875,8 +2120,6 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         bool CodeFetchDegraded,
         MathBlock[] MathBlocks,
         bool MathFetchDegraded,
-        DiagramBlock[] DiagramBlocks,
-        bool DiagramFetchDegraded,
         ReadingEmbedArtifact[] Embeds,
         ReadingBlock[] Blocks,
         ReadingBlockInlines[] Inlines,
@@ -1893,24 +2136,34 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         private readonly RenderedCitation[] _citations;
         private readonly OutgoingLink[] _records;
         private readonly string _codeDigest;
+        private readonly string _landedDigest;
 
         public MemoKey(
             string text,
             RenderedCitation[] citations,
             OutgoingLink[] records,
-            string codeDigest)
+            string codeDigest,
+            string landedDigest)
         {
             _text = text;
             _citations = citations;
             _records = records;
             _codeDigest = codeDigest;
+            _landedDigest = landedDigest;
         }
+
+        /// <summary>WB-20: this key with the diagrams a stage landed —
+        /// the document completed in place is what a stage-1 build over
+        /// them makes, so the next unchanged refresh memo-hits it.</summary>
+        public MemoKey WithLanded(string landedDigest) =>
+            new(_text, _citations, _records, _codeDigest, landedDigest);
 
         public bool Matches(MemoKey other) =>
             string.Equals(_text, other._text, StringComparison.Ordinal)
             && _citations.SequenceEqual(other._citations)
             && _records.SequenceEqual(other._records)
-            && string.Equals(_codeDigest, other._codeDigest, StringComparison.Ordinal);
+            && string.Equals(_codeDigest, other._codeDigest, StringComparison.Ordinal)
+            && string.Equals(_landedDigest, other._landedDigest, StringComparison.Ordinal);
     }
 
     /// <summary>

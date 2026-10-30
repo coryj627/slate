@@ -202,6 +202,86 @@ public sealed partial class RescanTests
         }
     }));
 
+    /// <summary>WB-20 (#1317, WD11): a landing a rescan reload carries seats
+    /// on the reloaded PARTIAL projection — its text applied, its diagram
+    /// still pending — and the diagram stage that lands later neither
+    /// re-seats, re-speaks nor refuses it, nor fails the rescan; a failing
+    /// stage leaves the fence in the unmatched shape.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ACarriedLandingSeatsOnTheReloadedPartialProjectionAndTheDiagramStageLeavesIt(bool stageTwoFails) =>
+        RunSta(() => PumpedDispatcher.Run(() =>
+    {
+        using var w = new BackgroundReadingWorkspace("landing-reload-diagram-" + (stageTwoFails ? "fails" : "lands"));
+        using var hosted = new HostedReadingSurface(w.HostTab);
+        using var parked = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        using var gate = new ManualResetEventSlim(false);
+        using var cancellation = new CancellationTokenSource();
+        try
+        {
+            HeldReadingLanding held = hosted.HoldTheLandingOverARefresh(parked, release);
+            object token = held.Token;
+            w.Announced.Clear();
+            ReadingContentViewModel? reloaded = null;
+            int landed = 0;
+            w.HostTab.ReadingCreatedForTests = model =>
+            {
+                reloaded = model;
+                model.DiagramStageGateForTests = gate;
+                model.DiagramsCompleted += (_, _) => landed++;
+                if (stageTwoFails)
+                {
+                    model.DiagramFaultForTests = () => new uniffi.slate_uniffi.VaultException.Io("injected diagram fault");
+                }
+            };
+
+            Task<WorkspaceViewModel.RescanDocumentsOutcome> documents = ReloadTheHostInPlace(
+                w,
+                cancellation.Token,
+                "# Host\n\n![[embedded]]\n\nChanged outside Slate.\n\n```mermaid\ngraph TD; A-->B\n```\n");
+            Assert.True(
+                PumpedDispatcher.PumpUntil(
+                    () => reloaded is not null && documents.IsCompleted && !hosted.Surface.IsFocusLandingPending),
+                "the reloaded partial projection settling the carried landing");
+            Assert.Equal(1, held.Spoken());
+            Assert.Equal(0, held.FellThrough());
+            Assert.Same(hosted.Surface, Keyboard.FocusedElement);
+            Assert.Contains("Changed outside Slate.", hosted.Text, StringComparison.Ordinal);
+            Assert.Contains("graph TD", hosted.Text, StringComparison.Ordinal);
+            Assert.False(hosted.Surface.CancelFocusLanding(token), "the carried landing is seated: nothing is held");
+            Assert.True(reloaded!.DiagramsPendingForTests, "premise: the reloaded projection's diagram stage is held");
+
+            gate.Set();
+            RunOutTheTornDownFetch(held.Before, release);
+            Assert.True(PumpedDispatcher.PumpUntil(() => landed == 1), "the reloaded projection's diagram stage landing");
+            PumpedDispatcher.Drain();
+            PumpedDispatcher.Drain();
+
+            Assert.Equal(1, held.Spoken());
+            Assert.Equal(0, held.FellThrough());
+            Assert.Empty(w.Announced);
+            Assert.Same(hosted.Surface, Keyboard.FocusedElement);
+            Assert.Equal(0UL, documents.Result.Failed);
+            Assert.False(reloaded.LastRefreshFailed);
+            Assert.False(reloaded.DiagramStageGateTimedOutForTests);
+            if (stageTwoFails)
+            {
+                Assert.DoesNotContain(
+                    hosted.Surface.Document.Blocks.OfType<Paragraph>().SelectMany(paragraph => paragraph.Inlines)
+                        .OfType<InlineUIContainer>().Select(container => container.Child),
+                    child => child is ReadingDiagramElement);
+                Assert.Contains("graph TD", hosted.Text, StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            release.Set();
+            gate.Set();
+        }
+    }));
+
     /// <summary>WB-9 (#1312): once the reload has ended, the slot's withdraw
     /// — its original token — still names the carried landing and lets go of
     /// it: the reloaded projection's settle seats nobody.</summary>
@@ -564,9 +644,11 @@ public sealed partial class RescanTests
     /// re-sync reloads the clean host tab in place, replacing its projection
     /// model in one dispatcher turn.</summary>
     private static Task<WorkspaceViewModel.RescanDocumentsOutcome> ReloadTheHostInPlace(
-        BackgroundReadingWorkspace w, CancellationToken cancellation)
+        BackgroundReadingWorkspace w,
+        CancellationToken cancellation,
+        string text = "# Host\n\n![[embedded]]\n\nChanged outside Slate.\n")
     {
-        File.WriteAllText(Path.Combine(w.Root, "host.md"), "# Host\n\n![[embedded]]\n\nChanged outside Slate.\n");
+        File.WriteAllText(Path.Combine(w.Root, "host.md"), text);
         using (var scan = new uniffi.slate_uniffi.CancelToken())
         {
             _ = w.Session.Rescan(scan);

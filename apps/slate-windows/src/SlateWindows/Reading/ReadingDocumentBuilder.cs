@@ -63,6 +63,29 @@ internal sealed class ReadingListBuildContext
             ?? ReadingDocumentBuilder.ProjectionDiagramRenderByteBudget;
 
     /// <summary>
+    /// The diagrams the last completed diagram stage landed for this path
+    /// (WB-20, #1317): a fence one of them matches builds complete, in the
+    /// outcome's shape and with no decode on the dispatcher.
+    /// </summary>
+    internal IReadOnlyList<LandedDiagram> LandedDiagrams { get; set; } =
+        Array.Empty<LandedDiagram>();
+
+    /// <summary>
+    /// True only for a stage-1 reading projection: a fence nothing has
+    /// landed for is left pending (its source and a "Diagram, rendering"
+    /// placeholder) for the diagram stage to complete, instead of main's
+    /// unmatched source shape.
+    /// </summary>
+    internal bool DiagramsPending { get; set; }
+
+    /// <summary>The fences this build left pending, chunks included.</summary>
+    internal List<PendingFence> PendingDiagrams { get; } = new();
+
+    /// <summary>The landed diagrams a fence of this build matched: what the
+    /// next landing keeps, so diagrams of fences gone from the note drop.</summary>
+    internal List<LandedDiagram> MatchedLandedDiagrams { get; } = new();
+
+    /// <summary>
     /// The embed-image analog (W3-5 round 5): the encoded-byte pools
     /// bound FFI transfer, not PIXELS — a small compressed image
     /// repeated across the 2,000-block ceiling decoded once per
@@ -911,40 +934,121 @@ internal static class ReadingDocumentBuilder
         IReadOnlyList<DiagramBlock> diagramBlocks,
         ReadingListBuildContext context)
     {
-        DiagramBlock? matched = diagramBlocks.FirstOrDefault(candidate =>
-            candidate.ByteOffset >= block.ByteStart
-            && candidate.ByteOffset < block.ByteEnd);
+        string fallbackSource = diagram.Interior.TrimEnd('\n', '\r');
 
-        // LIVE-source coherence (the W3-4/W3-2 lesson): the reading
-        // block is parsed from the live buffer, the artifact from the
-        // SAVED file, and a same-position unsaved edit keeps byte
-        // containment. Diagram fences are code-shaped, so the code
-        // precedent applies: LF-normalized interior equality.
-        if (matched is not null)
+        // WB-20 (#1317): a fence the last diagram stage landed builds
+        // complete, in that outcome's shape, with no decode here; a fence
+        // an artifact matches (the test overloads) resolves now.
+        DiagramBlock? artifact = null;
+        DiagramOutcome? outcome = null;
+        if (context.LandedDiagrams.FirstOrDefault(candidate =>
+                ArtifactMatches(candidate.Artifact, diagram, block)) is { } landed)
         {
-            string normalized = matched.Source.Replace("\r\n", "\n");
-            if (!string.Equals(normalized, diagram.Interior, StringComparison.Ordinal)
-                && !string.Equals(normalized, diagram.Interior + "\n", StringComparison.Ordinal)
-                && !string.Equals(normalized + "\n", diagram.Interior, StringComparison.Ordinal))
+            artifact = landed.Artifact;
+            outcome = landed.Outcome;
+            context.MatchedLandedDiagrams.Add(landed);
+            // A landed visual still draws from the projection-wide pool, as
+            // its decode did: the fences the stage resolves get what is left.
+            if (outcome is DiagramOutcome.Rendered && artifact.Svg is { Length: > 0 } landedSvg)
             {
-                matched = null;
+                context.RemainingDiagramRenderBytes =
+                    Math.Max(0, context.RemainingDiagramRenderBytes - landedSvg.Length);
             }
         }
-
-        string fallbackSource = diagram.Interior.TrimEnd('\n', '\r');
-        if (matched is null)
+        else if (diagramBlocks.FirstOrDefault(candidate =>
+                     ArtifactMatches(candidate, diagram, block)) is { } matched)
         {
-            // Mac's unmatched fallback: raw source, no fabricated
-            // status. The landing announcement carries the source —
-            // the math unmatched precedent.
-            Paragraph unmatchedParagraph = MonospaceParagraph(fallbackSource);
-            ReadingSemantics.MarkDiagramBlock(unmatchedParagraph, fallbackSource);
-            return unmatchedParagraph;
+            artifact = matched;
+            int remaining = context.RemainingDiagramRenderBytes;
+            outcome = ResolveDiagramOutcome(matched, ref remaining);
+            context.RemainingDiagramRenderBytes = remaining;
         }
 
-        // The description is the entire primary AT surface — verbatim
-        // core content, never composed; "Mermaid diagram." is the mac
-        // defensive fallback for an empty artifact.
+        switch (outcome)
+        {
+            case DiagramOutcome.Rendered rendered:
+                {
+                    var paragraph = new Paragraph();
+                    ApplyRenderedShape(
+                        paragraph,
+                        new ReadingDiagramElement(rendered.Description, artifact!.Source),
+                        rendered);
+                    return paragraph;
+                }
+            case DiagramOutcome.Failed failed:
+                {
+                    var paragraph = new Paragraph();
+                    ApplyFailureShape(
+                        paragraph,
+                        new ReadingDiagramElement(failed.Description, artifact!.Source),
+                        failed,
+                        fallbackSource);
+                    return paragraph;
+                }
+        }
+
+        // Mac's unmatched fallback: raw source, no fabricated status. The
+        // landing announcement carries the source — the math unmatched
+        // precedent.
+        Paragraph sourceParagraph = MonospaceParagraph(fallbackSource);
+        ReadingSemantics.MarkDiagramBlock(sourceParagraph, fallbackSource);
+        if (context.DiagramsPending)
+        {
+            // Pending (WB-20): the source stays IN the text range, where caret
+            // reading and the TextPattern reach it, and a zero-size focusable
+            // placeholder is named "Diagram, rendering" (WD11) until the stage
+            // completes it in place — the math coverage-gap shape.
+            sourceParagraph.Inlines.Add(new InlineUIContainer(
+                new ReadingDiagramElement(PendingDiagramName, fallbackSource)));
+            string key = block.ByteStart.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            ReadingSemantics.MarkDiagramPending(sourceParagraph, key);
+            context.PendingDiagrams.Add(new PendingFence(key, block, fallbackSource));
+        }
+        return sourceParagraph;
+    }
+
+    /// <summary>The placeholder's name while its diagram renders (WD11).</summary>
+    internal const string PendingDiagramName = "Diagram, rendering";
+
+    /// <summary>Whether <paramref name="artifact"/> is the canonical
+    /// content of this fence: byte containment, then LIVE-source coherence
+    /// (the W3-4/W3-2 lesson) — the reading block is parsed from the live
+    /// buffer, the artifact from the SAVED file, and a same-position unsaved
+    /// edit keeps byte containment. Diagram fences are code-shaped, so the
+    /// code precedent applies: LF-normalized interior equality.</summary>
+    internal static bool ArtifactMatches(
+        DiagramBlock artifact, ReadingBlockKind.Diagram diagram, ReadingBlock block)
+    {
+        if (artifact.ByteOffset < block.ByteStart || artifact.ByteOffset >= block.ByteEnd)
+        {
+            return false;
+        }
+        string normalized = artifact.Source.Replace("\r\n", "\n");
+        return string.Equals(normalized, diagram.Interior, StringComparison.Ordinal)
+            || string.Equals(normalized, diagram.Interior + "\n", StringComparison.Ordinal)
+            || string.Equals(normalized + "\n", diagram.Interior, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// What a fence becomes (WB-20, #1317): <paramref name="matched"/>'s
+    /// status resolved, its SVG decoded under the per-diagram cap and the
+    /// projection-wide pool (<paramref name="remainingDiagramRenderBytes"/>,
+    /// charged on entry — a failed decode spent the work too), the visual
+    /// frozen so it can cross from the diagram stage's worker to the
+    /// dispatcher. Core's "busy" render and the host's "image-busy" decode
+    /// are transient: shown, never remembered, retried by the next refresh.
+    /// </summary>
+    internal static DiagramOutcome ResolveDiagramOutcome(
+        DiagramBlock? matched, ref int remainingDiagramRenderBytes)
+    {
+        if (matched is null)
+        {
+            return new DiagramOutcome.Unmatched();
+        }
+
+        // The description is the entire primary AT surface — verbatim core
+        // content, never composed; "Mermaid diagram." is the mac defensive
+        // fallback for an empty artifact.
         string description = matched.StructuredDescription.Trim();
         if (description.Length == 0)
         {
@@ -954,107 +1058,159 @@ internal static class ReadingDocumentBuilder
         // vocabulary's own punctuation composes ("…3 steps, diagram.").
         string landing = description.TrimEnd('.');
 
-        System.Windows.Media.ImageSource? visual = null;
-        string? failureHeader = null;
-        string failureReason = string.Empty;
         switch (matched.RenderStatus)
         {
             case DiagramRenderStatus.UnsupportedDialect unsupported:
-                failureHeader = "Diagram dialect not supported";
-                failureReason = unsupported.Reason;
-                break;
+                return new DiagramOutcome.Failed(
+                    description, landing, "Diagram dialect not supported", unsupported.Reason,
+                    Transient: false);
             case DiagramRenderStatus.RenderFailed failed:
-                failureHeader = "Diagram could not be rendered";
-                failureReason = failed.Message;
-                break;
-            default:
-                if (matched.Svg is not { Length: > 0 } svg)
-                {
-                    // Mac audit #254 L1: Ok status with nil OR EMPTY
-                    // bytes routes to the decode-failure fallback.
-                    failureHeader = "Diagram could not be rendered";
-                    failureReason = "diagram rendered but image could not be decoded";
-                    break;
-                }
-                // Host visual budgets (the W3-2 round-7 shape): core
-                // bounds the RENDERER's work, not the host decoder's —
-                // per-diagram SVG cap plus the projection-wide pool,
-                // charged on entry (a failed decode burned the
-                // dispatcher too). Over-budget keeps the description
-                // and source; only the visual degrades.
-                if (svg.Length > MaximumRenderedDiagramSvgBytes
-                    || svg.Length > context.RemainingDiagramRenderBytes)
-                {
-                    failureHeader = "Diagram could not be rendered";
-                    failureReason = "diagram image exceeds the display budget";
-                    break;
-                }
-                context.RemainingDiagramRenderBytes -= svg.Length;
-                DiagramRenderProbeForTests?.Invoke(svg.Length);
-                visual = EditorInteractionCoordinator.DecodeImage(
-                    svg, "image/svg+xml", out string? decodeFailure);
-                if (visual is null)
-                {
-                    // A decode past its budget, or refused at the cap, says
-                    // so in core's sentence (#1581).
-                    failureHeader = "Diagram could not be rendered";
-                    failureReason = decodeFailure
-                        ?? "diagram rendered but image could not be decoded";
-                }
-                break;
+                return new DiagramOutcome.Failed(
+                    description, landing, "Diagram could not be rendered", failed.Message,
+                    Transient: string.Equals(
+                        failed.Message, CoreDiagramBusyMessage, StringComparison.Ordinal));
         }
-
-        if (visual is not null)
+        if (matched.Svg is not { Length: > 0 } svg)
         {
-            var element = new ReadingDiagramElement(description, matched.Source)
-            {
-                Content = new ReadingDiagramImage
-                {
-                    Source = visual,
-                    Stretch = System.Windows.Media.Stretch.Uniform,
-                    StretchDirection = StretchDirection.DownOnly,
-                    // Mac caps at a Dynamic-Type-scaled 600pt (audit
-                    // #254 M1); WPF has no text-size metric to scale
-                    // by, so the base cap ships and the scaling is a
-                    // recorded matrix note.
-                    MaxHeight = 600,
-                },
-                Margin = new Thickness(0, 4, 0, 4),
-            };
-            var renderedParagraph = new Paragraph(new InlineUIContainer(element))
-            {
-                TextAlignment = TextAlignment.Center,
-            };
-            ReadingSemantics.MarkDiagramBlock(renderedParagraph, landing);
-            return renderedParagraph;
+            // Mac audit #254 L1: Ok status with nil OR EMPTY bytes routes to
+            // the decode-failure fallback.
+            return new DiagramOutcome.Failed(
+                description, landing, "Diagram could not be rendered",
+                "diagram rendered but image could not be decoded", Transient: false);
         }
+        // Host visual budgets (the W3-2 round-7 shape): core bounds the
+        // RENDERER's work, not the host decoder's — per-diagram SVG cap plus
+        // the projection-wide pool, charged on entry. Over-budget keeps the
+        // description and source; only the visual degrades.
+        if (svg.Length > MaximumRenderedDiagramSvgBytes || svg.Length > remainingDiagramRenderBytes)
+        {
+            // Pool-dependent, so never remembered: the next projection's pool
+            // may hold room for it.
+            return new DiagramOutcome.Failed(
+                description, landing, "Diagram could not be rendered",
+                "diagram image exceeds the display budget", Transient: true);
+        }
+        remainingDiagramRenderBytes -= svg.Length;
+        DiagramRenderProbeForTests?.Invoke(svg.Length);
+        System.Windows.Media.ImageSource? visual = EditorInteractionCoordinator.DecodeImage(
+            svg, "image/svg+xml", out string? decodeFailure);
+        if (visual is null)
+        {
+            // A decode past its budget, or refused at the cap, says so in
+            // core's sentence (#1581).
+            return new DiagramOutcome.Failed(
+                description, landing, "Diagram could not be rendered",
+                decodeFailure ?? "diagram rendered but image could not be decoded",
+                Transient: string.Equals(
+                    decodeFailure,
+                    EditorInteractionCoordinator.SvgDecodeBusyMessage,
+                    StringComparison.Ordinal));
+        }
+        if (visual.CanFreeze)
+        {
+            visual.Freeze();
+        }
+        return new DiagramOutcome.Rendered(description, landing, visual);
+    }
 
-        // Failure presentation, mac shape: header, reason, then the
-        // full source — all IN the text range — plus the zero-size
-        // focusable element so the description stays Tab-reachable.
-        var paragraph = new Paragraph { Padding = new Thickness(8) };
+    /// <summary>Core's per-diagram render budget in seconds
+    /// (<c>MAX_RENDER_TIME_PER_DIAGRAM</c>, diagram.rs), which names it in
+    /// the "busy" sentence.</summary>
+    internal const ulong CoreDiagramRenderBudgetSeconds = 5;
+
+    private static string? s_coreDiagramBusyMessage;
+
+    /// <summary>Core's sentence for a render refused while earlier renders
+    /// still run past their budget (#1632): a refusal, not a failure of
+    /// this diagram, so it is never remembered. Read once.</summary>
+    internal static string CoreDiagramBusyMessage =>
+        s_coreDiagramBusyMessage ??= SlateUniffiMethods.RenderTimeExceededMessage(
+            "busy", CoreDiagramRenderBudgetSeconds);
+
+    /// <summary>Main's rendered shape around <paramref name="element"/>
+    /// (WB-20, #1317), for a fresh build and for the in-place completion:
+    /// the paragraph holds only the element's container, centred, with the
+    /// pending source's padding, background and font cleared.</summary>
+    internal static void ApplyRenderedShape(
+        Paragraph paragraph, ReadingDiagramElement element, DiagramOutcome.Rendered rendered)
+    {
+        element.Complete(rendered.Description, rendered.Visual);
+        element.Margin = new Thickness(0, 4, 0, 4);
+        InlineUIContainer container = ContainerOf(paragraph, element);
+        foreach (Inline inline in paragraph.Inlines.ToList())
+        {
+            if (!ReferenceEquals(inline, container))
+            {
+                paragraph.Inlines.Remove(inline);
+            }
+        }
+        paragraph.TextAlignment = TextAlignment.Center;
+        paragraph.ClearValue(Block.PaddingProperty);
+        paragraph.ClearValue(Block.BackgroundProperty);
+        paragraph.ClearValue(TextElement.FontFamilyProperty);
+        ReadingSemantics.MarkDiagramBlock(paragraph, rendered.Landing);
+    }
+
+    /// <summary>Main's failure shape around <paramref name="element"/>
+    /// (WB-20, #1317): header, reason, then the full source — all IN the
+    /// text range — before the zero-size focusable element, so the
+    /// description stays Tab-reachable. The element's container is kept
+    /// (the same object a reader may be on). Returns the source run, or
+    /// null for an empty source.</summary>
+    internal static Run? ApplyFailureShape(
+        Paragraph paragraph,
+        ReadingDiagramElement element,
+        DiagramOutcome.Failed failed,
+        string source)
+    {
+        element.Complete(failed.Description, null);
+        InlineUIContainer container = ContainerOf(paragraph, element);
+        foreach (Inline inline in paragraph.Inlines.ToList())
+        {
+            if (!ReferenceEquals(inline, container))
+            {
+                paragraph.Inlines.Remove(inline);
+            }
+        }
+        paragraph.ClearValue(Block.TextAlignmentProperty);
+        paragraph.ClearValue(TextElement.FontFamilyProperty);
+        paragraph.Padding = new Thickness(8);
         paragraph.SetResourceReference(Block.BackgroundProperty, "Slate.RaisedSurfaceBrush");
-        paragraph.Inlines.Add(new Run(failureHeader)
+        paragraph.Inlines.InsertBefore(container, new Run(failed.Header)
         {
             FontWeight = FontWeights.SemiBold,
         });
-        if (failureReason.Length > 0)
+        if (failed.Reason.Length > 0)
         {
-            paragraph.Inlines.Add(new LineBreak());
-            paragraph.Inlines.Add(new Run(failureReason));
+            paragraph.Inlines.InsertBefore(container, new LineBreak());
+            paragraph.Inlines.InsertBefore(container, new Run(failed.Reason));
         }
-        if (fallbackSource.Length > 0)
+        Run? sourceRun = null;
+        if (source.Length > 0)
         {
-            paragraph.Inlines.Add(new LineBreak());
-            paragraph.Inlines.Add(new Run(fallbackSource)
+            paragraph.Inlines.InsertBefore(container, new LineBreak());
+            sourceRun = new Run(source)
             {
                 FontFamily = new FontFamily("Cascadia Mono, Consolas, monospace"),
-            });
+            };
+            paragraph.Inlines.InsertBefore(container, sourceRun);
         }
-        paragraph.Inlines.Add(new InlineUIContainer(
-            new ReadingDiagramElement(description, matched.Source)));
-        ReadingSemantics.MarkDiagramBlock(paragraph, landing);
-        return paragraph;
+        ReadingSemantics.MarkDiagramBlock(paragraph, failed.Landing);
+        return sourceRun;
+    }
+
+    /// <summary>The container holding <paramref name="element"/> in
+    /// <paramref name="paragraph"/>, appended when the element is fresh.</summary>
+    private static InlineUIContainer ContainerOf(Paragraph paragraph, ReadingDiagramElement element)
+    {
+        if (element.Parent is InlineUIContainer existing
+            && ReferenceEquals(existing.Parent, paragraph))
+        {
+            return existing;
+        }
+        var container = new InlineUIContainer(element);
+        paragraph.Inlines.Add(container);
+        return container;
     }
 
     /// <summary>Host visual cap per diagram (W3-3): core's budgets

@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-10-28 at `37ba55dc` (the head the run stood on; the commit carrying this file is its child, and after a squash merge the head is a branch commit outside main — `--check` holds the body, not this line) by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-10-29 at `3ec734b9` (the head the run stood on; the commit carrying this file is its child, and after a squash merge the head is a branch commit outside main — `--check` holds the body, not this line) by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 
@@ -270,7 +270,7 @@ What `WorkspaceStore` round-trips — a **separate** inventory from the right-pa
 | Reading view (block model, mode toggle, heading/link AT nav, print) | `Reading/` | #728 (W3-1) | implemented (PR #1052, merged 2026-07-27; NVDA field-verified 2026-07-26/27; print §W-F-waived) |
 | Reading list marker: authored ordinal rendered and read | `Reading/ReadingView.swift` (core `list_marker`) | #1422 (plan 44 WB-11) | implemented both hosts (mac since plan 43 PR 16, #1048; Windows: plan 44 WB-11) |
 | Math rendering + canonical speech/braille artifact | core `math.rs` consumers | #729 (W3-2) | implemented (PR #1057, merged 2026-07-28; human AT pending) |
-| Diagrams (canonical Rust SVG + description) | core `diagram.rs` consumers | #730 (W3-3) | implemented (PR #1058, merged 2026-07-29; human AT pending) |
+| Diagrams (canonical Rust SVG + description) | core `diagram.rs` consumers | #730 (W3-3) | implemented (PR #1058, merged 2026-07-29; human AT pending); Windows projects progressively (#1317); mac unverified |
 | Code blocks (canonical tokens + AT preamble) | `CodeBlockView.swift` | #731 (W3-4) | implemented (PR #1054, merged 2026-07-27; human AT pending) |
 | Embeds across contexts | editor/reading embeds | #732 (W3-5; XD rows dropped) | implemented (PR #1059, merged 2026-07-30; human AT pending; `.base` row closed by W4-6's layered embed card, D-15) |
 | Accessible grid substrate | `AccessibleDataGrid.swift` | #733 (W4-1) | pending |
