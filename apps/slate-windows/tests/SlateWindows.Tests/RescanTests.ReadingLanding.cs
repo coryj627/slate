@@ -233,7 +233,7 @@ public sealed partial class RescanTests
                 model.DiagramsCompleted += (_, _) => landed++;
                 if (stageTwoFails)
                 {
-                    model.DiagramFaultForTests = () => new VaultException.Io("injected diagram fault");
+                    model.DiagramFaultForTests = () => new uniffi.slate_uniffi.VaultException.Io("injected diagram fault");
                 }
             };
 

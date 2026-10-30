@@ -180,7 +180,9 @@ public sealed partial class ReadingDiagramTests
             ReadingSemantics.IsDiagramBlock(paragraph),
             ReadingSemantics.DiagramDescriptionOf(paragraph),
             ReadingSemantics.PendingDiagramKeyOf(paragraph) ?? "-",
-            paragraph.TextAlignment);
+            // The local value: the inherited one is the containing
+            // document's, and the surface's differs from the builder's.
+            paragraph.ReadLocalValue(Block.TextAlignmentProperty));
 
     /// <summary>The diagram paragraph of a fresh single-stage build of
     /// <paramref name="markdown"/> over the vault's own artifacts.</summary>
@@ -476,7 +478,10 @@ public sealed partial class ReadingDiagramTests
             harness.Gate.Set();
             Assert.True(posted.Wait(TimeSpan.FromSeconds(10)), "the stage never posted its landing");
             posted.Reset();
-            harness.Tab.EditorDocument!.Insert(0, "A new first paragraph.\n\n");
+            // An edit after the fence: the live fence keeps the saved
+            // artifact's bytes, so the new projection's stage renders it.
+            harness.Tab.EditorDocument!.Insert(
+                harness.Tab.EditorDocument.TextLength, "\nA new last paragraph.\n");
             harness.Model.Refresh();
             Assert.True(
                 PumpedDispatcher.PumpUntil(() => !harness.Model.DiagramsPendingForTests, TimeSpan.FromSeconds(30)),
