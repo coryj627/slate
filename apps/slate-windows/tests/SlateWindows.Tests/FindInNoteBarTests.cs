@@ -533,6 +533,31 @@ public sealed class FindInNoteBarTests
         Assert.Equal(22, area.Caret.Column);
     });
 
+    /// <summary>Codex round 5: a tab switch may rebind the editor's document
+    /// before or after its data context; a document that is not this tab's
+    /// is never attached, and the tab's own restore state survives until
+    /// its document arrives.</summary>
+    [Fact]
+    public void ADocumentFromAnotherTabIsNeverAttached() => RunSta(() =>
+    {
+        using var shell = new Shell(new string('x', 45) + " a b");
+        shell.Open("a", caret: 40);
+        TextDocument own = shell.Editor.Document;
+        Assert.NotNull(shell.Find.Surface);
+
+        // The other tab's (short) document arrives first.
+        shell.Editor.Document = new TextDocument("a");
+        shell.Settle();
+        Assert.Null(shell.Find.Surface);
+
+        shell.Editor.Document = own;
+        shell.Settle();
+        Assert.Same(own, shell.Find.Surface?.Document);
+        shell.Press(shell.Bar.Query, Key.Escape);
+
+        Assert.Equal((40, 0), (shell.Editor.SelectionStart, shell.Editor.SelectionLength));
+    });
+
     [Fact]
     public void CloseAfterAShortenedDocumentRestoresAClampedCaret() => RunSta(() =>
     {

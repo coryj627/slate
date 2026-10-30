@@ -152,9 +152,14 @@ internal partial class FindInNoteBar : UserControl
         {
             return;
         }
+        // WPF may update the shared template's bindings in any order on a tab
+        // switch: the editor and its document are attached only once BOTH
+        // belong to this bar's tab, so another tab's text never becomes the
+        // search surface (nor rebases this tab's restore point).
         if (_model is { IsOpen: true, Mode: FindInNoteMode.Editor }
-            && Editor is { Document: { } document } editor
-            && ReferenceEquals((editor.DataContext as WorkspaceTabViewModel)?.FindInNote, _model))
+            && Editor is { Document: { } document, DataContext: WorkspaceTabViewModel tab } editor
+            && ReferenceEquals(tab.FindInNote, _model)
+            && ReferenceEquals(tab.EditorDocument, document))
         {
             if (_surface is null || !ReferenceEquals(_surface.Document, document))
             {
