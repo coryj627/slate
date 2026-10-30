@@ -368,6 +368,12 @@ pub(crate) fn split_markdown_target(url: &str) -> (String, Option<LinkAnchor>) {
 /// to `External` without reimplementing the same heuristic. Kept
 /// out of the public API because the rule is an implementation
 /// detail of the link layer, not a stable contract.
+///
+/// Schema state since migration 041 (#1426): `link_resolver::selector_target`
+/// reads it, and its answers are stored in two indexes over `links`. A change
+/// to this rule needs a migration that rebuilds them. Otherwise stored keys
+/// disagree with recomputed ones, and SQLite reports the index corrupt when
+/// an UPDATE or DELETE cannot find its entry.
 pub(crate) fn looks_external_for_resolver(url: &str) -> bool {
     looks_external(url)
 }

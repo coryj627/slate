@@ -112,6 +112,15 @@ thread_local! {
     /// on this thread — one statement each.
     pub(crate) static FOLDED_CANDIDATE_READS: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
+    /// #1426 test seam: dangling rows [`re_resolve_unresolved_links_naming`]
+    /// read on this thread — the rows a create's heal visits.
+    pub(crate) static HEAL_ROWS_VISITED: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+    /// #1426 test seam: while set, a create on this thread heals through the
+    /// vault-wide [`re_resolve_unresolved_links`], so a fact can compare the
+    /// two heals on twin vaults.
+    pub(crate) static CREATE_HEAL_VAULT_WIDE: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
 }
 
 /// Where [`replace_links_for_file`] draws a target's candidate paths from
@@ -516,6 +525,131 @@ pub(crate) fn re_resolve_unresolved_links_under(
         cancel.check()?;
         let anchor = deserialize_anchor(anchor_str.as_deref());
         let resolved = resolve_link(&target_raw, anchor, &source_path, &index);
+        if let ResolvedLink::Resolved { target_path, .. } = resolved {
+            update.execute(params![target_path, rowid])?;
+            affected.push(source_path);
+        }
+    }
+    affected.sort();
+    affected.dedup();
+    Ok(affected)
+}
+
+/// The heal a create runs inside its own transaction (W6-2 PR B, #746):
+/// [`re_resolve_unresolved_links_naming`] for the created path.
+pub(crate) fn heal_after_create(
+    tx: &Transaction,
+    created_path: &str,
+) -> Result<Vec<String>, VaultError> {
+    #[cfg(test)]
+    if CREATE_HEAL_VAULT_WIDE.with(std::cell::Cell::get) {
+        return re_resolve_unresolved_links(tx);
+    }
+    re_resolve_unresolved_links_naming(tx, created_path)
+}
+
+/// Which of migration 041's partial indexes a heal statement reads (#1426).
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum HealKey {
+    /// `idx_links_target_path_fold`: an exact target, by its path.
+    Path,
+    /// `idx_links_target_name_fold`: a bare name, by its name.
+    Name,
+}
+
+/// The dangling rows whose folded target key, in `key`'s mode, is one of
+/// `keys` placeholders — through that mode's partial index, whose predicate
+/// the statement repeats. `INDEXED BY` names it: `target_path IS NULL` also
+/// reads as an equality on `idx_links_target`, which the planner otherwise
+/// prefers, and that walks every dangling row.
+pub(crate) fn heal_rows_sql(key: HealKey, keys: usize) -> String {
+    let (function, index) = match key {
+        HealKey::Path => ("slate_link_target_path", "idx_links_target_path_fold"),
+        HealKey::Name => ("slate_link_target_name", "idx_links_target_name_fold"),
+    };
+    let placeholders = (1..=keys)
+        .map(|index| format!("?{index}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "SELECT links.rowid, files.path, links.target_raw, links.target_anchor
+         FROM links INDEXED BY {index}
+         JOIN files ON files.id = links.source_file_id
+         WHERE links.target_path IS NULL AND links.is_external = 0
+           AND slate_tree_sort_key({function}(links.target_raw)) IN ({placeholders})"
+    )
+}
+
+/// `form` without a trailing Markdown extension (any case) in its final
+/// component — the inverse of the selector's implied extension.
+fn without_implied_extension(form: &str) -> Option<&str> {
+    let (stem, extension) = form.rsplit_once('.')?;
+    (!extension.contains('/')
+        && crate::link_resolver::MD_EXTENSIONS
+            .iter()
+            .any(|md| md.eq_ignore_ascii_case(extension)))
+    .then_some(stem)
+}
+
+/// A create's heal (#1426): only the dangling rows whose authored target
+/// could name `created_path`, each resolved through the folded-name lookup
+/// in `tx`. The keys invert the selector's two modes. An exact target is
+/// found by the created path, and a bare name by its final component. Each
+/// form is also tried without a trailing Markdown extension, because the
+/// selector implies one. The fold (NFC, then lowercase) is a superset of
+/// the selector's lowercase comparison, and the selector still decides, so
+/// this heals exactly what [`re_resolve_unresolved_links`] heals. A failed
+/// read, or a row whose lookup fails, is the caller's error: never skipped,
+/// never written unresolved.
+pub(crate) fn re_resolve_unresolved_links_naming(
+    tx: &Transaction,
+    created_path: &str,
+) -> Result<Vec<String>, VaultError> {
+    // The stem without its extension both before and after folding:
+    // lowercasing reads context (a sigma before `.md` folds medial, alone
+    // final), and an extension can fold to a Markdown one (a Kelvin sign).
+    // An extra key reads only rows the selector then rejects.
+    let keys_of = |form: &str| {
+        let folded = crate::db::tree_sort_key(form);
+        let mut keys = vec![folded.clone()];
+        if let Some(stem) = without_implied_extension(form) {
+            keys.push(crate::db::tree_sort_key(stem));
+        }
+        if let Some(stem) = without_implied_extension(&folded) {
+            keys.push(stem.to_string());
+        }
+        keys.sort();
+        keys.dedup();
+        keys
+    };
+    let name = crate::link_resolver::final_component(created_path);
+    let mut rows: Vec<(i64, String, String, Option<String>)> = Vec::new();
+    for (key, form) in [(HealKey::Path, created_path), (HealKey::Name, name)] {
+        let keys = keys_of(form);
+        let mut select = tx.prepare_cached(&heal_rows_sql(key, keys.len()))?;
+        let found = select
+            .query_map(rusqlite::params_from_iter(keys.iter()), |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.extend(found);
+    }
+    #[cfg(test)]
+    HEAL_ROWS_VISITED.with(|visited| visited.set(visited.get() + rows.len()));
+
+    let mut affected: Vec<String> = Vec::new();
+    // One memo per source: a basename's winner depends on its source.
+    let mut winners: HashMap<String, HashMap<String, Option<String>>> = HashMap::new();
+    let mut update = tx.prepare("UPDATE links SET target_path = ?1 WHERE rowid = ?2")?;
+    for (rowid, source_path, target_raw, anchor_str) in rows {
+        let resolved = resolve_remembered(
+            &FoldedNameLookup,
+            winners.entry(source_path.clone()).or_default(),
+            tx,
+            &target_raw,
+            deserialize_anchor(anchor_str.as_deref()),
+            &source_path,
+        )?;
         if let ResolvedLink::Resolved { target_path, .. } = resolved {
             update.execute(params![target_path, rowid])?;
             affected.push(source_path);

@@ -233,6 +233,10 @@ const MIGRATIONS: &[Migration] = &[
         description: "change_feed: cross-session index change feed (plan 43 PR 21a, #1293)",
         sql: include_str!("../migrations/040_change_feed.sql"),
     },
+    Migration {
+        description: "links: folded target indexes so a create heals only the rows that could name it (#1426)",
+        sql: include_str!("../migrations/041_links_target_fold_index.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with Slate's standard PRAGMAs.
@@ -353,6 +357,37 @@ pub(crate) fn register_connection_functions(conn: &Connection) -> rusqlite::Resu
         |context| {
             let name = context.get::<Option<String>>(0)?;
             Ok(name.map(|name| tree_sort_key(&name)))
+        },
+    )?;
+    // #1426: migration 041 persists both in its indexes over dangling links'
+    // targets — the exact target's path, the bare name's name, NULL for the
+    // other mode — so they share `selector_target`'s one classification.
+    conn.create_scalar_function(
+        "slate_link_target_path",
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        |context| {
+            let target = context.get::<Option<String>>(0)?;
+            Ok(target
+                .and_then(|target| crate::link_resolver::selector_target(&target))
+                .and_then(|target| match target {
+                    crate::link_resolver::SelectorTarget::Exact(path) => Some(path),
+                    crate::link_resolver::SelectorTarget::Basename(_) => None,
+                }))
+        },
+    )?;
+    conn.create_scalar_function(
+        "slate_link_target_name",
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        |context| {
+            let target = context.get::<Option<String>>(0)?;
+            Ok(target
+                .and_then(|target| crate::link_resolver::selector_target(&target))
+                .and_then(|target| match target {
+                    crate::link_resolver::SelectorTarget::Basename(name) => Some(name),
+                    crate::link_resolver::SelectorTarget::Exact(_) => None,
+                }))
         },
     )
 }
@@ -817,6 +852,17 @@ mod tests {
             .query_row("SELECT slate_tree_sort_key('ÉTUDE')", [], |row| row.get(0))
             .expect("migration registered deterministic functions");
         assert_eq!(key, "étude");
+        // #1426: migration 041 persists both target-key functions in its
+        // indexes, so a raw connection needs them registered too.
+        let (path, name): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT slate_link_target_path('/Notes/Foo'), slate_link_target_name('Foo')",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("migration registered the target-key functions");
+        assert_eq!(path.as_deref(), Some("Notes/Foo"));
+        assert_eq!(name.as_deref(), Some("Foo"));
     }
 
     #[test]
@@ -1882,5 +1928,110 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1, "inserted row should persist across opens");
+    }
+
+    /// #1426: migration 041 adds the two partial indexes over the folded
+    /// targets of dangling links — an exact target by its path, a bare
+    /// name by its name — and lands the schema at 41.
+    #[test]
+    fn migration_041_adds_the_folded_target_indexes() {
+        let mut conn = fresh_db();
+        assert_eq!(migrate(&mut conn).expect("migrate"), 41);
+        for (index, function) in [
+            ("idx_links_target_path_fold", "slate_link_target_path"),
+            ("idx_links_target_name_fold", "slate_link_target_name"),
+        ] {
+            let sql: String = conn
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?1",
+                    [index],
+                    |row| row.get(0),
+                )
+                .unwrap_or_else(|error| panic!("{index} is missing: {error}"));
+            assert_eq!(
+                sql,
+                format!(
+                    "CREATE INDEX {index} ON links(slate_tree_sort_key({function}(target_raw)))\n\
+                     WHERE target_path IS NULL AND is_external = 0"
+                ),
+                "{index}"
+            );
+        }
+    }
+
+    /// #1426: the two target-key functions classify every target exactly as
+    /// the resolver's selector does — NULL both for a target that names
+    /// nothing, else exactly one key: the path key for an exact (rooted or
+    /// qualified) target, the name key for a bare name — and the key folds
+    /// to the selector's first probe key.
+    #[test]
+    fn the_target_key_functions_classify_every_target_as_the_selector_does() {
+        use crate::link_resolver::{CandidateProbe, candidate_probe};
+        let mut conn = Connection::open_in_memory().expect("raw in-memory connection");
+        migrate(&mut conn).expect("migrate");
+        let extra = [
+            "missing/foo",
+            "/missing/foo.md",
+            "./foo.md",
+            " foo ",
+            "a^b",
+            "https://example.com/foo",
+        ];
+        let targets = crate::link_resolver::census_fixtures::TARGETS
+            .iter()
+            .copied()
+            .chain(extra);
+        let mut checked = 0;
+        for target in targets {
+            let (path, name): (Option<String>, Option<String>) = conn
+                .query_row(
+                    "SELECT slate_link_target_path(?1), slate_link_target_name(?1)",
+                    [target],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            match candidate_probe(target) {
+                CandidateProbe::None => {
+                    assert_eq!((path, name), (None, None), "{target:?} names nothing");
+                }
+                CandidateProbe::Paths(keys) => {
+                    assert_eq!(name, None, "{target:?} is exact: no name key");
+                    let path = path.unwrap_or_else(|| panic!("{target:?}: no path key"));
+                    assert_eq!(tree_sort_key(&path), tree_sort_key(&keys[0]), "{target:?}");
+                }
+                CandidateProbe::Names(keys) => {
+                    assert_eq!(path, None, "{target:?} is a bare name: no path key");
+                    let name = name.unwrap_or_else(|| panic!("{target:?}: no name key"));
+                    assert_eq!(tree_sort_key(&name), tree_sort_key(&keys[0]), "{target:?}");
+                }
+            }
+            checked += 1;
+        }
+        assert!(checked > 40, "the census checked {checked} targets");
+    }
+
+    /// #1426: each of the targeted heal's two statements reads its partial
+    /// index, not the links table.
+    #[test]
+    fn the_folded_target_lookup_uses_its_partial_index() {
+        use crate::links_db::{HealKey, heal_rows_sql};
+        let mut conn = fresh_db();
+        migrate(&mut conn).expect("migrate");
+        for (key, index) in [
+            (HealKey::Path, "idx_links_target_path_fold"),
+            (HealKey::Name, "idx_links_target_name_fold"),
+        ] {
+            let plan: Vec<String> = conn
+                .prepare(&format!("EXPLAIN QUERY PLAN {}", heal_rows_sql(key, 2)))
+                .unwrap()
+                .query_map(["a", "b"], |row| row.get::<_, String>(3))
+                .unwrap()
+                .map(|step| step.unwrap())
+                .collect();
+            assert!(
+                plan.iter().any(|step| step.contains(index)),
+                "{key:?}: the heal must read {index}: {plan:?}"
+            );
+        }
     }
 }

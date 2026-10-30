@@ -266,7 +266,7 @@ pub enum ResolvedLink {
 /// extension-implied resolution. Iteration order is the priority
 /// order: a `[[foo]]` link with `foo.md` AND `foo.markdown` in the
 /// vault resolves to `foo.md`.
-const MD_EXTENSIONS: &[&str] = &["md", "markdown", "mdown", "mkd"];
+pub(crate) const MD_EXTENSIONS: &[&str] = &["md", "markdown", "mdown", "mkd"];
 
 /// Format an indexed Markdown target as a complete resolver-correct wikilink.
 ///
@@ -518,45 +518,23 @@ impl LinkCandidateSelector {
     /// The selector for `target_raw` resolved from `source_path`, or `None`
     /// when the target can name nothing in the index (empty or external).
     pub fn new(target_raw: &str, source_path: &str) -> Option<Self> {
-        let trimmed = target_raw.trim();
-        if trimmed.is_empty() || looks_external_for_resolver(trimmed) {
-            return None;
-        }
-        // Normalize the input: strip a leading `./` or `/` so
-        // `./notes/foo.md` and `/notes/foo.md` both resolve the same as
-        // `notes/foo.md`. Obsidian renders a leading `/` as vault-rooted;
-        // we match that. Multiple `../` is out of scope at this layer —
-        // wiki/markdown links pointing at parent directories of the vault
-        // aren't supported by the indexer.
-        //
-        // `rooted` (a leading `/` or `./`) is VAULT-ROOTED EXACT — no
-        // basename fallback. Before U2-3 the flag was stripped and lost, so
-        // `/foo` on a ROOT-LEVEL file (no `/` left after stripping) fell
-        // through to the basename scan and could tie-break to a DIFFERENT
-        // deep file — which also made root files unpinnable by any authored
-        // text (the U2-3 referential-stability census found this, seed 164).
-        let rooted = trimmed.starts_with('/') || trimmed.starts_with("./");
-        let normalized = trimmed
-            .strip_prefix("./")
-            .or_else(|| trimmed.strip_prefix('/'))
-            .unwrap_or(trimmed);
-        let lower = normalized.to_lowercase();
-        let has_extension = has_extension(normalized);
-        let mode = if rooted || normalized.contains('/') {
-            let mut keys = vec![lower.clone()];
-            if !has_extension {
-                keys.extend(MD_EXTENSIONS.iter().map(|ext| format!("{lower}.{ext}")));
+        let mode = match selector_target(target_raw)? {
+            SelectorTarget::Exact(normalized) => {
+                let lower = normalized.to_lowercase();
+                let mut keys = vec![lower.clone()];
+                if !has_extension(&normalized) {
+                    keys.extend(MD_EXTENSIONS.iter().map(|ext| format!("{lower}.{ext}")));
+                }
+                SelectorMode::Exact { keys }
             }
-            SelectorMode::Exact { keys }
-        } else {
-            SelectorMode::Basename {
-                basename: lower,
-                has_extension,
+            SelectorTarget::Basename(normalized) => SelectorMode::Basename {
+                basename: normalized.to_lowercase(),
+                has_extension: has_extension(&normalized),
                 source_dirs: dir_components(source_path)
                     .into_iter()
                     .map(str::to_string)
                     .collect(),
-            }
+            },
         };
         Some(Self { mode, best: None })
     }
@@ -633,6 +611,53 @@ pub enum CandidateProbe {
     /// A basename target: the file names it may match (the literal, then
     /// each implied Markdown extension).
     Names(Vec<String>),
+}
+
+/// How the resolution rules read a target (#1426): an exact target matches
+/// whole paths only, a basename matches final components. The string is the
+/// normalized target as authored — not lowercased, no extension added.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SelectorTarget {
+    Exact(String),
+    Basename(String),
+}
+
+/// The one classification of a target (#1426), shared by
+/// [`LinkCandidateSelector::new`] and the `links` target-key functions that
+/// migration 041 persists in its indexes — so the index and the selector
+/// cannot read one target two ways. `None` for an empty or external target.
+/// Changing it needs a migration that rebuilds those indexes, and so does
+/// anything that changes its answers: [`looks_external_for_resolver`], or a
+/// toolchain whose `trim` reads a different White_Space table. A stale stored
+/// key is worse than a missed heal: SQLite reports the index corrupt when an
+/// UPDATE or DELETE cannot find its entry.
+///
+/// A leading `./` or `/` is stripped, so `./notes/foo.md` and
+/// `/notes/foo.md` read as `notes/foo.md`; Obsidian renders a leading `/` as
+/// vault-rooted, and so does this. Multiple `../` is out of scope at this
+/// layer. A rooted target is EXACT, with no basename fallback: before U2-3
+/// the flag was stripped and lost, so `/foo` on a root-level file fell
+/// through to the basename scan and could tie-break to a different deep
+/// file, which also made root files unpinnable by any authored text (the
+/// U2-3 referential-stability census, seed 164). A remainder that contains
+/// `/` is exact too. Anchors are not stripped: `target_raw` is stored
+/// anchor-free.
+pub(crate) fn selector_target(target_raw: &str) -> Option<SelectorTarget> {
+    let trimmed = target_raw.trim();
+    if trimmed.is_empty() || looks_external_for_resolver(trimmed) {
+        return None;
+    }
+    let rooted = trimmed.starts_with('/') || trimmed.starts_with("./");
+    let normalized = trimmed
+        .strip_prefix("./")
+        .or_else(|| trimmed.strip_prefix('/'))
+        .unwrap_or(trimmed)
+        .to_string();
+    Some(if rooted || normalized.contains('/') {
+        SelectorTarget::Exact(normalized)
+    } else {
+        SelectorTarget::Basename(normalized)
+    })
 }
 
 /// The [`CandidateProbe`] for `target_raw`, normalized exactly as

@@ -6237,8 +6237,8 @@ impl VaultSession {
         // the next full scan, which the mac runs after every structural
         // mutation and the Windows shell never does; SQLite now heals at
         // scan, move AND create time, and the graph keeps replaying it.
-        let resolved_sources =
-            crate::links_db::re_resolve_unresolved_links(&tx).map_err(published)?;
+        // #1426: only the dangling rows that could name this path.
+        let resolved_sources = crate::links_db::heal_after_create(&tx, path).map_err(published)?;
         if graph_sink.live() {
             for source in &resolved_sources {
                 graph_sink
