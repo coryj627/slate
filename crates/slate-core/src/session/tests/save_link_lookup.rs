@@ -852,6 +852,10 @@ fn median_ms(mut values: Vec<f64>) -> f64 {
 /// migration's index build on the scanned cache.
 #[test]
 #[ignore = "timing harness for BENCHMARKS.md (#1426); run in release with --ignored --nocapture"]
+#[expect(
+    clippy::disallowed_macros,
+    reason = "a timing harness reports its medians on stdout; it prints only numbers from its own synthetic fixture, never a user's note"
+)]
 fn create_heal_timing() {
     let (_tmp, session) = dangling_vault(true);
     let (mut vault_wide, mut targeted, mut targeted_rows) = (Vec::new(), Vec::new(), Vec::new());
