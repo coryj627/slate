@@ -340,6 +340,7 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
             <!-- W4-4 (#736): the in-note properties header — above the
                  editor host, OUTSIDE its scroll viewer (UIA reads
@@ -485,7 +486,7 @@
                  source so UIA ownership is stable across providers. The
                  transparent layer intentionally makes Close/Escape the only
                  dismissal paths and prevents pointer input reaching the editor. -->
-            <local:AutomationLandmarkGrid Grid.RowSpan="3"
+            <local:AutomationLandmarkGrid Grid.RowSpan="4"
                                           Panel.ZIndex="100"
                                           Background="Transparent"
                                           Visibility="{Binding EditorInteractions.IsPopoverOpen, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}"
@@ -588,7 +589,14 @@
                            TextAlignment="Center"
                            TextWrapping="Wrap" />
             </StackPanel>
-            <TextBlock Grid.Row="2"
+            <!-- WB-22 (#1112): the find bar, a SIBLING of the note's surfaces,
+                 never their child (the editor's Document peer keeps its atomic
+                 text, w_c_matrix row 17); its Escape never reaches the text and
+                 the text's never reaches it. -->
+            <local:FindInNoteBar Grid.Row="2"
+                                 DataContext="{Binding FindInNote}"
+                                 Editor="{Binding ElementName=MarkdownEditor}" />
+            <TextBlock Grid.Row="3"
                        Margin="12,0,12,8"
                        Text="{Binding Status}"
                        Foreground="{DynamicResource Slate.SecondaryTextBrush}"

@@ -224,6 +224,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             }
         };
         EditorPreferences = editorPreferences ?? new EditorPreferencesViewModel(_announce);
+        FindInNote = new FindInNoteViewModel(_announce);
         Id = state.Id;
         Item = state.Item;
         Mode = state.Mode;
@@ -315,6 +316,9 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     }
     public EditorPreferencesViewModel EditorPreferences { get; }
 
+    /// <summary>WB-22 (#1112): this tab's find bar.</summary>
+    public FindInNoteViewModel FindInNote { get; }
+
     /// <summary>WB-21b (#1526): the one place a Reading model is made — the
     /// restored-reading branch, the toggle and the in-place replacement all
     /// call it — so every route's first projection speaks the reader's code
@@ -396,6 +400,9 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         OnPropertyChanged(nameof(IsReadingMode));
         OnPropertyChanged(nameof(IsEditorVisible));
         OnPropertyChanged(nameof(IsReadingVisible));
+        // WB-22 PR 1 (#1112): the find bar searches the editor only, so a
+        // switch to reading mode closes it without moving focus or the caret.
+        FindInNote.CloseForModeSwitch();
     }
     public bool IsBase => Item.Kind == WorkspaceItemKind.Base;
 
@@ -608,6 +615,14 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         // the fault moves to the new document with the item, and every gate
         // still refuses.
         bool carriesFault = LastSaveFaulted && item == Item;
+        // WB-22 (#1112): the find bar belongs to the note it searched; an
+        // in-place change of item (navigation, a Base or canvas opened here)
+        // closes it without moving focus. A same-item reload keeps it open
+        // and re-attaches to the reloaded document.
+        if (item != Item)
+        {
+            FindInNote.CloseForModeSwitch();
+        }
         BumpContentGeneration();
         _saveEpoch++;
         _itemEpoch++;
@@ -1330,6 +1345,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         _editorInteractions = null;
         _editorSession?.Dispose();
         _editorSession = null;
+        FindInNote.Dispose();
         if (_ownsEditorPreferences)
         {
             EditorPreferences.Dispose();
@@ -2491,6 +2507,15 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         ToggleReadingModeCommand = new RelayCommand(
             _ => RunWorkspaceMutation(ToggleActiveViewMode),
             _ => ActiveGroup.ActiveTab?.IsMarkdown == true);
+        // WB-22 (#1112): the palette's steps. The palette holds focus while
+        // it runs, so they act on the active tab's open bar; the keys go
+        // through FindInNoteKeyRoute, which reads the focused note instead.
+        FindNextInNoteCommand = new RelayCommand(
+            _ => ActiveGroup.ActiveTab?.FindInNote.Next(),
+            _ => ActiveGroup.ActiveTab?.FindInNote is { IsOpen: true });
+        FindPreviousInNoteCommand = new RelayCommand(
+            _ => ActiveGroup.ActiveTab?.FindInNote.Previous(),
+            _ => ActiveGroup.ActiveTab?.FindInNote is { IsOpen: true });
         MoveTabLeftCommand = new RelayCommand(
             _ => RunWorkspaceMutation(() => MoveActiveTab(-1)),
             _ => CanMoveActiveTab(-1));
@@ -2808,6 +2833,27 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     public ICommand DuplicateTabCommand { get; }
     public ICommand ReopenClosedTabCommand { get; }
     public ICommand ToggleReadingModeCommand { get; }
+
+    /// <summary>WB-22 (#1112): Find Next / Find Previous from the palette.</summary>
+    public ICommand FindNextInNoteCommand { get; }
+
+    public ICommand FindPreviousInNoteCommand { get; }
+
+    /// <summary>
+    /// WB-22 (#1112): Ctrl+F on a note opens the active tab's find bar, or,
+    /// open already, focuses its query with the text selected. False when
+    /// the active tab is not a note in the editor (PR 1: a reading-mode note
+    /// still falls through to vault search), so the caller falls through.
+    /// </summary>
+    public bool OpenFindInNote()
+    {
+        if (ActiveGroup.ActiveTab is not { IsMarkdown: true, IsReadingMode: false } tab)
+        {
+            return false;
+        }
+        tab.FindInNote.Open();
+        return true;
+    }
     public ICommand MoveTabLeftCommand { get; }
     public ICommand MoveTabRightCommand { get; }
     public ICommand NextTabCommand { get; }

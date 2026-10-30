@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-10-30 at `af61d39f` (the head the run stood on; the commit carrying this file is its child, and after a squash merge the head is a branch commit outside main — `--check` holds the body, not this line) by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-10-30 at `0d1928d3` (the head the run stood on; the commit carrying this file is its child, and after a squash merge the head is a branch commit outside main — `--check` holds the body, not this line) by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 
@@ -26,7 +26,7 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 
 ## Command inventory
 
-188 stable command ids from the `SlateCommandID` catalog (drift-test-enforced) plus 1 Windows-only (W6-2 PR B2, B2-D6: the mac's ⌘[ panel key delivered as the command `slate.graph.connectionsBack`, read from the Windows chord table's projection `chords.json`), 54 carrying chords from the registration blocks and definition-table chord switches (blank chord = palette/menu-only or focus-scoped by design; the generator fails if a `hotkey:` literal goes unattributed). Spoken hotkeys derive from chords via the `HotkeySpoken` glyph walk (mirrored here); Windows chord mapping is by platform convention (⌘→Ctrl, ⌥→Alt; decision 12), declared in one table in W5-1 with spoken strings substituted per-platform through the canonical vocabulary.
+188 stable command ids from the `SlateCommandID` catalog (drift-test-enforced) plus 3 Windows-only (W6-2 PR B2, B2-D6: the mac's ⌘[ panel key delivered as the command `slate.graph.connectionsBack`, read from the Windows chord table's projection `chords.json`), 54 carrying chords from the registration blocks and definition-table chord switches (blank chord = palette/menu-only or focus-scoped by design; the generator fails if a `hotkey:` literal goes unattributed). Spoken hotkeys derive from chords via the `HotkeySpoken` glyph walk (mirrored here); Windows chord mapping is by platform convention (⌘→Ctrl, ⌥→Alt; decision 12), declared in one table in W5-1 with spoken strings substituted per-platform through the canonical vocabulary.
 
 | command id | capability (mac label) | mac chord | spoken hotkey | consuming W issue | status |
 |---|---|---|---|---|---|
@@ -118,7 +118,7 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.editor.addProperty` | Add Property… | — | — | #736 (W4-4) | implemented; local gates green 2026-08-03; interactive CI + human AT pending |
 | `slate.editor.bulkRenameProperties` | Bulk Rename Properties… | ⇧⌘R | Shift Command R | #736 (W4-4) | implemented; local gates green 2026-08-03; interactive CI + human AT pending |
 | `slate.editor.citationSummary` | Citation Summary | ⇧⌘J | Shift Command J | #737 (W4-5) | implemented; local gates green 2026-08-04; interactive CI + human AT pending |
-| `slate.editor.findInNote` | Find… | ⌘F | Command F | #1112 (find-in-note, split from #742) | pending |
+| `slate.editor.findInNote` | Find… | ⌘F | Command F | #1112 (WB-22) | implemented; local gates green 2026-10-30; interactive CI + human AT pending |
 | `slate.editor.save` | Save | ⌘S | Command S | #724 (W2-1) | implemented; local gates green 2026-07-23; interactive CI + human AT pending |
 | `slate.editor.togglePropertiesSource` | Show Properties Source | ⇧⌘D | Shift Command D | #736 (W4-4) | pending |
 | `slate.editor.toggleSpellCheck` | Check Spelling While Typing | — | — | #725 (W2-3) | implemented; local gates green 2026-07-23; interactive CI + human AT pending |
@@ -218,6 +218,8 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.workspace.shrinkPane` | Shrink Pane | ⌥⌘- | Option Command Minus | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
 | `slate.workspace.splitDown` | Split Down | ⌥⌘\ | Option Command Backslash | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
 | `slate.workspace.splitRight` | Split Right | ⌘\ | Command Backslash | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.editor.findNext` | Find Next | — | — | #1112 (WB-22) | implemented; local gates green 2026-10-30; interactive CI + human AT pending |
+| `slate.editor.findPrevious` | Find Previous | — | — | #1112 (WB-22) | implemented; local gates green 2026-10-30; interactive CI + human AT pending |
 | `slate.graph.connectionsBack` | Connections: Back | ⌘[ | Command Left Bracket | #746 (W6-2) | implemented; local gates green 2026-09-05; interactive CI + human AT pending |
 
 The palette surface itself (ranking via the W0.5-1 core engine, sections, recents, chord display) is **#741 (W5-1)**; the quick switcher is **#723 (W1-4)**.
@@ -267,6 +269,7 @@ What `WorkspaceStore` round-trips — a **separate** inventory from the right-pa
 | Editor host (AvalonEdit ⇄ DocumentBuffer, undo, save, IME) | `NoteEditorView.swift` | #724 (W2-1) | implemented; local gates green 2026-07-23; interactive CI + human AT pending |
 | Editor canonical spans | #381 span API consumers | #381 (W2-2) | implemented; local gates green 2026-07-23; interactive CI + human AT pending |
 | In-editor interactions (links, tags, citations, embeds, checkboxes) | `NoteEditorView.swift` | #725 (W2-3) | implemented; local gates green 2026-07-23; interactive CI + human AT pending |
+| Find in note: find bar, next/previous, case, whole word, replace (editor) | `NoteEditorView.swift` (AppKit find bar, #874) | #1112 (plan 44 WB-22) | implemented in the editor (PR 1); the reading view is PR 2. Find-in-selection: unverified on mac; not shipped. Regex: not shipped (WD12) |
 | Reading view (block model, mode toggle, heading/link AT nav, print) | `Reading/` | #728 (W3-1) | implemented (PR #1052, merged 2026-07-27; NVDA field-verified 2026-07-26/27; print §W-F-waived) |
 | Reading list marker: authored ordinal rendered and read | `Reading/ReadingView.swift` (core `list_marker`) | #1422 (plan 44 WB-11) | implemented both hosts (mac since plan 43 PR 16, #1048; Windows: plan 44 WB-11) |
 | Math rendering + canonical speech/braille artifact | core `math.rs` consumers | #729 (W3-2) | implemented (PR #1057, merged 2026-07-28; human AT pending) |

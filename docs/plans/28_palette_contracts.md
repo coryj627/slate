@@ -89,6 +89,11 @@ overlay. `Visibility` binds through
 same element that overrides `DataContext` resolves against the wrong
 context and sticks at `FallbackValue=Collapsed` forever, which shipped
 twice before (W4-5, W4-6).
+*Note 2026-10-30 (plan 44 WB-22, #1112):* the find-in-note bar honours P5
+by being no overlay at all: a non-modal landmark (`AutomationLandmarkGrid`
+"Find in note") in a row of the note's own tab content, never a `Popup`,
+with no `IsDialog`, no focus scope and no swallow list; the shell's chords
+stay live beside it.
 
 **P6 — One accessible name per row; bolding is presentation only.**
 `MatchSpan` carries **UTF-8 byte offsets** into the label

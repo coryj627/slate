@@ -828,9 +828,12 @@ public sealed partial class CommandPaletteTests
 
         /// <param name="folder">Adds a collapsed folder holding one note, so
         /// the Files tree has a row that expands.</param>
-        public ShippedShellHost(bool shown = false, bool savedQuery = false, bool folder = false)
+        /// <param name="seed">Writes more files into the vault before its
+        /// scan (WB-22: a canvas).</param>
+        public ShippedShellHost(bool shown = false, bool savedQuery = false, bool folder = false, Action<string>? seed = null)
         {
             Assert.Null(Application.Current);
+            seed?.Invoke(_fixture.Root);
             if (folder)
             {
                 Directory.CreateDirectory(Path.Combine(_fixture.Root, "folder"));
@@ -956,6 +959,24 @@ public sealed partial class CommandPaletteTests
             return _workspace;
         }
 
+        /// <summary>WB-22: a clean workspace over the fixture with
+        /// <paramref name="path"/> open and its announcements going to
+        /// <paramref name="announce"/>.</summary>
+        public WorkspaceViewModel AttachWorkspace(Action<A11yEvent> announce, string path)
+        {
+            _workspace = new WorkspaceViewModel(
+                _session,
+                _fixture.Root,
+                () => [],
+                announce,
+                startInteractionBackgroundWork: false,
+                preferencesStore: new AppPreferencesStore(Path.Combine(_fixture.Root, "preferences.json")));
+            SetProperty(nameof(VaultLifecycleViewModel.Workspace), _workspace);
+            _workspace.OpenPath(path);
+            PumpedDispatcher.Drain();
+            return _workspace;
+        }
+
         public QuickSwitcherViewModel AttachQuickOpen()
         {
             _switcher = new QuickSwitcherViewModel(_session, _fixture.Root, _ => { }, localAppDataRoot: _fixture.Root);
@@ -992,6 +1013,27 @@ public sealed partial class CommandPaletteTests
         /// Returns whether the press was handled.</summary>
         public bool Press(UIElement target, Key key, ModifierKeys modifiers) =>
             Press(target, key, modifiers, system: false);
+
+        /// <summary>The same press on a content element (a link inside a
+        /// FlowDocument), WB-22.</summary>
+        public bool Press(IInputElement target, Key key, ModifierKeys modifiers)
+        {
+            bool handled = false;
+            ThreadModifiers.Hold(modifiers, () =>
+            {
+                PresentationSource source = PresentationSource.FromVisual(_inputSource)!;
+                KeyEventArgs preview = KeyArgs(source, key, system: false, Keyboard.PreviewKeyDownEvent);
+                target.RaiseEvent(preview);
+                handled = preview.Handled;
+                if (!handled)
+                {
+                    KeyEventArgs down = KeyArgs(source, key, system: false, Keyboard.KeyDownEvent);
+                    target.RaiseEvent(down);
+                    handled = down.Handled;
+                }
+            });
+            return handled;
+        }
 
         /// <summary>A system key press — what WPF raises for Alt+letter:
         /// <c>Key.System</c>, the letter in <c>SystemKey</c>.</summary>

@@ -22,6 +22,8 @@ public sealed class ThemeTokenContrastTests
         {
             ("primary/window", "Slate.TextColor", "Slate.WindowBackgroundColor"),
             ("primary/surface", "Slate.TextColor", "Slate.SurfaceColor"),
+            // WB-22 (#1112): the editor's text over a find-match fill.
+            ("find-match/text", "Slate.TextColor", "Slate.FindMatchColor"),
             ("primary/raised", "Slate.TextColor", "Slate.RaisedSurfaceColor"),
             ("secondary/window", "Slate.SecondaryTextColor", "Slate.WindowBackgroundColor"),
             ("secondary/surface", "Slate.SecondaryTextColor", "Slate.SurfaceColor"),

@@ -101,6 +101,8 @@ public partial class MainWindow : Window
                 Close();
             }
         }));
+        // WB-22 (#1112): Ctrl+G / Ctrl+Shift+G from the find bar and the note's text.
+        FindInNoteKeyRoute.Bind(this);
         _viewModel = new VaultLifecycleViewModel(
             openSeams?.PickVault ?? PickVaultAsync,
             action => _ = Dispatcher.InvokeAsync(action),
@@ -1580,6 +1582,10 @@ public partial class MainWindow : Window
             // Ctrl+Shift+J/R open sheets, Ctrl+Shift+E toggles reading.
             (Key.J or Key.R, ModifierKeys.Control or ModifierKeys.Control | ModifierKeys.Shift) => true,
             (Key.E, ModifierKeys.Control | ModifierKeys.Shift) => true,
+            // WB-22 (#1112): Ctrl+F opens the find bar (or vault search) and
+            // Ctrl+G / Ctrl+Shift+G step it; none may fire beneath a sheet.
+            (Key.F, ModifierKeys.Control) => true,
+            (Key.G, ModifierKeys.Control or ModifierKeys.Control | ModifierKeys.Shift) => true,
             // W7-6 (#1240): F6 / Shift+F6 cycle the shell regions, and
             // spec §4 makes them a no-op under any modal surface — so the
             // sheet layer suppresses them on the way down.

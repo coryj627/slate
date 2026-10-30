@@ -5,6 +5,9 @@
     <Color x:Key="Slate.SurfaceColor">#FF1E1E1E</Color>
     <Color x:Key="Slate.RaisedSurfaceColor">#FF292929</Color>
     <Color x:Key="Slate.TextColor">#FFF5F5F5</Color>
+    <!-- WB-22 (#1112): the editor's find-match fill, drawn behind the text.
+         The text over it clears the APCA floor (ThemeTokenContrastTests). -->
+    <Color x:Key="Slate.FindMatchColor">#FF5E4A00</Color>
     <Color x:Key="Slate.SecondaryTextColor">#FFD4D4D4</Color>
     <!-- Equals SecondaryText DELIBERATELY (adversarial round 1): at
          the >75 APCA floor the dark palette has zero dimming headroom
@@ -72,6 +75,9 @@
                      Color="{StaticResource Slate.RaisedSurfaceColor}" />
     <SolidColorBrush x:Key="Slate.TextBrush"
                      Color="{StaticResource Slate.TextColor}" />
+    <SolidColorBrush x:Key="Slate.FindMatchBrush"
+                     Color="{StaticResource Slate.FindMatchColor}" />
+    <SolidColorBrush x:Key="Slate.FindMatchOutlineBrush" Color="Transparent" />
     <SolidColorBrush x:Key="Slate.SecondaryTextBrush"
                      Color="{StaticResource Slate.SecondaryTextColor}" />
     <SolidColorBrush x:Key="Slate.TertiaryTextBrush"

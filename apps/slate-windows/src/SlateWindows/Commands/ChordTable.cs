@@ -95,6 +95,12 @@ internal enum ChordScope
     /// filter or tag scope, delivered by the field's own tunnelling handler
     /// (<c>MainWindow.SidebarFilterTextBox_PreviewKeyDown</c>).</summary>
     SidebarFilter,
+
+    /// <summary>The find-in-note bar (WB-22, #1112): Enter and Shift+Enter in
+    /// its query step, Escape anywhere in it closes it, delivered by the
+    /// bar's own tunnelling handler (<c>FindInNoteBar.Bind</c>). Ctrl+F,
+    /// Ctrl+G and Ctrl+Shift+G are <see cref="Global"/>.</summary>
+    FindInNote,
 }
 
 /// <summary>
@@ -252,6 +258,10 @@ internal static class ChordTable
         // Editor
         public const string Save = "slate.editor.save";
         public const string ToggleViewMode = "slate.editor.toggleViewMode";
+        // WB-22 (#1112): mac's find-in-note (#874), and Windows' two steps.
+        public const string EditorFindInNote = "slate.editor.findInNote";
+        public const string EditorFindNext = "slate.editor.findNext";
+        public const string EditorFindPrevious = "slate.editor.findPrevious";
         public const string CitationSummary = "slate.editor.citationSummary";
         public const string AddProperty = "slate.editor.addProperty";
         public const string BulkRenameProperties = "slate.editor.bulkRenameProperties";
@@ -825,6 +835,20 @@ internal static class ChordTable
         Reg(Ids.ToggleViewMode, "Toggle Reading Mode", CommandSection.Editor,
             "Switch the current note between editing and reading mode.",
             "⇧⌘E", "Ctrl+Shift+E"),
+        // WB-22 (#1112): Ctrl+F is the window's bubbling KeyBinding, acting
+        // only on a key no surface claimed (a Base's grid and a canvas take it
+        // first). The steps are Windows-only (mac's ⌘G lives in AppKit's find
+        // bar), delivered by FindInNoteKeyRoute's routed commands, which act
+        // for the note that holds keyboard focus and pass the key on otherwise.
+        Reg(Ids.EditorFindInNote, "Find…", CommandSection.Editor,
+            "Find and highlight text within the current note.",
+            "⌘F", "Ctrl+F", ChordScope.Global),
+        Reg(Ids.EditorFindNext, "Find Next", CommandSection.Editor,
+            "Move to the next match of the open find bar's query.",
+            mac: null, win: "Ctrl+G"),
+        Reg(Ids.EditorFindPrevious, "Find Previous", CommandSection.Editor,
+            "Move to the previous match of the open find bar's query.",
+            mac: null, win: "Ctrl+Shift+G"),
         Reg(Ids.CitationSummary, "Citation Summary", CommandSection.Editor,
             "Open the citation summary for the current note.", "⇧⌘J", "Ctrl+Shift+J"),
         Reg(Ids.AddProperty, "Add Property…", CommandSection.Editor,
@@ -1742,6 +1766,27 @@ internal static class ChordTable
                 + "nothing filtering the key is left to the window. A KeyBinding would "
                 + "not do: WPF marks a matched plain-ICommand binding handled even when "
                 + "it cannot execute."),
+
+            // WB-22 (#1112): the find bar's own keys, live only while focus is
+            // within the open bar (its tunnelling handler runs FindInNoteBar.Bind's
+            // map). Escape in the note's text never reaches the bar, a sibling of
+            // the surfaces, so it never closes it.
+            Chord("windows.findInNote.next", "Find in note: next match",
+                "Enter", ChordScope.FindInNote,
+                "WB-22: Enter in the find bar's query runs the bar's Next (the same "
+                + "step as Find Next, slate.editor.findNext), delivered by "
+                + "FindInNoteBar.Bind; elsewhere in the bar the key is left to the "
+                + "focused control (Enter on Replace All runs Replace All)."),
+            Chord("windows.findInNote.previous", "Find in note: previous match",
+                "Shift+Enter", ChordScope.FindInNote,
+                "WB-22: Shift+Enter in the find bar's query runs the bar's Previous "
+                + "(the same step as Find Previous, slate.editor.findPrevious), "
+                + "delivered by FindInNoteBar.Bind."),
+            Chord("windows.findInNote.close", "Find in note: close",
+                "Escape", ChordScope.FindInNote,
+                "WB-22: Escape anywhere in the find bar runs its Close (clears the "
+                + "highlights, restores the caret and selection, returns focus to the "
+                + "note), delivered by FindInNoteBar.Bind in the tunnelling phase."),
 
             Chord("windows.canvas.newCardLegacy",
                 "Canvas: New Card (legacy shortcut)",

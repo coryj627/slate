@@ -253,6 +253,10 @@ public sealed class MacCatalogParityTests
             // PR 2): mac registers the id with the same label, so it is a
             // shared id and P3 checks its label like any other (§G GD-5's
             // recorded divergence, closed on the mac lane).
+            ["slate.editor.findNext"] =
+                "Windows-only step of the find bar (WB-22, #1112): mac's \u2318G lives inside AppKit's find bar and has no SlateCommandID.",
+            ["slate.editor.findPrevious"] =
+                "Windows-only step of the find bar (WB-22, #1112): mac's \u21E7\u2318G lives inside AppKit's find bar and has no SlateCommandID.",
             ["slate.workspace.widenFilesSidebar"] =
                 "Windows-only keyboard sidebar resize (W7-7 PR 4b, AR-38): the splitters left the Tab order; mac's sidebars resize by pointer.",
             ["slate.workspace.narrowFilesSidebar"] =
