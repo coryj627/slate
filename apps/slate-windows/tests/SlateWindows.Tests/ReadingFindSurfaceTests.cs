@@ -745,6 +745,7 @@ public sealed class ReadingFindSurfaceTests
         find.FlushPendingForTests();
         Assert.Equal(1, find.CurrentIndex);
         Assert.Equal("e\u0301", harness.Surface.Selection.Text);
+        AssertTheRingEnclosesTheSelection(harness, matches[0]);
 
         find.Next();
 
@@ -760,8 +761,26 @@ public sealed class ReadingFindSurfaceTests
         Assert.Equal(2, find.TotalCount);
         find.Next();
         Assert.Equal(2, find.CurrentIndex);
+        AssertTheRingEnclosesTheSelection(harness, harness.Matches("\u0301")[1]);
         find.AttachSurface(null);
     });
+
+    /// <summary>The match's ring encloses what the reveal selected: the whole
+    /// graphemes a match inside one touches, never a zero-width stroke.</summary>
+    private static void AssertTheRingEnclosesTheSelection(Harness harness, (int Offset, int Length) match)
+    {
+        harness.Settle();
+        UIElement scope = Assert.IsAssignableFrom<UIElement>(harness.Surface.DocumentRenderScope);
+        GeneralTransform transform = harness.Surface.TransformToDescendant(scope)!;
+        Rect ring = Assert.Single(harness.Find.RectsOf(match.Offset, match.Length, scope, transform));
+        Rect selected = transform.TransformBounds(Rect.Union(
+            harness.Surface.Selection.Start.GetCharacterRect(LogicalDirection.Forward),
+            harness.Surface.Selection.End.GetCharacterRect(LogicalDirection.Backward)));
+        Assert.True(selected.Width > 1, $"premise: the selected grapheme has width ({selected})");
+        Assert.True(
+            ring.Left <= selected.Left + 0.5 && ring.Right >= selected.Right - 0.5,
+            $"the ring {ring.Left:F1}..{ring.Right:F1} misses the selected grapheme {selected.Left:F1}..{selected.Right:F1}");
+    }
 
     /// <summary>Codex round 4: a table row taller than the viewport shows
     /// lines of every cell; the visible range covers all of them, not only

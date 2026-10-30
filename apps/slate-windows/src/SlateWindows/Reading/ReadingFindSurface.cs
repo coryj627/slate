@@ -100,23 +100,10 @@ internal sealed class ReadingFindSurface : IFindInNoteSurface
     public void Reveal(int offset, int length)
     {
         ReadingTextIndex index = Index;
-        TextPointer start = index.StartOf(offset);
-        TextPointer end = index.EndOf(offset + length);
         UIElement? unit = index.UnitAt(offset);
-        if (unit is null)
-        {
-            // A match that starts or ends inside a grapheme (decomposed text)
-            // selects the whole graphemes it touches: WPF would otherwise
-            // snap the selection, even to nothing.
-            if (!start.IsAtInsertionPosition)
-            {
-                start = start.GetInsertionPosition(LogicalDirection.Backward);
-            }
-            if (!end.IsAtInsertionPosition)
-            {
-                end = end.GetNextInsertionPosition(LogicalDirection.Forward) ?? end;
-            }
-        }
+        (TextPointer start, TextPointer end) = unit is null
+            ? TextRangeOf(offset, length)
+            : (index.StartOf(offset), index.EndOf(offset + length));
         _surface.Selection.Select(start, end);
         TextPointer selected = _surface.Selection.Start;
         RevealedMatch = unit is not null
@@ -237,8 +224,7 @@ internal sealed class ReadingFindSurface : IFindInNoteSurface
         {
             yield break;
         }
-        TextPointer start = Index.StartOf(offset);
-        TextPointer end = Index.EndOf(offset + length);
+        (TextPointer start, TextPointer end) = TextRangeOf(offset, length);
         TextPointer line = start;
         while (line.CompareTo(end) < 0)
         {
@@ -272,6 +258,25 @@ internal sealed class ReadingFindSurface : IFindInNoteSurface
             }
             line = next!;
         }
+    }
+
+    /// <summary>A text match's range: the whole graphemes it touches, so one
+    /// that starts or ends inside a grapheme (decomposed text) is selected
+    /// and ringed whole — WPF would otherwise snap the selection, even to
+    /// nothing.</summary>
+    private (TextPointer Start, TextPointer End) TextRangeOf(int offset, int length)
+    {
+        TextPointer start = Index.StartOf(offset);
+        TextPointer end = Index.EndOf(offset + length);
+        if (!start.IsAtInsertionPosition)
+        {
+            start = start.GetInsertionPosition(LogicalDirection.Backward);
+        }
+        if (!end.IsAtInsertionPosition)
+        {
+            end = end.GetNextInsertionPosition(LogicalDirection.Forward) ?? end;
+        }
+        return (start, end);
     }
 
     /// <summary>The index offsets the viewport shows, first to last: whole
