@@ -407,6 +407,169 @@ public sealed class ReadingFindSurfaceTests
         tab.Dispose();
     });
 
+    /// <summary>Codex round 1: the bar re-attaches inside the Mode change's
+    /// notification, so a mode switch asks nothing only if its questions are
+    /// dropped before that notification — a query the loading reading view
+    /// held, a query typed inside the debounce, and (on an in-place change of
+    /// item) a held query are never answered on the next surface.</summary>
+    [Fact]
+    public void AModeSwitchAsksNothingEvenWhenTheBarReattachesInItsNotification() => RunSta(() =>
+    {
+        using var harness = new Harness("reading-find-switch-notified", "The reading note.\n", notes: 2);
+        var tab = new WorkspaceTabViewModel(
+            harness.Session,
+            new WorkspaceTabState(
+                Guid.NewGuid(),
+                new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+            startInteractionBackgroundWork: false);
+        using var model = new ReadingContentViewModel(harness.Session, tab, _ => { });
+        harness.Surface.Model = model;
+        var loading = new ReadingFindSurface(harness.Surface);
+        var heard = new List<A11yEvent>();
+        using var find = new FindInNoteViewModel(heard.Add);
+        var editor = new EditorFindSurface(new ICSharpCode.AvalonEdit.Document.TextDocument("the reading note"), editor: null);
+        // The bar's shape: it re-attaches synchronously on the Mode change.
+        find.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(FindInNoteViewModel.Mode))
+            {
+                find.AttachSurface(find.Mode == FindInNoteMode.Editor ? editor : loading);
+            }
+        };
+        find.Mode = FindInNoteMode.Reading;
+        find.Open();
+        find.AttachSurface(loading);
+        find.Query = "reading";
+        find.FlushPendingForTests();
+        Assert.Equal([FindInNotePhrase.WaitingForReadingView], Spoken(heard));
+
+        // A held question.
+        find.Mode = FindInNoteMode.Editor;
+        find.FlushPendingForTests();
+        Assert.Equal([FindInNotePhrase.WaitingForReadingView], Spoken(heard));
+        Assert.Equal((0, 0), editor.Selection);
+        Assert.Equal(1, find.TotalCount);
+
+        // A query typed inside the debounce.
+        find.Query = "note";
+        find.Mode = FindInNoteMode.Reading;
+        find.Mode = FindInNoteMode.Editor;
+        find.FlushPendingForTests();
+        Assert.Equal([FindInNotePhrase.WaitingForReadingView], Spoken(heard));
+        Assert.Equal((0, 0), editor.Selection);
+
+        // An in-place change of item, in the same mode, drops a held question
+        // too: the next note's projection answers nothing.
+        find.Mode = FindInNoteMode.Reading;
+        find.Query = "reading";
+        find.FlushPendingForTests();
+        Assert.Equal(2, Spoken(heard).Count);
+        find.CloseForModeSwitch();
+        model.Refresh();
+        Assert.True(
+            PumpedDispatcher.PumpUntil(() => harness.Surface.ShowsSearchableContent, TimeSpan.FromSeconds(30)),
+            "the projection never applied");
+        find.Open();
+        find.AttachSurface(new ReadingFindSurface(harness.Surface));
+        find.FlushPendingForTests();
+        Assert.Equal(2, Spoken(heard).Count);
+        Assert.True(harness.Surface.Selection.IsEmpty, "the next note's projection answered the held question");
+
+        find.AttachSurface(null);
+        harness.Surface.Model = null;
+        tab.Dispose();
+    });
+
+    /// <summary>Codex round 1: a step pressed after the projection applied
+    /// but before the first recount speaks one line: it answers the held
+    /// question itself.</summary>
+    [Fact]
+    public void AStepBeforeTheFirstRecountSpeaksOnce() => RunSta(() =>
+    {
+        using var harness = new Harness("reading-find-step-waiting", "One reading and two reading.\n", notes: 2);
+        var tab = new WorkspaceTabViewModel(
+            harness.Session,
+            new WorkspaceTabState(
+                Guid.NewGuid(),
+                new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+            startInteractionBackgroundWork: false);
+        using var model = new ReadingContentViewModel(harness.Session, tab, _ => { });
+        harness.Surface.Model = model;
+        var surface = new ReadingFindSurface(harness.Surface);
+        var heard = new List<A11yEvent>();
+        using var find = new FindInNoteViewModel(heard.Add);
+        find.Open();
+        find.AttachSurface(surface);
+        find.Query = "reading";
+        find.FlushPendingForTests();
+        model.Refresh();
+        Assert.True(PumpedDispatcher.PumpUntil(() => surface.IsSearchable, TimeSpan.FromSeconds(30)), "the projection never applied");
+
+        find.Next();
+
+        Assert.Equal([FindInNotePhrase.WaitingForReadingView, "1 of 2"], Spoken(heard));
+        Assert.Equal(1, find.CurrentIndex);
+        find.AttachSurface(null);
+        harness.Surface.Model = null;
+        tab.Dispose();
+    });
+
+    private const string MathAndDiagramNote =
+        "Words before.\n\n$$q + q$$\n\n```mermaid\nweirdDiagram\nstuff\n```\n";
+
+    /// <summary>Codex round 1: a diagram completing elsewhere leaves the
+    /// current math match current — the whole-element selection still says
+    /// which of the element's matches it is.</summary>
+    [Fact]
+    public void ADiagramCompletingElsewhereKeepsTheCurrentMathMatch() => RunSta(() =>
+    {
+        using var harness = new Harness("reading-find-math-completion", MathAndDiagramNote, gated: true);
+        var heard = new List<A11yEvent>();
+        using var find = new FindInNoteViewModel(heard.Add);
+        find.Open();
+        find.AttachSurface(harness.Find);
+        find.Query = "q";
+        find.FlushPendingForTests();
+        Assert.Equal((1, 2), (find.CurrentIndex, find.TotalCount));
+
+        harness.Land();
+        find.FlushPendingForTests();
+        Assert.Equal(1, find.CurrentIndex);
+
+        find.Next();
+        Assert.Equal(2, find.CurrentIndex);
+        Assert.Equal("2 of 2", Spoken(heard)[^1]);
+        find.AttachSurface(null);
+    });
+
+    /// <summary>Codex round 1: a restore point taken inside a diagram that
+    /// then completes in place is dropped, as a replacement drops one — the
+    /// completion rewrote the runs its pointers were in.</summary>
+    [Fact]
+    public void ARestorePointInsideACompletingDiagramIsDropped() => RunSta(() =>
+    {
+        using var harness = new Harness(
+            "reading-find-restore-completion",
+            "Before words.\n\n```mermaid\nweirdDiagram\nalpha\n```\n\nAfter words.\n",
+            gated: true);
+        (int offset, int length) = Assert.Single(harness.Matches("alpha"));
+        harness.Find.Reveal(offset, length);
+        Assert.Equal("alpha", harness.Surface.Selection.Text);
+        var heard = new List<A11yEvent>();
+        using var find = new FindInNoteViewModel(heard.Add);
+        find.Open();
+        find.AttachSurface(harness.Find);
+        find.Query = "after";
+        find.FlushPendingForTests();
+        Assert.Equal("After", harness.Surface.Selection.Text);
+
+        harness.Land();
+        find.FlushPendingForTests();
+        find.Close();
+
+        Assert.Equal("After", harness.Surface.Selection.Text);
+    });
+
     /// <summary>Two matches inside one math source are two stops, each
     /// selecting the whole element: the surface remembers which one it
     /// revealed while the selection is still the one the reveal made.</summary>

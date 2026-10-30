@@ -41,9 +41,10 @@ internal sealed class ReadingFindSurface : IFindInNoteSurface
     /// <summary>The index itself: a new one per content revision.</summary>
     public object Stamp => Index;
 
-    /// <summary>The surface's selection in the index's offsets — the match
-    /// last revealed while the selection is still exactly what the reveal
-    /// made (a math match selects its whole element).</summary>
+    /// <summary>The surface's selection in the index's offsets. A math match
+    /// selects its whole element, so while the selection is still exactly
+    /// what revealing one made, it is that match — found again in the current
+    /// index, since a completion elsewhere can move the element's offset.</summary>
     public (int Offset, int Length) Selection
     {
         get
@@ -51,9 +52,10 @@ internal sealed class ReadingFindSurface : IFindInNoteSurface
             TextSelection selection = _surface.Selection;
             if (_revealed is { } revealed
                 && selection.Start.CompareTo(revealed.Start) == 0
-                && selection.End.CompareTo(revealed.End) == 0)
+                && selection.End.CompareTo(revealed.End) == 0
+                && Index.UnitStart(revealed.Unit) is >= 0 and int unitStart)
             {
-                return (revealed.Offset, revealed.Length);
+                return (unitStart + revealed.Within, revealed.Length);
             }
             int start = Index.OffsetOf(selection.Start);
             return (start, Math.Max(0, Index.OffsetOf(selection.End) - start));
@@ -85,7 +87,9 @@ internal sealed class ReadingFindSurface : IFindInNoteSurface
     {
         ReadingTextIndex index = Index;
         _surface.Selection.Select(index.StartOf(offset), index.EndOf(offset + length));
-        _revealed = new Revealed(offset, length, _surface.Selection.Start, _surface.Selection.End);
+        _revealed = index.UnitAt(offset) is { } unit
+            ? new Revealed(unit, offset - index.UnitStart(unit), length, _surface.Selection.Start, _surface.Selection.End)
+            : null;
         if (_surface.DocumentRenderScope is { } scope)
         {
             // Only a rectangle that exists: none before layout, and an empty
@@ -140,7 +144,9 @@ internal sealed class ReadingFindSurface : IFindInNoteSurface
     public object CaptureRestorePoint()
     {
         TextSelection selection = _surface.Selection;
-        return new RestorePoint(selection.Start, selection.End, _surface.ReplacedRevision);
+        return new RestorePoint(
+            selection.Start, selection.End, _surface.ReplacedRevision,
+            PendingDiagramOf(selection.Start) ?? PendingDiagramOf(selection.End));
     }
 
     /// <summary>The surface keeps one document for its whole life, so a
@@ -148,11 +154,14 @@ internal sealed class ReadingFindSurface : IFindInNoteSurface
     public object RebaseRestorePoint(object restorePoint) => restorePoint;
 
     /// <summary>Re-selects where opening found the selection unless a
-    /// replacement (a merge or a model switch) moved every pointer since:
-    /// then the caret stays where that change left it.</summary>
+    /// replacement (a merge or a model switch) moved every pointer since, or
+    /// the pending diagram it lay in completed in place (the completion
+    /// rewrote that paragraph's runs): then the caret stays where it is.</summary>
     public void Restore(object restorePoint)
     {
-        if (restorePoint is RestorePoint { } point && point.Replacements == _surface.ReplacedRevision)
+        if (restorePoint is RestorePoint { } point
+            && point.Replacements == _surface.ReplacedRevision
+            && (point.PendingDiagram is null || ReadingSemantics.PendingDiagramKeyOf(point.PendingDiagram) is not null))
         {
             _surface.Selection.Select(point.Start, point.End);
         }
@@ -248,12 +257,22 @@ internal sealed class ReadingFindSurface : IFindInNoteSurface
         {
             _adorner?.SetMatches([], -1);
             StopDeferring();
+        }
+        if (change == ReadingContentChange.Replaced)
+        {
+            // Every pointer moved: no revealed match survives. A completion
+            // keeps one whose element and selection it left alone.
             _revealed = null;
         }
         TextChanged?.Invoke();
     }
 
-    private sealed record Revealed(int Offset, int Length, TextPointer Start, TextPointer End);
+    private static Paragraph? PendingDiagramOf(TextPointer pointer) =>
+        pointer.Paragraph is { } paragraph && ReadingSemantics.PendingDiagramKeyOf(paragraph) is not null ? paragraph : null;
 
-    private sealed record RestorePoint(TextPointer Start, TextPointer End, int Replacements);
+    /// <summary>A revealed math match: its element, where in the element's
+    /// source it starts, and the selection the reveal made.</summary>
+    private sealed record Revealed(UIElement Unit, int Within, int Length, TextPointer Start, TextPointer End);
+
+    private sealed record RestorePoint(TextPointer Start, TextPointer End, int Replacements, Paragraph? PendingDiagram);
 }

@@ -202,6 +202,20 @@ internal sealed class ReadingTextIndex
         return index < _segments.Count && _segments[index].FlatStart <= offset ? _segments[index].Element : null;
     }
 
+    /// <summary>Where <paramref name="unit"/> starts in the flat text; -1 when
+    /// it is not a unit of this index.</summary>
+    public int UnitStart(UIElement unit)
+    {
+        foreach (Segment segment in _segments)
+        {
+            if (ReferenceEquals(segment.Element, unit))
+            {
+                return segment.FlatStart;
+            }
+        }
+        return -1;
+    }
+
     /// <summary>A math block whose range is its speech (#1595's shape: it
     /// carries the fenced source a copy substitutes).</summary>
     private static bool SpeaksInPlaceOfSource(Paragraph paragraph) =>

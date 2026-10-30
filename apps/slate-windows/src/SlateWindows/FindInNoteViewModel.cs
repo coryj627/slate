@@ -121,11 +121,20 @@ internal sealed class FindInNoteViewModel : BindableBase, IDisposable
         get => _mode;
         set
         {
-            if (SetField(ref _mode, value))
+            if (value != _mode)
             {
                 // A mode switch asks nothing: a question the loading reading
-                // view held is not answered on the other surface.
+                // view held, or a query still on the debounce, is not answered
+                // on the other surface. Dropped BEFORE the change is published:
+                // the bar re-attaches inside its notification.
                 _askedWhileWaiting = false;
+                if (_pending == Recompute.Options)
+                {
+                    _pending = Recompute.Text;
+                }
+            }
+            if (SetField(ref _mode, value))
+            {
                 OnPropertyChanged(nameof(CanReplace));
                 RaiseCommands();
             }
@@ -376,6 +385,7 @@ internal sealed class FindInNoteViewModel : BindableBase, IDisposable
         _debounce.Stop();
         _pending = Recompute.None;
         _tracked = null;
+        _askedWhileWaiting = false;
         _restorePoint = null;
         RaiseCommands();
         DetachSurface();
@@ -480,6 +490,12 @@ internal sealed class FindInNoteViewModel : BindableBase, IDisposable
         if (!IsOpen || _surface is not { } surface)
         {
             return;
+        }
+        if (surface.IsSearchable)
+        {
+            // The step itself answers a question the loading reading view
+            // held: the refresh before it stays silent, so one line is heard.
+            _askedWhileWaiting = false;
         }
         EnsureFresh();
         if (!surface.IsSearchable)
