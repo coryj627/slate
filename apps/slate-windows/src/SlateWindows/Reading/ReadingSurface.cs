@@ -256,6 +256,7 @@ internal sealed class ReadingSurface : RichTextBox
             previous.PropertyChanged -= surface.Model_PropertyChanged;
             previous.BlocksAppended -= surface.Model_BlocksAppended;
             previous.TornDown -= surface.Model_TornDown;
+            previous.DiagramsCompleted -= surface.Model_DiagramsCompleted;
             previous.Tab.ReadingRescanReloadBegan -= surface.OnReadingRescanReloadBegan;
             // Kill the outgoing model's stream BEFORE anything else:
             // its chunk continuations hold list objects that live in
@@ -270,6 +271,7 @@ internal sealed class ReadingSurface : RichTextBox
             model.PropertyChanged += surface.Model_PropertyChanged;
             model.BlocksAppended += surface.Model_BlocksAppended;
             model.TornDown += surface.Model_TornDown;
+            model.DiagramsCompleted += surface.Model_DiagramsCompleted;
             model.Tab.ReadingRescanReloadBegan += surface.OnReadingRescanReloadBegan;
             if (ReferenceEquals(surface._lastMerged, model.Document)
                 && model.Document is not null
@@ -294,6 +296,9 @@ internal sealed class ReadingSurface : RichTextBox
                 {
                     model.RefreshForDependencies();
                 }
+                // WB-20: the detach retired this projection's diagram
+                // stage; nothing re-projects here, so it resumes.
+                model.ResumePendingDiagrams();
                 return;
             }
             // A model swap is a different projection (navigation, tab
@@ -419,6 +424,194 @@ internal sealed class ReadingSurface : RichTextBox
         }
     }
 
+    /// <summary>WB-20 (#1317) test seam: invoked at the top of every
+    /// <see cref="ApplyBuiltDocument"/> — the pin that a diagram's landing
+    /// completes in place instead of re-applying the document.</summary>
+    internal static Action? ApplyProbeForTests;
+
+    private void Model_DiagramsCompleted(
+        FlowDocument document, IReadOnlyList<(string Key, DiagramOutcome Outcome)> outcomes)
+    {
+        // Only the surface showing that projection completes it; any other
+        // ignores it, and the model's next build uses what landed.
+        if (ReferenceEquals(_lastMerged, document))
+        {
+            CompleteDiagrams(outcomes);
+        }
+    }
+
+    /// <summary>Where a text pointer sat relative to a pending diagram
+    /// paragraph, recorded before its completion edits it.</summary>
+    private readonly record struct DiagramAnchor(DiagramAnchorKind Kind, int Offset, TextPointer? Pointer);
+
+    private enum DiagramAnchorKind
+    {
+        /// <summary>Outside the paragraph: left alone — the edit is confined
+        /// to it and WPF's pointers are live, so they stay on their
+        /// character.</summary>
+        Outside,
+        InSource,
+        AtContainerStart,
+        AtContainerEnd,
+    }
+
+    /// <summary>
+    /// Completes this surface's pending diagram paragraphs in place (WB-20,
+    /// #1317). Each paragraph's placeholder element and its container are
+    /// kept — the reader may be on it, hold the caret beside it or anchor a
+    /// selection at it — and the paragraph's text is edited around them in
+    /// one change. The caret and the selection are remapped onto the same
+    /// characters. A late diagram says nothing (WD11): the element's name
+    /// change is a property change, not speech.
+    /// </summary>
+    internal void CompleteDiagrams(IReadOnlyList<(string Key, DiagramOutcome Outcome)> outcomes)
+    {
+        bool removedContainer = false;
+        bool collapsed = Selection.IsEmpty;
+        BeginChange();
+        try
+        {
+            foreach ((string key, DiagramOutcome outcome) in outcomes)
+            {
+                Paragraph? paragraph = Document.Blocks.OfType<Paragraph>().FirstOrDefault(
+                    candidate => string.Equals(
+                        ReadingSemantics.PendingDiagramKeyOf(candidate), key, StringComparison.Ordinal));
+                if (paragraph?.Inlines.LastInline is not InlineUIContainer
+                    {
+                        Child: ReadingDiagramElement element,
+                    } container)
+                {
+                    continue;
+                }
+                Run? source = paragraph.Inlines.FirstInline as Run;
+                string sourceText = source?.Text ?? string.Empty;
+
+                DiagramAnchor caret = RecordDiagramAnchor(CaretPosition, paragraph, source, container);
+                DiagramAnchor start = RecordDiagramAnchor(Selection.Start, paragraph, source, container);
+                DiagramAnchor end = RecordDiagramAnchor(Selection.End, paragraph, source, container);
+
+                Run? remappedSource = null;
+                bool keptContainer = true;
+                bool rendered = false;
+                switch (outcome)
+                {
+                    case DiagramOutcome.Rendered done:
+                        ReadingDocumentBuilder.ApplyRenderedShape(paragraph, element, done);
+                        rendered = true;
+                        break;
+                    case DiagramOutcome.Failed failed:
+                        remappedSource = ReadingDocumentBuilder.ApplyFailureShape(
+                            paragraph, element, failed, sourceText);
+                        break;
+                    default:
+                        // No artifact: main's unmatched shape — the source run
+                        // alone — unless the reader is on the placeholder,
+                        // which then keeps focus, named by the source until
+                        // the next projection rebuilds the paragraph.
+                        if (element.IsKeyboardFocusWithin)
+                        {
+                            element.Complete(sourceText, null);
+                        }
+                        else
+                        {
+                            paragraph.Inlines.Remove(container);
+                            keptContainer = false;
+                            removedContainer = true;
+                        }
+                        ReadingSemantics.MarkDiagramBlock(paragraph, sourceText);
+                        remappedSource = source;
+                        break;
+                }
+                ReadingSemantics.ClearDiagramPending(paragraph);
+
+                TextPointer? newCaret = RestoreDiagramAnchor(
+                    caret, rendered, remappedSource, keptContainer ? container : null, atEnd: false);
+                TextPointer? newStart = RestoreDiagramAnchor(
+                    start, rendered, remappedSource, keptContainer ? container : null, atEnd: false);
+                TextPointer? newEnd = RestoreDiagramAnchor(
+                    end, rendered, remappedSource, keptContainer ? container : null, atEnd: true);
+                if (collapsed)
+                {
+                    if (newCaret is not null)
+                    {
+                        CaretPosition = newCaret;
+                    }
+                }
+                else if (newStart is not null || newEnd is not null)
+                {
+                    Selection.Select(newStart ?? Selection.Start, newEnd ?? Selection.End);
+                }
+            }
+        }
+        finally
+        {
+            EndChange();
+        }
+
+        // Each landmark copies its text when collected, and the landing
+        // changed; the caret's Enter path reads the description live.
+        _landmarks = ReadingDocumentBuilder.CollectLandmarks(Document);
+        _navigator?.SetLandmarks(_landmarks);
+        // A removed container leaves the surface's children: drop WB-11's
+        // cached list and WPF's own (the stale-child problem). A text-only
+        // completion keeps every peer and invalidates nothing.
+        if (removedContainer)
+        {
+            InvalidateStructuralPeers();
+        }
+    }
+
+    private static DiagramAnchor RecordDiagramAnchor(
+        TextPointer pointer, Paragraph paragraph, Run? source, InlineUIContainer container)
+    {
+        if (pointer.CompareTo(paragraph.ContentStart) < 0 || pointer.CompareTo(paragraph.ContentEnd) > 0)
+        {
+            return new DiagramAnchor(DiagramAnchorKind.Outside, 0, pointer);
+        }
+        if (pointer.CompareTo(container.ElementStart) == 0)
+        {
+            return new DiagramAnchor(DiagramAnchorKind.AtContainerStart, 0, null);
+        }
+        if (pointer.CompareTo(container.ElementStart) > 0)
+        {
+            return new DiagramAnchor(DiagramAnchorKind.AtContainerEnd, 0, null);
+        }
+        if (source is null)
+        {
+            return new DiagramAnchor(DiagramAnchorKind.AtContainerStart, 0, null);
+        }
+        int offset = Math.Clamp(
+            source.ContentStart.GetOffsetToPosition(pointer), 0, source.Text.Length);
+        return new DiagramAnchor(DiagramAnchorKind.InSource, offset, null);
+    }
+
+    private static TextPointer? RestoreDiagramAnchor(
+        DiagramAnchor anchor,
+        bool rendered,
+        Run? source,
+        InlineUIContainer? container,
+        bool atEnd)
+    {
+        switch (anchor.Kind)
+        {
+            case DiagramAnchorKind.Outside:
+                return null;
+            case DiagramAnchorKind.InSource when rendered && container is not null:
+                // The diagram replaced the source: the caret sits before it,
+                // and a selection that reached into the source covers it.
+                return atEnd ? container.ElementEnd : container.ElementStart;
+            case DiagramAnchorKind.InSource when source is not null:
+                return source.ContentStart.GetPositionAtOffset(
+                    Math.Min(anchor.Offset, source.Text.Length)) ?? source.ContentEnd;
+            case DiagramAnchorKind.AtContainerStart when container is not null:
+                return container.ElementStart;
+            case DiagramAnchorKind.AtContainerEnd when container is not null:
+                return container.ElementEnd;
+            default:
+                return source?.ContentEnd ?? container?.ElementStart;
+        }
+    }
+
     /// <summary>
     /// Move the built document's blocks into the surface's persistent
     /// document, then re-collect landmarks over the LIVE container — the
@@ -428,6 +621,7 @@ internal sealed class ReadingSurface : RichTextBox
     /// </summary>
     internal void ApplyBuiltDocument(FlowDocument built)
     {
+        ApplyProbeForTests?.Invoke();
         // An embedded child (a task checkbox the user just clicked) may
         // hold keyboard focus, and this merge is about to destroy it —
         // WPF's focus recovery from a removed element is undefined

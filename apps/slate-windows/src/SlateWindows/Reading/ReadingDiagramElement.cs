@@ -38,8 +38,41 @@ internal sealed class ReadingDiagramElement : ContentControl
     }
 
     /// <summary>Canonical structured description ("Mermaid diagram."
-    /// fallback applied by the builder before construction).</summary>
-    public string Description { get; }
+    /// fallback applied by the builder before construction), or the
+    /// placeholder's "Diagram, rendering" until the stage completes it.</summary>
+    public string Description { get; private set; }
+
+    /// <summary>Completes this element in place (WB-20, #1317): the name
+    /// becomes <paramref name="description"/> and, when the render produced
+    /// one, the frozen <paramref name="visual"/> becomes its content. The
+    /// element and its peer stay the same objects, so keyboard focus on it
+    /// survives and a UIA client's reference stays valid; the name change
+    /// is raised on the peer when one exists. HelpText (the source) and the
+    /// tooltip are left alone.</summary>
+    internal void Complete(string description, System.Windows.Media.ImageSource? visual)
+    {
+        string old = Description;
+        Description = description;
+        AutomationProperties.SetName(this, description);
+        if (visual is not null)
+        {
+            Content = new ReadingDiagramImage
+            {
+                Source = visual,
+                Stretch = System.Windows.Media.Stretch.Uniform,
+                StretchDirection = StretchDirection.DownOnly,
+                // Mac caps at a Dynamic-Type-scaled 600pt (audit #254 M1);
+                // WPF has no text-size metric to scale by, so the base cap
+                // ships and the scaling is a recorded matrix note.
+                MaxHeight = 600,
+            };
+        }
+        if (!string.Equals(old, description, StringComparison.Ordinal)
+            && UIElementAutomationPeer.FromElement(this) is { } peer)
+        {
+            peer.RaisePropertyChangedEvent(AutomationElementIdentifiers.NameProperty, old, description);
+        }
+    }
 
     /// <summary>The mac tooltip rule (audit #254 M2): first three
     /// lines joined with spaces, capped at 120 chars plus an
