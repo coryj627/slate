@@ -309,6 +309,15 @@ public sealed partial class ReadingDiagramTests
                 Assert.All(elements, element => Assert.Equal(
                     "Flowchart with 1 step.",
                     System.Windows.Automation.AutomationProperties.GetName(element)));
+                // WB-20 red-team round 1: the landed renders still draw from
+                // the pool, so a re-projection (an edit after the fences)
+                // decodes no more than the pool holds.
+                tab.EditorDocument!.Insert(tab.EditorDocument.TextLength, "\nAfter the diagrams.\n");
+                tab.Reading!.Refresh();
+                AwaitDiagramStage(tab.Reading!);
+                Assert.Equal(
+                    2,
+                    FindDiagramElements(surface.Document).Count(element => element.Content is not null));
                 // The production pool: four maximal diagrams.
                 Assert.Equal(
                     4 * ReadingDocumentBuilder.MaximumRenderedDiagramSvgBytes,

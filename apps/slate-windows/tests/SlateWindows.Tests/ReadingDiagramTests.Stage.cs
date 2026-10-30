@@ -674,6 +674,28 @@ public sealed partial class ReadingDiagramTests
         });
     }
 
+    /// <summary>Red-team round 1: a stage fault the degrade path does not
+    /// catch — a core panic, a decoder failure — never strands a placeholder:
+    /// every fence lands as its source, and the fault is recorded.</summary>
+    [Fact]
+    public void AStageThatThrowsLandsEveryFenceAsItsSource()
+    {
+        RunSta(() =>
+        {
+            using var harness = StageHarness.Open(
+                "reading-diagram-throws",
+                StageNote,
+                model => model.DiagramBlocksOverrideForTests =
+                    _ => throw new InvalidOperationException("injected stage fault"));
+
+            harness.Land();
+
+            Assert.Empty(FindDiagramElements(harness.Surface.Document));
+            Assert.Contains("flowchart LR", harness.PatternText(), StringComparison.Ordinal);
+            Assert.IsType<InvalidOperationException>(harness.Model.LastTerminalFailureForTests);
+        });
+    }
+
     [Fact]
     public void SvgIsDecodedOffTheDispatcher()
     {

@@ -947,6 +947,13 @@ internal static class ReadingDocumentBuilder
             artifact = landed.Artifact;
             outcome = landed.Outcome;
             context.MatchedLandedDiagrams.Add(landed);
+            // A landed visual still draws from the projection-wide pool, as
+            // its decode did: the fences the stage resolves get what is left.
+            if (outcome is DiagramOutcome.Rendered && artifact.Svg is { Length: > 0 } landedSvg)
+            {
+                context.RemainingDiagramRenderBytes =
+                    Math.Max(0, context.RemainingDiagramRenderBytes - landedSvg.Length);
+            }
         }
         else if (diagramBlocks.FirstOrDefault(candidate =>
                      ArtifactMatches(candidate, diagram, block)) is { } matched)
@@ -1077,9 +1084,11 @@ internal static class ReadingDocumentBuilder
         // description and source; only the visual degrades.
         if (svg.Length > MaximumRenderedDiagramSvgBytes || svg.Length > remainingDiagramRenderBytes)
         {
+            // Pool-dependent, so never remembered: the next projection's pool
+            // may hold room for it.
             return new DiagramOutcome.Failed(
                 description, landing, "Diagram could not be rendered",
-                "diagram image exceeds the display budget", Transient: false);
+                "diagram image exceeds the display budget", Transient: true);
         }
         remainingDiagramRenderBytes -= svg.Length;
         DiagramRenderProbeForTests?.Invoke(svg.Length);

@@ -1965,6 +1965,16 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             {
                 DiagramStageGateTimedOutForTests = true;
             }
+            // Census runs only (the shell journey's seam): hold the stage so
+            // the journey sees the placeholder before the diagram lands.
+            if (ReadingSurface.CensusDiagEnabled
+                && int.TryParse(
+                    Environment.GetEnvironmentVariable("SLATE_TEST_DIAGRAM_STAGE_DELAY_MS"),
+                    out int delay)
+                && delay > 0)
+            {
+                Thread.Sleep(Math.Min(delay, 30_000));
+            }
             if (stage.Token.IsCancelled())
             {
                 return;
@@ -2018,6 +2028,24 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             }
             _ = dispatcher.InvokeAsync(
                 () => LandDiagramStage(pending, stage, outcomes, landed, landedDigest));
+            DiagramStagePostedForTests?.Set();
+        }
+        catch (Exception exception) when (!stage.Token.IsCancelled())
+        {
+            // A fault outside the degrade path above (a core panic, a
+            // decoder failure) never strands a placeholder: every fence
+            // keeps its source, the memo stays empty so the next refresh
+            // retries, and the fault is recorded.
+            var outcomes = pending.Fences
+                .Select(fence => (fence.Key, (DiagramOutcome)new DiagramOutcome.Unmatched()))
+                .ToList();
+            string landedDigest = DiagramArtifactDigest(
+                pending.Kept.Select(diagram => diagram.Artifact).ToArray(), degraded: false);
+            _ = dispatcher.InvokeAsync(() =>
+            {
+                RecordTerminalFailure(exception);
+                LandDiagramStage(pending, stage, outcomes, pending.Kept, landedDigest);
+            });
             DiagramStagePostedForTests?.Set();
         }
         finally

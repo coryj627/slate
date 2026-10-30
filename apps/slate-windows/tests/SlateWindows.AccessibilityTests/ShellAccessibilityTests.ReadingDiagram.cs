@@ -52,6 +52,9 @@ public sealed partial class ShellAccessibilityTests
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] = $"slate-reading-diagram-{Guid.NewGuid():N}";
             startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            // The census-gated seam holds the diagram stage, so the journey
+            // must see the placeholder before the diagram lands.
+            startInfo.Environment["SLATE_TEST_DIAGRAM_STAGE_DELAY_MS"] = "8000";
             process = Process.Start(startInfo)
                 ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
             if (!HasInteractiveDesktop(process, "reading-diagram"))
@@ -81,16 +84,16 @@ public sealed partial class ShellAccessibilityTests
                 "The first paragraph.",
                 surface.Patterns.Text.Pattern.DocumentRange.GetText(-1),
                 StringComparison.Ordinal);
-            // Any diagram element not yet completed is the placeholder.
-            foreach (AutomationElement diagram in window.FindAllDescendants(cf => cf.ByLocalizedControlType("diagram")))
-            {
-                string name = diagram.Name;
-                Assert.True(
-                    name == "Diagram, rendering"
-                        || name.StartsWith("Flowchart", StringComparison.Ordinal)
-                        || name.StartsWith("Mermaid diagram", StringComparison.Ordinal),
-                    $"an unexpected diagram name: {name}");
-            }
+            // The stage is held, so the text is readable while the diagrams are
+            // still placeholders: the first projection did not wait for them.
+            Assert.True(
+                window.FindAllDescendants(cf => cf.ByLocalizedControlType("diagram"))
+                    .Any(diagram => diagram.Name == "Diagram, rendering"),
+                "the text arrived without a \"Diagram, rendering\" placeholder");
+            Assert.False(
+                window.FindAllDescendants(cf => cf.ByLocalizedControlType("diagram"))
+                    .Any(diagram => diagram.Name.StartsWith("Flowchart", StringComparison.Ordinal)),
+                "the diagram rendered before the text was read");
 
             // The rendered diagram completes its placeholder (a cold
             // runner's first mermaid render keeps the 300 s bound).

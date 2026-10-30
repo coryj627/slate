@@ -468,6 +468,7 @@ internal sealed class ReadingSurface : RichTextBox
     {
         bool removedContainer = false;
         bool collapsed = Selection.IsEmpty;
+        bool backward = !collapsed && CaretPosition.CompareTo(Selection.Start) == 0;
         BeginChange();
         try
         {
@@ -508,7 +509,11 @@ internal sealed class ReadingSurface : RichTextBox
                         // alone — unless the reader is on the placeholder,
                         // which then keeps focus, named by the source until
                         // the next projection rebuilds the paragraph.
-                        if (element.IsKeyboardFocusWithin)
+                        if (element.IsKeyboardFocusWithin
+                            || ReferenceEquals(
+                                System.Windows.Input.FocusManager.GetFocusedElement(
+                                    System.Windows.Input.FocusManager.GetFocusScope(element)),
+                                element))
                         {
                             element.Complete(sourceText, null);
                         }
@@ -524,22 +529,41 @@ internal sealed class ReadingSurface : RichTextBox
                 }
                 ReadingSemantics.ClearDiagramPending(paragraph);
 
-                TextPointer? newCaret = RestoreDiagramAnchor(
-                    caret, rendered, remappedSource, keptContainer ? container : null, atEnd: false);
-                TextPointer? newStart = RestoreDiagramAnchor(
-                    start, rendered, remappedSource, keptContainer ? container : null, atEnd: false);
-                TextPointer? newEnd = RestoreDiagramAnchor(
-                    end, rendered, remappedSource, keptContainer ? container : null, atEnd: true);
-                if (collapsed)
+                // Caret state is repairable UI state (ApplyBuiltDocument's rule):
+                // a pointer that cannot be restored leaves WPF's own.
+                try
                 {
-                    if (newCaret is not null)
+                    TextPointer? newCaret = RestoreDiagramAnchor(
+                        caret, rendered, remappedSource, keptContainer ? container : null, atEnd: false);
+                    TextPointer? newStart = RestoreDiagramAnchor(
+                        start, rendered, remappedSource, keptContainer ? container : null, atEnd: false);
+                    TextPointer? newEnd = RestoreDiagramAnchor(
+                        end, rendered, remappedSource, keptContainer ? container : null, atEnd: true);
+                    if (collapsed)
                     {
-                        CaretPosition = newCaret;
+                        if (newCaret is not null)
+                        {
+                            CaretPosition = newCaret;
+                        }
+                    }
+                    else if (newStart is not null || newEnd is not null)
+                    {
+                        TextPointer from = newStart ?? Selection.Start;
+                        TextPointer to = newEnd ?? Selection.End;
+                        // Select(anchor, moving): a backward selection keeps its
+                        // moving end at its start.
+                        if (backward)
+                        {
+                            Selection.Select(to, from);
+                        }
+                        else
+                        {
+                            Selection.Select(from, to);
+                        }
                     }
                 }
-                else if (newStart is not null || newEnd is not null)
+                catch (InvalidOperationException)
                 {
-                    Selection.Select(newStart ?? Selection.Start, newEnd ?? Selection.End);
                 }
             }
         }
