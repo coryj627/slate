@@ -945,7 +945,10 @@ jobs:
     needs: [changes, windows]
     if: ${{ !cancelled() && needs.changes.outputs.run != 'false' && needs.windows.result == 'success' }}
     runs-on: ${{ (vars.WINDOWS_RUNNER_MODE == 'home-only' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && github.event.pull_request.user.login != 'dependabot[bot]' && !startsWith(github.head_ref || github.ref_name, 'dependabot/')) && 'slate-win-shell' || 'windows-latest' }}
-    timeout-minutes: 20
+    # Outside home-only mode the gate runs on windows-latest, where the
+    # journeys took 12-18 minutes by October 2026 (WB-22's two find journeys
+    # crossed the old 20). 35 is about twice a run: a hang still stops early.
+    timeout-minutes: 35
     steps:
       # First, so setup-dotnet below reads the global.json the artifact
       # carries; the download itself needs no SDK.
