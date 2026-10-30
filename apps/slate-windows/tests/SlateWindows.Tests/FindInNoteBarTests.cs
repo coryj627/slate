@@ -558,6 +558,28 @@ public sealed class FindInNoteBarTests
         Assert.Equal((40, 0), (shell.Editor.SelectionStart, shell.Editor.SelectionLength));
     });
 
+    /// <summary>Codex round 6: emptying the query hides the count readout
+    /// at once, before Tab could reach it, so no debounce or step can later
+    /// collapse it under the keys.</summary>
+    [Fact]
+    public void AnEmptiedQueryHidesTheCountAtOnce() => RunSta(() =>
+    {
+        using var shell = new Shell("a b a b a");
+        shell.Open("a");
+        var count = Assert.IsType<TextBlock>(shell.Bar.FindName("CountReadout"));
+        Assert.Same(shell.Child<TextBlock>("FindInNoteCount"), count);
+        Assert.True(count.IsVisible);
+
+        shell.Bar.Query.Text = string.Empty;
+        shell.Host.Shell.UpdateLayout();
+
+        Assert.False(count.IsVisible, "the count stayed reachable after the query emptied");
+        Assert.Equal(string.Empty, shell.Find.CountText);
+        Assert.True(shell.Bar.Query.IsKeyboardFocused);
+        shell.Press(shell.Bar.Query, Key.G, ModifierKeys.Control);
+        Assert.True(shell.Bar.Query.IsKeyboardFocused);
+    });
+
     [Fact]
     public void CloseAfterAShortenedDocumentRestoresAClampedCaret() => RunSta(() =>
     {

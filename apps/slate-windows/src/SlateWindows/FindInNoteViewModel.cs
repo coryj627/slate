@@ -65,6 +65,13 @@ internal sealed class FindInNoteViewModel : BindableBase, IDisposable
         {
             if (SetField(ref _query, value ?? string.Empty))
             {
+                if (_query.Length == 0)
+                {
+                    // At once, not on the debounce: the count readout
+                    // collapses while the query still holds the keys, so Tab
+                    // can never land on a readout that is about to vanish.
+                    CountText = string.Empty;
+                }
                 OptionsChanged();
             }
         }

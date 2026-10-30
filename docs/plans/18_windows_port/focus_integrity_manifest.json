@@ -4,7 +4,7 @@
     "xaml-binding FindInNoteBar.xaml FindInNoteReplace Visibility": "exempt: PR 1 (WB-22): the bar attaches only editor surfaces, so CanReplace never changes while it is open (a mode switch closes the bar, FindInNoteViewModel.CloseForModeSwitch); PR 2's reading-mode bar collapses them with the query holding the keys",
     "xaml-binding FindInNoteBar.xaml FindInNoteReplaceAll Visibility": "exempt: PR 1 (WB-22): the bar attaches only editor surfaces, so CanReplace never changes while it is open (a mode switch closes the bar, FindInNoteViewModel.CloseForModeSwitch); PR 2's reading-mode bar collapses them with the query holding the keys",
     "xaml-binding FindInNoteBar.xaml FindInNoteReplaceText Visibility": "exempt: PR 1 (WB-22): the bar attaches only editor surfaces, so CanReplace never changes while it is open (a mode switch closes the bar, FindInNoteViewModel.CloseForModeSwitch); PR 2's reading-mode bar collapses them with the query holding the keys",
-    "xaml-trigger FindInNoteBar.xaml CountReadout Visibility": "exempt: the count readout empties only when the query does, and only the query field, which then holds the keys, can empty it",
+    "xaml-trigger FindInNoteBar.xaml CountReadout Visibility": "FindInNoteBarTests.AnEmptiedQueryHidesTheCountAtOnce",
     "xaml-trigger FindInNoteBar.xaml UserControl(FindBarBooleanToVisibility) Visibility": "FindInNoteBarTests.EscapeClosesClearsHighlightsAndReturnsFocusToTheEditor",
     "collection SlateWindows.Bases.BaseQueryBuilderViewModel.RemoveCondition ConditionRows": "BuilderConditionLandingTests.RemovingAConditionFromItsButtonLandsOnARemainingCondition",
     "collection SlateWindows.Bases.DashboardSurfaceView.Render _sections.Children": "guard: DashboardSurfaceView",
