@@ -1344,25 +1344,41 @@ target by its path, a bare name by its name. The create now reads only the
 rows whose target could name its path, and resolves each through the
 folded-name lookup. Scans and moves keep the vault-wide heal.
 
-Recorded 2026-10-30 on CDESK (AMD Ryzen 7 9800X3D, 8 cores, 62 GB,
+Recorded 2026-10-29 on CDESK (AMD Ryzen 7 9800X3D, 8 cores, 62 GB,
 Windows 11 Pro build 26300), not the Mac Studio, with rustc 1.99.1 in the
-release profile. The harness is a temporary ignored fact on one vault:
-1,000 notes in 20 folders, each with 20 dangling links (10 bare names and
-10 qualified targets), 20,000 in all. It alternates nine creates healed
-vault-wide (the old heal, through a test seam) with nine healed
-targeted. Each cell is the median of nine.
+release profile. The harness is the ignored fact
+`session::tests::save_link_lookup::create_heal_timing`. Rerun it with
+`cargo test -p slate-core --release --lib create_heal_timing -- --ignored
+--nocapture`.
 
-| A create beside 20,000 unrelated dangling links | Median | Range |
+The fixture is 1,000 notes in 20 folders, each with 20 dangling links (10
+bare names and 10 qualified targets), 20,000 in all:
+- **The create:** nine creates healed vault-wide (the old heal, through a
+  test seam) alternate with nine healed targeted, on one scanned vault.
+- **The cold scan:** five scans of fresh vaults with migration 041's two
+  indexes alternate with five scans with the indexes dropped.
+- **The migration:** the index build drops and rebuilds both indexes five
+  times on the scanned cache.
+
+| Measure | Median | Range |
 |---|---:|---:|
-| Vault-wide heal (before) | 30.82 ms | 30.38–32.25 ms |
-| Targeted heal (after) | 12.72 ms | 11.98–13.29 ms |
+| Create, vault-wide heal (before) | 31.81 ms | 30.66–108.11 ms |
+| Create, targeted heal (after) | 12.75 ms | 11.86–13.67 ms |
+| Cold scan, without migration 041's indexes | 354 ms | 351–359 ms |
+| Cold scan, with them | 395 ms | 387–504 ms |
+| Migration 041's index build over 20,000 dangling rows | 18.2 ms | 17.7–34.7 ms |
 
-The remaining 12.7 ms is the create's own write, index and op-log. Its heal
-now reads none of the 20,000 rows. The row counter in
-`a_create_heals_only_the_dangling_rows_that_could_name_it` reads 7 for the
-7 rows that name the created file. That holds beside 200 qualified and
-rooted targets in other folders that share its final component, and 50
-unrelated bare names.
+- **The create.** It is 19 ms faster. Its heal read 0 rows in every round,
+  as counted by `HEAL_ROWS_VISITED` (none of the 20,000 names the created
+  path). `a_create_heals_only_the_dangling_rows_that_could_name_it` counts
+  7 rows read for the 7 that name the created file. That fixture also holds
+  200 qualified and rooted targets in other folders sharing the file's
+  final component, and 50 unrelated bare names.
+- **The cost.** Every dangling link written or cleared now maintains two
+  more index entries, each keyed through two functions. A cold scan that
+  writes 20,000 dangling links took about 41 ms longer (12%). A cache
+  holding 20,000 dangling links pays about 18 ms once, when migration 041
+  builds the indexes on first open.
 
 ## Plan 43 PR 21a — the change feed's trigger cost (#1293)
 

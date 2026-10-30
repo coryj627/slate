@@ -626,7 +626,11 @@ pub(crate) enum SelectorTarget {
 /// [`LinkCandidateSelector::new`] and the `links` target-key functions that
 /// migration 041 persists in its indexes — so the index and the selector
 /// cannot read one target two ways. `None` for an empty or external target.
-/// Changing it needs a migration that rebuilds those indexes.
+/// Changing it needs a migration that rebuilds those indexes, and so does
+/// anything that changes its answers: [`looks_external_for_resolver`], or a
+/// toolchain whose `trim` reads a different White_Space table. A stale stored
+/// key is worse than a missed heal: SQLite reports the index corrupt when an
+/// UPDATE or DELETE cannot find its entry.
 ///
 /// A leading `./` or `/` is stripped, so `./notes/foo.md` and
 /// `/notes/foo.md` read as `notes/foo.md`; Obsidian renders a leading `/` as

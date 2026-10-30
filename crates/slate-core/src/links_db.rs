@@ -605,11 +605,21 @@ pub(crate) fn re_resolve_unresolved_links_naming(
     tx: &Transaction,
     created_path: &str,
 ) -> Result<Vec<String>, VaultError> {
+    // The stem without its extension both before and after folding:
+    // lowercasing reads context (a sigma before `.md` folds medial, alone
+    // final), and an extension can fold to a Markdown one (a Kelvin sign).
+    // An extra key reads only rows the selector then rejects.
     let keys_of = |form: &str| {
-        let mut keys = vec![crate::db::tree_sort_key(form)];
+        let folded = crate::db::tree_sort_key(form);
+        let mut keys = vec![folded.clone()];
         if let Some(stem) = without_implied_extension(form) {
             keys.push(crate::db::tree_sort_key(stem));
         }
+        if let Some(stem) = without_implied_extension(&folded) {
+            keys.push(stem.to_string());
+        }
+        keys.sort();
+        keys.dedup();
         keys
     };
     let name = crate::link_resolver::final_component(created_path);

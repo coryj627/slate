@@ -16,8 +16,11 @@
 -- name lookup for `foo`. Partial: only dangling, internal rows are indexed.
 --
 -- Same UDF-as-schema-state and replay discipline as 033, 037 and 039:
--- rebuild the owned indexes, and a change to the classification needs a
--- migration that rebuilds them again.
+-- rebuild the owned indexes. Anything that changes the functions' answers
+-- needs a migration that rebuilds them again: the classification, the
+-- external-link rule it reads, or the fold's Unicode tables. A stale stored
+-- key makes SQLite report the index corrupt on the UPDATE or DELETE that
+-- cannot find it.
 DROP INDEX IF EXISTS idx_links_target_path_fold;
 CREATE INDEX idx_links_target_path_fold ON links(slate_tree_sort_key(slate_link_target_path(target_raw)))
 WHERE target_path IS NULL AND is_external = 0;

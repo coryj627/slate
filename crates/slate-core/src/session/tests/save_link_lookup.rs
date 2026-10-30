@@ -658,6 +658,37 @@ fn a_create_heals_only_the_dangling_rows_that_could_name_it() {
     );
 }
 
+/// #1426: lowercasing reads context, so a created path's folded form and
+/// its stem folded alone can differ — `ΟΔΟΣ.md` folds its sigma medial
+/// (`οδοσ.md`), the bare stem `ΟΔΟΣ` final (`οδος`) — and an extension can
+/// fold to a Markdown one (`marKdown` with the Kelvin sign). The heal still
+/// reaches every row the selector would match, as the vault-wide heal does.
+#[test]
+fn a_create_heals_a_target_whose_stem_folds_apart_from_its_path() {
+    for (created, target) in [
+        ("kelvin/note.mar\u{212a}down", "kelvin/note"),
+        (
+            "\u{39f}\u{394}\u{39f}\u{3a3}.md",
+            "\u{3bf}\u{3b4}\u{3bf}\u{3c3}",
+        ),
+    ] {
+        let (_tmp, session) = make_vault(|provider| {
+            provider
+                .write_file("src/source.md", format!("# s\n\n[[{target}]]\n").as_bytes())
+                .unwrap();
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        crate::links_db::HEAL_ROWS_VISITED.with(|rows| rows.set(0));
+        session.create_exclusive(created, "# t\n").unwrap();
+        assert_eq!(
+            outgoing_targets(&session, "src/source.md"),
+            [Some(created.to_string())],
+            "{target:?} does not name {created:?} after its create"
+        );
+        assert_eq!(heal_rows_visited(), 1, "{created:?}");
+    }
+}
+
 /// The `links` rows of every census source note, in path order.
 fn census_source_rows(session: &VaultSession, sources: &[String]) -> Vec<(String, Vec<LinkRow>)> {
     sources
@@ -692,10 +723,16 @@ fn a_create_heals_exactly_what_the_vault_wide_heal_heals() {
     let mut healed = 0;
     for path in INDEXED_PATHS {
         targeted.create_exclusive(path, "# t\n").unwrap();
+        crate::links_db::HEAL_ROWS_VISITED.with(|rows| rows.set(0));
         crate::links_db::CREATE_HEAL_VAULT_WIDE.with(|on| on.set(true));
         let created = vault_wide.create_exclusive(path, "# t\n");
         crate::links_db::CREATE_HEAL_VAULT_WIDE.with(|on| on.set(false));
         created.unwrap();
+        assert_eq!(
+            heal_rows_visited(),
+            0,
+            "premise: the vault-wide arm ran the targeted heal ({path})"
+        );
         let expected = census_source_rows(&vault_wide, &sources);
         assert_eq!(
             census_source_rows(&targeted, &sources),
@@ -779,5 +816,126 @@ fn a_create_whose_heal_fails_is_published_unindexed_and_commits_nothing() {
         fresh_rows(&session, None),
         3,
         "a heal UPDATE survived the rollback"
+    );
+}
+
+/// A vault of 1,000 notes in 20 folders, each with 20 dangling links (10
+/// bare names, 10 qualified targets) — 20,000 nothing resolves.
+fn dangling_vault(scan: bool) -> (tempfile::TempDir, VaultSession) {
+    let (tmp, session) = make_vault(|provider| {
+        for n in 0..1_000 {
+            let body: String = (0..10)
+                .map(|i| format!("[[ghost_{n}_{i}]] [[gone/ghost_{n}_{i}]]\n"))
+                .collect();
+            provider
+                .write_file(&format!("notes/d{}/n{n:04}.md", n % 20), body.as_bytes())
+                .unwrap();
+        }
+    });
+    if scan {
+        session.scan_initial(&CancelToken::new()).unwrap();
+    }
+    (tmp, session)
+}
+
+fn median_ms(mut values: Vec<f64>) -> f64 {
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    values[values.len() / 2]
+}
+
+/// The `BENCHMARKS.md` "Plan 44 WB-19" harness (#1426), not a fact: run it
+/// in release with `cargo test -p slate-core --release --lib
+/// create_heal_timing -- --ignored --nocapture`. Beside 20,000 dangling
+/// links it times a create healed vault-wide (the old heal, through the
+/// test seam) and targeted, alternately; a cold scan with migration 041's
+/// two indexes and without them, alternately on fresh vaults; and the
+/// migration's index build on the scanned cache.
+#[test]
+#[ignore = "timing harness for BENCHMARKS.md (#1426); run in release with --ignored --nocapture"]
+fn create_heal_timing() {
+    let (_tmp, session) = dangling_vault(true);
+    let (mut vault_wide, mut targeted, mut targeted_rows) = (Vec::new(), Vec::new(), Vec::new());
+    for round in 0..9 {
+        crate::links_db::CREATE_HEAL_VAULT_WIDE.with(|on| on.set(true));
+        let start = std::time::Instant::now();
+        session
+            .create_exclusive(&format!("new/w{round}.md"), "# new\n")
+            .unwrap();
+        vault_wide.push(start.elapsed().as_secs_f64() * 1000.0);
+        crate::links_db::CREATE_HEAL_VAULT_WIDE.with(|on| on.set(false));
+        crate::links_db::HEAL_ROWS_VISITED.with(|rows| rows.set(0));
+        let start = std::time::Instant::now();
+        session
+            .create_exclusive(&format!("new/t{round}.md"), "# new\n")
+            .unwrap();
+        targeted.push(start.elapsed().as_secs_f64() * 1000.0);
+        targeted_rows.push(heal_rows_visited());
+    }
+    println!(
+        "TIMING create: vault_wide median {:.2} ms {vault_wide:.2?}; targeted median {:.2} ms {targeted:.2?}; targeted heal rows {targeted_rows:?}",
+        median_ms(vault_wide.clone()),
+        median_ms(targeted.clone()),
+    );
+
+    let drop_indexes = |session: &VaultSession| {
+        session
+            .conn
+            .lock()
+            .unwrap()
+            .execute_batch(
+                "DROP INDEX idx_links_target_path_fold; DROP INDEX idx_links_target_name_fold;",
+            )
+            .unwrap();
+    };
+    let (mut with_indexes, mut without_indexes) = (Vec::new(), Vec::new());
+    for _ in 0..5 {
+        for indexed in [true, false] {
+            let (_tmp, session) = dangling_vault(false);
+            if !indexed {
+                drop_indexes(&session);
+            }
+            let start = std::time::Instant::now();
+            session.scan_initial(&CancelToken::new()).unwrap();
+            let ms = start.elapsed().as_secs_f64() * 1000.0;
+            if indexed {
+                with_indexes.push(ms);
+            } else {
+                without_indexes.push(ms);
+            }
+        }
+    }
+    println!(
+        "TIMING cold scan: with the indexes median {:.0} ms {with_indexes:.0?}; without median {:.0} ms {without_indexes:.0?}",
+        median_ms(with_indexes.clone()),
+        median_ms(without_indexes.clone()),
+    );
+
+    let mut builds = Vec::new();
+    for _ in 0..5 {
+        drop_indexes(&session);
+        let start = std::time::Instant::now();
+        session
+            .conn
+            .lock()
+            .unwrap()
+            .execute_batch(include_str!(
+                "../../../migrations/041_links_target_fold_index.sql"
+            ))
+            .unwrap();
+        builds.push(start.elapsed().as_secs_f64() * 1000.0);
+    }
+    let dangling: i64 = session
+        .conn
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM links WHERE target_path IS NULL",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    println!(
+        "TIMING migration 041 index build over {dangling} dangling rows: median {:.2} ms {builds:.2?}",
+        median_ms(builds.clone()),
     );
 }
