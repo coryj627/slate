@@ -152,7 +152,10 @@ internal sealed class ReadingFindSurface : IFindInNoteSurface
         }
     }
 
-    public void ReturnFocus() => _surface.RequestFocusLanding();
+    /// <summary>The reading view is on screen while its bar is open, so the
+    /// keys go straight back to it (as the editor surface's do); a landing
+    /// request is the shell's alone (OD-12).</summary>
+    public void ReturnFocus() => _surface.Focus();
 
     public void Detach()
     {

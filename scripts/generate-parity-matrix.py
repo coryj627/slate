@@ -763,8 +763,9 @@ WB_21_STATUS = (
     "interactive CI + human AT pending"
 )
 
-# Plan 44 WB-22 PR 1 (#1112): find in note in the editor — Ctrl+F (the
-# find bar, vault search when no note editor is active) and the two steps.
+# Plan 44 WB-22 (#1112): find in note in the editor (PR 1) and the reading
+# view (PR 2) — Ctrl+F (the find bar, vault search when no note is active)
+# and the two steps. The reading view goes beyond mac (#1654).
 # Find-in-selection: unverified on mac; not shipped.
 WB_22_STATUS = (
     "implemented; local gates green 2026-10-30; "
@@ -1251,7 +1252,7 @@ def main() -> int:
     a(f"| Editor host (AvalonEdit ⇄ DocumentBuffer, undo, save, IME) | `NoteEditorView.swift` | #724 (W2-1) | {issue_delivery_status('#724 (W2-1)', delivery_evidence)} |")
     a(f"| Editor canonical spans | #381 span API consumers | #381 (W2-2) | {issue_delivery_status('#381 (W2-2)', delivery_evidence)} |")
     a(f"| In-editor interactions (links, tags, citations, embeds, checkboxes) | `NoteEditorView.swift` | #725 (W2-3) | {issue_delivery_status('#725 (W2-3)', delivery_evidence)} |")
-    a("| Find in note: find bar, next/previous, case, whole word, replace (editor) | `NoteEditorView.swift` (AppKit find bar, #874) | #1112 (plan 44 WB-22) | implemented in the editor (PR 1); the reading view is PR 2. Find-in-selection: unverified on mac; not shipped. Regex: not shipped (WD12) |")
+    a("| Find in note: find bar, next/previous, case, whole word, replace (editor) | `NoteEditorView.swift` (AppKit find bar, #874) | #1112 (plan 44 WB-22) | implemented in the editor and the reading view; the reading view goes beyond mac (no reading-view find there; follow-up #1654). Find-in-selection: unverified on mac; not shipped. Regex: not shipped (WD12) |")
     a("| Reading view (block model, mode toggle, heading/link AT nav, print) | `Reading/` | #728 (W3-1) | implemented (PR #1052, merged 2026-07-27; NVDA field-verified 2026-07-26/27; print §W-F-waived) |")
     a("| Reading list marker: authored ordinal rendered and read | `Reading/ReadingView.swift` (core `list_marker`) | #1422 (plan 44 WB-11) | implemented both hosts (mac since plan 43 PR 16, #1048; Windows: plan 44 WB-11) |")
     a("| Math rendering + canonical speech/braille artifact | core `math.rs` consumers | #729 (W3-2) | implemented (PR #1057, merged 2026-07-28; human AT pending) |")

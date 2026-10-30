@@ -24,6 +24,10 @@ public sealed class ThemeTokenContrastTests
             ("primary/surface", "Slate.TextColor", "Slate.SurfaceColor"),
             // WB-22 (#1112): the editor's text over a find-match fill.
             ("find-match/text", "Slate.TextColor", "Slate.FindMatchColor"),
+            // WB-22 PR 2: the reading view's find ring against the reading
+            // surface and its code blocks (the canvas-ring precedent).
+            ("find-ring/surface", "Slate.FindMatchRingColor", "Slate.SurfaceColor"),
+            ("find-ring/raised", "Slate.FindMatchRingColor", "Slate.RaisedSurfaceColor"),
             ("primary/raised", "Slate.TextColor", "Slate.RaisedSurfaceColor"),
             ("secondary/window", "Slate.SecondaryTextColor", "Slate.WindowBackgroundColor"),
             ("secondary/surface", "Slate.SecondaryTextColor", "Slate.SurfaceColor"),

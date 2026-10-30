@@ -508,12 +508,16 @@ public sealed class FindInNoteBarTests
         shell.Press(shell.Bar.Query, Key.Enter);
         Assert.Equal("alpha", surface.Selection.Text);
 
-        shell.Press(shell.Bar.Query, Key.Escape);
+        // Read before the dispatcher drains: a later focus guard must not be
+        // what puts the keys back.
+        shell.Host.Press(shell.Bar.Query, Key.Escape, ModifierKeys.None);
+        Assert.True(surface.IsKeyboardFocused, "Escape did not return the keys to the reading text");
+        shell.Settle();
 
         Assert.False(shell.Find.IsOpen);
         Assert.Null(shell.ReadingAdorner());
         Assert.True(surface.Selection.IsEmpty, "the selection opening found was not given back");
-        Assert.True(surface.IsKeyboardFocused, "Escape did not return the keys to the reading text");
+        Assert.True(surface.IsKeyboardFocused, "the keys left the reading text after Escape");
     });
 
     /// <summary>PR 2: a mode switch with the bar open keeps its query and

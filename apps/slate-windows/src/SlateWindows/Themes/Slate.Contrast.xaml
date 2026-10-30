@@ -15,6 +15,7 @@
          highlight colour. -->
     <SolidColorBrush x:Key="Slate.FindMatchBrush" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}" />
     <SolidColorBrush x:Key="Slate.FindMatchOutlineBrush" Color="{DynamicResource {x:Static SystemColors.HighlightColorKey}}" />
+    <SolidColorBrush x:Key="Slate.FindMatchRingBrush" Color="{DynamicResource {x:Static SystemColors.HighlightColorKey}}" />
     <SolidColorBrush x:Key="Slate.SecondaryTextBrush"
                      Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />
     <!-- Deliberately NOT dimmer here: dimming in a contrast theme is an

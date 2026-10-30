@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-10-30 at `0d1928d3` (the head the run stood on; the commit carrying this file is its child, and after a squash merge the head is a branch commit outside main — `--check` holds the body, not this line) by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-10-30 at `b3f41fe2` (the head the run stood on; the commit carrying this file is its child, and after a squash merge the head is a branch commit outside main — `--check` holds the body, not this line) by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 
@@ -269,7 +269,7 @@ What `WorkspaceStore` round-trips — a **separate** inventory from the right-pa
 | Editor host (AvalonEdit ⇄ DocumentBuffer, undo, save, IME) | `NoteEditorView.swift` | #724 (W2-1) | implemented; local gates green 2026-07-23; interactive CI + human AT pending |
 | Editor canonical spans | #381 span API consumers | #381 (W2-2) | implemented; local gates green 2026-07-23; interactive CI + human AT pending |
 | In-editor interactions (links, tags, citations, embeds, checkboxes) | `NoteEditorView.swift` | #725 (W2-3) | implemented; local gates green 2026-07-23; interactive CI + human AT pending |
-| Find in note: find bar, next/previous, case, whole word, replace (editor) | `NoteEditorView.swift` (AppKit find bar, #874) | #1112 (plan 44 WB-22) | implemented in the editor (PR 1); the reading view is PR 2. Find-in-selection: unverified on mac; not shipped. Regex: not shipped (WD12) |
+| Find in note: find bar, next/previous, case, whole word, replace (editor) | `NoteEditorView.swift` (AppKit find bar, #874) | #1112 (plan 44 WB-22) | implemented in the editor and the reading view; the reading view goes beyond mac (no reading-view find there; follow-up #1654). Find-in-selection: unverified on mac; not shipped. Regex: not shipped (WD12) |
 | Reading view (block model, mode toggle, heading/link AT nav, print) | `Reading/` | #728 (W3-1) | implemented (PR #1052, merged 2026-07-27; NVDA field-verified 2026-07-26/27; print §W-F-waived) |
 | Reading list marker: authored ordinal rendered and read | `Reading/ReadingView.swift` (core `list_marker`) | #1422 (plan 44 WB-11) | implemented both hosts (mac since plan 43 PR 16, #1048; Windows: plan 44 WB-11) |
 | Math rendering + canonical speech/braille artifact | core `math.rs` consumers | #729 (W3-2) | implemented (PR #1057, merged 2026-07-28; human AT pending) |

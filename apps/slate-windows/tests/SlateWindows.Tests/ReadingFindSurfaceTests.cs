@@ -182,7 +182,9 @@ public sealed class ReadingFindSurfaceTests
         Assert.True(harness.Surface.Selection.End.CompareTo(container.ElementEnd) >= 0, "the selection ends inside the math element");
         Assert.Single(harness.Matches("mathbb"));
 
-        // No match spans a block boundary.
+        // No match spans a block boundary: one "\n" stands between blocks.
+        Assert.Contains("foo end\nbeta starts", harness.IndexText, StringComparison.Ordinal);
+        Assert.Empty(harness.Matches("endbeta"));
         Assert.Empty(harness.Matches("end beta"));
         Assert.Empty(harness.Matches("heading 1"));
     });
@@ -313,6 +315,51 @@ public sealed class ReadingFindSurfaceTests
         Assert.Null(harness.Adorner());
     });
 
+    /// <summary>The owner's call of 2026-10-26: a match in a math block's
+    /// source is drawn as one ring around the whole math element, never
+    /// over the hidden speech run.</summary>
+    [Fact]
+    public void AMathMatchRingsTheWholeMathElement() => RunSta(() =>
+    {
+        using var harness = new Harness("reading-find-math-ring", "Words before.\n\n$$\\nabla^2 f$$\n");
+        ReadingMathElement element = Assert.Single(LogicalDescendants<ReadingMathElement>(harness.Surface.Document));
+        (int offset, int length) = Assert.Single(harness.Matches("nabla"));
+        UIElement scope = Assert.IsAssignableFrom<UIElement>(harness.Surface.DocumentRenderScope);
+
+        Rect ring = Assert.Single(harness.Find.RectsOf(offset, length, scope));
+
+        Assert.Equal(element.TransformToVisual(scope).TransformBounds(new Rect(element.RenderSize)), ring);
+        harness.Find.Highlight([(offset, length)], 0);
+        harness.Settle();
+        Assert.Equal(1, Assert.IsType<FindMatchAdorner>(harness.Adorner()).Count);
+    });
+
+    /// <summary>Two matches inside one math source are two stops, each
+    /// selecting the whole element: the surface remembers which one it
+    /// revealed while the selection is still the one the reveal made.</summary>
+    [Fact]
+    public void TwoMatchesInOneMathBlockAreBothStepped() => RunSta(() =>
+    {
+        using var harness = new Harness("reading-find-math-step", "Words before.\n\n$$y + y$$\n");
+        var heard = new List<A11yEvent>();
+        using var find = new FindInNoteViewModel(heard.Add);
+        find.Open();
+        find.AttachSurface(harness.Find);
+        find.Query = "y";
+        find.FlushPendingForTests();
+        Assert.Equal(2, find.TotalCount);
+        Assert.Equal(1, find.CurrentIndex);
+
+        find.Next();
+
+        Assert.Equal(2, find.CurrentIndex);
+        Assert.Equal(harness.Matches("y")[1], harness.Find.Selection);
+        find.Next();
+        Assert.Equal(1, find.CurrentIndex);
+        Assert.Equal(["1 of 2", "2 of 2", "1 of 2. Wrapped to the top"], Spoken(heard));
+        find.AttachSurface(null);
+    });
+
     [Fact]
     public void TheLoadingPlaceholderIsNeverSearched() => RunSta(() =>
     {
@@ -399,6 +446,26 @@ public sealed class ReadingFindSurfaceTests
         Assert.Contains("Diagram dialect not supported", harness.IndexText, StringComparison.Ordinal);
         find.AttachSurface(null);
     });
+
+    private static IEnumerable<T> LogicalDescendants<T>(DependencyObject root)
+        where T : DependencyObject
+    {
+        foreach (object child in LogicalTreeHelper.GetChildren(root))
+        {
+            if (child is not DependencyObject node)
+            {
+                continue;
+            }
+            if (node is T match)
+            {
+                yield return match;
+            }
+            foreach (T descendant in LogicalDescendants<T>(node))
+            {
+                yield return descendant;
+            }
+        }
+    }
 
     private static string LargeNote()
     {

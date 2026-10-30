@@ -51,7 +51,7 @@ internal partial class FindInNoteBar : UserControl
     }
 
     /// <summary>The note's reading surface (the template's
-    /// <c>NoteReadingSurface</c>).</summary>
+    /// <c>ReadingSurface</c>).</summary>
     internal Reading.ReadingSurface? ReadingSurface
     {
         get => (Reading.ReadingSurface?)GetValue(ReadingSurfaceProperty);
