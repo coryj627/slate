@@ -1334,6 +1334,36 @@ per-query candidate cache.
 A failed lookup in a query now fails the query as the public failed result
 ("link lookup failed: …"). It used to read as an unresolved link.
 
+## Plan 44 WB-19 — a create heals only the rows that could name it (#1426)
+
+A create heals the dangling links its new file resolves (W6-2 PR B, #746).
+That heal read every dangling row in the vault and a snapshot of every
+`files` row, so a create's cost grew with the vault's unresolved links.
+Migration 041 indexes dangling rows by their folded target: an exact
+target by its path, a bare name by its name. The create now reads only the
+rows whose target could name its path, and resolves each through the
+folded-name lookup. Scans and moves keep the vault-wide heal.
+
+Recorded 2026-10-30 on CDESK (AMD Ryzen 7 9800X3D, 8 cores, 62 GB,
+Windows 11 Pro build 26300), not the Mac Studio, with rustc 1.99.1 in the
+release profile. The harness is a temporary ignored fact on one vault:
+1,000 notes in 20 folders, each with 20 dangling links (10 bare names and
+10 qualified targets), 20,000 in all. It alternates nine creates healed
+vault-wide (the old heal, through a test seam) with nine healed
+targeted. Each cell is the median of nine.
+
+| A create beside 20,000 unrelated dangling links | Median | Range |
+|---|---:|---:|
+| Vault-wide heal (before) | 30.82 ms | 30.38–32.25 ms |
+| Targeted heal (after) | 12.72 ms | 11.98–13.29 ms |
+
+The remaining 12.7 ms is the create's own write, index and op-log. Its heal
+now reads none of the 20,000 rows. The row counter in
+`a_create_heals_only_the_dangling_rows_that_could_name_it` reads 7 for the
+7 rows that name the created file. That holds beside 200 qualified and
+rooted targets in other folders that share its final component, and 50
+unrelated bare names.
+
 ## Plan 43 PR 21a — the change feed's trigger cost (#1293)
 
 Migration 040's six triggers write one `change_feed` row per changed path of

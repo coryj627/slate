@@ -553,3 +553,231 @@ fn a_repair_writes_the_links_a_scan_writes() {
         assert_eq!(link_rows(&session, host), scanned, "{host}");
     }
 }
+
+// --- Plan 44 WB-19 (#1426): a create heals only the dangling links its
+// path could resolve. ---
+
+fn heal_rows_visited() -> usize {
+    crate::links_db::HEAL_ROWS_VISITED.with(std::cell::Cell::get)
+}
+
+/// How many `links` rows whose raw target satisfies `predicate` (a SQL
+/// expression over `l`) hold `target_path` `resolved` (or NULL).
+fn link_rows_where(session: &VaultSession, predicate: &str, resolved: Option<&str>) -> i64 {
+    let conn = session.conn.lock().unwrap();
+    conn.query_row(
+        &format!("SELECT COUNT(*) FROM links l WHERE ({predicate}) AND l.target_path IS ?1"),
+        [resolved],
+        |row| row.get(0),
+    )
+    .unwrap()
+}
+
+/// #1426: a create reads only the dangling rows whose authored target could
+/// name the created path — never a qualified or rooted target in another
+/// folder that shares its final component, never an unrelated bare name —
+/// and no snapshot of `files`; it heals exactly the rows that name it.
+#[test]
+fn a_create_heals_only_the_dangling_rows_that_could_name_it() {
+    const UNRELATED: usize = 50;
+    const SHARING_THE_NAME: usize = 200;
+    let naming = [
+        "f\u{f6}o",
+        "f\u{f6}o.md",
+        "F\u{d6}O",
+        "/notes/f\u{f6}o",
+        "./notes/f\u{f6}o.md",
+        "notes/f\u{f6}o",
+        "Notes/F\u{f6}o.md",
+    ];
+    let (_tmp, session) = make_vault(|provider| {
+        let links = |targets: &mut dyn Iterator<Item = String>| -> String {
+            targets.map(|target| format!("[[{target}]]\n")).collect()
+        };
+        provider
+            .write_file(
+                "src/naming.md",
+                links(&mut naming.iter().map(|target| target.to_string())).as_bytes(),
+            )
+            .unwrap();
+        provider
+            .write_file(
+                "src/unrelated.md",
+                links(&mut (1..=UNRELATED).map(|n| format!("bar_{n}"))).as_bytes(),
+            )
+            .unwrap();
+        provider
+            .write_file(
+                "src/sharing.md",
+                links(&mut (1..=SHARING_THE_NAME).map(|n| {
+                    if n <= SHARING_THE_NAME / 2 {
+                        format!("missing_{n}/f\u{f6}o")
+                    } else {
+                        format!("/missing_{n}/f\u{f6}o.md")
+                    }
+                }))
+                .as_bytes(),
+            )
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    assert_eq!(
+        link_rows_where(&session, "1", None),
+        (naming.len() + UNRELATED + SHARING_THE_NAME) as i64,
+        "premise: every link dangles before the create"
+    );
+
+    reset_counters();
+    crate::links_db::PATH_ORDER_SNAPSHOT_PATHS.with(|paths| paths.set(0));
+    crate::links_db::HEAL_ROWS_VISITED.with(|rows| rows.set(0));
+    session
+        .create_exclusive("notes/f\u{f6}o.md", "# f\u{f6}o\n")
+        .unwrap();
+
+    assert_eq!(
+        link_rows_where(&session, "1", Some("notes/f\u{f6}o.md")),
+        naming.len() as i64,
+        "the create healed other than the rows that name it"
+    );
+    assert_eq!(
+        link_rows_where(&session, "l.target_raw LIKE '%missing%'", None),
+        SHARING_THE_NAME as i64,
+        "a target in another folder resolved to the created file"
+    );
+    assert_eq!(snapshot_paths(), 0, "the heal read a snapshot of the vault");
+    assert_eq!(
+        crate::links_db::PATH_ORDER_SNAPSHOT_PATHS.with(std::cell::Cell::get),
+        0,
+        "the heal read every path through the path-order helper"
+    );
+    assert_eq!(
+        heal_rows_visited(),
+        naming.len(),
+        "the heal read rows beyond the {} that name the created path",
+        naming.len()
+    );
+}
+
+/// The `links` rows of every census source note, in path order.
+fn census_source_rows(session: &VaultSession, sources: &[String]) -> Vec<(String, Vec<LinkRow>)> {
+    sources
+        .iter()
+        .map(|source| (source.clone(), link_rows(session, source)))
+        .collect()
+}
+
+/// #1426 (the equivalence census): with every shared fixture target
+/// dangling, one source note each, creating every fixture path in turn
+/// heals exactly what the vault-wide heal heals — two vaults, one per heal,
+/// compared row for row after each create.
+#[test]
+fn a_create_heals_exactly_what_the_vault_wide_heal_heals() {
+    use crate::link_resolver::census_fixtures::{INDEXED_PATHS, TARGETS};
+    let sources: Vec<String> = (0..TARGETS.len())
+        .map(|n| format!("src/t{n:02}.md"))
+        .collect();
+    let build = || {
+        let (tmp, session) = make_vault(|provider| {
+            for (source, target) in sources.iter().zip(TARGETS) {
+                provider
+                    .write_file(source, format!("# s\n\n[[{target}]]\n").as_bytes())
+                    .unwrap();
+            }
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        (tmp, session)
+    };
+    let (_targeted_tmp, targeted) = build();
+    let (_vault_wide_tmp, vault_wide) = build();
+    let mut healed = 0;
+    for path in INDEXED_PATHS {
+        targeted.create_exclusive(path, "# t\n").unwrap();
+        crate::links_db::CREATE_HEAL_VAULT_WIDE.with(|on| on.set(true));
+        let created = vault_wide.create_exclusive(path, "# t\n");
+        crate::links_db::CREATE_HEAL_VAULT_WIDE.with(|on| on.set(false));
+        created.unwrap();
+        let expected = census_source_rows(&vault_wide, &sources);
+        assert_eq!(
+            census_source_rows(&targeted, &sources),
+            expected,
+            "after creating {path}"
+        );
+        healed = expected
+            .iter()
+            .flat_map(|(_, rows)| rows)
+            .filter(|row| row.target_path.is_some())
+            .count();
+    }
+    assert!(
+        healed > 20,
+        "premise: the creates healed only {healed} links"
+    );
+}
+
+/// #1426 (never silent): a heal whose lookup fails fails the create after
+/// its bytes landed — `PublishedUnindexed`, the file on disk, no `files`
+/// row, and every dangling row it would have healed still dangling: the
+/// whole transaction, heal included, rolled back.
+#[test]
+fn a_create_whose_heal_fails_is_published_unindexed_and_commits_nothing() {
+    let build = || {
+        let (tmp, session) = make_vault(|provider| {
+            for n in 1..=3 {
+                provider
+                    .write_file(&format!("ghosts/g{n}.md"), b"# g\n\n[[fresh]]\n")
+                    .unwrap();
+            }
+        });
+        session.scan_initial(&CancelToken::new()).unwrap();
+        (tmp, session)
+    };
+    let fresh_rows = |session: &VaultSession, resolved: Option<&str>| {
+        link_rows_where(session, "l.target_raw = 'fresh'", resolved)
+    };
+
+    let (_control_tmp, control) = build();
+    match control.create_exclusive_reporting("fresh.md", "# fresh\n") {
+        Ok(CreateExclusiveOutcome::Committed(_)) => {}
+        other => panic!("control: expected Committed, got {other:?}"),
+    }
+    assert_eq!(
+        fresh_rows(&control, Some("fresh.md")),
+        3,
+        "control: the heal reaches the rows"
+    );
+
+    let (tmp, session) = build();
+    crate::links_db::LOOKUP_FAULT.with(|fault| fault.set(true));
+    let outcome = session.create_exclusive_reporting("fresh.md", "# fresh\n");
+    crate::links_db::LOOKUP_FAULT.with(|fault| fault.set(false));
+
+    match outcome {
+        Ok(CreateExclusiveOutcome::PublishedUnindexed {
+            path, content_hash, ..
+        }) => {
+            assert_eq!(path, "fresh.md");
+            assert_eq!(content_hash, crate::content_hash(b"# fresh\n"));
+        }
+        other => panic!("expected PublishedUnindexed, got {other:?}"),
+    }
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("fresh.md")).unwrap(),
+        "# fresh\n",
+        "the bytes landed"
+    );
+    let conn = session.conn.lock().unwrap();
+    let rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM files WHERE path = 'fresh.md'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    drop(conn);
+    assert_eq!(rows, 0, "the failed create committed its files row");
+    assert_eq!(
+        fresh_rows(&session, None),
+        3,
+        "a heal UPDATE survived the rollback"
+    );
+}
