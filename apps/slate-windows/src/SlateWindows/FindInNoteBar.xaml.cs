@@ -11,9 +11,10 @@ namespace SlateWindows;
 
 /// <summary>
 /// WB-22 (#1112): the find bar beside the note (DataContext: the tab's
-/// <see cref="FindInNoteViewModel"/>). It attaches the editor as the search
-/// surface while open, and runs its own keys from <see cref="Bind"/>'s map
-/// in the tunnelling phase, so they are live only while focus is inside it.
+/// <see cref="FindInNoteViewModel"/>). It attaches the editor or the reading
+/// surface, as the tab's mode says, as the search surface while open, and
+/// runs its own keys from <see cref="Bind"/>'s map in the tunnelling phase,
+/// so they are live only while focus is inside it.
 /// </summary>
 internal partial class FindInNoteBar : UserControl
 {
@@ -24,9 +25,16 @@ internal partial class FindInNoteBar : UserControl
         new PropertyMetadata(null, (owner, e) => ((FindInNoteBar)owner).OnEditorChanged(
             e.OldValue as SlateTextEditor, e.NewValue as SlateTextEditor)));
 
+    public static readonly DependencyProperty ReadingSurfaceProperty = DependencyProperty.Register(
+        nameof(ReadingSurface),
+        typeof(Reading.ReadingSurface),
+        typeof(FindInNoteBar),
+        new PropertyMetadata(null, (owner, e) => ((FindInNoteBar)owner).OnReadingSurfaceChanged(
+            e.OldValue as Reading.ReadingSurface, e.NewValue as Reading.ReadingSurface)));
+
     private readonly Dictionary<(Key Key, ModifierKeys Modifiers), Func<bool>> _chords = [];
     private FindInNoteViewModel? _model;
-    private EditorFindSurface? _surface;
+    private IFindInNoteSurface? _surface;
 
     public FindInNoteBar()
     {
@@ -40,6 +48,14 @@ internal partial class FindInNoteBar : UserControl
     {
         get => (SlateTextEditor?)GetValue(EditorProperty);
         set => SetValue(EditorProperty, value);
+    }
+
+    /// <summary>The note's reading surface (the template's
+    /// <c>NoteReadingSurface</c>).</summary>
+    internal Reading.ReadingSurface? ReadingSurface
+    {
+        get => (Reading.ReadingSurface?)GetValue(ReadingSurfaceProperty);
+        set => SetValue(ReadingSurfaceProperty, value);
     }
 
     internal TextBox Query => QueryBox;
@@ -131,8 +147,24 @@ internal partial class FindInNoteBar : UserControl
         Reattach();
     }
 
-    // Ownership is decided on the editor's tab as well as its document, so a
-    // context that arrives without a document change is answered too.
+    private void OnReadingSurfaceChanged(Reading.ReadingSurface? oldSurface, Reading.ReadingSurface? newSurface)
+    {
+        if (oldSurface is not null)
+        {
+            oldSurface.DataContextChanged -= Editor_DataContextChanged;
+        }
+        if (newSurface is not null)
+        {
+            newSurface.DataContextChanged += Editor_DataContextChanged;
+        }
+        _model?.AttachSurface(null);
+        _surface = null;
+        Reattach();
+    }
+
+    // Ownership is decided on the surface's tab as well as the editor's
+    // document, so a context that arrives without a document change is
+    // answered too.
     private void Editor_DataContextChanged(object sender, DependencyPropertyChangedEventArgs e) => Reattach();
 
     private void Editor_DocumentChanged(object? sender, EventArgs e)
@@ -144,6 +176,15 @@ internal partial class FindInNoteBar : UserControl
 
     private void Model_PropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
+        if (e.PropertyName is nameof(FindInNoteViewModel.Mode)
+            && _model is { CanReplace: false }
+            && (ReplaceBox.IsKeyboardFocusWithin || ReplaceButton.IsKeyboardFocusWithin || ReplaceAllButton.IsKeyboardFocusWithin))
+        {
+            // A switch to reading mode collapses the replace controls (on the
+            // CanReplace change raised next): the keys move to the query
+            // first, so they never fall out of the bar with them.
+            _ = QueryBox.Focus();
+        }
         if (e.PropertyName is nameof(FindInNoteViewModel.IsOpen) or nameof(FindInNoteViewModel.Mode))
         {
             Reattach();
@@ -151,12 +192,19 @@ internal partial class FindInNoteBar : UserControl
     }
 
     /// <summary>The editor is the surface while the bar is open in editor
-    /// mode; otherwise nothing is attached.</summary>
+    /// mode and the reading surface in reading mode; otherwise nothing is
+    /// attached.</summary>
     private void Reattach()
     {
         if (_model is null)
         {
             return;
+        }
+        // A surface the model detached on its own (a mode switch attached the
+        // other one) has stopped following its text: never reuse it.
+        if (!ReferenceEquals(_model.Surface, _surface))
+        {
+            _surface = null;
         }
         // WPF may update the shared template's bindings in any order on a tab
         // switch: the editor and its document are attached only once BOTH
@@ -167,9 +215,20 @@ internal partial class FindInNoteBar : UserControl
             && ReferenceEquals(tab.FindInNote, _model)
             && ReferenceEquals(tab.EditorDocument, document))
         {
-            if (_surface is null || !ReferenceEquals(_surface.Document, document))
+            if (_surface is not EditorFindSurface current || !ReferenceEquals(current.Document, document))
             {
                 _surface = new EditorFindSurface(document, editor);
+            }
+            _model.AttachSurface(_surface);
+            return;
+        }
+        if (_model is { IsOpen: true, Mode: FindInNoteMode.Reading }
+            && ReadingSurface is { DataContext: WorkspaceTabViewModel readingTab } reading
+            && ReferenceEquals(readingTab.FindInNote, _model))
+        {
+            if (_surface is not Reading.ReadingFindSurface current || !ReferenceEquals(current.Surface, reading))
+            {
+                _surface = new Reading.ReadingFindSurface(reading);
             }
             _model.AttachSurface(_surface);
             return;

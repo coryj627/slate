@@ -230,7 +230,7 @@ internal sealed class EditorFindSurface : IFindInNoteSurface
     public void ReturnFocus() => _editor?.FocusInputOwner();
 
     /// <summary>Stops following the document (the bar detached it).</summary>
-    internal void Detach()
+    public void Detach()
     {
         ClearHighlights();
         _document.Changed -= OnDocumentChanged;

@@ -1,0 +1,439 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+using System.Text;
+using System.Windows;
+using System.Windows.Automation.Peers;
+using System.Windows.Controls;
+using System.Windows.Documents;
+using System.Windows.Input;
+using System.Windows.Media;
+using ICSharpCode.AvalonEdit.Search;
+using SlateWindows.Reading;
+using uniffi.slate_uniffi;
+
+namespace SlateWindows.Tests;
+
+/// <summary>
+/// WB-22 (#1112) PR 2: the reading view as a find surface. The search runs
+/// over the text the surface's range holds (math blocks by their source,
+/// the owner's call of 2026-10-26), the current match is the surface's
+/// selection, and the matches are drawn in the render scope's own adorner
+/// layer — the reading document is never touched.
+/// </summary>
+public sealed class ReadingFindSurfaceTests
+{
+    /// <summary>One note in reading mode, its surface bound and hosted in a
+    /// shown window, with its find surface; the diagram stage gated on
+    /// request.</summary>
+    private sealed class Harness : IDisposable
+    {
+        private readonly FixtureVault _fixture;
+        private readonly CancelToken _cancel;
+        private readonly Window _window;
+
+        public Harness(string name, string markdown, bool gated = false, int notes = 1)
+        {
+            _fixture = FixtureVault.Create(notes, name);
+            File.WriteAllText(Path.Combine(_fixture.Root, "note0.md"), markdown);
+            Session = VaultSession.OpenFilesystem(_fixture.Root);
+            _cancel = new CancelToken();
+            Session.ScanInitial(_cancel);
+            Tab = new WorkspaceTabViewModel(
+                Session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                announce: Heard.Add,
+                startInteractionBackgroundWork: false);
+            if (gated)
+            {
+                Tab.ReadingCreatedForTests = model => model.DiagramStageGateForTests = Gate;
+            }
+            Tab.ToggleViewMode();
+            Surface = new ReadingSurface { Model = Tab.Reading };
+            _window = new Window
+            {
+                Content = Surface,
+                Width = 600,
+                Height = 400,
+                ShowInTaskbar = false,
+                WindowStyle = WindowStyle.None,
+                WindowStartupLocation = WindowStartupLocation.Manual,
+                Left = -2000,
+                Top = -2000,
+            };
+            _window.Show();
+            _window.UpdateLayout();
+            PumpedDispatcher.Drain();
+            Find = new ReadingFindSurface(Surface);
+        }
+
+        public VaultSession Session { get; }
+
+        public WorkspaceTabViewModel Tab { get; }
+
+        public ReadingSurface Surface { get; }
+
+        public ReadingFindSurface Find { get; }
+
+        public ManualResetEventSlim Gate { get; } = new(false);
+
+        public List<A11yEvent> Heard { get; } = [];
+
+        public ReadingContentViewModel Model => Tab.Reading!;
+
+        public string IndexText => Find.Text.Text;
+
+        public List<(int Offset, int Length)> Matches(string query) => SearchStrategyFactory
+            .Create(query, ignoreCase: true, matchWholeWords: false, SearchMode.Normal)
+            .FindAll(Find.Text, 0, Find.Text.TextLength)
+            .Select(result => (result.Offset, result.Length))
+            .ToList();
+
+        public void Settle()
+        {
+            _window.UpdateLayout();
+            PumpedDispatcher.Drain();
+        }
+
+        /// <summary>Releases the gate and pumps until the stage landed.</summary>
+        public void Land()
+        {
+            Gate.Set();
+            Assert.True(
+                PumpedDispatcher.PumpUntil(() => !Model.DiagramsPendingForTests, TimeSpan.FromSeconds(30)),
+                "the diagram stage never landed");
+            PumpedDispatcher.Drain();
+        }
+
+        public FindMatchAdorner? Adorner()
+        {
+            FrameworkElement scope = Assert.IsAssignableFrom<FrameworkElement>(Surface.DocumentRenderScope);
+            return AdornerLayer.GetAdornerLayer(scope)?.GetAdorners(scope)?.OfType<FindMatchAdorner>().SingleOrDefault();
+        }
+
+        public void Dispose()
+        {
+            Gate.Set();
+            Find.Detach();
+            _window.Close();
+            Tab.Dispose();
+            Session.Dispose();
+            _cancel.Dispose();
+            _fixture.Dispose();
+        }
+    }
+
+    private const string IndexNote =
+        "# Alpha heading\n\n"
+        + "1. first item\n2. second item\n\n"
+        + "A [link text](note0.md) here and **fo**o end\n\n"
+        + "beta starts here.\n\n"
+        + "| col | two |\n| --- | --- |\n| cell | data |\n\n"
+        + "- [ ] task words\n\n"
+        + "$$\\nabla^2 f$$\n\n"
+        + "$$\\mathbb{R}$$\n";
+
+    [Fact]
+    public void TheIndexCoversTheSurfaceRangeAndNothingEmbedded() => RunSta(() =>
+    {
+        using var harness = new Harness("reading-find-index", IndexNote);
+        Assert.True(harness.Find.IsSearchable, "premise: the projection applied");
+
+        // The range's text, each math paragraph's speech standing in its
+        // source's place, is the index's text (whitespace and the embedded
+        // element's U+FFFC aside).
+        var expected = new StringBuilder();
+        List<ReadingMathElement> math = [];
+        foreach (Block block in harness.Surface.Document.Blocks)
+        {
+            if (block is Paragraph paragraph && ReadingSemantics.IsMathBlock(paragraph))
+            {
+                ReadingMathElement element = paragraph.Inlines.OfType<InlineUIContainer>()
+                    .Select(container => container.Child).OfType<ReadingMathElement>().Single();
+                math.Add(element);
+                expected.Append(element.Source);
+                Assert.DoesNotContain(ReadingSemantics.MathSpeechOf(paragraph), harness.IndexText, StringComparison.Ordinal);
+            }
+            else
+            {
+                expected.Append(new TextRange(block.ContentStart, block.ContentEnd).Text);
+            }
+        }
+        Assert.Equal(2, math.Count);
+        Assert.Equal(Squeeze(expected.ToString()), Squeeze(harness.IndexText));
+
+        // A word split across formatting runs is one word, and the selection
+        // a reveal makes reads it.
+        (int offset, int length) = Assert.Single(harness.Matches("foo"));
+        harness.Find.Reveal(offset, length);
+        Assert.Equal("foo", harness.Surface.Selection.Text);
+        Assert.Single(harness.Matches("link text"));
+        Assert.Single(harness.Matches("second item"));
+        Assert.Single(harness.Matches("cell"));
+
+        // A math block is found by its source and marked whole.
+        (int nabla, int nablaLength) = Assert.Single(harness.Matches("nabla"));
+        Assert.Same(math[0], harness.Find.UnitAt(nabla));
+        harness.Find.Reveal(nabla, nablaLength);
+        var container = (InlineUIContainer)math[0].Parent;
+        Assert.True(harness.Surface.Selection.Start.CompareTo(container.ElementStart) <= 0, "the selection starts inside the math element");
+        Assert.True(harness.Surface.Selection.End.CompareTo(container.ElementEnd) >= 0, "the selection ends inside the math element");
+        Assert.Single(harness.Matches("mathbb"));
+
+        // No match spans a block boundary.
+        Assert.Empty(harness.Matches("end beta"));
+        Assert.Empty(harness.Matches("heading 1"));
+    });
+
+    public static TheoryData<string> ContentPaths => ["merge", "switch", "append", "completion", "rebind"];
+
+    [Theory]
+    [MemberData(nameof(ContentPaths))]
+    public void ContentChangedFiresOnceForEachContentPath(string path) => RunSta(() =>
+    {
+        using var harness = new Harness(
+            "reading-find-content-" + path,
+            path == "append" ? LargeNote() : DiagramNote,
+            gated: path == "completion",
+            notes: 2);
+        ReadingSurface surface = harness.Surface;
+        List<ReadingContentChange> heard = [];
+        surface.ContentChanged += heard.Add;
+        int revision = surface.ContentRevision;
+
+        switch (path)
+        {
+            case "merge":
+                surface.ApplyBuiltDocument(Build("# Merged\n\nalpha\n"));
+                Assert.Equal([ReadingContentChange.Replaced], heard);
+                Assert.True(surface.ShowsSearchableContent);
+                break;
+            case "switch":
+                {
+                    var tab = new WorkspaceTabViewModel(
+                        harness.Session,
+                        new WorkspaceTabState(
+                            Guid.NewGuid(),
+                            new WorkspaceItemState(WorkspaceItemKind.Markdown, "note1.md")),
+                        startInteractionBackgroundWork: false);
+                    using var model = new ReadingContentViewModel(harness.Session, tab, _ => { });
+                    surface.Model = model;
+                    Assert.Equal([ReadingContentChange.Replaced], heard);
+                    Assert.False(surface.ShowsSearchableContent, "the placeholder is not searchable");
+                    surface.Model = null;
+                    tab.Dispose();
+                    break;
+                }
+            case "append":
+                {
+                    var tab = new WorkspaceTabViewModel(
+                        harness.Session,
+                        new WorkspaceTabState(
+                            Guid.NewGuid(),
+                            new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                        startInteractionBackgroundWork: false);
+                    using var model = new ReadingContentViewModel(harness.Session, tab, _ => { });
+                    int fragments = 0;
+                    model.BlocksAppended += _ => fragments++;
+                    surface.Model = model;
+                    heard.Clear();
+                    revision = surface.ContentRevision;
+                    model.Refresh();
+                    Assert.True(PumpedDispatcher.PumpUntil(() => model.ProjectionComplete, TimeSpan.FromSeconds(60)), "the stream never finished");
+                    PumpedDispatcher.Drain();
+                    Assert.True(fragments > 0, "premise: the note streamed");
+                    Assert.Equal(fragments, heard.Count(change => change == ReadingContentChange.Appended));
+                    Assert.Equal(1, heard.Count(change => change == ReadingContentChange.Replaced));
+                    surface.Model = null;
+                    tab.Dispose();
+                    break;
+                }
+            case "completion":
+                harness.Land();
+                Assert.Equal([ReadingContentChange.CompletedInPlace], heard);
+                break;
+            case "rebind":
+                {
+                    ReadingContentViewModel model = harness.Model;
+                    Assert.True(model.ProjectionComplete, "premise: the projection is complete");
+                    surface.Model = null;
+                    surface.Model = model;
+                    Assert.Empty(heard);
+                    break;
+                }
+        }
+        Assert.Equal(revision + heard.Count, surface.ContentRevision);
+    });
+
+    [Fact]
+    public void TheCurrentMatchIsTheSelectionAndIsBroughtIntoView() => RunSta(() =>
+    {
+        var note = new StringBuilder("needle at the top.\n\n");
+        for (int i = 0; i < 80; i++)
+        {
+            note.Append("Filler paragraph ").Append(i).Append(".\n\n");
+        }
+        note.Append("The second needle is far down.\n");
+        using var harness = new Harness("reading-find-reveal", note.ToString());
+        IInputElement? focused = Keyboard.FocusedElement;
+        List<(int Offset, int Length)> matches = harness.Matches("needle");
+        Assert.Equal(2, matches.Count);
+
+        harness.Find.Reveal(matches[1].Offset, matches[1].Length);
+        harness.Settle();
+
+        Assert.Equal("needle", harness.Surface.Selection.Text);
+        Assert.Equal(matches[1], harness.Find.Selection);
+        Rect rect = harness.Surface.Selection.Start.GetCharacterRect(LogicalDirection.Forward);
+        // A scroll brings the match just inside the viewport's edge.
+        Assert.True(rect.Top >= 0 && rect.Bottom <= harness.Surface.ActualHeight + 0.5, $"the match is outside the viewport: {rect}; height {harness.Surface.ActualHeight}; viewport {harness.Surface.ContentScrollViewer?.ViewportHeight}; offset {harness.Surface.ContentScrollViewer?.VerticalOffset}");
+        Assert.Same(focused, Keyboard.FocusedElement);
+    });
+
+    [Fact]
+    public void TheAdornerHasNoPeerAndLivesInTheSurfacesOwnLayer() => RunSta(() =>
+    {
+        using var harness = new Harness("reading-find-adorner", "alpha one\n\nalpha two\n");
+        List<(int Offset, int Length)> matches = harness.Matches("alpha");
+        harness.Find.Highlight(matches, 0);
+        harness.Settle();
+
+        FindMatchAdorner adorner = Assert.IsType<FindMatchAdorner>(harness.Adorner());
+        Assert.Equal(2, adorner.Count);
+        Assert.Null(UIElementAutomationPeer.CreatePeerForElement(adorner));
+        AdornerLayer layer = Assert.IsType<AdornerLayer>(VisualTreeHelper.GetParent(adorner));
+        Assert.IsType<ScrollContentPresenter>(VisualTreeHelper.GetParent(layer));
+        Assert.True(harness.Surface.IsAncestorOf(layer), "the layer is not the surface's own");
+        Assert.False(adorner.IsHitTestVisible);
+        Assert.False(adorner.Focusable);
+
+        harness.Find.ClearHighlights();
+        Assert.Null(harness.Adorner());
+    });
+
+    [Fact]
+    public void TheLoadingPlaceholderIsNeverSearched() => RunSta(() =>
+    {
+        using var harness = new Harness("reading-find-placeholder", "The reading note.\n", notes: 2);
+        var tab = new WorkspaceTabViewModel(
+            harness.Session,
+            new WorkspaceTabState(
+                Guid.NewGuid(),
+                new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+            startInteractionBackgroundWork: false);
+        using var model = new ReadingContentViewModel(harness.Session, tab, _ => { });
+        harness.Surface.Model = model;
+        Assert.False(harness.Find.IsSearchable, "premise: the placeholder shows");
+
+        var heard = new List<A11yEvent>();
+        using var find = new FindInNoteViewModel(heard.Add);
+        var surface = new ReadingFindSurface(harness.Surface);
+        find.Open();
+        find.AttachSurface(surface);
+        find.Query = "reading";
+        find.FlushPendingForTests();
+
+        Assert.Equal([FindInNotePhrase.WaitingForReadingView], Spoken(heard));
+        Assert.Equal(0, find.TotalCount);
+        Assert.True(harness.Surface.Selection.IsEmpty);
+
+        model.Refresh();
+        Assert.True(PumpedDispatcher.PumpUntil(() => surface.IsSearchable, TimeSpan.FromSeconds(30)), "the projection never applied");
+        find.FlushPendingForTests();
+        Assert.Equal([FindInNotePhrase.WaitingForReadingView, "1 of 1"], Spoken(heard));
+        Assert.Equal(1, find.TotalCount);
+        surface.Detach();
+        harness.Surface.Model = null;
+        tab.Dispose();
+    });
+
+    [Fact]
+    public void AReadingRepublishReRunsTheSearch() => RunSta(() =>
+    {
+        using var harness = new Harness("reading-find-republish", "alpha one\n\nalpha two\n");
+        var heard = new List<A11yEvent>();
+        using var find = new FindInNoteViewModel(heard.Add);
+        find.Open();
+        find.AttachSurface(harness.Find);
+        find.Query = "alpha";
+        find.FlushPendingForTests();
+        Assert.Equal(2, find.TotalCount);
+        heard.Clear();
+
+        harness.Surface.ApplyBuiltDocument(Build("alpha one\n\nalpha two\n\nalpha three\n"));
+        Assert.Equal(0, harness.Adorner()?.Count ?? 0);
+        int caret = harness.Surface.Document.ContentStart.GetOffsetToPosition(harness.Surface.CaretPosition);
+
+        find.FlushPendingForTests();
+        Assert.Equal(3, find.TotalCount);
+        Assert.Empty(heard);
+        Assert.Equal(caret, harness.Surface.Document.ContentStart.GetOffsetToPosition(harness.Surface.CaretPosition));
+        find.AttachSurface(null);
+    });
+
+    private const string DiagramNote =
+        "# Diagram\n\nBefore the diagram, after words.\n\n"
+        + "```mermaid\nweirdDiagram\nstuff\n```\n\n"
+        + "After the diagram.\n";
+
+    [Fact]
+    public void AnInPlaceDiagramCompletionReRunsTheSearch() => RunSta(() =>
+    {
+        using var harness = new Harness("reading-find-diagram", DiagramNote, gated: true);
+        var heard = new List<A11yEvent>();
+        using var find = new FindInNoteViewModel(heard.Add);
+        find.Open();
+        find.AttachSurface(harness.Find);
+        // The pending shape holds only the source.
+        find.Query = "dialect";
+        find.FlushPendingForTests();
+        Assert.Equal(0, find.TotalCount);
+
+        harness.Land();
+        find.FlushPendingForTests();
+
+        // The failure shape's header is an in-range run.
+        Assert.True(find.TotalCount == 1, $"counted {find.TotalCount} over: {harness.IndexText}");
+        Assert.Contains("Diagram dialect not supported", harness.IndexText, StringComparison.Ordinal);
+        find.AttachSurface(null);
+    });
+
+    private static string LargeNote()
+    {
+        var text = new StringBuilder();
+        for (int i = 0; i < 600; i++)
+        {
+            text.Append("Paragraph number ").Append(i).Append(".\n\n");
+        }
+        return text.ToString();
+    }
+
+    /// <summary>The text without whitespace, the embedded element's U+FFFC
+    /// and the disc marker WPF's plain-text serialization writes for a
+    /// bulleted list (no document content: WB-11's ordered markers are runs,
+    /// and are compared).</summary>
+    private static string Squeeze(string text) =>
+        new(text.Where(c => !char.IsWhiteSpace(c) && c != '\uFFFC' && c != '\u2022').ToArray());
+
+    private static List<string> Spoken(List<A11yEvent> heard) =>
+        heard.Select(spoken => SlateUniffiMethods.A11yRender(spoken).Text).ToList();
+
+    /// <summary>A projection built from source, as the model builds one.</summary>
+    private static FlowDocument Build(string source)
+    {
+        ReadingBlock[] blocks = SlateUniffiMethods.ReadingBlocksSource(source);
+        ReadingBlockInlines[] inlines = SlateUniffiMethods.ReadingInlineSegmentsSource(
+            source, Array.Empty<RenderedCitation>(), Array.Empty<OutgoingLink>());
+        var model = new List<(ReadingBlock, ReadingBlockInlines)>();
+        for (int i = 0; i < blocks.Length && i < inlines.Length; i++)
+        {
+            model.Add((blocks[i], inlines[i]));
+        }
+        return ReadingDocumentBuilder.Build(model).Document;
+    }
+
+    private static void RunSta(Action body) =>
+        StaThread.Run(body, TimeSpan.FromSeconds(120), "STA test body timed out.");
+}
