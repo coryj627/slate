@@ -74,10 +74,11 @@ internal sealed class FindMatchAdorner : Adorner
         var ring = new Pen(brush, 2);
         var currentRing = new Pen(brush, 3);
         (int first, int last) = _owner.VisibleOffsets();
+        GeneralTransform? transform = _owner.Surface.TransformToDescendant(AdornedElement);
         for (int i = FirstEndingAtOrAfter(first); i < _matches.Count && _matches[i].Offset <= last; i++)
         {
             (int offset, int length) = _matches[i];
-            foreach (Rect rect in _owner.RectsOf(offset, length, AdornedElement))
+            foreach (Rect rect in _owner.RectsOf(offset, length, AdornedElement, transform))
             {
                 drawingContext.DrawRectangle(null, i == _current ? currentRing : ring, rect);
             }

@@ -18,7 +18,9 @@ namespace SlateWindows.Reading;
 /// <list type="bullet">
 /// <item>a math block is its TeX source, never the hidden speech run #1633
 /// puts in its range (the owner's call of 2026-10-26: a match marks the
-/// whole math element);</item>
+/// whole math element). A block with no core artifact shows its fenced
+/// source as a visible run, which is searched as text, and its empty
+/// element adds nothing;</item>
 /// <item>any other embedded element is one U+FFFC, so what it displays is
 /// neither searched nor counted.</item>
 /// </list>
@@ -70,10 +72,9 @@ internal sealed class ReadingTextIndex
             {
                 case TextPointerContext.Text:
                     string run = pointer.GetTextInRun(LogicalDirection.Forward);
-                    // A math paragraph's range holds its speech (or, with no
-                    // core artifact, its fenced source): its element stands
-                    // for it instead.
-                    bool inMath = pointer.Paragraph is { } paragraph && ReadingSemantics.IsMathBlock(paragraph);
+                    // A math paragraph whose range holds its speech: its
+                    // element stands for it instead.
+                    bool inMath = pointer.Paragraph is { } paragraph && SpeaksInPlaceOfSource(paragraph);
                     if (run.Length > 0 && !inMath)
                     {
                         segments.Add(new Segment(text.Length, run.Length, pointer, null, null));
@@ -83,6 +84,12 @@ internal sealed class ReadingTextIndex
                 case TextPointerContext.ElementStart:
                     switch (pointer.GetAdjacentElement(LogicalDirection.Forward))
                     {
+                        case InlineUIContainer { Child: ReadingMathElement, Parent: Paragraph host } empty
+                            when !SpeaksInPlaceOfSource(host):
+                            // No core artifact: the visible run before it is
+                            // the source, and the element draws nothing.
+                            pointer = empty.ElementEnd;
+                            continue;
                         case InlineUIContainer container:
                             AddUnit(container.ElementStart, container.ElementEnd, container.Child);
                             pointer = container.ElementEnd;
@@ -194,6 +201,11 @@ internal sealed class ReadingTextIndex
         int index = FirstEndingAfter(offset);
         return index < _segments.Count && _segments[index].FlatStart <= offset ? _segments[index].Element : null;
     }
+
+    /// <summary>A math block whose range is its speech (#1595's shape: it
+    /// carries the fenced source a copy substitutes).</summary>
+    private static bool SpeaksInPlaceOfSource(Paragraph paragraph) =>
+        ReadingSemantics.IsMathBlock(paragraph) && ReadingSemantics.MathCopyTextOf(paragraph) is not null;
 
     private int FirstEndingAfter(int offset)
     {

@@ -299,6 +299,7 @@ internal sealed class ReadingSurface : RichTextBox
                 // WB-20: the detach retired this projection's diagram
                 // stage; nothing re-projects here, so it resumes.
                 model.ResumePendingDiagrams();
+                surface.ModelChanged?.Invoke(surface, EventArgs.Empty);
                 return;
             }
             // A model swap is a different projection (navigation, tab
@@ -315,6 +316,7 @@ internal sealed class ReadingSurface : RichTextBox
             surface.ClearForModelSwitch();
             model.EnsureProjected();
         }
+        surface.ModelChanged?.Invoke(surface, EventArgs.Empty);
     }
 
     private void ClearForModelSwitch()
@@ -827,6 +829,14 @@ internal sealed class ReadingSurface : RichTextBox
     /// <summary>Bumped with every <see cref="ContentChanged"/>.</summary>
     internal int ContentRevision { get; private set; }
 
+    /// <summary>Bumped with every <see cref="ReadingContentChange.Replaced"/>:
+    /// a replacement moves every pointer into the document.</summary>
+    internal int ReplacedRevision { get; private set; }
+
+    /// <summary>WB-22: raised once a model change is fully handled (content
+    /// switched, or the rebind fast path taken).</summary>
+    internal event EventHandler? ModelChanged;
+
     /// <summary>The document holds an applied projection, not the "Loading
     /// reading view…" placeholder (true from the merge, not from
     /// <see cref="ApplyModel"/>'s bookkeeping after it, so a direct merge
@@ -843,6 +853,10 @@ internal sealed class ReadingSurface : RichTextBox
     private void RaiseContentChanged(ReadingContentChange change)
     {
         ContentRevision++;
+        if (change == ReadingContentChange.Replaced)
+        {
+            ReplacedRevision++;
+        }
         ContentChanged?.Invoke(change);
     }
 

@@ -3,6 +3,7 @@
 
 using System.Windows;
 using System.Windows.Documents;
+using System.Windows.Media;
 using ICSharpCode.AvalonEdit.Document;
 
 namespace SlateWindows.Reading;
@@ -22,7 +23,6 @@ internal sealed class ReadingFindSurface : IFindInNoteSurface
     private int _indexRevision = -1;
     private FindMatchAdorner? _adorner;
     private Revealed? _revealed;
-    private int _replacements;
     private (IReadOnlyList<(int Offset, int Length)> Matches, int Current)? _deferred;
 
     public ReadingFindSurface(ReadingSurface surface)
@@ -86,9 +86,15 @@ internal sealed class ReadingFindSurface : IFindInNoteSurface
         ReadingTextIndex index = Index;
         _surface.Selection.Select(index.StartOf(offset), index.EndOf(offset + length));
         _revealed = new Revealed(offset, length, _surface.Selection.Start, _surface.Selection.End);
-        if (_surface.DocumentRenderScope is { } scope && RectsOf(offset, length, scope).FirstOrDefault() is { IsEmpty: false } first)
+        if (_surface.DocumentRenderScope is { } scope)
         {
-            scope.BringIntoView(first);
+            // Only a rectangle that exists: none before layout, and an empty
+            // default would scroll to the top.
+            foreach (Rect rect in RectsOf(offset, length, scope, _surface.TransformToDescendant(scope)))
+            {
+                scope.BringIntoView(rect);
+                break;
+            }
         }
     }
 
@@ -134,7 +140,7 @@ internal sealed class ReadingFindSurface : IFindInNoteSurface
     public object CaptureRestorePoint()
     {
         TextSelection selection = _surface.Selection;
-        return new RestorePoint(selection.Start, selection.End, _replacements);
+        return new RestorePoint(selection.Start, selection.End, _surface.ReplacedRevision);
     }
 
     /// <summary>The surface keeps one document for its whole life, so a
@@ -146,7 +152,7 @@ internal sealed class ReadingFindSurface : IFindInNoteSurface
     /// then the caret stays where that change left it.</summary>
     public void Restore(object restorePoint)
     {
-        if (restorePoint is RestorePoint { } point && point.Replacements == _replacements)
+        if (restorePoint is RestorePoint { } point && point.Replacements == _surface.ReplacedRevision)
         {
             _surface.Selection.Select(point.Start, point.End);
         }
@@ -168,8 +174,10 @@ internal sealed class ReadingFindSurface : IFindInNoteSurface
     internal UIElement? UnitAt(int offset) => Index.UnitAt(offset);
 
     /// <summary>The rectangles a match covers in <paramref name="scope"/>'s
-    /// coordinates: a unit's element bounds, else one per line.</summary>
-    internal IEnumerable<Rect> RectsOf(int offset, int length, UIElement scope)
+    /// coordinates (<paramref name="transform"/>: the surface's to the
+    /// scope's, taken once per drawing): a unit's element bounds, else one
+    /// per line.</summary>
+    internal IEnumerable<Rect> RectsOf(int offset, int length, UIElement scope, GeneralTransform? transform)
     {
         if (Index.UnitAt(offset) is { IsVisible: true } element)
         {
@@ -179,7 +187,7 @@ internal sealed class ReadingFindSurface : IFindInNoteSurface
             }
             yield break;
         }
-        if (_surface.TransformToDescendant(scope) is not { } transform)
+        if (transform is null)
         {
             yield break;
         }
@@ -241,10 +249,6 @@ internal sealed class ReadingFindSurface : IFindInNoteSurface
             _adorner?.SetMatches([], -1);
             StopDeferring();
             _revealed = null;
-        }
-        if (change == ReadingContentChange.Replaced)
-        {
-            _replacements++;
         }
         TextChanged?.Invoke();
     }

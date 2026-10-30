@@ -123,6 +123,9 @@ internal sealed class FindInNoteViewModel : BindableBase, IDisposable
         {
             if (SetField(ref _mode, value))
             {
+                // A mode switch asks nothing: a question the loading reading
+                // view held is not answered on the other surface.
+                _askedWhileWaiting = false;
                 OnPropertyChanged(nameof(CanReplace));
                 RaiseCommands();
             }
@@ -628,12 +631,10 @@ internal sealed class FindInNoteViewModel : BindableBase, IDisposable
             else
             {
                 // Nothing tracked (a re-attach, a mode switch back): the
-                // match the selection covers exactly is current again.
+                // match the selection covers exactly shows as current, but
+                // stays untracked — Replace acts only on a hit the reader
+                // heard, so it steps (and speaks) first.
                 current = matches.IndexOf(surface.Selection);
-                if (current >= 0)
-                {
-                    _tracked = Track(document, matches[current].Offset, matches[current].Length);
-                }
             }
         }
         else

@@ -32,7 +32,7 @@ public sealed class ReadingFindSurfaceTests
         private readonly CancelToken _cancel;
         private readonly Window _window;
 
-        public Harness(string name, string markdown, bool gated = false, int notes = 1)
+        public Harness(string name, string markdown, bool gated = false, int notes = 1, string? live = null)
         {
             _fixture = FixtureVault.Create(notes, name);
             File.WriteAllText(Path.Combine(_fixture.Root, "note0.md"), markdown);
@@ -49,6 +49,12 @@ public sealed class ReadingFindSurfaceTests
             if (gated)
             {
                 Tab.ReadingCreatedForTests = model => model.DiagramStageGateForTests = Gate;
+            }
+            if (live is not null)
+            {
+                // An unsaved edit: the saved file's math artifacts no longer
+                // match the live source.
+                Tab.Text = live;
             }
             Tab.ToggleViewMode();
             Surface = new ReadingSurface { Model = Tab.Reading };
@@ -178,8 +184,13 @@ public sealed class ReadingFindSurfaceTests
         Assert.Same(math[0], harness.Find.UnitAt(nabla));
         harness.Find.Reveal(nabla, nablaLength);
         var container = (InlineUIContainer)math[0].Parent;
-        Assert.True(harness.Surface.Selection.Start.CompareTo(container.ElementStart) <= 0, "the selection starts inside the math element");
-        Assert.True(harness.Surface.Selection.End.CompareTo(container.ElementEnd) >= 0, "the selection ends inside the math element");
+        // The selection covers the element and no text beside it (WPF snaps
+        // its ends to the insertion positions around the element's tags).
+        TextSelection selection = harness.Surface.Selection;
+        Assert.True(selection.Start.CompareTo(container.ElementStart) <= 0, "the selection starts inside the math element");
+        Assert.True(selection.End.CompareTo(container.ElementEnd) >= 0, "the selection ends inside the math element");
+        Assert.Equal(string.Empty, new TextRange(selection.Start, container.ElementStart).Text);
+        Assert.Equal(string.Empty, new TextRange(container.ElementEnd, selection.End).Text);
         Assert.Single(harness.Matches("mathbb"));
 
         // No match spans a block boundary: one "\n" stands between blocks.
@@ -326,12 +337,74 @@ public sealed class ReadingFindSurfaceTests
         (int offset, int length) = Assert.Single(harness.Matches("nabla"));
         UIElement scope = Assert.IsAssignableFrom<UIElement>(harness.Surface.DocumentRenderScope);
 
-        Rect ring = Assert.Single(harness.Find.RectsOf(offset, length, scope));
+        Rect ring = Assert.Single(harness.Find.RectsOf(offset, length, scope, harness.Surface.TransformToDescendant(scope)));
 
         Assert.Equal(element.TransformToVisual(scope).TransformBounds(new Rect(element.RenderSize)), ring);
         harness.Find.Highlight([(offset, length)], 0);
         harness.Settle();
         Assert.Equal(1, Assert.IsType<FindMatchAdorner>(harness.Adorner()).Count);
+    });
+
+    /// <summary>Red team: a math block with no core artifact (an unsaved
+    /// formula edit) shows its fenced source as a visible run and an empty
+    /// element; a match is found, selected and ringed in that visible run,
+    /// never on the empty element.</summary>
+    [Fact]
+    public void AnUnmatchedMathBlockIsFoundInItsVisibleSource() => RunSta(() =>
+    {
+        using var harness = new Harness(
+            "reading-find-math-unmatched",
+            "Words before.\n\n$$\\nabla^2 f$$\n",
+            live: "Words before.\n\n$$\\alpha^2 f$$\n");
+        Paragraph math = Assert.Single(harness.Surface.Document.Blocks.OfType<Paragraph>(), ReadingSemantics.IsMathBlock);
+        Assert.Null(ReadingSemantics.MathCopyTextOf(math));
+
+        (int offset, int length) = Assert.Single(harness.Matches("alpha"));
+        Assert.Null(harness.Find.UnitAt(offset));
+        harness.Find.Reveal(offset, length);
+        harness.Settle();
+
+        Assert.Equal("alpha", harness.Surface.Selection.Text);
+        UIElement scope = Assert.IsAssignableFrom<UIElement>(harness.Surface.DocumentRenderScope);
+        Rect ring = Assert.Single(harness.Find.RectsOf(offset, length, scope, harness.Surface.TransformToDescendant(scope)));
+        Assert.True(ring.Width > 4 && ring.Height > 4, $"the ring is a dot: {ring}");
+    });
+
+    /// <summary>Red team: a mode switch asks nothing — a query the loading
+    /// reading view held is not answered on the editor, whose caret stays
+    /// and which speaks nothing.</summary>
+    [Fact]
+    public void AModeSwitchAsksNothingWhileTheReadingViewLoads() => RunSta(() =>
+    {
+        using var harness = new Harness("reading-find-switch-waiting", "The reading note.\n", notes: 2);
+        var tab = new WorkspaceTabViewModel(
+            harness.Session,
+            new WorkspaceTabState(
+                Guid.NewGuid(),
+                new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+            startInteractionBackgroundWork: false);
+        using var model = new ReadingContentViewModel(harness.Session, tab, _ => { });
+        harness.Surface.Model = model;
+        var heard = new List<A11yEvent>();
+        using var find = new FindInNoteViewModel(heard.Add);
+        find.Open();
+        find.AttachSurface(new ReadingFindSurface(harness.Surface));
+        find.Query = "reading";
+        find.FlushPendingForTests();
+        Assert.Equal([FindInNotePhrase.WaitingForReadingView], Spoken(heard));
+
+        var document = new ICSharpCode.AvalonEdit.Document.TextDocument("the reading note");
+        var editor = new EditorFindSurface(document, editor: null);
+        find.Mode = FindInNoteMode.Editor;
+        find.AttachSurface(editor);
+        find.FlushPendingForTests();
+
+        Assert.Equal([FindInNotePhrase.WaitingForReadingView], Spoken(heard));
+        Assert.Equal((0, 0), editor.Selection);
+        Assert.Equal(1, find.TotalCount);
+        find.AttachSurface(null);
+        harness.Surface.Model = null;
+        tab.Dispose();
     });
 
     /// <summary>Two matches inside one math source are two stops, each

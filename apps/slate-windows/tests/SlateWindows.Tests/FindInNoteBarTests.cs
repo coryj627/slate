@@ -504,6 +504,8 @@ public sealed class FindInNoteBarTests
         using var shell = new Shell(ReadingNote);
         shell.ToReading();
         ReadingSurface surface = shell.ReadingSurface;
+        surface.CaretPosition = surface.Document.ContentStart.GetPositionAtOffset(5)!;
+        int caret = surface.Document.ContentStart.GetOffsetToPosition(surface.CaretPosition);
         shell.OpenReading("alpha");
         shell.Press(shell.Bar.Query, Key.Enter);
         Assert.Equal("alpha", surface.Selection.Text);
@@ -517,6 +519,7 @@ public sealed class FindInNoteBarTests
         Assert.False(shell.Find.IsOpen);
         Assert.Null(shell.ReadingAdorner());
         Assert.True(surface.Selection.IsEmpty, "the selection opening found was not given back");
+        Assert.Equal(caret, surface.Document.ContentStart.GetOffsetToPosition(surface.CaretPosition));
         Assert.True(surface.IsKeyboardFocused, "the keys left the reading text after Escape");
     });
 
@@ -563,6 +566,45 @@ public sealed class FindInNoteBarTests
         Assert.Equal(1, shell.Renderers);
         Assert.Equal(2, shell.Find.CurrentIndex);
         Assert.Empty(shell.Spoken);
+
+        // The match shows as current but was not heard here: Replace steps
+        // and speaks before it writes anything.
+        shell.Find.ReplaceText = "omega";
+        shell.Find.Replace();
+        Assert.Equal("alpha beta alpha", shell.Tab.Text);
+        Assert.Single(shell.Spoken);
+    });
+
+    /// <summary>Red team: the reading surface is attached only once its
+    /// model, as well as its tab, is the bar's — a model that is another
+    /// tab's, or arrives late with no content change, is answered when it
+    /// does arrive.</summary>
+    [Fact]
+    public void TheBarWaitsForTheReadingSurfacesOwnModel() => RunSta(() =>
+    {
+        using var shell = new Shell(ReadingNote);
+        WorkspaceTabViewModel own = shell.Tab;
+        shell.Workspace.OpenPath("note1.md", WorkspaceOpenTarget.NewTab);
+        shell.Settle();
+        WorkspaceTabViewModel other = shell.Tab;
+        other.ToggleViewMode();
+        shell.Settle();
+        shell.Workspace.ActiveGroup.ActiveTab = own;
+        shell.Settle();
+        shell.ToReading();
+        shell.OpenReading("alpha");
+        ReadingSurface surface = shell.ReadingSurface;
+        Assert.IsType<ReadingFindSurface>(shell.Find.Surface);
+
+        surface.Model = other.Reading;
+        shell.Settle();
+        Assert.Null(shell.Find.Surface);
+
+        surface.ClearValue(ReadingSurface.ModelProperty);
+        shell.Settle();
+        Assert.Same(own.Reading, surface.Model);
+        Assert.IsType<ReadingFindSurface>(shell.Find.Surface);
+        Assert.Equal(3, shell.Find.TotalCount);
     });
 
     /// <summary>PR 2: a switch to reading mode collapses the replace

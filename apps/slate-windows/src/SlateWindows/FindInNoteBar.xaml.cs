@@ -152,10 +152,12 @@ internal partial class FindInNoteBar : UserControl
         if (oldSurface is not null)
         {
             oldSurface.DataContextChanged -= Editor_DataContextChanged;
+            oldSurface.ModelChanged -= ReadingSurface_ModelChanged;
         }
         if (newSurface is not null)
         {
             newSurface.DataContextChanged += Editor_DataContextChanged;
+            newSurface.ModelChanged += ReadingSurface_ModelChanged;
         }
         _model?.AttachSurface(null);
         _surface = null;
@@ -166,6 +168,10 @@ internal partial class FindInNoteBar : UserControl
     // document, so a context that arrives without a document change is
     // answered too.
     private void Editor_DataContextChanged(object sender, DependencyPropertyChangedEventArgs e) => Reattach();
+
+    // The reading surface's model may arrive after its tab, with or without
+    // a content change (the rebind fast path changes none).
+    private void ReadingSurface_ModelChanged(object? sender, EventArgs e) => Reattach();
 
     private void Editor_DocumentChanged(object? sender, EventArgs e)
     {
@@ -224,7 +230,8 @@ internal partial class FindInNoteBar : UserControl
         }
         if (_model is { IsOpen: true, Mode: FindInNoteMode.Reading }
             && ReadingSurface is { DataContext: WorkspaceTabViewModel readingTab } reading
-            && ReferenceEquals(readingTab.FindInNote, _model))
+            && ReferenceEquals(readingTab.FindInNote, _model)
+            && ReferenceEquals(reading.Model, readingTab.Reading))
         {
             if (_surface is not Reading.ReadingFindSurface current || !ReferenceEquals(current.Surface, reading))
             {
