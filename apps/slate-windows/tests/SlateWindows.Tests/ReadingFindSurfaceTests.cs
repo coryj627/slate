@@ -726,6 +726,67 @@ public sealed class ReadingFindSurfaceTests
         }
     });
 
+    /// <summary>Codex round 4: in decomposed text a match can end (or start)
+    /// inside a grapheme, where WPF snaps a selection. The reveal selects the
+    /// whole graphemes the match touches, and the surface still knows which
+    /// match that selection is, so Next moves on.</summary>
+    [Fact]
+    public void AMatchInsideAGraphemeStepsOn() => RunSta(() =>
+    {
+        using var harness = new Harness("reading-find-grapheme", "Cafe\u0301 and cafe\u0301 again.\n");
+        Assert.Contains("e\u0301", harness.IndexText, StringComparison.Ordinal);
+        List<(int Offset, int Length)> matches = harness.Matches("e");
+        Assert.Equal(2, matches.Count);
+        var heard = new List<A11yEvent>();
+        using var find = new FindInNoteViewModel(heard.Add);
+        find.Open();
+        find.AttachSurface(harness.Find);
+        find.Query = "e";
+        find.FlushPendingForTests();
+        Assert.Equal(1, find.CurrentIndex);
+        Assert.Equal("e\u0301", harness.Surface.Selection.Text);
+
+        find.Next();
+
+        Assert.Equal(2, find.CurrentIndex);
+        Assert.Equal(matches[1], harness.Find.Selection);
+        Assert.Equal("e\u0301", harness.Surface.Selection.Text);
+        find.Next();
+        Assert.Equal(1, find.CurrentIndex);
+
+        // A combining-mark-only search steps the same way.
+        find.Query = "\u0301";
+        find.FlushPendingForTests();
+        Assert.Equal(2, find.TotalCount);
+        find.Next();
+        Assert.Equal(2, find.CurrentIndex);
+        find.AttachSurface(null);
+    });
+
+    /// <summary>Codex round 4: a table row taller than the viewport shows
+    /// lines of every cell; the visible range covers all of them, not only
+    /// the first cell's.</summary>
+    [Fact]
+    public void ALaterTableCellsMatchesStayVisible() => RunSta(() =>
+    {
+        var tall = new StringBuilder();
+        for (int i = 0; i < 160; i++)
+        {
+            tall.Append("filler").Append(i).Append(' ');
+        }
+        using var harness = new Harness(
+            "reading-find-table",
+            "| first | second |\n| --- | --- |\n| " + tall + "| needle in the second cell |\n");
+        (int offset, _) = Assert.Single(harness.Matches("needle"));
+        TextPointer needle = harness.Find.Index.StartOf(offset);
+        Rect glyph = needle.GetCharacterRect(LogicalDirection.Forward);
+        Assert.True(glyph.Top >= 0 && glyph.Bottom <= harness.Surface.ActualHeight, $"premise: the needle is on screen at {glyph}");
+
+        (int first, int last) = harness.Find.VisibleOffsets();
+
+        Assert.True(first <= offset && last >= offset, $"visible {first}..{last}; the needle at {offset}");
+    });
+
     /// <summary>Two matches inside one math source are two stops, each
     /// selecting the whole element: the surface remembers which one it
     /// revealed while the selection is still the one the reveal made.</summary>

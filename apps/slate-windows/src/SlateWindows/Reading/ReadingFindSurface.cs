@@ -40,10 +40,11 @@ internal sealed class ReadingFindSurface : IFindInNoteSurface
     /// <summary>The index itself: a new one per content revision.</summary>
     public object Stamp => Index;
 
-    /// <summary>The surface's selection in the index's offsets. A math match
-    /// selects its whole element, so while the selection is still exactly
-    /// what revealing one made, it is that match — found again in the current
-    /// index, since a completion elsewhere can move the element's offset.</summary>
+    /// <summary>The surface's selection in the index's offsets. A reveal can
+    /// select more than its match (a math element whole; the whole graphemes
+    /// a match inside one touches), so while the selection is still exactly
+    /// what the reveal made, it is that match — found again in the current
+    /// index, since a completion elsewhere can move it.</summary>
     public (int Offset, int Length) Selection
     {
         get
@@ -51,10 +52,16 @@ internal sealed class ReadingFindSurface : IFindInNoteSurface
             TextSelection selection = _surface.Selection;
             if (RevealedMatch is { } revealed
                 && selection.Start.CompareTo(revealed.Start) == 0
-                && selection.End.CompareTo(revealed.End) == 0
-                && Index.UnitStart(revealed.Unit) is >= 0 and int unitStart)
+                && selection.End.CompareTo(revealed.End) == 0)
             {
-                return (unitStart + revealed.Within, revealed.Length);
+                if (revealed.Unit is null)
+                {
+                    return (Index.OffsetOf(revealed.Start) + revealed.Within, revealed.Length);
+                }
+                if (Index.UnitStart(revealed.Unit) is >= 0 and int unitStart)
+                {
+                    return (unitStart + revealed.Within, revealed.Length);
+                }
             }
             int start = Index.OffsetOf(selection.Start);
             return (start, Math.Max(0, Index.OffsetOf(selection.End) - start));
@@ -65,8 +72,8 @@ internal sealed class ReadingFindSurface : IFindInNoteSurface
 
     internal ReadingSurface Surface => _surface;
 
-    /// <summary>The revealed math match, on the surface (a replacement drops
-    /// it there), so a rebuilt find surface knows it too.</summary>
+    /// <summary>The revealed match, on the surface (a replacement drops it
+    /// there), so a rebuilt find surface knows it too.</summary>
     private Revealed? RevealedMatch
     {
         get => _surface.FindRevealMemory as Revealed;
@@ -93,10 +100,28 @@ internal sealed class ReadingFindSurface : IFindInNoteSurface
     public void Reveal(int offset, int length)
     {
         ReadingTextIndex index = Index;
-        _surface.Selection.Select(index.StartOf(offset), index.EndOf(offset + length));
-        RevealedMatch = index.UnitAt(offset) is { } unit
-            ? new Revealed(unit, offset - index.UnitStart(unit), length, _surface.Selection.Start, _surface.Selection.End)
-            : null;
+        TextPointer start = index.StartOf(offset);
+        TextPointer end = index.EndOf(offset + length);
+        UIElement? unit = index.UnitAt(offset);
+        if (unit is null)
+        {
+            // A match that starts or ends inside a grapheme (decomposed text)
+            // selects the whole graphemes it touches: WPF would otherwise
+            // snap the selection, even to nothing.
+            if (!start.IsAtInsertionPosition)
+            {
+                start = start.GetInsertionPosition(LogicalDirection.Backward);
+            }
+            if (!end.IsAtInsertionPosition)
+            {
+                end = end.GetNextInsertionPosition(LogicalDirection.Forward) ?? end;
+            }
+        }
+        _surface.Selection.Select(start, end);
+        TextPointer selected = _surface.Selection.Start;
+        RevealedMatch = unit is not null
+            ? new Revealed(unit, offset - index.UnitStart(unit), length, selected, _surface.Selection.End)
+            : new Revealed(null, offset - index.OffsetOf(selected), length, selected, _surface.Selection.End);
         if (_surface.DocumentRenderScope is { } scope)
         {
             // Only a rectangle that exists: none before layout, and an empty
@@ -252,7 +277,9 @@ internal sealed class ReadingFindSurface : IFindInNoteSurface
     /// <summary>The index offsets the viewport shows, first to last: whole
     /// lines, from the logical start of the top one to the logical end of the
     /// bottom one, so a line's direction never inverts the range and a math
-    /// element the bottom edge cuts is inside it whole.</summary>
+    /// element the bottom edge cuts is inside it whole. A table row is the
+    /// one place the reading view sets text side by side: an edge that falls
+    /// in a row widens the range to the whole row, every cell's lines.</summary>
     internal (int First, int Last) VisibleOffsets()
     {
         TextPointer? top = _surface.GetPositionFromPoint(new Point(0, 0), snapToText: true);
@@ -263,7 +290,27 @@ internal sealed class ReadingFindSurface : IFindInNoteSurface
         {
             last = Index.OffsetOf(nextLine);
         }
+        if (top is not null && RowOf(top) is { } topRow)
+        {
+            first = Math.Min(first, Index.OffsetOf(topRow.ContentStart));
+        }
+        if (bottom is not null && RowOf(bottom) is { } bottomRow)
+        {
+            last = Math.Max(last, Index.OffsetOf(bottomRow.ContentEnd));
+        }
         return (first, Math.Max(first, last));
+    }
+
+    private static TableRow? RowOf(TextPointer pointer)
+    {
+        for (DependencyObject? element = pointer.Parent; element is TextElement text; element = text.Parent)
+        {
+            if (text is TableRow row)
+            {
+                return row;
+            }
+        }
+        return null;
     }
 
     private void OnLayoutUpdated(object? sender, EventArgs e)
@@ -302,9 +349,10 @@ internal sealed class ReadingFindSurface : IFindInNoteSurface
     private static Paragraph? PendingDiagramOf(TextPointer pointer) =>
         pointer.Paragraph is { } paragraph && ReadingSemantics.PendingDiagramKeyOf(paragraph) is not null ? paragraph : null;
 
-    /// <summary>A revealed math match: its element, where in the element's
-    /// source it starts, and the selection the reveal made.</summary>
-    private sealed record Revealed(UIElement Unit, int Within, int Length, TextPointer Start, TextPointer End);
+    /// <summary>A revealed match and the selection the reveal made: for a
+    /// math match its element and where in the element's source it starts;
+    /// for text, how far past the selection's start it begins.</summary>
+    private sealed record Revealed(UIElement? Unit, int Within, int Length, TextPointer Start, TextPointer End);
 
     private sealed record RestorePoint(
         ReadingSurface Surface, TextPointer Start, TextPointer End, int Replacements, Paragraph? PendingDiagram);
