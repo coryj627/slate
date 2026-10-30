@@ -102,7 +102,7 @@ public partial class MainWindow : Window
             }
         }));
         // WB-22 (#1112): Ctrl+G / Ctrl+Shift+G from the find bar and the note's text.
-        FindInNoteKeyRoute.Bind(this);
+        FindInNoteKeyRoute.Bind(this, () => OpenModalSurface is not null || ComponentDispatcher.IsThreadModal);
         _viewModel = new VaultLifecycleViewModel(
             openSeams?.PickVault ?? PickVaultAsync,
             action => _ = Dispatcher.InvokeAsync(action),

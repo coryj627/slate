@@ -48,6 +48,11 @@ internal interface IFindInNoteSurface
 
     object CaptureRestorePoint();
 
+    /// <summary>A restore point taken on another surface's text (a same-item
+    /// reload swapped the document) moved onto this one, at the same
+    /// offsets, clamped; one already on this surface is returned as is.</summary>
+    object RebaseRestorePoint(object restorePoint);
+
     void Restore(object restorePoint);
 
     void ReturnFocus();

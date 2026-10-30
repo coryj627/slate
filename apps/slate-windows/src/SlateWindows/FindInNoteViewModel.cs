@@ -216,6 +216,12 @@ internal sealed class FindInNoteViewModel : BindableBase, IDisposable
         {
             _restorePoint = surface.CaptureRestorePoint();
         }
+        else if (_restorePoint is not null)
+        {
+            // A same-item reload swapped the document: the point moves onto
+            // the live one, so later edits move it as they would have.
+            _restorePoint = surface.RebaseRestorePoint(_restorePoint);
+        }
         RaiseCommands();
         if (Query.Length > 0)
         {
@@ -380,6 +386,7 @@ internal sealed class FindInNoteViewModel : BindableBase, IDisposable
             return;
         }
         old.TextChanged -= OnSurfaceTextChanged;
+        _debounce.Stop();
         old.ClearHighlights();
         if (old is EditorFindSurface editor)
         {
@@ -423,6 +430,12 @@ internal sealed class FindInNoteViewModel : BindableBase, IDisposable
     private void RunPending()
     {
         _debounce.Stop();
+        if (_surface is null)
+        {
+            // Detached (a tab switch inside the window): the pending change
+            // waits for the re-attach, which answers it.
+            return;
+        }
         Recompute cause = _pending;
         _pending = Recompute.None;
         if (cause != Recompute.None && IsOpen)

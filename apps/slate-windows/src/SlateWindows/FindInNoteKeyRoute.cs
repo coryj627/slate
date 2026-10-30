@@ -27,10 +27,13 @@ internal static class FindInNoteKeyRoute
     public static readonly RoutedUICommand FindPrevious =
         new("Find Previous", nameof(FindPrevious), typeof(FindInNoteKeyRoute));
 
-    internal static void Bind(UIElement window)
+    /// <param name="modalOpen">True while a sheet, an overlay or a modal
+    /// loop owns the shell: the steps pass the key on then.</param>
+    internal static void Bind(UIElement window, Func<bool> modalOpen)
     {
-        window.CommandBindings.Add(new CommandBinding(FindNext, (_, e) => Execute(e, forward: true), CanExecute));
-        window.CommandBindings.Add(new CommandBinding(FindPrevious, (_, e) => Execute(e, forward: false), CanExecute));
+        CanExecuteRoutedEventHandler canExecute = (sender, e) => CanExecute(e, modalOpen);
+        window.CommandBindings.Add(new CommandBinding(FindNext, (_, e) => Execute(e, forward: true), canExecute));
+        window.CommandBindings.Add(new CommandBinding(FindPrevious, (_, e) => Execute(e, forward: false), canExecute));
     }
 
     /// <summary>
@@ -56,9 +59,10 @@ internal static class FindInNoteKeyRoute
         return null;
     }
 
-    private static void CanExecute(object sender, CanExecuteRoutedEventArgs e)
+    private static void CanExecute(CanExecuteRoutedEventArgs e, Func<bool> modalOpen)
     {
-        e.CanExecute = SessionOwningFocus(Keyboard.FocusedElement as DependencyObject) is { IsOpen: true };
+        e.CanExecute = !modalOpen()
+            && SessionOwningFocus(Keyboard.FocusedElement as DependencyObject) is { IsOpen: true };
         e.ContinueRouting = !e.CanExecute;
         e.Handled = true;
     }

@@ -145,6 +145,7 @@ internal sealed partial class VaultLifecycleViewModel
     private readonly RelayCommand _closeVaultCommand;
     private readonly RelayCommand _toggleSearchCommand;
     private readonly RelayCommand _findInNoteCommand;
+    private readonly RelayCommand _findInNoteChordCommand;
 
     private VaultSession? _session;
     private CancelToken? _scanCancel;
@@ -288,6 +289,20 @@ internal sealed partial class VaultLifecycleViewModel
                 }
             },
             _ => true);
+        // The CHORD's command (the window's Ctrl+F KeyBinding): inert while a
+        // sheet, an overlay or a modal loop owns the shell, so the bar never
+        // opens, and vault search never toggles, beneath it. The palette's
+        // row keeps the unguarded command (it invokes before it dismisses,
+        // P9), as ToggleSearchCommand does.
+        _findInNoteChordCommand = new RelayCommand(
+            _ =>
+            {
+                if (ModalSurfaceOpen?.Invoke() != true)
+                {
+                    _findInNoteCommand.Execute(null);
+                }
+            },
+            _ => true);
         ReloadRecentVaults();
     }
 
@@ -312,6 +327,10 @@ internal sealed partial class VaultLifecycleViewModel
     /// <summary>WB-22 (#1112): Ctrl+F — the active note's find bar, else
     /// vault search.</summary>
     public ICommand FindInNoteCommand => _findInNoteCommand;
+
+    /// <summary>WB-22: Ctrl+F's chord — <see cref="FindInNoteCommand"/>, but
+    /// inert while a modal surface owns the shell.</summary>
+    public ICommand FindInNoteChordCommand => _findInNoteChordCommand;
 
     public bool IsVaultOpen
     {

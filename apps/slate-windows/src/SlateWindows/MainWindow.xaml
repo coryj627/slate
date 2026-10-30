@@ -42,7 +42,7 @@
              Ctrl+G / Ctrl+Shift+G are routed commands whose CanExecute sets
              ContinueRouting, so they pass through when no focused note's bar
              is open (a plain-ICommand binding would swallow the key). -->
-        <KeyBinding Key="F" Modifiers="Control" Command="{Binding FindInNoteCommand}" />
+        <KeyBinding Key="F" Modifiers="Control" Command="{Binding FindInNoteChordCommand}" />
         <KeyBinding Key="G" Modifiers="Control" Command="{x:Static local:FindInNoteKeyRoute.FindNext}" />
         <KeyBinding Key="G" Modifiers="Control+Shift" Command="{x:Static local:FindInNoteKeyRoute.FindPrevious}" />
         <KeyBinding Key="W" Modifiers="Control" Command="{Binding Workspace.CloseActiveTabCommand}" />

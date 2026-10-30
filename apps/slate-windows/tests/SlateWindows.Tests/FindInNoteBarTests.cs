@@ -368,6 +368,48 @@ public sealed class FindInNoteBarTests
         Assert.Equal(0, shell.Renderers);
     });
 
+    /// <summary>Codex round 1: under a sheet, Ctrl+F opens neither the bar
+    /// nor vault search, and Ctrl+G steps nothing.</summary>
+    [Fact]
+    public void CtrlFAndCtrlGUnderASheetDoNothingBeneathIt() => RunSta(() =>
+    {
+        using var shell = new Shell("a b a b a");
+        shell.Open("a");
+        shell.Find.Close();
+        shell.Workspace.OpenAddPropertySheet(synchronousForTests: true);
+        shell.Settle();
+        Assert.NotNull(shell.Workspace.AddPropertySheet);
+        shell.Heard.Clear();
+
+        shell.Press(shell.Host.Shell, Key.F, ModifierKeys.Control);
+
+        Assert.False(shell.Find.IsOpen);
+        Assert.False(shell.SearchIsOpen);
+        Assert.Empty(shell.Spoken);
+    });
+
+    /// <summary>Codex round 1: a same-item reload swaps the document; Close
+    /// still restores where the bar opened, followed by later edits.</summary>
+    [Fact]
+    public void ASameItemReloadKeepsTheRestorePointOnTheLiveDocument() => RunSta(() =>
+    {
+        using var shell = new Shell(
+            text: null,
+            seed: root => File.WriteAllText(Path.Combine(root, "note0.md"), "a b a b a"));
+        shell.Open("a", caret: 2);
+        TextDocument before = shell.Tab.EditorDocument!;
+
+        shell.Tab.ReplaceItem(shell.Tab.Item);
+        shell.Settle();
+        Assert.NotSame(before, shell.Tab.EditorDocument);
+        Assert.True(shell.Find.IsOpen);
+        shell.Tab.EditorDocument!.Insert(0, "zz");
+        shell.Settle();
+        shell.Press(shell.Bar.Query, Key.Escape);
+
+        Assert.Equal((4, 0), (shell.Editor.SelectionStart, shell.Editor.SelectionLength));
+    });
+
     [Fact]
     public void CloseAfterAShortenedDocumentRestoresAClampedCaret() => RunSta(() =>
     {

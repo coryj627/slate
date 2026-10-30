@@ -98,8 +98,13 @@ internal sealed class EditorFindSurface : IFindInNoteSurface
     public object CaptureRestorePoint()
     {
         (int offset, int length) = Selection;
-        return new RestorePoint(Anchor(offset), Anchor(offset + length));
+        return new RestorePoint(_document, Anchor(offset), Anchor(offset + length));
     }
+
+    public object RebaseRestorePoint(object restorePoint) =>
+        restorePoint is RestorePoint point && !ReferenceEquals(point.Document, _document)
+            ? new RestorePoint(_document, Anchor(point.Start.Offset), Anchor(point.End.Offset))
+            : restorePoint;
 
     public void Restore(object restorePoint)
     {
@@ -138,7 +143,7 @@ internal sealed class EditorFindSurface : IFindInNoteSurface
 
     private void OnDocumentChanged(object? sender, DocumentChangeEventArgs e) => TextChanged?.Invoke();
 
-    private sealed record RestorePoint(TextAnchor Start, TextAnchor End);
+    private sealed record RestorePoint(TextDocument Document, TextAnchor Start, TextAnchor End);
 }
 
 /// <summary>

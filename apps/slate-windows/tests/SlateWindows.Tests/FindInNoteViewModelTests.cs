@@ -133,6 +133,25 @@ public sealed class FindInNoteViewModelTests
         Assert.Equal(new[] { "1 of 1. Wrapped to the top" }, rig.Spoken);
     }
 
+    /// <summary>Codex round 1: a query typed just before a tab switch is
+    /// answered on the switch back — the detached tick does not eat it.</summary>
+    [Fact]
+    public void AQueryPendingAcrossADetachIsAnsweredOnTheReattach()
+    {
+        using var rig = new Rig("a b a");
+        rig.Find.Query = "a";
+        rig.Find.AttachSurface(null);
+        rig.Find.FlushPendingForTests();
+        Assert.Empty(rig.Heard);
+
+        rig.Find.AttachSurface(rig.Surface);
+
+        Assert.Equal(1, rig.Find.CurrentIndex);
+        Assert.Equal(2, rig.Find.TotalCount);
+        Assert.Equal((0, 1), rig.Surface.Selection);
+        Assert.Equal(new[] { "1 of 2" }, rig.Spoken);
+    }
+
     [Fact]
     public void ReplaceAllIsOneUndoStep()
     {
