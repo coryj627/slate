@@ -960,24 +960,24 @@ internal static class ReadingDocumentBuilder
         switch (outcome)
         {
             case DiagramOutcome.Rendered rendered:
-            {
-                var paragraph = new Paragraph();
-                ApplyRenderedShape(
-                    paragraph,
-                    new ReadingDiagramElement(rendered.Description, artifact!.Source),
-                    rendered);
-                return paragraph;
-            }
+                {
+                    var paragraph = new Paragraph();
+                    ApplyRenderedShape(
+                        paragraph,
+                        new ReadingDiagramElement(rendered.Description, artifact!.Source),
+                        rendered);
+                    return paragraph;
+                }
             case DiagramOutcome.Failed failed:
-            {
-                var paragraph = new Paragraph();
-                ApplyFailureShape(
-                    paragraph,
-                    new ReadingDiagramElement(failed.Description, artifact!.Source),
-                    failed,
-                    fallbackSource);
-                return paragraph;
-            }
+                {
+                    var paragraph = new Paragraph();
+                    ApplyFailureShape(
+                        paragraph,
+                        new ReadingDiagramElement(failed.Description, artifact!.Source),
+                        failed,
+                        fallbackSource);
+                    return paragraph;
+                }
         }
 
         // Mac's unmatched fallback: raw source, no fabricated status. The
