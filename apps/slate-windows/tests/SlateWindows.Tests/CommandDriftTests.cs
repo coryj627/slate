@@ -335,7 +335,7 @@ public sealed class CommandDriftTests
 
             // The parameterized preference setters (PR-4). Each menu item
             // supplies a CommandParameter naming the value it selects
-            // ("clearSpeak", "terse", "nemeth", "preambleOnly"), which a
+            // ("clearSpeak", "terse", "nemeth", "preambleFirstLine"), which a
             // palette row has no way to provide — a bare "Set Math Speech
             // Style" command could not know WHICH style. Verified against
             // mac: SlateCommands.swift declares no id for any of these four,

@@ -58,14 +58,16 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
     private string _codePreambleVerbosity = "preambleOnly";
 
     /// <summary>The mac CodeVerbosity vocabulary: storage keys and the
-    /// display names the canonical announcement speaks. WB-21 (RD6, #1389):
-    /// "preambleFirstLine" and "preambleAllTokens" left with their menu items,
-    /// since rendering never read them; a stored one now loads as Preamble only,
-    /// silently. WB-21b brings the real modes back through core.</summary>
+    /// display names the canonical announcement speaks. WB-21 (RD6, #1389)
+    /// removed "preambleFirstLine" and "preambleAllTokens" while rendering
+    /// never read them; WB-21b (#1526) brings them back, rendered by core's
+    /// <c>CodeBlockPreambleWithVerbosity</c>.</summary>
     internal static readonly IReadOnlyDictionary<string, string> CodeVerbosityNames =
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["preambleOnly"] = "Preamble only",
+            ["preambleFirstLine"] = "Preamble + first line",
+            ["preambleAllTokens"] = "Preamble + all tokens",
         };
 
     /// <summary>W3-2 MathPrefs vocabulary — storage keys and the
@@ -98,6 +100,21 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
     private string _mathSpeechStyle = "clearSpeak";
     private string _mathVerbosity = "medium";
     private string _mathBrailleCode = "nemeth";
+
+    /// <summary>WB-21b (#1526): raised after the code preamble verbosity
+    /// changes; the workspace re-projects every open reading view.</summary>
+    internal event Action? CodePreambleVerbosityChanged;
+
+    /// <summary>WB-21b (#1526): the verbosity in core's shape, read by each
+    /// reading build. (Qualified: the string property of the same name
+    /// shadows the type inside this class.)</summary>
+    internal uniffi.slate_uniffi.CodePreambleVerbosity CurrentCodePreambleVerbosity =>
+        _codePreambleVerbosity switch
+        {
+            "preambleFirstLine" => uniffi.slate_uniffi.CodePreambleVerbosity.FirstLine,
+            "preambleAllTokens" => uniffi.slate_uniffi.CodePreambleVerbosity.AllTokens,
+            _ => uniffi.slate_uniffi.CodePreambleVerbosity.PreambleOnly,
+        };
 
     /// <summary>Raised after any math preference changes, carrying the
     /// full FFI prefs — the workspace pushes them to the session and
@@ -137,11 +154,10 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
             && CodeVerbosityNames.ContainsKey(verbosity)
                 ? verbosity
                 : "preambleOnly";
-        // WB-21 (RD6, #1389): a stored key the vocabulary no longer holds
-        // (the removed "preambleFirstLine" or "preambleAllTokens", or a hand
-        // edit) is rewritten as the fallback, silently, so the file agrees
-        // with the checked item and a build that restores the mode
-        // (WB-21b) does not revive it unasked.
+        // WB-21 (RD6, #1389): a stored key the vocabulary does not hold (a
+        // hand edit, or a newer build's mode) is rewritten as the fallback,
+        // silently, so the file agrees with the checked item and nothing
+        // revives a mode the reader never saw checked.
         if (loaded?.CodePreambleVerbosity is string stored
             && !string.Equals(stored, _codePreambleVerbosity, StringComparison.Ordinal))
         {
@@ -207,11 +223,14 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
                 if (string.Equals(_codePreambleVerbosity, key, StringComparison.Ordinal))
                 {
                     // m1: the re-selected item re-asserts its check.
-                    RaiseCheckGroup(nameof(IsCodeVerbosityPreambleOnly));
+                    RaiseCheckGroup(
+                        nameof(IsCodeVerbosityPreambleOnly),
+                        nameof(IsCodeVerbosityFirstLine),
+                        nameof(IsCodeVerbosityAllTokens));
                     return;
                 }
-                CodePreambleVerbosity = key;
-                _announce(new A11yEvent.CodePreambleVerbosity(display));
+                ApplyCodePreambleVerbosity(
+                    key, () => _announce(new A11yEvent.CodePreambleVerbosity(display)));
             },
             _ => true);
 
@@ -379,39 +398,36 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
     /// <summary>
     /// W3-4 CodePrefs parity — parity with mac's SHIPPED behavior: the
     /// verbosity is persisted and its change announced through the
-    /// canonical vocabulary, and rendering always uses the preamble
-    /// (mac marks the view binding V1.x; matrix note records the same
-    /// posture here). Since WB-21 (RD6) the vocabulary holds one mode, so
-    /// no change can happen until WB-21b restores the others through core.
+    /// canonical vocabulary. Since WB-21b (#1526) the reading view's code
+    /// names speak it (core's <c>CodeBlockPreambleWithVerbosity</c>), and a
+    /// change re-projects every open reading view.
     /// </summary>
     public string CodePreambleVerbosity
     {
         get => _codePreambleVerbosity;
-        set
+        set => ApplyCodePreambleVerbosity(value, announce: null);
+    }
+
+    /// <summary>The math setters' order (persist, announce, then tell the
+    /// workspace): the setting line is spoken before anything the
+    /// re-projection says, and a throwing handler leaves the change
+    /// persisted. A key the vocabulary lacks, or the current one, changes
+    /// nothing and raises nothing. The command passes its announcement in,
+    /// so the event is still constructed where contract 38's ledger records
+    /// it (the constructor's command).</summary>
+    private void ApplyCodePreambleVerbosity(string value, Action? announce)
+    {
+        if (!CodeVerbosityNames.ContainsKey(value)
+            || !SetField(ref _codePreambleVerbosity, value))
         {
-            if (!CodeVerbosityNames.ContainsKey(value)
-                || !SetField(ref _codePreambleVerbosity, value))
-            {
-                return;
-            }
-            OnPropertyChanged(nameof(IsCodeVerbosityPreambleOnly));
-            if (_preferencesStore is not { } store)
-            {
-                return;
-            }
-            try
-            {
-                store.Save(store.Load() with { CodePreambleVerbosity = value });
-            }
-            catch (IOException exception)
-            {
-                HostLog.Write(HostDiagnosticEvent.AppPreferencesPersistFailed, exception);
-            }
-            catch (UnauthorizedAccessException exception)
-            {
-                HostLog.Write(HostDiagnosticEvent.AppPreferencesPersistFailed, exception);
-            }
+            return;
         }
+        OnPropertyChanged(nameof(IsCodeVerbosityPreambleOnly));
+        OnPropertyChanged(nameof(IsCodeVerbosityFirstLine));
+        OnPropertyChanged(nameof(IsCodeVerbosityAllTokens));
+        Persist(state => state with { CodePreambleVerbosity = value });
+        announce?.Invoke();
+        CodePreambleVerbosityChanged?.Invoke();
     }
 
     /// <summary>The notifications of one radio group's check items, raised
@@ -497,6 +513,12 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
 
     public bool IsCodeVerbosityPreambleOnly =>
         _codePreambleVerbosity == "preambleOnly";
+
+    public bool IsCodeVerbosityFirstLine =>
+        _codePreambleVerbosity == "preambleFirstLine";
+
+    public bool IsCodeVerbosityAllTokens =>
+        _codePreambleVerbosity == "preambleAllTokens";
 
     public ICommand ActualSizeCommand { get; }
     public ICommand ToggleSpellCheckCommand { get; }

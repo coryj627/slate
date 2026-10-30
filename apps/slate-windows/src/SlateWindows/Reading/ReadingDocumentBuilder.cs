@@ -78,6 +78,13 @@ internal sealed class ReadingListBuildContext
     /// </summary>
     internal bool DiagramsPending { get; set; }
 
+    /// <summary>
+    /// WB-21b (#1526): the verbosity a code block's accessible name speaks
+    /// at, read once per build so one build speaks one verbosity.
+    /// </summary>
+    internal CodePreambleVerbosity CodePreambleVerbosity { get; init; } =
+        CodePreambleVerbosity.PreambleOnly;
+
     /// <summary>The fences this build left pending, chunks included.</summary>
     internal List<PendingFence> PendingDiagrams { get; } = new();
 
@@ -449,6 +456,21 @@ internal static class ReadingDocumentBuilder
         string source = fence.Interior;
         string? language = fence.Language.Length == 0 ? null : fence.Language;
         string preamble = SlateUniffiMethods.CodeBlockPreamble(language, source);
+        // WB-21b (#1526): the peer's Name speaks at the reader's verbosity;
+        // the in-range caption below keeps the short preamble (the code
+        // follows in range, and speaking it twice would double every line).
+        // Only "all tokens" reads the token stream, so only it is handed
+        // the saved tokens, and only for a coherent fence (an unsaved edit
+        // has none). Core walks them over the source and emits every byte
+        // they leave uncovered, so the body is the interior either way —
+        // including a CRLF fence, whose saved offsets core clamps.
+        string name = SlateUniffiMethods.CodeBlockPreambleWithVerbosity(
+            language,
+            source,
+            coherent && context.CodePreambleVerbosity == CodePreambleVerbosity.AllTokens
+                ? matched!.Tokens
+                : [],
+            context.CodePreambleVerbosity);
 
         // The interior renders VERBATIM — TrimEnd ate authored trailing
         // blank lines, so display disagreed with the preamble's count
@@ -476,7 +498,7 @@ internal static class ReadingDocumentBuilder
             paragraph = MonospaceParagraph(fence.Interior);
         }
         ReadingSemantics.MarkCodeBlock(paragraph);
-        AutomationProperties.SetName(paragraph, preamble);
+        AutomationProperties.SetName(paragraph, name);
 
         // The preamble is IN-RANGE text (field, 2026-07-30): the
         // paragraph Name feeds object navigation but linear caret

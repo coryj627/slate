@@ -1293,13 +1293,42 @@ public sealed class W2EditorInteractionTests
             item => item is A11yEvent.SpellCheckToggled toggled && toggled.Enabled);
     }
 
-    /// <summary>WB-21 (RD6, #1389): "Preamble + first line" and
-    /// "Preamble + all tokens" changed nothing a reader heard, so they left
-    /// the menu. A preferences file still holding one loads as Preamble
-    /// only, the file is rewritten to agree, and the fallback speaks
-    /// nothing.</summary>
+    /// <summary>WB-21b (#1526): the three code preamble modes are back, now
+    /// that core renders them. Each key, selected from another mode, sets its
+    /// check flag and the verbosity the reading view reads, and is announced
+    /// once with its display name.</summary>
     [Fact]
-    public void AStoredFirstLineVerbosityFallsBackToPreambleOnlySilently()
+    public void TheThreeCodeVerbosityModesAreBackAndEachIsAnnouncedOnce()
+    {
+        var announced = new List<A11yEvent>();
+        using var preferences = new EditorPreferencesViewModel(announced.Add, new FakeEditorSpellingService());
+        (string Key, CodePreambleVerbosity Verbosity, string Spoken, Func<bool> Flag)[] modes =
+        [
+            ("preambleFirstLine", CodePreambleVerbosity.FirstLine,
+                "Code preamble verbosity: Preamble + first line.", () => preferences.IsCodeVerbosityFirstLine),
+            ("preambleAllTokens", CodePreambleVerbosity.AllTokens,
+                "Code preamble verbosity: Preamble + all tokens.", () => preferences.IsCodeVerbosityAllTokens),
+            ("preambleOnly", CodePreambleVerbosity.PreambleOnly,
+                "Code preamble verbosity: Preamble only.", () => preferences.IsCodeVerbosityPreambleOnly),
+        ];
+        foreach ((string key, CodePreambleVerbosity verbosity, string spoken, Func<bool> flag) in modes)
+        {
+            announced.Clear();
+            preferences.SetCodePreambleVerbosityCommand.Execute(key);
+
+            Assert.True(flag(), key);
+            Assert.Equal(key, preferences.CodePreambleVerbosity);
+            Assert.Equal(verbosity, preferences.CurrentCodePreambleVerbosity);
+            Assert.Equal(spoken, SlateUniffiMethods.A11yRender(Assert.Single(announced)).Text);
+        }
+    }
+
+    /// <summary>WB-21b red team round 1: a newly selected mode is persisted
+    /// (a fresh load restores it), the setting line is spoken before the
+    /// workspace is told, and a re-selection or an unknown key raises no
+    /// change.</summary>
+    [Fact]
+    public void ASelectedVerbosityPersistsAndRaisesOneChangeAfterItsAnnouncement()
     {
         string directory = Path.Combine(
             Path.GetTempPath(), $"slate-code-verbosity-{Guid.NewGuid():N}");
@@ -1307,19 +1336,28 @@ public sealed class W2EditorInteractionTests
         try
         {
             var store = new AppPreferencesStore(Path.Combine(directory, "preferences.json"));
-            store.Save(store.Load() with { CodePreambleVerbosity = "preambleFirstLine" });
-            Assert.Equal("preambleFirstLine", store.Load().CodePreambleVerbosity);
-
-            var announced = new List<A11yEvent>();
+            var order = new List<string>();
             using var preferences = new EditorPreferencesViewModel(
-                announced.Add,
+                spoken => order.Add("announced"),
                 new FakeEditorSpellingService(),
                 preferencesStore: store);
+            preferences.CodePreambleVerbosityChanged += () =>
+            {
+                order.Add("changed");
+                Assert.Equal("preambleFirstLine", store.Load().CodePreambleVerbosity);
+            };
 
-            Assert.True(preferences.IsCodeVerbosityPreambleOnly);
-            Assert.Equal("preambleOnly", preferences.CodePreambleVerbosity);
-            Assert.Equal("preambleOnly", store.Load().CodePreambleVerbosity);
-            Assert.Empty(announced);
+            preferences.SetCodePreambleVerbosityCommand.Execute("preambleFirstLine");
+            Assert.Equal(new[] { "announced", "changed" }, order);
+
+            preferences.SetCodePreambleVerbosityCommand.Execute("preambleFirstLine");
+            preferences.SetCodePreambleVerbosityCommand.Execute("nonsense");
+            preferences.CodePreambleVerbosity = "nonsense";
+            Assert.Equal(new[] { "announced", "changed" }, order);
+
+            using var reloaded = new EditorPreferencesViewModel(
+                _ => { }, new FakeEditorSpellingService(), preferencesStore: store);
+            Assert.Equal(CodePreambleVerbosity.FirstLine, reloaded.CurrentCodePreambleVerbosity);
         }
         finally
         {
@@ -1327,41 +1365,70 @@ public sealed class W2EditorInteractionTests
         }
     }
 
-    /// <summary>WB-21 (RD6, #1389): the removed keys are unknown to the
-    /// setter, so a stale caller passing one changes, persists and
-    /// announces nothing.</summary>
+    /// <summary>WB-21b (#1526): a saved mode is restored at load, and a key
+    /// the vocabulary lacks falls back to Preamble only — silently, and the
+    /// file is rewritten to agree (WB-21's rule for an unknown key).</summary>
     [Fact]
-    public void ThePreambleVerbosityCommandRejectsTheRemovedKeys()
+    public void AStoredVerbosityIsRestoredAndAnUnknownOneFallsBackSilently()
     {
-        string directory = Path.Combine(
-            Path.GetTempPath(), $"slate-code-verbosity-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(directory);
-        try
+        (string Stored, CodePreambleVerbosity Loaded, string Kept)[] cases =
+        [
+            ("preambleFirstLine", CodePreambleVerbosity.FirstLine, "preambleFirstLine"),
+            ("preambleAllTokens", CodePreambleVerbosity.AllTokens, "preambleAllTokens"),
+            ("nonsense", CodePreambleVerbosity.PreambleOnly, "preambleOnly"),
+        ];
+        foreach ((string stored, CodePreambleVerbosity loaded, string kept) in cases)
         {
-            string file = Path.Combine(directory, "preferences.json");
-            var store = new AppPreferencesStore(file);
-            var announced = new List<A11yEvent>();
-            using var preferences = new EditorPreferencesViewModel(
-                announced.Add,
-                new FakeEditorSpellingService(),
-                preferencesStore: store);
-            var raised = new List<string>();
-            preferences.PropertyChanged += (_, e) => raised.Add(e.PropertyName ?? "");
+            string directory = Path.Combine(
+                Path.GetTempPath(), $"slate-code-verbosity-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(directory);
+            try
+            {
+                var store = new AppPreferencesStore(Path.Combine(directory, "preferences.json"));
+                store.Save(store.Load() with { CodePreambleVerbosity = stored });
 
-            preferences.SetCodePreambleVerbosityCommand.Execute("preambleAllTokens");
-            preferences.SetCodePreambleVerbosityCommand.Execute("preambleFirstLine");
-            preferences.CodePreambleVerbosity = "preambleAllTokens";
+                var announced = new List<A11yEvent>();
+                using var preferences = new EditorPreferencesViewModel(
+                    announced.Add,
+                    new FakeEditorSpellingService(),
+                    preferencesStore: store);
 
-            Assert.True(preferences.IsCodeVerbosityPreambleOnly);
-            Assert.Equal("preambleOnly", preferences.CodePreambleVerbosity);
-            Assert.False(File.Exists(file), "a rejected key was persisted");
-            Assert.Empty(announced);
-            Assert.Empty(raised);
+                Assert.Equal(loaded, preferences.CurrentCodePreambleVerbosity);
+                Assert.Equal(kept, preferences.CodePreambleVerbosity);
+                Assert.Equal(loaded == CodePreambleVerbosity.FirstLine, preferences.IsCodeVerbosityFirstLine);
+                Assert.Equal(loaded == CodePreambleVerbosity.AllTokens, preferences.IsCodeVerbosityAllTokens);
+                Assert.Equal(loaded == CodePreambleVerbosity.PreambleOnly, preferences.IsCodeVerbosityPreambleOnly);
+                Assert.Equal(kept, store.Load().CodePreambleVerbosity);
+                Assert.Empty(announced);
+            }
+            finally
+            {
+                Directory.Delete(directory, recursive: true);
+            }
         }
-        finally
-        {
-            Directory.Delete(directory, recursive: true);
-        }
+    }
+
+    /// <summary>WB-21b (#1526): the setter accepts the restored keys and
+    /// still rejects an unknown one, through the command and the property
+    /// alike.</summary>
+    [Fact]
+    public void ThePreambleVerbosityCommandAcceptsAllTokensAndRejectsUnknownKeys()
+    {
+        var announced = new List<A11yEvent>();
+        using var preferences = new EditorPreferencesViewModel(announced.Add, new FakeEditorSpellingService());
+        Assert.True(preferences.IsCodeVerbosityPreambleOnly);
+
+        preferences.SetCodePreambleVerbosityCommand.Execute("preambleAllTokens");
+        Assert.True(preferences.IsCodeVerbosityAllTokens);
+        Assert.Equal(
+            "Code preamble verbosity: Preamble + all tokens.",
+            SlateUniffiMethods.A11yRender(Assert.Single(announced)).Text);
+
+        preferences.SetCodePreambleVerbosityCommand.Execute("nonsense");
+        preferences.CodePreambleVerbosity = "nonsense";
+        Assert.True(preferences.IsCodeVerbosityAllTokens);
+        Assert.Equal(CodePreambleVerbosity.AllTokens, preferences.CurrentCodePreambleVerbosity);
+        Assert.Single(announced);
     }
 
     [Fact]

@@ -113,7 +113,11 @@ see note), **N** (query engine + AST).
 pipelines).** Math → `{LaTeX, MathML, speech, braille}`, Mermaid →
 `{source, svg, description}`, code → AT preamble — all produced in Rust per
 §6.2–6.4; Windows consumes the same artifacts behind a UIA peer. **K is the
-model every other milestone should look like.**
+model every other milestone should look like.** *(Note 2026-10-30, plan 44
+WB-21b, #1526: the preamble at the reader's verbosity — the first line, or
+the whole block over the token stream — is core's sibling function
+`code_block_preamble_with_verbosity`; Windows consumes it, and mac's
+consumption is the follow-up.)*
 
 **Drift / Windows-risk:**
 

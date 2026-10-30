@@ -218,6 +218,96 @@ pub fn code_block_preamble(language: Option<&str>, source: &str) -> String {
     format!("Code block, {spoken_language}, {lines} {suffix}.")
 }
 
+/// How much of a code block its accessible name speaks after the preamble
+/// (WB-21b, decision WD13). The setting's three modes, mac's
+/// `CodeVerbosity` vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodePreambleVerbosity {
+    /// The preamble alone: exactly [`code_block_preamble`].
+    PreambleOnly,
+    /// The preamble, a space, and the source's first line verbatim;
+    /// "blank line" for an empty first line.
+    FirstLine,
+    /// The preamble, a space, and the whole source in byte order, walked
+    /// over the token stream.
+    AllTokens,
+}
+
+/// The code-block preamble at a reader's verbosity — a sibling of
+/// [`code_block_preamble`], whose signature and output stay as mac speaks
+/// them. Defined over `source` and its `tokens` (the `SyntaxToken` stream),
+/// never `semantic_spans`:
+/// - `PreambleOnly`: exactly `code_block_preamble(language, source)`.
+/// - `FirstLine`: the preamble, a space, the bytes before the first `\n`
+///   (the whole source when it has none), less a CRLF's `\r`; an empty
+///   first line speaks "blank line".
+/// - `AllTokens`: the preamble, a space, then every token's bytes in
+///   `start_byte` order with every uncovered byte emitted in place, so the
+///   body is the source byte for byte; nothing is translated (the AT's
+///   punctuation level decides what is heard). No cap: an oversized
+///   block's one token speaks the whole source.
+///
+/// An empty source speaks the preamble alone in every mode.
+pub fn code_block_preamble_with_verbosity(
+    language: Option<&str>,
+    source: &str,
+    tokens: &[SyntaxToken],
+    verbosity: CodePreambleVerbosity,
+) -> String {
+    let preamble = code_block_preamble(language, source);
+    if source.is_empty() {
+        return preamble;
+    }
+    match verbosity {
+        CodePreambleVerbosity::PreambleOnly => preamble,
+        CodePreambleVerbosity::FirstLine => {
+            let first = source
+                .split('\n')
+                .next()
+                .unwrap_or_default()
+                .trim_end_matches('\r');
+            if first.is_empty() {
+                format!("{preamble} blank line")
+            } else {
+                format!("{preamble} {first}")
+            }
+        }
+        CodePreambleVerbosity::AllTokens => {
+            format!("{preamble} {}", all_tokens_body(source, tokens))
+        }
+    }
+}
+
+/// The all-tokens body: `source` walked over `tokens` in `start_byte`
+/// order. The bytes before each token that no token covers are emitted in
+/// place, then the token's bytes, then whatever follows the last token, so
+/// nothing is omitted or reordered. Each token is clamped to the cursor and
+/// the source's end, and to char boundaries, so an overlapping or
+/// out-of-range token never repeats or panics.
+fn all_tokens_body(source: &str, tokens: &[SyntaxToken]) -> String {
+    let mut ordered: Vec<&SyntaxToken> = tokens.iter().collect();
+    ordered.sort_by_key(|token| token.start_byte);
+    let end = source.len();
+    let floor = |mut at: usize| {
+        at = at.min(end);
+        while !source.is_char_boundary(at) {
+            at -= 1;
+        }
+        at
+    };
+    let mut body = String::with_capacity(end);
+    let mut cursor = 0usize;
+    for token in ordered {
+        let start = floor((token.start_byte as usize).max(cursor));
+        let stop = floor((token.end_byte as usize).max(start));
+        body.push_str(&source[cursor..start]);
+        body.push_str(&source[start..stop]);
+        cursor = stop;
+    }
+    body.push_str(&source[cursor..]);
+    body
+}
+
 /// Dispatch a raw block to the matching tree-sitter grammar.
 ///
 /// Returns a single `Other` token covering the source when the
@@ -743,6 +833,254 @@ mod tests {
         assert_eq!(
             code_block_preamble(Some("rust"), ""),
             "Code block, rust, 0 lines."
+        );
+    }
+
+    fn highlighted(language: &str, source: &str) -> CodeBlock {
+        highlight_code(&RawCodeBlock {
+            source: source.to_string(),
+            language: Some(language.to_string()),
+            line: 1,
+            byte_offset: 0,
+        })
+    }
+
+    fn token(start_byte: u32, end_byte: u32) -> SyntaxToken {
+        SyntaxToken {
+            start_byte,
+            end_byte,
+            kind: TokenKind::Identifier,
+        }
+    }
+
+    /// WB-21b: Preamble only is the short preamble, byte for byte, over
+    /// the goldens' inputs.
+    #[test]
+    fn preamble_only_is_code_block_preamble() {
+        for (language, source) in [
+            (Some("rust"), "a\nb\nc\n"),
+            (Some("rust"), "one line"),
+            (None, "x\ny\n"),
+            (Some("rust"), ""),
+        ] {
+            let tokens = language
+                .map(|tag| highlighted(tag, source).tokens)
+                .unwrap_or_default();
+            assert_eq!(
+                code_block_preamble_with_verbosity(
+                    language,
+                    source,
+                    &tokens,
+                    CodePreambleVerbosity::PreambleOnly
+                ),
+                code_block_preamble(language, source)
+            );
+        }
+    }
+
+    #[test]
+    fn first_line_is_the_first_line_verbatim() {
+        let block = highlighted("rust", "fn main() {\n}\n");
+        assert_eq!(
+            code_block_preamble_with_verbosity(
+                Some("rust"),
+                &block.source,
+                &block.tokens,
+                CodePreambleVerbosity::FirstLine
+            ),
+            "Code block, rust, 2 lines. fn main() {"
+        );
+        assert_eq!(
+            code_block_preamble_with_verbosity(
+                None,
+                "no newline",
+                &[],
+                CodePreambleVerbosity::FirstLine
+            ),
+            "Code block, plain text, 1 line. no newline"
+        );
+    }
+
+    #[test]
+    fn first_line_blank_speaks_blank_line() {
+        assert_eq!(
+            code_block_preamble_with_verbosity(
+                Some("text"),
+                "\nx\n",
+                &[],
+                CodePreambleVerbosity::FirstLine
+            ),
+            "Code block, text, 2 lines. blank line"
+        );
+    }
+
+    /// The saved artifact keeps CRLF (mac passes it): the terminator's
+    /// `\r` is not part of the line, and a CRLF blank line is blank.
+    #[test]
+    fn first_line_drops_a_crlf_terminator() {
+        assert_eq!(
+            code_block_preamble_with_verbosity(
+                Some("rust"),
+                "fn main() {\r\n}\r\n",
+                &[],
+                CodePreambleVerbosity::FirstLine
+            ),
+            "Code block, rust, 2 lines. fn main() {"
+        );
+        assert_eq!(
+            code_block_preamble_with_verbosity(
+                Some("text"),
+                "\r\nx\r\n",
+                &[],
+                CodePreambleVerbosity::FirstLine
+            ),
+            "Code block, text, 2 lines. blank line"
+        );
+    }
+
+    #[test]
+    fn first_line_of_an_empty_source_is_the_preamble_alone() {
+        assert_eq!(
+            code_block_preamble_with_verbosity(
+                Some("rust"),
+                "",
+                &[],
+                CodePreambleVerbosity::FirstLine
+            ),
+            "Code block, rust, 0 lines."
+        );
+        assert_eq!(
+            code_block_preamble_with_verbosity(
+                Some("rust"),
+                "",
+                &[],
+                CodePreambleVerbosity::AllTokens
+            ),
+            "Code block, rust, 0 lines."
+        );
+    }
+
+    #[test]
+    fn all_tokens_over_a_grammar_stream_equals_the_source() {
+        for (language, source) in [
+            ("rust", "fn main() {\n    let x = 1;\n}\n"),
+            ("python", "x = 1 + 2\n"),
+            ("json", "{\"a\": [1, 2]}"),
+        ] {
+            let block = highlighted(language, source);
+            assert!(
+                !block.tokens.is_empty(),
+                "{language}: the grammar emitted no tokens"
+            );
+            assert_eq!(
+                code_block_preamble_with_verbosity(
+                    Some(language),
+                    source,
+                    &block.tokens,
+                    CodePreambleVerbosity::AllTokens
+                ),
+                format!("{} {source}", code_block_preamble(Some(language), source)),
+                "{language}"
+            );
+        }
+    }
+
+    #[test]
+    fn all_tokens_keeps_comments_and_strings_verbatim() {
+        let source = "// note\nlet s = \"a b\";\n";
+        let block = highlighted("rust", source);
+        assert_eq!(
+            code_block_preamble_with_verbosity(
+                Some("rust"),
+                source,
+                &block.tokens,
+                CodePreambleVerbosity::AllTokens
+            ),
+            "Code block, rust, 2 lines. // note\nlet s = \"a b\";\n"
+        );
+    }
+
+    #[test]
+    fn all_tokens_emits_uncovered_ranges_in_place() {
+        assert_eq!(
+            code_block_preamble_with_verbosity(
+                None,
+                "abcdefghij",
+                &[token(2, 4), token(6, 8)],
+                CodePreambleVerbosity::AllTokens
+            ),
+            "Code block, plain text, 1 line. abcdefghij"
+        );
+    }
+
+    #[test]
+    fn all_tokens_unknown_language_reads_the_source() {
+        let source = "++[>+<-]\n";
+        let block = highlighted("brainfuck", source);
+        assert_eq!(block.tokens.len(), 1);
+        assert_eq!(
+            code_block_preamble_with_verbosity(
+                Some("brainfuck"),
+                source,
+                &block.tokens,
+                CodePreambleVerbosity::AllTokens
+            ),
+            "Code block, brainfuck, 1 line. ++[>+<-]\n"
+        );
+    }
+
+    #[test]
+    fn all_tokens_with_no_tokens_reads_the_source() {
+        assert_eq!(
+            code_block_preamble_with_verbosity(
+                Some("rust"),
+                "a\nb",
+                &[],
+                CodePreambleVerbosity::AllTokens
+            ),
+            "Code block, rust, 2 lines. a\nb"
+        );
+    }
+
+    #[test]
+    fn all_tokens_clamps_overlapping_and_out_of_range_tokens() {
+        assert_eq!(
+            code_block_preamble_with_verbosity(
+                None,
+                "0123456789",
+                &[token(4, 20), token(0, 6)],
+                CodePreambleVerbosity::AllTokens
+            ),
+            "Code block, plain text, 1 line. 0123456789"
+        );
+        // A token edge inside a multi-byte char snaps to its boundary.
+        assert_eq!(
+            code_block_preamble_with_verbosity(
+                None,
+                "aé b",
+                &[token(0, 2), token(2, 5)],
+                CodePreambleVerbosity::AllTokens
+            ),
+            "Code block, plain text, 1 line. aé b"
+        );
+    }
+
+    #[test]
+    fn all_tokens_renders_tokens_not_declarations() {
+        let source = "fn alpha() { beta() }\n";
+        let block = highlighted("rust", source);
+        assert!(
+            block.semantic_spans.iter().any(|span| span.name == "alpha"),
+            "premise: alpha is a declaration"
+        );
+        assert_eq!(
+            code_block_preamble_with_verbosity(
+                Some("rust"),
+                source,
+                &block.tokens,
+                CodePreambleVerbosity::AllTokens
+            ),
+            "Code block, rust, 1 line. fn alpha() { beta() }\n"
         );
     }
 
