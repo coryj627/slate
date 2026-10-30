@@ -19,7 +19,7 @@ namespace SlateWindows.Tests;
 /// WPF text objects require STA; each test body runs on its own STA
 /// thread (the ShellAccessibilityTests convention).
 /// </summary>
-public sealed class ReadingViewTests
+public sealed partial class ReadingViewTests
 {
     private readonly ITestOutputHelper _output;
 

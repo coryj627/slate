@@ -240,9 +240,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         // the tab.
         if (IsReadingMode && IsMarkdown)
         {
-            Reading = new ReadingContentViewModel(
-                _session, this, _announce,
-                synchronousForTests: !_startInteractionBackgroundWork);
+            Reading = CreateReading();
             if (_startInteractionBackgroundWork)
             {
                 Reading.Activate();
@@ -316,6 +314,19 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         return failed;
     }
     public EditorPreferencesViewModel EditorPreferences { get; }
+
+    /// <summary>WB-21b (#1526): the one place a Reading model is made — the
+    /// restored-reading branch, the toggle and the in-place replacement all
+    /// call it — so every route's first projection speaks the reader's code
+    /// preamble verbosity, read live from this tab's preferences.</summary>
+    private ReadingContentViewModel CreateReading() =>
+        new(
+            _session,
+            this,
+            _announce,
+            synchronousForTests: !_startInteractionBackgroundWork,
+            codePreambleVerbosity: () => EditorPreferences.CurrentCodePreambleVerbosity);
+
     public string EditorAutomationName =>
         $"{System.IO.Path.GetFileName(Path)} editor";
     public string Path => Item.Path;
@@ -368,9 +379,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             Mode = "reading";
             if (Reading is null)
             {
-                Reading = new ReadingContentViewModel(
-                    _session, this, _announce,
-                    synchronousForTests: !_startInteractionBackgroundWork);
+                Reading = CreateReading();
                 ReadingCreatedForTests?.Invoke(Reading);
                 OnPropertyChanged(nameof(Reading));
             }
@@ -653,9 +662,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         Reading = null;
         if (IsReadingMode && IsMarkdown)
         {
-            Reading = new ReadingContentViewModel(
-                _session, this, _announce,
-                synchronousForTests: !_startInteractionBackgroundWork);
+            Reading = CreateReading();
             ReadingCreatedForTests?.Invoke(Reading);
             if (_reloadingForRescan)
             {
@@ -2303,6 +2310,16 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         EditorPreferences.MathPrefsChanged += prefs =>
         {
             _session.SetMathPrefs(prefs);
+            foreach (WorkspaceTabViewModel tab in
+                Groups.SelectMany(group => group.Tabs))
+            {
+                tab.Reading?.InvalidateForPrefsChange();
+            }
+        };
+        // WB-21b (#1526): every Reading model reads the code preamble
+        // verbosity per build; a change re-projects the open ones.
+        EditorPreferences.CodePreambleVerbosityChanged += () =>
+        {
             foreach (WorkspaceTabViewModel tab in
                 Groups.SelectMany(group => group.Tabs))
             {

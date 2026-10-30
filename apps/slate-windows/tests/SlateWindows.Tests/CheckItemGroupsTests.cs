@@ -112,7 +112,7 @@ public sealed class CheckItemGroupsTests
             (preferences.SetMathBrailleCodeCommand, "nemeth",
                 [nameof(EditorPreferencesViewModel.IsMathBrailleNemeth), nameof(EditorPreferencesViewModel.IsMathBrailleUeb)]),
             (preferences.SetCodePreambleVerbosityCommand, "preambleOnly",
-                [nameof(EditorPreferencesViewModel.IsCodeVerbosityPreambleOnly)]),
+                [nameof(EditorPreferencesViewModel.IsCodeVerbosityPreambleOnly), nameof(EditorPreferencesViewModel.IsCodeVerbosityFirstLine), nameof(EditorPreferencesViewModel.IsCodeVerbosityAllTokens)]),
         ];
         foreach ((System.Windows.Input.ICommand command, string current, string[] group) in groups)
         {

@@ -7156,6 +7156,24 @@ impl From<core::code::TokenKind> for TokenKind {
     }
 }
 
+/// WB-21b: the reverse, so a host can hand core back the tokens it read.
+impl From<TokenKind> for core::code::TokenKind {
+    fn from(k: TokenKind) -> Self {
+        match k {
+            TokenKind::Keyword => core::code::TokenKind::Keyword,
+            TokenKind::String => core::code::TokenKind::String,
+            TokenKind::Number => core::code::TokenKind::Number,
+            TokenKind::Comment => core::code::TokenKind::Comment,
+            TokenKind::Identifier => core::code::TokenKind::Identifier,
+            TokenKind::Type => core::code::TokenKind::Type,
+            TokenKind::Function => core::code::TokenKind::Function,
+            TokenKind::Operator => core::code::TokenKind::Operator,
+            TokenKind::Punctuation => core::code::TokenKind::Punctuation,
+            TokenKind::Other { label } => core::code::TokenKind::Other(label),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct SyntaxToken {
     pub start_byte: u32,
@@ -7165,6 +7183,16 @@ pub struct SyntaxToken {
 
 impl From<core::code::SyntaxToken> for SyntaxToken {
     fn from(t: core::code::SyntaxToken) -> Self {
+        Self {
+            start_byte: t.start_byte,
+            end_byte: t.end_byte,
+            kind: t.kind.into(),
+        }
+    }
+}
+
+impl From<SyntaxToken> for core::code::SyntaxToken {
+    fn from(t: SyntaxToken) -> Self {
         Self {
             start_byte: t.start_byte,
             end_byte: t.end_byte,
@@ -7723,6 +7751,47 @@ pub fn reading_blocks_source(source: String) -> Vec<ReadingBlock> {
 #[uniffi::export]
 pub fn code_block_preamble(language: Option<String>, source: String) -> String {
     core::code::code_block_preamble(language.as_deref(), &source)
+}
+
+/// WB-21b (decision WD13): how much of a code block its accessible name
+/// speaks after the preamble — the setting's three modes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CodePreambleVerbosity {
+    PreambleOnly,
+    FirstLine,
+    AllTokens,
+}
+
+impl From<CodePreambleVerbosity> for core::code::CodePreambleVerbosity {
+    fn from(v: CodePreambleVerbosity) -> Self {
+        match v {
+            CodePreambleVerbosity::PreambleOnly => core::code::CodePreambleVerbosity::PreambleOnly,
+            CodePreambleVerbosity::FirstLine => core::code::CodePreambleVerbosity::FirstLine,
+            CodePreambleVerbosity::AllTokens => core::code::CodePreambleVerbosity::AllTokens,
+        }
+    }
+}
+
+/// The code-block preamble at the reader's verbosity — a sibling of
+/// [`code_block_preamble`], whose signature is unchanged so mac keeps
+/// compiling and speaking what it speaks. Pass the block's authoritative
+/// source and its `SyntaxToken` stream (empty when the host has none, e.g.
+/// an unsaved edit inside the fence); core renders the first line or the
+/// whole source over the tokens, never the semantic spans.
+#[uniffi::export]
+pub fn code_block_preamble_with_verbosity(
+    language: Option<String>,
+    source: String,
+    tokens: Vec<SyntaxToken>,
+    verbosity: CodePreambleVerbosity,
+) -> String {
+    let tokens: Vec<core::code::SyntaxToken> = tokens.into_iter().map(Into::into).collect();
+    core::code::code_block_preamble_with_verbosity(
+        language.as_deref(),
+        &source,
+        &tokens,
+        verbosity.into(),
+    )
 }
 
 /// The sentence a diagram block shows when a render time budget stopped

@@ -197,12 +197,19 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         }
     }
 
+    /// <summary>WB-21b (#1526): the reader's code preamble verbosity, read
+    /// once per build; null reads Preamble only. Supplied at construction by
+    /// the tab's one factory, never set afterwards.</summary>
+    private readonly Func<CodePreambleVerbosity>? _codePreambleVerbosity;
+
     public ReadingContentViewModel(
         VaultSession session,
         WorkspaceTabViewModel tab,
         Action<A11yEvent> announce,
-        bool synchronousForTests = false)
+        bool synchronousForTests = false,
+        Func<CodePreambleVerbosity>? codePreambleVerbosity = null)
     {
+        _codePreambleVerbosity = codePreambleVerbosity;
         _session = session;
         _tab = tab;
         _announce = announce;
@@ -317,6 +324,12 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         _generation++;
         LiveRefreshGeneration = -1;
         RetireFetch();
+        // WB-21b red team: a hidden reading tab's complete projection is
+        // reused by the surface's rebind fast path, which never calls
+        // EnsureProjected — so mark it stale the way a moved dependency
+        // does: the old content stays visible while the re-fetch (no memo
+        // to hit) rebuilds it under the new preferences.
+        HasPendingDependencyRefresh = true;
     }
 
     /// <summary>
@@ -1602,7 +1615,10 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         int renderLimit = Math.Min(model.Count, MaximumRenderedBlocks);
         bool degraded = model.Count > renderLimit;
 
-        var context = new ReadingListBuildContext();
+        var context = new ReadingListBuildContext
+        {
+            CodePreambleVerbosity = _codePreambleVerbosity?.Invoke() ?? CodePreambleVerbosity.PreambleOnly,
+        };
         int firstEnd = Math.Min(BuildChunkBlocks, renderLimit);
         // Excluded from the memo on purpose: CodeBlock carries arrays
         // (reference equality would defeat every memo hit), and its
