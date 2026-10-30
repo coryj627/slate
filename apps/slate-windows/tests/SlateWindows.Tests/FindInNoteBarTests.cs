@@ -509,6 +509,30 @@ public sealed class FindInNoteBarTests
         Assert.Equal(3, area.Caret.Line);
     });
 
+    /// <summary>Codex round 4 (the design pass): with the text unchanged,
+    /// Close gives back AvalonEdit's own state verbatim — here the caret's
+    /// desired column, which a Down onto a short line keeps for the next
+    /// long one.</summary>
+    [Fact]
+    public void AnUnchangedNoteGetsBackTheCaretsDesiredColumn() => RunSta(() =>
+    {
+        string longLine = new string('x', 30);
+        using var shell = new Shell(longLine + "\nab\n" + longLine);
+        ICSharpCode.AvalonEdit.Editing.TextArea area = shell.Editor.TextArea;
+        shell.FocusEditor();
+        area.Caret.Position = new ICSharpCode.AvalonEdit.TextViewPosition(1, 22);
+        System.Windows.Documents.EditingCommands.MoveDownByLine.Execute(null, area);
+        Assert.Equal(2, area.Caret.Line);
+        Assert.False(double.IsNaN(area.Caret.DesiredXPos), "premise: Down kept a desired column");
+
+        OpenKeepingTheSelection(shell, "ab");
+        shell.Press(shell.Bar.Query, Key.Escape);
+        System.Windows.Documents.EditingCommands.MoveDownByLine.Execute(null, area);
+
+        Assert.Equal(3, area.Caret.Line);
+        Assert.Equal(22, area.Caret.Column);
+    });
+
     [Fact]
     public void CloseAfterAShortenedDocumentRestoresAClampedCaret() => RunSta(() =>
     {

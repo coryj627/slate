@@ -95,21 +95,28 @@ internal sealed class EditorFindSurface : IFindInNoteSurface
         }
     }
 
-    /// <summary>The selection's SHAPE as anchors — where it was anchored and
-    /// where its active end and the caret were, and, for a rectangle, its
-    /// visual columns — so a restore gives back the selection the reader
-    /// made (never a linear one over a rectangle's bounds, never a backward
-    /// one turned forward) and follows every edit made while the bar was
-    /// open.</summary>
+    /// <summary>
+    /// The editing state Close gives back, in two forms. EXACT: AvalonEdit's
+    /// own immutable selection, the caret's full position (visual column and
+    /// end-of-line affinity included) and its desired column, with the
+    /// document version they belong to — restored verbatim when the text is
+    /// unchanged, the common case. ANCHORED: the selection's shape as anchors
+    /// (where it was anchored, its active end, the caret, a rectangle's
+    /// visual columns) — used when the text changed while the bar was open,
+    /// so the restore follows every edit and never resurrects a selection an
+    /// edit collapsed.
+    /// </summary>
     public object CaptureRestorePoint()
     {
         if (_editor is not { } editor)
         {
             (int offset, int length) = _headlessSelection;
             return new RestorePoint(
-                _document, Anchor(offset), Anchor(offset + length), Anchor(offset + length), -1, null);
+                _document, Anchor(offset), Anchor(offset + length), Anchor(offset + length), -1, null, null);
         }
         TextArea area = editor.TextArea;
+        var exact = new ExactState(
+            area, _document.Version, area.Selection, area.Caret.Position, area.Caret.DesiredXPos);
         ICSharpCode.AvalonEdit.Editing.Selection selection = area.Selection;
         int caret = area.Caret.Offset;
         // The caret's column when it sits past its line's end (virtual space).
@@ -125,15 +132,16 @@ internal sealed class EditorFindSurface : IFindInNoteSurface
                 Anchor(caret),
                 caretColumn,
                 new RectangleColumns(
-                    VisualColumnOf(area, selection.StartPosition), VisualColumnOf(area, selection.EndPosition)));
+                    VisualColumnOf(area, selection.StartPosition), VisualColumnOf(area, selection.EndPosition)),
+                exact);
         }
         if (selection.IsEmpty)
         {
-            return new RestorePoint(_document, Anchor(caret), Anchor(caret), Anchor(caret), caretColumn, null);
+            return new RestorePoint(_document, Anchor(caret), Anchor(caret), Anchor(caret), caretColumn, null, exact);
         }
         int start = _document.GetOffset(selection.StartPosition.Location);
         int end = _document.GetOffset(selection.EndPosition.Location);
-        return new RestorePoint(_document, Anchor(start), Anchor(end), Anchor(caret), caretColumn, null);
+        return new RestorePoint(_document, Anchor(start), Anchor(end), Anchor(caret), caretColumn, null, exact);
     }
 
     /// <summary>A position's visual column; one built from a line and a
@@ -153,6 +161,8 @@ internal sealed class EditorFindSurface : IFindInNoteSurface
                 Start = Anchor(point.Start.Offset),
                 End = Anchor(point.End.Offset),
                 Caret = Anchor(point.Caret.Offset),
+                // Another document: only the anchored form can carry over.
+                Exact = null,
             }
             : restorePoint;
 
@@ -171,6 +181,21 @@ internal sealed class EditorFindSurface : IFindInNoteSurface
             return;
         }
         TextArea area = editor.TextArea;
+        if (point.Exact is { } exact
+            && ReferenceEquals(exact.Area, area)
+            && ReferenceEquals(point.Document, _document)
+            && exact.Version.BelongsToSameDocumentAs(_document.Version)
+            && exact.Version.CompareAge(_document.Version) == 0)
+        {
+            // Nothing changed while the bar was open: give back exactly what
+            // AvalonEdit had (the caret first — setting it clears the
+            // selection — and the desired column last, which the caret's
+            // setter resets).
+            area.Caret.Position = exact.CaretPosition;
+            area.Selection = exact.Selection;
+            area.Caret.DesiredXPos = exact.DesiredXPos;
+            return;
+        }
         if (point.CaretColumn >= 0)
         {
             area.Caret.Position = new TextViewPosition(_document.GetLocation(caret), point.CaretColumn);
@@ -229,7 +254,17 @@ internal sealed class EditorFindSurface : IFindInNoteSurface
         TextAnchor End,
         TextAnchor Caret,
         int CaretColumn,
-        RectangleColumns? Rectangle);
+        RectangleColumns? Rectangle,
+        ExactState? Exact);
+
+    /// <summary>AvalonEdit's own state at the open, valid while the document
+    /// is at <see cref="Version"/> in the same text area.</summary>
+    private sealed record ExactState(
+        TextArea Area,
+        ITextSourceVersion Version,
+        ICSharpCode.AvalonEdit.Editing.Selection Selection,
+        TextViewPosition CaretPosition,
+        double DesiredXPos);
 
     private sealed record RectangleColumns(int Start, int End);
 }
