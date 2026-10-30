@@ -833,6 +833,11 @@ internal sealed class ReadingSurface : RichTextBox
     /// a replacement moves every pointer into the document.</summary>
     internal int ReplacedRevision { get; private set; }
 
+    /// <summary>WB-22: the find match a reveal last made current, kept here
+    /// rather than on a find surface the bar rebuilds on every attach;
+    /// a replacement drops it.</summary>
+    internal object? FindRevealMemory { get; set; }
+
     /// <summary>WB-22: raised once a model change is fully handled (content
     /// switched, or the rebind fast path taken).</summary>
     internal event EventHandler? ModelChanged;
@@ -856,6 +861,7 @@ internal sealed class ReadingSurface : RichTextBox
         if (change == ReadingContentChange.Replaced)
         {
             ReplacedRevision++;
+            FindRevealMemory = null;
         }
         ContentChanged?.Invoke(change);
     }

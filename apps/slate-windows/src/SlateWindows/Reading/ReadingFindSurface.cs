@@ -22,7 +22,6 @@ internal sealed class ReadingFindSurface : IFindInNoteSurface
     private ReadingTextIndex? _index;
     private int _indexRevision = -1;
     private FindMatchAdorner? _adorner;
-    private Revealed? _revealed;
     private (IReadOnlyList<(int Offset, int Length)> Matches, int Current)? _deferred;
 
     public ReadingFindSurface(ReadingSurface surface)
@@ -50,7 +49,7 @@ internal sealed class ReadingFindSurface : IFindInNoteSurface
         get
         {
             TextSelection selection = _surface.Selection;
-            if (_revealed is { } revealed
+            if (RevealedMatch is { } revealed
                 && selection.Start.CompareTo(revealed.Start) == 0
                 && selection.End.CompareTo(revealed.End) == 0
                 && Index.UnitStart(revealed.Unit) is >= 0 and int unitStart)
@@ -65,6 +64,14 @@ internal sealed class ReadingFindSurface : IFindInNoteSurface
     public TextDocument? Document => null;
 
     internal ReadingSurface Surface => _surface;
+
+    /// <summary>The revealed math match, on the surface (a replacement drops
+    /// it there), so a rebuilt find surface knows it too.</summary>
+    private Revealed? RevealedMatch
+    {
+        get => _surface.FindRevealMemory as Revealed;
+        set => _surface.FindRevealMemory = value;
+    }
 
     internal ReadingTextIndex Index
     {
@@ -87,7 +94,7 @@ internal sealed class ReadingFindSurface : IFindInNoteSurface
     {
         ReadingTextIndex index = Index;
         _surface.Selection.Select(index.StartOf(offset), index.EndOf(offset + length));
-        _revealed = index.UnitAt(offset) is { } unit
+        RevealedMatch = index.UnitAt(offset) is { } unit
             ? new Revealed(unit, offset - index.UnitStart(unit), length, _surface.Selection.Start, _surface.Selection.End)
             : null;
         if (_surface.DocumentRenderScope is { } scope)
@@ -213,9 +220,23 @@ internal sealed class ReadingFindSurface : IFindInNoteSurface
             TextPointer? next = line.GetLineStartPosition(1);
             bool last = next is null || next.CompareTo(end) >= 0;
             TextPointer lineEnd = last ? end : next!;
-            Rect rect = Rect.Union(
-                line.GetCharacterRect(LogicalDirection.Forward),
-                lineEnd.GetCharacterRect(LogicalDirection.Backward));
+            // Every character's box on the line: across a change of
+            // direction the two logical ends need not bound the glyphs.
+            Rect rect = Rect.Empty;
+            for (TextPointer at = line; at.CompareTo(lineEnd) < 0;)
+            {
+                TextPointer after = at.GetNextInsertionPosition(LogicalDirection.Forward) is { } following
+                    && following.CompareTo(lineEnd) <= 0
+                    ? following
+                    : lineEnd;
+                rect.Union(at.GetCharacterRect(LogicalDirection.Forward));
+                rect.Union(after.GetCharacterRect(LogicalDirection.Backward));
+                if (after.CompareTo(at) <= 0)
+                {
+                    break;
+                }
+                at = after;
+            }
             if (!rect.IsEmpty)
             {
                 yield return transform.TransformBounds(rect);
@@ -228,14 +249,21 @@ internal sealed class ReadingFindSurface : IFindInNoteSurface
         }
     }
 
-    /// <summary>The index offsets the viewport shows, first to last.</summary>
+    /// <summary>The index offsets the viewport shows, first to last: whole
+    /// lines, from the logical start of the top one to the logical end of the
+    /// bottom one, so a line's direction never inverts the range and a math
+    /// element the bottom edge cuts is inside it whole.</summary>
     internal (int First, int Last) VisibleOffsets()
     {
-        TextPointer? first = _surface.GetPositionFromPoint(new Point(0, 0), snapToText: true);
-        TextPointer? last = _surface.GetPositionFromPoint(new Point(_surface.ActualWidth, _surface.ActualHeight), snapToText: true);
-        // A unit the bottom edge cuts is visible to its end: every match in
-        // its source rings the same element.
-        return (first is null ? 0 : Index.OffsetOf(first), last is null ? Index.Text.TextLength : Index.UnitEndAt(Index.OffsetOf(last)));
+        TextPointer? top = _surface.GetPositionFromPoint(new Point(0, 0), snapToText: true);
+        TextPointer? bottom = _surface.GetPositionFromPoint(new Point(0, _surface.ActualHeight), snapToText: true);
+        int first = top?.GetLineStartPosition(0) is { } lineStart ? Index.OffsetOf(lineStart) : 0;
+        int last = Index.Text.TextLength;
+        if (bottom?.GetLineStartPosition(1, out int moved) is { } nextLine && moved == 1)
+        {
+            last = Index.OffsetOf(nextLine);
+        }
+        return (first, Math.Max(first, last));
     }
 
     private void OnLayoutUpdated(object? sender, EventArgs e)
@@ -260,16 +288,13 @@ internal sealed class ReadingFindSurface : IFindInNoteSurface
         // A replacement moves every pointer to the deletion point and a
         // completion rewrites a diagram paragraph's runs: the drawn matches
         // go at once. Appends only grow the tail and keep them.
+        // A replacement drops the revealed match (the surface does, as every
+        // pointer moved); a completion keeps one whose element and selection
+        // it left alone.
         if (change != ReadingContentChange.Appended)
         {
             _adorner?.SetMatches([], -1);
             StopDeferring();
-        }
-        if (change == ReadingContentChange.Replaced)
-        {
-            // Every pointer moved: no revealed match survives. A completion
-            // keeps one whose element and selection it left alone.
-            _revealed = null;
         }
         TextChanged?.Invoke();
     }

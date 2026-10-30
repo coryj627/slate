@@ -652,6 +652,80 @@ public sealed class ReadingFindSurfaceTests
         Assert.True(last >= matches[2].Offset, $"visible to {last}, the last match at {matches[2].Offset}");
     });
 
+    /// <summary>Codex round 3: the bar builds a new find surface on every
+    /// attach (a mode round trip, a tab round trip). The math match a reveal
+    /// made current stays current across them while the selection is still
+    /// the one the reveal made: the memory lives on the reading surface.</summary>
+    [Fact]
+    public void AReattachKeepsTheCurrentMathMatch() => RunSta(() =>
+    {
+        using var harness = new Harness("reading-find-math-reattach", "Words before.\n\n$$q + q$$\n");
+        var heard = new List<A11yEvent>();
+        using var find = new FindInNoteViewModel(heard.Add);
+        find.Open();
+        find.AttachSurface(harness.Find);
+        find.Query = "q";
+        find.FlushPendingForTests();
+        Assert.Equal((1, 2), (find.CurrentIndex, find.TotalCount));
+
+        find.AttachSurface(null);
+        var again = new ReadingFindSurface(harness.Surface);
+        find.AttachSurface(again);
+        Assert.Equal(1, find.CurrentIndex);
+
+        find.Next();
+        Assert.Equal(2, find.CurrentIndex);
+        Assert.Equal("2 of 2", Spoken(heard)[^1]);
+        find.AttachSurface(null);
+    });
+
+    /// <summary>Codex round 3: the visible range is logical — whole visible
+    /// lines — so a right-to-left line, whose top-left point is its logical
+    /// end, keeps its matches drawn.</summary>
+    [Fact]
+    public void ARightToLeftLineKeepsItsMatchesVisible() => RunSta(() =>
+    {
+        const string hello = "\u0645\u0631\u062D\u0628\u0627";
+        using var harness = new Harness(
+            "reading-find-rtl",
+            hello + " \u0628\u0627\u0644\u0639\u0627\u0644\u0645 " + hello + "\n");
+        List<(int Offset, int Length)> matches = harness.Matches(hello);
+        Assert.Equal(2, matches.Count);
+
+        (int first, int last) = harness.Find.VisibleOffsets();
+
+        Assert.True(first <= matches[0].Offset && last >= matches[1].Offset, $"visible {first}..{last}; matches at {matches[0].Offset} and {matches[1].Offset}");
+        harness.Find.Highlight(matches, 0);
+        harness.Settle();
+        Assert.Equal(2, Assert.IsType<FindMatchAdorner>(harness.Adorner()).Count);
+    });
+
+    /// <summary>Codex round 3: a match running across a change of direction
+    /// is ringed around every glyph it holds, not between its two logical
+    /// ends (which need not bound it visually).</summary>
+    [Fact]
+    public void AMixedDirectionMatchIsRingedAroundEveryGlyph() => RunSta(() =>
+    {
+        using var harness = new Harness("reading-find-bidi", "abc \u05D0\u05D1\u05D2\u05D3 def\n");
+        (int offset, int length) = Assert.Single(harness.Matches("c \u05D0\u05D1"));
+        UIElement scope = Assert.IsAssignableFrom<UIElement>(harness.Surface.DocumentRenderScope);
+        GeneralTransform transform = harness.Surface.TransformToDescendant(scope)!;
+
+        Rect ring = Assert.Single(harness.Find.RectsOf(offset, length, scope, transform));
+
+        for (int i = 0; i < length; i++)
+        {
+            TextPointer start = harness.Find.Index.StartOf(offset + i);
+            TextPointer end = harness.Find.Index.EndOf(offset + i + 1);
+            Rect glyph = transform.TransformBounds(Rect.Union(
+                start.GetCharacterRect(LogicalDirection.Forward),
+                end.GetCharacterRect(LogicalDirection.Backward)));
+            Assert.True(
+                glyph.Left >= ring.Left - 0.5 && glyph.Right <= ring.Right + 0.5,
+                $"glyph {i} at {glyph.Left:F1}..{glyph.Right:F1} lies outside the ring {ring.Left:F1}..{ring.Right:F1}");
+        }
+    });
+
     /// <summary>Two matches inside one math source are two stops, each
     /// selecting the whole element: the surface remembers which one it
     /// revealed while the selection is still the one the reveal made.</summary>

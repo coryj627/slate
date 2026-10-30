@@ -216,16 +216,6 @@ internal sealed class ReadingTextIndex
         return -1;
     }
 
-    /// <summary>The end of the unit holding <paramref name="offset"/>, or the
-    /// offset itself in plain text.</summary>
-    public int UnitEndAt(int offset)
-    {
-        int index = FirstEndingAfter(offset);
-        return index < _segments.Count && _segments[index].FlatStart <= offset && _segments[index].End is not null
-            ? _segments[index].FlatEnd
-            : offset;
-    }
-
     /// <summary>A math block whose range is its speech (#1595's shape: it
     /// carries the fenced source a copy substitutes).</summary>
     private static bool SpeaksInPlaceOfSource(Paragraph paragraph) =>
