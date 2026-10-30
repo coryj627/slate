@@ -58,13 +58,14 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
     private string _codePreambleVerbosity = "preambleOnly";
 
     /// <summary>The mac CodeVerbosity vocabulary: storage keys and the
-    /// display names the canonical announcement speaks.</summary>
+    /// display names the canonical announcement speaks. WB-21 (RD6, #1389):
+    /// "preambleFirstLine" and "preambleAllTokens" left with their menu items,
+    /// since rendering never read them; a stored one now loads as Preamble only,
+    /// silently. WB-21b brings the real modes back through core.</summary>
     internal static readonly IReadOnlyDictionary<string, string> CodeVerbosityNames =
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["preambleOnly"] = "Preamble only",
-            ["preambleFirstLine"] = "Preamble + first line",
-            ["preambleAllTokens"] = "Preamble + all tokens",
         };
 
     /// <summary>W3-2 MathPrefs vocabulary — storage keys and the
@@ -136,6 +137,16 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
             && CodeVerbosityNames.ContainsKey(verbosity)
                 ? verbosity
                 : "preambleOnly";
+        // WB-21 (RD6, #1389): a stored key the vocabulary no longer holds
+        // (the removed "preambleFirstLine" or "preambleAllTokens", or a hand
+        // edit) is rewritten as the fallback, silently, so the file agrees
+        // with the checked item and a build that restores the mode
+        // (WB-21b) does not revive it unasked.
+        if (loaded?.CodePreambleVerbosity is string stored
+            && !string.Equals(stored, _codePreambleVerbosity, StringComparison.Ordinal))
+        {
+            Persist(state => state with { CodePreambleVerbosity = _codePreambleVerbosity });
+        }
         // A legacy "mathSpeak" never arrives here as active: the store
         // migrates it to "clearSpeak" (#1056), and an unknown key falls
         // to the default like every other field.
@@ -196,10 +207,7 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
                 if (string.Equals(_codePreambleVerbosity, key, StringComparison.Ordinal))
                 {
                     // m1: the re-selected item re-asserts its check.
-                    RaiseCheckGroup(
-                        nameof(IsCodeVerbosityPreambleOnly),
-                        nameof(IsCodeVerbosityFirstLine),
-                        nameof(IsCodeVerbosityAllTokens));
+                    RaiseCheckGroup(nameof(IsCodeVerbosityPreambleOnly));
                     return;
                 }
                 CodePreambleVerbosity = key;
@@ -373,7 +381,8 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
     /// verbosity is persisted and its change announced through the
     /// canonical vocabulary, and rendering always uses the preamble
     /// (mac marks the view binding V1.x; matrix note records the same
-    /// posture here).
+    /// posture here). Since WB-21 (RD6) the vocabulary holds one mode, so
+    /// no change can happen until WB-21b restores the others through core.
     /// </summary>
     public string CodePreambleVerbosity
     {
@@ -386,8 +395,6 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
                 return;
             }
             OnPropertyChanged(nameof(IsCodeVerbosityPreambleOnly));
-            OnPropertyChanged(nameof(IsCodeVerbosityFirstLine));
-            OnPropertyChanged(nameof(IsCodeVerbosityAllTokens));
             if (_preferencesStore is not { } store)
             {
                 return;
@@ -490,12 +497,6 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
 
     public bool IsCodeVerbosityPreambleOnly =>
         _codePreambleVerbosity == "preambleOnly";
-
-    public bool IsCodeVerbosityFirstLine =>
-        _codePreambleVerbosity == "preambleFirstLine";
-
-    public bool IsCodeVerbosityAllTokens =>
-        _codePreambleVerbosity == "preambleAllTokens";
 
     public ICommand ActualSizeCommand { get; }
     public ICommand ToggleSpellCheckCommand { get; }

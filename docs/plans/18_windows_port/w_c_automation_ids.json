@@ -1146,16 +1146,6 @@
   },
   {
     "Source": "MainWindow.xaml",
-    "Expression": "EditorCodeVerbosityAllTokensMenuItem",
-    "Surface": "Code blocks (W3-4)"
-  },
-  {
-    "Source": "MainWindow.xaml",
-    "Expression": "EditorCodeVerbosityFirstLineMenuItem",
-    "Surface": "Code blocks (W3-4)"
-  },
-  {
-    "Source": "MainWindow.xaml",
     "Expression": "EditorCodeVerbosityMenu",
     "Surface": "Code blocks (W3-4)"
   },

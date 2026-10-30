@@ -92,13 +92,6 @@ ID_ISSUE_OVERRIDES = {
     # docs/plans/29_search_overlay_contracts.md "Find-in-note is not in
     # this issue".
     "slate.editor.findInNote": "#1112 (find-in-note, split from #742)",
-    # Plan 43 PR 4 (#1216): mac's three graph verbosity palette rows. Windows
-    # selects the level through its Graph menu's one parameterized setter
-    # (W6-2 PR C, C-9) and registers no row per level; its twin rows are
-    # #1415, split from #746 rather than reopening the close-out's burn-down.
-    "slate.graph.setVerbosityTerse": "#1415 (graph verbosity palette rows, split from #746)",
-    "slate.graph.setVerbosityStandard": "#1415 (graph verbosity palette rows, split from #746)",
-    "slate.graph.setVerbosityVerbose": "#1415 (graph verbosity palette rows, split from #746)",
     "slate.editor.save": "#724 (W2-1)",
     "slate.editor.toggleViewMode": "#728 (W3-1)",
     "slate.editor.addProperty": "#736 (W4-4)",
@@ -757,6 +750,23 @@ W6_2_CLOSE_OUT_STATUS = (
     "interactive CI + human AT pending"
 )
 
+# Plan 44 WB-21 (#1415): mac's three chordless graph verbosity rows (plan 43
+# PR 4, #1216), registered on Windows through the preferences object's three
+# parameterless commands; the rows stay under the graph namespace's issue,
+# evidenced by the `graphNavigator` command group (the preferences object
+# and its tests), which the `graph` aggregate already carries. Their gates went green on
+# 2026-10-30 (IPA-13's rule, per slice).
+WB_21_STATUS = (
+    "implemented; local gates green 2026-10-30; "
+    "interactive CI + human AT pending"
+)
+
+WB_21_DELIVERED_COMMANDS = {
+    "slate.graph.setVerbosityTerse",
+    "slate.graph.setVerbosityStandard",
+    "slate.graph.setVerbosityVerbose",
+}
+
 W6_2_DELIVERED_COMMANDS = {
     # W6-2 PR A (#746, contract A-12): the graph tab's one chordless row,
     # executable through the palette and the registrar; B–E add the leaf's,
@@ -976,7 +986,8 @@ def load_delivery_evidence(
         | W5_3_DELIVERED_COMMANDS | W5_4_DELIVERED_COMMANDS | W6_1_DELIVERED_COMMANDS \
         | W6_2_DELIVERED_COMMANDS \
         | W6_2_PR_C_DELIVERED_COMMANDS \
-        | W6_2_PR_D_DELIVERED_COMMANDS
+        | W6_2_PR_D_DELIVERED_COMMANDS \
+        | WB_21_DELIVERED_COMMANDS
     mapped_commands = set(command_map)
     if mapped_commands != delivered_commands:
         missing = sorted(delivered_commands - mapped_commands)
@@ -1058,6 +1069,8 @@ def command_delivery_status(
         return W6_2_PR_D_STATUS
     if command_id in W6_2_DELIVERED_COMMANDS:
         return W6_2_STATUS
+    if command_id in WB_21_DELIVERED_COMMANDS:
+        return WB_21_STATUS
     return (
         W2_IMPLEMENTED_STATUS
         if issue.startswith(("#381", "#724", "#725"))

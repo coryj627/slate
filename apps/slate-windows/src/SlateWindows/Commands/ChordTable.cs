@@ -319,6 +319,10 @@ internal static class ChordTable
         public const string GraphZoomOut = "slate.graph.zoomOut";
         public const string GraphActualSize = "slate.graph.actualSize";
         public const string GraphFitGraph = "slate.graph.fitGraph";
+        // WB-21 (#1415): mac's three chordless verbosity rows, one per level.
+        public const string GraphSetVerbosityTerse = "slate.graph.setVerbosityTerse";
+        public const string GraphSetVerbosityStandard = "slate.graph.setVerbosityStandard";
+        public const string GraphSetVerbosityVerbose = "slate.graph.setVerbosityVerbose";
 
         // Canvas (W6-1 #745). Ids are byte-identical to mac's.
         public const string CanvasShowOutline = "slate.canvas.showOutline";
@@ -1111,29 +1115,17 @@ internal static class ChordTable
             + "the projection; with nothing to do it bubbles to the shell. Delivered by "
             + "GraphNavigator.HandleKey from GraphSurfaceView.OnPreviewKeyDown; the mac "
             + "has no ladder on the graph (C-D3)."),
-        // W6-2 PR C (C-9): the three verbosity levels, one disposition each
-        // — the canvas's twin (PR-4's math-verbosity reason): selected by
-        // one parameterised setter the Graph menu binds with the tag as
-        // its CommandParameter; unregistered here. Since plan 43 PR 4
-        // (#1216) the mac registers a palette row per level
-        // (slate.graph.setVerbosity*, these labels); Windows' rows are #1415.
-        Unreg("windows.graph.setVerbosityTerse", "Graph Verbosity: Terse",
-            CommandSection.Graph, GraphVerbosityReason),
-        Unreg("windows.graph.setVerbosityStandard", "Graph Verbosity: Standard",
-            CommandSection.Graph, GraphVerbosityReason),
-        Unreg("windows.graph.setVerbosityVerbose", "Graph Verbosity: Verbose",
-            CommandSection.Graph, GraphVerbosityReason),
+        // W6-2 PR C (C-9) recorded the three verbosity levels unregistered,
+        // reachable only through the Graph menu's parameterised setter. WB-21
+        // (#1415) registers mac's chordless rows (plan 43 PR 4, #1216): ids,
+        // labels and hints byte-identical, one per level of core's vector.
+        Reg(Ids.GraphSetVerbosityTerse, "Graph Verbosity: Terse", CommandSection.Graph,
+            "Set the graph announcement verbosity to Terse for this vault."),
+        Reg(Ids.GraphSetVerbosityStandard, "Graph Verbosity: Standard", CommandSection.Graph,
+            "Set the graph announcement verbosity to Standard for this vault."),
+        Reg(Ids.GraphSetVerbosityVerbose, "Graph Verbosity: Verbose", CommandSection.Graph,
+            "Set the graph announcement verbosity to Verbose for this vault."),
     ];
-
-    private const string GraphVerbosityReason =
-        "W6-2 PR C (C-9), the canvas's PR-4 precedent: the three graph verbosity "
-        + "levels — core's vector, persisted in the vault's graph.json (0b-12) — are "
-        + "selected by one parameterized setter the Graph menu binds with the level's "
-        + "tag as its CommandParameter. Each level is a row so the catalog records the "
-        + "closed set, and none is registered on Windows yet. Since plan 43 PR 4 (#1216) "
-        + "mac registers one palette row per level, slate.graph.setVerbosityTerse, "
-        + "slate.graph.setVerbosityStandard and slate.graph.setVerbosityVerbose, with "
-        + "these labels; Windows' twin rows are #1415.";
 
     private static IEnumerable<ChordTableEntry> CanvasRows() =>
     [

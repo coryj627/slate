@@ -3929,50 +3929,6 @@ public sealed class ReadingViewTests
     }
 
     /// <summary>
-    /// W3-4 CodePrefs parity (shipped-mac behavior: persisted +
-    /// announced; rendering stays preamble-only). The verbosity
-    /// round-trips the store, announces through the canonical
-    /// vocabulary, and rejects unknown keys.
-    /// </summary>
-    [Fact]
-    public void CodeVerbosityPersistsAnnouncesAndRejectsUnknownKeys()
-    {
-        string directory = Path.Combine(
-            Path.GetTempPath(), $"slate-code-verbosity-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(directory);
-        try
-        {
-            var store = new AppPreferencesStore(Path.Combine(directory, "preferences.json"));
-            var announced = new List<A11yEvent>();
-            using var preferences = new EditorPreferencesViewModel(
-                announced.Add,
-                new FakeEditorSpellingService(),
-                preferencesStore: store);
-            Assert.True(preferences.IsCodeVerbosityPreambleOnly);
-
-            preferences.SetCodePreambleVerbosityCommand.Execute("preambleFirstLine");
-            Assert.True(preferences.IsCodeVerbosityFirstLine);
-            Assert.Equal(
-                "Code preamble verbosity: Preamble + first line.",
-                SlateUniffiMethods.A11yRender(Assert.Single(announced)).Text);
-
-            preferences.SetCodePreambleVerbosityCommand.Execute("nonsense");
-            Assert.True(preferences.IsCodeVerbosityFirstLine);
-            Assert.Single(announced);
-
-            using var second = new EditorPreferencesViewModel(
-                _ => { },
-                new FakeEditorSpellingService(),
-                preferencesStore: store);
-            Assert.True(second.IsCodeVerbosityFirstLine);
-        }
-        finally
-        {
-            Directory.Delete(directory, recursive: true);
-        }
-    }
-
-    /// <summary>
     /// W3-4 adversarial round 1 [high]: an unsaved edit INSIDE a fence
     /// keeps byte containment, and the saved artifact must then lose —
     /// display, preamble, and Copy all follow the LIVE interior;

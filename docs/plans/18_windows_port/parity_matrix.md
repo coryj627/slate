@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-10-29 at `3ec734b9` (the head the run stood on; the commit carrying this file is its child, and after a squash merge the head is a branch commit outside main — `--check` holds the body, not this line) by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-10-30 at `af61d39f` (the head the run stood on; the commit carrying this file is its child, and after a squash merge the head is a branch commit outside main — `--check` holds the body, not this line) by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 
@@ -145,9 +145,9 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.graph.mostLinked` | Graph: Most Linked Notes | — | — | #746 (W6-2) | implemented; local gates green 2026-09-09; interactive CI + human AT pending |
 | `slate.graph.openTab` | Open Graph | — | — | #746 (W6-2) | implemented; local gates green 2026-09-05; interactive CI + human AT pending |
 | `slate.graph.orphans` | Graph: Orphaned Notes | — | — | #746 (W6-2) | implemented; local gates green 2026-09-09; interactive CI + human AT pending |
-| `slate.graph.setVerbosityStandard` | Graph Verbosity: Standard | — | — | #1415 (graph verbosity palette rows, split from #746) | pending |
-| `slate.graph.setVerbosityTerse` | Graph Verbosity: Terse | — | — | #1415 (graph verbosity palette rows, split from #746) | pending |
-| `slate.graph.setVerbosityVerbose` | Graph Verbosity: Verbose | — | — | #1415 (graph verbosity palette rows, split from #746) | pending |
+| `slate.graph.setVerbosityStandard` | Graph Verbosity: Standard | — | — | #746 (W6-2) | implemented; local gates green 2026-10-30; interactive CI + human AT pending |
+| `slate.graph.setVerbosityTerse` | Graph Verbosity: Terse | — | — | #746 (W6-2) | implemented; local gates green 2026-10-30; interactive CI + human AT pending |
+| `slate.graph.setVerbosityVerbose` | Graph Verbosity: Verbose | — | — | #746 (W6-2) | implemented; local gates green 2026-10-30; interactive CI + human AT pending |
 | `slate.graph.showConnections` | Show Connections | — | — | #746 (W6-2) | implemented; local gates green 2026-09-05; interactive CI + human AT pending |
 | `slate.graph.unresolved` | Graph: Unresolved Links | — | — | #746 (W6-2) | implemented; local gates green 2026-09-09; interactive CI + human AT pending |
 | `slate.graph.whereAmI` | Graph: Where Am I? | ⌃⌘I | Control Command I | #746 (W6-2) | implemented; local gates green 2026-09-09; interactive CI + human AT pending |
