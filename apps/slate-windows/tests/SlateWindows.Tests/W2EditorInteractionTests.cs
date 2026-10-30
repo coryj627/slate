@@ -1293,6 +1293,77 @@ public sealed class W2EditorInteractionTests
             item => item is A11yEvent.SpellCheckToggled toggled && toggled.Enabled);
     }
 
+    /// <summary>WB-21 (RD6, #1389): "Preamble + first line" and
+    /// "Preamble + all tokens" changed nothing a reader heard, so they left
+    /// the menu. A preferences file still holding one loads as Preamble
+    /// only, the file is rewritten to agree, and the fallback speaks
+    /// nothing.</summary>
+    [Fact]
+    public void AStoredFirstLineVerbosityFallsBackToPreambleOnlySilently()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(), $"slate-code-verbosity-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var store = new AppPreferencesStore(Path.Combine(directory, "preferences.json"));
+            store.Save(store.Load() with { CodePreambleVerbosity = "preambleFirstLine" });
+            Assert.Equal("preambleFirstLine", store.Load().CodePreambleVerbosity);
+
+            var announced = new List<A11yEvent>();
+            using var preferences = new EditorPreferencesViewModel(
+                announced.Add,
+                new FakeEditorSpellingService(),
+                preferencesStore: store);
+
+            Assert.True(preferences.IsCodeVerbosityPreambleOnly);
+            Assert.Equal("preambleOnly", preferences.CodePreambleVerbosity);
+            Assert.Equal("preambleOnly", store.Load().CodePreambleVerbosity);
+            Assert.Empty(announced);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    /// <summary>WB-21 (RD6, #1389): the removed keys are unknown to the
+    /// setter, so a stale caller passing one changes, persists and
+    /// announces nothing.</summary>
+    [Fact]
+    public void ThePreambleVerbosityCommandRejectsTheRemovedKeys()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(), $"slate-code-verbosity-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            string file = Path.Combine(directory, "preferences.json");
+            var store = new AppPreferencesStore(file);
+            var announced = new List<A11yEvent>();
+            using var preferences = new EditorPreferencesViewModel(
+                announced.Add,
+                new FakeEditorSpellingService(),
+                preferencesStore: store);
+            var raised = new List<string>();
+            preferences.PropertyChanged += (_, e) => raised.Add(e.PropertyName ?? "");
+
+            preferences.SetCodePreambleVerbosityCommand.Execute("preambleAllTokens");
+            preferences.SetCodePreambleVerbosityCommand.Execute("preambleFirstLine");
+            preferences.CodePreambleVerbosity = "preambleAllTokens";
+
+            Assert.True(preferences.IsCodeVerbosityPreambleOnly);
+            Assert.Equal("preambleOnly", preferences.CodePreambleVerbosity);
+            Assert.False(File.Exists(file), "a rejected key was persisted");
+            Assert.Empty(announced);
+            Assert.Empty(raised);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     [Fact]
     public void EditorXaml_PinsKeyboardContextMenuPopoverAndMatrixCommandHomes()
     {

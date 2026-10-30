@@ -235,24 +235,64 @@ public sealed class GraphPreferencesTests : IDisposable
         });
     }
 
+    /// <summary>WB-21 (#1415): mac's three palette rows, one per core level,
+    /// registered on Windows with mac's ids, labels and hints, chordless, in
+    /// the Graph section; the unregistered dispositions are gone.</summary>
     [Fact]
-    public void TheDispositionsArePresentUnregisteredAndTagTrue()
+    public void TheThreeVerbosityRowsAreRegisteredChordlessWithMacsLabelsAndHints()
     {
-        string[] tags = SlateUniffiMethods.GraphVerbosities().Select(l => l.Tag).ToArray();
-        Assert.Equal(["terse", "standard", "verbose"], tags);
-        foreach (string tag in tags)
+        GraphVerbositySpec[] levels = SlateUniffiMethods.GraphVerbosities();
+        Assert.Equal(["Terse", "Standard", "Verbose"], levels.Select(l => l.Title).ToArray());
+        foreach (GraphVerbositySpec level in levels)
         {
-            string id = "windows.graph.setVerbosity" + char.ToUpperInvariant(tag[0]) + tag[1..];
-            ChordTableEntry row = Assert.Single(ChordTable.Entries, r => r.Id == id);
-            Assert.False(row.IsRegistered);
-            Assert.False(row.IsCommandId);
+            ChordTableEntry row = Assert.Single(
+                ChordTable.Entries, r => r.Id == "slate.graph.setVerbosity" + level.Title);
+            Assert.True(row.IsRegistered, row.Id);
+            Assert.True(row.IsCommandId, row.Id);
+            Assert.Equal("Graph Verbosity: " + level.Title, row.Label);
+            Assert.Equal(
+                $"Set the graph announcement verbosity to {level.Title} for this vault.", row.Hint);
             Assert.Equal(CommandSection.Graph, row.Section);
             Assert.Null(row.WindowsChord);
             Assert.Null(row.MacChord);
-            Assert.NotNull(row.Reason);
-            Assert.Contains("parameterized setter", row.Reason, StringComparison.Ordinal);
         }
-        Assert.Equal(3, ChordTable.Entries.Count(r => r.Id.StartsWith("windows.graph.setVerbosity", StringComparison.Ordinal)));
+        Assert.DoesNotContain(
+            ChordTable.Entries, r => r.Id.StartsWith("windows.graph.setVerbosity", StringComparison.Ordinal));
+    }
+
+    /// <summary>WB-21 (#1415): each row's command sets its own level — the
+    /// Graph menu's check items bind the same <c>IsSelected</c> flags — and
+    /// executing the current level re-asserts the choices and raises
+    /// nothing.</summary>
+    [Fact]
+    public void EachVerbosityRowSetsItsLevelAndReassertsOnTheSameOne()
+    {
+        PumpedDispatcher.Run(() =>
+        {
+            var preferences = new GraphPreferencesViewModel(_root, new GraphConfigWriter());
+            var rows = new (GraphVerbosity Level, System.Windows.Input.ICommand Command)[]
+            {
+                (GraphVerbosity.Terse, preferences.SetVerbosityTerseCommand),
+                (GraphVerbosity.Verbose, preferences.SetVerbosityVerboseCommand),
+                (GraphVerbosity.Standard, preferences.SetVerbosityStandardCommand),
+            };
+            int raised = 0;
+            preferences.VerbosityChanged += () => raised++;
+            foreach ((GraphVerbosity level, System.Windows.Input.ICommand command) in rows)
+            {
+                Assert.True(command.CanExecute(null));
+                int before = raised;
+                command.Execute(null);
+                Assert.Equal(level, preferences.Verbosity);
+                Assert.Equal(before + 1, raised);
+                Assert.Equal(level, preferences.Choices.Single(c => c.IsSelected).Spec.Verbosity);
+
+                command.Execute(null);
+                Assert.Equal(before + 1, raised);
+                Assert.Equal(level, preferences.Choices.Single(c => c.IsSelected).Spec.Verbosity);
+            }
+            preferences.Shutdown();
+        });
     }
 
     // --- Term W7: CurrentConfig by field ------------------------------------

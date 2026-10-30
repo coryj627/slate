@@ -1704,6 +1704,42 @@
       "registered": true
     },
     {
+      "id": "slate.graph.setVerbosityTerse",
+      "label": "Graph Verbosity: Terse",
+      "section": "Graph",
+      "hint": "Set the graph announcement verbosity to Terse for this vault.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.graph.setVerbosityStandard",
+      "label": "Graph Verbosity: Standard",
+      "section": "Graph",
+      "hint": "Set the graph announcement verbosity to Standard for this vault.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.graph.setVerbosityVerbose",
+      "label": "Graph Verbosity: Verbose",
+      "section": "Graph",
+      "hint": "Set the graph announcement verbosity to Verbose for this vault.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
       "id": "slate.sidebar.open",
       "label": "Open",
       "section": "Sidebar",
@@ -2987,7 +3023,10 @@
       "slate.graph.zoomIn": "graphDiagram",
       "slate.graph.zoomOut": "graphDiagram",
       "slate.graph.actualSize": "graphDiagram",
-      "slate.graph.fitGraph": "graphDiagram"
+      "slate.graph.fitGraph": "graphDiagram",
+      "slate.graph.setVerbosityTerse": "graphNavigator",
+      "slate.graph.setVerbosityStandard": "graphNavigator",
+      "slate.graph.setVerbosityVerbose": "graphNavigator"
     },
     "issues": {
       "#720": "vault",
@@ -3380,45 +3419,6 @@
       "scope": "Graph",
       "registered": false,
       "reason": "W6-2 PR C, contract C-7: Escape on the graph surface clears a live needle and seats the reader on the projection, or leaves the filter region for the projection; with nothing to do it bubbles to the shell. Delivered by GraphNavigator.HandleKey from GraphSurfaceView.OnPreviewKeyDown; the mac has no ladder on the graph (C-D3)."
-    },
-    {
-      "id": "windows.graph.setVerbosityTerse",
-      "label": "Graph Verbosity: Terse",
-      "section": "Graph",
-      "hint": null,
-      "macChord": null,
-      "mac": null,
-      "windows": null,
-      "windowsSpoken": null,
-      "scope": "None",
-      "registered": false,
-      "reason": "W6-2 PR C (C-9), the canvas's PR-4 precedent: the three graph verbosity levels — core's vector, persisted in the vault's graph.json (0b-12) — are selected by one parameterized setter the Graph menu binds with the level's tag as its CommandParameter. Each level is a row so the catalog records the closed set, and none is registered on Windows yet. Since plan 43 PR 4 (#1216) mac registers one palette row per level, slate.graph.setVerbosityTerse, slate.graph.setVerbosityStandard and slate.graph.setVerbosityVerbose, with these labels; Windows' twin rows are #1415."
-    },
-    {
-      "id": "windows.graph.setVerbosityStandard",
-      "label": "Graph Verbosity: Standard",
-      "section": "Graph",
-      "hint": null,
-      "macChord": null,
-      "mac": null,
-      "windows": null,
-      "windowsSpoken": null,
-      "scope": "None",
-      "registered": false,
-      "reason": "W6-2 PR C (C-9), the canvas's PR-4 precedent: the three graph verbosity levels — core's vector, persisted in the vault's graph.json (0b-12) — are selected by one parameterized setter the Graph menu binds with the level's tag as its CommandParameter. Each level is a row so the catalog records the closed set, and none is registered on Windows yet. Since plan 43 PR 4 (#1216) mac registers one palette row per level, slate.graph.setVerbosityTerse, slate.graph.setVerbosityStandard and slate.graph.setVerbosityVerbose, with these labels; Windows' twin rows are #1415."
-    },
-    {
-      "id": "windows.graph.setVerbosityVerbose",
-      "label": "Graph Verbosity: Verbose",
-      "section": "Graph",
-      "hint": null,
-      "macChord": null,
-      "mac": null,
-      "windows": null,
-      "windowsSpoken": null,
-      "scope": "None",
-      "registered": false,
-      "reason": "W6-2 PR C (C-9), the canvas's PR-4 precedent: the three graph verbosity levels — core's vector, persisted in the vault's graph.json (0b-12) — are selected by one parameterized setter the Graph menu binds with the level's tag as its CommandParameter. Each level is a row so the catalog records the closed set, and none is registered on Windows yet. Since plan 43 PR 4 (#1216) mac registers one palette row per level, slate.graph.setVerbosityTerse, slate.graph.setVerbosityStandard and slate.graph.setVerbosityVerbose, with these labels; Windows' twin rows are #1415."
     },
     {
       "id": "windows.reading.nextH",

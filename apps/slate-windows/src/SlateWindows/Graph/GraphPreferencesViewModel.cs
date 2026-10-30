@@ -121,6 +121,9 @@ internal sealed class GraphPreferencesViewModel : BindableBase
                 }
             },
             _ => true);
+        SetVerbosityTerseCommand = new RelayCommand(_ => SetVerbosity(GraphVerbosity.Terse), _ => true);
+        SetVerbosityStandardCommand = new RelayCommand(_ => SetVerbosity(GraphVerbosity.Standard), _ => true);
+        SetVerbosityVerboseCommand = new RelayCommand(_ => SetVerbosity(GraphVerbosity.Verbose), _ => true);
     }
 
     /// <summary>Term W7: the loaded config, updated by field; the aggregate
@@ -152,6 +155,14 @@ internal sealed class GraphPreferencesViewModel : BindableBase
     /// <summary>The parameterised setter the three check items bind, each
     /// passing its TAG; an unknown tag is ignored.</summary>
     public ICommand SetVerbosityCommand { get; }
+
+    /// <summary>WB-21 (#1415): the palette's three rows, one level each,
+    /// through the same setter; tag-true like mac's.</summary>
+    public ICommand SetVerbosityTerseCommand { get; }
+
+    public ICommand SetVerbosityStandardCommand { get; }
+
+    public ICommand SetVerbosityVerboseCommand { get; }
 
     /// <summary>Raised after a level CHANGE: the workspace drops the relay's
     /// pending navigation class so a row line queued before the change

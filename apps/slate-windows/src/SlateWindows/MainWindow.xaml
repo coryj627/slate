@@ -542,18 +542,6 @@
                               IsChecked="{Binding Workspace.EditorPreferences.IsCodeVerbosityPreambleOnly, Mode=OneWay}"
                               Command="{Binding Workspace.EditorPreferences.SetCodePreambleVerbosityCommand}"
                               CommandParameter="preambleOnly" />
-                    <local:CheckMenuItem Header="Preamble + _First Line"
-                              AutomationProperties.AutomationId="EditorCodeVerbosityFirstLineMenuItem"
-                              IsCheckable="True"
-                              IsChecked="{Binding Workspace.EditorPreferences.IsCodeVerbosityFirstLine, Mode=OneWay}"
-                              Command="{Binding Workspace.EditorPreferences.SetCodePreambleVerbosityCommand}"
-                              CommandParameter="preambleFirstLine" />
-                    <local:CheckMenuItem Header="Preamble + _All Tokens"
-                              AutomationProperties.AutomationId="EditorCodeVerbosityAllTokensMenuItem"
-                              IsCheckable="True"
-                              IsChecked="{Binding Workspace.EditorPreferences.IsCodeVerbosityAllTokens, Mode=OneWay}"
-                              Command="{Binding Workspace.EditorPreferences.SetCodePreambleVerbosityCommand}"
-                              CommandParameter="preambleAllTokens" />
                 </MenuItem>
                 <Separator />
                 <MenuItem Header="Zoom _In"

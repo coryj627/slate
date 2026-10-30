@@ -544,6 +544,14 @@ internal static class SlateCommandRegistrar
             // C-8: Where-am-I — the navigator's verb; CanExecute is "the active
             // projection's readback seam answers", re-evaluated on its change.
             [ChordTable.Ids.GraphWhereAmI] = host => host.Workspace?.GraphWhereAmICommand,
+            // WB-21 (#1415): one row per level, through the setter the Graph
+            // menu's check items use; a level change speaks nothing on either route.
+            [ChordTable.Ids.GraphSetVerbosityTerse] =
+                host => host.Workspace?.GraphPreferences.SetVerbosityTerseCommand,
+            [ChordTable.Ids.GraphSetVerbosityStandard] =
+                host => host.Workspace?.GraphPreferences.SetVerbosityStandardCommand,
+            [ChordTable.Ids.GraphSetVerbosityVerbose] =
+                host => host.Workspace?.GraphPreferences.SetVerbosityVerboseCommand,
 
             // Canvas navigator, filter, Where-am-I and modes (W6-1 PR C,
             // contract C1). Every movement row stays enabled on a canvas

@@ -177,11 +177,12 @@ public sealed class DeliveryEvidenceCensus
 
     /// <summary>F7 (IPJ-2-2): every command chords.json maps to one of the
     /// four graph surface groups has a row in the committed matrix — the
-    /// thirteen `slate.graph.*` ids, the mac catalogue's twelve and B2's
-    /// Windows-only `slate.graph.connectionsBack` (the mac's ⌘[ panel key as
-    /// a command, B2-D6), which the generator's Windows-only inventory
-    /// extension renders; the documents' "thirteen command rows" is held
-    /// here, not assumed.</summary>
+    /// sixteen `slate.graph.*` ids: W6-2's thirteen (the mac catalogue's
+    /// twelve and B2's Windows-only `slate.graph.connectionsBack`, the mac's
+    /// ⌘[ panel key as a command, B2-D6, which the generator's Windows-only
+    /// inventory extension renders) and plan 44 WB-21's three verbosity rows
+    /// (#1415, the navigator's group). The count is held here, not
+    /// assumed.</summary>
     [Fact]
     public void EveryMappedGraphCommandHasAMatrixRow()
     {
@@ -193,7 +194,7 @@ public sealed class DeliveryEvidenceCensus
             .Select(c => c.Name)
             .OrderBy(id => id, StringComparer.Ordinal)
             .ToList();
-        Assert.Equal(13, mapped.Count);
+        Assert.Equal(16, mapped.Count);
         Assert.Contains("slate.graph.connectionsBack", mapped);
         var missing = mapped.Where(id => !matrix.Contains($"| `{id}` |", StringComparison.Ordinal)).ToList();
         Assert.True(missing.Count == 0, "graph commands chords.json maps with no matrix row: " + string.Join(", ", missing));
