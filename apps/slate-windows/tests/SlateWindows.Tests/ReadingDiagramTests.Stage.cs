@@ -298,6 +298,46 @@ public sealed partial class ReadingDiagramTests
         });
     }
 
+    /// <summary>A selection anchored at the placeholder's container — from it
+    /// into the paragraph after, forward or backward — keeps its endpoints
+    /// and its direction through the landing (Codoki on #1707; red-team
+    /// round 1's backward-selection fix).</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ASelectionAnchoredAtThePlaceholderKeepsItsEndpointsAndDirection(bool backward)
+    {
+        RunSta(() =>
+        {
+            using var harness = StageHarness.Open(
+                "reading-diagram-anchored-" + (backward ? "backward" : "forward"), StageNote, hosted: true);
+            FlowDocument document = harness.Surface.Document;
+            var container = (InlineUIContainer)harness.Placeholder().Parent;
+            TextPointer after = PositionAtText(document, "After the diagram.").GetPositionAtOffset(5)!;
+            if (backward)
+            {
+                harness.Surface.Selection.Select(after, container.ElementStart);
+            }
+            else
+            {
+                harness.Surface.Selection.Select(container.ElementStart, after);
+            }
+            string endCharacter = CharacterAfter(harness.Surface.Selection.End);
+            Assert.Equal(
+                backward,
+                harness.Surface.CaretPosition.CompareTo(harness.Surface.Selection.Start) == 0);
+
+            harness.Land();
+
+            Assert.Same(container, harness.Placeholder().Parent);
+            Assert.Equal(0, harness.Surface.Selection.Start.CompareTo(container.ElementStart));
+            Assert.Equal(endCharacter, CharacterAfter(harness.Surface.Selection.End));
+            Assert.Equal(
+                backward,
+                harness.Surface.CaretPosition.CompareTo(harness.Surface.Selection.Start) == 0);
+        });
+    }
+
     [Fact]
     public void AnchorsInsideThePendingSourceAreRemapped()
     {
