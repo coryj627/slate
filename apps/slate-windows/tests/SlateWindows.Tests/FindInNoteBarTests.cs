@@ -533,6 +533,45 @@ public sealed class FindInNoteBarTests
         Assert.Equal(22, area.Caret.Column);
     });
 
+    /// <summary>Codex round 7: the bar must not depend on every tab switch
+    /// changing the editor's document. Note tabs own separate documents
+    /// today (a duplicate mirrors its source's state into its own), so the
+    /// editor's document is pinned here to reach the schedule: the editor's
+    /// data context leaves for another tab and comes back with no document
+    /// change, and the bar detaches and reattaches on the context alone.</summary>
+    [Fact]
+    public void TheBarFollowsTheEditorsContextWithoutADocumentChange() => RunSta(() =>
+    {
+        using var shell = new Shell("x a b a");
+        WorkspaceTabViewModel own = shell.Tab;
+        shell.Workspace.OpenPath("note1.md", WorkspaceOpenTarget.NewTab);
+        shell.Settle();
+        WorkspaceTabViewModel other = shell.Tab;
+        Assert.NotSame(own, other);
+        shell.Workspace.ActiveGroup.ActiveTab = own;
+        shell.Settle();
+        shell.Open("a", caret: 0);
+        SlateTextEditor editor = shell.Editor;
+        TextDocument document = editor.Document;
+        Assert.Same(document, own.FindInNote.Surface?.Document);
+        editor.Document = document;
+
+        editor.DataContext = other;
+        shell.Settle();
+        Assert.Null(own.FindInNote.Surface);
+        editor.ClearValue(FrameworkElement.DataContextProperty);
+        shell.Settle();
+        Assert.Same(own, editor.DataContext);
+        Assert.Same(document, own.FindInNote.Surface?.Document);
+
+        shell.FocusEditor();
+        shell.Press(editor.TextArea, Key.G, ModifierKeys.Control);
+        Assert.Equal((6, 1), (editor.SelectionStart, editor.SelectionLength));
+        shell.Press(shell.Bar.Query, Key.Escape);
+        Assert.Equal((0, 0), (editor.SelectionStart, editor.SelectionLength));
+        Assert.True(editor.TextArea.IsKeyboardFocused, "Escape did not return focus to the text");
+    });
+
     /// <summary>Codex round 5: a tab switch may rebind the editor's document
     /// before or after its data context; a document that is not this tab's
     /// is never attached, and the tab's own restore state survives until

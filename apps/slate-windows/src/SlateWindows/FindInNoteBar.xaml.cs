@@ -119,15 +119,21 @@ internal partial class FindInNoteBar : UserControl
         if (oldEditor is not null)
         {
             oldEditor.DocumentChanged -= Editor_DocumentChanged;
+            oldEditor.DataContextChanged -= Editor_DataContextChanged;
         }
         if (newEditor is not null)
         {
             newEditor.DocumentChanged += Editor_DocumentChanged;
+            newEditor.DataContextChanged += Editor_DataContextChanged;
         }
         _model?.AttachSurface(null);
         _surface = null;
         Reattach();
     }
+
+    // Ownership is decided on the editor's tab as well as its document, so a
+    // context that arrives without a document change is answered too.
+    private void Editor_DataContextChanged(object sender, DependencyPropertyChangedEventArgs e) => Reattach();
 
     private void Editor_DocumentChanged(object? sender, EventArgs e)
     {
