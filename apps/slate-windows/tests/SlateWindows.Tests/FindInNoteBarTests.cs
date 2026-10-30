@@ -533,6 +533,28 @@ public sealed class FindInNoteBarTests
         Assert.Equal(22, area.Caret.Column);
     });
 
+    /// <summary>A text view with no height has valid but empty visual
+    /// lines; drawing the matches then draws nothing instead of throwing.</summary>
+    [Fact]
+    public void MatchesDrawNothingOnATextViewWithNoVisualLines() => RunSta(() =>
+    {
+        var document = new TextDocument("a b a");
+        var view = new ICSharpCode.AvalonEdit.Rendering.TextView { Document = document };
+        view.Measure(new Size(200, 0));
+        Assert.True(view.VisualLinesValid, "premise: the layout ran");
+        Assert.Empty(view.VisualLines);
+        var renderer = new FindMatchBackgroundRenderer(view, document);
+        renderer.SetMatches([(0, 1), (4, 1)]);
+
+        var visual = new DrawingVisual();
+        using (DrawingContext context = visual.RenderOpen())
+        {
+            renderer.Draw(view, context);
+        }
+
+        Assert.Null(visual.Drawing);
+    });
+
     /// <summary>Codex round 7: the bar must not depend on every tab switch
     /// changing the editor's document. Note tabs own separate documents
     /// today (a duplicate mirrors its source's state into its own), so the

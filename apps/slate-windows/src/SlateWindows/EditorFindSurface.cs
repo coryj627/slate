@@ -302,7 +302,8 @@ internal sealed class FindMatchBackgroundRenderer : IBackgroundRenderer
 
     public void Draw(TextView textView, DrawingContext drawingContext)
     {
-        if (_segments.Count == 0 || !textView.VisualLinesValid)
+        // A view with no height lays out no lines yet reports them valid.
+        if (_segments.Count == 0 || !textView.VisualLinesValid || textView.VisualLines.Count == 0)
         {
             return;
         }
