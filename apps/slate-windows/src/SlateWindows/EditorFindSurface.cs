@@ -3,7 +3,9 @@
 
 using System.Windows;
 using System.Windows.Media;
+using ICSharpCode.AvalonEdit;
 using ICSharpCode.AvalonEdit.Document;
+using ICSharpCode.AvalonEdit.Editing;
 using ICSharpCode.AvalonEdit.Rendering;
 
 namespace SlateWindows;
@@ -93,17 +95,53 @@ internal sealed class EditorFindSurface : IFindInNoteSurface
         }
     }
 
-    /// <summary>The selection as anchors, so a restore follows every edit
-    /// made while the bar was open.</summary>
+    /// <summary>The selection's SHAPE as anchors — where it was anchored and
+    /// where its active end and the caret were, and, for a rectangle, its
+    /// visual columns — so a restore gives back the selection the reader
+    /// made (never a linear one over a rectangle's bounds, never a backward
+    /// one turned forward) and follows every edit made while the bar was
+    /// open.</summary>
     public object CaptureRestorePoint()
     {
-        (int offset, int length) = Selection;
-        return new RestorePoint(_document, Anchor(offset), Anchor(offset + length));
+        if (_editor is not { } editor)
+        {
+            (int offset, int length) = _headlessSelection;
+            return new RestorePoint(
+                _document, Anchor(offset), Anchor(offset + length), Anchor(offset + length), null);
+        }
+        TextArea area = editor.TextArea;
+        ICSharpCode.AvalonEdit.Editing.Selection selection = area.Selection;
+        int caret = area.Caret.Offset;
+        if (selection.IsEmpty)
+        {
+            return new RestorePoint(_document, Anchor(caret), Anchor(caret), Anchor(caret), null);
+        }
+        int start = _document.GetOffset(selection.StartPosition.Location);
+        int end = _document.GetOffset(selection.EndPosition.Location);
+        RectangleColumns? rectangle = selection is RectangleSelection
+            ? new RectangleColumns(VisualColumnOf(area, selection.StartPosition), VisualColumnOf(area, selection.EndPosition))
+            : null;
+        return new RestorePoint(_document, Anchor(start), Anchor(end), Anchor(caret), rectangle);
     }
+
+    /// <summary>A position's visual column; one built from a line and a
+    /// column alone carries none (-1), so the visual line resolves it.</summary>
+    private static int VisualColumnOf(TextArea area, TextViewPosition position) =>
+        position.VisualColumn >= 0
+            ? position.VisualColumn
+            : area.TextView
+                .GetOrConstructVisualLine(area.Document.GetLineByNumber(position.Line))
+                .ValidateVisualColumn(position, area.Selection.EnableVirtualSpace);
 
     public object RebaseRestorePoint(object restorePoint) =>
         restorePoint is RestorePoint point && !ReferenceEquals(point.Document, _document)
-            ? new RestorePoint(_document, Anchor(point.Start.Offset), Anchor(point.End.Offset))
+            ? point with
+            {
+                Document = _document,
+                Start = Anchor(point.Start.Offset),
+                End = Anchor(point.End.Offset),
+                Caret = Anchor(point.Caret.Offset),
+            }
             : restorePoint;
 
     public void Restore(object restorePoint)
@@ -113,15 +151,34 @@ internal sealed class EditorFindSurface : IFindInNoteSurface
             return;
         }
         int start = Math.Clamp(point.Start.Offset, 0, _document.TextLength);
-        int end = Math.Clamp(point.End.Offset, start, _document.TextLength);
-        if (_editor is { } editor)
+        int end = Math.Clamp(point.End.Offset, 0, _document.TextLength);
+        int caret = Math.Clamp(point.Caret.Offset, 0, _document.TextLength);
+        if (_editor is not { } editor)
         {
-            editor.Select(start, end - start);
+            _headlessSelection = (Math.Min(start, end), Math.Abs(end - start));
+            return;
+        }
+        TextArea area = editor.TextArea;
+        area.Caret.Offset = caret;
+        if (start == end)
+        {
+            area.ClearSelection();
+        }
+        else if (point.Rectangle is { } columns)
+        {
+            area.Selection = new RectangleSelection(
+                area,
+                new TextViewPosition(_document.GetLocation(start), columns.Start),
+                new TextViewPosition(_document.GetLocation(end), columns.End));
         }
         else
         {
-            _headlessSelection = (start, end - start);
+            // Anchored at Start, active at End: a backward selection stays
+            // backward.
+            area.Selection = ICSharpCode.AvalonEdit.Editing.Selection.Create(area, start, end);
         }
+        // The caret is placed first: moving it after the selection is set
+        // would clear the selection.
     }
 
     public void ReturnFocus() => _editor?.FocusInputOwner();
@@ -143,7 +200,12 @@ internal sealed class EditorFindSurface : IFindInNoteSurface
 
     private void OnDocumentChanged(object? sender, DocumentChangeEventArgs e) => TextChanged?.Invoke();
 
-    private sealed record RestorePoint(TextDocument Document, TextAnchor Start, TextAnchor End);
+    /// <summary>Start is where the selection was anchored, End its active
+    /// end (either may be the greater).</summary>
+    private sealed record RestorePoint(
+        TextDocument Document, TextAnchor Start, TextAnchor End, TextAnchor Caret, RectangleColumns? Rectangle);
+
+    private sealed record RectangleColumns(int Start, int End);
 }
 
 /// <summary>

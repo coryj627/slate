@@ -83,10 +83,14 @@ public sealed class FindInNoteBarTests
         }
 
         /// <summary>Ctrl+F from the editor text, then the query typed and
-        /// the debounce flushed.</summary>
+        /// the debounce flushed. A negative caret keeps the editor's own
+        /// selection.</summary>
         public void Open(string query, int caret = 0)
         {
-            Editor.Select(caret, 0);
+            if (caret >= 0)
+            {
+                Editor.Select(caret, 0);
+            }
             FocusEditor();
             Press(Editor.TextArea, Key.F, ModifierKeys.Control);
             Assert.True(Find.IsOpen, "premise: Ctrl+F opened the bar");
@@ -410,6 +414,54 @@ public sealed class FindInNoteBarTests
         Assert.Equal((4, 0), (shell.Editor.SelectionStart, shell.Editor.SelectionLength));
     });
 
+    /// <summary>Codex round 2: a rectangular selection comes back as the
+    /// same rectangle, so a Delete after Escape removes only what the
+    /// reader selected.</summary>
+    [Fact]
+    public void ARectangularSelectionComesBackAsTheSameRectangle() => RunSta(() =>
+    {
+        using var shell = new Shell("abcd\nefgh\nijkl");
+        ICSharpCode.AvalonEdit.Editing.TextArea area = shell.Editor.TextArea;
+        shell.FocusEditor();
+        area.Selection = new ICSharpCode.AvalonEdit.Editing.RectangleSelection(
+            area,
+            new ICSharpCode.AvalonEdit.TextViewPosition(1, 2),
+            new ICSharpCode.AvalonEdit.TextViewPosition(3, 4));
+        // Where an Alt+drag leaves the caret: the rectangle's active end.
+        area.Caret.Position = new ICSharpCode.AvalonEdit.TextViewPosition(3, 4);
+        Assert.IsType<ICSharpCode.AvalonEdit.Editing.RectangleSelection>(area.Selection);
+        string selected = area.Selection.GetText();
+        Assert.Equal(new[] { "bc", "fg", "jk" }, selected.Split(["\r\n", "\n"], StringSplitOptions.None));
+
+        OpenKeepingTheSelection(shell, "e");
+        shell.Press(shell.Bar.Query, Key.Escape);
+
+        Assert.IsType<ICSharpCode.AvalonEdit.Editing.RectangleSelection>(area.Selection);
+        Assert.Equal(selected, area.Selection.GetText());
+        area.Selection.ReplaceSelectionWithText(string.Empty);
+        Assert.Equal("ad\neh\nil", shell.Tab.Text.Replace("\r\n", "\n"));
+    });
+
+    /// <summary>Codex round 2: a backward selection keeps its active end
+    /// (the caret) where the reader left it.</summary>
+    [Fact]
+    public void ABackwardSelectionKeepsItsActiveEnd() => RunSta(() =>
+    {
+        using var shell = new Shell("a b a b a");
+        ICSharpCode.AvalonEdit.Editing.TextArea area = shell.Editor.TextArea;
+        shell.FocusEditor();
+        area.Caret.Offset = 1;
+        area.Selection = ICSharpCode.AvalonEdit.Editing.Selection.Create(area, 4, 1);
+        Assert.False(area.Selection.IsEmpty);
+
+        OpenKeepingTheSelection(shell, "a");
+        shell.Press(shell.Bar.Query, Key.Escape);
+
+        Assert.Equal(1, area.Caret.Offset);
+        Assert.Equal(4, shell.Tab.EditorDocument!.GetOffset(area.Selection.StartPosition.Location));
+        Assert.Equal(1, shell.Tab.EditorDocument!.GetOffset(area.Selection.EndPosition.Location));
+    });
+
     [Fact]
     public void CloseAfterAShortenedDocumentRestoresAClampedCaret() => RunSta(() =>
     {
@@ -631,6 +683,18 @@ public sealed class FindInNoteBarTests
 
         Assert.Equal(new[] { "1 of 2" }, shell.Spoken);
     });
+
+    /// <summary>Ctrl+F from the focused editor without touching its
+    /// selection, then the query typed and the debounce flushed.</summary>
+    private static void OpenKeepingTheSelection(Shell shell, string query)
+    {
+        Assert.True(shell.Editor.TextArea.IsKeyboardFocused);
+        shell.Press(shell.Editor.TextArea, Key.F, ModifierKeys.Control);
+        Assert.True(shell.Find.IsOpen, "premise: Ctrl+F opened the bar");
+        shell.Bar.Query.Text = query;
+        shell.Find.FlushPendingForTests();
+        shell.Settle();
+    }
 
     private static IEnumerable<T> Descendants<T>(DependencyObject root)
         where T : DependencyObject
