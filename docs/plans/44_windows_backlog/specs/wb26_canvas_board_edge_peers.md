@@ -136,6 +136,17 @@ Issues: Closes #1277. Size L (design first). Lanes: windows + FlaUI (shell gate)
 - **The follow-selection toggle moves nothing and supersedes nothing.**
 - **New cases.** `TheNewestRequestForTheViewWins` adds both toggle directions after a realization, and an edge Invoke followed by Actual Size.
 
+**Codex round 8, 2026-10-31.**
+- **Zoom to Selection fits the document's applied selection.** It fits the DOCUMENT's selection in its APPLIED scene, never the board's stale installed one, so an edge Invoke's endpoint is the one fitted. An empty selection fits nothing and supersedes nothing.
+- **The peer registry holds documents weakly.** It is one registry per document in a `ConditionalWeakTable`.
+- **Publication provenance holds its document through a `WeakReference`.**
+- **A document switch refreshes the board's cached children,** so the old canvas's peers leave them at once.
+- **Facts:**
+  - `ACanvasTheBoardHasLeftIsNotKeptAliveByIt`, a GC fact for a board that leaves a canvas for another;
+  - `TheNewestRequestForTheViewWins` adds "invoke, then zoom to selection" and an empty selection;
+  - `AHeldPeerReadsNothingUntilItsCanvasIsInstalledAgain` asserts the board's own cached children are empty at the switch.
+- **Accepted, and older than this chunk.** A board left with NO document keeps its engine's last installed publication, whose lease closes through `SessionSource(document)`, until the pane is torn down. That is the engine's retention, untouched here. The weak provenance has no witness for that reason.
+
 ## Goal
 
 Locked contract 34 D5 says a labelled edge is a peer in the board's name

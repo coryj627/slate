@@ -107,6 +107,7 @@ public sealed class WcMatrixCanvasEvidenceCensus
                 "ARetainedActionObeysWhatTheDocumentAppliedBeforeTheBoardInstallsIt",
                 "InvokingAnEdgeWhoseEndpointIsTheSeatStillSaysWhereItLanded",
                 "ARealizationWaitsForTheSceneTheDocumentApplied", "TheNewestRequestForTheViewWins",
+                "ACanvasTheBoardHasLeftIsNotKeptAliveByIt",
                 "AFollowingBoardInAnotherPanePansToTheSelectionAndAnUnfollowingOneStays",
                 "AFollowingBoardRevealsANewCardOnceTheStateThatHasItInstalls", "AnOwedRevealIsPaidOnlyForTheCardThatIsStillTheSeat",
                 "AnOwedElsewhereRevealLapsesWhenTheBoardStopsFollowing", "TheBoardsOwnPeersRevealTheirCardWithFollowSelectionOff",

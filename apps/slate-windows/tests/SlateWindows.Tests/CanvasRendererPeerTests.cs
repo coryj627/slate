@@ -337,6 +337,8 @@ public sealed class CanvasRendererPeerTests : IDisposable
     [InlineData("realize, then toggle follow off")]
     [InlineData("realize, then toggle follow on")]
     [InlineData("invoke, then actual size")]
+    [InlineData("invoke, then zoom to selection")]
+    [InlineData("nothing selected: realize, then zoom to selection")]
     public void TheNewestRequestForTheViewWins(string order) => RunSta(() =>
     {
         WriteCanvas(
@@ -416,6 +418,21 @@ public sealed class CanvasRendererPeerTests : IDisposable
                 far.Realize();
                 _ = board.Surface.ViewportCommand(CanvasViewportVerb.ToggleFollowSelection);
                 break;
+            case "invoke, then zoom to selection":
+                // Invoke selects Beta, far off, while the board still installs
+                // the scene before it; Zoom to Selection fits the selection
+                // the reader just made, not the board's stale one (codex
+                // round 8).
+                board.Document.SeatSelectionSilently("near");
+                ((IInvokeProvider)board.HeldEdge("e3").GetPattern(PatternInterface.Invoke)!).Invoke();
+                _ = board.Surface.ViewportCommand(CanvasViewportVerb.ZoomToSelection);
+                break;
+            case "nothing selected: realize, then zoom to selection":
+                // Nothing to fit, so nothing superseded.
+                board.Document.SelectNode(null, announce: false);
+                far.Realize();
+                _ = board.Surface.ViewportCommand(CanvasViewportVerb.ZoomToSelection);
+                break;
             case "invoke, then actual size":
                 // The long "reaches" edge is on the window; its Invoke owes
                 // a reveal of Beta, far off, to the pending install. The
@@ -442,7 +459,12 @@ public sealed class CanvasRendererPeerTests : IDisposable
             case "select, then realize":
             case "realize, then toggle follow off":
             case "realize, then toggle follow on":
+            case "nothing selected: realize, then zoom to selection":
                 AssertInView(after, 20_000, 40, 500, 100);
+                break;
+            case "invoke, then zoom to selection":
+                Assert.Equal("b", board.Document.Selection.Selected);
+                AssertInView(after, 20_300, 40, 200, 100);
                 break;
             case "invoke, then actual size":
                 Assert.True(
@@ -754,6 +776,9 @@ public sealed class CanvasRendererPeerTests : IDisposable
             Assert.Null(board.Renderer.PeerFor(CanvasPeerKey.Edge("e1")));
             Assert.Null(board.Renderer.FindByName(null, null));
             Assert.Empty(board.Renderer.MaterializedPeers());
+            // The board's own cached children drop the other canvas's peers
+            // at the switch, not at the install (codex round 8).
+            Assert.Empty(board.Peer.GetChildren() ?? []);
 
             board.SettleUntil(() => ReferenceEquals(board.Renderer.InstalledDocument, board.Document));
             Assert.Equal(Supports, first.GetName());
@@ -764,6 +789,50 @@ public sealed class CanvasRendererPeerTests : IDisposable
             second.Shutdown();
         }
     });
+
+    /// <summary>D3's retirement rule for documents (codex round 8): a canvas
+    /// the board has left for another is not kept alive by the board's peer
+    /// registry, its publication provenance or its cached children once
+    /// nothing else holds it. (A board left with NO document keeps its last
+    /// installed publication, whose lease closes through its document — the
+    /// engine's, before this chunk, and torn down with the pane.)</summary>
+    [Fact]
+    public void ACanvasTheBoardHasLeftIsNotKeptAliveByIt() => RunSta(() =>
+    {
+        WriteCanvas(
+            "left.canvas",
+            [Card("a", "Alpha", 40, 40), Card("b", "Beta", 300, 40)],
+            [Edge("e1", "a", "b", "supports")]);
+        WriteCanvas("stay.canvas", [Card("c", "Gamma", 40, 40)], []);
+        using Board board = Open("stay.canvas");
+        board.PanTo(0, 0);
+        WeakReference left = VisitAndLeave(board);
+        for (int attempt = 0; attempt < 5 && left.IsAlive; attempt++)
+        {
+            PumpDispatcher();
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+        }
+        Assert.False(left.IsAlive, "the canvas the board left is still alive.");
+    });
+
+    /// <summary>Show a canvas, mint its peers, then leave it; out of line so
+    /// no frame of the fact keeps it reachable.</summary>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private WeakReference VisitAndLeave(Board board)
+    {
+        CanvasDocumentViewModel visited = OpenDocument("left.canvas");
+        board.Show(visited);
+        board.SettleUntil(() => ReferenceEquals(board.Renderer.InstalledDocument, visited));
+        Assert.Equal(3, board.Children().Count);
+        Assert.NotNull(board.HeldEdge("e1"));
+        board.Show(board.Document);
+        board.SettleUntil(() => ReferenceEquals(board.Renderer.InstalledDocument, board.Document));
+        _ = board.Children();
+        visited.Shutdown();
+        return new WeakReference(visited);
+    }
 
     /// <summary>D4 during a move preview: the realization targets the
     /// rectangles the board DRAWS. The committed union is wider than the

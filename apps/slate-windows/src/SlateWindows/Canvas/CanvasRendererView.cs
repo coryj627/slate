@@ -89,13 +89,16 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// from. The engine installs off the dispatcher, so for a moment after
     /// the board moves to another canvas its installed state is still the
     /// previous canvas's; a board peer reads the installed scene only when
-    /// it is its own document's (#1277, codex round 2).</summary>
-    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<CanvasPublication, CanvasDocumentViewModel>
-        _publicationDocuments = new();
+    /// it is its own document's (#1277, codex round 2). The document is held
+    /// WEAKLY: the engine keeps its installed publication after the board
+    /// moves on or tears down, and that must not keep a closed canvas alive
+    /// (codex round 8).</summary>
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<
+        CanvasPublication, WeakReference<CanvasDocumentViewModel>> _publicationDocuments = new();
 
     private void ForwardPublication(CanvasDocumentViewModel document, CanvasPublication publication)
     {
-        _publicationDocuments.AddOrUpdate(publication, document);
+        _publicationDocuments.AddOrUpdate(publication, new WeakReference<CanvasDocumentViewModel>(document));
         _engine.OnPublicationApplied(publication);
     }
 
@@ -103,7 +106,8 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// before any install, or for a source this board was never handed.</summary>
     internal CanvasDocumentViewModel? InstalledDocument =>
         _engine.Current is { } state
-        && _publicationDocuments.TryGetValue(state.Source, out CanvasDocumentViewModel? document)
+        && _publicationDocuments.TryGetValue(state.Source, out WeakReference<CanvasDocumentViewModel>? owner)
+        && owner.TryGetTarget(out CanvasDocumentViewModel? document)
             ? document
             : null;
 
@@ -141,7 +145,6 @@ internal sealed class CanvasRendererView : FrameworkElement
             _owedReveal = null;
             _owedRealization = null;
             _model = value;
-            SweepReclaimedPeers();
             _forwardPublication = null;
             if (value is not null)
             {
@@ -152,6 +155,11 @@ internal sealed class CanvasRendererView : FrameworkElement
                 _engine.CommitTransient(value.Transient);
                 ReturnToDocument(value);
             }
+            // The old document's peers leave the board's cached children now,
+            // not at the next install — which a board left with no document
+            // never gets — so nothing here keeps a closed canvas alive (codex
+            // round 8).
+            RefreshAutomationChildren();
         }
     }
 
@@ -517,10 +525,13 @@ internal sealed class CanvasRendererView : FrameworkElement
             ? new System.Windows.Rect(bounds.X, bounds.Y, bounds.Width, bounds.Height)
             : null;
 
+    /// <summary>Zoom to Selection's bounds: the DOCUMENT's selection in its
+    /// APPLIED scene — what the reader just selected, even while the board
+    /// still installs the scene before it (codex round 8). An empty
+    /// selection fits nothing, and so supersedes nothing.</summary>
     private System.Windows.Rect? SelectionBounds() =>
-        _engine.Current is { } state
-            && state.Selection is { } selected
-            && state.Source.Loaded?.Population is { } population
+        _model?.Selection.Selected is { } selected
+            && AppliedPopulation is { } population
             && population.SceneByNode.TryGetValue(selected, out CanvasSceneNode? node)
             ? new System.Windows.Rect(node.X, node.Y, node.Width, node.Height)
             : null;
@@ -583,11 +594,18 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// and every entry is scoped to the document it was minted for: D3's
     /// identity is (renderer, document, key), so a peer held on one canvas
     /// never answers for another canvas this board later shows that reuses
-    /// its ids (#1277, codex).
+    /// its ids (#1277, codex). The documents are held WEAKLY — one registry
+    /// per document in a weak table — so a canvas the board has left is not
+    /// kept alive by the registry (codex round 8).
     /// </summary>
-    private readonly System.Collections.Generic.Dictionary<
-        (CanvasDocumentViewModel Document, CanvasPeerKey Key), WeakReference<CanvasBoardAutomationPeer>>
-        _peers = [];
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<
+        CanvasDocumentViewModel,
+        System.Collections.Generic.Dictionary<CanvasPeerKey, WeakReference<CanvasBoardAutomationPeer>>>
+        _peerRegistries = new();
+
+    /// <summary>The bound document's registry; null with no document.</summary>
+    private System.Collections.Generic.Dictionary<CanvasPeerKey, WeakReference<CanvasBoardAutomationPeer>>? Peers =>
+        _model is { } document ? _peerRegistries.GetOrCreateValue(document) : null;
 
     /// <summary>The registry size that triggers the next sweep of reclaimed
     /// identities: twice the entries the last sweep kept, so sweeping costs
@@ -661,7 +679,9 @@ internal sealed class CanvasRendererView : FrameworkElement
         {
             return null;
         }
-        if (_peers.TryGetValue((document, key), out WeakReference<CanvasBoardAutomationPeer>? held)
+        System.Collections.Generic.Dictionary<CanvasPeerKey, WeakReference<CanvasBoardAutomationPeer>> peers =
+            _peerRegistries.GetOrCreateValue(document);
+        if (peers.TryGetValue(key, out WeakReference<CanvasBoardAutomationPeer>? held)
             && held.TryGetTarget(out CanvasBoardAutomationPeer? existing))
         {
             return existing;
@@ -674,34 +694,26 @@ internal sealed class CanvasRendererView : FrameworkElement
             held.SetTarget(peer);
             return peer;
         }
-        _peers[(document, key)] = new WeakReference<CanvasBoardAutomationPeer>(peer);
-        if (_peers.Count >= _peerSweepAt)
+        peers[key] = new WeakReference<CanvasBoardAutomationPeer>(peer);
+        if (peers.Count >= _peerSweepAt)
         {
-            SweepReclaimedPeers();
-            _peerSweepAt = Math.Max(PeerSweepFloor, _peers.Count * 2);
+            foreach (CanvasPeerKey reclaimed in peers
+                .Where(entry => !entry.Value.TryGetTarget(out _))
+                .Select(entry => entry.Key)
+                .ToArray())
+            {
+                _ = peers.Remove(reclaimed);
+            }
+            _peerSweepAt = Math.Max(PeerSweepFloor, peers.Count * 2);
         }
         return peer;
-    }
-
-    /// <summary>Drop the registry entries nothing holds — including every
-    /// entry of a document this board no longer shows, so the registry
-    /// never keeps a closed canvas reachable.</summary>
-    private void SweepReclaimedPeers()
-    {
-        foreach ((CanvasDocumentViewModel, CanvasPeerKey) reclaimed in _peers
-            .Where(entry => !entry.Value.TryGetTarget(out _))
-            .Select(entry => entry.Key)
-            .ToArray())
-        {
-            _ = _peers.Remove(reclaimed);
-        }
     }
 
     /// <summary>Whether a client or the board still holds the key's
     /// peer.</summary>
     private bool PeerIsLive(CanvasPeerKey key) =>
-        _model is { } document
-        && _peers.TryGetValue((document, key), out WeakReference<CanvasBoardAutomationPeer>? held)
+        Peers is { } peers
+        && peers.TryGetValue(key, out WeakReference<CanvasBoardAutomationPeer>? held)
         && held.TryGetTarget(out _);
 
     /// <summary>The item-container search (D3's first-touch cell): by
@@ -802,7 +814,7 @@ internal sealed class CanvasRendererView : FrameworkElement
             return;
         }
         var retained = System.Collections.Immutable.ImmutableHashSet.CreateRange(
-            _peers.Keys.Select(entry => entry.Key).Where(PeerIsLive)).Add(key);
+            (Peers?.Keys ?? Enumerable.Empty<CanvasPeerKey>()).Where(PeerIsLive)).Add(key);
         _engine.CommitRetained(retained);
         // The newest request for the view wins (codex rounds 5 and 6): an
         // older reveal still owed — to an install, or to a hidden board's
