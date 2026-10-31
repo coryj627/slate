@@ -155,7 +155,8 @@ changes only letter case on a case-insensitive volume.
 scratch directory named by `SLATE_WEAK_VOLUME_FAT32`, `…_EXFAT` or
 `…_SMB`, after a gate confirms that the volume is that kind
 (`check_weak_volume`). The gate is proven against a mislabelled NTFS
-folder on every machine [P-W1].
+folder, and against a table of the reports it judges, on every machine
+[P-W1].
 
 - **Rename and move rows.** The occupant is created AFTER the provider's
   own destination pre-check, through the test seam
@@ -166,8 +167,8 @@ folder on every machine [P-W1].
 
 | Volume | Create (staged publish) onto an occupied name | Rename and move onto a name occupied after the pre-check | Identity rename onto an occupied name | Case-only rename `Note.md` → `note.md` | Evidence |
 | --- | --- | --- | --- | --- | --- |
-| NTFS (the temp directory) | Refused | Refused | Refused | One entry; identity kept | Existing `windows_entry_tests.rs` facts and `fs.rs` seam facts |
-| SMB over `\\localhost\C$` (loopback to an NTFS volume) | Refused by the kernel publish: `DestinationExists`, occupant unchanged, stage cleaned | Refused by the kernel: `DestinationExists`; source and occupant unchanged | Refused by the kernel: `Io(AlreadyExists)`; both entries unchanged | One entry, new spelling, `FILE_ID_INFO` unchanged | [P-W1] |
+| NTFS (the temp directory) | Refused | Refused: the primitive with an occupant made before its call, and one made concurrently | Refused | One entry; identity kept | Not through the WB-27 seam. The NTFS evidence is:<br>• create: `create_exclusive_collision_preserves_winner_bytes_and_cleans_staged_temp`;<br>• rename: `rename_no_replace_atomic_refuses_occupied_destination` and `rename_no_replace_destination_creation_race_never_clobbers`, which call the primitive directly (`fs.rs`);<br>• identity and case-only: `conditional_rename_rejects_replacements_and_collisions` and `conditional_rename_handles_case_only_inverse_and_directory_moves` (`windows_entry_tests.rs`) |
+| SMB 3.1 over `\\localhost\C$` (loopback to an NTFS volume; the gate reads the protocol) | Refused by the kernel publish: `DestinationExists`, occupant unchanged, stage cleaned | Refused by the kernel: `DestinationExists`; source and occupant unchanged | Refused by the kernel: `Io(AlreadyExists)`; both entries unchanged | One entry, new spelling, `FILE_ID_INFO` unchanged. The identity inverse, which makes only the no-replace call, performs the same case-only rename | [P-W1] |
 | FAT32 | *Not probed*: needs the elevated VHD procedure in the WB-27 spec | — | — | — | — |
 | exFAT | *Not probed*: as FAT32 | — | — | — | — |
 
@@ -259,10 +260,19 @@ then renames with `ReplaceIfExists` false. Only when the volume reports
 the source's own alias as occupied does it retry that one rename with
 replacement (the `destination_is_source` arm of `rename_beneath_root`).
 
-On NTFS and on SMB over `\\localhost\C$`, the first call succeeds. The
-case-only rename leaves one entry with the new spelling and the same
-`FILE_ID_INFO` (`weak_volume_case_only_rename_keeps_the_entry`), so the
-retry arm is not reached [P-W1].
+On SMB over `\\localhost\C$`, the no-replace call alone performs the
+case-only rename. That holds in `weak_volume_case_only_rename_keeps_the_entry`
+[P-W1]:
+- the provider's rename leaves one entry, with the new spelling and the
+  same `FILE_ID_INFO`;
+- the identity inverse (`rename_if_identity`) renames another file's case
+  alias the same way. It makes ONLY the no-replace call and has no retry
+  arm.
+
+The same holds on NTFS
+(`conditional_rename_handles_case_only_inverse_and_directory_moves`).
+So on both, the provider's first call does the work, and the retry has
+no case to answer.
 
 Whether FAT32 or exFAT reaches it is unrecorded until those volumes are
 probed.
@@ -358,15 +368,25 @@ cargo test -p slate-core --locked --lib weak_volume -- --ignored --test-threads=
 - **What runs.** Six gated facts passed there, printing their
   `OBSERVED` lines. The three non-ignored gate facts pass on every
   machine.
-- **The mutations.** Every row's mutation was applied, and the fact was
-  seen failing on this share or on the mislabelled folder. The mutated
-  sites:
+- **The mutations: 15 applied, each seen failing.** The fact that
+  failed ran on this share, on the mislabelled folder, or in the decision
+  table. Product sites:
   - `ReplaceIfExists` true in the staged publish;
   - `ReplaceIfExists` true in the ordinary rename's kernel call;
   - `ReplaceIfExists` true in the identity inverse's kernel call;
   - a case-only rename that recreates the file;
-  - an identity compare skipped;
-  - a gate that accepts any name, or either FAT kind by "FAT".
+  - the identity inverse refusing a case-only alias;
+  - the identity compare skipped.
+
+  Gate sites:
+  - any file-system name accepted;
+  - either FAT kind accepted by "FAT";
+  - the two FAT names swapped;
+  - a remote volume taken for local FAT;
+  - the SMB check without its UNC half, without its remote half, and
+    without both;
+  - any redirector taken for SMB;
+  - a panic on an unset variable.
 - **Not run.** FAT32 and exFAT need the elevated VHD procedure.
 
 ## Appendix B. Sources

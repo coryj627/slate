@@ -27,12 +27,17 @@ below, it wins.
   in the matrix say "Not probed". The facts are ready: the volume
   procedure below, then the gated command in Verification, fills them in
   one elevated session.
-- **A third non-ignored fact.** The gate's name test is split into
-  `accept_file_system`, and
-  `weak_volume_gate_tells_the_two_fat_kinds_apart_by_their_exact_names`
-  proves it on every machine. Without a FAT volume, the "match either
-  FAT kind by `FAT`" mutation would have no witness. The plain listing
-  now holds three facts; the ignored listing still holds exactly six.
+- **A third non-ignored fact.**
+  `weak_volume_gate_decides_each_kind_from_what_the_volume_reports`. The
+  gate is split in two:
+  - `read_volume` reads what the volume reports: UNC or not, the drive
+    type, the file-system name, and the network protocol through
+    `FileRemoteProtocolInfo`;
+  - a pure `decide` judges the report.
+
+  The table fact runs `decide` against built-up reports for the volumes
+  this probe cannot mount. The plain listing now holds three facts; the
+  ignored listing still holds exactly six.
 - **SMB observations** (all six gated facts green):
   - the create, the raced rename and move, and the identity rename onto
     an occupied name are each refused by the kernel;
@@ -41,9 +46,41 @@ below, it wins.
     different id, and a stale identity is refused.
   No replacing rename was observed, so no refusal branch and no seventh
   fact.
-- **Mutations: 10 of 10 killed.** The FAT-name mutation is killed by the
-  new fact; every other mutation on the SMB share or the mislabelled
-  folder.
+- **Red team, 2026-10-31: changes made before the push.**
+  - *The SMB gate checks the protocol.* A UNC path on a `DRIVE_REMOTE`
+    volume is not enough: WSL's `\\wsl.localhost` is both and is served
+    by 9P. The gate now requires `FileRemoteProtocolInfo` to report
+    `WNNC_NET_SMB`. The query needs an 8-aligned buffer; with the
+    structure's own alignment it answers `ERROR_NOACCESS`.
+  - *The FAT kinds must be local.* A share reports its SERVER's file
+    system, so `\\host\F$` over a FAT32 volume would otherwise pass as
+    local FAT32.
+  - *SMB must answer `FILE_ID_INFO`.* The identity facts no longer fall
+    back to observation there. A FAT volume may still not answer, and
+    that is recorded.
+  - *A stale identity accepted is a failure on every volume whose
+    identity answers,* not a printed observation. This departs from
+    "asserting neither". An undo that renames a different file under
+    the old name is the hazard the inverse exists to stop. So, by Design
+    step 3's logic, it is a blocking finding for PR 38.
+  - *The case-only fact also runs the identity inverse.* The inverse
+    makes only the no-replace call, so its success proves the no-replace
+    call alone renames the alias. The provider's own rename could reach
+    its replacing retry arm and look the same.
+  - *The mislabelled-volume precondition reads the file system through
+    a handle* (`GetVolumeInformationByHandleW`), independently of the
+    gate's root-path read.
+  - *The create fact requires the stage folder to exist* before
+    asserting it empty.
+- **Mutations: 15 distinct, all killed.**
+  - The Tests table's case-only mutation, "rename through a temporary
+    name that drops the id", is replaced by "recreate the file". On NTFS
+    and SMB a rename keeps `FILE_ID_INFO`, so the planned mutation could
+    not fail the fact.
+  - The full list is P-W1 in the matrix.
+  - "Accept any name" is killed by the mislabelled-folder fact and the
+    decision table. With the remote guard, the gated gate fact on SMB no
+    longer reaches it.
 
 ## Goal
 

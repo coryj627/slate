@@ -20,10 +20,14 @@
 //! ```
 
 use std::os::windows::ffi::OsStrExt;
+use std::os::windows::fs::OpenOptionsExt;
+use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 
 use windows_sys::Win32::Storage::FileSystem::{
-    GetDriveTypeW, GetVolumeInformationW, GetVolumePathNameW,
+    FILE_FLAG_BACKUP_SEMANTICS, FILE_REMOTE_PROTOCOL_INFO, FileRemoteProtocolInfo, GetDriveTypeW,
+    GetFileInformationByHandleEx, GetVolumeInformationByHandleW, GetVolumeInformationW,
+    GetVolumePathNameW,
 };
 
 use super::{FsVaultProvider, VaultProvider};
@@ -48,6 +52,15 @@ macro_rules! observed {
 
 /// `GetDriveTypeW`'s answer for a network drive.
 const DRIVE_REMOTE: u32 = 4;
+/// `GetDriveTypeW`'s answer for a fixed local disk.
+const DRIVE_FIXED: u32 = 3;
+/// `FILE_REMOTE_PROTOCOL_INFO.Protocol` for SMB (`WNNC_NET_SMB`).
+const WNNC_NET_SMB: u32 = 0x0002_0000;
+/// The Plan 9 redirector WSL's `\\wsl.localhost` shares answer with
+/// (`WNNC_NET_9P`): remote and UNC, but not SMB.
+const WNNC_NET_9P: u32 = 0x0048_0000;
+/// An identity no file has, for the calls made where none answers.
+const NO_IDENTITY: &str = "0000000000000000-00000000000000000000000000000000";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum VolumeKind {
@@ -66,6 +79,24 @@ impl VolumeKind {
             VolumeKind::Smb => "SLATE_WEAK_VOLUME_SMB",
         }
     }
+}
+
+/// What a volume reports about itself, read once by [`read_volume`] and
+/// judged by [`decide`].
+#[derive(Clone, Debug)]
+struct VolumeReport {
+    /// The volume's root (`C:\`, or `\\server\share\`).
+    root: String,
+    /// The path names the volume as a UNC path (`\\server\share\…` or
+    /// `\\?\UNC\server\share\…`), not through a drive letter.
+    unc: bool,
+    /// `GetDriveTypeW` for the root.
+    drive_type: u32,
+    /// `GetVolumeInformationW`'s file-system name (a share reports its
+    /// server's).
+    file_system: String,
+    /// `FileRemoteProtocolInfo`'s protocol, for a remote volume that answers.
+    protocol: Option<u32>,
 }
 
 fn wide(path: &Path) -> Vec<u16> {
@@ -100,8 +131,40 @@ fn volume_root(path: &Path) -> Result<Vec<u16>, String> {
     Ok(root)
 }
 
-/// The file-system name `GetVolumeInformationW` reports for `path`'s volume.
-fn file_system_name(path: &Path) -> Result<String, String> {
+/// The folder `path` opened for its attributes (a directory needs
+/// `FILE_FLAG_BACKUP_SEMANTICS`).
+fn open_folder(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
+}
+
+/// The network protocol serving `path`, or `None` where the volume does not
+/// say.
+fn remote_protocol(path: &Path) -> Option<u32> {
+    /// The query answers `ERROR_NOACCESS` into a buffer aligned only as the
+    /// structure's fields are (4 bytes); 8 is what it takes.
+    #[repr(C, align(8))]
+    struct Aligned(FILE_REMOTE_PROTOCOL_INFO);
+
+    let folder = open_folder(path).ok()?;
+    let mut info = Aligned(FILE_REMOTE_PROTOCOL_INFO::default());
+    // SAFETY: a live handle and the exact, initialized, 8-aligned output
+    // structure.
+    let answered = unsafe {
+        GetFileInformationByHandleEx(
+            folder.as_raw_handle(),
+            FileRemoteProtocolInfo,
+            (&mut info.0 as *mut FILE_REMOTE_PROTOCOL_INFO).cast(),
+            std::mem::size_of::<FILE_REMOTE_PROTOCOL_INFO>() as u32,
+        )
+    } != 0;
+    answered.then_some(info.0.Protocol)
+}
+
+/// Everything the gate judges, read from the volume `path` is on.
+fn read_volume(path: &Path) -> Result<VolumeReport, String> {
     let root = volume_root(path)?;
     let mut name = [0u16; 64];
     // SAFETY: a NUL-terminated root, null for the outputs not asked for, and
@@ -125,49 +188,74 @@ fn file_system_name(path: &Path) -> Result<String, String> {
             std::io::Error::last_os_error()
         ));
     }
-    Ok(from_wide(&name))
+    // SAFETY: a NUL-terminated root path.
+    let drive_type = unsafe { GetDriveTypeW(root.as_ptr()) };
+    let text = path.as_os_str().to_string_lossy();
+    let unc =
+        text.starts_with(r"\\") && !text.starts_with(r"\\?\") || text.starts_with(r"\\?\UNC\");
+    Ok(VolumeReport {
+        root: from_wide(&root),
+        unc,
+        drive_type,
+        file_system: from_wide(&name),
+        protocol: (drive_type == DRIVE_REMOTE)
+            .then(|| remote_protocol(path))
+            .flatten(),
+    })
 }
 
-/// The gate's one decision: `Ok` with what the volume reports when `path` is
-/// on a volume of `kind` — exactly `FAT32`, exactly `exFAT`, or, for an SMB
-/// share, a UNC path whose volume `GetDriveTypeW` reports as `DRIVE_REMOTE`
-/// (the UNC root is returned) — and otherwise `Err` naming the kind expected
-/// and what the volume reported.
-fn check_weak_volume(kind: VolumeKind, path: &Path) -> Result<String, String> {
-    let expected = match kind {
-        VolumeKind::Fat32 => "FAT32",
-        VolumeKind::Exfat => "exFAT",
-        VolumeKind::Smb => {
-            let text = path.as_os_str().to_string_lossy();
-            let unc = text.starts_with(r"\\") && !text.starts_with(r"\\?\")
-                || text.starts_with(r"\\?\UNC\");
-            let root = volume_root(path)?;
-            // SAFETY: a NUL-terminated root path.
-            let remote = unsafe { GetDriveTypeW(root.as_ptr()) } == DRIVE_REMOTE;
-            return if unc && remote {
-                Ok(from_wide(&root))
-            } else {
-                Err(format!(
-                    "expected an SMB share, but {} is not a UNC path on a remote drive",
-                    path.display()
-                ))
-            };
-        }
-    };
-    accept_file_system(expected, file_system_name(path)?, path)
-}
-
-/// The FAT half of [`check_weak_volume`], on the name the volume reported:
-/// only the exact name passes, so neither FAT kind is taken for the other.
-fn accept_file_system(expected: &str, reported: String, path: &Path) -> Result<String, String> {
-    if reported == expected {
-        Ok(reported)
-    } else {
-        Err(format!(
-            "expected a {expected} volume, but {} is on {reported}",
-            path.display()
-        ))
+/// The file-system name a FAT kind must report exactly.
+fn file_system_for(kind: VolumeKind) -> Option<&'static str> {
+    match kind {
+        VolumeKind::Fat32 => Some("FAT32"),
+        VolumeKind::Exfat => Some("exFAT"),
+        VolumeKind::Smb => None,
     }
+}
+
+/// The gate's one decision, on what the volume reported: `Ok` with what it
+/// reports when it is the kind asked for, otherwise `Err` naming the kind
+/// expected and what the volume reported.
+/// - A FAT kind: a local volume (no UNC path, not `DRIVE_REMOTE`, which would
+///   pass a share's SERVER file system through) reporting exactly `FAT32` or
+///   `exFAT`.
+/// - SMB: a UNC path on a `DRIVE_REMOTE` volume served by the SMB protocol, so
+///   another redirector (WSL's 9P, WebDAV) is never taken for SMB. The UNC
+///   root is returned.
+fn decide(kind: VolumeKind, report: &VolumeReport, path: &Path) -> Result<String, String> {
+    let remote = report.drive_type == DRIVE_REMOTE;
+    match file_system_for(kind) {
+        Some(expected) if report.unc || remote => Err(format!(
+            "expected a local {expected} volume, but {} is on a remote drive (drive type {}, {})",
+            path.display(),
+            report.drive_type,
+            report.file_system
+        )),
+        Some(expected) if report.file_system == expected => Ok(report.file_system.clone()),
+        Some(expected) => Err(format!(
+            "expected a {expected} volume, but {} is on {}",
+            path.display(),
+            report.file_system
+        )),
+        None if !(report.unc && remote) => Err(format!(
+            "expected an SMB share, but {} is not a UNC path on a remote drive (drive type {})",
+            path.display(),
+            report.drive_type
+        )),
+        None if report.protocol == Some(WNNC_NET_SMB) => Ok(report.root.clone()),
+        None => Err(format!(
+            "expected an SMB share, but {} is served by network protocol {}, not SMB",
+            path.display(),
+            report
+                .protocol
+                .map_or_else(|| "(unreported)".to_string(), |p| format!("{p:#x}"))
+        )),
+    }
+}
+
+/// [`decide`] on the volume `path` is on.
+fn check_weak_volume(kind: VolumeKind, path: &Path) -> Result<String, String> {
+    decide(kind, &read_volume(path)?, path)
 }
 
 /// The volumes set in the environment, each checked against its kind.
@@ -245,6 +333,27 @@ fn destination_exists(error: &VaultError, expected: &str) -> bool {
     matches!(error, VaultError::DestinationExists { path } if path == expected)
 }
 
+/// The identity inverse's refusal (`windows_entry::refused`).
+fn identity_refused(error: &VaultError) -> bool {
+    matches!(error, VaultError::InvalidArgument { .. })
+}
+
+/// The entry's `FILE_ID_INFO` identity. SMB must answer (the facts' identity
+/// claims rest on it); a FAT volume may not, which is recorded and answered
+/// `None`.
+fn identity_on(kind: VolumeKind, provider: &FsVaultProvider, relative: &str) -> Option<String> {
+    match provider.mutation_identity(relative) {
+        Ok(identity) => Some(identity),
+        Err(error) if kind == VolumeKind::Smb => {
+            panic!("{kind:?}: FILE_ID_INFO must answer on an SMB share: {error:?}")
+        }
+        Err(error) => {
+            observed!("OBSERVED {kind:?} FILE_ID_INFO did not answer for {relative}: {error:?}");
+            None
+        }
+    }
+}
+
 fn create_lands_on_a_free_name_and_preserves_an_occupied_one(volumes: &[(VolumeKind, PathBuf)]) {
     for (kind, volume) in volumes {
         let scratch = Scratch::new(volume, "create");
@@ -266,8 +375,9 @@ fn create_lands_on_a_free_name_and_preserves_an_occupied_one(volumes: &[(VolumeK
         );
         assert_eq!(scratch.read("taken.md"), b"occupant", "{kind:?}");
         let staged: Vec<_> = std::fs::read_dir(scratch.0.join(".slate").join("tmp"))
-            .map(|entries| entries.map(|entry| entry.unwrap().file_name()).collect())
-            .unwrap_or_default();
+            .unwrap_or_else(|error| panic!("{kind:?}: the stage folder: {error}"))
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
         assert!(
             staged.is_empty(),
             "{kind:?}: the stage was left: {staged:?}"
@@ -341,8 +451,8 @@ fn identity_rename_refuses_an_occupied_name_at_the_kernel(volumes: &[(VolumeKind
         let provider = scratch.provider();
         scratch.write("a.md", b"source");
         scratch.write("b.md", b"occupant");
-        match provider.mutation_identity("a.md") {
-            Ok(identity) => {
+        match identity_on(*kind, &provider, "a.md") {
+            Some(identity) => {
                 // No pre-check: the kernel's no-replace is what refuses.
                 let error = provider
                     .rename_if_identity("a.md", "b.md", &identity)
@@ -355,16 +465,12 @@ fn identity_rename_refuses_an_occupied_name_at_the_kernel(volumes: &[(VolumeKind
                     "OBSERVED {kind:?} identity rename: identity answered; the kernel refused the occupied name"
                 );
             }
-            Err(unanswered) => {
+            None => {
                 let error = provider
-                    .rename_if_identity(
-                        "a.md",
-                        "b.md",
-                        "0000000000000000-00000000000000000000000000000000",
-                    )
+                    .rename_if_identity("a.md", "b.md", NO_IDENTITY)
                     .expect_err("with no identity, the inverse refuses");
                 observed!(
-                    "OBSERVED {kind:?} identity rename: FileIdInfo did not answer ({unanswered:?}); the inverse refused before the kernel ({error:?})"
+                    "OBSERVED {kind:?} identity rename: no identity to check; the inverse refused ({error:?})"
                 );
             }
         }
@@ -378,27 +484,44 @@ fn case_only_rename_keeps_the_entry(volumes: &[(VolumeKind, PathBuf)]) {
         let scratch = Scratch::new(volume, "case");
         let provider = scratch.provider();
         scratch.write("Note.md", b"note");
-        let before = provider.mutation_identity("Note.md").ok();
+        let before = identity_on(*kind, &provider, "Note.md");
         provider
             .rename("Note.md", "note.md")
             .unwrap_or_else(|error| panic!("{kind:?}: case-only rename: {error:?}"));
         assert_eq!(scratch.listing(), ["note.md"], "{kind:?}");
         assert_eq!(scratch.read("note.md"), b"note", "{kind:?}");
-        match before {
-            Some(before) => {
-                let after = provider
-                    .mutation_identity("note.md")
-                    .unwrap_or_else(|error| panic!("{kind:?}: identity after: {error:?}"));
-                assert_eq!(
-                    after, before,
-                    "{kind:?}: the case-only rename changed the identity"
-                );
-                observed!("OBSERVED {kind:?} case-only: one entry, new spelling, identity kept");
-            }
-            None => observed!(
+        let Some(before) = before else {
+            observed!(
                 "OBSERVED {kind:?} case-only: one entry, new spelling (no FileIdInfo, so the listing is the proof)"
-            ),
-        }
+            );
+            continue;
+        };
+        let after = identity_on(*kind, &provider, "note.md").expect("the identity answered before");
+        assert_eq!(
+            after, before,
+            "{kind:?}: the case-only rename changed the identity"
+        );
+
+        // The provider's rename may retry a case-only alias WITH replacement
+        // when the volume reports the alias occupied; the identity inverse
+        // makes only the no-replace call. That it performs the same case-only
+        // rename proves the no-replace call alone does it on this volume.
+        scratch.write("Other.md", b"other");
+        let other = identity_on(*kind, &provider, "Other.md").expect("the identity answered");
+        provider
+            .rename_if_identity("Other.md", "other.md", &other)
+            .unwrap_or_else(|error| {
+                panic!("{kind:?}: the no-replace call refused a case-only rename: {error:?}")
+            });
+        assert_eq!(scratch.listing(), ["note.md", "other.md"], "{kind:?}");
+        assert_eq!(
+            identity_on(*kind, &provider, "other.md").as_deref(),
+            Some(other.as_str()),
+            "{kind:?}"
+        );
+        observed!(
+            "OBSERVED {kind:?} case-only: one entry, new spelling, identity kept; the no-replace call alone renames the alias"
+        );
     }
 }
 
@@ -407,43 +530,41 @@ fn stale_identity_refuses_where_ids_are_identities(volumes: &[(VolumeKind, PathB
         let scratch = Scratch::new(volume, "stale");
         let provider = scratch.provider();
         scratch.write("a.md", b"first");
-        let Ok(first) = provider.mutation_identity("a.md") else {
+        let Some(first) = identity_on(*kind, &provider, "a.md") else {
             let error = provider
-                .rename_if_identity(
-                    "a.md",
-                    "c.md",
-                    "0000000000000000-00000000000000000000000000000000",
-                )
+                .rename_if_identity("a.md", "c.md", NO_IDENTITY)
                 .expect_err("with no identity, every identity-checked rename refuses");
             assert_eq!(scratch.read("a.md"), b"first", "{kind:?}");
             assert!(!scratch.exists("c.md"), "{kind:?}");
             observed!(
-                "OBSERVED {kind:?} stale identity: FileIdInfo did not answer; every identity-checked rename refuses ({error:?})"
+                "OBSERVED {kind:?} stale identity: no identity answers, so every identity-checked rename refuses ({error:?})"
             );
             continue;
         };
-        // Whether the id survives an ordinary rename (asserted only where
-        // ids are identities).
         provider.rename("a.md", "moved.md").unwrap();
-        let moved = provider.mutation_identity("moved.md").unwrap();
+        let moved = identity_on(*kind, &provider, "moved.md").expect("the identity answered");
         // A different file now holds the old name.
         scratch.write("a.md", b"second");
-        let second = provider.mutation_identity("a.md").unwrap();
+        let second = identity_on(*kind, &provider, "a.md").expect("the identity answered");
         let outcome = provider.rename_if_identity("a.md", "c.md", &first);
-        match kind {
-            VolumeKind::Smb => {
-                assert_eq!(moved, first, "{kind:?}: the id did not survive the rename");
-                assert!(outcome.is_err(), "{kind:?}: a stale identity was accepted");
-                assert_eq!(scratch.read("a.md"), b"second", "{kind:?}");
-                assert!(!scratch.exists("c.md"), "{kind:?}");
-            }
-            VolumeKind::Fat32 | VolumeKind::Exfat => {}
-        }
         observed!(
             "OBSERVED {kind:?} stale identity: id survives a rename: {}; the new file's id equals the old: {}; stale rename: {outcome:?}",
             moved == first,
             second == first
         );
+        // On EVERY volume whose identity answers: an undo that renamed a
+        // different file under the old name is the hazard the inverse exists
+        // to stop, so an accepted stale identity fails here (a blocking
+        // finding for PR 38), not a printed observation.
+        assert!(
+            outcome.as_ref().is_err_and(identity_refused),
+            "{kind:?}: a stale identity was not refused: {outcome:?}"
+        );
+        assert_eq!(scratch.read("a.md"), b"second", "{kind:?}");
+        assert!(!scratch.exists("c.md"), "{kind:?}");
+        if *kind == VolumeKind::Smb {
+            assert_eq!(moved, first, "{kind:?}: the id did not survive the rename");
+        }
     }
 }
 
@@ -517,6 +638,35 @@ fn weak_volume_gate_is_quiet_when_no_volume_is_set() {
     gate_names_the_file_system_it_ran_on(&none);
 }
 
+/// `path`'s file system read through a handle on the folder itself
+/// (`GetVolumeInformationByHandleW`), independently of the gate's
+/// root-path read.
+fn file_system_by_handle(path: &Path) -> String {
+    let folder = open_folder(path).unwrap();
+    let mut name = [0u16; 64];
+    // SAFETY: a live handle, null for the outputs not asked for, and a name
+    // buffer of the length passed.
+    let answered = unsafe {
+        GetVolumeInformationByHandleW(
+            folder.as_raw_handle(),
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            name.as_mut_ptr(),
+            name.len() as u32,
+        )
+    } != 0;
+    assert!(
+        answered,
+        "{}: {}",
+        path.display(),
+        std::io::Error::last_os_error()
+    );
+    from_wide(&name)
+}
+
 /// The deliberately mislabelled volume, on every machine: a folder on the
 /// system temp directory's volume, read first and asserted to be neither
 /// FAT kind, is refused as each of the three kinds, so a mislabelled
@@ -524,7 +674,7 @@ fn weak_volume_gate_is_quiet_when_no_volume_is_set() {
 #[test]
 fn weak_volume_gate_refuses_a_volume_whose_file_system_does_not_match_its_kind() {
     let folder = tempfile::tempdir().unwrap();
-    let reported = file_system_name(folder.path()).unwrap();
+    let reported = file_system_by_handle(folder.path());
     assert!(
         reported != "FAT32" && reported != "exFAT",
         "the precondition: the temp directory is on {reported}"
@@ -540,7 +690,7 @@ fn weak_volume_gate_refuses_a_volume_whose_file_system_does_not_match_its_kind()
     let reason = check_weak_volume(VolumeKind::Smb, folder.path())
         .expect_err("a local folder is not an SMB share");
     assert!(
-        reason.contains("is not a UNC path on a remote drive"),
+        reason.contains("is not a UNC path on a remote drive (drive type"),
         "{reason}"
     );
     // And the lookup refuses the mislabelled variable by name.
@@ -560,31 +710,79 @@ fn weak_volume_gate_refuses_a_volume_whose_file_system_does_not_match_its_kind()
     );
 }
 
-/// The FAT names, on every machine: FAT32 and exFAT are told apart by
-/// their exact names, which a mounted volume of each would otherwise be
-/// the only witness to.
+/// The gate's decision table, on every machine, over what volumes report:
+/// the volumes this probe could not mount (FAT32, exFAT, a share served by
+/// another redirector, a FAT volume reached through a share) would otherwise
+/// be its only witnesses.
 #[test]
-fn weak_volume_gate_tells_the_two_fat_kinds_apart_by_their_exact_names() {
+fn weak_volume_gate_decides_each_kind_from_what_the_volume_reports() {
     let path = Path::new(r"X:\probe");
+    let report =
+        |unc: bool, drive_type: u32, file_system: &str, protocol: Option<u32>| VolumeReport {
+            root: if unc {
+                r"\\host\share\".into()
+            } else {
+                r"X:\".into()
+            },
+            unc,
+            drive_type,
+            file_system: file_system.into(),
+            protocol,
+        };
+    let local = |file_system: &str| report(false, DRIVE_FIXED, file_system, None);
+    let share = |protocol: Option<u32>| report(true, DRIVE_REMOTE, "NTFS", protocol);
+
+    // The FAT kinds: the exact name, on a local volume only.
     assert_eq!(
-        accept_file_system("FAT32", "FAT32".into(), path),
+        decide(VolumeKind::Fat32, &local("FAT32"), path),
         Ok("FAT32".into())
     );
     assert_eq!(
-        accept_file_system("exFAT", "exFAT".into(), path),
+        decide(VolumeKind::Exfat, &local("exFAT"), path),
         Ok("exFAT".into())
     );
-    for (expected, reported) in [
-        ("FAT32", "exFAT"),
-        ("exFAT", "FAT32"),
-        ("FAT32", "FAT"),
-        ("exFAT", "NTFS"),
+    for (kind, reported) in [
+        (VolumeKind::Fat32, "exFAT"),
+        (VolumeKind::Exfat, "FAT32"),
+        (VolumeKind::Fat32, "FAT"),
+        (VolumeKind::Exfat, "NTFS"),
     ] {
-        let reason = accept_file_system(expected, reported.into(), path)
-            .expect_err("only the exact name passes");
+        let expected = file_system_for(kind).unwrap();
         assert_eq!(
-            reason,
-            format!(r"expected a {expected} volume, but X:\probe is on {reported}")
+            decide(kind, &local(reported), path),
+            Err(format!(
+                r"expected a {expected} volume, but X:\probe is on {reported}"
+            ))
         );
+    }
+    // A FAT volume through a share reports its server's file system: never
+    // taken for local FAT, whether named by UNC path or a mapped letter.
+    for remote_fat in [
+        report(true, DRIVE_REMOTE, "FAT32", Some(WNNC_NET_SMB)),
+        report(false, DRIVE_REMOTE, "FAT32", Some(WNNC_NET_SMB)),
+        report(true, DRIVE_FIXED, "FAT32", None),
+    ] {
+        let reason =
+            decide(VolumeKind::Fat32, &remote_fat, path).expect_err("a share is not local");
+        assert!(reason.contains("expected a local FAT32 volume"), "{reason}");
+    }
+
+    // SMB: a UNC path, a remote drive and the SMB protocol, all three.
+    assert_eq!(
+        decide(VolumeKind::Smb, &share(Some(WNNC_NET_SMB)), path),
+        Ok(r"\\host\share\".into())
+    );
+    let mapped_letter = report(false, DRIVE_REMOTE, "NTFS", Some(WNNC_NET_SMB));
+    let unc_but_local = report(true, DRIVE_FIXED, "NTFS", Some(WNNC_NET_SMB));
+    for not_a_share in [&mapped_letter, &unc_but_local, &local("NTFS")] {
+        let reason = decide(VolumeKind::Smb, not_a_share, path).expect_err("not a UNC remote path");
+        assert!(
+            reason.contains("is not a UNC path on a remote drive"),
+            "{reason}"
+        );
+    }
+    for other in [Some(WNNC_NET_9P), None] {
+        let reason = decide(VolumeKind::Smb, &share(other), path).expect_err("not SMB");
+        assert!(reason.contains("not SMB"), "{reason}");
     }
 }
