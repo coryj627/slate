@@ -551,8 +551,7 @@ internal sealed partial class VaultLifecycleViewModel
     /// <paramref name="failedSurfaces"/>, the run's retry collector). Every
     /// operation is awaited to its publication, and none speaks: the files
     /// tree (silent, <see cref="FilesSidebarViewModel.RefreshForRescanAsync"/>),
-    /// Quick Open (the index's openable documents, the run's journal
-    /// replayed), every open document (hash-compared, hash-conditioned
+    /// Quick Open (a silent re-rank against the index), every open document (hash-compared, hash-conditioned
     /// reloads), then the dependents once, ungated. Every core call runs
     /// through the rescan seam with the run's native token; host-side checks
     /// read its managed twin. A cancelled run (a close, a vault switch) stops
@@ -564,12 +563,11 @@ internal sealed partial class VaultLifecycleViewModel
         VaultSession session,
         CancelToken cancel,
         CancellationToken cancellation,
-        QuickSwitcherViewModel.ReplacementJournal? journal,
         ISet<RescanSurface> failedSurfaces,
         WorkspaceViewModel.RescanTouch fullPass)
     {
         Task<ulong> tree = ReSyncTreeAsync(reason, cancellation);
-        Task<ulong> quickOpen = ReSyncQuickOpenAsync(session, cancel, cancellation, journal);
+        Task<ulong> quickOpen = ReSyncQuickOpenAsync(cancellation);
         Task<ulong> workspace = Workspace is WorkspaceViewModel open
             ? ReSyncWorkspaceAsync(open, session, cancel, cancellation, fullPass, failedSurfaces)
             : Task.FromResult(0UL);
@@ -648,38 +646,20 @@ internal sealed partial class VaultLifecycleViewModel
     }
 
     /// <summary>
-    /// Quick Open (v2 §7): the index's openable documents, read in pages on
-    /// the seam with the run's token (<c>ListFiles</c> honours it), replace
-    /// its list — the Slate-owned changes the run's journal recorded
-    /// replayed onto the pages, and later re-read from the index
-    /// (<see cref="RereadJournalAsync"/>) — and an open switcher re-ranks
-    /// silently, awaited to that publication. The journal is the run's
-    /// (WB-10): opened before its first window, ended when it ends.
+    /// Quick Open (v2 §7; WB-25 stage 2): the rank reads the index the
+    /// run's scan just committed, so nothing is listed — an open switcher
+    /// re-ranks silently, awaited to that publication.
     /// </summary>
-    private async Task<ulong> ReSyncQuickOpenAsync(
-        VaultSession session,
-        CancelToken cancel,
-        CancellationToken cancellation,
-        QuickSwitcherViewModel.ReplacementJournal? runJournal)
+    private async Task<ulong> ReSyncQuickOpenAsync(CancellationToken cancellation)
     {
         if (QuickSwitcher is not QuickSwitcherViewModel switcher)
         {
             return 0;
         }
 
-        QuickSwitcherViewModel.ReplacementJournal journal = runJournal ?? switcher.BeginReplacement();
         try
         {
-            SwitcherFile[] files = await RunRescanCoreAsync(
-                "list",
-                () => LoadSwitcherFiles(session, cancel, SwitcherPageLoadingForTests),
-                cancellation);
-            if (cancellation.IsCancellationRequested || !ReferenceEquals(switcher, QuickSwitcher))
-            {
-                return 0;
-            }
-
-            await switcher.ReplaceFilesAsync(files, journal, cancellation);
+            await switcher.ReRankForRescanAsync(cancellation);
             return 0;
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
@@ -694,13 +674,6 @@ internal sealed partial class VaultLifecycleViewModel
         {
             HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
             return 1;
-        }
-        finally
-        {
-            if (!ReferenceEquals(journal, runJournal))
-            {
-                switcher.EndReplacement(journal);
-            }
         }
     }
 

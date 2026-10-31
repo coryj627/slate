@@ -959,6 +959,29 @@ impl VaultSession {
         Ok(page.into())
     }
 
+    /// WB-25 stage 2 (#1290): Quick Open's bounded rank against the
+    /// index — `switcher_rank_top`'s rows and exact `total` over the
+    /// openable documents, at most `limit` rows marshalled, no file list
+    /// from the host — under `cancel`.
+    pub fn switcher_rank_top_indexed(
+        &self,
+        query: String,
+        recent_paths: Vec<String>,
+        limit: u32,
+        cancel: Arc<CancelToken>,
+    ) -> Result<SwitcherRankPage, VaultError> {
+        let page = self.inner.switcher_rank_top_indexed(
+            &query,
+            &recent_paths,
+            limit as usize,
+            &cancel.inner,
+        )?;
+        Ok(SwitcherRankPage {
+            rows: page.rows.into_iter().map(Into::into).collect(),
+            total: page.total as u64,
+        })
+    }
+
     /// Return one indexed file's enriched sidebar summary by exact
     /// vault-relative path, or `None` when the file is not indexed.
     pub fn get_file_summary(&self, path: String) -> Result<Option<FileSummary>, VaultError> {

@@ -1223,7 +1223,7 @@ public sealed partial class RescanTests
         Task run = h.Lifecycle.RescanAsync(RescanReason.Explicit);
         h.Context.RunUntil(() => read.IsSet, "the rescan's tree snapshot");
         h.CreateInCore("made.md", "# Made\n");
-        h.Context.RunUntil(() => h.QuickOpen.FilePathsForTests.Contains("made.md"), "the Slate write's event");
+        h.Context.RunUntil(() => h.QuickOpen.RankedPathsForTests().Contains("made.md"), "the Slate write's event");
         unpark.Set();
         h.Context.Await(run);
 
@@ -1349,17 +1349,17 @@ public sealed partial class RescanTests
 
         h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
 
-        Assert.Contains("notes.mdown", h.QuickOpen.FilePathsForTests);
-        Assert.Contains("more.MKD", h.QuickOpen.FilePathsForTests);
-        Assert.DoesNotContain("data.txt", h.QuickOpen.FilePathsForTests);
+        Assert.Contains("notes.mdown", h.QuickOpen.RankedPathsForTests());
+        Assert.Contains("more.MKD", h.QuickOpen.RankedPathsForTests());
+        Assert.DoesNotContain("data.txt", h.QuickOpen.RankedPathsForTests());
         Assert.Equal(["Files refreshed. 3 new or changed, 0 removed."], h.Spoken);
 
         h.Events.Clear();
         h.Delete("notes.mdown");
         h.Now += TimeSpan.FromMinutes(1);
         h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
-        Assert.DoesNotContain("notes.mdown", h.QuickOpen.FilePathsForTests);
-        Assert.Contains("more.MKD", h.QuickOpen.FilePathsForTests);
+        Assert.DoesNotContain("notes.mdown", h.QuickOpen.RankedPathsForTests());
+        Assert.Contains("more.MKD", h.QuickOpen.RankedPathsForTests());
     });
 
     // ---------------------------------------------------------------------
@@ -1730,7 +1730,7 @@ public sealed partial class RescanTests
         h.Context.Await(run);
 
         Assert.Contains(Explicit1, h.Spoken);
-        Assert.Contains("late.md", h.QuickOpen.FilePathsForTests);
+        Assert.Contains("late.md", h.QuickOpen.RankedPathsForTests());
     });
 
     /// <summary>F7 (codex design pass 2): a vault close while the re-sync's
@@ -1831,7 +1831,7 @@ public sealed partial class RescanTests
         Assert.Equal([OneError], h.Spoken);
         Assert.False(gone.IsMissingFromDisk, "the blocked prune still removed the row");
         Assert.Contains(h.Sidebar.RootNodes, node => node.Path == "gone.md");
-        Assert.Contains("gone.md", h.QuickOpen.FilePathsForTests);
+        Assert.Contains("gone.md", h.QuickOpen.RankedPathsForTests());
 
         h.Events.Clear();
         h.Now += TimeSpan.FromMinutes(1);
@@ -1840,7 +1840,7 @@ public sealed partial class RescanTests
         Assert.Equal(["Files refreshed. 1 new or changed, 1 removed."], h.Spoken);
         Assert.True(gone.IsMissingFromDisk);
         Assert.DoesNotContain(h.Sidebar.RootNodes, node => node.Path == "gone.md");
-        Assert.DoesNotContain("gone.md", h.QuickOpen.FilePathsForTests);
+        Assert.DoesNotContain("gone.md", h.QuickOpen.RankedPathsForTests());
     });
 
     // ---------------------------------------------------------------------
@@ -2118,7 +2118,7 @@ public sealed partial class RescanTests
                 announce: Announce,
                 pickImportSources: pickImportSources,
                 scanClock: () => Now,
-                sessionLoadWorker: RunOnWorker<(ScanReport Report, SwitcherFile[] SwitcherFiles)>,
+                sessionLoadWorker: RunOnWorker<ScanReport>,
                 rescanWorker: new RecordingRescanWorker(this),
                 treeUiContext: asyncTree ? Context : null,
                 treeWorker: asyncTree ? RunTreeWorker : null);
@@ -2504,9 +2504,9 @@ public sealed partial class RescanTests
             Func<T> work = () =>
             {
                 T loaded = load();
-                if (loaded is ValueTuple<ScanReport, SwitcherFile[]> open)
+                if (loaded is ScanReport open)
                 {
-                    OpenReport = open.Item1;
+                    OpenReport = open;
                 }
 
                 return loaded;

@@ -24,7 +24,7 @@ public sealed class QuickSwitcherRankCoordinatorTests
             return delay.Task.WaitAsync(token);
         }
         using QuickSwitcherViewModel quick = CreateQuick(session, fixture.Root, context,
-            announcements.Add, new QuickSwitcherRankCoordinator(), (_, query, _) =>
+            announcements.Add, new QuickSwitcherRankCoordinator(), (query, _, _) =>
             {
                 rankedQueries.Add(query);
                 return Page("note.md");
@@ -70,7 +70,7 @@ public sealed class QuickSwitcherRankCoordinatorTests
         int active = 0;
         int maximum = 0;
 
-        SwitcherRankPage Rank(SwitcherFile[] _, string query, string[] __)
+        SwitcherRankPage Rank(string query, string[] _, CancelToken __)
         {
             enteredQueries.Enqueue(query);
             int current = Interlocked.Increment(ref active);
@@ -153,7 +153,7 @@ public sealed class QuickSwitcherRankCoordinatorTests
         int active = 0;
         int maximum = 0;
 
-        SwitcherRankPage FirstRank(SwitcherFile[] _, string __, string[] ___)
+        SwitcherRankPage FirstRank(string _, string[] __, CancelToken ___)
         {
             int current = Interlocked.Increment(ref active);
             UpdateMaximum(ref maximum, current);
@@ -169,7 +169,7 @@ public sealed class QuickSwitcherRankCoordinatorTests
             }
         }
 
-        SwitcherRankPage SecondRank(SwitcherFile[] _, string __, string[] ___)
+        SwitcherRankPage SecondRank(string _, string[] __, CancelToken ___)
         {
             int current = Interlocked.Increment(ref active);
             UpdateMaximum(ref maximum, current);
@@ -341,7 +341,7 @@ public sealed class QuickSwitcherRankCoordinatorTests
         SynchronizationContext context,
         Action<A11yEvent> announce,
         QuickSwitcherRankCoordinator? coordinator = null,
-        Func<SwitcherFile[], string, string[], SwitcherRankPage>? rankTop = null,
+        Func<string, string[], CancelToken, SwitcherRankPage>? rankTop = null,
         Func<CancellationToken, Task>? rankDelay = null)
     {
         SynchronizationContext? previous = SynchronizationContext.Current;
@@ -352,7 +352,6 @@ public sealed class QuickSwitcherRankCoordinatorTests
                 session,
                 vaultRoot,
                 announce,
-                [new SwitcherFile("note.md", "note.md")],
                 Path.Combine(vaultRoot, $"device-state-{Guid.NewGuid():N}"),
                 rankCoordinator: coordinator,
                 rankTop: rankTop,

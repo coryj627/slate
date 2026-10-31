@@ -205,40 +205,42 @@ public sealed class W1VaultCloseBarrierTests
         Assert.Null(lifecycle.Workspace);
     }
 
-    /// <summary>W7-7 PR 7 (#1252; codex PR 7 design pass): Quick Open's
-    /// listing honours the open's token. A disposal that lands while the
-    /// open load is inside the listing stops it THERE — core answers
-    /// <c>Cancelled</c> for the page, never a partial list — and nothing is
-    /// published: no workspace, no sidebar, no Quick Open.</summary>
+    /// <summary>W7-7 PR 7 (#1252; codex PR 7 design pass), WB-25 stage 2:
+    /// the open no longer lists Quick Open's files (the switcher ranks the
+    /// index), so its load makes one core call, the scan, under the open's
+    /// token. A disposal that lands right before the scan cancels that token
+    /// before it joins the load — the scan answers <c>Cancelled</c> before it
+    /// walks anything — and nothing is published: no workspace, no sidebar,
+    /// no Quick Open.</summary>
     [Fact]
-    public async Task ACancelledOpenLoadStopsInsideQuickOpensListingAndPublishesNothing()
+    public async Task ACancelledOpenLoadStopsAtItsScanAndPublishesNothing()
     {
-        using FixtureVault fixture = FixtureVault.Create(3, "open-load-listing-cancel");
-        using var listing = new ManualResetEventSlim();
-        Task<(ScanReport Report, SwitcherFile[] SwitcherFiles)>? load = null;
+        using FixtureVault fixture = FixtureVault.Create(3, "open-load-scan-cancel");
+        using var scanStarting = new ManualResetEventSlim();
+        Task<ScanReport>? load = null;
         var lifecycle = new VaultLifecycleViewModel(
             pickVault: () => Task.FromResult<string?>(fixture.Root),
             enqueueUi: action => action(),
             recentVaultsStore: new RecentVaultsStore(
                 Path.Combine(fixture.Root, "device-state", "recent-vaults.json")),
             sessionLoadWorker: work => load = Task.Run(work));
-        lifecycle.SwitcherPageLoadingForTests = cancel =>
+        lifecycle.OpenScanStartingForTests = cancel =>
         {
-            // On the load's worker, before the first page: wait for the
-            // disposal to cancel the open's token, then list with it.
-            listing.Set();
+            // On the load's worker, right before the scan: wait for the
+            // disposal to cancel the open's token, then scan with it.
+            scanStarting.Set();
             Assert.True(
                 SpinWait.SpinUntil(cancel.IsCancelled, TimeSpan.FromSeconds(10)),
-                "the disposal cancelled the open's token");
+                "the disposal cancelled the open's token before it joined the load");
         };
 
         Task open = lifecycle.OpenVaultAsync(fixture.Root);
-        Assert.True(listing.Wait(TimeSpan.FromSeconds(10)));
+        Assert.True(scanStarting.Wait(TimeSpan.FromSeconds(10)));
         await Task.Run(lifecycle.Dispose).WaitAsync(TimeSpan.FromSeconds(10));
         await open.WaitAsync(TimeSpan.FromSeconds(10));
 
         Assert.NotNull(load);
-        Assert.True(load!.IsFaulted, "the listing stopped rather than completing");
+        Assert.True(load!.IsFaulted, "the scan stopped rather than completing");
         Assert.IsType<VaultException.Cancelled>(load.Exception!.InnerException);
         Assert.Null(lifecycle.Workspace);
         Assert.Null(lifecycle.FileSidebar);

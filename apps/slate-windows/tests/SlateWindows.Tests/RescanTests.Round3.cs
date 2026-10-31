@@ -103,38 +103,39 @@ public sealed partial class RescanTests
 
     // --- (3) the close drains every rescan core call ----------------------------
 
-    /// <summary>Round 2, finding 3: the full re-sync runs Quick Open's
-    /// listing and the workspace's hash read CONCURRENTLY. With the listing
-    /// parked inside its page loop after the hash read finished, a close
-    /// waits for the listing to end — cancelled by the run's token — before
-    /// it disposes the session; the listing never runs on a disposed
-    /// session. WB-10 (#1293): the full re-sync is the change feed's for a
-    /// gap, so the feed is trimmed past the cursor, and the run is a
-    /// foreground one, whose recovery set lists nothing before its
-    /// window.</summary>
+    /// <summary>Round 2, finding 3: a close waits for every rescan core call
+    /// in flight to end — cancelled by the run's token — before it disposes
+    /// the session; none runs on a disposed session. Quick Open no longer
+    /// lists (WB-25 stage 2), so the call parked is the workspace's hash
+    /// read, inside its disk probe for an open note deleted outside Slate.
+    /// WB-10 (#1293): the full re-sync is the change feed's for a gap, so
+    /// the feed is trimmed past the cursor, and the run is a foreground
+    /// one.</summary>
     [Fact]
     public void ACloseWaitsForEveryRescanCoreCallInFlight() => RunSta(() =>
     {
-        using var h = new Harness("close-drains", ("alpha.md", "# Alpha\n"));
+        using var h = new Harness("close-drains", ("alpha.md", "# Alpha\n"), ("ghost.md", "# Ghost\n"));
         using var parked = new ManualResetEventSlim(false);
         using var release = new ManualResetEventSlim(false);
-        h.Lifecycle.SwitcherPageLoadingForTests = token =>
+        _ = h.Open("ghost.md");
+        h.Settle();
+        File.Delete(Path.Combine(h.Root, "ghost.md"));
+        h.Lifecycle.CanonicalPathForTests = path =>
         {
-            parked.Set();
-            _ = release.Wait(TimeSpan.FromSeconds(30));
+            if (path == "ghost.md" && !parked.IsSet)
+            {
+                parked.Set();
+                _ = release.Wait(TimeSpan.FromSeconds(30));
+            }
+
+            return null;
         };
-        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
-        {
-            _ = other.CreateExclusive("late.md", "# Late\n");
-        }
 
         CacheSql.TrimTheFeedPastTheCursor(h.Root);
         h.Now += TimeSpan.FromMinutes(1);
 
         Task run = h.Lifecycle.RescanAsync(RescanReason.Foreground);
-        h.Context.RunUntil(
-            () => parked.IsSet && h.CoreCallOutcomes.Any(outcome => outcome.Operation == "hashes"),
-            "the listing parked and the hash read done");
+        h.Context.RunUntil(() => parked.IsSet, "the hash read parked in its disk probe");
 
         long releasedAt = 0;
         _ = Task.Run(async () =>
@@ -147,13 +148,14 @@ public sealed partial class RescanTests
         long closedAt = h.Clock.ElapsedMilliseconds;
         h.Context.Await(run, "the closed rescan");
 
-        (string Operation, Exception? Failure, long At) listing =
-            Assert.Single(h.CoreCallOutcomes, outcome => outcome.Operation == "list");
-        Assert.True(listing.At <= closedAt, $"the close returned at {closedAt} ms, before the listing ended at {listing.At} ms");
+        (string Operation, Exception? Failure, long At) hashes =
+            Assert.Single(h.CoreCallOutcomes, outcome => outcome.Operation == "hashes");
+        Assert.True(hashes.At <= closedAt, $"the close returned at {closedAt} ms, before the hash read ended at {hashes.At} ms");
         Assert.True(Volatile.Read(ref releasedAt) > 0);
         Assert.True(
-            listing.Failure is null or VaultException.Cancelled,
-            $"the listing ran on a closed session: {listing.Failure?.GetType().Name}");
+            hashes.Failure is null or VaultException.Cancelled,
+            $"the hash read ran on a closed session: {hashes.Failure?.GetType().Name}");
+        Assert.DoesNotContain(h.CoreCallOutcomes, outcome => outcome.Operation == "list");
         Assert.DoesNotContain(h.Events, e => e is A11yEvent.VaultRescanFinished or A11yEvent.VaultRescanIncomplete);
     });
 
@@ -422,7 +424,7 @@ public sealed partial class RescanTests
         // The replacement's tag tree fails.
         h.Sidebar.AfterTagTreeForTests = () => throw new VaultException.Io("injected tag tree failure");
         h.CreateInCore("made.md", "# Made\n");
-        h.Context.RunUntil(() => h.QuickOpen.FilePathsForTests.Contains("made.md"), "the Slate write's event");
+        h.Context.RunUntil(() => h.QuickOpen.RankedPathsForTests().Contains("made.md"), "the Slate write's event");
         unpark.Set();
         h.Context.Await(run);
 

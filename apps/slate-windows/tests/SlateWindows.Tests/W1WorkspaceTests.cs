@@ -538,9 +538,10 @@ public sealed class W1QuickSwitcherAndChordTests
             session,
             fixture.Root,
             announcements.Add,
-            files,
             Path.Combine(Path.GetTempPath(), $"slate-quick-cap-{Guid.NewGuid():N}"),
-            debounceRanking: false);
+            debounceRanking: false,
+            rankTop: (query, recents, _) =>
+                SlateUniffiMethods.SwitcherRankTop(files, query, recents, QuickSwitcherViewModel.DisplayCap));
 
         quick.Open();
 
@@ -553,7 +554,11 @@ public sealed class W1QuickSwitcherAndChordTests
     [Fact]
     public void QuickSwitcher_UsesCoreRankingTypedCountsTargetsWrapAndIncrementalChanges()
     {
-        using FixtureVault fixture = FixtureVault.Create(2, "quick-switcher");
+        // WB-25 stage 2: the switcher ranks the index, so the vault holds
+        // exactly the files the fact ranks.
+        using FixtureVault fixture = FixtureVault.Create(0, "quick-switcher");
+        File.WriteAllText(Path.Combine(fixture.Root, "alpha.md"), "alpha\n");
+        File.WriteAllText(Path.Combine(fixture.Root, "beta.md"), "beta\n");
         using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
         using var cancel = new CancelToken();
         session.ScanInitial(cancel);
@@ -562,7 +567,6 @@ public sealed class W1QuickSwitcherAndChordTests
             session,
             fixture.Root,
             announcements.Add,
-            [new SwitcherFile("alpha.md", "alpha.md"), new SwitcherFile("beta.md", "beta.md")],
             Path.Combine(Path.GetTempPath(), $"slate-quick-recents-{Guid.NewGuid():N}"),
             debounceRanking: false);
 
@@ -582,6 +586,7 @@ public sealed class W1QuickSwitcherAndChordTests
         Assert.Empty(quick.Results);
         Assert.Null(quick.SelectedRow);
 
+        _ = session.CreateExclusive("gamma.md", "gamma\n");
         quick.ApplyFileChange(new FileChangeEvent(FileChangeKind.Created, "gamma.md", null));
         quick.Open();
         Assert.Contains(quick.Results, item => item.Path == "gamma.md");

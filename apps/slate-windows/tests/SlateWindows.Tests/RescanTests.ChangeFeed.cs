@@ -57,8 +57,8 @@ public sealed partial class RescanTests
         Assert.True(gone.IsMissingFromDisk);
         Assert.Contains(h.Sidebar.RootNodes, node => node.Path == "new.md");
         Assert.DoesNotContain(h.Sidebar.RootNodes, node => node.Path == "gone.md");
-        Assert.Contains("new.md", h.QuickOpen.FilePathsForTests);
-        Assert.DoesNotContain("gone.md", h.QuickOpen.FilePathsForTests);
+        Assert.Contains("new.md", h.QuickOpen.RankedPathsForTests());
+        Assert.DoesNotContain("gone.md", h.QuickOpen.RankedPathsForTests());
 
         h.Events.Clear();
         h.Now += TimeSpan.FromMinutes(1);
@@ -122,7 +122,7 @@ public sealed partial class RescanTests
         unregistered.Context.Await(unregistered.Lifecycle.RescanAsync(RescanReason.Explicit));
         Assert.Equal<ChangeFeedStatus>(new ChangeFeedStatus.Gap(ChangeFeedGap.NoCursor), Assert.Single(gap).Status);
         Assert.Equal([UncountedNoChanges], unregistered.Spoken);
-        Assert.Contains("new.md", unregistered.QuickOpen.FilePathsForTests);
+        Assert.Contains("new.md", unregistered.QuickOpen.RankedPathsForTests());
 
         gap.Clear();
         unregistered.Events.Clear();
@@ -162,7 +162,7 @@ public sealed partial class RescanTests
         Assert.Equal<ChangeFeedStatus>(new ChangeFeedStatus.Gap(ChangeFeedGap.Trimmed), Assert.Single(windows).Status);
         Assert.DoesNotContain("page", Operations(h));
         Assert.Equal([UncountedNoChanges], h.Spoken);
-        Assert.Contains("new.md", h.QuickOpen.FilePathsForTests);
+        Assert.Contains("new.md", h.QuickOpen.RankedPathsForTests());
         Assert.Contains(h.Sidebar.RootNodes, node => node.Path == "new.md");
 
         windows.Clear();
@@ -188,7 +188,7 @@ public sealed partial class RescanTests
         CacheSql.TrimTheFeedPastTheCursor(h.Root);
         h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Foreground));
         Assert.Empty(h.Events);
-        Assert.Contains("quiet.md", h.QuickOpen.FilePathsForTests);
+        Assert.Contains("quiet.md", h.QuickOpen.RankedPathsForTests());
 
         h.Now += TimeSpan.FromMinutes(1);
         using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
@@ -235,7 +235,7 @@ public sealed partial class RescanTests
             Assert.IsType<ChangeFeedStatus.TooLarge>(Assert.Single(windows).Status);
             Assert.DoesNotContain("page", Operations(h));
             Assert.Equal([UncountedNoChanges], h.Spoken);
-            Assert.Equal(10_002, h.QuickOpen.FilePathsForTests.Count);
+            Assert.Equal(10_002, h.QuickOpen.RankedTotalForTests());
 
             windows.Clear();
             h.Events.Clear();
@@ -397,7 +397,8 @@ public sealed partial class RescanTests
         h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
         h.Settle();
 
-        Assert.Equal(["scan", "list", "window", "hashes", "head", "acknowledge"], Operations(h));
+        // WB-25 stage 2: Quick Open's recovery re-ranks the index; it lists nothing.
+        Assert.Equal(["scan", "window", "hashes", "head", "acknowledge"], Operations(h));
         Assert.Equal(["bases", "connections", "graph"], kinds.Distinct().Order(StringComparer.Ordinal));
         Assert.Equal(1, ConnectionsProbes(h) - before);
         Assert.Equal([NoChanges], h.Spoken);
@@ -435,7 +436,7 @@ public sealed partial class RescanTests
 
         Assert.Equal(["Files refreshed. 4 new or changed, 2 removed."], h.Spoken);
         Assert.True(Operations(h).Count(operation => operation == "page") >= 4, "seven records in pages of two");
-        Assert.Equal(["edit.md", "moved.md", "one.md", "two.md"], h.QuickOpen.FilePathsForTests.Order(StringComparer.Ordinal));
+        Assert.Equal(["edit.md", "moved.md", "one.md", "two.md"], h.QuickOpen.RankedPathsForTests().Order(StringComparer.Ordinal));
         Assert.Equal(
             ["edit.md", "moved.md", "one.md", "two.md"],
             h.Sidebar.RootNodes.Select(node => node.Path).Order(StringComparer.Ordinal));
@@ -524,9 +525,9 @@ public sealed partial class RescanTests
         Assert.Equal(2, windows.Count);
         Assert.All(windows, window => Assert.IsType<ChangeFeedStatus.Exact>(window.Status));
         Assert.Equal(windows[0].ToSeq, windows[1].FromSeq);
-        Assert.Contains("two.md", h.QuickOpen.FilePathsForTests);
+        Assert.Contains("two.md", h.QuickOpen.RankedPathsForTests());
         Assert.Equal(
-            h.QuickOpen.FilePathsForTests.Order(StringComparer.Ordinal),
+            h.QuickOpen.RankedPathsForTests().Order(StringComparer.Ordinal),
             h.Sidebar.RootNodes.Select(node => node.Path).Order(StringComparer.Ordinal));
         Assert.Equal(["Files refreshed. 2 new or changed, 0 removed."], h.Spoken);
 
@@ -567,8 +568,8 @@ public sealed partial class RescanTests
         h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
 
         Assert.True(renamed);
-        Assert.DoesNotContain("brief.md", h.QuickOpen.FilePathsForTests);
-        Assert.Contains("kept.md", h.QuickOpen.FilePathsForTests);
+        Assert.DoesNotContain("brief.md", h.QuickOpen.RankedPathsForTests());
+        Assert.Contains("kept.md", h.QuickOpen.RankedPathsForTests());
     });
 
     /// <summary>Another session edits the open note, and this session's user
@@ -601,7 +602,7 @@ public sealed partial class RescanTests
         Assert.Equal("final.md", tab.Path);
         Assert.Equal("draft two\n", tab.Text);
         Assert.False(tab.IsDirty);
-        Assert.Equal(["final.md"], h.QuickOpen.FilePathsForTests);
+        Assert.Equal(["final.md"], h.QuickOpen.RankedPathsForTests());
     });
 
     /// <summary>Design §4.3's first row: another session edits a note and
@@ -699,7 +700,7 @@ public sealed partial class RescanTests
         Assert.Equal("my unsaved words\n", dirty.Text);
         Assert.True(dirty.IsDirty);
         Assert.False(dirty.IsMissingFromDisk);
-        Assert.Equal(["clean-renamed.md", "dirty-renamed.md"], h.QuickOpen.FilePathsForTests.Order(StringComparer.Ordinal));
+        Assert.Equal(["clean-renamed.md", "dirty-renamed.md"], h.QuickOpen.RankedPathsForTests().Order(StringComparer.Ordinal));
     });
 
     /// <summary>Design §4.3's table: another session renames the open note,
@@ -731,7 +732,7 @@ public sealed partial class RescanTests
         Assert.Equal("third.md", tab.Path);
         Assert.Equal("first\n", tab.Text);
         Assert.False(tab.IsMissingFromDisk);
-        Assert.Equal(["third.md"], h.QuickOpen.FilePathsForTests);
+        Assert.Equal(["third.md"], h.QuickOpen.RankedPathsForTests());
     });
 
     /// <summary>Design §4.3's table (the <c>from_hash</c> guard): another
@@ -812,7 +813,7 @@ public sealed partial class RescanTests
         Assert.Equal(first.FromSeq, windows[1].FromSeq);
         Assert.Equal(first.RecordCount, windows[1].RecordCount);
         Assert.Equal([Explicit1], h.Spoken);
-        Assert.Contains("new.md", h.QuickOpen.FilePathsForTests);
+        Assert.Contains("new.md", h.QuickOpen.RankedPathsForTests());
     });
 
     /// <summary>The retry set (design §4.3 :662-673): a tree refresh or a
@@ -838,13 +839,24 @@ public sealed partial class RescanTests
                 ? Task.FromException(new IOException("injected tree failure"))
                 : Task.Run(work, token);
         };
-        h.AfterCoreCall = operation =>
+        // WB-25 stage 2: Quick Open's re-sync is the open switcher's silent
+        // re-rank against the index; its first one fails.
+        int quickOpenRanks = 0;
+        int quickOpenFailures = surface == "quick-open" ? 1 : 0;
+        if (surface == "quick-open")
         {
-            if (surface == "quick-open" && operation == "list" && fail)
+            h.QuickOpen.Open();
+            h.Context.RunUntil(() => !h.QuickOpen.IsRanking && h.QuickOpen.Results.Count > 0, "the switcher's first rank");
+            h.Events.Clear();
+            h.QuickOpen.InsideRankForTests = () =>
             {
-                throw new IOException("injected Quick Open failure");
-            }
-        };
+                _ = Interlocked.Increment(ref quickOpenRanks);
+                if (Interlocked.Decrement(ref quickOpenFailures) >= 0)
+                {
+                    throw new IOException("injected Quick Open failure");
+                }
+            };
+        }
         using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
         {
             _ = other.CreateExclusive("new.md", "# New\n");
@@ -861,6 +873,7 @@ public sealed partial class RescanTests
         h.Events.Clear();
         h.CoreCalls.Clear();
         int treeReadsBefore = Volatile.Read(ref treeReads);
+        int quickOpenRanksBefore = Volatile.Read(ref quickOpenRanks);
         h.Now += TimeSpan.FromMinutes(1);
         h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Foreground));
 
@@ -871,7 +884,8 @@ public sealed partial class RescanTests
         }
         else
         {
-            Assert.Contains("list", Operations(h));
+            Assert.True(Volatile.Read(ref quickOpenRanks) > quickOpenRanksBefore, "Quick Open was not re-ranked");
+            Assert.Contains(h.QuickOpen.Results, row => row.Path == "new.md");
         }
 
         Assert.DoesNotContain(expected, h.Lifecycle.RetrySetForTests);
@@ -1105,7 +1119,7 @@ public sealed partial class RescanTests
 
         h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
         Assert.Equal([OneError], h.Spoken);
-        Assert.Contains("new.md", h.QuickOpen.FilePathsForTests);
+        Assert.Contains("new.md", h.QuickOpen.RankedPathsForTests());
 
         h.Events.Clear();
         h.Now += TimeSpan.FromMinutes(1);
@@ -1156,7 +1170,7 @@ public sealed partial class RescanTests
         Assert.Equal("c.md", tab.Path);
         Assert.False(tab.IsMissingFromDisk);
         Assert.Equal("the note\n", tab.Text);
-        Assert.Equal(["c.md"], h.QuickOpen.FilePathsForTests);
+        Assert.Equal(["c.md"], h.QuickOpen.RankedPathsForTests());
     });
 
     /// <summary>The sibling: the rename came home before the next run. Read
@@ -1190,7 +1204,7 @@ public sealed partial class RescanTests
 
         Assert.Equal("a.md", tab.Path);
         Assert.False(tab.IsMissingFromDisk);
-        Assert.Equal(["a.md"], h.QuickOpen.FilePathsForTests);
+        Assert.Equal(["a.md"], h.QuickOpen.RankedPathsForTests());
     });
 
     /// <summary>Codex round 2 (high, F4): a further pass's records name each
@@ -1670,53 +1684,6 @@ public sealed partial class RescanTests
         Assert.Equal("my unsaved words\n", duplicate.Text);
     });
 
-    /// <summary>Codex round 2 (low, F6): a journal that still moves after its
-    /// third re-read leaves Quick Open in the retry set, with no error, and
-    /// the next run's full reload brings every own file in.</summary>
-    [Fact]
-    public void AJournalStillMovingAfterItsThirdReReadLeavesQuickOpenToTheNextRun() => RunSta(() =>
-    {
-        using var h = new Harness("feed-journal-exhausted", ("alpha.md", "# Alpha\n"));
-        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
-        {
-            _ = other.CreateExclusive("brief.md", "# Brief\n");
-        }
-
-        int written = 0;
-        h.Lifecycle.ChangeFeedWindowObserverForTests = opened =>
-        {
-            if (written == 0)
-            {
-                _ = h.Lifecycle.SessionForTests!.CreateExclusive($"own{written++}.md", "# Own\n");
-            }
-        };
-        h.Lifecycle.ChangeFeedFaultForTests = called =>
-        {
-            if (called == "summary" && written < 8)
-            {
-                _ = h.Lifecycle.SessionForTests!.CreateExclusive($"own{written++}.md", "# Own\n");
-            }
-
-            return false;
-        };
-
-        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Explicit));
-        Assert.Contains(RescanSurface.QuickOpen, h.Lifecycle.RetrySetForTests);
-        Assert.True(written > 3, "premise: an own write landed during every re-read");
-        Assert.DoesNotContain(h.Events, spoken => spoken is A11yEvent.VaultRescanIncomplete);
-
-        h.Lifecycle.ChangeFeedFaultForTests = null;
-        h.Lifecycle.ChangeFeedWindowObserverForTests = null;
-        h.Events.Clear();
-        h.CoreCalls.Clear();
-        h.Now += TimeSpan.FromMinutes(1);
-        h.Context.Await(h.Lifecycle.RescanAsync(RescanReason.Foreground));
-
-        Assert.Contains("list", Operations(h));
-        Assert.DoesNotContain(RescanSurface.QuickOpen, h.Lifecycle.RetrySetForTests);
-        Assert.All(Enumerable.Range(0, written), n => Assert.Contains($"own{n}.md", h.QuickOpen.FilePathsForTests));
-    });
-
     /// <summary>Red team 3 / codex round 1: a foreground run reloads no
     /// Quick Open list, so its records alone bring another session's
     /// creations, deletion and rename to Quick Open, page after page.</summary>
@@ -1743,7 +1710,7 @@ public sealed partial class RescanTests
 
         Assert.DoesNotContain("list", Operations(h));
         Assert.True(Operations(h).Count(operation => operation == "page") >= 3, "the records in pages of two");
-        Assert.Equal(["edit.md", "moved.md", "one.md", "two.md"], h.QuickOpen.FilePathsForTests.Order(StringComparer.Ordinal));
+        Assert.Equal(["edit.md", "moved.md", "one.md", "two.md"], h.QuickOpen.RankedPathsForTests().Order(StringComparer.Ordinal));
         Assert.Empty(h.Events);
     });
 
@@ -2097,7 +2064,7 @@ public sealed partial class RescanTests
             "the watcher's run listing late.md");
         h.Context.Await(h.Lifecycle.RescanCompletion);
 
-        Assert.Contains("late.md", h.QuickOpen.FilePathsForTests);
+        Assert.Contains("late.md", h.QuickOpen.RankedPathsForTests());
         Assert.Empty(h.Events);
     });
 

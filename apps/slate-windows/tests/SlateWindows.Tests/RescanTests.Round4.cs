@@ -125,7 +125,7 @@ public sealed partial class RescanTests
         // The rest of the document re-sync still ran.
         Assert.Equal("alpha, changed outside Slate\n", other.Text);
         Assert.Contains(h.Sidebar.RootNodes, node => node.Path == "Ghost.md");
-        Assert.Contains("Ghost.md", h.QuickOpen.FilePathsForTests);
+        Assert.Contains("Ghost.md", h.QuickOpen.RankedPathsForTests());
     });
 
     // --- (5) a close waits for an ADMITTED Quick Open rank -------------------

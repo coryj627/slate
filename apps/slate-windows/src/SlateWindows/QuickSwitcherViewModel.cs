@@ -17,6 +17,9 @@ internal sealed record QuickSwitcherRowViewModel(
 /// <summary>
 /// W1-4 Quick Open chrome. All scoring, display-name derivation, recency
 /// blending, and count strings come from slate-core through the binding.
+/// WB-25 stage 2 (#1290; locked decision 05 §9.3.1): the rank runs against
+/// core's index (<c>SwitcherRankTopIndexed</c>) under a token the
+/// keystroke's source cancels — the host holds no file list.
 /// </summary>
 internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
 {
@@ -25,11 +28,11 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
     private readonly Action<A11yEvent> _announce;
     private readonly SynchronizationContext? _uiContext;
     private readonly QuickSwitcherRankCoordinator _rankCoordinator;
-    private readonly Func<SwitcherFile[], string, string[], SwitcherRankPage> _rankTop;
+    private readonly VaultSession _session;
+    private readonly Func<string, string[], CancelToken, SwitcherRankPage> _rankTop;
     private readonly Func<CancellationToken, Task> _rankDelay;
     private CancellationTokenSource? _rankCancellation;
     private int _rankGeneration;
-    private SwitcherFile[] _files = [];
     private IReadOnlyList<string> _recents = [];
     private string _query = string.Empty;
     private QuickSwitcherRowViewModel? _selectedRow;
@@ -45,28 +48,24 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
     // switcher closes (F7).
     private readonly List<(int Generation, TaskCompletionSource Published)> _rescanRankWaiters = [];
 
-    // The replacement journals open while a rescan reads the new list.
-    private readonly List<ReplacementJournal> _openJournals = [];
-
     public QuickSwitcherViewModel(
         VaultSession session,
         string vaultRoot,
         Action<A11yEvent> announce,
-        IEnumerable<SwitcherFile>? initialFiles = null,
         string? localAppDataRoot = null,
         bool debounceRanking = true,
         QuickSwitcherRankCoordinator? rankCoordinator = null,
-        Func<SwitcherFile[], string, string[], SwitcherRankPage>? rankTop = null,
+        Func<string, string[], CancelToken, SwitcherRankPage>? rankTop = null,
         Func<CancellationToken, Task>? rankDelay = null)
     {
         _announce = announce;
         _uiContext = debounceRanking ? SynchronizationContext.Current : null;
         _rankCoordinator = rankCoordinator ?? QuickSwitcherRankCoordinator.Shared;
         _rankDelay = rankDelay ?? (token => Task.Delay(60, token));
-        _rankTop = rankTop ?? ((files, query, recents) =>
-            SlateUniffiMethods.SwitcherRankTop(files, query, recents, DisplayCap));
+        _session = session;
+        _rankTop = rankTop ?? ((query, recents, cancel) =>
+            session.SwitcherRankTopIndexed(query, recents, DisplayCap, cancel));
         _recentsStore = new FileRecentsStore(vaultRoot, session.RootIdentity(), localAppDataRoot);
-        _files = initialFiles?.ToArray() ?? [];
         OpenCommand = new RelayCommand(_ => Open(), _ => !IsOpen);
         DismissCommand = new RelayCommand(_ => Dismiss(), _ => IsOpen);
         OpenCurrentCommand = new RelayCommand(_ => OpenSelected(WorkspaceOpenTarget.CurrentTab), _ => SelectedRow is not null);
@@ -241,287 +240,63 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
         }
     }
 
+    /// <summary>A Slate-owned change: the index already holds it, so an
+    /// open switcher re-ranks (WB-25 stage 2: no host list to edit).</summary>
     public void ApplyFileChange(FileChangeEvent change)
     {
-        bool openable = IsOpenablePath(change.Path);
-        JournalChange(change, openable);
-        _files = Applied(_files, change, openable);
         if (IsOpen)
         {
             ScheduleRefresh();
         }
     }
 
-    /// <summary>One file change applied to a list: pure, idempotent per
-    /// path (a Created already present, a Deleted already gone, a Renamed
-    /// already moved each change nothing), so replaying a change the list
-    /// already reflects is harmless.</summary>
-    private static SwitcherFile[] Applied(SwitcherFile[] current, FileChangeEvent change, bool openable)
-    {
-        var files = current.ToList();
-        if (change.PreviousPath is string previous)
-        {
-            string previousPrefix = previous + "/";
-            string nextPrefix = change.Path + "/";
-            for (int index = 0; index < files.Count; index++)
-            {
-                if (files[index].Path.StartsWith(previousPrefix, StringComparison.Ordinal))
-                {
-                    string nextPath = nextPrefix + files[index].Path[previousPrefix.Length..];
-                    files[index] = new SwitcherFile(nextPath, System.IO.Path.GetFileName(nextPath));
-                }
-            }
-
-            files.RemoveAll(file => string.Equals(file.Path, previous, StringComparison.Ordinal));
-        }
-
-        if (change.Kind == FileChangeKind.Deleted)
-        {
-            string deletedPrefix = change.Path + "/";
-            files.RemoveAll(file => string.Equals(file.Path, change.Path, StringComparison.Ordinal)
-                || file.Path.StartsWith(deletedPrefix, StringComparison.Ordinal));
-        }
-        else if (change.Kind is FileChangeKind.Created or FileChangeKind.Renamed
-            && openable
-            && !files.Any(file => string.Equals(file.Path, change.Path, StringComparison.Ordinal)))
-        {
-            files.Add(new SwitcherFile(change.Path, System.IO.Path.GetFileName(change.Path)));
-        }
-
-        return [.. files];
-    }
-
     /// <summary>
-    /// A batch of Slate-owned changes, in order, in one pass — the
-    /// funnel's per-event <see cref="ApplyFileChange"/> batched. An open
-    /// switcher re-ranks once.
+    /// A batch of Slate-owned changes in one pass — the funnel's per-event
+    /// <see cref="ApplyFileChange"/> batched. An open switcher re-ranks once.
     /// </summary>
     public void ApplyFileChanges(IReadOnlyCollection<(FileChangeEvent Change, bool Openable)> changes)
     {
-        if (changes.Count == 0)
-        {
-            return;
-        }
-
-        SwitcherFile[] files = _files;
-        foreach ((FileChangeEvent change, bool openable) in changes)
-        {
-            JournalChange(change, openable);
-            files = Applied(files, change, openable);
-        }
-
-        _files = files;
-        if (IsOpen)
+        if (changes.Count > 0 && IsOpen)
         {
             ScheduleRefresh();
         }
     }
 
     /// <summary>
-    /// W7-7 PR 7 (#1252, R-9; v2 §7): a rescan's replacement list is read
-    /// from the index in pages, on a worker, while Slate-owned writes keep
-    /// arriving on the dispatcher. The journal records each change applied
-    /// meanwhile, so <see cref="ReplaceFilesAsync"/> replays them onto the
-    /// pages it read — a stale page can never revert a Slate write
-    /// (<see cref="Applied"/> is idempotent, so a change the pages already
-    /// reflect replays as nothing).
-    /// </summary>
-    /// <remarks>WB-10 (#1293, design §4.3 :674-690): a rescan's journal is
-    /// open for the whole run, from before its first change-feed window;
-    /// after each window the run re-reads every path it names from the index
-    /// (<see cref="ApplyJournaledPathsAsync"/>) rather than replaying its
-    /// events.</remarks>
-    internal sealed class ReplacementJournal
-    {
-        internal List<(FileChangeEvent Change, bool Openable)> Changes { get; } = [];
-
-        /// <summary>Every path the journaled changes name: each change's,
-        /// and a rename's previous one.</summary>
-        internal IReadOnlySet<string> Paths()
-        {
-            var paths = new HashSet<string>(StringComparer.Ordinal);
-            foreach ((FileChangeEvent change, _) in Changes)
-            {
-                _ = paths.Add(change.Path);
-                if (change.PreviousPath is string previous)
-                {
-                    _ = paths.Add(previous);
-                }
-            }
-
-            return paths;
-        }
-    }
-
-    internal ReplacementJournal BeginReplacement()
-    {
-        var journal = new ReplacementJournal();
-        _openJournals.Add(journal);
-        return journal;
-    }
-
-    internal void EndReplacement(ReplacementJournal journal) => _ = _openJournals.Remove(journal);
-
-    private void JournalChange(FileChangeEvent change, bool openable)
-    {
-        foreach (ReplacementJournal journal in _openJournals)
-        {
-            journal.Changes.Add((change, openable));
-        }
-    }
-
-    /// <summary>
-    /// W7-7 PR 7 (#1252, R-9; v2 §7): replace the list with the index's
-    /// openable documents <paramref name="files"/>, the journal's changes
-    /// replayed onto it. A closed switcher completes at once; an open one
-    /// re-runs its query SILENTLY — no count is spoken, the rows are
+    /// WB-25 stage 2 (#1290): a rescan's scan committed a new index. A
+    /// closed switcher completes at once; an open one re-runs its query
+    /// SILENTLY against that index — no count is spoken, the rows are
     /// replaced in place and the selected path is kept when it survives —
     /// and the Task completes INSIDE the publication of that rank (or of a
     /// later one), faults on its terminal failure (counted by the rescan,
     /// never spoken here), completes when the switcher closes (F7), and is
-    /// cancelled with <paramref name="cancellation"/>. The journal stays
-    /// open: its owner ends it (WB-10: the rescan run's, at the run's end).
+    /// cancelled with <paramref name="cancellation"/>.
     /// </summary>
-    internal Task ReplaceFilesAsync(
-        SwitcherFile[] files,
-        ReplacementJournal journal,
-        CancellationToken cancellation)
-    {
-        if (cancellation.IsCancellationRequested)
-        {
-            return Task.FromCanceled(cancellation);
-        }
-
-        SwitcherFile[] replayed = files;
-        foreach ((FileChangeEvent change, bool openable) in journal.Changes)
-        {
-            replayed = Applied(replayed, change, openable);
-        }
-
-        _files = replayed;
-        return RepublishSilentlyAsync(cancellation);
-    }
+    internal Task ReRankForRescanAsync(CancellationToken cancellation) =>
+        cancellation.IsCancellationRequested
+            ? Task.FromCanceled(cancellation)
+            : RepublishSilentlyAsync(cancellation);
 
     /// <summary>
-    /// WB-10 (#1293, design §4.3): one page of a change-feed window, applied
-    /// in one pass over a path index — a removed file is dropped, a present
-    /// openable one is upserted from its summary (a present file that is not
-    /// openable is dropped); folders are not listed. An open switcher
-    /// re-ranks silently, awaited as <see cref="ReplaceFilesAsync"/> is.
+    /// WB-10 (#1293, design §4.3): one page of a change-feed window. Its
+    /// records are already in the index (WB-25 stage 2), so a page naming a
+    /// file re-ranks an open switcher silently, awaited as
+    /// <see cref="ReRankForRescanAsync"/> is; a folder-only page changes
+    /// nothing Quick Open shows.
     /// </summary>
     internal Task ApplyRecordsAsync(IReadOnlyList<ChangeRecord> records, CancellationToken cancellation)
     {
-        var upserts = new Dictionary<string, SwitcherFile>(StringComparer.Ordinal);
-        var removals = new HashSet<string>(StringComparer.Ordinal);
-        foreach (ChangeRecord record in records)
-        {
-            if (record.Entry != ChangeEntry.File)
-            {
-                continue;
-            }
-
-            switch (record.Effect)
-            {
-                case ChangeEffect.Removed:
-                    _ = upserts.Remove(record.Path);
-                    _ = removals.Add(record.Path);
-                    break;
-                case ChangeEffect.Present when record.Summary is FileSummary summary && record.Openable:
-                    _ = removals.Remove(record.Path);
-                    upserts[record.Path] = new SwitcherFile(summary.Path, summary.Name);
-                    break;
-                case ChangeEffect.Present:
-                    _ = upserts.Remove(record.Path);
-                    _ = removals.Add(record.Path);
-                    break;
-            }
-        }
-
-        return ApplyInventoryAsync(upserts, removals, cancellation);
-    }
-
-    /// <summary>
-    /// WB-10 (#1293, design §4.3 :674-690): the run's journal re-read — each
-    /// journaled path as the index holds it now: present and openable, it is
-    /// upserted from its summary; otherwise it is dropped. Awaited as
-    /// <see cref="ReplaceFilesAsync"/> is.
-    /// </summary>
-    internal Task ApplyJournaledPathsAsync(
-        IReadOnlyList<(string Path, FileSummary? Summary)> reads,
-        CancellationToken cancellation)
-    {
-        var upserts = new Dictionary<string, SwitcherFile>(StringComparer.Ordinal);
-        var removals = new HashSet<string>(StringComparer.Ordinal);
-        foreach ((string path, FileSummary? summary) in reads)
-        {
-            if (summary is not null && IsOpenablePath(summary.Path))
-            {
-                upserts[path] = new SwitcherFile(summary.Path, summary.Name);
-            }
-            else
-            {
-                _ = removals.Add(path);
-            }
-        }
-
-        return ApplyInventoryAsync(upserts, removals, cancellation);
-    }
-
-    /// <summary>Removals and upserts in one pass over a path index; an open
-    /// switcher re-ranks silently when the list changed.</summary>
-    private Task ApplyInventoryAsync(
-        IReadOnlyDictionary<string, SwitcherFile> upserts,
-        IReadOnlySet<string> removals,
-        CancellationToken cancellation)
-    {
         if (cancellation.IsCancellationRequested)
         {
             return Task.FromCanceled(cancellation);
         }
 
-        var files = new List<SwitcherFile>(_files.Length + upserts.Count);
-        var listed = new HashSet<string>(StringComparer.Ordinal);
-        bool changed = false;
-        foreach (SwitcherFile file in _files)
-        {
-            if (removals.Contains(file.Path))
-            {
-                changed = true;
-                continue;
-            }
-
-            if (upserts.TryGetValue(file.Path, out SwitcherFile? upsert))
-            {
-                changed |= upsert != file;
-                files.Add(upsert);
-            }
-            else
-            {
-                files.Add(file);
-            }
-
-            _ = listed.Add(file.Path);
-        }
-
-        foreach ((string path, SwitcherFile upsert) in upserts)
-        {
-            if (listed.Add(path))
-            {
-                files.Add(upsert);
-                changed = true;
-            }
-        }
-
-        if (!changed)
-        {
-            return Task.CompletedTask;
-        }
-
-        _files = [.. files];
-        return RepublishSilentlyAsync(cancellation);
+        return records.Any(record => record.Entry == ChangeEntry.File)
+            ? RepublishSilentlyAsync(cancellation)
+            : Task.CompletedTask;
     }
 
-    /// <summary>The list changed under a rescan: a closed switcher
+    /// <summary>The index changed under a rescan: a closed switcher
     /// completes at once; an open one re-runs its query silently, and the
     /// Task completes inside that rank's publication (or a later one).</summary>
     private Task RepublishSilentlyAsync(CancellationToken cancellation)
@@ -575,12 +350,18 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
     /// lane admitted it, where its token no longer reaches.</summary>
     internal Action? InsideRankForTests { get; set; }
 
-    /// <summary>The paths Quick Open ranks over — for the rescan facts.</summary>
-    internal IReadOnlyList<string> FilePathsForTests => [.. _files.Select(file => file.Path)];
+    /// <summary>The paths Quick Open's empty query ranks, straight from the
+    /// index (at most 10,000) — for the rescan facts.</summary>
+    internal IReadOnlyList<string> RankedPathsForTests() => [.. RankForTests().Rows.Select(row => row.Path)];
 
-    /// <summary>A Slate-owned event's path, classified as core does (W7-7
-    /// PR 7, round 26). A rescan's delta rows carry core's own flag.</summary>
-    private static bool IsOpenablePath(string path) => CoreDocumentClassification.IsOpenable(path);
+    /// <summary>The empty query's exact total, straight from the index.</summary>
+    internal int RankedTotalForTests() => ClampTotal(RankForTests().Total);
+
+    private SwitcherRankPage RankForTests()
+    {
+        using var cancel = new CancelToken();
+        return _session.SwitcherRankTopIndexed(string.Empty, [], 10_000, cancel);
+    }
 
     public void Dispose()
     {
@@ -619,8 +400,9 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
         if (_uiContext is null)
         {
             int inline = ++_rankGeneration;
+            using var inlineCancel = new CancelToken();
             ApplyRanked(
-                _rankTop(_files, Query, [.. _recents]),
+                _rankTop(Query, [.. _recents], inlineCancel),
                 Query,
                 inline,
                 silent);
@@ -632,7 +414,6 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
         _rankCancellation = cancellation;
         int generation = ++_rankGeneration;
         string query = Query;
-        SwitcherFile[] files = _files;
         string[] recents = [.. _recents];
         IsRanking = true;
         _rankingError = null;
@@ -644,11 +425,10 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
         }
 
         RaiseCommandStates();
-        RankCompletion = RankAsync(files, query, recents, generation, silent, cancellation.Token);
+        RankCompletion = RankAsync(query, recents, generation, silent, cancellation.Token);
     }
 
     private async Task RankAsync(
-        SwitcherFile[] files,
         string query,
         string[] recents,
         int generation,
@@ -662,7 +442,11 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
                 () =>
                 {
                     InsideRankForTests?.Invoke();
-                    return _rankTop(files, query, recents);
+                    // A superseded keystroke's source cancels the core
+                    // query too, so it stops inside core's statement.
+                    using var core = new CancelToken();
+                    using CancellationTokenRegistration linked = cancellationToken.Register(core.Cancel);
+                    return _rankTop(query, recents, core);
                 },
                 cancellationToken,
                 admitted => Interlocked.Exchange(ref _admittedRank, admitted));
