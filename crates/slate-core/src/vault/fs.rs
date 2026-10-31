@@ -2360,6 +2360,21 @@ impl FsVaultProvider {
             self.rename_by_path(from, &from_path, to, &to_path)
         }
     }
+
+    /// [`Self::rename_unrecorded`] with its `before_kernel_rename` seam open,
+    /// for the weak-volume facts (WB-27): an occupant made in the seam meets
+    /// the kernel's no-replace, not the provider's destination pre-check.
+    #[cfg(all(test, windows))]
+    pub(crate) fn rename_with_hook_for_tests(
+        &self,
+        from: &str,
+        to: &str,
+        before_kernel_rename: impl FnOnce() -> io::Result<()>,
+    ) -> Result<(), VaultError> {
+        let from_path = self.resolve_for_mutation(from)?;
+        let to_path = self.resolve_for_mutation(to)?;
+        self.rename_beneath_root(from, &from_path, to, &to_path, before_kernel_rename)
+    }
 }
 
 /// #1077 (contract I4): are two mutation paths ONE real filesystem entry?

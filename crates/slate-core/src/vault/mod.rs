@@ -100,5 +100,8 @@ mod windows_entry;
 #[cfg(all(test, windows))]
 pub(crate) mod test_support;
 
+#[cfg(all(test, windows))]
+mod weak_volume_tests;
+
 #[cfg(test)]
 mod test_trash_census;
