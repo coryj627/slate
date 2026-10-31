@@ -351,6 +351,71 @@ public sealed class CanvasRendererPeerTests : IDisposable
         }
     });
 
+    /// <summary>The board installs what the document applied a moment
+    /// later: in that moment a kept action must not reach what the document
+    /// already dropped, and an edge's Invoke obeys the direction the document
+    /// already applied (codex round 3).</summary>
+    [Fact]
+    public void ARetainedActionObeysWhatTheDocumentAppliedBeforeTheBoardInstallsIt() => RunSta(() =>
+    {
+        WriteCanvas(
+            "lag.canvas",
+            [Card("a", "Alpha", 40, 40), Card("b", "Beta", 300, 40), Card("c", "Gamma", 40, 200)],
+            [Edge("e1", "a", "b", "supports"), Edge("e2", "a", "b", "cites")]);
+        using Board board = Open("lag.canvas");
+        board.ZoomTo(1);
+        var deletedInvoke = Assert.IsAssignableFrom<IInvokeProvider>(board.HeldEdge("e1").GetPattern(PatternInterface.Invoke));
+        var deletedRealize = Assert.IsAssignableFrom<IVirtualizedItemProvider>(board.HeldEdge("e1").GetPattern(PatternInterface.VirtualizedItem));
+        var turnedInvoke = Assert.IsAssignableFrom<IInvokeProvider>(board.HeldEdge("e2").GetPattern(PatternInterface.Invoke));
+        board.Document.SeatSelectionSilently("c");
+
+        _ = board.Document.CanvasDeleteConnection("e1");
+        _ = board.Document.CanvasEditConnection("e2", "cites", CanvasConnectionDirection.FromTarget);
+        CanvasPopulation applied = board.Document.AppliedPublication!.Loaded!.Population;
+        CanvasPopulation installed = board.Renderer.Engine.Current!.Source.Loaded!.Population;
+        Assert.True(
+            !applied.SceneByEdge.ContainsKey("e1") && installed.SceneByEdge.ContainsKey("e1")
+                && applied.SceneByEdge["e2"].FromArrow && !installed.SceneByEdge["e2"].FromArrow,
+            "premise: the document applied both edits and the board has not installed them yet.");
+
+        Assert.Throws<ElementNotAvailableException>(deletedInvoke.Invoke);
+        Assert.Throws<ElementNotAvailableException>(deletedRealize.Realize);
+        Assert.Equal("c", board.Document.Selection.Selected);
+
+        turnedInvoke.Invoke();
+        Assert.Equal("a", board.Document.Selection.Selected);
+    });
+
+    /// <summary>D5: an edge's Invoke always says where it landed — when its
+    /// endpoint is already the seat, and on a second Invoke of the same
+    /// edge — with exactly one announcement each time (codex round
+    /// 3).</summary>
+    [Theory]
+    [InlineData(false, true, "b")]
+    [InlineData(true, false, "a")]
+    [InlineData(false, false, "b")]
+    [InlineData(true, true, "b")]
+    public void InvokingAnEdgeWhoseEndpointIsTheSeatStillSaysWhereItLanded(bool fromArrow, bool toArrow, string selected) => RunSta(() =>
+    {
+        WriteCanvas(
+            "seated.canvas",
+            [Card("a", "Alpha", 40, 40), Card("b", "Beta", 300, 40)],
+            [Edge("e1", "a", "b", "relates", fromArrow, toArrow)]);
+        using Board board = Open("seated.canvas");
+        board.PanTo(0, 0);
+        var invoke = Assert.IsAssignableFrom<IInvokeProvider>(board.HeldEdge("e1").GetPattern(PatternInterface.Invoke));
+        board.Document.SeatSelectionSilently(selected);
+
+        for (int round = 1; round <= 2; round++)
+        {
+            _announced.Clear();
+            invoke.Invoke();
+            board.Announcer.FlushForTests();
+            Assert.Equal(selected, board.Document.Selection.Selected);
+            Assert.Single(_announced);
+        }
+    });
+
     /// <summary>D3's identity is (renderer, document, key): a peer held on
     /// one canvas never answers for another canvas the same board shows that
     /// reuses the edge's id, and the board showing the first canvas again

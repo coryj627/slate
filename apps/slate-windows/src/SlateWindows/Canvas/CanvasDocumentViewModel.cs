@@ -1949,9 +1949,13 @@ internal sealed class CanvasDocumentViewModel : PanelWorkScheduler
     /// boundary first, then the move. Re-selecting the same node is a
     /// no-op, which is what breaks the surface ⇄ model echo.
     /// </summary>
-    public void SelectNode(string? nodeId, bool announce = true)
+    public void SelectNode(string? nodeId, bool announce = true, bool announceWhenSeated = false)
     {
-        if (string.Equals(Selection.Selected, nodeId, StringComparison.Ordinal))
+        // An activation that lands where the seat already is says where it
+        // landed only when its caller asks (WB-26: a board edge's Invoke
+        // always speaks its endpoint); every other door stays silent.
+        bool seated = string.Equals(Selection.Selected, nodeId, StringComparison.Ordinal);
+        if (seated && !(announce && announceWhenSeated))
         {
             return;
         }

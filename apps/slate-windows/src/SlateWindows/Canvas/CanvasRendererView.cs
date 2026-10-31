@@ -831,13 +831,13 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// document's one narrating selection mutation, then the
     /// origin-sensitive pan (a selection made ON this surface always
     /// scrolls into view).</summary>
-    internal void SelectAnnounced(string nodeId)
+    internal void SelectAnnounced(string nodeId, bool announceWhenSeated = false)
     {
         if (_model is not { } model)
         {
             return;
         }
-        model.SelectNode(nodeId);
+        model.SelectNode(nodeId, announceWhenSeated: announceWhenSeated);
         RevealNode(nodeId, CanvasMoveOrigin.OnSurface);
     }
 

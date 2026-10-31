@@ -205,11 +205,21 @@ internal abstract class CanvasBoardAutomationPeer :
     /// action pattern refuses off the window, the placeholder's rule.</summary>
     private protected void RequireAvailable(bool materialized)
     {
-        if (!Exists || (materialized && !Materialized))
+        if (!Exists
+            || Document.AppliedPublication?.Loaded?.Population is not { } applied
+            || !ExistsIn(applied)
+            || (materialized && !Materialized))
         {
             throw new ElementNotAvailableException();
         }
     }
+
+    /// <summary>Whether the card or edge stands in a population. An action
+    /// checks the document's APPLIED population as well as the installed
+    /// one: the board installs a delete, an unlabelling or a reload a moment
+    /// after the document applies it, and an action in that moment must not
+    /// reach what the document already dropped (codex round 3).</summary>
+    private protected abstract bool ExistsIn(CanvasPopulation population);
 
     /// <summary>Whether the card or edge this peer stands for is on the
     /// board now. A peer whose card or edge is gone — deleted, unlabelled,
@@ -311,6 +321,9 @@ internal sealed class CanvasCardAutomationPeer :
             : null;
 
     private protected override bool Exists => Node is not null;
+
+    private protected override bool ExistsIn(CanvasPopulation population) =>
+        population.SceneByNode.ContainsKey(Key.Id);
 
     protected override string GetNameCore() => Node?.SpeakableName ?? string.Empty;
 
@@ -415,6 +428,9 @@ internal sealed class CanvasEdgeAutomationPeer :
 
     private protected override bool Exists => Edge is not null;
 
+    private protected override bool ExistsIn(CanvasPopulation population) =>
+        CanvasRendererView.NamedEdge(population, Key.Id) is not null;
+
     protected override string GetNameCore() => Edge?.SpeakableName ?? string.Empty;
 
     protected override AutomationControlType GetAutomationControlTypeCore() =>
@@ -437,10 +453,16 @@ internal sealed class CanvasEdgeAutomationPeer :
         return patternInterface == PatternInterface.Invoke && Materialized ? this : null;
     }
 
+    /// <summary>D5: select the end-style table's endpoint — read from the
+    /// document's APPLIED edge, so a direction change already applied is the
+    /// one obeyed — and say where Invoke landed even when that card is
+    /// already the seat (codex round 3).</summary>
     void IInvokeProvider.Invoke()
     {
         RequireAvailable(materialized: true);
-        View.SelectAnnounced(CanvasRendererView.DesignatedEndpoint(Edge!));
+        CanvasSceneEdge applied = CanvasRendererView.NamedEdge(
+            Document.AppliedPublication!.Loaded!.Population, Key.Id)!;
+        View.SelectAnnounced(CanvasRendererView.DesignatedEndpoint(applied), announceWhenSeated: true);
     }
 
     protected override string GetHelpTextCore() => string.Empty;

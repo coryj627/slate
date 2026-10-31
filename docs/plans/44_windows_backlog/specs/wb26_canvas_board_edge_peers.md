@@ -101,6 +101,15 @@ Issues: Closes #1277. Size L (design first). Lanes: windows + FlaUI (shell gate)
   - `ARetainedProviderRefusesOnceItsPeerIsUnavailable`
   - `AHeldPeerReadsNothingUntilItsCanvasIsInstalledAgain`
 
+**Codex round 3, 2026-10-31.**
+- **Actions also check the applied population.** An action checks the document's APPLIED population as well as the installed one (`ExistsIn`): the board installs a delete, an unlabelling or a reload a moment after the document applies it, and nothing may act on what the document already dropped.
+- **Invoke reads the applied edge.** An edge's Invoke picks its endpoint from the document's applied edge, so an applied direction change is obeyed.
+- **Invoke always says where it landed.** It does so even when that card is already the seat (`SelectNode`'s `announceWhenSeated`, used by the edge peer only), with one announcement each time.
+- **A card's Invoke on the seated card stays silent,** as every other selection door is.
+- **Facts:**
+  - `ARetainedActionObeysWhatTheDocumentAppliedBeforeTheBoardInstallsIt`
+  - `InvokingAnEdgeWhoseEndpointIsTheSeatStillSaysWhereItLanded`
+
 ## Goal
 
 Locked contract 34 D5 says a labelled edge is a peer in the board's name
