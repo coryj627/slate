@@ -521,8 +521,10 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// observe. Every install refreshes the board's children and mints a
     /// peer per windowed card, so a strong registry kept every card the
     /// board ever windowed, and a realization made them all tombstones.
+    /// Cards and labelled edges share it under their discriminated keys
+    /// (D3, #1277).
     /// </summary>
-    private readonly System.Collections.Generic.Dictionary<CanvasPeerKey, WeakReference<CanvasCardAutomationPeer>>
+    private readonly System.Collections.Generic.Dictionary<CanvasPeerKey, WeakReference<CanvasBoardAutomationPeer>>
         _peers = [];
 
     /// <summary>The registry size that triggers the next sweep of reclaimed
@@ -536,9 +538,9 @@ internal sealed class CanvasRendererView : FrameworkElement
         new CanvasRendererAutomationPeer(this);
 
     /// <summary>The container's children: one peer per MATERIALIZED
-    /// placement, document order — minted on demand and identity-stable
-    /// per key within this renderer while anything holds the peer
-    /// (D3).</summary>
+    /// placement, document order — the cards, then the labelled edges
+    /// (#1277) — minted on demand and identity-stable per key within this
+    /// renderer while anything holds the peer (D3).</summary>
     internal System.Collections.Generic.List<System.Windows.Automation.Peers.AutomationPeer>
         MaterializedPeers()
     {
@@ -549,42 +551,62 @@ internal sealed class CanvasRendererView : FrameworkElement
         {
             return children;
         }
-        foreach (CanvasSceneNode node in population.SceneNodes)
+        foreach (CanvasPeerKey key in population.SceneNodes
+            .Select(node => CanvasPeerKey.Card(node.NodeId))
+            .Concat(population.SceneEdges.Select(edge => CanvasPeerKey.Edge(edge.EdgeId))))
         {
-            CanvasPeerKey key = CanvasPeerKey.Card(node.NodeId);
             if (state.Topology.Placements.TryGetValue(key, out CanvasPeerPlacement? placement)
-                && placement.Cell == CanvasPeerCell.Materialized)
+                && placement.Cell == CanvasPeerCell.Materialized
+                && PeerFor(key) is { } peer)
             {
-                children.Add(PeerFor(key)!);
+                children.Add(peer);
             }
         }
         return children;
     }
 
+    /// <summary>The edge an edge key names when it is a board peer: in the
+    /// scene, named by core (labelled, DD-2), both endpoints present.</summary>
+    internal static CanvasSceneEdge? NamedEdge(CanvasPopulation population, string edgeId) =>
+        population.SceneByEdge.TryGetValue(edgeId, out CanvasSceneEdge? edge)
+            && edge.SpeakableName is not null
+            && population.SceneByNode.ContainsKey(edge.FromNode)
+            && population.SceneByNode.ContainsKey(edge.ToNode)
+            ? edge
+            : null;
+
+    /// <summary>The card an edge peer's Invoke selects and its realization
+    /// falls back to — contract 34 D5's end-style table, total and
+    /// selection-independent: the arrow's head when exactly one end has an
+    /// arrow, else the to-node (document order).</summary>
+    internal static string DesignatedEndpoint(CanvasSceneEdge edge) =>
+        edge.FromArrow && !edge.ToArrow ? edge.FromNode : edge.ToNode;
+
     /// <summary>The registry read: a live peer, or mint one for a key the
     /// current population knows. Identity commits only with use — a key
     /// nobody asked for holds nothing (the retirement rule's registry
     /// half).</summary>
-    internal CanvasCardAutomationPeer? PeerFor(CanvasPeerKey key)
+    internal CanvasBoardAutomationPeer? PeerFor(CanvasPeerKey key)
     {
-        if (_peers.TryGetValue(key, out WeakReference<CanvasCardAutomationPeer>? held)
-            && held.TryGetTarget(out CanvasCardAutomationPeer? existing))
+        if (_peers.TryGetValue(key, out WeakReference<CanvasBoardAutomationPeer>? held)
+            && held.TryGetTarget(out CanvasBoardAutomationPeer? existing))
         {
             return existing;
         }
         if (_engine.Current?.Source.Loaded?.Population is not { } population
-            || key.IsEdge
-            || !population.SceneByNode.ContainsKey(key.Id))
+            || (key.IsEdge ? NamedEdge(population, key.Id) is null : !population.SceneByNode.ContainsKey(key.Id)))
         {
             return null;
         }
-        var peer = new CanvasCardAutomationPeer(this, key);
+        CanvasBoardAutomationPeer peer = key.IsEdge
+            ? new CanvasEdgeAutomationPeer(this, key)
+            : new CanvasCardAutomationPeer(this, key);
         if (held is not null)
         {
             held.SetTarget(peer);
             return peer;
         }
-        _peers[key] = new WeakReference<CanvasCardAutomationPeer>(peer);
+        _peers[key] = new WeakReference<CanvasBoardAutomationPeer>(peer);
         if (_peers.Count >= _peerSweepAt)
         {
             foreach (CanvasPeerKey reclaimed in _peers
@@ -602,12 +624,13 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// <summary>Whether a client or the board still holds the key's
     /// peer.</summary>
     private bool PeerIsLive(CanvasPeerKey key) =>
-        _peers.TryGetValue(key, out WeakReference<CanvasCardAutomationPeer>? held)
+        _peers.TryGetValue(key, out WeakReference<CanvasBoardAutomationPeer>? held)
         && held.TryGetTarget(out _);
 
     /// <summary>The item-container search (D3's first-touch cell): by
-    /// Name against the descriptor index, or the next card in document
-    /// order after the given peer.</summary>
+    /// Name against the descriptor index — the cards' speakable names, then
+    /// the labelled edges' (#1277) — or the next peer in that document order
+    /// after the given one.</summary>
     internal CanvasPeerKey? FindByName(
         System.Windows.Automation.Peers.AutomationPeer? after, string? name)
     {
@@ -615,18 +638,22 @@ internal sealed class CanvasRendererView : FrameworkElement
         {
             return null;
         }
-        string? afterId = (after as CanvasCardAutomationPeer)?.Key.Id;
-        var passed = afterId is null;
-        foreach (CanvasSceneNode node in population.SceneNodes)
+        CanvasPeerKey? afterKey = (after as CanvasBoardAutomationPeer)?.Key;
+        var passed = afterKey is null;
+        foreach ((CanvasPeerKey key, string spoken) in population.SceneNodes
+            .Select(node => (CanvasPeerKey.Card(node.NodeId), node.SpeakableName))
+            .Concat(population.SceneEdges
+                .Where(edge => NamedEdge(population, edge.EdgeId) is not null)
+                .Select(edge => (CanvasPeerKey.Edge(edge.EdgeId), edge.SpeakableName!))))
         {
             if (!passed)
             {
-                passed = node.NodeId == afterId;
+                passed = key == afterKey;
                 continue;
             }
-            if (name is null || string.Equals(node.SpeakableName, name, StringComparison.Ordinal))
+            if (name is null || string.Equals(spoken, name, StringComparison.Ordinal))
             {
-                return CanvasPeerKey.Card(node.NodeId);
+                return key;
             }
         }
         return null;
@@ -636,7 +663,7 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// authority — the engine rebuilds, the pan materializes the
     /// target — and hand back the SAME peer object, promoted by the
     /// next installed state.</summary>
-    internal CanvasCardAutomationPeer? RealizePeer(CanvasPeerKey key)
+    internal CanvasBoardAutomationPeer? RealizePeer(CanvasPeerKey key)
     {
         if (PeerFor(key) is not { } peer)
         {
@@ -647,45 +674,92 @@ internal sealed class CanvasRendererView : FrameworkElement
     }
 
     /// <summary>The realize half: retained-commit plus the pan that
-    /// brings the card into the window (D4 — a realization is a
+    /// brings the peer into the window (D4 — a realization is a
     /// selection made ON this surface for pan purposes: it always
-    /// scrolls into view).</summary>
+    /// scrolls into view). Never a zoom: for a labelled edge (#1277) the
+    /// pan contains its union rect when that fits the view at the current
+    /// zoom, and otherwise its designated endpoint's card — the card its
+    /// Invoke selects — which windows the edge too, since D3 materializes
+    /// an edge whose union meets the window.</summary>
     internal void Realize(CanvasPeerKey key)
     {
         if (_engine.Current?.Source.Loaded?.Population is not { } population
-            || !population.SceneByNode.TryGetValue(key.Id, out CanvasSceneNode? node))
+            || RealizationTarget(population, key) is not { } target)
         {
             return;
         }
         var retained = System.Collections.Immutable.ImmutableHashSet.CreateRange(
             _peers.Keys.Where(PeerIsLive)).Add(key);
         _engine.CommitRetained(retained);
-        _engine.CommitViewport(v => PanToContain(v, node));
+        _engine.CommitViewport(v => target.Fits(v)
+            ? PanToContain(v, target.X, target.Y, target.Width, target.Height)
+            : PanToContain(v, target.Fallback));
+    }
+
+    /// <summary>The rect a realization pans to contain — a card's own, or
+    /// an edge's union with its designated endpoint as the fallback when
+    /// the union is larger than the view.</summary>
+    private sealed record RealizeTarget(
+        double X, double Y, double Width, double Height, CanvasSceneNode Fallback)
+    {
+        internal bool Fits(CanvasViewportState viewport) =>
+            Width * viewport.Zoom <= viewport.ViewWidth && Height * viewport.Zoom <= viewport.ViewHeight;
+    }
+
+    private static RealizeTarget? RealizationTarget(CanvasPopulation population, CanvasPeerKey key)
+    {
+        if (!key.IsEdge)
+        {
+            return population.SceneByNode.TryGetValue(key.Id, out CanvasSceneNode? node)
+                ? new RealizeTarget(node.X, node.Y, node.Width, node.Height, node)
+                : null;
+        }
+        if (NamedEdge(population, key.Id) is not { } edge)
+        {
+            return null;
+        }
+        CanvasSceneNode from = population.SceneByNode[edge.FromNode];
+        CanvasSceneNode to = population.SceneByNode[edge.ToNode];
+        double x = Math.Min(from.X, to.X);
+        double y = Math.Min(from.Y, to.Y);
+        return new RealizeTarget(
+            x,
+            y,
+            Math.Max(from.X + from.Width, to.X + to.Width) - x,
+            Math.Max(from.Y + from.Height, to.Y + to.Height) - y,
+            population.SceneByNode[DesignatedEndpoint(edge)]);
     }
 
     private static CanvasViewportState PanToContain(
-        CanvasViewportState viewport, CanvasSceneNode node)
+        CanvasViewportState viewport, CanvasSceneNode node) =>
+        PanToContain(viewport, node.X, node.Y, node.Width, node.Height);
+
+    /// <summary>The smallest pan, at the current zoom, that brings the rect
+    /// into the view — whole when it fits; it never changes
+    /// <see cref="CanvasViewportState.Zoom"/>.</summary>
+    private static CanvasViewportState PanToContain(
+        CanvasViewportState viewport, double x, double y, double width, double height)
     {
         double zoom = viewport.Zoom;
-        double viewX = (node.X * zoom) + viewport.PanX;
-        double viewY = (node.Y * zoom) + viewport.PanY;
+        double viewX = (x * zoom) + viewport.PanX;
+        double viewY = (y * zoom) + viewport.PanY;
         double panX = viewport.PanX;
         double panY = viewport.PanY;
         if (viewX < 0)
         {
             panX -= viewX;
         }
-        else if (viewX + (node.Width * zoom) > viewport.ViewWidth)
+        else if (viewX + (width * zoom) > viewport.ViewWidth)
         {
-            panX -= viewX + (node.Width * zoom) - viewport.ViewWidth;
+            panX -= viewX + (width * zoom) - viewport.ViewWidth;
         }
         if (viewY < 0)
         {
             panY -= viewY;
         }
-        else if (viewY + (node.Height * zoom) > viewport.ViewHeight)
+        else if (viewY + (height * zoom) > viewport.ViewHeight)
         {
-            panY -= viewY + (node.Height * zoom) - viewport.ViewHeight;
+            panY -= viewY + (height * zoom) - viewport.ViewHeight;
         }
         return viewport.PannedTo(panX, panY);
     }

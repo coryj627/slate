@@ -156,9 +156,11 @@ internal sealed class CanvasPeerTopology
         }
         foreach (CanvasSceneEdge edge in population.SceneEdges)
         {
-            if (edge.Label is not { Length: > 0 })
+            if (edge.SpeakableName is null)
             {
-                // DD-2: an unlabelled edge is not a peer.
+                // DD-2: an unlabelled edge is not a peer — core names
+                // exactly the edges that are (#1277), so the host never
+                // re-derives "labelled" from the label's text.
                 continue;
             }
             if (population.SceneByNode.TryGetValue(edge.FromNode, out CanvasSceneNode? from)

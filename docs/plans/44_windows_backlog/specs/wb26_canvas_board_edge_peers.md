@@ -36,6 +36,40 @@ Issues: Closes #1277. Size L (design first). Lanes: windows + FlaUI (shell gate)
 - **Find by name.** `FindByName` walks cards, then named edges, in document order. Its `after` argument may be a card or an edge peer.
 - **Validity check.** `PeerFor` and `Realize` treat an edge key as valid only when the edge is in `SceneEdges`, has a speakable name, and has both endpoints in `SceneByNode`.
 
+**Red-team amendments, 2026-10-31, before code.** Where these differ from the design section or the Tests below, they win.
+1. **Hit-testing.** An edge's rectangle is the union of its endpoints' rectangles, so it covers them, and WPF's point walk checks children last-first. The board peer therefore overrides `GetPeerFromPointCore`:
+   - a card wins;
+   - an edge answers only a point no card covers.
+   New fact: `CanvasRendererPeerTests.APointOnAnEndpointCardIsTheCardNotTheEdge`.
+2. **The item-container door realizes, for edges as for cards.**
+   - **Find by name.** `FindItemByProperty` goes through `RealizePeer`, as it does for cards (`TheBoardsOwnPeersRevealTheirCardWithFollowSelectionOff` pins that pan). So `FindItemByNameResolvesAnEdge` asserts that:
+     - the descriptor lookup (`FindByName`) changes nothing;
+     - the container's search hands back the edge's peer;
+     - that peer is promoted with the bounded realization pan.
+   - **Placeholder.** A placeholder refuses action patterns the card's way: `GetPattern(Invoke)` is null. It does not throw `ElementNotAvailableException`, which nothing in the canvas does.
+3. **Censuses.**
+   - **`WcMatrixCanvasEvidenceCensus` is the census that applies.** It scrapes each peer class's own source span, so `GetPattern` stays in each subclass; the base class carries no pattern code.
+   - **Its manifest gains:**
+     - `CanvasEdgeAutomationPeer` (`Custom`; Invoke, VirtualizedItem);
+     - `Custom` in the Canvas visual row's control-type cell;
+     - the new fact names.
+   - **Dropped:** `CanvasAutomationPropertyCensus` sees no peer, so it is out of the filter.
+4. **D5's four-way fixture.**
+   - `EveryBoardPeerHasItsOwnNameAndTheContainersNameIsReserved` now waits for and asserts its two twin edges' peers: the phrase, and the phrase with " 2".
+   - The Rust fact covers twin parallel edges, a card that squats on an edge's phrase, and a card pre-named with an edge ordinal.
+5. **Parity matrix.** `parity_matrix.md` is generated, so any row goes through `scripts/generate-parity-matrix.py`, never by hand.
+6. **One labelled test.**
+   - Core names only an edge whose label is not blank (`!label.trim().is_empty()`, as group labels are trimmed).
+   - The topology's DD-2 test reads `SpeakableName is not null` instead of the label, and the topology facts' edge literals pass a `SpeakableName`.
+7. **Speakable names in the phrase.** The phrase references the endpoints by their speakable names, while the walk speaks `display_title`. This is a deliberate refinement of D5's "the same sentence": the board's references must match the cards' own board names. Contract 34's delivery record says so.
+8. **Lookup and geometry.**
+   - **Edge index.** The load-class descriptor index gains `SceneByEdge` (edge id to scene edge), built once with the population (ID-3), so a Name read is no linear scan.
+   - **What the topology keeps.** Edge geometry stays the topology's (a drag moves it).
+   - **Realization target.** `Realize` builds an edge's union from the node rectangles, because a placeholder's placement has no geometry.
+   - **Find by name.** `FindByName` compares discriminated keys, never bare ids.
+9. **Typed test sites.** Two facts typed `PeerFor`/`RealizePeer` as the card peer (`CanvasNavigatorTests`, `CanvasDocumentTests`). They now assert the type or hold the base class.
+10. **Swift.** The "Swift literal edits" in the header, the design section and the Brief do not apply (see D-A above). `canvas::model` now calls `crate::a11y::canvas_edge_phrase`, its first use of `a11y`.
+
 ## Goal
 
 Locked contract 34 D5 says a labelled edge is a peer in the board's name

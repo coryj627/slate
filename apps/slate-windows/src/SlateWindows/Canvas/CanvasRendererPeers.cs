@@ -13,9 +13,10 @@ namespace SlateWindows.Canvas;
 /// type, named "Canvas visual view", exposing THREE patterns — the
 /// read-only VALUE whose text is "Zoom N percent" (DD-5, raised from
 /// the engine's old/new pair), SELECTION over the single selected
-/// card, and ITEM-CONTAINER so an unrealized card is reachable by
-/// property search (the platform's virtualization door). Children are
-/// the materialized topology's peers, in document order.
+/// card, and ITEM-CONTAINER so an unrealized card or labelled edge is
+/// reachable by property search (the platform's virtualization door).
+/// Children are the materialized topology's peers in document order:
+/// the cards, then the labelled edges (#1277).
 /// </summary>
 internal sealed class CanvasRendererAutomationPeer :
     FrameworkElementAutomationPeer,
@@ -56,6 +57,26 @@ internal sealed class CanvasRendererAutomationPeer :
         _view.Visibility is System.Windows.Visibility.Visible
             ? _view.MaterializedPeers()
             : [];
+
+    /// <summary>The peer under a screen point: a card before any edge. A
+    /// labelled edge's rectangle is the union of its endpoints' (#1277), so
+    /// the platform's last-child-first walk would answer the edge for every
+    /// point on an endpoint card, and a reader's mouse or touch would hear
+    /// the connection instead of the card. An edge answers only a point no
+    /// card covers.</summary>
+    protected override AutomationPeer GetPeerFromPointCore(System.Windows.Point point)
+    {
+        System.Collections.Generic.List<AutomationPeer> children = GetChildren() ?? [];
+        foreach (AutomationPeer child in Enumerable.Reverse(children.OfType<CanvasCardAutomationPeer>())
+            .Concat<AutomationPeer>(Enumerable.Reverse(children.OfType<CanvasEdgeAutomationPeer>())))
+        {
+            if (child.GetBoundingRectangle().Contains(point))
+            {
+                return child;
+            }
+        }
+        return base.GetPeerFromPointCore(point);
+    }
 
     /// <summary>D3: a structure change raises the container's one
     /// children-invalidated event. It names only the container, so no card's
@@ -128,53 +149,37 @@ internal sealed class CanvasRendererAutomationPeer :
 }
 
 /// <summary>
-/// One card's peer (§D D3): Button control type, Name from core's
-/// speakable name, INVOKE selects through the announced door,
-/// SELECTION-ITEM per D6's matrix, and the rectangle in SCREEN
-/// coordinates from the installed state. The SAME peer object serves
-/// the card across materialization round trips (stable identity
-/// within its renderer); as a PLACEHOLDER it answers identifying
-/// properties from the descriptor index and refuses action patterns;
-/// a card gone from the document, or a closed pane, answers
-/// element-not-available.
+/// What every peer on the board shares (§D D3): its discriminated key, its
+/// cell in the installed state, the rectangle in SCREEN coordinates from
+/// the placement, and the virtualized-item door, exposed ALWAYS — as a
+/// PLACEHOLDER the peer answers identifying properties from the descriptor
+/// index and refuses action patterns until realization. The SAME peer
+/// object serves its key across materialization round trips (stable
+/// identity within its renderer); a key gone from the document, or a
+/// closed pane, answers element-not-available.
 /// </summary>
-internal sealed class CanvasCardAutomationPeer :
+internal abstract class CanvasBoardAutomationPeer :
     AutomationPeer,
-    IInvokeProvider,
-    ISelectionItemProvider,
     IVirtualizedItemProvider
 {
-    private readonly CanvasRendererView _view;
-
-    internal CanvasCardAutomationPeer(CanvasRendererView view, CanvasPeerKey key)
+    private protected CanvasBoardAutomationPeer(CanvasRendererView view, CanvasPeerKey key)
     {
-        _view = view;
+        View = view;
         Key = key;
     }
 
     internal CanvasPeerKey Key { get; }
 
-    private CanvasSceneNode? Node =>
-        _view.Engine.Current?.Source.Loaded?.Population is { } population
-            && population.SceneByNode.TryGetValue(Key.Id, out CanvasSceneNode? node)
-            ? node
-            : null;
+    private protected CanvasRendererView View { get; }
 
-    private bool Materialized =>
-        _view.Engine.Current?.Topology.Placements.TryGetValue(
+    private protected bool Materialized =>
+        View.Engine.Current?.Topology.Placements.TryGetValue(
             Key, out CanvasPeerPlacement? placement) == true
         && placement.Cell == CanvasPeerCell.Materialized;
 
-    protected override string GetNameCore() => Node?.SpeakableName ?? string.Empty;
-
-    protected override AutomationControlType GetAutomationControlTypeCore() =>
-        AutomationControlType.Button;
-
-    protected override string GetClassNameCore() => "CanvasCard";
-
     protected override System.Windows.Rect GetBoundingRectangleCore()
     {
-        if (_view.Engine.Current is not { } state
+        if (View.Engine.Current is not { } state
             || state.Topology.Placements.TryGetValue(Key, out CanvasPeerPlacement? placement) != true
             || placement.Cell != CanvasPeerCell.Materialized)
         {
@@ -186,8 +191,82 @@ internal sealed class CanvasCardAutomationPeer :
             (placement.Y * zoom) + state.Viewport.PanY,
             placement.Width * zoom,
             placement.Height * zoom);
-        return _view.ViewToScreen(view);
+        return View.ViewToScreen(view);
     }
+
+    void IVirtualizedItemProvider.Realize() => View.Realize(Key);
+
+    protected override bool IsControlElementCore() => true;
+
+    protected override bool IsContentElementCore() => true;
+
+    protected override bool IsEnabledCore() => true;
+
+    protected override bool IsKeyboardFocusableCore() => false;
+
+    protected override bool HasKeyboardFocusCore() => false;
+
+    protected override bool IsOffscreenCore() => !Materialized;
+
+    protected override string GetAutomationIdCore() =>
+        (Key.IsEdge ? "CanvasEdge:" : "CanvasCard:") + Key.Id;
+
+    // The AutomationPeer abstract surface no board peer uses.
+    protected override string GetAcceleratorKeyCore() => string.Empty;
+
+    protected override string GetAccessKeyCore() => string.Empty;
+
+    protected override string GetItemTypeCore() => string.Empty;
+
+    protected override System.Collections.Generic.List<AutomationPeer>? GetChildrenCore() =>
+        null;
+
+    protected override System.Windows.Point GetClickablePointCore() => default;
+
+    protected override AutomationOrientation GetOrientationCore() =>
+        AutomationOrientation.None;
+
+    protected override bool IsPasswordCore() => false;
+
+    protected override bool IsRequiredForFormCore() => false;
+
+    protected override System.Windows.Automation.Peers.AutomationPeer GetLabeledByCore() =>
+        null!;
+
+    protected override void SetFocusCore()
+    {
+    }
+}
+
+/// <summary>
+/// One card's peer (§D D3): Button control type, Name from core's
+/// speakable name, INVOKE selects through the announced door, and
+/// SELECTION-ITEM per D6's matrix.
+/// </summary>
+internal sealed class CanvasCardAutomationPeer :
+    CanvasBoardAutomationPeer,
+    IInvokeProvider,
+    ISelectionItemProvider
+{
+    internal CanvasCardAutomationPeer(CanvasRendererView view, CanvasPeerKey key)
+        : base(view, key)
+    {
+    }
+
+    private CanvasSceneNode? Node =>
+        View.Engine.Current?.Source.Loaded?.Population is { } population
+            && population.SceneByNode.TryGetValue(Key.Id, out CanvasSceneNode? node)
+            ? node
+            : null;
+
+    protected override string GetNameCore() => Node?.SpeakableName ?? string.Empty;
+
+    protected override AutomationControlType GetAutomationControlTypeCore() =>
+        AutomationControlType.Button;
+
+    protected override string GetClassNameCore() => "CanvasCard";
+
+    protected override string GetLocalizedControlTypeCore() => "card";
 
     public override object? GetPattern(PatternInterface patternInterface)
     {
@@ -207,16 +286,16 @@ internal sealed class CanvasCardAutomationPeer :
         return null;
     }
 
-    void IInvokeProvider.Invoke() => _view.SelectAnnounced(Key.Id);
+    void IInvokeProvider.Invoke() => View.SelectAnnounced(Key.Id);
 
     // --- SelectionItem, cell by cell (D6's matrix) ---------------------
 
     bool ISelectionItemProvider.IsSelected =>
-        string.Equals(_view.Engine.Current?.Selection, Key.Id, StringComparison.Ordinal);
+        string.Equals(View.Engine.Current?.Selection, Key.Id, StringComparison.Ordinal);
 
     IRawElementProviderSimple? ISelectionItemProvider.SelectionContainer => null;
 
-    void ISelectionItemProvider.Select() => _view.SelectAnnounced(Key.Id);
+    void ISelectionItemProvider.Select() => View.SelectAnnounced(Key.Id);
 
     void ISelectionItemProvider.AddToSelection()
     {
@@ -224,7 +303,7 @@ internal sealed class CanvasCardAutomationPeer :
         {
             return;
         }
-        if (_view.Engine.Current?.Selection is not null)
+        if (View.Engine.Current?.Selection is not null)
         {
             // Single selection: adding a second is the platform's
             // invalid-operation answer, never a silent replace —
@@ -233,64 +312,75 @@ internal sealed class CanvasCardAutomationPeer :
                 "the canvas selection is single; AddToSelection with another "
                 + "card selected is not a replace (§D D6).");
         }
-        _view.SelectAnnounced(Key.Id);
+        View.SelectAnnounced(Key.Id);
     }
 
     void ISelectionItemProvider.RemoveFromSelection()
     {
         if (((ISelectionItemProvider)this).IsSelected)
         {
-            _view.ClearSelectionAnnounced();
+            View.ClearSelectionAnnounced();
         }
     }
-
-    void IVirtualizedItemProvider.Realize() => _view.Realize(Key);
-
-    protected override bool IsControlElementCore() => true;
-
-    protected override bool IsContentElementCore() => true;
-
-    protected override bool IsEnabledCore() => true;
-
-    protected override bool IsKeyboardFocusableCore() => false;
-
-    protected override bool HasKeyboardFocusCore() => false;
-
-    protected override bool IsOffscreenCore() => !Materialized;
-
-    // The AutomationPeer abstract surface the card does not use.
-    protected override string GetAutomationIdCore() =>
-        (Key.IsEdge ? "CanvasEdge:" : "CanvasCard:") + Key.Id;
-
-    protected override string GetAcceleratorKeyCore() => string.Empty;
-
-    protected override string GetAccessKeyCore() => string.Empty;
 
     protected override string GetHelpTextCore() => Node?.Title ?? string.Empty;
 
     protected override string GetItemStatusCore() =>
-        _view.Model?.Selection.IsMarked(Key.Id) == true ? "marked" : string.Empty;
+        View.Model?.Selection.IsMarked(Key.Id) == true ? "marked" : string.Empty;
+}
 
-    protected override string GetItemTypeCore() => string.Empty;
-
-    protected override System.Collections.Generic.List<AutomationPeer>? GetChildrenCore() =>
-        null;
-
-    protected override System.Windows.Point GetClickablePointCore() => default;
-
-    protected override string GetLocalizedControlTypeCore() => "card";
-
-    protected override AutomationOrientation GetOrientationCore() =>
-        AutomationOrientation.None;
-
-    protected override bool IsPasswordCore() => false;
-
-    protected override bool IsRequiredForFormCore() => false;
-
-    protected override System.Windows.Automation.Peers.AutomationPeer GetLabeledByCore() =>
-        null!;
-
-    protected override void SetFocusCore()
+/// <summary>
+/// One labelled edge's peer (contract 34 D5, #1277): a Custom element a
+/// reader hears as "connection", named by core's traversal phrase with
+/// both endpoints, windowed like a card. INVOKE selects the endpoint D5's
+/// end-style table names, through the cards' announced door; there is no
+/// SELECTION-ITEM, since the board's seat is a node. An unlabelled edge
+/// never has one (DD-2).
+/// </summary>
+internal sealed class CanvasEdgeAutomationPeer :
+    CanvasBoardAutomationPeer,
+    IInvokeProvider
+{
+    internal CanvasEdgeAutomationPeer(CanvasRendererView view, CanvasPeerKey key)
+        : base(view, key)
     {
     }
+
+    private CanvasSceneEdge? Edge =>
+        View.Engine.Current?.Source.Loaded?.Population is { } population
+            ? CanvasRendererView.NamedEdge(population, Key.Id)
+            : null;
+
+    protected override string GetNameCore() => Edge?.SpeakableName ?? string.Empty;
+
+    protected override AutomationControlType GetAutomationControlTypeCore() =>
+        AutomationControlType.Custom;
+
+    protected override string GetClassNameCore() => "CanvasEdge";
+
+    protected override string GetLocalizedControlTypeCore() => "connection";
+
+    public override object? GetPattern(PatternInterface patternInterface)
+    {
+        if (patternInterface == PatternInterface.VirtualizedItem)
+        {
+            // ALWAYS exposed, as a card's is (D3's placeholder cell).
+            return this;
+        }
+        // Invoke only once materialized; no SelectionItem — the board's
+        // seat is a node.
+        return patternInterface == PatternInterface.Invoke && Materialized ? this : null;
+    }
+
+    void IInvokeProvider.Invoke()
+    {
+        if (Edge is { } edge)
+        {
+            View.SelectAnnounced(CanvasRendererView.DesignatedEndpoint(edge));
+        }
+    }
+
+    protected override string GetHelpTextCore() => string.Empty;
+
+    protected override string GetItemStatusCore() => string.Empty;
 }

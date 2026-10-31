@@ -79,6 +79,7 @@ public sealed class WcMatrixCanvasEvidenceCensus
             [
                 new("CanvasRendererAutomationPeer", ["Group"], ["Value", "Selection", "ItemContainer"]),
                 new("CanvasCardAutomationPeer", ["Button"], ["Invoke", "SelectionItem", "VirtualizedItem"]),
+                new("CanvasEdgeAutomationPeer", ["Custom"], ["Invoke", "VirtualizedItem"]),
             ],
             [],
             [],
@@ -96,6 +97,10 @@ public sealed class WcMatrixCanvasEvidenceCensus
             ["CanvasSurfaces_VisualBoardPeersAndZoom_AreClean", "TheZoomValueIsCoresRenderMinusItsPeriod", "FitCanvasContainsAndCentresCoresBounds",
                 "TheBoardsRightAndLeftFollowConnectionsAndEveryMoveRevealsItsSeat", "TheBoardRevealsItsOwnMovesAlwaysAndOtherMovesOnlyWhileFollowing",
                 "TheRevealRuleIsD4sOriginRule", "EveryBoardPeerHasItsOwnNameAndTheContainersNameIsReserved",
+                "ALabelledEdgeInTheWindowIsAChildOfTheBoard", "AnEdgeIsAPlaceholderOffWindowAndPromotesOnRealize",
+                "AnEdgeLongerThanTheViewportRealizesOnItsDesignatedEndpoint", "InvokeSelectsTheEndpointTheEndStyleTableNames",
+                "TheSameEdgePeerIsReturnedWhileAnythingHoldsIt", "FindItemByNameResolvesAnEdge",
+                "AStructureChangeRaisesChildrenInvalidatedOncePerInstall", "APointOnAnEndpointCardIsTheCardNotTheEdge",
                 "AFollowingBoardInAnotherPanePansToTheSelectionAndAnUnfollowingOneStays",
                 "AFollowingBoardRevealsANewCardOnceTheStateThatHasItInstalls", "AnOwedRevealIsPaidOnlyForTheCardThatIsStillTheSeat",
                 "AnOwedElsewhereRevealLapsesWhenTheBoardStopsFollowing", "TheBoardsOwnPeersRevealTheirCardWithFollowSelectionOff",

@@ -79,6 +79,14 @@ internal sealed class CanvasPopulation
             byNode[node.NodeId] = node;
         }
         SceneByNode = byNode.ToImmutable();
+        ImmutableDictionary<string, CanvasSceneEdge>.Builder byEdge =
+            ImmutableDictionary.CreateBuilder<string, CanvasSceneEdge>(
+                StringComparer.Ordinal);
+        foreach (CanvasSceneEdge edge in SceneEdges)
+        {
+            byEdge[edge.EdgeId] = edge;
+        }
+        SceneByEdge = byEdge.ToImmutable();
 
         ImmutableDictionary<string, CanvasOutlineRow>.Builder byId =
             ImmutableDictionary.CreateBuilder<string, CanvasOutlineRow>(
@@ -193,6 +201,11 @@ internal sealed class CanvasPopulation
     /// publication — a presentation build reuses the reference and
     /// allocates nothing per pan.</summary>
     internal ImmutableDictionary<string, CanvasSceneNode> SceneByNode { get; }
+
+    /// <summary>The descriptor index's edge half (D3, #1277): each
+    /// connection by edge id — a labelled edge's board name and endpoints
+    /// answer a first-touch lookup without a peer.</summary>
+    internal ImmutableDictionary<string, CanvasSceneEdge> SceneByEdge { get; }
 
     internal int Count => Outline.Length;
 

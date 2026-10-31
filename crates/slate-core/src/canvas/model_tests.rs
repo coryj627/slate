@@ -472,6 +472,104 @@ fn speakable_names_reserve_the_visual_boards_container_name() {
     );
 }
 
+/// Contract 34 D5 (#1277): a labelled edge is a peer in the board's ONE
+/// name namespace, named by core's traversal phrase with BOTH endpoints,
+/// so two same-label edges from one card to two destinations differ by
+/// name before any ordinal; residual collisions — a twin parallel edge,
+/// or a card whose given title already spells an edge's phrase — take the
+/// next free ordinal by the cards' own skip-occupied loop. An unlabelled,
+/// blank-labelled or dangling edge is never named (DD-2).
+#[test]
+fn edge_speakable_names_join_the_card_namespace() {
+    let phrase = r#"Text card "Hub" connects to Text card "Dest", labelled "supports""#;
+    let node = |id: &str, text: &str, y: i64| {
+        serde_json::json!({"id": id, "type": "text", "text": text,
+            "x": 0, "y": y, "width": 10, "height": 10})
+    };
+    let edge = |id: &str, from: &str, to: &str, label: Option<&str>, ends: (&str, &str)| {
+        let mut e = serde_json::json!({"id": id, "fromNode": from, "toNode": to,
+            "fromEnd": ends.0, "toEnd": ends.1});
+        if let Some(label) = label {
+            e["label"] = serde_json::Value::String(label.to_owned());
+        }
+        e
+    };
+    let json = serde_json::json!({
+        "nodes": [
+            node("hub", "Hub", 0),
+            node("dest-1", "Dest", 20),
+            node("dest-2", "Dest", 40),
+            node("board", VISUAL_BOARD_NAME, 60),
+            node("squatter", phrase, 80),
+            node("pre-suffixed", &format!("{phrase} 3"), 100),
+        ],
+        "edges": [
+            edge("e-to-1", "hub", "dest-1", Some("supports"), ("none", "arrow")),
+            edge("e-to-2", "hub", "dest-2", Some("supports"), ("none", "arrow")),
+            edge("e-twin", "hub", "dest-1", Some("supports"), ("none", "arrow")),
+            edge("e-back", "dest-1", "hub", Some("cites"), ("arrow", "none")),
+            edge("e-both", "hub", "dest-2", Some("pairs"), ("arrow", "arrow")),
+            edge("e-plain", "hub", "dest-2", Some("near"), ("none", "none")),
+            edge("e-loop", "hub", "hub", Some("again"), ("none", "arrow")),
+            edge("e-bare", "hub", "dest-1", None, ("none", "arrow")),
+            edge("e-empty", "hub", "dest-1", Some(""), ("none", "arrow")),
+            edge("e-blank", "hub", "dest-1", Some("   "), ("none", "arrow")),
+            edge("e-dangling", "hub", "nowhere", Some("lost"), ("none", "arrow")),
+        ],
+    });
+    let (canvas, _) = parse(&json.to_string());
+    let model = derive(&canvas);
+    let name = |edge: &str| {
+        model
+            .edge_names
+            .get(&EdgeId(edge.to_owned()))
+            .map(String::as_str)
+    };
+
+    // The card that already spells the phrase keeps it (cards first,
+    // first come), so the first edge takes the next free ordinal — and
+    // skips "… 3", which a real card title occupies.
+    assert_eq!(model.summaries[&id("squatter")].speakable_name, phrase);
+    assert_eq!(name("e-to-1"), Some(format!("{phrase} 2").as_str()));
+    assert_eq!(name("e-twin"), Some(format!("{phrase} 4").as_str()));
+    // The other destination differs by name before any ordinal: its
+    // reference is that card's SPEAKABLE name.
+    assert_eq!(
+        name("e-to-2"),
+        Some(r#"Text card "Hub" connects to Text card "Dest 2", labelled "supports""#)
+    );
+    // The from-node's own reading of the end styles, in the traversal's words.
+    assert_eq!(
+        name("e-back"),
+        Some(r#"Text card "Dest" connected from Text card "Hub", labelled "cites""#)
+    );
+    assert_eq!(
+        name("e-both"),
+        Some(r#"Text card "Hub" linked with Text card "Dest 2", labelled "pairs""#)
+    );
+    assert_eq!(
+        name("e-plain"),
+        Some(r#"Text card "Hub" linked with Text card "Dest 2", labelled "near""#)
+    );
+    assert_eq!(
+        name("e-loop"),
+        Some(r#"Text card "Hub" connects to Text card "Hub", labelled "again""#)
+    );
+    // DD-2: no name for an unlabelled, blank-labelled or dangling edge.
+    assert_eq!(name("e-bare"), None);
+    assert_eq!(name("e-empty"), None);
+    assert_eq!(name("e-blank"), None);
+    assert_eq!(name("e-dangling"), None);
+    assert_eq!(model.edge_names.len(), 7);
+
+    // One namespace: the container, every card and every named edge.
+    let mut every: Vec<&str> = vec![VISUAL_BOARD_NAME];
+    every.extend(model.summaries.values().map(|s| s.speakable_name.as_str()));
+    every.extend(model.edge_names.values().map(String::as_str));
+    let distinct: HashSet<&str> = every.iter().copied().collect();
+    assert_eq!(distinct.len(), every.len(), "{every:#?}");
+}
+
 /// `target` is derived once, in the model, and the index column is that
 /// derivation rather than a second `match` in `canvas_db` (0b-13).
 #[test]

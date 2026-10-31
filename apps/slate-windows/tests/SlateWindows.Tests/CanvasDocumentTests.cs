@@ -5813,7 +5813,7 @@ public sealed class CanvasDocumentTests : IDisposable
     private static (int Retained, int Materialized) RealizeWhileHeld(
         CanvasRendererView renderer, CanvasPeerKey key, Func<bool> settled)
     {
-        CanvasCardAutomationPeer? held = renderer.RealizePeer(key);
+        CanvasBoardAutomationPeer? held = renderer.RealizePeer(key);
         Assert.NotNull(held);
         PumpUntil(() => settled() && renderer.Engine.Current!.Retained.Contains(key));
         CanvasPresentationState state = renderer.Engine.Current!;
@@ -5962,9 +5962,10 @@ public sealed class CanvasDocumentTests : IDisposable
     /// container, and a card pre-named with another card's ordinal suffix)
     /// every live peer's Name is its own, and the card titled "Canvas visual
     /// view" answers to core's next free spelling, never to the container's
-    /// Name. The edges are in the fixture so the namespace is D5's whole
-    /// collision; labelled edges have no peers yet (a separate D5 gap), so
-    /// the peers are the container and its four cards.
+    /// Name. The twin parallel same-label edges are peers too (#1277): core
+    /// names each by its traversal phrase and the second takes the next free
+    /// ordinal, so the peers are the container, its four cards and its two
+    /// edges.
     /// </summary>
     [Fact]
     public void EveryBoardPeerHasItsOwnNameAndTheContainersNameIsReserved() => RunSta(() =>
@@ -5992,7 +5993,8 @@ public sealed class CanvasDocumentTests : IDisposable
             board.ResetChildrenCache();
             return board.GetChildren() ?? [];
         }
-        PumpUntil(() => Children().OfType<CanvasCardAutomationPeer>().Count() == 4);
+        PumpUntil(() => Children().OfType<CanvasCardAutomationPeer>().Count() == 4
+            && Children().OfType<CanvasEdgeAutomationPeer>().Count() == 2);
 
         Dictionary<string, string> cards = Children()
             .OfType<CanvasCardAutomationPeer>()
@@ -6006,6 +6008,12 @@ public sealed class CanvasDocumentTests : IDisposable
         Assert.Equal("Twin", cards["twin-a"]);
         Assert.Equal("Twin 3", cards["twin-b"]);
         Assert.Equal("Twin 2", cards["twin-2"]);
+        Dictionary<string, string> edges = Children()
+            .OfType<CanvasEdgeAutomationPeer>()
+            .ToDictionary(edge => edge.Key.Id, edge => edge.GetName(), StringComparer.Ordinal);
+        const string Echoes = "Text card \"Twin\" connects to Text card \"Twin 3\", labelled \"echoes\"";
+        Assert.Equal(Echoes, edges["e1"]);
+        Assert.Equal($"{Echoes} 2", edges["e2"]);
 
         string[] names = [board.GetName(), .. Children().Select(peer => peer.GetName())];
         Assert.True(
