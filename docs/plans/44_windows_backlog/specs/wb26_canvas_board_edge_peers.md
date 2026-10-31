@@ -4,6 +4,38 @@ Issues: Closes #1277. Size L (design first). Lanes: windows + FlaUI (shell gate)
 
 **Owner's call of 2026-10-26** (plan §3.1, "Review calls") outranks this spec where they differ: WB-26 does not wait for plan 43 PR 32 (#1370) — they share no Windows file; only core's `a11y.rs` and `lib.rs` may need a rebase.
 
+**Design answers, recorded 2026-10-31 before code.** These answers come from the run process (plan §3.1, "Run process"). The design section's recommendations were taken, and a fresh red team reviewed this record before the first fact was written.
+- **D-A: recommended (core owns the name).** The answer comes with five refinements:
+  - **Where names are allocated.** `canvas::model` allocates the names in the same skip-occupied loop as the cards' speakable names, right after the cards. It walks edges in document order and keeps them in a new `CanvasModel.edge_names: HashMap<EdgeId, String>`. An edge is named only if:
+    - its label is non-empty, the host's own DD-2 test (`Label is { Length: > 0 }`), and
+    - both of its endpoints exist (a dangling edge is never named, as adjacency already excludes it).
+  - **Ordinals.** A colliding edge phrase takes `"{phrase} {n}"`. As with the card ordinals, `n` skips every spelling already used and every real card title.
+  - **The phrase.**
+    - It is rendered in `a11y.rs` by a new `canvas_edge_phrase(from_kind, from_name, direction, to_kind, to_name, label)`.
+    - It shares its direction words with the `CanvasConnectionTraversed` renderer through one helper, so the two cannot drift.
+    - Its form is `{from ref} {connects to | connected from | linked with} {to ref}, labelled "{label}"`.
+    - `direction` is `direction_from(true, from_end, to_end)`, the from-node's own reading of the edge.
+    - Each ref is `card_ref(kind, speakable name)`. The endpoints' speakable names, not their raw titles, so the phrase names each card the way the board names it.
+  - **FFI.**
+    - The record gains `speakable_name: Option<String>`, not the design section's `String`.
+    - `None` means exactly "not a peer" (DD-2), so the host never re-derives labelled-ness from an empty string.
+    - It is the record's last field, with `#[uniffi(default = None)]`.
+  - **Swift.** No Swift source constructs a `CanvasSceneEdge`: `git grep CanvasSceneEdge apps/slate-mac` finds nothing outside the generated binding. So no Swift literal is edited, and the Swift lane compiles the regenerated binding.
+- **D-B: recommended.**
+  - The edge peer is `AutomationControlType.Custom` with `LocalizedControlType` "connection" and `ClassName` "CanvasEdge".
+  - It exposes Invoke (D5's table) and VirtualizedItem (always, as the card does), and no SelectionItem.
+  - `HelpText` and `ItemStatus` are empty.
+  - `AutomationId` is `CanvasEdge:{edge id}` (the card peer's existing rule).
+- **Base class.** The new `CanvasBoardAutomationPeer` base carries the shared code:
+  - the key and the materialized test;
+  - the screen rectangle from the placement;
+  - the VirtualizedItem door and offscreen;
+  - the AutomationId;
+  - the empty abstract surface.
+  The card and edge peers keep only their own name, control type and action patterns.
+- **Find by name.** `FindByName` walks cards, then named edges, in document order. Its `after` argument may be a card or an edge peer.
+- **Validity check.** `PeerFor` and `Realize` treat an edge key as valid only when the edge is in `SceneEdges`, has a speakable name, and has both endpoints in `SceneByNode`.
+
 ## Goal
 
 Locked contract 34 D5 says a labelled edge is a peer in the board's name
