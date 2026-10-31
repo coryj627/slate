@@ -981,8 +981,16 @@ public sealed class CanvasRendererPeerTests : IDisposable
             _window.UpdateLayout();
             Peer = Assert.IsType<CanvasRendererAutomationPeer>(
                 UIElementAutomationPeer.CreatePeerForElement(Renderer));
+            // The board at its full size in the 900×700 window, and the
+            // engine told so: an early layout pass can report a smaller
+            // size first, and a fact that realizes or fits against it pans
+            // for a view the board no longer has (a slow CI host delivered
+            // the full size after a realization had taken its fallback).
             SettleUntil(() => Renderer.Engine.Current is { Source.Loaded: not null } state
-                && state.Viewport.ViewWidth > 0);
+                && Renderer.ActualWidth > 800
+                && Renderer.ActualHeight > 600
+                && state.Viewport.ViewWidth == Renderer.ActualWidth
+                && state.Viewport.ViewHeight == Renderer.ActualHeight);
         }
 
         internal CanvasDocumentViewModel Document { get; }
