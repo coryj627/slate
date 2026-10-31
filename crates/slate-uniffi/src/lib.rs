@@ -13452,6 +13452,12 @@ pub struct CanvasSceneEdge {
     pub to_arrow: bool,
     pub label: Option<String>,
     pub color: Option<String>,
+    /// The edge's board name (contract 34 D5, #1277): core's traversal
+    /// phrase with both endpoints, unique in the board's one namespace;
+    /// `None` exactly when the edge is not a peer (unlabelled or dangling,
+    /// DD-2).
+    #[uniffi(default = None)]
+    pub speakable_name: Option<String>,
 }
 
 impl From<core::CanvasSceneEdge> for CanvasSceneEdge {
@@ -13466,6 +13472,7 @@ impl From<core::CanvasSceneEdge> for CanvasSceneEdge {
             to_arrow: e.to_arrow,
             label: e.label,
             color: e.color,
+            speakable_name: e.speakable_name,
         }
     }
 }

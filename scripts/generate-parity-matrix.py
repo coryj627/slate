@@ -1273,6 +1273,7 @@ def main() -> int:
         "harness) |"
     )
     a(f"| Accessible canvas (T parity) | `Canvas/` | #745 (W6-1) | {issue_delivery_status('#745 (W6-1)', delivery_evidence)} |")
+    a("| Canvas board edge elements: a labelled edge is a peer named by core's traversal phrase, Invoke per the end-style table | `Canvas/` (core `CanvasSceneEdge.speakable_name`) | #1277 (plan 44 WB-26); mac #1720 | implemented on Windows; unverified on mac; not shipped here (#1720) |")
     a(f"| Graph view (P parity, canonical textual representation) | `Graph/` | #746 (W6-2) | {issue_delivery_status('#746 (W6-2)', delivery_evidence)} |")
     for surface, source, issue in [
         ("Editor TextPattern semantic attributes and events", "`EditorAccessibilityAttributes.swift` (mac converged in #1224)", "#747 (W7-1)"),

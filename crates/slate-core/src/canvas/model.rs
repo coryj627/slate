@@ -298,6 +298,11 @@ pub struct CanvasModel {
     pub adjacency: AdjacencyMap,
     pub summaries: HashMap<NodeId, CardSummary>,
     pub spatial: SpatialIndex,
+    /// Each labelled edge's name on the visual board (contract 34 D5,
+    /// #1277): core's traversal phrase with both endpoints, unique in the
+    /// one namespace the container and the cards' speakable names share.
+    /// No entry for an unlabelled or dangling edge (DD-2).
+    pub edge_names: HashMap<EdgeId, String>,
 }
 
 /// Source of note titles / media alt text for `file` cards (frontmatter
@@ -519,22 +524,60 @@ pub fn derive_with(canvas: &Canvas, titles: &dyn FileTitleSource) -> CanvasModel
     let mut used: std::collections::HashSet<String> =
         std::collections::HashSet::with_capacity(nodes.len() + 1);
     used.insert(VISUAL_BOARD_NAME.to_owned());
+    let next_free = |base: &str, used: &std::collections::HashSet<String>| -> String {
+        if !used.contains(base) {
+            return base.to_owned();
+        }
+        let mut ordinal = 1usize;
+        loop {
+            ordinal += 1;
+            let next = format!("{base} {ordinal}");
+            if !used.contains(&next) && !real_titles.contains(next.as_str()) {
+                break next;
+            }
+        }
+    };
     let mut speakable_names: HashMap<NodeId, String> = HashMap::with_capacity(nodes.len());
     for node in nodes {
-        let base = &base_titles[&node.id];
-        let mut candidate = base.clone();
-        if used.contains(&candidate) {
-            let mut ordinal = 1usize;
-            candidate = loop {
-                ordinal += 1;
-                let next = format!("{base} {ordinal}");
-                if !used.contains(&next) && !real_titles.contains(next.as_str()) {
-                    break next;
-                }
-            };
-        }
+        let candidate = next_free(&base_titles[&node.id], &used);
         used.insert(candidate.clone());
         speakable_names.insert(node.id.clone(), candidate);
+    }
+
+    // Labelled edges join the SAME namespace (contract 34 D5, #1277),
+    // after every card, in document order, through the same skip-occupied
+    // search: a card keeps a title an edge's phrase also spells, and the
+    // edge takes the next free ordinal. The name is core's traversal
+    // phrase with BOTH endpoints, each referenced by its speakable name,
+    // read from the from-node's side — so two same-label edges from one
+    // card to two destinations differ before any ordinal. DD-2: an
+    // unlabelled (or blank-labelled) edge is never a peer, and a dangling
+    // one is invisible to navigation, so neither takes a name.
+    let mut edge_names: HashMap<EdgeId, String> = HashMap::new();
+    for edge in &canvas.edges {
+        let Some(label) = edge
+            .label
+            .as_deref()
+            .filter(|label| !label.trim().is_empty())
+        else {
+            continue;
+        };
+        let (Some(&from), Some(&to)) = (doc_index.get(&edge.from.0), doc_index.get(&edge.to.0))
+        else {
+            continue;
+        };
+        let (from, to) = (&nodes[from], &nodes[to]);
+        let phrase = crate::a11y::canvas_edge_phrase(
+            kind_label(from),
+            &speakable_names[&from.id],
+            direction_from(true, edge.from_end, edge.to_end),
+            kind_label(to),
+            &speakable_names[&to.id],
+            label,
+        );
+        let candidate = next_free(&phrase, &used);
+        used.insert(candidate.clone());
+        edge_names.insert(edge.id.clone(), candidate);
     }
     drop(used);
 
@@ -617,6 +660,7 @@ pub fn derive_with(canvas: &Canvas, titles: &dyn FileTitleSource) -> CanvasModel
         adjacency,
         summaries,
         spatial,
+        edge_names,
     }
 }
 

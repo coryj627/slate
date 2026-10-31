@@ -156,23 +156,20 @@ internal sealed class CanvasPeerTopology
         }
         foreach (CanvasSceneEdge edge in population.SceneEdges)
         {
-            if (edge.Label is not { Length: > 0 })
+            if (edge.SpeakableName is null)
             {
-                // DD-2: an unlabelled edge is not a peer.
+                // DD-2: an unlabelled edge is not a peer — core names
+                // exactly the edges that are (#1277), so the host never
+                // re-derives "labelled" from the label's text.
                 continue;
             }
             if (population.SceneByNode.TryGetValue(edge.FromNode, out CanvasSceneNode? from)
                 && population.SceneByNode.TryGetValue(edge.ToNode, out CanvasSceneNode? to))
             {
-                (double fx, double fy, double fw, double fh) = RectOf(from);
-                (double tx, double ty, double tw, double th) = RectOf(to);
                 bool follows = transientRects is not null
                     && (transientRects.ContainsKey(edge.FromNode)
                         || transientRects.ContainsKey(edge.ToNode));
-                double x = Math.Min(fx, tx);
-                double y = Math.Min(fy, ty);
-                double w = Math.Max(fx + fw, tx + tw) - x;
-                double h = Math.Max(fy + fh, ty + th) - y;
+                (double x, double y, double w, double h) = EdgeUnion(RectOf(from), RectOf(to));
                 if (follows || Intersects(x, y, w, h))
                 {
                     placements[CanvasPeerKey.Edge(edge.EdgeId)] =
@@ -195,10 +192,25 @@ internal sealed class CanvasPeerTopology
         bool Intersects(double x, double y, double w, double h) =>
             x <= right && x + w >= left && y <= bottom && y + h >= top;
 
-        (double X, double Y, double W, double H) RectOf(CanvasSceneNode node) =>
+        CanvasRect RectOf(CanvasSceneNode node) =>
             transientRects is not null
                 && transientRects.TryGetValue(node.NodeId, out CanvasRect? over)
-                ? (over.X, over.Y, over.Width, over.Height)
-                : (node.X, node.Y, node.Width, node.Height);
+                ? over
+                : new CanvasRect(node.X, node.Y, node.Width, node.Height);
+    }
+
+    /// <summary>An edge's RENDERED bounds: the bounding box of its two
+    /// endpoints' rectangles, which contains the straight path. The one
+    /// union the topology windows by and a realization pans to (#1277).</summary>
+    internal static (double X, double Y, double Width, double Height) EdgeUnion(
+        CanvasRect from, CanvasRect to)
+    {
+        double x = Math.Min(from.X, to.X);
+        double y = Math.Min(from.Y, to.Y);
+        return (
+            x,
+            y,
+            Math.Max(from.X + from.Width, to.X + to.Width) - x,
+            Math.Max(from.Y + from.Height, to.Y + to.Height) - y);
     }
 }

@@ -4,6 +4,149 @@ Issues: Closes #1277. Size L (design first). Lanes: windows + FlaUI (shell gate)
 
 **Owner's call of 2026-10-26** (plan §3.1, "Review calls") outranks this spec where they differ: WB-26 does not wait for plan 43 PR 32 (#1370) — they share no Windows file; only core's `a11y.rs` and `lib.rs` may need a rebase.
 
+**Design answers, recorded 2026-10-31 before code.** These answers come from the run process (plan §3.1, "Run process"). The design section's recommendations were taken, and a fresh red team reviewed this record before the first fact was written.
+- **D-A: recommended (core owns the name).** The answer comes with five refinements:
+  - **Where names are allocated.** `canvas::model` allocates the names in the same skip-occupied loop as the cards' speakable names, right after the cards. It walks edges in document order and keeps them in a new `CanvasModel.edge_names: HashMap<EdgeId, String>`. An edge is named only if:
+    - its label is non-empty, the host's own DD-2 test (`Label is { Length: > 0 }`), and
+    - both of its endpoints exist (a dangling edge is never named, as adjacency already excludes it).
+  - **Ordinals.** A colliding edge phrase takes `"{phrase} {n}"`. As with the card ordinals, `n` skips every spelling already used and every real card title.
+  - **The phrase.**
+    - It is rendered in `a11y.rs` by a new `canvas_edge_phrase(from_kind, from_name, direction, to_kind, to_name, label)`.
+    - It shares its direction words with the `CanvasConnectionTraversed` renderer through one helper, so the two cannot drift.
+    - Its form is `{from ref} {connects to | connected from | linked with} {to ref}, labelled "{label}"`.
+    - `direction` is `direction_from(true, from_end, to_end)`, the from-node's own reading of the edge.
+    - Each ref is `card_ref(kind, speakable name)`. The endpoints' speakable names, not their raw titles, so the phrase names each card the way the board names it.
+  - **FFI.**
+    - The record gains `speakable_name: Option<String>`, not the design section's `String`.
+    - `None` means exactly "not a peer" (DD-2), so the host never re-derives labelled-ness from an empty string.
+    - It is the record's last field, with `#[uniffi(default = None)]`.
+  - **Swift.** No Swift source constructs a `CanvasSceneEdge`: `git grep CanvasSceneEdge apps/slate-mac` finds nothing outside the generated binding. So no Swift literal is edited, and the Swift lane compiles the regenerated binding.
+- **D-B: recommended.**
+  - The edge peer is `AutomationControlType.Custom` with `LocalizedControlType` "connection" and `ClassName` "CanvasEdge".
+  - It exposes Invoke (D5's table) and VirtualizedItem (always, as the card does), and no SelectionItem.
+  - `HelpText` and `ItemStatus` are empty.
+  - `AutomationId` is `CanvasEdge:{edge id}` (the card peer's existing rule).
+- **Base class.** The new `CanvasBoardAutomationPeer` base carries the shared code:
+  - the key and the materialized test;
+  - the screen rectangle from the placement;
+  - the VirtualizedItem door and offscreen;
+  - the AutomationId;
+  - the empty abstract surface.
+  The card and edge peers keep only their own name, control type and action patterns.
+- **Find by name.** `FindByName` walks cards, then named edges, in document order. Its `after` argument may be a card or an edge peer.
+- **Validity check.** `PeerFor` and `Realize` treat an edge key as valid only when the edge is in `SceneEdges`, has a speakable name, and has both endpoints in `SceneByNode`.
+
+**Red-team amendments, 2026-10-31, before code.** Where these differ from the design section or the Tests below, they win.
+1. **Hit-testing.** An edge's rectangle is the union of its endpoints' rectangles, so it covers them, and WPF's point walk checks children last-first. The board peer therefore overrides `GetPeerFromPointCore`:
+   - a card wins;
+   - an edge answers only a point no card covers.
+   New fact: `CanvasRendererPeerTests.APointOnAnEndpointCardIsTheCardNotTheEdge`.
+2. **The item-container door realizes, for edges as for cards.**
+   - **Find by name.** `FindItemByProperty` goes through `RealizePeer`, as it does for cards (`TheBoardsOwnPeersRevealTheirCardWithFollowSelectionOff` pins that pan). So `FindItemByNameResolvesAnEdge` asserts that:
+     - the descriptor lookup (`FindByName`) changes nothing;
+     - the container's search hands back the edge's peer;
+     - that peer is promoted with the bounded realization pan.
+   - **Placeholder.** A placeholder refuses action patterns the card's way: `GetPattern(Invoke)` is null. It does not throw `ElementNotAvailableException`, which nothing in the canvas does.
+3. **Censuses.**
+   - **`WcMatrixCanvasEvidenceCensus` is the census that applies.** It scrapes each peer class's own source span, so `GetPattern` stays in each subclass; the base class carries no pattern code.
+   - **Its manifest gains:**
+     - `CanvasEdgeAutomationPeer` (`Custom`; Invoke, VirtualizedItem);
+     - `Custom` in the Canvas visual row's control-type cell;
+     - the new fact names.
+   - **Dropped:** `CanvasAutomationPropertyCensus` sees no peer, so it is out of the filter.
+4. **D5's four-way fixture.**
+   - `EveryBoardPeerHasItsOwnNameAndTheContainersNameIsReserved` now waits for and asserts its two twin edges' peers: the phrase, and the phrase with " 2".
+   - The Rust fact covers twin parallel edges, a card that squats on an edge's phrase, and a card pre-named with an edge ordinal.
+5. **Parity matrix.** `parity_matrix.md` is generated, so any row goes through `scripts/generate-parity-matrix.py`, never by hand.
+6. **One labelled test.**
+   - Core names only an edge whose label is not blank (`!label.trim().is_empty()`, as group labels are trimmed).
+   - The topology's DD-2 test reads `SpeakableName is not null` instead of the label, and the topology facts' edge literals pass a `SpeakableName`.
+7. **Speakable names in the phrase.** The phrase references the endpoints by their speakable names, while the walk speaks `display_title`. This is a deliberate refinement of D5's "the same sentence": the board's references must match the cards' own board names. Contract 34's delivery record says so.
+8. **Lookup and geometry.**
+   - **Edge index.** The load-class descriptor index gains `SceneByEdge` (edge id to scene edge), built once with the population (ID-3), so a Name read is no linear scan.
+   - **What the topology keeps.** Edge geometry stays the topology's (a drag moves it).
+   - **Realization target.** `Realize` builds an edge's union from the node rectangles, because a placeholder's placement has no geometry.
+   - **Find by name.** `FindByName` compares discriminated keys, never bare ids.
+9. **Typed test sites.** Two facts typed `PeerFor`/`RealizePeer` as the card peer (`CanvasNavigatorTests`, `CanvasDocumentTests`). They now assert the type or hold the base class.
+10. **Swift.** The "Swift literal edits" in the header, the design section and the Brief do not apply (see D-A above). `canvas::model` now calls `crate::a11y::canvas_edge_phrase`, its first use of `a11y`.
+
+**Review of the code (codex round 1 and the code red team), 2026-10-31.**
+- **D3's identity is (renderer, document, key).**
+  - The registry is keyed by document, and every peer records its own.
+  - A held peer exposes no pattern, reads offscreen and has an empty rect once its card or edge is gone, the pane closes, or the board shows another document.
+  - `PeerFor` revalidates before it returns a held peer.
+  - This applies to cards too, closing the same gap they had.
+- **Realization reads the installed state's effective rects** (`NodeRect`) through one `CanvasPeerTopology.EdgeUnion`.
+- **The board's hit test answers only inside the board,** each child clipped to it.
+- **Facts:**
+  - `APointBesideTheBoardIsNeverOneOfItsPeers`
+  - `AHeldEdgePeerGoesUnavailableWhenItsEdgeStopsBeingAPeer`
+  - `AnEdgePeerHeldOnOneCanvasNeverAnswersForAnother`
+  - `AnEdgeRealizesOnTheRectanglesItsBoardDraws`
+  The placeholder and find facts now target an edge whose designated endpoint is the LEFT card, so only the union branch passes them.
+- **Follow-ups:** the mac board's edges are #1720; an edge's bounds as a label chip, and the full-cover axe risk, are #1721.
+
+**Codex round 2, 2026-10-31.**
+- **Retained providers recheck at call time.** A client keeps the pattern interfaces it was handed, so every action rechecks when it runs (`RequireAvailable`):
+  - Realize refuses with `ElementNotAvailableException` once the peer's card or edge is gone, or its document is no longer shown.
+  - Invoke and the SelectionItem actions refuse the same way, and also off the window.
+- **The renderer records each publication's document** as it forwards it to the engine (`InstalledDocument`). Every peer-surface read requires the installed state to be the bound document's:
+  - `PeerFor`;
+  - `FindByName`;
+  - `Realize`;
+  - `MaterializedPeers`;
+  - each peer's own reads.
+  So nothing answers from the previous canvas's scene during a switch.
+- **Facts:**
+  - `ARetainedProviderRefusesOnceItsPeerIsUnavailable`
+  - `AHeldPeerReadsNothingUntilItsCanvasIsInstalledAgain`
+
+**Codex round 3, 2026-10-31.**
+- **Actions also check the applied population.** An action checks the document's APPLIED population as well as the installed one (`ExistsIn`): the board installs a delete, an unlabelling or a reload a moment after the document applies it, and nothing may act on what the document already dropped.
+- **Invoke reads the applied edge.** An edge's Invoke picks its endpoint from the document's applied edge, so an applied direction change is obeyed.
+- **Invoke always says where it landed.** It does so even when that card is already the seat (`SelectNode`'s `announceWhenSeated`, used by the edge peer only), with one announcement each time.
+- **A card's Invoke on the seated card stays silent,** as every other selection door is.
+- **Facts:**
+  - `ARetainedActionObeysWhatTheDocumentAppliedBeforeTheBoardInstallsIt`
+  - `InvokingAnEdgeWhoseEndpointIsTheSeatStillSaysWhereItLanded`
+
+**Codex round 4, 2026-10-31.**
+- **A realization checks its key against the document's applied scene.**
+- **It defers while the board lags.** When the installed scene is not yet the applied one, it commits the key as retained and owes the pan to the first install that is (`PayOwedRealization`, beside the owed reveal). The target is computed from that state's rects, so a reload or a direction change already applied is the one obeyed.
+- **The item-container search refuses dropped keys.** `RealizePeer` refuses a key the applied scene has dropped.
+- **Fact:** `ARealizationWaitsForTheSceneTheDocumentApplied`.
+
+**Codex round 5, 2026-10-31.**
+- **The board's hit test returns null outside the board, or while it is hidden.** Returning the board itself would end the window's walk there and mask the sibling control under the point.
+- **The newest request for the view wins.**
+  - A reveal and a viewport verb each drop an owed realization.
+  - A realization that pans at once drops an older owed reveal.
+  - An owed realization is paid after any owed reveal, so it lands last.
+- **Facts:**
+  - `APointBesideTheBoardIsNeverOneOfItsPeers` now also walks the window onto the switcher button with the board shown and hidden;
+  - `TheNewestRequestForTheViewWins` covers both orders, a fit verb, and a hidden board.
+
+**Codex round 6, 2026-10-31.**
+- **The fix.** A realization drops an older owed reveal as soon as it is accepted, whether it pans now or is itself owed to the install. The deferred case had kept the reveal, which a hidden board's showing could then pay over the edge.
+- **New cases.** `TheNewestRequestForTheViewWins` gains two deferred schedules: hidden before the request, and hidden before the install.
+- **What witnesses the fix.** The hidden-board case with an immediate realization is the witness: it fails when the drop is removed. In the two deferred schedules the board settles the older reveal before the realization pans, so they hold as behaviour checks, not as witnesses.
+
+**Codex round 7, 2026-10-31.**
+- **Only verbs that move or zoom the view supersede pans.** ZoomIn, ZoomOut, ActualSize, and a FitCanvas or ZoomToSelection that commits each supersede every owed pan, reveal and realization alike (`SupersedeOwedPans`). An edge Invoke's reveal owed to a pending install is therefore never paid over a newer verb.
+- **The follow-selection toggle moves nothing and supersedes nothing.**
+- **New cases.** `TheNewestRequestForTheViewWins` adds both toggle directions after a realization, and an edge Invoke followed by Actual Size.
+
+**Codex round 8, 2026-10-31.**
+- **Zoom to Selection fits the document's applied selection.** It fits the DOCUMENT's selection in its APPLIED scene, never the board's stale installed one, so an edge Invoke's endpoint is the one fitted. An empty selection fits nothing and supersedes nothing.
+- **The peer registry holds documents weakly.** It is one registry per document in a `ConditionalWeakTable`.
+- **Publication provenance holds its document through a `WeakReference`.**
+- **A document switch refreshes the board's cached children,** so the old canvas's peers leave them at once.
+- **Facts:**
+  - `ACanvasTheBoardHasLeftIsNotKeptAliveByIt`, a GC fact for a board that leaves a canvas for another;
+  - `TheNewestRequestForTheViewWins` adds "invoke, then zoom to selection" and an empty selection;
+  - `AHeldPeerReadsNothingUntilItsCanvasIsInstalledAgain` asserts the board's own cached children are empty at the switch.
+- **Accepted, and older than this chunk.** A board left with NO document keeps its engine's last installed publication, whose lease closes through `SessionSource(document)`, until the pane is torn down. That is the engine's retention, untouched here. The weak provenance has no witness for that reason.
+
 ## Goal
 
 Locked contract 34 D5 says a labelled edge is a peer in the board's name

@@ -80,6 +80,50 @@ internal sealed class CanvasRendererView : FrameworkElement
             handledEventsToo: false);
     }
 
+    /// <summary>The bound document's publication intake: records the
+    /// publication's document, then hands it to the engine. It runs on
+    /// whatever thread applied the publication.</summary>
+    private Action<CanvasPublication>? _forwardPublication;
+
+    /// <summary>Which document each publication this board was handed came
+    /// from. The engine installs off the dispatcher, so for a moment after
+    /// the board moves to another canvas its installed state is still the
+    /// previous canvas's; a board peer reads the installed scene only when
+    /// it is its own document's (#1277, codex round 2). The document is held
+    /// WEAKLY: the engine keeps its installed publication after the board
+    /// moves on or tears down, and that must not keep a closed canvas alive
+    /// (codex round 8).</summary>
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<
+        CanvasPublication, WeakReference<CanvasDocumentViewModel>> _publicationDocuments = new();
+
+    private void ForwardPublication(CanvasDocumentViewModel document, CanvasPublication publication)
+    {
+        // One entry per publication: a publication forwarded again (the
+        // board returning to its document) replaces its own. Both calls run
+        // on the UI thread that applies publications.
+        _publicationDocuments.Remove(publication);
+        _publicationDocuments.Add(publication, new WeakReference<CanvasDocumentViewModel>(document));
+        _engine.OnPublicationApplied(publication);
+    }
+
+    /// <summary>The document the INSTALLED state was built from — null
+    /// before any install, or for a source this board was never handed.</summary>
+    internal CanvasDocumentViewModel? InstalledDocument =>
+        _engine.Current is { } state
+        && _publicationDocuments.TryGetValue(state.Source, out WeakReference<CanvasDocumentViewModel>? owner)
+        && owner.TryGetTarget(out CanvasDocumentViewModel? document)
+            ? document
+            : null;
+
+    /// <summary>The installed scene, only while it is the bound document's —
+    /// what every peer-surface read answers from, so nothing is minted,
+    /// found or realized against the previous canvas's scene during a
+    /// switch.</summary>
+    private CanvasPopulation? BoundPopulation =>
+        _model is { } document && ReferenceEquals(InstalledDocument, document)
+            ? _engine.Current?.Source.Loaded?.Population
+            : null;
+
     /// <summary>The pane's document. Attach subscribes the engine to
     /// the post-apply notification; detach unsubscribes and disposes
     /// nothing shared — the engine and the text-scale service belong
@@ -95,23 +139,31 @@ internal sealed class CanvasRendererView : FrameworkElement
             }
             if (_model is { } old)
             {
-                old.PublicationApplied -= _engine.OnPublicationApplied;
+                old.PublicationApplied -= _forwardPublication;
                 old.ModeVisibleChanged -= OnModeVisibleChanged;
                 LeaveDocument(old);
             }
             // A reveal owed to the old document's seat is not this one's
             // (#1271, review round 2); a teardown sets null and lands here too.
+            // So is a realization owed to the old document's key.
             _owedReveal = null;
+            _owedRealization = null;
             _model = value;
+            _forwardPublication = null;
             if (value is not null)
             {
-                value.PublicationApplied += _engine.OnPublicationApplied;
+                _forwardPublication = publication => ForwardPublication(value, publication);
+                value.PublicationApplied += _forwardPublication;
                 value.ModeVisibleChanged += OnModeVisibleChanged;
-                _engine.OnPublicationApplied(
-                    value.AppliedPublication ?? CanvasPublication.Seed());
+                ForwardPublication(value, value.AppliedPublication ?? CanvasPublication.Seed());
                 _engine.CommitTransient(value.Transient);
                 ReturnToDocument(value);
             }
+            // The old document's peers leave the board's cached children now,
+            // not at the next install — which a board left with no document
+            // never gets — so nothing here keeps a closed canvas alive (codex
+            // round 8).
+            RefreshAutomationChildren();
         }
     }
 
@@ -160,6 +212,9 @@ internal sealed class CanvasRendererView : FrameworkElement
         // A reveal owed to a card the previous state lacked is paid by
         // the first install that has it (#1271, review round 2).
         PayOwedReveal();
+        // So is a realization asked for while the board still showed the
+        // scene the document had already replaced (codex round 4).
+        PayOwedRealization();
     }
 
     /// <summary>WPF caches the board's children. Refresh after the winning
@@ -424,12 +479,15 @@ internal sealed class CanvasRendererView : FrameworkElement
         switch (verb)
         {
             case CanvasViewportVerb.ZoomIn:
+                SupersedeOwedPans();
                 _engine.CommitViewport(v => v.ZoomedIn(centreX, centreY));
                 return Zoomed(null);
             case CanvasViewportVerb.ZoomOut:
+                SupersedeOwedPans();
                 _engine.CommitViewport(v => v.ZoomedOut(centreX, centreY));
                 return Zoomed(null);
             case CanvasViewportVerb.ActualSize:
+                SupersedeOwedPans();
                 _engine.CommitViewport(v => v.AtActualSize(centreX, centreY));
                 return Zoomed(null);
             case CanvasViewportVerb.FitCanvas:
@@ -443,6 +501,17 @@ internal sealed class CanvasRendererView : FrameworkElement
             default:
                 return CanvasViewportOutcome.Refused;
         }
+    }
+
+    /// <summary>The newest request for the view wins (codex rounds 5 and 7):
+    /// a verb that moves or zooms the view supersedes every pan still owed —
+    /// a reveal and a realization alike — so neither is paid over it when
+    /// the pending install lands or a hidden board shows. The
+    /// follow-selection toggle moves nothing and supersedes nothing.</summary>
+    private void SupersedeOwedPans()
+    {
+        _owedRealization = null;
+        _owedReveal = null;
     }
 
     /// <summary>§H TH-5: the committed zoom as the percent core renders,
@@ -460,10 +529,13 @@ internal sealed class CanvasRendererView : FrameworkElement
             ? new System.Windows.Rect(bounds.X, bounds.Y, bounds.Width, bounds.Height)
             : null;
 
+    /// <summary>Zoom to Selection's bounds: the DOCUMENT's selection in its
+    /// APPLIED scene — what the reader just selected, even while the board
+    /// still installs the scene before it (codex round 8). An empty
+    /// selection fits nothing, and so supersedes nothing.</summary>
     private System.Windows.Rect? SelectionBounds() =>
-        _engine.Current is { } state
-            && state.Selection is { } selected
-            && state.Source.Loaded?.Population is { } population
+        _model?.Selection.Selected is { } selected
+            && AppliedPopulation is { } population
             && population.SceneByNode.TryGetValue(selected, out CanvasSceneNode? node)
             ? new System.Windows.Rect(node.X, node.Y, node.Width, node.Height)
             : null;
@@ -481,6 +553,7 @@ internal sealed class CanvasRendererView : FrameworkElement
         {
             return CanvasViewportOutcome.Silent;
         }
+        SupersedeOwedPans();
         _engine.CommitViewport(v =>
         {
             double zoom = Math.Clamp(
@@ -521,9 +594,22 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// observe. Every install refreshes the board's children and mints a
     /// peer per windowed card, so a strong registry kept every card the
     /// board ever windowed, and a realization made them all tombstones.
+    /// Cards and labelled edges share it under their discriminated keys,
+    /// and every entry is scoped to the document it was minted for: D3's
+    /// identity is (renderer, document, key), so a peer held on one canvas
+    /// never answers for another canvas this board later shows that reuses
+    /// its ids (#1277, codex). The documents are held WEAKLY — one registry
+    /// per document in a weak table — so a canvas the board has left is not
+    /// kept alive by the registry (codex round 8).
     /// </summary>
-    private readonly System.Collections.Generic.Dictionary<CanvasPeerKey, WeakReference<CanvasCardAutomationPeer>>
-        _peers = [];
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<
+        CanvasDocumentViewModel,
+        System.Collections.Generic.Dictionary<CanvasPeerKey, WeakReference<CanvasBoardAutomationPeer>>>
+        _peerRegistries = new();
+
+    /// <summary>The bound document's registry; null with no document.</summary>
+    private System.Collections.Generic.Dictionary<CanvasPeerKey, WeakReference<CanvasBoardAutomationPeer>>? Peers =>
+        _model is { } document ? _peerRegistries.GetOrCreateValue(document) : null;
 
     /// <summary>The registry size that triggers the next sweep of reclaimed
     /// identities: twice the entries the last sweep kept, so sweeping costs
@@ -536,65 +622,93 @@ internal sealed class CanvasRendererView : FrameworkElement
         new CanvasRendererAutomationPeer(this);
 
     /// <summary>The container's children: one peer per MATERIALIZED
-    /// placement, document order — minted on demand and identity-stable
-    /// per key within this renderer while anything holds the peer
-    /// (D3).</summary>
+    /// placement, document order — the cards, then the labelled edges
+    /// (#1277) — minted on demand and identity-stable per key within this
+    /// renderer while anything holds the peer (D3).</summary>
     internal System.Collections.Generic.List<System.Windows.Automation.Peers.AutomationPeer>
         MaterializedPeers()
     {
         var children = new System.Collections.Generic.List<
             System.Windows.Automation.Peers.AutomationPeer>();
         if (_engine.Current is not { } state
-            || state.Source.Loaded?.Population is not { } population)
+            || BoundPopulation is not { } population)
         {
             return children;
         }
-        foreach (CanvasSceneNode node in population.SceneNodes)
+        foreach (CanvasPeerKey key in population.SceneNodes
+            .Select(node => CanvasPeerKey.Card(node.NodeId))
+            .Concat(population.SceneEdges.Select(edge => CanvasPeerKey.Edge(edge.EdgeId))))
         {
-            CanvasPeerKey key = CanvasPeerKey.Card(node.NodeId);
             if (state.Topology.Placements.TryGetValue(key, out CanvasPeerPlacement? placement)
-                && placement.Cell == CanvasPeerCell.Materialized)
+                && placement.Cell == CanvasPeerCell.Materialized
+                && PeerFor(key) is { } peer)
             {
-                children.Add(PeerFor(key)!);
+                children.Add(peer);
             }
         }
         return children;
     }
 
+    /// <summary>The edge an edge key names when it is a board peer: in the
+    /// scene, named by core (labelled, DD-2), both endpoints present.</summary>
+    internal static CanvasSceneEdge? NamedEdge(CanvasPopulation population, string edgeId) =>
+        population.SceneByEdge.TryGetValue(edgeId, out CanvasSceneEdge? edge)
+            && edge.SpeakableName is not null
+            && population.SceneByNode.ContainsKey(edge.FromNode)
+            && population.SceneByNode.ContainsKey(edge.ToNode)
+            ? edge
+            : null;
+
+    /// <summary>The card an edge peer's Invoke selects and its realization
+    /// falls back to — contract 34 D5's end-style table, total and
+    /// selection-independent: the arrow's head when exactly one end has an
+    /// arrow, else the to-node (document order).</summary>
+    internal static string DesignatedEndpoint(CanvasSceneEdge edge) =>
+        edge.FromArrow && !edge.ToArrow ? edge.FromNode : edge.ToNode;
+
     /// <summary>The registry read: a live peer, or mint one for a key the
     /// current population knows. Identity commits only with use — a key
     /// nobody asked for holds nothing (the retirement rule's registry
     /// half).</summary>
-    internal CanvasCardAutomationPeer? PeerFor(CanvasPeerKey key)
+    internal CanvasBoardAutomationPeer? PeerFor(CanvasPeerKey key)
     {
-        if (_peers.TryGetValue(key, out WeakReference<CanvasCardAutomationPeer>? held)
-            && held.TryGetTarget(out CanvasCardAutomationPeer? existing))
-        {
-            return existing;
-        }
-        if (_engine.Current?.Source.Loaded?.Population is not { } population
-            || key.IsEdge
-            || !population.SceneByNode.ContainsKey(key.Id))
+        // The key must name something the board shows NOW, held peer or
+        // not (codex): a held peer whose edge lost its label or was deleted
+        // is not handed out again — it answers unavailable on its own
+        // (CanvasBoardAutomationPeer.Exists) — and is the same object again
+        // if the key comes back while it is held.
+        if (_model is not { } document
+            || BoundPopulation is not { } population
+            || (key.IsEdge ? NamedEdge(population, key.Id) is null : !population.SceneByNode.ContainsKey(key.Id)))
         {
             return null;
         }
-        var peer = new CanvasCardAutomationPeer(this, key);
+        System.Collections.Generic.Dictionary<CanvasPeerKey, WeakReference<CanvasBoardAutomationPeer>> peers =
+            _peerRegistries.GetOrCreateValue(document);
+        if (peers.TryGetValue(key, out WeakReference<CanvasBoardAutomationPeer>? held)
+            && held.TryGetTarget(out CanvasBoardAutomationPeer? existing))
+        {
+            return existing;
+        }
+        CanvasBoardAutomationPeer peer = key.IsEdge
+            ? new CanvasEdgeAutomationPeer(this, document, key)
+            : new CanvasCardAutomationPeer(this, document, key);
         if (held is not null)
         {
             held.SetTarget(peer);
             return peer;
         }
-        _peers[key] = new WeakReference<CanvasCardAutomationPeer>(peer);
-        if (_peers.Count >= _peerSweepAt)
+        peers[key] = new WeakReference<CanvasBoardAutomationPeer>(peer);
+        if (peers.Count >= _peerSweepAt)
         {
-            foreach (CanvasPeerKey reclaimed in _peers
+            foreach (CanvasPeerKey reclaimed in peers
                 .Where(entry => !entry.Value.TryGetTarget(out _))
                 .Select(entry => entry.Key)
                 .ToArray())
             {
-                _ = _peers.Remove(reclaimed);
+                _ = peers.Remove(reclaimed);
             }
-            _peerSweepAt = Math.Max(PeerSweepFloor, _peers.Count * 2);
+            _peerSweepAt = Math.Max(PeerSweepFloor, peers.Count * 2);
         }
         return peer;
     }
@@ -602,31 +716,37 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// <summary>Whether a client or the board still holds the key's
     /// peer.</summary>
     private bool PeerIsLive(CanvasPeerKey key) =>
-        _peers.TryGetValue(key, out WeakReference<CanvasCardAutomationPeer>? held)
+        Peers is { } peers
+        && peers.TryGetValue(key, out WeakReference<CanvasBoardAutomationPeer>? held)
         && held.TryGetTarget(out _);
 
     /// <summary>The item-container search (D3's first-touch cell): by
-    /// Name against the descriptor index, or the next card in document
-    /// order after the given peer.</summary>
+    /// Name against the descriptor index — the cards' speakable names, then
+    /// the labelled edges' (#1277) — or the next peer in that document order
+    /// after the given one.</summary>
     internal CanvasPeerKey? FindByName(
         System.Windows.Automation.Peers.AutomationPeer? after, string? name)
     {
-        if (_engine.Current?.Source.Loaded?.Population is not { } population)
+        if (BoundPopulation is not { } population)
         {
             return null;
         }
-        string? afterId = (after as CanvasCardAutomationPeer)?.Key.Id;
-        var passed = afterId is null;
-        foreach (CanvasSceneNode node in population.SceneNodes)
+        CanvasPeerKey? afterKey = (after as CanvasBoardAutomationPeer)?.Key;
+        var passed = afterKey is null;
+        foreach ((CanvasPeerKey key, string spoken) in population.SceneNodes
+            .Select(node => (CanvasPeerKey.Card(node.NodeId), node.SpeakableName))
+            .Concat(population.SceneEdges
+                .Where(edge => NamedEdge(population, edge.EdgeId) is not null)
+                .Select(edge => (CanvasPeerKey.Edge(edge.EdgeId), edge.SpeakableName!))))
         {
             if (!passed)
             {
-                passed = node.NodeId == afterId;
+                passed = key == afterKey;
                 continue;
             }
-            if (name is null || string.Equals(node.SpeakableName, name, StringComparison.Ordinal))
+            if (name is null || string.Equals(spoken, name, StringComparison.Ordinal))
             {
-                return CanvasPeerKey.Card(node.NodeId);
+                return key;
             }
         }
         return null;
@@ -636,9 +756,13 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// authority — the engine rebuilds, the pan materializes the
     /// target — and hand back the SAME peer object, promoted by the
     /// next installed state.</summary>
-    internal CanvasCardAutomationPeer? RealizePeer(CanvasPeerKey key)
+    internal CanvasBoardAutomationPeer? RealizePeer(CanvasPeerKey key)
     {
-        if (PeerFor(key) is not { } peer)
+        // A search answers from the installed scene; a key the document has
+        // already dropped is not handed out (codex round 4).
+        if (AppliedPopulation is not { } applied
+            || !KeyIn(applied, key)
+            || PeerFor(key) is not { } peer)
         {
             return null;
         }
@@ -646,46 +770,154 @@ internal sealed class CanvasRendererView : FrameworkElement
         return peer;
     }
 
+    /// <summary>The bound document's APPLIED scene — what a delete, an
+    /// unlabelling or a reload has already made true, a moment before the
+    /// board installs it.</summary>
+    private CanvasPopulation? AppliedPopulation => _model?.AppliedPublication?.Loaded?.Population;
+
+    private static bool KeyIn(CanvasPopulation population, CanvasPeerKey key) =>
+        key.IsEdge ? NamedEdge(population, key.Id) is not null : population.SceneByNode.ContainsKey(key.Id);
+
+    /// <summary>A realization asked for while the installed scene was not
+    /// yet the document's applied one: its pan is computed from the first
+    /// installed state that IS, never from the scene being replaced, whose
+    /// geometry or designated endpoint may already be wrong (codex round 4).
+    /// Dropped when the board moves to another document, and when the key is
+    /// gone by the time that state installs.</summary>
+    private (CanvasDocumentViewModel Document, CanvasPeerKey Key)? _owedRealization;
+
+    private void PayOwedRealization()
+    {
+        if (_owedRealization is not { } owed
+            || AppliedPopulation is not { } applied
+            || !ReferenceEquals(BoundPopulation, applied))
+        {
+            return;
+        }
+        _owedRealization = null;
+        if (ReferenceEquals(owed.Document, _model) && KeyIn(applied, owed.Key))
+        {
+            PanToRealize(owed.Key);
+        }
+    }
+
     /// <summary>The realize half: retained-commit plus the pan that
-    /// brings the card into the window (D4 — a realization is a
+    /// brings the peer into the window (D4 — a realization is a
     /// selection made ON this surface for pan purposes: it always
-    /// scrolls into view).</summary>
+    /// scrolls into view). Never a zoom: for a labelled edge (#1277) the
+    /// pan contains its union rect when that fits the view at the current
+    /// zoom, and otherwise its designated endpoint's card — the card its
+    /// Invoke selects — which windows the edge too, since D3 materializes
+    /// an edge whose union meets the window.</summary>
     internal void Realize(CanvasPeerKey key)
     {
-        if (_engine.Current?.Source.Loaded?.Population is not { } population
-            || !population.SceneByNode.TryGetValue(key.Id, out CanvasSceneNode? node))
+        if (_model is not { } document
+            || AppliedPopulation is not { } applied
+            || !KeyIn(applied, key))
         {
             return;
         }
         var retained = System.Collections.Immutable.ImmutableHashSet.CreateRange(
-            _peers.Keys.Where(PeerIsLive)).Add(key);
+            (Peers?.Keys ?? Enumerable.Empty<CanvasPeerKey>()).Where(PeerIsLive)).Add(key);
         _engine.CommitRetained(retained);
-        _engine.CommitViewport(v => PanToContain(v, node));
+        // The newest request for the view wins (codex rounds 5 and 6): an
+        // older reveal still owed — to an install, or to a hidden board's
+        // showing — must not undo this realization when it is paid, whether
+        // the realization pans now or is itself owed to the install.
+        _owedReveal = null;
+        if (!ReferenceEquals(BoundPopulation, applied))
+        {
+            _owedRealization = (document, key);
+            return;
+        }
+        _owedRealization = null;
+        PanToRealize(key);
+    }
+
+    /// <summary>The pan half of a realization, from the installed state —
+    /// which the callers have checked is the document's applied one.</summary>
+    private void PanToRealize(CanvasPeerKey key)
+    {
+        if (BoundPopulation is not { } population
+            || _engine.Current is not { } state
+            || RealizationTarget(state, population, key) is not { } target)
+        {
+            return;
+        }
+        _engine.CommitViewport(v => target.Fits(v)
+            ? PanToContain(v, target.X, target.Y, target.Width, target.Height)
+            : PanToContain(v, target.Fallback));
+    }
+
+    /// <summary>The rect a realization pans to contain — a card's own, or
+    /// an edge's union with its designated endpoint's rect as the fallback
+    /// when the union is larger than the view. Both are the INSTALLED
+    /// state's effective rects, so a realization during a move or resize
+    /// preview targets what the board draws (codex).</summary>
+    private sealed record RealizeTarget(
+        double X, double Y, double Width, double Height, CanvasRect Fallback)
+    {
+        internal bool Fits(CanvasViewportState viewport) =>
+            Width * viewport.Zoom <= viewport.ViewWidth && Height * viewport.Zoom <= viewport.ViewHeight;
+    }
+
+    private static RealizeTarget? RealizationTarget(
+        CanvasPresentationState state, CanvasPopulation population, CanvasPeerKey key)
+    {
+        if (!key.IsEdge)
+        {
+            if (!population.SceneByNode.TryGetValue(key.Id, out CanvasSceneNode? node))
+            {
+                return null;
+            }
+            CanvasRect rect = state.NodeRect(node);
+            return new RealizeTarget(rect.X, rect.Y, rect.Width, rect.Height, rect);
+        }
+        if (NamedEdge(population, key.Id) is not { } edge)
+        {
+            return null;
+        }
+        (double x, double y, double width, double height) = CanvasPeerTopology.EdgeUnion(
+            state.NodeRect(population.SceneByNode[edge.FromNode]),
+            state.NodeRect(population.SceneByNode[edge.ToNode]));
+        return new RealizeTarget(
+            x, y, width, height, state.NodeRect(population.SceneByNode[DesignatedEndpoint(edge)]));
     }
 
     private static CanvasViewportState PanToContain(
-        CanvasViewportState viewport, CanvasSceneNode node)
+        CanvasViewportState viewport, CanvasRect rect) =>
+        PanToContain(viewport, rect.X, rect.Y, rect.Width, rect.Height);
+
+    private static CanvasViewportState PanToContain(
+        CanvasViewportState viewport, CanvasSceneNode node) =>
+        PanToContain(viewport, node.X, node.Y, node.Width, node.Height);
+
+    /// <summary>The smallest pan, at the current zoom, that brings the rect
+    /// into the view — whole when it fits; it never changes
+    /// <see cref="CanvasViewportState.Zoom"/>.</summary>
+    private static CanvasViewportState PanToContain(
+        CanvasViewportState viewport, double x, double y, double width, double height)
     {
         double zoom = viewport.Zoom;
-        double viewX = (node.X * zoom) + viewport.PanX;
-        double viewY = (node.Y * zoom) + viewport.PanY;
+        double viewX = (x * zoom) + viewport.PanX;
+        double viewY = (y * zoom) + viewport.PanY;
         double panX = viewport.PanX;
         double panY = viewport.PanY;
         if (viewX < 0)
         {
             panX -= viewX;
         }
-        else if (viewX + (node.Width * zoom) > viewport.ViewWidth)
+        else if (viewX + (width * zoom) > viewport.ViewWidth)
         {
-            panX -= viewX + (node.Width * zoom) - viewport.ViewWidth;
+            panX -= viewX + (width * zoom) - viewport.ViewWidth;
         }
         if (viewY < 0)
         {
             panY -= viewY;
         }
-        else if (viewY + (node.Height * zoom) > viewport.ViewHeight)
+        else if (viewY + (height * zoom) > viewport.ViewHeight)
         {
-            panY -= viewY + (node.Height * zoom) - viewport.ViewHeight;
+            panY -= viewY + (height * zoom) - viewport.ViewHeight;
         }
         return viewport.PannedTo(panX, panY);
     }
@@ -694,13 +926,13 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// document's one narrating selection mutation, then the
     /// origin-sensitive pan (a selection made ON this surface always
     /// scrolls into view).</summary>
-    internal void SelectAnnounced(string nodeId)
+    internal void SelectAnnounced(string nodeId, bool announceWhenSeated = false)
     {
         if (_model is not { } model)
         {
             return;
         }
-        model.SelectNode(nodeId);
+        model.SelectNode(nodeId, announceWhenSeated: announceWhenSeated);
         RevealNode(nodeId, CanvasMoveOrigin.OnSurface);
     }
 
@@ -757,6 +989,9 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// </remarks>
     internal void RevealNode(string nodeId, CanvasMoveOrigin origin)
     {
+        // The newest request for the view wins (codex round 5): a reveal
+        // supersedes a realization still owed to a pending install.
+        _owedRealization = null;
         _owedReveal = new OwedReveal(
             nodeId,
             origin,

@@ -2732,11 +2732,7 @@ impl CanvasA11yEvent {
                 title,
                 label,
             } => {
-                let phrase = match direction {
-                    EdgeDirection::Outgoing => "Connects to",
-                    EdgeDirection::Incoming => "Connected from",
-                    EdgeDirection::Bidirectional | EdgeDirection::Undirected => "Linked with",
-                };
+                let phrase = capitalize_first(connection_words(*direction));
                 let reference = card_ref(kind_label, title);
                 match label {
                     Some(label) => format!("{phrase} {reference}, labelled \"{label}\""),
@@ -3519,6 +3515,37 @@ fn spoken_color(color: &Option<CanvasColor>) -> String {
 /// doc 0a-D6).
 fn counted(count: u32, one: &str, many: &str) -> String {
     crate::sidebar_filter::count_noun(count as u64, one, many)
+}
+
+/// The words a connection is read in, from one endpoint's side: shared by
+/// the walk's [`CanvasA11yEvent::CanvasConnectionTraversed`] and the board's
+/// edge names ([`canvas_edge_phrase`]), so the two never drift apart.
+fn connection_words(direction: EdgeDirection) -> &'static str {
+    match direction {
+        EdgeDirection::Outgoing => "connects to",
+        EdgeDirection::Incoming => "connected from",
+        EdgeDirection::Bidirectional | EdgeDirection::Undirected => "linked with",
+    }
+}
+
+/// A labelled edge's name on the visual board (contract 34 D5, #1277): the
+/// connection walk's sentence with BOTH endpoints, since the board has no
+/// current card — `{from} connects to {to}, labelled "{label}"`, the
+/// direction read from the from-node's side. The model makes it unique.
+pub(crate) fn canvas_edge_phrase(
+    from_kind: &str,
+    from_name: &str,
+    direction: EdgeDirection,
+    to_kind: &str,
+    to_name: &str,
+    label: &str,
+) -> String {
+    format!(
+        "{} {} {}, labelled \"{label}\"",
+        card_ref(from_kind, from_name),
+        connection_words(direction),
+        card_ref(to_kind, to_name),
+    )
 }
 
 /// The t0 §1.1 card reference: `Group "label"` for groups,

@@ -5388,7 +5388,7 @@ public sealed partial class CanvasNavigatorTests : IDisposable
         _ = surface.ViewportCommand(CanvasViewportVerb.ToggleFollowSelection);
         Assert.False(board.Engine.CommittedViewport.FollowSelection, "premise: the board still follows the selection.");
         const string Target = "loose";
-        CanvasCardAutomationPeer peer = board.PeerFor(CanvasPeerKey.Card(Target))!;
+        var peer = Assert.IsType<CanvasCardAutomationPeer>(board.PeerFor(CanvasPeerKey.Card(Target)));
 
         foreach ((string name, PatternInterface pattern, Action<object> act) in
             new (string, PatternInterface, Action<object>)[]

@@ -21201,6 +21201,11 @@ pub struct CanvasSceneEdge {
     pub to_arrow: bool,
     pub label: Option<String>,
     pub color: Option<String>,
+    /// The edge's name on the visual board (contract 34 D5, #1277): core's
+    /// traversal phrase with both endpoints, unique across the container,
+    /// the cards and the other edges. `None` exactly when the edge is not a
+    /// board peer: unlabelled or dangling (DD-2).
+    pub speakable_name: Option<String>,
 }
 
 /// One load warning, pre-classified so the UI can phrase t0 §5
@@ -22231,6 +22236,7 @@ impl VaultSession {
                     crate::canvas::CanvasColor::Preset(p) => p.to_string(),
                     crate::canvas::CanvasColor::Hex(h) => h.clone(),
                 }),
+                speakable_name: state.model.edge_names.get(&edge.id).cloned(),
             })
             .collect();
         Ok((nodes, edges))

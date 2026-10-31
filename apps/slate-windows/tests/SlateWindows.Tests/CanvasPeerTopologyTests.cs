@@ -59,7 +59,7 @@ public sealed class CanvasPeerTopologyTests
     {
         CanvasPopulation population = Population(
             [Node("west", -10_000, 100), Node("east", 10_000, 100)],
-            [new("cross", "west", null, "east", null, false, true, "spans", null)]);
+            [new("cross", "west", null, "east", null, false, true, "spans", null, SpeakableName: "cross")]);
         CanvasPeerTopology topology = CanvasPeerTopology.Derive(
             population, View(), NoneRetained);
         Assert.True(
@@ -72,21 +72,27 @@ public sealed class CanvasPeerTopologyTests
             && edge.Cell == CanvasPeerCell.Materialized,
             "the crossing edge did not materialize: 'either endpoint in the "
             + "window' is the narrowing ID-4 forbids — the rendered bounds "
-            + "intersect the window, so the peer exists.");
+            + "intersect the window, so the peer exists (the live peer: "
+            + "CanvasRendererPeerTests.ALabelledEdgeInTheWindowIsAChildOfTheBoard).");
     }
 
     /// <summary>DD-2: an unlabelled edge is not a peer, wherever it
-    /// crosses.</summary>
+    /// crosses — and "unlabelled" is core's call: an edge core left
+    /// unnamed (a blank label) is not one either (#1277).</summary>
     [Fact]
     public void AnUnlabelledEdgeIsNeverAPeer()
     {
         CanvasPopulation population = Population(
             [Node("a", 0, 0), Node("b", 200, 0)],
-            [new("mute", "a", null, "b", null, false, true, null, null)]);
+            [
+                new("mute", "a", null, "b", null, false, true, null, null),
+                new("blank", "a", null, "b", null, false, true, "   ", null),
+            ]);
         CanvasPeerTopology topology = CanvasPeerTopology.Derive(
             population, View(), NoneRetained);
         Assert.True(
-            !topology.Placements.ContainsKey(CanvasPeerKey.Edge("mute")),
+            !topology.Placements.ContainsKey(CanvasPeerKey.Edge("mute"))
+                && !topology.Placements.ContainsKey(CanvasPeerKey.Edge("blank")),
             "an unlabelled edge materialized: it has no accessible handle "
             + "by DD-2, and its existence is readable from its endpoints.");
     }
@@ -98,7 +104,7 @@ public sealed class CanvasPeerTopologyTests
     {
         CanvasPopulation population = Population(
             [Node("shared", 5_000, 5_000)],
-            [new("shared", "shared", null, "shared", null, false, true, "loop", null)]);
+            [new("shared", "shared", null, "shared", null, false, true, "loop", null, SpeakableName: "loop")]);
         ImmutableHashSet<CanvasPeerKey> retained =
             [CanvasPeerKey.Card("shared")];
         CanvasPeerTopology topology = CanvasPeerTopology.Derive(

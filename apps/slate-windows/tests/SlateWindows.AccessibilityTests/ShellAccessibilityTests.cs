@@ -9454,6 +9454,33 @@ public sealed partial class ShellAccessibilityTests
                     TimeSpan.FromSeconds(10)).Success,
                 "the selected card does not report IsSelected.");
 
+            // WB-26 (#1277, contract 34 D5): a labelled edge is a Custom
+            // "connection" child of the board, named by core's traversal
+            // phrase with both endpoints, and its Invoke selects the card at
+            // the arrow's head — here the "supports" edge's to-node. The axe
+            // scan below covers the edge peers with the cards.
+            const string Supports =
+                "Text card \"Core question\" connects to Text card \"Evidence so far\", labelled \"supports\"";
+            AutomationElement edge = Retry.WhileNull(
+                () => board.FindAllChildren(finder => finder.ByControlType(ControlType.Custom))
+                    .FirstOrDefault(child => child.Properties.Name.Value == Supports),
+                TimeSpan.FromSeconds(10)).Result
+                ?? throw new Xunit.Sdk.XunitException(
+                    $"the board has no Custom child named \"{Supports}\": the labelled edge is not a peer.");
+            Assert.Equal("connection", edge.Properties.LocalizedControlType.Value);
+            Assert.True(edge.Patterns.Invoke.IsSupported, "the edge peer's Invoke pattern is missing (D5).");
+            edge.Patterns.Invoke.Pattern.Invoke();
+            AutomationElement head = Retry.WhileNull(
+                () => board.FindAllChildren(finder => finder.ByControlType(ControlType.Button))
+                    .FirstOrDefault(card => card.Properties.Name.Value == "Evidence so far"),
+                TimeSpan.FromSeconds(10)).Result
+                ?? throw new Xunit.Sdk.XunitException("the \"Evidence so far\" card peer never materialized.");
+            Assert.True(
+                Retry.WhileFalse(
+                    () => head.Patterns.SelectionItem.Pattern.IsSelected.Value,
+                    TimeSpan.FromSeconds(10)).Success,
+                "Invoke on the \"supports\" edge did not select its to-node (D5's end-style table).");
+
             AssertAxeClean(process, "canvas-visual");
 
             // W7-7 R-12 (#1255; the NVDA pass's F12): the board's ARROWS
