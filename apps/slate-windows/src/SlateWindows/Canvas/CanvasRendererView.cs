@@ -98,7 +98,11 @@ internal sealed class CanvasRendererView : FrameworkElement
 
     private void ForwardPublication(CanvasDocumentViewModel document, CanvasPublication publication)
     {
-        _publicationDocuments.AddOrUpdate(publication, new WeakReference<CanvasDocumentViewModel>(document));
+        // One entry per publication: a publication forwarded again (the
+        // board returning to its document) replaces its own. Both calls run
+        // on the UI thread that applies publications.
+        _publicationDocuments.Remove(publication);
+        _publicationDocuments.Add(publication, new WeakReference<CanvasDocumentViewModel>(document));
         _engine.OnPublicationApplied(publication);
     }
 
