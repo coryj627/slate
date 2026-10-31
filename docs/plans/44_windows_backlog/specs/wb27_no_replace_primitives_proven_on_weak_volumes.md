@@ -9,6 +9,42 @@ Decision: none pending here (plan 43's RD9 is recorded on #1434 and
 #1470: "probe, then refuse truthfully, never a replacing fallback"; this
 chunk supplies the Windows probe).
 
+**Delivery record, 2026-10-31.** Where it differs from the sections
+below, it wins.
+
+- **WB-24 is skipped for now (owner, 2026-10-31).** This chunk adds no
+  lane job: the `home-only` job it would extend does not exist. Design
+  step 4's fallback applies: the gated facts are run by hand, and their
+  results are in the PR body and the matrix.
+- **The SMB share is `\\localhost\C$`.** It is the default
+  administrative share, so no `New-SmbShare` and no elevation are needed.
+  The gate accepts it as a UNC path on a `DRIVE_REMOTE` volume, and
+  reports the root `\\localhost\C$\`. Run the facts from PowerShell:
+  Git Bash rewrites `\\localhost` to `\localhost` before Rust sees it,
+  and the gate then refuses the path, as it should.
+- **FAT32 and exFAT are not probed.** The run had no elevated session
+  for the VHD procedure, and this machine has no FAT volume. Their rows
+  in the matrix say "Not probed". The facts are ready: the volume
+  procedure below, then the gated command in Verification, fills them in
+  one elevated session.
+- **A third non-ignored fact.** The gate's name test is split into
+  `accept_file_system`, and
+  `weak_volume_gate_tells_the_two_fat_kinds_apart_by_their_exact_names`
+  proves it on every machine. Without a FAT volume, the "match either
+  FAT kind by `FAT`" mutation would have no witness. The plain listing
+  now holds three facts; the ignored listing still holds exactly six.
+- **SMB observations** (all six gated facts green):
+  - the create, the raced rename and move, and the identity rename onto
+    an occupied name are each refused by the kernel;
+  - a case-only rename keeps one entry and its `FILE_ID_INFO`;
+  - the id survives a rename, a new file at the old name gets a
+    different id, and a stale identity is refused.
+  No replacing rename was observed, so no refusal branch and no seventh
+  fact.
+- **Mutations: 10 of 10 killed.** The FAT-name mutation is killed by the
+  new fact; every other mutation on the SMB share or the mislabelled
+  folder.
+
 ## Goal
 
 Plan 43 PR 24's capability matrix answered for macOS what the no-replace

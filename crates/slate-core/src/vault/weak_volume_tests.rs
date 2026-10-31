@@ -53,7 +53,10 @@ fn wide(path: &Path) -> Vec<u16> {
 }
 
 fn from_wide(buffer: &[u16]) -> String {
-    let end = buffer.iter().position(|&unit| unit == 0).unwrap_or(buffer.len());
+    let end = buffer
+        .iter()
+        .position(|&unit| unit == 0)
+        .unwrap_or(buffer.len());
     String::from_utf16_lossy(&buffer[..end])
 }
 
@@ -61,8 +64,7 @@ fn from_wide(buffer: &[u16]) -> String {
 fn volume_root(path: &Path) -> Result<Vec<u16>, String> {
     let mut root = vec![0u16; 1024];
     // SAFETY: a NUL-terminated path and a buffer of the length passed.
-    if unsafe { GetVolumePathNameW(wide(path).as_ptr(), root.as_mut_ptr(), root.len() as u32) }
-        == 0
+    if unsafe { GetVolumePathNameW(wide(path).as_ptr(), root.as_mut_ptr(), root.len() as u32) } == 0
     {
         return Err(format!(
             "{} has no volume: {}",
@@ -70,7 +72,10 @@ fn volume_root(path: &Path) -> Result<Vec<u16>, String> {
             std::io::Error::last_os_error()
         ));
     }
-    let end = root.iter().position(|&unit| unit == 0).unwrap_or(root.len());
+    let end = root
+        .iter()
+        .position(|&unit| unit == 0)
+        .unwrap_or(root.len());
     root.truncate(end + 1);
     Ok(root)
 }
@@ -129,7 +134,12 @@ fn check_weak_volume(kind: VolumeKind, path: &Path) -> Result<String, String> {
             };
         }
     };
-    let reported = file_system_name(path)?;
+    accept_file_system(expected, file_system_name(path)?, path)
+}
+
+/// The FAT half of [`check_weak_volume`], on the name the volume reported:
+/// only the exact name passes, so neither FAT kind is taken for the other.
+fn accept_file_system(expected: &str, reported: String, path: &Path) -> Result<String, String> {
     if reported == expected {
         Ok(reported)
     } else {
@@ -181,8 +191,7 @@ impl Scratch {
     }
 
     fn read(&self, relative: &str) -> Vec<u8> {
-        std::fs::read(self.0.join(relative))
-            .unwrap_or_else(|error| panic!("{relative}: {error}"))
+        std::fs::read(self.0.join(relative)).unwrap_or_else(|error| panic!("{relative}: {error}"))
     }
 
     fn write(&self, relative: &str, bytes: &[u8]) {
@@ -231,13 +240,21 @@ fn create_lands_on_a_free_name_and_preserves_an_occupied_one(volumes: &[(VolumeK
         let error = provider
             .write_file_if_absent("taken.md", b"intruder")
             .expect_err("an occupied name is refused");
-        assert!(destination_exists(&error, "taken.md"), "{kind:?}: {error:?}");
+        assert!(
+            destination_exists(&error, "taken.md"),
+            "{kind:?}: {error:?}"
+        );
         assert_eq!(scratch.read("taken.md"), b"occupant", "{kind:?}");
         let staged: Vec<_> = std::fs::read_dir(scratch.0.join(".slate").join("tmp"))
             .map(|entries| entries.map(|entry| entry.unwrap().file_name()).collect())
             .unwrap_or_default();
-        assert!(staged.is_empty(), "{kind:?}: the stage was left: {staged:?}");
-        println!("OBSERVED {kind:?} create: free name landed; occupied name refused by the publish ({error:?})");
+        assert!(
+            staged.is_empty(),
+            "{kind:?}: the stage was left: {staged:?}"
+        );
+        println!(
+            "OBSERVED {kind:?} create: free name landed; occupied name refused by the publish ({error:?})"
+        );
     }
 }
 
@@ -273,7 +290,10 @@ fn rename_and_move_land_on_a_free_name_and_refuse_an_occupied_one(
                 })
                 .expect_err("a name occupied after the pre-check is refused");
             assert!(raced.get(), "{kind:?} {from} -> {to}: the hook ran");
-            assert!(destination_exists(&error, to), "{kind:?} {from} -> {to}: {error:?}");
+            assert!(
+                destination_exists(&error, to),
+                "{kind:?} {from} -> {to}: {error:?}"
+            );
             assert_eq!(scratch.read(from), b"source", "{kind:?} {from}");
             assert_eq!(scratch.read(to), b"occupant", "{kind:?} {to}");
         }
@@ -283,7 +303,10 @@ fn rename_and_move_land_on_a_free_name_and_refuse_an_occupied_one(
         let error = provider
             .rename("c.md", "sub/d.md")
             .expect_err("a pre-existing occupant is refused");
-        assert!(destination_exists(&error, "sub/d.md"), "{kind:?}: {error:?}");
+        assert!(
+            destination_exists(&error, "sub/d.md"),
+            "{kind:?}: {error:?}"
+        );
         assert_eq!(scratch.read("c.md"), b"source", "{kind:?}");
         assert_eq!(scratch.read("sub/d.md"), b"occupant", "{kind:?}");
         println!(
@@ -308,11 +331,17 @@ fn identity_rename_refuses_an_occupied_name_at_the_kernel(volumes: &[(VolumeKind
                     matches!(&error, VaultError::Io(io) if io.kind() == std::io::ErrorKind::AlreadyExists),
                     "{kind:?}: {error:?}"
                 );
-                println!("OBSERVED {kind:?} identity rename: identity answered; the kernel refused the occupied name");
+                println!(
+                    "OBSERVED {kind:?} identity rename: identity answered; the kernel refused the occupied name"
+                );
             }
             Err(unanswered) => {
                 let error = provider
-                    .rename_if_identity("a.md", "b.md", "0000000000000000-00000000000000000000000000000000")
+                    .rename_if_identity(
+                        "a.md",
+                        "b.md",
+                        "0000000000000000-00000000000000000000000000000000",
+                    )
                     .expect_err("with no identity, the inverse refuses");
                 println!(
                     "OBSERVED {kind:?} identity rename: FileIdInfo did not answer ({unanswered:?}); the inverse refused before the kernel ({error:?})"
@@ -340,7 +369,10 @@ fn case_only_rename_keeps_the_entry(volumes: &[(VolumeKind, PathBuf)]) {
                 let after = provider
                     .mutation_identity("note.md")
                     .unwrap_or_else(|error| panic!("{kind:?}: identity after: {error:?}"));
-                assert_eq!(after, before, "{kind:?}: the case-only rename changed the identity");
+                assert_eq!(
+                    after, before,
+                    "{kind:?}: the case-only rename changed the identity"
+                );
                 println!("OBSERVED {kind:?} case-only: one entry, new spelling, identity kept");
             }
             None => println!(
@@ -357,7 +389,11 @@ fn stale_identity_refuses_where_ids_are_identities(volumes: &[(VolumeKind, PathB
         scratch.write("a.md", b"first");
         let Ok(first) = provider.mutation_identity("a.md") else {
             let error = provider
-                .rename_if_identity("a.md", "c.md", "0000000000000000-00000000000000000000000000000000")
+                .rename_if_identity(
+                    "a.md",
+                    "c.md",
+                    "0000000000000000-00000000000000000000000000000000",
+                )
                 .expect_err("with no identity, every identity-checked rename refuses");
             assert_eq!(scratch.read("a.md"), b"first", "{kind:?}");
             assert!(!scratch.exists("c.md"), "{kind:?}");
@@ -393,8 +429,8 @@ fn stale_identity_refuses_where_ids_are_identities(volumes: &[(VolumeKind, PathB
 
 fn gate_names_the_file_system_it_ran_on(volumes: &[(VolumeKind, PathBuf)]) {
     for (kind, volume) in volumes {
-        let reported = check_weak_volume(*kind, volume)
-            .unwrap_or_else(|reason| panic!("{kind:?}: {reason}"));
+        let reported =
+            check_weak_volume(*kind, volume).unwrap_or_else(|reason| panic!("{kind:?}: {reason}"));
         match kind {
             VolumeKind::Fat32 => assert_eq!(reported, "FAT32"),
             VolumeKind::Exfat => assert_eq!(reported, "exFAT"),
@@ -474,13 +510,19 @@ fn weak_volume_gate_refuses_a_volume_whose_file_system_does_not_match_its_kind()
         "the precondition: the temp directory is on {reported}"
     );
     for kind in [VolumeKind::Fat32, VolumeKind::Exfat] {
-        let reason = check_weak_volume(kind, folder.path())
-            .expect_err("an NTFS folder is not a FAT volume");
-        assert!(reason.contains(&format!("is on {reported}")), "{kind:?}: {reason}");
+        let reason =
+            check_weak_volume(kind, folder.path()).expect_err("an NTFS folder is not a FAT volume");
+        assert!(
+            reason.contains(&format!("is on {reported}")),
+            "{kind:?}: {reason}"
+        );
     }
     let reason = check_weak_volume(VolumeKind::Smb, folder.path())
         .expect_err("a local folder is not an SMB share");
-    assert!(reason.contains("is not a UNC path on a remote drive"), "{reason}");
+    assert!(
+        reason.contains("is not a UNC path on a remote drive"),
+        "{reason}"
+    );
     // And the lookup refuses the mislabelled variable by name.
     let panicked = std::panic::catch_unwind(|| {
         weak_volumes_from(|name| {
@@ -492,5 +534,37 @@ fn weak_volume_gate_refuses_a_volume_whose_file_system_does_not_match_its_kind()
         .downcast_ref::<String>()
         .cloned()
         .unwrap_or_default();
-    assert!(message.starts_with("SLATE_WEAK_VOLUME_EXFAT: "), "{message}");
+    assert!(
+        message.starts_with("SLATE_WEAK_VOLUME_EXFAT: "),
+        "{message}"
+    );
+}
+
+/// The FAT names, on every machine: FAT32 and exFAT are told apart by
+/// their exact names, which a mounted volume of each would otherwise be
+/// the only witness to.
+#[test]
+fn weak_volume_gate_tells_the_two_fat_kinds_apart_by_their_exact_names() {
+    let path = Path::new(r"X:\probe");
+    assert_eq!(
+        accept_file_system("FAT32", "FAT32".into(), path),
+        Ok("FAT32".into())
+    );
+    assert_eq!(
+        accept_file_system("exFAT", "exFAT".into(), path),
+        Ok("exFAT".into())
+    );
+    for (expected, reported) in [
+        ("FAT32", "exFAT"),
+        ("exFAT", "FAT32"),
+        ("FAT32", "FAT"),
+        ("exFAT", "NTFS"),
+    ] {
+        let reason = accept_file_system(expected, reported.into(), path)
+            .expect_err("only the exact name passes");
+        assert_eq!(
+            reason,
+            format!(r"expected a {expected} volume, but X:\probe is on {reported}")
+        );
+    }
 }

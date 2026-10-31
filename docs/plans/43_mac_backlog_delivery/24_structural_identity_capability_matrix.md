@@ -150,6 +150,29 @@ changes only letter case on a case-insensitive volume.
 | --- | --- | --- | --- | --- | --- |
 | `NtSetInformationFile(FileRenameInformation)` on a handle opened without `FILE_SHARE_DELETE` | the handle | Yes, with other renamers and deleters excluded while the handle is open | `ReplaceIfExists` false | Yes | [src `windows_entry.rs:177-261`] [doc FILE_RENAME_INFO, CreateFileW] |
 
+**Windows, probed 2026-10-31 (plan 44 WB-27).** Each fact in
+`crates/slate-core/src/vault/weak_volume_tests.rs` runs only on a
+scratch directory named by `SLATE_WEAK_VOLUME_FAT32`, `…_EXFAT` or
+`…_SMB`, after a gate confirms that the volume is that kind
+(`check_weak_volume`). The gate is proven against a mislabelled NTFS
+folder on every machine [P-W1].
+
+- **Rename and move rows.** The occupant is created AFTER the provider's
+  own destination pre-check, through the test seam
+  `rename_with_hook_for_tests`. So it is the kernel's no-replace that
+  refuses, not the pre-check.
+- **Identity-rename row.** The identity rename has no pre-check, so its
+  occupant always meets the kernel.
+
+| Volume | Create (staged publish) onto an occupied name | Rename and move onto a name occupied after the pre-check | Identity rename onto an occupied name | Case-only rename `Note.md` → `note.md` | Evidence |
+| --- | --- | --- | --- | --- | --- |
+| NTFS (the temp directory) | Refused | Refused | Refused | One entry; identity kept | Existing `windows_entry_tests.rs` facts and `fs.rs` seam facts |
+| SMB over `\\localhost\C$` (loopback to an NTFS volume) | Refused by the kernel publish: `DestinationExists`, occupant unchanged, stage cleaned | Refused by the kernel: `DestinationExists`; source and occupant unchanged | Refused by the kernel: `Io(AlreadyExists)`; both entries unchanged | One entry, new spelling, `FILE_ID_INFO` unchanged | [P-W1] |
+| FAT32 | *Not probed*: needs the elevated VHD procedure in the WB-27 spec | — | — | — | — |
+| exFAT | *Not probed*: as FAT32 | — | — | — | — |
+
+No replacing rename was observed, so no refusal branch shipped.
+
 ## 4. What an open-descriptor identity check can and cannot guarantee
 
 A provider can open the source with `O_NOFOLLOW`, or descend from the
@@ -186,6 +209,18 @@ offers:
 | btrfs | Not probed | Yes (3.17) | Per filesystem | The inode number alone is per subvolume: each subvolume has "its own independent … inode number namespace", "Inode number is not a filesystem-wide unique identifier", and snapshots "preserve their original inode numbers" [doc btrfs Subvolumes]. That page does not say whether `st_dev` differs per subvolume; `statx` reports the subvolume (`stx_subvol`) since Linux 6.10 [man statx(2)] | Not documented on that page | ns timestamps |
 | NFS (Linux client) | Not probed | **No**: every `renameat2` flag is `EINVAL` | No | The server's file ID; handles may be unsupported | Server-dependent | Attribute caching; and "you can not assume that if the operation failed, the file was not renamed" [man rename(2) BUGS] |
 
+**Windows (plan 44 WB-27, 2026-10-31).** These rows record what the
+Windows provider meets. Here no-replace is `FileRenameInformation` with
+`ReplaceIfExists` false, and the identity is `FILE_ID_INFO`: the volume
+serial number plus the 128-bit file id.
+
+| Volume | Probed? | No-replace | Case-only rename | `FILE_ID_INFO` persists across rename | ID reuse |
+| --- | --- | --- | --- | --- | --- |
+| NTFS | Yes (existing facts) | Yes | Yes, identity kept | Yes | Not observed: a new file at an old name gets a different id |
+| SMB over `\\localhost\C$` (Windows 11 client and server, NTFS underneath) | Yes [P-W1] | Yes, at the kernel | Yes, identity kept | Yes: the id survives a rename, and a stale identity is refused | Not observed: a new file at the old name got a different id |
+| FAT32 | Not probed | — | — | — | — |
+| exFAT | Not probed | — | — | — | — |
+
 ## 6. Case-only and normalization-only renames
 
 Before renaming, Slate's provider checks whether the two spellings are
@@ -217,6 +252,20 @@ FAT32, `RENAME_EXCL` case-only and normalization-only renames succeeded;
 on exFAT they failed `ENOTSUP`, which the provider does not treat as a
 fallback case, so they would fail outright [P3] [P17]. None of these paths
 binds identity [P3].
+
+**Windows (plan 44 WB-27).** The provider first asks whether the
+destination name is the source under another spelling (`same_entry`),
+then renames with `ReplaceIfExists` false. Only when the volume reports
+the source's own alias as occupied does it retry that one rename with
+replacement (the `destination_is_source` arm of `rename_beneath_root`).
+
+On NTFS and on SMB over `\\localhost\C$`, the first call succeeds. The
+case-only rename leaves one entry with the new spelling and the same
+`FILE_ID_INFO` (`weak_volume_case_only_rename_keeps_the_entry`), so the
+retry arm is not reached [P-W1].
+
+Whether FAT32 or exFAT reaches it is unrecorded until those volumes are
+probed.
 
 ## 7. Directories
 
@@ -294,6 +343,31 @@ a second thread.
 | P12-P16 | Trash probes, including Finder | Reported in `24_trash_handoff_feasibility.md` §3. |
 | P17 | P0, P1, P2b, P3, P4 and P6 on FAT32 and exFAT (V4, V5) | Reported in the rows above and in `§5`. |
 | P18 | `stat -f %d` on a file, detach and re-attach the same image, `stat` again (V1) | `st_dev` 16777243 before and after; `diskutil` reports the volume UUID. |
+
+**P-W1 (plan 44 WB-27, 2026-10-31).** Environment: Windows 11 Pro
+10.0.26300, Slate at the WB-27 branch. Gated facts:
+
+```
+$env:SLATE_WEAK_VOLUME_SMB = '\\localhost\C$\Users\<user>\AppData\Local\Temp\wb27-smb'
+cargo test -p slate-core --locked --lib weak_volume -- --ignored --test-threads=1 --nocapture
+```
+
+- **The share.** It is the default administrative share. It reaches an
+  NTFS volume through the SMB client and server on one machine, and
+  needs no elevated setup.
+- **What runs.** Six gated facts passed there, printing their
+  `OBSERVED` lines. The three non-ignored gate facts pass on every
+  machine.
+- **The mutations.** Every row's mutation was applied, and the fact was
+  seen failing on this share or on the mislabelled folder. The mutated
+  sites:
+  - `ReplaceIfExists` true in the staged publish;
+  - `ReplaceIfExists` true in the ordinary rename's kernel call;
+  - `ReplaceIfExists` true in the identity inverse's kernel call;
+  - a case-only rename that recreates the file;
+  - an identity compare skipped;
+  - a gate that accepts any name, or either FAT kind by "FAT".
+- **Not run.** FAT32 and exFAT need the elevated VHD procedure.
 
 ## Appendix B. Sources
 
