@@ -511,6 +511,195 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
         }, TimeSpan.FromSeconds(60), "The deferred citation summary fixture timed out.");
     }
 
+    /// <summary>
+    /// WB-23 (#1314): a press parked while cited.md's citations load is
+    /// dropped when the note closes. Nothing publishes for "no note", so a
+    /// park left armed was answered by the reopen's first publish — minutes
+    /// later, with nobody having pressed anything — opening a modal and
+    /// speaking its counts.
+    /// </summary>
+    [Fact]
+    public void ADeferredSummaryIsDroppedWhenItsNoteCloses() =>
+        RunParkedAndMovedAway(workspace => workspace.CloseActiveTabCommand.Execute(null));
+
+    /// <summary>WB-23: the same when the reader switches to a board in a tab
+    /// of its own (a canvas has no citations leaf note) and activates the
+    /// note's tab again.</summary>
+    [Fact]
+    public void ADeferredSummaryIsDroppedWhenTheReaderSwitchesToABoardAndBack() =>
+        RunParkedAndMovedAway(workspace => workspace.OpenPath("board.canvas", WorkspaceOpenTarget.NewTab));
+
+    /// <summary>WB-23 red team: a close inside one workspace action that
+    /// leaves the leaf on the note asked about — the note's second pane
+    /// closed, its first pane taking over — keeps the press. The drop is
+    /// judged at the action's boundary, never at the transient "no note" in
+    /// between.</summary>
+    [Fact]
+    public void ClosingASplitPaneThatLeavesTheNoteKeepsThePress()
+    {
+        StaThread.RunPumped(() =>
+        {
+            Assert.True(PanelWorkScheduler.CurrentContextIsUiDispatcher(),
+                "The deferred summary fixture must own a serialized dispatcher context.");
+            var announced = new List<A11yEvent>();
+            using VaultSession session = OpenScanned();
+            using var workspace = MakeAsyncWorkspace(session, announced);
+            using var held = new HeldWork(hook => workspace.Citations.InterleaveForTests = hook);
+
+            try
+            {
+                workspace.OpenPath("cited.md");
+                held.WaitUntilEntered();
+                Assert.True(workspace.Citations.IsLoading);
+                workspace.SplitRightCommand.Execute(null);
+                Assert.Equal("cited.md", workspace.Citations.Path);
+                workspace.OpenCitationSummary();
+                Assert.Null(workspace.CitationSummary);
+
+                // The split's own pane closes; the first pane, on the same
+                // note, takes over.
+                workspace.CloseActiveTabCommand.Execute(null);
+                Assert.Equal("cited.md", workspace.Citations.Path);
+            }
+            finally
+            {
+                held.Release();
+            }
+            PumpedDispatcher.PumpUntilDrained(QuiesceAsync(workspace));
+            held.AssertHeldUntilReleased();
+
+            Assert.NotNull(workspace.CitationSummary);
+            Assert.Equal(2, workspace.CitationSummary!.Total);
+        }, TimeSpan.FromSeconds(60), "The deferred citation summary fixture timed out.");
+    }
+
+    /// <summary>WB-23 (WD10, answered as recommended: drop at B): a quick
+    /// A→B→A before any publish drops the press at B, so A's later publish
+    /// opens nothing — today that outcome depended on which publish landed
+    /// first.</summary>
+    [Fact]
+    public void ADeferredSummaryIsDroppedOnAQuickSwitchAwayAndBack()
+    {
+        StaThread.RunPumped(() =>
+        {
+            Assert.True(PanelWorkScheduler.CurrentContextIsUiDispatcher(),
+                "The deferred summary fixture must own a serialized dispatcher context.");
+            var announced = new List<A11yEvent>();
+            using VaultSession session = OpenScanned();
+            using var workspace = MakeAsyncWorkspace(session, announced);
+            using var held = new HeldWork(hook => workspace.Citations.InterleaveForTests = hook);
+
+            try
+            {
+                workspace.OpenPath("cited.md");
+                held.WaitUntilEntered();
+                Assert.True(workspace.Citations.IsLoading);
+                workspace.OpenCitationSummary();
+                Assert.Null(workspace.CitationSummary);
+
+                workspace.OpenPath("other.md");
+                workspace.OpenPath("cited.md");
+            }
+            finally
+            {
+                held.Release();
+            }
+            PumpedDispatcher.PumpUntilDrained(QuiesceAsync(workspace));
+            held.AssertHeldUntilReleased();
+
+            Assert.Equal("cited.md", workspace.Citations.Path);
+            Assert.Null(workspace.CitationSummary);
+            Assert.DoesNotContain(announced, item => item is A11yEvent.CitationSummaryShown);
+        }, TimeSpan.FromSeconds(60), "The deferred citation summary fixture timed out.");
+    }
+
+    /// <summary>WB-23: the drop unsubscribes the handler it added — the
+    /// panel holds as many handlers as before the press — and the reopen's
+    /// publish never runs it. Not provable from the parked flag alone.</summary>
+    [Fact]
+    public void ADroppedParkLeavesNoHandlerSubscribed()
+    {
+        StaThread.RunPumped(() =>
+        {
+            Assert.True(PanelWorkScheduler.CurrentContextIsUiDispatcher(),
+                "The deferred summary fixture must own a serialized dispatcher context.");
+            var announced = new List<A11yEvent>();
+            using VaultSession session = OpenScanned();
+            using var workspace = MakeAsyncWorkspace(session, announced);
+            using var held = new HeldWork(hook => workspace.Citations.InterleaveForTests = hook);
+            int before;
+
+            try
+            {
+                workspace.OpenPath("cited.md");
+                held.WaitUntilEntered();
+                Assert.True(workspace.Citations.IsLoading);
+                before = workspace.Citations.RowsPublishedSubscriberCountForTests;
+                workspace.OpenCitationSummary();
+                Assert.Equal(before + 1, workspace.Citations.RowsPublishedSubscriberCountForTests);
+
+                workspace.CloseActiveTabCommand.Execute(null);
+                Assert.Equal(before, workspace.Citations.RowsPublishedSubscriberCountForTests);
+            }
+            finally
+            {
+                held.Release();
+            }
+            PumpedDispatcher.PumpUntilDrained(QuiesceAsync(workspace));
+            held.AssertHeldUntilReleased();
+
+            workspace.OpenPath("cited.md");
+            PumpedDispatcher.PumpUntilDrained(QuiesceAsync(workspace));
+            Assert.Equal("cited.md", workspace.Citations.Path);
+            Assert.Equal(0, workspace.OpenSummaryWhenPublishedInvokedForTests);
+            Assert.Null(workspace.CitationSummary);
+        }, TimeSpan.FromSeconds(60), "The deferred citation summary fixture timed out.");
+    }
+
+    /// <summary>Park a press on cited.md behind its held load, move away
+    /// with <paramref name="moveAway"/>, release, then reopen cited.md: the
+    /// reopen's publish opens no sheet and says nothing.</summary>
+    private void RunParkedAndMovedAway(Action<WorkspaceViewModel> moveAway)
+    {
+        File.WriteAllText(Path.Combine(_fixture.Root, "board.canvas"), "{\"nodes\":[],\"edges\":[]}");
+        StaThread.RunPumped(() =>
+        {
+            Assert.True(PanelWorkScheduler.CurrentContextIsUiDispatcher(),
+                "The deferred summary fixture must own a serialized dispatcher context.");
+            var announced = new List<A11yEvent>();
+            using VaultSession session = OpenScanned();
+            using var workspace = MakeAsyncWorkspace(session, announced);
+            using var held = new HeldWork(hook => workspace.Citations.InterleaveForTests = hook);
+
+            try
+            {
+                workspace.OpenPath("cited.md");
+                held.WaitUntilEntered();
+                Assert.True(workspace.Citations.IsLoading);
+                workspace.OpenCitationSummary();
+                Assert.Null(workspace.CitationSummary);
+
+                moveAway(workspace);
+            }
+            finally
+            {
+                held.Release();
+            }
+            PumpedDispatcher.PumpUntilDrained(QuiesceAsync(workspace));
+            held.AssertHeldUntilReleased();
+            Assert.Null(workspace.Citations.Path);
+            Assert.Null(workspace.CitationSummary);
+
+            // The note is opened again, long after the press.
+            workspace.OpenPath("cited.md");
+            PumpedDispatcher.PumpUntilDrained(QuiesceAsync(workspace));
+
+            Assert.Equal("cited.md", workspace.Citations.Path);
+            Assert.Null(workspace.CitationSummary);
+            Assert.DoesNotContain(announced, item => item is A11yEvent.CitationSummaryShown);
+        }, TimeSpan.FromSeconds(60), "The deferred citation summary fixture timed out.");
+    }
+
     /// <summary>The defer must still DELIVER for the note it was asked
     /// about — a fix that simply stopped opening the sheet would pass
     /// the wrong-note test and reintroduce the dead keypress the defer

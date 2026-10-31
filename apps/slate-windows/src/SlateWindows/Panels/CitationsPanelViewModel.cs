@@ -117,6 +117,10 @@ internal sealed class CitationsPanelViewModel : PanelWorkScheduler
 
     internal int RequestIdForTests => _requestId;
 
+    /// <summary>WB-23 (#1314): how many handlers <see cref="RowsPublished"/>
+    /// holds, so a dropped park is seen to unsubscribe.</summary>
+    internal int RowsPublishedSubscriberCountForTests => RowsPublished?.GetInvocationList().Length ?? 0;
+
     internal long GenerationForTests => Interlocked.Read(ref _generation);
 
     /// <summary>The active note changed. A DIFFERENT path is an

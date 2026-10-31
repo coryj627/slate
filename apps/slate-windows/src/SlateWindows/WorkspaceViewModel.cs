@@ -2636,6 +2636,9 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // same-path calls are no-ops, so over-calling is refetch-free.
         Citations.NoteChanged(
             ActiveGroup.ActiveTab is { IsMarkdown: true } citedTab ? citedTab.Path : null);
+        // WB-23 (#1314): a parked Ctrl+Shift+J belongs to the note it asked
+        // about; the first change away from that note drops it.
+        DropParkedSummaryIfNoteChanged();
         // W6-2 PR B (rule C, Terms 3(d)/(g); B-19 iv): the Connections
         // leaf's root follows the same funnel — recorded inside a mutation,
         // reconciled once at its boundary; immediate outside one.
