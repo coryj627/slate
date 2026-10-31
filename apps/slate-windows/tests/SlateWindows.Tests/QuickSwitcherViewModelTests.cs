@@ -154,8 +154,14 @@ public sealed class QuickSwitcherViewModelTests
                 ranks++;
                 return new SwitcherRankPage([], 0);
             });
-        ChangeRecord File(ChangeEntry entry, ChangeEffect effect = ChangeEffect.Present, ChangeCount counted = ChangeCount.Created) => new(
-            "made.md", entry, effect, null, null, counted, null, null, true, 1);
+        ChangeRecord File(
+            ChangeEntry entry,
+            ChangeEffect effect = ChangeEffect.Present,
+            ChangeCount counted = ChangeCount.Created,
+            string path = "made.md",
+            string? renamedFrom = null) => new(
+            path, entry, effect, renamedFrom, null, counted, null, null,
+            CoreDocumentClassification.IsOpenable(path), 1);
 
         await quick.ApplyRecordsAsync([File(ChangeEntry.File)], CancellationToken.None);
         Assert.Equal(0, ranks);
@@ -171,6 +177,22 @@ public sealed class QuickSwitcherViewModelTests
         Assert.Equal(2, ranks);
         await quick.ApplyRecordsAsync([File(ChangeEntry.File, ChangeEffect.Removed, ChangeCount.Removed)], CancellationToken.None);
         Assert.Equal(3, ranks);
+
+        // Attachments are never ranked: creating, removing or renaming one
+        // between attachment paths changes no row.
+        await quick.ApplyRecordsAsync(
+            [
+                File(ChangeEntry.File, path: "image.png"),
+                File(ChangeEntry.File, ChangeEffect.Removed, ChangeCount.Removed, path: "old.png"),
+                File(ChangeEntry.File, ChangeEffect.Renamed, ChangeCount.Uncounted, path: "b.png", renamedFrom: "a.png"),
+            ],
+            CancellationToken.None);
+        Assert.Equal(3, ranks);
+        // A rename across the boundary removes a row, so it re-ranks.
+        await quick.ApplyRecordsAsync(
+            [File(ChangeEntry.File, ChangeEffect.Renamed, ChangeCount.Uncounted, path: "note.png", renamedFrom: "note.md")],
+            CancellationToken.None);
+        Assert.Equal(4, ranks);
     }
 
     /// <summary>The funnel's Slate-owned batch re-ranks an open switcher

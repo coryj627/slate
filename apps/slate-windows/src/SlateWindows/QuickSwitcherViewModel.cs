@@ -287,9 +287,11 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
     /// records are already in the index (WB-25 stage 2), and a rank reads
     /// only paths and names, so a page re-ranks an open switcher silently —
     /// awaited as <see cref="ReRankForRescanAsync"/> is — only when one of
-    /// its file records can change the ranked set: a file created, removed
-    /// or renamed. An edit to a file already ranked, or a folder record,
-    /// changes nothing Quick Open shows.
+    /// its file records can change the ranked set: an openable document
+    /// created, removed or renamed, or a rename across the openable boundary
+    /// (<c>note.md</c> to <c>note.png</c> removes a row). An edit to a file
+    /// already ranked, an attachment-only change, or a folder record changes
+    /// nothing Quick Open shows (codex).
     /// </summary>
     internal Task ApplyRecordsAsync(IReadOnlyList<ChangeRecord> records, CancellationToken cancellation)
     {
@@ -305,7 +307,10 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
 
     private static bool ChangesTheRankedSet(ChangeRecord record) =>
         record.Entry == ChangeEntry.File
-        && !(record.Effect == ChangeEffect.Present && record.Counted == ChangeCount.Modified);
+        && !(record.Effect == ChangeEffect.Present && record.Counted == ChangeCount.Modified)
+        && (record.Openable
+            || CoreDocumentClassification.IsOpenable(record.Path)
+            || (record.RenamedFrom is string from && CoreDocumentClassification.IsOpenable(from)));
 
     /// <summary>The index changed under a rescan: a closed switcher
     /// completes at once; an open one re-runs its query silently, and the

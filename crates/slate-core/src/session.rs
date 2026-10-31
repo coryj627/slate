@@ -6408,7 +6408,13 @@ impl VaultSession {
             cancel.check()?;
             Ok(file)
         });
-        crate::switcher::switcher_rank_top_stream(stream, query, recent_paths, limit)
+        let page = crate::switcher::switcher_rank_top_stream(stream, query, recent_paths, limit)?;
+        #[cfg(test)]
+        switcher_ranked_test_hook::fire();
+        // Codex: a cancel during the last row's scoring, the heap's sort or
+        // the page's construction is `Cancelled` too, never a page.
+        cancel.check()?;
+        Ok(page)
     }
 
     /// Fetch one indexed file through the same enriched projection as
@@ -12082,6 +12088,36 @@ pub(crate) mod list_files_row_test_hook {
         HOOK.with(|slot| {
             if let Some(hook) = slot.borrow().as_ref() {
                 hook(rows);
+            }
+        });
+    }
+}
+
+/// Test seam (WB-25 stage 2): runs on the calling thread after the indexed
+/// switcher rank has scored every row and built its page, before the call
+/// returns — the deterministic way to cancel after the final row.
+#[cfg(test)]
+pub(crate) mod switcher_ranked_test_hook {
+    use std::cell::RefCell;
+
+    type RankedHook = Box<dyn Fn()>;
+
+    thread_local! {
+        static HOOK: RefCell<Option<RankedHook>> = const { RefCell::new(None) };
+    }
+
+    pub(crate) fn install(hook: RankedHook) {
+        HOOK.with(|slot| *slot.borrow_mut() = Some(hook));
+    }
+
+    pub(crate) fn clear() {
+        HOOK.with(|slot| *slot.borrow_mut() = None);
+    }
+
+    pub(super) fn fire() {
+        HOOK.with(|slot| {
+            if let Some(hook) = slot.borrow().as_ref() {
+                hook();
             }
         });
     }
