@@ -21,8 +21,11 @@ internal sealed class FindMatchAdorner : Adorner
 {
     private readonly ReadingFindSurface _owner;
     private readonly ScrollViewer? _scroller;
-    private IReadOnlyList<(int Offset, int Length)> _matches = [];
+    private IReadOnlyList<(int Offset, int Length)> _matches = Array.Empty<(int Offset, int Length)>();
     private int _current = -1;
+    private Brush? _ringBrush;
+    private Pen? _ring;
+    private Pen? _currentRing;
 
     public FindMatchAdorner(UIElement renderScope, ReadingFindSurface owner)
         : base(renderScope)
@@ -70,9 +73,17 @@ internal sealed class FindMatchAdorner : Adorner
         {
             return;
         }
+        // The pens are rebuilt only when the theme hands over another brush,
+        // not on every scroll.
         Brush brush = _owner.Surface.TryFindResource("Slate.FindMatchRingBrush") as Brush ?? Brushes.DarkOrange;
-        var ring = new Pen(brush, 2);
-        var currentRing = new Pen(brush, 3);
+        if (!ReferenceEquals(brush, _ringBrush) || _ring is null || _currentRing is null)
+        {
+            _ringBrush = brush;
+            _ring = new Pen(brush, 2);
+            _currentRing = new Pen(brush, 3);
+        }
+        Pen ring = _ring;
+        Pen currentRing = _currentRing;
         (int first, int last) = _owner.VisibleOffsets();
         GeneralTransform? transform = _owner.Surface.TransformToDescendant(AdornedElement);
         for (int i = FirstEndingAtOrAfter(first); i < _matches.Count && _matches[i].Offset <= last; i++)
