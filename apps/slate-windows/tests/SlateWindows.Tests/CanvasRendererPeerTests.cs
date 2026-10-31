@@ -334,14 +334,21 @@ public sealed class CanvasRendererPeerTests : IDisposable
     [InlineData("hidden: select, then realize")]
     [InlineData("hidden: select, edit, then realize")]
     [InlineData("select, edit, realize, then hide")]
+    [InlineData("realize, then toggle follow off")]
+    [InlineData("realize, then toggle follow on")]
+    [InlineData("invoke, then actual size")]
     public void TheNewestRequestForTheViewWins(string order) => RunSta(() =>
     {
         WriteCanvas(
             "newest.canvas",
             [Card("near", "Near", 40, 40), Card("a", "Alpha", 20_000, 40), Card("b", "Beta", 20_300, 40)],
-            [Edge("e1", "b", "a", "far"), Edge("e2", "near", "near", "loops")]);
+            [Edge("e1", "b", "a", "far"), Edge("e2", "near", "near", "loops"), Edge("e3", "near", "b", "reaches")]);
         using Board board = Open("newest.canvas");
         board.ZoomTo(1);
+        if (order == "realize, then toggle follow on")
+        {
+            _ = board.Surface.ViewportCommand(CanvasViewportVerb.ToggleFollowSelection);
+        }
         var far = Assert.IsAssignableFrom<IVirtualizedItemProvider>(board.HeldEdge("e1").GetPattern(PatternInterface.VirtualizedItem));
         board.Document.SeatSelectionSilently("a");
 
@@ -402,11 +409,26 @@ public sealed class CanvasRendererPeerTests : IDisposable
                 board.Renderer.SelectAnnounced("near");
                 far.Realize();
                 break;
+            case "realize, then toggle follow off":
+            case "realize, then toggle follow on":
+                // The toggle moves nothing, so the realization it follows
+                // still stands (codex round 7).
+                far.Realize();
+                _ = board.Surface.ViewportCommand(CanvasViewportVerb.ToggleFollowSelection);
+                break;
+            case "invoke, then actual size":
+                // The long "reaches" edge is on the window; its Invoke owes
+                // a reveal of Beta, far off, to the pending install. The
+                // newer verb supersedes it (codex round 7).
+                ((IInvokeProvider)board.HeldEdge("e3").GetPattern(PatternInterface.Invoke)!).Invoke();
+                _ = board.Surface.ViewportCommand(CanvasViewportVerb.ActualSize);
+                break;
             default:
                 far.Realize();
                 _ = board.Surface.ViewportCommand(CanvasViewportVerb.FitCanvas);
                 break;
         }
+        CanvasViewportState requested = board.Renderer.Engine.CommittedViewport;
         board.SettleUntil(() => ReferenceEquals(
             board.Renderer.Engine.Current!.Source.Loaded!.Population, board.Document.AppliedPublication!.Loaded!.Population));
         board.Settle();
@@ -418,7 +440,14 @@ public sealed class CanvasRendererPeerTests : IDisposable
                 AssertInView(after, 40, 40, 200, 100);
                 break;
             case "select, then realize":
+            case "realize, then toggle follow off":
+            case "realize, then toggle follow on":
                 AssertInView(after, 20_000, 40, 500, 100);
+                break;
+            case "invoke, then actual size":
+                Assert.True(
+                    requested.SameGeometry(after),
+                    $"the older reveal moved the view the newer verb set: {requested.PanX},{requested.PanY} became {after.PanX},{after.PanY}.");
                 break;
             default:
                 // Fit centres the canvas's bounds (40..20,500) at its clamped

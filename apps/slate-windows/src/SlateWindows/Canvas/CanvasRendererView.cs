@@ -462,20 +462,20 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// case; every arrival here acts.</summary>
     internal CanvasViewportOutcome Viewport(CanvasViewportVerb verb)
     {
-        // The newest request for the view wins (codex round 5): a verb
-        // supersedes a realization still owed to a pending install.
-        _owedRealization = null;
         double centreX = ActualWidth / 2;
         double centreY = ActualHeight / 2;
         switch (verb)
         {
             case CanvasViewportVerb.ZoomIn:
+                SupersedeOwedPans();
                 _engine.CommitViewport(v => v.ZoomedIn(centreX, centreY));
                 return Zoomed(null);
             case CanvasViewportVerb.ZoomOut:
+                SupersedeOwedPans();
                 _engine.CommitViewport(v => v.ZoomedOut(centreX, centreY));
                 return Zoomed(null);
             case CanvasViewportVerb.ActualSize:
+                SupersedeOwedPans();
                 _engine.CommitViewport(v => v.AtActualSize(centreX, centreY));
                 return Zoomed(null);
             case CanvasViewportVerb.FitCanvas:
@@ -489,6 +489,17 @@ internal sealed class CanvasRendererView : FrameworkElement
             default:
                 return CanvasViewportOutcome.Refused;
         }
+    }
+
+    /// <summary>The newest request for the view wins (codex rounds 5 and 7):
+    /// a verb that moves or zooms the view supersedes every pan still owed —
+    /// a reveal and a realization alike — so neither is paid over it when
+    /// the pending install lands or a hidden board shows. The
+    /// follow-selection toggle moves nothing and supersedes nothing.</summary>
+    private void SupersedeOwedPans()
+    {
+        _owedRealization = null;
+        _owedReveal = null;
     }
 
     /// <summary>§H TH-5: the committed zoom as the percent core renders,
@@ -527,6 +538,7 @@ internal sealed class CanvasRendererView : FrameworkElement
         {
             return CanvasViewportOutcome.Silent;
         }
+        SupersedeOwedPans();
         _engine.CommitViewport(v =>
         {
             double zoom = Math.Clamp(

@@ -131,6 +131,11 @@ Issues: Closes #1277. Size L (design first). Lanes: windows + FlaUI (shell gate)
 - **New cases.** `TheNewestRequestForTheViewWins` gains two deferred schedules: hidden before the request, and hidden before the install.
 - **What witnesses the fix.** The hidden-board case with an immediate realization is the witness: it fails when the drop is removed. In the two deferred schedules the board settles the older reveal before the realization pans, so they hold as behaviour checks, not as witnesses.
 
+**Codex round 7, 2026-10-31.**
+- **Only verbs that move or zoom the view supersede pans.** ZoomIn, ZoomOut, ActualSize, and a FitCanvas or ZoomToSelection that commits each supersede every owed pan, reveal and realization alike (`SupersedeOwedPans`). An edge Invoke's reveal owed to a pending install is therefore never paid over a newer verb.
+- **The follow-selection toggle moves nothing and supersedes nothing.**
+- **New cases.** `TheNewestRequestForTheViewWins` adds both toggle directions after a realization, and an edge Invoke followed by Actual Size.
+
 ## Goal
 
 Locked contract 34 D5 says a labelled edge is a peer in the board's name
