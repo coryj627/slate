@@ -70,6 +70,22 @@ Issues: Closes #1277. Size L (design first). Lanes: windows + FlaUI (shell gate)
 9. **Typed test sites.** Two facts typed `PeerFor`/`RealizePeer` as the card peer (`CanvasNavigatorTests`, `CanvasDocumentTests`). They now assert the type or hold the base class.
 10. **Swift.** The "Swift literal edits" in the header, the design section and the Brief do not apply (see D-A above). `canvas::model` now calls `crate::a11y::canvas_edge_phrase`, its first use of `a11y`.
 
+**Review of the code (codex round 1 and the code red team), 2026-10-31.**
+- **D3's identity is (renderer, document, key).**
+  - The registry is keyed by document, and every peer records its own.
+  - A held peer exposes no pattern, reads offscreen and has an empty rect once its card or edge is gone, the pane closes, or the board shows another document.
+  - `PeerFor` revalidates before it returns a held peer.
+  - This applies to cards too, closing the same gap they had.
+- **Realization reads the installed state's effective rects** (`NodeRect`) through one `CanvasPeerTopology.EdgeUnion`.
+- **The board's hit test answers only inside the board,** each child clipped to it.
+- **Facts:**
+  - `APointBesideTheBoardIsNeverOneOfItsPeers`
+  - `AHeldEdgePeerGoesUnavailableWhenItsEdgeStopsBeingAPeer`
+  - `AnEdgePeerHeldOnOneCanvasNeverAnswersForAnother`
+  - `AnEdgeRealizesOnTheRectanglesItsBoardDraws`
+  The placeholder and find facts now target an edge whose designated endpoint is the LEFT card, so only the union branch passes them.
+- **Follow-ups:** the mac board's edges are #1720; an edge's bounds as a label chip, and the full-cover axe risk, are #1721.
+
 ## Goal
 
 Locked contract 34 D5 says a labelled edge is a peer in the board's name

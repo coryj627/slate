@@ -101,6 +101,8 @@ public sealed class WcMatrixCanvasEvidenceCensus
                 "AnEdgeLongerThanTheViewportRealizesOnItsDesignatedEndpoint", "InvokeSelectsTheEndpointTheEndStyleTableNames",
                 "TheSameEdgePeerIsReturnedWhileAnythingHoldsIt", "FindItemByNameResolvesAnEdge",
                 "AStructureChangeRaisesChildrenInvalidatedOncePerInstall", "APointOnAnEndpointCardIsTheCardNotTheEdge",
+                "APointBesideTheBoardIsNeverOneOfItsPeers", "AHeldEdgePeerGoesUnavailableWhenItsEdgeStopsBeingAPeer",
+                "AnEdgePeerHeldOnOneCanvasNeverAnswersForAnother", "AnEdgeRealizesOnTheRectanglesItsBoardDraws",
                 "AFollowingBoardInAnotherPanePansToTheSelectionAndAnUnfollowingOneStays",
                 "AFollowingBoardRevealsANewCardOnceTheStateThatHasItInstalls", "AnOwedRevealIsPaidOnlyForTheCardThatIsStillTheSeat",
                 "AnOwedElsewhereRevealLapsesWhenTheBoardStopsFollowing", "TheBoardsOwnPeersRevealTheirCardWithFollowSelectionOff",

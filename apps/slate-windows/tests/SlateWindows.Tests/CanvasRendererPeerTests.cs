@@ -75,14 +75,16 @@ public sealed class CanvasRendererPeerTests : IDisposable
     /// <summary>D3/D4: an edge whose two cards lie together beyond the
     /// window is a placeholder — the virtualized-item pattern, Invoke
     /// refused — and its realization pans, at the current zoom, until the
-    /// whole union is in view, promoting the same peer.</summary>
+    /// whole union is in view, promoting the same peer. The edge points at
+    /// the LEFT card, so a pan to its designated endpoint alone would leave
+    /// the right card out of view.</summary>
     [Fact]
     public void AnEdgeIsAPlaceholderOffWindowAndPromotesOnRealize() => RunSta(() =>
     {
         WriteCanvas(
             "far.canvas",
             [Card("home", "Home", 40, 40), Card("a", "Alpha", 20_000, 40), Card("b", "Beta", 20_300, 40)],
-            [Edge("e1", "a", "b", "supports")]);
+            [Edge("e1", "b", "a", "cites")]);
         using Board board = Open("far.canvas");
         board.PanTo(0, 0);
         CanvasViewportState before = board.Renderer.Engine.Current!.Viewport;
@@ -107,7 +109,7 @@ public sealed class CanvasRendererPeerTests : IDisposable
         Assert.False(edge.IsOffscreen());
         var invoke = Assert.IsAssignableFrom<IInvokeProvider>(edge.GetPattern(PatternInterface.Invoke));
         invoke.Invoke();
-        Assert.Equal("b", board.Document.Selection.Selected);
+        Assert.Equal("a", board.Document.Selection.Selected);
     });
 
     /// <summary>D3/D4 with a union wider than the view: no pan at the
@@ -234,14 +236,16 @@ public sealed class CanvasRendererPeerTests : IDisposable
         // The search mints the edge's peer and realizes it; with no UIA
         // client listening the provider it hands back may be null, so the
         // fact holds the peer the search minted, as the cards' fact does.
+        // "cites" points at the LEFT card, so only the union pan shows both.
         _ = ((IItemContainerProvider)board.Peer).FindItemByProperty(
-            null, AutomationElementIdentifiers.NameProperty.Id, Supports);
-        CanvasEdgeAutomationPeer edge = board.HeldEdge("e1");
-        Assert.Equal(CanvasPeerKey.Edge("e2"), board.Renderer.FindByName(edge, null));
+            null, AutomationElementIdentifiers.NameProperty.Id, Cites);
+        CanvasEdgeAutomationPeer edge = board.HeldEdge("e2");
+        Assert.Equal(CanvasPeerKey.Edge("e2"), board.Renderer.FindByName(board.HeldEdge("e1"), null));
+        Assert.Null(board.Renderer.FindByName(edge, null));
 
-        board.SettleUntil(() => board.Cell(CanvasPeerKey.Edge("e1")) == CanvasPeerCell.Materialized);
-        Assert.Contains(CanvasPeerKey.Edge("e1"), board.Renderer.Engine.Current!.Retained);
-        Assert.Same(edge, board.Renderer.PeerFor(CanvasPeerKey.Edge("e1")));
+        board.SettleUntil(() => board.Cell(CanvasPeerKey.Edge("e2")) == CanvasPeerCell.Materialized);
+        Assert.Contains(CanvasPeerKey.Edge("e2"), board.Renderer.Engine.Current!.Retained);
+        Assert.Same(edge, board.Renderer.PeerFor(CanvasPeerKey.Edge("e2")));
         CanvasViewportState after = board.Renderer.Engine.Current!.Viewport;
         Assert.Equal(installed.Viewport.Zoom, after.Zoom);
         AssertInView(after, 20_000, 40, 500, 100);
@@ -273,6 +277,171 @@ public sealed class CanvasRendererPeerTests : IDisposable
         Assert.Same(beta, board.Peer.GetPeerFromPoint(new Point(b.X + (b.Width / 2), b.Y + (b.Height / 2))));
         // Between the cards: the top-right corner of the union, on neither.
         Assert.Same(edge, board.Peer.GetPeerFromPoint(new Point(union.Right - 2, union.Top + 2)));
+    });
+
+    /// <summary>Peers materialize up to a view beyond the board, and an edge's
+    /// union can reach further still: a point beside the board — over the
+    /// sidebar or the editor — is never a card or an edge.</summary>
+    [Fact]
+    public void APointBesideTheBoardIsNeverOneOfItsPeers() => RunSta(() =>
+    {
+        WriteCanvas(
+            "wide.canvas",
+            [Card("a", "Alpha", 40, 40), Card("b", "Beta", 6_000, 40)],
+            [Edge("e1", "a", "b", "spans")]);
+        using Board board = Open("wide.canvas");
+        board.ZoomTo(1);
+        CanvasEdgeAutomationPeer edge = Assert.Single(board.Children().OfType<CanvasEdgeAutomationPeer>());
+        Rect bounds = board.Peer.GetBoundingRectangle();
+        Rect union = edge.GetBoundingRectangle();
+        var beside = new Point(bounds.Right + 20, union.Top + (union.Height / 2));
+        Assert.True(
+            union.Contains(beside),
+            $"premise: the edge's union {union} reaches past the board {bounds} to {beside}.");
+
+        Assert.Same(board.Peer, board.Peer.GetPeerFromPoint(beside));
+    });
+
+    /// <summary>A held edge peer answers only while its edge is a peer on
+    /// this board: once the edge loses its label or is deleted, or the pane
+    /// closes, it exposes no pattern and reads offscreen, and the registry
+    /// hands it out no more; an undo that brings the edge back brings the
+    /// same peer back (codex).</summary>
+    [Fact]
+    public void AHeldEdgePeerGoesUnavailableWhenItsEdgeStopsBeingAPeer() => RunSta(() =>
+    {
+        WriteCanvas(
+            "gone.canvas",
+            [Card("a", "Alpha", 40, 40), Card("b", "Beta", 300, 40)],
+            [Edge("e1", "a", "b", "supports"), Edge("e2", "a", "b", "cites")]);
+        using Board board = Open("gone.canvas");
+        board.PanTo(0, 0);
+        CanvasEdgeAutomationPeer supports = board.HeldEdge("e1");
+        CanvasEdgeAutomationPeer cites = board.HeldEdge("e2");
+
+        // Unlabelled: no longer a peer (DD-2).
+        _ = board.Document.CanvasEditConnection("e1", null, CanvasConnectionDirection.ToTarget);
+        board.SettleUntil(() => board.Renderer.Engine.Current!.Source.Loaded!.Population.SceneByEdge["e1"].SpeakableName is null);
+        AssertGone(supports);
+        Assert.Null(board.Renderer.PeerFor(CanvasPeerKey.Edge("e1")));
+
+        // Deleted.
+        _ = board.Document.CanvasDeleteConnection("e2");
+        board.SettleUntil(() => !board.Renderer.Engine.Current!.Source.Loaded!.Population.SceneByEdge.ContainsKey("e2"));
+        AssertGone(cites);
+        Assert.Null(board.Renderer.PeerFor(CanvasPeerKey.Edge("e2")));
+
+        // Undone: the edge is back, and the peer the reader holds is it again.
+        board.Document.CanvasUndo();
+        board.SettleUntil(() => board.Cell(CanvasPeerKey.Edge("e2")) == CanvasPeerCell.Materialized);
+        Assert.Same(cites, board.Renderer.PeerFor(CanvasPeerKey.Edge("e2")));
+        Assert.NotNull(cites.GetPattern(PatternInterface.Invoke));
+
+        // The pane closes.
+        board.Renderer.Shutdown();
+        AssertGone(cites);
+
+        static void AssertGone(CanvasEdgeAutomationPeer peer)
+        {
+            Assert.Equal(string.Empty, peer.GetName());
+            Assert.True(peer.IsOffscreen());
+            Assert.True(peer.GetBoundingRectangle().IsEmpty);
+            Assert.Null(peer.GetPattern(PatternInterface.VirtualizedItem));
+            Assert.Null(peer.GetPattern(PatternInterface.Invoke));
+        }
+    });
+
+    /// <summary>D3's identity is (renderer, document, key): a peer held on
+    /// one canvas never answers for another canvas the same board shows that
+    /// reuses the edge's id, and the board showing the first canvas again
+    /// hands back the peer the reader held (codex).</summary>
+    [Fact]
+    public void AnEdgePeerHeldOnOneCanvasNeverAnswersForAnother() => RunSta(() =>
+    {
+        WriteCanvas(
+            "first.canvas",
+            [Card("a", "Alpha", 40, 40), Card("b", "Beta", 300, 40)],
+            [Edge("e1", "a", "b", "supports")]);
+        WriteCanvas(
+            "second.canvas",
+            [Card("a", "Gamma", 40, 40), Card("b", "Delta", 300, 40)],
+            [Edge("e1", "b", "a", "refutes")]);
+        using Board board = Open("first.canvas");
+        board.PanTo(0, 0);
+        CanvasEdgeAutomationPeer first = board.HeldEdge("e1");
+        Assert.Equal(Supports, first.GetName());
+
+        CanvasDocumentViewModel second = OpenDocument("second.canvas");
+        try
+        {
+            board.Show(second);
+            board.SettleUntil(() => board.Renderer.Engine.Current!.Source.Loaded!.Population.SceneByNode["a"].Title == "Gamma");
+            Assert.Equal(string.Empty, first.GetName());
+            Assert.Null(first.GetPattern(PatternInterface.VirtualizedItem));
+            CanvasEdgeAutomationPeer other = board.HeldEdge("e1");
+            Assert.NotSame(first, other);
+            Assert.Equal(
+                "Text card \"Delta\" connects to Text card \"Gamma\", labelled \"refutes\"",
+                other.GetName());
+
+            board.Show(board.Document);
+            board.SettleUntil(() => board.Renderer.Engine.Current!.Source.Loaded!.Population.SceneByNode["a"].Title == "Alpha");
+            Assert.Same(first, board.Renderer.PeerFor(CanvasPeerKey.Edge("e1")));
+            Assert.Equal(Supports, first.GetName());
+        }
+        finally
+        {
+            second.Shutdown();
+        }
+    });
+
+    /// <summary>D4 during a move preview: the realization targets the
+    /// rectangles the board DRAWS. The committed union is wider than the
+    /// view, the previewed one fits, so the whole previewed edge comes into
+    /// view (codex).</summary>
+    [Fact]
+    public void AnEdgeRealizesOnTheRectanglesItsBoardDraws() => RunSta(() =>
+    {
+        WriteCanvas(
+            "preview.canvas",
+            [Card("home", "Home", 40, 40), Card("a", "Alpha", 20_000, 40), Card("b", "Beta", 23_000, 40)],
+            [Edge("e1", "b", "a", "cites")]);
+        using Board board = Open("preview.canvas");
+        board.ZoomTo(1);
+        CanvasViewportState before = board.Renderer.Engine.Current!.Viewport;
+        Assert.True(3_200 * before.Zoom > before.ViewWidth, "premise: the committed union is wider than the view.");
+
+        // Move Beta left, in the preview only, until its union with Alpha fits.
+        board.Document.Navigator.AttachPresenter(board.Surface);
+        board.Document.SeatSelectionSilently("b");
+        Assert.True(board.Document.Navigator.EnterMoveMode(), "premise: move mode starts on the seated card.");
+        CanvasRect Beta() => board.Document.Transient!.Rects["b"];
+        for (int step = 0; step < 400 && (board.Document.Transient?.Rects.ContainsKey("b") != true
+            || (Beta().X + Beta().Width - 20_000) * before.Zoom > before.ViewWidth * 0.8); step++)
+        {
+            Assert.True(board.Document.Navigator.ModeStep(-1, 0, large: true), "premise: the preview moves.");
+        }
+        board.SettleUntil(() => board.Renderer.Engine.Current!.TransientRects?.ContainsKey("b") == true);
+        CanvasRect previewed = Beta();
+        double right = previewed.X + previewed.Width;
+        Assert.True((right - 20_000) * before.Zoom <= before.ViewWidth, "premise: the previewed union fits the view.");
+
+        // Move mode follows the moved card into view (and keeps a moving
+        // card's edges materialized); pan back home so the realization, not
+        // the preview's own reveal, brings the edge into view.
+        board.PanTo(0, 0);
+        CanvasViewportState home = board.Renderer.Engine.Current!.Viewport;
+        Assert.True(
+            (20_000 * home.Zoom) + home.PanX > home.ViewWidth,
+            "premise: panned home, the previewed edge is out of view.");
+        CanvasEdgeAutomationPeer edge = board.HeldEdge("e1");
+        ((IVirtualizedItemProvider)edge).Realize();
+        board.SettleUntil(() => board.Cell(CanvasPeerKey.Edge("e1")) == CanvasPeerCell.Materialized);
+
+        CanvasViewportState after = board.Renderer.Engine.Current!.Viewport;
+        Assert.Equal(before.Zoom, after.Zoom);
+        AssertInView(after, 20_000, 40, right - 20_000, 100);
+        _ = board.Document.Navigator.CancelMode();
     });
 
     /// <summary>D3: a structure change raises the container's one
@@ -333,6 +502,14 @@ public sealed class CanvasRendererPeerTests : IDisposable
         return new Board(document, announcer, ownsDocument: true);
     }
 
+    private CanvasDocumentViewModel OpenDocument(string path)
+    {
+        var document = new CanvasDocumentViewModel(
+            _session, path, new CanvasAnnouncer(_announced.Add, TimeSpan.FromMinutes(1)), synchronousForTests: true);
+        document.Load();
+        return document;
+    }
+
     private static Board Open(Board shown) => new(shown.Document, shown.Announcer, ownsDocument: false);
 
     /// <summary>One shown visual board over a document: the surface in a
@@ -340,6 +517,7 @@ public sealed class CanvasRendererPeerTests : IDisposable
     private sealed class Board : IDisposable
     {
         private readonly Window _window;
+        private readonly CanvasSurfaceView _surface;
         private readonly bool _ownsDocument;
 
         internal Board(CanvasDocumentViewModel document, CanvasAnnouncer announcer, bool ownsDocument)
@@ -348,6 +526,7 @@ public sealed class CanvasRendererPeerTests : IDisposable
             Announcer = announcer;
             _ownsDocument = ownsDocument;
             var surface = new CanvasSurfaceView { Model = document };
+            _surface = surface;
             Renderer = surface.VisualForTests;
             _window = new Window
             {
@@ -368,6 +547,10 @@ public sealed class CanvasRendererPeerTests : IDisposable
         }
 
         internal CanvasDocumentViewModel Document { get; }
+
+        /// <summary>The pane's surface — the navigator's presenter once it
+        /// has focus, which a hosted fact attaches by hand.</summary>
+        internal CanvasSurfaceView Surface => _surface;
 
         /// <summary>The document's announcer: a navigation line waits out
         /// its coalescing window, so the facts flush it before
@@ -393,6 +576,24 @@ public sealed class CanvasRendererPeerTests : IDisposable
             Renderer.Engine.Current?.Topology.Placements.TryGetValue(key, out CanvasPeerPlacement? placement) == true
                 ? placement.Cell
                 : null;
+
+        /// <summary>The pane shows another document (a tab switch rebinds
+        /// the surface).</summary>
+        internal void Show(CanvasDocumentViewModel document)
+        {
+            _surface.Model = document;
+            document.ShowSurface(CanvasSurfaceKind.Visual);
+            _window.UpdateLayout();
+        }
+
+        /// <summary>A fixed zoom with the origin at the view's corner: the
+        /// board opens fitted to its content, which a fact whose premise is
+        /// a length against the view must not depend on.</summary>
+        internal void ZoomTo(double zoom)
+        {
+            Renderer.Engine.CommitViewport(view => view.WithZoom(zoom, 0, 0).PannedTo(0, 0));
+            Settle();
+        }
 
         internal void PanTo(double panX, double panY)
         {

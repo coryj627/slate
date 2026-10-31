@@ -3517,11 +3517,6 @@ fn counted(count: u32, one: &str, many: &str) -> String {
     crate::sidebar_filter::count_noun(count as u64, one, many)
 }
 
-/// The t0 §1.1 card reference: `Group "label"` for groups,
-/// `⟨Kind⟩ card "title"` otherwise. ONE definition — mac spelled it in
-/// `CanvasCardRef.phrase`, again (unquoted) in the renderer's peer
-/// names, and again (with a hardcoded kind) in the outline's
-/// connection rows, and the three drifted.
 /// The words a connection is read in, from one endpoint's side: shared by
 /// the walk's [`CanvasA11yEvent::CanvasConnectionTraversed`] and the board's
 /// edge names ([`canvas_edge_phrase`]), so the two never drift apart.
@@ -3553,6 +3548,11 @@ pub(crate) fn canvas_edge_phrase(
     )
 }
 
+/// The t0 §1.1 card reference: `Group "label"` for groups,
+/// `⟨Kind⟩ card "title"` otherwise. ONE definition — mac spelled it in
+/// `CanvasCardRef.phrase`, again (unquoted) in the renderer's peer
+/// names, and again (with a hardcoded kind) in the outline's
+/// connection rows, and the three drifted.
 fn card_ref(kind_label: &str, title: &str) -> String {
     if kind_label == "group" {
         format!("Group \"{title}\"")

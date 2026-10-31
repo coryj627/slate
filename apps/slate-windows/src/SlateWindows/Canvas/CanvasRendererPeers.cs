@@ -58,24 +58,34 @@ internal sealed class CanvasRendererAutomationPeer :
             ? _view.MaterializedPeers()
             : [];
 
-    /// <summary>The peer under a screen point: a card before any edge. A
-    /// labelled edge's rectangle is the union of its endpoints' (#1277), so
-    /// the platform's last-child-first walk would answer the edge for every
-    /// point on an endpoint card, and a reader's mouse or touch would hear
-    /// the connection instead of the card. An edge answers only a point no
-    /// card covers.</summary>
+    /// <summary>The peer under a screen point: a card before any edge, and
+    /// only inside the board. A labelled edge's rectangle is the union of its
+    /// endpoints' (#1277), so the platform's last-child-first walk would
+    /// answer the edge for every point on an endpoint card; and peers
+    /// materialize up to a view beyond the board, so an unclipped walk would
+    /// answer a card or an edge for a point over the sidebar or the editor
+    /// beside it. Each child is tested against its rectangle clipped to the
+    /// board's; an edge answers only a point on the board no card
+    /// covers.</summary>
     protected override AutomationPeer GetPeerFromPointCore(System.Windows.Point point)
     {
+        System.Windows.Rect board = GetBoundingRectangle();
+        if (IsOffscreen() || !board.Contains(point))
+        {
+            return this;
+        }
         System.Collections.Generic.List<AutomationPeer> children = GetChildren() ?? [];
         foreach (AutomationPeer child in Enumerable.Reverse(children.OfType<CanvasCardAutomationPeer>())
             .Concat<AutomationPeer>(Enumerable.Reverse(children.OfType<CanvasEdgeAutomationPeer>())))
         {
-            if (child.GetBoundingRectangle().Contains(point))
+            System.Windows.Rect visible = child.GetBoundingRectangle();
+            visible.Intersect(board);
+            if (!visible.IsEmpty && visible.Contains(point))
             {
                 return child;
             }
         }
-        return base.GetPeerFromPointCore(point);
+        return this;
     }
 
     /// <summary>D3: a structure change raises the container's one
@@ -162,9 +172,11 @@ internal abstract class CanvasBoardAutomationPeer :
     AutomationPeer,
     IVirtualizedItemProvider
 {
-    private protected CanvasBoardAutomationPeer(CanvasRendererView view, CanvasPeerKey key)
+    private protected CanvasBoardAutomationPeer(
+        CanvasRendererView view, CanvasDocumentViewModel document, CanvasPeerKey key)
     {
         View = view;
+        Document = document;
         Key = key;
     }
 
@@ -172,14 +184,31 @@ internal abstract class CanvasBoardAutomationPeer :
 
     private protected CanvasRendererView View { get; }
 
+    /// <summary>The document this peer was minted for (D3's identity is
+    /// renderer, document and key).</summary>
+    private protected CanvasDocumentViewModel Document { get; }
+
+    /// <summary>The installed scene, while the board still shows this
+    /// peer's document; null after the pane closes or the board moves to
+    /// another canvas, so a held peer never answers for either.</summary>
+    private protected CanvasPopulation? Population =>
+        ReferenceEquals(View.Model, Document) ? View.Engine.Current?.Source.Loaded?.Population : null;
+
+    /// <summary>Whether the card or edge this peer stands for is on the
+    /// board now. A peer whose card or edge is gone — deleted, unlabelled,
+    /// another document shown, the pane closed — exposes no pattern, not
+    /// even the realize door, and reads offscreen (codex).</summary>
+    private protected abstract bool Exists { get; }
+
     private protected bool Materialized =>
-        View.Engine.Current?.Topology.Placements.TryGetValue(
+        Exists
+        && View.Engine.Current?.Topology.Placements.TryGetValue(
             Key, out CanvasPeerPlacement? placement) == true
         && placement.Cell == CanvasPeerCell.Materialized;
 
     protected override System.Windows.Rect GetBoundingRectangleCore()
     {
-        if (View.Engine.Current is not { } state
+        if (!Materialized || View.Engine.Current is not { } state
             || state.Topology.Placements.TryGetValue(Key, out CanvasPeerPlacement? placement) != true
             || placement.Cell != CanvasPeerCell.Materialized)
         {
@@ -248,16 +277,19 @@ internal sealed class CanvasCardAutomationPeer :
     IInvokeProvider,
     ISelectionItemProvider
 {
-    internal CanvasCardAutomationPeer(CanvasRendererView view, CanvasPeerKey key)
-        : base(view, key)
+    internal CanvasCardAutomationPeer(
+        CanvasRendererView view, CanvasDocumentViewModel document, CanvasPeerKey key)
+        : base(view, document, key)
     {
     }
 
     private CanvasSceneNode? Node =>
-        View.Engine.Current?.Source.Loaded?.Population is { } population
+        Population is { } population
             && population.SceneByNode.TryGetValue(Key.Id, out CanvasSceneNode? node)
             ? node
             : null;
+
+    private protected override bool Exists => Node is not null;
 
     protected override string GetNameCore() => Node?.SpeakableName ?? string.Empty;
 
@@ -272,10 +304,10 @@ internal sealed class CanvasCardAutomationPeer :
     {
         if (patternInterface == PatternInterface.VirtualizedItem)
         {
-            // ALWAYS exposed (round 3's placeholder table): the
-            // realize door must exist precisely when the card is not
-            // materialized.
-            return this;
+            // ALWAYS exposed while the card exists (round 3's placeholder
+            // table): the realize door must exist precisely when the card
+            // is not materialized.
+            return Exists ? this : null;
         }
         if (patternInterface is PatternInterface.Invoke or PatternInterface.SelectionItem)
         {
@@ -341,15 +373,16 @@ internal sealed class CanvasEdgeAutomationPeer :
     CanvasBoardAutomationPeer,
     IInvokeProvider
 {
-    internal CanvasEdgeAutomationPeer(CanvasRendererView view, CanvasPeerKey key)
-        : base(view, key)
+    internal CanvasEdgeAutomationPeer(
+        CanvasRendererView view, CanvasDocumentViewModel document, CanvasPeerKey key)
+        : base(view, document, key)
     {
     }
 
     private CanvasSceneEdge? Edge =>
-        View.Engine.Current?.Source.Loaded?.Population is { } population
-            ? CanvasRendererView.NamedEdge(population, Key.Id)
-            : null;
+        Population is { } population ? CanvasRendererView.NamedEdge(population, Key.Id) : null;
+
+    private protected override bool Exists => Edge is not null;
 
     protected override string GetNameCore() => Edge?.SpeakableName ?? string.Empty;
 
@@ -364,8 +397,9 @@ internal sealed class CanvasEdgeAutomationPeer :
     {
         if (patternInterface == PatternInterface.VirtualizedItem)
         {
-            // ALWAYS exposed, as a card's is (D3's placeholder cell).
-            return this;
+            // ALWAYS exposed while the edge is a peer, as a card's is
+            // (D3's placeholder cell).
+            return Exists ? this : null;
         }
         // Invoke only once materialized; no SelectionItem — the board's
         // seat is a node.

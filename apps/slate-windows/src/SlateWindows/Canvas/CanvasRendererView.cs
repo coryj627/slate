@@ -103,6 +103,7 @@ internal sealed class CanvasRendererView : FrameworkElement
             // (#1271, review round 2); a teardown sets null and lands here too.
             _owedReveal = null;
             _model = value;
+            SweepReclaimedPeers();
             if (value is not null)
             {
                 value.PublicationApplied += _engine.OnPublicationApplied;
@@ -521,10 +522,14 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// observe. Every install refreshes the board's children and mints a
     /// peer per windowed card, so a strong registry kept every card the
     /// board ever windowed, and a realization made them all tombstones.
-    /// Cards and labelled edges share it under their discriminated keys
-    /// (D3, #1277).
+    /// Cards and labelled edges share it under their discriminated keys,
+    /// and every entry is scoped to the document it was minted for: D3's
+    /// identity is (renderer, document, key), so a peer held on one canvas
+    /// never answers for another canvas this board later shows that reuses
+    /// its ids (#1277, codex).
     /// </summary>
-    private readonly System.Collections.Generic.Dictionary<CanvasPeerKey, WeakReference<CanvasBoardAutomationPeer>>
+    private readonly System.Collections.Generic.Dictionary<
+        (CanvasDocumentViewModel Document, CanvasPeerKey Key), WeakReference<CanvasBoardAutomationPeer>>
         _peers = [];
 
     /// <summary>The registry size that triggers the next sweep of reclaimed
@@ -588,43 +593,58 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// half).</summary>
     internal CanvasBoardAutomationPeer? PeerFor(CanvasPeerKey key)
     {
-        if (_peers.TryGetValue(key, out WeakReference<CanvasBoardAutomationPeer>? held)
-            && held.TryGetTarget(out CanvasBoardAutomationPeer? existing))
-        {
-            return existing;
-        }
-        if (_engine.Current?.Source.Loaded?.Population is not { } population
+        // The key must name something the board shows NOW, held peer or
+        // not (codex): a held peer whose edge lost its label or was deleted
+        // is not handed out again — it answers unavailable on its own
+        // (CanvasBoardAutomationPeer.Exists) — and is the same object again
+        // if the key comes back while it is held.
+        if (_model is not { } document
+            || _engine.Current?.Source.Loaded?.Population is not { } population
             || (key.IsEdge ? NamedEdge(population, key.Id) is null : !population.SceneByNode.ContainsKey(key.Id)))
         {
             return null;
         }
+        if (_peers.TryGetValue((document, key), out WeakReference<CanvasBoardAutomationPeer>? held)
+            && held.TryGetTarget(out CanvasBoardAutomationPeer? existing))
+        {
+            return existing;
+        }
         CanvasBoardAutomationPeer peer = key.IsEdge
-            ? new CanvasEdgeAutomationPeer(this, key)
-            : new CanvasCardAutomationPeer(this, key);
+            ? new CanvasEdgeAutomationPeer(this, document, key)
+            : new CanvasCardAutomationPeer(this, document, key);
         if (held is not null)
         {
             held.SetTarget(peer);
             return peer;
         }
-        _peers[key] = new WeakReference<CanvasBoardAutomationPeer>(peer);
+        _peers[(document, key)] = new WeakReference<CanvasBoardAutomationPeer>(peer);
         if (_peers.Count >= _peerSweepAt)
         {
-            foreach (CanvasPeerKey reclaimed in _peers
-                .Where(entry => !entry.Value.TryGetTarget(out _))
-                .Select(entry => entry.Key)
-                .ToArray())
-            {
-                _ = _peers.Remove(reclaimed);
-            }
+            SweepReclaimedPeers();
             _peerSweepAt = Math.Max(PeerSweepFloor, _peers.Count * 2);
         }
         return peer;
     }
 
+    /// <summary>Drop the registry entries nothing holds — including every
+    /// entry of a document this board no longer shows, so the registry
+    /// never keeps a closed canvas reachable.</summary>
+    private void SweepReclaimedPeers()
+    {
+        foreach ((CanvasDocumentViewModel, CanvasPeerKey) reclaimed in _peers
+            .Where(entry => !entry.Value.TryGetTarget(out _))
+            .Select(entry => entry.Key)
+            .ToArray())
+        {
+            _ = _peers.Remove(reclaimed);
+        }
+    }
+
     /// <summary>Whether a client or the board still holds the key's
     /// peer.</summary>
     private bool PeerIsLive(CanvasPeerKey key) =>
-        _peers.TryGetValue(key, out WeakReference<CanvasBoardAutomationPeer>? held)
+        _model is { } document
+        && _peers.TryGetValue((document, key), out WeakReference<CanvasBoardAutomationPeer>? held)
         && held.TryGetTarget(out _);
 
     /// <summary>The item-container search (D3's first-touch cell): by
@@ -683,13 +703,13 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// an edge whose union meets the window.</summary>
     internal void Realize(CanvasPeerKey key)
     {
-        if (_engine.Current?.Source.Loaded?.Population is not { } population
-            || RealizationTarget(population, key) is not { } target)
+        if (_engine.Current is not { Source.Loaded.Population: { } population } state
+            || RealizationTarget(state, population, key) is not { } target)
         {
             return;
         }
         var retained = System.Collections.Immutable.ImmutableHashSet.CreateRange(
-            _peers.Keys.Where(PeerIsLive)).Add(key);
+            _peers.Keys.Select(entry => entry.Key).Where(PeerIsLive)).Add(key);
         _engine.CommitRetained(retained);
         _engine.CommitViewport(v => target.Fits(v)
             ? PanToContain(v, target.X, target.Y, target.Width, target.Height)
@@ -697,38 +717,43 @@ internal sealed class CanvasRendererView : FrameworkElement
     }
 
     /// <summary>The rect a realization pans to contain — a card's own, or
-    /// an edge's union with its designated endpoint as the fallback when
-    /// the union is larger than the view.</summary>
+    /// an edge's union with its designated endpoint's rect as the fallback
+    /// when the union is larger than the view. Both are the INSTALLED
+    /// state's effective rects, so a realization during a move or resize
+    /// preview targets what the board draws (codex).</summary>
     private sealed record RealizeTarget(
-        double X, double Y, double Width, double Height, CanvasSceneNode Fallback)
+        double X, double Y, double Width, double Height, CanvasRect Fallback)
     {
         internal bool Fits(CanvasViewportState viewport) =>
             Width * viewport.Zoom <= viewport.ViewWidth && Height * viewport.Zoom <= viewport.ViewHeight;
     }
 
-    private static RealizeTarget? RealizationTarget(CanvasPopulation population, CanvasPeerKey key)
+    private static RealizeTarget? RealizationTarget(
+        CanvasPresentationState state, CanvasPopulation population, CanvasPeerKey key)
     {
         if (!key.IsEdge)
         {
-            return population.SceneByNode.TryGetValue(key.Id, out CanvasSceneNode? node)
-                ? new RealizeTarget(node.X, node.Y, node.Width, node.Height, node)
-                : null;
+            if (!population.SceneByNode.TryGetValue(key.Id, out CanvasSceneNode? node))
+            {
+                return null;
+            }
+            CanvasRect rect = state.NodeRect(node);
+            return new RealizeTarget(rect.X, rect.Y, rect.Width, rect.Height, rect);
         }
         if (NamedEdge(population, key.Id) is not { } edge)
         {
             return null;
         }
-        CanvasSceneNode from = population.SceneByNode[edge.FromNode];
-        CanvasSceneNode to = population.SceneByNode[edge.ToNode];
-        double x = Math.Min(from.X, to.X);
-        double y = Math.Min(from.Y, to.Y);
+        (double x, double y, double width, double height) = CanvasPeerTopology.EdgeUnion(
+            state.NodeRect(population.SceneByNode[edge.FromNode]),
+            state.NodeRect(population.SceneByNode[edge.ToNode]));
         return new RealizeTarget(
-            x,
-            y,
-            Math.Max(from.X + from.Width, to.X + to.Width) - x,
-            Math.Max(from.Y + from.Height, to.Y + to.Height) - y,
-            population.SceneByNode[DesignatedEndpoint(edge)]);
+            x, y, width, height, state.NodeRect(population.SceneByNode[DesignatedEndpoint(edge)]));
     }
+
+    private static CanvasViewportState PanToContain(
+        CanvasViewportState viewport, CanvasRect rect) =>
+        PanToContain(viewport, rect.X, rect.Y, rect.Width, rect.Height);
 
     private static CanvasViewportState PanToContain(
         CanvasViewportState viewport, CanvasSceneNode node) =>
