@@ -137,7 +137,9 @@ internal sealed class CanvasRendererView : FrameworkElement
             }
             // A reveal owed to the old document's seat is not this one's
             // (#1271, review round 2); a teardown sets null and lands here too.
+            // So is a realization owed to the old document's key.
             _owedReveal = null;
+            _owedRealization = null;
             _model = value;
             SweepReclaimedPeers();
             _forwardPublication = null;
@@ -198,6 +200,9 @@ internal sealed class CanvasRendererView : FrameworkElement
         // A reveal owed to a card the previous state lacked is paid by
         // the first install that has it (#1271, review round 2).
         PayOwedReveal();
+        // So is a realization asked for while the board still showed the
+        // scene the document had already replaced (codex round 4).
+        PayOwedRealization();
     }
 
     /// <summary>WPF caches the board's children. Refresh after the winning
@@ -722,12 +727,47 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// next installed state.</summary>
     internal CanvasBoardAutomationPeer? RealizePeer(CanvasPeerKey key)
     {
-        if (PeerFor(key) is not { } peer)
+        // A search answers from the installed scene; a key the document has
+        // already dropped is not handed out (codex round 4).
+        if (AppliedPopulation is not { } applied
+            || !KeyIn(applied, key)
+            || PeerFor(key) is not { } peer)
         {
             return null;
         }
         Realize(key);
         return peer;
+    }
+
+    /// <summary>The bound document's APPLIED scene — what a delete, an
+    /// unlabelling or a reload has already made true, a moment before the
+    /// board installs it.</summary>
+    private CanvasPopulation? AppliedPopulation => _model?.AppliedPublication?.Loaded?.Population;
+
+    private static bool KeyIn(CanvasPopulation population, CanvasPeerKey key) =>
+        key.IsEdge ? NamedEdge(population, key.Id) is not null : population.SceneByNode.ContainsKey(key.Id);
+
+    /// <summary>A realization asked for while the installed scene was not
+    /// yet the document's applied one: its pan is computed from the first
+    /// installed state that IS, never from the scene being replaced, whose
+    /// geometry or designated endpoint may already be wrong (codex round 4).
+    /// Dropped when the board moves to another document, and when the key is
+    /// gone by the time that state installs.</summary>
+    private (CanvasDocumentViewModel Document, CanvasPeerKey Key)? _owedRealization;
+
+    private void PayOwedRealization()
+    {
+        if (_owedRealization is not { } owed
+            || AppliedPopulation is not { } applied
+            || !ReferenceEquals(BoundPopulation, applied))
+        {
+            return;
+        }
+        _owedRealization = null;
+        if (ReferenceEquals(owed.Document, _model) && KeyIn(applied, owed.Key))
+        {
+            PanToRealize(owed.Key);
+        }
     }
 
     /// <summary>The realize half: retained-commit plus the pan that
@@ -740,15 +780,34 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// an edge whose union meets the window.</summary>
     internal void Realize(CanvasPeerKey key)
     {
-        if (BoundPopulation is not { } population
-            || _engine.Current is not { } state
-            || RealizationTarget(state, population, key) is not { } target)
+        if (_model is not { } document
+            || AppliedPopulation is not { } applied
+            || !KeyIn(applied, key))
         {
             return;
         }
         var retained = System.Collections.Immutable.ImmutableHashSet.CreateRange(
             _peers.Keys.Select(entry => entry.Key).Where(PeerIsLive)).Add(key);
         _engine.CommitRetained(retained);
+        if (!ReferenceEquals(BoundPopulation, applied))
+        {
+            _owedRealization = (document, key);
+            return;
+        }
+        _owedRealization = null;
+        PanToRealize(key);
+    }
+
+    /// <summary>The pan half of a realization, from the installed state —
+    /// which the callers have checked is the document's applied one.</summary>
+    private void PanToRealize(CanvasPeerKey key)
+    {
+        if (BoundPopulation is not { } population
+            || _engine.Current is not { } state
+            || RealizationTarget(state, population, key) is not { } target)
+        {
+            return;
+        }
         _engine.CommitViewport(v => target.Fits(v)
             ? PanToContain(v, target.X, target.Y, target.Width, target.Height)
             : PanToContain(v, target.Fallback));

@@ -386,6 +386,48 @@ public sealed class CanvasRendererPeerTests : IDisposable
         Assert.Equal("a", board.Document.Selection.Selected);
     });
 
+    /// <summary>D3/D4 between the document's apply and the board's install: a
+    /// realization asked for in that moment waits for the scene the document
+    /// applied and pans by ITS geometry — here a direction change that moved
+    /// the designated endpoint of an edge longer than the view — and a search
+    /// for an edge the document already deleted hands nothing back and moves
+    /// nothing (codex round 4).</summary>
+    [Fact]
+    public void ARealizationWaitsForTheSceneTheDocumentApplied() => RunSta(() =>
+    {
+        WriteCanvas(
+            "realize-lag.canvas",
+            [Card("home", "Home", 40, 40), Card("left", "Left", 20_000, 40), Card("right", "Right", 120_000, 40)],
+            [Edge("e1", "right", "left", "spans"), Edge("e2", "home", "left", "gone")]);
+        using Board board = Open("realize-lag.canvas");
+        board.ZoomTo(1);
+        CanvasEdgeAutomationPeer edge = board.HeldEdge("e1");
+        var realize = Assert.IsAssignableFrom<IVirtualizedItemProvider>(edge.GetPattern(PatternInterface.VirtualizedItem));
+        const string Gone = "Text card \"Home\" connects to Text card \"Left\", labelled \"gone\"";
+        CanvasViewportState before = board.Renderer.Engine.CommittedViewport;
+
+        // The designated endpoint was Left (the arrow's head); the direction
+        // change makes it Right, the from-node.
+        _ = board.Document.CanvasEditConnection("e1", "spans", CanvasConnectionDirection.FromTarget);
+        _ = board.Document.CanvasDeleteConnection("e2");
+        CanvasPopulation installed = board.Renderer.Engine.Current!.Source.Loaded!.Population;
+        Assert.True(
+            !installed.SceneByEdge["e1"].FromArrow && installed.SceneByEdge.ContainsKey("e2"),
+            "premise: the board has not installed the document's edits yet.");
+
+        Assert.Null(((IItemContainerProvider)board.Peer).FindItemByProperty(
+            null, AutomationElementIdentifiers.NameProperty.Id, Gone));
+        Assert.True(before.SameGeometry(board.Renderer.Engine.CommittedViewport), "the search for a deleted edge panned.");
+        Assert.Null(board.Renderer.RealizePeer(CanvasPeerKey.Edge("e2")));
+        realize.Realize();
+        board.SettleUntil(() => board.Cell(CanvasPeerKey.Edge("e1")) == CanvasPeerCell.Materialized);
+
+        CanvasViewportState after = board.Renderer.Engine.Current!.Viewport;
+        Assert.Equal(before.Zoom, after.Zoom);
+        AssertInView(after, 120_000, 40, 200, 100);
+        Assert.False(edge.IsOffscreen());
+    });
+
     /// <summary>D5: an edge's Invoke always says where it landed — when its
     /// endpoint is already the seat, and on a second Invoke of the same
     /// edge — with exactly one announcement each time (codex round

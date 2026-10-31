@@ -110,6 +110,12 @@ Issues: Closes #1277. Size L (design first). Lanes: windows + FlaUI (shell gate)
   - `ARetainedActionObeysWhatTheDocumentAppliedBeforeTheBoardInstallsIt`
   - `InvokingAnEdgeWhoseEndpointIsTheSeatStillSaysWhereItLanded`
 
+**Codex round 4, 2026-10-31.**
+- **A realization checks its key against the document's applied scene.**
+- **It defers while the board lags.** When the installed scene is not yet the applied one, it commits the key as retained and owes the pan to the first install that is (`PayOwedRealization`, beside the owed reveal). The target is computed from that state's rects, so a reload or a direction change already applied is the one obeyed.
+- **The item-container search refuses dropped keys.** `RealizePeer` refuses a key the applied scene has dropped.
+- **Fact:** `ARealizationWaitsForTheSceneTheDocumentApplied`.
+
 ## Goal
 
 Locked contract 34 D5 says a labelled edge is a peer in the board's name
