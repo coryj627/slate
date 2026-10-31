@@ -29,6 +29,23 @@ use windows_sys::Win32::Storage::FileSystem::{
 use super::{FsVaultProvider, VaultProvider};
 use crate::VaultError;
 
+/// What a gated fact saw on a real volume, printed as its record for the
+/// matrix rows (run with `--nocapture`). The only output these facts make,
+/// and it names only the scratch entries they created.
+#[expect(
+    clippy::disallowed_macros,
+    reason = "the gated facts' observations are their record for the capability matrix (WB-27)"
+)]
+fn observe(line: std::fmt::Arguments<'_>) {
+    println!("{line}");
+}
+
+macro_rules! observed {
+    ($($arg:tt)*) => {
+        observe(format_args!($($arg)*))
+    };
+}
+
 /// `GetDriveTypeW`'s answer for a network drive.
 const DRIVE_REMOTE: u32 = 4;
 
@@ -255,7 +272,7 @@ fn create_lands_on_a_free_name_and_preserves_an_occupied_one(volumes: &[(VolumeK
             staged.is_empty(),
             "{kind:?}: the stage was left: {staged:?}"
         );
-        println!(
+        observed!(
             "OBSERVED {kind:?} create: free name landed; occupied name refused by the publish ({error:?})"
         );
     }
@@ -312,7 +329,7 @@ fn rename_and_move_land_on_a_free_name_and_refuse_an_occupied_one(
         );
         assert_eq!(scratch.read("c.md"), b"source", "{kind:?}");
         assert_eq!(scratch.read("sub/d.md"), b"occupant", "{kind:?}");
-        println!(
+        observed!(
             "OBSERVED {kind:?} rename/move: free names landed; occupants raced in after the pre-check refused by the kernel"
         );
     }
@@ -334,7 +351,7 @@ fn identity_rename_refuses_an_occupied_name_at_the_kernel(volumes: &[(VolumeKind
                     matches!(&error, VaultError::Io(io) if io.kind() == std::io::ErrorKind::AlreadyExists),
                     "{kind:?}: {error:?}"
                 );
-                println!(
+                observed!(
                     "OBSERVED {kind:?} identity rename: identity answered; the kernel refused the occupied name"
                 );
             }
@@ -346,7 +363,7 @@ fn identity_rename_refuses_an_occupied_name_at_the_kernel(volumes: &[(VolumeKind
                         "0000000000000000-00000000000000000000000000000000",
                     )
                     .expect_err("with no identity, the inverse refuses");
-                println!(
+                observed!(
                     "OBSERVED {kind:?} identity rename: FileIdInfo did not answer ({unanswered:?}); the inverse refused before the kernel ({error:?})"
                 );
             }
@@ -376,9 +393,9 @@ fn case_only_rename_keeps_the_entry(volumes: &[(VolumeKind, PathBuf)]) {
                     after, before,
                     "{kind:?}: the case-only rename changed the identity"
                 );
-                println!("OBSERVED {kind:?} case-only: one entry, new spelling, identity kept");
+                observed!("OBSERVED {kind:?} case-only: one entry, new spelling, identity kept");
             }
-            None => println!(
+            None => observed!(
                 "OBSERVED {kind:?} case-only: one entry, new spelling (no FileIdInfo, so the listing is the proof)"
             ),
         }
@@ -400,7 +417,7 @@ fn stale_identity_refuses_where_ids_are_identities(volumes: &[(VolumeKind, PathB
                 .expect_err("with no identity, every identity-checked rename refuses");
             assert_eq!(scratch.read("a.md"), b"first", "{kind:?}");
             assert!(!scratch.exists("c.md"), "{kind:?}");
-            println!(
+            observed!(
                 "OBSERVED {kind:?} stale identity: FileIdInfo did not answer; every identity-checked rename refuses ({error:?})"
             );
             continue;
@@ -422,7 +439,7 @@ fn stale_identity_refuses_where_ids_are_identities(volumes: &[(VolumeKind, PathB
             }
             VolumeKind::Fat32 | VolumeKind::Exfat => {}
         }
-        println!(
+        observed!(
             "OBSERVED {kind:?} stale identity: id survives a rename: {}; the new file's id equals the old: {}; stale rename: {outcome:?}",
             moved == first,
             second == first
@@ -446,7 +463,7 @@ fn gate_names_the_file_system_it_ran_on(volumes: &[(VolumeKind, PathBuf)]) {
                 volume.display()
             );
         }
-        println!("OBSERVED {kind:?} gate: reports {reported}; refused as the other two kinds");
+        observed!("OBSERVED {kind:?} gate: reports {reported}; refused as the other two kinds");
     }
 }
 
