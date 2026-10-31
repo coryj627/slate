@@ -922,6 +922,55 @@ fn tag_tree_page_refuses_a_page_another_connection_committed_under() {
     assert_eq!(page.entries.len(), 100);
 }
 
+/// WB-25 (codex round 2): a continuation waits behind a writer that holds
+/// the connection and changes the index, and the caller cancels while it
+/// waits. The answer is `Cancelled` — the cancel takes precedence over the
+/// stale refusal the writer's change would otherwise produce.
+#[test]
+fn tag_tree_page_cancelled_while_waiting_for_a_writer_is_cancelled_not_stale() {
+    let (_tmp, session) = tagged_vault(3);
+    let cursor = session
+        .tag_tree_page(Paging::first(1), &CancelToken::new())
+        .unwrap()
+        .next_cursor
+        .unwrap();
+    let cancel = CancelToken::new();
+    let writer = session.conn.lock().unwrap();
+    let result = std::thread::scope(|scope| {
+        let waiting = scope.spawn(|| {
+            session.tag_tree_page(
+                Paging {
+                    cursor: Some(cursor.clone()),
+                    limit: 1,
+                },
+                &cancel,
+            )
+        });
+        // Let the call pass its first check and block on the connection.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        writer
+            .execute("DELETE FROM file_tags WHERE tag_norm = 'tag002/leaf'", [])
+            .unwrap();
+        cancel.cancel();
+        drop(writer);
+        waiting.join().unwrap()
+    });
+
+    assert!(matches!(result, Err(VaultError::Cancelled)), "{result:?}");
+    // Uncancelled, the same continuation is stale.
+    let stale = session.tag_tree_page(
+        Paging {
+            cursor: Some(cursor),
+            limit: 1,
+        },
+        &CancelToken::new(),
+    );
+    assert!(
+        matches!(stale, Err(VaultError::InvalidArgument { .. })),
+        "{stale:?}"
+    );
+}
+
 /// A limit of 0 or over the cap is refused before any row is read.
 #[test]
 fn tag_tree_page_rejects_a_limit_over_the_cap() {

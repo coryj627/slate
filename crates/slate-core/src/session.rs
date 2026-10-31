@@ -8565,11 +8565,29 @@ impl VaultSession {
         validate_page_limit(paging.limit, MAX_TAG_TREE_PAGE_LIMIT, "tag tree")?;
         cancel.check()?;
         let conn = self.conn.lock().expect("session connection mutex");
+        // Codex round 2: a cancel takes precedence over every answer the
+        // page could give — checked as soon as the connection is free (a
+        // cancel that landed while this call waited behind a writer), and
+        // over a refusal (a stale cursor or snapshot) that the writer's
+        // change would otherwise report.
+        cancel.check()?;
+        match self.tag_tree_page_locked(&conn, &paging, cancel) {
+            Err(_) if cancel.is_cancelled() => Err(VaultError::Cancelled),
+            answer => answer,
+        }
+    }
+
+    fn tag_tree_page_locked(
+        &self,
+        conn: &rusqlite::Connection,
+        paging: &Paging,
+        cancel: &CancelToken,
+    ) -> Result<crate::TagTreePage, VaultError> {
         // Codex round 1: every page is bound to the index snapshot it read.
         // A continuation from another snapshot is refused, and so is a page
         // whose own statements straddled another connection's commit — the
         // host restarts from page one instead of joining two index states.
-        let snapshot = directory_page::DirectorySnapshot::capture(&conn)?;
+        let snapshot = directory_page::DirectorySnapshot::capture(conn)?;
         let cursor = paging
             .cursor
             .as_deref()
@@ -8582,7 +8600,7 @@ impl VaultSession {
             })
             .transpose()?;
         let mut check = || cancel.check();
-        let page = directory_page::with_sqlite_cancellation(&conn, cancel, || {
+        let page = directory_page::with_sqlite_cancellation(conn, cancel, || {
             let mut groups: Vec<(String, u32)> = Vec::new();
             {
                 let mut stmt = conn.prepare_cached(
@@ -8638,7 +8656,7 @@ impl VaultSession {
             })
         })?;
         cancel.check()?;
-        if directory_page::DirectorySnapshot::capture(&conn)? != snapshot {
+        if directory_page::DirectorySnapshot::capture(conn)? != snapshot {
             return Err(directory_page::stale_tag_tree_cursor_error());
         }
         Ok(page)
