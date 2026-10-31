@@ -44,14 +44,17 @@ pub struct DirListingPage {
     pub snapshot_id: String,
 }
 
+/// The index state a page was read from: SQLite's `data_version` (another
+/// connection committed) and this connection's `total_changes` (it wrote).
+/// The tag tree's pages bind to it too (WB-25).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct DirectorySnapshot {
+pub(super) struct DirectorySnapshot {
     data_version: i64,
     total_changes: u64,
 }
 
 impl DirectorySnapshot {
-    fn capture(conn: &Connection) -> Result<Self, VaultError> {
+    pub(super) fn capture(conn: &Connection) -> Result<Self, VaultError> {
         let data_version = conn.pragma_query_value(None, "data_version", |row| row.get(0))?;
         Ok(Self {
             data_version,
@@ -191,6 +194,64 @@ fn decode_cursor(value: &str) -> Result<DirectoryPageCursor, VaultError> {
         key: key.to_string(),
         path: path.to_string(),
     })
+}
+
+/// WB-25 (codex round 1): a tag tree continuation — the last emitted key —
+/// bound to the session and the index snapshot its page was read from, so
+/// a walk never joins pages of two index states.
+pub(super) fn encode_tag_tree_cursor(
+    session_nonce: u64,
+    snapshot: DirectorySnapshot,
+    key: &str,
+) -> String {
+    format!(
+        "t1:{session_nonce:016x}:{}:{}:{key}",
+        snapshot.data_version, snapshot.total_changes
+    )
+}
+
+/// The key of a tag tree continuation, refused (`InvalidArgument`) when it
+/// is malformed, from another session, or read from another snapshot.
+pub(super) fn decode_tag_tree_cursor(
+    value: &str,
+    session_nonce: u64,
+    snapshot: DirectorySnapshot,
+) -> Result<&str, VaultError> {
+    let malformed = || cursor_error("malformed tag tree page cursor");
+    let mut parts = value.splitn(5, ':');
+    if parts.next() != Some("t1") {
+        return Err(malformed());
+    }
+    let nonce =
+        u64::from_str_radix(parts.next().ok_or_else(malformed)?, 16).map_err(|_| malformed())?;
+    let data_version = parts
+        .next()
+        .ok_or_else(malformed)?
+        .parse::<i64>()
+        .map_err(|_| malformed())?;
+    let total_changes = parts
+        .next()
+        .ok_or_else(malformed)?
+        .parse::<u64>()
+        .map_err(|_| malformed())?;
+    let key = parts.next().ok_or_else(malformed)?;
+    if nonce != session_nonce {
+        return Err(cursor_error(
+            "tag tree page cursor belongs to a different session",
+        ));
+    }
+    let cursor_snapshot = DirectorySnapshot {
+        data_version,
+        total_changes,
+    };
+    if cursor_snapshot != snapshot {
+        return Err(stale_tag_tree_cursor_error());
+    }
+    Ok(key)
+}
+
+pub(super) fn stale_tag_tree_cursor_error() -> VaultError {
+    cursor_error("tag tree page cursor is stale; restart from the first page")
 }
 
 fn check_cancel(cancel: &CancelToken) -> Result<(), VaultError> {

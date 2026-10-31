@@ -588,6 +588,10 @@ fn walk(session: &VaultSession, limit: u32) -> Vec<slate_core::TagTreePageEntry>
             )
             .unwrap();
         assert!(page.entries.len() <= limit as usize);
+        assert!(
+            !page.entries.is_empty() || rows == 0,
+            "an empty page in a non-empty tree"
+        );
         let header = (
             page.total_entries,
             page.untagged_count,
@@ -713,18 +717,14 @@ fn tag_tree_page_resumes_after_a_cursor_inside_a_subtree() {
     let tmp = tempfile::tempdir().unwrap();
     tiny_fixture(tmp.path());
     let session = open(tmp.path());
-    let first_after = |cursor: &str| {
-        let page = session
-            .tag_tree_page(
-                slate_core::Paging {
-                    cursor: Some(cursor.to_string()),
-                    limit: 1,
-                },
-                &CancelToken::new(),
-            )
-            .unwrap();
-        let entry = page.entries.into_iter().next().unwrap();
-        (entry.full, entry.depth)
+    // One row a page: every row after the first is the answer to the
+    // cursor its predecessor's page handed back.
+    let entries = walk(&session, 1);
+    let keys = segment_paths(&entries);
+    let first_after = |key: &str| {
+        let at = keys.iter().position(|k| k == key).unwrap();
+        let entry = &entries[at + 1];
+        (entry.full.clone(), entry.depth)
     };
     assert_eq!(
         first_after("a"),
@@ -742,6 +742,72 @@ fn tag_tree_page_resumes_after_a_cursor_inside_a_subtree() {
         ("a".to_string(), 2),
         "after the implied \"\" under the root comes //a's leaf"
     );
+}
+
+fn page(
+    session: &VaultSession,
+    cursor: Option<String>,
+    limit: u32,
+) -> Result<slate_core::TagTreePage, slate_core::VaultError> {
+    session.tag_tree_page(slate_core::Paging { cursor, limit }, &CancelToken::new())
+}
+
+fn assert_refused(result: Result<slate_core::TagTreePage, slate_core::VaultError>, why: &str) {
+    match result {
+        Err(slate_core::VaultError::InvalidArgument { message }) => {
+            assert!(message.contains(why), "{message}")
+        }
+        other => panic!("expected a refusal ({why}), got {other:?}"),
+    }
+}
+
+/// WB-25 (codex round 1): a continuation is bound to the index its page
+/// read. After a write — a tag removed, one added before the cursor, or a
+/// count changed — the next page is refused as stale instead of joining two
+/// index states, and a walk from page one reads the new index whole.
+#[test]
+fn tag_tree_page_refuses_a_continuation_after_the_index_changed() {
+    let tmp = tempfile::tempdir().unwrap();
+    write(tmp.path(), "abc.md", "#a/b/c\n");
+    write(tmp.path(), "z.md", "#z\n");
+    let session = open(tmp.path());
+    let first = page(&session, None, 1).unwrap();
+    assert_eq!(first.total_entries, 4);
+    let cursor = first.next_cursor.clone().unwrap();
+    // Unchanged, the continuation is honoured.
+    assert_eq!(
+        page(&session, Some(cursor.clone()), 1).unwrap().entries[0].full,
+        "a/b"
+    );
+
+    session.create_exclusive("m.md", "#m\n").unwrap();
+    assert_refused(page(&session, Some(cursor), 1), "stale");
+
+    let fresh = walk(&session, 1);
+    assert_eq!(
+        segment_paths(&fresh),
+        ["a", "a/b", "a/b/c", "m", "z"],
+        "the new index, whole"
+    );
+}
+
+/// A continuation that is not one this session handed out is refused.
+#[test]
+fn tag_tree_page_refuses_a_foreign_or_malformed_cursor() {
+    let tmp = tempfile::tempdir().unwrap();
+    tiny_fixture(tmp.path());
+    let session = open(tmp.path());
+    let other = open(tmp.path());
+    let foreign = page(&other, None, 1).unwrap().next_cursor.unwrap();
+    assert_refused(page(&session, Some(foreign), 1), "different session");
+    for malformed in [
+        "a",
+        "t1:zz:0:0:a",
+        "t1:0000000000000000:x:0:a",
+        "t1:0000000000000000:0:0",
+    ] {
+        assert_refused(page(&session, Some(malformed.to_string()), 1), "malformed");
+    }
 }
 
 #[test]

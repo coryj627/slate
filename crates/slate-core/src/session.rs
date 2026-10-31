@@ -8553,8 +8553,10 @@ impl VaultSession {
     /// range on `idx_file_tags_tag` (`= key OR [key/, key0)`), with no
     /// `LIKE` metacharacter to over-match and no stop at an embedded U+0000.
     /// The token is checked before the read, polled inside the statements
-    /// and between rows and entries; a cancellation is `Cancelled`, never a
-    /// partial page.
+    /// and between rows, comparisons and entries; a cancellation is
+    /// `Cancelled`, never a partial page. The cursor is opaque and bound to
+    /// the session and the index snapshot: after any index change it is
+    /// refused (`InvalidArgument`, stale) and the walk starts again.
     pub fn tag_tree_page(
         &self,
         paging: Paging,
@@ -8563,7 +8565,24 @@ impl VaultSession {
         validate_page_limit(paging.limit, MAX_TAG_TREE_PAGE_LIMIT, "tag tree")?;
         cancel.check()?;
         let conn = self.conn.lock().expect("session connection mutex");
-        directory_page::with_sqlite_cancellation(&conn, cancel, || {
+        // Codex round 1: every page is bound to the index snapshot it read.
+        // A continuation from another snapshot is refused, and so is a page
+        // whose own statements straddled another connection's commit — the
+        // host restarts from page one instead of joining two index states.
+        let snapshot = directory_page::DirectorySnapshot::capture(&conn)?;
+        let cursor = paging
+            .cursor
+            .as_deref()
+            .map(|cursor| {
+                directory_page::decode_tag_tree_cursor(
+                    cursor,
+                    self.directory_cursor_nonce,
+                    snapshot,
+                )
+            })
+            .transpose()?;
+        let mut check = || cancel.check();
+        let page = directory_page::with_sqlite_cancellation(&conn, cancel, || {
             let mut groups: Vec<(String, u32)> = Vec::new();
             {
                 let mut stmt = conn.prepare_cached(
@@ -8577,7 +8596,7 @@ impl VaultSession {
                     cancel.check()?;
                 }
             }
-            groups.sort_by(|a, b| crate::tag_tree::cmp_segments(&a.0, &b.0));
+            let groups = crate::tag_tree::sort_by_segments(groups, &mut check)?;
             let untagged: u32 = conn.query_row(
                 "SELECT COUNT(*) FROM files f
                  WHERE f.is_markdown = 1
@@ -8590,10 +8609,11 @@ impl VaultSession {
                 "SELECT COUNT(DISTINCT file_id) FROM file_tags
                  WHERE tag_norm = ?1 OR (tag_norm >= ?2 AND tag_norm < ?3)",
             )?;
-            let (entries, next_cursor) = crate::tag_tree::page_after(
+            let (entries, next_key) = crate::tag_tree::page_after(
                 &groups,
-                paging.cursor.as_deref(),
+                cursor,
                 paging.limit as usize,
+                &mut check,
                 |key| -> Result<u32, VaultError> {
                     cancel.check()?;
                     // `0` is the byte after `/`: [key/, key0) is exactly
@@ -8605,12 +8625,23 @@ impl VaultSession {
             )?;
             Ok(crate::TagTreePage {
                 entries,
-                next_cursor,
-                total_entries: crate::tag_tree::total_entries(&groups),
+                next_cursor: next_key.map(|key| {
+                    directory_page::encode_tag_tree_cursor(
+                        self.directory_cursor_nonce,
+                        snapshot,
+                        &key,
+                    )
+                }),
+                total_entries: crate::tag_tree::total_entries(&groups, &mut check)?,
                 untagged_count: untagged,
                 audio_summary: crate::tag_tree::summary(groups.len() as u64, untagged),
             })
-        })
+        })?;
+        cancel.check()?;
+        if directory_page::DirectorySnapshot::capture(&conn)? != snapshot {
+            return Err(directory_page::stale_tag_tree_cursor_error());
+        }
+        Ok(page)
     }
 
     /// FL5-3a (refs #666): add `tag` to each file's frontmatter `tags:`

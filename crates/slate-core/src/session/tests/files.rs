@@ -889,6 +889,39 @@ fn tag_tree_page_cancelled_mid_statement_returns_cancelled_not_a_partial_page() 
     assert_eq!(page.total_entries, 600);
 }
 
+/// WB-25 (codex round 1): another connection commits while the page's
+/// statements run. The page is refused as stale — never a page whose
+/// grouped read and nested counts come from two index states — and the
+/// next call reads the new state.
+#[test]
+fn tag_tree_page_refuses_a_page_another_connection_committed_under() {
+    let (tmp, session) = tagged_vault(300);
+    let db = tmp.path().join(".slate/cache.sqlite");
+    let fired = std::rc::Rc::new(std::cell::Cell::new(false));
+    let once = fired.clone();
+    crate::session::directory_page::progress_test_hook::install(Box::new(move || {
+        if !once.replace(true) {
+            let other = rusqlite::Connection::open(&db).unwrap();
+            other.execute("CREATE TABLE wb25_probe (x)", []).unwrap();
+        }
+    }));
+
+    let result = session.tag_tree_page(Paging::first(100), &CancelToken::new());
+    crate::session::directory_page::progress_test_hook::clear();
+
+    assert!(fired.get(), "the probe never ran inside a statement");
+    match result {
+        Err(VaultError::InvalidArgument { message }) => {
+            assert!(message.contains("stale"), "{message}")
+        }
+        other => panic!("expected a stale refusal, got {other:?}"),
+    }
+    let page = session
+        .tag_tree_page(Paging::first(100), &CancelToken::new())
+        .unwrap();
+    assert_eq!(page.entries.len(), 100);
+}
+
 /// A limit of 0 or over the cap is refused before any row is read.
 #[test]
 fn tag_tree_page_rejects_a_limit_over_the_cap() {

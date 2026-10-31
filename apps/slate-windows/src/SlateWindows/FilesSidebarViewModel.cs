@@ -1432,6 +1432,12 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     /// session's place.</summary>
     internal Func<Paging, CancelToken, TagTreePage>? TagTreePageForTests { get; set; }
 
+    /// <summary>WB-25 (codex round 1): how many times one refresh starts the
+    /// tag tree again from page one after core refuses a page because the
+    /// index changed under the walk, before the refresh reports the
+    /// failure.</summary>
+    internal const int MaxTagTreeRestarts = 3;
+
     private TagLoadOutcome BuildTags(CancellationToken cancellationToken)
     {
         try
@@ -1448,7 +1454,8 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             var roots = new List<SidebarTagViewModel>();
             var ancestors = new List<SidebarTagViewModel>();
             string? cursor = null;
-            do
+            int restarts = 0;
+            while (true)
             {
                 TagTreePage page;
                 try
@@ -1459,12 +1466,28 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 {
                     throw new OperationCanceledException(cancellationToken);
                 }
+                catch (VaultException.InvalidArgument) when (restarts < MaxTagTreeRestarts)
+                {
+                    // Core binds every page to the index it read; a refused
+                    // page means the index changed under the walk, so the
+                    // rows so far describe an older vault and the tree
+                    // starts again from page one.
+                    restarts++;
+                    roots.Clear();
+                    ancestors.Clear();
+                    cursor = null;
+                    cancellationToken.ThrowIfCancellationRequested();
+                    continue;
+                }
                 AfterTagTreeForTests?.Invoke();
                 cancellationToken.ThrowIfCancellationRequested();
                 AppendTagPage(page.Entries, roots, ancestors);
                 cursor = page.NextCursor;
+                if (cursor is null)
+                {
+                    break;
+                }
             }
-            while (cursor is not null);
 
             return new TagLoadOutcome(roots, null);
         }

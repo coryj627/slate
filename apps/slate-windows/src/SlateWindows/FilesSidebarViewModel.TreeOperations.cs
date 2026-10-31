@@ -78,9 +78,10 @@ internal sealed partial class FilesSidebarViewModel
     /// </summary>
     /// <remarks>W7-7 PR 7 (F5): the caller's <paramref name="cancellation"/>
     /// — a rescan run's — is linked into this refresh's own, so it reaches
-    /// the tree read and the tag tree: checked before and after the native
-    /// <c>TagTree</c> call, a cancel skips or discards the result, nothing
-    /// publishes, and the returned Task is cancelled at once.</remarks>
+    /// the tree read and the tag tree: WB-25 pages the tag tree under a core
+    /// token that cancellation cancels, checked after every page; a cancel
+    /// stops inside core or between pages, nothing publishes, and the
+    /// returned Task is cancelled at once.</remarks>
     internal Task RefreshAsync(bool reportCount = false, CancellationToken cancellation = default) =>
         StartAwaitedRefresh(reportCount, cancellation, silent: false);
 

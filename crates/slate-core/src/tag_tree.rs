@@ -205,51 +205,98 @@ fn page_entry(key: &str, direct_count: u32, file_count: u32) -> TagTreePageEntry
     }
 }
 
+/// How many leading segments two keys' `split('/')` sequences share.
+fn common_segments(a: &str, b: &str) -> usize {
+    a.split('/')
+        .zip(b.split('/'))
+        .take_while(|(x, y)| x == y)
+        .count()
+}
+
 /// Every key of the tree in pre-order from after `cursor` (from the start
 /// when `None`): before each real tag, the proper prefixes of its
 /// `split('/')` sequence not yet emitted (its implied ancestors), shallowest
 /// first, then the tag. `groups` holds the distinct real tags with their
 /// direct counts, sorted by [`cmp_segments`]. `visit` sees each key with its
-/// direct count (0 for an implied ancestor) and answers whether to go on.
+/// direct count (0 for an implied ancestor) and answers whether to go on;
+/// `check` runs once per real tag, emitted or not.
+///
+/// Linear in the tags' bytes (codex round 1): everything up to the last
+/// emitted key (or the cursor) is already out, so a tag's unseen prefixes
+/// are exactly those deeper than the segments it shares with that key —
+/// sliced from the tag at its separators, never re-joined or compared.
 fn walk_keys_after<E>(
     groups: &[(String, u32)],
     cursor: Option<&str>,
+    check: &mut impl FnMut() -> Result<(), E>,
     mut visit: impl FnMut(&str, u32) -> Result<bool, E>,
 ) -> Result<(), E> {
     let start = cursor.map_or(0, |cursor| {
         groups.partition_point(|(key, _)| cmp_segments(key, cursor) != std::cmp::Ordering::Greater)
     });
-    let mut last: Option<String> = cursor.map(str::to_owned);
+    let mut last: Option<&str> = cursor;
     for (key, direct) in &groups[start..] {
-        let segments: Vec<&str> = key.split('/').collect();
-        for depth in 1..segments.len() {
-            let prefix = segments[..depth].join("/");
-            let unseen = last
-                .as_deref()
-                .is_none_or(|last| cmp_segments(&prefix, last) == std::cmp::Ordering::Greater);
-            if unseen {
-                if !visit(&prefix, 0)? {
-                    return Ok(());
-                }
-                last = Some(prefix);
+        check()?;
+        let seen = last.map_or(0, |last| common_segments(key, last));
+        for (depth, (separator, _)) in key.match_indices('/').enumerate() {
+            if depth + 1 > seen && !visit(&key[..separator], 0)? {
+                return Ok(());
             }
         }
         if !visit(key, *direct)? {
             return Ok(());
         }
-        last = Some(key.clone());
+        last = Some(key);
     }
     Ok(())
 }
 
-/// The rows of the whole tree (real tags plus implied ancestors).
-pub(crate) fn total_entries(groups: &[(String, u32)]) -> u32 {
-    let mut total = 0u32;
-    let _ = walk_keys_after::<std::convert::Infallible>(groups, None, |_, _| {
-        total += 1;
-        Ok(true)
-    });
-    total
+/// The rows of the whole tree (real tags plus implied ancestors): each tag
+/// adds its segments past those it shares with the tag before it. `check`
+/// runs once per tag.
+pub(crate) fn total_entries<E>(
+    groups: &[(String, u32)],
+    check: &mut impl FnMut() -> Result<(), E>,
+) -> Result<u32, E> {
+    let mut total = 0usize;
+    let mut last: Option<&str> = None;
+    for (key, _) in groups {
+        check()?;
+        let segments = key.split('/').count();
+        total += segments - last.map_or(0, |last| common_segments(key, last));
+        last = Some(key);
+    }
+    Ok(u32::try_from(total).unwrap_or(u32::MAX))
+}
+
+/// `groups` sorted by [`cmp_segments`] (stable), `check` run before every
+/// comparison: a merge sort, so a cancel lands between two comparisons of
+/// a long-tag sort instead of after the whole sort (codex round 1).
+pub(crate) fn sort_by_segments<E>(
+    mut groups: Vec<(String, u32)>,
+    check: &mut impl FnMut() -> Result<(), E>,
+) -> Result<Vec<(String, u32)>, E> {
+    if groups.len() < 2 {
+        return Ok(groups);
+    }
+    let right = groups.split_off(groups.len() / 2);
+    let left = sort_by_segments(groups, check)?;
+    let right = sort_by_segments(right, check)?;
+    let mut merged = Vec::with_capacity(left.len() + right.len());
+    let mut left = left.into_iter().peekable();
+    let mut right = right.into_iter().peekable();
+    while let (Some(a), Some(b)) = (left.peek(), right.peek()) {
+        check()?;
+        let next = if cmp_segments(&b.0, &a.0) == std::cmp::Ordering::Less {
+            right.next()
+        } else {
+            left.next()
+        };
+        merged.extend(next);
+    }
+    merged.extend(left);
+    merged.extend(right);
+    Ok(merged)
 }
 
 /// One page of at most `limit` rows after `cursor`, each row's nested
@@ -259,12 +306,13 @@ pub(crate) fn page_after<E>(
     groups: &[(String, u32)],
     cursor: Option<&str>,
     limit: usize,
+    check: &mut impl FnMut() -> Result<(), E>,
     mut file_count: impl FnMut(&str) -> Result<u32, E>,
 ) -> Result<(Vec<TagTreePageEntry>, Option<String>), E> {
     let mut entries = Vec::new();
     let mut last_key: Option<String> = None;
     let mut more = false;
-    walk_keys_after(groups, cursor, |key, direct| {
+    walk_keys_after(groups, cursor, check, |key, direct| {
         if entries.len() == limit {
             more = true;
             return Ok(false);
@@ -454,9 +502,12 @@ mod tests {
             .map(|(i, t)| (t.to_string(), i as i64))
             .collect();
         let expected = flatten_preorder(&build_tag_tree(&rows, 0));
-        let mut groups: Vec<(String, u32)> = tags.iter().map(|t| (t.to_string(), 1)).collect();
-        groups.sort_by(|a, b| cmp_segments(&a.0, &b.0));
-        assert_eq!(total_entries(&groups) as usize, expected.len());
+        let groups: Vec<(String, u32)> = tags.iter().map(|t| (t.to_string(), 1)).collect();
+        let groups = sort_by_segments(groups, &mut no_cancel).unwrap();
+        assert_eq!(
+            total_entries(&groups, &mut no_cancel).unwrap() as usize,
+            expected.len()
+        );
         let nested = |key: &str| -> Result<u32, ()> {
             let below = format!("{key}/");
             Ok(tags
@@ -469,8 +520,9 @@ mod tests {
             let mut cursor: Option<String> = None;
             for _ in 0..=expected.len() + 1 {
                 let (entries, next) =
-                    page_after(&groups, cursor.as_deref(), limit, nested).unwrap();
+                    page_after(&groups, cursor.as_deref(), limit, &mut no_cancel, nested).unwrap();
                 assert!(entries.len() <= limit);
+                assert!(!entries.is_empty(), "an empty page at limit {limit}");
                 walked.extend(entries);
                 cursor = next;
                 if cursor.is_none() {
@@ -480,5 +532,138 @@ mod tests {
             assert!(cursor.is_none(), "the walk at limit {limit} never ended");
             assert_eq!(walked, expected, "limit {limit}");
         }
+    }
+
+    fn no_cancel() -> Result<(), ()> {
+        Ok(())
+    }
+
+    /// A check that refuses from its `fail_at`th call on, counting calls.
+    fn refusing_at(
+        fail_at: usize,
+        calls: &std::cell::Cell<usize>,
+    ) -> impl FnMut() -> Result<(), ()> {
+        move || {
+            calls.set(calls.get() + 1);
+            if calls.get() > fail_at {
+                Err(())
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    /// WB-25 (codex round 1): the merge sort is `cmp_segments`'s order, and
+    /// a cancel lands between comparisons — every call of the check, from
+    /// the first to the last, stops the sort.
+    #[test]
+    fn sort_by_segments_orders_like_cmp_segments_and_stops_at_any_check() {
+        let tags = [
+            "p/q",
+            "a",
+            "a\u{1}z",
+            "a/",
+            "//a",
+            "a//b",
+            "a\u{0}b/c",
+            "a b",
+            "/a",
+            "a/z",
+            "a\u{0}b",
+        ];
+        let groups: Vec<(String, u32)> = tags.iter().map(|t| (t.to_string(), 1)).collect();
+        let mut expected = groups.clone();
+        expected.sort_by(|a, b| cmp_segments(&a.0, &b.0));
+        assert_eq!(
+            sort_by_segments(groups.clone(), &mut no_cancel),
+            Ok(expected)
+        );
+
+        let calls = std::cell::Cell::new(0);
+        sort_by_segments(groups.clone(), &mut refusing_at(usize::MAX, &calls)).unwrap();
+        let comparisons = calls.get();
+        assert!(comparisons >= tags.len() - 1, "{comparisons} checks");
+        for fail_at in 0..comparisons {
+            let calls = std::cell::Cell::new(0);
+            let result = sort_by_segments(groups.clone(), &mut refusing_at(fail_at, &calls));
+            assert_eq!(result, Err(()), "a refusal at check {fail_at} was ignored");
+            assert_eq!(
+                calls.get(),
+                fail_at + 1,
+                "the sort went on past check {fail_at}"
+            );
+        }
+    }
+
+    /// WB-25 (codex round 1): counting the tree and walking a page check once
+    /// per tag, so a cancel stops them at the next tag — including the tags
+    /// a resumed page skips past.
+    #[test]
+    fn counting_and_paging_stop_at_the_next_tag_once_refused() {
+        let groups: Vec<(String, u32)> = ["a/b", "a/c", "d", "e/f/g"]
+            .iter()
+            .map(|t| (t.to_string(), 1))
+            .collect();
+        for fail_at in 0..groups.len() {
+            let calls = std::cell::Cell::new(0);
+            assert_eq!(
+                total_entries(&groups, &mut refusing_at(fail_at, &calls)),
+                Err(())
+            );
+            assert_eq!(calls.get(), fail_at + 1);
+            let calls = std::cell::Cell::new(0);
+            let page = page_after(
+                &groups,
+                None,
+                100,
+                &mut refusing_at(fail_at, &calls),
+                |_| Ok(1),
+            );
+            assert_eq!(page, Err(()), "a refusal at tag {fail_at} was ignored");
+        }
+        // Resumed after `a/c`, the walk still checks before `d`.
+        let calls = std::cell::Cell::new(0);
+        let page = page_after(
+            &groups,
+            Some("a/c"),
+            100,
+            &mut refusing_at(0, &calls),
+            |_| Ok(1),
+        );
+        assert_eq!(page, Err(()));
+    }
+
+    /// WB-25 (codex round 1): one legal tag of 100,001 segments. Counting
+    /// it, a one-row page, and a page resumed from deep inside it are each
+    /// linear in its bytes — the old walk re-joined every prefix and ran
+    /// about ten billion byte operations per page.
+    #[test]
+    fn a_tag_of_a_hundred_thousand_segments_pages_in_linear_time() {
+        let depth = 100_001;
+        let deep = vec!["a"; depth].join("/");
+        let groups = vec![(deep.clone(), 1)];
+        assert_eq!(total_entries(&groups, &mut no_cancel), Ok(depth as u32));
+
+        let (first, next) = page_after(&groups, None, 1, &mut no_cancel, |_| Ok(1)).unwrap();
+        assert_eq!(first.len(), 1);
+        assert_eq!((first[0].full.as_str(), first[0].depth), ("a", 0));
+        assert_eq!(next.as_deref(), Some("a"));
+
+        let cursor = vec!["a"; 50_000].join("/");
+        let (resumed, next) =
+            page_after(&groups, Some(&cursor), 2, &mut no_cancel, |_| Ok(1)).unwrap();
+        assert_eq!(
+            resumed.iter().map(|entry| entry.depth).collect::<Vec<_>>(),
+            [50_000, 50_001]
+        );
+        assert_eq!(next.map(|key| key.len()), Some(50_002 * 2 - 1));
+
+        let last_prefix = &deep[..deep.len() - 2];
+        let (tail, next) =
+            page_after(&groups, Some(last_prefix), 5, &mut no_cancel, |_| Ok(1)).unwrap();
+        assert_eq!(tail.len(), 1);
+        assert_eq!(tail[0].depth as usize, depth - 1);
+        assert_eq!(tail[0].direct_count, 1);
+        assert_eq!(next, None);
     }
 }

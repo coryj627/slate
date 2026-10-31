@@ -227,9 +227,19 @@ cannot sort by it without a registered collation, so a page reads
 — the distinct tags (each its own key) and their direct counts, held in
 core and never marshalled; the unpaged `tag_tree` already holds every
 row — under `with_sqlite_cancellation`, polling the token per row, and
-sorts them with `cmp_segments`. The cursor is the last emitted entry's
+sorts them with `cmp_segments` (a merge sort that checks the token
+before every comparison). The cursor is the last emitted entry's
 KEY, opaque to the host, which passes `next_cursor` back unread. It is
 never the entry's `full`: a `full` cursor would repeat or skip nodes.
+The cursor is bound to the session and to the index snapshot its page
+read: SQLite's `data_version` and the connection's `total_changes`, the
+directory pages' `DirectorySnapshot`, encoded as
+`t1:<nonce>:<data_version>:<total_changes>:<key>`. A continuation from
+another snapshot or session is refused (`InvalidArgument`), and so is a
+page whose statements straddled another connection's commit. A walk
+never joins pages of two index states. Windows drops the rows it holds
+and restarts from page one, up to three times, then reports "Could not
+load tags" (codex round 1).
 Both implied `""` nodes would leave the cursor `""`, which resumes
 before the implied `""` under the root, so that node would repeat on
 every page. The `a` that `/a`'s leaf would leave compares `Equal` to the
@@ -390,8 +400,9 @@ entry's `(depth, segment)` with the host's ancestor stack.
   the full tag's bytes → the order differs; count descendants with
   `LIKE` → `a\u{0}b`'s `file_count` counts the note tagged `a`; cursor
   by `full` → the root `a` is missing at limits 2 and 3.
+- `tag_tree_page_refuses_a_continuation_after_the_index_changed`, `tag_tree_page_refuses_a_foreign_or_malformed_cursor`, `tag_tree_page_refuses_a_page_another_connection_committed_under` (session tests), and the Windows `ATagTreePageRefusedForAChangedIndexRestartsTheWalkFromPageOne` — the snapshot binding and the host's restart (codex round 1). The unit facts `counting_and_paging_stop_at_the_next_tag_once_refused`, `sort_by_segments_orders_like_cmp_segments_and_stops_at_any_check` and `a_tag_of_a_hundred_thousand_segments_pages_in_linear_time` pin the token checks and the linear walk.
 - `tag_tree_page_resumes_after_a_cursor_inside_a_subtree` — over the
-  tiny fixture: a cursor at `a` yields `a/z` first, not `a-b`; a cursor
+  tiny fixture, one row a page (the cursors are opaque): a cursor at `a` yields `a/z` first, not `a-b`; a cursor
   at `p/q` yields `p/q/r`; a cursor at `/a` (the key `/a`'s leaf
   leaves; its `full` is `a`) yields the root `a`; a cursor at `/` (the
   implied `""` under the root) yields `//a`'s leaf at depth 2.
@@ -502,10 +513,17 @@ Assert-RustFacts 'tag_tree' @(
   'tag_tree_page_counts_match_the_unpaged_tree',
   'tag_tree_page_like_metachars_do_not_over_match',
   'tag_tree_page_cancelled_mid_statement_returns_cancelled_not_a_partial_page',
-  'tag_tree_page_rejects_a_limit_over_the_cap')
+  'tag_tree_page_rejects_a_limit_over_the_cap',
+  'tag_tree_page_refuses_a_continuation_after_the_index_changed',
+  'tag_tree_page_refuses_a_foreign_or_malformed_cursor',
+  'tag_tree_page_refuses_a_page_another_connection_committed_under',
+  'counting_and_paging_stop_at_the_next_tag_once_refused',
+  'sort_by_segments_orders_like_cmp_segments_and_stops_at_any_check',
+  'a_tag_of_a_hundred_thousand_segments_pages_in_linear_time')
 Assert-Gates
 Assert-DotnetFacts $tests 'FullyQualifiedName~SidebarTagFilterTests|FullyQualifiedName~RescanTests|FullyQualifiedName~BoundedFfiListCensus' @(
   'TheTagTreeArrivesInPagesAndACancelledRefreshPublishesNothing',
+  'ATagTreePageRefusedForAChangedIndexRestartsTheWalkFromPageOne',
   'EveryVaultListOperationTheWindowsHostCallsIsPagedOrBounded') 'stage1'
 Assert-Format
 ```

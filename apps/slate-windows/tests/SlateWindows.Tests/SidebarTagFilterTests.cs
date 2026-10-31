@@ -365,8 +365,10 @@ public sealed class SidebarTagFilterTests
             new("g", "g", 1, 1, 0),
         ];
         var requested = new List<string?>();
+        CancelToken? coreToken = null;
         sidebar.TagTreePageForTests = (paging, cancel) =>
         {
+            coreToken = cancel;
             requested.Add(paging.Cursor);
             int start = paging.Cursor is null ? 0 : int.Parse(paging.Cursor, CultureInfo.InvariantCulture);
             TagTreeEntry[] page = [.. rows.Skip(start).Take(3)];
@@ -375,16 +377,20 @@ public sealed class SidebarTagFilterTests
         };
         using var cancellation = new CancellationTokenSource();
         int pages = 0;
+        bool coreTokenCancelled = false;
         sidebar.AfterTagTreeForTests = () =>
         {
             pages++;
             cancellation.Cancel();
+            // The refresh's cancellation reaches the token core polls.
+            coreTokenCancelled = coreToken!.IsCancelled();
         };
 
         Task cancelled = sidebar.RefreshAsync(cancellation: cancellation.Token);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelled.WaitAsync(TimeSpan.FromSeconds(10)));
 
         Assert.Equal(1, pages);
+        Assert.True(coreTokenCancelled, "the refresh's cancellation never reached core's token");
         Assert.Equal(new string?[] { null }, requested.ToArray());
         Assert.Equal(before, sidebar.Tags.Select(tag => tag.Full).ToArray());
 
@@ -401,6 +407,69 @@ public sealed class SidebarTagFilterTests
         Assert.Equal(["a/b", "a/d"], [.. a.Children.Select(tag => tag.Full)]);
         Assert.Equal(["a/b/c"], [.. a.Children[0].Children.Select(tag => tag.Full)]);
         Assert.Equal(["e/f"], [.. sidebar.Tags[1].Children.Select(tag => tag.Full)]);
+        sidebar.BeginSessionShutdownAndCaptureWork().SessionWork.Wait(TimeSpan.FromSeconds(10));
+    }
+
+    /// <summary>WB-25 (codex round 1): core refuses a page whose index
+    /// changed under the walk. The refresh drops the rows it holds and starts
+    /// again from page one, so the tree never mixes two index states; past
+    /// <see cref="FilesSidebarViewModel.MaxTagTreeRestarts"/> refusals it
+    /// reports the failure.</summary>
+    [Fact]
+    public async Task ATagTreePageRefusedForAChangedIndexRestartsTheWalkFromPageOne()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "tag-pages-stale");
+        Write(fixture, "seed.md", "#seed\n");
+        using VaultSession session = OpenScanned(fixture);
+        FilesSidebarViewModel sidebar = await NewSidebar(session, fixture, _ => { });
+
+        // The old index has a/b and a/c; the new one has only z. The first
+        // continuation is refused, as core refuses one after a write.
+        TagTreeEntry[] before = [new("a", "a", 2, 0, 0), new("b", "a/b", 1, 1, 1), new("c", "a/c", 1, 1, 1)];
+        TagTreeEntry[] after = [new("z", "z", 1, 1, 0)];
+        var requested = new List<string?>();
+        int refusals = 0;
+        int refusalsToServe = 1;
+        sidebar.TagTreePageForTests = (paging, cancel) =>
+        {
+            requested.Add(paging.Cursor);
+            if (paging.Cursor is not null)
+            {
+                if (refusals < refusalsToServe)
+                {
+                    refusals++;
+                    throw new VaultException.InvalidArgument("tag tree page cursor is stale; restart from the first page");
+                }
+
+                return new TagTreePage([before[2]], null, 3, 0, "2 tags.");
+            }
+
+            return refusals == 0
+                ? new TagTreePage(before[..2], "old", 3, 0, "2 tags.")
+                : new TagTreePage(after, null, 1, 0, "1 tag.");
+        };
+
+        await sidebar.RefreshAsync().WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(new string?[] { null, "old", null }, requested.ToArray());
+        Assert.Equal(new[] { "z" }, sidebar.Tags.Select(tag => tag.Full).ToArray());
+        Assert.Empty(sidebar.Tags[0].Children);
+
+        // Refused every time: the refresh gives up and says so.
+        requested.Clear();
+        refusals = 0;
+        refusalsToServe = int.MaxValue;
+        sidebar.TagTreePageForTests = (paging, cancel) =>
+        {
+            requested.Add(paging.Cursor);
+            refusals++;
+            throw new VaultException.InvalidArgument("tag tree page cursor is stale; restart from the first page");
+        };
+
+        await sidebar.RefreshAsync().WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(FilesSidebarViewModel.MaxTagTreeRestarts + 1, requested.Count);
+        Assert.StartsWith("Could not load tags", sidebar.Status, StringComparison.Ordinal);
         sidebar.BeginSessionShutdownAndCaptureWork().SessionWork.Wait(TimeSpan.FromSeconds(10));
     }
 

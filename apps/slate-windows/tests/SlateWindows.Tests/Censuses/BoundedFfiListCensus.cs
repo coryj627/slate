@@ -15,8 +15,9 @@ namespace SlateWindows.Tests.Censuses;
 [Trait("census", "bounded-ffi-list")]
 public sealed partial class BoundedFfiListCensus
 {
-    /// <summary>The unbounded entry points, as a call site spells them.</summary>
-    private static readonly string[] UnboundedCalls = [@"\.TagTree\("];
+    /// <summary>The unbounded entry points, as a call site or a method group
+    /// spells them (<c>TagTreePage</c> is a different word).</summary>
+    private static readonly string[] UnboundedCalls = [@"\.TagTree\b"];
 
     [Fact]
     public void EveryVaultListOperationTheWindowsHostCallsIsPagedOrBounded()
@@ -41,6 +42,9 @@ public sealed partial class BoundedFfiListCensus
         string planted = "class X\n{\n    void M(VaultSession s) => _ = s.TagTree();\n}\n";
 
         Assert.Equal(["Planted.cs:3"], UnboundedCallSites("Planted.cs", planted));
+        Assert.Equal(
+            ["Group.cs:1"],
+            UnboundedCallSites("Group.cs", "Func<TagTree> load = _session.TagTree;\n"));
         Assert.Empty(UnboundedCallSites("Paged.cs", "class Y { void M(VaultSession s) => _ = s.TagTreePage(p, c); }"));
     }
 
