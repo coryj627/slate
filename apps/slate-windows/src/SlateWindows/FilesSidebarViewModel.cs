@@ -1425,46 +1425,68 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     }
 
     /// <summary>Test seam (W7-7 PR 7, F5): runs on the tree worker right
-    /// after the native <c>TagTree</c> call returns.</summary>
+    /// after each native <c>TagTreePage</c> call returns.</summary>
     internal Action? AfterTagTreeForTests { get; set; }
+
+    /// <summary>Test seam (WB-25): answers the tag tree's pages in the
+    /// session's place.</summary>
+    internal Func<Paging, CancelToken, TagTreePage>? TagTreePageForTests { get; set; }
+
+    /// <summary>WB-25 (codex round 1): how many times one refresh starts the
+    /// tag tree again from page one after core refuses a page because the
+    /// index changed under the walk, before the refresh reports the
+    /// failure.</summary>
+    internal const int MaxTagTreeRestarts = 3;
 
     private TagLoadOutcome BuildTags(CancellationToken cancellationToken)
     {
         try
         {
-            // W7-7 PR 7 (F5): the caller's token is checked before AND after
-            // the tokenless native call (#1290 owns making it cancellable),
-            // so a cancelled refresh skips it or discards what it returned.
+            // WB-25 (#1290; locked decision 05 §9.3.1): the tag tree arrives
+            // in pages under a token the caller's cancels, so a cancelled
+            // refresh stops inside core or between pages and publishes
+            // nothing.
             cancellationToken.ThrowIfCancellationRequested();
-            TagTree tree = _session.TagTree();
-            AfterTagTreeForTests?.Invoke();
-            cancellationToken.ThrowIfCancellationRequested();
+            const uint pageLimit = 500;
+            Func<Paging, CancelToken, TagTreePage> loadPage = TagTreePageForTests ?? _session.TagTreePage;
+            using var cancel = new CancelToken();
+            using CancellationTokenRegistration linked = cancellationToken.Register(cancel.Cancel);
             var roots = new List<SidebarTagViewModel>();
             var ancestors = new List<SidebarTagViewModel>();
-            foreach (TagTreeEntry entry in tree.Entries)
+            string? cursor = null;
+            int restarts = 0;
+            while (true)
             {
+                TagTreePage page;
+                try
+                {
+                    page = loadPage(new Paging(cursor, pageLimit), cancel);
+                }
+                catch (VaultException.Cancelled) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw new OperationCanceledException(cancellationToken);
+                }
+                catch (VaultException.InvalidArgument) when (restarts < MaxTagTreeRestarts)
+                {
+                    // Core binds every page to the index it read; a refused
+                    // page means the index changed under the walk, so the
+                    // rows so far describe an older vault and the tree
+                    // starts again from page one.
+                    restarts++;
+                    roots.Clear();
+                    ancestors.Clear();
+                    cursor = null;
+                    cancellationToken.ThrowIfCancellationRequested();
+                    continue;
+                }
+                AfterTagTreeForTests?.Invoke();
                 cancellationToken.ThrowIfCancellationRequested();
-                var tag = new SidebarTagViewModel(
-                    entry.Segment,
-                    entry.Full,
-                    entry.FileCount,
-                    entry.DirectCount,
-                    entry.Depth);
-                while (ancestors.Count > entry.Depth)
+                AppendTagPage(page.Entries, roots, ancestors);
+                cursor = page.NextCursor;
+                if (cursor is null)
                 {
-                    ancestors.RemoveAt(ancestors.Count - 1);
+                    break;
                 }
-
-                if (entry.Depth == 0 || ancestors.Count == 0)
-                {
-                    roots.Add(tag);
-                }
-                else
-                {
-                    ancestors[^1].Children.Add(tag);
-                }
-
-                ancestors.Add(tag);
             }
 
             return new TagLoadOutcome(roots, null);
@@ -1472,6 +1494,41 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         catch (VaultException exception)
         {
             return new TagLoadOutcome([], $"Could not load tags: {exception.Message}");
+        }
+    }
+
+    /// <summary>One page's rows onto the tree, the ancestor stack carried
+    /// across pages: a row's parent is the nearest earlier row one level
+    /// up, wherever the page boundary fell. A page is at most 500 rows: the
+    /// refresh's token is checked once per page, before its rows.</summary>
+    private static void AppendTagPage(
+        IEnumerable<TagTreeEntry> entries,
+        List<SidebarTagViewModel> roots,
+        List<SidebarTagViewModel> ancestors)
+    {
+        foreach (TagTreeEntry entry in entries)
+        {
+            var tag = new SidebarTagViewModel(
+                entry.Segment,
+                entry.Full,
+                entry.FileCount,
+                entry.DirectCount,
+                entry.Depth);
+            while (ancestors.Count > entry.Depth)
+            {
+                ancestors.RemoveAt(ancestors.Count - 1);
+            }
+
+            if (entry.Depth == 0 || ancestors.Count == 0)
+            {
+                roots.Add(tag);
+            }
+            else
+            {
+                ancestors[^1].Children.Add(tag);
+            }
+
+            ancestors.Add(tag);
         }
     }
 

@@ -8543,6 +8543,125 @@ impl VaultSession {
         Ok(crate::tag_tree::build_tag_tree(&rows, untagged))
     }
 
+    /// WB-25 (#1290; locked decision 05 §9.3.1): the tag tree a page at a
+    /// time, under `cancel`. The rows are `tag_tree`'s flattened pre-order
+    /// byte for byte; order, cursor and counts use each node's KEY (its
+    /// segment path joined with `/`), never its `full`, which leading empty
+    /// segments let two nodes share. The distinct tags are read and sorted
+    /// in core ([`crate::tag_tree::cmp_segments`]: SQLite has no collation
+    /// for it) and never marshalled; a node's nested count is a BINARY byte
+    /// range on `idx_file_tags_tag` (`= key OR [key/, key0)`), with no
+    /// `LIKE` metacharacter to over-match and no stop at an embedded U+0000.
+    /// The token is checked before the read, polled inside the statements
+    /// and between rows, comparisons and entries; a cancellation is
+    /// `Cancelled`, never a partial page. The cursor is opaque and bound to
+    /// the session and the index snapshot: after any index change it is
+    /// refused (`InvalidArgument`, stale) and the walk starts again.
+    pub fn tag_tree_page(
+        &self,
+        paging: Paging,
+        cancel: &CancelToken,
+    ) -> Result<crate::TagTreePage, VaultError> {
+        validate_page_limit(paging.limit, MAX_TAG_TREE_PAGE_LIMIT, "tag tree")?;
+        cancel.check()?;
+        let conn = self.conn.lock().expect("session connection mutex");
+        // Codex round 2: a cancel takes precedence over every answer the
+        // page could give — checked as soon as the connection is free (a
+        // cancel that landed while this call waited behind a writer), and
+        // over a refusal (a stale cursor or snapshot) that the writer's
+        // change would otherwise report.
+        cancel.check()?;
+        match self.tag_tree_page_locked(&conn, &paging, cancel) {
+            Err(_) if cancel.is_cancelled() => Err(VaultError::Cancelled),
+            answer => answer,
+        }
+    }
+
+    fn tag_tree_page_locked(
+        &self,
+        conn: &rusqlite::Connection,
+        paging: &Paging,
+        cancel: &CancelToken,
+    ) -> Result<crate::TagTreePage, VaultError> {
+        // Codex round 1: every page is bound to the index snapshot it read.
+        // A continuation from another snapshot is refused, and so is a page
+        // whose own statements straddled another connection's commit — the
+        // host restarts from page one instead of joining two index states.
+        let snapshot = directory_page::DirectorySnapshot::capture(conn)?;
+        let cursor = paging
+            .cursor
+            .as_deref()
+            .map(|cursor| {
+                directory_page::decode_tag_tree_cursor(
+                    cursor,
+                    self.directory_cursor_nonce,
+                    snapshot,
+                )
+            })
+            .transpose()?;
+        let mut check = || cancel.check();
+        let page = directory_page::with_sqlite_cancellation(conn, cancel, || {
+            let mut groups: Vec<(String, u32)> = Vec::new();
+            {
+                let mut stmt = conn.prepare_cached(
+                    "SELECT tag_norm, COUNT(DISTINCT file_id) FROM file_tags GROUP BY tag_norm",
+                )?;
+                let rows = stmt.query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, u32>(1)?))
+                })?;
+                for row in rows {
+                    groups.push(row?);
+                    cancel.check()?;
+                }
+            }
+            let groups = crate::tag_tree::sort_by_segments(groups, &mut check)?;
+            let untagged: u32 = conn.query_row(
+                "SELECT COUNT(*) FROM files f
+                 WHERE f.is_markdown = 1
+                   AND NOT EXISTS (
+                       SELECT 1 FROM file_tags t WHERE t.file_id = f.id)",
+                [],
+                |row| row.get(0),
+            )?;
+            let mut nested = conn.prepare_cached(
+                "SELECT COUNT(DISTINCT file_id) FROM file_tags
+                 WHERE tag_norm = ?1 OR (tag_norm >= ?2 AND tag_norm < ?3)",
+            )?;
+            let (entries, next_key) = crate::tag_tree::page_after(
+                &groups,
+                cursor,
+                paging.limit as usize,
+                &mut check,
+                |key| -> Result<u32, VaultError> {
+                    cancel.check()?;
+                    // `0` is the byte after `/`: [key/, key0) is exactly
+                    // the tags under `key/`.
+                    let below = format!("{key}/");
+                    let past = format!("{key}0");
+                    Ok(nested.query_row(rusqlite::params![key, below, past], |row| row.get(0))?)
+                },
+            )?;
+            Ok(crate::TagTreePage {
+                entries,
+                next_cursor: next_key.map(|key| {
+                    directory_page::encode_tag_tree_cursor(
+                        self.directory_cursor_nonce,
+                        snapshot,
+                        &key,
+                    )
+                }),
+                total_entries: crate::tag_tree::total_entries(&groups, &mut check)?,
+                untagged_count: untagged,
+                audio_summary: crate::tag_tree::summary(groups.len() as u64, untagged),
+            })
+        })?;
+        cancel.check()?;
+        if directory_page::DirectorySnapshot::capture(conn)? != snapshot {
+            return Err(directory_page::stale_tag_tree_cursor_error());
+        }
+        Ok(page)
+    }
+
     /// FL5-3a (refs #666): add `tag` to each file's frontmatter `tags:`
     /// list. Validates once, conflict-checks each file against its
     /// indexed hash, edits through the shared frontmatter serializer,
@@ -10301,6 +10420,10 @@ pub(crate) fn scan_point(point: &str) {
 /// (locked decision 05 §4 principle 4, §9.3.1). A limit of 0 or above it is
 /// refused before any row is read.
 pub const MAX_LIST_FILES_PAGE_LIMIT: u32 = 10_000;
+
+/// WB-25 (#1290): the most rows one [`VaultSession::tag_tree_page`] call
+/// returns, under the same rule as the files page.
+pub const MAX_TAG_TREE_PAGE_LIMIT: u32 = 10_000;
 
 /// The one page-limit rule (W7-7 PR 7, round 3 finding 7), shared by the
 /// files page and the directory pages: a limit is `1..=max`, refused

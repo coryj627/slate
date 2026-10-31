@@ -672,6 +672,44 @@ pub struct TagTree {
     pub audio_summary: String,
 }
 
+/// WB-25 (#1290; locked decision 05 §9.3.1): one page of the flattened tag
+/// tree, the same rows as [`TagTree::entries`] in the same order.
+/// `next_cursor` is opaque: pass it back unread; `None` on the last page.
+/// `total_entries` counts every row of the whole tree; the untagged count
+/// and the summary ride every page.
+#[derive(uniffi::Record)]
+pub struct TagTreePage {
+    pub entries: Vec<TagTreeEntry>,
+    pub next_cursor: Option<String>,
+    pub total_entries: u32,
+    pub untagged_count: u32,
+    pub audio_summary: String,
+}
+
+impl From<core::TagTreePageEntry> for TagTreeEntry {
+    fn from(entry: core::TagTreePageEntry) -> Self {
+        TagTreeEntry {
+            segment: entry.segment,
+            full: entry.full,
+            file_count: entry.file_count,
+            direct_count: entry.direct_count,
+            depth: entry.depth,
+        }
+    }
+}
+
+impl From<core::TagTreePage> for TagTreePage {
+    fn from(page: core::TagTreePage) -> Self {
+        TagTreePage {
+            entries: page.entries.into_iter().map(TagTreeEntry::from).collect(),
+            next_cursor: page.next_cursor,
+            total_entries: page.total_entries,
+            untagged_count: page.untagged_count,
+            audio_summary: page.audio_summary,
+        }
+    }
+}
+
 /// FL5-3b (#666): one tag carried by a file selection, with its
 /// distinct-file count — the Remove Tag editor's choice row.
 #[derive(uniffi::Record)]
@@ -716,24 +754,12 @@ impl From<core::TagEditReport> for TagEditReport {
 }
 
 fn flatten_tag_tree(tree: core::TagTree) -> TagTree {
-    fn walk(node: core::TagTreeNode, depth: u32, out: &mut Vec<TagTreeEntry>) {
-        out.push(TagTreeEntry {
-            segment: node.segment,
-            full: node.full,
-            file_count: node.file_count,
-            direct_count: node.direct_count,
-            depth,
-        });
-        for child in node.children {
-            walk(child, depth + 1, out);
-        }
-    }
-    let mut entries = Vec::new();
-    for root in tree.roots {
-        walk(root, 0, &mut entries);
-    }
+    // WB-25: core's one pre-order flattening, shared with the paged walk.
     TagTree {
-        entries,
+        entries: core::tag_tree::flatten_preorder(&tree)
+            .into_iter()
+            .map(TagTreeEntry::from)
+            .collect(),
         untagged_count: tree.untagged_count,
         audio_summary: tree.audio_summary,
     }
@@ -851,6 +877,21 @@ impl VaultSession {
     /// (inline + frontmatter), flattened pre-order for the bindings.
     pub fn tag_tree(&self) -> Result<TagTree, VaultError> {
         Ok(flatten_tag_tree(self.inner.tag_tree()?))
+    }
+
+    /// WB-25 (#1290; locked decision 05 §9.3.1): the tag tree a page at a
+    /// time under `cancel` — the same rows as `tag_tree`, never the whole
+    /// projection in one call. A cancellation is `Cancelled`, never a
+    /// partial page; a limit of 0 or over 10,000 is refused.
+    pub fn tag_tree_page(
+        &self,
+        paging: Paging,
+        cancel: Arc<CancelToken>,
+    ) -> Result<TagTreePage, VaultError> {
+        Ok(self
+            .inner
+            .tag_tree_page(paging.into(), &cancel.inner)?
+            .into())
     }
 
     /// FL5-2 (#665): the reserved Untagged scope through the one shared

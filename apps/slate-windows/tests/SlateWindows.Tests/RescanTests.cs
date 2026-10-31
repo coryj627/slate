@@ -1233,8 +1233,8 @@ public sealed partial class RescanTests
 
     /// <summary>F5 (codex PR 7 design pass 2, mitigation): a caller's
     /// cancellation reaches the tree read's tag tree. Cancelled right after
-    /// the native <c>TagTree</c> call returns, the refresh discards what it
-    /// read — nothing publishes, nothing is spoken, the awaited Task is
+    /// a <c>TagTreePage</c> call returns (WB-25), the refresh discards what
+    /// it read — nothing publishes, nothing is spoken, the awaited Task is
     /// cancelled; cancelled before, the tag tree is never read.</summary>
     [Fact]
     public void ACancelAroundTheTagTreeCallPublishesNothing() => RunSta(() =>
