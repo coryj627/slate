@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 //! WB-27 (plan 44): the Windows no-replace create and rename, run on the weak
 //! volumes the capability matrix (plan 24 §3.3, §5, §6) lists from source:
 //! FAT32, exFAT and an SMB share.
