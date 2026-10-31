@@ -380,7 +380,7 @@ public sealed partial class RescanTests
     });
 
     /// <summary>The owner's decision Q8: an unchanged explicit Refresh adds
-    /// only the recovery set — Quick Open's whole list, the Bases re-run
+    /// only the recovery set — Quick Open's re-rank, the Bases re-run
     /// (dashboards and saved queries live in the cache, outside the feed) and
     /// one graph probe — and no reading or history publication when nothing
     /// shows a failure.</summary>
@@ -538,14 +538,14 @@ public sealed partial class RescanTests
     });
 
     // ---------------------------------------------------------------------
-    // The Slate-write journal and the tab comparison
+    // Slate writes during a run, and the tab comparison
     // ---------------------------------------------------------------------
 
     /// <summary>Another session creates a note, and this session's user
     /// renames it while the run's window is open. The window's record says
-    /// the note is at its first name, but the rename is journaled and both
-    /// its names are re-read from the index after the records: Quick Open
-    /// does not get the old name back.</summary>
+    /// the note is at its first name, but Quick Open ranks the index, which
+    /// holds the rename (WB-25 stage 2; the journal that re-read it is
+    /// gone): Quick Open does not get the old name back.</summary>
     [Fact]
     public void ASlateWriteDuringTheWindowIsReReadNotReverted() => RunSta(() =>
     {

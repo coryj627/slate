@@ -587,7 +587,7 @@ public sealed class W1QuickSwitcherAndChordTests
         Assert.Null(quick.SelectedRow);
 
         _ = session.CreateExclusive("gamma.md", "gamma\n");
-        quick.ApplyFileChange(new FileChangeEvent(FileChangeKind.Created, "gamma.md", null));
+        quick.ApplyFileChanges([(new FileChangeEvent(FileChangeKind.Created, "gamma.md", null), true)]);
         quick.Open();
         Assert.Contains(quick.Results, item => item.Path == "gamma.md");
     }

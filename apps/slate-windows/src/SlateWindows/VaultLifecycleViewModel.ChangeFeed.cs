@@ -111,7 +111,7 @@ internal sealed partial class VaultLifecycleViewModel
 
     /// <summary>
     /// The open: this session's cursor at the feed's head, right after the
-    /// open scan and before Quick Open's listing (design §6), so the open
+    /// open scan (design §6), so the open
     /// scan's own files — which <c>VaultScanFinished</c> spoke — are not in
     /// the first window. A failure (a busy cache, a schema skew) is logged
     /// with no path (#507) and never spoken: the first run's window is then a
@@ -171,11 +171,11 @@ internal sealed partial class VaultLifecycleViewModel
 
     /// <summary>
     /// The run after its scan (design §4.3, §4.6). First the retry set,
-    /// whatever the reason — Quick Open and the tree by their full reloads;
-    /// the dependents ride the run's first dependents pass — and an explicit
-    /// Refresh's recovery set (the owner's decision Q8): Quick Open's whole
-    /// list, a tree showing a failure, and every dependent showing one, even
-    /// with an empty window. Then at most <c>change_feed_max_passes()</c>
+    /// whatever the reason — Quick Open by its re-rank and the tree by its
+    /// full reload; the dependents ride the run's first dependents pass —
+    /// and an explicit Refresh's recovery set (the owner's decision Q8):
+    /// Quick Open's re-rank, a tree showing a failure, and every dependent
+    /// showing one, even with an empty window. Then at most <c>change_feed_max_passes()</c>
     /// windows: an exact one through its records, a gap or an oversized one
     /// through R-9's full re-sync, each followed by the feed's head. Then the
     /// last window's acknowledgment, unless a feed read failed. Quick Open
@@ -410,7 +410,8 @@ internal sealed partial class VaultLifecycleViewModel
     /// <summary>
     /// The record path (design §4.3, §6): an exact window's records, read in
     /// bounded pages under the run's token. Phase A, every page: an open
-    /// Quick Open re-ranks against the index when the page names a file;
+    /// Quick Open re-ranks against the index when a file record can change
+    /// what it ranks;
     /// renames are buffered, and the removed, present and touched paths
     /// gather over the whole window. Phase B, after the last page, because
     /// renames precede removals in page order: the buffered renames move the

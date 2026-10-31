@@ -43,7 +43,7 @@ namespace SlateWindows;
 /// </para>
 /// <para>
 /// Plan 43 PR 20b (design §4.2 item 3, §4.5): a Watcher request is never
-/// dropped. Before the workspace exists (the open's own scan and listing) and
+/// dropped. Before the workspace exists (the open's own scan) and
 /// while an import or a trash operation runs it is recorded in the lattice,
 /// and the end of the open and the blockers settling serve it; while the
 /// window is away it waits for the next activation, where it joins the
@@ -84,7 +84,7 @@ internal sealed partial class VaultLifecycleViewModel
 
     // W7-7 PR 7 (codex AR-18 review round 2, finding 3): every rescan core
     // call that touches the session is admitted into ONE synchronized set —
-    // the re-sync runs several at once (Quick Open's listing beside the
+    // the re-sync runs several at once (the tree's reads beside the
     // workspace's hash read, say). CloseSession closes the admission,
     // cancels the run and drains the set to EMPTY before any native state
     // is disposed.
@@ -160,8 +160,8 @@ internal sealed partial class VaultLifecycleViewModel
 
         if (Workspace is null)
         {
-            // Before the workspace exists — the open's own scan and listing
-            // — a watcher request is recorded, and the end of the open
+            // Before the workspace exists — the open's own scan — a
+            // watcher request is recorded, and the end of the open
             // serves it (ServeRecordedRescan).
             RecordWatcherRequest(reason, carriesWatcher);
             return Task.CompletedTask;
@@ -551,10 +551,11 @@ internal sealed partial class VaultLifecycleViewModel
     /// <paramref name="failedSurfaces"/>, the run's retry collector). Every
     /// operation is awaited to its publication, and none speaks: the files
     /// tree (silent, <see cref="FilesSidebarViewModel.RefreshForRescanAsync"/>),
-    /// Quick Open (a silent re-rank against the index), every open document (hash-compared, hash-conditioned
-    /// reloads), then the dependents once, ungated. Every core call runs
-    /// through the rescan seam with the run's native token; host-side checks
-    /// read its managed twin. A cancelled run (a close, a vault switch) stops
+    /// Quick Open (a silent re-rank against the index, under the
+    /// switcher's own token through the rank lane), every open document
+    /// (hash-compared, hash-conditioned reloads), then the dependents once,
+    /// ungated. Every other core call runs through the rescan seam with the
+    /// run's native token; host-side checks read its managed twin. A cancelled run (a close, a vault switch) stops
     /// wherever it is.
     /// </summary>
     private async Task<ulong> ReSyncFromIndexAsync(

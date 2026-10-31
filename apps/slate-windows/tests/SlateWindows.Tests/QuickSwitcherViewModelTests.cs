@@ -154,8 +154,8 @@ public sealed class QuickSwitcherViewModelTests
                 ranks++;
                 return new SwitcherRankPage([], 0);
             });
-        ChangeRecord File(ChangeEntry entry) => new(
-            "made.md", entry, ChangeEffect.Present, null, null, ChangeCount.Created, null, null, true, 1);
+        ChangeRecord File(ChangeEntry entry, ChangeEffect effect = ChangeEffect.Present, ChangeCount counted = ChangeCount.Created) => new(
+            "made.md", entry, effect, null, null, counted, null, null, true, 1);
 
         await quick.ApplyRecordsAsync([File(ChangeEntry.File)], CancellationToken.None);
         Assert.Equal(0, ranks);
@@ -164,8 +164,106 @@ public sealed class QuickSwitcherViewModelTests
         Assert.Equal(1, ranks);
         await quick.ApplyRecordsAsync([File(ChangeEntry.Directory)], CancellationToken.None);
         Assert.Equal(1, ranks);
+        // An edit to a file already ranked changes no path or name.
+        await quick.ApplyRecordsAsync([File(ChangeEntry.File, counted: ChangeCount.Modified)], CancellationToken.None);
+        Assert.Equal(1, ranks);
         await quick.ApplyRecordsAsync([File(ChangeEntry.File)], CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(2, ranks);
+        await quick.ApplyRecordsAsync([File(ChangeEntry.File, ChangeEffect.Removed, ChangeCount.Removed)], CancellationToken.None);
+        Assert.Equal(3, ranks);
+    }
+
+    /// <summary>The funnel's Slate-owned batch re-ranks an open switcher
+    /// against the index, once a batch; an empty batch or a closed switcher
+    /// ranks nothing.</summary>
+    [Fact]
+    public void ASlateOwnedBatchReRanksAnOpenSwitcher()
+    {
+        using FixtureVault fixture = FixtureVault.Create(1, "quick-open-funnel");
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        int ranks = 0;
+        using var quick = new QuickSwitcherViewModel(
+            session,
+            fixture.Root,
+            _ => { },
+            Path.Combine(fixture.Root, "device-state"),
+            debounceRanking: false,
+            rankTop: (_, _, _) =>
+            {
+                ranks++;
+                return new SwitcherRankPage([], 0);
+            });
+        (FileChangeEvent, bool) Created(string path) => (new FileChangeEvent(FileChangeKind.Created, path, null), true);
+
+        quick.ApplyFileChanges([Created("closed.md")]);
+        Assert.Equal(0, ranks);
+        quick.Open();
+        Assert.Equal(1, ranks);
+        quick.ApplyFileChanges([]);
+        Assert.Equal(1, ranks);
+        quick.ApplyFileChanges([Created("a.md"), Created("b.md")]);
+        Assert.Equal(2, ranks);
+    }
+
+    /// <summary>A silent re-rank (a rescan's, a feed page's) that supersedes
+    /// a keystroke's rank still pending runs as that keystroke's, so the
+    /// reader still hears the count for what they typed.</summary>
+    [Fact]
+    public async Task ASilentReRankKeepsAPendingKeystrokesCount()
+    {
+        using FixtureVault fixture = FixtureVault.Create(1, "quick-open-silent-supersede");
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        var context = new PumpSynchronizationContext();
+        var announcements = new List<A11yEvent>();
+        var delays = new List<TaskCompletionSource>();
+        Task Delay(CancellationToken token)
+        {
+            var delay = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            delays.Add(delay);
+            return delay.Task.WaitAsync(token);
+        }
+
+        SynchronizationContext? previous = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(context);
+        QuickSwitcherViewModel quick;
+        try
+        {
+            quick = new QuickSwitcherViewModel(
+                session,
+                fixture.Root,
+                announcements.Add,
+                Path.Combine(fixture.Root, "device-state"),
+                rankCoordinator: new QuickSwitcherRankCoordinator(),
+                rankTop: (query, _, _) => new SwitcherRankPage(
+                    [new SwitcherRow("note0.md", "note0.md", "note0", 1, [])], 1),
+                rankDelay: Delay);
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previous);
+        }
+
+        using (quick)
+        {
+            quick.Open();
+            delays[^1].SetResult();
+            await quick.RankCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+            context.Drain();
+            announcements.Clear();
+
+            quick.Query = "no";
+            Task created = quick.ApplyRecordsAsync(
+                [new ChangeRecord("made.md", ChangeEntry.File, ChangeEffect.Present, null, null, ChangeCount.Created, null, null, true, 1)],
+                CancellationToken.None);
+            delays[^1].SetResult();
+            await quick.RankCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+            context.Drain();
+            await created.WaitAsync(TimeSpan.FromSeconds(5));
+
+            A11yEvent.QuickSwitcherCount count = Assert.IsType<A11yEvent.QuickSwitcherCount>(
+                Assert.Single(announcements));
+            Assert.Equal("no", count.Query);
+        }
     }
 
     private sealed class PumpSynchronizationContext : SynchronizationContext

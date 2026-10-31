@@ -6358,14 +6358,17 @@ impl VaultSession {
     }
 
     /// WB-25 stage 2 (#1290; locked decision 05 §9.3.1): Quick Open's
-    /// bounded rank against the index. One statement streams the openable
-    /// documents in `path COLLATE BINARY` order — the order the host's
-    /// paged listing handed the free ranker — into the ranker, so the
-    /// rows and `total` equal `switcher_rank_top`'s over that list while
-    /// at most `limit` rows are kept or marshalled and the host never
-    /// holds the file set. The token is checked before the read, polled
-    /// inside the statement and per row; a cancellation is `Cancelled`,
-    /// never a page.
+    /// bounded rank against the index. One statement reads the openable
+    /// documents' paths and names in `path COLLATE BINARY` order — the
+    /// order the host's paged listing handed the free ranker — and the
+    /// ranker scores them, so the rows and `total` equal
+    /// `switcher_rank_top`'s over that list while at most `limit` rows are
+    /// marshalled and the host never holds the file set. The rows are
+    /// copied out under the connection lock and scored after it is
+    /// released (red team): a save never waits behind a keystroke's
+    /// scoring pass. The token is checked before the read, polled inside
+    /// the statement and per row, read and scored; a cancellation is
+    /// `Cancelled`, never a page.
     pub fn switcher_rank_top_indexed(
         &self,
         query: &str,
@@ -6379,26 +6382,33 @@ impl VaultSession {
             });
         }
         cancel.check()?;
-        let conn = self.conn.lock().expect("session connection mutex");
-        cancel.check()?;
-        directory_page::with_sqlite_cancellation(&conn, cancel, || {
-            let mut stmt = conn.prepare_cached(&format!(
-                "SELECT path, name FROM files WHERE {} ORDER BY path COLLATE BINARY ASC",
-                file_filter_where(FileFilter::OpenableDocuments)
-            ))?;
-            let rows = stmt.query_map([], |row| {
-                Ok(crate::switcher::SwitcherFile {
-                    path: row.get(0)?,
-                    name: row.get(1)?,
-                })
-            })?;
-            let stream = rows.map(|row| -> Result<_, VaultError> {
-                let file = row?;
-                cancel.check()?;
-                Ok(file)
-            });
-            crate::switcher::switcher_rank_top_stream(stream, query, recent_paths, limit)
-        })
+        let files = {
+            let conn = self.conn.lock().expect("session connection mutex");
+            cancel.check()?;
+            directory_page::with_sqlite_cancellation(&conn, cancel, || {
+                let mut stmt = conn.prepare_cached(&format!(
+                    "SELECT path, name FROM files WHERE {} ORDER BY path COLLATE BINARY ASC",
+                    file_filter_where(FileFilter::OpenableDocuments)
+                ))?;
+                let rows = stmt.query_map([], |row| {
+                    Ok(crate::switcher::SwitcherFile {
+                        path: row.get(0)?,
+                        name: row.get(1)?,
+                    })
+                })?;
+                let mut files = Vec::new();
+                for row in rows {
+                    files.push(row?);
+                    cancel.check()?;
+                }
+                Ok(files)
+            })?
+        };
+        let stream = files.into_iter().map(|file| -> Result<_, VaultError> {
+            cancel.check()?;
+            Ok(file)
+        });
+        crate::switcher::switcher_rank_top_stream(stream, query, recent_paths, limit)
     }
 
     /// Fetch one indexed file through the same enriched projection as

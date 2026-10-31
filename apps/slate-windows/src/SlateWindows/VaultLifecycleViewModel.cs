@@ -1298,7 +1298,7 @@ internal sealed partial class VaultLifecycleViewModel
         }
 
         // W7-7 PR 7 (finding 3): every admitted rescan core call — the scan,
-        // the listing, the hash reads, the reads, the re-seat's probe — has
+        // the hash reads, the reads, the re-seat's probe — has
         // ended before the tokens, the workspace or the session go.
         DrainRescanCoreCalls();
 

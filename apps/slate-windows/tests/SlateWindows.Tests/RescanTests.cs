@@ -1222,8 +1222,9 @@ public sealed partial class RescanTests
 
         Task run = h.Lifecycle.RescanAsync(RescanReason.Explicit);
         h.Context.RunUntil(() => read.IsSet, "the rescan's tree snapshot");
+        int batches = h.QuickOpen.AppliedChangeBatchesForTests;
         h.CreateInCore("made.md", "# Made\n");
-        h.Context.RunUntil(() => h.QuickOpen.RankedPathsForTests().Contains("made.md"), "the Slate write's event");
+        h.Context.RunUntil(() => h.QuickOpen.AppliedChangeBatchesForTests > batches, "the Slate write's event");
         unpark.Set();
         h.Context.Await(run);
 

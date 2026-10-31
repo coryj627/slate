@@ -33,6 +33,9 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
     private readonly Func<CancellationToken, Task> _rankDelay;
     private CancellationTokenSource? _rankCancellation;
     private int _rankGeneration;
+    // Whether the rank in flight is a silent one: a silent re-rank never
+    // downgrades a keystroke's rank still pending (red team).
+    private bool _pendingRankSilent;
     private IReadOnlyList<string> _recents = [];
     private string _query = string.Empty;
     private QuickSwitcherRowViewModel? _selectedRow;
@@ -240,27 +243,29 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
         }
     }
 
-    /// <summary>A Slate-owned change: the index already holds it, so an
-    /// open switcher re-ranks (WB-25 stage 2: no host list to edit).</summary>
-    public void ApplyFileChange(FileChangeEvent change)
+    /// <summary>
+    /// A batch of Slate-owned changes, from the funnel. The index already
+    /// holds them (WB-25 stage 2: no host list to edit), so an open
+    /// switcher re-ranks once.
+    /// </summary>
+    public void ApplyFileChanges(IReadOnlyCollection<(FileChangeEvent Change, bool Openable)> changes)
     {
+        if (changes.Count == 0)
+        {
+            return;
+        }
+
+        AppliedChangeBatchesForTests++;
         if (IsOpen)
         {
             ScheduleRefresh();
         }
     }
 
-    /// <summary>
-    /// A batch of Slate-owned changes in one pass — the funnel's per-event
-    /// <see cref="ApplyFileChange"/> batched. An open switcher re-ranks once.
-    /// </summary>
-    public void ApplyFileChanges(IReadOnlyCollection<(FileChangeEvent Change, bool Openable)> changes)
-    {
-        if (changes.Count > 0 && IsOpen)
-        {
-            ScheduleRefresh();
-        }
-    }
+    /// <summary>How many non-empty Slate-owned batches the funnel has
+    /// handed the switcher — for the facts that wait for a write's event to
+    /// be applied.</summary>
+    internal int AppliedChangeBatchesForTests { get; private set; }
 
     /// <summary>
     /// WB-25 stage 2 (#1290): a rescan's scan committed a new index. A
@@ -279,10 +284,12 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
 
     /// <summary>
     /// WB-10 (#1293, design §4.3): one page of a change-feed window. Its
-    /// records are already in the index (WB-25 stage 2), so a page naming a
-    /// file re-ranks an open switcher silently, awaited as
-    /// <see cref="ReRankForRescanAsync"/> is; a folder-only page changes
-    /// nothing Quick Open shows.
+    /// records are already in the index (WB-25 stage 2), and a rank reads
+    /// only paths and names, so a page re-ranks an open switcher silently —
+    /// awaited as <see cref="ReRankForRescanAsync"/> is — only when one of
+    /// its file records can change the ranked set: a file created, removed
+    /// or renamed. An edit to a file already ranked, or a folder record,
+    /// changes nothing Quick Open shows.
     /// </summary>
     internal Task ApplyRecordsAsync(IReadOnlyList<ChangeRecord> records, CancellationToken cancellation)
     {
@@ -291,10 +298,14 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
             return Task.FromCanceled(cancellation);
         }
 
-        return records.Any(record => record.Entry == ChangeEntry.File)
+        return records.Any(ChangesTheRankedSet)
             ? RepublishSilentlyAsync(cancellation)
             : Task.CompletedTask;
     }
+
+    private static bool ChangesTheRankedSet(ChangeRecord record) =>
+        record.Entry == ChangeEntry.File
+        && !(record.Effect == ChangeEffect.Present && record.Counted == ChangeCount.Modified);
 
     /// <summary>The index changed under a rescan: a closed switcher
     /// completes at once; an open one re-runs its query silently, and the
@@ -347,7 +358,7 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
 
     /// <summary>Test seam (W7-7 PR 7, codex PR 7 round 3 finding 5): runs on
     /// the pool INSIDE the admitted native rank — after the coordinator's
-    /// lane admitted it, where its token no longer reaches.</summary>
+    /// lane admitted it, before the core call.</summary>
     internal Action? InsideRankForTests { get; set; }
 
     /// <summary>The paths Quick Open's empty query ranks, straight from the
@@ -371,7 +382,8 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
         // rank — a rescan awaiting one is settled, never left waiting.
         SettleRescanRankWaiters(int.MaxValue, failure: null);
         // W7-7 PR 7 (codex PR 7 round 3, finding 5): an ADMITTED rank's
-        // native call no longer sees its token. The close waits for it to
+        // core call sees its cancelled token (WB-25 stage 2) but still has
+        // to return before the session goes. The close waits for it to
         // return and release the process-wide lane, so nothing this vault
         // started outlives it and the next vault ranks at once. Pool work
         // only: the wait never needs this thread. A rank admitted after
@@ -409,9 +421,13 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
             return;
         }
 
+        // A silent re-rank that supersedes a keystroke's pending rank runs
+        // as that keystroke's: its count is still spoken.
+        silent &= !(IsRanking && !_pendingRankSilent);
         CancelRanking();
         var cancellation = new CancellationTokenSource();
         _rankCancellation = cancellation;
+        _pendingRankSilent = silent;
         int generation = ++_rankGeneration;
         string query = Query;
         string[] recents = [.. _recents];

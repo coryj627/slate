@@ -131,8 +131,7 @@ public sealed partial class RescanTests
     // --- (5) a close waits for an ADMITTED Quick Open rank -------------------
 
     /// <summary>Round 3, finding 5: the re-sync's silent re-rank, parked INSIDE
-    /// its native call — past the coordinator's admission, where its token no
-    /// longer reaches. A vault close waits for it to return before it
+    /// its native call — past the coordinator's admission. A vault close waits for it to return before it
     /// finishes, and the process-wide rank lane is free at once for the next
     /// vault.</summary>
     [Fact]

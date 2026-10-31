@@ -7,8 +7,9 @@ namespace SlateWindows;
 
 /// <summary>
 /// Process-lifetime admission lane for native Quick Open ranking. Cancellation
-/// can remove queued work, but an admitted native call owns the lane until it
-/// actually returns because the FFI operation itself is not cancellable.
+/// can remove queued work; an admitted native call owns the lane until it
+/// actually returns. Since WB-25 stage 2 that call sees its cancelled core
+/// token and stops early, but it still returns before the lane is free.
 /// </summary>
 internal sealed class QuickSwitcherRankCoordinator
 {
@@ -19,8 +20,8 @@ internal sealed class QuickSwitcherRankCoordinator
     /// <param name="admitted">W7-7 PR 7 (codex PR 7 round 3, finding 5):
     /// told, on admission and BEFORE the admitted call's token is checked,
     /// of a Task that completes once the call has returned and released the
-    /// lane — what a closing owner drains, since the native call itself no
-    /// longer sees its token.</param>
+    /// lane — what a closing owner drains, so the call returns before the
+    /// session it reads is disposed.</param>
     internal async Task<SwitcherRankPage> RankAsync(
         Func<SwitcherRankPage> rank,
         CancellationToken cancellationToken,

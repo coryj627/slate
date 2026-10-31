@@ -423,8 +423,9 @@ public sealed partial class RescanTests
         h.Context.RunUntil(() => read.IsSet, "the rescan's tree snapshot");
         // The replacement's tag tree fails.
         h.Sidebar.AfterTagTreeForTests = () => throw new VaultException.Io("injected tag tree failure");
+        int batches = h.QuickOpen.AppliedChangeBatchesForTests;
         h.CreateInCore("made.md", "# Made\n");
-        h.Context.RunUntil(() => h.QuickOpen.RankedPathsForTests().Contains("made.md"), "the Slate write's event");
+        h.Context.RunUntil(() => h.QuickOpen.AppliedChangeBatchesForTests > batches, "the Slate write's event");
         unpark.Set();
         h.Context.Await(run);
 
