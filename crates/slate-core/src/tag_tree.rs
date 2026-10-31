@@ -119,7 +119,7 @@ pub(crate) fn build_tag_tree(rows: &[(String, i64)], untagged_count: u32) -> Tag
 /// Normative, locale-neutral strings (FL5-1 rule 5): grouped decimals,
 /// second clause omitted when nothing is untagged. The UI localizes
 /// visual formatting; core summaries stay stable for announcements.
-fn summary(tag_count: u64, untagged_count: u32) -> String {
+pub(crate) fn summary(tag_count: u64, untagged_count: u32) -> String {
     let tags = count_noun(tag_count, "tag", "tags");
     if untagged_count == 0 {
         format!("{tags}.")
@@ -127,6 +127,153 @@ fn summary(tag_count: u64, untagged_count: u32) -> String {
         let untagged = count_noun(untagged_count as u64, "untagged note", "untagged notes");
         format!("{tags}, {untagged}.")
     }
+}
+
+/// WB-25 (#1290): one flattened pre-order row of the tag tree — what the
+/// paged walk carries and the FFI's `TagTreeEntry` is built from. `depth`
+/// is 0 for a root; a row's parent is the nearest earlier row one level up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagTreePageEntry {
+    pub segment: String,
+    pub full: String,
+    pub file_count: u32,
+    pub direct_count: u32,
+    pub depth: u32,
+}
+
+/// WB-25 (#1290): one page of the flattened tag tree. `next_cursor` is
+/// opaque: the host passes it back unread. `total_entries` counts every
+/// row of the whole tree (real tags and implied ancestors); the untagged
+/// count and the summary ride every page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagTreePage {
+    pub entries: Vec<TagTreePageEntry>,
+    pub next_cursor: Option<String>,
+    pub total_entries: u32,
+    pub untagged_count: u32,
+    pub audio_summary: String,
+}
+
+/// The tree's rows in pre-order: one flattening, shared by the unpaged
+/// tree's bindings and the paged walk's oracle.
+pub fn flatten_preorder(tree: &TagTree) -> Vec<TagTreePageEntry> {
+    fn walk(node: &TagTreeNode, depth: u32, out: &mut Vec<TagTreePageEntry>) {
+        out.push(TagTreePageEntry {
+            segment: node.segment.clone(),
+            full: node.full.clone(),
+            file_count: node.file_count,
+            direct_count: node.direct_count,
+            depth,
+        });
+        for child in &node.children {
+            walk(child, depth + 1, out);
+        }
+    }
+    let mut out = Vec::new();
+    for root in &tree.roots {
+        walk(root, 0, &mut out);
+    }
+    out
+}
+
+/// WB-25 (#1290): the order [`build_tag_tree`] produces, over node KEYS (a
+/// node's segment path joined with `/`): the segment sequences compared
+/// lexicographically, each segment in byte order, a proper prefix first.
+/// It splits exactly as `build_tag_tree` does, so it is that tree's
+/// pre-order, and it never equates two different keys (the split gives the
+/// key back): a character below `/` (U+0001, U+0000) can neither collide
+/// with a separator nor sort across one.
+pub fn cmp_segments(a: &str, b: &str) -> std::cmp::Ordering {
+    a.split('/').cmp(b.split('/'))
+}
+
+/// A node's `full` from its key, `materialize`'s rule: leading empty
+/// segments add no separator, so a node's `full` is its key with its
+/// leading `/`s trimmed. Not an identity — `/a`, `//a` and `a` all read
+/// `a` — which is why order, cursor and counts use the key.
+fn full_of_key(key: &str) -> &str {
+    key.trim_start_matches('/')
+}
+
+fn page_entry(key: &str, direct_count: u32, file_count: u32) -> TagTreePageEntry {
+    TagTreePageEntry {
+        segment: key.rsplit('/').next().unwrap_or_default().to_string(),
+        full: full_of_key(key).to_string(),
+        file_count,
+        direct_count,
+        depth: key.split('/').count() as u32 - 1,
+    }
+}
+
+/// Every key of the tree in pre-order from after `cursor` (from the start
+/// when `None`): before each real tag, the proper prefixes of its
+/// `split('/')` sequence not yet emitted (its implied ancestors), shallowest
+/// first, then the tag. `groups` holds the distinct real tags with their
+/// direct counts, sorted by [`cmp_segments`]. `visit` sees each key with its
+/// direct count (0 for an implied ancestor) and answers whether to go on.
+fn walk_keys_after<E>(
+    groups: &[(String, u32)],
+    cursor: Option<&str>,
+    mut visit: impl FnMut(&str, u32) -> Result<bool, E>,
+) -> Result<(), E> {
+    let start = cursor.map_or(0, |cursor| {
+        groups.partition_point(|(key, _)| cmp_segments(key, cursor) != std::cmp::Ordering::Greater)
+    });
+    let mut last: Option<String> = cursor.map(str::to_owned);
+    for (key, direct) in &groups[start..] {
+        let segments: Vec<&str> = key.split('/').collect();
+        for depth in 1..segments.len() {
+            let prefix = segments[..depth].join("/");
+            let unseen = last
+                .as_deref()
+                .is_none_or(|last| cmp_segments(&prefix, last) == std::cmp::Ordering::Greater);
+            if unseen {
+                if !visit(&prefix, 0)? {
+                    return Ok(());
+                }
+                last = Some(prefix);
+            }
+        }
+        if !visit(key, *direct)? {
+            return Ok(());
+        }
+        last = Some(key.clone());
+    }
+    Ok(())
+}
+
+/// The rows of the whole tree (real tags plus implied ancestors).
+pub(crate) fn total_entries(groups: &[(String, u32)]) -> u32 {
+    let mut total = 0u32;
+    let _ = walk_keys_after::<std::convert::Infallible>(groups, None, |_, _| {
+        total += 1;
+        Ok(true)
+    });
+    total
+}
+
+/// One page of at most `limit` rows after `cursor`, each row's nested
+/// count from `file_count(key)`; the cursor of the next page is the last
+/// emitted row's key, `None` once the tree is exhausted.
+pub(crate) fn page_after<E>(
+    groups: &[(String, u32)],
+    cursor: Option<&str>,
+    limit: usize,
+    mut file_count: impl FnMut(&str) -> Result<u32, E>,
+) -> Result<(Vec<TagTreePageEntry>, Option<String>), E> {
+    let mut entries = Vec::new();
+    let mut last_key: Option<String> = None;
+    let mut more = false;
+    walk_keys_after(groups, cursor, |key, direct| {
+        if entries.len() == limit {
+            more = true;
+            return Ok(false);
+        }
+        entries.push(page_entry(key, direct, file_count(key)?));
+        last_key = Some(key.to_string());
+        Ok(true)
+    })?;
+    Ok((entries, if more { last_key } else { None }))
 }
 
 #[cfg(test)]
@@ -221,5 +368,117 @@ mod tests {
         let tree = build_tag_tree(&[], 0);
         assert!(tree.roots.is_empty());
         assert_eq!(tree.audio_summary, "0 tags.");
+    }
+
+    /// WB-25 (#1290): over the adversarial tag set, every node's key (its
+    /// segment path joined with `/`, rebuilt from the flattened rows) sorted
+    /// by `cmp_segments` is `flatten_preorder`'s order; every node's `full`
+    /// is `full_of_key` of its key; and no two different keys compare equal.
+    #[test]
+    fn cmp_segments_is_build_tag_trees_preorder_and_never_equates_two_tags() {
+        let tags = [
+            "a",
+            "a/",
+            "a//b",
+            "a/z",
+            "a\u{0}b",
+            "a\u{0}b/c",
+            "a\u{1}z",
+            "a\u{1}z/k",
+            "a b",
+            "a-b",
+            "a.b/c",
+            "a_b/child",
+            "axb/child",
+            "/a",
+            "//a",
+        ];
+        let rows: Vec<(String, i64)> = tags
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (t.to_string(), i as i64))
+            .collect();
+        let flat = flatten_preorder(&build_tag_tree(&rows, 0));
+        let mut stack: Vec<String> = Vec::new();
+        let keys: Vec<String> = flat
+            .iter()
+            .map(|entry| {
+                stack.truncate(entry.depth as usize);
+                stack.push(entry.segment.clone());
+                stack.join("/")
+            })
+            .collect();
+        for (entry, key) in flat.iter().zip(&keys) {
+            assert_eq!(entry.full, full_of_key(key), "the full of {key:?}");
+        }
+        let mut sorted = keys.clone();
+        sorted.sort_by(|a, b| cmp_segments(a, b));
+        assert_eq!(
+            sorted, keys,
+            "cmp_segments is not build_tag_tree's pre-order"
+        );
+        for x in &keys {
+            for y in &keys {
+                assert_eq!(
+                    cmp_segments(x, y) == std::cmp::Ordering::Equal,
+                    x == y,
+                    "{x:?} vs {y:?}"
+                );
+            }
+        }
+        // The leading-empty-segment leaves read like the root `a`.
+        let a_fulls = flat.iter().filter(|entry| entry.full == "a").count();
+        assert_eq!(
+            a_fulls, 3,
+            "/a's leaf, //a's leaf and the root a all read a"
+        );
+    }
+
+    /// The page assembler over groups walks exactly the flattened tree at
+    /// every limit, with implied ancestors and a cursor that is a key.
+    #[test]
+    fn page_after_walks_the_flattened_tree_at_every_limit() {
+        let tags = [
+            "a",
+            "a/z",
+            "a-b",
+            "p/q/r",
+            "a_b/child",
+            "axb/child",
+            "/a",
+            "//a",
+        ];
+        let rows: Vec<(String, i64)> = tags
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (t.to_string(), i as i64))
+            .collect();
+        let expected = flatten_preorder(&build_tag_tree(&rows, 0));
+        let mut groups: Vec<(String, u32)> = tags.iter().map(|t| (t.to_string(), 1)).collect();
+        groups.sort_by(|a, b| cmp_segments(&a.0, &b.0));
+        assert_eq!(total_entries(&groups) as usize, expected.len());
+        let nested = |key: &str| -> Result<u32, ()> {
+            let below = format!("{key}/");
+            Ok(tags
+                .iter()
+                .filter(|t| **t == key || t.starts_with(&below))
+                .count() as u32)
+        };
+        for limit in 1..=4 {
+            let mut walked = Vec::new();
+            let mut cursor: Option<String> = None;
+            for _ in 0..=expected.len() + 1 {
+                let (entries, next) =
+                    page_after(&groups, cursor.as_deref(), limit, nested).unwrap();
+                assert!(entries.len() <= limit);
+                walked.extend(entries);
+                cursor = next;
+                if cursor.is_none() {
+                    break;
+                }
+            }
+            assert!(cursor.is_none(), "the walk at limit {limit} never ended");
+            assert_eq!(walked, expected, "limit {limit}");
+        }
     }
 }

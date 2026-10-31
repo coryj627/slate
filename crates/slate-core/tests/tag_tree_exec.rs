@@ -565,3 +565,220 @@ fn tags_for_files_counts_distinct_files_alphabetically() {
     assert_eq!(shaped, vec![("alpha", 2), ("beta", 1)]);
     assert!(session.tags_for_files(vec![]).unwrap().is_empty());
 }
+
+// MARK: WB-25 (#1290) · the paged, cancellable tag tree
+
+/// Walk every page at `limit` from no cursor, passing each `next_cursor`
+/// back; fails if the walk takes more pages than the tree has rows, plus
+/// one (a resume that repeats cannot loop forever). Every page carries the
+/// same `total_entries`, `untagged_count` and `audio_summary`.
+fn walk(session: &VaultSession, limit: u32) -> Vec<slate_core::TagTreePageEntry> {
+    let rows = slate_core::tag_tree::flatten_preorder(&session.tag_tree().unwrap()).len();
+    let mut out = Vec::new();
+    let mut cursor: Option<String> = None;
+    let mut shared: Option<(u32, u32, String)> = None;
+    for _ in 0..=rows + 1 {
+        let page = session
+            .tag_tree_page(
+                slate_core::Paging {
+                    cursor: cursor.clone(),
+                    limit,
+                },
+                &CancelToken::new(),
+            )
+            .unwrap();
+        assert!(page.entries.len() <= limit as usize);
+        let header = (
+            page.total_entries,
+            page.untagged_count,
+            page.audio_summary.clone(),
+        );
+        assert_eq!(
+            shared.get_or_insert_with(|| header.clone()),
+            &header,
+            "a page's header changed"
+        );
+        out.extend(page.entries);
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            assert_eq!(header.0 as usize, rows, "total_entries");
+            return out;
+        }
+    }
+    panic!("the walk at limit {limit} exceeded its page bound");
+}
+
+/// Each row's segment path, rebuilt from `(depth, segment)` with the host's
+/// ancestor stack.
+fn segment_paths(entries: &[slate_core::TagTreePageEntry]) -> Vec<String> {
+    let mut stack: Vec<String> = Vec::new();
+    entries
+        .iter()
+        .map(|entry| {
+            stack.truncate(entry.depth as usize);
+            stack.push(entry.segment.clone());
+            stack.join("/")
+        })
+        .collect()
+}
+
+fn tiny_fixture(vault: &std::path::Path) {
+    write(vault, "a.md", "#a\n");
+    write(vault, "az.md", "#a/z\n");
+    write(vault, "ab.md", "#a-b\n");
+    write(vault, "pqr.md", "#p/q/r\n");
+    write(vault, "under.md", "#a_b/child\n");
+    write(vault, "x.md", "#axb/child\n");
+    write(vault, "slash.md", "---\ntags: [\"/a\"]\n---\nbody\n");
+    write(vault, "slashes.md", "---\ntags: [\"//a\"]\n---\nbody\n");
+    write(vault, "plain.md", "untagged\n");
+}
+
+#[test]
+fn tag_tree_page_with_a_tiny_limit_walks_every_entry_in_pre_order() {
+    let tmp = tempfile::tempdir().unwrap();
+    tiny_fixture(tmp.path());
+    let session = open(tmp.path());
+    let expected = slate_core::tag_tree::flatten_preorder(&session.tag_tree().unwrap());
+    let fulls: Vec<&str> = expected
+        .iter()
+        .take(5)
+        .map(|entry| entry.full.as_str())
+        .collect();
+    assert_eq!(
+        fulls,
+        ["", "", "a", "a", "a"],
+        "premise: the leading-empty-segment nodes lead"
+    );
+    for limit in [1, 2] {
+        let walked = walk(&session, limit);
+        assert_eq!(walked, expected, "limit {limit}");
+        let paths = segment_paths(&walked);
+        let distinct: std::collections::BTreeSet<&String> = paths.iter().collect();
+        assert_eq!(
+            distinct.len(),
+            paths.len(),
+            "a segment path repeats at limit {limit}"
+        );
+    }
+}
+
+#[test]
+fn tag_tree_page_keeps_tags_holding_characters_below_the_separator_apart_at_every_page_boundary() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tags = [
+        "a",
+        "a/z",
+        "\"a\\x01z\"",
+        "\"a\\x01z/k\"",
+        "\"a\\0b\"",
+        "\"a\\0b/c\"",
+        "a-b",
+        "a.b/c",
+        "\"/a\"",
+        "\"//a\"",
+    ];
+    for (i, tag) in tags.iter().enumerate() {
+        write(
+            tmp.path(),
+            &format!("n{i}.md"),
+            &format!("---\ntags: [{tag}]\n---\nbody\n"),
+        );
+    }
+    let session = open(tmp.path());
+    let expected = slate_core::tag_tree::flatten_preorder(&session.tag_tree().unwrap());
+    for limit in [1, 2, 3] {
+        let walked = walk(&session, limit);
+        assert_eq!(walked, expected, "limit {limit}");
+        let paths = segment_paths(&walked);
+        let distinct: std::collections::BTreeSet<&String> = paths.iter().collect();
+        assert_eq!(
+            distinct.len(),
+            paths.len(),
+            "a segment path repeats at limit {limit}"
+        );
+        assert!(
+            paths.iter().any(|p| p == "a/z"),
+            "a/z is missing at limit {limit}"
+        );
+        assert!(
+            paths.iter().any(|p| p == "a\u{1}z"),
+            "a\\x01z is missing at limit {limit}"
+        );
+    }
+}
+
+#[test]
+fn tag_tree_page_resumes_after_a_cursor_inside_a_subtree() {
+    let tmp = tempfile::tempdir().unwrap();
+    tiny_fixture(tmp.path());
+    let session = open(tmp.path());
+    let first_after = |cursor: &str| {
+        let page = session
+            .tag_tree_page(
+                slate_core::Paging {
+                    cursor: Some(cursor.to_string()),
+                    limit: 1,
+                },
+                &CancelToken::new(),
+            )
+            .unwrap();
+        let entry = page.entries.into_iter().next().unwrap();
+        (entry.full, entry.depth)
+    };
+    assert_eq!(
+        first_after("a"),
+        ("a/z".to_string(), 1),
+        "after a comes a/z, not a-b"
+    );
+    assert_eq!(first_after("p/q"), ("p/q/r".to_string(), 2));
+    assert_eq!(
+        first_after("/a"),
+        ("a".to_string(), 0),
+        "after /a's leaf comes the root a"
+    );
+    assert_eq!(
+        first_after("/"),
+        ("a".to_string(), 2),
+        "after the implied \"\" under the root comes //a's leaf"
+    );
+}
+
+#[test]
+fn tag_tree_page_counts_match_the_unpaged_tree() {
+    let tmp = tempfile::tempdir().unwrap();
+    tiny_fixture(tmp.path());
+    let session = open(tmp.path());
+    let paged = walk(&session, 500);
+    let unpaged = slate_core::tag_tree::flatten_preorder(&session.tag_tree().unwrap());
+    let counts = |entries: &[slate_core::TagTreePageEntry]| -> Vec<(u32, u32)> {
+        entries
+            .iter()
+            .map(|entry| (entry.file_count, entry.direct_count))
+            .collect()
+    };
+    assert_eq!(counts(&paged), counts(&unpaged));
+    // The "" root counts the two notes whose tags begin with `/`; /a's leaf
+    // counts only its own note.
+    assert_eq!((paged[0].full.as_str(), paged[0].file_count), ("", 2));
+    let slash_a = paged
+        .iter()
+        .zip(segment_paths(&paged))
+        .find(|(_, path)| path == "/a")
+        .unwrap()
+        .0;
+    assert_eq!(slash_a.file_count, 1);
+}
+
+#[test]
+fn tag_tree_page_like_metachars_do_not_over_match() {
+    let tmp = tempfile::tempdir().unwrap();
+    tiny_fixture(tmp.path());
+    let session = open(tmp.path());
+    let paged = walk(&session, 500);
+    let a_b = paged.iter().find(|entry| entry.full == "a_b").unwrap();
+    assert_eq!(
+        a_b.file_count, 1,
+        "a_b counts its own child only, never axb/child"
+    );
+}

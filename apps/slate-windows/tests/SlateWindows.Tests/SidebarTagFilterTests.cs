@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Globalization;
 using System.Reflection;
 using System.Threading.Channels;
 using uniffi.slate_uniffi;
@@ -336,6 +337,71 @@ public sealed class SidebarTagFilterTests
         await rig.Tree.PublishNext();
         await sidebar.TreeRefreshCompletion.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.Equal("2 top-level items.", sidebar.Status);
+    }
+
+    /// <summary>WB-25 (#1290): the tag tree arrives in pages under the
+    /// refresh's token. A refresh cancelled after page one stops there and
+    /// publishes nothing; an uncancelled one builds the whole tree across the
+    /// page boundaries, the ancestor stack carried over each.</summary>
+    [Fact]
+    public async Task TheTagTreeArrivesInPagesAndACancelledRefreshPublishesNothing()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "tag-pages");
+        Write(fixture, "seed.md", "#seed\n");
+        using VaultSession session = OpenScanned(fixture);
+        FilesSidebarViewModel sidebar = await NewSidebar(session, fixture, _ => { });
+        string[] before = [.. sidebar.Tags.Select(tag => tag.Full)];
+        Assert.Equal(["seed"], before);
+
+        // Seven rows, three a page: a/b/c straddles the first boundary.
+        TagTreeEntry[] rows =
+        [
+            new("a", "a", 3, 0, 0),
+            new("b", "a/b", 2, 1, 1),
+            new("c", "a/b/c", 1, 1, 2),
+            new("d", "a/d", 1, 1, 1),
+            new("e", "e", 1, 1, 0),
+            new("f", "e/f", 1, 1, 1),
+            new("g", "g", 1, 1, 0),
+        ];
+        var requested = new List<string?>();
+        sidebar.TagTreePageForTests = (paging, cancel) =>
+        {
+            requested.Add(paging.Cursor);
+            int start = paging.Cursor is null ? 0 : int.Parse(paging.Cursor, CultureInfo.InvariantCulture);
+            TagTreeEntry[] page = [.. rows.Skip(start).Take(3)];
+            string? next = start + 3 < rows.Length ? (start + 3).ToString(CultureInfo.InvariantCulture) : null;
+            return new TagTreePage(page, next, (uint)rows.Length, 0, "7 tags.");
+        };
+        using var cancellation = new CancellationTokenSource();
+        int pages = 0;
+        sidebar.AfterTagTreeForTests = () =>
+        {
+            pages++;
+            cancellation.Cancel();
+        };
+
+        Task cancelled = sidebar.RefreshAsync(cancellation: cancellation.Token);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelled.WaitAsync(TimeSpan.FromSeconds(10)));
+
+        Assert.Equal(1, pages);
+        Assert.Equal(new string?[] { null }, requested.ToArray());
+        Assert.Equal(before, sidebar.Tags.Select(tag => tag.Full).ToArray());
+
+        // Control: an uncancelled refresh pages to the end.
+        pages = 0;
+        requested.Clear();
+        sidebar.AfterTagTreeForTests = () => pages++;
+        await sidebar.RefreshAsync().WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(3, pages);
+        Assert.Equal(new string?[] { null, "3", "6" }, requested.ToArray());
+        Assert.Equal(["a", "e", "g"], [.. sidebar.Tags.Select(tag => tag.Full)]);
+        SidebarTagViewModel a = sidebar.Tags[0];
+        Assert.Equal(["a/b", "a/d"], [.. a.Children.Select(tag => tag.Full)]);
+        Assert.Equal(["a/b/c"], [.. a.Children[0].Children.Select(tag => tag.Full)]);
+        Assert.Equal(["e/f"], [.. sidebar.Tags[1].Children.Select(tag => tag.Full)]);
+        sidebar.BeginSessionShutdownAndCaptureWork().SessionWork.Wait(TimeSpan.FromSeconds(10));
     }
 
     /// <summary>A sidebar whose tree publications and filter runs the fact

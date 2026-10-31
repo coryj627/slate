@@ -838,3 +838,83 @@ fn list_files_refuses_a_zero_or_oversized_page_limit() {
     assert_eq!(one.items.len(), 1);
     assert!(one.next_cursor.is_some());
 }
+
+// --- WB-25 (#1290): the paged tag tree honours its CancelToken -------------------
+
+fn tagged_vault(count: usize) -> (tempfile::TempDir, VaultSession) {
+    let (tmp, session) = make_vault(|p| {
+        for i in 0..count {
+            p.write_file(
+                &format!("t{i:03}.md"),
+                format!("#tag{i:03}/leaf\n").as_bytes(),
+            )
+            .unwrap();
+        }
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    (tmp, session)
+}
+
+/// A token cancelled before the call answers `Cancelled`, with no page.
+#[test]
+fn tag_tree_page_refuses_an_already_cancelled_token() {
+    let (_tmp, session) = tagged_vault(3);
+    let cancel = CancelToken::new();
+    cancel.cancel();
+
+    let result = session.tag_tree_page(Paging::first(10), &cancel);
+
+    assert!(matches!(result, Err(VaultError::Cancelled)));
+}
+
+/// Cancelled from inside SQLite's first progress callback — mid-statement —
+/// the call answers `Cancelled`, never a partial page; the next call, with a
+/// fresh token, answers the whole page (the progress handler was cleared).
+#[test]
+fn tag_tree_page_cancelled_mid_statement_returns_cancelled_not_a_partial_page() {
+    let (_tmp, session) = tagged_vault(300);
+    let cancel = CancelToken::new();
+    let trip = cancel.clone();
+    crate::session::directory_page::progress_test_hook::install(Box::new(move || trip.cancel()));
+
+    let result = session.tag_tree_page(Paging::first(100), &cancel);
+    crate::session::directory_page::progress_test_hook::clear();
+
+    assert!(matches!(result, Err(VaultError::Cancelled)), "{result:?}");
+    let page = session
+        .tag_tree_page(Paging::first(100), &CancelToken::new())
+        .unwrap();
+    assert_eq!(page.entries.len(), 100);
+    // 300 tags under 300 implied roots.
+    assert_eq!(page.total_entries, 600);
+}
+
+/// A limit of 0 or over the cap is refused before any row is read.
+#[test]
+fn tag_tree_page_rejects_a_limit_over_the_cap() {
+    let (_tmp, session) = tagged_vault(1);
+    for limit in [0, MAX_TAG_TREE_PAGE_LIMIT + 1] {
+        let result = session.tag_tree_page(
+            Paging {
+                cursor: None,
+                limit,
+            },
+            &CancelToken::new(),
+        );
+        assert!(
+            matches!(result, Err(VaultError::InvalidArgument { .. })),
+            "limit {limit}: {result:?}"
+        );
+    }
+    assert!(
+        session
+            .tag_tree_page(
+                Paging {
+                    cursor: None,
+                    limit: MAX_TAG_TREE_PAGE_LIMIT,
+                },
+                &CancelToken::new(),
+            )
+            .is_ok()
+    );
+}

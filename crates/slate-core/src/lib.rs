@@ -190,7 +190,7 @@ pub use sidebar_filter::{
     sidebar_filter_audio_summary, sidebar_filter_date_requirements, sidebar_tag_filter_activation,
     validate_date_windows,
 };
-pub use tag_tree::{TagTree, TagTreeNode};
+pub use tag_tree::{TagTree, TagTreeNode, TagTreePage, TagTreePageEntry};
 pub use vault::{
     DirEntry, EntryKind, FileEvent, FileEventSink, FileStat, FsVaultProvider, VaultProvider,
     WatchEnd, WatchHandle, content_hash, route_trash_to_scratch_bin_for_tests,
