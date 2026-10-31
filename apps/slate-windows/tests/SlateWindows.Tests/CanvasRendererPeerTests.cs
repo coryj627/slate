@@ -332,6 +332,8 @@ public sealed class CanvasRendererPeerTests : IDisposable
     [InlineData("select, then realize")]
     [InlineData("realize, then fit")]
     [InlineData("hidden: select, then realize")]
+    [InlineData("hidden: select, edit, then realize")]
+    [InlineData("select, edit, realize, then hide")]
     public void TheNewestRequestForTheViewWins(string order) => RunSta(() =>
     {
         WriteCanvas(
@@ -342,6 +344,32 @@ public sealed class CanvasRendererPeerTests : IDisposable
         board.ZoomTo(1);
         var far = Assert.IsAssignableFrom<IVirtualizedItemProvider>(board.HeldEdge("e1").GetPattern(PatternInterface.VirtualizedItem));
         board.Document.SeatSelectionSilently("a");
+
+        if (order is "hidden: select, edit, then realize" or "select, edit, realize, then hide")
+        {
+            // Both requests owed: the reveal to the hidden board's showing or
+            // the pending install, the realization to that install. The
+            // reveal is the older and must never be paid over the edge.
+            bool hideFirst = order.StartsWith("hidden", StringComparison.Ordinal);
+            if (hideFirst)
+            {
+                board.Renderer.Visibility = Visibility.Collapsed;
+            }
+            board.Renderer.SelectAnnounced("near");
+            _ = board.Document.CanvasEditConnection("e2", "circles", CanvasConnectionDirection.ToTarget);
+            far.Realize();
+            if (!hideFirst)
+            {
+                board.Renderer.Visibility = Visibility.Collapsed;
+            }
+            board.SettleUntil(() => ReferenceEquals(
+                board.Renderer.Engine.Current!.Source.Loaded!.Population, board.Document.AppliedPublication!.Loaded!.Population));
+            board.Renderer.Visibility = Visibility.Visible;
+            board.Window.UpdateLayout();
+            board.Settle();
+            AssertInView(board.Renderer.Engine.Current!.Viewport, 20_000, 40, 500, 100);
+            return;
+        }
 
         if (order.StartsWith("hidden", StringComparison.Ordinal))
         {

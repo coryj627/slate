@@ -126,6 +126,11 @@ Issues: Closes #1277. Size L (design first). Lanes: windows + FlaUI (shell gate)
   - `APointBesideTheBoardIsNeverOneOfItsPeers` now also walks the window onto the switcher button with the board shown and hidden;
   - `TheNewestRequestForTheViewWins` covers both orders, a fit verb, and a hidden board.
 
+**Codex round 6, 2026-10-31.**
+- **The fix.** A realization drops an older owed reveal as soon as it is accepted, whether it pans now or is itself owed to the install. The deferred case had kept the reveal, which a hidden board's showing could then pay over the edge.
+- **New cases.** `TheNewestRequestForTheViewWins` gains two deferred schedules: hidden before the request, and hidden before the install.
+- **What witnesses the fix.** The hidden-board case with an immediate realization is the witness: it fails when the drop is removed. In the two deferred schedules the board settles the older reveal before the realization pans, so they hold as behaviour checks, not as witnesses.
+
 ## Goal
 
 Locked contract 34 D5 says a labelled edge is a peer in the board's name

@@ -792,18 +792,17 @@ internal sealed class CanvasRendererView : FrameworkElement
         var retained = System.Collections.Immutable.ImmutableHashSet.CreateRange(
             _peers.Keys.Select(entry => entry.Key).Where(PeerIsLive)).Add(key);
         _engine.CommitRetained(retained);
+        // The newest request for the view wins (codex rounds 5 and 6): an
+        // older reveal still owed — to an install, or to a hidden board's
+        // showing — must not undo this realization when it is paid, whether
+        // the realization pans now or is itself owed to the install.
+        _owedReveal = null;
         if (!ReferenceEquals(BoundPopulation, applied))
         {
-            // Owed to the install, and paid after any reveal owed before it
-            // (OnStateInstalled pays the reveal first), so the newer request
-            // lands last.
             _owedRealization = (document, key);
             return;
         }
-        // Panned now: an older reveal still owed to an install must not
-        // undo it when that install lands (codex round 5).
         _owedRealization = null;
-        _owedReveal = null;
         PanToRealize(key);
     }
 
