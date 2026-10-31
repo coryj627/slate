@@ -462,6 +462,9 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// case; every arrival here acts.</summary>
     internal CanvasViewportOutcome Viewport(CanvasViewportVerb verb)
     {
+        // The newest request for the view wins (codex round 5): a verb
+        // supersedes a realization still owed to a pending install.
+        _owedRealization = null;
         double centreX = ActualWidth / 2;
         double centreY = ActualHeight / 2;
         switch (verb)
@@ -791,10 +794,16 @@ internal sealed class CanvasRendererView : FrameworkElement
         _engine.CommitRetained(retained);
         if (!ReferenceEquals(BoundPopulation, applied))
         {
+            // Owed to the install, and paid after any reveal owed before it
+            // (OnStateInstalled pays the reveal first), so the newer request
+            // lands last.
             _owedRealization = (document, key);
             return;
         }
+        // Panned now: an older reveal still owed to an install must not
+        // undo it when that install lands (codex round 5).
         _owedRealization = null;
+        _owedReveal = null;
         PanToRealize(key);
     }
 
@@ -953,6 +962,9 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// </remarks>
     internal void RevealNode(string nodeId, CanvasMoveOrigin origin)
     {
+        // The newest request for the view wins (codex round 5): a reveal
+        // supersedes a realization still owed to a pending install.
+        _owedRealization = null;
         _owedReveal = new OwedReveal(
             nodeId,
             origin,

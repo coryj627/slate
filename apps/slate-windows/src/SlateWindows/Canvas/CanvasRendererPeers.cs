@@ -65,14 +65,16 @@ internal sealed class CanvasRendererAutomationPeer :
     /// materialize up to a view beyond the board, so an unclipped walk would
     /// answer a card or an edge for a point over the sidebar or the editor
     /// beside it. Each child is tested against its rectangle clipped to the
-    /// board's; an edge answers only a point on the board no card
-    /// covers.</summary>
+    /// board's; an edge answers only a point on the board no card covers.
+    /// A point off the board — or any point while the board is hidden — is
+    /// not the board's at all: null, so the parent's walk goes on to the
+    /// sibling that is there (codex round 5).</summary>
     protected override AutomationPeer GetPeerFromPointCore(System.Windows.Point point)
     {
         System.Windows.Rect board = GetBoundingRectangle();
         if (IsOffscreen() || !board.Contains(point))
         {
-            return this;
+            return null!;
         }
         System.Collections.Generic.List<AutomationPeer> children = GetChildren() ?? [];
         foreach (AutomationPeer child in Enumerable.Reverse(children.OfType<CanvasCardAutomationPeer>())

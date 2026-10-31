@@ -116,6 +116,16 @@ Issues: Closes #1277. Size L (design first). Lanes: windows + FlaUI (shell gate)
 - **The item-container search refuses dropped keys.** `RealizePeer` refuses a key the applied scene has dropped.
 - **Fact:** `ARealizationWaitsForTheSceneTheDocumentApplied`.
 
+**Codex round 5, 2026-10-31.**
+- **The board's hit test returns null outside the board, or while it is hidden.** Returning the board itself would end the window's walk there and mask the sibling control under the point.
+- **The newest request for the view wins.**
+  - A reveal and a viewport verb each drop an owed realization.
+  - A realization that pans at once drops an older owed reveal.
+  - An owed realization is paid after any owed reveal, so it lands last.
+- **Facts:**
+  - `APointBesideTheBoardIsNeverOneOfItsPeers` now also walks the window onto the switcher button with the board shown and hidden;
+  - `TheNewestRequestForTheViewWins` covers both orders, a fit verb, and a hidden board.
+
 ## Goal
 
 Locked contract 34 D5 says a labelled edge is a peer in the board's name

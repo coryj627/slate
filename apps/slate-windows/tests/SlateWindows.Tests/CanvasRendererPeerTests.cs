@@ -281,7 +281,9 @@ public sealed class CanvasRendererPeerTests : IDisposable
 
     /// <summary>Peers materialize up to a view beyond the board, and an edge's
     /// union can reach further still: a point beside the board — over the
-    /// sidebar or the editor — is never a card or an edge.</summary>
+    /// sidebar or the editor — is never a card or an edge, nor the board
+    /// itself, so the window's walk reaches the sibling control that is
+    /// there, with the board shown or hidden (codex round 5).</summary>
     [Fact]
     public void APointBesideTheBoardIsNeverOneOfItsPeers() => RunSta(() =>
     {
@@ -299,7 +301,104 @@ public sealed class CanvasRendererPeerTests : IDisposable
             union.Contains(beside),
             $"premise: the edge's union {union} reaches past the board {bounds} to {beside}.");
 
-        Assert.Same(board.Peer, board.Peer.GetPeerFromPoint(beside));
+        Assert.Null(board.Peer.GetPeerFromPoint(beside));
+
+        // Through the window, onto the sibling switcher button above the board.
+        AutomationPeer window = UIElementAutomationPeer.CreatePeerForElement(board.Window);
+        FrameworkElement outlineChoice = FindByAutomationId(board.Window, "CanvasShowOutline");
+        AutomationPeer choice = UIElementAutomationPeer.CreatePeerForElement(outlineChoice);
+        Rect choiceRect = choice.GetBoundingRectangle();
+        var onChoice = new Point(choiceRect.X + (choiceRect.Width / 2), choiceRect.Y + (choiceRect.Height / 2));
+        Assert.False(bounds.Contains(onChoice), "premise: the switcher button sits off the board.");
+        foreach (bool hidden in new[] { false, true })
+        {
+            board.Renderer.Visibility = hidden ? Visibility.Collapsed : Visibility.Visible;
+            board.Window.UpdateLayout();
+            AutomationPeer? hit = window.GetPeerFromPoint(onChoice);
+            Assert.True(
+                hit is not null && hit is not CanvasRendererAutomationPeer && hit is not CanvasBoardAutomationPeer,
+                $"the window's walk answered {hit?.GetType().Name ?? "null"} for the switcher button (board hidden: {hidden}).");
+        }
+        board.Renderer.Visibility = Visibility.Visible;
+    });
+
+    /// <summary>D4: the newest request for the view wins (codex round 5). With
+    /// the board still installing what the document applied, a realization
+    /// owed to that install and a reveal of a card the user selects on the
+    /// board — in either order — or a fit verb after the realization end with
+    /// the view where the NEWER request put it.</summary>
+    [Theory]
+    [InlineData("realize, then select")]
+    [InlineData("select, then realize")]
+    [InlineData("realize, then fit")]
+    [InlineData("hidden: select, then realize")]
+    public void TheNewestRequestForTheViewWins(string order) => RunSta(() =>
+    {
+        WriteCanvas(
+            "newest.canvas",
+            [Card("near", "Near", 40, 40), Card("a", "Alpha", 20_000, 40), Card("b", "Beta", 20_300, 40)],
+            [Edge("e1", "b", "a", "far"), Edge("e2", "near", "near", "loops")]);
+        using Board board = Open("newest.canvas");
+        board.ZoomTo(1);
+        var far = Assert.IsAssignableFrom<IVirtualizedItemProvider>(board.HeldEdge("e1").GetPattern(PatternInterface.VirtualizedItem));
+        board.Document.SeatSelectionSilently("a");
+
+        if (order.StartsWith("hidden", StringComparison.Ordinal))
+        {
+            // A hidden board owes its reveal until it shows again; a
+            // realization made meanwhile pans at once, and the reveal it
+            // superseded must not undo it when the board shows.
+            board.Renderer.Visibility = Visibility.Collapsed;
+            board.Renderer.SelectAnnounced("near");
+            far.Realize();
+            board.Renderer.Visibility = Visibility.Visible;
+            board.Window.UpdateLayout();
+            board.Settle();
+            AssertInView(board.Renderer.Engine.Current!.Viewport, 20_000, 40, 500, 100);
+            return;
+        }
+
+        // The document applies an edit the board has not installed yet.
+        _ = board.Document.CanvasEditConnection("e2", "circles", CanvasConnectionDirection.ToTarget);
+        Assert.False(
+            ReferenceEquals(board.Renderer.Engine.Current!.Source.Loaded!.Population, board.Document.AppliedPublication!.Loaded!.Population),
+            "premise: the board has not installed the applied edit yet.");
+
+        switch (order)
+        {
+            case "realize, then select":
+                far.Realize();
+                board.Renderer.SelectAnnounced("near");
+                break;
+            case "select, then realize":
+                board.Renderer.SelectAnnounced("near");
+                far.Realize();
+                break;
+            default:
+                far.Realize();
+                _ = board.Surface.ViewportCommand(CanvasViewportVerb.FitCanvas);
+                break;
+        }
+        board.SettleUntil(() => ReferenceEquals(
+            board.Renderer.Engine.Current!.Source.Loaded!.Population, board.Document.AppliedPublication!.Loaded!.Population));
+        board.Settle();
+
+        CanvasViewportState after = board.Renderer.Engine.Current!.Viewport;
+        switch (order)
+        {
+            case "realize, then select":
+                AssertInView(after, 40, 40, 200, 100);
+                break;
+            case "select, then realize":
+                AssertInView(after, 20_000, 40, 500, 100);
+                break;
+            default:
+                // Fit centres the canvas's bounds (40..20,500) at its clamped
+                // zoom; the owed realization would have panned to the edge.
+                Assert.True(after.Zoom < 0.5, $"the fit was undone: zoom {after.Zoom}.");
+                Assert.InRange((10_270 * after.Zoom) + after.PanX, (after.ViewWidth / 2) - 2, (after.ViewWidth / 2) + 2);
+                break;
+        }
     });
 
     /// <summary>A held edge peer answers only while its edge is a peer on
@@ -762,6 +861,8 @@ public sealed class CanvasRendererPeerTests : IDisposable
 
         internal CanvasDocumentViewModel Document { get; }
 
+        internal Window Window => _window;
+
         /// <summary>The pane's surface — the navigator's presenter once it
         /// has focus, which a hosted fact attaches by hand.</summary>
         internal CanvasSurfaceView Surface => _surface;
@@ -831,6 +932,24 @@ public sealed class CanvasRendererPeerTests : IDisposable
                 Document.Shutdown();
             }
         }
+    }
+
+    private static FrameworkElement FindByAutomationId(DependencyObject root, string id)
+    {
+        var pending = new Stack<DependencyObject>([root]);
+        while (pending.Count > 0)
+        {
+            DependencyObject next = pending.Pop();
+            if (next is FrameworkElement element && AutomationProperties.GetAutomationId(element) == id)
+            {
+                return element;
+            }
+            for (int index = 0; index < System.Windows.Media.VisualTreeHelper.GetChildrenCount(next); index++)
+            {
+                pending.Push(System.Windows.Media.VisualTreeHelper.GetChild(next, index));
+            }
+        }
+        throw new Xunit.Sdk.XunitException($"no element with AutomationId {id}.");
     }
 
     private static void RunSta(Action body) =>
