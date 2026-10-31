@@ -386,12 +386,40 @@ internal sealed partial class WorkspaceViewModel
     private string? _parkedSummaryPath;
     private bool _summaryParked;
 
+    /// <summary>WB-23 (#1314): how often the parked press's handler ran.</summary>
+    internal int OpenSummaryWhenPublishedInvokedForTests { get; private set; }
+
+    /// <summary>WB-23 (#1314): the citations leaf no longer shows the note a
+    /// parked press asked about (a close, a board or base, another note —
+    /// even one left again before any publish, WD10): the press is dropped
+    /// and its handler unsubscribed. Nothing publishes for "no note", so a
+    /// park left armed was answered by a reopen's first publish, opening a
+    /// modal and speaking its counts with nobody having pressed anything
+    /// (contract 40 R-8, OD-12). Judged where a workspace action ends — the
+    /// boundary's own sync — never at a transient "no note" inside one (a
+    /// split pane's close hands the leaf back to the same note); a publish
+    /// landing in between still meets the handler's own note check.</summary>
+    private void DropParkedSummaryIfNoteChanged()
+    {
+        if (_persistenceBatchDepth > 0)
+        {
+            return;
+        }
+        if (_summaryParked && !string.Equals(Citations.Path, _parkedSummaryPath, StringComparison.Ordinal))
+        {
+            Citations.RowsPublished -= OpenSummaryWhenPublished;
+            _summaryParked = false;
+            _parkedSummaryPath = null;
+        }
+    }
+
     /// <summary>The deferred Ctrl+Shift+J landing. Detaches on the
     /// first publish either way: an answer about a different note is
     /// not an answer, and re-parking it would leave a request armed
     /// against a question nobody asked.</summary>
     private void OpenSummaryWhenPublished(object? sender, EventArgs eventArgs)
     {
+        OpenSummaryWhenPublishedInvokedForTests++;
         Citations.RowsPublished -= OpenSummaryWhenPublished;
         _summaryParked = false;
         string? asked = _parkedSummaryPath;
