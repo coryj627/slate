@@ -971,6 +971,45 @@ fn tag_tree_page_cancelled_while_waiting_for_a_writer_is_cancelled_not_stale() {
     );
 }
 
+/// WB-25 stage 2 (#1290): Quick Open's indexed rank honours its token —
+/// refused before the read when already cancelled, and `Cancelled`, never
+/// a page, when the token trips inside the statement; a fresh token then
+/// ranks the whole set.
+#[test]
+fn switcher_rank_top_indexed_cancelled_returns_cancelled() {
+    let (_tmp, session) = tagged_vault(300);
+    let cancelled = CancelToken::new();
+    cancelled.cancel();
+    let refused = session.switcher_rank_top_indexed("leaf", &[], 50, &cancelled);
+    assert!(matches!(refused, Err(VaultError::Cancelled)), "{refused:?}");
+
+    let cancel = CancelToken::new();
+    let trip = cancel.clone();
+    crate::session::directory_page::progress_test_hook::install(Box::new(move || trip.cancel()));
+    let result = session.switcher_rank_top_indexed("", &[], 50, &cancel);
+    crate::session::directory_page::progress_test_hook::clear();
+    assert!(matches!(result, Err(VaultError::Cancelled)), "{result:?}");
+
+    let page = session
+        .switcher_rank_top_indexed("", &[], 50, &CancelToken::new())
+        .unwrap();
+    assert_eq!((page.rows.len(), page.total), (50, 300));
+
+    // Codex: cancelled after the last row is scored and the page is built,
+    // in either query arm, the call is still `Cancelled`.
+    for query in ["", "t1"] {
+        let cancel = CancelToken::new();
+        let trip = cancel.clone();
+        crate::session::switcher_ranked_test_hook::install(Box::new(move || trip.cancel()));
+        let result = session.switcher_rank_top_indexed(query, &[], 50, &cancel);
+        crate::session::switcher_ranked_test_hook::clear();
+        assert!(
+            matches!(result, Err(VaultError::Cancelled)),
+            "{query:?}: {result:?}"
+        );
+    }
+}
+
 /// A limit of 0 or over the cap is refused before any row is read.
 #[test]
 fn tag_tree_page_rejects_a_limit_over_the_cap() {

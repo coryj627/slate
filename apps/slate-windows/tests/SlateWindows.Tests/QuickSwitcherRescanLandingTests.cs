@@ -39,13 +39,11 @@ public sealed class QuickSwitcherRescanLandingTests
             host.FocusChanges.Clear();
             host.Announced.Clear();
 
-            QuickSwitcherViewModel.ReplacementJournal journal = host.Switcher.BeginReplacement();
-            Task replaced = host.Switcher.ReplaceFilesAsync(
-                [new SwitcherFile("a-created-outside.md", "a-created-outside.md"), .. host.Files],
-                journal,
-                CancellationToken.None);
+            // WB-25 stage 2: the rescan's scan put the note in the index;
+            // the silent re-rank reads it there.
+            host.IndexNote("a-created-outside.md");
+            Task replaced = host.Switcher.ReRankForRescanAsync(CancellationToken.None);
             Assert.True(PumpedDispatcher.PumpUntil(() => replaced.IsCompleted, TimeSpan.FromSeconds(10)), "the silent re-rank");
-            host.Switcher.EndReplacement(journal);
             host.Settle();
 
             Assert.Contains(host.Switcher.Results, row => row.Path == "a-created-outside.md");
@@ -85,14 +83,12 @@ public sealed class QuickSwitcherRescanLandingTests
                 _session.ScanInitial(cancel);
             }
 
-            Files = [.. Enumerable.Range(0, 4).Select(index => new SwitcherFile($"note{index}.md", $"note{index}.md"))];
             Shell = new MainWindow();
             _lifecycle = Assert.IsType<VaultLifecycleViewModel>(Shell.DataContext);
             Switcher = new QuickSwitcherViewModel(
                 _session,
                 _fixture.Root,
                 Announced.Add,
-                initialFiles: Files,
                 localAppDataRoot: _fixture.Root);
             SetField("_session", _session);
             SetField("_vaultPath", _fixture.Root);
@@ -129,7 +125,12 @@ public sealed class QuickSwitcherRescanLandingTests
 
         public QuickSwitcherViewModel Switcher { get; }
 
-        public SwitcherFile[] Files { get; }
+        /// <summary>The scanned vault's notes.</summary>
+        public int NoteCount => 4;
+
+        /// <summary>A note the index gains, as a rescan's scan would add
+        /// one created outside Slate.</summary>
+        public void IndexNote(string path) => _ = _session.CreateExclusive(path, "outside\n");
 
         public List<A11yEvent> Announced { get; } = [];
 
@@ -141,7 +142,7 @@ public sealed class QuickSwitcherRescanLandingTests
         {
             Switcher.Open();
             Assert.True(
-                PumpedDispatcher.PumpUntil(() => Switcher.Results.Count == Files.Length, TimeSpan.FromSeconds(10)),
+                PumpedDispatcher.PumpUntil(() => Switcher.Results.Count == NoteCount, TimeSpan.FromSeconds(10)),
                 "Quick Open's first rank never published");
             Settle();
         }

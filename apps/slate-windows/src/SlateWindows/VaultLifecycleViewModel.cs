@@ -90,9 +90,7 @@ internal sealed partial class VaultLifecycleViewModel
     private readonly Func<Action, CancellationToken, Task>? _treeWorker;
     private readonly Func<Action, CancellationToken, Task>? _filterWorker;
     private readonly Func<Action, CancellationToken, Task>? _importWorker;
-    private readonly Func<
-        Func<(ScanReport Report, SwitcherFile[] SwitcherFiles)>,
-        Task<(ScanReport Report, SwitcherFile[] SwitcherFiles)>> _runSessionLoad;
+    private readonly Func<Func<ScanReport>, Task<ScanReport>> _runSessionLoad;
     private readonly Func<Action, Task> _runSyncMarkerArm;
     private readonly TimeSpan? _syncMarkerDebounce;
     // W7-7 PR 7 (R-9): the rescan's clock and its core-call seam.
@@ -196,9 +194,7 @@ internal sealed partial class VaultLifecycleViewModel
         Func<Action, CancellationToken, Task>? treeWorker = null,
         Func<Action, CancellationToken, Task>? filterWorker = null,
         Func<Action, CancellationToken, Task>? importWorker = null,
-        Func<
-            Func<(ScanReport Report, SwitcherFile[] SwitcherFiles)>,
-            Task<(ScanReport Report, SwitcherFile[] SwitcherFiles)>>? sessionLoadWorker = null,
+        Func<Func<ScanReport>, Task<ScanReport>>? sessionLoadWorker = null,
         Func<Action, Task>? syncArmWorker = null,
         TimeSpan? syncMarkerDebounce = null,
         Action<RenderedAnnouncement>? announceRendered = null,
@@ -627,32 +623,34 @@ internal sealed partial class VaultLifecycleViewModel
             VaultSession activeSession = _session;
             CancelToken activeCancel = _scanCancel;
             UiProgressListener activeProgressListener = _progressListener;
-            Action<CancelToken>? switcherPageHook = SwitcherPageLoadingForTests;
+            Action<CancelToken>? scanStarting = OpenScanStartingForTests;
             Func<VaultSession, ulong>? registerChangeFeed = RegisterChangeFeedForTests;
-            Task<(ScanReport Report, SwitcherFile[] SwitcherFiles)> loadTask = _runSessionLoad(() =>
+            Task<ScanReport> loadTask = _runSessionLoad(() =>
             {
                 // Plan 43 PR 20b (#1267, design §4.3): the vault watcher arms
                 // right before the open scan — #638's arm-then-probe rule: a
                 // change made during the scan is either seen by its walk or
                 // arrives as a burst.
                 StartVaultWatch(activeSession);
+                // WB-25 stage 2: Quick Open ranks against the index, so the
+                // open lists nothing; its scan is the load's one core call
+                // under the open's token.
+                scanStarting?.Invoke(activeCancel);
                 ScanReport report = activeSession.ScanInitialWithProgress(activeCancel, activeProgressListener);
                 // WB-10 (#1293, design §6): this session's change-feed cursor,
-                // after the open scan and before Quick Open's listing.
+                // after the open scan.
                 RegisterChangeFeed(activeSession, registerChangeFeed);
-                // W7-7 PR 7: Quick Open's listing honours the open's token
-                // too, so a close stops it mid-listing, not after it.
-                return (report, LoadSwitcherFiles(activeSession, activeCancel, switcherPageHook));
+                return report;
             });
             _sessionLoadCompletion = loadTask;
-            (ScanReport Report, SwitcherFile[] SwitcherFiles) loaded = await loadTask;
+            ScanReport loaded = await loadTask;
             if (generation == _generation)
             {
-                StatusText = ScanFinishedStatus(loaded.Report);
+                StatusText = ScanFinishedStatus(loaded);
                 // The foreground rescan's cooldown counts from the open
                 // scan too: the vault was just read (W7-7 PR 7).
                 _lastScanEndedAt = _scanClock();
-                ProgressMaximum = Math.Max(1, loaded.Report.FilesSeen);
+                ProgressMaximum = Math.Max(1, loaded.FilesSeen);
                 ProgressValue = ProgressMaximum;
                 IsProgressIndeterminate = false;
                 // #1684: the workspace is built here and published only once
@@ -662,7 +660,7 @@ internal sealed partial class VaultLifecycleViewModel
                 // rest of the open, and the launch landing then finds the
                 // rows. A tree with no rows yet would hold the keys itself and
                 // hand them on when the rows arrive: two moves, not one.
-                WorkspaceAssembly assembled = InitializeWorkspace(_session, root, loaded.SwitcherFiles);
+                WorkspaceAssembly assembled = InitializeWorkspace(_session, root);
                 _assembling = assembled;
                 await AwaitFirstTreePublicationAsync(assembled.Sidebar, FirstTreePublicationBound);
                 // A teardown meanwhile took the assembly down with the
@@ -1300,7 +1298,7 @@ internal sealed partial class VaultLifecycleViewModel
         }
 
         // W7-7 PR 7 (finding 3): every admitted rescan core call — the scan,
-        // the listing, the hash reads, the reads, the re-seat's probe — has
+        // the hash reads, the reads, the re-seat's probe — has
         // ended before the tokens, the workspace or the session go.
         DrainRescanCoreCalls();
 
@@ -1489,8 +1487,7 @@ internal sealed partial class VaultLifecycleViewModel
 
     private WorkspaceAssembly InitializeWorkspace(
         VaultSession session,
-        string root,
-        IEnumerable<SwitcherFile> switcherFiles)
+        string root)
     {
         WorkspaceSnapshot? persisted = new WorkspacePersistence(root).Load();
         FilesSidebarViewModel? sidebar = null;
@@ -1530,7 +1527,7 @@ internal sealed partial class VaultLifecycleViewModel
             treeWorker: _treeWorker,
             filterWorker: _filterWorker,
             importWorker: _importWorker);
-        var switcher = new QuickSwitcherViewModel(session, root, _announce, switcherFiles);
+        var switcher = new QuickSwitcherViewModel(session, root, _announce);
 
         workspace.FileOpened += Workspace_FileOpened;
         workspace.EditorTagActivated += Workspace_EditorTagActivated;
@@ -2126,31 +2123,10 @@ internal sealed partial class VaultLifecycleViewModel
         _palette?.Dismiss();
     }
 
-    /// <summary>Test seam (W7-7 PR 7): runs on the load's worker before
-    /// each Quick Open listing page, with the open's token.</summary>
-    internal Action<CancelToken>? SwitcherPageLoadingForTests { get; set; }
-
-    private static SwitcherFile[] LoadSwitcherFiles(
-        VaultSession session,
-        CancelToken cancel,
-        Action<CancelToken>? beforePage)
-    {
-        const uint pageLimit = 500;
-        var files = new List<SwitcherFile>();
-        string? cursor = null;
-        do
-        {
-            beforePage?.Invoke(cancel);
-            FileSummaryPage page = session.ListFiles(
-                FileFilter.OpenableDocuments,
-                new Paging(cursor, pageLimit),
-                cancel);
-            files.AddRange(page.Items.Select(file => new SwitcherFile(file.Path, file.Name)));
-            cursor = page.NextCursor;
-        }
-        while (cursor is not null);
-        return [.. files];
-    }
+    /// <summary>Test seam (WB-25 stage 2): runs on the load's worker right
+    /// before the open's scan — the load's one core call now that Quick Open
+    /// lists nothing — with the open's token. Production never sets it.</summary>
+    internal Action<CancelToken>? OpenScanStartingForTests { get; set; }
 
     private void QuickSwitcher_OpenRequested(
         object? sender,
@@ -2367,9 +2343,7 @@ internal sealed class RelayCommand : ICommand
 internal sealed record VaultOpenSeams(
     Func<Task<string?>>? PickVault = null,
     Func<string, Task<VaultSession>>? OpenSession = null,
-    Func<
-        Func<(ScanReport Report, SwitcherFile[] SwitcherFiles)>,
-        Task<(ScanReport Report, SwitcherFile[] SwitcherFiles)>>? SessionLoad = null,
+    Func<Func<ScanReport>, Task<ScanReport>>? SessionLoad = null,
     RecentVaultsStore? RecentVaults = null,
     Func<RecentVault, Task<bool>>? ConfirmRemoveMissingRecent = null,
     Func<RecentVault, Task<bool>>? ConfirmOpenSlateOnlyRecent = null,

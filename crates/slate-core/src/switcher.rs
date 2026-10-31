@@ -23,6 +23,7 @@
 //! display cap to [`switcher_rank_top`], which returns that bounded row
 //! page plus the exact total count used by result announcements.
 
+use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
@@ -286,11 +287,105 @@ pub fn switcher_rank_top(
         .enumerate()
         .map(|(index, key)| (key, index))
         .collect();
+    rank_stream(files.iter().zip(&file_keys), query, &rank, limit)
+}
+
+/// WB-25 stage 2 (#1290): [`switcher_rank_top`] over a stream of files —
+/// the index's rows in `path COLLATE BINARY` order, as the host's paged
+/// list hands them to the free ranker — instead of a slice, so no host
+/// holds or marshals the file set. Rows and `total` equal
+/// [`switcher_rank_top`]'s over the same files in the same order. The
+/// stream ends at its first error, which is returned instead of a page.
+///
+/// The recents cannot be pruned against the whole file set before the
+/// scan, so the non-empty arm ranks with the unpruned map (each recent's
+/// key to its last index): pruning drops absent recents without
+/// reordering the survivors, and only present rows are compared, so both
+/// maps order every pair of rows alike.
+pub(crate) fn switcher_rank_top_stream<E>(
+    rows: impl Iterator<Item = Result<SwitcherFile, E>>,
+    query: &str,
+    recent_paths: &[String],
+    limit: usize,
+) -> Result<SwitcherRankPage, E> {
+    if query.is_empty() {
+        // The present recents in recency order (each the FIRST row whose
+        // key matches; a duplicated recent repeats), then the first rows
+        // that are no recent's, in stream order.
+        let recent_keys: Vec<String> = recent_paths.iter().map(|path| path_key(path)).collect();
+        let recent_set: HashSet<&str> = recent_keys.iter().map(String::as_str).collect();
+        let mut first_for_recent: HashMap<String, SwitcherFile> = HashMap::new();
+        let mut rest = Vec::new();
+        let mut rest_total = 0usize;
+        for row in rows {
+            let file = row?;
+            let key = path_key(&file.path);
+            if recent_set.contains(key.as_str()) {
+                first_for_recent.entry(key).or_insert(file);
+            } else {
+                rest_total = rest_total.saturating_add(1);
+                if rest.len() < limit {
+                    rest.push(file);
+                }
+            }
+        }
+        let recents: Vec<&SwitcherFile> = recent_keys
+            .iter()
+            .filter_map(|key| first_for_recent.get(key))
+            .collect();
+        let total = recents.len().saturating_add(rest_total);
+        let mut page_rows: Vec<SwitcherRow> =
+            recents.into_iter().take(limit).map(unranked_row).collect();
+        let room = limit - page_rows.len();
+        page_rows.extend(rest.iter().take(room).map(unranked_row));
+        return Ok(SwitcherRankPage {
+            rows: page_rows,
+            total,
+        });
+    }
+
+    let rank: HashMap<String, usize> = recent_paths
+        .iter()
+        .map(|path| path_key(path))
+        .enumerate()
+        .map(|(index, key)| (key, index))
+        .collect();
+    let mut failure = None;
+    let stream = rows.map_while(|row| match row {
+        Ok(file) => {
+            let key = path_key(&file.path);
+            Some((file, key))
+        }
+        Err(error) => {
+            failure = Some(error);
+            None
+        }
+    });
+    let page = rank_stream(stream, query, &rank, limit);
+    match failure {
+        Some(error) => Err(error),
+        None => Ok(page),
+    }
+}
+
+/// The non-empty-query ranking shared by [`switcher_rank_top`] and
+/// [`switcher_rank_top_stream`]: each `(file, path_key)` scored, at most
+/// `limit` candidates retained in a heap under
+/// `RankedCandidate::ranking_order_values`, the exact match count kept.
+/// `rank` maps a recent's path key to its recency rank.
+fn rank_stream<F: Borrow<SwitcherFile>, K: AsRef<str>>(
+    files: impl Iterator<Item = (F, K)>,
+    query: &str,
+    rank: &HashMap<String, usize>,
+    limit: usize,
+) -> SwitcherRankPage {
     let mut retained: BinaryHeap<RankedCandidate> =
-        BinaryHeap::with_capacity(limit.min(files.len()));
+        BinaryHeap::with_capacity(limit.min(files.size_hint().0));
     let mut total = 0usize;
 
-    for (input_index, (file, key)) in files.iter().zip(&file_keys).enumerate() {
+    for (input_index, (file, key)) in files.enumerate() {
+        let file = file.borrow();
+        let key = key.as_ref();
         let Some((display_name, score, spans)) = score_with_display(query, file) else {
             continue;
         };
@@ -324,7 +419,7 @@ pub fn switcher_rank_top(
                 score,
                 display_name_match_spans: spans,
             },
-            path_key: key.clone(),
+            path_key: key.to_owned(),
             recency_rank,
             input_index,
         };
@@ -681,6 +776,81 @@ mod tests {
             let page = switcher_rank_top(&files, query, &recents, 2);
             assert_eq!(page.total, full.len());
             assert_eq!(page.rows, full[..2]);
+        }
+    }
+
+    /// WB-25 stage 2 (#1290): the streaming ranker equals the slice ranker
+    /// over the same files in the same order — every query arm, every
+    /// limit, absent and duplicated recents, canonically equivalent
+    /// spellings — and ends at its stream's first error with that error.
+    #[test]
+    fn the_stream_ranker_equals_switcher_rank_top_and_stops_at_its_first_error() {
+        let mut files: Vec<SwitcherFile> = (0..600)
+            .map(|index| {
+                let bucket = index % 13;
+                file(
+                    &format!("folder-{bucket:02}/note-{index:04}.md"),
+                    &format!("note-{index:04}.md"),
+                )
+            })
+            .collect();
+        files.push(file("e\u{301}/note.md", "note.md"));
+        files.push(file("\u{e9}/note.md", "note.md"));
+        files.push(file("x/todo.md", "todo.md"));
+        files.push(file("y/todo.md", "todo.md"));
+        files.push(file("z/todo.md", "todo.md"));
+        let recent_lists = [
+            vec![],
+            vec![
+                "z/todo.md".to_owned(),
+                "gone.md".to_owned(),
+                "x/todo.md".to_owned(),
+                "z/todo.md".to_owned(),
+            ],
+            vec![
+                "\u{e9}/note.md".to_owned(),
+                "folder-03/note-0003.md".to_owned(),
+                "\u{e9}/note.md".to_owned(),
+            ],
+        ];
+        for recents in &recent_lists {
+            for query in ["", "note", "todo", "n19", "missing"] {
+                for limit in [0, 1, 2, 7, 50, 5_000] {
+                    let oracle = switcher_rank_top(&files, query, recents, limit);
+                    let streamed = switcher_rank_top_stream(
+                        files.iter().cloned().map(Ok::<_, ()>),
+                        query,
+                        recents,
+                        limit,
+                    );
+                    assert_eq!(
+                        streamed,
+                        Ok(oracle),
+                        "query={query:?} limit={limit} recents={recents:?}"
+                    );
+                }
+            }
+        }
+
+        for query in ["", "note"] {
+            let consumed = std::cell::Cell::new(0);
+            let rows = files.iter().enumerate().map(|(index, file)| {
+                consumed.set(consumed.get() + 1);
+                if index == 10 {
+                    Err("stopped")
+                } else {
+                    Ok(file.clone())
+                }
+            });
+            assert_eq!(
+                switcher_rank_top_stream(rows, query, &[], 5),
+                Err("stopped")
+            );
+            assert_eq!(
+                consumed.get(),
+                11,
+                "the stream ran past its error ({query:?})"
+            );
         }
     }
 }

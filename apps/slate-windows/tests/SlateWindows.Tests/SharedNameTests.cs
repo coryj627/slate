@@ -614,13 +614,16 @@ public sealed class SharedNameTests
     private static QuickSwitcherViewModel OpenQuickSwitcher(
         VaultSession session, string root, Action<A11yEvent> announce, params SwitcherFile[] files)
     {
+        // WB-25 stage 2: the switcher keeps no list; these facts rank the
+        // namesakes they name through the rank seam, by core's ranker.
         var quick = new QuickSwitcherViewModel(
             session,
             root,
             announce,
-            files,
             Path.Combine(root, "device-state"),
-            debounceRanking: false);
+            debounceRanking: false,
+            rankTop: (query, recents, _) =>
+                SlateUniffiMethods.SwitcherRankTop(files, query, recents, QuickSwitcherViewModel.DisplayCap));
         quick.Open();
         Assert.Equal(files.Length, quick.Results.Count);
         return quick;

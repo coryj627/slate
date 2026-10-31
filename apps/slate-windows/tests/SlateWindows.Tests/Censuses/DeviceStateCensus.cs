@@ -23,7 +23,7 @@ public sealed class DeviceStateCensus
     private static readonly Dictionary<string, int> RecentsOwners = new(StringComparer.Ordinal)
     {
         ["FilesSidebarViewModel"] = 8,
-        ["QuickSwitcherViewModel"] = 5,
+        ["QuickSwitcherViewModel"] = 4,
     };
 
     /// <summary>The stores whose first argument is their file.</summary>

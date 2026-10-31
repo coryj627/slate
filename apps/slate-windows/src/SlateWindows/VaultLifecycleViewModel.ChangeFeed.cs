@@ -111,7 +111,7 @@ internal sealed partial class VaultLifecycleViewModel
 
     /// <summary>
     /// The open: this session's cursor at the feed's head, right after the
-    /// open scan and before Quick Open's listing (design §6), so the open
+    /// open scan (design §6), so the open
     /// scan's own files — which <c>VaultScanFinished</c> spoke — are not in
     /// the first window. A failure (a busy cache, a schema skew) is logged
     /// with no path (#507) and never spoken: the first run's window is then a
@@ -170,17 +170,17 @@ internal sealed partial class VaultLifecycleViewModel
     }
 
     /// <summary>
-    /// The run after its scan (design §4.3, §4.6). The Slate-write journal
-    /// opens first and stays open to the run's end. Then the retry set,
-    /// whatever the reason — Quick Open and the tree by their full reloads;
-    /// the dependents ride the run's first dependents pass — and an explicit
-    /// Refresh's recovery set (the owner's decision Q8): Quick Open's whole
-    /// list, a tree showing a failure, and every dependent showing one, even
-    /// with an empty window. Then at most <c>change_feed_max_passes()</c>
+    /// The run after its scan (design §4.3, §4.6). First the retry set,
+    /// whatever the reason — Quick Open by its re-rank and the tree by its
+    /// full reload; the dependents ride the run's first dependents pass —
+    /// and an explicit Refresh's recovery set (the owner's decision Q8):
+    /// Quick Open's re-rank, a tree showing a failure, and every dependent
+    /// showing one, even with an empty window. Then at most <c>change_feed_max_passes()</c>
     /// windows: an exact one through its records, a gap or an oversized one
-    /// through R-9's full re-sync, each followed by the journal's re-read and
-    /// the feed's head. Then the journal once more, and the last window's
-    /// acknowledgment, unless a feed read failed. Null when the run was
+    /// through R-9's full re-sync, each followed by the feed's head. Then the
+    /// last window's acknowledgment, unless a feed read failed. Quick Open
+    /// keeps no list (WB-25 stage 2): a re-rank reads the index, so a
+    /// Slate-owned write during the run needs no journal. Null when the run was
     /// cancelled or its vault closed: nothing is acknowledged, the retry set
     /// is as it was, and the next run reads the same window again.
     /// </summary>
@@ -197,238 +197,209 @@ internal sealed partial class VaultLifecycleViewModel
         var failedSurfaces = new HashSet<RescanSurface>();
         var retried = new HashSet<RescanSurface>();
         HashSet<RescanSurface> retrying = [.. _retrySet];
-        QuickSwitcherViewModel? switcher = QuickSwitcher;
-        QuickSwitcherViewModel.ReplacementJournal? journal = switcher?.BeginReplacement();
-        try
+        if (retrying.Contains(RescanSurface.QuickOpen) || reason == RescanReason.Explicit)
         {
-            if (retrying.Contains(RescanSurface.QuickOpen) || reason == RescanReason.Explicit)
-            {
-                ulong failed = await ContainedAsync(ReSyncQuickOpenAsync(session, cancel, cancellation, journal), cancellation);
-                if (!Current())
-                {
-                    return null;
-                }
-
-                outcome.Failed += failed;
-                _ = retried.Add(RescanSurface.QuickOpen);
-                if (failed > 0)
-                {
-                    _ = failedSurfaces.Add(RescanSurface.QuickOpen);
-                }
-            }
-
-            if (retrying.Contains(RescanSurface.Tree)
-                || (reason == RescanReason.Explicit && FileSidebar?.ShowsFailedLevelForRescan == true))
-            {
-                ulong failed = await ContainedAsync(ReSyncTreeAsync(reason, cancellation), cancellation);
-                if (!Current())
-                {
-                    return null;
-                }
-
-                outcome.Failed += failed;
-                _ = retried.Add(RescanSurface.Tree);
-                if (failed > 0)
-                {
-                    _ = failedSurfaces.Add(RescanSurface.Tree);
-                }
-            }
-
-            // The dependents' retries and the recovery set ride the run's
-            // first dependents pass only — the full re-sync's too.
-            IReadOnlySet<RescanSurface> retry = new HashSet<RescanSurface>(retrying.Intersect(DependentSurfaces));
-            bool recover = reason == RescanReason.Explicit;
-            ulong? after = null;
-            ChangeFeedWindow? last = null;
-            bool answered = true;
-            int passes = Math.Max(1, (int)SlateUniffiMethods.ChangeFeedMaxPasses());
-            for (int pass = 1; pass <= passes; pass++)
-            {
-                ulong? from = after;
-                ChangeFeedWindow window;
-                try
-                {
-                    window = await RunChangeFeedCallAsync("window", () => session.ChangeFeedWindow(from, cancel), cancellation);
-                }
-                catch (Exception exception) when (exception is not OutOfMemoryException)
-                {
-                    if (!Current())
-                    {
-                        return null;
-                    }
-
-                    // The feed cannot answer: one error, nothing
-                    // acknowledged, and R-9's full re-sync.
-                    HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
-                    outcome.Failed++;
-                    answered = false;
-                    outcome.Failed += await ReSyncFromIndexAsync(
-                        generation, reason, session, cancel, cancellation, journal, failedSurfaces, RescanTouch(retry, recover));
-                    retried.UnionWith(retry);
-                    if (!Current())
-                    {
-                        return null;
-                    }
-
-                    break;
-                }
-
-                if (!Current())
-                {
-                    return null;
-                }
-
-                ChangeFeedWindowObserverForTests?.Invoke(window);
-                last = window;
-                if (window.Status is ChangeFeedStatus.Exact)
-                {
-                    WindowApplication? applied = await ApplyChangeFeedWindowAsync(
-                        generation, reason, session, window, fromCursor: from is null, cancel, cancellation, journal, retry, recover, failedSurfaces);
-                    if (applied is null)
-                    {
-                        return null;
-                    }
-
-                    outcome.Failed += applied.Failed;
-                    if (!applied.Answered)
-                    {
-                        answered = false;
-                    }
-                }
-                else
-                {
-                    // More than 10,000 rows, or rows the feed no longer
-                    // holds: nothing was read, and the full re-sync shows the
-                    // index. Its dependents pass is ungated, and the retries
-                    // and the recovery set ride it.
-                    outcome.Failed += await ReSyncFromIndexAsync(
-                        generation, reason, session, cancel, cancellation, journal, failedSurfaces, RescanTouch(retry, recover));
-                    if (!Current())
-                    {
-                        return null;
-                    }
-                }
-
-                retried.UnionWith(retry);
-                retry = new HashSet<RescanSurface>();
-                recover = false;
-
-                ulong? reread = await RereadJournalAsync(generation, session, cancel, cancellation, journal, failedSurfaces);
-                if (reread is not ulong rereadFailed)
-                {
-                    return null;
-                }
-
-                outcome.Failed += rereadFailed;
-                if (!answered || pass >= passes)
-                {
-                    break;
-                }
-
-                ulong head;
-                try
-                {
-                    head = await RunChangeFeedCallAsync("head", () => session.ChangeFeedHead(cancel), cancellation);
-                }
-                catch (Exception exception) when (exception is not OutOfMemoryException)
-                {
-                    if (!Current())
-                    {
-                        return null;
-                    }
-
-                    HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
-                    outcome.Failed++;
-                    answered = false;
-                    break;
-                }
-
-                if (!Current())
-                {
-                    return null;
-                }
-
-                // A head past the target: another session committed after the
-                // window opened, and a further window applies the rest.
-                if (head <= window.ToSeq)
-                {
-                    break;
-                }
-
-                after = window.ToSeq;
-            }
-
-            // The journal's last re-read comes before the acknowledgment, so
-            // a run cancelled during it has moved no cursor.
-            ulong? finalReread = await RereadJournalAsync(generation, session, cancel, cancellation, journal, failedSurfaces);
-            if (finalReread is not ulong finalFailed)
+            ulong failed = await ContainedAsync(ReSyncQuickOpenAsync(cancellation), cancellation);
+            if (!Current())
             {
                 return null;
             }
 
-            outcome.Failed += finalFailed;
-
-            // The last window's acknowledgment moves the cursor to its target,
-            // after a failed re-sync operation too: the retry set owns that
-            // failure, not the feed (design §4.3 :671-673). A failed
-            // acknowledgment is one error, and the next run reads the window
-            // again, so its counts are spoken once, by the run that
-            // acknowledges them.
-            bool acknowledged = false;
-            if (answered && last is not null)
+            outcome.Failed += failed;
+            _ = retried.Add(RescanSurface.QuickOpen);
+            if (failed > 0)
             {
-                string token = last.Token;
-                try
-                {
-                    _ = await RunChangeFeedCallAsync(
-                        "acknowledge",
-                        () =>
-                        {
-                            session.AcknowledgeChangeFeed(token, cancel);
-                            return true;
-                        },
-                        cancellation);
-                    acknowledged = true;
-                }
-                catch (Exception exception) when (exception is not OutOfMemoryException)
-                {
-                    if (!Current())
-                    {
-                        return null;
-                    }
+                _ = failedSurfaces.Add(RescanSurface.QuickOpen);
+            }
+        }
 
-                    HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
-                    outcome.Failed++;
+        if (retrying.Contains(RescanSurface.Tree)
+            || (reason == RescanReason.Explicit && FileSidebar?.ShowsFailedLevelForRescan == true))
+        {
+            ulong failed = await ContainedAsync(ReSyncTreeAsync(reason, cancellation), cancellation);
+            if (!Current())
+            {
+                return null;
+            }
+
+            outcome.Failed += failed;
+            _ = retried.Add(RescanSurface.Tree);
+            if (failed > 0)
+            {
+                _ = failedSurfaces.Add(RescanSurface.Tree);
+            }
+        }
+
+        // The dependents' retries and the recovery set ride the run's
+        // first dependents pass only — the full re-sync's too.
+        IReadOnlySet<RescanSurface> retry = new HashSet<RescanSurface>(retrying.Intersect(DependentSurfaces));
+        bool recover = reason == RescanReason.Explicit;
+        ulong? after = null;
+        ChangeFeedWindow? last = null;
+        bool answered = true;
+        int passes = Math.Max(1, (int)SlateUniffiMethods.ChangeFeedMaxPasses());
+        for (int pass = 1; pass <= passes; pass++)
+        {
+            ulong? from = after;
+            ChangeFeedWindow window;
+            try
+            {
+                window = await RunChangeFeedCallAsync("window", () => session.ChangeFeedWindow(from, cancel), cancellation);
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException)
+            {
+                if (!Current())
+                {
+                    return null;
                 }
 
+                // The feed cannot answer: one error, nothing
+                // acknowledged, and R-9's full re-sync.
+                HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
+                outcome.Failed++;
+                answered = false;
+                outcome.Failed += await ReSyncFromIndexAsync(
+                    generation, reason, session, cancel, cancellation, failedSurfaces, RescanTouch(retry, recover));
+                retried.UnionWith(retry);
+                if (!Current())
+                {
+                    return null;
+                }
+
+                break;
+            }
+
+            if (!Current())
+            {
+                return null;
+            }
+
+            ChangeFeedWindowObserverForTests?.Invoke(window);
+            last = window;
+            if (window.Status is ChangeFeedStatus.Exact)
+            {
+                WindowApplication? applied = await ApplyChangeFeedWindowAsync(
+                    generation, reason, session, window, fromCursor: from is null, cancel, cancellation, retry, recover, failedSurfaces);
+                if (applied is null)
+                {
+                    return null;
+                }
+
+                outcome.Failed += applied.Failed;
+                if (!applied.Answered)
+                {
+                    answered = false;
+                }
+            }
+            else
+            {
+                // More than 10,000 rows, or rows the feed no longer
+                // holds: nothing was read, and the full re-sync shows the
+                // index. Its dependents pass is ungated, and the retries
+                // and the recovery set ride it.
+                outcome.Failed += await ReSyncFromIndexAsync(
+                    generation, reason, session, cancel, cancellation, failedSurfaces, RescanTouch(retry, recover));
                 if (!Current())
                 {
                     return null;
                 }
             }
 
-            if (acknowledged)
+            retried.UnionWith(retry);
+            retry = new HashSet<RescanSurface>();
+            recover = false;
+
+            if (!answered || pass >= passes)
             {
-                _feedProvenance.Clear();
-                if (last is { Status: ChangeFeedStatus.Exact, Counted: true })
-                {
-                    outcome.Counted = true;
-                    outcome.Changed = last.Changed;
-                    outcome.Removed = last.Removed;
-                }
+                break;
             }
 
-            _retrySet.ExceptWith(retried);
-            _retrySet.UnionWith(failedSurfaces);
-            return outcome;
-        }
-        finally
-        {
-            if (journal is not null)
+            ulong head;
+            try
             {
-                switcher!.EndReplacement(journal);
+                head = await RunChangeFeedCallAsync("head", () => session.ChangeFeedHead(cancel), cancellation);
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException)
+            {
+                if (!Current())
+                {
+                    return null;
+                }
+
+                HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
+                outcome.Failed++;
+                answered = false;
+                break;
+            }
+
+            if (!Current())
+            {
+                return null;
+            }
+
+            // A head past the target: another session committed after the
+            // window opened, and a further window applies the rest.
+            if (head <= window.ToSeq)
+            {
+                break;
+            }
+
+            after = window.ToSeq;
+        }
+
+        // The last window's acknowledgment moves the cursor to its target,
+        // after a failed re-sync operation too: the retry set owns that
+        // failure, not the feed (design §4.3 :671-673). A failed
+        // acknowledgment is one error, and the next run reads the window
+        // again, so its counts are spoken once, by the run that
+        // acknowledges them.
+        bool acknowledged = false;
+        if (answered && last is not null)
+        {
+            string token = last.Token;
+            try
+            {
+                _ = await RunChangeFeedCallAsync(
+                    "acknowledge",
+                    () =>
+                    {
+                        session.AcknowledgeChangeFeed(token, cancel);
+                        return true;
+                    },
+                    cancellation);
+                acknowledged = true;
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException)
+            {
+                if (!Current())
+                {
+                    return null;
+                }
+
+                HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
+                outcome.Failed++;
+            }
+
+            if (!Current())
+            {
+                return null;
             }
         }
+
+        if (acknowledged)
+        {
+            _feedProvenance.Clear();
+            if (last is { Status: ChangeFeedStatus.Exact, Counted: true })
+            {
+                outcome.Counted = true;
+                outcome.Changed = last.Changed;
+                outcome.Removed = last.Removed;
+            }
+        }
+
+        _retrySet.ExceptWith(retried);
+        _retrySet.UnionWith(failedSurfaces);
+        return outcome;
     }
 
     /// <summary>The full re-sync's dependents pass: ungated, with the run's
@@ -438,9 +409,10 @@ internal sealed partial class VaultLifecycleViewModel
 
     /// <summary>
     /// The record path (design §4.3, §6): an exact window's records, read in
-    /// bounded pages under the run's token. Phase A, every page: Quick Open
-    /// drops the removed paths and upserts the openable present ones in one
-    /// pass; renames are buffered, and the removed, present and touched paths
+    /// bounded pages under the run's token. Phase A, every page: an open
+    /// Quick Open re-ranks against the index when a file record can change
+    /// what it ranks;
+    /// renames are buffered, and the removed, present and touched paths
     /// gather over the whole window. Phase B, after the last page, because
     /// renames precede removals in page order: the buffered renames move the
     /// tabs that held their files in one planned batch
@@ -463,7 +435,6 @@ internal sealed partial class VaultLifecycleViewModel
         bool fromCursor,
         CancelToken cancel,
         CancellationToken cancellation,
-        QuickSwitcherViewModel.ReplacementJournal? journal,
         IReadOnlySet<RescanSurface> retry,
         bool recover,
         ISet<RescanSurface> failedSurfaces)
@@ -505,7 +476,7 @@ internal sealed partial class VaultLifecycleViewModel
                     application.Failed++;
                     application.Answered = false;
                     application.Failed += await ReSyncFromIndexAsync(
-                        generation, reason, session, cancel, cancellation, journal, failedSurfaces, RescanTouch(retry, recover));
+                        generation, reason, session, cancel, cancellation, failedSurfaces, RescanTouch(retry, recover));
                     return Current() ? application : null;
                 }
 
@@ -803,102 +774,5 @@ internal sealed partial class VaultLifecycleViewModel
                 _feedProvenance[origin] = (to + at[from.Length..], tabs);
             }
         }
-    }
-
-    /// <summary>
-    /// The Slate-write journal's re-read (design §4.3 :674-690): every path a
-    /// Slate-owned event named while the run was open — a rename's both — is
-    /// re-read from the index for Quick Open's presence and summary, never
-    /// its event replayed. An own write that committed after the window
-    /// opened is newer than the window's records and wins over them; one
-    /// that committed before it is already in them. The reads run on the
-    /// worker under the run's token; an own event journaled while they ran
-    /// (a rename the read predates) makes the re-read run again, at most three
-    /// times; a journal still moving after the third leaves Quick Open in the
-    /// retry set, with no error (codex round 2): the next run's full reload
-    /// settles it. Returns the failed operations (one, and Quick Open enters
-    /// the retry set), or null when cancelled.
-    /// </summary>
-    private async Task<ulong?> RereadJournalAsync(
-        int generation,
-        VaultSession session,
-        CancelToken cancel,
-        CancellationToken cancellation,
-        QuickSwitcherViewModel.ReplacementJournal? journal,
-        ISet<RescanSurface> failedSurfaces)
-    {
-        if (journal is null || QuickSwitcher is not QuickSwitcherViewModel switcher)
-        {
-            return 0;
-        }
-
-        for (int round = 0; round < 3; round++)
-        {
-            int journaled = journal.Changes.Count;
-            string[] paths = [.. journal.Paths().Order(StringComparer.Ordinal)];
-            if (paths.Length == 0)
-            {
-                return 0;
-            }
-
-            try
-            {
-                (string Path, FileSummary? Summary)[] reads = await RunChangeFeedCallAsync<(string Path, FileSummary? Summary)[]>(
-                    "summary",
-                    () =>
-                    {
-                        var found = new List<(string Path, FileSummary? Summary)>(paths.Length);
-                        foreach (string path in paths)
-                        {
-                            if (cancel.IsCancelled())
-                            {
-                                throw new VaultException.Cancelled();
-                            }
-
-                            try
-                            {
-                                found.Add((path, session.GetFileSummary(path)));
-                            }
-                            catch (VaultException.InvalidPath)
-                            {
-                                // A path the index can never hold.
-                                found.Add((path, null));
-                            }
-                        }
-
-                        return [.. found];
-                    },
-                    cancellation);
-                if (generation != _generation || cancellation.IsCancellationRequested)
-                {
-                    return null;
-                }
-
-                await switcher.ApplyJournaledPathsAsync(reads, cancellation);
-                if (generation != _generation || cancellation.IsCancellationRequested)
-                {
-                    return null;
-                }
-            }
-            catch (Exception exception) when (exception is not OutOfMemoryException)
-            {
-                if (generation != _generation || cancellation.IsCancellationRequested)
-                {
-                    return null;
-                }
-
-                HostLog.Write(HostDiagnosticEvent.VaultRescanFailed, exception);
-                _ = failedSurfaces.Add(RescanSurface.QuickOpen);
-                return 1;
-            }
-
-            if (journal.Changes.Count == journaled)
-            {
-                return 0;
-            }
-        }
-
-        _ = failedSurfaces.Add(RescanSurface.QuickOpen);
-        return 0;
     }
 }

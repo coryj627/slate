@@ -56,7 +56,7 @@ public sealed partial class RescanTests
         A11yEvent.VaultRescanFinished finished = OneRescanSentence(h);
         Assert.Equal((RescanReason.Watcher, 1UL, 0UL), (finished.Reason, finished.Changed, finished.Removed));
         Assert.Equal([Explicit1], h.Spoken);
-        Assert.Contains("late.md", h.QuickOpen.FilePathsForTests);
+        Assert.Contains("late.md", h.QuickOpen.RankedPathsForTests());
         Assert.True(h.ScanCalls > scans, "no rescan ran");
     });
 
@@ -96,8 +96,8 @@ public sealed partial class RescanTests
         Assert.Equal(h.Spoken[0], h.Lifecycle.StatusText);
         Assert.Contains(h.Sidebar.RootNodes, node => node.Path == "late.md");
         Assert.DoesNotContain(h.Sidebar.RootNodes, node => node.Path == "gone.md");
-        Assert.Contains("late.md", h.QuickOpen.FilePathsForTests);
-        Assert.DoesNotContain("gone.md", h.QuickOpen.FilePathsForTests);
+        Assert.Contains("late.md", h.QuickOpen.RankedPathsForTests());
+        Assert.DoesNotContain("gone.md", h.QuickOpen.RankedPathsForTests());
     });
 
     /// <summary>§4.5: a partial Watcher run speaks the incomplete sentence,
@@ -147,7 +147,7 @@ public sealed partial class RescanTests
         Assert.Empty(h.Events);
         Assert.Equal(status, h.Lifecycle.StatusText);
         Assert.Contains(h.Sidebar.RootNodes, node => node.Path == "two.md");
-        Assert.Contains("three.md", h.QuickOpen.FilePathsForTests);
+        Assert.Contains("three.md", h.QuickOpen.RankedPathsForTests());
 
         h.Now += TimeSpan.FromSeconds(1);
         h.Write("four.md", "# Four\n");

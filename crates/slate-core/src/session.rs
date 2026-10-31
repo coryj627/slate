@@ -6357,6 +6357,66 @@ impl VaultSession {
         })
     }
 
+    /// WB-25 stage 2 (#1290; locked decision 05 §9.3.1): Quick Open's
+    /// bounded rank against the index. One statement reads the openable
+    /// documents' paths and names in `path COLLATE BINARY` order — the
+    /// order the host's paged listing handed the free ranker — and the
+    /// ranker scores them, so the rows and `total` equal
+    /// `switcher_rank_top`'s over that list while at most `limit` rows are
+    /// marshalled and the host never holds the file set. The rows are
+    /// copied out under the connection lock and scored after it is
+    /// released (red team): a save never waits behind a keystroke's
+    /// scoring pass. The token is checked before the read, polled inside
+    /// the statement and per row, read and scored; a cancellation is
+    /// `Cancelled`, never a page.
+    pub fn switcher_rank_top_indexed(
+        &self,
+        query: &str,
+        recent_paths: &[String],
+        limit: usize,
+        cancel: &CancelToken,
+    ) -> Result<crate::switcher::SwitcherRankPage, VaultError> {
+        if limit > MAX_SWITCHER_RANK_LIMIT as usize {
+            return Err(VaultError::InvalidArgument {
+                message: format!("switcher rank limit must be at most {MAX_SWITCHER_RANK_LIMIT}"),
+            });
+        }
+        cancel.check()?;
+        let files = {
+            let conn = self.conn.lock().expect("session connection mutex");
+            cancel.check()?;
+            directory_page::with_sqlite_cancellation(&conn, cancel, || {
+                let mut stmt = conn.prepare_cached(&format!(
+                    "SELECT path, name FROM files WHERE {} ORDER BY path COLLATE BINARY ASC",
+                    file_filter_where(FileFilter::OpenableDocuments)
+                ))?;
+                let rows = stmt.query_map([], |row| {
+                    Ok(crate::switcher::SwitcherFile {
+                        path: row.get(0)?,
+                        name: row.get(1)?,
+                    })
+                })?;
+                let mut files = Vec::new();
+                for row in rows {
+                    files.push(row?);
+                    cancel.check()?;
+                }
+                Ok(files)
+            })?
+        };
+        let stream = files.into_iter().map(|file| -> Result<_, VaultError> {
+            cancel.check()?;
+            Ok(file)
+        });
+        let page = crate::switcher::switcher_rank_top_stream(stream, query, recent_paths, limit)?;
+        #[cfg(test)]
+        switcher_ranked_test_hook::fire();
+        // Codex: a cancel during the last row's scoring, the heap's sort or
+        // the page's construction is `Cancelled` too, never a page.
+        cancel.check()?;
+        Ok(page)
+    }
+
     /// Fetch one indexed file through the same enriched projection as
     /// [`VaultSession::list_files`].
     ///
@@ -10425,6 +10485,10 @@ pub const MAX_LIST_FILES_PAGE_LIMIT: u32 = 10_000;
 /// returns, under the same rule as the files page.
 pub const MAX_TAG_TREE_PAGE_LIMIT: u32 = 10_000;
 
+/// The largest `limit` [`VaultSession::switcher_rank_top_indexed`] takes:
+/// a rank marshals at most that many rows (WB-25).
+pub const MAX_SWITCHER_RANK_LIMIT: u32 = 10_000;
+
 /// The one page-limit rule (W7-7 PR 7, round 3 finding 7), shared by the
 /// files page and the directory pages: a limit is `1..=max`, refused
 /// before any row is read.
@@ -12029,20 +12093,56 @@ pub(crate) mod list_files_row_test_hook {
     }
 }
 
-fn list_files_impl(
-    conn: &Connection,
-    filter: FileFilter,
-    paging: Paging,
-    cancel: &CancelToken,
-) -> Result<Page<FileSummary>, VaultError> {
-    let where_clause = match filter {
+/// Test seam (WB-25 stage 2): runs on the calling thread after the indexed
+/// switcher rank has scored every row and built its page, before the call
+/// returns — the deterministic way to cancel after the final row.
+#[cfg(test)]
+pub(crate) mod switcher_ranked_test_hook {
+    use std::cell::RefCell;
+
+    type RankedHook = Box<dyn Fn()>;
+
+    thread_local! {
+        static HOOK: RefCell<Option<RankedHook>> = const { RefCell::new(None) };
+    }
+
+    pub(crate) fn install(hook: RankedHook) {
+        HOOK.with(|slot| *slot.borrow_mut() = Some(hook));
+    }
+
+    pub(crate) fn clear() {
+        HOOK.with(|slot| *slot.borrow_mut() = None);
+    }
+
+    pub(super) fn fire() {
+        HOOK.with(|slot| {
+            if let Some(hook) = slot.borrow().as_ref() {
+                hook();
+            }
+        });
+    }
+}
+
+/// The `files` predicate a [`FileFilter`] selects, shared by the paged
+/// listing and the indexed switcher rank (WB-25).
+fn file_filter_where(filter: FileFilter) -> &'static str {
+    match filter {
         FileFilter::All => "1=1",
         FileFilter::MarkdownOnly => "is_markdown = 1",
         FileFilter::MarkdownAndCanvas => "(is_markdown = 1 OR extension = 'canvas')",
         FileFilter::OpenableDocuments => {
             "(is_markdown = 1 OR extension = 'canvas' OR extension = 'base')"
         }
-    };
+    }
+}
+
+fn list_files_impl(
+    conn: &Connection,
+    filter: FileFilter,
+    paging: Paging,
+    cancel: &CancelToken,
+) -> Result<Page<FileSummary>, VaultError> {
+    let where_clause = file_filter_where(filter);
 
     // Fetch limit + 1: the extra row tells us whether there's a next page.
     let fetch_n = paging.limit as i64 + 1;
