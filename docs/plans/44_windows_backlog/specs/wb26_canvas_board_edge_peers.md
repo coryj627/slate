@@ -86,6 +86,21 @@ Issues: Closes #1277. Size L (design first). Lanes: windows + FlaUI (shell gate)
   The placeholder and find facts now target an edge whose designated endpoint is the LEFT card, so only the union branch passes them.
 - **Follow-ups:** the mac board's edges are #1720; an edge's bounds as a label chip, and the full-cover axe risk, are #1721.
 
+**Codex round 2, 2026-10-31.**
+- **Retained providers recheck at call time.** A client keeps the pattern interfaces it was handed, so every action rechecks when it runs (`RequireAvailable`):
+  - Realize refuses with `ElementNotAvailableException` once the peer's card or edge is gone, or its document is no longer shown.
+  - Invoke and the SelectionItem actions refuse the same way, and also off the window.
+- **The renderer records each publication's document** as it forwards it to the engine (`InstalledDocument`). Every peer-surface read requires the installed state to be the bound document's:
+  - `PeerFor`;
+  - `FindByName`;
+  - `Realize`;
+  - `MaterializedPeers`;
+  - each peer's own reads.
+  So nothing answers from the previous canvas's scene during a switch.
+- **Facts:**
+  - `ARetainedProviderRefusesOnceItsPeerIsUnavailable`
+  - `AHeldPeerReadsNothingUntilItsCanvasIsInstalledAgain`
+
 ## Goal
 
 Locked contract 34 D5 says a labelled edge is a peer in the board's name

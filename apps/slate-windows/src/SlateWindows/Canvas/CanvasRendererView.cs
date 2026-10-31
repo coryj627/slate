@@ -80,6 +80,42 @@ internal sealed class CanvasRendererView : FrameworkElement
             handledEventsToo: false);
     }
 
+    /// <summary>The bound document's publication intake: records the
+    /// publication's document, then hands it to the engine. It runs on
+    /// whatever thread applied the publication.</summary>
+    private Action<CanvasPublication>? _forwardPublication;
+
+    /// <summary>Which document each publication this board was handed came
+    /// from. The engine installs off the dispatcher, so for a moment after
+    /// the board moves to another canvas its installed state is still the
+    /// previous canvas's; a board peer reads the installed scene only when
+    /// it is its own document's (#1277, codex round 2).</summary>
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<CanvasPublication, CanvasDocumentViewModel>
+        _publicationDocuments = new();
+
+    private void ForwardPublication(CanvasDocumentViewModel document, CanvasPublication publication)
+    {
+        _publicationDocuments.AddOrUpdate(publication, document);
+        _engine.OnPublicationApplied(publication);
+    }
+
+    /// <summary>The document the INSTALLED state was built from — null
+    /// before any install, or for a source this board was never handed.</summary>
+    internal CanvasDocumentViewModel? InstalledDocument =>
+        _engine.Current is { } state
+        && _publicationDocuments.TryGetValue(state.Source, out CanvasDocumentViewModel? document)
+            ? document
+            : null;
+
+    /// <summary>The installed scene, only while it is the bound document's —
+    /// what every peer-surface read answers from, so nothing is minted,
+    /// found or realized against the previous canvas's scene during a
+    /// switch.</summary>
+    private CanvasPopulation? BoundPopulation =>
+        _model is { } document && ReferenceEquals(InstalledDocument, document)
+            ? _engine.Current?.Source.Loaded?.Population
+            : null;
+
     /// <summary>The pane's document. Attach subscribes the engine to
     /// the post-apply notification; detach unsubscribes and disposes
     /// nothing shared — the engine and the text-scale service belong
@@ -95,7 +131,7 @@ internal sealed class CanvasRendererView : FrameworkElement
             }
             if (_model is { } old)
             {
-                old.PublicationApplied -= _engine.OnPublicationApplied;
+                old.PublicationApplied -= _forwardPublication;
                 old.ModeVisibleChanged -= OnModeVisibleChanged;
                 LeaveDocument(old);
             }
@@ -104,12 +140,13 @@ internal sealed class CanvasRendererView : FrameworkElement
             _owedReveal = null;
             _model = value;
             SweepReclaimedPeers();
+            _forwardPublication = null;
             if (value is not null)
             {
-                value.PublicationApplied += _engine.OnPublicationApplied;
+                _forwardPublication = publication => ForwardPublication(value, publication);
+                value.PublicationApplied += _forwardPublication;
                 value.ModeVisibleChanged += OnModeVisibleChanged;
-                _engine.OnPublicationApplied(
-                    value.AppliedPublication ?? CanvasPublication.Seed());
+                ForwardPublication(value, value.AppliedPublication ?? CanvasPublication.Seed());
                 _engine.CommitTransient(value.Transient);
                 ReturnToDocument(value);
             }
@@ -552,7 +589,7 @@ internal sealed class CanvasRendererView : FrameworkElement
         var children = new System.Collections.Generic.List<
             System.Windows.Automation.Peers.AutomationPeer>();
         if (_engine.Current is not { } state
-            || state.Source.Loaded?.Population is not { } population)
+            || BoundPopulation is not { } population)
         {
             return children;
         }
@@ -599,7 +636,7 @@ internal sealed class CanvasRendererView : FrameworkElement
         // (CanvasBoardAutomationPeer.Exists) — and is the same object again
         // if the key comes back while it is held.
         if (_model is not { } document
-            || _engine.Current?.Source.Loaded?.Population is not { } population
+            || BoundPopulation is not { } population
             || (key.IsEdge ? NamedEdge(population, key.Id) is null : !population.SceneByNode.ContainsKey(key.Id)))
         {
             return null;
@@ -654,7 +691,7 @@ internal sealed class CanvasRendererView : FrameworkElement
     internal CanvasPeerKey? FindByName(
         System.Windows.Automation.Peers.AutomationPeer? after, string? name)
     {
-        if (_engine.Current?.Source.Loaded?.Population is not { } population)
+        if (BoundPopulation is not { } population)
         {
             return null;
         }
@@ -703,7 +740,8 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// an edge whose union meets the window.</summary>
     internal void Realize(CanvasPeerKey key)
     {
-        if (_engine.Current is not { Source.Loaded.Population: { } population } state
+        if (BoundPopulation is not { } population
+            || _engine.Current is not { } state
             || RealizationTarget(state, population, key) is not { } target)
         {
             return;

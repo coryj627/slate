@@ -395,6 +395,113 @@ public sealed class CanvasRendererPeerTests : IDisposable
         }
     });
 
+    /// <summary>A client keeps the pattern interfaces it was handed and calls
+    /// them later, so every action rechecks when it runs (codex round 2): a
+    /// retained provider whose peer's canvas the board no longer shows, or
+    /// whose edge left the window, refuses as unavailable and moves nothing
+    /// on the canvas the board shows now.</summary>
+    [Fact]
+    public void ARetainedProviderRefusesOnceItsPeerIsUnavailable() => RunSta(() =>
+    {
+        WriteCanvas(
+            "first.canvas",
+            [Card("a", "Alpha", 40, 40), Card("b", "Beta", 300, 40), Card("far", "Far", 9_000, 40)],
+            [Edge("e1", "a", "b", "supports")]);
+        WriteCanvas(
+            "second.canvas",
+            [Card("a", "Gamma", 40, 40), Card("b", "Delta", 300, 40), Card("far", "Away", 9_000, 40)],
+            [Edge("e1", "b", "a", "refutes")]);
+        using Board board = Open("first.canvas");
+        board.ZoomTo(1);
+        CanvasEdgeAutomationPeer edge = board.HeldEdge("e1");
+        var card = Assert.IsType<CanvasCardAutomationPeer>(board.Renderer.PeerFor(CanvasPeerKey.Card("a")));
+        var edgeInvoke = Assert.IsAssignableFrom<IInvokeProvider>(edge.GetPattern(PatternInterface.Invoke));
+        var edgeRealize = Assert.IsAssignableFrom<IVirtualizedItemProvider>(edge.GetPattern(PatternInterface.VirtualizedItem));
+        var cardInvoke = Assert.IsAssignableFrom<IInvokeProvider>(card.GetPattern(PatternInterface.Invoke));
+        var cardItem = Assert.IsAssignableFrom<ISelectionItemProvider>(card.GetPattern(PatternInterface.SelectionItem));
+
+        // The board shows another canvas that reuses every id.
+        CanvasDocumentViewModel second = OpenDocument("second.canvas");
+        try
+        {
+            board.Show(second);
+            board.SettleUntil(() => ReferenceEquals(board.Renderer.InstalledDocument, second));
+            board.PanTo(-8_000, 0);
+            second.SeatSelectionSilently("far");
+            board.Settle();
+            CanvasViewportState away = board.Renderer.Engine.CommittedViewport;
+
+            Assert.Throws<ElementNotAvailableException>(edgeRealize.Realize);
+            Assert.Throws<ElementNotAvailableException>(edgeInvoke.Invoke);
+            Assert.Throws<ElementNotAvailableException>(cardInvoke.Invoke);
+            Assert.Throws<ElementNotAvailableException>(cardItem.Select);
+            Assert.False(cardItem.IsSelected);
+            board.Settle();
+            Assert.Equal("far", second.Selection.Selected);
+            Assert.True(away.SameGeometry(board.Renderer.Engine.CommittedViewport), "a retained provider moved the other canvas's view.");
+            Assert.DoesNotContain(CanvasPeerKey.Edge("e1"), board.Renderer.Engine.Current!.Retained);
+        }
+        finally
+        {
+            board.Show(board.Document);
+            second.Shutdown();
+        }
+
+        // Back on its own canvas, panned so the edge is off the window: the
+        // action pattern it kept refuses, the placeholder's rule.
+        board.SettleUntil(() => ReferenceEquals(board.Renderer.InstalledDocument, board.Document));
+        board.PanTo(-20_000, -20_000);
+        Assert.NotEqual(CanvasPeerCell.Materialized, board.Cell(CanvasPeerKey.Edge("e1")));
+        board.Document.SeatSelectionSilently("far");
+        Assert.Throws<ElementNotAvailableException>(edgeInvoke.Invoke);
+        Assert.Equal("far", board.Document.Selection.Selected);
+    });
+
+    /// <summary>The engine installs off the dispatcher, so just after the
+    /// board goes back to a canvas its installed state is still the other
+    /// canvas's: until its own state installs, a held peer reads nothing and
+    /// nothing is minted from the other canvas's scene (codex round
+    /// 2).</summary>
+    [Fact]
+    public void AHeldPeerReadsNothingUntilItsCanvasIsInstalledAgain() => RunSta(() =>
+    {
+        WriteCanvas(
+            "first.canvas",
+            [Card("a", "Alpha", 40, 40), Card("b", "Beta", 300, 40)],
+            [Edge("e1", "a", "b", "supports")]);
+        WriteCanvas(
+            "second.canvas",
+            [Card("a", "Gamma", 40, 40), Card("b", "Delta", 300, 40)],
+            [Edge("e1", "b", "a", "refutes")]);
+        using Board board = Open("first.canvas");
+        board.PanTo(0, 0);
+        CanvasEdgeAutomationPeer first = board.HeldEdge("e1");
+        CanvasDocumentViewModel second = OpenDocument("second.canvas");
+        try
+        {
+            board.Show(second);
+            board.SettleUntil(() => ReferenceEquals(board.Renderer.InstalledDocument, second));
+
+            board.Show(board.Document);
+            Assert.True(
+                ReferenceEquals(board.Renderer.InstalledDocument, second),
+                "premise: the switch back has not installed yet.");
+            Assert.Equal(string.Empty, first.GetName());
+            Assert.Null(first.GetPattern(PatternInterface.VirtualizedItem));
+            Assert.Null(board.Renderer.PeerFor(CanvasPeerKey.Edge("e1")));
+            Assert.Null(board.Renderer.FindByName(null, null));
+            Assert.Empty(board.Renderer.MaterializedPeers());
+
+            board.SettleUntil(() => ReferenceEquals(board.Renderer.InstalledDocument, board.Document));
+            Assert.Equal(Supports, first.GetName());
+            Assert.Same(first, board.Renderer.PeerFor(CanvasPeerKey.Edge("e1")));
+        }
+        finally
+        {
+            second.Shutdown();
+        }
+    });
+
     /// <summary>D4 during a move preview: the realization targets the
     /// rectangles the board DRAWS. The committed union is wider than the
     /// view, the previewed one fits, so the whole previewed edge comes into

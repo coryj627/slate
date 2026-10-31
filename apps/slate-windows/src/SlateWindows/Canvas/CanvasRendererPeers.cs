@@ -188,11 +188,28 @@ internal abstract class CanvasBoardAutomationPeer :
     /// renderer, document and key).</summary>
     private protected CanvasDocumentViewModel Document { get; }
 
-    /// <summary>The installed scene, while the board still shows this
-    /// peer's document; null after the pane closes or the board moves to
-    /// another canvas, so a held peer never answers for either.</summary>
+    /// <summary>The installed scene, while the board shows this peer's
+    /// document AND has installed that document's state; null after the
+    /// pane closes, while the board shows another canvas, and while a switch
+    /// back has not installed yet, so a held peer never answers from
+    /// another canvas's scene (codex round 2).</summary>
     private protected CanvasPopulation? Population =>
-        ReferenceEquals(View.Model, Document) ? View.Engine.Current?.Source.Loaded?.Population : null;
+        ReferenceEquals(View.Model, Document) && ReferenceEquals(View.InstalledDocument, Document)
+            ? View.Engine.Current?.Source.Loaded?.Population
+            : null;
+
+    /// <summary>A client may keep a pattern interface it was handed and call
+    /// it after the peer changed cell, so every action rechecks at call
+    /// time (codex round 2): a peer whose card or edge is gone — or whose
+    /// document the board no longer shows — refuses as unavailable, and an
+    /// action pattern refuses off the window, the placeholder's rule.</summary>
+    private protected void RequireAvailable(bool materialized)
+    {
+        if (!Exists || (materialized && !Materialized))
+        {
+            throw new ElementNotAvailableException();
+        }
+    }
 
     /// <summary>Whether the card or edge this peer stands for is on the
     /// board now. A peer whose card or edge is gone — deleted, unlabelled,
@@ -223,7 +240,11 @@ internal abstract class CanvasBoardAutomationPeer :
         return View.ViewToScreen(view);
     }
 
-    void IVirtualizedItemProvider.Realize() => View.Realize(Key);
+    void IVirtualizedItemProvider.Realize()
+    {
+        RequireAvailable(materialized: false);
+        View.Realize(Key);
+    }
 
     protected override bool IsControlElementCore() => true;
 
@@ -318,19 +339,28 @@ internal sealed class CanvasCardAutomationPeer :
         return null;
     }
 
-    void IInvokeProvider.Invoke() => View.SelectAnnounced(Key.Id);
+    void IInvokeProvider.Invoke()
+    {
+        RequireAvailable(materialized: true);
+        View.SelectAnnounced(Key.Id);
+    }
 
     // --- SelectionItem, cell by cell (D6's matrix) ---------------------
 
     bool ISelectionItemProvider.IsSelected =>
-        string.Equals(View.Engine.Current?.Selection, Key.Id, StringComparison.Ordinal);
+        Exists && string.Equals(View.Engine.Current?.Selection, Key.Id, StringComparison.Ordinal);
 
     IRawElementProviderSimple? ISelectionItemProvider.SelectionContainer => null;
 
-    void ISelectionItemProvider.Select() => View.SelectAnnounced(Key.Id);
+    void ISelectionItemProvider.Select()
+    {
+        RequireAvailable(materialized: true);
+        View.SelectAnnounced(Key.Id);
+    }
 
     void ISelectionItemProvider.AddToSelection()
     {
+        RequireAvailable(materialized: true);
         if (((ISelectionItemProvider)this).IsSelected)
         {
             return;
@@ -349,6 +379,7 @@ internal sealed class CanvasCardAutomationPeer :
 
     void ISelectionItemProvider.RemoveFromSelection()
     {
+        RequireAvailable(materialized: true);
         if (((ISelectionItemProvider)this).IsSelected)
         {
             View.ClearSelectionAnnounced();
@@ -408,10 +439,8 @@ internal sealed class CanvasEdgeAutomationPeer :
 
     void IInvokeProvider.Invoke()
     {
-        if (Edge is { } edge)
-        {
-            View.SelectAnnounced(CanvasRendererView.DesignatedEndpoint(edge));
-        }
+        RequireAvailable(materialized: true);
+        View.SelectAnnounced(CanvasRendererView.DesignatedEndpoint(Edge!));
     }
 
     protected override string GetHelpTextCore() => string.Empty;

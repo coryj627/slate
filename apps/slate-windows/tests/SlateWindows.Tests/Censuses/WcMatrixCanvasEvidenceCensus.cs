@@ -103,6 +103,7 @@ public sealed class WcMatrixCanvasEvidenceCensus
                 "AStructureChangeRaisesChildrenInvalidatedOncePerInstall", "APointOnAnEndpointCardIsTheCardNotTheEdge",
                 "APointBesideTheBoardIsNeverOneOfItsPeers", "AHeldEdgePeerGoesUnavailableWhenItsEdgeStopsBeingAPeer",
                 "AnEdgePeerHeldOnOneCanvasNeverAnswersForAnother", "AnEdgeRealizesOnTheRectanglesItsBoardDraws",
+                "ARetainedProviderRefusesOnceItsPeerIsUnavailable", "AHeldPeerReadsNothingUntilItsCanvasIsInstalledAgain",
                 "AFollowingBoardInAnotherPanePansToTheSelectionAndAnUnfollowingOneStays",
                 "AFollowingBoardRevealsANewCardOnceTheStateThatHasItInstalls", "AnOwedRevealIsPaidOnlyForTheCardThatIsStillTheSeat",
                 "AnOwedElsewhereRevealLapsesWhenTheBoardStopsFollowing", "TheBoardsOwnPeersRevealTheirCardWithFollowSelectionOff",
