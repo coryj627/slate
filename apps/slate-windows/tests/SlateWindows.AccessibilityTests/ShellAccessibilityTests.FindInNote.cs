@@ -69,6 +69,55 @@ public sealed partial class ShellAccessibilityTests
             AssertItemNamesAreSpeakable(process, "find-in-note-ctrl-g");
         });
 
+    /// <summary>
+    /// WB-22 PR 2 (#1112), cross-process: in a reading-mode note Ctrl+F opens
+    /// the bar with no replace controls a reader can reach, and with the bar
+    /// open Ctrl+G from the reading text moves the reading surface's
+    /// selection (its Text pattern) to the next match while the focus stays
+    /// on the reading surface. Axe-clean with text typed.
+    /// </summary>
+    [Fact]
+    public void FindInNote_ReadingView_CtrlGFromTheTextMovesTheSelectionAndReplaceIsAbsent() =>
+        RunFindInNoteJourney("find-in-note-reading", (process, window, automation, editor) =>
+        {
+            editor.Focus();
+            using (Keyboard.Pressing(VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT))
+            {
+                Keyboard.Type(VirtualKeyShort.KEY_E);
+            }
+            AutomationElement reading = WaitForElement(window, "ReadingSurface", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => automation.FocusedElement()?.AutomationId == "ReadingSurface",
+                    TimeSpan.FromSeconds(10)),
+                "the switch to reading mode did not land on the reading surface");
+
+            _ = OpenFindBarAndType(window, reading, "alpha");
+            AutomationElement? replace = window.FindFirstDescendant(cf => cf.ByAutomationId("FindInNoteReplace"));
+            Assert.True(
+                replace is null || replace.Properties.IsOffscreen.ValueOrDefault,
+                "the reading-mode bar shows a Replace control");
+
+            reading.Focus();
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => automation.FocusedElement()?.AutomationId == "ReadingSurface",
+                    TimeSpan.FromSeconds(5)),
+                "the reading surface did not take the focus back");
+            int before = SelectionStart(reading);
+            using (Keyboard.Pressing(VirtualKeyShort.CONTROL))
+            {
+                Keyboard.Type(VirtualKeyShort.KEY_G);
+            }
+            Assert.True(
+                SpinWait.SpinUntil(() => SelectionStart(reading) != before, TimeSpan.FromSeconds(10)),
+                "Ctrl+G from the reading text did not move its selection");
+            Assert.Equal("alpha", SelectionText(reading));
+            Assert.Equal("ReadingSurface", automation.FocusedElement()?.AutomationId);
+
+            AssertAxeClean(process, "find-in-note-reading");
+        });
+
     private static AutomationElement OpenFindBarAndType(Window window, AutomationElement editor, string query)
     {
         editor.Focus();

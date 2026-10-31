@@ -1,0 +1,364 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+using System.Windows;
+using System.Windows.Documents;
+using System.Windows.Media;
+using ICSharpCode.AvalonEdit.Document;
+
+namespace SlateWindows.Reading;
+
+/// <summary>
+/// WB-22 (#1112): the reading view as a find surface. The search runs over a
+/// <see cref="ReadingTextIndex"/> cached per content revision; the current
+/// match is the surface's selection (a position, not content, so caret
+/// reading and the Text pattern carry it) and every match is drawn over the
+/// text by a <see cref="FindMatchAdorner"/> — the document, its elements and
+/// its peers are never touched.
+/// </summary>
+internal sealed class ReadingFindSurface : IFindInNoteSurface
+{
+    private readonly ReadingSurface _surface;
+    private ReadingTextIndex? _index;
+    private int _indexRevision = -1;
+    private FindMatchAdorner? _adorner;
+    private (IReadOnlyList<(int Offset, int Length)> Matches, int Current)? _deferred;
+
+    public ReadingFindSurface(ReadingSurface surface)
+    {
+        _surface = surface;
+        _surface.ContentChanged += OnContentChanged;
+    }
+
+    public FindInNoteMode Mode => FindInNoteMode.Reading;
+
+    /// <summary>Never the "Loading reading view…" placeholder.</summary>
+    public bool IsSearchable => _surface.ShowsSearchableContent;
+
+    public ITextSource Text => Index.Text;
+
+    /// <summary>The index itself: a new one per content revision.</summary>
+    public object Stamp => Index;
+
+    /// <summary>The surface's selection in the index's offsets. A reveal can
+    /// select more than its match (a math element whole; the whole graphemes
+    /// a match inside one touches), so while the selection is still exactly
+    /// what the reveal made, it is that match — found again in the current
+    /// index, since a completion elsewhere can move it.</summary>
+    public (int Offset, int Length) Selection
+    {
+        get
+        {
+            TextSelection selection = _surface.Selection;
+            if (RevealedMatch is { } revealed
+                && selection.Start.CompareTo(revealed.Start) == 0
+                && selection.End.CompareTo(revealed.End) == 0)
+            {
+                if (revealed.Unit is null)
+                {
+                    return (Index.OffsetOf(revealed.Start) + revealed.Within, revealed.Length);
+                }
+                if (Index.UnitStart(revealed.Unit) is >= 0 and int unitStart)
+                {
+                    return (unitStart + revealed.Within, revealed.Length);
+                }
+            }
+            int start = Index.OffsetOf(selection.Start);
+            return (start, Math.Max(0, Index.OffsetOf(selection.End) - start));
+        }
+    }
+
+    public TextDocument? Document => null;
+
+    internal ReadingSurface Surface => _surface;
+
+    /// <summary>The revealed match, on the surface (a replacement drops it
+    /// there), so a rebuilt find surface knows it too.</summary>
+    private Revealed? RevealedMatch
+    {
+        get => _surface.FindRevealMemory as Revealed;
+        set => _surface.FindRevealMemory = value;
+    }
+
+    internal ReadingTextIndex Index
+    {
+        get
+        {
+            if (_index is null || _indexRevision != _surface.ContentRevision)
+            {
+                _index = ReadingTextIndex.Build(_surface.Document);
+                _indexRevision = _surface.ContentRevision;
+            }
+            return _index;
+        }
+    }
+
+    public event Action? TextChanged;
+
+    /// <summary>The match becomes the surface's selection and is brought
+    /// into view; keyboard focus is not moved.</summary>
+    public void Reveal(int offset, int length)
+    {
+        ReadingTextIndex index = Index;
+        UIElement? unit = index.UnitAt(offset);
+        (TextPointer start, TextPointer end) = unit is null
+            ? TextRangeOf(offset, length)
+            : (index.StartOf(offset), index.EndOf(offset + length));
+        _surface.Selection.Select(start, end);
+        TextPointer selected = _surface.Selection.Start;
+        RevealedMatch = unit is not null
+            ? new Revealed(unit, offset - index.UnitStart(unit), length, selected, _surface.Selection.End)
+            : new Revealed(null, offset - index.OffsetOf(selected), length, selected, _surface.Selection.End);
+        if (_surface.DocumentRenderScope is { } scope)
+        {
+            // Only a rectangle that exists: none before layout, and an empty
+            // default would scroll to the top.
+            foreach (Rect rect in RectsOf(offset, length, scope, _surface.TransformToDescendant(scope)))
+            {
+                scope.BringIntoView(rect);
+                break;
+            }
+        }
+    }
+
+    public void Highlight(IReadOnlyList<(int Offset, int Length)> matches, int current)
+    {
+        if (matches.Count == 0)
+        {
+            ClearHighlights();
+            return;
+        }
+        if (_adorner is null)
+        {
+            if (_surface.DocumentRenderScope is not { } scope || AdornerLayer.GetAdornerLayer(scope) is not { } layer)
+            {
+                // A surface just shown (a mode switch) has no template yet:
+                // the matches are drawn by the first layout pass that has one.
+                if (_deferred is null)
+                {
+                    _surface.LayoutUpdated += OnLayoutUpdated;
+                }
+                _deferred = (matches, current);
+                return;
+            }
+            _adorner = new FindMatchAdorner(scope, this);
+            layer.Add(_adorner);
+        }
+        StopDeferring();
+        _adorner.SetMatches(matches, current);
+    }
+
+    public void ClearHighlights()
+    {
+        StopDeferring();
+        if (_adorner is not { } adorner)
+        {
+            return;
+        }
+        _adorner = null;
+        adorner.Retire();
+        AdornerLayer.GetAdornerLayer(adorner.AdornedElement)?.Remove(adorner);
+    }
+
+    public object CaptureRestorePoint()
+    {
+        TextSelection selection = _surface.Selection;
+        return new RestorePoint(
+            _surface, selection.Start, selection.End, _surface.ReplacedRevision,
+            PendingDiagramOf(selection.Start) ?? PendingDiagramOf(selection.End));
+    }
+
+    /// <summary>A surface keeps one document for its whole life, so a point
+    /// taken on it stays on it. A point from another surface (a pane split
+    /// or collapse rebuilt it) points into another document: this surface
+    /// takes its own instead.</summary>
+    public object RebaseRestorePoint(object restorePoint) =>
+        restorePoint is RestorePoint { } point && ReferenceEquals(point.Surface, _surface)
+            ? restorePoint
+            : CaptureRestorePoint();
+
+    /// <summary>Re-selects where opening found the selection unless a
+    /// replacement (a merge or a model switch) moved every pointer since, or
+    /// the pending diagram it lay in completed in place (the completion
+    /// rewrote that paragraph's runs): then the caret stays where it is.</summary>
+    public void Restore(object restorePoint)
+    {
+        if (restorePoint is RestorePoint { } point
+            && point.Replacements == _surface.ReplacedRevision
+            && (point.PendingDiagram is null || ReadingSemantics.PendingDiagramKeyOf(point.PendingDiagram) is not null))
+        {
+            _surface.Selection.Select(point.Start, point.End);
+        }
+    }
+
+    /// <summary>The reading view is on screen while its bar is open, so the
+    /// keys go straight back to it (as the editor surface's do); a landing
+    /// request is the shell's alone (OD-12).</summary>
+    public void ReturnFocus() => _surface.Focus();
+
+    public void Detach()
+    {
+        _surface.ContentChanged -= OnContentChanged;
+        ClearHighlights();
+    }
+
+    /// <summary>The embedded element a match at <paramref name="offset"/>
+    /// marks whole, or null for plain text.</summary>
+    internal UIElement? UnitAt(int offset) => Index.UnitAt(offset);
+
+    /// <summary>The rectangles a match covers in <paramref name="scope"/>'s
+    /// coordinates (<paramref name="transform"/>: the surface's to the
+    /// scope's, taken once per drawing): a unit's element bounds, else one
+    /// per line.</summary>
+    internal IEnumerable<Rect> RectsOf(int offset, int length, UIElement scope, GeneralTransform? transform)
+    {
+        if (Index.UnitAt(offset) is { IsVisible: true } element)
+        {
+            if (element.TransformToVisual(scope) is { } toScope)
+            {
+                yield return toScope.TransformBounds(new Rect(element.RenderSize));
+            }
+            yield break;
+        }
+        if (transform is null)
+        {
+            yield break;
+        }
+        (TextPointer start, TextPointer end) = TextRangeOf(offset, length);
+        TextPointer line = start;
+        while (line.CompareTo(end) < 0)
+        {
+            TextPointer? next = line.GetLineStartPosition(1);
+            bool last = next is null || next.CompareTo(end) >= 0;
+            TextPointer lineEnd = last ? end : next!;
+            // Every character's box on the line: across a change of
+            // direction the two logical ends need not bound the glyphs.
+            Rect rect = Rect.Empty;
+            for (TextPointer at = line; at.CompareTo(lineEnd) < 0;)
+            {
+                TextPointer after = at.GetNextInsertionPosition(LogicalDirection.Forward) is { } following
+                    && following.CompareTo(lineEnd) <= 0
+                    ? following
+                    : lineEnd;
+                rect.Union(at.GetCharacterRect(LogicalDirection.Forward));
+                rect.Union(after.GetCharacterRect(LogicalDirection.Backward));
+                if (after.CompareTo(at) <= 0)
+                {
+                    break;
+                }
+                at = after;
+            }
+            if (!rect.IsEmpty)
+            {
+                yield return transform.TransformBounds(rect);
+            }
+            if (last)
+            {
+                yield break;
+            }
+            line = next!;
+        }
+    }
+
+    /// <summary>A text match's range: the whole graphemes it touches, so one
+    /// that starts or ends inside a grapheme (decomposed text) is selected
+    /// and ringed whole — WPF would otherwise snap the selection, even to
+    /// nothing.</summary>
+    private (TextPointer Start, TextPointer End) TextRangeOf(int offset, int length)
+    {
+        TextPointer start = Index.StartOf(offset);
+        TextPointer end = Index.EndOf(offset + length);
+        if (!start.IsAtInsertionPosition)
+        {
+            start = start.GetInsertionPosition(LogicalDirection.Backward);
+        }
+        if (!end.IsAtInsertionPosition)
+        {
+            end = end.GetNextInsertionPosition(LogicalDirection.Forward) ?? end;
+        }
+        return (start, end);
+    }
+
+    /// <summary>The index offsets the viewport shows, first to last: whole
+    /// lines, from the logical start of the top one to the logical end of the
+    /// bottom one, so a line's direction never inverts the range and a math
+    /// element the bottom edge cuts is inside it whole. A table row is the
+    /// one place the reading view sets text side by side: an edge that falls
+    /// in a row widens the range to the whole row, every cell's lines.</summary>
+    internal (int First, int Last) VisibleOffsets()
+    {
+        TextPointer? top = _surface.GetPositionFromPoint(new Point(0, 0), snapToText: true);
+        TextPointer? bottom = _surface.GetPositionFromPoint(new Point(0, _surface.ActualHeight), snapToText: true);
+        int first = top?.GetLineStartPosition(0) is { } lineStart ? Index.OffsetOf(lineStart) : 0;
+        int last = Index.Text.TextLength;
+        if (bottom?.GetLineStartPosition(1, out int moved) is { } nextLine && moved == 1)
+        {
+            last = Index.OffsetOf(nextLine);
+        }
+        if (top is not null && RowOf(top) is { } topRow)
+        {
+            first = Math.Min(first, Index.OffsetOf(topRow.ContentStart));
+        }
+        if (bottom is not null && RowOf(bottom) is { } bottomRow)
+        {
+            last = Math.Max(last, Index.OffsetOf(bottomRow.ContentEnd));
+        }
+        return (first, Math.Max(first, last));
+    }
+
+    private static TableRow? RowOf(TextPointer pointer)
+    {
+        for (DependencyObject? element = pointer.Parent; element is TextElement text; element = text.Parent)
+        {
+            if (text is TableRow row)
+            {
+                return row;
+            }
+        }
+        return null;
+    }
+
+    private void OnLayoutUpdated(object? sender, EventArgs e)
+    {
+        if (_deferred is { } deferred && _surface.DocumentRenderScope is { } scope && AdornerLayer.GetAdornerLayer(scope) is not null)
+        {
+            Highlight(deferred.Matches, deferred.Current);
+        }
+    }
+
+    private void StopDeferring()
+    {
+        if (_deferred is not null)
+        {
+            _deferred = null;
+            _surface.LayoutUpdated -= OnLayoutUpdated;
+        }
+    }
+
+    private void OnContentChanged(ReadingContentChange change)
+    {
+        // A replacement moves every pointer to the deletion point and a
+        // completion rewrites a diagram paragraph's runs: the drawn matches
+        // go at once. Appends only grow the tail and keep them.
+        // A replacement drops the revealed match (the surface does, as every
+        // pointer moved); a completion keeps one whose element and selection
+        // it left alone.
+        if (change != ReadingContentChange.Appended)
+        {
+            _adorner?.SetMatches([], -1);
+            StopDeferring();
+        }
+        TextChanged?.Invoke();
+    }
+
+    private static Paragraph? PendingDiagramOf(TextPointer pointer) =>
+        pointer.Paragraph is { } paragraph && ReadingSemantics.PendingDiagramKeyOf(paragraph) is not null ? paragraph : null;
+
+    /// <summary>A revealed match and the selection the reveal made: for a
+    /// math match its element and where in the element's source it starts;
+    /// for text, how far past the selection's start it begins.</summary>
+    private sealed record Revealed(UIElement? Unit, int Within, int Length, TextPointer Start, TextPointer End);
+
+    private sealed record RestorePoint(
+        ReadingSurface Surface, TextPointer Start, TextPointer End, int Replacements, Paragraph? PendingDiagram);
+}

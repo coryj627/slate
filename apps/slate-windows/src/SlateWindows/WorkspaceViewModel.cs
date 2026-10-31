@@ -228,6 +228,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         Id = state.Id;
         Item = state.Item;
         Mode = state.Mode;
+        SyncFindInNoteMode();
         PropsCollapsed = state.PropsCollapsed;
         ActiveCanvasSurface = state.ActiveCanvasSurface;
         Load();
@@ -400,10 +401,14 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         OnPropertyChanged(nameof(IsReadingMode));
         OnPropertyChanged(nameof(IsEditorVisible));
         OnPropertyChanged(nameof(IsReadingVisible));
-        // WB-22 PR 1 (#1112): the find bar searches the editor only, so a
-        // switch to reading mode closes it without moving focus or the caret.
-        FindInNote.CloseForModeSwitch();
+        // WB-22 (#1112): an open find bar stays open across the switch and
+        // moves to the other surface, keeping its query and options.
+        SyncFindInNoteMode();
     }
+
+    /// <summary>The find bar searches the surface the tab shows.</summary>
+    private void SyncFindInNoteMode() =>
+        FindInNote.Mode = IsReadingMode ? FindInNoteMode.Reading : FindInNoteMode.Editor;
     public bool IsBase => Item.Kind == WorkspaceItemKind.Base;
 
     public bool IsSavedQueryTab => Item.Kind == WorkspaceItemKind.SavedQuery;
@@ -2840,14 +2845,14 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     public ICommand FindPreviousInNoteCommand { get; }
 
     /// <summary>
-    /// WB-22 (#1112): Ctrl+F on a note opens the active tab's find bar, or,
-    /// open already, focuses its query with the text selected. False when
-    /// the active tab is not a note in the editor (PR 1: a reading-mode note
-    /// still falls through to vault search), so the caller falls through.
+    /// WB-22 (#1112): Ctrl+F on a note, in the editor or in the reading
+    /// view, opens the active tab's find bar, or, open already, focuses its
+    /// query with the text selected. False when the active tab is not a
+    /// note, so the caller falls through to vault search.
     /// </summary>
     public bool OpenFindInNote()
     {
-        if (ActiveGroup.ActiveTab is not { IsMarkdown: true, IsReadingMode: false } tab)
+        if (ActiveGroup.ActiveTab is not { IsMarkdown: true } tab)
         {
             return false;
         }

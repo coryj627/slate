@@ -1,9 +1,9 @@
 {
   "_doc": "W7-7 PR 4b (#1247, R-5; the owner's S6): every site that can take the element holding the keys away under them, and what witnesses its landing: a fact that names the site ('Class.Method'), 'guard: <scope>' for a site inside a guarded scope that neither is nor holds a region root, or 'exempt: <reason>'. FocusIntegrityManifestCensus scrapes the sites and judges each witness; SLATE_FOCUS_MANIFEST_UPDATE=1 rewrites this file, keeping every assignment.",
   "sites": {
-    "xaml-binding FindInNoteBar.xaml FindInNoteReplace Visibility": "exempt: PR 1 (WB-22): the bar attaches only editor surfaces, so CanReplace never changes while it is open (a mode switch closes the bar, FindInNoteViewModel.CloseForModeSwitch); PR 2's reading-mode bar collapses them with the query holding the keys",
-    "xaml-binding FindInNoteBar.xaml FindInNoteReplaceAll Visibility": "exempt: PR 1 (WB-22): the bar attaches only editor surfaces, so CanReplace never changes while it is open (a mode switch closes the bar, FindInNoteViewModel.CloseForModeSwitch); PR 2's reading-mode bar collapses them with the query holding the keys",
-    "xaml-binding FindInNoteBar.xaml FindInNoteReplaceText Visibility": "exempt: PR 1 (WB-22): the bar attaches only editor surfaces, so CanReplace never changes while it is open (a mode switch closes the bar, FindInNoteViewModel.CloseForModeSwitch); PR 2's reading-mode bar collapses them with the query holding the keys",
+    "xaml-binding FindInNoteBar.xaml ReplaceButton Visibility": "FindInNoteBarTests.AModeSwitchFromAReplaceControlKeepsTheKeysInTheBar",
+    "xaml-binding FindInNoteBar.xaml ReplaceAllButton Visibility": "FindInNoteBarTests.AModeSwitchFromAReplaceControlKeepsTheKeysInTheBar",
+    "xaml-binding FindInNoteBar.xaml ReplaceBox Visibility": "FindInNoteBarTests.AModeSwitchFromAReplaceControlKeepsTheKeysInTheBar",
     "xaml-trigger FindInNoteBar.xaml CountReadout Visibility": "FindInNoteBarTests.AnEmptiedQueryHidesTheCountAtOnce",
     "xaml-trigger FindInNoteBar.xaml UserControl(FindBarBooleanToVisibility) Visibility": "FindInNoteBarTests.EscapeClosesClearsHighlightsAndReturnsFocusToTheEditor",
     "collection SlateWindows.Bases.BaseQueryBuilderViewModel.RemoveCondition ConditionRows": "BuilderConditionLandingTests.RemovingAConditionFromItsButtonLandsOnARemainingCondition",
@@ -237,7 +237,7 @@
     "xaml-binding WorkspaceTemplates.xaml LayoutItemsControl in WorkspaceNodeTemplate#0 Visibility": "guard: ContentPaneBorder",
     "xaml-binding WorkspaceTemplates.xaml MarkdownEditor Visibility": "guard: ContentPaneBorder",
     "xaml-binding WorkspaceTemplates.xaml PropertiesHeader Visibility": "guard: ContentPaneBorder",
-    "xaml-binding WorkspaceTemplates.xaml ReadingSurface in WorkspaceTabContentTemplate#0 Visibility": "guard: ContentPaneBorder",
+    "xaml-binding WorkspaceTemplates.xaml ReadingSurface Visibility": "guard: ContentPaneBorder",
     "xaml-binding WorkspaceTemplates.xaml ScrollViewer in EditorInteractionPopover#0 Visibility": "guard: ContentPaneBorder",
     "xaml-binding WorkspaceTemplates.xaml ScrollViewer(PropertiesRows) Visibility": "guard: ContentPaneBorder",
     "xaml-binding WorkspaceTemplates.xaml StackPanel in EditorInteractionPopover#1 Visibility": "guard: ContentPaneBorder",

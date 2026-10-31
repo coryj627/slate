@@ -27,6 +27,7 @@ internal sealed class FindInNoteViewModel : BindableBase, IDisposable
     private readonly DispatcherTimer _debounce;
     private IFindInNoteSurface? _surface;
     private object? _restorePoint;
+    private FindInNoteMode _restoreMode;
     private string _query = string.Empty;
     private bool _matchCase;
     private bool _wholeWord;
@@ -41,6 +42,7 @@ internal sealed class FindInNoteViewModel : BindableBase, IDisposable
     private Recompute _pending = Recompute.None;
     private ResultSet? _results;
     private TrackedHit? _tracked;
+    private bool _askedWhileWaiting;
     private bool _disposed;
 
     public FindInNoteViewModel(Action<A11yEvent> announce, TimeSpan? debounce = null)
@@ -119,6 +121,18 @@ internal sealed class FindInNoteViewModel : BindableBase, IDisposable
         get => _mode;
         set
         {
+            if (value != _mode)
+            {
+                // A mode switch asks nothing: a question the loading reading
+                // view held, or a query still on the debounce, is not answered
+                // on the other surface. Dropped BEFORE the change is published:
+                // the bar re-attaches inside its notification.
+                _askedWhileWaiting = false;
+                if (_pending == Recompute.Options)
+                {
+                    _pending = Recompute.Text;
+                }
+            }
             if (SetField(ref _mode, value))
             {
                 OnPropertyChanged(nameof(CanReplace));
@@ -192,6 +206,7 @@ internal sealed class FindInNoteViewModel : BindableBase, IDisposable
             if (_surface is not null)
             {
                 _restorePoint = _surface.CaptureRestorePoint();
+                _restoreMode = _surface.Mode;
             }
         }
         FocusRequested?.Invoke();
@@ -217,11 +232,13 @@ internal sealed class FindInNoteViewModel : BindableBase, IDisposable
         }
         surface.TextChanged += OnSurfaceTextChanged;
         Mode = surface.Mode;
-        // Taken once, at the open's first attach: a tab switch and back, or a
-        // same-item reload, re-attaches without moving where Close returns.
-        if (IsOpen && _restorePoint is null)
+        // Taken once per surface, at the open's first attach: a tab switch
+        // and back, or a same-item reload, re-attaches without moving where
+        // Close returns; a mode switch takes it on the new surface.
+        if (IsOpen && (_restorePoint is null || _restoreMode != surface.Mode))
         {
             _restorePoint = surface.CaptureRestorePoint();
+            _restoreMode = surface.Mode;
         }
         else if (_restorePoint is not null)
         {
@@ -338,6 +355,7 @@ internal sealed class FindInNoteViewModel : BindableBase, IDisposable
         _debounce.Stop();
         _pending = Recompute.None;
         _tracked = null;
+        _askedWhileWaiting = false;
         // Restored and refocused BEFORE IsOpen falls: the bar detaches its
         // surface as soon as it closes.
         if (_surface is { } surface)
@@ -354,9 +372,9 @@ internal sealed class FindInNoteViewModel : BindableBase, IDisposable
         RaiseCommands();
     }
 
-    /// <summary>A mode switch or an in-place change of item with the bar
-    /// open (PR 1): the bar closes without moving focus or the caret; PR 2
-    /// keeps it open across a mode switch instead.</summary>
+    /// <summary>An in-place change of item with the bar open: the bar
+    /// closes without moving focus or the caret (a mode switch keeps it
+    /// open and moves it to the other surface instead).</summary>
     internal void CloseForModeSwitch()
     {
         if (!IsOpen)
@@ -367,6 +385,7 @@ internal sealed class FindInNoteViewModel : BindableBase, IDisposable
         _debounce.Stop();
         _pending = Recompute.None;
         _tracked = null;
+        _askedWhileWaiting = false;
         _restorePoint = null;
         RaiseCommands();
         DetachSurface();
@@ -394,11 +413,7 @@ internal sealed class FindInNoteViewModel : BindableBase, IDisposable
         }
         old.TextChanged -= OnSurfaceTextChanged;
         _debounce.Stop();
-        old.ClearHighlights();
-        if (old is EditorFindSurface editor)
-        {
-            editor.Detach();
-        }
+        old.Detach();
         _surface = null;
         _tracked = null;
         _results = null;
@@ -476,7 +491,19 @@ internal sealed class FindInNoteViewModel : BindableBase, IDisposable
         {
             return;
         }
+        if (surface.IsSearchable)
+        {
+            // The step itself answers a question the loading reading view
+            // held: the refresh before it stays silent, so one line is heard.
+            _askedWhileWaiting = false;
+        }
         EnsureFresh();
+        if (!surface.IsSearchable)
+        {
+            _askedWhileWaiting = true;
+            Speak(FindInNotePhrase.WaitingForReadingView);
+            return;
+        }
         if (Error is { } error)
         {
             Speak(error);
@@ -536,6 +563,29 @@ internal sealed class FindInNoteViewModel : BindableBase, IDisposable
             CountText = string.Empty;
             return;
         }
+        if (!surface.IsSearchable)
+        {
+            // The reading view's loading placeholder is never searched. A
+            // query or step asked now is answered once, by the first recount
+            // over an applied projection.
+            _results = null;
+            _tracked = null;
+            surface.ClearHighlights();
+            TotalCount = 0;
+            CurrentIndex = 0;
+            CountText = FindInNotePhrase.WaitingForReadingView;
+            if (cause == Recompute.Options)
+            {
+                _askedWhileWaiting = true;
+                Speak(FindInNotePhrase.WaitingForReadingView);
+            }
+            return;
+        }
+        if (_askedWhileWaiting)
+        {
+            _askedWhileWaiting = false;
+            cause = Recompute.Options;
+        }
         ISearchStrategy? strategy = CreateStrategy();
         if (strategy is null)
         {
@@ -583,13 +633,24 @@ internal sealed class FindInNoteViewModel : BindableBase, IDisposable
         int current = -1;
         if (surface.Document is { } document)
         {
-            if (_tracked is { } tracked && Validates(tracked, document))
+            if (_tracked is { } tracked)
             {
-                current = matches.IndexOf((tracked.Start.Offset, tracked.Length));
+                if (Validates(tracked, document))
+                {
+                    current = matches.IndexOf((tracked.Start.Offset, tracked.Length));
+                }
+                if (current < 0)
+                {
+                    _tracked = null;
+                }
             }
-            if (current < 0)
+            else
             {
-                _tracked = null;
+                // Nothing tracked (a re-attach, a mode switch back): the
+                // match the selection covers exactly shows as current, but
+                // stays untracked — Replace acts only on a hit the reader
+                // heard, so it steps (and speaks) first.
+                current = matches.IndexOf(surface.Selection);
             }
         }
         else

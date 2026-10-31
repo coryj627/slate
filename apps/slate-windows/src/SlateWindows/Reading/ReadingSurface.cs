@@ -299,6 +299,7 @@ internal sealed class ReadingSurface : RichTextBox
                 // WB-20: the detach retired this projection's diagram
                 // stage; nothing re-projects here, so it resumes.
                 model.ResumePendingDiagrams();
+                surface.ModelChanged?.Invoke(surface, EventArgs.Empty);
                 return;
             }
             // A model swap is a different projection (navigation, tab
@@ -315,6 +316,7 @@ internal sealed class ReadingSurface : RichTextBox
             surface.ClearForModelSwitch();
             model.EnsureProjected();
         }
+        surface.ModelChanged?.Invoke(surface, EventArgs.Empty);
     }
 
     private void ClearForModelSwitch()
@@ -348,6 +350,8 @@ internal sealed class ReadingSurface : RichTextBox
         // WB-11 (#1329): the cached children would otherwise serve the previous
         // note's lists and elements under the new tab until the incoming merge.
         InvalidateStructuralPeers();
+        ShowsSearchableContent = false;
+        RaiseContentChanged(ReadingContentChange.Replaced);
     }
 
     private void Model_PropertyChanged(
@@ -382,6 +386,7 @@ internal sealed class ReadingSurface : RichTextBox
         _navigator?.SetLandmarks(_landmarks);
         // A chunk can append items to a list opened in an earlier one.
         InvalidateStructuralPeers();
+        RaiseContentChanged(ReadingContentChange.Appended);
     }
 
     private FlowDocument? _lastMerged;
@@ -583,6 +588,7 @@ internal sealed class ReadingSurface : RichTextBox
         {
             InvalidateStructuralPeers();
         }
+        RaiseContentChanged(ReadingContentChange.CompletedInPlace);
     }
 
     private static DiagramAnchor RecordDiagramAnchor(
@@ -705,6 +711,8 @@ internal sealed class ReadingSurface : RichTextBox
         // state a reader who moved away leaves behind, so a late merge could
         // steal focus back. The landing the shell asked for is delivered by
         // ApplyModel after the merge, and nothing else lands.
+        ShowsSearchableContent = true;
+        RaiseContentChanged(ReadingContentChange.Replaced);
     }
 
     /// <summary>The caret as its top-level block's index and the offset
@@ -812,6 +820,51 @@ internal sealed class ReadingSurface : RichTextBox
     /// first applied chunk of a streamed note is ready, because appends only
     /// grow the tail and the reader starts at the top, which is there.</summary>
     private bool ShowsAppliedProjection => _lastMerged is not null;
+
+    /// <summary>WB-22 (#1112): raised once at the end of each path that
+    /// changes what the document holds — never by the rebind fast path,
+    /// which changes nothing.</summary>
+    internal event Action<ReadingContentChange>? ContentChanged;
+
+    /// <summary>Bumped with every <see cref="ContentChanged"/>.</summary>
+    internal int ContentRevision { get; private set; }
+
+    /// <summary>Bumped with every <see cref="ReadingContentChange.Replaced"/>:
+    /// a replacement moves every pointer into the document.</summary>
+    internal int ReplacedRevision { get; private set; }
+
+    /// <summary>WB-22: the find match a reveal last made current, kept here
+    /// rather than on a find surface the bar rebuilds on every attach;
+    /// a replacement drops it.</summary>
+    internal object? FindRevealMemory { get; set; }
+
+    /// <summary>WB-22: raised once a model change is fully handled (content
+    /// switched, or the rebind fast path taken).</summary>
+    internal event EventHandler? ModelChanged;
+
+    /// <summary>The document holds an applied projection, not the "Loading
+    /// reading view…" placeholder (true from the merge, not from
+    /// <see cref="ApplyModel"/>'s bookkeeping after it, so a direct merge
+    /// counts too).</summary>
+    internal bool ShowsSearchableContent { get; private set; }
+
+    /// <summary>The text view's render scope: what the template's
+    /// <c>PART_ContentHost</c> scroll viewer scrolls. Null before the
+    /// template applies.</summary>
+    internal FrameworkElement? DocumentRenderScope => ContentScrollViewer?.Content as FrameworkElement;
+
+    internal ScrollViewer? ContentScrollViewer => GetTemplateChild("PART_ContentHost") as ScrollViewer;
+
+    private void RaiseContentChanged(ReadingContentChange change)
+    {
+        ContentRevision++;
+        if (change == ReadingContentChange.Replaced)
+        {
+            ReplacedRevision++;
+            FindRevealMemory = null;
+        }
+        ContentChanged?.Invoke(change);
+    }
 
     /// <summary>What the surface shows is a failure, not the note: the
     /// model's terminal-failure notice, or the content a failed refresh kept
@@ -1919,4 +1972,14 @@ internal sealed class ReadingListItemPeer : TextElementAutomationPeer
     /// item's CheckBox is the element this bug was found on.</summary>
     protected override List<AutomationPeer> GetChildrenCore() =>
         ReadingStructuralPeer.NoChildren();
+}
+
+/// <summary>WB-22 (#1112): what a <see cref="ReadingSurface.ContentChanged"/>
+/// did. A replacement moves every pointer; an append only grows the tail;
+/// an in-place completion rewrites one diagram paragraph's runs.</summary>
+internal enum ReadingContentChange
+{
+    Replaced,
+    Appended,
+    CompletedInPlace,
 }

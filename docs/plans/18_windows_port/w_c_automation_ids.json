@@ -2601,6 +2601,11 @@
   },
   {
     "Source": "WorkspaceTemplates.xaml",
+    "Expression": "ReadingSurface",
+    "Surface": "Reading view (W3-1)"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
     "Expression": "WorkspaceSplitHandle",
     "Surface": "Split workspace"
   },

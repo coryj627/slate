@@ -57,5 +57,9 @@ internal interface IFindInNoteSurface
 
     void ReturnFocus();
 
+    /// <summary>Stops following the surface (the bar detached it): the
+    /// highlights cleared and its change events unsubscribed.</summary>
+    void Detach();
+
     event Action? TextChanged;
 }

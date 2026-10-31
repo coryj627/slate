@@ -4,11 +4,13 @@
 using System.Windows;
 using System.Windows.Automation.Peers;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using ICSharpCode.AvalonEdit.Document;
 using SlateWindows.Canvas;
 using SlateWindows.Grids;
+using SlateWindows.Reading;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows.Tests;
@@ -107,6 +109,55 @@ public sealed class FindInNoteBarTests
 
         public int Renderers => Editor.TextArea.TextView.BackgroundRenderers.OfType<FindMatchBackgroundRenderer>().Count();
 
+        public ReadingSurface ReadingSurface => Assert.Single(
+            Descendants<ReadingSurface>(Host.Shell),
+            surface => ReferenceEquals(surface.DataContext, Tab) && surface.IsVisible);
+
+        public bool Press(IInputElement target, Key key, ModifierKeys modifiers = ModifierKeys.None)
+        {
+            bool handled = Host.Press(target, key, modifiers);
+            Settle();
+            return handled;
+        }
+
+        /// <summary>The note in reading mode, its projection applied.</summary>
+        public void ToReading()
+        {
+            Tab.ToggleViewMode();
+            Settle();
+            Assert.True(ReadingSurface.ShowsSearchableContent, "premise: the reading projection applied");
+        }
+
+        public void FocusReading()
+        {
+            Assert.True(ReadingSurface.Focus());
+            Settle();
+            Assert.True(ReadingSurface.IsKeyboardFocused, "premise: the reading text holds the keys");
+        }
+
+        /// <summary>Ctrl+F from the reading text, then the query typed and
+        /// the debounce flushed.</summary>
+        public void OpenReading(string query)
+        {
+            FocusReading();
+            Press(ReadingSurface, Key.F, ModifierKeys.Control);
+            Assert.True(Find.IsOpen, "premise: Ctrl+F opened the bar");
+            Bar.Query.Text = query;
+            Find.FlushPendingForTests();
+            Settle();
+        }
+
+        /// <summary>The rings on <paramref name="surface"/> (by default the
+        /// shown reading surface).</summary>
+        public FindMatchAdorner? ReadingAdorner(ReadingSurface? surface = null)
+        {
+            if ((surface ?? ReadingSurface).DocumentRenderScope is not { } scope)
+            {
+                return null;
+            }
+            return AdornerLayer.GetAdornerLayer(scope)?.GetAdorners(scope)?.OfType<FindMatchAdorner>().SingleOrDefault();
+        }
+
         public void Dispose() => Host.Dispose();
     }
 
@@ -185,15 +236,6 @@ public sealed class FindInNoteBarTests
     {
         // A clean tab: closing a dirty one would raise the unsaved prompt.
         using var shell = new Shell(text: null);
-
-        // A reading-mode note (PR 1: the bar searches the editor only).
-        shell.Tab.ToggleViewMode();
-        shell.Settle();
-        shell.Press(shell.Host.Shell, Key.F, ModifierKeys.Control);
-        Assert.True(shell.SearchIsOpen);
-        Assert.False(shell.Find.IsOpen);
-        shell.Host.Lifecycle.Search.Toggle();
-        Assert.False(shell.SearchIsOpen);
 
         // A graph tab.
         shell.Workspace.OpenGraph();
@@ -319,25 +361,354 @@ public sealed class FindInNoteBarTests
         Assert.Equal(1, rig.Find.TotalCount);
     }
 
-    /// <summary>Red team round 1 (PR 1): a switch to reading mode with the
-    /// bar open closes it; nothing stays drawn on, or writable in, the
-    /// hidden editor.</summary>
+    private const string ReadingNote = "# alpha head\n\n- an alpha item\n\nA [alpha link](note1.md) here.\n";
+
+    /// <summary>PR 2: Ctrl+F in a reading-mode note opens the bar over the
+    /// reading view, never vault search.</summary>
     [Fact]
-    public void AModeSwitchWithTheBarOpenClosesIt() => RunSta(() =>
+    public void CtrlFInReadingModeOpensTheBarOverTheReadingView() => RunSta(() =>
     {
-        using var shell = new Shell("a b a b a");
-        shell.Open("a");
+        using var shell = new Shell(ReadingNote);
+        shell.ToReading();
+        ReadingSurface surface = shell.ReadingSurface;
+        shell.FocusReading();
+
+        shell.Press(surface, Key.F, ModifierKeys.Control);
+
+        Assert.True(shell.Find.IsOpen);
+        Assert.Equal(FindInNoteMode.Reading, shell.Find.Mode);
+        Assert.True(shell.Bar.Query.IsKeyboardFocused);
+        Assert.False(shell.SearchIsOpen);
+        shell.Bar.Query.Text = "alpha";
+        shell.Find.FlushPendingForTests();
+        shell.Settle();
+        Assert.IsType<ReadingFindSurface>(shell.Find.Surface);
+        Assert.Equal(3, shell.Find.TotalCount);
+    });
+
+    /// <summary>PR 2: Ctrl+G from the reading text steps the selection with
+    /// the keys kept, and opening, drawing and stepping change nothing in
+    /// the reading document: its text, its elements, its peers, its
+    /// revision.</summary>
+    [Fact]
+    public void CtrlGFromTheReadingSurfaceMovesTheSelectionAndLeavesTheDocumentAlone() => RunSta(() =>
+    {
+        using var shell = new Shell(ReadingNote);
+        shell.ToReading();
+        ReadingSurface surface = shell.ReadingSurface;
+        string text = DocumentText(surface);
+        string structure = Fingerprint(surface.Document);
+        int revision = surface.ContentRevision;
+        int changes = 0;
+        surface.TextChanged += (_, _) => changes++;
+        AutomationPeer peer = UIElementAutomationPeer.CreatePeerForElement(surface);
+        List<AutomationPeer> peers = peer.GetChildren() ?? [];
+
+        shell.OpenReading("alpha");
+        Assert.Equal(1, shell.Find.CurrentIndex);
+        shell.FocusReading();
+        shell.Heard.Clear();
+
+        Assert.True(shell.Press(surface, Key.G, ModifierKeys.Control));
+        Assert.Equal("alpha", surface.Selection.Text);
+        Assert.Equal(2, shell.Find.CurrentIndex);
+        Assert.Equal(["2 of 3"], shell.Spoken);
+        Assert.True(surface.IsKeyboardFocused, "the step took the keys from the reading text");
+        shell.Press(surface, Key.G, ModifierKeys.Control);
+        shell.Press(surface, Key.G, ModifierKeys.Control);
+        Assert.Equal(1, shell.Find.CurrentIndex);
+
+        Assert.Equal(text, DocumentText(surface));
+        Assert.Equal(structure, Fingerprint(surface.Document));
+        Assert.Equal(0, changes);
+        Assert.Equal(revision, surface.ContentRevision);
+        List<AutomationPeer> after = peer.GetChildren() ?? [];
+        Assert.Equal(peers.Count, after.Count);
+        Assert.All(peers.Zip(after), pair => Assert.Same(pair.First, pair.Second));
+    });
+
+    /// <summary>PR 2: Ctrl+G from a link inside the reading document — a
+    /// content element, reached through its logical parent — steps the
+    /// surface's selection, the keys staying on the link.</summary>
+    [Fact]
+    public void CtrlGFromALinkInTheReadingDocumentSteps() => RunSta(() =>
+    {
+        using var shell = new Shell(ReadingNote);
+        shell.ToReading();
+        ReadingSurface surface = shell.ReadingSurface;
+        shell.OpenReading("alpha");
+        Hyperlink link = Assert.Single(
+            LogicalDescendants<Hyperlink>(surface.Document),
+            candidate => new TextRange(candidate.ContentStart, candidate.ContentEnd).Text.Contains("alpha", StringComparison.Ordinal));
+        Assert.True(link.Focus(), "premise: the link takes the keys");
+        Assert.True(link.IsKeyboardFocused);
+
+        Assert.True(shell.Press(link, Key.G, ModifierKeys.Control));
+
+        Assert.Equal(2, shell.Find.CurrentIndex);
+        Assert.Equal("alpha", surface.Selection.Text);
+        Assert.True(link.IsKeyboardFocused, "the step took the keys from the link");
+    });
+
+    /// <summary>PR 2: with the note's bar closed — never opened, or opened
+    /// and closed — Ctrl+G from the reading text is left unhandled.</summary>
+    [Fact]
+    public void CtrlGWithTheBarClosedPassesThroughTheReadingSurface() => RunSta(() =>
+    {
+        using var shell = new Shell(ReadingNote);
+        shell.ToReading();
+        ReadingSurface surface = shell.ReadingSurface;
+        for (int pass = 0; pass < 2; pass++)
+        {
+            if (pass == 1)
+            {
+                shell.OpenReading("alpha");
+                shell.Press(shell.Bar.Query, Key.Escape);
+                Assert.False(shell.Find.IsOpen);
+            }
+            shell.FocusReading();
+            string selection = surface.Selection.Text;
+            shell.Heard.Clear();
+
+            Assert.False(shell.Press(surface, Key.G, ModifierKeys.Control));
+            Assert.False(shell.Press(surface, Key.G, ModifierKeys.Control | ModifierKeys.Shift));
+
+            Assert.Equal(selection, surface.Selection.Text);
+            Assert.Empty(shell.Spoken);
+            Assert.False(shell.Find.IsOpen);
+        }
+    });
+
+    /// <summary>PR 2: Escape in the reading text never reaches the bar, so it
+    /// stays open with its matches drawn.</summary>
+    [Fact]
+    public void EscapeInTheReadingSurfaceLeavesTheBarOpen() => RunSta(() =>
+    {
+        using var shell = new Shell(ReadingNote);
+        shell.ToReading();
+        shell.OpenReading("alpha");
+        shell.FocusReading();
+
+        shell.Press(shell.ReadingSurface, Key.Escape);
+
+        Assert.True(shell.Find.IsOpen);
+        Assert.Equal(3, Assert.IsType<FindMatchAdorner>(shell.ReadingAdorner()).Count);
+    });
+
+    /// <summary>PR 2: Escape in the bar over the reading view closes it,
+    /// takes the rings away, gives the selection back and returns the keys
+    /// to the reading text.</summary>
+    [Fact]
+    public void EscapeClosesAndReturnsFocusToTheReadingSurface() => RunSta(() =>
+    {
+        using var shell = new Shell(ReadingNote);
+        shell.ToReading();
+        ReadingSurface surface = shell.ReadingSurface;
+        surface.CaretPosition = surface.Document.ContentStart.GetPositionAtOffset(5)!;
+        int caret = surface.Document.ContentStart.GetOffsetToPosition(surface.CaretPosition);
+        shell.OpenReading("alpha");
+        shell.Press(shell.Bar.Query, Key.Enter);
+        Assert.Equal("alpha", surface.Selection.Text);
+
+        // Read before the dispatcher drains: a later focus guard must not be
+        // what puts the keys back.
+        shell.Host.Press(shell.Bar.Query, Key.Escape, ModifierKeys.None);
+        Assert.True(surface.IsKeyboardFocused, "Escape did not return the keys to the reading text");
+        shell.Settle();
+
+        Assert.False(shell.Find.IsOpen);
+        Assert.Null(shell.ReadingAdorner());
+        Assert.True(surface.Selection.IsEmpty, "the selection opening found was not given back");
+        Assert.Equal(caret, surface.Document.ContentStart.GetOffsetToPosition(surface.CaretPosition));
+        Assert.True(surface.IsKeyboardFocused, "the keys left the reading text after Escape");
+    });
+
+    /// <summary>PR 2: a mode switch with the bar open keeps its query and
+    /// options and moves it to the other surface: the editor's fill goes,
+    /// the reading view's rings come, the set is recounted over the reading
+    /// text silently with no caret or selection moved, and back again the
+    /// editor's still-selected match is current.</summary>
+    [Fact]
+    public void AModeSwitchWithTheBarOpenKeepsTheQueryAndMovesTheHighlights() => RunSta(() =>
+    {
+        using var shell = new Shell("alpha beta alpha");
+        shell.Open("alpha");
+        shell.Press(shell.Bar.Query, Key.Enter);
+        Assert.Equal(2, shell.Find.CurrentIndex);
         SlateTextEditor editor = shell.Editor;
         Assert.Equal(1, shell.Renderers);
+        shell.Heard.Clear();
+
+        shell.Press(shell.Bar.Query, Key.E, ModifierKeys.Control | ModifierKeys.Shift);
+        shell.Find.FlushPendingForTests();
+        shell.Settle();
+
+        Assert.True(shell.Find.IsOpen);
+        Assert.Equal(FindInNoteMode.Reading, shell.Find.Mode);
+        Assert.Equal("alpha", shell.Find.Query);
+        Assert.Empty(editor.TextArea.TextView.BackgroundRenderers.OfType<FindMatchBackgroundRenderer>());
+        ReadingSurface surface = shell.ReadingSurface;
+        Assert.Equal(2, Assert.IsType<FindMatchAdorner>(shell.ReadingAdorner()).Count);
+        Assert.Equal(2, shell.Find.TotalCount);
+        Assert.Equal(0, shell.Find.CurrentIndex);
+        Assert.True(surface.Selection.IsEmpty, "the switch moved the reading selection");
+        Assert.Equal(Visibility.Collapsed, shell.Child<Button>("FindInNoteReplace").Visibility);
+        Assert.Empty(shell.Spoken);
+        // The toggle's own landing: the keys go to the surface it shows.
+        Assert.True(surface.IsKeyboardFocused, "the keys did not land on the reading text");
+
+        shell.Press(shell.Bar.Query, Key.E, ModifierKeys.Control | ModifierKeys.Shift);
+        shell.Find.FlushPendingForTests();
+        shell.Settle();
+
+        Assert.Equal(FindInNoteMode.Editor, shell.Find.Mode);
+        Assert.Null(shell.ReadingAdorner(surface));
+        Assert.Equal(1, shell.Renderers);
+        Assert.Equal(2, shell.Find.CurrentIndex);
+        Assert.Empty(shell.Spoken);
+
+        // The match shows as current but was not heard here: Replace steps
+        // and speaks before it writes anything.
+        shell.Find.ReplaceText = "omega";
+        shell.Find.Replace();
+        Assert.Equal("alpha beta alpha", shell.Tab.Text);
+        Assert.Single(shell.Spoken);
+    });
+
+    /// <summary>Red team: the reading surface is attached only once its
+    /// model, as well as its tab, is the bar's — a model that is another
+    /// tab's, or arrives late with no content change, is answered when it
+    /// does arrive.</summary>
+    [Fact]
+    public void TheBarWaitsForTheReadingSurfacesOwnModel() => RunSta(() =>
+    {
+        using var shell = new Shell(ReadingNote);
+        WorkspaceTabViewModel own = shell.Tab;
+        shell.Workspace.OpenPath("note1.md", WorkspaceOpenTarget.NewTab);
+        shell.Settle();
+        WorkspaceTabViewModel other = shell.Tab;
+        other.ToggleViewMode();
+        shell.Settle();
+        shell.Workspace.ActiveGroup.ActiveTab = own;
+        shell.Settle();
+        shell.ToReading();
+        shell.OpenReading("alpha");
+        ReadingSurface surface = shell.ReadingSurface;
+        Assert.IsType<ReadingFindSurface>(shell.Find.Surface);
+
+        surface.Model = other.Reading;
+        shell.Settle();
+        Assert.Null(shell.Find.Surface);
+
+        surface.ClearValue(ReadingSurface.ModelProperty);
+        shell.Settle();
+        Assert.Same(own.Reading, surface.Model);
+        Assert.IsType<ReadingFindSurface>(shell.Find.Surface);
+        Assert.Equal(3, shell.Find.TotalCount);
+    });
+
+    /// <summary>PR 2: a switch to reading mode collapses the replace
+    /// controls; one holding the keys hands them to the query first, so a
+    /// switch with no landing of its own (the tab's toggle; the command's
+    /// shortcut then lands them on the reading text) never leaves them on a
+    /// collapsed control.</summary>
+    [Theory]
+    [InlineData("ReplaceBox")]
+    [InlineData("ReplaceButton")]
+    [InlineData("ReplaceAllButton")]
+    public void AModeSwitchFromAReplaceControlKeepsTheKeysInTheBar(string control) => RunSta(() =>
+    {
+        using var shell = new Shell("alpha beta alpha");
+        shell.Open("alpha");
+        var replace = Assert.IsAssignableFrom<FrameworkElement>(shell.Bar.FindName(control));
+        Assert.True(replace.Focus());
 
         shell.Tab.ToggleViewMode();
         shell.Settle();
 
-        Assert.False(shell.Find.IsOpen);
-        Assert.Empty(editor.TextArea.TextView.BackgroundRenderers.OfType<FindMatchBackgroundRenderer>());
-        Assert.False(shell.Find.ReplaceCommand.CanExecute(null));
-        Assert.Equal(string.Empty, shell.Find.CountText);
+        Assert.Equal(FindInNoteMode.Reading, shell.Find.Mode);
+        Assert.True(shell.Bar.Query.IsKeyboardFocused, "the keys left the bar with the collapsed control");
     });
+
+    /// <summary>PR 2: reading mode has no replace — its three controls are
+    /// collapsed, absent from the landmark's children, and their commands
+    /// cannot run; editor mode has them before Close.</summary>
+    [Fact]
+    public void TheReadingModeBarHidesReplace() => RunSta(() =>
+    {
+        using var shell = new Shell(ReadingNote);
+        shell.Open("alpha");
+        Assert.Equal(
+            ["FindInNoteQuery", "FindInNoteCount", "FindInNotePrevious", "FindInNoteNext", "FindInNoteMatchCase",
+             "FindInNoteWholeWord", "FindInNoteReplaceText", "FindInNoteReplace", "FindInNoteReplaceAll", "FindInNoteClose"],
+            LandmarkChildren(shell));
+
+        shell.ToReading();
+
+        foreach (string id in new[] { "FindInNoteReplaceText", "FindInNoteReplace", "FindInNoteReplaceAll" })
+        {
+            Assert.Equal(Visibility.Collapsed, shell.Child<FrameworkElement>(id).Visibility);
+        }
+        Assert.False(shell.Find.ReplaceCommand.CanExecute(null));
+        Assert.False(shell.Find.ReplaceAllCommand.CanExecute(null));
+        Assert.Equal(
+            ["FindInNoteQuery", "FindInNoteCount", "FindInNotePrevious", "FindInNoteNext", "FindInNoteMatchCase",
+             "FindInNoteWholeWord", "FindInNoteClose"],
+            LandmarkChildren(shell));
+    });
+
+    /// <summary>The landmark's children a reader reaches: WPF keeps a
+    /// collapsed element as an offscreen peer, which screen readers
+    /// skip.</summary>
+    private static List<string> LandmarkChildren(Shell shell)
+    {
+        AutomationPeer landmark = UIElementAutomationPeer.CreatePeerForElement(shell.Child<FrameworkElement>("FindInNote"));
+        landmark.ResetChildrenCache();
+        return (landmark.GetChildren() ?? [])
+            .Where(child => !child.IsOffscreen())
+            .Select(child => child.GetAutomationId())
+            .ToList();
+    }
+
+    private static string DocumentText(ReadingSurface surface) =>
+        new TextRange(surface.Document.ContentStart, surface.Document.ContentEnd).Text;
+
+    /// <summary>The document's elements in pre-order, each run with its
+    /// text: what a highlight written INTO the document would change.</summary>
+    private static string Fingerprint(FlowDocument document)
+    {
+        var text = new System.Text.StringBuilder();
+        foreach (DependencyObject element in LogicalDescendants<DependencyObject>(document))
+        {
+            text.Append(element.GetType().Name);
+            if (element is Run run)
+            {
+                text.Append('[').Append(run.Text).Append(']');
+            }
+            text.Append(' ');
+        }
+        return text.ToString();
+    }
+
+    private static IEnumerable<T> LogicalDescendants<T>(DependencyObject root)
+        where T : DependencyObject
+    {
+        foreach (object child in LogicalTreeHelper.GetChildren(root))
+        {
+            if (child is not DependencyObject node)
+            {
+                continue;
+            }
+            if (node is T match)
+            {
+                yield return match;
+            }
+            foreach (T descendant in LogicalDescendants<T>(node))
+            {
+                yield return descendant;
+            }
+        }
+    }
 
     /// <summary>Red team round 1: the bar belongs to the note it searched —
     /// an in-place change of item closes it and clears its count, while a

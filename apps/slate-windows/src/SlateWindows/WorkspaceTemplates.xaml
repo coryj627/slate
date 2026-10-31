@@ -454,7 +454,8 @@
             <!-- W3-1 (#728): the reading surface swaps in for the editor
                  on the persisted per-tab mode. Same grid cell — one of
                  the two is always collapsed, so UIA never sees both. -->
-            <reading:ReadingSurface Grid.Row="1"
+            <reading:ReadingSurface x:Name="ReadingSurface"
+                                    Grid.Row="1"
                                     Margin="12"
                                     Padding="12"
                                     Model="{Binding Reading}"
@@ -595,7 +596,8 @@
                  the text's never reaches it. -->
             <local:FindInNoteBar Grid.Row="2"
                                  DataContext="{Binding FindInNote}"
-                                 Editor="{Binding ElementName=MarkdownEditor}" />
+                                 Editor="{Binding ElementName=MarkdownEditor}"
+                                 ReadingSurface="{Binding ElementName=ReadingSurface}" />
             <TextBlock Grid.Row="3"
                        Margin="12,0,12,8"
                        Text="{Binding Status}"
