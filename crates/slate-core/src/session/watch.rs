@@ -1056,7 +1056,7 @@ impl VaultSession {
         // the handle's own anchor is the reference).
         if let Some(anchor) = self.root_identity
             && handle.arm_identity()
-                != Some(RootIdentity::from_device_inode(anchor.device, anchor.inode))
+                != Some(RootIdentity::from_device_inode(anchor.volume, anchor.id_low))
         {
             log::warn!(
                 "vault watch refused: the vault root no longer names the folder this session \

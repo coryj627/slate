@@ -43,6 +43,41 @@ use std::{fs, io};
 
 use crate::VaultError;
 
+/// Physical identity of a held directory: the vault root a session opened,
+/// or its `.slate` (FL-06 round-27; plan 44 WB-28 design item 1, WD22 and
+/// WD24). Read from the held handle inside the open, never from a path, so
+/// a spelling that swapped A→B→A around the open cannot produce it for B.
+///
+/// `persistent` is `true` when the id is the file system's own file id:
+/// `fstat`'s `st_dev` and `st_ino` (`volume`, `id_low`; `id_high` is 0) or
+/// Windows' `FileIdInfo` (the 64-bit volume serial and the 128-bit id). It
+/// is `false` for the fallback a FAT, FAT32 or exFAT volume answers
+/// instead (`GetFileInformationByHandle`: the 32-bit serial and the 64-bit
+/// file index), which changes when the entry is renamed or moved and can
+/// repeat on another volume. Equality covers all four fields, so a weak
+/// identity never equals a persistent one, and no access decision compares
+/// identities: two weak identities that are equal need not name one
+/// folder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct VaultRootIdentity {
+    pub volume: u64,
+    pub id_high: u64,
+    pub id_low: u64,
+    pub persistent: bool,
+}
+
+impl VaultRootIdentity {
+    /// A Unix `(st_dev, st_ino)`: always the file system's own id.
+    pub(crate) fn from_device_inode(device: u64, inode: u64) -> Self {
+        Self {
+            volume: device,
+            id_high: 0,
+            id_low: inode,
+            persistent: true,
+        }
+    }
+}
+
 /// Whether this target resolves the interior through held descriptors:
 /// macOS and Linux on 64-bit (the unix VFS hook writes SQLite's
 /// `struct stat`, whose layout matches `libc::stat` there).
@@ -304,9 +339,9 @@ struct Held {
     sqlite: std::sync::OnceLock<crate::db::anchored::SqliteAnchor>,
     /// The directory, opened for search (`O_SEARCH`, or Linux's `O_PATH`).
     dir: fs::File,
-    /// `(device, inode)` from `fstat` of `dir`: the structural-lock
-    /// registry's key (design §6, owner decision Q5).
-    identity: (u64, u64),
+    /// `fstat` of `dir`: the structural-lock registry's key (design §6,
+    /// owner decision Q5).
+    identity: VaultRootIdentity,
 }
 
 impl std::fmt::Debug for CacheDir {
@@ -358,8 +393,8 @@ impl CacheDir {
         })))
     }
 
-    /// The held directory's `(device, inode)`.
-    pub(crate) fn identity(&self) -> Option<(u64, u64)> {
+    /// The held directory's identity.
+    pub(crate) fn identity(&self) -> Option<VaultRootIdentity> {
         Some(self.0.held.identity)
     }
 
@@ -403,7 +438,7 @@ impl CacheDir {
     }
 
     /// No held directory, so no identity: the registry keys the pathname.
-    pub(crate) fn identity(&self) -> Option<(u64, u64)> {
+    pub(crate) fn identity(&self) -> Option<VaultRootIdentity> {
         None
     }
 
@@ -529,10 +564,10 @@ pub struct FsRoot {
     /// The spelling the session opened, for messages and the display
     /// fallback.
     opened_as: PathBuf,
-    /// `(device, inode)` of the held root (`fstat` of the descriptor), or a
-    /// pathname observation where the root is not held (other Unixes, as
-    /// before); `None` on Windows until 22W.
-    identity: Option<(u64, u64)>,
+    /// The held root's identity (`fstat` of the descriptor), or a pathname
+    /// observation where the root is not held (other Unixes, as before);
+    /// `None` on Windows until 22W.
+    identity: Option<VaultRootIdentity>,
     #[cfg(all(
         any(target_os = "macos", target_os = "linux"),
         target_pointer_width = "64"
@@ -552,8 +587,8 @@ impl std::fmt::Debug for FsRoot {
 }
 
 impl FsRoot {
-    /// The held root's `(device, inode)` — the identity the interior bound.
-    pub(crate) fn identity(&self) -> Option<(u64, u64)> {
+    /// The held root's identity — the one the interior bound.
+    pub(crate) fn identity(&self) -> Option<VaultRootIdentity> {
         self.identity
     }
 
@@ -730,12 +765,12 @@ fn slate_refusal(root: &fs::File, slate: &Path, error: io::Error) -> VaultError 
     any(target_os = "macos", target_os = "linux"),
     target_pointer_width = "64"
 )))]
-fn observed_identity(root: &Path) -> Option<(u64, u64)> {
+fn observed_identity(root: &Path) -> Option<VaultRootIdentity> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt as _;
         let meta = fs::File::open(root).ok()?.metadata().ok()?;
-        Some((meta.dev(), meta.ino()))
+        Some(VaultRootIdentity::from_device_inode(meta.dev(), meta.ino()))
     }
     #[cfg(not(unix))]
     {
@@ -800,10 +835,13 @@ pub(crate) mod sys {
         }
     }
 
-    pub(crate) fn identity(file: &fs::File) -> io::Result<(u64, u64)> {
+    pub(crate) fn identity(file: &fs::File) -> io::Result<super::VaultRootIdentity> {
         use std::os::unix::fs::MetadataExt as _;
         let meta = file.metadata()?;
-        Ok((meta.dev(), meta.ino()))
+        Ok(super::VaultRootIdentity::from_device_inode(
+            meta.dev(),
+            meta.ino(),
+        ))
     }
 
     pub(crate) fn open_at(

@@ -2476,7 +2476,7 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
     XCTAssertEqual(
       state.sidebarVaultRootIdentity,
       AppState.SidebarVaultRootIdentity(
-        device: anchor.device, inode: anchor.inode))
+        device: anchor.volume, inode: anchor.idLow))
   }
 
   func testOpenSurvivesAMoveAwayAndBackOfTheSameDirectory() throws {

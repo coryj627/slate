@@ -254,9 +254,12 @@ pub fn open_database(path: &Path, cache_size_pages: u32) -> Result<Connection, D
         // A session's cache opens by its synthetic anchored path; the
         // diagnostic names the cache a person would recognise (plan 43 PR
         // 22a, design §4.2), and only at `debug` (the #507 privacy rule).
-        #[cfg(all(
-            any(target_os = "macos", target_os = "linux"),
-            target_pointer_width = "64"
+        #[cfg(any(
+            all(
+                any(target_os = "macos", target_os = "linux"),
+                target_pointer_width = "64"
+            ),
+            windows
         ))]
         let path = anchored::display_path(path);
         log::debug!(
@@ -277,9 +280,12 @@ pub fn open_database(path: &Path, cache_size_pages: u32) -> Result<Connection, D
 /// second connections open here too, so every connection to an anchored
 /// cache resolves through the held `.slate`.
 pub(crate) fn open_connection(path: &Path) -> rusqlite::Result<Connection> {
-    #[cfg(all(
-        any(target_os = "macos", target_os = "linux"),
-        target_pointer_width = "64"
+    #[cfg(any(
+        all(
+            any(target_os = "macos", target_os = "linux"),
+            target_pointer_width = "64"
+        ),
+        windows
     ))]
     if let Some(vfs) = anchored::VFS
         && anchored::is_synthetic(path)

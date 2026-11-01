@@ -55,10 +55,10 @@ internal sealed record SidebarJournalAppend(Guid Id, Task<bool> Durable);
 /// #1435: the vault root's physical identity on Windows, as the journal keys
 /// it — the volume serial number and the 128-bit file id of
 /// <c>FILE_ID_INFO</c>, the identity <see cref="ExternalLinkPolicy"/> trusts
-/// (ReFS-safe; the 64-bit <c>nFileIndex</c> is not unique there). Core's
-/// <c>VaultSession.RootIdentity()</c> observes nothing on Windows (its
-/// <c>observe_root_identity</c> leaves the observation to this host), so the
-/// journal reads it here. A replacement vault at the same path is another
+/// (ReFS-safe; the 64-bit <c>nFileIndex</c> is not unique there). The
+/// journal reads it here, from the path, as it did before core's
+/// <c>VaultSession.RootIdentity()</c> read the held root on Windows (plan 44
+/// WB-28). A replacement vault at the same path is another
 /// directory with another file id, so it never finds the file.
 /// </summary>
 internal sealed record SidebarJournalIdentity(ulong Device, UInt128 Inode)

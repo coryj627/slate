@@ -61,7 +61,7 @@ fn next_directory_cursor_nonce() -> u64 {
 /// by (plan 43 PR 22a, #940; design §6, owner decision Q5).
 ///
 /// Where the interior is held (macOS and Linux) the key is the held cache
-/// directory's `(device, inode)`: the canonical lock pathname is the same
+/// directory's whole identity: the canonical lock pathname is the same
 /// string before and after a root swap (design §3.2 probe (b)), so a
 /// pathname key would hand one vault's slot to the vault swapped in at its
 /// path, and hold two sessions on one vault, opened through two spellings
@@ -69,14 +69,14 @@ fn next_directory_cursor_nonce() -> u64 {
 /// it is the canonical lock path, as before.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum StructuralLockKey {
-    Identity { device: u64, inode: u64 },
+    Identity(VaultRootIdentity),
     Path(PathBuf),
 }
 
 impl StructuralLockKey {
     fn of(cache: &CacheDir) -> std::io::Result<Self> {
         Ok(match cache.identity() {
-            Some((device, inode)) => Self::Identity { device, inode },
+            Some(identity) => Self::Identity(identity),
             None => Self::Path(std::fs::canonicalize(cache.display())?.join("structural.lock")),
         })
     }
@@ -85,7 +85,7 @@ impl StructuralLockKey {
     /// link, or by its canonical path where the interior is not held.
     fn open_file(&self, cache: &CacheDir) -> std::io::Result<std::fs::File> {
         match self {
-            Self::Identity { .. } => cache.open_file(
+            Self::Identity(_) => cache.open_file(
                 "structural.lock",
                 FileOptions::new().read(true).write(true).create(true),
             ),
@@ -1083,26 +1083,18 @@ struct OplogAppendState {
 /// growth rather than payload bytes alone. Deliberately generous.
 const OPLOG_ENTRY_FRAMING_OVERHEAD_ESTIMATE: u64 = 256;
 
-/// Physical identity of the filesystem root a session opened — one
-/// `(device, inode)` metadata observation made inside the open itself
-/// (FL-06 round-27). Hosts compare their own per-surface root
-/// observations against this anchor; a path that swapped A→B→A around
-/// the open cannot produce a matching pair of observations for two
-/// different directories.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct VaultRootIdentity {
-    pub device: u64,
-    pub inode: u64,
-}
+/// Physical identity of the filesystem root a session opened (FL-06
+/// round-27; widened by plan 44 WB-28): see the type in `vault::fs_root`.
+/// Hosts compare their own per-surface root observations against this
+/// anchor; a path that swapped A→B→A around the open cannot produce a
+/// matching pair of observations for two different directories.
+pub use crate::vault::fs_root::VaultRootIdentity;
 
 #[cfg(unix)]
 fn observe_root_identity(root: &std::path::Path) -> Option<VaultRootIdentity> {
     use std::os::unix::fs::MetadataExt;
     let meta = std::fs::metadata(root).ok()?;
-    Some(VaultRootIdentity {
-        device: meta.dev(),
-        inode: meta.ino(),
-    })
+    Some(VaultRootIdentity::from_device_inode(meta.dev(), meta.ino()))
 }
 
 #[cfg(not(unix))]
@@ -3220,9 +3212,7 @@ impl VaultSession {
         // beneath those descriptors, so a root swapped after this point
         // cannot hand the session another vault's interior.
         let held_root = Arc::new(FsRoot::open(&root)?);
-        let root_identity = held_root
-            .identity()
-            .map(|(device, inode)| VaultRootIdentity { device, inode });
+        let root_identity = held_root.identity();
         #[cfg(test)]
         fire_open_swap_seam(OpenSwapPoint::RootAnchored);
         let root_for_reverify = root.clone();

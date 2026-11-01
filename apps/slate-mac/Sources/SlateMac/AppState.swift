@@ -10668,7 +10668,7 @@ final class AppState: ObservableObject {
             // observes no identity cannot prove the surfaces share one
             // root: abort those too.
             let sessionRootIdentity = session.rootIdentity().map {
-                SidebarVaultRootIdentity(device: $0.device, inode: $0.inode)
+                SidebarVaultRootIdentity(device: $0.volume, inode: $0.idLow)
             }
             if sessionRootIdentity == nil
                 || sidebarVaultRootIdentity != sessionRootIdentity
