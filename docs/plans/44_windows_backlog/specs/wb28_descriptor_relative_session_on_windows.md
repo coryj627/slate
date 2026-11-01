@@ -275,6 +275,16 @@ differs from the sections below, it wins.
   rewrites between its read and its delete loses that rewrite, and a source
   an ACL forbids deleting can merge cleared entries back (accepted-risk
   candidates, codex rounds 1 and 2).
+- **Codex approved at round 3** (head `592182c9`), with these accepted-risk
+  candidates, each needing another writer or two separate disturbances: a
+  second process's `Add`, `Replace` or `Clear` landing between a
+  migration's reads and its commit (the app's own calls are synchronous in
+  one process; a future lock would cover both migrations and the three
+  writers); a source undeletable through a migration and a replacement
+  that replays once deletable; a snapshot from an earlier failed migration
+  retiring an unchanged source the later load could not merge; and the
+  sidebar's cached-list `Replace` dropping entries a load recovered
+  (pre-existing).
 - **Added beyond the table:** the writer's four-row theory
   `APendingWriteNeverReachesAnotherRootsPreferences` (retarget, alias,
   weak collision, weak reopen),
