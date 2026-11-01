@@ -117,10 +117,22 @@ overwrite) there.
   `fs_root()`, which on Windows is now the held root's own final path,
   verified against its identity (no reparse point in it, and none of its
   folders can be renamed or removed while the root is held); the spelling
-  lookup asks only for attribute access, and folders on the way are opened
-  with traverse access alone, without `SYNCHRONIZE` or synchronous I/O
-  (codex round 2), so a traverse-only folder still lets a read through. A
-  handle with no access at all cannot be the parent of a relative open.
+  lookup asks only for attribute access.
+- **Codex rounds 2 and 3: the provider's reads open their whole relative
+  name in one `NtCreateFile` against the held root**
+  (`windows_entry::open_beneath_path`). The system parses the folders on
+  the way as for a path, so the traverse-check bypass and the reparse
+  points among them behave as for a path open; only the starting point is
+  the held handle. A folder-by-folder walk had asked each folder for
+  rights a path open never asks (attribute, then `SYNCHRONIZE`, then
+  traverse access), and a handle with no access at all cannot parent a
+  relative open. Metadata probes ask for `FILE_READ_ATTRIBUTES` alone,
+  with no synchronous I/O: less than `std::fs::metadata` asks
+  (`CreateFileW` adds `SYNCHRONIZE`). The interior's walks beneath
+  `.slate` stay folder by folder, because they refuse links.
+- **Not mirrored:** `std`'s fallback to a directory listing when even an
+  attribute open is refused with a sharing violation (system files such
+  as a page file), which does not reach a vault.
 - **Accepted risks (codex round 1, below the two-coincidence bar):**
   - two mounted FAT clones whose weak identities collide, plus a spelling
     retargeted from one to the other during the open, pass the open's

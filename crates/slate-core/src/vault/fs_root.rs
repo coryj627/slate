@@ -925,15 +925,17 @@ impl FsRoot {
     /// follows, then refuses an entry that is not beneath the held root;
     /// `Follow::Never` opens the leaf as itself (`symlink_metadata`).
     pub(crate) fn open_beneath(&self, relative: &Path, follow: Follow) -> io::Result<fs::File> {
-        use windows_sys::Win32::Storage::FileSystem::{FILE_GENERIC_READ, FILE_READ_ATTRIBUTES};
+        use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
         if relative.as_os_str().is_empty() {
             return self.root.try_clone();
         }
-        let access = match follow {
-            Follow::Never => FILE_READ_ATTRIBUTES,
-            Follow::Links | Follow::InVault => FILE_GENERIC_READ,
+        let file = match follow {
+            // A look at the entry itself: no access, as `symlink_metadata`.
+            Follow::Never => sys::open_metadata_beneath(&self.root, relative, false)?,
+            Follow::Links | Follow::InVault => {
+                sys::open_beneath(&self.root, relative, true, FILE_GENERIC_READ)?
+            }
         };
-        let file = sys::open_beneath(&self.root, relative, follow != Follow::Never, access)?;
         if follow == Follow::InVault {
             let inside = super::trash_handoff::final_path(&file)?;
             let held = super::trash_handoff::final_path(&self.root)?;
@@ -950,17 +952,10 @@ impl FsRoot {
     /// The metadata of the entry at `relative`: followed (`Follow::Links`, as
     /// `fs::metadata`) or as itself (`Follow::Never`, as `symlink_metadata`).
     pub(crate) fn stat_beneath(&self, relative: &Path, follow: Follow) -> io::Result<fs::Metadata> {
-        use windows_sys::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES;
         if relative.as_os_str().is_empty() {
             return self.root.metadata();
         }
-        sys::open_beneath(
-            &self.root,
-            relative,
-            follow != Follow::Never,
-            FILE_READ_ATTRIBUTES,
-        )?
-        .metadata()
+        sys::open_metadata_beneath(&self.root, relative, follow != Follow::Never)?.metadata()
     }
 
     /// The entries of the folder at `relative` (links followed to reach it,
@@ -1022,12 +1017,7 @@ impl FsRoot {
         }
         // Attribute access is enough for the final path: the spelling of an
         // entry the reader may rename but not read is still its spelling.
-        let file = match sys::open_beneath(
-            &self.root,
-            relative,
-            true,
-            windows_sys::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES,
-        ) {
+        let file = match sys::open_metadata_beneath(&self.root, relative, true) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(error),

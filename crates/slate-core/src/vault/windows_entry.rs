@@ -187,30 +187,47 @@ pub(super) fn reopen(dir: &fs::File, access: u32, share: u32) -> io::Result<fs::
     )
 }
 
-/// A folder on the way opened only to resolve the next name beneath it
-/// (plan 44 WB-28): traverse access alone, not `SYNCHRONIZE` and no
-/// synchronous I/O, since nothing reads or waits on it. A path open needs
-/// only to pass the folders on its way, so a traverse-only folder lets this
-/// through too (a handle with no access at all cannot be the parent of a
-/// relative open: it is refused). `options` carries
-/// `FILE_OPEN_REPARSE_POINT` or `FILE_DIRECTORY_FILE` when the caller needs
-/// them.
-pub(super) fn open_to_traverse(
+/// The entry at the vault-relative `components` beneath `parent`, resolved
+/// in ONE `NtCreateFile` call whose name is the components joined by `\`,
+/// relative to `parent` (plan 44 WB-28, codex round 3). The system parses
+/// the folders on the way as it parses a path, so a folder the caller may
+/// only pass (traverse checking bypassed, as for every path open) or a
+/// reparse point among them behaves exactly as for a path open; only the
+/// starting point is the held handle. `options` may carry
+/// `FILE_OPEN_REPARSE_POINT` (the leaf opens as itself, `symlink_metadata`'s
+/// rule) or `FILE_DIRECTORY_FILE`. `synchronous` adds `SYNCHRONIZE` and
+/// synchronous I/O for a handle that is read; a metadata probe passes
+/// `access` 0 and no synchronous I/O, as `std::fs::metadata` opens.
+pub(super) fn open_beneath_path(
     parent: &fs::File,
-    name: &OsStr,
+    components: &[&OsStr],
+    access: u32,
     options: u32,
+    synchronous: bool,
 ) -> io::Result<fs::File> {
-    let mut name: Vec<u16> = name.encode_wide().collect();
-    if !simple_name(&name) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "Expected a simple entry name",
-        ));
+    let mut name: Vec<u16> = Vec::new();
+    for (index, component) in components.iter().enumerate() {
+        let wide: Vec<u16> = component.encode_wide().collect();
+        if !simple_name(&wide) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Expected a simple entry name",
+            ));
+        }
+        if index > 0 {
+            name.push(u16::from(b'\\'));
+        }
+        name.extend(wide);
     }
+    let (access, options) = if synchronous {
+        (access | SYNCHRONIZE, options | FILE_SYNCHRONOUS_IO_NONALERT)
+    } else {
+        (access, options)
+    };
     nt_create_relative(
         parent,
         &mut name,
-        FILE_TRAVERSE,
+        access,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
         FILE_OPEN,
         options,

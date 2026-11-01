@@ -285,21 +285,9 @@ pub(crate) fn delete_by_handle(file: &fs::File) -> io::Result<()> {
     Ok(())
 }
 
-/// The entry at `relative` (vault-relative components) beneath `root`,
-/// each component opened relative to the one before and followed through
-/// a link, as a pathname read follows it. With `follow_leaf` false the
-/// leaf alone opens as itself (`symlink_metadata`'s rule): a link there is
-/// the link. The mutation walks, not these reads, refuse a link among the
-/// folders, in their own words. An empty `relative` names no entry here:
-/// the caller holds the root.
-pub(crate) fn open_beneath(
-    root: &fs::File,
-    relative: &Path,
-    follow_leaf: bool,
-    access: u32,
-) -> io::Result<fs::File> {
+/// `relative`'s components, refusing anything but plain names.
+fn components(relative: &Path) -> io::Result<Vec<&OsStr>> {
     use std::path::Component;
-    use windows_sys::Wdk::Storage::FileSystem::{FILE_OPEN, FILE_OPEN_REPARSE_POINT};
     let names: Vec<&OsStr> = relative
         .components()
         .map(|component| match component {
@@ -310,28 +298,59 @@ pub(crate) fn open_beneath(
             )),
         })
         .collect::<io::Result<_>>()?;
-    let Some((leaf, folders)) = names.split_last() else {
+    if names.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "the vault root itself is the held handle",
         ));
-    };
-    let share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
-    let mut current: Option<fs::File> = None;
-    for name in folders {
-        let parent = current.as_ref().unwrap_or(root);
-        // Traverse access alone, not even SYNCHRONIZE: a path open needs only
-        // to pass the folders on its way, so a traverse-only folder still
-        // lets a read through.
-        current = Some(windows_entry::open_to_traverse(parent, name, 0)?);
     }
-    let parent = current.as_ref().unwrap_or(root);
+    Ok(names)
+}
+
+/// The entry at `relative` beneath `root`, opened to be read: one
+/// `NtCreateFile` resolves the whole relative name as a path open would,
+/// links among the folders followed. With `follow_leaf` false the leaf
+/// opens as itself. The mutation walks, not these reads, refuse a link
+/// among the folders, in their own words.
+pub(crate) fn open_beneath(
+    root: &fs::File,
+    relative: &Path,
+    follow_leaf: bool,
+    access: u32,
+) -> io::Result<fs::File> {
+    use windows_sys::Wdk::Storage::FileSystem::FILE_OPEN_REPARSE_POINT;
     let options = if follow_leaf {
         0
     } else {
         FILE_OPEN_REPARSE_POINT
     };
-    windows_entry::create_relative(parent, leaf, access, share, FILE_OPEN, options)
+    windows_entry::open_beneath_path(root, &components(relative)?, access, options, true)
+}
+
+/// The entry at `relative` beneath `root`, opened only to look at it:
+/// attribute access alone and no synchronous I/O. `std::fs::metadata` asks
+/// as much (`CreateFileW` adds `FILE_READ_ATTRIBUTES` and `SYNCHRONIZE` to
+/// every open) and `SYNCHRONIZE` too; leaving that out means a leaf that
+/// denies it, or one the reader may not read, still answers the look
+/// (NTFS grants attribute reads to whoever may list the parent).
+pub(crate) fn open_metadata_beneath(
+    root: &fs::File,
+    relative: &Path,
+    follow_leaf: bool,
+) -> io::Result<fs::File> {
+    use windows_sys::Wdk::Storage::FileSystem::FILE_OPEN_REPARSE_POINT;
+    let options = if follow_leaf {
+        0
+    } else {
+        FILE_OPEN_REPARSE_POINT
+    };
+    windows_entry::open_beneath_path(
+        root,
+        &components(relative)?,
+        FILE_READ_ATTRIBUTES,
+        options,
+        false,
+    )
 }
 
 /// What a listing reports an entry as, the way `std::fs::FileType` does: a
@@ -419,23 +438,27 @@ pub(crate) fn entry_id(file: &fs::File) -> io::Result<VaultRootIdentity> {
 }
 
 /// Whether `relative` (vault-relative, `/`-separated) names a folder
-/// beneath `root`, each component opened relative to the one before and
-/// followed through links, as `Path::is_dir` follows them: only the
-/// starting point is anchored (the open's templates detection).
+/// beneath `root`, resolved as a path open resolves it (links followed):
+/// only the starting point is anchored (the open's templates detection).
 pub(crate) fn is_dir_beneath(root: &fs::File, relative: &str) -> bool {
     use windows_sys::Wdk::Storage::FileSystem::FILE_DIRECTORY_FILE;
-    let mut current: Option<fs::File> = None;
-    for name in relative.split('/') {
-        let Ok(name) = component(name) else {
-            return false;
-        };
-        let parent = current.as_ref().unwrap_or(root);
-        match windows_entry::open_to_traverse(parent, &name, FILE_DIRECTORY_FILE) {
-            Ok(next) => current = Some(next),
-            Err(_) => return false,
-        }
-    }
-    current.is_some()
+    let Ok(names) = relative
+        .split('/')
+        .map(component)
+        .collect::<io::Result<Vec<_>>>()
+    else {
+        return false;
+    };
+    let names: Vec<&OsStr> = names.iter().map(OsString::as_os_str).collect();
+    !names.is_empty()
+        && windows_entry::open_beneath_path(
+            root,
+            &names,
+            FILE_READ_ATTRIBUTES,
+            FILE_DIRECTORY_FILE,
+            false,
+        )
+        .is_ok()
 }
 
 /// Windows writes a folder's entries with the change that made them; there

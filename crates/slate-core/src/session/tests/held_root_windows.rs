@@ -950,3 +950,61 @@ fn an_unreadable_entry_keeps_its_spelling_and_can_be_renamed() {
     drop(guard);
     assert!(tmp.path().join("Renamed.md").is_file());
 }
+
+/// A folder on the way that denies traverse itself still lets a read, a
+/// stat and the templates detection through, as a path open does (codex
+/// round 3): the whole relative name is one `NtCreateFile`, so the system's
+/// traverse-check bypass applies as it does for a path.
+#[test]
+fn a_folder_that_denies_traverse_still_lets_reads_and_template_detection_through() {
+    let tmp = tempfile::tempdir().unwrap();
+    let locked = tmp.path().join("locked");
+    std::fs::create_dir_all(locked.join("Templates")).unwrap();
+    std::fs::write(locked.join("note.md"), "# Note\n").unwrap();
+    std::fs::write(
+        tmp.path().join("slate.json"),
+        r#"{ "templates": { "directory": "locked/Templates" } }"#,
+    )
+    .unwrap();
+    let mut guard = DenyGuard(Vec::new());
+    deny(&mut guard, &locked, "X");
+    // The control: a pathname read passes the folder.
+    assert_eq!(
+        std::fs::read_to_string(locked.join("note.md")).unwrap(),
+        "# Note\n"
+    );
+
+    let session = session_at(tmp.path()).unwrap();
+    assert_eq!(
+        session.config.templates_dir.as_deref(),
+        Some("locked/Templates"),
+        "the templates folder is detected beneath the traverse-denied folder"
+    );
+    assert_eq!(session.read_text("locked/note.md").unwrap(), "# Note\n");
+    assert!(session.provider.stat("locked/note.md").is_ok());
+    drop(session);
+    drop(guard);
+}
+
+/// A leaf that denies `SYNCHRONIZE` still answers the looks (codex round
+/// 3): a stat and the mutation probes open it with attribute access alone,
+/// no synchronous I/O.
+#[test]
+fn a_leaf_that_denies_synchronize_still_answers_stats_and_probes() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("note.md"), "# Note\n").unwrap();
+    let session = session_at(tmp.path()).unwrap();
+    let mut guard = DenyGuard(Vec::new());
+    deny(&mut guard, &tmp.path().join("note.md"), "S");
+
+    assert!(session.provider.stat("note.md").is_ok());
+    assert_eq!(
+        session.provider.mutation_path_kind("note.md").unwrap(),
+        Some(crate::vault::EntryKind::File)
+    );
+    assert_eq!(
+        session.canonical_path("NOTE.md").unwrap().as_deref(),
+        Some("note.md")
+    );
+    drop(guard);
+}
