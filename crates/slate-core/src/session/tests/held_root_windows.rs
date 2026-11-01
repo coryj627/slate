@@ -1333,30 +1333,27 @@ fn a_root_spelled_with_dots_or_relatively_opens_the_folder() {
         );
     }
 
-    // A relative spelling from the current folder (same drive), under an
-    // ACL that denies SYNCHRONIZE on the root.
-    let cwd = std::env::current_dir().unwrap();
+    // A relative spelling, under an ACL that denies SYNCHRONIZE on the root:
+    // a vault made beside the current folder, so the relative spelling
+    // always exists, whatever drive the temporary folder is on.
+    let beside = tempfile::Builder::new()
+        .prefix("wb28-relative-")
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap();
+    let relative_vault = beside.path().join("R");
+    std::fs::create_dir_all(&relative_vault).unwrap();
+    std::fs::write(relative_vault.join("note.md"), "# Note\n").unwrap();
     let mut guard = DenyGuard(Vec::new());
-    deny(&mut guard, &vault, "S");
-    if cwd.components().next() == vault.components().next() {
-        // The drive prefix and the root are no folders to climb out of.
-        let ups = cwd.components().count() - 2;
-        let mut relative = std::path::PathBuf::new();
-        for _ in 0..ups {
-            relative.push("..");
-        }
-        relative.push(
-            vault
-                .strip_prefix(vault.ancestors().last().unwrap())
-                .unwrap(),
-        );
-        let session = session_at(&relative).unwrap();
-        assert_eq!(
-            session.read_text("note.md").unwrap(),
-            "# Note\n",
-            "{}",
-            relative.display()
-        );
-    }
+    deny(&mut guard, &relative_vault, "S");
+    let relative = std::path::PathBuf::from(beside.path().file_name().unwrap()).join("R");
+    assert!(relative.is_relative());
+    let session = session_at(&relative).unwrap();
+    assert_eq!(
+        session.read_text("note.md").unwrap(),
+        "# Note\n",
+        "{}",
+        relative.display()
+    );
+    drop(session);
     drop(guard);
 }

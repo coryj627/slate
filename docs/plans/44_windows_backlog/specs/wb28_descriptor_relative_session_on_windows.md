@@ -186,7 +186,11 @@ overwrite) there.
   - a root or `.slate` that grants no data right at all is held unpinned;
   - in a case-sensitive folder, hard links named `a.md` and `A.md` compare
     as one entry, so a move of one onto the other replaces the second
-    link (codex round 7).
+    link (codex round 7);
+  - a held root whose watch identity cannot be read leaves the watch's arm
+    check without an anchor, so that failure plus a retarget could arm a
+    watch on another folder (codex round 9).
+- **Codex approved at round 9** (head `b1c98a76`).
 - **The facts are in `session/tests/held_root_windows.rs`** (and
   `db/anchored_windows.rs`, `session/tests/watch.rs`), named for what they
   prove; the Verification list's names map onto them in PR 1's body.
