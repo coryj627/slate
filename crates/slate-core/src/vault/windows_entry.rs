@@ -462,6 +462,17 @@ impl PinnedRoot {
         Ok(Self { dir })
     }
 
+    /// Adopt the root a filesystem session holds (plan 44 WB-28, C2): the
+    /// walk starts at a duplicate of the held handle, never at a path, so
+    /// a spelling retargeted while the session lives cannot hand a move,
+    /// a save, a creation or the Trash handoff another vault. The twin of
+    /// the Unix `PinnedRoot::adopt`.
+    pub(super) fn adopt(held: &fs::File) -> Result<Self, VaultError> {
+        Ok(Self {
+            dir: held.try_clone().map_err(VaultError::Io)?,
+        })
+    }
+
     /// The root handle itself: the Trash handoff takes the vault root's
     /// current path from it (#1450).
     pub(super) fn handle(&self) -> &fs::File {
@@ -637,14 +648,23 @@ fn directory(file: &fs::File) -> Result<(), VaultError> {
     Ok(())
 }
 
-fn open(root: &Path, relative: &Path, access: u32) -> Result<PinnedEntry, VaultError> {
+/// The vault root for an undo or a redo when no session holds one (a bare
+/// provider): opened by its path as itself, and refused when it is not a
+/// plain folder. A session's provider hands its held root instead (WB-28,
+/// C4), which follows the root's own reparse point at the open, so a vault
+/// opened through a junction undoes too.
+pub(super) fn open_unheld_root(root: &Path) -> Result<fs::File, VaultError> {
     let root = fs::OpenOptions::new()
         .access_mode(FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
         .open(root)?;
     directory(&root)?;
-    let mut ancestors = vec![root];
+    Ok(root)
+}
+
+fn open(root: &fs::File, relative: &Path, access: u32) -> Result<PinnedEntry, VaultError> {
+    let mut ancestors = vec![root.try_clone()?];
     let components = relative.components().collect::<Vec<_>>();
     if components.is_empty() {
         return Err(refused());
@@ -699,12 +719,12 @@ fn identity(file: &fs::File) -> Result<String, VaultError> {
     ))
 }
 
-pub(super) fn capture(root: &Path, relative: &Path) -> Result<String, VaultError> {
+pub(super) fn capture(root: &fs::File, relative: &Path) -> Result<String, VaultError> {
     identity(&open(root, relative, FILE_READ_ATTRIBUTES)?.file)
 }
 
 pub(super) fn rename(
-    root: &Path,
+    root: &fs::File,
     from: &Path,
     to: &Path,
     expected: &str,
@@ -715,14 +735,8 @@ pub(super) fn rename(
     }
     let destination_parent = to.parent().ok_or_else(refused)?;
     let destination = if destination_parent.as_os_str().is_empty() {
-        let file = fs::OpenOptions::new()
-            .access_mode(FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY)
-            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
-            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
-            .open(root)?;
-        directory(&file)?;
         PinnedEntry {
-            file,
+            file: root.try_clone()?,
             _ancestors: Vec::new(),
         }
     } else {

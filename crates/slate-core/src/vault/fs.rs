@@ -173,6 +173,70 @@ impl FsVaultProvider {
         pinned_root::PinnedRoot::open(&self.root)
     }
 
+    /// The vault root for one rename, save, creation or Trash inventory on
+    /// Windows (#1451; plan 44 WB-28, C2): the held root handle when the
+    /// session holds one, else the root opened by path for this operation.
+    #[cfg(windows)]
+    fn pinned_root(&self) -> Result<super::windows_entry::PinnedRoot, VaultError> {
+        if let Some(held) = &self.held {
+            return super::windows_entry::PinnedRoot::adopt(held.descriptor());
+        }
+        super::windows_entry::PinnedRoot::open(&self.root)
+    }
+
+    /// The vault root an undo or a redo resolves beneath on Windows: the
+    /// held root when the session holds one (WB-28, C4), else the root
+    /// opened by path as itself.
+    #[cfg(windows)]
+    fn identity_root(&self) -> Result<fs::File, VaultError> {
+        if let Some(held) = &self.held {
+            return held.descriptor().try_clone().map_err(VaultError::Io);
+        }
+        super::windows_entry::open_unheld_root(&self.root)
+    }
+
+    /// The held root and `path`'s place beneath it, when a Windows session
+    /// holds the root (plan 44 WB-28 design table B): the provider's reads
+    /// and probes then resolve beneath the held handle, never by `path`.
+    #[cfg(windows)]
+    fn held_beneath<'p>(&self, path: &'p Path) -> Option<(&super::fs_root::FsRoot, &'p Path)> {
+        let held = self.held.as_deref()?;
+        Some((held, path.strip_prefix(&self.root).ok()?))
+    }
+
+    /// `relative` opened for reading, links followed as a pathname read
+    /// follows them: beneath the held root on Windows (WB-28), by path
+    /// otherwise.
+    fn open_for_read(&self, relative: &str) -> Result<fs::File, VaultError> {
+        let path = self.resolve(relative)?;
+        #[cfg(windows)]
+        if let Some((held, beneath)) = self.held_beneath(&path) {
+            return Ok(held.open_beneath(beneath, super::fs_root::Follow::Links)?);
+        }
+        Ok(fs::File::open(&path)?)
+    }
+
+    /// The metadata of the entry at `path` itself (`symlink_metadata`):
+    /// beneath the held root on Windows (WB-28), by path otherwise.
+    fn entry_metadata(&self, path: &Path) -> io::Result<fs::Metadata> {
+        #[cfg(windows)]
+        if let Some((held, beneath)) = self.held_beneath(path) {
+            return held.stat_beneath(beneath, super::fs_root::Follow::Never);
+        }
+        path.symlink_metadata()
+    }
+
+    /// Whether two mutation paths are one entry (#1077 I4): beneath the
+    /// held root by file id on Windows (WB-28), by canonical path
+    /// otherwise.
+    fn is_same_entry(&self, a: &Path, b: &Path) -> bool {
+        #[cfg(windows)]
+        if let (Some((held, a)), Some((_, b))) = (self.held_beneath(a), self.held_beneath(b)) {
+            return held.same_entry_beneath(a, b);
+        }
+        same_entry(a, b)
+    }
+
     /// Where saves and creates stage their bytes (#940): the held `.slate`'s
     /// `tmp`, made with `mkdirat` and opened without following a link, when
     /// the session holds the root; else `.slate/tmp` by path, made with
@@ -186,6 +250,16 @@ impl FsVaultProvider {
             let slate = held.cache_dir().descriptor();
             super::fs_root::sys::ensure_dir_at(slate, c"tmp")?;
             return Ok(Staging::Held(open_directory_at(slate, c"tmp")?));
+        }
+        // Windows (plan 44 WB-28): the held `.slate`'s `tmp`, made and opened
+        // relative to the held handle as itself.
+        #[cfg(windows)]
+        if let Some(held) = &self.held {
+            use super::fs_root::sys;
+            let slate = held.cache_dir().descriptor();
+            let tmp = std::ffi::OsStr::new("tmp");
+            sys::ensure_dir_at(slate, tmp)?;
+            return Ok(Staging::Held(sys::open_dir_at(slate, tmp)?));
         }
         let tmp_dir = self.tmp_dir();
         fs::create_dir_all(&tmp_dir)?;
@@ -323,12 +397,9 @@ impl FsVaultProvider {
                         path: relative.to_string(),
                         reason: "mutation destination is not beneath the vault root".into(),
                     })?;
-            // A reference on both hosts: Unix opens against the pinned
-            // root, Windows against the root's path (#1570).
-            #[cfg(unix)]
+            // Both hosts open against the pinned root: the held one when
+            // the session holds it (#1570; WB-28 for Windows).
             let root = &self.pinned_root()?;
-            #[cfg(windows)]
-            let root = self.root.as_path();
             PinnedMutationTarget::open(
                 root,
                 vault_relative,
@@ -463,9 +534,9 @@ impl FsVaultProvider {
         to_path: &Path,
         before_kernel_rename: impl FnOnce() -> io::Result<()>,
     ) -> Result<(), VaultError> {
-        use super::windows_entry::{self, Folders, PinnedRoot};
+        use super::windows_entry::{self, Folders};
 
-        let root = PinnedRoot::open(&self.root)?;
+        let root = self.pinned_root()?;
         let from_relative = self.vault_relative(from_path, from)?;
         let to_relative = self.vault_relative(to_path, to)?;
         let missing_source = || {
@@ -524,7 +595,7 @@ impl FsVaultProvider {
             if windows_entry::entry_exists(destination_parent.handle(), to_leaf)
                 .map_err(|error| destination_parent.failed(error))?
             {
-                if !same_entry(from_path, to_path) {
+                if !self.is_same_entry(from_path, to_path) {
                     return Err(VaultError::DestinationExists {
                         path: to.to_string(),
                     });
@@ -658,6 +729,13 @@ impl FsVaultProvider {
             path: path.to_string_lossy().into_owned(),
             reason: "mutation path has no parent directory".into(),
         })?;
+        #[cfg(windows)]
+        let metadata = match self.held_beneath(parent) {
+            Some((held, beneath)) => held.stat_beneath(beneath, super::fs_root::Follow::Links),
+            None => parent.metadata(),
+        }
+        .map_err(VaultError::Io)?;
+        #[cfg(not(windows))]
         let metadata = parent.metadata().map_err(VaultError::Io)?;
         if !metadata.is_dir() {
             return Err(VaultError::InvalidPath {
@@ -876,7 +954,7 @@ impl FsVaultProvider {
         let path = self.resolve_for_mutation(relative)?;
         let vault_relative = self.vault_relative(&path, relative)?;
         let target = PinnedMutationTarget::open(
-            &self.root,
+            &self.pinned_root()?,
             vault_relative,
             relative,
             true,
@@ -1063,16 +1141,16 @@ impl PinnedMutationTarget {
     /// missing one made in its pinned parent. A junction, a symbolic link or
     /// a file on the way is `mutation`'s typed refusal.
     fn open(
-        root: &Path,
+        root: &super::windows_entry::PinnedRoot,
         vault_relative: &Path,
         original: &str,
         create_missing_parents: bool,
         mutation: Mutation,
     ) -> Result<Self, VaultError> {
-        use super::windows_entry::{Folders, PinnedRoot};
+        use super::windows_entry::Folders;
 
         let leaf = final_component(vault_relative, original)?.to_os_string();
-        let parent = PinnedRoot::open(root)?.folder(
+        let parent = root.folder(
             parent_of(vault_relative),
             original,
             create_missing_parents,
@@ -1130,7 +1208,7 @@ impl PinnedMutationTarget {
     }
 
     fn publish_staged_no_replace(&self, staged: &Staged) -> io::Result<()> {
-        self.publish_staged(staged.path(), false)
+        self.publish_staged(staged, false)
     }
 
     /// A save's publish (#1451): the staged file renamed onto the leaf inside
@@ -1146,7 +1224,6 @@ impl PinnedMutationTarget {
     /// retry briefly with backoff; a persistent refusal is a real permissions
     /// problem and still surfaces.
     fn publish_staged_replacing(&self, staged: &Staged) -> io::Result<()> {
-        let staged = staged.path();
         let mut delay = std::time::Duration::from_millis(5);
         let mut attempts = 0u32;
         loop {
@@ -1167,17 +1244,17 @@ impl PinnedMutationTarget {
 
     /// Rename the staged file into the pinned folder by handle: the
     /// destination is `FileRenameInformation`'s `RootDirectory`, never a
-    /// path. The staged file itself is still named by its path in
-    /// `.slate/tmp`, under the random name `tempfile` gave it a moment
-    /// before, and opened as itself (`FILE_OPEN_REPARSE_POINT`): a swap there
-    /// can change which bytes arrive or fail the rename, never where they
-    /// land. `.slate` is reached by path throughout, which is #940's
-    /// descriptor-relative interior (PR 22's `FsRoot`), as on Unix.
+    /// path. A session's staged file is the handle it was made with beneath
+    /// the held `.slate\tmp` (plan 44 WB-28), so neither end is a path; a
+    /// bare provider's is named by its path in `.slate/tmp`, under the
+    /// random name `tempfile` gave it a moment before, and opened as itself
+    /// (`FILE_OPEN_REPARSE_POINT`): a swap there can change which bytes
+    /// arrive or fail the rename, never where they land.
     ///
     /// The staged file's attributes are reset to `FILE_ATTRIBUTE_NORMAL`
     /// first, as `persist` did: `tempfile` creates it
     /// `FILE_ATTRIBUTE_TEMPORARY`, which must not stay on a note.
-    fn publish_staged(&self, staged: &Path, replace: bool) -> io::Result<()> {
+    fn publish_staged(&self, staged: &Staged, replace: bool) -> io::Result<()> {
         use std::os::windows::{fs::OpenOptionsExt as _, io::AsRawHandle as _};
         use windows_sys::Win32::Storage::FileSystem::{
             DELETE, FILE_ATTRIBUTE_NORMAL, FILE_BASIC_INFO, FILE_FLAG_OPEN_REPARSE_POINT,
@@ -1185,11 +1262,19 @@ impl PinnedMutationTarget {
             FileBasicInfo, SetFileInformationByHandle,
         };
 
-        let source = fs::OpenOptions::new()
-            .access_mode(DELETE | FILE_WRITE_ATTRIBUTES)
-            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
-            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-            .open(staged)?;
+        let opened;
+        let source = match staged {
+            Staged::Path(temp) => {
+                opened = fs::OpenOptions::new()
+                    .access_mode(DELETE | FILE_WRITE_ATTRIBUTES)
+                    .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                    .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+                    .open(temp.path())?;
+                &opened
+            }
+            // Made with DELETE and FILE_WRITE_ATTRIBUTES access.
+            Staged::Held(held) => &held.file,
+        };
         // Zero times leave the file's times unchanged.
         let basic = FILE_BASIC_INFO {
             FileAttributes: FILE_ATTRIBUTE_NORMAL,
@@ -1352,10 +1437,13 @@ fn publish_staged_no_replace(
 enum Staging {
     /// `.slate/tmp` by path, staged with `tempfile`.
     Path(PathBuf),
-    /// The held `.slate/tmp` (plan 43 PR 22a, #940).
-    #[cfg(all(
-        any(target_os = "macos", target_os = "linux"),
-        target_pointer_width = "64"
+    /// The held `.slate/tmp` (plan 43 PR 22a, #940; Windows: plan 44 WB-28).
+    #[cfg(any(
+        all(
+            any(target_os = "macos", target_os = "linux"),
+            target_pointer_width = "64"
+        ),
+        windows
     ))]
     Held(fs::File),
 }
@@ -1368,9 +1456,12 @@ impl Staging {
                 .prefix(prefix)
                 .tempfile_in(dir)
                 .map(Staged::Path),
-            #[cfg(all(
-                any(target_os = "macos", target_os = "linux"),
-                target_pointer_width = "64"
+            #[cfg(any(
+                all(
+                    any(target_os = "macos", target_os = "linux"),
+                    target_pointer_width = "64"
+                ),
+                windows
             ))]
             Self::Held(dir) => HeldStaged::create(dir, prefix).map(Staged::Held),
         }
@@ -1399,9 +1490,12 @@ impl Staging {
 /// [`Staged::published`] says the publish consumed the name.
 enum Staged {
     Path(tempfile::NamedTempFile),
-    #[cfg(all(
-        any(target_os = "macos", target_os = "linux"),
-        target_pointer_width = "64"
+    #[cfg(any(
+        all(
+            any(target_os = "macos", target_os = "linux"),
+            target_pointer_width = "64"
+        ),
+        windows
     ))]
     Held(HeldStaged),
 }
@@ -1410,9 +1504,12 @@ impl Staged {
     fn file(&self) -> &fs::File {
         match self {
             Self::Path(temp) => temp.as_file(),
-            #[cfg(all(
-                any(target_os = "macos", target_os = "linux"),
-                target_pointer_width = "64"
+            #[cfg(any(
+                all(
+                    any(target_os = "macos", target_os = "linux"),
+                    target_pointer_width = "64"
+                ),
+                windows
             ))]
             Self::Held(held) => &held.file,
         }
@@ -1421,16 +1518,19 @@ impl Staged {
     fn file_mut(&mut self) -> &mut fs::File {
         match self {
             Self::Path(temp) => temp.as_file_mut(),
-            #[cfg(all(
-                any(target_os = "macos", target_os = "linux"),
-                target_pointer_width = "64"
+            #[cfg(any(
+                all(
+                    any(target_os = "macos", target_os = "linux"),
+                    target_pointer_width = "64"
+                ),
+                windows
             ))]
             Self::Held(held) => &mut held.file,
         }
     }
 
-    /// A path-staged file's path (only Unix stages beneath a descriptor).
-    #[cfg(not(unix))]
+    /// A path-staged file's path (the targets that stage by path only).
+    #[cfg(not(any(unix, windows)))]
     fn path(&self) -> &Path {
         match self {
             Self::Path(temp) => temp.path(),
@@ -1479,9 +1579,12 @@ impl Staged {
     fn close(self) -> io::Result<()> {
         match self {
             Self::Path(temp) => temp.close(),
-            #[cfg(all(
-                any(target_os = "macos", target_os = "linux"),
-                target_pointer_width = "64"
+            #[cfg(any(
+                all(
+                    any(target_os = "macos", target_os = "linux"),
+                    target_pointer_width = "64"
+                ),
+                windows
             ))]
             Self::Held(held) => held.close(),
         }
@@ -1497,9 +1600,12 @@ impl Staged {
                 drop(path_guard);
                 drop(file);
             }
-            #[cfg(all(
-                any(target_os = "macos", target_os = "linux"),
-                target_pointer_width = "64"
+            #[cfg(any(
+                all(
+                    any(target_os = "macos", target_os = "linux"),
+                    target_pointer_width = "64"
+                ),
+                windows
             ))]
             Self::Held(mut held) => held.armed = false,
         }
@@ -1580,6 +1686,56 @@ impl Drop for HeldStaged {
     fn drop(&mut self) {
         if self.armed {
             let _ = super::fs_root::sys::unlink_at(&self.dir, &self.name);
+        }
+    }
+}
+
+/// A file staged in the held `.slate\tmp` on Windows (plan 44 WB-28): made
+/// relative to the held handle with `FILE_CREATE` under a random name, as
+/// `tempfile` names its files, kept open with `DELETE` access, published by
+/// that handle and removed through it, so no step names it by a path.
+#[cfg(windows)]
+struct HeldStaged {
+    file: fs::File,
+    armed: bool,
+}
+
+#[cfg(windows)]
+impl HeldStaged {
+    fn create(dir: &fs::File, prefix: &str) -> io::Result<Self> {
+        static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        for _ in 0..64 {
+            let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let nanos = std::time::SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_nanos())
+                .unwrap_or_default();
+            let seed = format!("{}:{nanos}:{sequence}", std::process::id());
+            let suffix = &blake3::hash(seed.as_bytes()).to_hex()[..12];
+            let name = std::ffi::OsString::from(format!("{prefix}{suffix}"));
+            match super::fs_root::sys::create_staged(dir, &name) {
+                Ok(file) => return Ok(Self { file, armed: true }),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "could not name a staging file in .slate/tmp",
+        ))
+    }
+
+    fn close(mut self) -> io::Result<()> {
+        self.armed = false;
+        super::fs_root::sys::delete_by_handle(&self.file)
+    }
+}
+
+#[cfg(windows)]
+impl Drop for HeldStaged {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = super::fs_root::sys::delete_by_handle(&self.file);
         }
     }
 }
@@ -1775,6 +1931,24 @@ impl VaultProvider for FsVaultProvider {
 
     fn list_dir(&self, relative: &str) -> Result<Vec<DirEntry>, VaultError> {
         let path = self.resolve(relative)?;
+        #[cfg(windows)]
+        if let Some((held, beneath)) = self.held_beneath(&path) {
+            use super::fs_root::sys::ListedKind;
+            let mut entries: Vec<DirEntry> = held
+                .list_beneath(beneath)?
+                .into_iter()
+                .map(|(name, kind)| DirEntry {
+                    name: name.to_string_lossy().into_owned(),
+                    kind: match kind {
+                        ListedKind::Folder => EntryKind::Directory,
+                        ListedKind::Link => EntryKind::Symlink,
+                        ListedKind::File => EntryKind::File,
+                    },
+                })
+                .collect();
+            entries.sort_by(|a, b| a.name.cmp(&b.name));
+            return Ok(entries);
+        }
         let read = fs::read_dir(&path)?;
 
         let mut entries: Vec<DirEntry> = Vec::new();
@@ -1802,14 +1976,15 @@ impl VaultProvider for FsVaultProvider {
     }
 
     fn read_file(&self, relative: &str) -> Result<Vec<u8>, VaultError> {
-        let path = self.resolve(relative)?;
-        Ok(fs::read(&path)?)
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        self.open_for_read(relative)?.read_to_end(&mut bytes)?;
+        Ok(bytes)
     }
 
     fn read_file_with_cap(&self, relative: &str, max_bytes: u64) -> Result<Vec<u8>, VaultError> {
         use std::io::Read;
-        let path = self.resolve(relative)?;
-        let file = fs::File::open(&path)?;
+        let file = self.open_for_read(relative)?;
         // Cap allocation at `max_bytes + 1`. The +1 is the over-cap
         // sentinel: if `buf.len() > max_bytes` after the read, the
         // caller knows the file exceeded the threshold without us
@@ -1830,8 +2005,7 @@ impl VaultProvider for FsVaultProvider {
         max_bytes: u64,
     ) -> Result<Vec<u8>, VaultError> {
         use std::io::{Read, Seek, SeekFrom};
-        let path = self.resolve(relative)?;
-        let mut file = fs::File::open(&path)?;
+        let mut file = self.open_for_read(relative)?;
         file.seek(SeekFrom::Start(offset))?;
         let cap = max_bytes.saturating_add(1);
         let mut handle = file.take(cap);
@@ -1913,7 +2087,7 @@ impl VaultProvider for FsVaultProvider {
             .map_err(|_| VaultError::InvalidArgument {
                 message: "Mutation path is outside the vault".into(),
             })?;
-        super::windows_entry::capture(&self.root, relative)
+        super::windows_entry::capture(&self.identity_root()?, relative)
     }
 
     #[cfg(windows)]
@@ -1944,8 +2118,8 @@ impl VaultProvider for FsVaultProvider {
         // either end's folders rejects the batch before its first item moves.
         #[cfg(windows)]
         {
-            use super::windows_entry::{Folders, PinnedRoot};
-            let root = PinnedRoot::open(&self.root)?;
+            use super::windows_entry::Folders;
+            let root = self.pinned_root()?;
             for (path, original) in [(&from_path, from), (&to_path, to)] {
                 let relative = self.vault_relative(path, original)?;
                 root.folder(
@@ -1957,12 +2131,12 @@ impl VaultProvider for FsVaultProvider {
                 )?;
             }
         }
-        from_path.symlink_metadata().map_err(VaultError::Io)?;
+        self.entry_metadata(&from_path).map_err(VaultError::Io)?;
         self.require_mutation_parent_access(&from_path)?;
         self.require_mutation_parent_access(&to_path)?;
-        match to_path.symlink_metadata() {
+        match self.entry_metadata(&to_path) {
             // #1077 (I4): the source's own alias is not an occupant.
-            Ok(_) if same_entry(&from_path, &to_path) => Ok(()),
+            Ok(_) if self.is_same_entry(&from_path, &to_path) => Ok(()),
             Ok(_) => Err(VaultError::DestinationExists {
                 path: to.to_string(),
             }),
@@ -1973,13 +2147,13 @@ impl VaultProvider for FsVaultProvider {
 
     fn preflight_delete(&self, relative: &str) -> Result<(), VaultError> {
         let path = self.resolve_for_mutation(relative)?;
-        path.symlink_metadata().map_err(VaultError::Io)?;
+        self.entry_metadata(&path).map_err(VaultError::Io)?;
         self.require_mutation_parent_access(&path)
     }
 
     fn mutation_path_kind(&self, relative: &str) -> Result<Option<EntryKind>, VaultError> {
         let path = self.resolve_for_mutation(relative)?;
-        match path.symlink_metadata() {
+        match self.entry_metadata(&path) {
             Ok(metadata) => Ok(Some(if metadata.file_type().is_symlink() {
                 EntryKind::Symlink
             } else if metadata.is_dir() {
@@ -2018,6 +2192,19 @@ impl VaultProvider for FsVaultProvider {
     #[cfg(windows)]
     fn canonical_path(&self, relative: &str) -> Result<Option<String>, VaultError> {
         let path = self.resolve(relative)?;
+        // A session's provider reads the stored spelling beneath the held
+        // root (WB-28 table B): the same two rules, from the handles.
+        if let Some((held, beneath)) = self.held_beneath(&path) {
+            return held
+                .stored_spelling_beneath(beneath)
+                .map_err(|error| match error.kind() {
+                    io::ErrorKind::PermissionDenied => VaultError::InvalidPath {
+                        path: relative.to_string(),
+                        reason: error.to_string(),
+                    },
+                    _ => VaultError::Io(error),
+                });
+        }
         match path.symlink_metadata() {
             Ok(meta) if meta.file_type().is_symlink() => return Ok(Some(relative.to_string())),
             Ok(_) => {}
@@ -2146,7 +2333,14 @@ impl VaultProvider for FsVaultProvider {
         let path = self.resolve(relative)?;
         // `metadata()` follows symlinks; the indexer wants the target's
         // mtime/size when stating a symlink, so this matches the
-        // documented semantics in `super::mod`.
+        // documented semantics in `super::mod`. Beneath the held root on
+        // Windows (WB-28), following links the same way.
+        #[cfg(windows)]
+        let meta = match self.held_beneath(&path) {
+            Some((held, beneath)) => held.stat_beneath(beneath, super::fs_root::Follow::Links)?,
+            None => fs::metadata(&path)?,
+        };
+        #[cfg(not(windows))]
         let meta = fs::metadata(&path)?;
         let kind = if meta.is_dir() {
             EntryKind::Directory
@@ -2214,6 +2408,28 @@ impl VaultProvider for FsVaultProvider {
         // (rare but legal: `~/vaults/current → ~/vaults/2026-q2/`)
         // doesn't false-flag every entry inside as escaping.
         let resolved = self.resolve(relative)?;
+        // Beneath the held root on Windows (WB-28): links are followed, and
+        // the opened entry must lie beneath the held root — the handle's own
+        // final path, so no path is resolved twice.
+        #[cfg(windows)]
+        if let Some((held, beneath)) = self.held_beneath(&resolved) {
+            let file = held
+                .open_beneath(beneath, super::fs_root::Follow::InVault)
+                .map_err(|error| match error.kind() {
+                    io::ErrorKind::PermissionDenied => VaultError::InvalidPath {
+                        path: relative.to_string(),
+                        reason: format!(
+                            "{error} (likely a link pointing outside the vault); refusing to read for safety"
+                        ),
+                    },
+                    _ => VaultError::Io(error),
+                })?;
+            let cap = max_bytes.saturating_add(1);
+            let mut handle = file.take(cap);
+            let mut buf: Vec<u8> = Vec::with_capacity(cap.min(64 * 1024) as usize);
+            handle.read_to_end(&mut buf)?;
+            return Ok(buf);
+        }
         let canonical_target = fs::canonicalize(&resolved)?;
         let canonical_root = fs::canonicalize(&self.root)?;
         if !canonical_target.starts_with(&canonical_root) {
@@ -2301,7 +2517,8 @@ impl FsVaultProvider {
                         path: relative.to_string(),
                         reason: "mutation destination is not beneath the vault root".into(),
                     })?;
-            let handed = super::trash_handoff::pinned_path(&self.root, vault_relative, relative)?;
+            let handed =
+                super::trash_handoff::pinned_path(&self.pinned_root()?, vault_relative, relative)?;
             // `symlink_metadata` does not follow the leaf, so a broken symlink
             // still passes; the raw io::Error keeps its kind.
             let meta = handed.symlink_metadata().map_err(VaultError::Io)?;
@@ -2344,7 +2561,12 @@ impl FsVaultProvider {
                     message: "Mutation path is outside the vault".into(),
                 })
         };
-        super::windows_entry::rename(&self.root, &relative(&from)?, &relative(&to)?, expected)
+        super::windows_entry::rename(
+            &self.identity_root()?,
+            &relative(&from)?,
+            &relative(&to)?,
+            expected,
+        )
     }
 
     /// [`VaultProvider::rename`]'s body; the trait method records its echo.

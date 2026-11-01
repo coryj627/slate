@@ -22,6 +22,17 @@ fn session_at(root: &Path) -> Result<VaultSession, VaultError> {
     VaultSession::from_filesystem(root.to_path_buf())
 }
 
+/// A full scan that saw every entry: a scan reports a listing it could not
+/// make as an error sample, not a failure, so a fact that relies on the
+/// index checks it (a root listing that failed once passed silently).
+fn scanned(session: &VaultSession) {
+    let report = session.scan_initial(&CancelToken::new()).unwrap();
+    assert!(
+        report.complete && report.error_count == 0,
+        "the scan saw everything: {report:?}"
+    );
+}
+
 /// The error an open that must refuse gives.
 fn refused_open(root: &Path, why: &str) -> VaultError {
     match session_at(root) {
@@ -192,7 +203,7 @@ fn a_root_whose_file_id_info_is_unsupported_opens_with_a_weak_file_index_identit
     let identity = session.root_identity().expect("the fallback answers");
     assert!(!identity.persistent, "a FAT32 profile's identity is weak");
     assert_eq!(identity.id_high, 0);
-    session.scan_initial(&CancelToken::new()).unwrap();
+    scanned(&session);
     session.rename_file("note.md", "renamed.md").unwrap();
     assert!(vault.join("renamed.md").is_file(), "the session works");
 }
@@ -258,8 +269,8 @@ fn colliding_weak_identities_take_turns_and_reach_only_their_own_vault() {
         b.root_identity(),
         "premise: the two weak identities collide"
     );
-    a.scan_initial(&CancelToken::new()).unwrap();
-    b.scan_initial(&CancelToken::new()).unwrap();
+    scanned(&a);
+    scanned(&b);
     a.rename_file("note.md", "from-a.md").unwrap();
     b.rename_file("note.md", "from-b.md").unwrap();
     assert!(first.join("from-a.md").is_file() && !first.join("from-b.md").exists());
@@ -315,7 +326,7 @@ fn the_session_cache_opens_through_the_held_slate() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("note.md"), "# Note\n").unwrap();
     let session = session_at(tmp.path()).unwrap();
-    session.scan_initial(&CancelToken::new()).unwrap();
+    scanned(&session);
     let opened = session
         .conn
         .lock()
@@ -344,4 +355,105 @@ fn a_plain_open_passes_its_reverification_and_has_a_watch_anchor() {
         session.watch_anchor.is_some(),
         "the watch anchor is the held root's"
     );
+}
+
+/// Every file below `root`, by its root-relative path, with its bytes.
+fn tree(root: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+    let mut files = std::collections::BTreeMap::new();
+    let mut folders = vec![root.to_path_buf()];
+    while let Some(folder) = folders.pop() {
+        for entry in std::fs::read_dir(&folder).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if entry.file_type().unwrap().is_dir() {
+                folders.push(path);
+            } else {
+                let relative = path
+                    .strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned();
+                files.insert(relative, std::fs::read(&path).unwrap());
+            }
+        }
+    }
+    files
+}
+
+/// Design item 5's interior-resolution family, the Windows stand-in for
+/// every Unix live rename: the vault is opened through a junction
+/// `outer\vault` → `outer\A`, then, with the session live, the junction is
+/// remade to point at a decoy `outer\B` with its own `.slate`, `slate.json`
+/// and notes. Every interior writer and reader must still reach `A` — the
+/// staged save and its publish, an exclusive create, a structural rename
+/// (the structural lock), the op-log, the cache with its WAL and shared
+/// memory, the provider's reads, `canonical_path` and `root_display_path()`
+/// — and `B`'s tree stays byte-identical. A by-path implementation writes
+/// into, or reads from, `B`.
+#[test]
+fn no_interior_writer_or_reader_follows_a_retargeted_spelling() {
+    let tmp = tempfile::tempdir().unwrap();
+    let outer = tmp.path().join("outer");
+    let a = outer.join("A");
+    let b = outer.join("B");
+    std::fs::create_dir_all(&a).unwrap();
+    std::fs::write(a.join("note.md"), "# A\n").unwrap();
+    std::fs::create_dir_all(b.join(".slate")).unwrap();
+    std::fs::write(b.join("note.md"), "# B, the decoy\n").unwrap();
+    std::fs::write(
+        b.join("slate.json"),
+        r#"{ "templates": { "directory": "T" } }"#,
+    )
+    .unwrap();
+    std::fs::write(b.join(".slate").join("prefs.json"), "{}").unwrap();
+    let spelling = outer.join("vault");
+    junction(&spelling, &a);
+
+    let session = session_at(&spelling).unwrap();
+    scanned(&session);
+    let decoy = tree(&b);
+
+    std::fs::remove_dir(&spelling).unwrap();
+    junction(&spelling, &b);
+    assert_eq!(
+        std::fs::read_to_string(spelling.join("note.md")).unwrap(),
+        "# B, the decoy\n",
+        "premise: the spelling now names the decoy"
+    );
+
+    let read = session.read_note_parts("note.md").unwrap();
+    assert_eq!(read.body.trim(), "# A", "the provider reads A");
+    session
+        .save_text("note.md", "# A, saved\n", Some(read.content_hash.as_str()))
+        .unwrap();
+    session.create_exclusive("new.md", "# New\n").unwrap();
+    session.rename_file("new.md", "moved.md").unwrap();
+    assert_eq!(session.read_text("note.md").unwrap(), "# A, saved\n");
+    assert_eq!(
+        session.canonical_path("moved.md").unwrap().as_deref(),
+        Some("moved.md"),
+        "canonical_path resolves beneath A"
+    );
+    let shown = session.root_display_path().unwrap();
+    assert!(
+        shown.ends_with(Path::new("outer").join("A")),
+        "the display path names the held folder: {}",
+        shown.display()
+    );
+
+    assert_eq!(
+        std::fs::read_to_string(a.join("note.md")).unwrap(),
+        "# A, saved\n"
+    );
+    assert!(a.join("moved.md").is_file() && !a.join("new.md").exists());
+    for leaf in [
+        "cache.sqlite",
+        "cache.sqlite-wal",
+        "cache.sqlite-shm",
+        "structural.lock",
+    ] {
+        assert!(a.join(".slate").join(leaf).is_file(), "A holds {leaf}");
+    }
+    drop(session);
+    assert_eq!(tree(&b), decoy, "the decoy is byte-identical");
 }

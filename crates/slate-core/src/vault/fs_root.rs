@@ -694,6 +694,12 @@ pub struct FsRoot {
     /// item 6), so a re-read of its spelling reads as the open read.
     #[cfg(windows)]
     seams: sys::Seams,
+    /// Serializes listings of the root itself on Windows: a listing's
+    /// position belongs to the handle it runs on, and the root is listed
+    /// on the held handle (a second handle on it cannot be made from the
+    /// held one: `ReOpenFile` refuses it).
+    #[cfg(windows)]
+    listing: std::sync::Mutex<()>,
     cache: CacheDir,
 }
 
@@ -845,6 +851,7 @@ impl FsRoot {
             identity: Some(identity),
             root: held,
             seams,
+            listing: std::sync::Mutex::new(()),
             cache,
         })
     }
@@ -897,6 +904,123 @@ impl FsRoot {
     /// design review: core reads Windows identities only from handles).
     pub(crate) fn spelling_names_root(&self) -> bool {
         self.names_held(&self.opened_as)
+    }
+
+    /// The entry at the vault-relative `relative`, opened beneath the held
+    /// root for reading (WB-28 design table B): `Follow::Links` follows a
+    /// link wherever the pathname read followed one; `Follow::InVault`
+    /// follows, then refuses an entry that is not beneath the held root;
+    /// `Follow::Never` opens every component as itself.
+    pub(crate) fn open_beneath(&self, relative: &Path, follow: Follow) -> io::Result<fs::File> {
+        use windows_sys::Win32::Storage::FileSystem::{FILE_GENERIC_READ, FILE_READ_ATTRIBUTES};
+        if relative.as_os_str().is_empty() {
+            return self.root.try_clone();
+        }
+        let access = match follow {
+            Follow::Never => FILE_READ_ATTRIBUTES,
+            Follow::Links | Follow::InVault => FILE_GENERIC_READ,
+        };
+        let file = sys::open_beneath(&self.root, relative, follow != Follow::Never, access)?;
+        if follow == Follow::InVault {
+            let inside = super::trash_handoff::final_path(&file)?;
+            let held = super::trash_handoff::final_path(&self.root)?;
+            if !inside.starts_with(&held) {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    format!("{inside:?} is not beneath the vault root {held:?}"),
+                ));
+            }
+        }
+        Ok(file)
+    }
+
+    /// The metadata of the entry at `relative`: followed (`Follow::Links`, as
+    /// `fs::metadata`) or as itself (`Follow::Never`, as `symlink_metadata`).
+    pub(crate) fn stat_beneath(&self, relative: &Path, follow: Follow) -> io::Result<fs::Metadata> {
+        use windows_sys::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES;
+        if relative.as_os_str().is_empty() {
+            return self.root.metadata();
+        }
+        sys::open_beneath(
+            &self.root,
+            relative,
+            follow != Follow::Never,
+            FILE_READ_ATTRIBUTES,
+        )?
+        .metadata()
+    }
+
+    /// The entries of the folder at `relative` (links followed to reach it,
+    /// as `fs::read_dir` follows them); a link inside is reported as a link.
+    pub(crate) fn list_beneath(
+        &self,
+        relative: &Path,
+    ) -> io::Result<Vec<(OsString, sys::ListedKind)>> {
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_TRAVERSE, SYNCHRONIZE,
+        };
+        if relative.as_os_str().is_empty() {
+            let _listing = self
+                .listing
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            return sys::read_dir_entries(&self.root);
+        }
+        let folder = sys::open_beneath(
+            &self.root,
+            relative,
+            true,
+            FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | FILE_TRAVERSE | SYNCHRONIZE,
+        )?;
+        sys::read_dir_entries(&folder)
+    }
+
+    /// Whether `a` and `b` are one entry under two spellings (a case-only
+    /// alias): both open as themselves, neither is a link, and their ids
+    /// match. A path that cannot be looked at is never the same entry.
+    pub(crate) fn same_entry_beneath(&self, a: &Path, b: &Path) -> bool {
+        let id = |relative: &Path| {
+            let file = self.open_beneath(relative, Follow::Never).ok()?;
+            let metadata = file.metadata().ok()?;
+            if metadata.file_type().is_symlink() {
+                return None;
+            }
+            sys::entry_id(&file).ok()
+        };
+        matches!((id(a), id(b)), (Some(x), Some(y)) if x == y)
+    }
+
+    /// The stored spelling of the entry at `relative`, vault-relative with
+    /// `/` (#1077 I1): a link keeps its own spelling; a missing entry is
+    /// `None`; an entry an ancestor link leads outside the held root is an
+    /// error (I7), since it has no in-vault spelling to bind to.
+    pub(crate) fn stored_spelling_beneath(&self, relative: &Path) -> io::Result<Option<String>> {
+        match self.stat_beneath(relative, Follow::Never) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Ok(Some(relative.to_string_lossy().replace('\\', "/")));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        }
+        let file = match self.open_beneath(relative, Follow::Links) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let stored = super::trash_handoff::final_path(&file)?;
+        let held = super::trash_handoff::final_path(&self.root)?;
+        let rest = stored.strip_prefix(&held).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "canonical location {stored:?} is not beneath the vault root {held:?} \
+                     (an ancestor reparse point leads outside the vault); refusing to bind \
+                     an identity"
+                ),
+            )
+        })?;
+        Ok(Some(rest.to_string_lossy().replace('\\', "/")))
     }
 
     /// The held root in the vault watcher's own terms (the volume serial
@@ -1038,6 +1162,18 @@ fn observed_identity(root: &Path) -> Option<VaultRootIdentity> {
         let _ = root;
         None
     }
+}
+
+/// How a read beneath the held root treats a link on the way (WB-28 design
+/// table B): `Links` follows one wherever the pathname read followed it;
+/// `InVault` follows, then requires the entry to lie beneath the held root;
+/// `Never` opens every component as itself (the mutation probes).
+#[cfg(windows)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Follow {
+    Links,
+    InVault,
+    Never,
 }
 
 /// Core's sentence for a vault root (or `.slate`) whose volume gives no

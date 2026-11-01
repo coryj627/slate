@@ -296,17 +296,16 @@ pub(super) fn current_path(_descriptor: &fs::File) -> io::Result<PathBuf> {
 /// (`Folders::PlainOnly`).
 #[cfg(windows)]
 pub(super) fn pinned_path(
-    root: &Path,
+    root: &super::windows_entry::PinnedRoot,
     vault_relative: &Path,
     original: &str,
 ) -> Result<PathBuf, VaultError> {
     use super::fs::Mutation;
-    use super::windows_entry::{Folders, PinnedRoot};
+    use super::windows_entry::Folders;
 
     let leaf = vault_relative
         .file_name()
         .ok_or_else(|| refused(original, "the path has no final component"))?;
-    let root = PinnedRoot::open(root)?;
     let parent = root.folder(
         vault_relative.parent().unwrap_or_else(|| Path::new("")),
         original,

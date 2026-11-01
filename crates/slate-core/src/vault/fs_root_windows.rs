@@ -240,6 +240,181 @@ pub(crate) fn is_reparse_point(metadata: &fs::Metadata) -> bool {
     metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 
+/// A new staging file `name` in `dir` (the held `.slate\tmp`):
+/// `FILE_CREATE`, so a name already there is `AlreadyExists` and is never
+/// opened; opened for writing, attributes and deletion, so the save can
+/// write it, publish it by handle and remove it through the same handle;
+/// shared as `tempfile` shares its files.
+pub(crate) fn create_staged(dir: &fs::File, name: &OsStr) -> io::Result<fs::File> {
+    use windows_sys::Wdk::Storage::FileSystem::{
+        FILE_CREATE, FILE_NON_DIRECTORY_FILE, FILE_OPEN_REPARSE_POINT,
+    };
+    use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_ATTRIBUTES;
+    windows_entry::create_relative(
+        dir,
+        name,
+        FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_WRITE_ATTRIBUTES | DELETE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        FILE_CREATE,
+        FILE_NON_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT,
+    )
+}
+
+/// Mark the file `file` is open on (with `DELETE` access) for deletion,
+/// by its handle: the entry goes when the last handle closes, and no
+/// other entry that took its name is touched.
+pub(crate) fn delete_by_handle(file: &fs::File) -> io::Result<()> {
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_DISPOSITION_INFO, FileDispositionInfo, SetFileInformationByHandle,
+    };
+    let info = FILE_DISPOSITION_INFO { DeleteFile: true };
+    // SAFETY: a live handle and an initialized FILE_DISPOSITION_INFO of the
+    // size passed.
+    let ok = unsafe {
+        SetFileInformationByHandle(
+            file.as_raw_handle(),
+            FileDispositionInfo,
+            (&info as *const FILE_DISPOSITION_INFO).cast(),
+            std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
+        )
+    };
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// The entry at `relative` (vault-relative components) beneath `root`,
+/// each component opened relative to the one before. With `follow_links`
+/// every component is followed through a link, as a pathname read follows
+/// it; without, every component opens as itself and a link on the way is
+/// [`STOPPED_ON_LINK`] (the leaf itself may be a link: it opens as one).
+/// An empty `relative` names no entry here: the caller holds the root.
+pub(crate) fn open_beneath(
+    root: &fs::File,
+    relative: &Path,
+    follow_links: bool,
+    access: u32,
+) -> io::Result<fs::File> {
+    use std::path::Component;
+    use windows_sys::Wdk::Storage::FileSystem::{FILE_OPEN, FILE_OPEN_REPARSE_POINT};
+    let names: Vec<&OsStr> = relative
+        .components()
+        .map(|component| match component {
+            Component::Normal(name) => Ok(name),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "the path is not vault-relative",
+            )),
+        })
+        .collect::<io::Result<_>>()?;
+    let Some((leaf, folders)) = names.split_last() else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "the vault root itself is the held handle",
+        ));
+    };
+    let options = if follow_links {
+        0
+    } else {
+        FILE_OPEN_REPARSE_POINT
+    };
+    let share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+    let mut current: Option<fs::File> = None;
+    for name in folders {
+        let parent = current.as_ref().unwrap_or(root);
+        let next =
+            windows_entry::create_relative(parent, name, FOLDER_ACCESS, share, FILE_OPEN, options)?;
+        if !follow_links
+            && matches!(
+                windows_entry::found(&next)?,
+                Found::Junction | Found::SymbolicLink | Found::Link
+            )
+        {
+            return Err(io::Error::from_raw_os_error(STOPPED_ON_LINK));
+        }
+        current = Some(next);
+    }
+    let parent = current.as_ref().unwrap_or(root);
+    windows_entry::create_relative(parent, leaf, access, share, FILE_OPEN, options)
+}
+
+/// What a listing reports an entry as, the way `std::fs::FileType` does: a
+/// name surrogate (a junction, a symbolic link) is a link whether it
+/// stands for a folder or a file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ListedKind {
+    File,
+    Folder,
+    Link,
+}
+
+/// The names in `dir` with their kinds, `.` and `..` excluded. `dir` is a
+/// handle of its own, opened with list access.
+pub(crate) fn read_dir_entries(dir: &fs::File) -> io::Result<Vec<(OsString, ListedKind)>> {
+    const NAME_SURROGATE: u32 = 0x2000_0000;
+    let mut buffer = vec![0u64; 8 * 1024];
+    let mut entries = Vec::new();
+    let mut class = FileFullDirectoryRestartInfo;
+    loop {
+        let bytes = u32::try_from(buffer.len() * 8).unwrap_or(u32::MAX);
+        // SAFETY: a live handle and a writable, aligned buffer of `bytes`.
+        let ok = unsafe {
+            GetFileInformationByHandleEx(
+                dir.as_raw_handle(),
+                class,
+                buffer.as_mut_ptr().cast(),
+                bytes,
+            )
+        };
+        if ok == 0 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(ERROR_NO_MORE_FILES as i32) {
+                return Ok(entries);
+            }
+            return Err(error);
+        }
+        class = FileFullDirectoryInfo;
+        let base = buffer.as_ptr().cast::<u8>();
+        let mut offset = 0usize;
+        loop {
+            // SAFETY: a record the call wrote, within the buffer.
+            let entry = unsafe { &*base.add(offset).cast::<FILE_FULL_DIR_INFO>() };
+            let length = entry.FileNameLength as usize / 2;
+            // SAFETY: the record's name runs FileNameLength bytes, inside the buffer.
+            let name = unsafe { std::slice::from_raw_parts(entry.FileName.as_ptr(), length) };
+            if name != [46] && name != [46, 46] {
+                // A reparse point's tag is in EaSize (FILE_FULL_DIR_INFO).
+                let kind = if entry.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+                    && entry.EaSize & NAME_SURROGATE != 0
+                {
+                    ListedKind::Link
+                } else if entry.FileAttributes
+                    & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_DIRECTORY
+                    != 0
+                {
+                    ListedKind::Folder
+                } else {
+                    ListedKind::File
+                };
+                entries.push((OsString::from_wide(name), kind));
+            }
+            if entry.NextEntryOffset == 0 {
+                break;
+            }
+            offset += entry.NextEntryOffset as usize;
+        }
+    }
+}
+
+/// The file system's id of the entry `file` is open on, for telling two
+/// entries apart at one moment: `FileIdInfo`, else the file index (on a
+/// volume that answers only that, two entries that exist at once still
+/// have different indexes).
+pub(crate) fn entry_id(file: &fs::File) -> io::Result<VaultRootIdentity> {
+    file_id_info(file).or_else(|_| file_index(file))
+}
+
 /// Whether `relative` (vault-relative, `/`-separated) names a folder
 /// beneath `root`, each component opened relative to the one before and
 /// followed through links, as `Path::is_dir` follows them: only the
