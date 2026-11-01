@@ -612,7 +612,7 @@ before code.
 | WB-26 | `specs/wb26_canvas_board_edge_peers.md` | Labelled canvas edges are UIA peers on the visual board: named by core's traversal phrase, windowed like cards, Invoke total over the end-style table |
 | WB-27 | `specs/wb27_no_replace_primitives_proven_on_weak_volumes.md` | 38W: the Windows no-replace primitives are proven on FAT32, exFAT and an SMB share |
 | WB-28 | `specs/wb28_descriptor_relative_session_on_windows.md` | 22W: the Windows session holds its vault root and resolves its interior through handles, and its identity is lossless |
-| WB-29a | written when its wave starts (W10) | One hot-exit design serves both hosts, and the core store it fixes is on `main` with its facts |
+| WB-29a | `specs/wb29a_hot_exit_shared_design_and_core_store.md` | One hot-exit design serves both hosts, and the core store it fixes is on `main` with its facts |
 | WB-29 | `specs/wb29_hot_exit_windows_half.md` | Unsaved notes survive closing, quitting and a crash on Windows, and come back unsaved when the vault reopens |
 | WB-30 | `specs/wb30_trash_verification_t2_core_and_windows.md` | After a Move to Trash, Slate checks that what arrived is the confirmed item, and says so |
 | WB-31 | `specs/wb31_two_sessions_one_process_bench.md` | Two sessions in one process: the shared page cache is reproduced or refuted on Windows, and the remedy waits for the answer |
