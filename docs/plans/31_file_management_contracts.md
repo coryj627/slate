@@ -701,7 +701,11 @@ enforced by construction, not by review.
   created"). A vault whose root is a junction still saves and creates.
   **Residual:** as on Unix before plan 43 PR 22a, the final component is
   still a name and the staged file is named by its path in `.slate/tmp`
-  (#940; Windows' body is 22W, Milestone W).
+  (#940; Windows' body is 22W, Milestone W). **Closed on Windows
+  2026-11-01 by 22W** (plan 44 WB-28, #1729 core and its host PR): the
+  session holds the root and `.slate`, opens each name relative to the
+  held root, and stages and publishes the file by handle beneath the held
+  `.slate`; the host's own stores reach the vault through the held root.
 
 ## Phase plan
 
