@@ -41,7 +41,11 @@ internal sealed class GraphConfigWriter
     private readonly Dictionary<VaultRootScope, VaultState> _vaults = [];
 
     // ONE tail for the process (WB-28 open item 1): per-scope queues let
-    // a weak root's reopen, a new scope, overtake its straggler.
+    // a weak root's reopen, a new scope, overtake its straggler. The cost
+    // is head-of-line blocking across vaults: a slow write (a stalled
+    // network share) delays every other vault's preferences write behind
+    // it. One window holds one vault at a time, so the queue rarely holds
+    // two scopes at once, and each write is one small file.
     private Task _tail = Task.CompletedTask;
 
     private sealed class VaultState

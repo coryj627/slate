@@ -513,6 +513,25 @@ public sealed partial class FileRecentsStoreTests
         Assert.Equal(["c.md", "z.md", "a.md"], store.Load());
     }
 
+    /// <summary>A replacement whose own commit fails retires nothing: the
+    /// source its load merged stays, and a later load merges it again.</summary>
+    [Fact]
+    public void AFailedReplacementRetiresNoSource()
+    {
+        using FixtureVault fixture = FixtureVault.Create(1, "recents-replace-fails");
+        string deviceRoot = Path.Combine(fixture.Root, "device-state");
+        new FileRecentsStore(fixture.Root, localAppDataRoot: deviceRoot).Replace(["old.md", "b.md"]);
+        var store = new FileRecentsStore(fixture.Root, Persistent, deviceRoot);
+        Directory.CreateDirectory(store.FilePathForTests);
+        Assert.Equal(["old.md", "b.md"], store.Load());
+
+        store.Replace(["new.md", "b.md"]);
+
+        Assert.True(File.Exists(store.PathKeyedPathForTests), "a source was retired by a replacement that never committed");
+        Directory.Delete(store.FilePathForTests);
+        Assert.Equal(["old.md", "b.md"], store.Load());
+    }
+
     private static string WriteInVault(string vaultRoot, string[] entries)
     {
         string directory = Path.Combine(vaultRoot, ".slate");
