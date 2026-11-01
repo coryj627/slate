@@ -87,11 +87,23 @@ internal sealed class WorkspacePersistence
     private const string WorkspaceFileName = "workspace.json";
 
     private readonly string _vaultRoot;
+    private readonly VaultRootAnchor? _root;
     private readonly Action? _afterDirectoryAnchored;
 
-    public WorkspacePersistence(string vaultRoot, Action? afterDirectoryAnchored = null)
+    /// <summary>
+    /// The root this store reaches the vault through (plan 44 WB-28): the
+    /// session's held root in production; a store built with no anchor
+    /// opens by path, which only the tests may do.
+    /// </summary>
+    private VaultRootAnchor Root => _root ?? VaultRootAnchor.ByPathForTests(_vaultRoot);
+
+    public WorkspacePersistence(
+        string vaultRoot,
+        Action? afterDirectoryAnchored = null,
+        VaultRootAnchor? root = null)
     {
         _vaultRoot = Path.GetFullPath(vaultRoot);
+        _root = root;
         _afterDirectoryAnchored = afterDirectoryAnchored;
     }
 
@@ -100,7 +112,7 @@ internal sealed class WorkspacePersistence
         try
         {
             using AnchoredVaultStore? store = AnchoredVaultStore.Open(
-                _vaultRoot,
+                Root,
                 createDirectory: false,
                 _afterDirectoryAnchored);
             byte[]? input = store?.ReadAllBytesBounded(WorkspaceFileName, MaxFileBytes);
@@ -169,7 +181,7 @@ internal sealed class WorkspacePersistence
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         using AnchoredVaultStore store = AnchoredVaultStore.Open(
-            _vaultRoot,
+            Root,
             createDirectory: true,
             _afterDirectoryAnchored)
             ?? throw new IOException("Could not anchor the workspace store directory.");

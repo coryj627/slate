@@ -32,6 +32,7 @@ internal sealed class SidebarSettingsStore
     private const string SettingsFileName = "sidebar.json";
     private const string LockFileName = "sidebar.json.lock";
     private readonly string _vaultRoot;
+    private readonly VaultRootAnchor? _anchor;
     private readonly Action? _afterDirectoryAnchored;
     private JsonObject _root = new() { ["version"] = SchemaVersion };
     private string? _readOnlyReason;
@@ -42,9 +43,20 @@ internal sealed class SidebarSettingsStore
     /// its notice from either).</summary>
     public string? ReadOnlyReason => _readOnlyReason;
 
-    public SidebarSettingsStore(string vaultRoot, Action? afterDirectoryAnchored = null)
+    /// <summary>
+    /// The root this store reaches the vault through (plan 44 WB-28): the
+    /// session's held root in production; a store built with no anchor
+    /// opens by path, which only the tests may do.
+    /// </summary>
+    private VaultRootAnchor Root => _anchor ?? VaultRootAnchor.ByPathForTests(_vaultRoot);
+
+    public SidebarSettingsStore(
+        string vaultRoot,
+        Action? afterDirectoryAnchored = null,
+        VaultRootAnchor? root = null)
     {
         _vaultRoot = Path.GetFullPath(vaultRoot);
+        _anchor = root;
         _afterDirectoryAnchored = afterDirectoryAnchored;
     }
 
@@ -320,7 +332,7 @@ internal sealed class SidebarSettingsStore
         }
 
         using AnchoredVaultStore store = AnchoredVaultStore.Open(
-            _vaultRoot,
+            Root,
             createDirectory: true,
             _afterDirectoryAnchored)
             ?? throw new IOException("Could not anchor the sidebar settings directory.");
@@ -358,7 +370,7 @@ internal sealed class SidebarSettingsStore
             () =>
             {
                 using AnchoredVaultStore? store = AnchoredVaultStore.Open(
-                    _vaultRoot,
+                    Root,
                     createDirectory: false,
                     _afterDirectoryAnchored);
                 return store?.ReadAllBytesBounded(SettingsFileName, MaxReadBytes);

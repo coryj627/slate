@@ -558,8 +558,12 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         JournalReplay? journalReplay = null;
         if (vaultRoot is not null)
         {
-            _settingsStore = new SidebarSettingsStore(vaultRoot);
-            _recentsStore = new FileRecentsStore(vaultRoot, session.RootIdentity(), localAppDataRoot);
+            _settingsStore = new SidebarSettingsStore(vaultRoot, root: VaultRootAnchor.Of(session));
+            _recentsStore = new FileRecentsStore(
+            vaultRoot,
+            session.RootIdentity(),
+            localAppDataRoot,
+            VaultRootAnchor.Of(session));
             SidebarSettingsSnapshot settings = _settingsStore.Load();
             // #1435: a rename or move the last session journaled but never
             // carried into the file — a crash after core committed, or a

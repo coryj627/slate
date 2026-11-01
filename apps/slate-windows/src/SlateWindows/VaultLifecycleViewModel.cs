@@ -379,6 +379,12 @@ internal sealed partial class VaultLifecycleViewModel
     /// <see cref="OpenVaultAsync"/>, before its busy guard.</summary>
     internal Action<string>? OpenRequestedForTests { get; set; }
 
+    /// <summary>Plan 44 WB-28 PR 2: how the open reads the session's root
+    /// identity, before anything records or announces the vault; a fact
+    /// makes it answer null.</summary>
+    internal Func<VaultSession, VaultRootIdentity?> RootIdentityReader { get; set; } =
+        session => session.RootIdentity();
+
     public bool IsBusy
     {
         get => _isBusy;
@@ -583,6 +589,22 @@ internal sealed partial class VaultLifecycleViewModel
             if (generation != _generation)
             {
                 openedSession.Dispose();
+                return;
+            }
+
+            // WB-28 (fail-closed behind core): every vault store reaches the
+            // vault through the held root, which a root with no identity
+            // cannot anchor. Core refuses such a root at the open; a null
+            // here refuses it again, before the vault is recorded or
+            // announced. A weak identity is not null and opens. The
+            // finally disposes the session.
+            if (OperatingSystem.IsWindows() && RootIdentityReader(openedSession) is null)
+            {
+                ReportTerminalStatus(
+                    $"Could not open vault: {SlateUniffiMethods.VaultRootIdentityUnavailableDetail()}",
+                    A11yPriority.High);
+                IsVaultOpen = false;
+                ReturnedToWelcome?.Invoke(this, EventArgs.Empty);
                 return;
             }
 
@@ -1494,7 +1516,9 @@ internal sealed partial class VaultLifecycleViewModel
         VaultSession session,
         string root)
     {
-        WorkspaceSnapshot? persisted = new WorkspacePersistence(root).Load();
+        WorkspaceSnapshot? persisted = new WorkspacePersistence(
+            root,
+            root: VaultRootAnchor.Of(session)).Load();
         FilesSidebarViewModel? sidebar = null;
         var workspace = new WorkspaceViewModel(
             session,

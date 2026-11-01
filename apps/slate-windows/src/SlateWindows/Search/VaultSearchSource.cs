@@ -21,8 +21,10 @@ namespace SlateWindows.Search;
 /// (contract S5).
 /// </para>
 /// <para>
-/// The recents store is cached, one instance per vault root, and
-/// rebuilt when the root changes. The file is still re-read on every
+/// The recents store is cached, one instance per vault session, and
+/// rebuilt when the session changes (plan 44 WB-28: the store reaches
+/// the vault through the session's held root, so a reopen of the same
+/// path needs a new one). The file is still re-read on every
 /// operation (mac's documented single-writer discipline) — the cache
 /// exists for the store's one piece of state:
 /// <see cref="SearchRecentsStore.LastSaveError"/>. The first version
@@ -37,7 +39,10 @@ internal sealed class VaultSearchSource : ISearchSource
     private readonly Func<string?> _vaultRoot;
 
     private SearchRecentsStore? _recents;
-    private string? _recentsRoot;
+    // The session the cached store reaches the vault through (WB-28 open
+    // item 2): a reopen of the same path is another session, whose store
+    // must hold the new root, so the cache is keyed by the instance.
+    private VaultSession? _recentsSession;
 
     public VaultSearchSource(Func<VaultSession?> session, Func<string?> vaultRoot)
     {
@@ -51,6 +56,10 @@ internal sealed class VaultSearchSource : ISearchSource
     /// <see langword="null"/> — non-fatal, but observable, which is the
     /// point of caching the store at all.</summary>
     public Exception? LastRecentsSaveError => _recents?.LastSaveError;
+
+    /// <summary>Whether a recents store is cached (the facts' window on
+    /// item 2's clear).</summary>
+    internal bool HasCachedRecentsForTests => _recents is not null;
 
     /// <inheritdoc />
     public bool IsVaultOpen => _session() is not null;
@@ -77,7 +86,7 @@ internal sealed class VaultSearchSource : ISearchSource
     public void ClearRecents() => RecentsStore()?.Clear();
 
     /// <summary>
-    /// The one store for the current vault root, or
+    /// The one store for the current vault session, or
     /// <see langword="null"/> with no vault open. Identical behaviour
     /// to per-call construction — the store re-reads the file on every
     /// operation — except that <see cref="SearchRecentsStore.LastSaveError"/>
@@ -85,16 +94,17 @@ internal sealed class VaultSearchSource : ISearchSource
     /// </summary>
     private SearchRecentsStore? RecentsStore()
     {
-        if (_vaultRoot() is not string root)
+        if (_session() is not VaultSession session || _vaultRoot() is not string root)
         {
+            _recents = null;
+            _recentsSession = null;
             return null;
         }
 
-        if (_recents is null
-            || !string.Equals(_recentsRoot, root, StringComparison.Ordinal))
+        if (_recents is null || !ReferenceEquals(session, _recentsSession))
         {
-            _recents = new SearchRecentsStore(root);
-            _recentsRoot = root;
+            _recents = new SearchRecentsStore(root, VaultRootAnchor.Of(session));
+            _recentsSession = session;
         }
 
         return _recents;

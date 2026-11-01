@@ -71,6 +71,7 @@ internal sealed class GraphPreferencesViewModel : BindableBase
     }
 
     private readonly string _key;
+    private readonly VaultRootAnchor _root;
     private readonly GraphConfigWriter _writer;
     private readonly DispatcherTimer _timer;
     private readonly List<Task> _outstanding = [];
@@ -83,22 +84,26 @@ internal sealed class GraphPreferencesViewModel : BindableBase
         GraphConfigWriter? writer = null,
         GraphConfigStore? store = null,
         Dispatcher? dispatcher = null,
-        TimeSpan? window = null)
+        TimeSpan? window = null,
+        VaultRootAnchor? root = null)
     {
         ArgumentNullException.ThrowIfNull(vaultRoot);
         _key = GraphConfigWriter.KeyOf(vaultRoot);
+        // The root the writer keys and pins (plan 44 WB-28): the session's
+        // in production; by path only in the tests.
+        _root = root ?? VaultRootAnchor.ByPathForTests(vaultRoot);
         _writer = writer ?? GraphConfigWriter.Shared;
         // Term W6: the newest outstanding aggregate IS the config — a reopen
         // during a straggling write reads what the straggler will write;
         // otherwise the file, through Term W7's decode arms.
-        if (_writer.Newest(_key) is { } outstanding)
+        if (_writer.Newest(_root) is { } outstanding)
         {
             _current = outstanding;
             IsWritable = true;
         }
         else
         {
-            GraphConfigLoad load = (store ?? new GraphConfigStore(vaultRoot)).Read();
+            GraphConfigLoad load = (store ?? new GraphConfigStore(vaultRoot, _root)).Read();
             _current = load.Config;
             IsWritable = load.Writable;
             LoadFailure = load.Failure;
@@ -326,7 +331,7 @@ internal sealed class GraphPreferencesViewModel : BindableBase
             RefusedForTests++;
             return;
         }
-        ulong generation = _writer.Reserve(_key);
+        ulong generation = _writer.Reserve(_root);
         _pending = (_current, generation);
         _timer.Stop();
         _timer.Start();
@@ -351,7 +356,7 @@ internal sealed class GraphPreferencesViewModel : BindableBase
             // so nothing said so (IPG-5). Both transitions run on the owner
             // dispatcher, so this prune is serialised with the adds.
             _ = _outstanding.RemoveAll(task => task.IsCompleted);
-            _outstanding.Add(_writer.Enqueue(_key, pair.Aggregate, pair.Generation));
+            _outstanding.Add(_writer.Enqueue(_root, pair.Aggregate, pair.Generation));
         }
     }
 
@@ -380,6 +385,8 @@ internal sealed class GraphPreferencesViewModel : BindableBase
     }
 
     internal string KeyForTests => _key;
+
+    internal VaultRootAnchor RootForTests => _root;
 
     internal bool HasPendingForTests => _pending is not null;
 

@@ -12,8 +12,15 @@ namespace SlateWindows.Graph;
 /// in the process — the mac's <c>GraphConfigWriter.shared</c> — with its
 /// state per vault KEY (Term W1: <c>Path.GetFullPath</c>, the trailing
 /// separator trimmed, compared OrdinalIgnoreCase — the lifecycle's own
-/// convention, so <c>C:\Vault</c> and <c>c:\vault\</c> are one key). Per
-/// key, a serial queue on the pool and four facts under one lock: the
+/// convention, so <c>C:\Vault</c> and <c>c:\vault\</c> are one key). Plan
+/// 44 WB-28 PR 2 (open item 1) keys the state by the ROOT instead — a
+/// <see cref="VaultRootScope"/>: the file system's id for a persistent
+/// root, so every spelling of one folder is one scope and a spelling that
+/// now names another folder is another; the session itself for a weak
+/// root, whose ids can collide. A write pins the root at admission and
+/// goes through that pin, never a path, and all writes share ONE serial
+/// queue, so a reopen's write lands after a straggler's whatever their
+/// scopes. Per scope, four facts under one lock: the
 /// generation COUNTER, the highest ADMITTED generation, the OUTSTANDING
 /// admitted aggregates and the LAST SUCCESSFUL write's generation. Three
 /// operations: <see cref="Reserve"/> (synchronous, monotonic, never reset
@@ -31,7 +38,11 @@ internal sealed class GraphConfigWriter
     public static GraphConfigWriter Shared { get; } = new();
 
     private readonly object _lock = new();
-    private readonly Dictionary<string, VaultState> _vaults = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<VaultRootScope, VaultState> _vaults = [];
+
+    // ONE tail for the process (WB-28 open item 1): per-scope queues let
+    // a weak root's reopen, a new scope, overtake its straggler.
+    private Task _tail = Task.CompletedTask;
 
     private sealed class VaultState
     {
@@ -39,7 +50,6 @@ internal sealed class GraphConfigWriter
         public ulong Admitted;
         public ulong LastWritten;
         public readonly SortedDictionary<ulong, GraphConfig> Outstanding = [];
-        public Task Tail = Task.CompletedTask;
     }
 
     internal GraphConfigWriter()
@@ -60,23 +70,24 @@ internal sealed class GraphConfigWriter
         return Path.TrimEndingDirectorySeparator(Path.GetFullPath(vaultRoot));
     }
 
-    /// <summary>The store a key's writes go to — the key is a full path;
-    /// a fact points the writer at a store of its own.</summary>
-    internal Func<string, GraphConfigStore> StoreFor { get; set; } = key => new GraphConfigStore(key);
+    /// <summary>The store a write goes to, given the root it pinned at
+    /// admission; a fact points the writer at a store of its own.</summary>
+    internal Func<VaultRootAnchor, GraphConfigStore> StoreFor { get; set; } =
+        root => new GraphConfigStore(root.DisplayPath, root);
 
     /// <summary>Test seam: runs inside the queue's body, after the dequeue
     /// and before the store's write — a fact parks a write there or makes
     /// it fail.</summary>
-    internal Action<string, GraphConfig>? WriteGateForTests { get; set; }
+    internal Action<VaultRootScope, GraphConfig>? WriteGateForTests { get; set; }
 
-    /// <summary>Reserve the next generation for the key (Term W3 reserves at
-    /// schedule time, so generations follow EDIT order).</summary>
-    public ulong Reserve(string key)
+    /// <summary>Reserve the next generation for the root (Term W3 reserves
+    /// at schedule time, so generations follow EDIT order).</summary>
+    public ulong Reserve(VaultRootAnchor root)
     {
-        ArgumentNullException.ThrowIfNull(key);
+        ArgumentNullException.ThrowIfNull(root);
         lock (_lock)
         {
-            VaultState state = StateOf(key);
+            VaultState state = StateOf(root.Scope);
             state.Counter++;
             return state.Counter;
         }
@@ -84,39 +95,53 @@ internal sealed class GraphConfigWriter
 
     /// <summary>Admit and queue an aggregate under its reserved generation;
     /// the returned task completes after the write's attempt, succeeded or
-    /// failed. A superseded generation is dropped at the call.</summary>
-    public Task Enqueue(string key, GraphConfig aggregate, ulong generation)
+    /// failed. A superseded generation is dropped at the call. The root is
+    /// pinned here, so a write queued while its session lives lands in that
+    /// root even when the session has closed by the time it runs; a root
+    /// that cannot be pinned fails the write as the store would.</summary>
+    public Task Enqueue(VaultRootAnchor root, GraphConfig aggregate, ulong generation)
     {
-        ArgumentNullException.ThrowIfNull(key);
+        ArgumentNullException.ThrowIfNull(root);
         ArgumentNullException.ThrowIfNull(aggregate);
         lock (_lock)
         {
-            VaultState state = StateOf(key);
+            VaultState state = StateOf(root.Scope);
             if (generation <= state.Admitted)
             {
                 DroppedAtEnqueueForTests++;
                 return Task.CompletedTask;
             }
+            VaultRootAnchor pinned;
+            try
+            {
+                pinned = root.Pin();
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                HostLog.Write(HostDiagnosticEvent.GraphConfigPersistFailed, exception);
+                FailedForTests++;
+                return Task.CompletedTask;
+            }
             state.Admitted = generation;
             state.Outstanding[generation] = aggregate;
-            Task run = state.Tail.ContinueWith(
-                _ => Write(key, state, aggregate, generation),
+            Task run = _tail.ContinueWith(
+                _ => Write(pinned, state, aggregate, generation),
                 CancellationToken.None,
                 TaskContinuationOptions.None,
                 TaskScheduler.Default);
-            state.Tail = run;
+            _tail = run;
             return run;
         }
     }
 
     /// <summary>The highest-generation outstanding aggregate — admitted and
     /// not yet attempted — else null (Term W6's read).</summary>
-    public GraphConfig? Newest(string key)
+    public GraphConfig? Newest(VaultRootAnchor root)
     {
-        ArgumentNullException.ThrowIfNull(key);
+        ArgumentNullException.ThrowIfNull(root);
         lock (_lock)
         {
-            if (!_vaults.TryGetValue(KeyOf(key), out VaultState? state) || state.Outstanding.Count == 0)
+            if (!_vaults.TryGetValue(root.Scope, out VaultState? state) || state.Outstanding.Count == 0)
             {
                 return null;
             }
@@ -124,12 +149,12 @@ internal sealed class GraphConfigWriter
         }
     }
 
-    private void Write(string key, VaultState state, GraphConfig aggregate, ulong generation)
+    private void Write(VaultRootAnchor pinned, VaultState state, GraphConfig aggregate, ulong generation)
     {
         try
         {
-            WriteGateForTests?.Invoke(key, aggregate);
-            StoreFor(key).Write(aggregate);
+            WriteGateForTests?.Invoke(pinned.Scope, aggregate);
+            StoreFor(pinned).Write(aggregate);
             lock (_lock)
             {
                 // The outcome and the aggregate's REMOVAL under one lock
@@ -169,15 +194,19 @@ internal sealed class GraphConfigWriter
             }
             throw;
         }
+        finally
+        {
+            // The root pinned at admission is released with the write.
+            pinned.Dispose();
+        }
     }
 
-    private VaultState StateOf(string key)
+    private VaultState StateOf(VaultRootScope scope)
     {
-        string normalised = KeyOf(key);
-        if (!_vaults.TryGetValue(normalised, out VaultState? state))
+        if (!_vaults.TryGetValue(scope, out VaultState? state))
         {
             state = new VaultState();
-            _vaults[normalised] = state;
+            _vaults[scope] = state;
         }
         return state;
     }
@@ -186,11 +215,24 @@ internal sealed class GraphConfigWriter
 
     internal int FailedForTests { get; private set; }
 
-    internal (ulong Counter, ulong Admitted, ulong LastWritten, int Outstanding) StateForTests(string key)
+    /// <summary>The process-wide queue's last write: done once every write
+    /// enqueued before the read has been attempted.</summary>
+    internal Task TailForTests
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _tail;
+            }
+        }
+    }
+
+    internal (ulong Counter, ulong Admitted, ulong LastWritten, int Outstanding) StateForTests(VaultRootAnchor root)
     {
         lock (_lock)
         {
-            VaultState state = StateOf(key);
+            VaultState state = StateOf(root.Scope);
             return (state.Counter, state.Admitted, state.LastWritten, state.Outstanding.Count);
         }
     }

@@ -10,9 +10,12 @@ using System.Text;
 namespace SlateWindows;
 
 /// <summary>
-/// Holds no-delete-share handles to a vault root and its <c>.slate</c>
-/// directory for one store operation. Child files are opened without following
-/// their final reparse point and are verified against the anchored directory.
+/// Holds a vault root and its <c>.slate</c> directory for one store
+/// operation. The root is the one the session holds (a
+/// <see cref="VaultRootAnchor"/>), <c>.slate</c> is opened relative to it
+/// and every child relative to <c>.slate</c>, each as itself (a reparse point
+/// is refused, never followed), so no step resolves a path (plan 44 WB-28
+/// PR 2): a vault whose spelling now names another folder is never reached.
 /// </summary>
 internal sealed class AnchoredVaultStore : IDisposable
 {
@@ -22,9 +25,8 @@ internal sealed class AnchoredVaultStore : IDisposable
     private const uint GenericRead = 0x80000000;
     private const uint GenericWrite = 0x40000000;
     private const uint FileAttributeDirectory = 0x00000010;
-    private const uint FileAttributeNormal = 0x00000080;
     private const uint FileAttributeReparsePoint = 0x00000400;
-    private const uint FileFlagBackupSemantics = 0x02000000;
+    private const uint FileListDirectory = 0x00000001;
     private const uint FileFlagOpenReparsePoint = 0x00200000;
     private const uint FileFlagSequentialScan = 0x08000000;
     private const uint FileFlagWriteThrough = 0x80000000;
@@ -33,8 +35,6 @@ internal sealed class AnchoredVaultStore : IDisposable
 
     private readonly SafeFileHandle _vaultHandle;
     private readonly SafeFileHandle _directoryHandle;
-    private readonly string _directoryPath;
-    private readonly string _directoryFinalPath;
     private readonly Action? _beforeRename;
     private readonly Action? _afterRename;
     private bool _disposed;
@@ -42,61 +42,58 @@ internal sealed class AnchoredVaultStore : IDisposable
     private AnchoredVaultStore(
         SafeFileHandle vaultHandle,
         SafeFileHandle directoryHandle,
-        string directoryPath,
-        string directoryFinalPath,
         Action? beforeRename,
         Action? afterRename)
     {
         _vaultHandle = vaultHandle;
         _directoryHandle = directoryHandle;
-        _directoryPath = directoryPath;
-        _directoryFinalPath = directoryFinalPath;
         _beforeRename = beforeRename;
         _afterRename = afterRename;
     }
 
+    /// <summary>
+    /// Opens <c>.slate</c> beneath <paramref name="root"/>'s handle (made
+    /// there when <paramref name="createDirectory"/>), or null when it is
+    /// absent. A <c>.slate</c> that is a reparse point or not a folder is
+    /// refused.
+    /// </summary>
     public static AnchoredVaultStore? Open(
-        string vaultRoot,
+        VaultRootAnchor root,
         bool createDirectory,
         Action? afterDirectoryAnchored = null,
         Action? beforeRename = null,
         Action? afterRename = null)
     {
-        string fullRoot = Path.GetFullPath(vaultRoot);
-        SafeFileHandle vaultHandle = OpenRequiredDirectory(fullRoot);
+        SafeFileHandle vaultHandle = root.OpenRoot();
         SafeFileHandle? directoryHandle = null;
         try
         {
-            string rootFinalPath = FinalPath(vaultHandle);
-            string directoryPath = Path.Combine(fullRoot, StoreDirectoryName);
-            if (createDirectory)
-            {
-                Directory.CreateDirectory(directoryPath);
-            }
-
-            directoryHandle = TryOpenDirectory(directoryPath);
+            // Attribute and list access, shared for reading and writing as the
+            // session's own hold is; no synchronous I/O, since it only parents
+            // the opens beneath it.
+            directoryHandle = NativeRelativeOpen.Open(
+                vaultHandle,
+                StoreDirectoryName,
+                FileReadAttributes | FileListDirectory,
+                FileShare.Read | FileShare.Write,
+                createDirectory ? NativeRelativeOpen.FileOpenIf : NativeRelativeOpen.FileOpen,
+                NativeRelativeOpen.FileDirectoryFile | NativeRelativeOpen.FileOpenReparsePoint,
+                out int error);
             if (directoryHandle is null)
             {
-                vaultHandle.Dispose();
-                return null;
+                if (error is ErrorFileNotFound or ErrorPathNotFound)
+                {
+                    vaultHandle.Dispose();
+                    return null;
+                }
+
+                throw IoException("Could not safely open the vault store directory.", error);
             }
 
-            string directoryFinalPath = FinalPath(directoryHandle);
-            string expectedDirectory = NormalizeFinalPath(
-                Path.Combine(rootFinalPath, StoreDirectoryName));
-            if (!string.Equals(
-                directoryFinalPath,
-                expectedDirectory,
-                StringComparison.OrdinalIgnoreCase))
-            {
-                throw new IOException("Vault store directory identity changed.");
-            }
-
+            EnsureAttributes(directoryHandle, expectDirectory: true);
             var store = new AnchoredVaultStore(
                 vaultHandle,
                 directoryHandle,
-                directoryPath,
-                directoryFinalPath,
                 beforeRename,
                 afterRename);
             directoryHandle = null;
@@ -123,13 +120,12 @@ internal sealed class AnchoredVaultStore : IDisposable
     {
         ThrowIfDisposed();
         ValidateFileName(fileName);
-        VerifyDirectoryIdentity();
         SafeFileHandle? handle = TryOpenChild(
             fileName,
             GenericRead | FileReadAttributes,
             FileShare.Read,
             FileMode.Open,
-            FileAttributeNormal | FileFlagOpenReparsePoint | FileFlagSequentialScan);
+            FileFlagOpenReparsePoint | FileFlagSequentialScan);
         if (handle is null)
         {
             return null;
@@ -137,7 +133,7 @@ internal sealed class AnchoredVaultStore : IDisposable
 
         using (handle)
         {
-            EnsureRegularChild(handle, fileName);
+            EnsureAttributes(handle, expectDirectory: false);
             using var stream = new FileStream(handle, FileAccess.Read, 64 * 1024, isAsync: false);
             return SafeFile.ReadAllBytesBounded(stream, maximumBytes);
         }
@@ -147,16 +143,15 @@ internal sealed class AnchoredVaultStore : IDisposable
     {
         ThrowIfDisposed();
         ValidateFileName(fileName);
-        VerifyDirectoryIdentity();
         SafeFileHandle handle = OpenChild(
             fileName,
             GenericRead | GenericWrite | FileReadAttributes,
             FileShare.None,
             FileMode.OpenOrCreate,
-            FileAttributeNormal | FileFlagOpenReparsePoint);
+            FileFlagOpenReparsePoint);
         try
         {
-            EnsureRegularChild(handle, fileName);
+            EnsureAttributes(handle, expectDirectory: false);
             return new FileStream(handle, FileAccess.ReadWrite, 4096, isAsync: false);
         }
         catch
@@ -170,26 +165,24 @@ internal sealed class AnchoredVaultStore : IDisposable
     {
         ThrowIfDisposed();
         ValidateFileName(fileName);
-        VerifyDirectoryIdentity();
         string temporaryName = $"{fileName}.tmp-{Guid.NewGuid():N}";
         SafeFileHandle handle = OpenChild(
             temporaryName,
             GenericWrite | DeleteAccess | FileReadAttributes,
             FileShare.Read,
             FileMode.CreateNew,
-            FileAttributeNormal | FileFlagOpenReparsePoint | FileFlagWriteThrough);
+            FileFlagOpenReparsePoint | FileFlagWriteThrough);
         bool renameCommitted = false;
         try
         {
-            EnsureRegularChild(handle, temporaryName);
+            EnsureAttributes(handle, expectDirectory: false);
             RandomAccess.Write(handle, contents, 0);
             RandomAccess.FlushToDisk(handle);
-            VerifyDirectoryIdentity();
             _beforeRename?.Invoke();
             RenameAnchored(handle, fileName);
             renameCommitted = true;
             _afterRename?.Invoke();
-            EnsureRegularChild(handle, fileName);
+            EnsureAttributes(handle, expectDirectory: false);
         }
         finally
         {
@@ -206,13 +199,12 @@ internal sealed class AnchoredVaultStore : IDisposable
     {
         ThrowIfDisposed();
         ValidateFileName(fileName);
-        VerifyDirectoryIdentity();
         SafeFileHandle? handle = TryOpenChild(
             fileName,
             DeleteAccess | FileReadAttributes,
             FileShare.Read,
             FileMode.Open,
-            FileAttributeNormal | FileFlagOpenReparsePoint);
+            FileFlagOpenReparsePoint);
         if (handle is null)
         {
             return;
@@ -220,7 +212,7 @@ internal sealed class AnchoredVaultStore : IDisposable
 
         using (handle)
         {
-            EnsureRegularChild(handle, fileName);
+            EnsureAttributes(handle, expectDirectory: false);
             if (!TryDeleteByHandle(handle, out int error))
             {
                 throw IoException(
@@ -242,44 +234,6 @@ internal sealed class AnchoredVaultStore : IDisposable
         _vaultHandle.Dispose();
     }
 
-    private static SafeFileHandle OpenRequiredDirectory(string path) =>
-        TryOpenDirectory(path)
-        ?? throw new DirectoryNotFoundException("Vault root does not exist.");
-
-    private static SafeFileHandle? TryOpenDirectory(string path)
-    {
-        SafeFileHandle handle = CreateFileW(
-            WindowsNativePath.ForCreateFile(path),
-            FileReadAttributes,
-            FileShare.Read | FileShare.Write,
-            IntPtr.Zero,
-            FileMode.Open,
-            FileFlagBackupSemantics | FileFlagOpenReparsePoint,
-            IntPtr.Zero);
-        if (handle.IsInvalid)
-        {
-            int error = Marshal.GetLastPInvokeError();
-            handle.Dispose();
-            if (error is ErrorFileNotFound or ErrorPathNotFound)
-            {
-                return null;
-            }
-
-            throw IoException("Could not safely open the vault store directory.", error);
-        }
-
-        try
-        {
-            EnsureAttributes(handle, expectDirectory: true);
-            return handle;
-        }
-        catch
-        {
-            handle.Dispose();
-            throw;
-        }
-    }
-
     private SafeFileHandle OpenChild(
         string fileName,
         uint desiredAccess,
@@ -296,18 +250,34 @@ internal sealed class AnchoredVaultStore : IDisposable
         FileMode mode,
         uint flags)
     {
-        SafeFileHandle handle = CreateFileW(
-            WindowsNativePath.ForCreateFile(Path.Combine(_directoryPath, fileName)),
-            desiredAccess,
-            share,
-            IntPtr.Zero,
-            mode,
-            flags,
-            IntPtr.Zero);
-        if (handle.IsInvalid)
+        uint options = NativeRelativeOpen.FileNonDirectoryFile
+            | NativeRelativeOpen.FileSynchronousIoNonalert;
+        if ((flags & FileFlagOpenReparsePoint) != 0)
         {
-            int error = Marshal.GetLastPInvokeError();
-            handle.Dispose();
+            options |= NativeRelativeOpen.FileOpenReparsePoint;
+        }
+
+        if ((flags & FileFlagSequentialScan) != 0)
+        {
+            options |= NativeRelativeOpen.FileSequentialOnly;
+        }
+
+        if ((flags & FileFlagWriteThrough) != 0)
+        {
+            options |= NativeRelativeOpen.FileWriteThrough;
+        }
+
+        // A FileStream reads it, so it is synchronous.
+        SafeFileHandle? handle = NativeRelativeOpen.Open(
+            _directoryHandle,
+            fileName,
+            desiredAccess | NativeRelativeOpen.Synchronize,
+            share,
+            NativeRelativeOpen.DispositionOf(mode),
+            options,
+            out int error);
+        if (handle is null)
+        {
             if (error is ErrorFileNotFound or ErrorPathNotFound)
             {
                 return null;
@@ -317,28 +287,6 @@ internal sealed class AnchoredVaultStore : IDisposable
         }
 
         return handle;
-    }
-
-    private void EnsureRegularChild(SafeFileHandle handle, string fileName)
-    {
-        EnsureAttributes(handle, expectDirectory: false);
-        string actual = FinalPath(handle);
-        string expected = NormalizeFinalPath(Path.Combine(_directoryFinalPath, fileName));
-        if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new IOException("Vault store file identity changed.");
-        }
-    }
-
-    private void VerifyDirectoryIdentity()
-    {
-        if (!string.Equals(
-            FinalPath(_directoryHandle),
-            _directoryFinalPath,
-            StringComparison.OrdinalIgnoreCase))
-        {
-            throw new IOException("Vault store directory identity changed.");
-        }
     }
 
     private static void EnsureAttributes(SafeFileHandle handle, bool expectDirectory)
@@ -431,31 +379,6 @@ internal sealed class AnchoredVaultStore : IDisposable
         }
     }
 
-    private static string FinalPath(SafeFileHandle handle)
-    {
-        char[] buffer = new char[512];
-        while (true)
-        {
-            uint length = GetFinalPathNameByHandleW(handle, buffer, (uint)buffer.Length, 0);
-            if (length == 0)
-            {
-                throw IoException(
-                    "Could not resolve an anchored vault store handle.",
-                    Marshal.GetLastPInvokeError());
-            }
-
-            if (length < buffer.Length)
-            {
-                return NormalizeFinalPath(new string(buffer, 0, (int)length));
-            }
-
-            buffer = new char[checked((int)length + 1)];
-        }
-    }
-
-    private static string NormalizeFinalPath(string path) =>
-        path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-
     private static void ValidateFileName(string fileName)
     {
         if (string.IsNullOrWhiteSpace(fileName)
@@ -499,16 +422,6 @@ internal sealed class AnchoredVaultStore : IDisposable
         public uint ReparseTag;
     }
 
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern SafeFileHandle CreateFileW(
-        string fileName,
-        uint desiredAccess,
-        FileShare shareMode,
-        IntPtr securityAttributes,
-        FileMode creationDisposition,
-        uint flagsAndAttributes,
-        IntPtr templateFile);
-
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetFileInformationByHandleEx(
@@ -516,13 +429,6 @@ internal sealed class AnchoredVaultStore : IDisposable
         FileInfoByHandleClass informationClass,
         out FileAttributeTagInfo information,
         uint bufferSize);
-
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern uint GetFinalPathNameByHandleW(
-        SafeFileHandle file,
-        [Out] char[] filePath,
-        uint filePathLength,
-        uint flags);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
