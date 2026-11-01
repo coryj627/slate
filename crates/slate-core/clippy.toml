@@ -17,10 +17,12 @@
 # when it helps, rides a separate debug line).
 #
 # `#[allow(clippy::disallowed_macros)]` is available as an escape hatch for
-# any genuinely-print-to-stdout code path. slate-core's only one is the
-# ignored timing harness `create_heal_timing` (#1426), which prints medians
-# measured on its own synthetic fixture for BENCHMARKS.md. Its facts assert
-# on returned values, not stdout.
+# any genuinely-print-to-stdout code path. slate-core has two:
+# - the ignored timing harness `create_heal_timing` (#1426), which prints
+#   medians measured on its own synthetic fixture for BENCHMARKS.md;
+# - the Windows weak-volume facts' `observe` (WB-27), which prints what a
+#   gated fact saw on a scratch volume for the capability matrix.
+# Both sets of facts assert on returned values, not stdout.
 disallowed-macros = [
     { path = "std::eprintln", reason = "slate-core routes non-fatal diagnostics through the `log` facade (log::warn!/debug!), never bare stderr — a library eprintln! of a vault path leaks note titles into host logs. See #507 and the logging-facade note in lib.rs." },
     { path = "std::println", reason = "slate-core is a library; it returns data to hosts rather than printing to stdout. Use the `log` facade for diagnostics. See #507." },
