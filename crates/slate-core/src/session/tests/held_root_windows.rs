@@ -1170,3 +1170,67 @@ fn a_followed_stat_of_an_opaque_reparse_point_reports_the_entry() {
     let session = session_at(tmp.path()).unwrap();
     assert!(session.provider.stat("socket").is_ok());
 }
+
+/// `.slate` and `.slate\tmp` that deny listing still open the vault and take
+/// a save (codex round 5): the held `.slate` and the staging folder are held
+/// with attribute access alone; only a listing asks to list. A pathname
+/// write into the staging folder is the control.
+#[test]
+fn a_slate_and_staging_folder_that_deny_listing_still_open_and_save() {
+    let tmp = tempfile::tempdir().unwrap();
+    let staging = tmp.path().join(".slate").join("tmp");
+    std::fs::create_dir_all(&staging).unwrap();
+    std::fs::write(tmp.path().join("note.md"), "# Note\n").unwrap();
+    let mut guard = DenyGuard(Vec::new());
+    deny(&mut guard, &tmp.path().join(".slate"), "RD");
+    deny(&mut guard, &staging, "RD");
+    std::fs::write(staging.join("control"), "x").unwrap();
+    std::fs::remove_file(staging.join("control")).unwrap();
+
+    let session = session_at(tmp.path()).unwrap();
+    scanned(&session);
+    let hash = session.read_note_parts("note.md").unwrap().content_hash;
+    session
+        .save_text("note.md", "# Saved\n", Some(hash.as_str()))
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("note.md")).unwrap(),
+        "# Saved\n"
+    );
+    drop(session);
+    drop(guard);
+}
+/// A vault root and `.slate` that deny listing are still held, through
+/// traverse access, so the session opens, reads by name, and keeps its
+/// pin: another opener's delete access is still a sharing violation
+/// (codex round 5; a handle with attribute access alone pins nothing).
+#[test]
+fn a_root_and_slate_that_deny_listing_are_still_held_and_pinned() {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    let tmp = tempfile::tempdir().unwrap();
+    let vault = tmp.path().join("vault");
+    std::fs::create_dir_all(vault.join(".slate")).unwrap();
+    std::fs::write(vault.join("note.md"), "# Note\n").unwrap();
+    let mut guard = DenyGuard(Vec::new());
+    deny(&mut guard, &vault, "RD");
+    deny(&mut guard, &vault.join(".slate"), "RD");
+
+    let session = session_at(&vault).unwrap();
+    assert_eq!(session.read_text("note.md").unwrap(), "# Note\n");
+    for held in [vault.clone(), vault.join(".slate")] {
+        let error = std::fs::OpenOptions::new()
+            .access_mode(0x0001_0000) // DELETE
+            .share_mode(7)
+            .custom_flags(0x0200_0000) // FILE_FLAG_BACKUP_SEMANTICS
+            .open(&held)
+            .expect_err("still held without sharing deletion");
+        assert_eq!(
+            error.raw_os_error(),
+            Some(32),
+            "{}: {error:?}",
+            held.display()
+        );
+    }
+    drop(session);
+    drop(guard);
+}

@@ -50,11 +50,30 @@ pub(crate) const STOPPED_ON_LINK: i32 = 681;
 /// VHDs answering error 87 and naming themselves so).
 const WEAK_FILE_SYSTEMS: [&str; 3] = ["FAT", "FAT32", "exFAT"];
 
-/// What a held or walked folder is opened with: what main's per-operation
-/// root open (`windows_entry::PinnedRoot::open`) asked, enough to list it
-/// and to resolve names relative to it. No traverse access: a path open
-/// never needs it, and a folder that denies it still opens.
-pub(crate) const FOLDER_ACCESS: u32 = FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY;
+/// What a held or walked folder is opened with: attribute access alone,
+/// enough to parent relative opens and to tell a link from a folder (codex
+/// rounds 4 and 5). No traverse or list access: a path open needs neither
+/// on the folders it passes, and a listing reopens its folder for list
+/// access ([`LIST_ACCESS`]).
+pub(crate) const FOLDER_ACCESS: u32 = FILE_READ_ATTRIBUTES;
+
+/// What a session HOLD (the root, `.slate`) asks, in order: a data right is
+/// what takes part in sharing checks, so only a handle with one blocks
+/// another opener's delete (attribute access alone does not). List access
+/// first (main's per-operation root open asked it), traverse access where
+/// listing is denied, so a folder that denies one of the two still holds.
+const HOLD_ACCESS: [u32; 2] = [
+    FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY,
+    FILE_READ_ATTRIBUTES | windows_sys::Win32::Storage::FileSystem::FILE_TRAVERSE,
+];
+
+/// The first of [`HOLD_ACCESS`] the folder grants.
+fn holding(mut open: impl FnMut(u32) -> io::Result<fs::File>) -> io::Result<fs::File> {
+    match open(HOLD_ACCESS[0]) {
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => open(HOLD_ACCESS[1]),
+        other => other,
+    }
+}
 
 /// What a listing handle asks: list access alone (the listing needs
 /// synchronous I/O, which `open_beneath` adds), as a path listing asks.
@@ -117,13 +136,12 @@ fn refuse_links(file: fs::File, want_folder: bool) -> io::Result<fs::File> {
 pub(crate) fn open_dir_at(dir: &fs::File, name: &OsStr) -> io::Result<fs::File> {
     // Not FILE_DIRECTORY_FILE: a link to a file must open as itself so it can
     // be named as a link, not fail as "not a directory".
-    let file = windows_entry::create_relative(
+    // Shared for reading and writing, not deletion: `.slate` is held so.
+    let file = windows_entry::open_as_itself(
         dir,
         name,
         FOLDER_ACCESS,
         FILE_SHARE_READ | FILE_SHARE_WRITE,
-        windows_sys::Wdk::Storage::FileSystem::FILE_OPEN,
-        windows_sys::Wdk::Storage::FileSystem::FILE_OPEN_REPARSE_POINT,
     )?;
     refuse_links(file, true)
 }
@@ -188,10 +206,16 @@ pub(crate) fn ensure_dir_at(dir: &fs::File, name: &OsStr) -> io::Result<()> {
 /// session lives.
 pub(crate) fn open_or_make_slate(root: &fs::File) -> io::Result<fs::File> {
     let name = OsStr::new(".slate");
-    match open_dir_at(root, name) {
+    let hold = || {
+        let file = holding(|access| {
+            windows_entry::open_as_itself(root, name, access, FILE_SHARE_READ | FILE_SHARE_WRITE)
+        })?;
+        refuse_links(file, true)
+    };
+    match hold() {
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             ensure_dir_at(root, name)?;
-            open_dir_at(root, name)
+            hold()
         }
         other => other,
     }
@@ -486,11 +510,26 @@ pub(crate) fn read_dir_names(dir: &fs::File) -> io::Result<Vec<OsString>> {
 /// writing but not for deletion: neither it nor any folder above it can be
 /// renamed or removed while the session lives (design item 5).
 pub(crate) fn open_root(root: &Path) -> io::Result<fs::File> {
-    fs::OpenOptions::new()
-        .access_mode(FOLDER_ACCESS | SYNCHRONIZE)
-        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
-        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
-        .open(super::super::windows_extended_path(root))
+    let path = super::super::windows_extended_path(root);
+    holding(|access| {
+        fs::OpenOptions::new()
+            .access_mode(access | SYNCHRONIZE)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(&path)
+    })
+}
+
+/// A file object of its own on the folder `dir` is open on, for a caller
+/// that lists through it (the host's duplicate): list access where the
+/// folder grants it, else attribute access.
+pub(crate) fn reopen_for_caller(dir: &fs::File) -> io::Result<fs::File> {
+    match windows_entry::reopen(dir, HOLD_ACCESS[0], 7) {
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            windows_entry::reopen(dir, FOLDER_ACCESS, 7)
+        }
+        other => other,
+    }
 }
 
 /// `FileIdInfo`: the 64-bit volume serial and the 128-bit file id, the

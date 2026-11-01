@@ -382,9 +382,11 @@ pub(super) fn display_spelling(path: &Path) -> PathBuf {
     if let Some(unc) = text.strip_prefix(r"\\?\UNC\") {
         return PathBuf::from(format!(r"\\{unc}"));
     }
+    // Only a drive-letter path sheds the prefix: a volume-GUID path
+    // (`\\?\Volume{…}\…`) has no shorter spelling and must stay absolute.
     match text.strip_prefix(r"\\?\") {
-        Some(rest) => PathBuf::from(rest),
-        None => path.to_path_buf(),
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => PathBuf::from(rest),
+        _ => path.to_path_buf(),
     }
 }
 

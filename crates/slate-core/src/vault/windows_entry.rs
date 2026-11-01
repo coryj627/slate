@@ -235,6 +235,35 @@ pub(super) fn open_beneath_path(
     )
 }
 
+/// The folder or entry `name` in `parent`, opened as itself
+/// (`FILE_OPEN_REPARSE_POINT`) with exactly `access` and `share`, no
+/// synchronous I/O (plan 44 WB-28, codex round 5): a handle that parents
+/// relative opens needs no list right and is never read, so a folder that
+/// denies listing or `SYNCHRONIZE` still serves.
+pub(super) fn open_as_itself(
+    parent: &fs::File,
+    name: &OsStr,
+    access: u32,
+    share: u32,
+) -> io::Result<fs::File> {
+    let mut name: Vec<u16> = name.encode_wide().collect();
+    if !simple_name(&name) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Expected a simple entry name",
+        ));
+    }
+    nt_create_relative(
+        parent,
+        &mut name,
+        access,
+        share,
+        FILE_OPEN,
+        FILE_OPEN_REPARSE_POINT,
+        0,
+    )
+}
+
 /// The `NtCreateFile` call itself, for a name already checked (or empty: the
 /// parent itself), with exactly the access and options given.
 fn nt_create_relative(

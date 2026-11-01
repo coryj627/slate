@@ -613,8 +613,10 @@ impl InteriorDir for CacheDir {
     }
 
     fn read_child_dir(&self, name: &str) -> io::Result<Vec<OsString>> {
+        // Opened as itself (a link is refused), then reopened for list
+        // access alone: the listing needs no other right on the folder.
         let child = sys::open_dir_at(self.descriptor(), &sys::component(name)?)?;
-        sys::read_dir_names(&child)
+        sys::read_dir_names(&super::windows_entry::reopen(&child, sys::LIST_ACCESS, 7)?)
     }
 
     fn sync_child_dir(&self, name: &str) -> io::Result<()> {
@@ -861,7 +863,7 @@ impl FsRoot {
     /// It is a file object of its own (`windows_entry::reopen`), so a host
     /// listing through it never shares a position with the session's.
     pub(crate) fn duplicate_root(&self) -> io::Result<std::os::windows::io::OwnedHandle> {
-        Ok(super::windows_entry::reopen(&self.root, sys::FOLDER_ACCESS, 7)?.into())
+        Ok(sys::reopen_for_caller(&self.root)?.into())
     }
 
     /// The held root's current path (`GetFinalPathNameByHandleW`), accepted

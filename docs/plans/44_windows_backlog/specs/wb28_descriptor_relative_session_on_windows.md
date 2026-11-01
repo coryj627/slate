@@ -139,6 +139,14 @@ overwrite) there.
   without a drive letter); a followed stat of a reparse point that is no
   link (an AF_UNIX socket) reports the entry itself, as `std` does; the
   stored spelling is strict Unicode again, as main's.
+- **Codex round 5, taken:** interior folders on the way and the staging
+  folder are opened with attribute access alone (a handle with attribute
+  access, or even `SYNCHRONIZE` alone, parents a relative open), and an
+  interior listing reopens its folder for list access alone. The session's
+  two holds keep a data right, because only a handle with one takes part
+  in sharing checks and so blocks another opener's delete: list access,
+  or traverse access where listing is denied. The display spelling keeps
+  a volume-GUID path absolute.
 - **Not mirrored:** `std`'s fallback to a directory listing when even an
   attribute open is refused with a sharing violation (system files such
   as a page file), which does not reach a vault.
