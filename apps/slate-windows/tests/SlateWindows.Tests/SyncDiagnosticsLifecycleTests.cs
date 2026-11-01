@@ -410,6 +410,7 @@ public sealed class SyncDiagnosticsLifecycleTests : IDisposable
         // it runs after the gate on the probe's publication.
         var published = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnPublished(object? sender, EventArgs args) => published.TrySetResult();
         WorkspaceViewModel? opened = null;
         void OnWorkspaceAssigned(object? sender, PropertyChangedEventArgs args)
         {
@@ -417,7 +418,7 @@ public sealed class SyncDiagnosticsLifecycleTests : IDisposable
                 && lifecycle.Workspace is { } assigned)
             {
                 opened = assigned;
-                assigned.SyncDiagnostics.Published += (_, _) => published.TrySetResult();
+                assigned.SyncDiagnostics.Published += OnPublished;
             }
         }
 
@@ -432,12 +433,21 @@ public sealed class SyncDiagnosticsLifecycleTests : IDisposable
         }
 
         WorkspaceViewModel workspace = Assert.IsType<WorkspaceViewModel>(lifecycle.Workspace);
-        // A refused open or switch leaves the previous workspace in
-        // place, and its probe published long ago.
+        // Only a workspace this open assigned counts. A refused open or
+        // switch leaves the previous workspace in place, and its probe
+        // published long ago: waiting on it would wait for nothing.
         Assert.Same(opened, workspace);
-        Assert.True(
-            await Task.WhenAny(published.Task, Task.Delay(Bound)) == published.Task,
-            "the vault-open probe must publish a report or an error");
+        try
+        {
+            Assert.True(
+                await Task.WhenAny(published.Task, Task.Delay(Bound)) == published.Task,
+                "the vault-open probe must publish a report or an error");
+        }
+        finally
+        {
+            workspace.SyncDiagnostics.Published -= OnPublished;
+        }
+
         Assert.Null(workspace.SyncDiagnostics.LoadError);
         return workspace.SyncDiagnostics.Report!;
     }
