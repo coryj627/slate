@@ -21,12 +21,12 @@ internal sealed class AnchoredVaultStore : IDisposable
 {
     private const string StoreDirectoryName = ".slate";
     private const uint DeleteAccess = 0x00010000;
+    private const uint FileListDirectory = 0x00000001;
     private const uint FileReadAttributes = 0x00000080;
     private const uint GenericRead = 0x80000000;
     private const uint GenericWrite = 0x40000000;
     private const uint FileAttributeDirectory = 0x00000010;
     private const uint FileAttributeReparsePoint = 0x00000400;
-    private const uint FileListDirectory = 0x00000001;
     private const uint FileFlagOpenReparsePoint = 0x00200000;
     private const uint FileFlagSequentialScan = 0x08000000;
     private const uint FileFlagWriteThrough = 0x80000000;
@@ -68,9 +68,12 @@ internal sealed class AnchoredVaultStore : IDisposable
         SafeFileHandle? directoryHandle = null;
         try
         {
-            // Attribute and list access, shared for reading and writing as the
-            // session's own hold is; no synchronous I/O, since it only parents
-            // the opens beneath it.
+            // List access as well as attributes: only a handle with a data
+            // right takes part in sharing checks, so this one keeps .slate
+            // from being renamed or replaced for the operation (main compared
+            // final paths after each open instead). Shared for reading and
+            // writing as the session's own hold is; no synchronous I/O, since
+            // it only parents the opens beneath it.
             directoryHandle = NativeRelativeOpen.Open(
                 vaultHandle,
                 StoreDirectoryName,
@@ -289,7 +292,7 @@ internal sealed class AnchoredVaultStore : IDisposable
         return handle;
     }
 
-    private static void EnsureAttributes(SafeFileHandle handle, bool expectDirectory)
+    internal static void EnsureAttributes(SafeFileHandle handle, bool expectDirectory)
     {
         if (!GetFileInformationByHandleEx(
             handle,

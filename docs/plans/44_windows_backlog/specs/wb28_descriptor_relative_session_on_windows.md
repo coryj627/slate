@@ -195,6 +195,74 @@ overwrite) there.
   `db/anchored_windows.rs`, `session/tests/watch.rs`), named for what they
   prove; the Verification list's names map onto them in PR 1's body.
 
+**Delivery record, PR 2 (2026-11-01).** Host only; no Rust changes. Where it
+differs from the sections below, it wins.
+
+- **Every store opens the root through the anchor, and `.slate` and its
+  files relative to it** (`NativeRelativeOpen`, one `NtCreateFile` per
+  name, `FILE_OPEN_REPARSE_POINT` on each), so the final-path comparison
+  main made after each open is gone. `GraphConfigStore.Read` goes through
+  the anchor too: main read `graph.json` by its path. A folder at
+  `graph.json`'s name is now logged as `IOException` (the anchored open's
+  type), not `UnauthorizedAccessException`.
+- **The anchor carries no spelling.** Its path is
+  `RootDisplayPath()`, the held root's own, for messages alone. So the
+  writer cannot key by a spelling, and the Tests table's "key `Newest` by
+  path" mutation is equivalent; the spelling risk sits in the preferences
+  view model, which a fact covers
+  (`ThePreferencesWriteTheRootTheirSessionHolds`).
+- **The writer's pin is released with its write, read from the pin
+  itself.** Core's duplicate is a file object of its own that does not
+  block a rename once the session's hold is gone, so "the root renames
+  afterwards" cannot see a leaked pin;
+  `AQueuedWriteLandsInTheRootItWasEditedIn` asserts the pinned anchor was
+  disposed instead.
+- **The writer's by-path forms live in the test assembly**
+  (`GraphConfigWriterByPath`), so the writer's own callers stay the
+  census's (C-15 xv).
+- **Two census changes.** `GraphConfigMutationCensus` models
+  `NativeRelativeOpen.Open` as it modelled `CreateFileW`: the handle carries
+  its name's provenance (the name reaches the kernel through a pinned
+  buffer the census does not follow). The new `VaultRootAnchorCensus`
+  binds every construction of a vault store in the shell and requires its
+  `root` argument, because the test assembly allows by-path roots for
+  every fact and a forgotten production site would otherwise fail only in
+  the app.
+- **PR 1's refusal fact moved** to `VaultOpenIdentityTests` under the
+  Verification list's name
+  (`AFolderWhoseFileSystemGivesNoFileIdDoesNotOpenAndSaysWhy`).
+- **`W1AnchoredVaultStoreTests` runs alone** (a collection with
+  `DisableParallelization`), because one of its facts switches the
+  process-wide `ByPathAllowed`.
+- **The store's `.slate` handle keeps list access.** Only a handle with a
+  data right takes part in sharing checks, and this one is what keeps
+  `.slate` from being renamed or replaced during a store operation (main
+  compared final paths after each open instead);
+  `WorkspaceDirectoryIdentityFailsClosedWhenSwapAttemptsSucceed` fails with
+  attribute access alone.
+- **The fresh red team's findings, taken in PR 2:**
+  - `Clear` drops the path-keyed source after its own confirmed commit,
+    and `Replace` drops a source it could read, so a source left by a
+    stopped migration cannot merge cleared or renamed paths back (item 7's
+    "merging again changes nothing" holds only until the destination is
+    rewritten);
+  - the recents read takes absence from the read itself, not
+    `File.Exists` (IPG-8), with a folder at the file's name read as absent;
+  - the writer pins before taking its lock, and a weak root's scope is a
+    per-session token that does not keep the session alive;
+  - the test assembly's by-path root opens the root as itself and refuses
+    a reparse point, as main's root open did;
+  - every store's read is proven against a retargeted spelling, and a
+    census holds the by-path root to the stores' fallbacks.
+- **Recorded, not changed:** a corrupt recents source is retried on every
+  load and never logged (item 7 as written).
+- **Added beyond the table:** the writer's four-row theory
+  `APendingWriteNeverReachesAnotherRootsPreferences` (retarget, alias,
+  weak collision, weak reopen),
+  `TheStoreReadsAndWritesTheHeldRootNotItsSpelling`,
+  `AStoreDirectoryThatIsAJunctionIsRefused`, and the search source's three
+  facts (open item 2).
+
 ## Goal
 
 On Windows, as on macOS and Linux since 22a, a filesystem session binds

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Operations;
 
@@ -63,5 +64,46 @@ public sealed class VaultRootAnchorCensus
                 "WorkspaceViewModel.cs:WorkspacePersistence:anchored",
             ],
             found.Order(StringComparer.Ordinal).ToList());
+    }
+
+    /// <summary>A <c>root:</c> argument is an anchor only if it is not the
+    /// test assembly's by-path one: the shell calls
+    /// <see cref="VaultRootAnchor.ByPathForTests"/> only in each store's
+    /// no-anchor fallback (which refuses in the app).</summary>
+    [Fact]
+    public void TheByPathRootIsReachedOnlyThroughTheStoresFallbacks()
+    {
+        var callers = new List<string>();
+        foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
+        {
+            SemanticModel model = ShellCompilation.ModelFor(source);
+            foreach (InvocationExpressionSyntax invocation in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                if (model.GetSymbolInfo(invocation).Symbol is IMethodSymbol { Name: nameof(VaultRootAnchor.ByPathForTests) } method
+                    && method.ContainingType.ToDisplayString() == "SlateWindows.VaultRootAnchor")
+                {
+                    SyntaxNode owner = invocation.Ancestors().First(node => node is MemberDeclarationSyntax);
+                    string name = owner switch
+                    {
+                        PropertyDeclarationSyntax property => property.Identifier.Text,
+                        ConstructorDeclarationSyntax => ".ctor",
+                        MethodDeclarationSyntax declared => declared.Identifier.Text,
+                        _ => owner.Kind().ToString(),
+                    };
+                    callers.Add($"{relative}:{name}");
+                }
+            }
+        }
+
+        Assert.Equal(
+            [
+                "FileRecentsStore.cs:Root",
+                "Graph/GraphConfigStore.cs:Root",
+                "Graph/GraphPreferencesViewModel.cs:.ctor",
+                "Search/SearchRecentsStore.cs:Root",
+                "SidebarSettingsStore.cs:Root",
+                "WorkspacePersistence.cs:Root",
+            ],
+            callers.Order(StringComparer.Ordinal).ToList());
     }
 }

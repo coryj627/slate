@@ -103,23 +103,29 @@ internal sealed class GraphConfigWriter
     {
         ArgumentNullException.ThrowIfNull(root);
         ArgumentNullException.ThrowIfNull(aggregate);
+        // Pinned before the lock: the pin calls into core and duplicates a
+        // handle, which no other writer operation should wait behind.
+        VaultRootAnchor pinned;
+        try
+        {
+            pinned = root.Pin();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            HostLog.Write(HostDiagnosticEvent.GraphConfigPersistFailed, exception);
+            lock (_lock)
+            {
+                FailedForTests++;
+            }
+            return Task.CompletedTask;
+        }
         lock (_lock)
         {
             VaultState state = StateOf(root.Scope);
             if (generation <= state.Admitted)
             {
                 DroppedAtEnqueueForTests++;
-                return Task.CompletedTask;
-            }
-            VaultRootAnchor pinned;
-            try
-            {
-                pinned = root.Pin();
-            }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-            {
-                HostLog.Write(HostDiagnosticEvent.GraphConfigPersistFailed, exception);
-                FailedForTests++;
+                pinned.Dispose();
                 return Task.CompletedTask;
             }
             state.Admitted = generation;

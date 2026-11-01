@@ -60,6 +60,56 @@ public sealed partial class W1AnchoredVaultStoreTests
         AssertUnchanged(decoy, retarget.Decoy);
     }
 
+    /// <summary>The reads go through the held root too: after the retarget,
+    /// each store's load, and the old in-vault recents file's migration,
+    /// see only the held vault, whose spelling now names a decoy with files
+    /// of its own.</summary>
+    [Fact]
+    public void EveryStoreReadsTheHeldRootAfterTheSpellingIsRetargeted()
+    {
+        using var retarget = Retargeted.Make("wb28-reads");
+        foreach ((string root, string tag, SidebarSortMode sort) in new[]
+        {
+            (retarget.Held, "held", SidebarSortMode.NameDescending),
+            (retarget.Decoy, "decoy", SidebarSortMode.ModifiedNewest),
+        })
+        {
+            new WorkspacePersistence(root).Save(Snapshot(tag));
+            new SearchRecentsStore(root).Add(tag);
+            new SidebarSettingsStore(root).SetOrganization(sort, groupByDate: false);
+            File.WriteAllText(Path.Combine(root, ".slate", "file-recents.json"), $"[\"{tag}.md\"]");
+        }
+
+        string deviceRoot = Path.Combine(Path.GetTempPath(), $"slate-recents-device-{Guid.NewGuid():N}");
+        try
+        {
+            using VaultSession session = retarget.OpenThroughTheSpelling();
+            retarget.PointTheSpellingAtTheDecoy();
+            Dictionary<string, byte[]> decoy = FilesUnder(retarget.Decoy);
+            string spelling = retarget.Spelling;
+
+            Assert.Equal("held", new WorkspacePersistence(spelling, root: VaultRootAnchor.Of(session)).Load()?.ActiveLeaf);
+            Assert.Equal(["held"], new SearchRecentsStore(spelling, VaultRootAnchor.Of(session)).Load());
+            Assert.Equal(
+                SidebarSortMode.NameDescending,
+                new SidebarSettingsStore(spelling, root: VaultRootAnchor.Of(session)).Load().SortMode);
+            var recents = new FileRecentsStore(spelling, session.RootIdentity(), deviceRoot, VaultRootAnchor.Of(session));
+            Assert.Equal(["held.md"], recents.Load());
+            Assert.False(File.Exists(Path.Combine(retarget.Held, ".slate", "file-recents.json")), "the held vault's old file migrated");
+            AssertUnchanged(decoy, retarget.Decoy);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(deviceRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+        }
+    }
+
     [Fact]
     public void ARootForcedToAnotherVaultsWeakIndexIsNeverReachedThroughIt()
     {
@@ -118,6 +168,25 @@ public sealed partial class W1AnchoredVaultStoreTests
         Assert.Equal(
             before.Order(StringComparer.Ordinal),
             Directory.GetFiles(Path.Combine(fixture.Root, ".slate"), "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>A by-path root that is a junction is refused, never
+    /// followed, as main's root open refused it.</summary>
+    [Fact]
+    public void AByPathRootThatIsAJunctionIsRefused()
+    {
+        using FixtureVault target = FixtureVault.Create(0, "wb28-by-path-target");
+        string junction = target.Root + "-junction";
+        Junctions.Create(junction, target.Root);
+        try
+        {
+            Assert.Throws<IOException>(() => new WorkspacePersistence(junction).Save(Snapshot("through")));
+            Assert.False(Directory.Exists(Path.Combine(target.Root, ".slate")), "the save followed the junction");
+        }
+        finally
+        {
+            Junctions.Remove(junction);
+        }
     }
 
     /// <summary>A store built with no anchor refuses unless the process

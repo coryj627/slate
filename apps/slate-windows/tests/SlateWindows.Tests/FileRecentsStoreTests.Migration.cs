@@ -257,6 +257,66 @@ public sealed partial class FileRecentsStoreTests
         }
     }
 
+    /// <summary>Clear means none: a path-keyed source that outlived its
+    /// migration (the destination locked at the load) does not merge its
+    /// entries back.</summary>
+    [Fact]
+    public void ClearingRecentsDropsAPathKeyedSourceTheMigrationLeft()
+    {
+        using FixtureVault fixture = FixtureVault.Create(1, "recents-clear-source");
+        string deviceRoot = Path.Combine(fixture.Root, "device-state");
+        new FileRecentsStore(fixture.Root, localAppDataRoot: deviceRoot).Replace(["a.md", "b.md"]);
+        var store = new FileRecentsStore(fixture.Root, Persistent, deviceRoot);
+        Directory.CreateDirectory(store.FilePathForTests);
+        Assert.Equal(["a.md", "b.md"], store.Load());
+        Directory.Delete(store.FilePathForTests);
+
+        store.Clear();
+
+        Assert.False(File.Exists(store.PathKeyedPathForTests), "the source would merge the cleared entries back");
+        Assert.Empty(store.Load());
+    }
+
+    /// <summary>The sidebar's rename reconciliation replaces the list a load
+    /// merged; the source it merged goes too, so a renamed path does not come
+    /// back from it.</summary>
+    [Fact]
+    public void AReplacementDropsTheReadablePathKeyedSourceItWasMergedFrom()
+    {
+        using FixtureVault fixture = FixtureVault.Create(1, "recents-replace-source");
+        string deviceRoot = Path.Combine(fixture.Root, "device-state");
+        new FileRecentsStore(fixture.Root, localAppDataRoot: deviceRoot).Replace(["old.md", "b.md"]);
+        var store = new FileRecentsStore(fixture.Root, Persistent, deviceRoot);
+        Directory.CreateDirectory(store.FilePathForTests);
+        Assert.Equal(["old.md", "b.md"], store.Load());
+        Directory.Delete(store.FilePathForTests);
+
+        store.Replace(["new.md", "b.md"]);
+
+        Assert.False(File.Exists(store.PathKeyedPathForTests));
+        Assert.Equal(["new.md", "b.md"], store.Load());
+    }
+
+    /// <summary>A path-keyed source that cannot be read when the list is
+    /// replaced keeps its entries for a later load.</summary>
+    [Fact]
+    public void AReplacementKeepsAPathKeyedSourceItCouldNotRead()
+    {
+        using FixtureVault fixture = FixtureVault.Create(1, "recents-replace-held");
+        string deviceRoot = Path.Combine(fixture.Root, "device-state");
+        new FileRecentsStore(fixture.Root, localAppDataRoot: deviceRoot).Replace(["a.md"]);
+        var store = new FileRecentsStore(fixture.Root, Persistent, deviceRoot);
+        // Held against reads only: a delete of it would still succeed.
+        using (new FileStream(store.PathKeyedPathForTests, FileMode.Open, FileAccess.Read, FileShare.Delete))
+        {
+            store.Replace(["c.md"]);
+            Assert.True(File.Exists(store.PathKeyedPathForTests), "a source that could not be read was deleted");
+        }
+
+        Assert.True(File.Exists(store.PathKeyedPathForTests));
+        Assert.Equal(["c.md", "a.md"], store.Load());
+    }
+
     private static string WriteInVault(string vaultRoot, string[] entries)
     {
         string directory = Path.Combine(vaultRoot, ".slate");

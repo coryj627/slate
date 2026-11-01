@@ -98,7 +98,15 @@ internal sealed class FileRecentsStore
 
     public void Clear()
     {
-        if (!TryCommit([]) || _legacySettled)
+        if (!TryCommit([]))
+        {
+            return;
+        }
+
+        // Clear means none, so no source may merge its entries back: the
+        // path-keyed file goes, and so does an unmigrated in-vault file.
+        DropPathKeyedSource();
+        if (_legacySettled)
         {
             return;
         }
@@ -122,8 +130,24 @@ internal sealed class FileRecentsStore
     public IReadOnlyList<string> Replace(IEnumerable<string> paths)
     {
         IReadOnlyList<string> sanitized = Sanitize(paths);
-        Save(sanitized);
+        // The replacement came from a Load that merged a readable
+        // path-keyed source, so a source still there would bring back the
+        // paths it replaced; one that cannot be read now keeps its entries.
+        bool sourceRead = TryRead(_pathKeyedPath) is RecentsRead.Read;
+        if (TryCommit(sanitized) && sourceRead)
+        {
+            DropPathKeyedSource();
+        }
+
         return sanitized;
+    }
+
+    private void DropPathKeyedSource()
+    {
+        if (!string.Equals(_pathKeyedPath, _path, StringComparison.OrdinalIgnoreCase))
+        {
+            SafeFile.TryDelete(_pathKeyedPath);
+        }
     }
 
     /// <summary>
@@ -231,17 +255,22 @@ internal sealed class FileRecentsStore
 
     private static RecentsRead TryRead(string path)
     {
+        // Absence is the read's own answer, never File.Exists: that answers
+        // false for a file it cannot stat, and a migration would then
+        // overwrite a destination it never read (IPG-8).
         try
         {
-            if (!File.Exists(path))
-            {
-                return new RecentsRead.Absent();
-            }
-
             return Parse(SafeFile.ReadAllBytesBounded(path, MaxPayloadBytes));
         }
-        catch (FileNotFoundException)
+        catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
         {
+            _ = exception;
+            return new RecentsRead.Absent();
+        }
+        catch (UnauthorizedAccessException) when (Directory.Exists(path))
+        {
+            // A folder at the file's name holds no list: nothing to read, and
+            // a commit over it fails on its own.
             return new RecentsRead.Absent();
         }
         catch (Exception exception) when (

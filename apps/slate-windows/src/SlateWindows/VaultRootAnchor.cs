@@ -13,7 +13,8 @@ namespace SlateWindows;
 /// store belongs to. A persistent identity is the file system's own id, so
 /// two sessions on one folder (any spelling) share a scope (owner decision
 /// D1); a weak identity (FAT, FAT32, exFAT) can collide between folders, so
-/// each session is its own scope, compared by reference.
+/// each session is its own scope, compared by reference to a token that
+/// does not keep the session alive.
 /// </summary>
 internal abstract record VaultRootScope
 {
@@ -43,6 +44,10 @@ internal sealed class VaultRootAnchor : IDisposable
     /// the test assembly's module initializer sets it; production refuses.
     /// </summary>
     internal static bool ByPathAllowed;
+
+    // A weak root's scope token per session: the writer keeps its scopes
+    // for the process's life, and a token, unlike the session, is small.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<VaultSession, object> SessionTokens = new();
 
     private readonly Func<SafeFileHandle> _open;
     private readonly SafeFileHandle? _pinned;
@@ -76,7 +81,7 @@ internal sealed class VaultRootAnchor : IDisposable
         VaultRootIdentity? identity = session.RootIdentity();
         VaultRootScope scope = identity is { Persistent: true }
             ? new VaultRootScope.Persistent(identity.Volume, identity.IdHigh, identity.IdLow)
-            : new VaultRootScope.Session(session);
+            : new VaultRootScope.Session(SessionTokens.GetValue(session, _ => new object()));
         return new VaultRootAnchor(
             () =>
             {
@@ -153,16 +158,18 @@ internal sealed class VaultRootAnchor : IDisposable
 
     private static SafeFileHandle OpenByPath(string path)
     {
+        // main's root open: attribute access, the root itself (a junction
+        // or link at the root is refused, never followed).
         const uint FileReadAttributes = 0x00000080;
-        const uint FileListDirectory = 0x00000001;
         const uint FileFlagBackupSemantics = 0x02000000;
+        const uint FileFlagOpenReparsePoint = 0x00200000;
         SafeFileHandle handle = CreateFileW(
             WindowsNativePath.ForCreateFile(path),
-            FileReadAttributes | FileListDirectory,
-            FileShare.Read | FileShare.Write | FileShare.Delete,
+            FileReadAttributes,
+            FileShare.Read | FileShare.Write,
             IntPtr.Zero,
             FileMode.Open,
-            FileFlagBackupSemantics,
+            FileFlagBackupSemantics | FileFlagOpenReparsePoint,
             IntPtr.Zero);
         if (handle.IsInvalid)
         {
@@ -177,6 +184,16 @@ internal sealed class VaultRootAnchor : IDisposable
             throw new IOException(
                 "Could not open the vault root.",
                 new System.ComponentModel.Win32Exception(error));
+        }
+
+        try
+        {
+            AnchoredVaultStore.EnsureAttributes(handle, expectDirectory: true);
+        }
+        catch
+        {
+            handle.Dispose();
+            throw;
         }
 
         return handle;
