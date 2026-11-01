@@ -34,6 +34,12 @@ use thiserror::Error;
 ))]
 pub(crate) mod anchored;
 
+/// Plan 44 WB-28 (22W): SQLite through the held `.slate` handle (the win32
+/// VFS system-call hook).
+#[cfg(windows)]
+#[path = "db/anchored_windows.rs"]
+pub(crate) mod anchored;
+
 /// Errors produced by the database layer.
 #[derive(Debug, Error)]
 pub enum DbError {

@@ -77,7 +77,8 @@ use windows_sys::{
     Wdk::{
         Foundation::OBJECT_ATTRIBUTES,
         Storage::FileSystem::{
-            FILE_CREATE, FILE_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_REPARSE_POINT,
+            FILE_CREATE, FILE_DELETE_ON_CLOSE, FILE_DIRECTORY_FILE, FILE_NON_DIRECTORY_FILE,
+            FILE_OPEN, FILE_OPEN_IF, FILE_OPEN_REPARSE_POINT, FILE_OVERWRITE, FILE_OVERWRITE_IF,
             FILE_RENAME_INFORMATION, FILE_SYNCHRONOUS_IO_NONALERT, FileRenameInformation,
             NtCreateFile, NtSetInformationFile,
         },
@@ -124,6 +125,34 @@ fn create_relative(
     disposition: u32,
     options: u32,
 ) -> io::Result<fs::File> {
+    // A new folder takes the attributes `CreateDirectoryW` gives one; an
+    // open ignores them.
+    let file_attributes = if disposition == FILE_CREATE {
+        FILE_ATTRIBUTE_NORMAL
+    } else {
+        0
+    };
+    create_relative_with(
+        parent,
+        name,
+        access,
+        share,
+        disposition,
+        options,
+        file_attributes,
+    )
+}
+
+/// [`create_relative`] with the attributes a created entry takes.
+fn create_relative_with(
+    parent: &fs::File,
+    name: &OsStr,
+    access: u32,
+    share: u32,
+    disposition: u32,
+    options: u32,
+    file_attributes: u32,
+) -> io::Result<fs::File> {
     let mut name: Vec<u16> = name.encode_wide().collect();
     if !simple_name(&name) {
         return Err(io::Error::new(
@@ -144,13 +173,6 @@ fn create_relative(
         ObjectName: &mut unicode,
         Attributes: OBJ_CASE_INSENSITIVE,
         ..Default::default()
-    };
-    // A new folder takes the attributes `CreateDirectoryW` gives one; an
-    // open ignores them.
-    let file_attributes = if disposition == FILE_CREATE {
-        FILE_ATTRIBUTE_NORMAL
-    } else {
-        0
     };
     let mut handle = std::ptr::null_mut();
     let mut status_block: IO_STATUS_BLOCK = unsafe { std::mem::zeroed() };
@@ -178,6 +200,53 @@ fn create_relative(
     }
     // SAFETY: a successful NtCreateFile transfers a newly owned file handle.
     Ok(unsafe { fs::File::from_raw_handle(handle) })
+}
+
+/// `CreateFileW`'s arguments, as SQLite passes them, for the single
+/// component `name` relative to `parent` (the SQLite hook, `db::anchored`,
+/// plan 44 WB-28): the disposition is translated to its `NtCreateFile`
+/// twin, `FILE_FLAG_DELETE_ON_CLOSE` becomes `FILE_DELETE_ON_CLOSE` with
+/// `DELETE` access, and the entry itself opens (`FILE_OPEN_REPARSE_POINT`,
+/// `FILE_NON_DIRECTORY_FILE`). The caller refuses a reparse point.
+pub(crate) fn sqlite_create_relative(
+    parent: &fs::File,
+    name: &OsStr,
+    access: u32,
+    share: u32,
+    disposition: u32,
+    flags_and_attributes: u32,
+) -> io::Result<fs::File> {
+    let disposition = match disposition {
+        CREATE_NEW => FILE_CREATE,
+        CREATE_ALWAYS => FILE_OVERWRITE_IF,
+        OPEN_EXISTING => FILE_OPEN,
+        OPEN_ALWAYS => FILE_OPEN_IF,
+        TRUNCATE_EXISTING => FILE_OVERWRITE,
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Unknown creation disposition",
+            ));
+        }
+    };
+    let mut access = access;
+    let mut options = FILE_NON_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT;
+    if flags_and_attributes & FILE_FLAG_DELETE_ON_CLOSE != 0 {
+        access |= DELETE;
+        options |= FILE_DELETE_ON_CLOSE;
+    }
+    // The low 16 bits are attributes; the flags above them are translated
+    // or (like `FILE_FLAG_RANDOM_ACCESS`, a hint) dropped.
+    let attributes = flags_and_attributes & 0xFFFF;
+    create_relative_with(
+        parent,
+        name,
+        access,
+        share,
+        disposition,
+        options,
+        attributes,
+    )
 }
 
 /// Open the entry `name` itself (a link or a junction is opened, never
