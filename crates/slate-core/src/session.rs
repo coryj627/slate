@@ -1090,22 +1090,6 @@ const OPLOG_ENTRY_FRAMING_OVERHEAD_ESTIMATE: u64 = 256;
 /// matching pair of observations for two different directories.
 pub use crate::vault::fs_root::VaultRootIdentity;
 
-#[cfg(unix)]
-fn observe_root_identity(root: &std::path::Path) -> Option<VaultRootIdentity> {
-    use std::os::unix::fs::MetadataExt;
-    let meta = std::fs::metadata(root).ok()?;
-    Some(VaultRootIdentity::from_device_inode(meta.dev(), meta.ino()))
-}
-
-#[cfg(not(unix))]
-fn observe_root_identity(_root: &std::path::Path) -> Option<VaultRootIdentity> {
-    // Windows file identity needs the volume serial + file index pair,
-    // which std does not expose on stable — the Milestone W host will
-    // supply its own observation. An absent identity fails closed on
-    // the host side.
-    None
-}
-
 /// Plan 43 PR 22a (#940; design `22_descriptor_relative_session_design.md`
 /// §4.4): where the deterministic A→B→A seam fires inside an open. A fact
 /// installs a callback on its own thread ([`install_open_swap_seam`]) and
@@ -1128,6 +1112,10 @@ pub(crate) enum OpenSwapPoint {
     /// `VaultSession::open`: SQLite, migration and recovery are done; the
     /// session has not returned.
     CacheOpened,
+    /// Windows `FsRoot::open` (plan 44 WB-28 design item 5): the root is
+    /// held and its identity read; `.slate` is not held yet.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    BeforeSlateHeld,
 }
 
 #[cfg(test)]
@@ -1164,7 +1152,7 @@ pub(crate) fn install_open_swap_seam(
 }
 
 #[cfg(test)]
-fn fire_open_swap_seam(point: OpenSwapPoint) {
+pub(crate) fn fire_open_swap_seam(point: OpenSwapPoint) {
     // Taken out for the call, so a seam that opens a session itself does
     // not re-enter its own borrow.
     let taken = OPEN_SWAP_SEAM.with(|slot| slot.borrow_mut().take());
@@ -1435,6 +1423,11 @@ pub struct VaultSession {
     /// (FL-06 round-27). `None` for non-filesystem providers or
     /// platforms without a stable observation.
     root_identity: Option<VaultRootIdentity>,
+    /// The held root in the vault watcher's own terms (Unix `(st_dev,
+    /// st_ino)`; Windows the held handle's volume serial and file index),
+    /// which the watch's arm check compares with (WB-28, C9). `None` where
+    /// no filesystem root backs the session.
+    watch_anchor: Option<(u64, u64)>,
     /// Plan 43 PR 20a (#1267): the vault watch, when the host armed one
     /// (`start_watching`). Its coalescer thread holds `Arc`s to the
     /// provider and `event_listeners`, never to the session.
@@ -2775,6 +2768,7 @@ impl VaultSession {
             trash_confirmation: Mutex::new(None),
             trash_stage_generation: AtomicU64::new(0),
             root_identity: None,
+            watch_anchor: None,
             watch: Mutex::new(watch::WatchSeat::default()),
             held_root,
             interior,
@@ -3161,6 +3155,21 @@ impl VaultSession {
         self.held_root.as_ref().map(|root| root.display_path())
     }
 
+    /// Plan 44 WB-28 (22W): a duplicate of the vault root handle this
+    /// session holds, owned by the caller. It names the held folder whatever
+    /// any spelling names now, so a host store that opens `.slate` relative
+    /// to it reaches this session's vault and no other. A session no
+    /// filesystem root backs answers `Unsupported`.
+    #[cfg(windows)]
+    pub fn duplicate_root_handle(&self) -> Result<std::os::windows::io::OwnedHandle, VaultError> {
+        let Some(root) = self.held_root.as_ref() else {
+            return Err(VaultError::Unsupported {
+                feature: "a vault root handle for a session no folder backs".into(),
+            });
+        };
+        root.duplicate_root().map_err(VaultError::Io)
+    }
+
     /// Convenience: open a vault rooted at `root` using `FsVaultProvider`.
     /// Cache lives at `<root>/.slate` per the locked storage layout.
     ///
@@ -3216,6 +3225,7 @@ impl VaultSession {
         #[cfg(test)]
         fire_open_swap_seam(OpenSwapPoint::RootAnchored);
         let root_for_reverify = root.clone();
+        let held_for_reverify = Arc::clone(&held_root);
         let cache_dir = root.join(".slate");
         let mut config = SessionConfig::new(cache_dir);
         config.user_actor_id = user_actor_id.to_string();
@@ -3267,13 +3277,14 @@ impl VaultSession {
         // kept). The interior is bound to the held root whatever the path
         // names; a root left swapped at the end of the open still fails it,
         // so no host is handed a session whose path names another vault.
-        if root_identity.is_some() && observe_root_identity(&root_for_reverify) != root_identity {
+        if root_identity.is_some() && !held_for_reverify.spelling_names_root() {
             return Err(VaultError::InvalidPath {
                 path: root_for_reverify.display().to_string(),
                 reason: "vault root changed while the session was opening".into(),
             });
         }
         session.root_identity = root_identity;
+        session.watch_anchor = held_for_reverify.watch_pair();
         Ok(session)
     }
 
@@ -22563,6 +22574,8 @@ mod tests {
     mod change_feed;
 
     mod descriptor_interior;
+
+    mod held_root_windows;
 
     mod fault_guard;
     mod rename_planning;

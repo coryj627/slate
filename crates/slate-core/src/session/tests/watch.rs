@@ -1293,10 +1293,7 @@ fn a_root_change_event_ends_the_watch_without_a_callback() {
 fn a_root_mismatch_at_arm_time_refuses_the_watch() {
     let _switch = switch_shared();
     let (_tmp, provider, mut session) = scripted_vault(&[]);
-    session.root_identity = Some(VaultRootIdentity {
-        device: 7,
-        inode: 42,
-    });
+    session.watch_anchor = Some((7, 42));
     *provider.identity.lock().unwrap() = Some(RootIdentity::from_device_inode(7, 43));
     assert!(
         !session.start_watching(),

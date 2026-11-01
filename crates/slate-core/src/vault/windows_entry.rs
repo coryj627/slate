@@ -117,7 +117,7 @@ fn simple_name(name: &[u16]) -> bool {
 /// directory `parent`. A single component plus `FILE_OPEN_REPARSE_POINT`
 /// never follows a child link; converted parent reparses fail instead of
 /// re-resolving a path.
-fn create_relative(
+pub(super) fn create_relative(
     parent: &fs::File,
     name: &OsStr,
     access: u32,

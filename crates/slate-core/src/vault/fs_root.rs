@@ -68,6 +68,7 @@ pub struct VaultRootIdentity {
 
 impl VaultRootIdentity {
     /// A Unix `(st_dev, st_ino)`: always the file system's own id.
+    #[cfg(unix)]
     pub(crate) fn from_device_inode(device: u64, inode: u64) -> Self {
         Self {
             volume: device,
@@ -322,25 +323,33 @@ pub(crate) struct CacheDir(Arc<CacheDirInner>);
 struct CacheDirInner {
     /// The configured spelling, for messages: never resolved again.
     display: PathBuf,
-    #[cfg(all(
-        any(target_os = "macos", target_os = "linux"),
-        target_pointer_width = "64"
+    #[cfg(any(
+        all(
+            any(target_os = "macos", target_os = "linux"),
+            target_pointer_width = "64"
+        ),
+        windows
     ))]
     held: Held,
 }
 
-#[cfg(all(
-    any(target_os = "macos", target_os = "linux"),
-    target_pointer_width = "64"
+#[cfg(any(
+    all(
+        any(target_os = "macos", target_os = "linux"),
+        target_pointer_width = "64"
+    ),
+    windows
 ))]
 struct Held {
     /// The SQLite registration, made by the first SQLite open and dropped
     /// with the last clone (before `dir`, which it duplicated anyway).
     sqlite: std::sync::OnceLock<crate::db::anchored::SqliteAnchor>,
-    /// The directory, opened for search (`O_SEARCH`, or Linux's `O_PATH`).
+    /// The directory, opened for search (`O_SEARCH`, or Linux's `O_PATH`;
+    /// on Windows list and traverse access, not shared for deletion).
     dir: fs::File,
-    /// `fstat` of `dir`: the structural-lock registry's key (design §6,
-    /// owner decision Q5).
+    /// The identity of `dir` (`fstat`; on Windows `FileIdInfo`, or the
+    /// weak index on a FAT volume): the structural-lock registry's key
+    /// (design §6, owner decision Q5; WB-28 design item 4).
     identity: VaultRootIdentity,
 }
 
@@ -383,14 +392,48 @@ impl CacheDir {
     /// Hold `dir`, already open, as the cache directory spelled `display`.
     fn held(dir: fs::File, display: PathBuf) -> io::Result<Self> {
         let identity = sys::identity(&dir)?;
-        Ok(Self(Arc::new(CacheDirInner {
+        Ok(Self::holding(dir, display, identity))
+    }
+}
+
+/// The held form: Windows (plan 44 WB-28).
+#[cfg(windows)]
+impl CacheDir {
+    /// `VaultSession::open`'s cache directory: made by its configured path if
+    /// missing, then held. The configured path is the caller's own
+    /// spelling, so it is followed; everything beneath it is not.
+    pub(crate) fn configured(path: &Path) -> io::Result<Self> {
+        fs::create_dir_all(path)?;
+        let dir = sys::open_root(path)?;
+        Self::held(dir, path.to_path_buf(), sys::Seams::for_root(path))
+    }
+
+    /// Hold `dir`, already open, as the cache directory spelled `display`,
+    /// reading its identity through `seams`.
+    fn held(dir: fs::File, display: PathBuf, seams: sys::Seams) -> io::Result<Self> {
+        let identity = sys::identity(&dir, seams)?;
+        Ok(Self::holding(dir, display, identity))
+    }
+}
+
+/// What both held forms share.
+#[cfg(any(
+    all(
+        any(target_os = "macos", target_os = "linux"),
+        target_pointer_width = "64"
+    ),
+    windows
+))]
+impl CacheDir {
+    fn holding(dir: fs::File, display: PathBuf, identity: VaultRootIdentity) -> Self {
+        Self(Arc::new(CacheDirInner {
             display,
             held: Held {
                 sqlite: std::sync::OnceLock::new(),
                 dir,
                 identity,
             },
-        })))
+        }))
     }
 
     /// The held directory's identity.
@@ -404,8 +447,9 @@ impl CacheDir {
     }
 
     /// The path SQLite opens `leaf` by: the synthetic
-    /// `/.slate-fd/<token>/<leaf>` the VFS hook resolves against the held
-    /// directory, registered on first use.
+    /// `/.slate-fd/<token>/<leaf>` (Windows: `C:\|slate-fd\<token>\<leaf>`)
+    /// the VFS hook resolves against the held directory, registered on
+    /// first use.
     pub(crate) fn sqlite_path(&self, leaf: &str) -> io::Result<PathBuf> {
         let held = &self.0.held;
         if let Some(anchor) = held.sqlite.get() {
@@ -418,11 +462,14 @@ impl CacheDir {
     }
 }
 
-/// The pathname form (Windows until 22W): every call is the one the interior
-/// made before.
-#[cfg(not(all(
-    any(target_os = "macos", target_os = "linux"),
-    target_pointer_width = "64"
+/// The pathname form (the targets without a held interior): every call is
+/// the one the interior made before.
+#[cfg(not(any(
+    all(
+        any(target_os = "macos", target_os = "linux"),
+        target_pointer_width = "64"
+    ),
+    windows
 )))]
 impl CacheDir {
     /// `VaultSession::open`'s cache directory, made by its configured path if
@@ -513,10 +560,76 @@ impl InteriorDir for CacheDir {
     }
 }
 
+/// Beneath the held directory on Windows (plan 44 WB-28): one component at
+/// a time, opened as itself, so a junction or a link is refused rather
+/// than followed.
+#[cfg(windows)]
+impl InteriorDir for CacheDir {
+    fn display_dir(&self) -> Cow<'_, Path> {
+        Cow::Borrowed(&self.0.display)
+    }
+
+    fn ensure_self(&self) -> io::Result<()> {
+        // It is held open: it exists, wherever it is now.
+        Ok(())
+    }
+
+    fn ensure_child_dir(&self, name: &str) -> io::Result<()> {
+        sys::ensure_dir_at(self.descriptor(), &sys::component(name)?)
+    }
+
+    fn open_file(&self, relative: &str, options: FileOptions) -> io::Result<fs::File> {
+        let held = self.descriptor();
+        let (parent, leaf) = sys::parent_and_leaf(held, relative)?;
+        sys::open_at(parent.get(held), &leaf, options)
+    }
+
+    fn rename_file(&self, from: &str, to: &str) -> io::Result<()> {
+        let held = self.descriptor();
+        let (from_parent, from_leaf) = sys::parent_and_leaf(held, from)?;
+        let (to_parent, to_leaf) = sys::parent_and_leaf(held, to)?;
+        sys::rename_at(
+            from_parent.get(held),
+            &from_leaf,
+            to_parent.get(held),
+            &to_leaf,
+        )
+    }
+
+    fn remove_file(&self, relative: &str) -> io::Result<()> {
+        let held = self.descriptor();
+        let (parent, leaf) = sys::parent_and_leaf(held, relative)?;
+        sys::unlink_at(parent.get(held), &leaf)
+    }
+
+    fn file_len(&self, relative: &str) -> io::Result<u64> {
+        let held = self.descriptor();
+        let (parent, leaf) = sys::parent_and_leaf(held, relative)?;
+        let metadata = sys::stat_at(parent.get(held), &leaf)?;
+        if sys::is_reparse_point(&metadata) {
+            return Err(io::Error::from_raw_os_error(sys::STOPPED_ON_LINK));
+        }
+        Ok(metadata.len())
+    }
+
+    fn read_child_dir(&self, name: &str) -> io::Result<Vec<OsString>> {
+        let child = sys::open_dir_at(self.descriptor(), &sys::component(name)?)?;
+        sys::read_dir_names(&child)
+    }
+
+    fn sync_child_dir(&self, name: &str) -> io::Result<()> {
+        let child = sys::open_dir_at(self.descriptor(), &sys::component(name)?)?;
+        sys::sync_dir(&child)
+    }
+}
+
 /// By the configured pathname, exactly as before.
-#[cfg(not(all(
-    any(target_os = "macos", target_os = "linux"),
-    target_pointer_width = "64"
+#[cfg(not(any(
+    all(
+        any(target_os = "macos", target_os = "linux"),
+        target_pointer_width = "64"
+    ),
+    windows
 )))]
 impl InteriorDir for CacheDir {
     fn display_dir(&self) -> Cow<'_, Path> {
@@ -566,13 +679,21 @@ pub struct FsRoot {
     opened_as: PathBuf,
     /// The held root's identity (`fstat` of the descriptor), or a pathname
     /// observation where the root is not held (other Unixes, as before);
-    /// `None` on Windows until 22W.
+    /// on Windows (plan 44 WB-28) the held handle's
+    /// `FileIdInfo`, or its weak file index on a FAT volume.
     identity: Option<VaultRootIdentity>,
-    #[cfg(all(
-        any(target_os = "macos", target_os = "linux"),
-        target_pointer_width = "64"
+    #[cfg(any(
+        all(
+            any(target_os = "macos", target_os = "linux"),
+            target_pointer_width = "64"
+        ),
+        windows
     ))]
     root: fs::File,
+    /// The identity seams the root was opened under (Windows; design
+    /// item 6), so a re-read of its spelling reads as the open read.
+    #[cfg(windows)]
+    seams: sys::Seams,
     cache: CacheDir,
 }
 
@@ -647,6 +768,21 @@ impl FsRoot {
         &self.root
     }
 
+    /// Whether the spelling the session opened still names the held root
+    /// (the open's pathname re-verification, design §7).
+    pub(crate) fn spelling_names_root(&self) -> bool {
+        use std::os::unix::fs::MetadataExt as _;
+        fs::metadata(&self.opened_as).is_ok_and(|meta| {
+            self.identity == Some(VaultRootIdentity::from_device_inode(meta.dev(), meta.ino()))
+        })
+    }
+
+    /// The held root in the vault watcher's own terms: `(st_dev, st_ino)`.
+    pub(crate) fn watch_pair(&self) -> Option<(u64, u64)> {
+        self.identity
+            .map(|identity| (identity.volume, identity.id_low))
+    }
+
     /// The held root's current path, from the kernel (`F_GETPATH`, or
     /// `/proc/self/fd` on Linux), accepted only when that path still names
     /// the held root (§3.6(a), the rule PR 24's matrix §4 records); `None`
@@ -683,11 +819,123 @@ impl FsRoot {
     }
 }
 
-/// The pathname form (Windows until 22W): every read is the one the open
-/// made before.
-#[cfg(not(all(
-    any(target_os = "macos", target_os = "linux"),
-    target_pointer_width = "64"
+/// The held form: Windows (plan 44 WB-28, 22W).
+#[cfg(windows)]
+impl FsRoot {
+    /// Open and hold the vault root at `root` and its `.slate`, making
+    /// `.slate` beneath the held root when it is missing. The root is held
+    /// without sharing deletion, so neither it nor a folder above it can be
+    /// renamed or removed while the session lives (design item 5). Its
+    /// identity is read right after the hold and before `.slate`: a root
+    /// whose volume gives no identity refuses the open with core's
+    /// sentence, and no `.slate` is made (WD24). A `.slate` that is a
+    /// junction, a symbolic link or not a folder is refused.
+    pub(crate) fn open(root: &Path) -> Result<Self, VaultError> {
+        let seams = sys::Seams::for_root(root);
+        let held = sys::open_root(root).map_err(VaultError::Io)?;
+        let identity = sys::identity(&held, seams).map_err(identity_refusal)?;
+        #[cfg(test)]
+        crate::session::fire_open_swap_seam(crate::session::OpenSwapPoint::BeforeSlateHeld);
+        let slate_display = root.join(".slate");
+        let slate = sys::open_or_make_slate(&held)
+            .map_err(|error| slate_refusal(&held, &slate_display, error))?;
+        let cache = CacheDir::held(slate, slate_display, seams).map_err(identity_refusal)?;
+        Ok(Self {
+            opened_as: root.to_path_buf(),
+            identity: Some(identity),
+            root: held,
+            seams,
+            cache,
+        })
+    }
+
+    /// The held root handle.
+    pub(crate) fn descriptor(&self) -> &fs::File {
+        &self.root
+    }
+
+    /// A duplicate of the held root handle (`DuplicateHandle` with the same
+    /// access, not inheritable): it names the held folder whatever any
+    /// spelling names now. The host's vault stores reach the vault through
+    /// one, never by a path or an identity compare (design items 6 and 9).
+    pub(crate) fn duplicate_root(&self) -> io::Result<std::os::windows::io::OwnedHandle> {
+        Ok(self.root.try_clone()?.into())
+    }
+
+    /// The held root's current path (`GetFinalPathNameByHandleW`), accepted
+    /// only while the folder at that path is the held one, by the read the
+    /// identity's `persistent` flag names (design item 9); `None` when it
+    /// cannot be verified. Display only.
+    pub(crate) fn verified_current_path(&self) -> Option<PathBuf> {
+        let path = super::trash_handoff::final_path(&self.root).ok()?;
+        self.names_held(&path)
+            .then(|| super::trash_handoff::display_spelling(&path))
+    }
+
+    /// Whether the folder at `path` (its own reparse point followed, every
+    /// share mode, so a session's own hold does not refuse the look) reads
+    /// the identity this root was opened with, under the same seams.
+    fn names_held(&self, path: &Path) -> bool {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
+            FILE_SHARE_WRITE,
+        };
+        let Ok(file) = fs::OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(super::windows_extended_path(path))
+        else {
+            return false;
+        };
+        sys::identity(&file, self.seams).ok() == self.identity
+    }
+
+    /// Whether the spelling the session opened still names the held root
+    /// (the open's pathname re-verification, design §7; C3 of the WB-28
+    /// design review: core reads Windows identities only from handles).
+    pub(crate) fn spelling_names_root(&self) -> bool {
+        self.names_held(&self.opened_as)
+    }
+
+    /// The held root in the vault watcher's own terms (the volume serial
+    /// and file index it arms with), so the watch is compared with the root
+    /// this session holds, like with like (C9).
+    pub(crate) fn watch_pair(&self) -> Option<(u64, u64)> {
+        sys::watch_pair(&self.root).ok()
+    }
+
+    /// The bytes of `name` in the root (`slate.json`), opened beneath the
+    /// held root as itself.
+    pub(crate) fn read_root_file(&self, name: &str) -> io::Result<Vec<u8>> {
+        use std::io::Read as _;
+        let mut file = sys::open_at(
+            &self.root,
+            &sys::component(name)?,
+            FileOptions::new().read(true),
+        )?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)?;
+        Ok(bytes)
+    }
+
+    /// Whether `relative` (vault-relative, `/`-separated) names a folder,
+    /// resolved beneath the held root: links are followed, as
+    /// `Path::is_dir` follows them; only the starting point is anchored.
+    pub(crate) fn is_dir(&self, relative: &str) -> bool {
+        sys::is_dir_beneath(&self.root, relative)
+    }
+}
+
+/// The pathname form (the targets without a held root): every read is the
+/// one the open made before.
+#[cfg(not(any(
+    all(
+        any(target_os = "macos", target_os = "linux"),
+        target_pointer_width = "64"
+    ),
+    windows
 )))]
 impl FsRoot {
     /// Record the root by its pathname; `.slate` is made by
@@ -703,6 +951,17 @@ impl FsRoot {
     /// Nothing is held, so nothing can be verified.
     pub(crate) fn verified_current_path(&self) -> Option<PathBuf> {
         None
+    }
+
+    /// Whether the spelling still observes the identity the open recorded.
+    pub(crate) fn spelling_names_root(&self) -> bool {
+        observed_identity(&self.opened_as) == self.identity
+    }
+
+    /// The recorded identity in the vault watcher's own terms.
+    pub(crate) fn watch_pair(&self) -> Option<(u64, u64)> {
+        self.identity
+            .map(|identity| (identity.volume, identity.id_low))
     }
 
     /// `name` in the root, by path.
@@ -759,11 +1018,13 @@ fn slate_refusal(root: &fs::File, slate: &Path, error: io::Error) -> VaultError 
 }
 
 /// The root's identity by one pathname observation, where the root is not
-/// held: other Unixes keep the round-27 observation; Windows has none until
-/// 22W (the host fails closed on `None`).
-#[cfg(not(all(
-    any(target_os = "macos", target_os = "linux"),
-    target_pointer_width = "64"
+/// held: other Unixes keep the round-27 observation.
+#[cfg(not(any(
+    all(
+        any(target_os = "macos", target_os = "linux"),
+        target_pointer_width = "64"
+    ),
+    windows
 )))]
 fn observed_identity(root: &Path) -> Option<VaultRootIdentity> {
     #[cfg(unix)]
@@ -776,6 +1037,59 @@ fn observed_identity(root: &Path) -> Option<VaultRootIdentity> {
     {
         let _ = root;
         None
+    }
+}
+
+/// Core's sentence for a vault root (or `.slate`) whose volume gives no
+/// identity (WD24): the OS error is logged, not spoken.
+#[cfg(windows)]
+fn identity_refusal(error: io::Error) -> VaultError {
+    log::debug!("the vault root's identity could not be read: {error}");
+    VaultError::Io(io::Error::new(
+        error.kind(),
+        crate::a11y::VAULT_ROOT_IDENTITY_UNAVAILABLE,
+    ))
+}
+
+/// A `.slate` that is a link or not a folder, as core's typed refusal in
+/// the words of the vault walk (`windows_entry::check`); any other
+/// failure stays the IO error.
+#[cfg(windows)]
+fn slate_refusal(root: &fs::File, slate: &Path, error: io::Error) -> VaultError {
+    use super::windows_entry::Found;
+    if !matches!(error.raw_os_error(), Some(sys::STOPPED_ON_LINK) | Some(267)) {
+        return VaultError::Io(error);
+    }
+    let found = sys::stat_at(root, std::ffi::OsStr::new(".slate"))
+        .ok()
+        .and_then(|_| {
+            super::windows_entry::open_relative(
+                root,
+                std::ffi::OsStr::new(".slate"),
+                windows_sys::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES,
+            )
+            .ok()
+        })
+        .and_then(|file| super::windows_entry::found(&file).ok());
+    let reason = match found {
+        Some(Found::Junction) => {
+            "\".slate\" is a junction, not a folder in this vault, so the vault was not opened"
+        }
+        Some(Found::SymbolicLink) => {
+            "\".slate\" is a symbolic link, not a folder in this vault, so the vault was not opened"
+        }
+        Some(Found::Link) => {
+            "\".slate\" is a link, not a folder in this vault, so the vault was not opened"
+        }
+        Some(Found::NotFolder) => "\".slate\" is not a folder, so the vault was not opened",
+        // It changed back into a folder, or vanished, since the open.
+        Some(Found::Folder) | Some(Found::ReparseFolder) | None => {
+            return VaultError::Io(error);
+        }
+    };
+    VaultError::InvalidPath {
+        path: slate.display().to_string(),
+        reason: reason.into(),
     }
 }
 
@@ -1054,6 +1368,12 @@ pub(crate) mod sys {
         }
     }
 }
+
+/// The handle-relative calls the held Windows interior is made of (plan 44
+/// WB-28).
+#[cfg(windows)]
+#[path = "fs_root_windows.rs"]
+pub(crate) mod sys;
 
 #[cfg(test)]
 mod tests {

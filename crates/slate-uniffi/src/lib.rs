@@ -826,6 +826,26 @@ impl VaultSession {
             .map(|path| path.to_string_lossy().into_owned())
     }
 
+    /// Plan 44 WB-28 (22W): a duplicate of the vault root handle this
+    /// session holds, as its raw value. The caller owns it and closes it
+    /// (the Windows host wraps it in a `SafeFileHandle`). Off Windows, and
+    /// for a session no folder backs, `Unsupported`; Swift never calls it.
+    pub fn duplicate_root_handle(&self) -> Result<u64, VaultError> {
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::IntoRawHandle as _;
+            let handle = self.inner.duplicate_root_handle()?;
+            Ok(handle.into_raw_handle() as usize as u64)
+        }
+        #[cfg(not(windows))]
+        {
+            Err(core::VaultError::Unsupported {
+                feature: "a vault root handle off Windows".into(),
+            }
+            .into())
+        }
+    }
+
     /// Walk the vault and index every file into the metadata cache.
     /// Synchronous; callers should dispatch off the UI thread.
     ///
@@ -11501,6 +11521,14 @@ pub struct RenderedAnnouncement {
 /// field dump ("@message=…"; a write conflict's is two content hashes and
 /// a modification time). `Io` and `Db` were flattened at the boundary to
 /// the inner error's text, which is that detail verbatim.
+/// Plan 44 WB-28 (WD24): core's sentence for a Windows vault whose folder's
+/// volume gives no file identity, so the host speaks core's words when it
+/// refuses a null identity itself.
+#[uniffi::export]
+pub fn vault_root_identity_unavailable_detail() -> String {
+    core::a11y::VAULT_ROOT_IDENTITY_UNAVAILABLE.to_string()
+}
+
 #[uniffi::export]
 pub fn vault_error_detail(error: VaultError) -> String {
     use core::VaultError as C;

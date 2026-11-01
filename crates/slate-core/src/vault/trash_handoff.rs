@@ -325,7 +325,7 @@ pub(super) fn pinned_path(
 /// `GetFinalPathNameByHandleW` for an open handle: the normalized path of the
 /// object the handle is open on, with its drive letter (`\\?\C:\…`).
 #[cfg(windows)]
-fn final_path(file: &std::fs::File) -> std::io::Result<PathBuf> {
+pub(super) fn final_path(file: &std::fs::File) -> std::io::Result<PathBuf> {
     use std::os::windows::{ffi::OsStringExt as _, io::AsRawHandle as _};
     use windows_sys::Win32::Storage::FileSystem::{
         FILE_NAME_NORMALIZED, GetFinalPathNameByHandleW, VOLUME_NAME_DOS,
@@ -353,6 +353,20 @@ fn final_path(file: &std::fs::File) -> std::io::Result<PathBuf> {
             return Ok(PathBuf::from(std::ffi::OsString::from_wide(&buffer)));
         }
         buffer.resize(length, 0);
+    }
+}
+
+/// `final_path`'s result as a person reads it: `\\?\C:\…` as `C:\…`, and
+/// `\\?\UNC\server\share\…` as `\\server\share\…`. Display only.
+#[cfg(windows)]
+pub(super) fn display_spelling(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(unc) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{unc}"));
+    }
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) => PathBuf::from(rest),
+        None => path.to_path_buf(),
     }
 }
 
