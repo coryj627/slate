@@ -215,6 +215,12 @@ not kept. Two processes restoring one tab id therefore never both count
 as kept: the later claim wins, and the other learns it at its next
 write.
 
+**A host never takes a claim back.** A tab whose write returns
+`Superseded { by: Claim }` stops writing and stays not kept until it
+next turns clean (its next dirtiness claims afresh); it never re-claims
+to win the entry back. So two writers cannot alternate silently, and
+the one that lost knows it at its next close.
+
 **Durability, per platform; failures propagate.** A temp file is synced
 before its rename; the rename and the directory are synced after.
 Windows: `FlushFileBuffers` on the file, then `MoveFileExW` with
@@ -237,9 +243,11 @@ turns clean releases its claim (§6).
 
 `read_buffers(key) -> Result<HotExitSnapshot, HotExitError>` returns
 `{ epoch, entries: Vec<HotExitEntry> }` under the vault lock. It deletes
-temp files, an entry whose claim file is missing and whose incarnation
-the claim does not name (a release or discard cut short after its claim
-step), and nothing else. A missing `epoch` file in an existing directory
+temp files and every entry whose claim file is missing or names an
+older epoch (a release or a vault discard cut short after its claim or
+epoch step), and nothing else; an entry whose claim names a newer
+incarnation (a restored tab that claimed and has not written yet) is
+kept and returned. A missing `epoch` file in an existing directory
 is `Err(HotExitError::Damaged)` (fail closed: no claim, no write and no
 restore for that vault until Close Vault's Discard All recreates it; the
 entries stay on disk), so a lost epoch can never fall back to 0 and let
@@ -421,7 +429,13 @@ recovery write.
 4. **Accepted risk: a root whose creation time is rewritten.** Its key
    changes; its kept notes are orphaned, never restored elsewhere, and
    stay on disk.
-5. **Accepted risk: a store that fills with entries for vaults never
+5. **Accepted risk: two Slate processes on one vault, editing the same
+   restored tab id.** The later claim wins. A process that closed first,
+   told its text was kept, loses it to the other process's later claim
+   and write. It needs two processes on one vault with the same layout:
+   Windows runs one instance (its single-instance mutex) and the Mac one
+   app instance.
+6. **Accepted risk: a store that fills with entries for vaults never
    reopened.** They are never deleted unread; the store then refuses new
    writes and closing prompts. A later host command can offer to review
    or discard them.
