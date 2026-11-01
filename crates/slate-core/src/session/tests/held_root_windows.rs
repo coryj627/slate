@@ -457,3 +457,60 @@ fn no_interior_writer_or_reader_follows_a_retargeted_spelling() {
     drop(session);
     assert_eq!(tree(&b), decoy, "the decoy is byte-identical");
 }
+
+/// The open's pathname re-verification reads the held root (C3): a spelling
+/// retargeted at another folder after the interior opened, and left so at
+/// the end of the open, refuses it, as on Unix.
+#[test]
+fn a_spelling_retargeted_during_the_open_refuses_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let a = tmp.path().join("A");
+    let b = tmp.path().join("B");
+    std::fs::create_dir_all(&a).unwrap();
+    std::fs::create_dir_all(&b).unwrap();
+    let spelling = tmp.path().join("vault");
+    junction(&spelling, &a);
+    let (seam_spelling, seam_b) = (spelling.clone(), b.clone());
+    let _seam = install_open_swap_seam(move |point| {
+        if point == OpenSwapPoint::InteriorOpened {
+            std::fs::remove_dir(&seam_spelling).unwrap();
+            junction(&seam_spelling, &seam_b);
+        }
+    });
+    let error = refused_open(&spelling, "a retargeted spelling refuses the open");
+    let VaultError::InvalidPath { reason, .. } = &error else {
+        panic!("the re-verification's refusal, not {error:?}");
+    };
+    assert_eq!(reason, "vault root changed while the session was opening");
+}
+
+/// A read that must stay in the vault (templates, `read_in_vault_with_cap`)
+/// follows a link only to an entry beneath the held root: a templates folder
+/// that is a junction to a folder outside the vault is refused.
+#[test]
+fn an_in_vault_read_through_a_link_that_leaves_the_vault_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let vault = tmp.path().join("vault");
+    let outside = tmp.path().join("outside");
+    std::fs::create_dir_all(vault.join("inside")).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("secret.md"), "outside").unwrap();
+    std::fs::write(vault.join("inside").join("ok.md"), "inside").unwrap();
+    junction(&vault.join("Templates"), &outside);
+    junction(&vault.join("Linked"), &vault.join("inside"));
+    let session = session_at(&vault).unwrap();
+
+    let error = session
+        .provider
+        .read_in_vault_with_cap("Templates/secret.md", 1024)
+        .unwrap_err();
+    assert!(matches!(error, VaultError::InvalidPath { .. }), "{error:?}");
+    assert_eq!(
+        session
+            .provider
+            .read_in_vault_with_cap("Linked/ok.md", 1024)
+            .unwrap(),
+        b"inside",
+        "a link that stays in the vault is followed"
+    );
+}

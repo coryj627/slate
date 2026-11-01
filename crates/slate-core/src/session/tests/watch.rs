@@ -1302,3 +1302,17 @@ fn a_root_mismatch_at_arm_time_refuses_the_watch() {
     *provider.identity.lock().unwrap() = Some(RootIdentity::from_device_inode(7, 42));
     assert!(session.start_watching(), "the folder the session opened");
 }
+
+/// Plan 44 WB-28 (C9): a Windows filesystem session's real watch arms
+/// against the root the session holds, compared in the watcher's own terms
+/// (its volume serial and file index), not with the `FileIdInfo` record the
+/// session reports — which would refuse every Windows watch.
+#[cfg(windows)]
+#[test]
+fn a_windows_session_watch_arms_against_its_held_root() {
+    let _switch = switch_shared();
+    let tmp = tempfile::tempdir().unwrap();
+    let session = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+    assert!(session.start_watching(), "the held root's own watch arms");
+    session.stop_watching();
+}

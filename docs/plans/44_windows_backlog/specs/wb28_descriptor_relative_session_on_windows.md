@@ -51,6 +51,44 @@ Design items 0, 1, 4, 6, 7 and 9 apply it).
 
 **Owner's call of 2026-10-26** (plan §3.1, "Review calls", WD7 and WD22) outranks this spec where they differ: WD7 and WD22 are answered as recommended; WB-28 starts once its design review posts the `FsRoot` helper names on #1513, not after 22c merges; WB-29a's design (docs) may run beside it, and WB-29a's core store follows it.
 
+**Delivery record, PR 1 (2026-11-01).** Where it differs from the sections
+below, it wins. The design review on #1513 (issuecomment-6553047390)
+named the `FsRoot` helpers; the owner answered D1 (an equal persistent
+identity is the same root) and D3 (a weak-root reopen accepts the
+overwrite) there.
+
+- **Step 0 ran 2026-11-01 (owner's elevated session; doc 24 P-W2).** No
+  stop condition: FAT32 and exFAT answer `FileIdInfo` with error 87,
+  name themselves `FAT32` and `exFAT`, and give a file index that is
+  stable and distinct within the mount, and that changes on a rename.
+  The seams fail `FileIdInfo` with 87. D2 needs no answer: no FAT volume
+  answers `FileIdInfo` at all.
+- **The SQLite path is `C:\|slate-fd\<token>\<leaf>`, not
+  `\\.slate-fd\<token>\<leaf>` (item 3).** SQLite takes a path that
+  starts with `\\` for a network share and shares one lock handle among a
+  process's connections (`winIsUNCPath`, `bUseSharedLockHandle`); racing
+  first writes then failed with `SQLITE_PROTOCOL` in 8 runs of 8. The
+  new prefix is absolute, so `GetFullPathNameW` keeps it, and `|` is not
+  allowed in a Windows file name, so no real path is ever it: without the
+  hook kernel32 answers `ERROR_INVALID_NAME`. The race passes 8 of 8. D4
+  (the by-path fallback) is not needed.
+- **The watch's arm check compares like with like (C9, found in PR 1).**
+  `session/watch.rs` compared the watcher's arm identity (on Windows the
+  volume serial and file index) with the session's identity; with the
+  identity now `FileIdInfo`, every Windows watch would have been refused.
+  The session keeps a `watch_anchor`, the held root in the watcher's own
+  terms.
+- **The root is listed on the held handle under a lock.** `ReOpenFile`
+  refuses a second handle on the held root (`ERROR_ACCESS_DENIED`), and a
+  listing's position belongs to its handle.
+- **The mutation probes follow ancestors (`Follow::Never` is
+  `symlink_metadata`'s rule).** The mutation's own walk refuses a link
+  among the folders in its typed words (#1449, #1452).
+- **Table B has Windows bodies only.** Unix declarations with today's
+  pathname bodies would have no caller (the provider keeps its own Unix
+  code), which `-D warnings` refuses; 22c adds them with its bodies.
+- **PR 2 carries open items 1 and 2** (the review's split).
+
 ## Goal
 
 On Windows, as on macOS and Linux since 22a, a filesystem session binds
