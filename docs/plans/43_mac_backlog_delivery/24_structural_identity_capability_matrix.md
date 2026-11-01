@@ -169,8 +169,8 @@ folder, and against a table of the reports it judges, on every machine
 | --- | --- | --- | --- | --- | --- |
 | NTFS (the temp directory) | Refused | Refused: the primitive with an occupant made before its call, and one made concurrently | Refused | One entry; identity kept | Not through the WB-27 seam. The NTFS evidence is:<br>• create: `create_exclusive_collision_preserves_winner_bytes_and_cleans_staged_temp`;<br>• rename: `rename_no_replace_atomic_refuses_occupied_destination` and `rename_no_replace_destination_creation_race_never_clobbers`, which call the primitive directly (`fs.rs`);<br>• identity and case-only: `conditional_rename_rejects_replacements_and_collisions` and `conditional_rename_handles_case_only_inverse_and_directory_moves` (`windows_entry_tests.rs`) |
 | SMB 3.1 over `\\localhost\C$` (loopback to an NTFS volume; the gate reads the protocol) | Refused by the kernel publish: `DestinationExists`, occupant unchanged, stage cleaned | Refused by the kernel: `DestinationExists`; source and occupant unchanged | Refused by the kernel: `Io(AlreadyExists)`; both entries unchanged | One entry, new spelling, `FILE_ID_INFO` unchanged. The identity inverse, which makes only the no-replace call, performs the same case-only rename | [P-W1] |
-| FAT32 | *Not probed*: needs the elevated VHD procedure in the WB-27 spec | — | — | — | — |
-| exFAT | *Not probed*: as FAT32 | — | — | — | — |
+| FAT32 (1 GB VHD, probed 2026-11-01) | Refused by the kernel publish: `DestinationExists`, occupant unchanged | Refused by the kernel; source and occupant unchanged | Not reached: no `FILE_ID_INFO` (error 87), so the identity rename refuses before the kernel call; both entries unchanged | **Reports success and keeps the old spelling** (#1727). `MoveFileEx` does the same, in every case shape tried | [P-W2] |
+| exFAT (1 GB VHD, probed 2026-11-01) | As FAT32 | As FAT32 | As FAT32 | As FAT32 (#1727) | [P-W2] |
 
 No replacing rename was observed, so no refusal branch shipped.
 
@@ -219,8 +219,8 @@ serial number plus the 128-bit file id.
 | --- | --- | --- | --- | --- | --- |
 | NTFS | Yes (existing facts) | Yes | Yes, identity kept | Yes | Not observed: a new file at an old name gets a different id |
 | SMB over `\\localhost\C$` (Windows 11 client and server, NTFS underneath) | Yes [P-W1] | Yes, at the kernel | Yes, identity kept | Yes: the id survives a rename, and a stale identity is refused | Not observed: a new file at the old name got a different id |
-| FAT32 | Not probed | — | — | — | — |
-| exFAT | Not probed | — | — | — | — |
+| FAT32 | Yes [P-W2] | Yes, at the kernel | **No**: reports success, the spelling is unchanged (#1727) | No `FILE_ID_INFO` (error 87). The fallback file index (`GetFileInformationByHandle`) is stable within a mount and distinct per entry, and **changes when the entry is renamed** | Not probed |
+| exFAT | Yes [P-W2] | Yes, at the kernel | **No**, as FAT32 (#1727) | As FAT32 | Not probed |
 
 ## 6. Case-only and normalization-only renames
 
@@ -274,8 +274,15 @@ The same holds on NTFS
 So on both, the provider's first call does the work, and the retry has
 no case to answer.
 
-Whether FAT32 or exFAT reaches it is unrecorded until those volumes are
-probed.
+On FAT32 and exFAT (2026-11-01) neither call performs it: the
+no-replace call returns success and the entry keeps its old spelling,
+so the retry arm is never reached either [P-W2]. `MoveFileEx`
+(PowerShell's `Rename-Item`) leaves the spelling unchanged too, for a
+long name to a lowercase 8.3 name, an 8.3 name to another case, an 8.3
+name to a long name, and a long name to a long name. A retry 16 s later
+(past the file-name tunnel cache) does not change it either. The
+provider reports the rename as done, so the index and the disk
+disagree: #1727.
 
 ## 7. Directories
 
@@ -387,7 +394,41 @@ cargo test -p slate-core --locked --lib weak_volume -- --ignored --test-threads=
     without both;
   - any redirector taken for SMB;
   - a panic on an unset variable.
-- **Not run.** FAT32 and exFAT need the elevated VHD procedure.
+- **Not run here.** FAT32 and exFAT, which need the elevated VHD
+  procedure: P-W2.
+
+**P-W2 (plan 44 WB-27 and WB-28 step 0, 2026-11-01).** Environment:
+Windows 11 Pro 10.0.26300, the owner's elevated PowerShell 7, `main`
+at 500d4382 or later. Two 1 GB dynamic VHDs, made and formatted by WB-27's
+volume procedure (`New-VHD | Mount-VHD | Initialize-Disk |
+New-Partition | Format-Volume -FileSystem FAT32` and `exFAT`), with
+`SLATE_WEAK_VOLUME_FAT32` and `…_EXFAT` set to a folder on each.
+
+- **The six gated facts.** Five pass on both volumes:
+  - create, rename and move each land on a free name;
+  - an occupied name is refused at the kernel;
+  - the gate names the file system it ran on;
+  - with no `FILE_ID_INFO` (error 87, `ERROR_INVALID_PARAMETER`), the
+    identity rename and the stale-identity rename refuse.
+
+  `weak_volume_case_only_rename_keeps_the_entry` fails on both: the
+  provider's rename returns `Ok`, and the folder still lists `Note.md`.
+  The fact stops at the first volume that fails, so exFAT's result
+  comes from a second run with only `…_EXFAT` set.
+- **Case-only renames through `MoveFileEx`.** On both volumes,
+  `Rename-Item` left the spelling unchanged for every case tried:
+  `Note.md` → `note.md`, `NOTE.MD` → `note.md`, `note.md` → `Note.md`,
+  `Long Note.md` → `long note.md` and `NOTE.MD` → `NOTE.md`. The first
+  two were renamed again 16 s later, with no change.
+- **WB-28's step 0: the identity reads on a folder.** Opened with
+  `FILE_FLAG_BACKUP_SEMANTICS`, with an NTFS temp folder as the
+  control. No stop condition.
+
+| Volume | File-system name | `FileIdInfo` | File index (serial-index) | Index read again | Sibling's index | `FileIdInfo` after a rename | Index after a rename |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| NTFS (control) | `NTFS` | answers | `885d7da1-007e00000025022f` | same | `885d7da1-020700000025025e` | unchanged | unchanged |
+| FAT32 | `FAT32` | error 87 | `0cda959e-00000000004042c0` | same | `0cda959e-00000000004042e0` | error 87 | `0cda959e-0000000000404360` |
+| exFAT | `exFAT` | error 87 | `c0dce383-0000000000060280` | same | `c0dce383-00000000000602e0` | error 87 | `c0dce383-0000000000060340` |
 
 ## Appendix B. Sources
 
