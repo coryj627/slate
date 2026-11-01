@@ -30,7 +30,7 @@ public sealed partial class SearchRecentsStoreTests
 
             source.RecordRecent("second");
             Assert.Null(source.LastRecentsSaveError);
-            Assert.Equal(["second", "first"], source.LoadRecents());
+            Assert.Equal(new[] { "second", "first" }, source.LoadRecents());
         }
         finally
         {
@@ -51,7 +51,7 @@ public sealed partial class SearchRecentsStoreTests
             current = VaultSession.OpenFilesystem(spelling);
             var source = new VaultSearchSource(() => current, () => spelling);
             source.RecordRecent("only-in-a");
-            Assert.Equal(["only-in-a"], source.LoadRecents());
+            Assert.Equal(new[] { "only-in-a" }, source.LoadRecents());
 
             current.Dispose();
             current = null;
@@ -59,7 +59,7 @@ public sealed partial class SearchRecentsStoreTests
             WriteRecentsFile(second.Root, "[\"only-in-b\"]");
             current = VaultSession.OpenFilesystem(spelling);
 
-            Assert.Equal(["only-in-b"], source.LoadRecents());
+            Assert.Equal(new[] { "only-in-b" }, source.LoadRecents());
             Assert.Null(source.LastRecentsSaveError);
         }
         finally
