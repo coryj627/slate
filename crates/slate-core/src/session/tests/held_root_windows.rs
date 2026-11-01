@@ -81,6 +81,20 @@ fn the_held_root_its_ancestors_and_slate_stay_put_while_the_session_lives() {
         );
     }
 
+    // What the hold itself guarantees, apart from the open cache inside:
+    // nobody else can open the root or `.slate` for deletion (a rename
+    // needs that access), because neither handle shares it.
+    for held in [vault.clone(), vault.join(".slate")] {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        let error = std::fs::OpenOptions::new()
+            .access_mode(0x0001_0000) // DELETE
+            .share_mode(7)
+            .custom_flags(0x0200_0000) // FILE_FLAG_BACKUP_SEMANTICS
+            .open(&held)
+            .expect_err("held without sharing deletion");
+        assert_eq!(error.raw_os_error(), Some(32), "{}: {error:?}", held.display());
+    }
+
     drop(session);
     std::fs::rename(&vault, outer.join("renamed")).unwrap();
     assert!(!vault.exists(), "nothing is made again at the old path");
