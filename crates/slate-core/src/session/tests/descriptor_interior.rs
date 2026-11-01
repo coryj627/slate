@@ -91,7 +91,9 @@ fn the_interior_binds_the_anchored_root_through_an_a_b_a_swap() {
                 rename(&a, &b);
                 rename(&hold, &a);
             }
-            OpenSwapPoint::CacheDirAnchored | OpenSwapPoint::CacheOpened => {}
+            OpenSwapPoint::CacheDirAnchored
+            | OpenSwapPoint::CacheOpened
+            | OpenSwapPoint::BeforeSlateHeld => {}
         })
     };
     let session = VaultSession::from_filesystem_with_actor(a.clone(), "local")
@@ -202,7 +204,9 @@ fn open_binds_the_anchored_cache_dir_through_an_a_b_a_swap() {
                 rename(&a_cache, &b_cache);
                 rename(&hold_cache, &a_cache);
             }
-            OpenSwapPoint::RootAnchored | OpenSwapPoint::InteriorOpened => {}
+            OpenSwapPoint::RootAnchored
+            | OpenSwapPoint::InteriorOpened
+            | OpenSwapPoint::BeforeSlateHeld => {}
         })
     };
     let session = VaultSession::open(
