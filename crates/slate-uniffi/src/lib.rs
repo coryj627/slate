@@ -11515,12 +11515,6 @@ pub struct RenderedAnnouncement {
     pub priority: A11yPriority,
 }
 
-/// Core's detail for an error a host caught (W7-7, #1249): the text a
-/// host speaks or shows for it, rendered by `slate_core::a11y::
-/// vault_error_detail` — never the binding's own message, which is a
-/// field dump ("@message=…"; a write conflict's is two content hashes and
-/// a modification time). `Io` and `Db` were flattened at the boundary to
-/// the inner error's text, which is that detail verbatim.
 /// Plan 44 WB-28 (WD24): core's sentence for a Windows vault whose folder's
 /// volume gives no file identity, so the host speaks core's words when it
 /// refuses a null identity itself.
@@ -11529,6 +11523,12 @@ pub fn vault_root_identity_unavailable_detail() -> String {
     core::a11y::VAULT_ROOT_IDENTITY_UNAVAILABLE.to_string()
 }
 
+/// Core's detail for an error a host caught (W7-7, #1249): the text a
+/// host speaks or shows for it, rendered by `slate_core::a11y::
+/// vault_error_detail` — never the binding's own message, which is a
+/// field dump ("@message=…"; a write conflict's is two content hashes and
+/// a modification time). `Io` and `Db` were flattened at the boundary to
+/// the inner error's text, which is that detail verbatim.
 #[uniffi::export]
 pub fn vault_error_detail(error: VaultError) -> String {
     use core::VaultError as C;

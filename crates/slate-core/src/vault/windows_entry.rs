@@ -160,6 +160,36 @@ fn create_relative_with(
             "Expected a simple entry name",
         ));
     }
+    nt_create_relative(
+        parent,
+        &mut name,
+        access,
+        share,
+        disposition,
+        options,
+        file_attributes,
+    )
+}
+
+/// A new handle with a file object of its own on the folder `dir` is open
+/// on: `NtCreateFile` relative to `dir` with an empty name (plan 44 WB-28).
+/// A duplicated handle shares the original's file object, and with it a
+/// listing's position; this one does not.
+pub(super) fn reopen(dir: &fs::File, access: u32, share: u32) -> io::Result<fs::File> {
+    nt_create_relative(dir, &mut Vec::new(), access, share, FILE_OPEN, 0, 0)
+}
+
+/// The `NtCreateFile` call itself, for a name already checked (or empty: the
+/// parent itself).
+fn nt_create_relative(
+    parent: &fs::File,
+    name: &mut Vec<u16>,
+    access: u32,
+    share: u32,
+    disposition: u32,
+    options: u32,
+    file_attributes: u32,
+) -> io::Result<fs::File> {
     let length = u16::try_from(name.len() * 2)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "Entry name is too long"))?;
     let mut unicode = UNICODE_STRING {
@@ -580,6 +610,25 @@ pub(super) fn rename_into(
     name: &OsStr,
     replace: bool,
 ) -> io::Result<()> {
+    rename_with(
+        source,
+        parent,
+        name,
+        FileRenameInformation,
+        u32::from(replace),
+    )
+}
+
+/// `NtSetInformationFile` with a rename `class`: `FileRenameInformation`
+/// takes `flags` as its `ReplaceIfExists` byte, `FileRenameInformationEx`
+/// as its `Flags` (the union's two readings).
+fn rename_with(
+    source: &fs::File,
+    parent: &fs::File,
+    name: &OsStr,
+    class: windows_sys::Wdk::Storage::FileSystem::FILE_INFORMATION_CLASS,
+    flags: u32,
+) -> io::Result<()> {
     let name: Vec<u16> = name.encode_wide().collect();
     if !simple_name(&name) {
         return Err(io::Error::new(
@@ -598,7 +647,7 @@ pub(super) fn rename_into(
     // name. Both handles outlive the synchronous call.
     let status = unsafe {
         let info = buffer.as_mut_ptr().cast::<FILE_RENAME_INFORMATION>();
-        (*info).Anonymous.ReplaceIfExists = replace;
+        (*info).Anonymous.Flags = flags;
         (*info).RootDirectory = parent.as_raw_handle();
         (*info).FileNameLength = name_length;
         std::ptr::copy_nonoverlapping(
@@ -616,7 +665,7 @@ pub(super) fn rename_into(
             &mut status_block,
             info.cast(),
             info_length,
-            FileRenameInformation,
+            class,
         )
     };
     if status < 0 {
@@ -625,6 +674,34 @@ pub(super) fn rename_into(
         ));
     }
     Ok(())
+}
+
+/// The interior's replacing rename (`fs_root::sys::rename_at`), as
+/// `std::fs::rename` makes it (plan 44 WB-28): `FileRenameInformationEx`
+/// with POSIX semantics, so a target another handle holds open, sharing
+/// deletion, is still replaced. A volume without POSIX rename (FAT) gets
+/// the classic replacing rename.
+pub(super) fn rename_replacing(
+    source: &fs::File,
+    parent: &fs::File,
+    name: &OsStr,
+) -> io::Result<()> {
+    use windows_sys::Wdk::Storage::FileSystem::{
+        FILE_RENAME_POSIX_SEMANTICS, FILE_RENAME_REPLACE_IF_EXISTS, FileRenameInformationEx,
+    };
+    match rename_with(
+        source,
+        parent,
+        name,
+        FileRenameInformationEx,
+        FILE_RENAME_REPLACE_IF_EXISTS | FILE_RENAME_POSIX_SEMANTICS,
+    ) {
+        // ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED: no POSIX rename here.
+        Err(error) if matches!(error.raw_os_error(), Some(87) | Some(50)) => {
+            rename_into(source, parent, name, true)
+        }
+        other => other,
+    }
 }
 
 struct PinnedEntry {

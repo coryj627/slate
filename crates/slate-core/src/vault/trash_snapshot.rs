@@ -33,7 +33,7 @@ fn refused(message: &str) -> VaultError {
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
-pub(super) use windows::snapshot_cancellable;
+pub(super) use windows::{snapshot_beneath, snapshot_cancellable};
 
 #[cfg(not(any(unix, windows)))]
 pub(super) fn snapshot_cancellable(

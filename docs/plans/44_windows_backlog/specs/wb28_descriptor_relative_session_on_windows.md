@@ -78,9 +78,13 @@ overwrite) there.
   identity now `FileIdInfo`, every Windows watch would have been refused.
   The session keeps a `watch_anchor`, the held root in the watcher's own
   terms.
-- **The root is listed on the held handle under a lock.** `ReOpenFile`
-  refuses a second handle on the held root (`ERROR_ACCESS_DENIED`), and a
-  listing's position belongs to its handle.
+- **The root is listed on a file object of its own.** A listing's position
+  belongs to its file object, and a duplicated handle shares the held
+  one's. `ReOpenFile` answered `ERROR_ACCESS_DENIED` in this PR's attempt;
+  `NtCreateFile` with an empty name relative to the held handle
+  (`windows_entry::reopen`) makes the new file object, for root listings
+  and for `duplicate_root_handle`, so a host listing never shares a
+  position with the session's.
 - **The mutation probes follow ancestors (`Follow::Never` is
   `symlink_metadata`'s rule).** The mutation's own walk refuses a link
   among the folders in its typed words (#1449, #1452).
@@ -88,6 +92,29 @@ overwrite) there.
   pathname bodies would have no caller (the provider keeps its own Unix
   code), which `-D warnings` refuses; 22c adds them with its bodies.
 - **PR 2 carries open items 1 and 2** (the review's split).
+- **The fresh red team's findings, taken in PR 1:**
+  - the Trash confirmation's snapshot walks from the held root, as the
+    Trash handoff does, so the count the reader confirms is the tree that
+    goes, and a vault opened through a junction can Trash (main refused
+    it);
+  - the interior's replacing rename keeps `std::fs::rename`'s POSIX
+    semantics (`FileRenameInformationEx`, with the classic rename on FAT);
+  - folders on the way are opened with attribute access only, as a path
+    open needs no rights on the folders it passes;
+  - a case-only same-entry needs the two spellings to differ only by
+    case, so two hard links to one file stay two entries;
+  - interior appends map as std's do.
+- **Recorded, not changed:**
+  - `canonical_path` through a junction ancestor that stays in the vault
+    gives the target's spelling (main's Windows rule), not `None` as row
+    1014 and mac's I7 have it; a fact pins the kept rule;
+  - WD24's refusal reaches any volume that answers no `FileIdInfo` and
+    does not name itself FAT: a Samba or NAS share without file ids, a
+    WinFsp mount (Cryptomator, rclone) or `\\wsl.localhost` may now refuse
+    a vault that opened on main; only loopback Windows SMB was probed.
+- **The facts are in `session/tests/held_root_windows.rs`** (and
+  `db/anchored_windows.rs`, `session/tests/watch.rs`), named for what they
+  prove; the Verification list's names map onto them in PR 1's body.
 
 ## Goal
 

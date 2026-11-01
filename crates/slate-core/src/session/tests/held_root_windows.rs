@@ -92,7 +92,12 @@ fn the_held_root_its_ancestors_and_slate_stay_put_while_the_session_lives() {
             .custom_flags(0x0200_0000) // FILE_FLAG_BACKUP_SEMANTICS
             .open(&held)
             .expect_err("held without sharing deletion");
-        assert_eq!(error.raw_os_error(), Some(32), "{}: {error:?}", held.display());
+        assert_eq!(
+            error.raw_os_error(),
+            Some(32),
+            "{}: {error:?}",
+            held.display()
+        );
     }
 
     drop(session);
@@ -382,7 +387,11 @@ fn tree(root: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
             let entry = entry.unwrap();
             let path = entry.path();
             if entry.file_type().unwrap().is_dir() {
-                let relative = path.strip_prefix(root).unwrap().to_string_lossy().into_owned();
+                let relative = path
+                    .strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned();
                 files.insert(format!("{relative}/"), Vec::new());
                 folders.push(path);
             } else {
@@ -531,4 +540,247 @@ fn an_in_vault_read_through_a_link_that_leaves_the_vault_is_refused() {
         b"inside",
         "a link that stays in the vault is followed"
     );
+}
+
+/// The identity is `FileIdInfo` itself: the 64-bit volume serial and the
+/// 128-bit file id, its low half first (the host's `UInt128(high, low)`),
+/// compared with an independent read, not with core's own.
+#[test]
+fn the_identity_is_the_volume_serial_and_the_whole_128_bit_file_id() {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ID_INFO, FileIdInfo, GetFileInformationByHandleEx,
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let session = session_at(tmp.path()).unwrap();
+    let identity = session.root_identity().unwrap();
+
+    let dir = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(0x0200_0000) // FILE_FLAG_BACKUP_SEMANTICS
+        .open(tmp.path())
+        .unwrap();
+    // SAFETY: zeroed storage of the type the call fills.
+    let mut info: FILE_ID_INFO = unsafe { std::mem::zeroed() };
+    // SAFETY: a live handle and a buffer of exactly FILE_ID_INFO's size.
+    let ok = unsafe {
+        GetFileInformationByHandleEx(
+            dir.as_raw_handle(),
+            FileIdInfo,
+            (&mut info as *mut FILE_ID_INFO).cast(),
+            std::mem::size_of::<FILE_ID_INFO>() as u32,
+        )
+    };
+    assert_ne!(ok, 0, "NTFS answers FileIdInfo");
+    let id = u128::from_le_bytes(info.FileId.Identifier);
+    assert_eq!(identity.volume, info.VolumeSerialNumber);
+    assert_eq!(identity.id_high, (id >> 64) as u64);
+    assert_eq!(identity.id_low, id as u64);
+    assert!(identity.persistent);
+}
+
+/// Design item 4: the structural-lock registry is keyed by the held
+/// `.slate`'s identity, so two spellings of one vault (a junction and the
+/// folder itself) share one slot, and two vaults do not.
+#[test]
+fn two_spellings_of_one_vault_share_one_structural_lock_slot() {
+    let tmp = tempfile::tempdir().unwrap();
+    let vault = tmp.path().join("vault");
+    let other = tmp.path().join("other");
+    std::fs::create_dir_all(&vault).unwrap();
+    std::fs::create_dir_all(&other).unwrap();
+    let link = tmp.path().join("link");
+    junction(&link, &vault);
+    let key = |session: &VaultSession| {
+        StructuralLockKey::of(session.held_root.as_ref().unwrap().cache_dir()).unwrap()
+    };
+    let direct = session_at(&vault).unwrap();
+    let through_link = session_at(&link).unwrap();
+    let elsewhere = session_at(&other).unwrap();
+    assert!(matches!(key(&direct), StructuralLockKey::Identity(_)));
+    assert_eq!(key(&direct), key(&through_link), "one vault, one slot");
+    assert_ne!(key(&direct), key(&elsewhere), "two vaults, two slots");
+}
+
+/// An interior folder that is a junction is refused, never written through:
+/// a save stages beneath the held `.slate`, and `.slate\tmp` planted as a
+/// junction to a folder outside the vault fails the save.
+#[test]
+fn a_junctioned_interior_folder_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let vault = tmp.path().join("vault");
+    let outside = tmp.path().join("outside");
+    std::fs::create_dir_all(&vault).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(vault.join("note.md"), "# Note\n").unwrap();
+    let session = session_at(&vault).unwrap();
+    scanned(&session);
+    let _ = std::fs::remove_dir(vault.join(".slate").join("tmp"));
+    junction(&vault.join(".slate").join("tmp"), &outside);
+
+    let hash = session.read_note_parts("note.md").unwrap().content_hash;
+    session
+        .save_text("note.md", "# Saved\n", Some(hash.as_str()))
+        .expect_err("a junctioned staging folder refuses the save");
+    assert_eq!(
+        std::fs::read_dir(&outside).unwrap().count(),
+        0,
+        "nothing staged outside"
+    );
+    assert_eq!(
+        std::fs::read_to_string(vault.join("note.md")).unwrap(),
+        "# Note\n"
+    );
+}
+
+/// Design item 5's seam: a `.slate` planted as a junction after the root is
+/// held and before `.slate` is, is refused, and nothing reaches its target.
+#[test]
+fn a_slate_junction_planted_before_the_hold_never_receives_the_interior() {
+    let tmp = tempfile::tempdir().unwrap();
+    let vault = tmp.path().join("vault");
+    let outside = tmp.path().join("outside");
+    std::fs::create_dir_all(&vault).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    let (seam_slate, seam_outside) = (vault.join(".slate"), outside.clone());
+    let _seam = install_open_swap_seam(move |point| {
+        if point == OpenSwapPoint::BeforeSlateHeld {
+            junction(&seam_slate, &seam_outside);
+        }
+    });
+    let error = refused_open(&vault, "a planted .slate junction refuses the open");
+    assert!(matches!(error, VaultError::InvalidPath { .. }), "{error:?}");
+    assert_eq!(
+        std::fs::read_dir(&outside).unwrap().count(),
+        0,
+        "the target got nothing"
+    );
+}
+
+/// The duplicate the host's stores will use names the held folder after the
+/// spelling is retargeted, and is a file object of its own (it lists while
+/// the session's root is untouched).
+#[test]
+fn the_duplicated_root_handle_names_the_held_root_after_its_spelling_is_retargeted() {
+    let tmp = tempfile::tempdir().unwrap();
+    let a = tmp.path().join("A");
+    let b = tmp.path().join("B");
+    std::fs::create_dir_all(&a).unwrap();
+    std::fs::create_dir_all(&b).unwrap();
+    std::fs::write(a.join("only-in-a.md"), "a").unwrap();
+    let spelling = tmp.path().join("vault");
+    junction(&spelling, &a);
+    let session = session_at(&spelling).unwrap();
+    std::fs::remove_dir(&spelling).unwrap();
+    junction(&spelling, &b);
+
+    let duplicate = std::fs::File::from(session.duplicate_root_handle().unwrap());
+    let named = crate::vault::trash_handoff_final_path_for_tests(&duplicate).unwrap();
+    assert!(named.ends_with("A"), "{}", named.display());
+    let names = crate::vault::fs_root::sys::read_dir_names(&duplicate).unwrap();
+    assert!(names.iter().any(|name| name == "only-in-a.md"), "{names:?}");
+}
+
+/// A move onto a hard link of the source is not a case-only rename: the
+/// two names are two entries, so the provider refuses the destination and
+/// both stay (the file-id compare alone would have replaced `b.md`).
+#[test]
+fn a_move_onto_a_hard_link_of_the_source_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("a.md"), "# A\n").unwrap();
+    std::fs::hard_link(tmp.path().join("a.md"), tmp.path().join("b.md")).unwrap();
+    let session = session_at(tmp.path()).unwrap();
+    // The provider's own rename, where the case-only rule lives (the
+    // session refuses an indexed destination before it gets there).
+    let error = session
+        .provider
+        .rename("a.md", "b.md")
+        .expect_err("b.md is occupied");
+    assert!(
+        matches!(error, VaultError::DestinationExists { .. }),
+        "{error:?}"
+    );
+    assert!(tmp.path().join("a.md").is_file() && tmp.path().join("b.md").is_file());
+}
+
+/// The stored spelling through a junction ancestor that stays in the vault
+/// is the target's (main's Windows rule, kept; recorded in the spec's PR 1
+/// record): `Linked/x.md` → `inside/x.md`.
+#[test]
+fn canonical_path_through_an_in_vault_junction_ancestor_is_the_targets_spelling() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join("inside")).unwrap();
+    std::fs::write(tmp.path().join("inside").join("x.md"), "x").unwrap();
+    junction(&tmp.path().join("Linked"), &tmp.path().join("inside"));
+    let session = session_at(tmp.path()).unwrap();
+    assert_eq!(
+        session.canonical_path("Linked/x.md").unwrap().as_deref(),
+        Some("inside/x.md")
+    );
+}
+
+/// The interior's replacing rename keeps `std::fs::rename`'s POSIX
+/// semantics: a target another handle holds open, sharing deletion (as an
+/// indexer or another reader does), is still replaced.
+#[test]
+fn an_interior_rename_replaces_a_target_another_handle_holds_open() {
+    use crate::vault::fs_root::{FileOptions, InteriorDir as _};
+    let tmp = tempfile::tempdir().unwrap();
+    let session = session_at(tmp.path()).unwrap();
+    let cache = session.held_root.as_ref().unwrap().cache_dir().clone();
+    std::fs::write(tmp.path().join(".slate").join("prefs.json"), "old").unwrap();
+    let held_open = std::fs::File::open(tmp.path().join(".slate").join("prefs.json")).unwrap();
+    {
+        use std::io::Write as _;
+        let mut staged = cache
+            .open_file(
+                "prefs.json.tmp",
+                FileOptions::new().write(true).create(true),
+            )
+            .unwrap();
+        staged.write_all(b"new").unwrap();
+    }
+    cache.rename_file("prefs.json.tmp", "prefs.json").unwrap();
+    drop(held_open);
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join(".slate").join("prefs.json")).unwrap(),
+        "new"
+    );
+}
+/// The Trash confirmation counts the tree the Trash handoff sends (red
+/// team, WB-28): both walk from the held root. A vault opened through a
+/// junction stages its Trash (main refused: "through a symbolic link"),
+/// and after the spelling is retargeted at a decoy the stage still counts
+/// the held vault's folder, not the decoy's.
+#[test]
+fn a_retargeted_spelling_stages_the_trash_of_the_held_vault() {
+    use crate::{BatchTrashRequest, StructuralBatchItem};
+    let tmp = tempfile::tempdir().unwrap();
+    let a = tmp.path().join("A");
+    let b = tmp.path().join("B");
+    std::fs::create_dir_all(a.join("Folder")).unwrap();
+    std::fs::create_dir_all(b.join("Folder")).unwrap();
+    for name in ["one.md", "two.md"] {
+        std::fs::write(a.join("Folder").join(name), "a").unwrap();
+    }
+    for name in ["1.md", "2.md", "3.md", "4.md", "5.md"] {
+        std::fs::write(b.join("Folder").join(name), "b").unwrap();
+    }
+    let spelling = tmp.path().join("vault");
+    junction(&spelling, &a);
+    let session = session_at(&spelling).unwrap();
+    scanned(&session);
+    std::fs::remove_dir(&spelling).unwrap();
+    junction(&spelling, &b);
+
+    let staged = session
+        .stage_trash(BatchTrashRequest {
+            items: vec![StructuralBatchItem {
+                path: "Folder".into(),
+                is_directory: true,
+            }],
+        })
+        .unwrap();
+    assert_eq!(staged.items[0].item_count, 2, "the held vault's Folder");
 }

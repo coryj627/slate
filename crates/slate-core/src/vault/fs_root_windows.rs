@@ -128,15 +128,16 @@ fn file_request(options: FileOptions) -> (u32, u32) {
     use windows_sys::Wdk::Storage::FileSystem::{
         FILE_CREATE, FILE_OPEN, FILE_OPEN_IF, FILE_OVERWRITE, FILE_OVERWRITE_IF,
     };
+    // std's mapping: append wins over write (a true append, no
+    // FILE_WRITE_DATA).
     let mut access = 0;
     if options.read {
         access |= FILE_GENERIC_READ;
     }
-    if options.write {
-        access |= FILE_GENERIC_WRITE;
-    }
     if options.append {
         access |= (FILE_GENERIC_WRITE & !FILE_WRITE_DATA) | FILE_APPEND_DATA;
+    } else if options.write {
+        access |= FILE_GENERIC_WRITE;
     }
     let disposition = match (options.create_new, options.create, options.truncate) {
         (true, _, _) => FILE_CREATE,
@@ -200,7 +201,7 @@ pub(crate) fn rename_at(
     to: &OsStr,
 ) -> io::Result<()> {
     let source = windows_entry::open_for_rename(from_dir, from)?;
-    windows_entry::rename_into(&source, to_dir, to, true)
+    windows_entry::rename_replacing(&source, to_dir, to)
 }
 
 /// Remove the file `name` in `dir`, as itself (a link is removed, never its
@@ -319,10 +320,12 @@ pub(crate) fn open_beneath(
     let mut current: Option<fs::File> = None;
     for name in folders {
         let parent = current.as_ref().unwrap_or(root);
+        // Attribute access only: a relative open needs no rights on its
+        // parent, as a path open needs none on the folders it passes.
         current = Some(windows_entry::create_relative(
             parent,
             name,
-            FOLDER_ACCESS,
+            FILE_READ_ATTRIBUTES,
             share,
             FILE_OPEN,
             0,
@@ -379,8 +382,16 @@ pub(crate) fn read_dir_entries(dir: &fs::File) -> io::Result<Vec<(OsString, List
             // SAFETY: a record the call wrote, within the buffer.
             let entry = unsafe { &*base.add(offset).cast::<FILE_FULL_DIR_INFO>() };
             let length = entry.FileNameLength as usize / 2;
-            // SAFETY: the record's name runs FileNameLength bytes, inside the buffer.
-            let name = unsafe { std::slice::from_raw_parts(entry.FileName.as_ptr(), length) };
+            // SAFETY: the record's name runs FileNameLength bytes from its
+            // FileName field, inside the buffer; the pointer comes from the
+            // buffer, not from the one-element field.
+            let name = unsafe {
+                std::slice::from_raw_parts(
+                    base.add(offset + std::mem::offset_of!(FILE_FULL_DIR_INFO, FileName))
+                        .cast::<u16>(),
+                    length,
+                )
+            };
             if name != [46] && name != [46, 46] {
                 // A reparse point's tag is in EaSize (FILE_FULL_DIR_INFO).
                 let kind = if entry.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
@@ -428,7 +439,7 @@ pub(crate) fn is_dir_beneath(root: &fs::File, relative: &str) -> bool {
         match windows_entry::create_relative(
             parent,
             &name,
-            FOLDER_ACCESS,
+            FILE_READ_ATTRIBUTES,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             FILE_OPEN,
             FILE_DIRECTORY_FILE,
@@ -449,48 +460,10 @@ pub(crate) fn sync_dir(_dir: &fs::File) -> io::Result<()> {
 /// The names in `dir`, `.` and `..` excluded. `dir` is a handle of its own
 /// (the listing's position is the handle's), opened with list access.
 pub(crate) fn read_dir_names(dir: &fs::File) -> io::Result<Vec<OsString>> {
-    // A buffer of u64 is aligned for FILE_FULL_DIR_INFO.
-    let mut buffer = vec![0u64; 8 * 1024];
-    let mut names = Vec::new();
-    let mut class = FileFullDirectoryRestartInfo;
-    loop {
-        let bytes = u32::try_from(buffer.len() * 8).unwrap_or(u32::MAX);
-        // SAFETY: a live handle and a writable, aligned buffer of `bytes`.
-        let ok = unsafe {
-            GetFileInformationByHandleEx(
-                dir.as_raw_handle(),
-                class,
-                buffer.as_mut_ptr().cast(),
-                bytes,
-            )
-        };
-        if ok == 0 {
-            let error = io::Error::last_os_error();
-            if error.raw_os_error() == Some(ERROR_NO_MORE_FILES as i32) {
-                return Ok(names);
-            }
-            return Err(error);
-        }
-        class = FileFullDirectoryInfo;
-        let base = buffer.as_ptr().cast::<u8>();
-        let mut offset = 0usize;
-        loop {
-            // SAFETY: `offset` is a record the call wrote (the first, or one
-            // reached by its NextEntryOffset), within the buffer.
-            let entry = unsafe { &*base.add(offset).cast::<FILE_FULL_DIR_INFO>() };
-            let length = entry.FileNameLength as usize / 2;
-            // SAFETY: the record's name runs FileNameLength bytes from
-            // FileName, inside the buffer.
-            let name = unsafe { std::slice::from_raw_parts(entry.FileName.as_ptr(), length) };
-            if name != [46] && name != [46, 46] {
-                names.push(OsString::from_wide(name));
-            }
-            if entry.NextEntryOffset == 0 {
-                break;
-            }
-            offset += entry.NextEntryOffset as usize;
-        }
-    }
+    Ok(read_dir_entries(dir)?
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect())
 }
 
 /// Open the vault root at `root` and hold it for the session. Its own

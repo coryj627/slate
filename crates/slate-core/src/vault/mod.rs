@@ -96,6 +96,15 @@ pub(crate) use watch::{report_evidence_for_tests, short_name_for_tests};
 #[cfg(windows)]
 pub(crate) use windows_entry::sqlite_create_relative;
 
+/// A handle's normalized final path, for the Windows facts that check which
+/// folder a handle names.
+#[cfg(all(windows, test))]
+pub(crate) fn trash_handoff_final_path_for_tests(
+    file: &std::fs::File,
+) -> std::io::Result<std::path::PathBuf> {
+    trash_handoff::final_path(file)
+}
+
 #[cfg(windows)]
 mod windows_entry;
 

@@ -1919,6 +1919,15 @@ impl VaultProvider for FsVaultProvider {
             let target = self.pin_mutation_target(relative, false, Mutation::Move)?;
             super::trash_snapshot::snapshot_at(&target.parent, &target.leaf, cancel)
         }
+        // A session's provider walks from the held root (WB-28), the root
+        // its Trash handoff walks from.
+        #[cfg(windows)]
+        if let Some(held) = &self.held {
+            let path = self.resolve_for_mutation(relative)?;
+            let beneath = self.vault_relative(&path, relative)?;
+            let root = held.descriptor().try_clone().map_err(VaultError::Io)?;
+            return super::trash_snapshot::snapshot_beneath(root, beneath, cancel);
+        }
         #[cfg(not(unix))]
         {
             super::trash_snapshot::snapshot_cancellable(

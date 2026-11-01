@@ -694,12 +694,6 @@ pub struct FsRoot {
     /// item 6), so a re-read of its spelling reads as the open read.
     #[cfg(windows)]
     seams: sys::Seams,
-    /// Serializes listings of the root itself on Windows: a listing's
-    /// position belongs to the handle it runs on, and the root is listed
-    /// on the held handle (a second handle on it cannot be made from the
-    /// held one: `ReOpenFile` refuses it).
-    #[cfg(windows)]
-    listing: std::sync::Mutex<()>,
     cache: CacheDir,
 }
 
@@ -851,7 +845,6 @@ impl FsRoot {
             identity: Some(identity),
             root: held,
             seams,
-            listing: std::sync::Mutex::new(()),
             cache,
         })
     }
@@ -865,8 +858,18 @@ impl FsRoot {
     /// access, not inheritable): it names the held folder whatever any
     /// spelling names now. The host's vault stores reach the vault through
     /// one, never by a path or an identity compare (design items 6 and 9).
+    /// It is a file object of its own (`windows_entry::reopen`), so a host
+    /// listing through it never shares a position with the session's.
     pub(crate) fn duplicate_root(&self) -> io::Result<std::os::windows::io::OwnedHandle> {
-        Ok(self.root.try_clone()?.into())
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_TRAVERSE, SYNCHRONIZE,
+        };
+        Ok(super::windows_entry::reopen(
+            &self.root,
+            FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | FILE_TRAVERSE | SYNCHRONIZE,
+            7,
+        )?
+        .into())
     }
 
     /// The held root's current path (`GetFinalPathNameByHandleW`), accepted
@@ -960,11 +963,12 @@ impl FsRoot {
             FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_TRAVERSE, SYNCHRONIZE,
         };
         if relative.as_os_str().is_empty() {
-            let _listing = self
-                .listing
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            return sys::read_dir_entries(&self.root);
+            let own = super::windows_entry::reopen(
+                &self.root,
+                FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | FILE_TRAVERSE | SYNCHRONIZE,
+                7,
+            )?;
+            return sys::read_dir_entries(&own);
         }
         let folder = sys::open_beneath(
             &self.root,
@@ -987,7 +991,10 @@ impl FsRoot {
             }
             sys::entry_id(&file).ok()
         };
-        matches!((id(a), id(b)), (Some(x), Some(y)) if x == y)
+        // One entry under two spellings, not two hard links to one file:
+        // the spellings name the same place, differing only by case.
+        let place = |relative: &Path| relative.to_string_lossy().to_lowercase();
+        place(a) == place(b) && matches!((id(a), id(b)), (Some(x), Some(y)) if x == y)
     }
 
     /// The stored spelling of the entry at `relative`, vault-relative with
