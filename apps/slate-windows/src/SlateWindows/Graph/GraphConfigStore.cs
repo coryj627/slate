@@ -41,12 +41,21 @@ internal sealed class GraphConfigStore
     internal const int MaxReadBytes = 1024 * 1024;
 
     private readonly string _vaultRoot;
+    private readonly VaultRootAnchor? _root;
     private readonly string _path;
 
-    public GraphConfigStore(string vaultRoot)
+    /// <summary>
+    /// The root this store reaches the vault through (plan 44 WB-28): the
+    /// session's held root in production; a store built with no anchor
+    /// opens by path, which only the tests may do.
+    /// </summary>
+    private VaultRootAnchor Root => _root ?? VaultRootAnchor.ByPathForTests(_vaultRoot);
+
+    public GraphConfigStore(string vaultRoot, VaultRootAnchor? root = null)
     {
         ArgumentNullException.ThrowIfNull(vaultRoot);
         _vaultRoot = vaultRoot;
+        _root = root;
         _path = Path.Combine(vaultRoot, ".slate", FileName);
     }
 
@@ -103,7 +112,7 @@ internal sealed class GraphConfigStore
         // deleted root throws DirectoryNotFoundException and nothing is
         // recreated at its old path; `.slate` is made only inside a root
         // that exists.
-        using AnchoredVaultStore store = AnchoredVaultStore.Open(_vaultRoot, createDirectory: true)
+        using AnchoredVaultStore store = AnchoredVaultStore.Open(Root, createDirectory: true)
             ?? throw new DirectoryNotFoundException("The vault's .slate folder could not be opened.");
         string? existing = null;
         try
@@ -143,11 +152,14 @@ internal sealed class GraphConfigStore
 
     private string ReadText()
     {
-        // Consume an optional UTF-8 preamble while retaining the throwing
-        // decoder. BOM autodetection can replace it with a lenient decoder,
-        // silently repairing bytes that a later save would overwrite.
-        using var reader = new StreamReader(_path, StrictUtf8, detectEncodingFromByteOrderMarks: false);
-        return reader.ReadToEnd();
+        // Through the held root too (plan 44 WB-28 PR 2), bounded as the
+        // write's read is, the preamble consumed by the throwing decoder
+        // (BOM autodetection could swap in a lenient one and silently
+        // repair bytes a later save would overwrite). An absent .slate or
+        // file is Term W7's missing arm.
+        using AnchoredVaultStore store = AnchoredVaultStore.Open(Root, createDirectory: false)
+            ?? throw new FileNotFoundException("The vault has no .slate folder.");
+        return ReadExisting(store) ?? throw new FileNotFoundException("The vault has no graph config.");
     }
 
     /// <summary>The host-facing reason for each core refusal (the mac's

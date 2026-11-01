@@ -572,6 +572,14 @@ internal sealed class GraphConfigMutationCensus
         }
         string type = method.ContainingType.ToDisplayString();
         bool any = values.Any(value => value);
+        if (type == "SlateWindows.NativeRelativeOpen" && method.Name == "Open")
+        {
+            // Plan 44 WB-28 PR 2: the relative open is the stores' CreateFileW.
+            // It hands the name to the kernel through a pinned buffer this
+            // census does not follow, so it is modelled as the external call
+            // was: the handle carries the provenance of the name it opened.
+            return any;
+        }
         if (_methods.ContainsKey(method.OriginalDefinition))
         {
             Result result = Invoke(method, values, receiver, state.Authorized);

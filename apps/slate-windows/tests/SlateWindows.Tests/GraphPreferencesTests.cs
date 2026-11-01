@@ -113,16 +113,12 @@ public sealed class GraphPreferencesTests : IDisposable
     private static void Drain(GraphPreferencesViewModel preferences) =>
         Assert.True(preferences.WhenWritesDrained().Wait(TimeSpan.FromSeconds(10)), "the writes never drained");
 
-    /// <summary>The application writer's queue for a root, idle.</summary>
-    private static void WaitForTheSharedWriter(string root)
-    {
-        var clock = System.Diagnostics.Stopwatch.StartNew();
-        while (GraphConfigWriter.Shared.StateForTests(root).Outstanding > 0 && clock.Elapsed < TimeSpan.FromSeconds(10))
-        {
-            Thread.Sleep(10);
-        }
-        Assert.Equal(0, GraphConfigWriter.Shared.StateForTests(root).Outstanding);
-    }
+    /// <summary>The application writer's one queue, idle up to now (WB-28:
+    /// the workspace keys its writes by the session's root, not a path).</summary>
+    private static void WaitForTheSharedWriter() =>
+        Assert.True(
+            GraphConfigWriter.Shared.TailForTests.Wait(TimeSpan.FromSeconds(10)),
+            "the shared writer never went idle");
 
     private static GraphVerbositySpec Level(GraphPreferencesViewModel preferences, GraphVerbosity verbosity) =>
         preferences.Levels.Single(level => level.Verbosity == verbosity);
@@ -558,7 +554,7 @@ public sealed class GraphPreferencesTests : IDisposable
                 Assert.Equal(2, preferences.RefusedForTests);
                 Assert.False(preferences.TimerEnabledForTests);
             });
-            WaitForTheSharedWriter(vault);
+            WaitForTheSharedWriter();
             Assert.Equal("hub", OnDisk(vault).Filters.NameQuery);
         }
         finally
@@ -894,9 +890,9 @@ public sealed class GraphPreferencesTests : IDisposable
                 host.Workspace.GraphNavigator.RunPreset(GraphPreset.MostLinked);
                 host.Settle();
                 Assert.False(preferences.HasPendingForTests);
-                Assert.Equal(4UL, GraphConfigWriter.Shared.StateForTests(vault).Counter);
+                Assert.Equal(4UL, GraphConfigWriter.Shared.StateForTests(preferences.RootForTests).Counter);
             });
-            WaitForTheSharedWriter(vault);
+            WaitForTheSharedWriter();
             GraphConfig written = OnDisk(vault);
             Assert.Equal("hub", written.Filters.NameQuery);
             Assert.False(written.Filters.OrphansOnly);
@@ -1130,7 +1126,7 @@ public sealed class GraphPreferencesTests : IDisposable
                 Assert.Equal("hub", second.State.NameQuery);
                 Assert.True(second.Preferences.IsWritable);
             });
-            WaitForTheSharedWriter(vault);
+            WaitForTheSharedWriter();
             Assert.Equal("hub", OnDisk(vault).Filters.NameQuery);
         }
         finally

@@ -68,7 +68,11 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
         _session = session;
         _rankTop = rankTop ?? ((query, recents, cancel) =>
             session.SwitcherRankTopIndexed(query, recents, DisplayCap, cancel));
-        _recentsStore = new FileRecentsStore(vaultRoot, session.RootIdentity(), localAppDataRoot);
+        _recentsStore = new FileRecentsStore(
+            vaultRoot,
+            session.RootIdentity(),
+            localAppDataRoot,
+            VaultRootAnchor.Of(session));
         OpenCommand = new RelayCommand(_ => Open(), _ => !IsOpen);
         DismissCommand = new RelayCommand(_ => Dismiss(), _ => IsOpen);
         OpenCurrentCommand = new RelayCommand(_ => OpenSelected(WorkspaceOpenTarget.CurrentTab), _ => SelectedRow is not null);

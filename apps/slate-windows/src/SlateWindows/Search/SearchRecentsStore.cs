@@ -63,11 +63,20 @@ internal sealed class SearchRecentsStore
     };
 
     private readonly string _vaultRoot;
+    private readonly VaultRootAnchor? _root;
 
-    public SearchRecentsStore(string vaultRoot)
+    /// <summary>
+    /// The root this store reaches the vault through (plan 44 WB-28): the
+    /// session's held root in production; a store built with no anchor
+    /// opens by path, which only the tests may do.
+    /// </summary>
+    private VaultRootAnchor Root => _root ?? VaultRootAnchor.ByPathForTests(_vaultRoot);
+
+    public SearchRecentsStore(string vaultRoot, VaultRootAnchor? root = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(vaultRoot);
         _vaultRoot = Path.GetFullPath(vaultRoot);
+        _root = root;
     }
 
     /// <summary>The last persistence failure, or <see langword="null"/>.
@@ -90,7 +99,7 @@ internal sealed class SearchRecentsStore
         try
         {
             using AnchoredVaultStore? store = AnchoredVaultStore.Open(
-                _vaultRoot,
+                Root,
                 createDirectory: false);
             byte[]? input = store?.ReadAllBytesBounded(FileName, MaxFileBytes);
             if (input is null)
@@ -170,7 +179,7 @@ internal sealed class SearchRecentsStore
         try
         {
             using AnchoredVaultStore store = AnchoredVaultStore.Open(
-                _vaultRoot,
+                Root,
                 createDirectory: true)
                 ?? throw new IOException("Could not anchor the search-recents directory.");
             // Pretty-printed like mac's encoder; the schema either side

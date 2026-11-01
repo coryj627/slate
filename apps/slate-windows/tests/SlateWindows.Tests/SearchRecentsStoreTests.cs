@@ -4,6 +4,7 @@
 using System.Text;
 using System.Text.Json;
 using SlateWindows.Search;
+using uniffi.slate_uniffi;
 
 namespace SlateWindows.Tests;
 
@@ -12,7 +13,7 @@ namespace SlateWindows.Tests;
 /// must interoperate with mac's <c>SearchRecentsStore</c> — same file,
 /// same schema, same caps, same degrade-to-empty discipline.
 /// </summary>
-public sealed class SearchRecentsStoreTests
+public sealed partial class SearchRecentsStoreTests
 {
     private const string RelativePath = ".slate/search-recents.json";
 
@@ -198,31 +199,25 @@ public sealed class SearchRecentsStoreTests
     [Fact]
     public void VaultSearchSourceCachesOneStoreSoASaveErrorStaysObservable()
     {
-        string root = Path.Combine(
-            Path.GetTempPath(), $"slate-search-source-cache-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(root);
-        try
-        {
-            // A FILE named .slate blocks the store directory, so every
-            // save fails — the shape of a real broken vault.
-            File.WriteAllText(Path.Combine(root, ".slate"), "not a directory");
-            var source = new VaultSearchSource(() => null, () => root);
+        using FixtureVault vault = FixtureVault.Create(0, "search-source-cache");
+        string root = vault.Root;
+        // WB-28 PR 2: the store reaches the vault through an open session.
+        using VaultSession session = VaultSession.OpenFilesystem(root);
+        // A FOLDER at the recents file's name blocks every save's
+        // publish — the shape of a real broken vault.
+        Directory.CreateDirectory(Path.Combine(root, ".slate", "search-recents.json"));
+        var source = new VaultSearchSource(() => session, () => root);
 
-            source.RecordRecent("doomed");
+        source.RecordRecent("doomed");
 
-            // Per-call construction discarded the failing store — and
-            // LastSaveError with it — before anything could read it;
-            // the cached store keeps the failure observable.
-            Assert.NotNull(source.LastRecentsSaveError);
-            // Load still degrades to empty rather than throwing, and
-            // does not launder the recorded failure.
-            Assert.Empty(source.LoadRecents());
-            Assert.NotNull(source.LastRecentsSaveError);
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
+        // Per-call construction discarded the failing store — and
+        // LastSaveError with it — before anything could read it;
+        // the cached store keeps the failure observable.
+        Assert.NotNull(source.LastRecentsSaveError);
+        // Load still degrades to empty rather than throwing, and
+        // does not launder the recorded failure.
+        Assert.Empty(source.LoadRecents());
+        Assert.NotNull(source.LastRecentsSaveError);
     }
 
     private static void WriteRecentsFile(string vaultRoot, string content)

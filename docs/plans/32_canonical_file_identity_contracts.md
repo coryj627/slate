@@ -255,7 +255,11 @@ the answer is `None`, and the mutation that follows refuses the link in
 followed such a link, binding an in-vault target's spelling and refusing an
 outside one with its own reason. A link at the end keeps its own stored
 spelling. Linux keeps the identity default; Windows keeps its pathname form
-until 22W.
+until 22W. **22W delivered 2026-11-01** (plan 44 WB-28, #1729): Windows
+reads each stored spelling beneath the held root, asking attribute access
+alone, so a root swapped after the open cannot answer; a junction among
+the folders that stays in the vault keeps main's Windows rule (the
+target's spelling), as WB-28's PR 1 record says.
 
 *Mac half (#1147):* the re-seat fails closed too. A stored-spelling probe
 that throws leaves the tab missing and untouched, never reloaded on a guess

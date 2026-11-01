@@ -6,7 +6,7 @@ using SlateWindows.Search;
 
 namespace SlateWindows.Tests;
 
-public sealed class W1AnchoredVaultStoreTests
+public sealed partial class W1AnchoredVaultStoreTests
 {
     [Theory]
     [InlineData(240)]
@@ -318,7 +318,7 @@ public sealed class W1AnchoredVaultStoreTests
         File.WriteAllText(target, "before");
         using AnchoredVaultStore store = Assert.IsType<AnchoredVaultStore>(
             AnchoredVaultStore.Open(
-                fixture.Root,
+                VaultRootAnchor.ByPathForTests(fixture.Root),
                 createDirectory: true,
                 afterRename: () => throw new IOException("Simulated post-rename validation failure.")));
 
@@ -361,7 +361,7 @@ public sealed class W1AnchoredVaultStoreTests
 
         AnchoredVaultStore store = Assert.IsType<AnchoredVaultStore>(
             AnchoredVaultStore.Open(
-                localVault,
+                VaultRootAnchor.ByPathForTests(localVault),
                 createDirectory: true,
                 beforeRename: SwapAncestor));
         Exception? failure;

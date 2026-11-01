@@ -202,7 +202,9 @@ public sealed class GraphConfigStoreTests : IDisposable
     }
 
     [Theory]
-    [InlineData("unreadable", "GraphConfigReadFailed", "UnauthorizedAccessException")]
+    // WB-28 PR 2: the read goes through the anchored store, whose open
+    // failures are IOException (a folder at the file's name included).
+    [InlineData("unreadable", "GraphConfigReadFailed", "IOException")]
     [InlineData("invalid-utf8", "GraphConfigReadFailed", "DecoderFallbackException")]
     [InlineData("unparseable", "GraphConfigDecodeFailed", "Unparseable")]
     [InlineData("newer-version", "GraphConfigDecodeFailed", "NewerVersion")]

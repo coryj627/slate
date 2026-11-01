@@ -13,7 +13,7 @@ namespace SlateWindows.Tests;
 /// served to a reopen (a parked write included), a failed write lost, a
 /// straggler never overwriting a reopened workspace's write.
 /// </summary>
-public sealed class GraphConfigWriterTests : IDisposable
+public sealed partial class GraphConfigWriterTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), $"slate-graph-writer-{Guid.NewGuid():N}");
 

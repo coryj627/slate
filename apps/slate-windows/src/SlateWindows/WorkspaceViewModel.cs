@@ -2281,7 +2281,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         Func<int>? lifecycleGeneration = null)
     {
         _session = session;
-        _persistence = new WorkspacePersistence(vaultRoot);
+        _persistence = new WorkspacePersistence(vaultRoot, root: VaultRootAnchor.Of(session));
         _vaultRoot = vaultRoot;
         _expandedDirectoryPaths = expandedDirectoryPaths;
         _announce = announce;

@@ -13,7 +13,7 @@ namespace SlateWindows.Tests;
 /// on main, and moves or deletes no recents file. In PR 1 every identity
 /// keeps the path key; PR 2 adds the identity key for a persistent one.
 /// </summary>
-public sealed class FileRecentsStoreTests
+public sealed partial class FileRecentsStoreTests
 {
     [Fact]
     public void AWeakIdentityKeepsThePathKeyAndMigratesNothing()

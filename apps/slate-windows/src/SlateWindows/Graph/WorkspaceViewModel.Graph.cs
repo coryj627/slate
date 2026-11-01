@@ -221,7 +221,8 @@ internal sealed partial class WorkspaceViewModel
     /// config read at construction (the writer's newest outstanding
     /// aggregate, else the file) over the application writer; the instance
     /// census counts this factory's one call.</summary>
-    private GraphPreferencesViewModel NewGraphPreferences() => new GraphPreferencesViewModel(_vaultRoot);
+    private GraphPreferencesViewModel NewGraphPreferences() =>
+        new GraphPreferencesViewModel(_vaultRoot, root: VaultRootAnchor.Of(_session));
 
     /// <summary>The workspace's ONE navigator (C-1): the view state, the
     /// seated document, the admission seam and the preset funnel; the
