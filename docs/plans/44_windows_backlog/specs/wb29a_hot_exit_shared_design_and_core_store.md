@@ -198,7 +198,10 @@ host starts at 1 and raises it per write.
    `claim.epoch` (else `Superseded { by: Epoch }`); `claims/<id>` holds
    `claim.incarnation` (else `Superseded { by: Claim }`); the stored entry,
    if it has this incarnation, has a lower generation (else
-   `Superseded { by: Newer { stored_generation } }`); the vault's caps
+   `Superseded { by: Newer { stored_generation } }`, returned only after
+   the store syncs that stored entry and its directory again under the
+   lock, a failure being an error: a newer write whose own durability
+   step failed is never vouched for); the vault's caps
    (else `Refused`). Then it renames the temp file over the entry and makes
    the rename durable, and returns `Durable { generation }`.
 3. A failure anywhere is `Err(HotExitError::Io { … })` and removes the
@@ -243,7 +246,8 @@ turns clean releases its claim (§6).
 
 `read_buffers(key) -> Result<HotExitSnapshot, HotExitError>` returns
 `{ epoch, entries: Vec<HotExitEntry> }` under the vault lock. It deletes
-temp files and every entry whose claim file is missing or names an
+temp files last modified more than an hour ago (a live write's staging
+file is younger) and every entry whose claim file is missing or names an
 older epoch (a release or a vault discard cut short after its claim or
 epoch step), and nothing else; an entry whose claim names a newer
 incarnation (a restored tab that claimed and has not written yet) is
@@ -259,11 +263,20 @@ reading each `path` beneath the held root (no index, no scan):
 
 | The vault now | Decision | What the host does |
 |---|---|---|
-| a file at `path`, its file identity == `baseline_file_id` (or either is null) and its hash == `baseline_hash` | `Restore { path }` | the tab opens on `path`, buffer = `text`, dirty |
+| a file at `path`, its file identity == `baseline_file_id` (or either is null) and its hash == `baseline_hash` | `Restore { path }` | the tab opens on `path`, buffer = `text`, dirty; its saves carry `baseline_file_id` as well as `baseline_hash` until one lands (below) |
 | a file at `path`, same identity (or null), another hash | `RestoreStale { path }` | the same, externally stale; its next save passes `baseline_hash` and `save_text` returns `WriteConflict` (`session.rs:4577`), which blocks the save |
 | a file at `path` whose identity differs from a non-null `baseline_file_id`, or `baseline_hash` null | `ExistsNow { path }` | a new unsaved note at `path`, dirty; its first save is create-exclusive, so it refuses rather than overwrite the file now there |
 | no file at `path` | `Gone { path }` | a new unsaved note at `path`, dirty; its first save creates it exclusively |
 | `path` no longer validates (outside the vault, under `.slate`) | `Recovered { path }` | a new unsaved note at `Recovered note.md` (then `Recovered note 2.md`, …) at the vault root, holding `text`; nothing is dropped unread |
+
+**The identity travels to the first save.** `save_text` gains an
+optional `expected_file_identity`, checked beside `expected_content_hash`
+in the same step (`session.rs:4536-4583`): a file at `path` whose
+identity differs refuses the save with `WriteConflict`. A restored tab
+passes its entry's `baseline_file_id` until a save lands, so a file put
+at the path after the classification — a backup restore with the same
+bytes — is refused too. The check shares the hash check's existing
+window between check and publish; it adds no new race.
 
 A note moved or renamed while Slate was closed restores as `Gone` at its
 old path, its text intact (§Deviations). An unrelated file put at a
@@ -277,7 +290,14 @@ classified path (its item replaced when the layout's path differs —
 `ReplaceTabItem` keeps a tab's id while it changes the path,
 `Layout.cs:319-337`) and the entry's text, dirty; an entry with no such
 tab opens as a new tab **with the entry's id** in the active group, in
-`written_at` order. Each restored tab then claims its entry (§2): the new
+`written_at` order. **Peers whose texts differ** (a crash between two
+same-path tabs' publications) are reconciled before mirroring can copy
+one over the other: the entry with the latest `written_at` gives its
+text to every tab on that path; each other distinct text opens as a new
+unsaved note at `{stem} (recovered).md` (numbered when taken), created
+exclusively, which adopts that entry's id; a layout tab whose entry so
+moved takes a fresh id. No version is lost, and one tab's discard still
+never removes another's text. Each restored tab then claims its entry (§2): the new
 incarnation invalidates any writer of the old one, and its first write
 replaces the restored entry. So the entry restores at most once more
 than it is written, and a later save or discard of the tab removes it.
@@ -344,18 +364,22 @@ vault are damaged", "saving them took longer than 5 seconds".
 
 - **A tab's discard releases its claim.**
   `release_entry(key, claim) -> Result<HotExitReleaseOutcome, HotExitError>`
-  takes the vault lock; if `claims/<id>` still holds `claim.incarnation`
-  and the epoch matches, it deletes the claim file (durably), then the
-  entry (durably), and returns `Released`; otherwise it returns
-  `Superseded { by: Claim | Epoch }` and deletes nothing. Every write of
-  that incarnation that lands later finds no claim and is `Superseded`.
-  A stale release — delayed past a newer claim or a vault discard — can
-  never delete a newer entry. Routes: a clean transition (a save landed,
+  takes the vault lock and retires everything of its own incarnation,
+  whatever has happened since: if `claims/<id>` holds `claim.incarnation`
+  it deletes the claim (durably); if the stored entry's incarnation is
+  `claim.incarnation` it deletes the entry (durably). It returns
+  `Released`. Nothing of another incarnation is touched, so a release
+  that lands after the tab's next claim still removes the discarded
+  text, and a stale release can never delete a newer entry. Every write
+  of the released incarnation that lands later finds no claim and is
+  `Superseded`. Routes: a clean transition (a save landed,
   undo to the baseline, a reload) and a dirty tab's own Discard (closing
   it, closing its pane, replacing its document). The host awaits a
   release at most 5 s; one not confirmed by then stays pending and is
   part of the next close's flush (§5), so a release that never landed
-  makes that close fall back to the prompt rather than exit.
+  makes that close fall back to the prompt rather than exit. A crash
+  while a release is unconfirmed can restore the discarded text once
+  (an accepted risk: a crash and an unconfirmed release, §Deviations).
 - **A vault discard advances the epoch first.**
   `discard_vault(key) -> Result<u64, HotExitError>` takes the vault lock,
   writes `epoch + 1` durably, then deletes every claim and entry (durably)
@@ -435,7 +459,14 @@ recovery write.
    and write. It needs two processes on one vault with the same layout:
    Windows runs one instance (its single-instance mutex) and the Mac one
    app instance.
-6. **Accepted risk: a store that fills with entries for vaults never
+6. **Accepted risk: a crash while a tab's release is unconfirmed.** The
+   discarded text can restore once; the reader discards it again. It
+   needs a release that did not land within 5 s and a crash before the
+   next close's flush.
+7. **Accepted risk: an identity check sharing the hash check's window.**
+   A replacement in the instant between `save_text`'s check and its
+   publish passes both, exactly as a byte change does today.
+8. **Accepted risk: a store that fills with entries for vaults never
    reopened.** They are never deleted unread; the store then refuses new
    writes and closing prompts. A later host command can offer to review
    or discard them.
@@ -450,7 +481,9 @@ its locks, the `HotExitFs` seam) and its FFI in
 `HotExitSnapshot`, `HotExitWriteOutcome`, `HotExitReleaseOutcome`,
 `HotExitSupersession`, `HotExitRefusal`, `HotExitUnavailable`,
 `HotExitRestore`; `HotExitError`; the session methods `hot_exit_key`,
-`note_file_identity` and `classify_hot_exit_entries`; the seven
+`note_file_identity` and `classify_hot_exit_entries`; `save_text`'s
+optional `expected_file_identity` (both hosts pass `None` until they adopt
+hot exit); the seven
 `A11yEvent` variants with their corpus rows; and the Mac volume UUID,
 birth time and file-system read. Windows and Mac compile against the new
 bindings (the corpus mirrors move); neither host calls the store until
@@ -472,9 +505,11 @@ inside its critical section while the other tries to enter.
 | `a_failed_sync_is_never_reported_durable` | each sync step failed in turn → `Err`, never `Durable`; before the rename the old entry stays | ignore a sync error |
 | `two_tabs_on_one_note_are_two_entries_and_one_release_keeps_the_other` | the peer rule | key by path |
 | `an_older_generation_never_replaces_a_newer_one` | `Newer { stored_generation }` under one claim; newer text on disk | `>=` / no check |
+| `newer_is_never_vouched_for_without_durability` | hold write N; N+1 renames, its directory sync fails (`Err`); N then completes → `Err`, never `Newer`; with the sync healed, N → `Newer` after the store re-syncs | return `Newer` without the re-sync |
 | `a_newer_claim_invalidates_every_older_writer` | claim A, claim B on one id, A's write → `Superseded { Claim }`, B's text on disk | no claim check |
 | `two_processes_restoring_one_tab_never_both_count_as_kept` | child process claims and writes; the parent's write after it → `Claim`; and the reverse order | generation-only ordering |
 | `a_release_invalidates_its_own_late_writes` | release, then a delayed write of that claim → `Superseded`, no entry on disk | release without deleting the claim |
+| `a_release_retires_its_payload_after_the_next_claim` | durable C; next claim C2 starts a held payload write; release(C) lands → C's entry deleted; kill before C2 publishes → `read_buffers` returns nothing | release by the live claim only |
 | `a_stale_release_never_deletes_a_newer_entry` | release of claim A delayed past claim B's write → `Superseded`, B's entry stays; same past a vault discard and a new claim | release by id alone |
 | `a_vault_discard_supersedes_every_earlier_claim_write_and_release` | each kind issued before `discard_vault`, landing after → `Epoch`, nothing on disk | skip the epoch check |
 | `a_discard_cut_short_after_its_epoch_hides_every_older_entry` | a seam fault between the epoch and the deletes; the next read returns nothing and deletes the files | bump the epoch after the deletes |
@@ -482,13 +517,14 @@ inside its critical section while the other tries to enter.
 | `a_lost_epoch_fails_closed` | `epoch` deleted from an emptied vault directory → `Damaged` for claim, write and read; a write from before cannot land | reset to 0 |
 | `a_write_or_claim_over_a_cap_is_refused_and_changes_nothing` | 8 MiB, 256 entries, 64 MiB, 32 vaults (the vault cap under racing first claims from two threads and from a child process) | check outside the store lock; write before the check |
 | `nothing_unread_is_ever_deleted` | entries untouched for a year (injected clock) and entries whose path no longer validates are still returned by `read_buffers` | any retention or pruning |
-| `a_cut_short_write_keeps_the_previous_entry` | a fault before the rename; previous entry stays; the next read deletes the temp | write in place |
+| `a_cut_short_write_keeps_the_previous_entry` | a fault before the rename; previous entry stays; the next read deletes the temp once it is an hour old (injected clock), never a younger one | write in place; delete young temps |
 | `two_vault_keys_never_read_each_others_entries` | R1 for distinct keys, including keys differing only in the creation time | drop part of the key |
 | `an_invalid_entry_id_is_refused` | ids outside `[0-9A-Za-z_-]{1,64}`, nothing written | accept any id |
 | `the_vault_lock_excludes_another_process` | the child holds the lock inside a publish (barrier); the parent's claim blocks until it is released | no file lock |
 | session: `no_hot_exit_key_without_a_lasting_local_identity` | `Unavailable` under the WB-28 seams, a sentinel `FILE_ID_INFO` seam, a remote-volume seam (Windows), the volume seam (macOS), and on Linux | key a weak, sentinel or remote identity |
 | session: `the_key_includes_the_roots_creation_time` | a root deleted and recreated with a reused id (seam) gets another key | omit the creation time |
 | session: `the_mac_key_survives_a_remount_and_two_volumes_never_share_one` (macOS) | volume UUID, inode and birth time, never `st_dev` | key by `st_dev` |
+| session: `the_first_save_refuses_a_file_put_at_the_path_after_classification` | classify `Restore`; replace the file with another holding the baseline bytes; `save_text` with the entry's identity → `WriteConflict`, the other file untouched | drop the identity from `save_text` |
 | session: `classify_decides_each_row` | `Restore`, `RestoreStale`, `ExistsNow` (another file at the path; a null baseline over a file), `Gone` (including an empty note deleted beside another empty note — never re-seated), `Recovered` | ignore the file identity; re-seat by hash; restore over a file |
 | a11y: the seven variants render, at their priorities, in the corpus and the fixture | the copy | — |
 
@@ -499,7 +535,10 @@ do); no host behaviour changes. WB-29 and PR 29 add the host facts:
 restore → edit → reopen gets the new text; restore → save → reopen gets
 nothing; a restored entry with no layout tab keeps its id; a layout tab
 whose path differs from its entry's takes the entry's path; two dirty
-peers, one discards, reopen restores the other; a Discard All whose
+peers, one discards, reopen restores the other; two peers killed
+between their publications restore the newest text to both tabs and the
+older text as a recovered note, and an edit then mirrors only the
+newest; a Discard All whose
 `discard_vault` does not commit keeps the vault open.
 
 ## Docs and registers
@@ -558,3 +597,12 @@ mutation run per row above, locally.
   checked under a short store lock; a lost epoch fails closed; lock facts
   use a child process. Both Deviations accepted by Codex; three accepted
   risks recorded above.
+- **Codex round 2 (2026-11-01), taken:** `Newer` is vouched for only
+  after the stored entry is re-synced under the lock; a release retires
+  its own incarnation's payload even after the next claim; the restored
+  tab's saves carry the entry's file identity into `save_text`; divergent
+  same-path entries reconcile at restore (the newest to the path's tabs,
+  each other version as a recovered note); temp cleanup only past an
+  hour. Accepted risks added: a crash during an unconfirmed release; the
+  identity check sharing the hash check's window. Deviations 1 and 2
+  accepted again.
