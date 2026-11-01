@@ -4,8 +4,9 @@ Issues: Refs #1525 (both PRs of this chunk write `Refs`; #1525 closes in
 whichever of WB-29 and plan 43 PR 29's mac half merges last, §5). Size L
 (design first). Lanes: this design PR is docs only; the core-store PR
 that follows is rust, windows and swift (compile: the FFI gains an
-object, records, two session methods and five `A11yEvent` variants,
-and both corpus mirrors move; core reads the Mac volume's UUID). AT: none for the design or the store (nothing a reader hears
+object, records, three session methods and seven `A11yEvent`
+variants, and both corpus mirrors move; core reads the Mac volume's
+UUID and birth time). AT: none for the design or the store (nothing a reader hears
 changes until a host adopts it; WB-29 carries the NVDA pass). Wave: W10
 (this design), W11 (the store, after WB-28 — merged 2026-11-01 as
 #1729 and #1731). Decision: WD20, answered 2026-10-26 (plan §3.1): one
@@ -100,6 +101,12 @@ with core's sentence saying why.
 
 ## Design
 
+The store protocol below was rebuilt from first principles after Codex's
+round 1 (§Review record): every writer owns its entry through a claim, a
+newer claim or a discard invalidates every older writer, every check and
+publish happens under one short lock, and nothing the reader has not
+seen is deleted by the store on its own.
+
 ### 1. The store, its key and its caps
 
 **A process-lifetime core object.** `HotExitStore` is a uniffi
@@ -110,335 +117,376 @@ The host passes its device-local root (Windows `SlateDeviceState.Root`,
 Mac Application Support/Slate); the store keeps everything under
 `<device_root>/hot-exit/v1/`. It never touches a vault.
 
-**The vault key is an opaque record core makes.**
-`VaultSession::hot_exit_key() -> HotExitKeyResult` returns
-`Key { key: HotExitVaultKey }` or `Unavailable { reason: HotExitUnavailable }`
-(§7). `HotExitVaultKey { text: String }` is plain data the host passes to
-every store call; the host never builds or reads it. Core makes `text`
-from an identity that survives a remount and that two folders never
-share:
+**The vault key is an opaque record core makes, only for a lasting
+identity.** `VaultSession::hot_exit_key() -> HotExitKeyResult` returns
+`Key { key: HotExitVaultKey }` or `Unavailable { reason }` (§7).
+`HotExitVaultKey { text: String }` is plain data the host passes to the
+store; the host never builds or reads it. Core makes `text` only when
+the root's identity is lasting and local:
 
-- **Windows:** the persistent `FileIdInfo` root identity, as
-  `win:{volume:x16}-{id_high:x16}{id_low:x16}` (the recents store's
-  lossless text, `FileRecentsStore.cs:85`). A weak identity (FAT, FAT32,
-  exFAT) is `Unavailable`.
-- **macOS:** the root folder's volume UUID (`getattrlist`
-  `ATTR_VOL_UUID` on the held root) and its inode, as
-  `mac:{volume-uuid}-{inode:x16}`. `st_dev` is not used: it is reused
-  across removable media and can change when a volume remounts, and
-  WB-28's Unix identity (`fs_root.rs:70-79`, always `persistent: true`)
-  is built from it. A volume that reports no UUID, or whose file system
-  (`statfs` `f_fstypename`) is `msdos`, `exfat`, `smbfs`, `nfs`, `afpfs`
-  or `webdav`, is `Unavailable` (their inode numbers are not lasting).
-- **Linux (no Slate host):** `Unavailable`. Core facts reach the store
+- **Windows:** `win:{volume:x16}-{id_high:x16}{id_low:x16}-{created:x16}`
+  from the held root's `FILE_ID_INFO` and `FILE_BASIC_INFO.CreationTime`.
+  `Unavailable` when the identity is weak (FAT, FAT32, exFAT), when the
+  128-bit id is a sentinel (all zeros or all ones, which MS-FSCC says to
+  ignore) or the volume serial is zero, or when the volume is remote
+  (`FILE_REMOTE_DEVICE` in its characteristics). The creation time keeps
+  a deleted root's reused file id from naming the new folder.
+- **macOS:** `mac:{volume-uuid}-{inode:x16}-{birth:x16}` from the held
+  root (`getattrlist` `ATTR_VOL_UUID`, `ATTR_CMN_CRTIME`). `st_dev`, which
+  WB-28's Unix identity uses (`fs_root.rs:70-79`), is not: it is reused
+  across removable media and can change on remount. `Unavailable` when
+  the volume reports no UUID, is not local (`MNT_LOCAL` clear), or its
+  file system (`f_fstypename`) is `msdos` or `exfat`.
+- **Linux (no Slate host):** `Unavailable`; core facts reach the store
   with explicit keys (§Tests).
 
-The store hashes `text` into a directory name, so two spellings of one
-folder are one directory: `hot-exit/v1/<hex(SHA-256(text))>/`. Inside:
+The store hashes `text` into a directory name:
+`hot-exit/v1/vaults/<hex(SHA-256(text))>/`. Inside it:
 
-- `epoch` — the vault's discard epoch, a decimal `u64` (§6);
-- `entries/<entry-id>.json` — one file per buffer;
-- `tombstones/<entry-id>.json` — a per-buffer discard floor (§6);
+- `epoch` — the vault's discard epoch, a decimal `u64`; created with the
+  directory and never deleted afterwards;
+- `claims/<entry-id>` — the current claim on an entry: a random 128-bit
+  incarnation id and the epoch it was made in;
+- `entries/<entry-id>.json` — the entry's latest durable text;
 - `lock` — the vault's cross-process lock file (§8).
 
-The store's root also holds `procs/<process-id>.lock`, one per running
-store, held locked for the process's life (§6).
-
-**The key within a vault is per tab (the peer rule).** An entry's id is
+**The key within a vault is per tab (the peer rule).** An entry id is
 the host's tab id, an opaque string of at most 64 characters from
-`[0-9A-Za-z_-]`; any other spelling is refused
-(`HotExitError::InvalidEntryId`). Two tabs on one note are two entries,
-so one tab's discard never removes its peer's newer generation. On the
-Mac, where same-path tabs share one buffer (`WorkspaceState.swift:356-363`),
-both entries carry the same text; restoring either is right.
+`[0-9A-Za-z_-]`; anything else is refused (`HotExitError::InvalidEntryId`).
+Two tabs on one note are two entries, so one tab's discard never removes
+its peer's text. On the Mac, where same-path tabs share one buffer
+(`WorkspaceState.swift:356-363`), both entries carry the same text.
 
-**An entry** is UTF-8 JSON:
-`{ "schema": 1, "entry_id", "path" (vault-relative, forward slashes),
-"text", "baseline_hash" (the file's content hash when the buffer was
-loaded or last saved; null for a note never saved), "generation" (u64,
-§2), "epoch" (u64), "written_at" (RFC 3339 UTC) }`.
+**An entry** is UTF-8 JSON: `{ "schema": 1, "entry_id", "incarnation",
+"generation" (u64), "path" (vault-relative, forward slashes), "text",
+"baseline_hash" (the note's content hash when the buffer was loaded or
+last saved; null for a note never saved), "baseline_file_id" (the note's
+file identity then, from `VaultSession::note_file_identity(path)`; null
+when the platform gives none), "written_at" (RFC 3339 UTC) }`.
 
-**Caps and retention.** Per entry: `text` at most 8 MiB of UTF-8. Per
-vault: at most 256 entries and 64 MiB of entry files. Whole store: 256
-MiB. A write over a cap returns
-`Refused { refusal: HotExitRefusal::OverCap }` and writes nothing; the
-tab's existing entry stays (older, but a valid copy). Retention:
-`HotExitStore::open` deletes a vault directory none of whose files
-changed in 30 days, and `read_buffers` returns nothing older than that;
-so a vault never reopened, or a stray entry no tab holds, cannot fill the
-store for good.
+**Caps.** Per entry: 8 MiB of text. Per vault: 256 entries and 64 MiB.
+Per store: 32 vault directories (so at most 2 GiB in all), checked when
+a vault's directory is created, under a store-wide lock held only for
+that check and the creation. A write or a first claim over a cap returns
+`Refused { refusal }` and changes nothing. **The store never deletes an
+entry the reader has not acted on**: no retention, no pruning of unread
+text. An entry leaves only through its tab's save or discard, Close
+Vault's Discard All, or a restore that the next write supersedes. A full
+store refuses new writes, so closing falls back to the prompt (§5).
 
-### 2. Generations, cadence, durability and results
+### 2. Claims, writes and what an outcome means
 
-**The generation is the store's ordering token, and the host seeds it.**
-Every write carries a `generation` that the host raises by one per write
-it issues for that tab. A tab's counter starts above anything the store
-already knows for its id: `read_buffers` returns, per id it knows (entry
-or tombstone), `next_generation = max(entry generation, tombstone floor) + 1`,
-and the host starts that tab's counter there. Windows' in-memory
-`ContentGeneration` (`WorkspaceViewModel.cs:281-291`, reset with each new
-tab instance) is not this counter: WB-29 keeps a separate hot-exit
-counter per tab, seeded at restore. A tab id the store does not know
-starts at 1. So a restored tab's writes and discards are never below its
-own history, in this process or after a crash.
+**A tab owns its entry through a claim.** Before its first write, and
+again after every clean transition, a tab calls
+`claim_entry(key, epoch, entry_id) -> Result<HotExitClaimOutcome, HotExitError>`.
+Under the vault lock the store checks `epoch` against the vault's
+current epoch (`Superseded { by: Epoch }` if older), writes
+`claims/<id>` = a fresh random incarnation durably (§2, durability), and
+returns `Claimed { claim: HotExitClaim { entry_id, incarnation, epoch } }`.
+A newer claim replaces an older one, so every writer holding the older
+incarnation — another tab instance, another process, a write still in
+flight — is invalidated at once. Generations count within one claim: the
+host starts at 1 and raises it per write.
 
-**Cadence (the host's).** A tab that turns dirty writes at once; while
-it stays dirty, a write follows 1 s after the last edit (a host
-constant). A tab that turns clean calls `discard_buffer` (§6).
+**A write publishes only under its own live claim.**
+`write_buffer(key, claim, generation, entry: HotExitEntryWrite) -> Result<HotExitWriteOutcome, HotExitError>`:
 
-**Every write is durable-or-error.**
-`write_buffer(key, entry: HotExitEntryWrite) -> Result<HotExitWriteOutcome, HotExitError>`
-writes `entries/<id>.json.tmp-<random>` in the vault directory, calls
-`sync_data` (`FlushFileBuffers` on Windows), renames it over the entry
-(POSIX `rename`; Windows `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING |
-MOVEFILE_WRITE_THROUGH`), and syncs the directory where the platform can
-(best effort, as `sync_parent`, `vault/fs.rs:1110-1132`). It returns
-`Durable { generation }` only after the rename. An I/O failure is
-`Err(HotExitError::Io { … })`, the temp file removed.
+1. **Outside the lock** it writes the entry to
+   `entries/<id>.json.tmp-<random>` and makes it durable (below). A
+   stalled payload write holds no lock and delays no other call.
+2. **Under the vault lock** it checks, in order: the vault's epoch equals
+   `claim.epoch` (else `Superseded { by: Epoch }`); `claims/<id>` holds
+   `claim.incarnation` (else `Superseded { by: Claim }`); the stored entry,
+   if it has this incarnation, has a lower generation (else
+   `Superseded { by: Newer { stored_generation } }`); the vault's caps
+   (else `Refused`). Then it renames the temp file over the entry and makes
+   the rename durable, and returns `Durable { generation }`.
+3. A failure anywhere is `Err(HotExitError::Io { … })` and removes the
+   temp file. A failure after the rename (the durability step) is also an
+   error: the host treats it as not kept, though the new or the old
+   entry — both valid copies — may survive.
 
-**A write that is not applied says why.**
-`HotExitWriteOutcome::Superseded { by: HotExitSupersession }`:
+**A tab counts as kept only on its own durable text.** For a flush (§5)
+a tab is kept when its latest issued generation returned `Durable`, or
+when an earlier one returned `Newer { stored_generation }` at or above
+the latest under the same claim. `Superseded { by: Claim }` and
+`{ by: Epoch }` mean the store does not hold this tab's text: the tab is
+not kept. Two processes restoring one tab id therefore never both count
+as kept: the later claim wins, and the other learns it at its next
+write.
 
-- `Newer { stored_generation }` — the stored entry's generation is at
-  least this one's (an older write finished after a newer one);
-- `Floor { through_generation }` — the tab was discarded through this
-  generation (§6);
-- `Epoch { current }` — the vault was discarded after the host read its
-  epoch (§6).
+**Durability, per platform; failures propagate.** A temp file is synced
+before its rename; the rename and the directory are synced after.
+Windows: `FlushFileBuffers` on the file, then `MoveFileExW` with
+`MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH` (the documented way
+to make a rename's metadata durable; NTFS journals it). macOS:
+`fcntl(F_FULLFSYNC)` on the file, `rename`, then `F_FULLFSYNC` on the
+directory (macOS `fsync` does not flush the drive cache). A directory the
+store creates is made durable in its parent the same way. The `epoch` and
+`claims/` files use the same sequence. Any failed sync is an error — the
+store never reports `Durable` on a best-effort step (unlike the vault's
+`sync_parent`, `vault/fs.rs:1110-1132`, which ignores errors). All I/O
+goes through one internal seam (`HotExitFs`) so facts can fail any step
+and see the order of calls (§Tests).
 
-A flush (§5) counts a tab as kept only on `Durable { g }` or
-`Newer { stored_generation: s }` with `g` or `s` at least the tab's
-latest generation. `Floor` and `Epoch` mean the store holds nothing for
-it; the host refreshes its epoch with `current_epoch(key)` on `Epoch`.
+**Cadence (the host's).** A tab that turns dirty claims and writes at
+once; while dirty, a write follows 1 s after the last edit. A tab that
+turns clean releases its claim (§6).
 
 ### 3. The restore rule
 
 `read_buffers(key) -> Result<HotExitSnapshot, HotExitError>` returns
-`{ epoch, entries: Vec<HotExitEntry>, next_generations: Vec<HotExitNextGeneration> }`:
-every entry whose epoch equals the vault's current epoch and whose
-generation is above its tombstone floor, and the per-id seeds (§2). Under
-the vault lock it deletes temp files and files below the current epoch
-or floor (left by a cut-short call); it never deletes a current entry.
+`{ epoch, entries: Vec<HotExitEntry> }` under the vault lock. It deletes
+temp files, an entry whose claim file is missing and whose incarnation
+the claim does not name (a release or discard cut short after its claim
+step), and nothing else. A missing `epoch` file in an existing directory
+is `Err(HotExitError::Damaged)` (fail closed: no claim, no write and no
+restore for that vault until Close Vault's Discard All recreates it; the
+entries stay on disk), so a lost epoch can never fall back to 0 and let
+an older write in.
 
-The host classifies the entries through one session read:
+The host classifies the entries through one session read,
 `VaultSession::classify_hot_exit_entries(entries) -> Vec<HotExitRestore>`,
 reading each `path` beneath the held root (no index, no scan):
 
 | The vault now | Decision | What the host does |
 |---|---|---|
-| a file at `path` whose content hash == `baseline_hash` | `Restore { path }` | the tab opens on `path`, its buffer set to `text`, dirty |
-| a file at `path` with another hash | `RestoreStale { path }` | the same, and the tab is externally stale; its next save passes `baseline_hash` and `save_text` returns `WriteConflict` (`session.rs:4577`), which blocks the save with the existing conflict sentence |
-| no file at `path` | `Gone { path }` | a new unsaved note at `path`, dirty, holding `text`; its first save creates it exclusively |
-| a file at `path` and `baseline_hash` null (the buffer was a new note) | `ExistsNow { path }` | a new unsaved note at `path`, dirty; its first save is create-exclusive, so it refuses rather than overwrite (`save_text(…, None)` would overwrite, `session.rs:4194-4196`) |
-| `path` no longer validates (outside the vault, under `.slate`) | `Invalid` | never restored; the host discards the entry (`discard_buffer`) |
+| a file at `path`, its file identity == `baseline_file_id` (or either is null) and its hash == `baseline_hash` | `Restore { path }` | the tab opens on `path`, buffer = `text`, dirty |
+| a file at `path`, same identity (or null), another hash | `RestoreStale { path }` | the same, externally stale; its next save passes `baseline_hash` and `save_text` returns `WriteConflict` (`session.rs:4577`), which blocks the save |
+| a file at `path` whose identity differs from a non-null `baseline_file_id`, or `baseline_hash` null | `ExistsNow { path }` | a new unsaved note at `path`, dirty; its first save is create-exclusive, so it refuses rather than overwrite the file now there |
+| no file at `path` | `Gone { path }` | a new unsaved note at `path`, dirty; its first save creates it exclusively |
+| `path` no longer validates (outside the vault, under `.slate`) | `Recovered { path }` | a new unsaved note at `Recovered note.md` (then `Recovered note 2.md`, …) at the vault root, holding `text`; nothing is dropped unread |
 
 A note moved or renamed while Slate was closed restores as `Gone` at its
-old path, its text intact; the reader saves it there or discards it. No
-re-seat is made by content hash: a unique same-hash delete and create is
-not a rename (`rescan.rs:193-207`), and re-seating on it could put the
-edits onto an unrelated file (an empty note, a template). Re-seat by
-file identity needs per-file ids the index does not keep (§Deviations).
+old path, its text intact (§Deviations). An unrelated file put at a
+note's old path is caught by its file identity where the platform gives
+one; with no identity on either side, a replacement with identical bytes
+restores as `Restore` (an accepted risk, §Deviations).
 
-**Mapping to tabs.** The host restores its saved layout as today, then,
-for each classified entry: the restored tab with the entry's id takes the
-classified path (its item is replaced when the layout's path differs —
+**Mapping to tabs.** The host restores its saved layout as today. For
+each classified entry, the restored tab with the entry's id takes the
+classified path (its item replaced when the layout's path differs —
 `ReplaceTabItem` keeps a tab's id while it changes the path,
 `Layout.cs:319-337`) and the entry's text, dirty; an entry with no such
 tab opens as a new tab **with the entry's id** in the active group, in
-`written_at` order. Every restored tab seeds its counter from
-`next_generations` (§2). So a later save or discard of that tab
-discards that entry, and nothing restores twice.
+`written_at` order. Each restored tab then claims its entry (§2): the new
+incarnation invalidates any writer of the old one, and its first write
+replaces the restored entry. So the entry restores at most once more
+than it is written, and a later save or discard of the tab removes it.
 
 ### 4. The open sequence and the copy
 
 **Order.** Session open → identity admission (WB-28) → `hot_exit_key()`
-→ `read_buffers` and `classify_hot_exit_entries` (off the UI thread, on
-the open's load worker: the snapshot can be 64 MiB) → the layout restore
-with the classified buffers injected into the tabs it constructs → the
-workspace becomes ready once, after the buffers are installed →
-`UnsavedNotesRestored`. Windows reads after the open scan
-(`VaultLifecycleViewModel.cs:657-675`) and before the `WorkspaceViewModel`
-construction (`:1530`), passing the restored set in, because `RestoreNode`
-builds new tab instances; `WorkspaceReady` (`:1631`) is raised after the
-buffers are installed, so the launch landing (`MainWindow.xaml.cs:486-495`)
+→ `read_buffers` and `classify_hot_exit_entries`, off the UI thread on
+the open's load worker → the layout restore with the classified buffers
+injected into the tabs it constructs → the workspace becomes ready once,
+after the buffers are installed → `UnsavedNotesRestored`. Windows reads
+after the open scan (`VaultLifecycleViewModel.cs:657-675`) and before
+the `WorkspaceViewModel` construction (`:1530`), passing the set in, since
+`RestoreNode` builds new tab instances; `WorkspaceReady` (`:1631`) is
+raised after, so the launch landing (`MainWindow.xaml.cs:486-495`)
 happens once. The Mac reads at `restoreWorkspaceLayout`
-(`AppState.swift:10827`), which runs before its scan task: the
-classification reads paths, not the index, so it needs no scan, and the
-buffers are installed before any editor shows (§Deviations).
+(`AppState.swift:10827`), before its scan task, and installs the dirty
+buffers before `activateTab` (§Deviations).
 
 **Copy (core).** New `A11yEvent` variants, rendered in core, in the
-corpus and the committed fixture, and in both host corpus mirrors in the
-store PR:
+corpus and the committed fixture, and in both host corpus mirrors:
 
 | Event | Priority | Sentence |
 |---|---|---|
 | `UnsavedNotesRestored { count }` | Medium | "Restored 1 unsaved note." / "Restored {count} unsaved notes." |
 | `RestoredNoteChangedOnDisk { name }` | Medium | "{name} changed on disk after its unsaved edits were kept. The edits are restored; saving will stop and say so before anything is overwritten." |
 | `RestoredNoteMissingOnDisk { name }` | Medium | "{name} is no longer on disk. Its unsaved edits are restored as a new note." |
-| `RestoredNoteExistsOnDisk { name }` | Medium | "{name} now exists on disk. Its unsaved edits are restored as a new note, and saving will not overwrite the file." |
-| `UnsavedNotesNotKept { reason }` | High | the status line when application close or a vault switch falls back to the prompt: "Your unsaved notes cannot be kept for next time: {reason}." |
+| `RestoredNoteExistsOnDisk { name }` | Medium | "Another file is now at {name}. Its unsaved edits are restored as a new note, and saving will not overwrite that file." |
+| `RestoredNoteRecovered { name }` | Medium | "An unsaved note whose place is no longer in the vault is restored as {name}." |
+| `UnsavedNotesNotKept { reason }` | High | "Your unsaved notes cannot be kept for next time: {reason}." |
+| `UnsavedNotesNotDiscarded` | High | "Slate could not yet discard the kept copies of your unsaved notes, so the vault stays open. Try again, or cancel." |
 
-`HotExitUnavailable` and `HotExitRefusal` render their `reason` in core:
-the weak-root sentence (§7), "a note is larger than the 8 MB the store
-keeps", "the store for this vault is full", "the store could not be
-written" and "saving them took longer than 5 seconds". The host composes
-none of them.
+The reasons (`HotExitUnavailable`, `HotExitRefusal`, `HotExitError`)
+render in core too: the weak-root sentence (§7), "this vault is on a
+network drive", "a note is larger than the 8 MB the store keeps", "the
+store for this vault is full", "the store holds notes for too many
+vaults", "the store could not be written", "the store's records for this
+vault are damaged", "saving them took longer than 5 seconds".
 
 ### 5. Interlocks: closing, switching, Close Vault
 
-- **Application close and vault switch never ask once the latest
-  generations are kept.** The host issues each dirty tab's latest
-  generation, waits for the outcomes at most 5 s, and closes without a
-  prompt when every tab is kept (§2's rule). Otherwise it falls back to
-  today's prompt, the status line speaking `UnsavedNotesNotKept` with the
-  first reason. The layout save on close keeps running as today. On the
-  Mac the flush runs inside `admitTermination`'s `.terminateLater` window
+- **Application close and vault switch never ask once every dirty tab is
+  kept.** The host issues each dirty tab's latest generation and every
+  release still pending (§6), waits at most 5 s, and closes without a
+  prompt when every tab is kept and every release confirmed. Otherwise it
+  falls back to today's prompt, speaking `UnsavedNotesNotKept` with the
+  first reason. The layout save on close runs as today. On the Mac the
+  flush runs inside `admitTermination`'s `.terminateLater` window
   (`AppState.swift:11927-11949`), before its existing termination steps.
-- **Close Vault still asks.** Save All saves as today, and each tab that
-  turns clean discards its entry. Discard All fences (§6) and calls
-  `discard_vault`, which also removes any entry no tab holds.
+- **A Discard All completes only once its fence is durable.** Close
+  Vault's Discard All, and the fallback prompt's Discard All on
+  application close and vault switch, call `discard_vault` and wait for it
+  at most 5 s. It never waits behind a stalled payload write (§2: payload
+  I/O holds no lock). If it has not committed by then, or failed, the
+  close does not proceed: the vault stays open and the prompt speaks
+  `UnsavedNotesNotDiscarded` (Try again / Cancel). No worker is joined:
+  the call keeps running and a later attempt sees its outcome.
+- **Close Vault still asks.** Save All saves as today; each tab that
+  turns clean releases its claim.
 - **Explicit save stands (RD1, #877).** Hot exit never writes a note into
   the vault.
 
-### 6. Every Discard fences pending writes; the store supersedes them
+### 6. Discards: releases and the vault epoch
 
-Both mechanisms are durable before any delete.
-
-- **The vault's discard epoch.** `discard_vault(key) -> Result<u64, HotExitError>`
-  takes the vault lock, writes `epoch + 1` (temp + `sync_data` + rename),
-  then deletes every entry and tombstone, and returns the new epoch. A
-  write whose epoch is below the current one returns
-  `Superseded { by: Epoch }`. A missing `epoch` file reads as the highest
-  epoch among the vault's files (never lower than a write the host was
-  told is durable). The host's epoch comes from `read_buffers` and from
-  each `discard_vault` it makes.
-- **A per-buffer floor.** `discard_buffer(key, entry_id, through_generation)`
-  writes `tombstones/<id>.json` = `{ through_generation, process }`
-  durably, then deletes the entry if its generation is not above the
-  floor. A later write for that id at or below the floor returns
-  `Superseded { by: Floor }`. `process` is the random 128-bit id the
-  store minted at open. `read_buffers` prunes a tombstone only when its
-  process no longer runs: when `procs/<process>.lock` can be locked
-  (each store holds its own lock file for its life, so a live process's
-  floors are never pruned, even across a relaunch while an abandoned
-  write still runs). `discard_vault` clears every tombstone.
-
-**The routes that fence.** Close Vault's Discard All (`discard_vault`);
-the fallback prompt's Discard All on application close and vault switch
-(`discard_vault`, issued while an older write may still be in flight —
-the epoch drops it); a clean transition (`discard_buffer` through the
-generation that turned clean); a dirty tab's own Discard — closing it,
-closing its pane, or replacing its document (`discard_buffer` through its
-latest generation); and an `Invalid` entry at restore. A host awaits its
-discards at most 5 s, then proceeds and logs the unconfirmed discard;
-the floor or epoch still supersedes a late write once the discard lands.
+- **A tab's discard releases its claim.**
+  `release_entry(key, claim) -> Result<HotExitReleaseOutcome, HotExitError>`
+  takes the vault lock; if `claims/<id>` still holds `claim.incarnation`
+  and the epoch matches, it deletes the claim file (durably), then the
+  entry (durably), and returns `Released`; otherwise it returns
+  `Superseded { by: Claim | Epoch }` and deletes nothing. Every write of
+  that incarnation that lands later finds no claim and is `Superseded`.
+  A stale release — delayed past a newer claim or a vault discard — can
+  never delete a newer entry. Routes: a clean transition (a save landed,
+  undo to the baseline, a reload) and a dirty tab's own Discard (closing
+  it, closing its pane, replacing its document). The host awaits a
+  release at most 5 s; one not confirmed by then stays pending and is
+  part of the next close's flush (§5), so a release that never landed
+  makes that close fall back to the prompt rather than exit.
+- **A vault discard advances the epoch first.**
+  `discard_vault(key) -> Result<u64, HotExitError>` takes the vault lock,
+  writes `epoch + 1` durably, then deletes every claim and entry (durably)
+  and returns the new epoch. A claim, write or release carrying an older
+  epoch is `Superseded { by: Epoch }`. Cut short after the epoch, it
+  leaves entries whose claims name the old epoch; `read_buffers` returns
+  only entries whose claim is current, and deletes the rest.
 
 ### 7. A weak root: no hot exit
 
 The owner's call (WD20, 2026-10-26) picks policy (a). `hot_exit_key()`
-is `Unavailable { reason: WeakRoot }` for a root identity that is not
-persistent on Windows, for the Mac volumes §1 names, and on Linux; the
-reason renders "this folder's file system cannot keep a lasting identity
-for the vault". The host has no key, so it never writes or reads for that
-vault; application close and vault switch fall back to today's prompt,
-speaking `UnsavedNotesNotKept`; a crash keeps nothing, as on `main`.
+is `Unavailable { reason }` for every root §1 excludes: a weak, sentinel
+or remote identity on Windows; a volume with no UUID, not local, or
+`msdos`/`exfat` on the Mac; Linux. The host has no key, so it never
+claims, writes or reads for that vault; application close and vault
+switch fall back to today's prompt, speaking `UnsavedNotesNotKept`; a
+crash keeps nothing, as on `main`.
 
-R1 (no buffer is restored into a folder other than the one whose session
-wrote it) holds by construction: only an identity two folders never
-share, and that survives a remount, makes a key. R2 holds because a weak
+R1 (no buffer restored into a folder other than the one whose session
+wrote it) holds because only a local, non-sentinel, lasting identity
+with the root's creation time makes a key. R2 holds because a weak
 root's close promised nothing: it prompted. R3: store facts prove two
 distinct keys never read each other's entries; core facts prove
-`hot_exit_key()` is `Unavailable` under WB-28's seams
-(`SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED`,
-`SLATE_TEST_ROOT_FILE_INDEX_COLLIDES`) on Windows, and under a seam that
-makes the Mac's volume report an excluded file system or no UUID.
+`Unavailable` under WB-28's seams, under a seam returning a sentinel
+`FILE_ID_INFO`, under a remote-volume seam, and under the Mac volume
+seam. The residual — a tool rewriting a root's creation time — changes
+the key and orphans its entries (never restores them elsewhere); the
+entries stay on disk until a Close Vault Discard All on a vault with
+that key, or until the reader deletes the store (§Deviations).
 
 ### 8. The store's calls borrow no vault session
 
-`write_buffer`, `discard_buffer`, `discard_vault`, `current_epoch` and
-`read_buffers` are methods of `HotExitStore`, whose state is the device
-root, a per-vault mutex map and its process id and lock. They take the
-`HotExitVaultKey` record. None takes a `VaultSession`, so no binding call
-keeps a session alive after `session.Dispose()`, and no teardown joins a
-recovery write. The object is `Send + Sync`: calls for one vault
-serialise on its in-process mutex and on the vault directory's `lock`
-file (an advisory lock: `LockFileEx` on Windows, `flock` on the Mac),
-held for each call, so two Slate processes on one vault serialise too;
-calls for two vaults run in parallel. A call cut short by process exit
-leaves the previous durable state: a write before its rename leaves the
-old entry and a temp file; a discard after its epoch or floor and before
-its deletes leaves files that `read_buffers` ignores and deletes.
+`claim_entry`, `write_buffer`, `release_entry`, `discard_vault`,
+`current_epoch` and `read_buffers` are methods of `HotExitStore`, whose
+state is the device root and a per-vault mutex map. They take the
+`HotExitVaultKey` record and a claim; none takes a `VaultSession`, so no
+binding call keeps a session alive after `session.Dispose()`, and no
+teardown joins a recovery call. The object is `Send + Sync`. Every check
+and publish for one vault runs under its in-process mutex and its
+directory's `lock` file (an advisory lock, `LockFileEx` on Windows,
+`flock` on the Mac), held only for the check, the rename and their
+syncs — never for a payload write — so two Slate processes on one vault
+serialise, and calls for two vaults run in parallel. A call cut short by
+process exit leaves the previous durable state (§2, §6).
 
-`classify_hot_exit_entries` and `hot_exit_key` are session methods,
-called on the open sequence before the workspace exists; neither is a
+`hot_exit_key`, `note_file_identity` and `classify_hot_exit_entries` are
+session methods: the first and last run on the open sequence before the
+workspace exists; `note_file_identity` runs when a note loads or a save
+lands, on the save path that already holds the session. None is a
 recovery write.
 
-## Deviations from WB-29's list, for the owner and Codex
+## Deviations and accepted risks, for the owner and Codex
 
-1. **No re-seat of a moved note (item 3).** A moved note restores as
-   `Gone` at its old path, edits intact. Re-seating by content hash
+1. **No re-seat of a moved note (WB-29 item 3).** A moved note restores
+   as `Gone` at its old path, edits intact. Re-seating by content hash
    contradicts the rescan's pinned rule (`rescan.rs:193-207`) and can
    misplace edits; re-seating by file identity needs per-file ids the
-   index does not keep. A later plan can add it.
-2. **The Mac reads before its scan (WD20's order sentence).** WD20 says
-   the recovery state is read after the open scan. Windows does exactly
-   that. The Mac restores its layout before its scan
-   (`AppState.swift:10827-10838`); since the classification reads paths
-   beneath the held root and no index, the Mac reads there, before any
-   editor shows, rather than injecting into tabs the reader may already
-   have typed in.
+   index does not keep. Codex round 1 accepted this.
+2. **The Mac reads before its scan (WD20's order sentence).** Windows
+   reads after its scan, as WD20 says. The Mac restores its layout before
+   its scan (`AppState.swift:10827-10838`); the classification reads
+   paths beneath the held root and no index, so the Mac reads there and
+   installs the dirty buffers before `activateTab`. Codex round 1
+   accepted this.
+3. **Accepted risk: an identical-bytes replacement with no file
+   identity.** Where neither the entry nor the file now at its path has a
+   file identity, an unrelated file with exactly the baseline's bytes
+   restores as `Restore`, and its first save overwrites it. Windows and
+   the Mac give identities on every volume that has a key, so this needs
+   a platform identity failure plus identical bytes.
+4. **Accepted risk: a root whose creation time is rewritten.** Its key
+   changes; its kept notes are orphaned, never restored elsewhere, and
+   stay on disk.
+5. **Accepted risk: a store that fills with entries for vaults never
+   reopened.** They are never deleted unread; the store then refuses new
+   writes and closing prompts. A later host command can offer to review
+   or discard them.
 
 ## The core store PR (after this design merges)
 
-New module `crates/slate-core/src/hot_exit.rs` (the store, its file
-lock, the process lock) and its FFI in `crates/slate-uniffi/src/lib.rs`:
-the object; the records `HotExitVaultKey`, `HotExitKeyResult`,
-`HotExitUnavailable`, `HotExitEntryWrite`, `HotExitEntry`,
-`HotExitNextGeneration`, `HotExitSnapshot`, `HotExitWriteOutcome`,
-`HotExitSupersession`, `HotExitRefusal`, `HotExitRestore`; `HotExitError`;
-the session methods `hot_exit_key` and `classify_hot_exit_entries`; the
-five `A11yEvent` variants with their corpus rows; and the Mac volume UUID
-and file-system read. Windows and Mac compile against the new bindings
-(the corpus mirrors move); neither host calls the store until WB-29 and
-PR 29.
+New module `crates/slate-core/src/hot_exit.rs` (the store, its claims,
+its locks, the `HotExitFs` seam) and its FFI in
+`crates/slate-uniffi/src/lib.rs`: the object; the records
+`HotExitVaultKey`, `HotExitKeyResult`, `HotExitClaim`,
+`HotExitClaimOutcome`, `HotExitEntryWrite`, `HotExitEntry`,
+`HotExitSnapshot`, `HotExitWriteOutcome`, `HotExitReleaseOutcome`,
+`HotExitSupersession`, `HotExitRefusal`, `HotExitUnavailable`,
+`HotExitRestore`; `HotExitError`; the session methods `hot_exit_key`,
+`note_file_identity` and `classify_hot_exit_entries`; the seven
+`A11yEvent` variants with their corpus rows; and the Mac volume UUID,
+birth time and file-system read. Windows and Mac compile against the new
+bindings (the corpus mirrors move); neither host calls the store until
+WB-29 and PR 29.
 
 ## Tests (the core store PR)
 
-Core facts, `crates/slate-core/src/hot_exit/tests.rs` unless noted. Each
-asserts on the files on disk as well as through `read_buffers`, so a
-read-side filter cannot hide a write that should not have happened.
+Core facts in `crates/slate-core/src/hot_exit/tests.rs` unless noted.
+Every fact asserts on the files on disk as well as through the API. The
+`HotExitFs` seam records the order of every write, sync and rename and
+can fail any one of them; lock facts run a second **OS process** (the
+test binary re-invoked as a child) with barriers that hold one side
+inside its critical section while the other tries to enter.
 
 | Fact | Proves | Mutation it kills |
 |---|---|---|
-| `a_durable_write_is_read_back_after_the_store_reopens` | write → new store on the root → the entry is read back | skip the rename |
-| `two_tabs_on_one_note_are_two_entries_and_one_discard_keeps_the_other` | the peer rule | key by path |
-| `an_older_generation_never_replaces_a_newer_one` | `Superseded { by: Newer }` with the stored generation; the newer text stays on disk | `>=` / no check |
-| `a_superseded_write_says_why` | `Newer`, `Floor` and `Epoch` each returned for its own cause | one undifferentiated variant |
-| `a_restored_tabs_counter_starts_above_its_history` | `next_generations` = max(entry, floor) + 1; restore → write gen `next` → `Durable`; restore → discard through `next` → nothing restores | seed from 0; ignore the floor |
-| `a_write_issued_before_a_vault_discard_is_superseded_even_if_it_lands_later` | the epoch; no file written | skip the epoch compare |
-| `a_discard_cut_short_after_its_epoch_hides_every_older_entry` | a seam between the epoch write and the deletes; the next read returns nothing and deletes the old files | bump the epoch after the deletes |
-| `a_buffer_discard_supersedes_its_earlier_generations` | the floor | skip the floor |
-| `a_live_processs_floor_is_never_pruned` | a second store on the same root does not prune the first's tombstones while the first is open; after the first drops, the next read prunes them | prune by process id alone |
-| `a_lost_epoch_file_never_lowers_the_epoch` | the epoch file deleted: the read epoch is the highest among the files | reset to 0 |
-| `a_write_over_a_cap_is_refused_and_leaves_the_older_entry` | the 8 MiB, 256-entry, 64 MiB and 256 MiB caps | write before the check |
-| `a_vault_untouched_for_thirty_days_is_pruned_at_open` | retention, with an injected clock | no retention |
-| `a_cut_short_write_keeps_the_previous_entry` | a seam before the rename; the previous entry stays; the next read deletes the temp file | write in place |
-| `two_vault_keys_never_read_each_others_entries` | R1 for distinct keys | drop part of the key |
+| `a_durable_write_is_read_back_after_the_store_reopens` | write → new store → read back | skip the rename |
+| `durable_means_synced_then_renamed_then_synced` | the recorded order is file sync, rename, directory (or write-through) sync, for entries, claims and the epoch | drop any sync; sync after the rename only |
+| `a_failed_sync_is_never_reported_durable` | each sync step failed in turn → `Err`, never `Durable`; before the rename the old entry stays | ignore a sync error |
+| `two_tabs_on_one_note_are_two_entries_and_one_release_keeps_the_other` | the peer rule | key by path |
+| `an_older_generation_never_replaces_a_newer_one` | `Newer { stored_generation }` under one claim; newer text on disk | `>=` / no check |
+| `a_newer_claim_invalidates_every_older_writer` | claim A, claim B on one id, A's write → `Superseded { Claim }`, B's text on disk | no claim check |
+| `two_processes_restoring_one_tab_never_both_count_as_kept` | child process claims and writes; the parent's write after it → `Claim`; and the reverse order | generation-only ordering |
+| `a_release_invalidates_its_own_late_writes` | release, then a delayed write of that claim → `Superseded`, no entry on disk | release without deleting the claim |
+| `a_stale_release_never_deletes_a_newer_entry` | release of claim A delayed past claim B's write → `Superseded`, B's entry stays; same past a vault discard and a new claim | release by id alone |
+| `a_vault_discard_supersedes_every_earlier_claim_write_and_release` | each kind issued before `discard_vault`, landing after → `Epoch`, nothing on disk | skip the epoch check |
+| `a_discard_cut_short_after_its_epoch_hides_every_older_entry` | a seam fault between the epoch and the deletes; the next read returns nothing and deletes the files | bump the epoch after the deletes |
+| `a_stalled_payload_write_never_blocks_a_discard` | a seam holds a payload write; `discard_vault` completes; the held write then lands as `Superseded` | hold the lock during the payload write |
+| `a_lost_epoch_fails_closed` | `epoch` deleted from an emptied vault directory → `Damaged` for claim, write and read; a write from before cannot land | reset to 0 |
+| `a_write_or_claim_over_a_cap_is_refused_and_changes_nothing` | 8 MiB, 256 entries, 64 MiB, 32 vaults (the vault cap under racing first claims from two threads and from a child process) | check outside the store lock; write before the check |
+| `nothing_unread_is_ever_deleted` | entries untouched for a year (injected clock) and entries whose path no longer validates are still returned by `read_buffers` | any retention or pruning |
+| `a_cut_short_write_keeps_the_previous_entry` | a fault before the rename; previous entry stays; the next read deletes the temp | write in place |
+| `two_vault_keys_never_read_each_others_entries` | R1 for distinct keys, including keys differing only in the creation time | drop part of the key |
 | `an_invalid_entry_id_is_refused` | ids outside `[0-9A-Za-z_-]{1,64}`, nothing written | accept any id |
-| `two_processes_on_one_vault_serialise_on_its_lock` | two stores on one root racing writes and a `discard_vault` leave no pre-discard entry on disk | no file lock |
-| session: `a_weak_root_has_no_hot_exit_key` (Windows, WB-28 seams; Mac, the volume seam; Linux) | `Unavailable { WeakRoot }` | key a weak identity |
-| session: `the_mac_key_survives_a_remount_and_two_volumes_never_share_one` (macOS) | the key is the volume UUID and inode, not `st_dev` | key by `st_dev` |
-| session: `classify_decides_restore_stale_gone_exists_now_and_invalid` | each row of §3's table, including an empty note deleted beside another empty note (`Gone`, never re-seated) and a null baseline over a file now on disk (`ExistsNow`) | treat a changed file as `Restore`; re-seat by hash; restore a null baseline over a file as `Restore` |
-| a11y: the five variants render, sit at their priorities, and appear in the corpus and fixture | the copy | — |
+| `the_vault_lock_excludes_another_process` | the child holds the lock inside a publish (barrier); the parent's claim blocks until it is released | no file lock |
+| session: `no_hot_exit_key_without_a_lasting_local_identity` | `Unavailable` under the WB-28 seams, a sentinel `FILE_ID_INFO` seam, a remote-volume seam (Windows), the volume seam (macOS), and on Linux | key a weak, sentinel or remote identity |
+| session: `the_key_includes_the_roots_creation_time` | a root deleted and recreated with a reused id (seam) gets another key | omit the creation time |
+| session: `the_mac_key_survives_a_remount_and_two_volumes_never_share_one` (macOS) | volume UUID, inode and birth time, never `st_dev` | key by `st_dev` |
+| session: `classify_decides_each_row` | `Restore`, `RestoreStale`, `ExistsNow` (another file at the path; a null baseline over a file), `Gone` (including an empty note deleted beside another empty note — never re-seated), `Recovered` | ignore the file identity; re-seat by hash; restore over a file |
+| a11y: the seven variants render, at their priorities, in the corpus and the fixture | the copy | — |
 
-uniffi: `hot_exit_store_round_trips_through_the_binding` (open, write,
-read, discard through the exported object). Hosts: both corpus mirrors
-gain the five events (the Rust tripwires fail until they do); no host
-behaviour changes. WB-29 and PR 29 add the host facts: restore → edit →
-reopen gets the new text; restore → save → reopen gets nothing; a
-restored entry with no layout tab keeps its id; a layout tab whose path
-differs from its entry's takes the entry's path; two dirty peers, one
-discards, reopen restores the other.
+uniffi: `hot_exit_store_round_trips_through_the_binding` (open, claim,
+write, read, release, discard through the exported object). Hosts: both
+corpus mirrors gain the seven events (the Rust tripwires fail until they
+do); no host behaviour changes. WB-29 and PR 29 add the host facts:
+restore → edit → reopen gets the new text; restore → save → reopen gets
+nothing; a restored entry with no layout tab keeps its id; a layout tab
+whose path differs from its entry's takes the entry's path; two dirty
+peers, one discards, reopen restores the other; a Discard All whose
+`discard_vault` does not commit keeps the vault open.
 
 ## Docs and registers
 
@@ -481,3 +529,18 @@ mutation run per row above, locally.
   - cross-process: a per-vault file lock and per-process lock files guard tombstone pruning;
   - the Mac flush runs inside `.terminateLater`;
   - facts assert on disk; a crash seam between the epoch and the deletes.
+- **Codex round 1 (2026-11-01), taken by rebuilding the store protocol:**
+  per-entry claims with random incarnations replace host-seeded
+  generations and per-buffer floors (a newer claim, a release or a vault
+  discard invalidates every older writer, in any thread or process); the
+  ack rule counts only a tab's own durable text; payload writes hold no
+  lock, so a discard never waits behind one, and a Discard All completes
+  only once its epoch is durable (else the vault stays open); no
+  retention and no pruning of unread text, and `Invalid` entries restore
+  as recovered notes; the key requires a local, non-sentinel identity and
+  includes the root's creation time; each note's file identity is kept so
+  a replacement at its path is caught; durability is specified per
+  platform and every sync failure propagates; the store-wide vault cap is
+  checked under a short store lock; a lost epoch fails closed; lock facts
+  use a child process. Both Deviations accepted by Codex; three accepted
+  risks recorded above.
