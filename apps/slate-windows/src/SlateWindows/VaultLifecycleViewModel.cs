@@ -560,6 +560,9 @@ internal sealed partial class VaultLifecycleViewModel
         CloseSearchForVaultTransition();
 
         CloseSession();
+        // Whether this attempt has already handed the keys to the welcome
+        // view, so a refusal below does not hand them over twice.
+        bool returnedToWelcome = IsVaultOpen;
         if (IsVaultOpen)
         {
             // WB-9 (codex round 1): a switch's close lands the keys on the
@@ -604,7 +607,11 @@ internal sealed partial class VaultLifecycleViewModel
                     $"Could not open vault: {SlateUniffiMethods.VaultRootIdentityUnavailableDetail()}",
                     A11yPriority.High);
                 IsVaultOpen = false;
-                ReturnedToWelcome?.Invoke(this, EventArgs.Empty);
+                if (!returnedToWelcome)
+                {
+                    ReturnedToWelcome?.Invoke(this, EventArgs.Empty);
+                }
+
                 return;
             }
 

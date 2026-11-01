@@ -317,6 +317,94 @@ public sealed partial class FileRecentsStoreTests
         Assert.Equal(["c.md", "a.md"], store.Load());
     }
 
+    /// <summary>Codex round 1: the merge uses the destination as it was read,
+    /// so a destination that turns unreadable between that read and the
+    /// merge (another process holds it against reads but not replacement)
+    /// does not lose its entries to an empty list.</summary>
+    [Theory]
+    [InlineData("path-keyed")]
+    [InlineData("in-vault")]
+    public void ADestinationThatTurnsUnreadableKeepsItsEntriesInTheMerge(string source)
+    {
+        using FixtureVault fixture = FixtureVault.Create(1, "recents-turns-unreadable");
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        string deviceRoot = Path.Combine(Path.GetTempPath(), $"slate-recents-device-{Guid.NewGuid():N}");
+        VaultRootIdentity identity = Assert.IsType<VaultRootIdentity>(session.RootIdentity());
+        if (source == "path-keyed")
+        {
+            new FileRecentsStore(fixture.Root, localAppDataRoot: deviceRoot).Replace(["old.md"]);
+        }
+        else
+        {
+            _ = WriteInVault(fixture.Root, ["old.md"]);
+        }
+
+        var store = new FileRecentsStore(fixture.Root, identity, deviceRoot, VaultRootAnchor.Of(session));
+        Directory.CreateDirectory(deviceRoot);
+        File.WriteAllText(store.FilePathForTests, "[\"new.md\"]");
+        FileStream? hold = null;
+        store.AfterDestinationReadForTests = () =>
+            hold = new FileStream(store.FilePathForTests, FileMode.Open, FileAccess.Read, FileShare.Delete);
+        try
+        {
+            IReadOnlyList<string> loaded = store.Load();
+            hold?.Dispose();
+            hold = null;
+            store.AfterDestinationReadForTests = null;
+            Assert.Equal(["new.md", "old.md"], loaded);
+            // The replace over a file another process holds open fails here,
+            // so the destination keeps its own entries and the source stays
+            // for the next load, which completes the migration.
+            Assert.Contains("new.md", ReadList(store.FilePathForTests));
+            Assert.Equal(["new.md", "old.md"], store.Load());
+            Assert.Equal(["new.md", "old.md"], ReadList(store.FilePathForTests));
+        }
+        finally
+        {
+            hold?.Dispose();
+            DeleteQuietly(deviceRoot);
+        }
+    }
+
+    /// <summary>Codex round 1: a read-only path-keyed source still goes once
+    /// the list is cleared or replaced, so it cannot merge the entries back,
+    /// in this store or the next one.</summary>
+    [Theory]
+    [InlineData("clear")]
+    [InlineData("replace")]
+    public void AReadOnlyPathKeyedSourceIsDroppedOnceConsumed(string action)
+    {
+        using FixtureVault fixture = FixtureVault.Create(1, "recents-read-only-source");
+        string deviceRoot = Path.Combine(fixture.Root, "device-state");
+        new FileRecentsStore(fixture.Root, localAppDataRoot: deviceRoot).Replace(["old.md", "b.md"]);
+        var store = new FileRecentsStore(fixture.Root, Persistent, deviceRoot);
+        File.SetAttributes(store.PathKeyedPathForTests, FileAttributes.ReadOnly);
+        try
+        {
+            Assert.Equal(["old.md", "b.md"], store.Load());
+            if (action == "clear")
+            {
+                store.Clear();
+            }
+            else
+            {
+                store.Replace(["new.md", "b.md"]);
+            }
+
+            string[] expected = action == "clear" ? [] : ["new.md", "b.md"];
+            Assert.False(File.Exists(store.PathKeyedPathForTests), "the read-only source stayed and would merge back");
+            Assert.Equal(expected, store.Load());
+            Assert.Equal(expected, new FileRecentsStore(fixture.Root, Persistent, deviceRoot).Load());
+        }
+        finally
+        {
+            if (File.Exists(store.PathKeyedPathForTests))
+            {
+                File.SetAttributes(store.PathKeyedPathForTests, FileAttributes.Normal);
+            }
+        }
+    }
+
     private static string WriteInVault(string vaultRoot, string[] entries)
     {
         string directory = Path.Combine(vaultRoot, ".slate");

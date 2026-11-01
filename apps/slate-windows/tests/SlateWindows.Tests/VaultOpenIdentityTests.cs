@@ -97,6 +97,47 @@ public sealed class VaultOpenIdentityTests
         Assert.Throws<ObjectDisposedException>(() => read!.RootIdentity());
     }
 
+    /// <summary>Codex round 1: a switch from an open vault to one refused for
+    /// its identity hands the keys to the welcome view once, not twice (each
+    /// return queues a focus move).</summary>
+    [Fact]
+    public async Task ASwitchRefusedForNoIdentityReturnsToWelcomeOnce()
+    {
+        using var first = FixtureVault.Create(1, "wb28-switch-from");
+        using var second = FixtureVault.Create(1, "wb28-switch-to");
+        string recents = Path.Combine(Path.GetTempPath(), $"wb28-recents-{System.Guid.NewGuid():N}.json");
+        var store = new RecentVaultsStore(recents);
+        var announced = new List<A11yEvent>();
+        using var lifecycle = new VaultLifecycleViewModel(
+            pickVault: () => Task.FromResult<string?>(null),
+            enqueueUi: action => action(),
+            recentVaultsStore: store,
+            announce: announced.Add);
+        try
+        {
+            await lifecycle.OpenVaultAsync(first.Root);
+            Assert.True(lifecycle.IsVaultOpen);
+            int returnedToWelcome = 0;
+            lifecycle.ReturnedToWelcome += (_, _) => returnedToWelcome++;
+            announced.Clear();
+            lifecycle.RootIdentityReader = _ => null;
+
+            await lifecycle.OpenVaultAsync(second.Root);
+
+            Assert.Equal(1, returnedToWelcome);
+            Assert.Equal(
+                "Could not open vault: " + SlateUniffiMethods.VaultRootIdentityUnavailableDetail(),
+                lifecycle.StatusText);
+            Assert.DoesNotContain(announced, @event => @event is A11yEvent.VaultOpened);
+            Assert.False(lifecycle.IsVaultOpen);
+            Assert.DoesNotContain(store.Load(), recent => string.Equals(recent.Path, second.Root, System.StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            File.Delete(recents);
+        }
+    }
+
     [Fact]
     public async Task AFolderAnsweringOnlyTheFileIndexOpens()
     {

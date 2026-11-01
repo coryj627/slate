@@ -67,6 +67,10 @@ internal sealed class FileRecentsStore
     /// <summary>Test seam: the path-keyed file of earlier builds.</summary>
     internal string PathKeyedPathForTests => _pathKeyedPath;
 
+    /// <summary>Test seam: runs in either migration after the destination's
+    /// read and before the merge (a fact changes the destination there).</summary>
+    internal Action? AfterDestinationReadForTests { get; set; }
+
     /// <summary>Test seam: each anchored open the in-vault step makes.</summary>
     internal int LegacyProbesForTests { get; private set; }
 
@@ -146,8 +150,24 @@ internal sealed class FileRecentsStore
     {
         if (!string.Equals(_pathKeyedPath, _path, StringComparison.OrdinalIgnoreCase))
         {
-            SafeFile.TryDelete(_pathKeyedPath);
+            DeleteSource(_pathKeyedPath);
         }
+    }
+
+    // A consumed source goes even when it is read-only (std's delete
+    // ignores the attribute too): left behind, it would merge back.
+    private static void DeleteSource(string path)
+    {
+        try
+        {
+            File.SetAttributes(path, File.GetAttributes(path) & ~FileAttributes.ReadOnly);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            _ = exception;
+        }
+
+        SafeFile.TryDelete(path);
     }
 
     /// <summary>
@@ -163,17 +183,19 @@ internal sealed class FileRecentsStore
         }
 
         if (TryRead(_pathKeyedPath) is not RecentsRead.Read source
-            || TryRead(_path) is RecentsRead.Unreadable)
+            || TryRead(_path) is not { } destination
+            || destination is RecentsRead.Unreadable)
         {
             // Absent: nothing to do. Unreadable, either side: nothing is
             // written or deleted, and the next load retries.
             return null;
         }
 
-        IReadOnlyList<string> merged = Merge(_path, source.Entries);
+        AfterDestinationReadForTests?.Invoke();
+        IReadOnlyList<string> merged = Merge(destination, source.Entries);
         if (TryCommit(merged))
         {
-            SafeFile.TryDelete(_pathKeyedPath);
+            DeleteSource(_pathKeyedPath);
         }
 
         return merged;
@@ -217,12 +239,15 @@ internal sealed class FileRecentsStore
                 return null;
             }
 
-            if (legacy is not RecentsRead.Read source || TryRead(_path) is RecentsRead.Unreadable)
+            if (legacy is not RecentsRead.Read source
+                || TryRead(_path) is not { } destination
+                || destination is RecentsRead.Unreadable)
             {
                 return null;
             }
 
-            IReadOnlyList<string> merged = Merge(_path, source.Entries);
+            AfterDestinationReadForTests?.Invoke();
+            IReadOnlyList<string> merged = Merge(destination, source.Entries);
             if (TryCommit(merged))
             {
                 try
@@ -246,9 +271,11 @@ internal sealed class FileRecentsStore
         }
     }
 
-    // The destination's entries are the newer, so they lead and win the cap.
-    private IReadOnlyList<string> Merge(string destination, IReadOnlyList<string> older) =>
-        Sanitize((TryRead(destination) is RecentsRead.Read current ? current.Entries : []).Concat(older));
+    // The destination as it was read once, before the merge: a second read
+    // could fail where the first did not and turn its entries into none.
+    // Its entries are the newer, so they lead and win the cap.
+    private static IReadOnlyList<string> Merge(RecentsRead destination, IReadOnlyList<string> older) =>
+        Sanitize((destination is RecentsRead.Read current ? current.Entries : []).Concat(older));
 
     private IReadOnlyList<string> Read(string path) =>
         TryRead(path) is RecentsRead.Read read ? read.Entries : [];
