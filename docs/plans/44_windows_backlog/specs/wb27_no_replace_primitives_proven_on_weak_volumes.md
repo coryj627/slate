@@ -27,6 +27,11 @@ below, it wins.
   in the matrix say "Not probed". The facts are ready: the volume
   procedure below, then the gated command in Verification, fills them in
   one elevated session.
+- **FAT32 and exFAT probed, 2026-11-01** (the owner's elevated session;
+  doc 24's P-W2). Five of the six gated facts pass on both. The
+  case-only fact fails on both: the rename reports success and the
+  entry keeps its old spelling, and `MoveFileEx` behaves the same. Filed
+  as #1727, outside this chunk; the matrix rows now say so.
 - **A third non-ignored fact.**
   `weak_volume_gate_decides_each_kind_from_what_the_volume_reports`. The
   gate is split in two:
