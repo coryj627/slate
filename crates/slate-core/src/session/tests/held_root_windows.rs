@@ -1234,3 +1234,34 @@ fn a_root_and_slate_that_deny_listing_are_still_held_and_pinned() {
     drop(session);
     drop(guard);
 }
+
+/// A `.slate` that denies both listing and traverse (one deny entry) still
+/// holds, through a creation right, and stays pinned, and the vault saves
+/// (codex round 6); a pathname write into `.slate` is the control.
+#[test]
+fn a_slate_that_denies_listing_and_traverse_is_held_through_a_creation_right() {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join(".slate")).unwrap();
+    std::fs::write(tmp.path().join("note.md"), "# Note\n").unwrap();
+    let mut guard = DenyGuard(Vec::new());
+    deny(&mut guard, &tmp.path().join(".slate"), "RD,X");
+    std::fs::write(tmp.path().join(".slate").join("control"), "x").unwrap();
+    std::fs::remove_file(tmp.path().join(".slate").join("control")).unwrap();
+
+    let session = session_at(tmp.path()).unwrap();
+    scanned(&session);
+    let hash = session.read_note_parts("note.md").unwrap().content_hash;
+    session
+        .save_text("note.md", "# Saved\n", Some(hash.as_str()))
+        .unwrap();
+    let error = std::fs::OpenOptions::new()
+        .access_mode(0x0001_0000) // DELETE
+        .share_mode(7)
+        .custom_flags(0x0200_0000) // FILE_FLAG_BACKUP_SEMANTICS
+        .open(tmp.path().join(".slate"))
+        .expect_err("still held without sharing deletion");
+    assert_eq!(error.raw_os_error(), Some(32), "{error:?}");
+    drop(session);
+    drop(guard);
+}

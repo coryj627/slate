@@ -57,22 +57,30 @@ const WEAK_FILE_SYSTEMS: [&str; 3] = ["FAT", "FAT32", "exFAT"];
 /// access ([`LIST_ACCESS`]).
 pub(crate) const FOLDER_ACCESS: u32 = FILE_READ_ATTRIBUTES;
 
-/// What a session HOLD (the root, `.slate`) asks, in order: a data right is
-/// what takes part in sharing checks, so only a handle with one blocks
-/// another opener's delete (attribute access alone does not). List access
-/// first (main's per-operation root open asked it), traverse access where
-/// listing is denied, so a folder that denies one of the two still holds.
-const HOLD_ACCESS: [u32; 2] = [
+/// What a session HOLD (the root, `.slate`) asks, in order. Only a handle
+/// with a data right takes part in sharing checks, so only such a hold
+/// blocks another opener's delete (attribute access alone does not): list
+/// access first (main's per-operation root open asked it), then traverse,
+/// then the two creation rights (codex rounds 5 and 6), so a folder that
+/// denies some of them is still held, and pinned.
+const HOLD_ACCESS: [u32; 4] = [
     FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY,
     FILE_READ_ATTRIBUTES | windows_sys::Win32::Storage::FileSystem::FILE_TRAVERSE,
+    FILE_READ_ATTRIBUTES | windows_sys::Win32::Storage::FileSystem::FILE_ADD_FILE,
+    FILE_READ_ATTRIBUTES | windows_sys::Win32::Storage::FileSystem::FILE_ADD_SUBDIRECTORY,
 ];
 
-/// The first of [`HOLD_ACCESS`] the folder grants.
+/// The first of [`HOLD_ACCESS`] the folder grants; where it grants none,
+/// attribute access alone, so a folder a path open could still use holds
+/// too, without the pin (recorded in the WB-28 delivery record).
 fn holding(mut open: impl FnMut(u32) -> io::Result<fs::File>) -> io::Result<fs::File> {
-    match open(HOLD_ACCESS[0]) {
-        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => open(HOLD_ACCESS[1]),
-        other => other,
+    for access in HOLD_ACCESS {
+        match open(access) {
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => continue,
+            other => return other,
+        }
     }
+    open(FOLDER_ACCESS)
 }
 
 /// What a listing handle asks: list access alone (the listing needs

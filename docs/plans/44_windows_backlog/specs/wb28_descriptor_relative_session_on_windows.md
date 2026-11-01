@@ -145,8 +145,10 @@ overwrite) there.
   interior listing reopens its folder for list access alone. The session's
   two holds keep a data right, because only a handle with one takes part
   in sharing checks and so blocks another opener's delete: list access,
-  or traverse access where listing is denied. The display spelling keeps
-  a volume-GUID path absolute.
+  then traverse, then the two creation rights (codex round 6). A folder
+  that grants none of the four is held with attribute access alone: the
+  vault opens, as on main, without the pin. The display spelling keeps a
+  volume-GUID path absolute.
 - **Not mirrored:** `std`'s fallback to a directory listing when even an
   attribute open is refused with a sharing violation (system files such
   as a page file), which does not reach a vault.
@@ -162,7 +164,11 @@ overwrite) there.
     (pre-existing, `vault/watch.rs`): two timed retargets (A→B before the
     backend opens, B→A before it observes) pass the arm check while it
     watches B. A later change binds the watched folder and its identity to
-    one handle.
+    one handle;
+  - a `.slate` that denies listing together with an op-log folder that
+    denies attribute reads fails the op-log listing's first open (two
+    restricted folders, codex round 6);
+  - a root or `.slate` that grants no data right at all is held unpinned.
 - **The facts are in `session/tests/held_root_windows.rs`** (and
   `db/anchored_windows.rs`, `session/tests/watch.rs`), named for what they
   prove; the Verification list's names map onto them in PR 1's body.
