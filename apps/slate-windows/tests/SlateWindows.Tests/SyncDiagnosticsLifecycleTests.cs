@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.ComponentModel;
 using System.Diagnostics;
 using uniffi.slate_uniffi;
 
@@ -400,10 +401,42 @@ public sealed class SyncDiagnosticsLifecycleTests : IDisposable
     private static async Task<SyncDetectionReport> OpenAndProbeAsync(
         VaultLifecycleViewModel lifecycle, string root)
     {
-        await lifecycle.OpenVaultAsync(root);
+        // Wait for Published itself, not for the report: the probe's
+        // own thread sets the report a moment before Published runs
+        // the workspace's announce gate, so a count read on the report
+        // alone can miss the announcement (#1716). This handler is
+        // attached as the workspace is assigned, which is before the
+        // vault-open probe can start and after the gate subscribed, so
+        // it runs after the gate on the probe's publication.
+        var published = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        WorkspaceViewModel? opened = null;
+        void OnWorkspaceAssigned(object? sender, PropertyChangedEventArgs args)
+        {
+            if (args.PropertyName == nameof(VaultLifecycleViewModel.Workspace)
+                && lifecycle.Workspace is { } assigned)
+            {
+                opened = assigned;
+                assigned.SyncDiagnostics.Published += (_, _) => published.TrySetResult();
+            }
+        }
+
+        lifecycle.PropertyChanged += OnWorkspaceAssigned;
+        try
+        {
+            await lifecycle.OpenVaultAsync(root);
+        }
+        finally
+        {
+            lifecycle.PropertyChanged -= OnWorkspaceAssigned;
+        }
+
         WorkspaceViewModel workspace = Assert.IsType<WorkspaceViewModel>(lifecycle.Workspace);
+        // A refused open or switch leaves the previous workspace in
+        // place, and its probe published long ago.
+        Assert.Same(opened, workspace);
         Assert.True(
-            await SpinAsync(() => HasProbed(workspace), Bound),
+            await Task.WhenAny(published.Task, Task.Delay(Bound)) == published.Task,
             "the vault-open probe must publish a report or an error");
         Assert.Null(workspace.SyncDiagnostics.LoadError);
         return workspace.SyncDiagnostics.Report!;
