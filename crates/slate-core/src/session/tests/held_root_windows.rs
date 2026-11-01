@@ -1312,3 +1312,51 @@ fn an_interior_delete_removes_a_read_only_file() {
     cache.remove_file("retired.oplog").unwrap();
     assert!(!retired.exists(), "the read-only file is gone");
 }
+
+/// The spelling a vault is opened by is normalized as Win32 normalizes it
+/// before it becomes an NT name (codex round 8): `A\.` and `A\..\A` open
+/// the folder, and a relative spelling opens it too, even where the root
+/// denies `SYNCHRONIZE`.
+#[test]
+fn a_root_spelled_with_dots_or_relatively_opens_the_folder() {
+    let tmp = tempfile::tempdir().unwrap();
+    let vault = tmp.path().join("A");
+    std::fs::create_dir_all(&vault).unwrap();
+    std::fs::write(vault.join("note.md"), "# Note\n").unwrap();
+    for spelling in [vault.join("."), vault.join("..").join("A")] {
+        let session = session_at(&spelling).unwrap();
+        assert_eq!(
+            session.read_text("note.md").unwrap(),
+            "# Note\n",
+            "{}",
+            spelling.display()
+        );
+    }
+
+    // A relative spelling from the current folder (same drive), under an
+    // ACL that denies SYNCHRONIZE on the root.
+    let cwd = std::env::current_dir().unwrap();
+    let mut guard = DenyGuard(Vec::new());
+    deny(&mut guard, &vault, "S");
+    if cwd.components().next() == vault.components().next() {
+        // The drive prefix and the root are no folders to climb out of.
+        let ups = cwd.components().count() - 2;
+        let mut relative = std::path::PathBuf::new();
+        for _ in 0..ups {
+            relative.push("..");
+        }
+        relative.push(
+            vault
+                .strip_prefix(vault.ancestors().last().unwrap())
+                .unwrap(),
+        );
+        let session = session_at(&relative).unwrap();
+        assert_eq!(
+            session.read_text("note.md").unwrap(),
+            "# Note\n",
+            "{}",
+            relative.display()
+        );
+    }
+    drop(guard);
+}

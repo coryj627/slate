@@ -895,7 +895,9 @@ impl FsRoot {
             FILE_FLAG_BACKUP_SEMANTICS, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
             FILE_SHARE_WRITE,
         };
-        let extended = super::windows_extended_path(path);
+        let Ok(extended) = sys::nt_ready(path) else {
+            return false;
+        };
         // No SYNCHRONIZE (codex round 7), as the hold itself opens.
         let opened = super::windows_entry::open_absolute(
             &extended,

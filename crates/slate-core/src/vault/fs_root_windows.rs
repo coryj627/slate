@@ -543,7 +543,7 @@ pub(crate) fn read_dir_names(dir: &fs::File) -> io::Result<Vec<OsString>> {
 /// renamed or removed while the session lives (design item 5).
 pub(crate) fn open_root(root: &Path) -> io::Result<fs::File> {
     use windows_sys::Wdk::Storage::FileSystem::FILE_DIRECTORY_FILE;
-    let path = super::super::windows_extended_path(root);
+    let path = nt_ready(root)?;
     holding(|access| {
         // No SYNCHRONIZE (codex round 7): a hold is never read or waited on.
         windows_entry::open_absolute(
@@ -560,6 +560,17 @@ pub(crate) fn open_root(root: &Path) -> io::Result<fs::File> {
                 .open(&path)
         })
     })
+}
+
+/// `path` normalized as Win32 normalizes a spelling (`GetFullPathNameW`,
+/// through `std::path::absolute`: `.` and `..` resolved, a relative path
+/// made absolute, nothing on disk consulted, no junction followed), then
+/// in its extended form, ready for an NT name (codex round 8). A verbatim
+/// path stays as it is.
+pub(crate) fn nt_ready(path: &Path) -> io::Result<std::path::PathBuf> {
+    Ok(super::super::windows_extended_path(&std::path::absolute(
+        path,
+    )?))
 }
 
 /// A file object of its own on the folder `dir` is open on, for a caller

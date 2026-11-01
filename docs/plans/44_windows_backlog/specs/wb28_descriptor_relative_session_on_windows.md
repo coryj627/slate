@@ -156,6 +156,10 @@ overwrite) there.
   synchronous I/O; interior deletes use `std`'s disposition (POSIX
   semantics, the read-only attribute ignored, the classic disposition on
   FAT).
+- **Codex round 8, taken:** the spelling becomes an NT name only after
+  Win32's own normalization (`std::path::absolute`, `GetFullPathNameW`):
+  `.` and `..` resolved and a relative spelling made absolute, nothing on
+  disk consulted, for the hold and the end-of-open check alike.
 - **Followed links keep pathname semantics.** Only the starting point is
   anchored: a junction inside the vault that leads back out through the
   session's own retargetable spelling is followed as a path open follows
