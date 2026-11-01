@@ -362,11 +362,28 @@ internal sealed class AnchoredVaultStore : IDisposable
         return information;
     }
 
+    // std's delete: POSIX semantics with the read-only attribute ignored, so
+    // a read-only file goes too; the classic disposition where the volume
+    // refuses the extended one (FAT).
     private static bool TryDeleteByHandle(SafeFileHandle handle, out int error)
     {
+        const int Delete = 0x1;
+        const int PosixSemantics = 0x2;
+        const int IgnoreReadOnlyAttribute = 0x10;
         IntPtr buffer = Marshal.AllocHGlobal(sizeof(int));
         try
         {
+            Marshal.WriteInt32(buffer, Delete | PosixSemantics | IgnoreReadOnlyAttribute);
+            if (SetFileInformationByHandle(
+                handle,
+                FileInfoByHandleClass.FileDispositionInfoEx,
+                buffer,
+                sizeof(int)))
+            {
+                error = 0;
+                return true;
+            }
+
             Marshal.WriteInt32(buffer, 1);
             bool deleted = SetFileInformationByHandle(
                 handle,
@@ -404,6 +421,7 @@ internal sealed class AnchoredVaultStore : IDisposable
     {
         FileDispositionInfo = 4,
         FileAttributeTagInfo = 9,
+        FileDispositionInfoEx = 21,
     }
 
     private enum NtFileInformationClass

@@ -34,6 +34,13 @@ internal sealed class FileRecentsStore
     // Load retries it, so a file unreadable at the first load still merges.
     private bool _legacySettled;
 
+    // The source entries a Load merged, per source, as they were read: a
+    // replacement built from that Load consumed exactly these, so it
+    // retires a source only while the source still holds them (codex
+    // round 2), and a source never merged keeps its entries.
+    private IReadOnlyList<string>? _consumedPathKeyed;
+    private IReadOnlyList<string>? _consumedLegacy;
+
     /// <summary>
     /// The root this store reaches the vault through (plan 44 WB-28): the
     /// session's held root in production; a store built with no anchor
@@ -108,15 +115,16 @@ internal sealed class FileRecentsStore
         }
 
         // Clear means none, so no source may merge its entries back: the
-        // path-keyed file goes, and so does an unmigrated in-vault file.
+        // path-keyed file goes, and so does an in-vault file not yet
+        // migrated or migrated but left behind; the step settles whether
+        // or not that delete succeeded.
         DropPathKeyedSource();
-        if (_legacySettled)
+        _consumedPathKeyed = null;
+        if (_legacySettled && _consumedLegacy is null)
         {
             return;
         }
 
-        // Clear means none: the unmigrated in-vault file goes too, and the
-        // step settles whether or not that delete succeeded.
         try
         {
             LegacyProbesForTests++;
@@ -129,21 +137,69 @@ internal sealed class FileRecentsStore
         }
 
         _legacySettled = true;
+        _consumedLegacy = null;
     }
 
     public IReadOnlyList<string> Replace(IEnumerable<string> paths)
     {
         IReadOnlyList<string> sanitized = Sanitize(paths);
-        // The replacement came from a Load that merged a readable
-        // path-keyed source, so a source still there would bring back the
-        // paths it replaced; one that cannot be read now keeps its entries.
-        bool sourceRead = TryRead(_pathKeyedPath) is RecentsRead.Read;
-        if (TryCommit(sanitized) && sourceRead)
+        if (TryCommit(sanitized))
         {
-            DropPathKeyedSource();
+            RetireConsumedSources();
         }
 
         return sanitized;
+    }
+
+    /// <summary>
+    /// After a confirmed replacement: each source whose entries the
+    /// replaced list merged goes, while it still holds exactly those
+    /// entries, so it cannot bring back the paths the replacement renamed;
+    /// a source that changed since, or was never merged, stays and merges
+    /// behind the replacement later.
+    /// </summary>
+    private void RetireConsumedSources()
+    {
+        if (_consumedPathKeyed is { } pathKeyed)
+        {
+            if (TryRead(_pathKeyedPath) is RecentsRead.Read current
+                && current.Entries.SequenceEqual(pathKeyed, StringComparer.Ordinal))
+            {
+                DropPathKeyedSource();
+            }
+
+            _consumedPathKeyed = null;
+        }
+
+        if (_consumedLegacy is not { } legacy)
+        {
+            return;
+        }
+
+        try
+        {
+            LegacyProbesForTests++;
+            using AnchoredVaultStore? store = AnchoredVaultStore.Open(Root, createDirectory: false);
+            byte[]? input = store?.ReadAllBytesBounded(LegacyFileName, MaxPayloadBytes);
+            if (input is not null
+                && Parse(input) is RecentsRead.Read current
+                && current.Entries.SequenceEqual(legacy, StringComparer.Ordinal))
+            {
+                store!.DeleteRegularFileIfExists(LegacyFileName);
+                _legacySettled = true;
+            }
+            else if (input is null)
+            {
+                _legacySettled = true;
+            }
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or JsonException)
+        {
+            _ = exception;
+        }
+
+        _consumedLegacy = null;
     }
 
     private void DropPathKeyedSource()
@@ -193,6 +249,7 @@ internal sealed class FileRecentsStore
 
         AfterDestinationReadForTests?.Invoke();
         IReadOnlyList<string> merged = Merge(destination, source.Entries);
+        _consumedPathKeyed = source.Entries;
         if (TryCommit(merged))
         {
             DeleteSource(_pathKeyedPath);
@@ -208,11 +265,13 @@ internal sealed class FileRecentsStore
     /// </summary>
     private IReadOnlyList<string>? MigrateLegacy()
     {
-        if (File.Exists(_pathKeyedPath)
-            && !string.Equals(_pathKeyedPath, _path, StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(_pathKeyedPath, _path, StringComparison.OrdinalIgnoreCase)
+            && TryRead(_pathKeyedPath) is not RecentsRead.Absent)
         {
             // The path-keyed source first, so the order stays destination,
-            // path-keyed, in-vault.
+            // path-keyed, in-vault: until the read says it is gone (not
+            // File.Exists, which answers false for a file it cannot stat),
+            // the older in-vault entries wait.
             return null;
         }
 
@@ -248,15 +307,19 @@ internal sealed class FileRecentsStore
 
             AfterDestinationReadForTests?.Invoke();
             IReadOnlyList<string> merged = Merge(destination, source.Entries);
+            _consumedLegacy = source.Entries;
             if (TryCommit(merged))
             {
                 try
                 {
                     store!.DeleteRegularFileIfExists(LegacyFileName);
+                    _consumedLegacy = null;
                 }
                 catch (Exception exception) when (
                     exception is IOException or UnauthorizedAccessException)
                 {
+                    // Settled, but remembered: a Clear or a replacement on
+                    // this store retries the delete.
                     _ = exception;
                 }
 

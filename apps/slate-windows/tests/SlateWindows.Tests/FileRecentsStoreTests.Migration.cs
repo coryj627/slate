@@ -381,7 +381,12 @@ public sealed partial class FileRecentsStoreTests
         File.SetAttributes(store.PathKeyedPathForTests, FileAttributes.ReadOnly);
         try
         {
+            // The migration's commit fails (a folder at the destination's
+            // name), so the source is still there when the list is replaced.
+            Directory.CreateDirectory(store.FilePathForTests);
             Assert.Equal(["old.md", "b.md"], store.Load());
+            Assert.True(File.Exists(store.PathKeyedPathForTests), "premise: the source outlived the load");
+            Directory.Delete(store.FilePathForTests);
             if (action == "clear")
             {
                 store.Clear();
@@ -403,6 +408,109 @@ public sealed partial class FileRecentsStoreTests
                 File.SetAttributes(store.PathKeyedPathForTests, FileAttributes.Normal);
             }
         }
+    }
+
+    /// <summary>Codex round 2: a read-only in-vault file is deleted once its
+    /// entries are committed, so neither a Clear nor a fresh store can bring
+    /// them back.</summary>
+    [Fact]
+    public void AReadOnlyInVaultSourceIsDeletedOnceMigrated()
+    {
+        using FixtureVault fixture = FixtureVault.Create(1, "recents-read-only-in-vault");
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        string deviceRoot = Path.Combine(Path.GetTempPath(), $"slate-recents-device-{Guid.NewGuid():N}");
+        VaultRootIdentity identity = Assert.IsType<VaultRootIdentity>(session.RootIdentity());
+        string inVault = WriteInVault(fixture.Root, ["old.md"]);
+        File.SetAttributes(inVault, FileAttributes.ReadOnly);
+        try
+        {
+            var store = new FileRecentsStore(fixture.Root, identity, deviceRoot, VaultRootAnchor.Of(session));
+            Assert.Equal(["old.md"], store.Load());
+            Assert.False(File.Exists(inVault), "the read-only in-vault file stayed and would merge back");
+            store.Clear();
+            Assert.Empty(new FileRecentsStore(fixture.Root, identity, deviceRoot, VaultRootAnchor.Of(session)).Load());
+        }
+        finally
+        {
+            if (File.Exists(inVault))
+            {
+                File.SetAttributes(inVault, FileAttributes.Normal);
+            }
+
+            DeleteQuietly(deviceRoot);
+        }
+    }
+
+    /// <summary>Codex round 2, schedule A: a replacement built from a load
+    /// that merged the in-vault file (its commit failed) retires that file,
+    /// so the path the replacement renamed does not come back.</summary>
+    [Fact]
+    public void AReplacementRetiresTheInVaultSourceItsLoadMerged()
+    {
+        using FixtureVault fixture = FixtureVault.Create(1, "recents-replace-in-vault");
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        string deviceRoot = Path.Combine(Path.GetTempPath(), $"slate-recents-device-{Guid.NewGuid():N}");
+        VaultRootIdentity identity = Assert.IsType<VaultRootIdentity>(session.RootIdentity());
+        string inVault = WriteInVault(fixture.Root, ["old.md", "b.md"]);
+        var store = new FileRecentsStore(fixture.Root, identity, deviceRoot, VaultRootAnchor.Of(session));
+        try
+        {
+            Directory.CreateDirectory(store.FilePathForTests);
+            Assert.Equal(["old.md", "b.md"], store.Load());
+            Assert.True(File.Exists(inVault), "premise: the commit failed and the source stayed");
+            Directory.Delete(store.FilePathForTests);
+
+            store.Replace(["new.md", "b.md"]);
+
+            Assert.False(File.Exists(inVault), "the merged in-vault file would bring old.md back");
+            Assert.Equal(["new.md", "b.md"], new FileRecentsStore(fixture.Root, identity, deviceRoot, VaultRootAnchor.Of(session)).Load());
+        }
+        finally
+        {
+            DeleteQuietly(deviceRoot);
+        }
+    }
+
+    /// <summary>Codex round 2, schedule B: a path-keyed source the load could
+    /// not read was never merged, so a replacement keeps it and its entries
+    /// merge behind the replacement later.</summary>
+    [Fact]
+    public void AReplacementKeepsAPathKeyedSourceItsLoadCouldNotRead()
+    {
+        using FixtureVault fixture = FixtureVault.Create(1, "recents-replace-unmerged");
+        string deviceRoot = Path.Combine(fixture.Root, "device-state");
+        new FileRecentsStore(fixture.Root, localAppDataRoot: deviceRoot).Replace(["a.md"]);
+        var store = new FileRecentsStore(fixture.Root, Persistent, deviceRoot);
+        using (new FileStream(store.PathKeyedPathForTests, FileMode.Open, FileAccess.Read, FileShare.Delete))
+        {
+            Assert.Empty(store.Load());
+        }
+
+        store.Replace(["c.md"]);
+
+        Assert.True(File.Exists(store.PathKeyedPathForTests), "a source never merged was deleted");
+        Assert.Equal(["c.md", "a.md"], store.Load());
+    }
+
+    /// <summary>A source that changed after the load merged it holds entries
+    /// the replacement never saw, so the replacement keeps it.</summary>
+    [Fact]
+    public void AReplacementKeepsAPathKeyedSourceThatChangedSinceItsLoad()
+    {
+        using FixtureVault fixture = FixtureVault.Create(1, "recents-replace-changed");
+        string deviceRoot = Path.Combine(fixture.Root, "device-state");
+        var pathKeyed = new FileRecentsStore(fixture.Root, localAppDataRoot: deviceRoot);
+        pathKeyed.Replace(["a.md"]);
+        var store = new FileRecentsStore(fixture.Root, Persistent, deviceRoot);
+        Directory.CreateDirectory(store.FilePathForTests);
+        Assert.Equal(["a.md"], store.Load());
+        Directory.Delete(store.FilePathForTests);
+        pathKeyed.Replace(["z.md", "a.md"]);
+
+        store.Replace(["c.md"]);
+
+        Assert.True(File.Exists(store.PathKeyedPathForTests), "a source with entries the replacement never saw was deleted");
+        Assert.Equal(["c.md", "z.md", "a.md"], store.Load());
     }
 
     private static string WriteInVault(string vaultRoot, string[] entries)
