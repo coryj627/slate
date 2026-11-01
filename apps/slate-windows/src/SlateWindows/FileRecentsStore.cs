@@ -25,9 +25,13 @@ internal sealed class FileRecentsStore
         string? localAppDataRoot = null)
     {
         _vaultRoot = Path.GetFullPath(vaultRoot);
-        string identityText = identity is null
-            ? _vaultRoot.ToUpperInvariant()
-            : $"{identity.Device}-{identity.Inode}";
+        // WB-28 PR 1: core now reads the held root's identity on Windows,
+        // but every identity keeps the path key until PR 2 brings the
+        // identity key and its migration (design item 7), so no recents
+        // file is orphaned between the two. On main the identity was always
+        // null here, so the key is unchanged.
+        _ = identity;
+        string identityText = _vaultRoot.ToUpperInvariant();
         string key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identityText)));
         string root = localAppDataRoot ?? Path.Combine(
             SlateDeviceState.Root,

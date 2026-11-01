@@ -25,7 +25,7 @@ static FAULT_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Every fault-seam variable a guarded fact may set (#1481). Private, so
 /// the guard's own facts write the list out rather than read it here.
-const FAULT_VARIABLES: [&str; 15] = [
+const FAULT_VARIABLES: [&str; 19] = [
     "SLATE_TEST_FAULT_AFTER_WRITE",
     "SLATE_TEST_FAULT_PRE_WRITE",
     "SLATE_TEST_FAULT_REINDEX",
@@ -41,6 +41,10 @@ const FAULT_VARIABLES: [&str; 15] = [
     "SLATE_TEST_STALL_ORPHAN_REPAIR",
     "SLATE_TEST_TORN_FILE_TASKS",
     "SLATE_TEST_TORN_NOTE_READ",
+    "SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED",
+    "SLATE_TEST_ROOT_FILE_ID_UNAVAILABLE",
+    "SLATE_TEST_ROOT_FILE_ID_INFO_FAILS",
+    "SLATE_TEST_ROOT_FILE_INDEX_COLLIDES",
 ];
 
 /// The one place the fault mutex is taken: a holder that panicked poisoned

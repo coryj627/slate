@@ -93,6 +93,40 @@ pub(crate) use watch::RootAnchor;
 pub(crate) use watch::{Relocation, RootIdentity};
 #[cfg(all(test, windows))]
 pub(crate) use watch::{report_evidence_for_tests, short_name_for_tests};
+#[cfg(windows)]
+pub(crate) use windows_entry::sqlite_create_relative;
+
+/// A handle's normalized final path, for the Windows facts that check which
+/// folder a handle names.
+/// A handle's final path in the volume-GUID form, for the fact that proves
+/// the held path's fallback for a volume without a drive letter.
+#[cfg(all(windows, test))]
+pub(crate) fn final_path_guid_for_tests(
+    file: &std::fs::File,
+) -> std::io::Result<std::path::PathBuf> {
+    trash_handoff::final_path_as(
+        file,
+        windows_sys::Win32::Storage::FileSystem::VOLUME_NAME_GUID,
+    )
+}
+
+/// An open of an absolute path with exactly `access` (no `SYNCHRONIZE`),
+/// for the facts that check a hold's sharing under an ACL denying it.
+#[cfg(all(windows, test))]
+pub(crate) fn open_absolute_for_tests(
+    path: &std::path::Path,
+    access: u32,
+) -> std::io::Result<std::fs::File> {
+    windows_entry::open_absolute(&fs::windows_extended_path(path), access, 7, 0)
+        .expect("an absolute path")
+}
+
+#[cfg(all(windows, test))]
+pub(crate) fn trash_handoff_final_path_for_tests(
+    file: &std::fs::File,
+) -> std::io::Result<std::path::PathBuf> {
+    trash_handoff::final_path(file)
+}
 
 #[cfg(windows)]
 mod windows_entry;

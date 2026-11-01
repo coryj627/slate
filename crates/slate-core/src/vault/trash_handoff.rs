@@ -296,17 +296,16 @@ pub(super) fn current_path(_descriptor: &fs::File) -> io::Result<PathBuf> {
 /// (`Folders::PlainOnly`).
 #[cfg(windows)]
 pub(super) fn pinned_path(
-    root: &Path,
+    root: &super::windows_entry::PinnedRoot,
     vault_relative: &Path,
     original: &str,
 ) -> Result<PathBuf, VaultError> {
     use super::fs::Mutation;
-    use super::windows_entry::{Folders, PinnedRoot};
+    use super::windows_entry::Folders;
 
     let leaf = vault_relative
         .file_name()
         .ok_or_else(|| refused(original, "the path has no final component"))?;
-    let root = PinnedRoot::open(root)?;
     let parent = root.folder(
         vault_relative.parent().unwrap_or_else(|| Path::new("")),
         original,
@@ -325,10 +324,19 @@ pub(super) fn pinned_path(
 /// `GetFinalPathNameByHandleW` for an open handle: the normalized path of the
 /// object the handle is open on, with its drive letter (`\\?\C:\…`).
 #[cfg(windows)]
-fn final_path(file: &std::fs::File) -> std::io::Result<PathBuf> {
+pub(super) fn final_path(file: &std::fs::File) -> std::io::Result<PathBuf> {
+    final_path_as(
+        file,
+        windows_sys::Win32::Storage::FileSystem::VOLUME_NAME_DOS,
+    )
+}
+
+/// `GetFinalPathNameByHandleW` with the volume form `volume`.
+#[cfg(windows)]
+pub(super) fn final_path_as(file: &std::fs::File, volume: u32) -> std::io::Result<PathBuf> {
     use std::os::windows::{ffi::OsStringExt as _, io::AsRawHandle as _};
     use windows_sys::Win32::Storage::FileSystem::{
-        FILE_NAME_NORMALIZED, GetFinalPathNameByHandleW, VOLUME_NAME_DOS,
+        FILE_NAME_NORMALIZED, GetFinalPathNameByHandleW,
     };
 
     let mut buffer = vec![0u16; 512];
@@ -342,7 +350,7 @@ fn final_path(file: &std::fs::File) -> std::io::Result<PathBuf> {
                 file.as_raw_handle(),
                 buffer.as_mut_ptr(),
                 capacity,
-                FILE_NAME_NORMALIZED | VOLUME_NAME_DOS,
+                FILE_NAME_NORMALIZED | volume,
             )
         } as usize;
         if length == 0 {
@@ -353,6 +361,32 @@ fn final_path(file: &std::fs::File) -> std::io::Result<PathBuf> {
             return Ok(PathBuf::from(std::ffi::OsString::from_wide(&buffer)));
         }
         buffer.resize(length, 0);
+    }
+}
+
+/// `final_path`, falling back to the volume-GUID form (`\\?\Volume{…}\…`)
+/// on a volume mounted without a drive letter, where the DOS form fails
+/// (plan 44 WB-28, codex round 4). Both forms are paths the file APIs
+/// open; the Trash handoff keeps the DOS form alone.
+#[cfg(windows)]
+pub(super) fn final_path_any(file: &std::fs::File) -> std::io::Result<PathBuf> {
+    use windows_sys::Win32::Storage::FileSystem::VOLUME_NAME_GUID;
+    final_path(file).or_else(|_| final_path_as(file, VOLUME_NAME_GUID))
+}
+
+/// `final_path`'s result as a person reads it: `\\?\C:\…` as `C:\…`, and
+/// `\\?\UNC\server\share\…` as `\\server\share\…`. Display only.
+#[cfg(windows)]
+pub(super) fn display_spelling(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(unc) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{unc}"));
+    }
+    // Only a drive-letter path sheds the prefix: a volume-GUID path
+    // (`\\?\Volume{…}\…`) has no shorter spelling and must stay absolute.
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => PathBuf::from(rest),
+        _ => path.to_path_buf(),
     }
 }
 

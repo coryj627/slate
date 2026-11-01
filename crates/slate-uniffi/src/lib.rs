@@ -613,16 +613,25 @@ fn is_allowed_status_char(c: char) -> bool {
     // range doesn't accidentally re-admit it.
 }
 
-/// Physical `(device, inode)` identity of the vault root as observed
-/// by one metadata call inside a session's own open (FL-06 round-27).
+/// Physical identity of the vault root, read from the root the session
+/// holds open (FL-06 round-27; widened losslessly by plan 44 WB-28, WD22).
 /// Hosts compare their per-surface root observations against this
 /// anchor so a path swapped A→B→A around the open cannot bind surfaces
-/// to different vaults. Nil when the platform cannot observe one;
+/// to different vaults. Nil when no filesystem root backs the session;
 /// hosts fail closed.
+///
+/// `persistent` is true when the id is the file system's own (Unix
+/// `st_dev`/`st_ino` as `volume`/`id_low` with `id_high` 0; Windows
+/// `FileIdInfo`'s 64-bit serial and 128-bit id). It is false for the
+/// weaker read a FAT, FAT32 or exFAT volume answers instead (WD24): that
+/// id changes when the folder is renamed or moved, and two volumes can
+/// repeat it, so it is never a key that outlives the session.
 #[derive(uniffi::Record)]
 pub struct VaultRootIdentity {
-    pub device: u64,
-    pub inode: u64,
+    pub volume: u64,
+    pub id_high: u64,
+    pub id_low: u64,
+    pub persistent: bool,
 }
 
 /// FL4-1 (#662): one host-validated half-open UTC window for a required
@@ -797,8 +806,10 @@ impl VaultSession {
     /// to run surfaces that cannot prove they share it.
     pub fn root_identity(&self) -> Option<VaultRootIdentity> {
         self.inner.root_identity().map(|id| VaultRootIdentity {
-            device: id.device,
-            inode: id.inode,
+            volume: id.volume,
+            id_high: id.id_high,
+            id_low: id.id_low,
+            persistent: id.persistent,
         })
     }
 
@@ -813,6 +824,26 @@ impl VaultSession {
         self.inner
             .root_display_path()
             .map(|path| path.to_string_lossy().into_owned())
+    }
+
+    /// Plan 44 WB-28 (22W): a duplicate of the vault root handle this
+    /// session holds, as its raw value. The caller owns it and closes it
+    /// (the Windows host wraps it in a `SafeFileHandle`). Off Windows, and
+    /// for a session no folder backs, `Unsupported`; Swift never calls it.
+    pub fn duplicate_root_handle(&self) -> Result<u64, VaultError> {
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::IntoRawHandle as _;
+            let handle = self.inner.duplicate_root_handle()?;
+            Ok(handle.into_raw_handle() as usize as u64)
+        }
+        #[cfg(not(windows))]
+        {
+            Err(core::VaultError::Unsupported {
+                feature: "a vault root handle off Windows".into(),
+            }
+            .into())
+        }
     }
 
     /// Walk the vault and index every file into the metadata cache.
@@ -11482,6 +11513,14 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
 pub struct RenderedAnnouncement {
     pub text: String,
     pub priority: A11yPriority,
+}
+
+/// Plan 44 WB-28 (WD24): core's sentence for a Windows vault whose folder's
+/// volume gives no file identity, so the host speaks core's words when it
+/// refuses a null identity itself.
+#[uniffi::export]
+pub fn vault_root_identity_unavailable_detail() -> String {
+    core::a11y::VAULT_ROOT_IDENTITY_UNAVAILABLE.to_string()
 }
 
 /// Core's detail for an error a host caught (W7-7, #1249): the text a

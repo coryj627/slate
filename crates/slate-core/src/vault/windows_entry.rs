@@ -77,7 +77,8 @@ use windows_sys::{
     Wdk::{
         Foundation::OBJECT_ATTRIBUTES,
         Storage::FileSystem::{
-            FILE_CREATE, FILE_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_REPARSE_POINT,
+            FILE_CREATE, FILE_DELETE_ON_CLOSE, FILE_DIRECTORY_FILE, FILE_NON_DIRECTORY_FILE,
+            FILE_OPEN, FILE_OPEN_IF, FILE_OPEN_REPARSE_POINT, FILE_OVERWRITE, FILE_OVERWRITE_IF,
             FILE_RENAME_INFORMATION, FILE_SYNCHRONOUS_IO_NONALERT, FileRenameInformation,
             NtCreateFile, NtSetInformationFile,
         },
@@ -116,13 +117,41 @@ fn simple_name(name: &[u16]) -> bool {
 /// directory `parent`. A single component plus `FILE_OPEN_REPARSE_POINT`
 /// never follows a child link; converted parent reparses fail instead of
 /// re-resolving a path.
-fn create_relative(
+pub(super) fn create_relative(
     parent: &fs::File,
     name: &OsStr,
     access: u32,
     share: u32,
     disposition: u32,
     options: u32,
+) -> io::Result<fs::File> {
+    // A new folder takes the attributes `CreateDirectoryW` gives one; an
+    // open ignores them.
+    let file_attributes = if disposition == FILE_CREATE {
+        FILE_ATTRIBUTE_NORMAL
+    } else {
+        0
+    };
+    create_relative_with(
+        parent,
+        name,
+        access,
+        share,
+        disposition,
+        options,
+        file_attributes,
+    )
+}
+
+/// [`create_relative`] with the attributes a created entry takes.
+fn create_relative_with(
+    parent: &fs::File,
+    name: &OsStr,
+    access: u32,
+    share: u32,
+    disposition: u32,
+    options: u32,
+    file_attributes: u32,
 ) -> io::Result<fs::File> {
     let mut name: Vec<u16> = name.encode_wide().collect();
     if !simple_name(&name) {
@@ -131,6 +160,189 @@ fn create_relative(
             "Expected a simple entry name",
         ));
     }
+    nt_create_relative(
+        parent,
+        &mut name,
+        access | SYNCHRONIZE,
+        share,
+        disposition,
+        options | FILE_SYNCHRONOUS_IO_NONALERT,
+        file_attributes,
+    )
+}
+
+/// A new handle with a file object of its own on the folder `dir` is open
+/// on: `NtCreateFile` relative to `dir` with an empty name (plan 44 WB-28).
+/// A duplicated handle shares the original's file object, and with it a
+/// listing's position; this one does not.
+pub(super) fn reopen(dir: &fs::File, access: u32, share: u32) -> io::Result<fs::File> {
+    nt_create_relative(
+        dir,
+        &mut Vec::new(),
+        access | SYNCHRONIZE,
+        share,
+        FILE_OPEN,
+        FILE_SYNCHRONOUS_IO_NONALERT,
+        0,
+    )
+}
+
+/// The entry at the vault-relative `components` beneath `parent`, resolved
+/// in ONE `NtCreateFile` call whose name is the components joined by `\`,
+/// relative to `parent` (plan 44 WB-28, codex round 3). The system parses
+/// the folders on the way as it parses a path, so a folder the caller may
+/// only pass (traverse checking bypassed, as for every path open) or a
+/// reparse point among them behaves exactly as for a path open; only the
+/// starting point is the held handle. `options` may carry
+/// `FILE_OPEN_REPARSE_POINT` (the leaf opens as itself, `symlink_metadata`'s
+/// rule) or `FILE_DIRECTORY_FILE`. `synchronous` adds `SYNCHRONIZE` and
+/// synchronous I/O for a handle that is read; a metadata probe passes
+/// `access` 0 and no synchronous I/O, as `std::fs::metadata` opens.
+pub(super) fn open_beneath_path(
+    parent: &fs::File,
+    components: &[&OsStr],
+    access: u32,
+    options: u32,
+    synchronous: bool,
+) -> io::Result<fs::File> {
+    let mut name: Vec<u16> = Vec::new();
+    for (index, component) in components.iter().enumerate() {
+        let wide: Vec<u16> = component.encode_wide().collect();
+        if !simple_name(&wide) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Expected a simple entry name",
+            ));
+        }
+        if index > 0 {
+            name.push(u16::from(b'\\'));
+        }
+        name.extend(wide);
+    }
+    let (access, options) = if synchronous {
+        (access | SYNCHRONIZE, options | FILE_SYNCHRONOUS_IO_NONALERT)
+    } else {
+        (access, options)
+    };
+    nt_create_relative(
+        parent,
+        &mut name,
+        access,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        FILE_OPEN,
+        options,
+        0,
+    )
+}
+
+/// The folder or entry `name` in `parent`, opened as itself
+/// (`FILE_OPEN_REPARSE_POINT`) with exactly `access` and `share`, no
+/// synchronous I/O (plan 44 WB-28, codex round 5): a handle that parents
+/// relative opens needs no list right and is never read, so a folder that
+/// denies listing or `SYNCHRONIZE` still serves.
+pub(super) fn open_as_itself(
+    parent: &fs::File,
+    name: &OsStr,
+    access: u32,
+    share: u32,
+) -> io::Result<fs::File> {
+    let mut name: Vec<u16> = name.encode_wide().collect();
+    if !simple_name(&name) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Expected a simple entry name",
+        ));
+    }
+    nt_create_relative(
+        parent,
+        &mut name,
+        access,
+        share,
+        FILE_OPEN,
+        FILE_OPEN_REPARSE_POINT,
+        0,
+    )
+}
+
+/// The entry at the absolute `path` (a `\\?\` extended path), opened with
+/// `NtCreateFile` by its NT name (`\??\…`) and exactly `access`, `share`
+/// and `options`: no `SYNCHRONIZE` and no synchronous I/O unless asked
+/// (plan 44 WB-28, codex round 7). `CreateFileW` adds both to every open,
+/// so a folder that denies `SYNCHRONIZE` refuses it; this does not. Its own
+/// reparse point is followed unless `options` carries
+/// `FILE_OPEN_REPARSE_POINT`. `None` for a path with no extended form
+/// (relative, or a device path), which the caller opens as before.
+pub(super) fn open_absolute(
+    path: &Path,
+    access: u32,
+    share: u32,
+    options: u32,
+) -> Option<io::Result<fs::File>> {
+    let wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    let rest = wide.strip_prefix(&[92, 92, 63, 92])?; // \\?\
+    let mut name: Vec<u16> = [92, 63, 63, 92].to_vec(); // \??\
+    name.extend_from_slice(rest);
+    let Ok(length) = u16::try_from(name.len() * 2) else {
+        return Some(Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Path is too long",
+        )));
+    };
+    let mut unicode = UNICODE_STRING {
+        Length: length,
+        MaximumLength: length,
+        Buffer: name.as_mut_ptr(),
+    };
+    let attributes = OBJECT_ATTRIBUTES {
+        Length: std::mem::size_of::<OBJECT_ATTRIBUTES>() as u32,
+        ObjectName: &mut unicode,
+        Attributes: OBJ_CASE_INSENSITIVE,
+        ..Default::default()
+    };
+    let mut handle = std::ptr::null_mut();
+    let mut status_block: IO_STATUS_BLOCK = unsafe { std::mem::zeroed() };
+    // SAFETY: the synchronous call borrows live name/attribute/status buffers.
+    let status = unsafe {
+        NtCreateFile(
+            &mut handle,
+            access,
+            &attributes,
+            &mut status_block,
+            std::ptr::null(),
+            0,
+            share,
+            FILE_OPEN,
+            options,
+            std::ptr::null(),
+            0,
+        )
+    };
+    if status < 0 {
+        return Some(Err(io::Error::from_raw_os_error(
+            unsafe { RtlNtStatusToDosError(status) } as i32,
+        )));
+    }
+    // SAFETY: a successful NtCreateFile transfers a newly owned file handle.
+    Some(Ok(unsafe { fs::File::from_raw_handle(handle) }))
+}
+
+/// [`reopen`] without synchronous I/O and without `SYNCHRONIZE`: a handle
+/// that only parents relative opens (the host's duplicate).
+pub(super) fn reopen_async(dir: &fs::File, access: u32, share: u32) -> io::Result<fs::File> {
+    nt_create_relative(dir, &mut Vec::new(), access, share, FILE_OPEN, 0, 0)
+}
+
+/// The `NtCreateFile` call itself, for a name already checked (or empty: the
+/// parent itself), with exactly the access and options given.
+fn nt_create_relative(
+    parent: &fs::File,
+    name: &mut Vec<u16>,
+    access: u32,
+    share: u32,
+    disposition: u32,
+    options: u32,
+    file_attributes: u32,
+) -> io::Result<fs::File> {
     let length = u16::try_from(name.len() * 2)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "Entry name is too long"))?;
     let mut unicode = UNICODE_STRING {
@@ -145,13 +357,6 @@ fn create_relative(
         Attributes: OBJ_CASE_INSENSITIVE,
         ..Default::default()
     };
-    // A new folder takes the attributes `CreateDirectoryW` gives one; an
-    // open ignores them.
-    let file_attributes = if disposition == FILE_CREATE {
-        FILE_ATTRIBUTE_NORMAL
-    } else {
-        0
-    };
     let mut handle = std::ptr::null_mut();
     let mut status_block: IO_STATUS_BLOCK = unsafe { std::mem::zeroed() };
     // SAFETY: the synchronous call borrows live name/attribute/status buffers and
@@ -159,14 +364,14 @@ fn create_relative(
     let status = unsafe {
         NtCreateFile(
             &mut handle,
-            access | SYNCHRONIZE,
+            access,
             &attributes,
             &mut status_block,
             std::ptr::null(),
             file_attributes,
             share,
             disposition,
-            options | FILE_SYNCHRONOUS_IO_NONALERT,
+            options,
             std::ptr::null(),
             0,
         )
@@ -178,6 +383,53 @@ fn create_relative(
     }
     // SAFETY: a successful NtCreateFile transfers a newly owned file handle.
     Ok(unsafe { fs::File::from_raw_handle(handle) })
+}
+
+/// `CreateFileW`'s arguments, as SQLite passes them, for the single
+/// component `name` relative to `parent` (the SQLite hook, `db::anchored`,
+/// plan 44 WB-28): the disposition is translated to its `NtCreateFile`
+/// twin, `FILE_FLAG_DELETE_ON_CLOSE` becomes `FILE_DELETE_ON_CLOSE` with
+/// `DELETE` access, and the entry itself opens (`FILE_OPEN_REPARSE_POINT`,
+/// `FILE_NON_DIRECTORY_FILE`). The caller refuses a reparse point.
+pub(crate) fn sqlite_create_relative(
+    parent: &fs::File,
+    name: &OsStr,
+    access: u32,
+    share: u32,
+    disposition: u32,
+    flags_and_attributes: u32,
+) -> io::Result<fs::File> {
+    let disposition = match disposition {
+        CREATE_NEW => FILE_CREATE,
+        CREATE_ALWAYS => FILE_OVERWRITE_IF,
+        OPEN_EXISTING => FILE_OPEN,
+        OPEN_ALWAYS => FILE_OPEN_IF,
+        TRUNCATE_EXISTING => FILE_OVERWRITE,
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Unknown creation disposition",
+            ));
+        }
+    };
+    let mut access = access;
+    let mut options = FILE_NON_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT;
+    if flags_and_attributes & FILE_FLAG_DELETE_ON_CLOSE != 0 {
+        access |= DELETE;
+        options |= FILE_DELETE_ON_CLOSE;
+    }
+    // The low 16 bits are attributes; the flags above them are translated
+    // or (like `FILE_FLAG_RANDOM_ACCESS`, a hint) dropped.
+    let attributes = flags_and_attributes & 0xFFFF;
+    create_relative_with(
+        parent,
+        name,
+        access,
+        share,
+        disposition,
+        options,
+        attributes,
+    )
 }
 
 /// Open the entry `name` itself (a link or a junction is opened, never
@@ -393,6 +645,17 @@ impl PinnedRoot {
         Ok(Self { dir })
     }
 
+    /// Adopt the root a filesystem session holds (plan 44 WB-28, C2): the
+    /// walk starts at a duplicate of the held handle, never at a path, so
+    /// a spelling retargeted while the session lives cannot hand a move,
+    /// a save, a creation or the Trash handoff another vault. The twin of
+    /// the Unix `PinnedRoot::adopt`.
+    pub(super) fn adopt(held: &fs::File) -> Result<Self, VaultError> {
+        Ok(Self {
+            dir: held.try_clone().map_err(VaultError::Io)?,
+        })
+    }
+
     /// The root handle itself: the Trash handoff takes the vault root's
     /// current path from it (#1450).
     pub(super) fn handle(&self) -> &fs::File {
@@ -500,6 +763,25 @@ pub(super) fn rename_into(
     name: &OsStr,
     replace: bool,
 ) -> io::Result<()> {
+    rename_with(
+        source,
+        parent,
+        name,
+        FileRenameInformation,
+        u32::from(replace),
+    )
+}
+
+/// `NtSetInformationFile` with a rename `class`: `FileRenameInformation`
+/// takes `flags` as its `ReplaceIfExists` byte, `FileRenameInformationEx`
+/// as its `Flags` (the union's two readings).
+fn rename_with(
+    source: &fs::File,
+    parent: &fs::File,
+    name: &OsStr,
+    class: windows_sys::Wdk::Storage::FileSystem::FILE_INFORMATION_CLASS,
+    flags: u32,
+) -> io::Result<()> {
     let name: Vec<u16> = name.encode_wide().collect();
     if !simple_name(&name) {
         return Err(io::Error::new(
@@ -518,7 +800,7 @@ pub(super) fn rename_into(
     // name. Both handles outlive the synchronous call.
     let status = unsafe {
         let info = buffer.as_mut_ptr().cast::<FILE_RENAME_INFORMATION>();
-        (*info).Anonymous.ReplaceIfExists = replace;
+        (*info).Anonymous.Flags = flags;
         (*info).RootDirectory = parent.as_raw_handle();
         (*info).FileNameLength = name_length;
         std::ptr::copy_nonoverlapping(
@@ -536,7 +818,7 @@ pub(super) fn rename_into(
             &mut status_block,
             info.cast(),
             info_length,
-            FileRenameInformation,
+            class,
         )
     };
     if status < 0 {
@@ -545,6 +827,34 @@ pub(super) fn rename_into(
         ));
     }
     Ok(())
+}
+
+/// The interior's replacing rename (`fs_root::sys::rename_at`), as
+/// `std::fs::rename` makes it (plan 44 WB-28): `FileRenameInformationEx`
+/// with POSIX semantics, so a target another handle holds open, sharing
+/// deletion, is still replaced. A volume without POSIX rename (FAT) gets
+/// the classic replacing rename.
+pub(super) fn rename_replacing(
+    source: &fs::File,
+    parent: &fs::File,
+    name: &OsStr,
+) -> io::Result<()> {
+    use windows_sys::Wdk::Storage::FileSystem::{
+        FILE_RENAME_POSIX_SEMANTICS, FILE_RENAME_REPLACE_IF_EXISTS, FileRenameInformationEx,
+    };
+    match rename_with(
+        source,
+        parent,
+        name,
+        FileRenameInformationEx,
+        FILE_RENAME_REPLACE_IF_EXISTS | FILE_RENAME_POSIX_SEMANTICS,
+    ) {
+        // ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED: no POSIX rename here.
+        Err(error) if matches!(error.raw_os_error(), Some(87) | Some(50)) => {
+            rename_into(source, parent, name, true)
+        }
+        other => other,
+    }
 }
 
 struct PinnedEntry {
@@ -568,14 +878,23 @@ fn directory(file: &fs::File) -> Result<(), VaultError> {
     Ok(())
 }
 
-fn open(root: &Path, relative: &Path, access: u32) -> Result<PinnedEntry, VaultError> {
+/// The vault root for an undo or a redo when no session holds one (a bare
+/// provider): opened by its path as itself, and refused when it is not a
+/// plain folder. A session's provider hands its held root instead (WB-28,
+/// C4), which follows the root's own reparse point at the open, so a vault
+/// opened through a junction undoes too.
+pub(super) fn open_unheld_root(root: &Path) -> Result<fs::File, VaultError> {
     let root = fs::OpenOptions::new()
         .access_mode(FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
         .open(root)?;
     directory(&root)?;
-    let mut ancestors = vec![root];
+    Ok(root)
+}
+
+fn open(root: &fs::File, relative: &Path, access: u32) -> Result<PinnedEntry, VaultError> {
+    let mut ancestors = vec![root.try_clone()?];
     let components = relative.components().collect::<Vec<_>>();
     if components.is_empty() {
         return Err(refused());
@@ -630,12 +949,12 @@ fn identity(file: &fs::File) -> Result<String, VaultError> {
     ))
 }
 
-pub(super) fn capture(root: &Path, relative: &Path) -> Result<String, VaultError> {
+pub(super) fn capture(root: &fs::File, relative: &Path) -> Result<String, VaultError> {
     identity(&open(root, relative, FILE_READ_ATTRIBUTES)?.file)
 }
 
 pub(super) fn rename(
-    root: &Path,
+    root: &fs::File,
     from: &Path,
     to: &Path,
     expected: &str,
@@ -646,14 +965,8 @@ pub(super) fn rename(
     }
     let destination_parent = to.parent().ok_or_else(refused)?;
     let destination = if destination_parent.as_os_str().is_empty() {
-        let file = fs::OpenOptions::new()
-            .access_mode(FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY)
-            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
-            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
-            .open(root)?;
-        directory(&file)?;
         PinnedEntry {
-            file,
+            file: root.try_clone()?,
             _ancestors: Vec::new(),
         }
     } else {

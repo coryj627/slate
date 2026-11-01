@@ -3419,6 +3419,12 @@ fn embed_unavailable_reason(reason: &EmbedUnresolvedReason) -> String {
     }
 }
 
+/// Why a Windows vault does not open when its folder's volume answers
+/// neither identity read (plan 44 WB-28, WD24): core's copy, carried in a
+/// `VaultError::Io` whose message crosses the FFI verbatim, so the host
+/// speaks it through `vault_error_detail` with no corpus or event change.
+pub const VAULT_ROOT_IDENTITY_UNAVAILABLE: &str = "This folder's file system gives Slate no file identity for it, so Slate cannot keep the vault anchored to it.";
+
 /// A vault error as the detail a person hears or reads (W7-7, #1249):
 /// the words of mac's `humanReadableVaultError`, arm for arm, rendered
 /// here so the Windows host spells none of them (mac keeps its own copy

@@ -687,7 +687,12 @@ internal sealed partial class VaultLifecycleViewModel
         {
             if (generation == _generation)
             {
-                ReportTerminalStatus($"Could not open vault: {exception.Message}", A11yPriority.High);
+                // Core's words (WB-28): an Io detail such as the identity
+                // refusal crosses verbatim; the binding's own message is a
+                // field dump.
+                ReportTerminalStatus(
+                    $"Could not open vault: {SlateUniffiMethods.VaultErrorDetail(exception)}",
+                    A11yPriority.High);
                 CloseSession();
                 IsVaultOpen = false;
                 ReturnedToWelcome?.Invoke(this, EventArgs.Empty);

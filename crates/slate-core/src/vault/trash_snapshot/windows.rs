@@ -38,6 +38,19 @@ pub(in crate::vault) fn snapshot_cancellable(
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
         .open(root)?;
     check_directory(&root)?;
+    snapshot_beneath(root, relative, cancel)
+}
+
+/// The snapshot of `relative` beneath the root handle `root` (plan 44
+/// WB-28): a session hands its held root, so the confirmation counts and
+/// stamps the tree the Trash handoff will send, whatever the root's
+/// spelling names now, and a vault opened through a junction can Trash.
+pub(in crate::vault) fn snapshot_beneath(
+    root: fs::File,
+    relative: &Path,
+    cancel: &crate::CancelToken,
+) -> Result<TrashSnapshot, VaultError> {
+    cancel.check()?;
     let mut guards = vec![root];
     let components = relative.components().collect::<Vec<_>>();
     if components.is_empty() {

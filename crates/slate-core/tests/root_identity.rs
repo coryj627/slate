@@ -16,8 +16,13 @@ fn filesystem_open_observes_the_roots_physical_identity() {
     let session = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
     let identity = session.root_identity().expect("unix observes an identity");
     let meta = std::fs::metadata(tmp.path()).unwrap();
-    assert_eq!(identity.device, meta.dev());
-    assert_eq!(identity.inode, meta.ino());
+    assert_eq!(identity.volume, meta.dev());
+    assert_eq!(identity.id_high, 0);
+    assert_eq!(identity.id_low, meta.ino());
+    assert!(
+        identity.persistent,
+        "a unix inode is the file system's own id"
+    );
 
     let other = tempfile::tempdir().unwrap();
     let second = VaultSession::from_filesystem(other.path().to_path_buf()).unwrap();

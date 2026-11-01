@@ -1052,11 +1052,11 @@ impl VaultSession {
             }
         };
         // §4.4 step 1: arm, then verify the root the watch observed against
-        // the session's own anchor (Unix; Windows has none in core, so there
-        // the handle's own anchor is the reference).
-        if let Some(anchor) = self.root_identity
-            && handle.arm_identity()
-                != Some(RootIdentity::from_device_inode(anchor.device, anchor.inode))
+        // the root this session holds, in the watch's own terms (Unix: the
+        // held root's `(st_dev, st_ino)`; Windows: the held handle's volume
+        // serial and file index, never its `FileIdInfo` record — WB-28, C9).
+        if let Some((volume, file)) = self.watch_anchor
+            && handle.arm_identity() != Some(RootIdentity::from_device_inode(volume, file))
         {
             log::warn!(
                 "vault watch refused: the vault root no longer names the folder this session \

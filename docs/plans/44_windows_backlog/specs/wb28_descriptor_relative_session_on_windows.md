@@ -51,6 +51,150 @@ Design items 0, 1, 4, 6, 7 and 9 apply it).
 
 **Owner's call of 2026-10-26** (plan §3.1, "Review calls", WD7 and WD22) outranks this spec where they differ: WD7 and WD22 are answered as recommended; WB-28 starts once its design review posts the `FsRoot` helper names on #1513, not after 22c merges; WB-29a's design (docs) may run beside it, and WB-29a's core store follows it.
 
+**Delivery record, PR 1 (2026-11-01).** Where it differs from the sections
+below, it wins. The design review on #1513 (issuecomment-6553047390)
+named the `FsRoot` helpers; the owner answered D1 (an equal persistent
+identity is the same root) and D3 (a weak-root reopen accepts the
+overwrite) there.
+
+- **Step 0 ran 2026-11-01 (owner's elevated session; doc 24 P-W2).** No
+  stop condition: FAT32 and exFAT answer `FileIdInfo` with error 87,
+  name themselves `FAT32` and `exFAT`, and give a file index that is
+  stable and distinct within the mount, and that changes on a rename.
+  The seams fail `FileIdInfo` with 87. D2 needs no answer: no FAT volume
+  answers `FileIdInfo` at all.
+- **The SQLite path is `C:\|slate-fd\<token>\<leaf>`, not
+  `\\.slate-fd\<token>\<leaf>` (item 3).** SQLite takes a path that
+  starts with `\\` for a network share and shares one lock handle among a
+  process's connections (`winIsUNCPath`, `bUseSharedLockHandle`); racing
+  first writes then failed with `SQLITE_PROTOCOL` in 8 runs of 8. The
+  new prefix is absolute, so `GetFullPathNameW` keeps it, and `|` is not
+  allowed in a Windows file name, so no real path is ever it: without the
+  hook kernel32 answers `ERROR_INVALID_NAME`. The race passes 8 of 8. D4
+  (the by-path fallback) is not needed.
+- **The watch's arm check compares like with like (C9, found in PR 1).**
+  `session/watch.rs` compared the watcher's arm identity (on Windows the
+  volume serial and file index) with the session's identity; with the
+  identity now `FileIdInfo`, every Windows watch would have been refused.
+  The session keeps a `watch_anchor`, the held root in the watcher's own
+  terms.
+- **The root is listed on a file object of its own.** A listing's position
+  belongs to its file object, and a duplicated handle shares the held
+  one's. `ReOpenFile` answered `ERROR_ACCESS_DENIED` in this PR's attempt;
+  `NtCreateFile` with an empty name relative to the held handle
+  (`windows_entry::reopen`) makes the new file object, for root listings
+  and for `duplicate_root_handle`, so a host listing never shares a
+  position with the session's.
+- **The mutation probes follow ancestors (`Follow::Never` is
+  `symlink_metadata`'s rule).** The mutation's own walk refuses a link
+  among the folders in its typed words (#1449, #1452).
+- **Table B has Windows bodies only.** Unix declarations with today's
+  pathname bodies would have no caller (the provider keeps its own Unix
+  code), which `-D warnings` refuses; 22c adds them with its bodies.
+- **PR 2 carries open items 1 and 2** (the review's split).
+- **The fresh red team's findings, taken in PR 1:**
+  - the Trash confirmation's snapshot walks from the held root, as the
+    Trash handoff does, so the count the reader confirms is the tree that
+    goes, and a vault opened through a junction can Trash (main refused
+    it);
+  - the interior's replacing rename keeps `std::fs::rename`'s POSIX
+    semantics (`FileRenameInformationEx`, with the classic rename on FAT);
+  - folders on the way are opened with attribute access only, as a path
+    open needs no rights on the folders it passes;
+  - a case-only same-entry needs the two spellings to differ only by
+    case, so two hard links to one file stay two entries;
+  - interior appends map as std's do.
+- **Recorded, not changed:**
+  - `canonical_path` through a junction ancestor that stays in the vault
+    gives the target's spelling (main's Windows rule), not `None` as row
+    1014 and mac's I7 have it; a fact pins the kept rule;
+  - WD24's refusal reaches any volume that answers no `FileIdInfo` and
+    does not name itself FAT: a Samba or NAS share without file ids, a
+    WinFsp mount (Cryptomator, rclone) or `\\wsl.localhost` may now refuse
+    a vault that opened on main; only loopback Windows SMB was probed.
+- **Codex round 1, taken:** the session's path-based readers (bibliography
+  and CSL styles, sync detection, the LiveSync config) read through
+  `fs_root()`, which on Windows is now the held root's own final path,
+  verified against its identity (no reparse point in it, and none of its
+  folders can be renamed or removed while the root is held); the spelling
+  lookup asks only for attribute access.
+- **Codex rounds 2 and 3: the provider's reads open their whole relative
+  name in one `NtCreateFile` against the held root**
+  (`windows_entry::open_beneath_path`). The system parses the folders on
+  the way as for a path, so the traverse-check bypass and the reparse
+  points among them behave as for a path open; only the starting point is
+  the held handle. A folder-by-folder walk had asked each folder for
+  rights a path open never asks (attribute, then `SYNCHRONIZE`, then
+  traverse access), and a handle with no access at all cannot parent a
+  relative open. Metadata probes ask for `FILE_READ_ATTRIBUTES` alone,
+  with no synchronous I/O: less than `std::fs::metadata` asks
+  (`CreateFileW` adds `SYNCHRONIZE`). The interior's walks beneath
+  `.slate` stay folder by folder, because they refuse links.
+- **Codex round 4, taken:** the held root and `.slate` ask what main's
+  per-operation root open asked (attribute and list access, no traverse);
+  a listing asks list access alone; a configured templates folder parses
+  as a Windows path (`\`, repeated and trailing separators); the held
+  path, the stored spelling and the in-vault check fall back to the
+  volume-GUID final path where the DOS form fails (a volume mounted
+  without a drive letter); a followed stat of a reparse point that is no
+  link (an AF_UNIX socket) reports the entry itself, as `std` does; the
+  stored spelling is strict Unicode again, as main's.
+- **Codex round 5, taken:** interior folders on the way and the staging
+  folder are opened with attribute access alone (a handle with attribute
+  access, or even `SYNCHRONIZE` alone, parents a relative open), and an
+  interior listing reopens its folder for list access alone. The session's
+  two holds keep a data right, because only a handle with one takes part
+  in sharing checks and so blocks another opener's delete: list access,
+  then traverse, then the two creation rights (codex round 6). A folder
+  that grants none of the four is held with attribute access alone: the
+  vault opens, as on main, without the pin. The display spelling keeps a
+  volume-GUID path absolute.
+- **Codex round 7, taken:** the root hold and the end-of-open spelling
+  check open with `NtCreateFile` by the NT name (`\??\…`), asking no
+  `SYNCHRONIZE` (`CreateFileW` adds it to every open, so a root that
+  denies it refused the vault); the host's duplicate is reopened without
+  synchronous I/O; interior deletes use `std`'s disposition (POSIX
+  semantics, the read-only attribute ignored, the classic disposition on
+  FAT).
+- **Codex round 8, taken:** the spelling becomes an NT name only after
+  Win32's own normalization (`std::path::absolute`, `GetFullPathNameW`):
+  `.` and `..` resolved and a relative spelling made absolute, nothing on
+  disk consulted, for the hold and the end-of-open check alike.
+- **Followed links keep pathname semantics.** Only the starting point is
+  anchored: a junction inside the vault that leads back out through the
+  session's own retargetable spelling is followed as a path open follows
+  it (codex round 7).
+- **Not mirrored:** `std`'s fallback to a directory listing when even an
+  attribute open is refused with a sharing violation (system files such
+  as a page file), which does not reach a vault.
+- **Accepted risks (codex round 1, below the two-coincidence bar):**
+  - two mounted FAT clones whose weak identities collide, plus a spelling
+    retargeted from one to the other during the open, pass the open's
+    re-verification (weak identities compare equal); the session still
+    holds and uses the folder it opened;
+  - two hard links whose names differ by a Unicode case mapping NTFS does
+    not apply (`K` and the Kelvin sign) compare as one entry, so a move of
+    one onto the other replaces the second link (no content is lost);
+  - the watcher arms its spelling before it reads the identity it compares
+    (pre-existing, `vault/watch.rs`): two timed retargets (A→B before the
+    backend opens, B→A before it observes) pass the arm check while it
+    watches B. A later change binds the watched folder and its identity to
+    one handle;
+  - a `.slate` that denies listing together with an op-log folder that
+    denies attribute reads fails the op-log listing's first open (two
+    restricted folders, codex round 6);
+  - a root or `.slate` that grants no data right at all is held unpinned;
+  - in a case-sensitive folder, hard links named `a.md` and `A.md` compare
+    as one entry, so a move of one onto the other replaces the second
+    link (codex round 7);
+  - a held root whose watch identity cannot be read leaves the watch's arm
+    check without an anchor, so that failure plus a retarget could arm a
+    watch on another folder (codex round 9).
+- **Codex approved at round 9** (head `b1c98a76`).
+- **The facts are in `session/tests/held_root_windows.rs`** (and
+  `db/anchored_windows.rs`, `session/tests/watch.rs`), named for what they
+  prove; the Verification list's names map onto them in PR 1's body.
+
 ## Goal
 
 On Windows, as on macOS and Linux since 22a, a filesystem session binds
