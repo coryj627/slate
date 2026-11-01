@@ -178,11 +178,15 @@ store refuses new writes, so closing falls back to the prompt (§5).
 
 **A tab owns its entry through a claim.** Before its first write, and
 again after every clean transition, a tab calls
-`claim_entry(key, epoch, entry_id) -> Result<HotExitClaimOutcome, HotExitError>`.
+`claim_entry(key, epoch, entry_id, adopts: Option<incarnation>) -> Result<HotExitClaimOutcome, HotExitError>`.
+A restored tab's first claim passes `adopts` = the incarnation of the
+entry it was restored from (from the snapshot); every other claim passes
+`None`.
 Under the vault lock the store checks `epoch` against the vault's
 current epoch (`Superseded { by: Epoch }` if older), writes
 `claims/<id>` = a fresh random incarnation durably (§2, durability), and
-returns `Claimed { claim: HotExitClaim { entry_id, incarnation, epoch } }`.
+returns `Claimed { claim: HotExitClaim { entry_id, incarnation, epoch, adopted } }`,
+`adopted` being the `adopts` it was given.
 A newer claim replaces an older one, so every writer holding the older
 incarnation — another tab instance, another process, a write still in
 flight — is invalidated at once. Generations count within one claim: the
@@ -364,11 +368,15 @@ vault are damaged", "saving them took longer than 5 seconds".
 
 - **A tab's discard releases its claim.**
   `release_entry(key, claim) -> Result<HotExitReleaseOutcome, HotExitError>`
-  takes the vault lock and retires everything of its own incarnation,
-  whatever has happened since: if `claims/<id>` holds `claim.incarnation`
-  it deletes the claim (durably); if the stored entry's incarnation is
-  `claim.incarnation` it deletes the entry (durably). It returns
-  `Released`. Nothing of another incarnation is touched, so a release
+  takes the vault lock and retires everything of its own incarnation and
+  of the incarnation it adopted, whatever has happened since: if
+  `claims/<id>` holds `claim.incarnation` it deletes the claim (durably);
+  if the stored entry's incarnation is `claim.incarnation` or
+  `claim.adopted` it deletes the entry (durably). It returns `Released`.
+  So releasing a restored tab before its first write retires the text it
+  was restored from. Nothing of another incarnation is touched — a
+  successor's published payload stays, and claiming without releasing
+  leaves the adopted text until the tab's first write replaces it — so a release
   that lands after the tab's next claim still removes the discarded
   text, and a stale release can never delete a newer entry. Every write
   of the released incarnation that lands later finds no claim and is
@@ -510,6 +518,9 @@ inside its critical section while the other tries to enter.
 | `two_processes_restoring_one_tab_never_both_count_as_kept` | child process claims and writes; the parent's write after it → `Claim`; and the reverse order | generation-only ordering |
 | `a_release_invalidates_its_own_late_writes` | release, then a delayed write of that claim → `Superseded`, no entry on disk | release without deleting the claim |
 | `a_release_retires_its_payload_after_the_next_claim` | durable C; next claim C2 starts a held payload write; release(C) lands → C's entry deleted; kill before C2 publishes → `read_buffers` returns nothing | release by the live claim only |
+| `a_release_retires_the_text_its_claim_adopted` | restore entry A, claim B adopting A, release(B) before any write → A deleted; claim C, kill before C publishes → nothing restores; the same with release(B) landing after claim C | retire only the claim's own incarnation |
+| `claiming_without_releasing_keeps_the_adopted_text` | restore A, claim B adopting A, kill before B writes → A restores | delete the adopted payload at the claim |
+| `a_stale_adopters_release_keeps_a_successors_payload` | claim B adopting A, claim C, C publishes, release(B) lands → C's entry stays | delete by entry id |
 | `a_stale_release_never_deletes_a_newer_entry` | release of claim A delayed past claim B's write → `Superseded`, B's entry stays; same past a vault discard and a new claim | release by id alone |
 | `a_vault_discard_supersedes_every_earlier_claim_write_and_release` | each kind issued before `discard_vault`, landing after → `Epoch`, nothing on disk | skip the epoch check |
 | `a_discard_cut_short_after_its_epoch_hides_every_older_entry` | a seam fault between the epoch and the deletes; the next read returns nothing and deletes the files | bump the epoch after the deletes |
@@ -606,3 +617,7 @@ mutation run per row above, locally.
   hour. Accepted risks added: a crash during an unconfirmed release; the
   identity check sharing the hash check's window. Deviations 1 and 2
   accepted again.
+- **Codex round 3 (2026-11-01), taken:** a restored tab's claim names
+  the incarnation it adopts, and its release retires that payload as
+  well as its own, never a successor's. No other blocker; Deviations 1
+  and 2 accepted again.
