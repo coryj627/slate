@@ -149,6 +149,17 @@ overwrite) there.
   that grants none of the four is held with attribute access alone: the
   vault opens, as on main, without the pin. The display spelling keeps a
   volume-GUID path absolute.
+- **Codex round 7, taken:** the root hold and the end-of-open spelling
+  check open with `NtCreateFile` by the NT name (`\??\…`), asking no
+  `SYNCHRONIZE` (`CreateFileW` adds it to every open, so a root that
+  denies it refused the vault); the host's duplicate is reopened without
+  synchronous I/O; interior deletes use `std`'s disposition (POSIX
+  semantics, the read-only attribute ignored, the classic disposition on
+  FAT).
+- **Followed links keep pathname semantics.** Only the starting point is
+  anchored: a junction inside the vault that leads back out through the
+  session's own retargetable spelling is followed as a path open follows
+  it (codex round 7).
 - **Not mirrored:** `std`'s fallback to a directory listing when even an
   attribute open is refused with a sharing violation (system files such
   as a page file), which does not reach a vault.
@@ -168,7 +179,10 @@ overwrite) there.
   - a `.slate` that denies listing together with an op-log folder that
     denies attribute reads fails the op-log listing's first open (two
     restricted folders, codex round 6);
-  - a root or `.slate` that grants no data right at all is held unpinned.
+  - a root or `.slate` that grants no data right at all is held unpinned;
+  - in a case-sensitive folder, hard links named `a.md` and `A.md` compare
+    as one entry, so a move of one onto the other replaces the second
+    link (codex round 7).
 - **The facts are in `session/tests/held_root_windows.rs`** (and
   `db/anchored_windows.rs`, `session/tests/watch.rs`), named for what they
   prove; the Verification list's names map onto them in PR 1's body.

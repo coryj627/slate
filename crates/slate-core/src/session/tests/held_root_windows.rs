@@ -1265,3 +1265,50 @@ fn a_slate_that_denies_listing_and_traverse_is_held_through_a_creation_right() {
     drop(session);
     drop(guard);
 }
+
+/// A vault root that denies `SYNCHRONIZE` still opens, reads, passes the
+/// end-of-open check and stays pinned (codex round 7): the hold and the
+/// spelling check open with `NtCreateFile` and ask no `SYNCHRONIZE`, which
+/// `CreateFileW` adds to every open. A pathname read is the control.
+#[test]
+fn a_vault_root_that_denies_synchronize_still_opens_and_stays_pinned() {
+    let tmp = tempfile::tempdir().unwrap();
+    let vault = tmp.path().join("vault");
+    std::fs::create_dir_all(&vault).unwrap();
+    std::fs::write(vault.join("note.md"), "# Note\n").unwrap();
+    let mut guard = DenyGuard(Vec::new());
+    deny(&mut guard, &vault, "S");
+    assert_eq!(
+        std::fs::read_to_string(vault.join("note.md")).unwrap(),
+        "# Note\n"
+    );
+
+    let session = session_at(&vault).unwrap();
+    assert_eq!(session.read_text("note.md").unwrap(), "# Note\n");
+    // The check's own open asks no SYNCHRONIZE either, so it reaches the
+    // sharing check (CreateFileW would be refused by the ACL first).
+    let error = crate::vault::open_absolute_for_tests(&vault, 0x0001_0000 /* DELETE */)
+        .expect_err("still held without sharing deletion");
+    assert_eq!(error.raw_os_error(), Some(32), "{error:?}");
+    drop(session);
+    drop(guard);
+}
+
+/// The interior removes a read-only file as `std::fs::remove_file` does
+/// (codex round 7): a retired op-log someone marked read-only is still
+/// reclaimed.
+#[test]
+fn an_interior_delete_removes_a_read_only_file() {
+    use crate::vault::fs_root::InteriorDir as _;
+    let tmp = tempfile::tempdir().unwrap();
+    let session = session_at(tmp.path()).unwrap();
+    let cache = session.held_root.as_ref().unwrap().cache_dir().clone();
+    let retired = tmp.path().join(".slate").join("retired.oplog");
+    std::fs::write(&retired, "x").unwrap();
+    let mut permissions = std::fs::metadata(&retired).unwrap().permissions();
+    permissions.set_readonly(true);
+    std::fs::set_permissions(&retired, permissions).unwrap();
+
+    cache.remove_file("retired.oplog").unwrap();
+    assert!(!retired.exists(), "the read-only file is gone");
+}

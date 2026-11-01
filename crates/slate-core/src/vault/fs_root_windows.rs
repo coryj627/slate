@@ -246,7 +246,7 @@ pub(crate) fn rename_at(
 /// target).
 pub(crate) fn unlink_at(dir: &fs::File, name: &OsStr) -> io::Result<()> {
     use windows_sys::Wdk::Storage::FileSystem::{
-        FILE_DELETE_ON_CLOSE, FILE_NON_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_REPARSE_POINT,
+        FILE_NON_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_REPARSE_POINT,
     };
     let file = windows_entry::create_relative(
         dir,
@@ -254,10 +254,9 @@ pub(crate) fn unlink_at(dir: &fs::File, name: &OsStr) -> io::Result<()> {
         DELETE | FILE_READ_ATTRIBUTES,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
         FILE_OPEN,
-        FILE_NON_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT | FILE_DELETE_ON_CLOSE,
+        FILE_NON_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT,
     )?;
-    drop(file);
-    Ok(())
+    delete_by_handle(&file)
 }
 
 /// The metadata of the entry `name` in `dir`, looked at as itself.
@@ -304,11 +303,36 @@ pub(crate) fn create_staged(dir: &fs::File, name: &OsStr) -> io::Result<fs::File
 /// other entry that took its name is touched.
 pub(crate) fn delete_by_handle(file: &fs::File) -> io::Result<()> {
     use windows_sys::Win32::Storage::FileSystem::{
-        FILE_DISPOSITION_INFO, FileDispositionInfo, SetFileInformationByHandle,
+        FILE_DISPOSITION_FLAG_DELETE, FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE,
+        FILE_DISPOSITION_FLAG_POSIX_SEMANTICS, FILE_DISPOSITION_INFO, FILE_DISPOSITION_INFO_EX,
+        FileDispositionInfo, FileDispositionInfoEx, SetFileInformationByHandle,
     };
+    // std's remove_file: POSIX semantics, the read-only attribute ignored
+    // (codex round 7: a read-only retired op-log is still reclaimed);
+    // the classic disposition where the volume has no POSIX delete (FAT).
+    let ex = FILE_DISPOSITION_INFO_EX {
+        Flags: FILE_DISPOSITION_FLAG_DELETE
+            | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS
+            | FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE,
+    };
+    // SAFETY: a live handle and an initialized structure of the size passed.
+    let ok = unsafe {
+        SetFileInformationByHandle(
+            file.as_raw_handle(),
+            FileDispositionInfoEx,
+            (&ex as *const FILE_DISPOSITION_INFO_EX).cast(),
+            std::mem::size_of::<FILE_DISPOSITION_INFO_EX>() as u32,
+        )
+    };
+    if ok != 0 {
+        return Ok(());
+    }
+    let error = io::Error::last_os_error();
+    if !matches!(error.raw_os_error(), Some(87) | Some(50) | Some(1)) {
+        return Err(error);
+    }
     let info = FILE_DISPOSITION_INFO { DeleteFile: true };
-    // SAFETY: a live handle and an initialized FILE_DISPOSITION_INFO of the
-    // size passed.
+    // SAFETY: as above.
     let ok = unsafe {
         SetFileInformationByHandle(
             file.as_raw_handle(),
@@ -518,13 +542,23 @@ pub(crate) fn read_dir_names(dir: &fs::File) -> io::Result<Vec<OsString>> {
 /// writing but not for deletion: neither it nor any folder above it can be
 /// renamed or removed while the session lives (design item 5).
 pub(crate) fn open_root(root: &Path) -> io::Result<fs::File> {
+    use windows_sys::Wdk::Storage::FileSystem::FILE_DIRECTORY_FILE;
     let path = super::super::windows_extended_path(root);
     holding(|access| {
-        fs::OpenOptions::new()
-            .access_mode(access | SYNCHRONIZE)
-            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
-            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
-            .open(&path)
+        // No SYNCHRONIZE (codex round 7): a hold is never read or waited on.
+        windows_entry::open_absolute(
+            &path,
+            access,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            FILE_DIRECTORY_FILE,
+        )
+        .unwrap_or_else(|| {
+            fs::OpenOptions::new()
+                .access_mode(access | SYNCHRONIZE)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+                .open(&path)
+        })
     })
 }
 
@@ -532,9 +566,10 @@ pub(crate) fn open_root(root: &Path) -> io::Result<fs::File> {
 /// that lists through it (the host's duplicate): list access where the
 /// folder grants it, else attribute access.
 pub(crate) fn reopen_for_caller(dir: &fs::File) -> io::Result<fs::File> {
-    match windows_entry::reopen(dir, HOLD_ACCESS[0], 7) {
+    // No synchronous I/O (codex round 7): the caller opens beneath it.
+    match windows_entry::reopen_async(dir, HOLD_ACCESS[0], 7) {
         Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
-            windows_entry::reopen(dir, FOLDER_ACCESS, 7)
+            windows_entry::reopen_async(dir, FOLDER_ACCESS, 7)
         }
         other => other,
     }

@@ -110,6 +110,17 @@ pub(crate) fn final_path_guid_for_tests(
     )
 }
 
+/// An open of an absolute path with exactly `access` (no `SYNCHRONIZE`),
+/// for the facts that check a hold's sharing under an ACL denying it.
+#[cfg(all(windows, test))]
+pub(crate) fn open_absolute_for_tests(
+    path: &std::path::Path,
+    access: u32,
+) -> std::io::Result<std::fs::File> {
+    windows_entry::open_absolute(&fs::windows_extended_path(path), access, 7, 0)
+        .expect("an absolute path")
+}
+
 #[cfg(all(windows, test))]
 pub(crate) fn trash_handoff_final_path_for_tests(
     file: &std::fs::File,

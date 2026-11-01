@@ -264,6 +264,74 @@ pub(super) fn open_as_itself(
     )
 }
 
+/// The entry at the absolute `path` (a `\\?\` extended path), opened with
+/// `NtCreateFile` by its NT name (`\??\…`) and exactly `access`, `share`
+/// and `options`: no `SYNCHRONIZE` and no synchronous I/O unless asked
+/// (plan 44 WB-28, codex round 7). `CreateFileW` adds both to every open,
+/// so a folder that denies `SYNCHRONIZE` refuses it; this does not. Its own
+/// reparse point is followed unless `options` carries
+/// `FILE_OPEN_REPARSE_POINT`. `None` for a path with no extended form
+/// (relative, or a device path), which the caller opens as before.
+pub(super) fn open_absolute(
+    path: &Path,
+    access: u32,
+    share: u32,
+    options: u32,
+) -> Option<io::Result<fs::File>> {
+    let wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    let rest = wide.strip_prefix(&[92, 92, 63, 92])?; // \\?\
+    let mut name: Vec<u16> = [92, 63, 63, 92].to_vec(); // \??\
+    name.extend_from_slice(rest);
+    let Ok(length) = u16::try_from(name.len() * 2) else {
+        return Some(Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Path is too long",
+        )));
+    };
+    let mut unicode = UNICODE_STRING {
+        Length: length,
+        MaximumLength: length,
+        Buffer: name.as_mut_ptr(),
+    };
+    let attributes = OBJECT_ATTRIBUTES {
+        Length: std::mem::size_of::<OBJECT_ATTRIBUTES>() as u32,
+        ObjectName: &mut unicode,
+        Attributes: OBJ_CASE_INSENSITIVE,
+        ..Default::default()
+    };
+    let mut handle = std::ptr::null_mut();
+    let mut status_block: IO_STATUS_BLOCK = unsafe { std::mem::zeroed() };
+    // SAFETY: the synchronous call borrows live name/attribute/status buffers.
+    let status = unsafe {
+        NtCreateFile(
+            &mut handle,
+            access,
+            &attributes,
+            &mut status_block,
+            std::ptr::null(),
+            0,
+            share,
+            FILE_OPEN,
+            options,
+            std::ptr::null(),
+            0,
+        )
+    };
+    if status < 0 {
+        return Some(Err(io::Error::from_raw_os_error(
+            unsafe { RtlNtStatusToDosError(status) } as i32,
+        )));
+    }
+    // SAFETY: a successful NtCreateFile transfers a newly owned file handle.
+    Some(Ok(unsafe { fs::File::from_raw_handle(handle) }))
+}
+
+/// [`reopen`] without synchronous I/O and without `SYNCHRONIZE`: a handle
+/// that only parents relative opens (the host's duplicate).
+pub(super) fn reopen_async(dir: &fs::File, access: u32, share: u32) -> io::Result<fs::File> {
+    nt_create_relative(dir, &mut Vec::new(), access, share, FILE_OPEN, 0, 0)
+}
+
 /// The `NtCreateFile` call itself, for a name already checked (or empty: the
 /// parent itself), with exactly the access and options given.
 fn nt_create_relative(

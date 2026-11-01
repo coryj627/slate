@@ -895,12 +895,22 @@ impl FsRoot {
             FILE_FLAG_BACKUP_SEMANTICS, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
             FILE_SHARE_WRITE,
         };
-        let Ok(file) = fs::OpenOptions::new()
-            .access_mode(FILE_READ_ATTRIBUTES)
-            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
-            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
-            .open(super::windows_extended_path(path))
-        else {
+        let extended = super::windows_extended_path(path);
+        // No SYNCHRONIZE (codex round 7), as the hold itself opens.
+        let opened = super::windows_entry::open_absolute(
+            &extended,
+            FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            0,
+        )
+        .unwrap_or_else(|| {
+            fs::OpenOptions::new()
+                .access_mode(FILE_READ_ATTRIBUTES)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+                .open(&extended)
+        });
+        let Ok(file) = opened else {
             return false;
         };
         sys::identity(&file, self.seams).ok() == self.identity
