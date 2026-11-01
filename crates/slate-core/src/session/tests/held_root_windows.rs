@@ -913,9 +913,16 @@ fn a_traverse_only_folder_on_the_way_still_lets_reads_through() {
     std::fs::write(inner.join("note.md"), "# Note\n").unwrap();
     let session = session_at(tmp.path()).unwrap();
     let mut guard = DenyGuard(Vec::new());
-    deny(&mut guard, &tmp.path().join("locked"), "RD,RA");
-    deny(&mut guard, &inner, "RD,RA");
+    // SYNCHRONIZE too (codex round 2): a folder passed on the way is never
+    // waited on, so its walk handle asks only to traverse it.
+    deny(&mut guard, &tmp.path().join("locked"), "RD,RA,S");
+    deny(&mut guard, &inner, "RD,RA,S");
 
+    // The control: a pathname read passes these folders.
+    assert_eq!(
+        std::fs::read_to_string(inner.join("note.md")).unwrap(),
+        "# Note\n"
+    );
     assert_eq!(
         session.read_text("locked/inner/note.md").unwrap(),
         "# Note\n"

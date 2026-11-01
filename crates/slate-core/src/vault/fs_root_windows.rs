@@ -320,13 +320,10 @@ pub(crate) fn open_beneath(
     let mut current: Option<fs::File> = None;
     for name in folders {
         let parent = current.as_ref().unwrap_or(root);
-        // No access at all (SYNCHRONIZE only): a relative open needs no
-        // rights on its parent, as a path open needs none on the folders it
-        // passes, so a traverse-only folder on the way still lets a read
-        // through.
-        current = Some(windows_entry::create_relative(
-            parent, name, 0, share, FILE_OPEN, 0,
-        )?);
+        // Traverse access alone, not even SYNCHRONIZE: a path open needs only
+        // to pass the folders on its way, so a traverse-only folder still
+        // lets a read through.
+        current = Some(windows_entry::open_to_traverse(parent, name, 0)?);
     }
     let parent = current.as_ref().unwrap_or(root);
     let options = if follow_leaf {
@@ -426,21 +423,14 @@ pub(crate) fn entry_id(file: &fs::File) -> io::Result<VaultRootIdentity> {
 /// followed through links, as `Path::is_dir` follows them: only the
 /// starting point is anchored (the open's templates detection).
 pub(crate) fn is_dir_beneath(root: &fs::File, relative: &str) -> bool {
-    use windows_sys::Wdk::Storage::FileSystem::{FILE_DIRECTORY_FILE, FILE_OPEN};
+    use windows_sys::Wdk::Storage::FileSystem::FILE_DIRECTORY_FILE;
     let mut current: Option<fs::File> = None;
     for name in relative.split('/') {
         let Ok(name) = component(name) else {
             return false;
         };
         let parent = current.as_ref().unwrap_or(root);
-        match windows_entry::create_relative(
-            parent,
-            &name,
-            0,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            FILE_OPEN,
-            FILE_DIRECTORY_FILE,
-        ) {
+        match windows_entry::open_to_traverse(parent, &name, FILE_DIRECTORY_FILE) {
             Ok(next) => current = Some(next),
             Err(_) => return false,
         }

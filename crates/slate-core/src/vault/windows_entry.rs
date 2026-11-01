@@ -163,10 +163,10 @@ fn create_relative_with(
     nt_create_relative(
         parent,
         &mut name,
-        access,
+        access | SYNCHRONIZE,
         share,
         disposition,
-        options,
+        options | FILE_SYNCHRONOUS_IO_NONALERT,
         file_attributes,
     )
 }
@@ -176,11 +176,50 @@ fn create_relative_with(
 /// A duplicated handle shares the original's file object, and with it a
 /// listing's position; this one does not.
 pub(super) fn reopen(dir: &fs::File, access: u32, share: u32) -> io::Result<fs::File> {
-    nt_create_relative(dir, &mut Vec::new(), access, share, FILE_OPEN, 0, 0)
+    nt_create_relative(
+        dir,
+        &mut Vec::new(),
+        access | SYNCHRONIZE,
+        share,
+        FILE_OPEN,
+        FILE_SYNCHRONOUS_IO_NONALERT,
+        0,
+    )
+}
+
+/// A folder on the way opened only to resolve the next name beneath it
+/// (plan 44 WB-28): traverse access alone, not `SYNCHRONIZE` and no
+/// synchronous I/O, since nothing reads or waits on it. A path open needs
+/// only to pass the folders on its way, so a traverse-only folder lets this
+/// through too (a handle with no access at all cannot be the parent of a
+/// relative open: it is refused). `options` carries
+/// `FILE_OPEN_REPARSE_POINT` or `FILE_DIRECTORY_FILE` when the caller needs
+/// them.
+pub(super) fn open_to_traverse(
+    parent: &fs::File,
+    name: &OsStr,
+    options: u32,
+) -> io::Result<fs::File> {
+    let mut name: Vec<u16> = name.encode_wide().collect();
+    if !simple_name(&name) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Expected a simple entry name",
+        ));
+    }
+    nt_create_relative(
+        parent,
+        &mut name,
+        FILE_TRAVERSE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        FILE_OPEN,
+        options,
+        0,
+    )
 }
 
 /// The `NtCreateFile` call itself, for a name already checked (or empty: the
-/// parent itself).
+/// parent itself), with exactly the access and options given.
 fn nt_create_relative(
     parent: &fs::File,
     name: &mut Vec<u16>,
@@ -211,14 +250,14 @@ fn nt_create_relative(
     let status = unsafe {
         NtCreateFile(
             &mut handle,
-            access | SYNCHRONIZE,
+            access,
             &attributes,
             &mut status_block,
             std::ptr::null(),
             file_attributes,
             share,
             disposition,
-            options | FILE_SYNCHRONOUS_IO_NONALERT,
+            options,
             std::ptr::null(),
             0,
         )

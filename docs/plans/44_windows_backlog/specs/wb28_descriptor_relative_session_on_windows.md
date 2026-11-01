@@ -118,7 +118,9 @@ overwrite) there.
   verified against its identity (no reparse point in it, and none of its
   folders can be renamed or removed while the root is held); the spelling
   lookup asks only for attribute access, and folders on the way are opened
-  with no access at all (a traverse-only folder still lets a read through).
+  with traverse access alone, without `SYNCHRONIZE` or synchronous I/O
+  (codex round 2), so a traverse-only folder still lets a read through. A
+  handle with no access at all cannot be the parent of a relative open.
 - **Accepted risks (codex round 1, below the two-coincidence bar):**
   - two mounted FAT clones whose weak identities collide, plus a spelling
     retargeted from one to the other during the open, pass the open's
@@ -126,7 +128,12 @@ overwrite) there.
     holds and uses the folder it opened;
   - two hard links whose names differ by a Unicode case mapping NTFS does
     not apply (`K` and the Kelvin sign) compare as one entry, so a move of
-    one onto the other replaces the second link (no content is lost).
+    one onto the other replaces the second link (no content is lost);
+  - the watcher arms its spelling before it reads the identity it compares
+    (pre-existing, `vault/watch.rs`): two timed retargets (A→B before the
+    backend opens, B→A before it observes) pass the arm check while it
+    watches B. A later change binds the watched folder and its identity to
+    one handle.
 - **The facts are in `session/tests/held_root_windows.rs`** (and
   `db/anchored_windows.rs`, `session/tests/watch.rs`), named for what they
   prove; the Verification list's names map onto them in PR 1's body.
