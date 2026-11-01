@@ -32,9 +32,9 @@ use windows_sys::Win32::Storage::FileSystem::{
     BY_HANDLE_FILE_INFORMATION, DELETE, FILE_APPEND_DATA, FILE_ATTRIBUTE_REPARSE_POINT,
     FILE_FLAG_BACKUP_SEMANTICS, FILE_FULL_DIR_INFO, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
     FILE_ID_INFO, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
-    FILE_SHARE_WRITE, FILE_TRAVERSE, FILE_WRITE_DATA, FileFullDirectoryInfo,
-    FileFullDirectoryRestartInfo, FileIdInfo, GetFileInformationByHandle,
-    GetFileInformationByHandleEx, GetVolumeInformationByHandleW, SYNCHRONIZE,
+    FILE_SHARE_WRITE, FILE_WRITE_DATA, FileFullDirectoryInfo, FileFullDirectoryRestartInfo,
+    FileIdInfo, GetFileInformationByHandle, GetFileInformationByHandleEx,
+    GetVolumeInformationByHandleW, SYNCHRONIZE,
 };
 
 use super::super::windows_entry::{self, Found};
@@ -50,9 +50,15 @@ pub(crate) const STOPPED_ON_LINK: i32 = 681;
 /// VHDs answering error 87 and naming themselves so).
 const WEAK_FILE_SYSTEMS: [&str; 3] = ["FAT", "FAT32", "exFAT"];
 
-/// What the folder walk asks of a held or walked folder: enough to list it
-/// and to resolve names relative to it.
-const FOLDER_ACCESS: u32 = FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY | FILE_TRAVERSE;
+/// What a held or walked folder is opened with: what main's per-operation
+/// root open (`windows_entry::PinnedRoot::open`) asked, enough to list it
+/// and to resolve names relative to it. No traverse access: a path open
+/// never needs it, and a folder that denies it still opens.
+pub(crate) const FOLDER_ACCESS: u32 = FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY;
+
+/// What a listing handle asks: list access alone (the listing needs
+/// synchronous I/O, which `open_beneath` adds), as a path listing asks.
+pub(crate) const LIST_ACCESS: u32 = FILE_LIST_DIRECTORY;
 
 /// `name` as one component, refusing an empty name, `.`, `..`, a separator,
 /// a colon (an alternate data stream) or an embedded NUL.
@@ -442,14 +448,11 @@ pub(crate) fn entry_id(file: &fs::File) -> io::Result<VaultRootIdentity> {
 /// only the starting point is anchored (the open's templates detection).
 pub(crate) fn is_dir_beneath(root: &fs::File, relative: &str) -> bool {
     use windows_sys::Wdk::Storage::FileSystem::FILE_DIRECTORY_FILE;
-    let Ok(names) = relative
-        .split('/')
-        .map(component)
-        .collect::<io::Result<Vec<_>>>()
-    else {
+    // Parsed as a Windows path, as the open's own validation parses it, so
+    // `\` separators and repeated or trailing ones are accepted.
+    let Ok(names) = components(Path::new(relative)) else {
         return false;
     };
-    let names: Vec<&OsStr> = names.iter().map(OsString::as_os_str).collect();
     !names.is_empty()
         && windows_entry::open_beneath_path(
             root,

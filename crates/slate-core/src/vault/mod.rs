@@ -98,6 +98,18 @@ pub(crate) use windows_entry::sqlite_create_relative;
 
 /// A handle's normalized final path, for the Windows facts that check which
 /// folder a handle names.
+/// A handle's final path in the volume-GUID form, for the fact that proves
+/// the held path's fallback for a volume without a drive letter.
+#[cfg(all(windows, test))]
+pub(crate) fn final_path_guid_for_tests(
+    file: &std::fs::File,
+) -> std::io::Result<std::path::PathBuf> {
+    trash_handoff::final_path_as(
+        file,
+        windows_sys::Win32::Storage::FileSystem::VOLUME_NAME_GUID,
+    )
+}
+
 #[cfg(all(windows, test))]
 pub(crate) fn trash_handoff_final_path_for_tests(
     file: &std::fs::File,

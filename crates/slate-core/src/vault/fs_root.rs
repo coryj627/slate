@@ -861,15 +861,7 @@ impl FsRoot {
     /// It is a file object of its own (`windows_entry::reopen`), so a host
     /// listing through it never shares a position with the session's.
     pub(crate) fn duplicate_root(&self) -> io::Result<std::os::windows::io::OwnedHandle> {
-        use windows_sys::Win32::Storage::FileSystem::{
-            FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_TRAVERSE, SYNCHRONIZE,
-        };
-        Ok(super::windows_entry::reopen(
-            &self.root,
-            FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | FILE_TRAVERSE | SYNCHRONIZE,
-            7,
-        )?
-        .into())
+        Ok(super::windows_entry::reopen(&self.root, sys::FOLDER_ACCESS, 7)?.into())
     }
 
     /// The held root's current path (`GetFinalPathNameByHandleW`), accepted
@@ -877,7 +869,7 @@ impl FsRoot {
     /// identity's `persistent` flag names (design item 9); `None` when it
     /// cannot be verified. Display only.
     pub(crate) fn verified_current_path(&self) -> Option<PathBuf> {
-        let path = super::trash_handoff::final_path(&self.root).ok()?;
+        let path = super::trash_handoff::final_path_any(&self.root).ok()?;
         self.names_held(&path)
             .then(|| super::trash_handoff::display_spelling(&path))
     }
@@ -888,7 +880,7 @@ impl FsRoot {
     /// removed). For the session's path-based readers (bibliography, CSL
     /// styles, sync detection).
     pub(crate) fn held_path(&self) -> Option<PathBuf> {
-        let path = super::trash_handoff::final_path(&self.root).ok()?;
+        let path = super::trash_handoff::final_path_any(&self.root).ok()?;
         self.names_held(&path).then_some(path)
     }
 
@@ -910,6 +902,12 @@ impl FsRoot {
             return false;
         };
         sys::identity(&file, self.seams).ok() == self.identity
+    }
+
+    /// `names_held` for the facts.
+    #[cfg(test)]
+    pub(crate) fn names_held_for_tests(&self, path: &Path) -> bool {
+        self.names_held(path)
     }
 
     /// Whether the spelling the session opened still names the held root
@@ -937,8 +935,8 @@ impl FsRoot {
             }
         };
         if follow == Follow::InVault {
-            let inside = super::trash_handoff::final_path(&file)?;
-            let held = super::trash_handoff::final_path(&self.root)?;
+            let inside = super::trash_handoff::final_path_any(&file)?;
+            let held = super::trash_handoff::final_path_any(&self.root)?;
             if !inside.starts_with(&held) {
                 return Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
@@ -955,7 +953,22 @@ impl FsRoot {
         if relative.as_os_str().is_empty() {
             return self.root.metadata();
         }
-        sys::open_metadata_beneath(&self.root, relative, follow != Follow::Never)?.metadata()
+        match sys::open_metadata_beneath(&self.root, relative, follow != Follow::Never) {
+            Ok(file) => file.metadata(),
+            // std's rule (rust-lang/rust#109106): a reparse point that is no
+            // link (an AF_UNIX socket) cannot be followed; its own entry is
+            // what a followed stat reports. A link, real or dangling, keeps
+            // the error.
+            Err(error) if follow != Follow::Never && error.raw_os_error() == Some(1920) => {
+                let metadata =
+                    sys::open_metadata_beneath(&self.root, relative, false)?.metadata()?;
+                if metadata.file_type().is_symlink() {
+                    return Err(error);
+                }
+                Ok(metadata)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// The entries of the folder at `relative` (links followed to reach it,
@@ -964,23 +977,11 @@ impl FsRoot {
         &self,
         relative: &Path,
     ) -> io::Result<Vec<(OsString, sys::ListedKind)>> {
-        use windows_sys::Win32::Storage::FileSystem::{
-            FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_TRAVERSE, SYNCHRONIZE,
-        };
         if relative.as_os_str().is_empty() {
-            let own = super::windows_entry::reopen(
-                &self.root,
-                FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | FILE_TRAVERSE | SYNCHRONIZE,
-                7,
-            )?;
+            let own = super::windows_entry::reopen(&self.root, sys::LIST_ACCESS, 7)?;
             return sys::read_dir_entries(&own);
         }
-        let folder = sys::open_beneath(
-            &self.root,
-            relative,
-            true,
-            FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | FILE_TRAVERSE | SYNCHRONIZE,
-        )?;
+        let folder = sys::open_beneath(&self.root, relative, true, sys::LIST_ACCESS)?;
         sys::read_dir_entries(&folder)
     }
 
@@ -1022,8 +1023,8 @@ impl FsRoot {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(error),
         };
-        let stored = super::trash_handoff::final_path(&file)?;
-        let held = super::trash_handoff::final_path(&self.root)?;
+        let stored = super::trash_handoff::final_path_any(&file)?;
+        let held = super::trash_handoff::final_path_any(&self.root)?;
         let rest = stored.strip_prefix(&held).map_err(|_| {
             io::Error::new(
                 io::ErrorKind::PermissionDenied,
@@ -1034,7 +1035,15 @@ impl FsRoot {
                 ),
             )
         })?;
-        Ok(Some(rest.to_string_lossy().replace('\\', "/")))
+        // Strict, as main's: a name that is not valid Unicode has no
+        // spelling to bind (a lossy one could name a sibling).
+        let rest = rest.to_str().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "canonical path is not valid UTF-8",
+            )
+        })?;
+        Ok(Some(rest.replace('\\', "/")))
     }
 
     /// The held root in the vault watcher's own terms (the volume serial

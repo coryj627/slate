@@ -325,9 +325,18 @@ pub(super) fn pinned_path(
 /// object the handle is open on, with its drive letter (`\\?\C:\…`).
 #[cfg(windows)]
 pub(super) fn final_path(file: &std::fs::File) -> std::io::Result<PathBuf> {
+    final_path_as(
+        file,
+        windows_sys::Win32::Storage::FileSystem::VOLUME_NAME_DOS,
+    )
+}
+
+/// `GetFinalPathNameByHandleW` with the volume form `volume`.
+#[cfg(windows)]
+pub(super) fn final_path_as(file: &std::fs::File, volume: u32) -> std::io::Result<PathBuf> {
     use std::os::windows::{ffi::OsStringExt as _, io::AsRawHandle as _};
     use windows_sys::Win32::Storage::FileSystem::{
-        FILE_NAME_NORMALIZED, GetFinalPathNameByHandleW, VOLUME_NAME_DOS,
+        FILE_NAME_NORMALIZED, GetFinalPathNameByHandleW,
     };
 
     let mut buffer = vec![0u16; 512];
@@ -341,7 +350,7 @@ pub(super) fn final_path(file: &std::fs::File) -> std::io::Result<PathBuf> {
                 file.as_raw_handle(),
                 buffer.as_mut_ptr(),
                 capacity,
-                FILE_NAME_NORMALIZED | VOLUME_NAME_DOS,
+                FILE_NAME_NORMALIZED | volume,
             )
         } as usize;
         if length == 0 {
@@ -353,6 +362,16 @@ pub(super) fn final_path(file: &std::fs::File) -> std::io::Result<PathBuf> {
         }
         buffer.resize(length, 0);
     }
+}
+
+/// `final_path`, falling back to the volume-GUID form (`\\?\Volume{…}\…`)
+/// on a volume mounted without a drive letter, where the DOS form fails
+/// (plan 44 WB-28, codex round 4). Both forms are paths the file APIs
+/// open; the Trash handoff keeps the DOS form alone.
+#[cfg(windows)]
+pub(super) fn final_path_any(file: &std::fs::File) -> std::io::Result<PathBuf> {
+    use windows_sys::Win32::Storage::FileSystem::VOLUME_NAME_GUID;
+    final_path(file).or_else(|_| final_path_as(file, VOLUME_NAME_GUID))
 }
 
 /// `final_path`'s result as a person reads it: `\\?\C:\…` as `C:\…`, and

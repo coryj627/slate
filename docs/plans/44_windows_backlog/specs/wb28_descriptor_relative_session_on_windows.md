@@ -130,6 +130,15 @@ overwrite) there.
   with no synchronous I/O: less than `std::fs::metadata` asks
   (`CreateFileW` adds `SYNCHRONIZE`). The interior's walks beneath
   `.slate` stay folder by folder, because they refuse links.
+- **Codex round 4, taken:** the held root and `.slate` ask what main's
+  per-operation root open asked (attribute and list access, no traverse);
+  a listing asks list access alone; a configured templates folder parses
+  as a Windows path (`\`, repeated and trailing separators); the held
+  path, the stored spelling and the in-vault check fall back to the
+  volume-GUID final path where the DOS form fails (a volume mounted
+  without a drive letter); a followed stat of a reparse point that is no
+  link (an AF_UNIX socket) reports the entry itself, as `std` does; the
+  stored spelling is strict Unicode again, as main's.
 - **Not mirrored:** `std`'s fallback to a directory listing when even an
   attribute open is refused with a sharing violation (system files such
   as a page file), which does not reach a vault.

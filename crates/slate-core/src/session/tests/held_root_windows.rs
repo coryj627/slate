@@ -1008,3 +1008,165 @@ fn a_leaf_that_denies_synchronize_still_answers_stats_and_probes() {
     );
     drop(guard);
 }
+
+/// A listing asks the listed folder for list access alone (codex round 4):
+/// a folder that denies traverse lists, and so does one that denies
+/// attribute reads beneath a parent that denies listing; a pathname
+/// listing is the control for each.
+#[test]
+fn listings_ask_only_for_list_access() {
+    let tmp = tempfile::tempdir().unwrap();
+    let no_traverse = tmp.path().join("no-traverse");
+    let outer = tmp.path().join("outer");
+    let inner = outer.join("inner");
+    std::fs::create_dir_all(&no_traverse).unwrap();
+    std::fs::create_dir_all(&inner).unwrap();
+    std::fs::write(no_traverse.join("a.md"), "a").unwrap();
+    std::fs::write(inner.join("b.md"), "b").unwrap();
+    let session = session_at(tmp.path()).unwrap();
+    let mut guard = DenyGuard(Vec::new());
+    deny(&mut guard, &no_traverse, "X");
+    deny(&mut guard, &outer, "RD");
+    deny(&mut guard, &inner, "RA");
+
+    for (relative, path, name) in [
+        ("no-traverse", &no_traverse, "a.md"),
+        ("outer/inner", &inner, "b.md"),
+    ] {
+        let control: Vec<String> = std::fs::read_dir(path)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(control, [name], "the pathname listing works");
+        let listed: Vec<String> = session
+            .provider
+            .list_dir(relative)
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.name)
+            .collect();
+        assert_eq!(listed, [name], "{relative}");
+    }
+    drop(guard);
+}
+
+/// The held root asks what main's per-operation root open asked (codex
+/// round 4): a vault whose root denies traverse still opens and reads.
+#[test]
+fn a_vault_root_that_denies_traverse_still_opens() {
+    let tmp = tempfile::tempdir().unwrap();
+    let vault = tmp.path().join("vault");
+    std::fs::create_dir_all(vault.join(".slate")).unwrap();
+    std::fs::write(vault.join("note.md"), "# Note\n").unwrap();
+    let mut guard = DenyGuard(Vec::new());
+    deny(&mut guard, &vault, "X");
+    deny(&mut guard, &vault.join(".slate"), "X");
+    assert_eq!(
+        std::fs::read_to_string(vault.join("note.md")).unwrap(),
+        "# Note\n"
+    );
+
+    let session = session_at(&vault).unwrap();
+    scanned(&session);
+    assert_eq!(session.read_text("note.md").unwrap(), "# Note\n");
+    drop(session);
+    drop(guard);
+}
+
+/// A templates folder configured with Windows separators (`\`, a trailing
+/// one) is detected, as the open's own path validation accepts it (codex
+/// round 4).
+#[test]
+fn a_templates_folder_with_windows_separators_is_detected() {
+    for configured in [
+        r"Notes\\Templates",
+        "Notes/Templates/",
+        r"Notes\\\\Templates",
+    ] {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("Notes").join("Templates")).unwrap();
+        std::fs::write(
+            tmp.path().join("slate.json"),
+            format!(r#"{{ "templates": {{ "directory": "{configured}" }} }}"#),
+        )
+        .unwrap();
+        let session = session_at(tmp.path()).unwrap();
+        assert!(
+            session.config.templates_dir.is_some(),
+            "{configured}: the templates folder is detected"
+        );
+    }
+}
+
+/// The held path falls back to the volume-GUID form, for a volume mounted
+/// without a drive letter (codex round 4): that form names the held folder,
+/// passes the identity check, and the file APIs read through it.
+#[test]
+fn the_held_paths_volume_guid_form_names_the_held_folder() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("note.md"), "# Note\n").unwrap();
+    let session = session_at(tmp.path()).unwrap();
+    let held = session.held_root.as_ref().unwrap();
+    let guid = crate::vault::final_path_guid_for_tests(held.descriptor()).unwrap();
+    assert!(
+        guid.to_string_lossy().starts_with(r"\\?\Volume{"),
+        "{}",
+        guid.display()
+    );
+    assert!(held.names_held_for_tests(&guid));
+    assert_eq!(
+        std::fs::read_to_string(guid.join("note.md")).unwrap(),
+        "# Note\n"
+    );
+}
+
+/// A followed stat of a reparse point that is no link (an AF_UNIX socket)
+/// reports the entry itself, as `std::fs::metadata` does
+/// (rust-lang/rust#109106; codex round 4).
+#[test]
+fn a_followed_stat_of_an_opaque_reparse_point_reports_the_entry() {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::System::IO::DeviceIoControl;
+    const FSCTL_SET_REPARSE_POINT: u32 = 0x0009_00A4;
+    const IO_REPARSE_TAG_AF_UNIX: u32 = 0x8000_0023;
+    let tmp = tempfile::tempdir().unwrap();
+    let socket = tmp.path().join("socket");
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .custom_flags(0x0020_0000) // FILE_FLAG_OPEN_REPARSE_POINT
+        .open(&socket)
+        .unwrap();
+    // The reparse header with no data: tag, data length 0, reserved.
+    let mut header = [0u8; 8];
+    header[..4].copy_from_slice(&IO_REPARSE_TAG_AF_UNIX.to_le_bytes());
+    let mut returned = 0u32;
+    // SAFETY: a live handle and an input buffer of the size passed.
+    let ok = unsafe {
+        DeviceIoControl(
+            file.as_raw_handle(),
+            FSCTL_SET_REPARSE_POINT,
+            header.as_ptr().cast(),
+            header.len() as u32,
+            std::ptr::null_mut(),
+            0,
+            &mut returned,
+            std::ptr::null_mut(),
+        )
+    };
+    assert_ne!(
+        ok,
+        0,
+        "set the AF_UNIX tag: {:?}",
+        std::io::Error::last_os_error()
+    );
+    drop(file);
+    assert!(
+        std::fs::metadata(&socket).is_ok(),
+        "the control: std's followed stat"
+    );
+
+    let session = session_at(tmp.path()).unwrap();
+    assert!(session.provider.stat("socket").is_ok());
+}
