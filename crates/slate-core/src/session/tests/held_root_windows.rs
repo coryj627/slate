@@ -357,7 +357,9 @@ fn a_plain_open_passes_its_reverification_and_has_a_watch_anchor() {
     );
 }
 
-/// Every file below `root`, by its root-relative path, with its bytes.
+/// Every entry below `root`, by its root-relative path: a file with its
+/// bytes, a folder (its path ending in `/`) with none, so a folder made in
+/// the decoy (a staging `.slate\tmp`) changes the tree too.
 fn tree(root: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
     let mut files = std::collections::BTreeMap::new();
     let mut folders = vec![root.to_path_buf()];
@@ -366,6 +368,8 @@ fn tree(root: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
             let entry = entry.unwrap();
             let path = entry.path();
             if entry.file_type().unwrap().is_dir() {
+                let relative = path.strip_prefix(root).unwrap().to_string_lossy().into_owned();
+                files.insert(format!("{relative}/"), Vec::new());
                 folders.push(path);
             } else {
                 let relative = path
