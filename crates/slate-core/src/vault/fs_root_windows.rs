@@ -320,15 +320,12 @@ pub(crate) fn open_beneath(
     let mut current: Option<fs::File> = None;
     for name in folders {
         let parent = current.as_ref().unwrap_or(root);
-        // Attribute access only: a relative open needs no rights on its
-        // parent, as a path open needs none on the folders it passes.
+        // No access at all (SYNCHRONIZE only): a relative open needs no
+        // rights on its parent, as a path open needs none on the folders it
+        // passes, so a traverse-only folder on the way still lets a read
+        // through.
         current = Some(windows_entry::create_relative(
-            parent,
-            name,
-            FILE_READ_ATTRIBUTES,
-            share,
-            FILE_OPEN,
-            0,
+            parent, name, 0, share, FILE_OPEN, 0,
         )?);
     }
     let parent = current.as_ref().unwrap_or(root);
@@ -439,7 +436,7 @@ pub(crate) fn is_dir_beneath(root: &fs::File, relative: &str) -> bool {
         match windows_entry::create_relative(
             parent,
             &name,
-            FILE_READ_ATTRIBUTES,
+            0,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             FILE_OPEN,
             FILE_DIRECTORY_FILE,

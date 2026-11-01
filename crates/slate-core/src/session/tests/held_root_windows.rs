@@ -678,6 +678,35 @@ fn the_duplicated_root_handle_names_the_held_root_after_its_spelling_is_retarget
     let duplicate = std::fs::File::from(session.duplicate_root_handle().unwrap());
     let named = crate::vault::trash_handoff_final_path_for_tests(&duplicate).unwrap();
     assert!(named.ends_with("A"), "{}", named.display());
+    // A file object of its own: list the session's held handle to its end,
+    // then a CONTINUING listing on the duplicate still starts at the
+    // beginning (a duplicated handle would share the position and be done).
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileFullDirectoryInfo, FileFullDirectoryRestartInfo, GetFileInformationByHandleEx,
+    };
+    let held = session.held_root.as_ref().unwrap().descriptor();
+    let mut buffer = vec![0u64; 1024];
+    let list = |file: &std::fs::File, class, buffer: &mut Vec<u64>| {
+        // SAFETY: a live handle and a writable, aligned buffer of its size.
+        unsafe {
+            GetFileInformationByHandleEx(
+                file.as_raw_handle(),
+                class,
+                buffer.as_mut_ptr().cast(),
+                (buffer.len() * 8) as u32,
+            )
+        }
+    };
+    let mut class = FileFullDirectoryRestartInfo;
+    while list(held, class, &mut buffer) != 0 {
+        class = FileFullDirectoryInfo;
+    }
+    assert_ne!(
+        list(&duplicate, FileFullDirectoryInfo, &mut buffer),
+        0,
+        "the duplicate keeps its own listing position"
+    );
     let names = crate::vault::fs_root::sys::read_dir_names(&duplicate).unwrap();
     assert!(names.iter().any(|name| name == "only-in-a.md"), "{names:?}");
 }
@@ -783,4 +812,134 @@ fn a_retargeted_spelling_stages_the_trash_of_the_held_vault() {
         })
         .unwrap();
     assert_eq!(staged.items[0].item_count, 2, "the held vault's Folder");
+}
+
+/// The session's path-based readers (bibliography, CSL styles, sync
+/// detection, the LiveSync config) read the held folder after the spelling
+/// is retargeted (codex round 1): `fs_root()` is the held root's own final
+/// path on Windows.
+#[test]
+fn the_session_path_readers_read_the_held_folder_after_a_retarget() {
+    use crate::citations::bibliography::{BibFormat, BibliographySource};
+    let tmp = tempfile::tempdir().unwrap();
+    let a = tmp.path().join("A");
+    let b = tmp.path().join("B");
+    std::fs::create_dir_all(&a).unwrap();
+    std::fs::create_dir_all(b.join(".obsidian/plugins/obsidian-livesync")).unwrap();
+    std::fs::write(
+        a.join("refs.bib"),
+        "@book{inA, title = {In A}, year = {2001}}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        b.join("refs.bib"),
+        "@book{inB, title = {In B}, year = {2002}}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        b.join(".obsidian/plugins/obsidian-livesync/data.json"),
+        "{}",
+    )
+    .unwrap();
+    let spelling = tmp.path().join("vault");
+    junction(&spelling, &a);
+    let session = session_at(&spelling).unwrap();
+    std::fs::remove_dir(&spelling).unwrap();
+    junction(&spelling, &b);
+
+    session
+        .set_bibliography_sources(vec![BibliographySource {
+            path: "refs.bib".into(),
+            format: BibFormat::BibTeX,
+            watch: false,
+        }])
+        .unwrap();
+    let keys: Vec<String> = session
+        .get_bibliography_entries()
+        .unwrap()
+        .into_iter()
+        .map(|entry| entry.key)
+        .collect();
+    assert_eq!(keys, ["inA"], "the held vault's refs.bib");
+    let report = session.detect_sync().unwrap();
+    assert!(
+        report.providers.is_empty(),
+        "B's LiveSync marker is not ours: {report:?}"
+    );
+    assert!(matches!(
+        session.livesync_config().unwrap(),
+        crate::sync_detect::LiveSyncConfigStatus::NotPresent
+    ));
+}
+/// Removes the deny entries `deny` added, before the temp folder goes.
+struct DenyGuard(Vec<std::path::PathBuf>);
+
+impl Drop for DenyGuard {
+    fn drop(&mut self) {
+        for path in &self.0 {
+            let _ = std::process::Command::new("icacls")
+                .arg(path)
+                .args(["/remove:d", "*S-1-1-0"])
+                .output();
+        }
+    }
+}
+
+/// Deny Everyone `rights` (icacls abbreviations) on `path` itself, not
+/// inherited.
+fn deny(guard: &mut DenyGuard, path: &Path, rights: &str) {
+    let out = std::process::Command::new("icacls")
+        .arg(path)
+        .arg("/deny")
+        .arg(format!("*S-1-1-0:({rights})"))
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "icacls /deny: {out:?}");
+    guard.0.push(path.to_path_buf());
+}
+
+/// A folder on the way that the reader may only traverse (no list, no
+/// attribute rights) still lets a read and a stat beneath it through, as a
+/// path open does (codex round 1): the walk asks no rights of the folders
+/// it passes.
+#[test]
+fn a_traverse_only_folder_on_the_way_still_lets_reads_through() {
+    // Two levels: Windows grants read-attributes on a folder to whoever may
+    // list its parent, so only a folder below a denied one is truly
+    // traverse-only.
+    let tmp = tempfile::tempdir().unwrap();
+    let inner = tmp.path().join("locked").join("inner");
+    std::fs::create_dir_all(&inner).unwrap();
+    std::fs::write(inner.join("note.md"), "# Note\n").unwrap();
+    let session = session_at(tmp.path()).unwrap();
+    let mut guard = DenyGuard(Vec::new());
+    deny(&mut guard, &tmp.path().join("locked"), "RD,RA");
+    deny(&mut guard, &inner, "RD,RA");
+
+    assert_eq!(
+        session.read_text("locked/inner/note.md").unwrap(),
+        "# Note\n"
+    );
+    assert!(session.provider.stat("locked/inner/note.md").is_ok());
+    drop(guard);
+}
+
+/// An entry the reader may rename but not read keeps its stored spelling
+/// and can still be renamed (codex round 1): the spelling lookup asks only
+/// for attribute access.
+#[test]
+fn an_unreadable_entry_keeps_its_spelling_and_can_be_renamed() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("Secret.md"), "x").unwrap();
+    let session = session_at(tmp.path()).unwrap();
+    let mut guard = DenyGuard(Vec::new());
+    deny(&mut guard, &tmp.path().join("Secret.md"), "RD");
+
+    assert_eq!(
+        session.canonical_path("secret.md").unwrap().as_deref(),
+        Some("Secret.md")
+    );
+    session.provider.rename("Secret.md", "Renamed.md").unwrap();
+    drop(guard);
+    assert!(tmp.path().join("Renamed.md").is_file());
 }

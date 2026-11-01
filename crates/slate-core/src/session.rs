@@ -10248,7 +10248,18 @@ impl VaultSession {
     /// `cache_dir` has no parent or an empty one (a bare relative
     /// path) — provider-abstracted/in-memory setups, where resolving
     /// vault paths against the process CWD would be meaningless.
+    ///
+    /// A Windows session that holds its root (plan 44 WB-28) answers the
+    /// held folder's own final path, verified against the held identity:
+    /// it has no reparse point in it, and none of its folders can be
+    /// renamed or removed while the root is held, so a spelling retargeted
+    /// mid-session cannot hand these readers another folder. A root whose
+    /// path cannot be verified answers `None`, failing closed.
     fn fs_root(&self) -> Option<std::path::PathBuf> {
+        #[cfg(windows)]
+        if let Some(held) = &self.held_root {
+            return held.held_path();
+        }
         self.config
             .cache_dir
             .parent()

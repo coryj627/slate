@@ -762,11 +762,24 @@ mod tests {
     fn a_linked_leaf_and_the_directory_itself_are_refused() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("real.sqlite"), b"x").unwrap();
-        let linked = std::os::windows::fs::symlink_file(
+        // A file symbolic link where this account may make one, else a
+        // junction (no privilege needed): a reparse point either way, so the
+        // refusal below is always exercised.
+        let symlinked = std::os::windows::fs::symlink_file(
             tmp.path().join("real.sqlite"),
             tmp.path().join("linked.sqlite"),
         )
         .is_ok();
+        if !symlinked {
+            std::fs::create_dir(tmp.path().join("elsewhere")).unwrap();
+            let out = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(tmp.path().join("linked.sqlite"))
+                .arg(tmp.path().join("elsewhere"))
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "mklink /J: {out:?}");
+        }
         let anchor = SqliteAnchor::register(&open_dir(tmp.path()), tmp.path()).unwrap();
         let c_wide = |path: PathBuf| {
             let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
@@ -788,7 +801,7 @@ mod tests {
             assert_eq!(handle, INVALID_HANDLE_VALUE);
             assert_eq!(anchored_delete_file(dir.as_ptr()), 0);
         }
-        if linked {
+        {
             let link = c_wide(anchor.database_path("linked.sqlite"));
             // SAFETY: as above.
             let handle = unsafe {
@@ -806,10 +819,12 @@ mod tests {
                 handle, INVALID_HANDLE_VALUE,
                 "a linked leaf is never opened"
             );
-            assert_eq!(
-                io::Error::last_os_error().raw_os_error(),
-                Some(ERROR_CANT_ACCESS_FILE as i32)
-            );
+            if symlinked {
+                assert_eq!(
+                    io::Error::last_os_error().raw_os_error(),
+                    Some(ERROR_CANT_ACCESS_FILE as i32)
+                );
+            }
         }
         let real = c_wide(anchor.database_path("real.sqlite"));
         // SAFETY: as above.

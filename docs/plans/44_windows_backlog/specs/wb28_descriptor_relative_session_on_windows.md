@@ -112,6 +112,21 @@ overwrite) there.
     does not name itself FAT: a Samba or NAS share without file ids, a
     WinFsp mount (Cryptomator, rclone) or `\\wsl.localhost` may now refuse
     a vault that opened on main; only loopback Windows SMB was probed.
+- **Codex round 1, taken:** the session's path-based readers (bibliography
+  and CSL styles, sync detection, the LiveSync config) read through
+  `fs_root()`, which on Windows is now the held root's own final path,
+  verified against its identity (no reparse point in it, and none of its
+  folders can be renamed or removed while the root is held); the spelling
+  lookup asks only for attribute access, and folders on the way are opened
+  with no access at all (a traverse-only folder still lets a read through).
+- **Accepted risks (codex round 1, below the two-coincidence bar):**
+  - two mounted FAT clones whose weak identities collide, plus a spelling
+    retargeted from one to the other during the open, pass the open's
+    re-verification (weak identities compare equal); the session still
+    holds and uses the folder it opened;
+  - two hard links whose names differ by a Unicode case mapping NTFS does
+    not apply (`K` and the Kelvin sign) compare as one entry, so a move of
+    one onto the other replaces the second link (no content is lost).
 - **The facts are in `session/tests/held_root_windows.rs`** (and
   `db/anchored_windows.rs`, `session/tests/watch.rs`), named for what they
   prove; the Verification list's names map onto them in PR 1's body.

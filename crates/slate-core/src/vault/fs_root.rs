@@ -882,6 +882,16 @@ impl FsRoot {
             .then(|| super::trash_handoff::display_spelling(&path))
     }
 
+    /// The held root's final path (`\\?\C:\…`), verified to name the held
+    /// folder: a spelling of the held root that no retarget can redirect
+    /// while the session holds it (its folders cannot be renamed or
+    /// removed). For the session's path-based readers (bibliography, CSL
+    /// styles, sync detection).
+    pub(crate) fn held_path(&self) -> Option<PathBuf> {
+        let path = super::trash_handoff::final_path(&self.root).ok()?;
+        self.names_held(&path).then_some(path)
+    }
+
     /// Whether the folder at `path` (its own reparse point followed, every
     /// share mode, so a session's own hold does not refuse the look) reads
     /// the identity this root was opened with, under the same seams.
@@ -1010,7 +1020,14 @@ impl FsRoot {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(error),
         }
-        let file = match self.open_beneath(relative, Follow::Links) {
+        // Attribute access is enough for the final path: the spelling of an
+        // entry the reader may rename but not read is still its spelling.
+        let file = match sys::open_beneath(
+            &self.root,
+            relative,
+            true,
+            windows_sys::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES,
+        ) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(error),
