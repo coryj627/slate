@@ -1293,7 +1293,7 @@ impl PinnedMutationTarget {
         {
             return Err(io::Error::last_os_error());
         }
-        super::windows_entry::rename_into(&source, self.parent.handle(), &self.leaf, replace)
+        super::windows_entry::rename_into(source, self.parent.handle(), &self.leaf, replace)
     }
 
     /// A failed call in the pinned folder: the typed refusal when one of its

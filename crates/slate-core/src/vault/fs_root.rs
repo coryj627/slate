@@ -910,7 +910,7 @@ impl FsRoot {
     /// root for reading (WB-28 design table B): `Follow::Links` follows a
     /// link wherever the pathname read followed one; `Follow::InVault`
     /// follows, then refuses an entry that is not beneath the held root;
-    /// `Follow::Never` opens every component as itself.
+    /// `Follow::Never` opens the leaf as itself (`symlink_metadata`).
     pub(crate) fn open_beneath(&self, relative: &Path, follow: Follow) -> io::Result<fs::File> {
         use windows_sys::Win32::Storage::FileSystem::{FILE_GENERIC_READ, FILE_READ_ATTRIBUTES};
         if relative.as_os_str().is_empty() {
@@ -1167,7 +1167,9 @@ fn observed_identity(root: &Path) -> Option<VaultRootIdentity> {
 /// How a read beneath the held root treats a link on the way (WB-28 design
 /// table B): `Links` follows one wherever the pathname read followed it;
 /// `InVault` follows, then requires the entry to lie beneath the held root;
-/// `Never` opens every component as itself (the mutation probes).
+/// `Never` opens the leaf as itself, as `symlink_metadata` does (the
+/// mutation probes; the mutation's own walk refuses a link among the
+/// folders, in its words).
 #[cfg(windows)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Follow {

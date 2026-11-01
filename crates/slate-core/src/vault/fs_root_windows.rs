@@ -285,15 +285,16 @@ pub(crate) fn delete_by_handle(file: &fs::File) -> io::Result<()> {
 }
 
 /// The entry at `relative` (vault-relative components) beneath `root`,
-/// each component opened relative to the one before. With `follow_links`
-/// every component is followed through a link, as a pathname read follows
-/// it; without, every component opens as itself and a link on the way is
-/// [`STOPPED_ON_LINK`] (the leaf itself may be a link: it opens as one).
-/// An empty `relative` names no entry here: the caller holds the root.
+/// each component opened relative to the one before and followed through
+/// a link, as a pathname read follows it. With `follow_leaf` false the
+/// leaf alone opens as itself (`symlink_metadata`'s rule): a link there is
+/// the link. The mutation walks, not these reads, refuse a link among the
+/// folders, in their own words. An empty `relative` names no entry here:
+/// the caller holds the root.
 pub(crate) fn open_beneath(
     root: &fs::File,
     relative: &Path,
-    follow_links: bool,
+    follow_leaf: bool,
     access: u32,
 ) -> io::Result<fs::File> {
     use std::path::Component;
@@ -314,28 +315,25 @@ pub(crate) fn open_beneath(
             "the vault root itself is the held handle",
         ));
     };
-    let options = if follow_links {
-        0
-    } else {
-        FILE_OPEN_REPARSE_POINT
-    };
     let share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
     let mut current: Option<fs::File> = None;
     for name in folders {
         let parent = current.as_ref().unwrap_or(root);
-        let next =
-            windows_entry::create_relative(parent, name, FOLDER_ACCESS, share, FILE_OPEN, options)?;
-        if !follow_links
-            && matches!(
-                windows_entry::found(&next)?,
-                Found::Junction | Found::SymbolicLink | Found::Link
-            )
-        {
-            return Err(io::Error::from_raw_os_error(STOPPED_ON_LINK));
-        }
-        current = Some(next);
+        current = Some(windows_entry::create_relative(
+            parent,
+            name,
+            FOLDER_ACCESS,
+            share,
+            FILE_OPEN,
+            0,
+        )?);
     }
     let parent = current.as_ref().unwrap_or(root);
+    let options = if follow_leaf {
+        0
+    } else {
+        FILE_OPEN_REPARSE_POINT
+    };
     windows_entry::create_relative(parent, leaf, access, share, FILE_OPEN, options)
 }
 
