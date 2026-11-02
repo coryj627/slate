@@ -17,6 +17,8 @@ Four areas need real engineering:
 
 Three things should change in the design system rather than in the app: the two-layer shadows, the optional Mica title bar, and the Material acrylic component. All three changed on 1 November 2026 (see Shadows and Mica and acrylic).
 
+The six spikes ran on 2 November 2026 and none failed (see Spikes to run first). They confirm the approach for all four areas of engineering above, and they don't reduce the work. They added two requirements for the menu template.
+
 ## Ratings
 
 - **Native:** the Fluent theme already does it. Override resource keys only.
@@ -29,18 +31,18 @@ Three things should change in the design system rather than in the app: the two-
 | Colour tokens, light and dark | Native | Override Fluent's **brush** keys in the Slate dictionaries (see Colour) |
 | High Contrast | Native | Keep `Fluent.HC` + `Slate.Contrast`; never apply gold there |
 | Type ramp, sizes, line heights | Native | CSS px = WPF device-independent pixels, so values carry over 1:1 |
-| Segoe UI Variable | Native, with a check | Use the named families; confirm in a spike |
-| Text scaling | Build | Scale font sizes yourself |
+| Segoe UI Variable | Native | Use the named families; spike 1 confirmed them on Windows 11 |
+| Text scaling | Build | Scale font sizes yourself; spike 5 confirmed `MinHeight` rows grow without clipping |
 | Icons | Native | `SymbolThemeFontFamily`; name every icon-only control |
 | Radii, strokes | Native | 4 and 8 match Fluent; 6px tabs need a template |
 | Hover and pressed | Template | Map overlays to Fluent's state brushes |
-| Shadows | Change the design | One shadow per element; watch ClearType |
+| Shadows | Change the design | One shadow per element; on a sibling of the text, with the ClearType hint (spike 4) |
 | Motion | Native | Storyboards with the same curves and durations |
 | Focus ring | Native | One offset differs (1px vs 3px) |
-| Text selection | Native, with a switch | Turn off adorner selection for solid gold |
-| Menus | Template | One shared template for every row type |
+| Text selection | Native, with a switch | Turn off adorner selection for solid gold; spike 6 confirmed it with right-to-left text |
+| Menus | Template | One shared template for every row type; it scales shortcut text and fits the top-level item in 48px |
 | Tooltips | Native | Keyboard tooltips are built in |
-| Title bar | Build | `WindowChrome` + `WM_NCHITTEST` hook |
+| Title bar | Build | `WindowChrome` + `WM_NCHITTEST` hook; spike 3 confirmed Snap Layouts opens |
 | Mica, acrylic | Change the design | Conflicts with Slate's solid-surface policy |
 | Narrow-width layouts | Build (small) | No `AdaptiveTrigger` in WPF |
 
@@ -55,8 +57,8 @@ Three things should change in the design system rather than in the app: the two-
 ## Type
 
 - **Sizes and line heights: Native.** One CSS px is one WPF device-independent pixel, so 12/16, 14/20, 20/28 carry over unchanged. To get exact line heights, set `LineHeight` with `LineStackingStrategy="BlockLineHeight"`. The default strategy uses the tallest glyph instead. The tokens use no letter-spacing, which WPF `TextBlock` lacks.
-- **Segoe UI Variable: Native, with a check.** WPF's Fluent theme sets only the icon font (`SymbolThemeFontFamily`), so text stays in plain Segoe UI unless the app sets `FontFamily`. WPF can't drive a variable font's axes (its DirectWrite layer has no font-axis APIs), so automatic optical sizing, which WinUI has, isn't available. Use the named families: `Segoe UI Variable Small` under 12px, `Text` for 12–24px, `Display` above 24px, each falling back to `Segoe UI` (Windows 10 doesn't ship the variable font). The system only uses weights 400, 600 and 700, which WPF names directly. **Spike:** confirm WPF lists these three named families on Windows 11.
-- **Open Sans and Cascadia Code: Native.** Embed them as resources. **Spike:** check that Cascadia Code ligatures survive AvalonEdit's syntax colouring, which splits text into separate coloured runs.
+- **Segoe UI Variable: Native.** WPF's Fluent theme sets only the icon font (`SymbolThemeFontFamily`), so text stays in plain Segoe UI unless the app sets `FontFamily`. WPF can't drive a variable font's axes (its DirectWrite layer has no font-axis APIs), so automatic optical sizing, which WinUI has, isn't available. Use the named families: `Segoe UI Variable Small` under 12px, `Text` for 12–24px, `Display` above 24px, each falling back to `Segoe UI` (Windows 10 doesn't ship the variable font). The system only uses weights 400, 600 and 700, which WPF names directly. Spike 1 confirmed that WPF lists the three named families on Windows 11 and renders 400 and 600 without synthetic bolding.
+- **Open Sans and Cascadia Code: Native.** Embed them as resources. Spike 2 confirmed that Cascadia Code ligatures survive AvalonEdit's colour runs. A colour boundary inside an operator doesn't break the ligature, and the glyph takes the first run's colour or splits by cell.
 - **Text scaling: Build.** WinUI applies the Windows "Make text bigger" setting automatically. WPF doesn't, so fixed `FontSize` values stay as they are. Read `UISettings.TextScaleFactor` (1 to 2.25) and handle `TextScaleFactorChanged`. Microsoft's guidance is to scale small text more than large text and to leave icon glyphs unscaled. **Design impact (done):** the shell heights (48 title bar, 36 tab strip, 24 status bar) and the 32–36px rows are now minimums that grow with text (`--titlebar-min-height`, `--tabstrip-min-height`, `--statusbar-min-height`; `MinHeight` in WPF), up to 225%.
 - Expect WPF text to look slightly different from the HTML cards (different rasterizer). Judge type in the running app.
 
@@ -94,7 +96,11 @@ Every icon-only button needs `AutomationProperties.Name`. Otherwise Narrator rea
 - **Shortcut text uses the disabled colour** (`TextFillColorDisabledBrush`, #5C000000 in light mode, about 2.5:1 on white) whether or not the item is enabled. The system requires secondary text, and at least 4.5:1 even for disabled items.
 - **Checked rows draw a 20 × 20 check box** rather than the bare checkmark the system uses.
 
-Fix: one Slate `MenuItem` template for all four roles (top-level header, top-level item, submenu header, submenu item). Each role uses the same columns (check, icon, label, shortcut, chevron) with `SharedSizeGroup`, and the menu panel sets `Grid.IsSharedSizeScope`. Keep `InputGestureText` and the `AcceleratorKey` binding Slate already uses. Popup values for reference: Fluent uses radius 8, 3px vertical padding and a 167ms slide-in.
+Spike 5 found two more:
+- **Shortcut text doesn't scale.** It stays small at 2.25 even with the `MenuItem`'s `FontSize` set to 31.5, while the row's label grows.
+- **The top-level item doesn't fit a 48px title bar.** Its text sits in 30px of Fluent's padding and margins. With 14px text, that makes the item about 49px tall before any margin of its own.
+
+Fix: one Slate `MenuItem` template for all four roles (top-level header, top-level item, submenu header, submenu item). Each role uses the same columns (check, icon, label, shortcut, chevron) with `SharedSizeGroup`, and the menu panel sets `Grid.IsSharedSizeScope`. The shortcut column takes its size from the scaled text, and the top-level role fits 48px at 100%. Keep `InputGestureText` and the `AcceleratorKey` binding Slate already uses. Popup values for reference: Fluent uses radius 8, 3px vertical padding and a 167ms slide-in.
 
 ## Tooltips
 
@@ -150,17 +156,19 @@ Fix: one Slate `MenuItem` template for all four roles (top-level header, top-lev
 3. Focus style, selection switch and brushes, `AutomationProperties.Name` on icon buttons.
 4. Shadows: one effect per element, direction 270, ClearType hint on popups.
 5. Switch and SearchBox templates, then the Slate patterns.
-6. Title bar spike: `WindowChrome`, the `HTMAXBUTTON` hook, and app-menu keys.
+6. Title bar: `WindowChrome`, the `HTMAXBUTTON` hook, and app-menu keys.
 7. Text scaling across the shell.
 
 ## Spikes to run first
 
-- WPF lists `Segoe UI Variable Small / Text / Display` as families on Windows 11.
-- Cascadia Code ligatures in AvalonEdit with syntax colouring on.
-- Snap Layouts hover and pressed visuals with the `HTMAXBUTTON` hook.
-- ClearType in a popup with `ClearTypeHint` set on an opaque surface.
-- The shell at 225% text scale.
-- Non-adorner text selection with right-to-left text. A crash with Hebrew text was reported on .NET Framework 4.8 (dotnet/wpf#2314).
+All six ran on 2 November 2026 in a throwaway WPF app outside the repo, on Windows 11 build 26300.9711 (26H2) with .NET 10.0.14 and AvalonEdit 6.3.1.120. ClearType was on. The display was 1920 × 1200 at 100% scale. Spike 5 also ran on 5120 × 2880 at 200%. Screenshots are in `spikes/`. No spike failed, so no failure follow-up applies.
+
+1. **Segoe UI Variable families: Pass.** WPF lists `Segoe UI Variable Small`, `Text` and `Display`. All 18 combinations (three families at 12, 14 and 28px, weights 400 and 600) use real 400 and 600 faces with `StyleSimulations` of `None`, so nothing is synthetically bolded. ![Three families at three sizes and two weights](spikes/spike1-fonts.png)
+2. **Cascadia Code ligatures in AvalonEdit: Pass, with one difference from what was expected.** `->`, `!=`, `===` and `<=` join in plain text, in a heading, when the whole operator is one colour, and in a fenced code block. A Cascadia Mono control shows the same text unjoined. The difference: a colour boundary inside an operator doesn't break the ligature. `!=`, `===` and `<=` take the first run's colour throughout, and `->` splits its colour by cell. All of them stay legible, so the editor stays on Cascadia Code. The colours came from a test `DocumentColorizingTransformer` that calls `ChangeLinePart` and sets the foreground, as `AvalonCanonicalSpanColorizer` does. Slate's own highlighter was not run. ![Cascadia Code above the Cascadia Mono control](spikes/spike2-ligatures.png)
+3. **Snap Layouts on a custom maximize button: Pass.** With `CaptionHeight="48"`, `UseAeroCaptionButtons="False"` and the `HTMAXBUTTON` hook, a real mouse hover opens the flyout within 1.4 seconds. The hook's hover and pressed visuals both draw. Releasing off the button doesn't maximize, a click does, and Win+Z opens the layouts. The top-level window list doesn't show the flyout, so the screenshot is the evidence for it. ![The Snap Layouts flyout under the custom maximize button](spikes/spike3-hover-flyout.png)
+4. **ClearType inside popups: Pass.** At the specified setup, 86.7% of the popup's text pixels carry colour fringes, the same as a normal `TextBlock`. Both controls lose them completely: no `ClearTypeHint` gives 0%, and so does the shadow on the text's parent instead of a sibling. ![Popup text with colour fringes at 400%](spikes/spike4-popup0-400.png)
+5. **Shell at 225% text size: Pass.** With Windows Text size at 225% (`TextScaleFactor` 225), WPF leaves fixed font sizes alone: the rows stay at their unscaled heights, which confirms the Build rating. Multiplying the font sizes by 2.25, as the app has to, using the Fluent theme, grows the title bar from 52.6 to 75.9, the tab strip from 36 to 45.9 and the status bar from 24 to 39.9. Heights were the same at 100% and 200% display scale, and at 100% Text size with the same factor. No text clips, the caption buttons stay 46 × 48, and a control row with a fixed `Height` is caught clipping. The spike passed in the factor as a number and read the setting from the registry, so `UISettings.TextScaleFactor` and its change event are still untested. Two findings for the menu template, both recorded under Menus: shortcut text stays small, and Fluent's top-level item doesn't fit 48. ![The shell at 2.25 with a menu open, under the real setting](spikes/spike5-shell-2.25.png)
+6. **Non-adorner selection with right-to-left text: Pass.** With the switch off, a TextBox selection across Latin, Hebrew and Arabic is solid pale gold with dark text. With it unset, the same brushes paint over the text, which is the control. AvalonEdit looks the same either way, because it draws its own selection. No exception across 191 programmatic ranges (110 TextBox, 81 AvalonEdit) and real Shift+Arrow selection, 30 characters forward and 14 back, in both controls. ![TextBox selection](spikes/spike6-6a-textbox.png) ![AvalonEdit selection](spikes/spike6-6a-avalon.png)
 
 ## Sources
 
