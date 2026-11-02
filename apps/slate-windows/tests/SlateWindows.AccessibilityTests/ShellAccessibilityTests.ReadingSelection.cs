@@ -67,10 +67,14 @@ public sealed partial class ShellAccessibilityTests
             (int selected, double inkContrast) = Measure(reading, highlight);
             Assert.True(
                 selected > 500,
-                $"only {selected} pixels are the highlight {highlight}: the selection isn't drawn in the overlay.");
+                $"only {selected} pixels are the highlight {highlight}: the selection isn't drawn in the overlay. "
+                + $"Selected '{SelectionText(reading).Length}' characters; focus on '{automation.FocusedElement()?.AutomationId}'; "
+                + $"most common colours {MostCommonColors(reading)}.");
             Assert.True(
                 inkContrast >= 4.5,
                 $"the selected text's strongest ink measures {inkContrast:F2}:1 on the highlight: the overlay hides it.");
+
+            AssertAxeClean(process, "reading-selection");
         });
 
     /// <summary>How many of the surface's pixels are the highlight, within the
@@ -78,7 +82,7 @@ public sealed partial class ShellAccessibilityTests
     /// which is the core of the selected text's strokes.</summary>
     private static (int Highlight, double InkContrast) Measure(AutomationElement surface, Color highlight)
     {
-        using CaptureImage capture = Capture.Element(surface);
+        using CaptureImage capture = CapturePhysicalPixels(surface);
         Bitmap bitmap = capture.Bitmap;
         var count = 0;
         var strongest = 1.0;
@@ -99,6 +103,45 @@ public sealed partial class ShellAccessibilityTests
         }
 
         return (count, strongest);
+    }
+
+    /// <summary>The test host isn't DPI aware, so on a scaled display the
+    /// element's bounds and the screen copy disagree and the capture lands on
+    /// the wrong part of the window. Awareness on this thread alone leaves the
+    /// rest of the process as it was.</summary>
+    private static CaptureImage CapturePhysicalPixels(AutomationElement surface)
+    {
+        IntPtr previous = SetThreadDpiAwarenessContext(DpiAwarenessContextPerMonitorAwareV2);
+        try
+        {
+            return Capture.Element(surface);
+        }
+        finally
+        {
+            SetThreadDpiAwarenessContext(previous);
+        }
+    }
+
+    private static readonly IntPtr DpiAwarenessContextPerMonitorAwareV2 = new(-4);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr SetThreadDpiAwarenessContext(IntPtr dpiContext);
+
+    private static string MostCommonColors(AutomationElement surface)
+    {
+        using CaptureImage capture = CapturePhysicalPixels(surface);
+        Bitmap bitmap = capture.Bitmap;
+        var counts = new Dictionary<int, int>();
+        for (var y = 0; y < bitmap.Height; y++)
+        {
+            for (var x = 0; x < bitmap.Width; x++)
+            {
+                int color = bitmap.GetPixel(x, y).ToArgb() & 0xFFFFFF;
+                counts[color] = counts.GetValueOrDefault(color) + 1;
+            }
+        }
+
+        return string.Join(", ", counts.OrderByDescending(pair => pair.Value).Take(4).Select(pair => $"#{pair.Key:X6}={pair.Value}"));
     }
 
     private static double Contrast(Color first, Color second)
