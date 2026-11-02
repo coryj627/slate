@@ -3,9 +3,11 @@
 Issues: #1525 (Windows half; closes in whichever of WB-29 and plan 43
 PR 29's Mac half merges last — both hosts merged and field-passed, WD20;
 earlier PRs write `Refs #1525`). Size L, two PRs: PR 1 (core: a
-compare-and-swap claim, `retire_entry`, the file identity returned by
-the read and the save that touch the file, three reason fragments and
-the discard-pending prompt's copy, §7; lanes Rust, Mac and Windows) and
+cross-process vault hold, a compare-and-swap claim, `retire_entry`, the
+snapshot's current claims, the file identity returned by the read and
+the save that touch the file, five reason fragments, the timed-out
+fragment's 4 s, and the discard-pending prompt's copy, §7; lanes Rust,
+Mac and Windows) and
 PR 2 (the Windows host; lane windows). AT: NVDA full pass on PR 2.
 Wave: W11, slot 2.
 
@@ -342,10 +344,10 @@ changes the baseline behind further edits (`AdoptLandedWrite`, `:1312`)
   named; any claim or write carrying an epoch a committed discard has
   passed; and a retirement every incarnation of which was claimed at an
   epoch a committed discard has passed. A discard counts as committed
-  when it returned the new epoch, or when the vault's `current_epoch`,
-  read after it resolved, is past the epoch it began at (a discard that
-  errored after advancing the epoch committed its fence, and what it
-  failed to delete is what `read_buffers` deletes).
+  only when `discard_vault` returned the new epoch: an error may follow
+  an epoch rename whose directory sync failed, so a visible later epoch
+  is not proof of a durable fence (Codex round 6), and Try again issues
+  a new discard (§4), whose success makes the fence durable.
 - **O6, a discard fences until no discard is unresolved, and never
   silently re-keeps what it covered.** While any vault discard for the
   key is unresolved, the writer issues no claim or write for it, and no
@@ -429,10 +431,17 @@ retirement of its key once before it starts waiting (red team round 5).
 **Holds.** The store host owns each vault's hold (§7) from the first
 open that acquires it until that vault is closed and no obligation of
 its key is unresolved; then it releases it, so another Slate process
-can use the vault's store. A reopen in this process reuses the hold it
-still owns. A hold that cannot be acquired because another process owns
-it gives the open `HotExitOpen.None` with core's held-elsewhere reason
-(§2, §6).
+can use the vault's store. Disposal without a teardown (the crash
+shape) counts as the vault closed. An open that fails after acquiring
+the hold releases it the same way. The store host takes, reuses and
+releases holds under its own lock, so a reopen in this process either
+reuses the hold it still owns or acquires it anew, never racing its
+release. `HeldElsewhere` gives the open `HotExitOpen.None` with core's
+held-elsewhere reason; any other `hold_vault` error gives it with
+core's store-unwritable reason (§2, §6). A retirement answered
+`Damaged` resolves with that reason instead of retrying forever, so a
+damaged vault never pins the hold; the next open's read meets the same
+damage and Discard All repairs it (§6).
 
 **Nothing joins it.** A store call is never handed to `TrackWorker`;
 `CloseAndJoinWorkers` joins save workers only, as on `main`; disposal
@@ -450,7 +459,7 @@ held-elsewhere reason and nothing is read), then waits up to 4 s for that key's
 unresolved obligations from an earlier session of this process (a
 reopen's read must not race the last session's retirements). If any is
 still unresolved after 4 s, this open hands `HotExitOpen.None` with
-core's timed-out reason: the writer is inert for the session (§6),
+core's earlier-work-pending reason (§7): the writer is inert for the session (§6),
 nothing is read, and no Discard All touches the store, so entries
 nobody has read stay for a later open and no layout tab (whose ids may
 match them) claims against them. A snapshot read while a retirement is
@@ -518,8 +527,11 @@ inherited incarnation still to retire.
   copies it too. The other places that set a baseline hash take the
   identity from the same core result: the task splice (`:1681`, from
   `ToggleTaskStatus`'s `SaveReport`), the rescan reload
-  (`ReplaceItemWithReadText`, `VaultLifecycleViewModel.Rescan.cs:711`,
-  `:1411`, whose worker reads through `ReadTextIdentified`), and a
+  (`ReplaceItemWithReadText`, `WorkspaceViewModel.Rescan.cs:711`,
+  `:1411`, whose worker reads through `ReadTextIdentified`), the
+  property write's rebaseline (`RebaselineAfterPropertyWrite`,
+  `WorkspaceTabViewModel.Properties.cs:109-124`, which reads through
+  `ReadTextIdentified` instead of `ReadText`), and a
   create-exclusive that published unindexed (`PublishedUnindexed`
   gains `file_identity`, §7). Core reports `None`
   where it has no identity for the file it read or wrote (a platform or
@@ -539,7 +551,11 @@ inherited incarnation still to retire.
   (O2) — before any write.
 - **While dirty, a changed snapshot is written 1 s after the last change**
   (a dispatcher timer per tab), at most one write in flight per tab; a
-  tick during one marks the tab due. A change of the baseline (a save
+  tick during one marks the tab due. A write's generation is the
+  writer's own per-claim write counter, bumped for every snapshot it
+  issues, never `ContentGeneration` (`RetargetPath`,
+  `WorkspaceViewModel.cs:736-749`, changes the path without bumping it,
+  so a rename-only write would otherwise meet `Newer`). A change of the baseline (a save
   landing behind further edits, a rename, `InvalidatePath`) is written
   at once, not after the debounce. Each write carries the live claim
   and the snapshot taken on the dispatcher.
@@ -580,7 +596,10 @@ inherited incarnation still to retire.
   `Close`, `PrepareForApplicationClose` `ApplicationClose`).
 - **Settle (O5).** `HotExitWriter.Settle(budget: 4 s, mode)` (new,
   synchronous on the dispatcher, pumped through `PumpedWait.Until` over
-  `Task.WhenAny(settled, Task.Delay(budget))`): it drains pending
+  `Task.WhenAny(settled, Task.Delay(budget))`, always running at least
+  one dispatcher frame even when nothing is outstanding, so the re-check
+  after it has one defined frame to guard and the facts one place to
+  put a change): it drains pending
   re-evaluations, stops the debounce timers, issues the latest snapshot
   of every dirty episode not kept at it (claiming first where it has
   none, unless the vault is fenced), retries errored retirements, waits
@@ -621,9 +640,9 @@ inherited incarnation still to retire.
   route returns while `SavesIdle` is false: `Dispose` detaches the
   writer before `CloseAndJoinWorkers` (`WorkspaceViewModel.cs:3360`), so
   a save landing after the return would never retire its entry. On
-  Close Vault the nothing-dirty settle runs in `RetireOnly` mode, so a
-  keystroke in its frame is never claimed and kept but reaches the
-  prompt (red team round 5). With nothing dirty, `NotKept` means an obligation is unresolved —
+  Close Vault a keystroke in that settle's frame may be claimed and
+  kept by the writer, and the re-check still sends it to Close Vault's
+  prompt, whose Discard retires it. With nothing dirty, `NotKept` means an obligation is unresolved —
   a retirement the reader's discard or save is owed, or a discard: the
   route **does not close on its own** (WB-29a §5–§6). It opens the
   **discard-pending prompt** (owner call 2, D-1): its message is
@@ -639,9 +658,18 @@ inherited incarnation still to retire.
   are joined by nothing, and the close proceeds; on Close Vault it
   speaks `VaultClosed` through `AnnounceTeardown` as `Closed` does (one
   close line, contract 38 D-10), on a switch it is spoken as the switch
-  is, and on application close it is silent. The prompt is a standard
-  Windows task dialog owned by the main window, so NVDA reads its
-  sentence and its buttons; nothing else is posted for it. The prompt
+  is, and on application close it is silent. The prompt follows the
+  close prompt's pattern (`ConfirmUnsavedClose`,
+  `MainWindow.xaml.cs:365-381`): a Yes/No/Cancel `MessageBox` owned by
+  the main window through the same `ShowUnsavedClosePrompt` seam
+  (`:362`), its text core's message and core's instruction sentence
+  ("Choose Yes to try again, No to close and keep the copies, or Cancel
+  to keep the vault open.", §7), mapped to a new
+  `DiscardPendingDecision` returned by a new lifecycle delegate
+  `confirmDiscardPending` beside `confirmUnsavedClose`
+  (`VaultLifecycleViewModel.cs:223`), which the facts substitute. NVDA
+  reads a `MessageBox`'s text and buttons; nothing else is posted for
+  it. The prompt
   and its Try again run outside the round loop's
   `MaxPumpedAdmissionRounds` (`WorkspaceViewModel.Layout.cs:672`): Try again is one more
   settle, never a round, so retrying never ends in the rounds-exhausted
@@ -665,8 +693,9 @@ inherited incarnation still to retire.
   if a frame of that settle let the reader type, open a tab or save, it
   continues the round loop instead, so the new work is kept or asked
   about and never dropped unseen (Codex round 3). Anything else: the
-  discard-pending prompt above (Try again waits for a discard still in
-  flight; once none is, it issues a new `DiscardVault` — whatever the
+  discard-pending prompt above (Try again waits at most 4 s without
+  pumping for a discard still in flight; once none is, it issues a new
+  `DiscardVault` — whatever the
   failed one did to the epoch, since `discard_vault` advances the epoch
   durably before it deletes and a later delete or sync error leaves it
   advanced with nothing committed (`hot_exit.rs:688-710`) — under the
@@ -692,9 +721,11 @@ inherited incarnation still to retire.
   `Window.InternalClose`, raising `Closing` — so today the ordinary close
   path (and its prompt) runs while Windows ends the session, if Windows
   lets it. A new `SessionEnding` handler runs one bounded flush first:
-  the writer issues the latest snapshot of every dirty episode it can
-  (no claim waits behind an unresolved retirement), waits at most 2 s
-  without pumping, opens no prompt and never cancels the session end,
+  the writer captures the latest snapshot of every dirty episode on the
+  dispatcher and hands the claim-then-write chains to the store host,
+  which runs them off the dispatcher (no claim waits behind an
+  unresolved retirement); the dispatcher waits at most 2 s without
+  pumping, opens no prompt and never cancels the session end,
   so whatever is durable is kept even if Windows ends the process
   before `Closing`. `Closing` then runs the ordinary application close:
   with everything kept it is `ClosedKept` without a prompt; otherwise
@@ -874,7 +905,8 @@ WB-29a's spec (§2, §3, §5, §6 and its delivery record) for both hosts.
   `a_stale_release_never_deletes_a_newer_entry`,
   `a_release_retires_the_text_its_claim_adopted`,
   `a_stale_adopters_release_keeps_a_successors_payload`,
-  `two_processes_restoring_one_tab_never_both_count_as_kept`. WB-29a
+  `two_processes_restoring_one_tab_never_both_count_as_kept`,
+  `a_superseded_write_says_why`. WB-29a
   §2's "a newer claim replaces an older one" is amended to "a claim
   naming the current one replaces it".
 - **The identity of the file a read or save touched.** A new
@@ -895,10 +927,14 @@ WB-29a's spec (§2, §3, §5, §6 and its delivery record) for both hosts.
   one of these notes"), `HOT_EXIT_REASON_DISCARD_PENDING` ("an earlier discard
   of the kept copies has not finished"),
   `HOT_EXIT_REASON_DISCARDED` ("you chose to discard them") and
-  `HOT_EXIT_REASON_HELD_ELSEWHERE` ("this vault is open in Slate in
-  another Windows session"), each with an
-  FFI accessor beside `hot_exit_reason_timed_out()`, plus
-  `hot_exit_reason_store_unwritable()`; and the discard-pending prompt
+  `HOT_EXIT_REASON_HELD_ELSEWHERE` ("another Slate window is still
+  using this vault's kept copies") and
+  `HOT_EXIT_REASON_EARLIER_WORK_PENDING` ("Slate is still finishing
+  earlier work on this vault's kept copies"), each with an FFI accessor
+  beside `hot_exit_reason_timed_out()`, plus
+  `hot_exit_reason_store_unwritable()`; `HOT_EXIT_REASON_TIMED_OUT`
+  becomes "saving them took longer than 4 seconds" (the host's settle
+  budget; corpus and golden updated); and the discard-pending prompt
   (owner call 2). `UnsavedNotesNotDiscarded`, which no host constructs
   yet and which offered only "Try again, or cancel", becomes the
   prompt's message: "Slate could not yet discard the kept copies of
@@ -906,10 +942,13 @@ WB-29a's spec (§2, §3, §5, §6 and its delivery record) for both hosts.
   are kept, and they come back as unsaved notes the next time you open
   this vault." (corpus, golden and both mirrors updated). Its three choices come
   from `hot_exit_discard_pending_choices() -> HotExitDiscardPendingChoices
-  { try_again, close_keeping_copies, cancel }`: "Try again", "Close and
-  keep the copies", "Cancel". The host renders the event as the
-  dialog's message (§4), which is its construction site; the Mac half
-  uses the same prompt (the amendment).
+  { try_again, close_keeping_copies, cancel, yes_no_cancel_instruction }`:
+  "Try again", "Close and keep the copies", "Cancel", and, for a host
+  whose dialog cannot relabel its buttons, "Choose Yes to try again, No
+  to close and keep the copies, or Cancel to keep the vault open." The
+  host renders the event as the dialog's message (§4), which is its
+  construction site; the Mac half uses the same prompt with its own
+  buttons (the amendment).
 - **Facts** (core, `hot_exit` and `session` tests): the claim's three
   answers (expected matches; expected `None` over an older epoch's
   claim; a mismatch changes nothing, its payload and claim untouched),
@@ -974,8 +1013,9 @@ the session goes).
    `HotExit_AKilledProcessKeepsAnUnsavedNote` kills the real process.
 8. **A reopen whose wait for the last session's obligations expires
    has no hot exit that session** (§2): it restores nothing, keeps
-   nothing, and its close prompts with core's timed-out reason; the
-   entries come back at a later open, once the store host's own retry
+   nothing, and its close prompts with core's earlier-work-pending
+   reason; the entries come back at a later open, once a hung claim or
+   write returns (nothing retries those) and the store host's own retry
    (§1) lands the parked retirements.
 9. **One vault open in Slate in two Windows sessions of one account:**
    the second process cannot acquire the vault's hold, so it has no hot
@@ -1011,10 +1051,20 @@ debounce explicitly. Every `Wait` asserts its result. Every successful
 route asserts its outcome (`PrepareForApplicationClose()` true, the
 switch completed, `ClosedKept` / `Closed` / `ClosedAllSaved` /
 `ClosedChangesDiscarded` / `ClosedCopiesKept`) and a bounded number of
-settles. "A new process" is a fresh `HotExitStoreHost` on the same
-device root while the old host's held calls stay held (a same-process
-reopen waits for them, §2). Faults come from the hooks' returned
-`HotExitFault` (§1).
+settles. "A new process" is the old store host's
+`SimulateProcessDeathForTests()` — it drops every hold it owns (closing
+the lock handles, as the OS does at exit) and resolves every call still
+held in `Before` unissued, as a dead process never issues it; a call
+already issued has done to the store whatever it did — followed by a
+fresh `HotExitStoreHost` on the same device root. Every assertion that
+"a new process restores …" (or "restores nothing") also asserts that
+the new open acquired the vault's hold and its `Read` succeeded, so a
+refused or inert open can never pass for an empty store. A fact that
+needs another holder's interference (a claim taken, an epoch moved)
+makes it through the core `HotExitStore` directly, with no hold — the
+"store edited by hand" case — since two conforming hosts cannot hold
+one vault. The FlaUI kill fact uses a real process. Faults come from
+the hooks' returned `HotExitFault` (§1).
 
 | Fact | Asserts | Mutation |
 |---|---|---|
@@ -1029,25 +1079,27 @@ reopen waits for them, §2). Faults come from the hooks' returned
 | `AClaimWithNoPayloadNeverWedgesItsTab` (Theory: a layout tab holds the id; none does) | a claim lands and its first write never reaches the store (`Before` fault on that write), the crash shape; reopening: the snapshot has no entry for the id and lists its claim; the tab claims expecting that incarnation and is kept on its next edit; with no tab, the orphan is retired | ignore the snapshot's claims; or adopt orphans only where a payload exists |
 | `ARetriedRetirementNeverDisplacesASuccessor` | a restored tab; a store outage (the seam fails every call) errors its adopting claim and the retirement of a Discard by navigation that keeps the tab's `Id`; the outage ends; an edit to the new document retries the retirement first, then claims and writes C; the crash shape: reopening restores C's text and not the restored text | retire through an adopting claim and a release (the old shape); or issue the claim ahead of the errored retirement |
 | `AnErroredClaimIsRetriedWithItsOwnIncarnation` | the seam fails a claim after its publication; the next change retries it: `Claimed` with the same incarnation, then the write | make a new incarnation on retry (the retry is then `Superseded { Claim }`) |
-| `AnAdoptingClaimTakenByAnotherWindowIsNotKept` | two store hosts on one device root reopen the vault; the second's adopting claim is `Superseded { Claim }`: its close prompts with core's taken-over reason, retires nothing, and the first's text is still restorable | treat it as kept; or retire the inherited payload anyway |
+| `AnAdoptingClaimTakenByAnotherClaimIsNotKept` | a reopen's snapshot read; before its adopting claim, the test claims the entry through the core store directly (expecting the observed claim); the adopting claim is `Superseded { Claim }`: the close prompts with core's taken-over reason and the tab retires nothing | treat it as kept; or retire the inherited payload anyway |
 | `AnOldClaimsLateOutcomeNeverCountsForANewOne` | C1's write held; clean, then C2; C1's late `Durable` and `Superseded { Claim }` change nothing for C2 | record any outcome |
 | `ASaveNeverWaitsOnARecoveryWrite` | a write held; Ctrl+S reaches `SaveWriteHookForTests` at once and lands | route writes through `Admit` |
 | `AKeptCloseClosesWithoutAPrompt` (Theory: application close, switch) | an edit after the last debounce and one typed inside the settle's frame; outcome `ClosedKept`, the prompt never invoked; reopening restores the final text dirty, the file unchanged | `continue` on `Kept` (the rounds run out: `Refused`) |
 | `AKeptCloseReSettlesWhenASaveSlipsIn` | a Ctrl+S admitted during the settle's frame: the round loop settles the save, then closes `Closed` | return `ClosedKept` without the re-check |
 | `ASettleThatCannotKeepFallsBackToThePromptWithItsReason` (Theory: write error, cap refusal, lost claim, timeout) | the prompt opens; `UnsavedNotesNotKept` with core's reason, in the status line; Cancel keeps the window and the buffer | close on failure |
-| `ACleanCloseSettlesItsRetirements` (Theory: application close, switch, Close Vault, Save All on the fallback prompt, Try again; × nothing in the frame, an edit in the frame, a new tab in the frame, a Ctrl+S in the frame) | the last dirty tab saved, its retirement held under 4 s; with nothing in the frame the route closes on its confirmation and reopening restores nothing; an edit or a new tab in the frame continues the round loop (Close Vault prompts for it, never keeps it); a save in the frame is settled first, and no route returns with `SavesIdle` false | return the early `Closed` unsettled; or skip the re-check; or settle Close Vault's nothing-dirty round in normal mode |
+| `ACleanCloseSettlesItsRetirements` (Theory: application close, switch, Close Vault, Save All on the fallback prompt, Try again; × nothing in the frame, an edit in the frame, a new tab in the frame, a Ctrl+S in the frame) | the last dirty tab saved, its retirement held under 4 s; with nothing in the frame the route closes on its confirmation and a new process restores nothing; an edit or a new tab in the frame continues the round loop (Close Vault prompts for it); a save in the frame is settled first, and no route returns with `SavesIdle` false | return the early `Closed` unsettled; or skip the re-check |
 | `AnUnconfirmedRetirementOpensTheDiscardPendingPrompt` (Theory: Try again after it lands; Cancel; Close and keep the copies) | a retirement held past 4 s: the prompt opens with core's message and three labels; Try again closes `Closed` and reopening restores nothing; Cancel is `Refused` with the window open; Close and keep the copies is `ClosedCopiesKept`, and a new process restores the saved-over text unsaved; Try again never exhausts the round loop | close anyway; or offer no way out; or count Try again as a round |
 | `CloseVaultStillAsksAndDiscardAllFencesTheStore` | Close Vault prompts with a write held; Discard All issues `discard_vault` after the fence, nothing after it; `ClosedChangesDiscarded`; reopening restores nothing | skip the discard; or claim in the settle after it |
 | `ARefusedDiscardKeepsTheWriterFencedUntilItResolves` (Theory: resolves committed; resolves failed with the epoch advanced; resolves failed with it unchanged) | `discard_vault` held past 4 s, Cancel: `Refused`; an edit issues nothing and a close settles `NotKept` (discard pending); after resolution the edited tab claims with `expected` none behind its covered retirement and is kept, and an unchanged covered tab is not | lift the fence on refusal; or trust the old claims after an advanced epoch |
 | `ACoveredTabSavedOrClosedWhileTheDiscardIsPendingStaysRetired` (Theory: {saved clean, closed answering Discard} during the pending discard × the discard fails without advancing the epoch) | a new process restores nothing for that tab | rely on the epoch alone for covered episodes |
-| `AnEpochMovedElsewhereNeverReKeepsUnchangedText` (Theory: a write in flight; already kept) | two store hosts on one device root, each with the vault; B's Discard All commits; A's unchanged tab is unkept (taken over), A's close prompts, and a new process restores nothing; an edit after it is kept | re-claim on `Superseded { Epoch }`; or trust the cached kept snapshot |
-| `AVaultHeldByAnotherProcessHasNoHotExit` (Theory: a write in flight in the holder; the holder kept and idle) | a child process (or a second store with its own hold) holds the vault; this open gets core's held-elsewhere reason, reads nothing, claims nothing, and its close prompts; the holder's kept text is unchanged and restorable; once the holder releases, a reopen has hot exit | skip the hold; or read before acquiring it |
+| `AnEpochMovedElsewhereNeverReKeepsUnchangedText` (Theory: a write in flight; already kept) | the test calls `discard_vault` through the core store directly; this host's unchanged tab is unkept (taken over), its close prompts, and a new process restores nothing; an edit after it is kept | re-claim on `Superseded { Epoch }`; or trust the cached kept snapshot |
+| `AVaultHeldByAnotherProcessHasNoHotExit` (Theory: a write in flight in the holder; the holder kept and idle) | a second store host holds the vault; this open gets core's held-elsewhere reason, reads nothing, claims nothing, and its close prompts; the holder's kept text is unchanged; after the holder's `SimulateProcessDeathForTests()` a reopen acquires the hold and restores it | skip the hold; or read before acquiring it |
 | `AHoldOutlivesTheVaultUntilItsObligationsResolve` | Close and keep the copies with a retirement held; another store instance cannot acquire the hold; released, the hold is freed | release the hold at close |
+| `AFailedOpenReleasesItsHold` (Theory: the open fails after the hold; the crash-shape disposal with nothing pending) | another store instance acquires the hold afterwards; a reopen in this process acquires it anew | keep the hold for the process |
+| `ADamagedRetirementResolvesWithItsReason` | a claim file made unparsable through the core store directly; a retirement answers `Damaged` once and is not retried; the hold is released at close; the next open reads `Damaged` and its Discard All repairs | retry it as an `Io` error |
 | `ASecondDiscardAllWaitsForTheOneInFlight` | a refused Discard All held; a second Discard All issues no discard and waits for the first; its commit lets the second close `ClosedChangesDiscarded` | issue a second discard |
 | `ALateDiscardNeverReKeepsTheTextItDiscarded` (Theory: application close, switch) | Discard All held past 4 s, Cancel; no edit; the discard commits; the next close opens the prompt with core's discarded reason (not `ClosedKept`); the crash shape: reopening restores nothing | start a fresh episode for every dirty tab |
-| `ACommittedDiscardRechecksAfterItsRetireOnlySettle` (Theory: an edit to a clean tab, a new tab edited, a Ctrl+S, each inside the settle's frame) | an earlier retirement held when Discard All commits; the route continues the round loop instead of returning `ClosedChangesDiscarded`; the new text is kept or asked about; reopening after a kept close restores it | return `ClosedChangesDiscarded` without the re-check |
-| `CloseAndKeepTheCopiesAfterAFailedDiscard` | `discard_vault` fails (the seam): the prompt; Close and keep the copies: `ClosedCopiesKept`; reopening restores the kept copies unsaved | keep the vault open |
-| `TryAgainAfterADiscardThatAdvancedAndFailed` | the `After` hook replaces the first `discard_vault`'s result with an `Io` error once its epoch advanced (what the host sees when a delete or sync failed after the epoch); Try again issues a new discard under the fence, which commits; `ClosedChangesDiscarded`; reopening restores nothing | retry only a discard that left the epoch unchanged |
+| `ACommittedDiscardRechecksAfterItsRetireOnlySettle` (Theory: an edit to a clean tab, a new tab edited, a Ctrl+S) | the change is posted to the dispatcher before Discard All and runs in the `RetireOnly` settle's guaranteed frame (the fact asserts it ran before the route returned); the route continues the round loop instead of returning `ClosedChangesDiscarded`; the new text is kept or asked about; a new process after a kept close restores it | return `ClosedChangesDiscarded` without the re-check; or skip the settle's guaranteed frame |
+| `CloseAndKeepTheCopiesAfterAFailedDiscard` | two dirty tabs kept; Discard All: `discard_vault` fails in `Before` (never issued, the epoch unchanged) and the covered retirements are held in `Before`; the prompt; Close and keep the copies: `ClosedCopiesKept`; a new process restores both kept copies unsaved | keep the vault open; or let the covered retirements through before the close |
+| `TryAgainAfterADiscardThatAdvancedAndFailed` | the `After` hook replaces the first `discard_vault`'s result with an `Io` error once its epoch advanced; the route treats it as not committed (its pending retirements stay live); Try again issues a new discard under the fence, which returns the new epoch; `ClosedChangesDiscarded`; a new process restores nothing | retry only a discard that left the epoch unchanged; or count a visible epoch as committed |
 | `ADiscardWaitNeverDeadlocksTheDispatcher` | `DiscardVault` completes while the dispatcher is blocked in its wait | resume on the dispatcher |
 | `ADiscardedTabsEntryIsNotRestored` (Theory: close the tab, close its pane, open another note into it, each answered Discard) | the episode ends before disposal or re-pointing; reopening builds no tab for it | skip the retirement |
 | `TwoDirtyPeersAreTwoEntries` | two tabs on `a.md`, one discards; reopening restores the other's | key by path |
@@ -1058,7 +1110,7 @@ reopen waits for them, §2). Faults come from the hooks' returned
 | `ASessionEndThatIgnoresCancelAbandons` | the `Closing` of a session end with its cancel ignored, a dirty tab whose store write fails: the prompt is answered Cancel and the window still closes; disposal abandons the episode (no retirement) | retire on that close |
 | `ABaselineChangeIsWrittenAtOnce` (Theory: a save landing behind edits, a rename) | the write of the new baseline is issued without the debounce | debounce it |
 | `CloseVaultThatKeepsTheCopiesSpeaksOneCloseLine` | Close Vault, a retirement held past 4 s, Close and keep the copies: `VaultClosed` spoken once | no case in `AnnounceTeardown` |
-| `HostCodeNeverPairsAHashWithASeparateIdentity` (census) | no file under `SlateWindows/` calls `NoteFileIdentity`; every statement that assigns a tab's content hash assigns `FileIdentity` beside it, from `IdentifiedText`, `NotePartsBundle`, `SaveReport`, `PublishedUnindexed`, a restored `HotExitEntry`, another tab's baseline, or null beside a null hash (`ReplaceItem`'s clear, `WorkspaceViewModel.Layout.cs:647`) | read the identity with `NoteFileIdentity` at load; or set a hash without its identity (the task splice) |
+| `HostCodeNeverPairsAHashWithASeparateIdentity` (census) | no file under `SlateWindows/` calls `NoteFileIdentity`; every statement that assigns a tab's content hash assigns `FileIdentity` beside it, from `IdentifiedText`, `NotePartsBundle`, `SaveReport`, `PublishedUnindexed`, a restored `HotExitEntry`, another tab's baseline, or null beside a null hash (`ReplaceItem`'s clear, `WorkspaceViewModel.cs:647`) | read the identity with `NoteFileIdentity` at load; or set a hash without its identity (the task splice; the property rebaseline) |
 | `AStalledWriteInOneVaultNeverHoldsAnother` | A's write held; the switch's settle times out and its prompt opens; Save All lands, A's retirement confirms and the held write is moot, the switch completes `ClosedAllSaved`; B's edits kept, B's close `ClosedKept` | one process-wide gate |
 | `AReopenWaitsForTheLastSessionsObligations` | Close and keep the copies with a retirement held, then a reopen in the same process: released within 4 s, the read waits for it and restores nothing of the retired text; held past 4 s: no hot exit that session — nothing read, no claim, its close prompts with core's timed-out reason, and its Discard All calls nothing | read without waiting; or read anyway after the wait; or hand the key |
 | `AnErroredRetirementLeftByCloseAndKeepNeverDisablesTheNextOpen` | a retirement errors (`Before` fault), Close and keep the copies, the fault ends; with no workspace the store host's retry confirms it; a reopen in the same process has hot exit and restores nothing of the retired text | retry only from a settle or a queued call |
@@ -1102,10 +1154,13 @@ assert today's prompt (§1) run unchanged.
   teardown waits on a recovery write beyond the settle's budget;
   signing out flushes without a prompt; a vault with no key keeps the
   prompt).
-- WB-29a's spec (PR 1): a dated amendment to §2 (the compare-and-swap
-  claim and its caller-made incarnation), §3 (the identity from the
-  read and the save), §5 (the discard-pending prompt and Close and keep
-  the copies, both hosts), §6 (`retire_entry`) and its delivery record.
+- WB-29a's spec (PR 1): a dated amendment to §1 (the vault hold), §2
+  (the compare-and-swap claim and its caller-made incarnation; "a newer
+  claim replaces an older one"), §3 (the identity from the read and the
+  save; the snapshot's current claims), §5 (the discard-pending prompt
+  and Close and keep the copies, both hosts), §6 (`retire_entry`),
+  Deviation 5 (Windows runs one instance per Windows session, not per
+  account), and its delivery record.
 - PR 2: the seven Windows designations become construction sites; the
   ledger (`python -I scripts/a11y_trigger_ledger.py --write`, then
   `--check`).
@@ -1168,9 +1223,12 @@ Start-Slate $vault   # scenario (1); each relaunch in (2)-(4) is this same line 
 
 Scenario (5) denies writes to the store's folder with a checked deny
 entry (.NET's `FileSystemAccessRule`, not `icacls /deny`, whose
-`SYNCHRONIZE` would refuse reads too) and undoes it after:
+`SYNCHRONIZE` would refuse reads too) only after Slate has opened the
+vault (its store read and its hold taken, so the open is not inert),
+and undoes it after:
 
 ```powershell
+Start-Slate $vault   # scenario (5): wait for the vault-opened sentence before the deny
 $hotExit = Join-Path $device 'hot-exit'
 if (-not (Test-Path -LiteralPath $hotExit -PathType Container)) { throw "no hot-exit store at $hotExit (scenario (1) writes it)" }
 $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
@@ -1179,7 +1237,7 @@ $acl = Get-Acl -LiteralPath $hotExit; $acl.AddAccessRule($deny); Set-Acl -Litera
 $probe = Join-Path $hotExit 'wb29-deny-probe.tmp'
 $denied = $false; try { [System.IO.File]::WriteAllText($probe, 'x') } catch [System.UnauthorizedAccessException] { $denied = $true }
 if (-not $denied) { Remove-Item -LiteralPath $probe; throw 'the deny did not take' }
-Start-Slate $vault   # scenario (5): type, Alt+F4 — the prompt, with core's reason spoken and in the status line
+# scenario (5), in the running Slate: type, Alt+F4 — the prompt, with core's reason spoken and in the status line
 icacls $hotExit /remove:d "*$($me.Value)" /T /C; if ($LASTEXITCODE -ne 0) { throw 'icacls could not remove the deny' }
 [System.IO.File]::WriteAllText($probe, 'x'); Remove-Item -LiteralPath $probe
 $env:SLATE_TEST_ROOT_FILE_ID_INFO_UNSUPPORTED = 'wb29-weak-root'
@@ -1207,7 +1265,8 @@ draft until then.
       merged before code; the owner's calls of 2026-11-02 recorded.
 - [ ] PR 1 (core): the compare-and-swap claim with its caller-made
       incarnation, `retire_entry`, the identified read and
-      `SaveReport.file_identity`, the three reason fragments, the
+      `SaveReport.file_identity`, the vault hold, the snapshot's
+      claims, the reason fragments, the
       discard-pending prompt's copy, and WB-29a's dated amendment, each
       with its core facts seen failing first or by mutation; the Mac app
       builds and the Windows bindings regenerate.
@@ -1263,7 +1322,8 @@ WB-29 is the Windows host of WB-29a's hot-exit store (#1734), in two
 PRs. PR 1 amends core (owner call 1): a cross-process vault hold, a compare-and-swap claim that
 carries its own incarnation, `retire_entry` that needs no claim, the
 file identity returned by the read and the save that touched the file,
-three reason fragments and the discard-pending prompt's copy, with a
+the vault hold, the snapshot's claims, the reason fragments and the
+discard-pending prompt's copy, with a
 dated amendment to WB-29a. PR 2 is the host, on one model (§0): a tab
 owns its entry for one dirty episode, ended by the reader (retire every
 incarnation it holds) or abandoned by disposal (keep everything, as a
