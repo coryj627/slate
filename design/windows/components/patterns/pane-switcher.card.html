@@ -1,0 +1,23 @@
+<!-- @dsCard group="Components" viewport="700x220" name="Pattern · Pane switcher" subtitle="Right-pane view strip: tooltips, selected indicator, More panels overflow, vertical" -->
+<!DOCTYPE html><html><head><meta charset="utf-8"><link rel="stylesheet" href="../../styles.css">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script>
+<style>body{margin:0;padding:20px;background:var(--surface-card);color:var(--text-primary);overflow:hidden}.row{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:14px}.k{font:12px/16px var(--font-ui);color:var(--text-tertiary);width:84px;flex:none;padding-top:6px}</style></head>
+<body><div id="root"></div>
+<script type="text/babel">
+const NS = window.SlateDesignSystem_326dc9 || {};
+class Safe extends React.Component{constructor(p){super(p);this.state={e:null}}static getDerivedStateFromError(e){return{e}}render(){return this.state.e?<span style={{font:"11px monospace",color:"var(--status-error)"}}>{this.props.n}: render error</span>:this.props.children}}
+const C = ({n, ...p}) => { const X = NS[n]; return X ? <Safe n={n}><X {...p}/></Safe> : <span style={{font:"11px monospace",color:"var(--status-error)"}}>{n} missing</span>; };
+const Row = ({k, children}) => <div className="row"><span className="k">{k}</span>{children}</div>;
+const G = ({c, s=20}) => <span aria-hidden="true" style={{fontFamily:"var(--font-icons)",fontSize:s,lineHeight:s+"px",width:s,height:s,display:"inline-flex",alignItems:"center",justifyContent:"center",fontStyle:"normal"}}>{String.fromCharCode(parseInt(c,16))}</span>;
+const PANELS=[["outline","Outline","E8FD"],["backlinks","Backlinks","E71B"],["outgoing","Outgoing links","E8A7"],["connections","Connections","F003"],["graph","Graph inspector","E9E9"],["embeds","Embeds","E8A1"],["math","Math","E8EF"],["code","Code","E943"],["diagrams","Diagrams","E9D2"],["tasks","Tasks","E9D5"],["review","Tasks Review","E73A","Ctrl+R"],["history","History","E81C"],["citations","Citations","E82D"],["bibliography","Bibliography","E8F1"],["queries","Queries","E71C"],["base","Base dock","E8A9"],["sync","Sync","E895"]].map(([id,label,icon,shortcut])=>({id,label,icon,shortcut}));
+const Pane=({children})=><div style={{position:"relative",width:300,padding:"4px 8px",boxSizing:"border-box",background:"var(--surface-window)",border:"1px solid var(--border-subtle)",borderRadius:4}}>{children}</div>;
+function Demo(){const [a,setA]=React.useState("backlinks");const [b,setB]=React.useState("citations");const [v,setV]=React.useState("outline");return <div style={{display:"flex",gap:24}}>
+<div><Row k="Selected"><Pane><C n="PaneSwitcher" items={PANELS} value={a} onChange={setA} label="Right pane views"/><span style={{position:"absolute",left:70,top:52,transform:"translateX(-50%)"}}><C n="Tooltip" label="Backlinks"/></span></Pane></Row>
+<div style={{height:40}}/><Row k="In overflow"><Pane><C n="PaneSwitcher" items={PANELS} value={b} onChange={setB} label="Right pane views"/></Pane></Row></div>
+<Row k="Vertical"><div style={{padding:4,background:"var(--surface-window)",border:"1px solid var(--border-subtle)",borderRadius:4}}><C n="PaneSwitcher" items={PANELS.slice(0,6)} maxVisible={4} orientation="vertical" value={v} onChange={setV} label="Right pane views"/></div></Row>
+</div>}
+ReactDOM.createRoot(document.getElementById('root')).render(<Demo/>);
+</script></body></html>
