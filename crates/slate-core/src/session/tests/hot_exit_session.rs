@@ -603,13 +603,13 @@ fn an_unchanged_property_delete_reports_the_file_it_read() {
     );
 }
 
-/// Red team (PR 1): a note that is itself a link reads through the link,
-/// and its identified read reports exactly what `note_file_identity`
-/// reports for it, so a checked save never refuses on an identity the
-/// check cannot produce.
+/// Red team and Codex (PR 1): a note that is itself a link reads through
+/// the link, so its bytes are the target's while `note_file_identity` names
+/// the entry (the link on Unix, none on Windows). The identified read names
+/// neither: it reports none, and a checked save from that baseline lands.
 #[cfg(any(windows, unix))]
 #[test]
-fn an_identified_read_of_a_link_agrees_with_note_file_identity() {
+fn an_identified_read_of_a_link_names_no_identity_and_its_save_lands() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     std::fs::write(root.join("target.md"), "# Target\n").unwrap();
@@ -625,10 +625,13 @@ fn an_identified_read_of_a_link_agrees_with_note_file_identity() {
     let session = session_at(root);
     let read = session.read_text_identified("link.md").unwrap();
     assert_eq!(read.text, "# Target\n");
-    assert_eq!(
-        read.file_identity,
-        session.note_file_identity("link.md").unwrap()
-    );
-    #[cfg(windows)]
-    assert_eq!(read.file_identity, None, "Windows names no link");
+    assert_eq!(read.file_identity, None);
+    session
+        .save_text_checked(
+            "link.md",
+            "# Saved\n",
+            Some(&read.content_hash),
+            read.file_identity.as_deref(),
+        )
+        .unwrap();
 }

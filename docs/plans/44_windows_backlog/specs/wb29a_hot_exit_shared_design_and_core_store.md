@@ -624,15 +624,16 @@ section wins.
   `SaveReport.file_identity` and `PublishedUnindexed.file_identity`, each
   from one handle (the staged file's for a save, since the rename keeps
   it), and kept only when it agrees with `note_file_identity` for the
-  entry at the path: that gives none for a link or any other reparse
-  point (OneDrive placeholders, compressed or deduplicated files), and a
-  checked save compares against it, so a baseline never carries an
-  identity the check cannot produce; a file put at the path between the
-  handle and that check makes them disagree, and the result is none.
+  entry at the path, which a checked save compares against: on Windows
+  that gives none for a link or any other reparse point (OneDrive
+  placeholders, compressed or deduplicated files), on Unix a link's own
+  inode. So a baseline never carries an identity the check cannot
+  produce, a link's read (the target's bytes) reports none, and a file
+  put at the path between the handle and that check reports none.
   `None` where none can be had, never a failed read or save.
-- **Refusals change nothing.** A claim naming an expected claim in a
-  vault that has no directory is refused before the directory is
-  created. Hold files (`holds/<key hash>.lock`, empty) are not removed:
+- **Refusals change nothing.** A claim with a stale epoch or an expected
+  claim, on a vault that has no directory, is refused before the
+  directory is created, so it spends no vault cap. Hold files (`holds/<key hash>.lock`, empty) are not removed:
   one per vault this device has held, an accepted, bounded leftover.
 - **§5, the discard-pending prompt (owner call D-1).** A close the store
   cannot finish — a discard or a retirement not confirmed — opens a

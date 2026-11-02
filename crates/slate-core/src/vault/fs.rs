@@ -211,12 +211,13 @@ impl FsVaultProvider {
     /// `relative` names that same file under `file_identity`'s own rule
     /// (plan 44 WB-29 §7). A handle's identity alone names the file the
     /// bytes came from, but a checked save compares against
-    /// `file_identity`, which gives none for a link or any other reparse
-    /// point (OneDrive's placeholders, compressed or deduplicated files):
-    /// agreeing with it keeps those saves from refusing on an identity the
-    /// later check can never produce, and a file put at the path in
-    /// between (they then differ) reports none, which the restore treats
-    /// as an unknown identity, never a wrong one.
+    /// `file_identity`, which names the entry: on Windows none for a link
+    /// or any other reparse point (OneDrive's placeholders, compressed or
+    /// deduplicated files), on Unix a link's own inode. Agreeing with it
+    /// keeps those saves from refusing on an identity the later check can
+    /// never produce, a link's read (the target's bytes) reports none, and
+    /// a file put at the path in between (they then differ) reports none,
+    /// which the restore treats as an unknown identity, never a wrong one.
     fn agreed_identity(&self, relative: &str, handle: Option<String>) -> Option<String> {
         let entry = self.file_identity(relative).ok().flatten()?;
         handle.filter(|identity| *identity == entry)

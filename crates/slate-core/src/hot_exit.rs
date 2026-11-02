@@ -547,10 +547,19 @@ impl HotExitStore {
     ) -> Result<HotExitClaimOutcome, HotExitError> {
         validate_entry_id(entry_id)?;
         validate_incarnation(incarnation)?;
-        // A vault with no directory has no current claim to name: refuse
-        // before creating it, so a refused claim changes nothing.
-        if expected.is_some() && !self.vault_dir(key).exists() {
-            return Ok(HotExitClaimOutcome::Superseded(HotExitSupersession::Claim));
+        // A vault with no directory is at epoch 0 with no current claim: a
+        // claim that could only be refused there is refused before creating
+        // it, so a refusal changes nothing and spends no vault cap. A vault
+        // created meanwhile answers the next call under its lock.
+        if !self.vault_dir(key).exists() {
+            if epoch != 0 {
+                return Ok(HotExitClaimOutcome::Superseded(
+                    HotExitSupersession::Epoch { current: 0 },
+                ));
+            }
+            if expected.is_some() {
+                return Ok(HotExitClaimOutcome::Superseded(HotExitSupersession::Claim));
+            }
         }
         let dir = match self.ensure_vault(key)? {
             Ok(dir) => dir,

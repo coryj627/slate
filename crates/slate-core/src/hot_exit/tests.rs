@@ -1337,6 +1337,123 @@ fn an_expected_claim_over_no_current_claim_changes_nothing() {
     assert!(!f.vault_dir(&fresh).exists());
 }
 
+/// Codex (PR 1): a claim with a stale epoch on a vault with no directory is
+/// refused before creating it: no directory, no vault cap spent.
+#[test]
+fn a_stale_epoch_claim_on_a_fresh_vault_creates_nothing() {
+    let f = Fixture::new();
+    for i in 0..(MAX_VAULTS + 1) {
+        let fresh = key(&format!("never-claimed-{i}"));
+        assert_eq!(
+            f.store
+                .claim_entry(
+                    &fresh,
+                    1,
+                    "tab1",
+                    None,
+                    &new_hot_exit_incarnation().unwrap()
+                )
+                .unwrap(),
+            HotExitClaimOutcome::Superseded(HotExitSupersession::Epoch { current: 0 })
+        );
+        assert!(!f.vault_dir(&fresh).exists());
+    }
+    // Every vault cap slot is still free: a real first claim lands.
+    let _ = claim(&f.store, &key("really-claimed"), "tab1");
+}
+
+/// Codex (PR 1): contenders that overlap, each expecting the same claim: the
+/// comparison runs under the vault lock, so exactly one takes it over. Each
+/// has its own store and lock handle, as a process does.
+#[test]
+fn overlapping_claims_expecting_one_claim_have_one_winner() {
+    let f = Fixture::new();
+    let k = key("vault-a");
+    let a = claim(&f.store, &k, "tab1");
+    durable(f.store.write_buffer(&k, &a, 1, &entry("restored")));
+    // The test holds the vault lock until both contenders have read whatever
+    // they read before taking it.
+    let held = f.store.lock_vault(&k).unwrap();
+    let contenders: Vec<_> = (0..2)
+        .map(|_| {
+            let store = f.reopen();
+            let k = k.clone();
+            let expected = a.incarnation.clone();
+            std::thread::spawn(move || {
+                store.claim_entry(
+                    &k,
+                    0,
+                    "tab1",
+                    Some(&expected),
+                    &new_hot_exit_incarnation().unwrap(),
+                )
+            })
+        })
+        .collect();
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(
+        contenders.iter().all(|c| !c.is_finished()),
+        "a contender finished while the vault lock was held"
+    );
+    drop(held);
+    let outcomes: Vec<_> = contenders
+        .into_iter()
+        .map(|c| c.join().unwrap().unwrap())
+        .collect();
+    let winners = outcomes
+        .iter()
+        .filter(|o| matches!(o, HotExitClaimOutcome::Claimed(_)))
+        .count();
+    assert_eq!(winners, 1, "{outcomes:?}");
+    assert!(
+        outcomes.contains(&HotExitClaimOutcome::Superseded(HotExitSupersession::Claim)),
+        "{outcomes:?}"
+    );
+}
+
+/// Codex (PR 1): every sync of a claim's retry and of a retirement is an
+/// error when it fails, never `Claimed` or done, and the healed retry lands.
+#[test]
+fn a_failed_sync_is_never_answered_claimed_or_retired() {
+    let f = Fixture::new();
+    let k = key("vault-a");
+    let a = claim(&f.store, &k, "tab1");
+    durable(f.store.write_buffer(&k, &a, 1, &entry("A")));
+    let incarnation = new_hot_exit_incarnation().unwrap();
+    let retry =
+        |store: &HotExitStore| store.claim_entry(&k, 0, "tab1", Some(&a.incarnation), &incarnation);
+    assert!(matches!(
+        retry(&f.store).unwrap(),
+        HotExitClaimOutcome::Claimed(_)
+    ));
+    // The retry re-syncs the claim file, then `claims/` (`vaults/` is 0).
+    f.fs.fail_nth(HotExitStep::SyncFile, 0);
+    assert!(retry(&f.store).is_err(), "a failed file sync said Claimed");
+    f.fs.fail_nth(HotExitStep::SyncDir, 1);
+    assert!(
+        retry(&f.store).is_err(),
+        "a failed claims sync said Claimed"
+    );
+    f.fs.heal();
+    assert!(matches!(
+        retry(&f.store).unwrap(),
+        HotExitClaimOutcome::Claimed(_)
+    ));
+    // A retirement's two directory syncs, with the records removed or not.
+    let listed = [incarnation.clone(), a.incarnation.clone()];
+    for failing in [0, 1] {
+        f.fs.fail_nth(HotExitStep::SyncDir, failing);
+        assert!(
+            f.store.retire_entry(&k, "tab1", &listed).is_err(),
+            "sync {failing} failed but the retirement said done"
+        );
+        f.fs.heal();
+    }
+    f.store.retire_entry(&k, "tab1", &listed).unwrap();
+    assert!(f.files_in(&k, CLAIMS_DIR).is_empty());
+    assert!(f.on_disk(&k, "tab1").is_none());
+}
+
 /// The red team's round-4 schedule: an adopter that never wrote leaves a
 /// payload under a claim of another incarnation. The next adopter expects
 /// the observed claim, and its `adopted` lists both, so its release
