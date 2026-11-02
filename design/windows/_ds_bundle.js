@@ -246322,15 +246322,15 @@ function HorizontalTab(_p = {}) {
       position: "absolute",
       left: 0,
       top: 41,
-      width: 76,
+      right: 0,
       height: 3
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       position: "absolute",
       left: 12,
+      right: 12,
       top: 0,
-      width: 52,
       height: 3,
       borderRadius: 9999,
       backgroundColor: "var(--brand-stroke-compound-rest)"
@@ -246411,15 +246411,15 @@ function HorizontalTab(_p = {}) {
       position: "absolute",
       left: 0,
       top: 41,
-      width: 76,
+      right: 0,
       height: 3
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       position: "absolute",
       left: 12,
+      right: 12,
       top: 0,
-      width: 52,
       height: 3,
       borderRadius: 9999,
       backgroundColor: "var(--brand-stroke-compound-hover)"
@@ -246500,15 +246500,15 @@ function HorizontalTab(_p = {}) {
       position: "absolute",
       left: 0,
       top: 41,
-      width: 76,
+      right: 0,
       height: 3
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       position: "absolute",
       left: 12,
+      right: 12,
       top: 0,
-      width: 52,
       height: 3,
       borderRadius: 9999,
       backgroundColor: "var(--brand-stroke-compound-pressed)"
@@ -246518,7 +246518,7 @@ function HorizontalTab(_p = {}) {
     className: props.className,
     style: {
       margin: "-0.5px -1px",
-      width: 76,
+      width: "fit-content",
       borderRadius: 2,
       backgroundColor: "rgba(255,255,255,0)",
       boxShadow: "0 0 0 3px var(--neutral-stroke-focus-2-rest)",
@@ -246617,8 +246617,8 @@ function HorizontalTab(_p = {}) {
     style: {
       position: "absolute",
       left: 12,
+      right: 12,
       top: 0,
-      width: 52,
       height: 3,
       borderRadius: 9999,
       backgroundColor: "var(--brand-stroke-compound-rest)"
@@ -246698,15 +246698,15 @@ function HorizontalTab(_p = {}) {
       position: "absolute",
       left: 0,
       top: 41,
-      width: 76,
+      right: 0,
       height: 3
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       position: "absolute",
       left: 12,
+      right: 12,
       top: 0,
-      width: 52,
       height: 3,
       borderRadius: 9999,
       backgroundColor: "var(--neutral-foreground-disabled-rest)"
@@ -246787,7 +246787,7 @@ function HorizontalTab(_p = {}) {
       position: "absolute",
       left: 0,
       top: 41,
-      width: 75,
+      right: 0,
       height: 3
     }
   }));
@@ -246866,15 +246866,15 @@ function HorizontalTab(_p = {}) {
       position: "absolute",
       left: 0,
       top: 41,
-      width: 75,
+      right: 0,
       height: 3
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       position: "absolute",
       left: 12,
+      right: 12,
       top: 0,
-      width: 51,
       height: 3,
       borderRadius: 9999,
       backgroundColor: "var(--neutral-stroke-1-hover)"
@@ -246955,15 +246955,15 @@ function HorizontalTab(_p = {}) {
       position: "absolute",
       left: 0,
       top: 41,
-      width: 75,
+      right: 0,
       height: 3
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       position: "absolute",
       left: 12,
+      right: 12,
       top: 0,
-      width: 51,
       height: 3,
       borderRadius: 9999,
       backgroundColor: "var(--neutral-stroke-1-pressed)"
@@ -246972,8 +246972,8 @@ function HorizontalTab(_p = {}) {
   const __body8 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
-      margin: "-0.5px -0.5px",
-      width: 75,
+      margin: "-0.5px -1px",
+      width: "fit-content",
       borderRadius: 2,
       backgroundColor: "rgba(255,255,255,0)",
       boxShadow: "0 0 0 3px var(--neutral-stroke-focus-2-rest)",
@@ -247143,7 +247143,7 @@ function HorizontalTab(_p = {}) {
       position: "absolute",
       left: 0,
       top: 41,
-      width: 75,
+      right: 0,
       height: 3
     }
   }));
@@ -247222,15 +247222,15 @@ function HorizontalTab(_p = {}) {
       position: "absolute",
       left: 0,
       top: 41,
-      width: 76,
+      right: 0,
       height: 3
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       position: "absolute",
       left: 12,
+      right: 12,
       top: 0,
-      width: 52,
       height: 3,
       borderRadius: 9999,
       backgroundColor: "var(--brand-stroke-compound-hover)"
@@ -247311,15 +247311,15 @@ function HorizontalTab(_p = {}) {
       position: "absolute",
       left: 0,
       top: 41,
-      width: 76,
+      right: 0,
       height: 3
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       position: "absolute",
       left: 12,
+      right: 12,
       top: 0,
-      width: 52,
       height: 3,
       borderRadius: 9999,
       backgroundColor: "var(--brand-stroke-compound-pressed)"
@@ -247329,7 +247329,7 @@ function HorizontalTab(_p = {}) {
     className: props.className,
     style: {
       margin: "-0.5px -1px",
-      width: 76,
+      width: "fit-content",
       borderRadius: 2,
       boxShadow: "0 0 0 3px var(--neutral-stroke-focus-2-rest)",
       display: "flex",
@@ -247427,8 +247427,8 @@ function HorizontalTab(_p = {}) {
     style: {
       position: "absolute",
       left: 12,
+      right: 12,
       top: 0,
-      width: 52,
       height: 3,
       borderRadius: 9999,
       backgroundColor: "var(--brand-stroke-compound-rest)"
@@ -247509,15 +247509,15 @@ function HorizontalTab(_p = {}) {
       position: "absolute",
       left: 0,
       top: 41,
-      width: 75,
+      right: 0,
       height: 3
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       position: "absolute",
       left: 12,
+      right: 12,
       top: 0,
-      width: 51,
       height: 3,
       borderRadius: 9999,
       backgroundColor: "var(--neutral-stroke-1-hover)"
@@ -247598,15 +247598,15 @@ function HorizontalTab(_p = {}) {
       position: "absolute",
       left: 0,
       top: 41,
-      width: 75,
+      right: 0,
       height: 3
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       position: "absolute",
       left: 12,
+      right: 12,
       top: 0,
-      width: 51,
       height: 3,
       borderRadius: 9999,
       backgroundColor: "var(--neutral-stroke-1-pressed)"
@@ -247615,8 +247615,8 @@ function HorizontalTab(_p = {}) {
   const __body15 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
-      margin: "-0.5px -0.5px",
-      width: 75,
+      margin: "-0.5px -1px",
+      width: "fit-content",
       borderRadius: 2,
       boxShadow: "0 0 0 3px var(--neutral-stroke-focus-2-rest)",
       display: "flex",
@@ -247786,15 +247786,15 @@ function HorizontalTab(_p = {}) {
       position: "absolute",
       left: 0,
       top: 30,
-      width: 64,
+      right: 0,
       height: 2
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       position: "absolute",
       left: 8,
+      right: 8,
       top: 0,
-      width: 48,
       height: 2,
       borderRadius: 9999,
       backgroundColor: "var(--brand-stroke-compound-rest)"
@@ -247875,15 +247875,15 @@ function HorizontalTab(_p = {}) {
       position: "absolute",
       left: 0,
       top: 30,
-      width: 64,
+      right: 0,
       height: 2
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       position: "absolute",
       left: 8,
+      right: 8,
       top: 0,
-      width: 48,
       height: 2,
       borderRadius: 9999,
       backgroundColor: "var(--brand-stroke-compound-hover)"
@@ -247964,15 +247964,15 @@ function HorizontalTab(_p = {}) {
       position: "absolute",
       left: 0,
       top: 30,
-      width: 64,
+      right: 0,
       height: 2
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       position: "absolute",
       left: 8,
+      right: 8,
       top: 0,
-      width: 48,
       height: 2,
       borderRadius: 9999,
       backgroundColor: "var(--brand-stroke-compound-pressed)"
@@ -247982,7 +247982,7 @@ function HorizontalTab(_p = {}) {
     className: props.className,
     style: {
       margin: "-4px -4px",
-      width: 64,
+      width: "fit-content",
       borderRadius: 2,
       backgroundColor: "rgba(255,255,255,0)",
       borderTop: "3px solid var(--neutral-stroke-focus-2-rest)",
@@ -248084,8 +248084,8 @@ function HorizontalTab(_p = {}) {
     style: {
       position: "absolute",
       left: 8,
+      right: 8,
       top: 0,
-      width: 48,
       height: 2,
       borderRadius: 9999,
       backgroundColor: "var(--brand-stroke-compound-rest)"
@@ -248165,15 +248165,15 @@ function HorizontalTab(_p = {}) {
       position: "absolute",
       left: 0,
       top: 30,
-      width: 64,
+      right: 0,
       height: 2
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       position: "absolute",
       left: 8,
+      right: 8,
       top: 0,
-      width: 48,
       height: 2,
       borderRadius: 9999,
       backgroundColor: "var(--neutral-foreground-disabled-rest)"
@@ -248254,7 +248254,7 @@ function HorizontalTab(_p = {}) {
       position: "absolute",
       left: 0,
       top: 30,
-      width: 63,
+      right: 0,
       height: 2
     }
   }));
@@ -248333,15 +248333,15 @@ function HorizontalTab(_p = {}) {
       position: "absolute",
       left: 0,
       top: 30,
-      width: 63,
+      right: 0,
       height: 2
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       position: "absolute",
       left: 8,
+      right: 8,
       top: 0,
-      width: 48,
       height: 2,
       borderRadius: 9999,
       backgroundColor: "var(--neutral-stroke-1-hover)"
@@ -248422,15 +248422,15 @@ function HorizontalTab(_p = {}) {
       position: "absolute",
       left: 0,
       top: 30,
-      width: 63,
+      right: 0,
       height: 2
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       position: "absolute",
       left: 8,
+      right: 8,
       top: 0,
-      width: 48,
       height: 2,
       borderRadius: 9999,
       backgroundColor: "var(--neutral-stroke-1-pressed)"
@@ -248439,8 +248439,8 @@ function HorizontalTab(_p = {}) {
   const __body24 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
-      margin: "-4px -3.5px",
-      width: 63,
+      margin: "-4px -4px",
+      width: "fit-content",
       borderRadius: 2,
       backgroundColor: "rgba(255,255,255,0)",
       borderTop: "3px solid var(--neutral-stroke-focus-2-rest)",
@@ -248613,7 +248613,7 @@ function HorizontalTab(_p = {}) {
       position: "absolute",
       left: 0,
       top: 30,
-      width: 63,
+      right: 0,
       height: 2
     }
   }));
@@ -248692,15 +248692,15 @@ function HorizontalTab(_p = {}) {
       position: "absolute",
       left: 0,
       top: 30,
-      width: 64,
+      right: 0,
       height: 2
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       position: "absolute",
       left: 8,
+      right: 8,
       top: 0,
-      width: 48,
       height: 2,
       borderRadius: 9999,
       backgroundColor: "var(--brand-stroke-compound-hover)"
@@ -248781,15 +248781,15 @@ function HorizontalTab(_p = {}) {
       position: "absolute",
       left: 0,
       top: 30,
-      width: 64,
+      right: 0,
       height: 2
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       position: "absolute",
       left: 8,
+      right: 8,
       top: 0,
-      width: 48,
       height: 2,
       borderRadius: 9999,
       backgroundColor: "var(--brand-stroke-compound-pressed)"
@@ -248799,7 +248799,7 @@ function HorizontalTab(_p = {}) {
     className: props.className,
     style: {
       margin: "-4px -4px",
-      width: 64,
+      width: "fit-content",
       borderRadius: 2,
       borderTop: "3px solid var(--neutral-stroke-focus-2-rest)",
       borderRight: "3px solid var(--neutral-stroke-focus-2-rest)",
@@ -248900,8 +248900,8 @@ function HorizontalTab(_p = {}) {
     style: {
       position: "absolute",
       left: 8,
+      right: 8,
       top: 0,
-      width: 48,
       height: 2,
       borderRadius: 9999,
       backgroundColor: "var(--brand-stroke-compound-rest)"
@@ -248982,15 +248982,15 @@ function HorizontalTab(_p = {}) {
       position: "absolute",
       left: 0,
       top: 30,
-      width: 63,
+      right: 0,
       height: 2
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       position: "absolute",
       left: 8,
+      right: 8,
       top: 0,
-      width: 48,
       height: 2,
       borderRadius: 9999,
       backgroundColor: "var(--neutral-stroke-1-hover)"
@@ -249071,15 +249071,15 @@ function HorizontalTab(_p = {}) {
       position: "absolute",
       left: 0,
       top: 30,
-      width: 63,
+      right: 0,
       height: 2
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       position: "absolute",
       left: 8,
+      right: 8,
       top: 0,
-      width: 48,
       height: 2,
       borderRadius: 9999,
       backgroundColor: "var(--neutral-stroke-1-pressed)"
@@ -249088,8 +249088,8 @@ function HorizontalTab(_p = {}) {
   const __body31 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
-      margin: "-4px -3.5px",
-      width: 63,
+      margin: "-4px -4px",
+      width: "fit-content",
       borderRadius: 2,
       borderTop: "3px solid var(--neutral-stroke-focus-2-rest)",
       borderRight: "3px solid var(--neutral-stroke-focus-2-rest)",
@@ -249502,6 +249502,7 @@ function HorizontalTab(_p = {}) {
   const __body36 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: props.style2 === "filled circular" ? "0 -1px" : undefined,
       width: "fit-content",
       height: 32,
       borderRadius: 9999,
@@ -249648,6 +249649,7 @@ function HorizontalTab(_p = {}) {
   const __body38 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "0 -1px",
       width: "fit-content",
       height: 32,
       borderRadius: 9999,
@@ -249723,6 +249725,7 @@ function HorizontalTab(_p = {}) {
   const __body39 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "0 -1px",
       width: "fit-content",
       height: 32,
       borderRadius: 9999,
@@ -249798,6 +249801,7 @@ function HorizontalTab(_p = {}) {
   const __body40 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "0 -1px",
       width: "fit-content",
       height: 32,
       borderRadius: 9999,
@@ -250169,6 +250173,7 @@ function HorizontalTab(_p = {}) {
   const __body45 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "0 -1px",
       width: "fit-content",
       height: 32,
       borderRadius: 9999,
@@ -250469,6 +250474,7 @@ function HorizontalTab(_p = {}) {
   const __body49 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "0 -1px",
       width: "fit-content",
       height: 32,
       borderRadius: 9999,
@@ -250781,6 +250787,7 @@ function HorizontalTab(_p = {}) {
   const __body53 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "0 1px",
       width: "fit-content",
       height: 24,
       borderRadius: 9999,
@@ -250865,6 +250872,7 @@ function HorizontalTab(_p = {}) {
   const __body54 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: props.style2 === "filled circular" ? "0 -1px" : undefined,
       width: "fit-content",
       height: 24,
       borderRadius: 9999,
@@ -251011,6 +251019,7 @@ function HorizontalTab(_p = {}) {
   const __body56 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "0 -1px",
       width: "fit-content",
       height: 24,
       borderRadius: 9999,
@@ -251086,6 +251095,7 @@ function HorizontalTab(_p = {}) {
   const __body57 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "0 -1px",
       width: "fit-content",
       height: 24,
       borderRadius: 9999,
@@ -290566,6 +290576,7 @@ function VerticalTab(_p = {}) {
   const __body38 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: props.style2 === "filled circular" ? "0 -1px" : undefined,
       width: "fit-content",
       height: 32,
       borderRadius: 9999,
@@ -290712,6 +290723,7 @@ function VerticalTab(_p = {}) {
   const __body40 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "0 -1px",
       width: "fit-content",
       height: 32,
       borderRadius: 9999,
@@ -290787,6 +290799,7 @@ function VerticalTab(_p = {}) {
   const __body41 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "0 -1px",
       width: "fit-content",
       height: 32,
       borderRadius: 9999,
@@ -291237,6 +291250,7 @@ function VerticalTab(_p = {}) {
   const __body47 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "0 -1px",
       width: "fit-content",
       height: 32,
       borderRadius: 9999,
@@ -291940,6 +291954,7 @@ function VerticalTab(_p = {}) {
   const __body56 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: props.style2 === "filled circular" ? "0 -1px" : undefined,
       width: "fit-content",
       height: 24,
       borderRadius: 9999,
@@ -292086,6 +292101,7 @@ function VerticalTab(_p = {}) {
   const __body58 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "0 -1px",
       width: "fit-content",
       height: 24,
       borderRadius: 9999,
@@ -292161,6 +292177,7 @@ function VerticalTab(_p = {}) {
   const __body59 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "0 -1px",
       width: "fit-content",
       height: 24,
       borderRadius: 9999,
@@ -292611,6 +292628,7 @@ function VerticalTab(_p = {}) {
   const __body65 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "0 -1px",
       width: "fit-content",
       height: 24,
       borderRadius: 9999,
