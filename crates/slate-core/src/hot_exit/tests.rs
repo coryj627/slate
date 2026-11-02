@@ -75,11 +75,14 @@ impl Recording {
         self.log.lock().unwrap().clear();
     }
 
+    /// Fails rather than hangs when the write never reaches its staged sync.
     fn wait_until_holding(&self) {
-        let mut holding = self.holding.lock().unwrap();
-        while !*holding {
-            holding = self.holding_cv.wait(holding).unwrap();
-        }
+        let holding = self.holding.lock().unwrap();
+        let (_holding, wait) = self
+            .holding_cv
+            .wait_timeout_while(holding, Duration::from_secs(30), |holding| !*holding)
+            .unwrap();
+        assert!(!wait.timed_out(), "the write never reached its staged sync");
     }
 
     fn release_hold(&self) {
