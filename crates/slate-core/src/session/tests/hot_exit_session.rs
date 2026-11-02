@@ -400,6 +400,20 @@ mod macos {
         assert!(key.text.starts_with("mac:"), "{}", key.text);
         let inode = std::fs::metadata(tmp.path()).unwrap().ino();
         assert!(key.text.contains(&format!("{inode:016x}")), "{}", key.text);
+        // The birth component is the folder's own creation time, in
+        // nanoseconds, not a constant.
+        let born = std::fs::metadata(tmp.path())
+            .unwrap()
+            .created()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64;
+        assert!(
+            key.text.ends_with(&format!("-{born:016x}")),
+            "{} (born {born:016x})",
+            key.text
+        );
         let dev = std::fs::metadata(tmp.path()).unwrap().dev();
         assert!(!key.text.contains(&format!("-{dev:x}-")), "{}", key.text);
         // Two folders on one volume share the UUID and differ in the inode.

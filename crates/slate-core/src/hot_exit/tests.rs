@@ -203,7 +203,7 @@ impl Fixture {
     fn entry_file(&self, key: &HotExitVaultKey, id: &str) -> PathBuf {
         self.vault_dir(key)
             .join(ENTRIES_DIR)
-            .join(format!("{id}{ENTRY_EXT}"))
+            .join(format!("{}{ENTRY_EXT}", stem(id)))
     }
 
     fn on_disk(&self, key: &HotExitVaultKey, id: &str) -> Option<HotExitEntry> {
@@ -337,42 +337,40 @@ fn opening_the_store_syncs_its_directory_chain() {
             "{chain} not synced: {synced:?}"
         );
     }
-}
-
-/// A device root this call creates, and any parent it creates with it, is
-/// a new name in an existing directory: the chain is synced up to that
-/// existing ancestor, not only to the device root.
-#[test]
-fn a_new_device_root_and_its_new_parents_are_synced() {
-    let dir = tempfile::tempdir().unwrap();
-    let device = dir.path().join("new-parent").join("new-device");
-    let fs = Arc::new(Recording::default());
-    let _store = HotExitStore::open_with(
-        &device,
+    // Every open syncs the whole chain, whoever created it: a second
+    // opener never takes "already there" as "already durable".
+    let before = synced.len();
+    let _again = HotExitStore::open_with(
+        dir.path(),
         Arc::clone(&fs) as Arc<dyn HotExitFs>,
         Arc::new(SystemTime::now),
     )
     .unwrap();
-    let synced: Vec<String> = fs
+    let again = fs
         .steps()
         .into_iter()
         .filter(|(step, _)| *step == HotExitStep::SyncDir)
-        .map(|(_, name)| name)
-        .collect();
-    let existing = dir.path().file_name().unwrap().to_str().unwrap();
-    for chain in [
-        VAULTS_DIR,
-        VERSION_DIR,
-        STORE_DIR,
-        "new-device",
-        "new-parent",
-        existing,
-    ] {
-        assert!(
-            synced.iter().any(|name| name == chain),
-            "{chain} not synced: {synced:?}"
-        );
-    }
+        .count();
+    assert_eq!(again - before, before, "a second open synced less");
+}
+
+/// The store creates nothing above its own directory: a device root that
+/// is missing, or relative, is refused (its own durability is the host's),
+/// and nothing is made.
+#[test]
+fn the_device_root_must_be_an_existing_absolute_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("new-parent").join("new-device");
+    assert!(matches!(
+        HotExitStore::open(&missing),
+        Err(HotExitError::Io { .. })
+    ));
+    assert!(!dir.path().join("new-parent").exists());
+    assert!(matches!(
+        HotExitStore::open(Path::new("relative-device")),
+        Err(HotExitError::Io { .. })
+    ));
+    assert!(!Path::new("relative-device").exists());
 }
 
 /// No epoch follows u64::MAX: a counter or claim at the maximum is damage,
@@ -397,7 +395,7 @@ fn a_maximal_epoch_is_refused_before_any_change() {
 
     std::fs::write(f.vault_dir(&k).join(EPOCH_FILE), b"0").unwrap();
     std::fs::write(
-        f.vault_dir(&k).join(CLAIMS_DIR).join("tab1"),
+        f.vault_dir(&k).join(CLAIMS_DIR).join(stem("tab1")),
         format!(
             r#"{{"incarnation":"{}","epoch":{}}}"#,
             c.incarnation,
@@ -457,7 +455,7 @@ fn a_claim_from_a_later_epoch_keeps_its_entry() {
         Err(HotExitError::Damaged)
     ));
     assert_eq!(f.on_disk(&k, "tab1").unwrap().text, "unread");
-    assert!(f.files_in(&k, CLAIMS_DIR).contains(&"tab1".to_string()));
+    assert!(f.files_in(&k, CLAIMS_DIR).contains(&stem("tab1")));
     let next = f.store.discard_vault(&k).unwrap();
     assert!(
         next > c.epoch,
@@ -551,13 +549,41 @@ fn newer_is_never_vouched_for_without_durability() {
             stored_generation: 2
         })
     );
-    let steps: Vec<HotExitStep> = f.fs.steps().into_iter().map(|(step, _)| step).collect();
+    // The stored entry itself, not only the staged write's temp, is synced
+    // and then its directory, before Newer is vouched for.
+    let stored = format!("{}{ENTRY_EXT}", stem("tab1"));
+    let steps = f.fs.steps();
     assert!(
         steps
             .windows(2)
-            .any(|w| w == [HotExitStep::SyncFile, HotExitStep::SyncDir]),
+            .any(|w| w[0] == (HotExitStep::SyncFile, stored.clone())
+                && w[1].0 == HotExitStep::SyncDir),
         "Newer re-synced the stored entry: {steps:?}"
     );
+}
+
+/// NTFS and APFS compare names without case, yet `TabA` and `taba` are two
+/// valid, different entries: one must never replace the other's text.
+#[test]
+fn entry_ids_differing_only_by_case_are_two_entries() {
+    let f = Fixture::new();
+    let k = key("vault-a");
+    let upper = claim(&f.store, &k, "TabA");
+    durable(f.store.write_buffer(&k, &upper, 1, &entry("upper")));
+    let lower = claim(&f.store, &k, "taba");
+    durable(f.store.write_buffer(&k, &lower, 1, &entry("lower")));
+    let mut texts: Vec<String> = f
+        .store
+        .read_buffers(&k)
+        .unwrap()
+        .entries
+        .into_iter()
+        .map(|entry| entry.text)
+        .collect();
+    texts.sort();
+    assert_eq!(texts, ["lower", "upper"]);
+    f.store.release_entry(&k, &lower).unwrap();
+    assert_eq!(f.store.read_buffers(&k).unwrap().entries[0].text, "upper");
 }
 
 #[test]
@@ -1112,7 +1138,7 @@ fn an_unreadable_claim_keeps_its_entry_unread() {
     let k = key("vault-a");
     let c = claim(&f.store, &k, "tab1");
     durable(f.store.write_buffer(&k, &c, 1, &entry("keep me")));
-    let claim_file = f.vault_dir(&k).join(CLAIMS_DIR).join("tab1");
+    let claim_file = f.vault_dir(&k).join(CLAIMS_DIR).join(stem("tab1"));
     std::fs::write(&claim_file, b"{ not json").unwrap();
     assert!(matches!(
         f.store.read_buffers(&k),

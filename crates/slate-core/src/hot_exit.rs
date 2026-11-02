@@ -443,33 +443,29 @@ impl HotExitStore {
         fs: Arc<dyn HotExitFs>,
         now: Arc<dyn Fn() -> SystemTime + Send + Sync>,
     ) -> Result<Self, HotExitError> {
+        // The device root is the host's own app-data folder: absolute and
+        // already there, its name the host's to have made durable. Existence
+        // alone proves nothing about a directory this store would create
+        // (another opener may have just made it, unsynced), so the store
+        // creates nothing above its own `hot-exit` directory.
+        if !device_root.is_absolute() || !device_root.is_dir() {
+            return Err(HotExitError::Io {
+                detail: format!(
+                    "the hot-exit device root must be an existing absolute folder: {}",
+                    device_root.display()
+                ),
+            });
+        }
         let root = device_root.join(STORE_DIR).join(VERSION_DIR);
         let vaults = root.join(VAULTS_DIR);
-        // The nearest ancestor of the device root that already exists: every
-        // directory below it may be created here, its name new in its parent.
-        let mut anchor = device_root;
-        while !anchor.exists()
-            && let Some(parent) = anchor.parent()
-        {
-            anchor = parent;
-        }
         std::fs::create_dir_all(&vaults)?;
         // Each directory's entry is durable only once its parent is synced:
-        // sync the chain from `vaults` up to that existing ancestor, every
-        // time (a concurrent opener may have created a link this caller did
-        // not), so nothing acknowledged later can vanish with an unsynced
-        // ancestor (§2).
-        let mut chain = vec![vaults.clone(), root.clone(), device_root.join(STORE_DIR)];
-        chain.extend(
-            device_root
-                .ancestors()
-                .take_while(|dir| *dir != anchor)
-                .map(Path::to_path_buf),
-        );
-        if !anchor.as_os_str().is_empty() {
-            chain.push(anchor.to_path_buf());
-        }
-        for dir in &chain {
+        // sync every directory this store owns and the device root (whose
+        // entry names `hot-exit`) on every open, whoever created them, so
+        // nothing acknowledged later can vanish with an unsynced ancestor
+        // (§2). Above the device root nothing is the store's: its parent may
+        // not even be writable.
+        for dir in [&vaults, &root, &device_root.join(STORE_DIR), device_root] {
             fs.sync_dir(dir)?;
         }
         Ok(Self {
@@ -517,7 +513,7 @@ impl HotExitStore {
         };
         self.publish(
             &dir.join(CLAIMS_DIR),
-            entry_id,
+            &stem(entry_id),
             &serde_json::to_vec(&record).map_err(json_error)?,
         )?;
         Ok(HotExitClaimOutcome::Claimed(HotExitClaim {
@@ -561,7 +557,7 @@ impl HotExitStore {
         // 1. Outside the lock: stage and sync the payload.
         let temp = entries_dir.join(format!(
             "{}{ENTRY_EXT}{TEMP_MARK}{}",
-            claim.entry_id,
+            stem(&claim.entry_id),
             fresh_incarnation()?
         ));
         let staged = self
@@ -597,12 +593,13 @@ impl HotExitStore {
                 HotExitSupersession::Epoch { current },
             ));
         }
-        match self.read_claim(dir, &claim.entry_id)? {
+        let name = stem(&claim.entry_id);
+        match self.read_claim(dir, &name)? {
             Some(record) if record.incarnation == claim.incarnation => {}
             _ => return Ok(HotExitWriteOutcome::Superseded(HotExitSupersession::Claim)),
         }
         let entries_dir = dir.join(ENTRIES_DIR);
-        let target = entries_dir.join(format!("{}{ENTRY_EXT}", claim.entry_id));
+        let target = entries_dir.join(format!("{name}{ENTRY_EXT}"));
         if let Some(stored) = self.read_entry(&target)?
             && stored.incarnation == claim.incarnation
             && stored.generation >= generation
@@ -617,7 +614,7 @@ impl HotExitStore {
                 },
             ));
         }
-        let (count, bytes) = self.vault_usage(&entries_dir, &claim.entry_id)?;
+        let (count, bytes) = self.vault_usage(&entries_dir, &name)?;
         if count + 1 > MAX_ENTRIES_PER_VAULT || bytes + new_size > MAX_BYTES_PER_VAULT {
             return Ok(HotExitWriteOutcome::Refused(HotExitRefusal::VaultFull));
         }
@@ -640,17 +637,18 @@ impl HotExitStore {
         }
         let _guard = self.lock_vault(key)?;
         let claims_dir = dir.join(CLAIMS_DIR);
-        if let Some(record) = self.read_claim(&dir, &claim.entry_id)?
+        let name = stem(&claim.entry_id);
+        if let Some(record) = self.read_claim(&dir, &name)?
             && record.incarnation == claim.incarnation
         {
-            self.fs.remove(&claims_dir.join(&claim.entry_id))?;
+            self.fs.remove(&claims_dir.join(&name))?;
         }
         // Synced whether or not this call removed anything: a retry after a
         // failed sync finds the records already gone, and must still make
         // that removal durable before it reports the release done (§6).
         self.fs.sync_dir(&claims_dir)?;
         let entries_dir = dir.join(ENTRIES_DIR);
-        let target = entries_dir.join(format!("{}{ENTRY_EXT}", claim.entry_id));
+        let target = entries_dir.join(format!("{name}{ENTRY_EXT}"));
         if let Some(stored) = self.read_entry(&target)?
             && (stored.incarnation == claim.incarnation
                 || claim.adopted.as_deref() == Some(stored.incarnation.as_str()))
@@ -947,11 +945,12 @@ impl HotExitStore {
         Ok(highest)
     }
 
-    fn read_claim(&self, dir: &Path, entry_id: &str) -> Result<Option<ClaimRecord>, HotExitError> {
-        if entry_id.contains(TEMP_MARK) {
+    /// The claim file `name` (an entry's [`stem`], as listed).
+    fn read_claim(&self, dir: &Path, name: &str) -> Result<Option<ClaimRecord>, HotExitError> {
+        if name.contains(TEMP_MARK) {
             return Ok(None);
         }
-        match self.fs.read(&dir.join(CLAIMS_DIR).join(entry_id)) {
+        match self.fs.read(&dir.join(CLAIMS_DIR).join(name)) {
             // A claim that exists but does not parse fails closed, like a
             // lost epoch: reading it as absent would delete its entry unread.
             Ok(bytes) => serde_json::from_slice(&bytes)
@@ -970,14 +969,14 @@ impl HotExitStore {
         }
     }
 
-    /// Entries and bytes the vault holds, not counting `entry_id`'s own
-    /// file (a write replaces it).
+    /// Entries and bytes the vault holds, not counting the writing entry's
+    /// own file `own_stem` (a write replaces it).
     fn vault_usage(
         &self,
         entries_dir: &Path,
-        entry_id: &str,
+        own_stem: &str,
     ) -> Result<(usize, u64), HotExitError> {
-        let own = format!("{entry_id}{ENTRY_EXT}");
+        let own = format!("{own_stem}{ENTRY_EXT}");
         let mut count = 0;
         let mut bytes = 0;
         for name in self.fs.list(entries_dir)? {
@@ -1033,6 +1032,14 @@ fn validate_entry_id(entry_id: &str) -> Result<(), HotExitError> {
     } else {
         Err(HotExitError::InvalidEntryId)
     }
+}
+
+/// The name an entry's claim and payload files carry: the id's bytes in
+/// lower-case hex. Two valid ids may differ only by case (`TabA`, `taba`),
+/// and NTFS and APFS compare names without case, so the id itself as a
+/// name would let one tab's write replace another's unread text.
+fn stem(entry_id: &str) -> String {
+    entry_id.bytes().map(|b| format!("{b:02x}")).collect()
 }
 
 fn fresh_incarnation() -> Result<String, HotExitError> {

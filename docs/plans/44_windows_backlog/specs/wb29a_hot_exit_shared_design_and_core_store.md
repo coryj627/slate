@@ -545,16 +545,25 @@ Where it differs from the design above, it wins.
 - **A recovered name** avoids every kept entry's path, and its search is
   bounded: it stops at an answer that is not "no such file" and falls back
   to `Recovered note {entry id}.md`.
-- **Durable includes every directory name above an entry:** opening the
-  store syncs `vaults`, `v1`, `hot-exit`, the device root and every parent
-  it had to create, up to the nearest directory that already existed, each
-  time, and
+- **The device root is the host's, and must exist:** `open` refuses a
+  device root that is relative or missing and creates nothing above
+  `hot-exit`, because existence cannot prove a directory durable (another
+  opener may have just made it, unsynced) and a parent above the host's
+  app-data folder may not even be writable. The host's existing app-data
+  folder (the one its settings already live in) is the durable anchor.
+- **Durable includes every directory name below that anchor:** opening the
+  store syncs `vaults`, `v1`, `hot-exit` and the device root on every open,
+  whoever created them, and
   every claim syncs `vaults` before it publishes, so a vault directory a
   concurrent creator renamed into place but had not yet synced (or failed
   to sync) is made durable by the caller relying on it.
 - **A claim from a later epoch than the vault's is damage, not age:** the
   read returns `Damaged` and deletes nothing, and Discard All moves past
   the highest epoch any claim names as well as the counter.
+- **An entry's files are named by its id in hex,** not by the id: two
+  valid ids may differ only by case (`TabA`, `taba`), and NTFS and APFS
+  compare names without case, so the id as a name would let one tab's
+  write replace another's unread text. The entry's JSON keeps the id itself.
 - **No epoch follows `u64::MAX`:** an epoch or claim at the maximum makes
   Discard All return `Damaged` before it changes anything, rather than
   panicking across the FFI or wrapping below the claims it must pass.
