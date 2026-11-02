@@ -10,7 +10,7 @@ const __vkey = (p) => "size=" + __venc(p.size) + '|' + "state=" + __venc(p.state
 
 export function Accordion(_p = {}) {
   _p = __slateNorm(_p, {"size":["md","lg","sm","extra large"],"state":["rest","disabled"],"chevron":["before","after"]});
-  const props = { ..._p, icon: _p.icon ?? true, focused: _p.focused ?? false, text: _p.text ?? "Text", size: _p.size ?? "md", state: _p.state ?? "rest", expanded: _p.expanded ?? true, chevron: _p.chevron ?? "before" };
+  const props = { ..._p, icon: _p.icon ?? true, focused: _p.focused ?? false, text: _p.text ?? "Text", size: _p.size ?? "md", state: _p.state ?? "rest", expanded: _p.state === "disabled" ? false : _p.expanded ?? true, chevron: _p.chevron ?? "before" };
   const __body0 = () => (
     <div className={props.className} style={{
       width: 340,
@@ -63,7 +63,9 @@ export function Accordion(_p = {}) {
                 flexShrink: 0,
                 color: "var(--neutral-foreground-1-rest)",
               }}>{props.icon1 ?? <Chevron2 direction={"down"} size={"20"} theme={"regular"} />}</div>
+            {props.icon && (
             <div style={{ position: "relative", flexShrink: 0, color: "var(--neutral-foreground-1-rest)" }}>{props.iconBefore20pxRegular ?? <Placeholder size={"20"} theme={"regular"} />}</div>
+            )}
           </div>
           <div style={{
             position: "relative",
@@ -507,7 +509,9 @@ export function Accordion(_p = {}) {
                 flexShrink: 0,
                 color: "var(--neutral-foreground-1-rest)",
               }}>{props.icon1 ?? <Chevron2 direction={"down"} size={"20"} theme={"regular"} />}</div>
+            {props.icon && (
             <div style={{ position: "relative", flexShrink: 0, color: "var(--neutral-foreground-1-rest)" }}>{props.iconBefore20pxRegular ?? <Placeholder size={"20"} theme={"regular"} />}</div>
+            )}
           </div>
           <div style={{
             position: "relative",
@@ -1362,7 +1366,9 @@ export function Accordion(_p = {}) {
                 flexShrink: 0,
                 color: "var(--neutral-foreground-1-rest)",
               }}>{props.icon1 ?? <Chevron2 direction={"down"} size={"20"} theme={"regular"} />}</div>
+            {props.icon && (
             <div style={{ position: "relative", flexShrink: 0, color: "var(--neutral-foreground-1-rest)" }}>{props.iconBefore20pxRegular ?? <Placeholder size={"20"} theme={"regular"} />}</div>
+            )}
           </div>
           <div style={{
             position: "relative",
