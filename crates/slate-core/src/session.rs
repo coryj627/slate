@@ -511,6 +511,9 @@ pub struct NotePartsBundle {
     /// Newlines before the body start — the whole-file → body LINE delta
     /// (backlink jumps, task rows speak 1-based file lines).
     pub body_line_offset: u32,
+    /// Plan 44 WB-29 §7: the identity of the file `content_hash` was read
+    /// from, from the same handle.
+    pub file_identity: Option<String>,
 }
 
 // --- Save report ---
@@ -523,6 +526,19 @@ pub struct SaveReport {
     pub new_content_hash: String,
     pub new_size_bytes: u64,
     pub new_mtime_ms: i64,
+    /// Plan 44 WB-29 §7: the identity of the file this save published
+    /// (taken from its staged file's handle), or of the file it found
+    /// already holding these bytes; `None` where the provider gives none.
+    pub file_identity: Option<String>,
+}
+
+/// Plan 44 WB-29 §7: a note's text with the hash and the identity of the
+/// one file version it was read from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdentifiedText {
+    pub text: String,
+    pub content_hash: String,
+    pub file_identity: Option<String>,
 }
 
 /// The typed outcome of a create-if-absent write (#1123).
@@ -547,6 +563,8 @@ pub enum CreateExclusiveOutcome {
     PublishedUnindexed {
         path: String,
         content_hash: String,
+        /// Plan 44 WB-29 §7: the created file's identity.
+        file_identity: Option<String>,
         error: VaultError,
     },
 }
@@ -558,6 +576,7 @@ pub(crate) enum CreateFailure {
     /// The no-replace write landed; a later step failed.
     Published {
         content_hash: String,
+        file_identity: Option<String>,
         error: VaultError,
     },
 }
@@ -4135,6 +4154,34 @@ impl VaultSession {
                 size: stat.size_bytes,
             });
         }
+        let bytes = self.provider.read_file_with_cap(path, limit)?;
+        Self::checked_text(path, bytes, limit)
+    }
+
+    /// Plan 44 WB-29 §7: [`read_text`](Self::read_text), with the text's
+    /// hash and the identity of the file it was read from, taken from the
+    /// one handle that read the bytes — so a file replaced between a read
+    /// and an identity lookup can never lend the text its identity.
+    pub fn read_text_identified(&self, path: &str) -> Result<IdentifiedText, VaultError> {
+        let limit = self.config.large_file_refuse_bytes;
+        let stat = self.provider.stat(path)?;
+        if stat.size_bytes > limit {
+            return Err(VaultError::FileTooLarge {
+                path: path.to_string(),
+                size: stat.size_bytes,
+            });
+        }
+        let (bytes, file_identity) = self.provider.read_file_identified(path, limit)?;
+        let text = Self::checked_text(path, bytes, limit)?;
+        Ok(IdentifiedText {
+            content_hash: crate::vault::content_hash(text.as_bytes()),
+            text,
+            file_identity,
+        })
+    }
+
+    /// The size cap and UTF-8 check every text read shares.
+    fn checked_text(path: &str, bytes: Vec<u8>, limit: u64) -> Result<String, VaultError> {
         // `read_file_with_cap` allocates at most `limit + 1` bytes
         // even if the file grows between stat and read — that's the
         // TOCTOU-safe ceiling. If the returned buffer hits the +1
@@ -4142,7 +4189,6 @@ impl VaultSession {
         // FileTooLarge but the actual size on disk is unknown to us
         // here (we deliberately stopped reading), so we surface
         // `limit + 1` as a lower bound rather than lying.
-        let bytes = self.provider.read_file_with_cap(path, limit)?;
         if (bytes.len() as u64) > limit {
             return Err(VaultError::FileTooLarge {
                 path: path.to_string(),
@@ -4847,13 +4893,19 @@ impl VaultSession {
         // aged, since its repair stats the same impossible path forever.
         // All other write errors keep the marker: an atomic publish
         // can fail AFTER mutating disk.
-        if let Err(write_error) = self.provider.write_file(path, contents.as_bytes()) {
-            if matches!(write_error, VaultError::InvalidPath { .. }) {
-                drop(tx);
-                self.clear_own_intent_registration(conn, path, intent_token);
+        let file_identity = match self
+            .provider
+            .write_file_identified(path, contents.as_bytes())
+        {
+            Ok(identity) => identity,
+            Err(write_error) => {
+                if matches!(write_error, VaultError::InvalidPath { .. }) {
+                    drop(tx);
+                    self.clear_own_intent_registration(conn, path, intent_token);
+                }
+                return Err(write_error);
             }
-            return Err(write_error);
-        }
+        };
 
         // Test-only fault seam (adversarial round 12): THIS is the
         // real partial-failure boundary — file written, index not
@@ -4975,6 +5027,7 @@ impl VaultSession {
             new_content_hash: new_hash,
             new_size_bytes: new_stat.size_bytes,
             new_mtime_ms: new_stat.mtime_ms,
+            file_identity,
         })
     }
 
@@ -6279,12 +6332,14 @@ impl VaultSession {
             Err(CreateFailure::Refused(error)) => Err(error),
             Err(CreateFailure::Published {
                 content_hash,
+                file_identity,
                 error,
             }) => {
                 self.notify_file_change(FileChangeKind::Created, path, None);
                 Ok(CreateExclusiveOutcome::PublishedUnindexed {
                     path: path.to_string(),
                     content_hash,
+                    file_identity,
                     error,
                 })
             }
@@ -6393,8 +6448,9 @@ impl VaultSession {
         }
 
         // No-replace publish: the point of no return for user bytes.
-        self.provider
-            .write_file_if_absent(path, bytes)
+        let file_identity = self
+            .provider
+            .write_file_if_absent_identified(path, bytes)
             .map_err(CreateFailure::Refused)?;
 
         // From here every failure is a POST-PUBLISH failure (#1123): the
@@ -6405,6 +6461,7 @@ impl VaultSession {
         let new_hash = crate::vault::content_hash(bytes);
         let published = |error: VaultError| CreateFailure::Published {
             content_hash: new_hash.clone(),
+            file_identity: file_identity.clone(),
             error,
         };
 
@@ -6533,6 +6590,7 @@ impl VaultSession {
             new_content_hash: new_hash,
             new_size_bytes: new_stat.size_bytes,
             new_mtime_ms: new_stat.mtime_ms,
+            file_identity,
         })
     }
 
@@ -9320,7 +9378,11 @@ impl VaultSession {
 
         let mut conn = self.conn.lock().expect("session connection mutex");
 
-        let contents = self.read_text(path)?;
+        let IdentifiedText {
+            text: contents,
+            file_identity: read_identity,
+            ..
+        } = self.read_text_identified(path)?;
         let edit = if by_identity {
             crate::frontmatter::delete_property_by_identity_in_source(&contents, key)
         } else {
@@ -9361,6 +9423,7 @@ impl VaultSession {
                     new_content_hash: current_hash,
                     new_size_bytes: contents.len() as u64,
                     new_mtime_ms: stat.mtime_ms,
+                    file_identity: read_identity,
                 });
             }
         };
@@ -9404,8 +9467,11 @@ impl VaultSession {
     pub fn read_note_parts(&self, path: &str) -> Result<NotePartsBundle, VaultError> {
         // `read_text` doesn't touch the connection mutex, so no lock is
         // needed here — this is a pure read, like `read_text` itself.
-        let contents = self.read_text(path)?;
-        let content_hash = crate::vault::content_hash(contents.as_bytes());
+        let IdentifiedText {
+            text: contents,
+            content_hash,
+            file_identity,
+        } = self.read_text_identified(path)?;
         let mtime_ms = self.provider.stat(path)?.mtime_ms;
         let parts = crate::split_note(&contents);
         // Byte-exact by construction: the body is a suffix of `contents`
@@ -9423,6 +9489,7 @@ impl VaultSession {
             mtime_ms,
             body_byte_offset: body_byte_offset as u64,
             body_line_offset,
+            file_identity,
         })
     }
 

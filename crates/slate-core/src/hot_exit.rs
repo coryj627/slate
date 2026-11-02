@@ -547,6 +547,11 @@ impl HotExitStore {
     ) -> Result<HotExitClaimOutcome, HotExitError> {
         validate_entry_id(entry_id)?;
         validate_incarnation(incarnation)?;
+        // A vault with no directory has no current claim to name: refuse
+        // before creating it, so a refused claim changes nothing.
+        if expected.is_some() && !self.vault_dir(key).exists() {
+            return Ok(HotExitClaimOutcome::Superseded(HotExitSupersession::Claim));
+        }
         let dir = match self.ensure_vault(key)? {
             Ok(dir) => dir,
             Err(refusal) => return Ok(HotExitClaimOutcome::Refused(refusal)),
@@ -1195,7 +1200,7 @@ fn stem(entry_id: &str) -> String {
 
 /// The entry id a [`stem`] names, or `None` for a name no valid id makes.
 fn unstem(name: &str) -> Option<String> {
-    if name.len() % 2 != 0 {
+    if !name.len().is_multiple_of(2) {
         return None;
     }
     let bytes: Option<Vec<u8>> = (0..name.len())

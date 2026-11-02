@@ -94,12 +94,22 @@ fn a_post_publish_failure_reports_the_landed_bytes_and_the_next_scan_indexes_the
     let CreateExclusiveOutcome::PublishedUnindexed {
         path: reported,
         content_hash,
+        file_identity,
         error,
     } = outcome
     else {
         panic!("the seam must produce the post-publish arm: {outcome:?}");
     };
     assert_eq!(reported, path);
+    // Plan 44 WB-29 §7: the created file's identity travels with the arm.
+    #[cfg(any(windows, unix))]
+    assert_eq!(
+        file_identity,
+        session.note_file_identity(&path).unwrap(),
+        "the post-publish arm names the file it created"
+    );
+    #[cfg(not(any(windows, unix)))]
+    let _ = file_identity;
     assert!(
         matches!(error, VaultError::InvalidArgument { ref message } if message.contains("test fault")),
         "got {error:?}"

@@ -7019,6 +7019,65 @@ mod tests {
         }
     }
 
+    /// Plan 44 WB-29 §7: every hot-exit reason completes
+    /// `UnsavedNotesNotKept` as one sentence — lower-case, no full stop of
+    /// its own — and the discard-pending prompt's choices are core's.
+    #[test]
+    fn every_hot_exit_reason_completes_the_not_kept_sentence() {
+        for (reason, expected) in [
+            (
+                HOT_EXIT_REASON_TAKEN_OVER,
+                "Your unsaved notes cannot be kept for next time: Slate no longer holds the kept \
+                 copy of one of these notes.",
+            ),
+            (
+                HOT_EXIT_REASON_DISCARD_PENDING,
+                "Your unsaved notes cannot be kept for next time: an earlier discard of the kept \
+                 copies has not finished.",
+            ),
+            (
+                HOT_EXIT_REASON_DISCARDED,
+                "Your unsaved notes cannot be kept for next time: you chose to discard them.",
+            ),
+            (
+                HOT_EXIT_REASON_HELD_ELSEWHERE,
+                "Your unsaved notes cannot be kept for next time: another Slate window is still \
+                 using this vault's kept copies.",
+            ),
+            (
+                HOT_EXIT_REASON_EARLIER_WORK_PENDING,
+                "Your unsaved notes cannot be kept for next time: Slate is still finishing \
+                 earlier work on this vault's kept copies.",
+            ),
+            (
+                HOT_EXIT_REASON_TIMED_OUT,
+                "Your unsaved notes cannot be kept for next time: saving them took longer than \
+                 4 seconds.",
+            ),
+        ] {
+            let event = A11yEvent::UnsavedNotesNotKept {
+                reason: reason.into(),
+            };
+            assert_eq!(event.render(), expected);
+            assert_eq!(event.priority(), A11yPriority::High);
+        }
+        assert_eq!(
+            [
+                HOT_EXIT_CHOICE_TRY_AGAIN,
+                HOT_EXIT_CHOICE_CLOSE_KEEPING_COPIES,
+                HOT_EXIT_CHOICE_CANCEL,
+                HOT_EXIT_CHOICES_YES_NO_CANCEL,
+            ],
+            [
+                "Try again",
+                "Close and keep the copies",
+                "Cancel",
+                "Choose Yes to try again, No to close and keep the copies, or Cancel to keep \
+                 the vault open.",
+            ]
+        );
+    }
+
     /// The full corpus golden: every representative event's exact
     /// (priority, text). THIS TABLE IS THE CONTRACT — a wording change
     /// here is a product decision (and a §W-D parity change), never a
@@ -7531,7 +7590,7 @@ mod tests {
             ),
             (
                 High,
-                "Slate could not yet discard the kept copies of your unsaved notes, so the vault stays open. Try again, or cancel.",
+                "Slate could not yet discard the kept copies of your unsaved notes. If you close anyway, any copies not yet discarded are kept, and they come back as unsaved notes the next time you open this vault.",
             ),
             // --- Canvas (W6-1 0a, #745) ---
             (Medium, "Research"),

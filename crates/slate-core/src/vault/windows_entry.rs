@@ -939,7 +939,7 @@ fn open_leaf(
     Err(refused())
 }
 
-fn identity(file: &fs::File) -> Result<String, VaultError> {
+pub(super) fn identity(file: &fs::File) -> Result<String, VaultError> {
     let mut info: FILE_ID_INFO = unsafe { std::mem::zeroed() };
     // SAFETY: live handle and the exact initialized output structure.
     if unsafe {

@@ -239,6 +239,44 @@ pub trait VaultProvider: Send + Sync {
         Ok(None)
     }
 
+    /// Plan 44 WB-29 §7: [`Self::read_file_with_cap`] and the identity of
+    /// the file those bytes came from, so a hash and an identity always
+    /// describe one file version. The filesystem provider takes both from
+    /// one handle; this default (for providers without a handle to ask)
+    /// pairs the read with [`Self::file_identity`], and reports `None`
+    /// rather than fail a read for an identity.
+    fn read_file_identified(
+        &self,
+        relative: &str,
+        max_bytes: u64,
+    ) -> Result<(Vec<u8>, Option<String>), VaultError> {
+        let bytes = self.read_file_with_cap(relative, max_bytes)?;
+        Ok((bytes, self.file_identity(relative).unwrap_or(None)))
+    }
+
+    /// Plan 44 WB-29 §7: [`Self::write_file`] and the identity of the file
+    /// it published (the filesystem provider takes it from the staged
+    /// file's handle; this default asks [`Self::file_identity`]).
+    fn write_file_identified(
+        &self,
+        relative: &str,
+        contents: &[u8],
+    ) -> Result<Option<String>, VaultError> {
+        self.write_file(relative, contents)?;
+        Ok(self.file_identity(relative).unwrap_or(None))
+    }
+
+    /// Plan 44 WB-29 §7: [`Self::write_file_if_absent`] and the identity of
+    /// the file it created.
+    fn write_file_if_absent_identified(
+        &self,
+        relative: &str,
+        contents: &[u8],
+    ) -> Result<Option<String>, VaultError> {
+        self.write_file_if_absent(relative, contents)?;
+        Ok(self.file_identity(relative).unwrap_or(None))
+    }
+
     /// Best-effort change subscription (plan 43 PR 20a, #1267). Returns
     /// `Ok(None)` if the platform or the provider has no filesystem events
     /// for this vault, and an error when the platform refuses the watch;
