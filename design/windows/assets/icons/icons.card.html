@@ -9,6 +9,6 @@
 <script type="text/babel">
 const { Icon } = window.SlateDesignSystem_326dc9;
 const n=["Search","Settings","Folder","Pin","Star","Info","Dismiss","MoreHorizontal","Navigation","Code","Filter","Clock","Delete","Image","Open","Lightbulb","BranchFork","ArrowSync","Calendar","Checkmark","Flag","Mail","Person","Chat","ArrowLeft","ArrowUp","ArrowDown","ArrowDownload","ArrowUpload","Warning","ErrorCircle","QuestionCircle","ClipboardTask","Play","Copilot","Glasses"];
-const name=k=>k==="Calendar"?"CalendarDirectionLTRSize20Theme":k+"Size20ThemeRegular";
-ReactDOM.createRoot(document.getElementById('root')).render(<div className="g">{n.map(k=><div className="c" key={k}><Icon name={name(k)} size={20}/>{k}</div>)}</div>);
+const iconName=k=>k==="Calendar"?"CalendarDirectionLTRSize20Theme":k==="Folder"?"FolderSize20ItemCountNo":k+"Size20ThemeRegular";
+ReactDOM.createRoot(document.getElementById('root')).render(<div className="g">{n.map(k=><div className="c" key={k}><Icon name={iconName(k)} size={20}/>{k}</div>)}</div>);
 </script></body></html>

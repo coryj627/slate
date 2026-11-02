@@ -12,13 +12,9 @@ export interface TreeItemProps {
   primaryText?: string;
   iconAfter?: boolean;
   iconAfter1Filled20px?: React.ReactNode;
-  iconAfter2Filled20px?: React.ReactNode;
   iconAfter1Regular20px?: React.ReactNode;
-  iconAfter2Regular20px?: React.ReactNode;
   iconAfter1Regular16px?: React.ReactNode;
-  iconAfter2Regular16px?: React.ReactNode;
   iconAfter1Filled16px?: React.ReactNode;
-  iconAfter2Filled16px?: React.ReactNode;
   badges?: boolean;
   quickActions?: boolean;
   focus?: boolean;

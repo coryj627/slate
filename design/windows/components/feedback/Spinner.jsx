@@ -50,7 +50,7 @@ export function Spinner(_p = {}) {
       </div>
       <div style={{
         position: "relative",
-        width: 62,
+        width: "fit-content",
         display: "flex",
         flexDirection: "row",
         padding: "0px 8px 0px 8px",
@@ -118,7 +118,7 @@ export function Spinner(_p = {}) {
       </div>
       <div style={{
         position: "relative",
-        width: 62,
+        width: "fit-content",
         display: "flex",
         flexDirection: "row",
         padding: "0px 8px 0px 8px",
@@ -186,7 +186,7 @@ export function Spinner(_p = {}) {
       </div>
       <div style={{
         position: "relative",
-        width: 62,
+        width: "fit-content",
         display: "flex",
         flexDirection: "row",
         padding: "0px 8px 0px 8px",
@@ -254,7 +254,7 @@ export function Spinner(_p = {}) {
       </div>
       <div style={{
         position: "relative",
-        width: 62,
+        width: "fit-content",
         display: "flex",
         flexDirection: "row",
         padding: "0px 8px 0px 8px",
@@ -322,7 +322,7 @@ export function Spinner(_p = {}) {
       </div>
       <div style={{
         position: "relative",
-        width: 62,
+        width: "fit-content",
         display: "flex",
         flexDirection: "row",
         padding: "0px 8px 0px 8px",
@@ -388,7 +388,7 @@ export function Spinner(_p = {}) {
       </div>
       <div style={{
         position: "relative",
-        width: 62,
+        width: "fit-content",
         display: "flex",
         flexDirection: "row",
         padding: "0px 8px 0px 8px",
@@ -454,7 +454,7 @@ export function Spinner(_p = {}) {
       </div>
       <div style={{
         position: "relative",
-        width: 62,
+        width: "fit-content",
         display: "flex",
         flexDirection: "row",
         padding: "0px 8px 0px 8px",
@@ -520,7 +520,7 @@ export function Spinner(_p = {}) {
       </div>
       <div style={{
         position: "relative",
-        width: 62,
+        width: "fit-content",
         display: "flex",
         flexDirection: "row",
         padding: "0px 8px 0px 8px",
@@ -587,7 +587,7 @@ export function Spinner(_p = {}) {
       </div>
       <div style={{
         position: "relative",
-        width: 73,
+        width: "fit-content",
         display: "flex",
         flexDirection: "row",
         padding: "0px 8px 0px 8px",
@@ -654,7 +654,7 @@ export function Spinner(_p = {}) {
       </div>
       <div style={{
         position: "relative",
-        width: 73,
+        width: "fit-content",
         display: "flex",
         flexDirection: "row",
         padding: "0px 8px 0px 8px",
@@ -720,7 +720,7 @@ export function Spinner(_p = {}) {
       </div>
       <div style={{
         position: "relative",
-        width: 73,
+        width: "fit-content",
         display: "flex",
         flexDirection: "row",
         padding: "0px 8px 0px 8px",
@@ -786,7 +786,7 @@ export function Spinner(_p = {}) {
       </div>
       <div style={{
         position: "relative",
-        width: 73,
+        width: "fit-content",
         display: "flex",
         flexDirection: "row",
         padding: "0px 8px 0px 8px",
@@ -852,7 +852,7 @@ export function Spinner(_p = {}) {
       </div>
       <div style={{
         position: "relative",
-        width: 73,
+        width: "fit-content",
         display: "flex",
         flexDirection: "row",
         padding: "0px 8px 0px 8px",
@@ -918,7 +918,7 @@ export function Spinner(_p = {}) {
       </div>
       <div style={{
         position: "relative",
-        width: 73,
+        width: "fit-content",
         display: "flex",
         flexDirection: "row",
         padding: "0px 8px 0px 8px",
@@ -984,7 +984,7 @@ export function Spinner(_p = {}) {
       </div>
       <div style={{
         position: "relative",
-        width: 89,
+        width: "fit-content",
         display: "flex",
         flexDirection: "row",
         padding: "0px 8px 0px 8px",
@@ -1050,7 +1050,7 @@ export function Spinner(_p = {}) {
       </div>
       <div style={{
         position: "relative",
-        width: 89,
+        width: "fit-content",
         display: "flex",
         flexDirection: "row",
         padding: "0px 8px 0px 8px",

@@ -14646,10 +14646,6 @@ function AnimatedProgressBar(_p = {}) {
       overflow: "hidden",
       borderRadius: 9999,
       backgroundColor: "var(--neutral-background-6-rest)",
-      borderTop: "1px solid rgba(255,255,255,0)",
-      borderRight: "1px solid rgba(255,255,255,0)",
-      borderBottom: "1px solid rgba(255,255,255,0)",
-      borderLeft: "1px solid rgba(255,255,255,0)",
       display: "flex",
       flexDirection: "row",
       padding: "0px 492px 0px 0px",
@@ -14677,10 +14673,6 @@ function AnimatedProgressBar(_p = {}) {
       height: 2,
       borderRadius: 9999,
       backgroundColor: "var(--neutral-background-6-rest)",
-      borderTop: "1px solid rgba(255,255,255,0)",
-      borderRight: "1px solid rgba(255,255,255,0)",
-      borderBottom: "1px solid rgba(255,255,255,0)",
-      borderLeft: "1px solid rgba(255,255,255,0)",
       display: "flex",
       flexDirection: "row",
       padding: "0px 100px 0px 0px",
@@ -14706,10 +14698,6 @@ function AnimatedProgressBar(_p = {}) {
       height: 2,
       borderRadius: 9999,
       backgroundColor: "var(--neutral-background-6-rest)",
-      borderTop: "1px solid rgba(255,255,255,0)",
-      borderRight: "1px solid rgba(255,255,255,0)",
-      borderBottom: "1px solid rgba(255,255,255,0)",
-      borderLeft: "1px solid rgba(255,255,255,0)",
       display: "flex",
       flexDirection: "row",
       alignItems: "flex-start",
@@ -14733,10 +14721,6 @@ function AnimatedProgressBar(_p = {}) {
       height: 2,
       borderRadius: 9999,
       backgroundColor: "var(--neutral-background-6-rest)",
-      borderTop: "1px solid rgba(255,255,255,0)",
-      borderRight: "1px solid rgba(255,255,255,0)",
-      borderBottom: "1px solid rgba(255,255,255,0)",
-      borderLeft: "1px solid rgba(255,255,255,0)",
       display: "flex",
       flexDirection: "row",
       alignItems: "flex-start",
@@ -14760,10 +14744,6 @@ function AnimatedProgressBar(_p = {}) {
       height: 2,
       borderRadius: 9999,
       backgroundColor: "var(--neutral-background-6-rest)",
-      borderTop: "1px solid rgba(255,255,255,0)",
-      borderRight: "1px solid rgba(255,255,255,0)",
-      borderBottom: "1px solid rgba(255,255,255,0)",
-      borderLeft: "1px solid rgba(255,255,255,0)",
       display: "flex",
       flexDirection: "row",
       padding: "0px 1px 0px 0px",
@@ -14789,10 +14769,6 @@ function AnimatedProgressBar(_p = {}) {
       height: 2,
       borderRadius: 9999,
       backgroundColor: "var(--neutral-background-6-rest)",
-      borderTop: "1px solid rgba(255,255,255,0)",
-      borderRight: "1px solid rgba(255,255,255,0)",
-      borderBottom: "1px solid rgba(255,255,255,0)",
-      borderLeft: "1px solid rgba(255,255,255,0)",
       display: "flex",
       flexDirection: "row",
       padding: "0px 22px 0px 0px",
@@ -14818,10 +14794,6 @@ function AnimatedProgressBar(_p = {}) {
       height: 2,
       borderRadius: 9999,
       backgroundColor: "var(--neutral-background-6-rest)",
-      borderTop: "1px solid rgba(255,255,255,0)",
-      borderRight: "1px solid rgba(255,255,255,0)",
-      borderBottom: "1px solid rgba(255,255,255,0)",
-      borderLeft: "1px solid rgba(255,255,255,0)",
       display: "flex",
       flexDirection: "row",
       alignItems: "flex-start",
@@ -14845,10 +14817,6 @@ function AnimatedProgressBar(_p = {}) {
       height: 2,
       borderRadius: 9999,
       backgroundColor: "var(--neutral-background-6-rest)",
-      borderTop: "1px solid rgba(255,255,255,0)",
-      borderRight: "1px solid rgba(255,255,255,0)",
-      borderBottom: "1px solid rgba(255,255,255,0)",
-      borderLeft: "1px solid rgba(255,255,255,0)",
       display: "flex",
       flexDirection: "row",
       alignItems: "flex-start",
@@ -14872,10 +14840,6 @@ function AnimatedProgressBar(_p = {}) {
       height: 2,
       borderRadius: 9999,
       backgroundColor: "var(--neutral-background-6-rest)",
-      borderTop: "1px solid rgba(255,255,255,0)",
-      borderRight: "1px solid rgba(255,255,255,0)",
-      borderBottom: "1px solid rgba(255,255,255,0)",
-      borderLeft: "1px solid rgba(255,255,255,0)",
       display: "flex",
       flexDirection: "row",
       padding: "0px 20px 0px 0px",
@@ -14902,10 +14866,6 @@ function AnimatedProgressBar(_p = {}) {
       overflow: "hidden",
       borderRadius: 9999,
       backgroundColor: "var(--neutral-background-6-rest)",
-      borderTop: "1px solid rgba(255,255,255,0)",
-      borderRight: "1px solid rgba(255,255,255,0)",
-      borderBottom: "1px solid rgba(255,255,255,0)",
-      borderLeft: "1px solid rgba(255,255,255,0)",
       display: "flex",
       flexDirection: "row",
       padding: "0px 492px 0px 0px",
@@ -14933,10 +14893,6 @@ function AnimatedProgressBar(_p = {}) {
       height: 4,
       borderRadius: 9999,
       backgroundColor: "var(--neutral-background-6-rest)",
-      borderTop: "1px solid rgba(255,255,255,0)",
-      borderRight: "1px solid rgba(255,255,255,0)",
-      borderBottom: "1px solid rgba(255,255,255,0)",
-      borderLeft: "1px solid rgba(255,255,255,0)",
       display: "flex",
       flexDirection: "row",
       alignItems: "flex-start",
@@ -14960,10 +14916,6 @@ function AnimatedProgressBar(_p = {}) {
       height: 4,
       borderRadius: 9999,
       backgroundColor: "var(--neutral-background-6-rest)",
-      borderTop: "1px solid rgba(255,255,255,0)",
-      borderRight: "1px solid rgba(255,255,255,0)",
-      borderBottom: "1px solid rgba(255,255,255,0)",
-      borderLeft: "1px solid rgba(255,255,255,0)",
       display: "flex",
       flexDirection: "row",
       padding: "0px 1px 0px 0px",
@@ -14989,10 +14941,6 @@ function AnimatedProgressBar(_p = {}) {
       height: 4,
       borderRadius: 9999,
       backgroundColor: "var(--neutral-background-6-rest)",
-      borderTop: "1px solid rgba(255,255,255,0)",
-      borderRight: "1px solid rgba(255,255,255,0)",
-      borderBottom: "1px solid rgba(255,255,255,0)",
-      borderLeft: "1px solid rgba(255,255,255,0)",
       display: "flex",
       flexDirection: "row",
       padding: "0px 22px 0px 0px",
@@ -15018,10 +14966,6 @@ function AnimatedProgressBar(_p = {}) {
       height: 4,
       borderRadius: 9999,
       backgroundColor: "var(--neutral-background-6-rest)",
-      borderTop: "1px solid rgba(255,255,255,0)",
-      borderRight: "1px solid rgba(255,255,255,0)",
-      borderBottom: "1px solid rgba(255,255,255,0)",
-      borderLeft: "1px solid rgba(255,255,255,0)",
       display: "flex",
       flexDirection: "row",
       alignItems: "flex-start",
@@ -15045,10 +14989,6 @@ function AnimatedProgressBar(_p = {}) {
       height: 4,
       borderRadius: 9999,
       backgroundColor: "var(--neutral-background-6-rest)",
-      borderTop: "1px solid rgba(255,255,255,0)",
-      borderRight: "1px solid rgba(255,255,255,0)",
-      borderBottom: "1px solid rgba(255,255,255,0)",
-      borderLeft: "1px solid rgba(255,255,255,0)",
       display: "flex",
       flexDirection: "row",
       alignItems: "flex-start",
@@ -15072,10 +15012,6 @@ function AnimatedProgressBar(_p = {}) {
       height: 4,
       borderRadius: 9999,
       backgroundColor: "var(--neutral-background-6-rest)",
-      borderTop: "1px solid rgba(255,255,255,0)",
-      borderRight: "1px solid rgba(255,255,255,0)",
-      borderBottom: "1px solid rgba(255,255,255,0)",
-      borderLeft: "1px solid rgba(255,255,255,0)",
       display: "flex",
       flexDirection: "row",
       padding: "0px 20px 0px 0px",
@@ -15101,10 +15037,6 @@ function AnimatedProgressBar(_p = {}) {
       height: 4,
       borderRadius: 9999,
       backgroundColor: "var(--neutral-background-6-rest)",
-      borderTop: "1px solid rgba(255,255,255,0)",
-      borderRight: "1px solid rgba(255,255,255,0)",
-      borderBottom: "1px solid rgba(255,255,255,0)",
-      borderLeft: "1px solid rgba(255,255,255,0)",
       display: "flex",
       flexDirection: "row",
       padding: "0px 100px 0px 0px",
@@ -15131,10 +15063,6 @@ function AnimatedProgressBar(_p = {}) {
       overflow: "hidden",
       borderRadius: 9999,
       backgroundColor: "var(--neutral-background-6-rest)",
-      borderTop: "1px solid rgba(255,255,255,0)",
-      borderRight: "1px solid rgba(255,255,255,0)",
-      borderBottom: "1px solid rgba(255,255,255,0)",
-      borderLeft: "1px solid rgba(255,255,255,0)",
       display: "flex",
       flexDirection: "row",
       alignItems: "flex-start",
@@ -15187,10 +15115,6 @@ function AnimatedProgressBar(_p = {}) {
       overflow: "hidden",
       borderRadius: 9999,
       backgroundColor: "var(--neutral-background-6-rest)",
-      borderTop: "1px solid rgba(255,255,255,0)",
-      borderRight: "1px solid rgba(255,255,255,0)",
-      borderBottom: "1px solid rgba(255,255,255,0)",
-      borderLeft: "1px solid rgba(255,255,255,0)",
       display: "flex",
       flexDirection: "row",
       alignItems: "flex-start",
@@ -15244,10 +15168,6 @@ function AnimatedProgressBar(_p = {}) {
       overflow: "hidden",
       borderRadius: 9999,
       backgroundColor: "var(--neutral-background-6-rest)",
-      borderTop: "1px solid rgba(255,255,255,0)",
-      borderRight: "1px solid rgba(255,255,255,0)",
-      borderBottom: "1px solid rgba(255,255,255,0)",
-      borderLeft: "1px solid rgba(255,255,255,0)",
       display: "flex",
       flexDirection: "row",
       alignItems: "flex-start",
@@ -15300,10 +15220,6 @@ function AnimatedProgressBar(_p = {}) {
       overflow: "hidden",
       borderRadius: 9999,
       backgroundColor: "var(--neutral-background-6-rest)",
-      borderTop: "1px solid rgba(255,255,255,0)",
-      borderRight: "1px solid rgba(255,255,255,0)",
-      borderBottom: "1px solid rgba(255,255,255,0)",
-      borderLeft: "1px solid rgba(255,255,255,0)",
       display: "flex",
       flexDirection: "row",
       alignItems: "flex-start",
@@ -15357,10 +15273,6 @@ function AnimatedProgressBar(_p = {}) {
       overflow: "hidden",
       borderRadius: 9999,
       backgroundColor: "var(--neutral-background-6-rest)",
-      borderTop: "1px solid rgba(255,255,255,0)",
-      borderRight: "1px solid rgba(255,255,255,0)",
-      borderBottom: "1px solid rgba(255,255,255,0)",
-      borderLeft: "1px solid rgba(255,255,255,0)",
       display: "flex",
       flexDirection: "row",
       alignItems: "flex-start",
@@ -15413,10 +15325,6 @@ function AnimatedProgressBar(_p = {}) {
       overflow: "hidden",
       borderRadius: 9999,
       backgroundColor: "var(--neutral-background-6-rest)",
-      borderTop: "1px solid rgba(255,255,255,0)",
-      borderRight: "1px solid rgba(255,255,255,0)",
-      borderBottom: "1px solid rgba(255,255,255,0)",
-      borderLeft: "1px solid rgba(255,255,255,0)",
       display: "flex",
       flexDirection: "row",
       alignItems: "flex-start",
@@ -15470,10 +15378,6 @@ function AnimatedProgressBar(_p = {}) {
       overflow: "hidden",
       borderRadius: 9999,
       backgroundColor: "var(--neutral-background-6-rest)",
-      borderTop: "1px solid rgba(255,255,255,0)",
-      borderRight: "1px solid rgba(255,255,255,0)",
-      borderBottom: "1px solid rgba(255,255,255,0)",
-      borderLeft: "1px solid rgba(255,255,255,0)",
       display: "flex",
       flexDirection: "row",
       alignItems: "flex-start",
@@ -15526,10 +15430,6 @@ function AnimatedProgressBar(_p = {}) {
       overflow: "hidden",
       borderRadius: 9999,
       backgroundColor: "var(--neutral-background-6-rest)",
-      borderTop: "1px solid rgba(255,255,255,0)",
-      borderRight: "1px solid rgba(255,255,255,0)",
-      borderBottom: "1px solid rgba(255,255,255,0)",
-      borderLeft: "1px solid rgba(255,255,255,0)",
       display: "flex",
       flexDirection: "row",
       alignItems: "flex-start",
@@ -32167,6 +32067,7 @@ function Skeleton(_p = {}) {
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
+      background: "linear-gradient(to right, var(--neutral-background-stencil-1-rest) 0%, var(--neutral-background-stencil-2-rest) 50%, var(--neutral-background-stencil-1-rest) 100%)",
       position: "absolute",
       left: 0,
       top: 0,
@@ -32178,41 +32079,7 @@ function Skeleton(_p = {}) {
       alignItems: "flex-start",
       flexWrap: "nowrap"
     }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: 396,
-    height: 132,
-    viewBox: "0 0 396 132",
-    fill: "none",
-    style: {
-      position: "absolute",
-      left: 0,
-      top: 0,
-      width: 396,
-      height: 132,
-      overflow: "hidden"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  })), /*#__PURE__*/React.createElement("svg", {
-    width: 396,
-    height: 132,
-    viewBox: "0 0 396 132",
-    fill: "none",
-    style: {
-      position: "absolute",
-      left: 0,
-      top: 0,
-      width: 396,
-      height: 132,
-      color: "var(--neutral-background-stencil-2-rest)"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  }))));
+  }));
   const __body1 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
@@ -32226,6 +32093,7 @@ function Skeleton(_p = {}) {
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
+      background: "linear-gradient(to right, var(--neutral-background-stencil-1-rest) 0%, var(--neutral-background-stencil-2-rest) 50%, var(--neutral-background-stencil-1-rest) 100%)",
       position: "absolute",
       left: 0,
       top: 0,
@@ -32237,41 +32105,7 @@ function Skeleton(_p = {}) {
       alignItems: "flex-start",
       flexWrap: "nowrap"
     }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: 396,
-    height: 132,
-    viewBox: "0 0 396 132",
-    fill: "none",
-    style: {
-      position: "absolute",
-      left: 0,
-      top: 0,
-      width: 396,
-      height: 132,
-      overflow: "hidden"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  })), /*#__PURE__*/React.createElement("svg", {
-    width: 396,
-    height: 132,
-    viewBox: "0 0 396 132",
-    fill: "none",
-    style: {
-      position: "absolute",
-      left: 0,
-      top: 0,
-      width: 396,
-      height: 132,
-      color: "var(--neutral-background-stencil-2-rest)"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  }))));
+  }));
   const __body2 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
@@ -32296,41 +32130,7 @@ function Skeleton(_p = {}) {
       alignItems: "flex-start",
       flexWrap: "nowrap"
     }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: 132,
-    height: 132,
-    viewBox: "0 0 132 132",
-    fill: "none",
-    style: {
-      position: "absolute",
-      left: 0,
-      top: 0,
-      width: 132,
-      height: 132,
-      overflow: "hidden"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 132 0 L 132 132 L 0 132 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  })), /*#__PURE__*/React.createElement("svg", {
-    width: 132,
-    height: 132,
-    viewBox: "0 0 132 132",
-    fill: "none",
-    style: {
-      position: "absolute",
-      left: 0,
-      top: 0,
-      width: 132,
-      height: 132,
-      color: "var(--neutral-background-stencil-2-rest)"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 132 0 L 132 132 L 0 132 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  }))));
+  }));
   const __body3 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
@@ -32355,41 +32155,7 @@ function Skeleton(_p = {}) {
       alignItems: "flex-start",
       flexWrap: "nowrap"
     }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: 132,
-    height: 132,
-    viewBox: "0 0 132 132",
-    fill: "none",
-    style: {
-      position: "absolute",
-      left: 0,
-      top: 0,
-      width: 132,
-      height: 132,
-      overflow: "hidden"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 132 0 L 132 132 L 0 132 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  })), /*#__PURE__*/React.createElement("svg", {
-    width: 132,
-    height: 132,
-    viewBox: "0 0 132 132",
-    fill: "none",
-    style: {
-      position: "absolute",
-      left: 0,
-      top: 0,
-      width: 132,
-      height: 132,
-      color: "var(--neutral-background-stencil-2-rest)"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 132 0 L 132 132 L 0 132 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  }))));
+  }));
   const __body4 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
@@ -32402,6 +32168,7 @@ function Skeleton(_p = {}) {
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
+      background: "linear-gradient(to right, var(--neutral-background-stencil-1-rest) 0%, var(--neutral-background-stencil-2-rest) 50%, var(--neutral-background-stencil-1-rest) 100%)",
       position: "absolute",
       left: -132,
       top: 0,
@@ -32413,41 +32180,7 @@ function Skeleton(_p = {}) {
       alignItems: "flex-start",
       flexWrap: "nowrap"
     }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: 396,
-    height: 132,
-    viewBox: "0 0 396 132",
-    fill: "none",
-    style: {
-      position: "absolute",
-      left: 0,
-      top: 0,
-      width: 396,
-      height: 132,
-      overflow: "hidden"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  })), /*#__PURE__*/React.createElement("svg", {
-    width: 396,
-    height: 132,
-    viewBox: "0 0 396 132",
-    fill: "none",
-    style: {
-      position: "absolute",
-      left: 0,
-      top: 0,
-      width: 396,
-      height: 132,
-      color: "var(--neutral-background-stencil-2-rest)"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  }))));
+  }));
   const __body5 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
@@ -32461,6 +32194,7 @@ function Skeleton(_p = {}) {
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
+      background: "linear-gradient(to right, var(--neutral-background-stencil-1-rest) 0%, var(--neutral-background-stencil-2-rest) 50%, var(--neutral-background-stencil-1-rest) 100%)",
       position: "absolute",
       left: -132,
       top: 0,
@@ -32472,41 +32206,7 @@ function Skeleton(_p = {}) {
       alignItems: "flex-start",
       flexWrap: "nowrap"
     }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: 396,
-    height: 132,
-    viewBox: "0 0 396 132",
-    fill: "none",
-    style: {
-      position: "absolute",
-      left: 0,
-      top: 0,
-      width: 396,
-      height: 132,
-      overflow: "hidden"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  })), /*#__PURE__*/React.createElement("svg", {
-    width: 396,
-    height: 132,
-    viewBox: "0 0 396 132",
-    fill: "none",
-    style: {
-      position: "absolute",
-      left: 0,
-      top: 0,
-      width: 396,
-      height: 132,
-      color: "var(--neutral-background-stencil-2-rest)"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  }))));
+  }));
   const __body6 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
@@ -32519,6 +32219,7 @@ function Skeleton(_p = {}) {
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
+      background: "linear-gradient(to right, var(--neutral-background-stencil-1-rest) 0%, var(--neutral-background-stencil-2-rest) 50%, var(--neutral-background-stencil-1-rest) 100%)",
       position: "absolute",
       left: -264,
       top: 0,
@@ -32530,41 +32231,7 @@ function Skeleton(_p = {}) {
       alignItems: "flex-start",
       flexWrap: "nowrap"
     }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: 396,
-    height: 132,
-    viewBox: "0 0 396 132",
-    fill: "none",
-    style: {
-      position: "absolute",
-      left: 0,
-      top: 0,
-      width: 396,
-      height: 132,
-      overflow: "hidden"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  })), /*#__PURE__*/React.createElement("svg", {
-    width: 396,
-    height: 132,
-    viewBox: "0 0 396 132",
-    fill: "none",
-    style: {
-      position: "absolute",
-      left: 0,
-      top: 0,
-      width: 396,
-      height: 132,
-      color: "var(--neutral-background-stencil-2-rest)"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  }))));
+  }));
   const __body7 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
@@ -32578,6 +32245,7 @@ function Skeleton(_p = {}) {
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
+      background: "linear-gradient(to right, var(--neutral-background-stencil-1-rest) 0%, var(--neutral-background-stencil-2-rest) 50%, var(--neutral-background-stencil-1-rest) 100%)",
       position: "absolute",
       left: -264,
       top: 0,
@@ -32589,41 +32257,7 @@ function Skeleton(_p = {}) {
       alignItems: "flex-start",
       flexWrap: "nowrap"
     }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: 396,
-    height: 132,
-    viewBox: "0 0 396 132",
-    fill: "none",
-    style: {
-      position: "absolute",
-      left: 0,
-      top: 0,
-      width: 396,
-      height: 132,
-      overflow: "hidden"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  })), /*#__PURE__*/React.createElement("svg", {
-    width: 396,
-    height: 132,
-    viewBox: "0 0 396 132",
-    fill: "none",
-    style: {
-      position: "absolute",
-      left: 0,
-      top: 0,
-      width: 396,
-      height: 132,
-      color: "var(--neutral-background-stencil-2-rest)"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  }))));
+  }));
   const __body8 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
@@ -32636,6 +32270,7 @@ function Skeleton(_p = {}) {
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
+      background: "linear-gradient(to right, var(--neutral-background-stencil-1-rest) 0%, var(--neutral-background-stencil-2-rest) 50%, var(--neutral-background-stencil-1-rest) 100%)",
       position: "absolute",
       left: -396,
       top: 0,
@@ -32648,41 +32283,7 @@ function Skeleton(_p = {}) {
       alignItems: "flex-start",
       flexWrap: "nowrap"
     }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: 396,
-    height: 132,
-    viewBox: "0 0 396 132",
-    fill: "none",
-    style: {
-      position: "absolute",
-      left: 0,
-      top: 0,
-      width: 396,
-      height: 132,
-      overflow: "hidden"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  })), /*#__PURE__*/React.createElement("svg", {
-    width: 396,
-    height: 132,
-    viewBox: "0 0 396 132",
-    fill: "none",
-    style: {
-      position: "absolute",
-      left: 0,
-      top: 0,
-      width: 396,
-      height: 132,
-      color: "var(--colors-shared-steel-shade-20)"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  }))));
+  }));
   const __body9 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
@@ -32696,6 +32297,7 @@ function Skeleton(_p = {}) {
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
+      background: "linear-gradient(to right, var(--neutral-background-stencil-1-rest) 0%, var(--neutral-background-stencil-2-rest) 50%, var(--neutral-background-stencil-1-rest) 100%)",
       position: "absolute",
       left: -396,
       top: 0,
@@ -32708,41 +32310,7 @@ function Skeleton(_p = {}) {
       alignItems: "flex-start",
       flexWrap: "nowrap"
     }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: 396,
-    height: 132,
-    viewBox: "0 0 396 132",
-    fill: "none",
-    style: {
-      position: "absolute",
-      left: 0,
-      top: 0,
-      width: 396,
-      height: 132,
-      overflow: "hidden"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  })), /*#__PURE__*/React.createElement("svg", {
-    width: 396,
-    height: 132,
-    viewBox: "0 0 396 132",
-    fill: "none",
-    style: {
-      position: "absolute",
-      left: 0,
-      top: 0,
-      width: 396,
-      height: 132,
-      color: "var(--colors-shared-steel-shade-20)"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  }))));
+  }));
   const __body10 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
@@ -32755,6 +32323,7 @@ function Skeleton(_p = {}) {
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
+      background: "linear-gradient(to right, var(--neutral-background-stencil-1-rest) 0%, var(--neutral-background-stencil-2-rest) 50%, var(--neutral-background-stencil-1-rest) 100%)",
       position: "absolute",
       left: 132,
       top: 0,
@@ -32767,41 +32336,7 @@ function Skeleton(_p = {}) {
       alignItems: "flex-start",
       flexWrap: "nowrap"
     }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: 396,
-    height: 132,
-    viewBox: "0 0 396 132",
-    fill: "none",
-    style: {
-      position: "absolute",
-      left: 0,
-      top: 0,
-      width: 396,
-      height: 132,
-      overflow: "hidden"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  })), /*#__PURE__*/React.createElement("svg", {
-    width: 396,
-    height: 132,
-    viewBox: "0 0 396 132",
-    fill: "none",
-    style: {
-      position: "absolute",
-      left: 0,
-      top: 0,
-      width: 396,
-      height: 132,
-      color: "var(--colors-shared-steel-shade-20)"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  }))));
+  }));
   const __body11 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
@@ -32815,6 +32350,7 @@ function Skeleton(_p = {}) {
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
+      background: "linear-gradient(to right, var(--neutral-background-stencil-1-rest) 0%, var(--neutral-background-stencil-2-rest) 50%, var(--neutral-background-stencil-1-rest) 100%)",
       position: "absolute",
       left: 132,
       top: 0,
@@ -32827,41 +32363,7 @@ function Skeleton(_p = {}) {
       alignItems: "flex-start",
       flexWrap: "nowrap"
     }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: 396,
-    height: 132,
-    viewBox: "0 0 396 132",
-    fill: "none",
-    style: {
-      position: "absolute",
-      left: 0,
-      top: 0,
-      width: 396,
-      height: 132,
-      overflow: "hidden"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  })), /*#__PURE__*/React.createElement("svg", {
-    width: 396,
-    height: 132,
-    viewBox: "0 0 396 132",
-    fill: "none",
-    style: {
-      position: "absolute",
-      left: 0,
-      top: 0,
-      width: 396,
-      height: 132,
-      color: "var(--colors-shared-steel-shade-20)"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  }))));
+  }));
   const __impls = {
     // figma: Shape=Rectangle (default), Animated=True, Frame=1
     "shape=rectangle (default)|animated=true|frame=1": __body0,
@@ -32963,7 +32465,7 @@ function Spinner(_p = {}) {
   })), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
-      width: 62,
+      width: "fit-content",
       display: "flex",
       flexDirection: "row",
       padding: "0px 8px 0px 8px",
@@ -33034,7 +32536,7 @@ function Spinner(_p = {}) {
   })), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
-      width: 62,
+      width: "fit-content",
       display: "flex",
       flexDirection: "row",
       padding: "0px 8px 0px 8px",
@@ -33105,7 +32607,7 @@ function Spinner(_p = {}) {
   })), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
-      width: 62,
+      width: "fit-content",
       display: "flex",
       flexDirection: "row",
       padding: "0px 8px 0px 8px",
@@ -33176,7 +32678,7 @@ function Spinner(_p = {}) {
   })), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
-      width: 62,
+      width: "fit-content",
       display: "flex",
       flexDirection: "row",
       padding: "0px 8px 0px 8px",
@@ -33247,7 +32749,7 @@ function Spinner(_p = {}) {
   })), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
-      width: 62,
+      width: "fit-content",
       display: "flex",
       flexDirection: "row",
       padding: "0px 8px 0px 8px",
@@ -33316,7 +32818,7 @@ function Spinner(_p = {}) {
   })), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
-      width: 62,
+      width: "fit-content",
       display: "flex",
       flexDirection: "row",
       padding: "0px 8px 0px 8px",
@@ -33385,7 +32887,7 @@ function Spinner(_p = {}) {
   })), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
-      width: 62,
+      width: "fit-content",
       display: "flex",
       flexDirection: "row",
       padding: "0px 8px 0px 8px",
@@ -33454,7 +32956,7 @@ function Spinner(_p = {}) {
   })), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
-      width: 62,
+      width: "fit-content",
       display: "flex",
       flexDirection: "row",
       padding: "0px 8px 0px 8px",
@@ -33524,7 +33026,7 @@ function Spinner(_p = {}) {
   })), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
-      width: 73,
+      width: "fit-content",
       display: "flex",
       flexDirection: "row",
       padding: "0px 8px 0px 8px",
@@ -33594,7 +33096,7 @@ function Spinner(_p = {}) {
   })), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
-      width: 73,
+      width: "fit-content",
       display: "flex",
       flexDirection: "row",
       padding: "0px 8px 0px 8px",
@@ -33663,7 +33165,7 @@ function Spinner(_p = {}) {
   })), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
-      width: 73,
+      width: "fit-content",
       display: "flex",
       flexDirection: "row",
       padding: "0px 8px 0px 8px",
@@ -33732,7 +33234,7 @@ function Spinner(_p = {}) {
   })), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
-      width: 73,
+      width: "fit-content",
       display: "flex",
       flexDirection: "row",
       padding: "0px 8px 0px 8px",
@@ -33801,7 +33303,7 @@ function Spinner(_p = {}) {
   })), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
-      width: 73,
+      width: "fit-content",
       display: "flex",
       flexDirection: "row",
       padding: "0px 8px 0px 8px",
@@ -33870,7 +33372,7 @@ function Spinner(_p = {}) {
   })), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
-      width: 73,
+      width: "fit-content",
       display: "flex",
       flexDirection: "row",
       padding: "0px 8px 0px 8px",
@@ -33939,7 +33441,7 @@ function Spinner(_p = {}) {
   })), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
-      width: 89,
+      width: "fit-content",
       display: "flex",
       flexDirection: "row",
       padding: "0px 8px 0px 8px",
@@ -34008,7 +33510,7 @@ function Spinner(_p = {}) {
   })), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
-      width: 89,
+      width: "fit-content",
       display: "flex",
       flexDirection: "row",
       padding: "0px 8px 0px 8px",
@@ -37515,10 +37017,6 @@ function StaticProgressBar(_p = {}) {
       height: 2,
       borderRadius: 9999,
       backgroundColor: "var(--neutral-background-6-rest)",
-      borderTop: "1px solid rgba(255,255,255,0)",
-      borderRight: "1px solid rgba(255,255,255,0)",
-      borderBottom: "1px solid rgba(255,255,255,0)",
-      borderLeft: "1px solid rgba(255,255,255,0)",
       display: "flex",
       flexDirection: "row",
       padding: "0px 100px 0px 0px",
@@ -37544,10 +37042,6 @@ function StaticProgressBar(_p = {}) {
       height: 2,
       borderRadius: 9999,
       backgroundColor: "var(--neutral-background-6-rest)",
-      borderTop: "1px solid rgba(255,255,255,0)",
-      borderRight: "1px solid rgba(255,255,255,0)",
-      borderBottom: "1px solid rgba(255,255,255,0)",
-      borderLeft: "1px solid rgba(255,255,255,0)",
       display: "flex",
       flexDirection: "row",
       alignItems: "flex-start",
@@ -37571,10 +37065,6 @@ function StaticProgressBar(_p = {}) {
       height: 2,
       borderRadius: 9999,
       backgroundColor: "var(--neutral-background-6-rest)",
-      borderTop: "1px solid rgba(255,255,255,0)",
-      borderRight: "1px solid rgba(255,255,255,0)",
-      borderBottom: "1px solid rgba(255,255,255,0)",
-      borderLeft: "1px solid rgba(255,255,255,0)",
       display: "flex",
       flexDirection: "row",
       padding: "0px 100px 0px 0px",
@@ -37601,10 +37091,6 @@ function StaticProgressBar(_p = {}) {
       height: 2,
       borderRadius: 9999,
       backgroundColor: "var(--neutral-background-6-rest)",
-      borderTop: "1px solid rgba(255,255,255,0)",
-      borderRight: "1px solid rgba(255,255,255,0)",
-      borderBottom: "1px solid rgba(255,255,255,0)",
-      borderLeft: "1px solid rgba(255,255,255,0)",
       display: "flex",
       flexDirection: "row",
       padding: "0px 100px 0px 0px",
@@ -37630,10 +37116,6 @@ function StaticProgressBar(_p = {}) {
       height: 4,
       borderRadius: 9999,
       backgroundColor: "var(--neutral-background-6-rest)",
-      borderTop: "1px solid rgba(255,255,255,0)",
-      borderRight: "1px solid rgba(255,255,255,0)",
-      borderBottom: "1px solid rgba(255,255,255,0)",
-      borderLeft: "1px solid rgba(255,255,255,0)",
       display: "flex",
       flexDirection: "row",
       padding: "0px 100px 0px 0px",
@@ -37659,10 +37141,6 @@ function StaticProgressBar(_p = {}) {
       height: 4,
       borderRadius: 9999,
       backgroundColor: "var(--neutral-background-6-rest)",
-      borderTop: "1px solid rgba(255,255,255,0)",
-      borderRight: "1px solid rgba(255,255,255,0)",
-      borderBottom: "1px solid rgba(255,255,255,0)",
-      borderLeft: "1px solid rgba(255,255,255,0)",
       display: "flex",
       flexDirection: "row",
       alignItems: "flex-start",
@@ -37686,10 +37164,6 @@ function StaticProgressBar(_p = {}) {
       height: 4,
       borderRadius: 9999,
       backgroundColor: "var(--neutral-background-6-rest)",
-      borderTop: "1px solid rgba(255,255,255,0)",
-      borderRight: "1px solid rgba(255,255,255,0)",
-      borderBottom: "1px solid rgba(255,255,255,0)",
-      borderLeft: "1px solid rgba(255,255,255,0)",
       display: "flex",
       flexDirection: "row",
       padding: "0px 100px 0px 0px",
@@ -37715,10 +37189,6 @@ function StaticProgressBar(_p = {}) {
       height: 4,
       borderRadius: 9999,
       backgroundColor: "var(--neutral-background-6-rest)",
-      borderTop: "1px solid rgba(255,255,255,0)",
-      borderRight: "1px solid rgba(255,255,255,0)",
-      borderBottom: "1px solid rgba(255,255,255,0)",
-      borderLeft: "1px solid rgba(255,255,255,0)",
       display: "flex",
       flexDirection: "row",
       padding: "0px 100px 0px 0px",
@@ -37744,10 +37214,6 @@ function StaticProgressBar(_p = {}) {
       height: 2,
       borderRadius: 9999,
       backgroundColor: "var(--neutral-background-6-rest)",
-      borderTop: "1px solid rgba(255,255,255,0)",
-      borderRight: "1px solid rgba(255,255,255,0)",
-      borderBottom: "1px solid rgba(255,255,255,0)",
-      borderLeft: "1px solid rgba(255,255,255,0)",
       display: "flex",
       flexDirection: "row",
       padding: "0px 492px 0px 0px",
@@ -37800,10 +37266,6 @@ function StaticProgressBar(_p = {}) {
       height: 4,
       borderRadius: 9999,
       backgroundColor: "var(--neutral-background-6-rest)",
-      borderTop: "1px solid rgba(255,255,255,0)",
-      borderRight: "1px solid rgba(255,255,255,0)",
-      borderBottom: "1px solid rgba(255,255,255,0)",
-      borderLeft: "1px solid rgba(255,255,255,0)",
       display: "flex",
       flexDirection: "row",
       padding: "0px 328px 0px 0px",
@@ -115904,14 +115366,13 @@ function MessageBar(_p = {}) {
     style: {
       position: "relative",
       fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
-      fontWeight: 600,
+      fontWeight: 400,
       fontSize: 12,
       whiteSpace: "nowrap",
       overflow: "hidden",
       textOverflow: "ellipsis",
       lineHeight: "16px",
       color: "var(--neutral-foreground-1-rest)",
-      textDecoration: "underline",
       flexGrow: 1
     }
   }, props.textString), props.actions && /*#__PURE__*/React.createElement("div", {
@@ -116178,11 +115639,10 @@ function MessageBar(_p = {}) {
       position: "relative",
       width: 520,
       fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
-      fontWeight: 600,
+      fontWeight: 400,
       fontSize: 12,
       lineHeight: "16px",
       color: "var(--neutral-foreground-1-rest)",
-      textDecoration: "underline",
       flexShrink: 0
     }
   }, props.textString)), props.dismiss && /*#__PURE__*/React.createElement("div", {
@@ -117771,10 +117231,6 @@ function Toast(_p = {}) {
       height: 2,
       borderRadius: 9999,
       backgroundColor: "var(--neutral-background-6-rest)",
-      borderTop: "1px solid rgba(255,255,255,0)",
-      borderRight: "1px solid rgba(255,255,255,0)",
-      borderBottom: "1px solid rgba(255,255,255,0)",
-      borderLeft: "1px solid rgba(255,255,255,0)",
       display: "flex",
       flexDirection: "row",
       padding: "0px 100px 0px 0px",
@@ -156908,7 +156364,7 @@ function DataGridCellLarge(_p = {}) {
       color: "var(--brand-foreground-link-rest)",
       flexShrink: 0
     }
-  }, "Link")), /*#__PURE__*/React.createElement("div", {
+  }, _p.content ?? "Link")), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       width: 20,
@@ -157783,7 +157239,7 @@ function DataGridCellMedium(_p = {}) {
       color: "var(--brand-foreground-link-rest)",
       flexShrink: 0
     }
-  }, "Link")), /*#__PURE__*/React.createElement("div", {
+  }, _p.content ?? "Link")), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       width: 20,
@@ -158500,7 +157956,7 @@ function DataGridCellSmall(_p = {}) {
       color: "var(--brand-foreground-link-rest)",
       flexShrink: 0
     }
-  }, "Link")), /*#__PURE__*/React.createElement("div", {
+  }, _p.content ?? "Link")), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       width: 20,
@@ -159225,7 +158681,7 @@ function DataGridCellSmaller(_p = {}) {
       color: "var(--brand-foreground-link-rest)",
       flexShrink: 0
     }
-  }, "Link")), /*#__PURE__*/React.createElement("div", {
+  }, _p.content ?? "Link")), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       width: 20,
@@ -194764,7 +194220,7 @@ function SearchBox(_p = {}) {
       flexGrow: 1,
       alignSelf: "stretch"
     }
-  }, "Search")))), /*#__PURE__*/React.createElement("div", {
+  }, props.placeholder ?? "Search")))), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "absolute",
       left: 0,
@@ -194858,7 +194314,7 @@ function SearchBox(_p = {}) {
       flexGrow: 1,
       alignSelf: "stretch"
     }
-  }, "Search")))));
+  }, props.placeholder ?? "Search")))));
   const __body2 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
@@ -194942,7 +194398,7 @@ function SearchBox(_p = {}) {
       flexGrow: 1,
       alignSelf: "stretch"
     }
-  }, "Search")))));
+  }, props.placeholder ?? "Search")))));
   const __body3 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
@@ -195023,7 +194479,7 @@ function SearchBox(_p = {}) {
       flexGrow: 1,
       alignSelf: "stretch"
     }
-  }, "Search")))), /*#__PURE__*/React.createElement("div", {
+  }, props.placeholder ?? "Search")))), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "absolute",
       left: 0,
@@ -195657,7 +195113,7 @@ function SearchBox(_p = {}) {
       flexGrow: 1,
       alignSelf: "stretch"
     }
-  }, "Search")))), /*#__PURE__*/React.createElement("div", {
+  }, props.placeholder ?? "Search")))), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "absolute",
       left: 0,
@@ -195755,7 +195211,7 @@ function SearchBox(_p = {}) {
       flexGrow: 1,
       alignSelf: "stretch"
     }
-  }, "Search")))), /*#__PURE__*/React.createElement("div", {
+  }, props.placeholder ?? "Search")))), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "absolute",
       left: 0,
@@ -195849,7 +195305,7 @@ function SearchBox(_p = {}) {
       flexGrow: 1,
       alignSelf: "stretch"
     }
-  }, "Search")))));
+  }, props.placeholder ?? "Search")))));
   const __body11 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
@@ -195933,7 +195389,7 @@ function SearchBox(_p = {}) {
       flexGrow: 1,
       alignSelf: "stretch"
     }
-  }, "Search")))));
+  }, props.placeholder ?? "Search")))));
   const __body12 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
@@ -196014,7 +195470,7 @@ function SearchBox(_p = {}) {
       flexGrow: 1,
       alignSelf: "stretch"
     }
-  }, "Search")))), /*#__PURE__*/React.createElement("div", {
+  }, props.placeholder ?? "Search")))), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "absolute",
       left: 0,
@@ -196645,7 +196101,7 @@ function SearchBox(_p = {}) {
       flexGrow: 1,
       alignSelf: "stretch"
     }
-  }, "Search")))), /*#__PURE__*/React.createElement("div", {
+  }, props.placeholder ?? "Search")))), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "absolute",
       left: 0,
@@ -196744,7 +196200,7 @@ function SearchBox(_p = {}) {
       flexGrow: 1,
       alignSelf: "stretch"
     }
-  }, "Search")))), /*#__PURE__*/React.createElement("div", {
+  }, props.placeholder ?? "Search")))), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "absolute",
       left: 0,
@@ -196839,7 +196295,7 @@ function SearchBox(_p = {}) {
       flexGrow: 1,
       alignSelf: "stretch"
     }
-  }, "Search")))));
+  }, props.placeholder ?? "Search")))));
   const __body20 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
@@ -196924,7 +196380,7 @@ function SearchBox(_p = {}) {
       flexGrow: 1,
       alignSelf: "stretch"
     }
-  }, "Search")))));
+  }, props.placeholder ?? "Search")))));
   const __body21 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
@@ -197006,7 +196462,7 @@ function SearchBox(_p = {}) {
       flexGrow: 1,
       alignSelf: "stretch"
     }
-  }, "Search")))), /*#__PURE__*/React.createElement("div", {
+  }, props.placeholder ?? "Search")))), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "absolute",
       left: 0,
@@ -197651,7 +197107,7 @@ function SearchBox(_p = {}) {
       flexGrow: 1,
       alignSelf: "stretch"
     }
-  }, "Search")))), /*#__PURE__*/React.createElement("div", {
+  }, props.placeholder ?? "Search")))), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "absolute",
       left: 0,

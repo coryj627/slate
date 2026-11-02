@@ -16,6 +16,7 @@ export function Skeleton(_p = {}) {
       ...props.style,
     }}>
       <div style={{
+        background: "linear-gradient(to right, var(--neutral-background-stencil-1-rest) 0%, var(--neutral-background-stencil-2-rest) 50%, var(--neutral-background-stencil-1-rest) 100%)",
         position: "absolute",
         left: 0,
         top: 0,
@@ -27,26 +28,6 @@ export function Skeleton(_p = {}) {
         alignItems: "flex-start",
         flexWrap: "nowrap",
       }}>
-        <svg width={396} height={132} viewBox="0 0 396 132" fill="none" style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          width: 396,
-          height: 132,
-          overflow: "hidden",
-        }}>
-          <path d={"M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-        </svg>
-        <svg width={396} height={132} viewBox="0 0 396 132" fill="none" style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          width: 396,
-          height: 132,
-          color: "var(--neutral-background-stencil-2-rest)",
-        }}>
-          <path d={"M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-        </svg>
       </div>
     </div>
   );
@@ -61,6 +42,7 @@ export function Skeleton(_p = {}) {
       ...props.style,
     }}>
       <div style={{
+        background: "linear-gradient(to right, var(--neutral-background-stencil-1-rest) 0%, var(--neutral-background-stencil-2-rest) 50%, var(--neutral-background-stencil-1-rest) 100%)",
         position: "absolute",
         left: 0,
         top: 0,
@@ -72,26 +54,6 @@ export function Skeleton(_p = {}) {
         alignItems: "flex-start",
         flexWrap: "nowrap",
       }}>
-        <svg width={396} height={132} viewBox="0 0 396 132" fill="none" style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          width: 396,
-          height: 132,
-          overflow: "hidden",
-        }}>
-          <path d={"M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-        </svg>
-        <svg width={396} height={132} viewBox="0 0 396 132" fill="none" style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          width: 396,
-          height: 132,
-          color: "var(--neutral-background-stencil-2-rest)",
-        }}>
-          <path d={"M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-        </svg>
       </div>
     </div>
   );
@@ -117,26 +79,6 @@ export function Skeleton(_p = {}) {
         alignItems: "flex-start",
         flexWrap: "nowrap",
       }}>
-        <svg width={132} height={132} viewBox="0 0 132 132" fill="none" style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          width: 132,
-          height: 132,
-          overflow: "hidden",
-        }}>
-          <path d={"M 0 0 L 132 0 L 132 132 L 0 132 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-        </svg>
-        <svg width={132} height={132} viewBox="0 0 132 132" fill="none" style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          width: 132,
-          height: 132,
-          color: "var(--neutral-background-stencil-2-rest)",
-        }}>
-          <path d={"M 0 0 L 132 0 L 132 132 L 0 132 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-        </svg>
       </div>
     </div>
   );
@@ -162,26 +104,6 @@ export function Skeleton(_p = {}) {
         alignItems: "flex-start",
         flexWrap: "nowrap",
       }}>
-        <svg width={132} height={132} viewBox="0 0 132 132" fill="none" style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          width: 132,
-          height: 132,
-          overflow: "hidden",
-        }}>
-          <path d={"M 0 0 L 132 0 L 132 132 L 0 132 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-        </svg>
-        <svg width={132} height={132} viewBox="0 0 132 132" fill="none" style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          width: 132,
-          height: 132,
-          color: "var(--neutral-background-stencil-2-rest)",
-        }}>
-          <path d={"M 0 0 L 132 0 L 132 132 L 0 132 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-        </svg>
       </div>
     </div>
   );
@@ -195,6 +117,7 @@ export function Skeleton(_p = {}) {
       ...props.style,
     }}>
       <div style={{
+        background: "linear-gradient(to right, var(--neutral-background-stencil-1-rest) 0%, var(--neutral-background-stencil-2-rest) 50%, var(--neutral-background-stencil-1-rest) 100%)",
         position: "absolute",
         left: -132,
         top: 0,
@@ -206,26 +129,6 @@ export function Skeleton(_p = {}) {
         alignItems: "flex-start",
         flexWrap: "nowrap",
       }}>
-        <svg width={396} height={132} viewBox="0 0 396 132" fill="none" style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          width: 396,
-          height: 132,
-          overflow: "hidden",
-        }}>
-          <path d={"M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-        </svg>
-        <svg width={396} height={132} viewBox="0 0 396 132" fill="none" style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          width: 396,
-          height: 132,
-          color: "var(--neutral-background-stencil-2-rest)",
-        }}>
-          <path d={"M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-        </svg>
       </div>
     </div>
   );
@@ -240,6 +143,7 @@ export function Skeleton(_p = {}) {
       ...props.style,
     }}>
       <div style={{
+        background: "linear-gradient(to right, var(--neutral-background-stencil-1-rest) 0%, var(--neutral-background-stencil-2-rest) 50%, var(--neutral-background-stencil-1-rest) 100%)",
         position: "absolute",
         left: -132,
         top: 0,
@@ -251,26 +155,6 @@ export function Skeleton(_p = {}) {
         alignItems: "flex-start",
         flexWrap: "nowrap",
       }}>
-        <svg width={396} height={132} viewBox="0 0 396 132" fill="none" style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          width: 396,
-          height: 132,
-          overflow: "hidden",
-        }}>
-          <path d={"M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-        </svg>
-        <svg width={396} height={132} viewBox="0 0 396 132" fill="none" style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          width: 396,
-          height: 132,
-          color: "var(--neutral-background-stencil-2-rest)",
-        }}>
-          <path d={"M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-        </svg>
       </div>
     </div>
   );
@@ -284,6 +168,7 @@ export function Skeleton(_p = {}) {
       ...props.style,
     }}>
       <div style={{
+        background: "linear-gradient(to right, var(--neutral-background-stencil-1-rest) 0%, var(--neutral-background-stencil-2-rest) 50%, var(--neutral-background-stencil-1-rest) 100%)",
         position: "absolute",
         left: -264,
         top: 0,
@@ -295,26 +180,6 @@ export function Skeleton(_p = {}) {
         alignItems: "flex-start",
         flexWrap: "nowrap",
       }}>
-        <svg width={396} height={132} viewBox="0 0 396 132" fill="none" style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          width: 396,
-          height: 132,
-          overflow: "hidden",
-        }}>
-          <path d={"M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-        </svg>
-        <svg width={396} height={132} viewBox="0 0 396 132" fill="none" style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          width: 396,
-          height: 132,
-          color: "var(--neutral-background-stencil-2-rest)",
-        }}>
-          <path d={"M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-        </svg>
       </div>
     </div>
   );
@@ -329,6 +194,7 @@ export function Skeleton(_p = {}) {
       ...props.style,
     }}>
       <div style={{
+        background: "linear-gradient(to right, var(--neutral-background-stencil-1-rest) 0%, var(--neutral-background-stencil-2-rest) 50%, var(--neutral-background-stencil-1-rest) 100%)",
         position: "absolute",
         left: -264,
         top: 0,
@@ -340,26 +206,6 @@ export function Skeleton(_p = {}) {
         alignItems: "flex-start",
         flexWrap: "nowrap",
       }}>
-        <svg width={396} height={132} viewBox="0 0 396 132" fill="none" style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          width: 396,
-          height: 132,
-          overflow: "hidden",
-        }}>
-          <path d={"M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-        </svg>
-        <svg width={396} height={132} viewBox="0 0 396 132" fill="none" style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          width: 396,
-          height: 132,
-          color: "var(--neutral-background-stencil-2-rest)",
-        }}>
-          <path d={"M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-        </svg>
       </div>
     </div>
   );
@@ -373,6 +219,7 @@ export function Skeleton(_p = {}) {
       ...props.style,
     }}>
       <div style={{
+        background: "linear-gradient(to right, var(--neutral-background-stencil-1-rest) 0%, var(--neutral-background-stencil-2-rest) 50%, var(--neutral-background-stencil-1-rest) 100%)",
         position: "absolute",
         left: -396,
         top: 0,
@@ -385,26 +232,6 @@ export function Skeleton(_p = {}) {
         alignItems: "flex-start",
         flexWrap: "nowrap",
       }}>
-        <svg width={396} height={132} viewBox="0 0 396 132" fill="none" style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          width: 396,
-          height: 132,
-          overflow: "hidden",
-        }}>
-          <path d={"M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-        </svg>
-        <svg width={396} height={132} viewBox="0 0 396 132" fill="none" style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          width: 396,
-          height: 132,
-          color: "var(--colors-shared-steel-shade-20)",
-        }}>
-          <path d={"M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-        </svg>
       </div>
     </div>
   );
@@ -419,6 +246,7 @@ export function Skeleton(_p = {}) {
       ...props.style,
     }}>
       <div style={{
+        background: "linear-gradient(to right, var(--neutral-background-stencil-1-rest) 0%, var(--neutral-background-stencil-2-rest) 50%, var(--neutral-background-stencil-1-rest) 100%)",
         position: "absolute",
         left: -396,
         top: 0,
@@ -431,26 +259,6 @@ export function Skeleton(_p = {}) {
         alignItems: "flex-start",
         flexWrap: "nowrap",
       }}>
-        <svg width={396} height={132} viewBox="0 0 396 132" fill="none" style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          width: 396,
-          height: 132,
-          overflow: "hidden",
-        }}>
-          <path d={"M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-        </svg>
-        <svg width={396} height={132} viewBox="0 0 396 132" fill="none" style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          width: 396,
-          height: 132,
-          color: "var(--colors-shared-steel-shade-20)",
-        }}>
-          <path d={"M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-        </svg>
       </div>
     </div>
   );
@@ -464,6 +272,7 @@ export function Skeleton(_p = {}) {
       ...props.style,
     }}>
       <div style={{
+        background: "linear-gradient(to right, var(--neutral-background-stencil-1-rest) 0%, var(--neutral-background-stencil-2-rest) 50%, var(--neutral-background-stencil-1-rest) 100%)",
         position: "absolute",
         left: 132,
         top: 0,
@@ -476,26 +285,6 @@ export function Skeleton(_p = {}) {
         alignItems: "flex-start",
         flexWrap: "nowrap",
       }}>
-        <svg width={396} height={132} viewBox="0 0 396 132" fill="none" style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          width: 396,
-          height: 132,
-          overflow: "hidden",
-        }}>
-          <path d={"M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-        </svg>
-        <svg width={396} height={132} viewBox="0 0 396 132" fill="none" style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          width: 396,
-          height: 132,
-          color: "var(--colors-shared-steel-shade-20)",
-        }}>
-          <path d={"M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-        </svg>
       </div>
     </div>
   );
@@ -510,6 +299,7 @@ export function Skeleton(_p = {}) {
       ...props.style,
     }}>
       <div style={{
+        background: "linear-gradient(to right, var(--neutral-background-stencil-1-rest) 0%, var(--neutral-background-stencil-2-rest) 50%, var(--neutral-background-stencil-1-rest) 100%)",
         position: "absolute",
         left: 132,
         top: 0,
@@ -522,26 +312,6 @@ export function Skeleton(_p = {}) {
         alignItems: "flex-start",
         flexWrap: "nowrap",
       }}>
-        <svg width={396} height={132} viewBox="0 0 396 132" fill="none" style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          width: 396,
-          height: 132,
-          overflow: "hidden",
-        }}>
-          <path d={"M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-        </svg>
-        <svg width={396} height={132} viewBox="0 0 396 132" fill="none" style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          width: 396,
-          height: 132,
-          color: "var(--colors-shared-steel-shade-20)",
-        }}>
-          <path d={"M 0 0 L 396 0 L 396 132 L 0 132 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-        </svg>
       </div>
     </div>
   );
