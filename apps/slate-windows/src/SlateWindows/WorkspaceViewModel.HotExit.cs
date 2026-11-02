@@ -1270,20 +1270,35 @@ internal sealed partial class WorkspaceViewModel
                 restored++;
             }
         }
-        foreach ((Guid id, string entryId, HotExitRestorePlan.Planned planned) in plan.NewTabs)
+        _restoring = true;
+        try
         {
-            WorkspaceTabViewModel tab = AddTab(
-                ActiveGroup,
-                new WorkspaceItemState(WorkspaceItemKind.Markdown, planned.Path),
-                activate: false,
-                restoredId: id,
-                preloadedTextForRestore: planned.Decision
-                    is HotExitRestore.ExistsNow or HotExitRestore.Gone or HotExitRestore.Recovered
-                    ? string.Empty
-                    : null);
-            tab.RecoveryEntryId = entryId;
-            LandHotExitEntry(tab, planned, notices);
-            restored++;
+            foreach ((Guid id, string entryId, HotExitRestorePlan.Planned planned) in plan.NewTabs)
+            {
+                WorkspaceGroupViewModel group = ActiveGroup;
+                WorkspaceTabViewModel tab = AddTab(
+                    group,
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, planned.Path),
+                    activate: false,
+                    restoredId: id,
+                    preloadedTextForRestore: planned.Decision
+                        is HotExitRestore.ExistsNow or HotExitRestore.Gone or HotExitRestore.Recovered
+                        ? string.Empty
+                        : null);
+                tab.RecoveryEntryId = entryId;
+                LandHotExitEntry(tab, planned, notices);
+                restored++;
+                // The layout's active tab stays active; a group that had none
+                // shows the first note it restores.
+                if (group.ActiveTab is null)
+                {
+                    group.RestoreActive(tab);
+                }
+            }
+        }
+        finally
+        {
+            _restoring = false;
         }
         foreach (HotExitCurrentClaim orphan in plan.OrphanClaims)
         {

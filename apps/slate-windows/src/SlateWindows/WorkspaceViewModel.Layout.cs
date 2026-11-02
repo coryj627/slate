@@ -423,7 +423,11 @@ internal sealed partial class WorkspaceViewModel
             group.ActiveTab = tab;
         }
 
-        RaiseCommandStates();
+        // WB-29 §5: a restore adds tabs before the commands exist.
+        if (!_restoring)
+        {
+            RaiseCommandStates();
+        }
         return tab;
     }
 
