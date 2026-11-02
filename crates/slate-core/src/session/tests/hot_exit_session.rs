@@ -6,6 +6,9 @@
 //! the session's hot-exit reads — the vault's store key, each note's file
 //! identity, how a kept entry comes back, and the identity-checked save.
 
+// The environment seams (`fault_guard`) only the Windows and macOS key
+// facts set.
+#[cfg(any(windows, target_os = "macos"))]
 use super::common::*;
 use super::*;
 use crate::hot_exit::{HotExitEntry, HotExitKeyResult, HotExitRestore};
