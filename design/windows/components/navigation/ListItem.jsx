@@ -908,15 +908,12 @@ export function ListItem(_p = {}) {
   );
   const __body9 = () => (
     <div className={props.className} style={{
-      margin: "-3px -3px",
       width: 272,
       height: 32,
       borderRadius: 4,
       backgroundColor: "var(--neutral-background-1-rest)",
-      borderTop: "3px solid var(--neutral-stroke-focus-1-rest)",
-      borderRight: "3px solid var(--neutral-stroke-focus-1-rest)",
-      borderBottom: "3px solid var(--neutral-stroke-focus-1-rest)",
-      borderLeft: "3px solid var(--neutral-stroke-focus-1-rest)",
+      outline: "3px solid var(--neutral-stroke-focus-1-rest)",
+      outlineOffset: "-3px",
       display: "flex",
       flexDirection: "row",
       alignItems: "center",
@@ -938,7 +935,7 @@ export function ListItem(_p = {}) {
         alignItems: "center",
         flexWrap: "nowrap",
         boxSizing: "border-box",
-        paddingLeft: "calc(var(--spacing-horizontal-none-2) * 1px)",
+        paddingLeft: "calc(var(--spacing-horizontal-snudge-2) * 1px)",
         paddingTop: "calc(var(--spacing-vertical-snudge-2) * 1px)",
         paddingRight: "calc(var(--spacing-horizontal-none-2) * 1px)",
         paddingBottom: "calc(var(--spacing-vertical-snudge-2) * 1px)",
@@ -1004,15 +1001,12 @@ export function ListItem(_p = {}) {
   );
   const __body10 = () => (
     <div className={props.className} style={{
-      margin: "-3px -3px",
       width: 272,
       height: 32,
       borderRadius: 4,
       backgroundColor: "var(--neutral-background-1-rest)",
-      borderTop: "3px solid var(--neutral-stroke-focus-1-rest)",
-      borderRight: "3px solid var(--neutral-stroke-focus-1-rest)",
-      borderBottom: "3px solid var(--neutral-stroke-focus-1-rest)",
-      borderLeft: "3px solid var(--neutral-stroke-focus-1-rest)",
+      outline: "3px solid var(--neutral-stroke-focus-1-rest)",
+      outlineOffset: "-3px",
       display: "flex",
       flexDirection: "row",
       alignItems: "center",
@@ -1035,7 +1029,7 @@ export function ListItem(_p = {}) {
         alignItems: "center",
         flexWrap: "nowrap",
         boxSizing: "border-box",
-        paddingLeft: "calc(var(--spacing-horizontal-none-2) * 1px)",
+        paddingLeft: "calc(var(--spacing-horizontal-snudge-2) * 1px)",
         paddingTop: "calc(var(--spacing-vertical-snudge-2) * 1px)",
         paddingRight: "calc(var(--spacing-horizontal-none-2) * 1px)",
         paddingBottom: "calc(var(--spacing-vertical-snudge-2) * 1px)",
