@@ -2,7 +2,7 @@ Fluent 2 "DataGridCellSmaller" component re-themed to Slate (gold brand ramp) â€
 
 ```jsx
 const { DataGridCellSmaller } = window.SlateDesignSystem_326dc9;
-<DataGridCellSmaller layout="text" appearance="none" />
+<DataGridCellSmaller layout="text" appearance="primary" />
 ```
 
 Props (from DataGridCellSmaller.d.ts):

@@ -10,7 +10,7 @@ const __vkey = (p) => "layout=" + __venc(p.layout) + '|' + "style2=" + __venc(p.
 
 export function DataGridCellLarge(_p = {}) {
   _p = __slateNorm(_p, {"layout":["text","link","cell actions","single select","multi-select","two line text","swappable"],"style2":["none","primary","secondary"]});
-  const props = { ..._p, layout: _p.layout ?? "text", style2: _p.style2 ?? "none", focus: _p.focus ?? false, avatar32px: _p.avatar32px ?? true, subcontent: _p.subcontent ?? "Subcontent", productIcon: _p.productIcon ?? true, content: _p.content ?? "Content", systemIcon: _p.systemIcon ?? true };
+  const props = { ..._p, layout: _p.layout ?? "text", style2: _p.style2 ?? (["single select", "multi-select", "cell actions"].includes(_p.layout) ? "none" : "primary"), focus: _p.focus ?? false, avatar32px: _p.avatar32px ?? true, subcontent: _p.subcontent ?? "Subcontent", productIcon: _p.productIcon ?? true, content: _p.content ?? "Content", systemIcon: _p.systemIcon ?? true };
   const __body0 = () => (
     <div className={props.className} style={{
       width: 200,

@@ -8,7 +8,7 @@ const __vkey = (p) => "layout=" + __venc(p.layout) + '|' + "chevronPlacement=" +
 
 export function Carousel(_p = {}) {
   _p = __slateNorm(_p, {"layout":["over content","outside content"],"chevronPlacement":["flexible to edges","grouped to steps","centered to content"],"pauseButton":["in nav","on content click"],"navType":["steps","image preview"]});
-  const props = { ..._p, layout: _p.layout ?? "over content", chevronPlacement: _p.chevronPlacement ?? "flexible to edges", pauseButton: _p.pauseButton ?? "in nav", navType: _p.navType ?? "steps", title: _p.title ?? true };
+  const props = { ..._p, layout: _p.layout ?? "over content", chevronPlacement: _p.chevronPlacement ?? "flexible to edges", pauseButton: _p.pauseButton ?? ((_p.layout ?? "over content") === "over content" ? "on content click" : "in nav"), navType: _p.navType ?? "steps", title: _p.title ?? true };
   const __body0 = () => (
     <div className={props.className} style={{
       width: 415,

@@ -5,7 +5,7 @@ const __vkey = (p) => "divider=" + __venc(p.divider) + '|' + "state=" + __venc(p
 
 export function MenuSection(_p = {}) {
   _p = __slateNorm(_p, {"state":["rest","disabled"]});
-  const props = { ..._p, divider: _p.divider ?? true, state: _p.state ?? "rest", primaryString: _p.primaryString ?? "Section header" };
+  const props = { ..._p, divider: _p.divider ?? ((_p.state ?? "rest") === "disabled"), state: _p.state ?? "rest", primaryString: _p.primaryString ?? "Section header" };
   const __body0 = () => (
     <div className={props.className} style={{
       width: 240,

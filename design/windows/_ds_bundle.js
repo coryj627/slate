@@ -7565,7 +7565,7 @@ function Carousel(_p = {}) {
     ..._p,
     layout: _p.layout ?? "over content",
     chevronPlacement: _p.chevronPlacement ?? "flexible to edges",
-    pauseButton: _p.pauseButton ?? "in nav",
+    pauseButton: _p.pauseButton ?? ((_p.layout ?? "over content") === "over content" ? "on content click" : "in nav"),
     navType: _p.navType ?? "steps",
     title: _p.title ?? true
   };
@@ -12508,7 +12508,7 @@ function Persona(_p = {}) {
     quaternaryString: _p.quaternaryString ?? "Quaternary string",
     layout: _p.layout ?? "text after (default)",
     style2: _p.style2 ?? "avatar (default)",
-    size: _p.size ?? "small (badge only)",
+    size: _p.size ?? (_p.style2 === "presence badge" ? "small (badge only)" : "medium (default)"),
     alignment: _p.alignment ?? "center (default)"
   };
   const __body0 = () => /*#__PURE__*/React.createElement("div", {
@@ -14636,7 +14636,7 @@ function AnimatedProgressBar(_p = {}) {
     style2: _p.style2 ?? "indeterminate",
     size: _p.size ?? "medium (default)",
     state: _p.state ?? "default",
-    status: _p.status ?? "not started"
+    status: _p.status ?? ((_p.style2 ?? "indeterminate") === "indeterminate" ? "gradient before" : "not started")
   };
   const __body0 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
@@ -110534,7 +110534,7 @@ function Folder(_p = {}) {
   const props = {
     ..._p,
     size: _p.size ?? "16",
-    itemCount: _p.itemCount ?? true,
+    itemCount: _p.itemCount ?? ["96", "256"].includes(String(_p.size)),
     preview: _p.preview ?? "none"
   };
   const __body0 = () => /*#__PURE__*/React.createElement("div", {
@@ -156952,7 +156952,7 @@ function DataGridCellLarge(_p = {}) {
   const props = {
     ..._p,
     layout: _p.layout ?? "text",
-    style2: _p.style2 ?? "none",
+    style2: _p.style2 ?? (["single select", "multi-select", "cell actions"].includes(_p.layout) ? "none" : "primary"),
     focus: _p.focus ?? false,
     avatar32px: _p.avatar32px ?? true,
     subcontent: _p.subcontent ?? "Subcontent",
@@ -158566,7 +158566,7 @@ function DataGridCellSmall(_p = {}) {
   const props = {
     ..._p,
     layout: _p.layout ?? "text",
-    style2: _p.style2 ?? "none",
+    style2: _p.style2 ?? (["single select", "multi-select", "cell actions"].includes(_p.layout) ? "none" : "primary"),
     focus: _p.focus ?? false,
     avatar24px: _p.avatar24px ?? true,
     content: _p.content ?? "Content",
@@ -159300,7 +159300,7 @@ function DataGridCellSmaller(_p = {}) {
   const props = {
     ..._p,
     layout: _p.layout ?? "text",
-    style2: _p.style2 ?? "none",
+    style2: _p.style2 ?? (["single select", "multi-select", "cell actions"].includes(_p.layout) ? "none" : "primary"),
     focus: _p.focus ?? false,
     avatar20px: _p.avatar20px ?? true,
     content: _p.content ?? "Content",
@@ -165237,6 +165237,7 @@ function Placeholder6(_p = {}) {
     "size=16|theme=filled": __body9,
     // figma: Size=12, Theme=z
     "size=12|theme=z": __body10,
+    "size=12|theme=regular": __body10,
     // figma: Size=12, Theme=Filled
     "size=12|theme=filled": __body11,
     // figma: Size=48, Theme=Filled
@@ -194005,7 +194006,7 @@ function RadioBase(_p = {}) {
     subtextString: _p.subtextString ?? "Subtext",
     subtext: _p.subtext ?? false,
     layout: _p.layout ?? "icon only",
-    state: _p.state ?? "default"
+    state: _p.state ?? (_p.layout === "icon+label below" ? "default" : "checked")
   };
   const __body0 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
@@ -269071,7 +269072,7 @@ function MenuSection(_p = {}) {
   });
   const props = {
     ..._p,
-    divider: _p.divider ?? true,
+    divider: _p.divider ?? ((_p.state ?? "rest") === "disabled"),
     state: _p.state ?? "rest",
     primaryString: _p.primaryString ?? "Section header"
   };
@@ -270766,7 +270767,7 @@ function NavNodeSmall(_p = {}) {
     group: _p.group ?? false,
     selected: _p.selected ?? false,
     state: _p.state ?? "rest",
-    open: _p.open ?? true,
+    open: _p.open ?? (_p.group === true && _p.selected !== true),
     secondaryActions: _p.secondaryActions ?? false,
     focus: _p.focus ?? false,
     content: _p.content ?? "Nav content"

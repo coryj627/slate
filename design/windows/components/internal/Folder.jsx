@@ -5,7 +5,7 @@ const __vkey = (p) => "size=" + __venc(p.size) + '|' + "itemCount=" + __venc(p.i
 
 export function Folder(_p = {}) {
   _p = __slateNorm(_p, {"size":["16","20","24","32","36","40","48","96","256"],"preview":["none","filled","thumbnail"]});
-  const props = { ..._p, size: _p.size ?? "16", itemCount: _p.itemCount ?? true, preview: _p.preview ?? "none" };
+  const props = { ..._p, size: _p.size ?? "16", itemCount: _p.itemCount ?? ["96", "256"].includes(String(_p.size)), preview: _p.preview ?? "none" };
   const __body0 = () => (
     <div className={props.className} style={{
       width: 96,
