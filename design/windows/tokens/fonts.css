@@ -1,0 +1,30 @@
+/* Slate webfonts.
+   UI: Segoe UI Variable Text/Display/Small + Segoe UI (installed with Windows 11; not redistributed here).
+   Reader: Open Sans (uploaded, OFL — fonts/OpenSans-OFL.txt).
+   Editor: Cascadia Code / Cascadia Mono (uploaded, variable weight 200–700; NF = Nerd Font, PL = Powerline variants). */
+/* Inter: the kit's --font-family-default named it for docs labels. No component uses it, so it isn't loaded; fluent-slate.css points the token at Segoe UI. The system has no network font dependency. */
+@font-face{font-family:"Open Sans";src:url("../fonts/OpenSans-Variable.ttf") format("truetype");font-weight:300 800;font-stretch:75% 100%;font-style:normal;font-display:swap}
+@font-face{font-family:"Open Sans";src:url("../fonts/OpenSans-Italic-Variable.ttf") format("truetype");font-weight:300 800;font-stretch:75% 100%;font-style:italic;font-display:swap}
+@font-face{font-family:"Cascadia Code";src:url("../fonts/CascadiaCode.ttf") format("truetype");font-weight:200 700;font-style:normal;font-display:swap}
+@font-face{font-family:"Cascadia Code";src:url("../fonts/CascadiaCodeItalic.ttf") format("truetype");font-weight:200 700;font-style:italic;font-display:swap}
+@font-face{font-family:"Cascadia Mono";src:url("../fonts/CascadiaMono.ttf") format("truetype");font-weight:200 700;font-style:normal;font-display:swap}
+@font-face{font-family:"Cascadia Mono";src:url("../fonts/CascadiaMonoItalic.ttf") format("truetype");font-weight:200 700;font-style:italic;font-display:swap}
+@font-face{font-family:"Cascadia Code NF";src:url("../fonts/CascadiaCodeNF.ttf") format("truetype");font-weight:200 700;font-style:normal;font-display:swap}
+@font-face{font-family:"Cascadia Code NF";src:url("../fonts/CascadiaCodeNFItalic.ttf") format("truetype");font-weight:200 700;font-style:italic;font-display:swap}
+@font-face{font-family:"Cascadia Mono NF";src:url("../fonts/CascadiaMonoNF.ttf") format("truetype");font-weight:200 700;font-style:normal;font-display:swap}
+@font-face{font-family:"Cascadia Mono NF";src:url("../fonts/CascadiaMonoNFItalic.ttf") format("truetype");font-weight:200 700;font-style:italic;font-display:swap}
+@font-face{font-family:"Cascadia Code PL";src:url("../fonts/CascadiaCodePL.ttf") format("truetype");font-weight:200 700;font-style:normal;font-display:swap}
+@font-face{font-family:"Cascadia Code PL";src:url("../fonts/CascadiaCodePLItalic.ttf") format("truetype");font-weight:200 700;font-style:italic;font-display:swap}
+@font-face{font-family:"Cascadia Mono PL";src:url("../fonts/CascadiaMonoPL.ttf") format("truetype");font-weight:200 700;font-style:normal;font-display:swap}
+@font-face{font-family:"Cascadia Mono PL";src:url("../fonts/CascadiaMonoPLItalic.ttf") format("truetype");font-weight:200 700;font-style:italic;font-display:swap}
+
+/* Segoe UI Variable Text/Display/Small need no rule: those names are the installed families. Segoe UI is below. */
+@font-face{font-family:"Segoe UI";src:local("Segoe UI");font-weight:100 900;font-style:normal;font-display:swap}
+
+/* Segoe Fluent Icons (installed) — the WPF Fluent theme's icon font. Glyphs are Private Use Area code points (e.g. U+E721 Search). */
+@font-face{font-family:"Segoe Fluent Icons";src:local("Segoe Fluent Icons");font-weight:400;font-style:normal;font-display:block}
+/* Segoe MDL2 Assets (installed) — Windows 10 predecessor icon font; fallback for --font-icons. Same PUA code points for shared glyphs. */
+@font-face{font-family:"Segoe MDL2 Assets";src:local("Segoe MDL2 Assets");font-weight:400;font-style:normal;font-display:block}
+
+/* Segoe Sans — Microsoft's web-only face named by the Fluent kit tokens. Not obtainable for the app, so it is aliased to the installed Segoe UI. */
+@font-face{font-family:"Segoe Sans";src:local("Segoe UI");font-weight:100 900;font-style:normal;font-display:swap}

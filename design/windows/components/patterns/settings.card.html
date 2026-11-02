@@ -1,0 +1,32 @@
+<!-- @dsCard group="Components" viewport="700x380" name="Pattern · Settings" subtitle="SettingsLayout categories + SettingRow (label, description, control) — Appearance (Theme, Accent color), Editor, Math, Files sidebar" -->
+<!DOCTYPE html><html><head><meta charset="utf-8"><link rel="stylesheet" href="../../styles.css">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script>
+<style>body{margin:0;padding:20px;background:var(--surface-card);color:var(--text-primary);overflow:hidden}.row{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:14px}.k{font:12px/16px var(--font-ui);color:var(--text-tertiary);width:84px;flex:none;padding-top:6px}</style></head>
+<body><div id="root"></div>
+<script type="text/babel">
+const NS = window.SlateDesignSystem_326dc9 || {};
+class Safe extends React.Component{constructor(p){super(p);this.state={e:null}}static getDerivedStateFromError(e){return{e}}render(){return this.state.e?<span style={{font:"11px monospace",color:"var(--status-error)"}}>{this.props.n}: render error</span>:this.props.children}}
+const C = ({n, ...p}) => { const X = NS[n]; return X ? <Safe n={n}><X {...p}/></Safe> : <span style={{font:"11px monospace",color:"var(--status-error)"}}>{n} missing</span>; };
+const Row = ({k, children}) => <div className="row"><span className="k">{k}</span>{children}</div>;
+const G = ({c, s=20}) => <span aria-hidden="true" style={{fontFamily:"var(--font-icons)",fontSize:s,lineHeight:s+"px",width:s,height:s,display:"inline-flex",alignItems:"center",justifyContent:"center",fontStyle:"normal"}}>{String.fromCharCode(parseInt(c,16))}</span>;
+const Sel=({v,opts,label})=><span style={{position:"relative",display:"inline-flex"}}><select aria-label={label} defaultValue={v} style={{appearance:"none",height:32,minWidth:160,padding:"0 30px 0 10px",borderRadius:4,border:"1px solid var(--border-subtle)",borderBottom:"1px solid var(--border-strong)",background:"var(--surface-card)",color:"var(--text-primary)",font:"14px/20px var(--font-ui)",cursor:"pointer"}}>{opts.map(o=><option key={o}>{o}</option>)}</select><span aria-hidden="true" style={{position:"absolute",right:10,top:10,fontFamily:"var(--font-icons)",fontSize:12,lineHeight:"12px",pointerEvents:"none",color:"var(--text-secondary)"}}>{String.fromCharCode(0xE70D)}</span></span>;
+const Sw=({on:init,label})=>{const [on,setOn]=React.useState(init);const [h,setH]=React.useState(false);const S=NS.Switch;return <button role="switch" aria-checked={on} aria-label={label} onClick={()=>setOn(!on)} onMouseEnter={()=>setH(true)} onMouseLeave={()=>setH(false)} style={{padding:0,border:"none",background:"transparent",display:"flex",cursor:"pointer"}}>{S&&<S checked={on} layout="switch" state={h?"hover":"rest"}/>}</button>};
+const CATS=[{id:"appearance",label:"Appearance",icon:"E790"},{id:"editor",label:"Editor",icon:"E70F"},{id:"math",label:"Math",icon:"E8EF"},{id:"files",label:"Files sidebar",icon:"E8B7"}];
+function Demo(){const [c,setC]=React.useState("appearance");const [q,setQ]=React.useState("");return <div style={{height:340,border:"1px solid var(--border-subtle)",borderRadius:8,overflow:"hidden"}}><C n="SettingsLayout" categories={CATS} value={c} onChange={setC} query={q} onQueryChange={setQ} description={c==="math"?"How Slate reads math aloud and shows it in braille.":undefined}>
+{c==="appearance"&&<><C n="SettingRow" label="Theme"><Sel v="Use Windows setting" opts={["Light","Dark","Use Windows setting"]} label="Theme"/></C>
+<C n="SettingRow" label="Accent color" description="Automatic uses Slate gold unless you’ve chosen an accent color in Windows."><Sel v="Automatic" opts={["Automatic","Slate gold","Windows accent"]} label="Accent color"/></C></>}
+{c==="editor"&&<><C n="SettingRow" label="Font size" description="Text size in the editor."><Sel v="14" opts={["12","13","14","15","16","18","20"]} label="Font size"/></C>
+<C n="SettingRow" label="Check spelling while typing" description="Underlines misspelled words in the editor."><Sw on={true} label="Check spelling while typing"/></C>
+<C n="SettingRow" label="Open reading links in a new tab" description="When off, links in reading mode open in the current tab."><Sw on={true} label="Open reading links in a new tab"/></C></>}
+{c==="math"&&<><C n="SettingRow" label="Speech style"><Sel v="ClearSpeak" opts={["ClearSpeak","SimpleSpeak"]} label="Speech style"/></C>
+<C n="SettingRow" label="Verbosity"><Sel v="Medium" opts={["Terse","Medium","Verbose"]} label="Verbosity"/></C>
+<C n="SettingRow" label="Braille code"><Sel v="Nemeth" opts={["Nemeth","UEB"]} label="Braille code"/></C></>}
+{c==="files"&&<><C n="SettingRow" label="Sort order"><Sel v="Name A to Z" opts={["Name A to Z","Name Z to A","Modified (newest first)","Modified (oldest first)","Created (newest first)","Created (oldest first)"]} label="Sort order"/></C>
+<C n="SettingRow" label="Group by date"><Sw on={false} label="Group by date"/></C>
+<C n="SettingRow" label="Show tags"><Sw on={true} label="Show tags"/></C></>}
+</C></div>}
+ReactDOM.createRoot(document.getElementById('root')).render(<Demo/>);
+</script></body></html>

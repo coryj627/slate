@@ -1,0 +1,61 @@
+# WPF feasibility research — notes (2026-11-01)
+
+User request (m0096): research whether the design system's styling and interactions are feasible on WPF with the Fluent theme or a custom theme modification.
+
+## Slate repo (coryj627/slate @ main)
+- SlateWindows.csproj: net10.0-windows, UseWPF; AvalonEdit 6.3.1.120, WpfMath 2.1.0, Svg.Skia 5.2.3, SkiaSharp 4.153.1, HarfBuzzSharp 14.2.1.301; app.manifest.
+- App.xaml.cs: AppContext switch `Switch.System.Windows.Appearance.DisableFluentThemeWindowBackdrop`=true ("W1-1 Mica policy: every text-bearing Slate surface has a solid, token-backed background"); TextBoxAccessibility.Install() (#1106: Fluent TextBox clear button publishes a private-use glyph as its accessible name); PerMonitorV2 probe; comment "Explicit dictionaries instead of the still-experimental ThemeMode API".
+- ThemeManager.cs: merges pack://application:,,,/PresentationFramework.Fluent;component/Themes/Fluent.{Light,Dark,HC}.xaml, then Slate.{Light,Dark,Contrast}.xaml last; reacts to SystemParameters.HighContrast + SystemEvents.UserPreferenceChanged; reads AppsUseLightTheme. Slate.Contrast.xaml maps tokens to SystemColors keys.
+- URLs: https://github.com/coryj627/slate/blob/main/apps/slate-windows/src/SlateWindows/App.xaml.cs , .../ThemeManager.cs , .../SlateWindows.csproj
+
+## dotnet/wpf main — Fluent theme source (src/Microsoft.DotNet.Wpf/src/Themes/PresentationFramework.Fluent/)
+- Styles/ = 51 dictionaries: Button, Calendar, CheckBox, CollectionViewGroup, ComboBox, ContentControl, ContextMenu, DataGrid, DatePicker, DocumentViewer, Expander, Frame, GridSplitter, GridView, GroupBox, GroupItem, HeaderedContentControl, Hyperlink, ItemsControl, Label, ListBox, ListBoxItem, ListView, ListViewItem, Menu, MenuItem, NavigationWindow, Page, PasswordBox, ProgressBar, RadioButton, RepeatButton, ResizeGrip, RichTextBox, ScrollBar, ScrollViewer, Separator, Slider, StatusBar, StatusBarItem, TabControl, TextBlock, TextBox, Thumb, ToggleButton, ToolBar, ToolTip, TreeView, TreeViewItem, UserControl, Window. No "ToggleSwitch" key anywhere in Styles.
+- Styles/MenuItem.xaml (file header credits "Leszek Pomianowski and WPF UI Contributors"):
+  - SubmenuItem: 4 columns — checkbox column (SharedSizeGroup MenuItemCheckBoxIconColumnGroup, only Visible when IsCheckable; a 20×20 Border with CheckBoxBackground/CheckBoxBorderBrush, CornerRadius 4, glyph E73E when checked), Icon (MenuItemIconColumnGroup), Header, Shortcut (SharedSizeGroup "Shortcut").
+  - InputGestureText TextBlock: FontSize 11, VerticalAlignment Bottom, Margin 25,0,0,0, Foreground ALWAYS {DynamicResource TextFillColorDisabledBrush} (enabled or not).
+  - SubmenuHeader: 3 columns — Icon, Header, Chevron (E76C, Margin 0,3,0,0). NO checkbox column → submenu rows start left of checkable rows (explains Slate Editor menu: Math / Code Preamble Verbosity).
+  - Disabled: trigger sets Foreground TextFillColorDisabled on header (+ chevron in SubmenuHeader).
+  - Popups: AllowsTransparency=True; SubmenuBorder CornerRadius 8, Padding 0,3, Background FlyoutBackground, BorderBrush FlyoutBorderBrush; DropShadowEffect BlurRadius 20, ShadowDepth 6, Opacity 0.25 (top-level) vs 0.5 (submenu); open animation TranslateTransform.Y -90→0, 167 ms, CircleEase EaseOut.
+  - Row: Border Margin 4,1, CornerRadius 4; content Grid Margin 8,6; highlight = MenuBarItemBackgroundSelected; FocusVisualStyle DefaultCollectionFocusVisualStyle.
+- Resources/Theme/Light.xaml: TextFillColorSecondary #9E000000, Tertiary #72000000, Disabled #5C000000. Dark.xaml: #C5FFFFFF / #87FFFFFF / #5DFFFFFF. HC.xaml: TextFillColorDisabledBrush = SystemColorGrayTextColor.
+- Theme/Dark.xaml L136–142: `<DynamicResource x:Key="SystemAccentColor" ResourceKey="{x:Static SystemColors.AccentColorKey}" />` (+Light1–3, Dark1–3). Brushes built with StaticResource from those, e.g. AccentFillColorDefaultBrush = {StaticResource SystemAccentColorLight2}; AccentButtonBackground; CheckBoxCheckBackgroundFillChecked… (163 accent refs in Theme/). → overriding SystemAccentColor later does NOT recolour these; override the BRUSH keys (control styles use DynamicResource, e.g. Button.xaml AccentButtonStyle Background={DynamicResource AccentButtonBackground}).
+- Resources/Fonts.xaml: SymbolThemeFontFamily = "Segoe Fluent Icons, Segoe MDL2 Assets".
+- Resources/Variables.xaml: ControlCornerRadius 4; OverlayCornerRadius 8.
+- Resources/DefaultFocusVisualStyle.xaml: DefaultControlFocusVisualStyle, DefaultCollectionFocusVisualStyle; SystemParameters.FocusVisualStyleKey based on DefaultControlFocusVisualStyle.
+- TextBox/RichTextBox/PasswordBox/ComboBox: SelectionBrush = {DynamicResource TextControlSelectionHighlightColor}.
+- Popups with AllowsTransparency + DropShadowEffect: ComboBox (+ fallback trigger when AllowsTransparency=False), DatePicker, MenuItem, ToolBar overflow, ToolTip.
+- Styles/Window.xaml: DataTriggers on FrameworkAppContextSwitches.DisableFluentThemeWindowBackdrop.
+
+## Web
+- Microsoft Learn, What's new in WPF for .NET 10 (https://learn.microsoft.com/en-us/dotnet/desktop/wpf/whats-new/net100): .NET 10 released Nov 2025; Fluent "still in progress"; new Fluent styles DatePicker, GridSplitter, GridView, GroupBox, Hyperlink, Label, NavigationWindow, RichTextBox, TextBox; Expander animation fixed; HighContrast crashes fixed; RecognizesAccessKey added; RTL fixes MenuItem/Expander/TreeViewItem.
+- dotnet/wpf discussion #10387 Fluent Theme in .NET 10 plan (https://github.com/dotnet/wpf/discussions/10387): focus on missing Fluent styles; Frame breaking change.
+- Gist BYJRK (https://gist.github.com/BYJRK/69ac439cf44fca34b5731b822b2f8a6c): native Fluent lacks ToggleSwitch, NavigationView, SplitButton, Breadcrumb, RatingControl, Flyout, ProgressRing; no StackPanel.Spacing; no TextBox placeholder. (secondary)
+- Uno Platform guide (https://platform.uno/articles/wpf-modernization-in-2026-a-source-backed-decision-guide/): .NET 10 LTS supported until 14 Nov 2028; WPF in maintenance mode.
+- Bad Echo (https://badecho.com/index.php/2025/09/03/fluent-theme-not-a-theme/): Fluent resources are merged manually into App resources, so WPF doesn't treat them as a system theme → custom styles must BasedOn explicitly.
+- dotnet/core .NET 10 Preview 4 WPF notes (https://github.com/dotnet/core/blob/main/release-notes/10.0/preview/preview4/wpf.md): text controls brought to WinUI parity; common brush resources added.
+
+## More findings (turn m0105–m0108)
+- dotnet/wpf Shell/WindowChromeWorker.cs: _HandleNCHitTest handles WM.NCHITTEST; no HTMAXBUTTON anywhere in Shell/ → WindowChrome never reports the maximize button; snap-layout flyout on a custom caption needs an HwndSource hook returning HTMAXBUTTON.
+- MS docs "Support snap layouts for desktop apps on Windows 11" (https://github.com/MicrosoftDocs/windows-dev-docs/blob/docs/hub/apps/desktop/modernize/ui/apply-snap-layout-menu.md): custom title bar must return HTMAXBUTTON from WM_NCHITTEST over maximize; app min width should be at most 500 epx, ideally ≤330 epx.
+- TextBoxBase.cs:800 SelectionTextBrushProperty exists; :823 selection opacity default depends on FrameworkAppContextSwitches.UseAdornerForTextboxSelectionRendering (adorner mode ignores SelectionTextBrush).
+- Segoe Fluent Icons (Learn, https://learn.microsoft.com/en-us/windows/apps/design/iconography/segoe-fluent-icons-font): replaced MDL2 as recommended in Win11; not on Windows 10 by default (downloadable; may lag); PUA code points shared with MDL2 → Fluent theme SymbolThemeFontFamily "Segoe Fluent Icons, Segoe MDL2 Assets" falls back.
+- Typography (Learn, https://learn.microsoft.com/en-us/windows/apps/design/style/typography): XAML common controls (WinUI) pick Segoe UI Variable automatically and match optical size to font size; weights Light 300 / Semilight 350 / Regular 400 / Semibold 600 / Bold 700.
+- WPF Fluent Fonts.xaml defines ONLY SymbolThemeFontFamily (no text font) → WPF Fluent text stays SystemFonts.MessageFontFamily (Segoe UI) unless app sets FontFamily.
+- dotnet/wpf DirectWriteForwarder: no IDWriteFontFace5 / DWRITE_FONT_AXIS / IDWriteFontResource → WPF can't drive variable-font axes; use named families "Segoe UI Variable Small/Text/Display" + FontWeight (FromOpenTypeWeight(350) for Semilight).
+- DefaultFocusVisualStyle.xaml: Control = single Rectangle, Margin -3, Radius 4, Stroke KeyboardFocusBorderColorBrush, 2px; Collection = same without margin. (WinUI/web Fluent use 2px outer + 1px inner ring.)
+
+## Slate repo usage (dfddb4fad6df)
+- apps/slate-windows/src has NO WindowChrome, HTMAXBUTTON, ToggleSwitch, SharedSizeGroup, KeyboardFocusBorderColorBrush, SelectionBrush, AccentButtonBackground, "Segoe UI Variable" → standard OS title bar today; no custom switch; Fluent focus/selection brushes untouched.
+- MainWindow.xaml uses DropShadowEffect BlurRadius 18 ShadowDepth 4 Opacity 0.28 in 11 places (L2577…4308); Direction unset (WPF default 315° = down-right).
+- Menu items everywhere: InputGestureText="{cmd:ChordText …}" + AutomationProperties.AcceleratorKey bound to it (ChordTextExtension.cs; ChordTable.cs).
+## Project DS (this project)
+- tokens/: base.css brand.css colors.css fluent-slate.css fonts.css spacing.css typography.css + fluent/.
+- base.css: :focus-visible outline 2px var(--focus-ring) offset 1px; ::selection selection-bg/selection-text. colors.css light: --focus-ring var(--wpf-text), --selection-bg gold-150, --selection-text #171717; dark: selection-bg gold-70, text #F5F5F5; accent-text gold-70 (light)/gold-110 (dark); accent-indicator gold-90/gold-110.
+- spacing.css: --shadow-2..64 two-layer (ambient 0 0 2px/8px + key 0 Npx 2Npx), dark alpha .24/.28; durations 50/100/150/200/250/300/400ms; curves decelerate-mid (0,0,0,1), accelerate-mid (1,0,1,1), easy-ease (.33,0,.67,1), linear; --titlebar-height 48px, tabstrip 36, statusbar 24, sidebar 260, rightpane 300.
+- components groups: actions (Button, CompoundButton, Link, SplitButton, Toolbar), content (Accordion, Avatar*, Card*, Carousel*, DataGridCell*, Divider, ImagePreview*, InteractionTag, Persona, Tag…), feedback (AnimatedProgressBar, Badge, MessageBar, PresenceBadge, Skeleton, Spinner, StaticProgressBar, StatusIndicator, Toast), forms (Checkbox, Dropdown, Field, InfoButton, InfoLabel, Input, Label, Radio, RadioGroup, Rating, SearchBox, Slider, SpinButton, Swatch, SwatchPicker, Switch, TagPicker*, Textarea), navigation (AppItem*, Breadcrumb*, HorizontalTab*, ListContent, ListItem, MenuItem, MenuMenu, MenuSection, MenuSplitItem, Nav*, SectionHeader, TreeItem, VerticalTab*), overlays (Dialog, Drawer*, InlineDrawer, MaterialAcrylic, OverlayDrawer, Popover, TeachingPopover, Tooltip), patterns (CountListRow, EmptyStateLauncher, NoteHeader, PaneSwitcher, PanelToolbar, SettingRow, SettingsLayout), internal.
+
+## ClearType / tooltips (web)
+- ClearTypeHint (WPF 4.0+): WPF turns ClearType off when the text buffer could be transparent: Effects, OpacityMask, VisualBrush, DrawingBrush, layered windows (AllowsTransparency); in layered windows Clip and Opacity too. Stock popups affected: ComboBox, DatePicker, MenuItem, ToolTip, ToolBar overflow. RenderOptions.ClearTypeHint="Enabled" re-enables for a subtree on an opaque background; no intermediate render targets between hint and text; doesn't affect TextBox (works on TextBlock). Sources: https://learn.microsoft.com/en-us/archive/blogs/text/cleartypehint ; https://learn.microsoft.com/en-us/dotnet/api/system.windows.media.renderoptions.cleartypehint
+- Tooltips: .NET Fx 4.8 shows tooltips on keyboard focus + Ctrl+Shift+F10; .NET 6+ adds ToolTipService.ShowsToolTipOnKeyboardFocus / ToolTip.ShowsToolTipOnKeyboardFocus; ShowDuration default → Int32.MaxValue (persistent); WCAG 2.1 persistent/dismissable/hoverable. Spec: https://github.com/dotnet/wpf/blob/main/src/Microsoft.DotNet.Wpf/specs/tooltip.md
+## Slate theme keys
+- Themes/Slate.{Light,Dark,Contrast}.xaml define namespaced Slate.* keys: WindowBackground, Surface, RaisedSurface, Text, SecondaryText, TertiaryText, Border, Accent, SelectionBackground, SelectionText, Focus, Error, Warning, FindMatch(+Outline,+Ring), Editor{Heading,Code,Wikilink,Tag,Metadata}, Code{Keyword,String,Number,Comment,Type,Function}. Dark: WindowBackground #121212, Surface #1E1E1E, RaisedSurface #292929. Contrast maps to SystemColors keys.

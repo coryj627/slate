@@ -1,0 +1,219 @@
+/* Generated from Figma Variables. First mode = :root default.
+   FLOAT tokens are unitless — multiply by 1px in calc() where a length is needed. */
+
+:root {
+  --base-bottom-margin: 6;
+  --base-bottom-marging-w-icon: 4;
+  --base-icon-size: 16;
+  --base-left-margin: 11;
+  --base-min-size: 96;
+  --base-radius: 4;
+  --base-right-margin: 11;
+  --base-top-margin-w-icon: 4;
+  --base-top-margin: 4;
+  --button-accent-background-color: var(--color-fill-color-accent-default); /* @kind color */
+  --button-accent-border-gradient-1: rgba(255,255,255,0.08); /* @kind color */
+  --button-accent-border-gradient-2: rgba(0,0,0,0.4); /* @kind color */
+  --button-accent-text-color: var(--color-fill-color-accent-on-text-primary); /* @kind color */
+  --button-standard-background-color: var(--color-fill-color-control-default); /* @kind color */
+  --button-standard-border-gradient-1: rgba(0,0,0,0.06); /* @kind color */
+  --button-standard-border-gradient-2: rgba(0,0,0,0.16); /* @kind color */
+  --button-standard-text-color: var(--color-fill-color-text-primary); /* @kind color */
+  --button-subtle-background-color: var(--color-fill-color-subtle-transparent); /* @kind color */
+  --button-subtle-stroke: var(--color-fill-color-subtle-transparent); /* @kind color */
+  --button-subtle-text-color: var(--color-fill-color-text-primary); /* @kind color */
+  --color-background-fill-color-layer-alt: var(--colors-light-background-fill-color-layer-alt); /* @kind color */
+  --color-background-fill-color-smoke-default: var(--colors-light-background-fill-color-smoke-default); /* @kind color */
+  --color-background-fill-color-solid-background-base: var(--colors-light-background-fill-color-solid-background-base); /* @kind color */
+  --color-effect-shadows-dialog-color-top: rgba(0,0,0,0.19); /* @kind color */
+  --color-fill-color-accent-default: var(--colors-light-fillcolor-accent-default); /* @kind color */
+  --color-fill-color-accent-disabled: var(--colors-light-fillcolor-accent-disabled); /* @kind color */
+  --color-fill-color-accent-on-text-primary: var(--colors-light-fillcolor-text-on-accent-primary); /* @kind color */
+  --color-fill-color-accent-secondary: var(--colors-light-fillcolor-accent-secondary); /* @kind color */
+  --color-fill-color-accent-tertiary: var(--colors-light-fillcolor-accent-tertiary); /* @kind color */
+  --color-fill-color-control-default: var(--colors-light-fillcolor-control-default); /* @kind color */
+  --color-fill-color-control-disabled: var(--colors-light-fillcolor-control-disabled); /* @kind color */
+  --color-fill-color-control-secondary: var(--colors-light-fillcolor-control-secondary); /* @kind color */
+  --color-fill-color-control-tertiary: var(--colors-light-fillcolor-control-tertiary); /* @kind color */
+  --color-fill-color-control-transparent: var(--colors-light-fillcolor-control-transparent); /* @kind color */
+  --color-fill-color-subtle-disabled: var(--colors-light-fillcolor-subtle-disabled); /* @kind color */
+  --color-fill-color-subtle-secondary: var(--colors-light-fillcolor-subtle-secondary); /* @kind color */
+  --color-fill-color-subtle-tertiary: var(--colors-light-fillcolor-subtle-tertiary); /* @kind color */
+  --color-fill-color-subtle-transparent: var(--colors-light-fillcolor-subtle-transparent); /* @kind color */
+  --color-fill-color-text-disabled: var(--colors-light-fillcolor-text-disabled); /* @kind color */
+  --color-fill-color-text-primary: rgba(0,0,0,0.8956); /* @kind color */
+  --color-fill-color-text-secondary: var(--colors-light-fillcolor-text-secondary); /* @kind color */
+  --color-stroke-color-control-stroke-default: var(--colors-light-stroke-color-control-stroke-default); /* @kind color */
+  --color-stroke-color-control-stroke-on-accent-default: var(--colors-light-stroke-color-control-stroke-on-accent-default); /* @kind color */
+  --color-stroke-color-divider-stroke-default: var(--colors-light-stroke-color-divider-stroke-default); /* @kind color */
+  --color-stroke-color-focus-stroke-inner: var(--colors-light-stroke-color-focus-stroke-inner); /* @kind color */
+  --color-stroke-color-focus-stroke-outer: var(--colors-light-stroke-color-focus-stroke-outer); /* @kind color */
+  --color-stroke-color-surface-stroke-default: var(--colors-light-stroke-color-surface-stroke-default); /* @kind color */
+  --colors-dark-background-fill-color-layer-alt: rgba(255,255,255,0.0538); /* @kind color */
+  --colors-dark-background-fill-color-smoke-default: rgba(0,0,0,0.3); /* @kind color */
+  --colors-dark-background-fill-color-solid-background-base: rgb(32,32,32); /* @kind color */
+  --colors-dark-fillcolor-accent-default: rgb(96,205,255); /* @kind color */
+  --colors-dark-fillcolor-accent-disabled: rgba(255,255,255,0.1581); /* @kind color */
+  --colors-dark-fillcolor-accent-secondary: rgba(96,205,255,0.9); /* @kind color */
+  --colors-dark-fillcolor-accent-tertiary: rgba(96,205,255,0.8); /* @kind color */
+  --colors-dark-fillcolor-control-default: rgba(255,255,255,0.0605); /* @kind color */
+  --colors-dark-fillcolor-control-disabled: rgba(30,30,30,0.7); /* @kind color */
+  --colors-dark-fillcolor-control-secondary: rgba(249,249,249,0.0837); /* @kind color */
+  --colors-dark-fillcolor-control-tertiary: rgba(249,249,249,0.0326); /* @kind color */
+  --colors-dark-fillcolor-control-transparent: rgba(255,255,255,0); /* @kind color */
+  --colors-dark-fillcolor-subtle-disabled: rgba(255,255,255,0); /* @kind color */
+  --colors-dark-fillcolor-subtle-secondary: rgba(255,255,255,0.0605); /* @kind color */
+  --colors-dark-fillcolor-subtle-tertiary: rgba(255,255,255,0.0419); /* @kind color */
+  --colors-dark-fillcolor-subtle-transparent: rgba(255,255,255,0); /* @kind color */
+  --colors-dark-fillcolor-text-disabled: rgba(255,255,255,0.3628); /* @kind color */
+  --colors-dark-fillcolor-text-on-accent-primary: rgb(0,0,0); /* @kind color */
+  --colors-dark-fillcolor-text-primary: rgb(255,255,255); /* @kind color */
+  --colors-dark-fillcolor-text-secondary: rgba(255,255,255,0.786); /* @kind color */
+  --colors-dark-stroke-color-control-stroke-on-accent-default: rgba(255,255,255,0.08); /* @kind color */
+  --colors-dark-stroke-color-control-stroke-secondary: rgba(255,255,255,0.093); /* @kind color */
+  --colors-dark-stroke-color-divider-stroke-default: rgba(255,255,255,0.0837); /* @kind color */
+  --colors-dark-stroke-color-focus-stroke-inner: rgba(0,0,0,0.7); /* @kind color */
+  --colors-dark-stroke-color-focus-stroke-outer: rgb(255,255,255); /* @kind color */
+  --colors-dark-stroke-color-surface-stroke-default: rgba(117,117,117,0.4); /* @kind color */
+  --colors-light-background-fill-color-layer-alt: rgb(255,255,255); /* @kind color */
+  --colors-light-background-fill-color-smoke-default: rgba(0,0,0,0.3); /* @kind color */
+  --colors-light-background-fill-color-solid-background-base: rgb(243,243,243); /* @kind color */
+  --colors-light-fillcolor-accent-default: rgb(0,95,184); /* @kind color */
+  --colors-light-fillcolor-accent-disabled: rgba(0,0,0,0.2169); /* @kind color */
+  --colors-light-fillcolor-accent-secondary: rgba(0,95,184,0.9); /* @kind color */
+  --colors-light-fillcolor-accent-tertiary: rgba(0,95,184,0.8); /* @kind color */
+  --colors-light-fillcolor-control-default: rgba(255,255,255,0.7); /* @kind color */
+  --colors-light-fillcolor-control-disabled: rgba(249,249,249,0.3); /* @kind color */
+  --colors-light-fillcolor-control-secondary: rgba(249,249,249,0.5); /* @kind color */
+  --colors-light-fillcolor-control-tertiary: rgba(249,249,249,0.3); /* @kind color */
+  --colors-light-fillcolor-control-transparent: rgba(255,255,255,0); /* @kind color */
+  --colors-light-fillcolor-subtle-disabled: rgba(0,0,0,0); /* @kind color */
+  --colors-light-fillcolor-subtle-secondary: rgba(0,0,0,0.0373); /* @kind color */
+  --colors-light-fillcolor-subtle-tertiary: rgba(0,0,0,0.0241); /* @kind color */
+  --colors-light-fillcolor-subtle-transparent: rgba(255,255,255,0); /* @kind color */
+  --colors-light-fillcolor-text-disabled: rgba(0,0,0,0.3614); /* @kind color */
+  --colors-light-fillcolor-text-on-accent-disabled: rgb(255,255,255); /* @kind color */
+  --colors-light-fillcolor-text-on-accent-primary: rgb(255,255,255); /* @kind color */
+  --colors-light-fillcolor-text-on-accent-secondary: rgba(255,255,255,0.7); /* @kind color */
+  --colors-light-fillcolor-text-primary: rgba(0,0,0,0.8956); /* @kind color */
+  --colors-light-fillcolor-text-secondary: rgba(0,0,0,0.6063); /* @kind color */
+  --colors-light-stroke-color-control-stroke-default: rgba(0,0,0,0.0578); /* @kind color */
+  --colors-light-stroke-color-control-stroke-on-accent-default: rgba(255,255,255,0.08); /* @kind color */
+  --colors-light-stroke-color-divider-stroke-default: rgba(0,0,0,0.0803); /* @kind color */
+  --colors-light-stroke-color-focus-stroke-inner: rgb(255,255,255); /* @kind color */
+  --colors-light-stroke-color-focus-stroke-outer: rgba(0,0,0,0.8956); /* @kind color */
+  --colors-light-stroke-color-surface-stroke-default: rgba(117,117,117,0.4); /* @kind color */
+  --colors-neutral-grey-14: rgb(36,36,36); /* @kind color */
+  --colors-neutral-grey-44: rgb(112,112,112); /* @kind color */
+  --colors-neutral-grey-86: rgb(219,219,219); /* @kind color */
+  --colors-neutral-grey-black: rgb(0,0,0); /* @kind color */
+  --colors-neutral-grey-white: rgb(255,255,255); /* @kind color */
+  --container-bottom-margin: 1;
+  --container-icon-only-padding: 5;
+  --container-left-margin: 1;
+  --container-right-margin: 1;
+  --container-top-margin: 1;
+  --dialog-dialog-width: 448;
+  --focus-padding: 1;
+  --focus-stroke-weight: 2;
+  --numbers-button-radius: 4;
+}
+
+:root[data-theme="dark"], .dark {
+  --color-background-fill-color-layer-alt: var(--colors-dark-background-fill-color-layer-alt); /* @kind color */
+  --color-background-fill-color-smoke-default: var(--colors-dark-background-fill-color-smoke-default); /* @kind color */
+  --color-background-fill-color-solid-background-base: var(--colors-dark-background-fill-color-solid-background-base); /* @kind color */
+  --color-effect-shadows-dialog-color-top: rgba(0,0,0,0.37); /* @kind color */
+  --color-fill-color-accent-default: var(--colors-dark-fillcolor-accent-default); /* @kind color */
+  --color-fill-color-accent-disabled: var(--colors-dark-fillcolor-accent-disabled); /* @kind color */
+  --color-fill-color-accent-on-text-primary: var(--colors-dark-fillcolor-text-on-accent-primary); /* @kind color */
+  --color-fill-color-accent-secondary: var(--colors-dark-fillcolor-accent-secondary); /* @kind color */
+  --color-fill-color-accent-tertiary: var(--colors-dark-fillcolor-accent-tertiary); /* @kind color */
+  --color-fill-color-control-default: var(--colors-dark-fillcolor-control-default); /* @kind color */
+  --color-fill-color-control-disabled: var(--colors-dark-fillcolor-control-disabled); /* @kind color */
+  --color-fill-color-control-secondary: var(--colors-dark-fillcolor-control-secondary); /* @kind color */
+  --color-fill-color-control-tertiary: var(--colors-dark-fillcolor-control-tertiary); /* @kind color */
+  --color-fill-color-control-transparent: var(--colors-dark-fillcolor-control-transparent); /* @kind color */
+  --color-fill-color-subtle-disabled: var(--colors-dark-fillcolor-subtle-disabled); /* @kind color */
+  --color-fill-color-subtle-secondary: var(--colors-dark-fillcolor-subtle-secondary); /* @kind color */
+  --color-fill-color-subtle-tertiary: var(--colors-dark-fillcolor-subtle-tertiary); /* @kind color */
+  --color-fill-color-subtle-transparent: var(--colors-dark-fillcolor-subtle-transparent); /* @kind color */
+  --color-fill-color-text-disabled: var(--colors-dark-fillcolor-text-disabled); /* @kind color */
+  --color-fill-color-text-primary: rgb(255,255,255); /* @kind color */
+  --color-fill-color-text-secondary: var(--colors-dark-fillcolor-text-secondary); /* @kind color */
+  --color-stroke-color-control-stroke-default: var(--colors-dark-stroke-color-control-stroke-secondary); /* @kind color */
+  --color-stroke-color-control-stroke-on-accent-default: var(--colors-dark-stroke-color-control-stroke-on-accent-default); /* @kind color */
+  --color-stroke-color-divider-stroke-default: var(--colors-dark-stroke-color-divider-stroke-default); /* @kind color */
+  --color-stroke-color-focus-stroke-inner: var(--colors-dark-stroke-color-focus-stroke-inner); /* @kind color */
+  --color-stroke-color-focus-stroke-outer: var(--colors-dark-stroke-color-focus-stroke-outer); /* @kind color */
+  --color-stroke-color-surface-stroke-default: var(--colors-dark-stroke-color-surface-stroke-default); /* @kind color */
+}
+
+:root[data-mode="hover"] {
+  --button-accent-background-color: var(--color-fill-color-accent-secondary); /* @kind color */
+  --button-accent-border-gradient-1: rgba(255,255,255,0.08); /* @kind color */
+  --button-accent-border-gradient-2: rgba(0,0,0,0.4); /* @kind color */
+  --button-accent-text-color: var(--color-fill-color-accent-on-text-primary); /* @kind color */
+  --button-standard-background-color: var(--color-fill-color-control-secondary); /* @kind color */
+  --button-standard-border-gradient-1: rgba(0,0,0,0.06); /* @kind color */
+  --button-standard-border-gradient-2: rgba(0,0,0,0.16); /* @kind color */
+  --button-standard-text-color: var(--color-fill-color-text-primary); /* @kind color */
+  --button-subtle-background-color: var(--color-fill-color-subtle-tertiary); /* @kind color */
+  --button-subtle-stroke: var(--color-fill-color-subtle-secondary); /* @kind color */
+  --button-subtle-text-color: var(--color-fill-color-text-primary); /* @kind color */
+}
+
+:root[data-mode="pressed"] {
+  --button-accent-background-color: var(--color-fill-color-accent-tertiary); /* @kind color */
+  --button-accent-border-gradient-1: var(--color-stroke-color-control-stroke-on-accent-default); /* @kind color */
+  --button-accent-border-gradient-2: var(--color-stroke-color-control-stroke-on-accent-default); /* @kind color */
+  --button-accent-text-color: var(--colors-light-fillcolor-text-on-accent-secondary); /* @kind color */
+  --button-standard-background-color: var(--color-fill-color-control-tertiary); /* @kind color */
+  --button-standard-border-gradient-1: var(--color-stroke-color-control-stroke-default); /* @kind color */
+  --button-standard-border-gradient-2: var(--color-stroke-color-control-stroke-default); /* @kind color */
+  --button-standard-text-color: var(--color-fill-color-text-secondary); /* @kind color */
+  --button-subtle-background-color: var(--color-fill-color-control-tertiary); /* @kind color */
+  --button-subtle-stroke: var(--color-fill-color-subtle-tertiary); /* @kind color */
+  --button-subtle-text-color: var(--color-fill-color-text-secondary); /* @kind color */
+}
+
+:root[data-mode="disabled"] {
+  --button-accent-background-color: var(--color-fill-color-accent-disabled); /* @kind color */
+  --button-accent-border-gradient-1: var(--color-fill-color-control-transparent); /* @kind color */
+  --button-accent-border-gradient-2: var(--color-fill-color-control-transparent); /* @kind color */
+  --button-accent-text-color: var(--colors-light-fillcolor-text-on-accent-disabled); /* @kind color */
+  --button-standard-background-color: var(--color-fill-color-control-disabled); /* @kind color */
+  --button-standard-border-gradient-1: var(--color-stroke-color-control-stroke-default); /* @kind color */
+  --button-standard-border-gradient-2: var(--color-stroke-color-control-stroke-default); /* @kind color */
+  --button-standard-text-color: var(--color-fill-color-text-disabled); /* @kind color */
+  --button-subtle-background-color: var(--color-fill-color-subtle-disabled); /* @kind color */
+  --button-subtle-stroke: var(--color-fill-color-subtle-disabled); /* @kind color */
+  --button-subtle-text-color: var(--color-fill-color-text-disabled); /* @kind color */
+}
+
+:root[data-mode="compact"] {
+  --base-bottom-margin: 2;
+  --base-bottom-marging-w-icon: 0;
+  --base-icon-size: 12;
+  --base-left-margin: 11;
+  --base-min-size: 0;
+  --base-radius: 3;
+  --base-right-margin: 11;
+  --base-top-margin-w-icon: 0;
+  --base-top-margin: 0;
+  --container-bottom-margin: 9;
+  --container-icon-only-padding: 9;
+  --container-left-margin: 1;
+  --container-right-margin: 1;
+  --container-top-margin: 9;
+  --focus-padding: 1;
+  --focus-stroke-weight: 2;
+}
+
+:root[data-mode="min-size"] {
+  --dialog-dialog-width: 320;
+}
+
+:root[data-mode="max-size"] {
+  --dialog-dialog-width: 520;
+}

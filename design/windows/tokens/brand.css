@@ -1,0 +1,29 @@
+/* Slate brand — colours sampled from assets/logo/slate-gold.png.
+   Gold #E2AD24 (field) and Slate #47515B (dog silhouette).
+   The Fluent 2 brand ramp (--brand-10 … --brand-160) is re-keyed to Slate gold, the way the
+   Fluent Theme Designer re-keys a ramp from one key colour. Every materialized Fluent
+   component that reads a brand token picks this up automatically.
+   Stops chosen so Fluent's own role mapping stays accessible:
+   light  brand-background-1 = brand-80 (#7D5A00) → white text 6.3:1
+   dark   brand-background-1 = brand-70 (#6B4D00) → white text 7.9:1
+   dark   brand foreground   = brand-100/110 → gold on #1E1E1E ≥ 5.5:1 */
+:root{
+--slate-gold:#E2AD24;
+--slate-grey:#47515B;
+--slate-grey-dark:#2F363D;
+--slate-grey-light:#6B7681;
+/* deprecated aliases (renamed 2026-11) */
+--slate-slate:var(--slate-grey);--slate-slate-dark:var(--slate-grey-dark);--slate-slate-light:var(--slate-grey-light);
+--gold-10:#140E00;--gold-20:#241A02;--gold-30:#352603;--gold-40:#453104;--gold-50:#563D04;--gold-60:#604400;--gold-70:#6B4D00;--gold-80:#7D5A00;
+--gold-90:#A57A00;--gold-100:#C9960D;--gold-110:#E2AD24;--gold-120:#EABD4B;--gold-130:#F0CB6E;--gold-140:#F5D991;--gold-150:#F9E7B8;--gold-160:#FDF5E1;
+--brand-10:var(--gold-10);--brand-20:var(--gold-20);--brand-30:var(--gold-30);--brand-40:var(--gold-40);--brand-50:var(--gold-50);--brand-60:var(--gold-60);--brand-70:var(--gold-70);--brand-80:var(--gold-80);
+--brand-90:var(--gold-90);--brand-100:var(--gold-100);--brand-110:var(--gold-110);--brand-120:var(--gold-120);--brand-130:var(--gold-130);--brand-140:var(--gold-140);--brand-150:var(--gold-150);--brand-160:var(--gold-160);
+--brand-10-2:var(--gold-10);--brand-20-2:var(--gold-20);--brand-30-2:var(--gold-30);--brand-40-2:var(--gold-40);--brand-50-2:var(--gold-50);--brand-60-2:var(--gold-60);--brand-70-2:var(--gold-70);--brand-80-2:var(--gold-80);
+--brand-90-2:var(--gold-90);--brand-100-2:var(--gold-100);--brand-110-2:var(--gold-110);--brand-120-2:var(--gold-120);--brand-130-2:var(--gold-130);--brand-140-2:var(--gold-140);--brand-150-2:var(--gold-150);--brand-160-2:var(--gold-160);
+/* Fluent names its default brand ramp "comm-blue"; these slots now hold Slate gold. Keep the names — Fluent components read them. */
+--colors-brand-comm-blue-10:var(--gold-10);--colors-brand-comm-blue-20:var(--gold-20);--colors-brand-comm-blue-30:var(--gold-30);--colors-brand-comm-blue-40:var(--gold-40);--colors-brand-comm-blue-50:var(--gold-50);--colors-brand-comm-blue-60:var(--gold-60);--colors-brand-comm-blue-70:var(--gold-70);--colors-brand-comm-blue-80:var(--gold-80);
+--colors-brand-comm-blue-90:var(--gold-90);--colors-brand-comm-blue-100:var(--gold-100);--colors-brand-comm-blue-110:var(--gold-110);--colors-brand-comm-blue-120:var(--gold-120);--colors-brand-comm-blue-130:var(--gold-130);--colors-brand-comm-blue-140:var(--gold-140);--colors-brand-comm-blue-150:var(--gold-150);--colors-brand-comm-blue-160:var(--gold-160);
+--colors-brand-comm-blue-20-2:var(--gold-20);--colors-brand-comm-blue-20-3:var(--gold-20);--colors-brand-comm-blue-30-2:var(--gold-30);--colors-brand-comm-blue-40-2:var(--gold-40);--colors-brand-comm-blue-50-2:var(--gold-50);--colors-brand-comm-blue-60-2:var(--gold-60);
+--colors-brand-comm-blue-70-2:var(--gold-70);--colors-brand-comm-blue-70-3:var(--gold-70);--colors-brand-comm-blue-80-2:var(--gold-80);--colors-brand-comm-blue-80-3:var(--gold-80);--colors-brand-comm-blue-80-4:var(--gold-80);--colors-brand-comm-blue-90-2:var(--gold-90);
+--colors-brand-comm-blue-100-2:var(--gold-100);--colors-brand-comm-blue-100-3:var(--gold-100);--colors-brand-comm-blue-110-2:var(--gold-110);--colors-brand-comm-blue-130-2:var(--gold-130);--colors-brand-comm-blue-140-2:var(--gold-140);--colors-brand-comm-blue-160-2:var(--gold-160);--colors-brand-comm-blue-160-3:var(--gold-160);
+}
