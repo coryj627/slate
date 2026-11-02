@@ -621,3 +621,4 @@ mutation run per row above, locally.
   the incarnation it adopts, and its release retires that payload as
   well as its own, never a successor's. No other blocker; Deviations 1
   and 2 accepted again.
+- **Codex approved at round 4** (head `70c1752d`): no remaining blocker under D1–D9; both Deviations acceptable. The core store PR implements this design; its facts and mutation results are that PR's to show.
