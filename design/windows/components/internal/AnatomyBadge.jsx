@@ -62,7 +62,7 @@ export function AnatomyBadge(_p = {}) {
         whiteSpace: "nowrap",
         lineHeight: 1.5,
         letterSpacing: "-0.010em",
-        color: "var(--neutral-foreground-2-rest)",
+        color: "var(--neutral-foreground-static-rest-3)",
         flexShrink: 0,
         alignSelf: "stretch",
       }}>{props.text1 ?? "Badge"}</span>

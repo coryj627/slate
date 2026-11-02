@@ -51,7 +51,7 @@ export function StateTags(_p = {}) {
           fontSize: 14,
           whiteSpace: "nowrap",
           lineHeight: "20px",
-          color: "rgb(151,71,255)",
+          color: "rgb(131,62,222)",
           flexShrink: 0,
           alignSelf: "stretch",
         }}>{props.text1 ?? "Visionary feature"}</span>
@@ -141,7 +141,7 @@ export function StateTags(_p = {}) {
           fontSize: 14,
           whiteSpace: "nowrap",
           lineHeight: "20px",
-          color: "rgb(30,169,135)",
+          color: "rgb(22,123,99)",
           flexShrink: 0,
           alignSelf: "stretch",
         }}>{props.text1 ?? "Establishing pattern"}</span>
@@ -186,7 +186,7 @@ export function StateTags(_p = {}) {
           fontSize: 14,
           whiteSpace: "nowrap",
           lineHeight: "20px",
-          color: "rgb(30,169,135)",
+          color: "rgb(22,123,99)",
           flexShrink: 0,
           alignSelf: "stretch",
         }}>{props.text1 ?? "Coherent pattern"}</span>
@@ -231,7 +231,7 @@ export function StateTags(_p = {}) {
           fontSize: 14,
           whiteSpace: "nowrap",
           lineHeight: "20px",
-          color: "rgb(221,13,200)",
+          color: "rgb(192,11,174)",
           flexShrink: 0,
           alignSelf: "stretch",
         }}>{props.text1 ?? "Local feature"}</span>
@@ -276,7 +276,7 @@ export function StateTags(_p = {}) {
           fontSize: 14,
           whiteSpace: "nowrap",
           lineHeight: "20px",
-          color: "rgb(213,54,19)",
+          color: "rgb(196,50,17)",
           flexShrink: 0,
           alignSelf: "stretch",
         }}>{props.text1 ?? "Incoherent feature"}</span>
