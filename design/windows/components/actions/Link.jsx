@@ -28,7 +28,6 @@ export function Link(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "column",
-        gap: -2,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -46,6 +45,7 @@ export function Link(_p = {}) {
         }}>{props.text}</span>
         {props.inlineStyle && (
         <div style={{
+          marginTop: -2,
           position: "relative",
           height: 3,
           borderTop: "1px solid var(--brand-foreground-link-rest-3)",
@@ -89,7 +89,6 @@ export function Link(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "column",
-        gap: -2,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -106,6 +105,7 @@ export function Link(_p = {}) {
           flexShrink: 0,
         }}>{props.text}</span>
         <div style={{
+          marginTop: -2,
           position: "relative",
           height: 3,
           borderTop: "1px solid var(--brand-foreground-link-hover-3)",
@@ -148,7 +148,6 @@ export function Link(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "column",
-        gap: -2,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -165,6 +164,7 @@ export function Link(_p = {}) {
           flexShrink: 0,
         }}>{props.text}</span>
         <div style={{
+          marginTop: -2,
           position: "relative",
           height: 3,
           borderTop: "1px solid var(--brand-foreground-link-pressed-3)",
@@ -207,7 +207,6 @@ export function Link(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "column",
-        gap: -2,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -224,6 +223,7 @@ export function Link(_p = {}) {
           flexShrink: 0,
         }}>{props.text}</span>
         <div style={{
+          marginTop: -2,
           position: "relative",
           height: 3,
           borderTop: "1px solid var(--neutral-stroke-focus-2-rest-4)",
@@ -266,7 +266,6 @@ export function Link(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "column",
-        gap: -2,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -284,6 +283,7 @@ export function Link(_p = {}) {
         }}>{props.text}</span>
         {props.inlineStyle && (
         <div style={{
+          marginTop: -2,
           position: "relative",
           height: 3,
           borderTop: "1px solid var(--neutral-foreground-disabled-rest-4)",
@@ -327,7 +327,6 @@ export function Link(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "column",
-        gap: -2,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -345,6 +344,7 @@ export function Link(_p = {}) {
         }}>{props.text}</span>
         {props.inlineStyle && (
         <div style={{
+          marginTop: -2,
           position: "relative",
           height: 3,
           borderTop: "1px solid var(--neutral-foreground-2-rest-3)",
@@ -388,7 +388,6 @@ export function Link(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "column",
-        gap: -2,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -405,6 +404,7 @@ export function Link(_p = {}) {
           flexShrink: 0,
         }}>{props.text}</span>
         <div style={{
+          marginTop: -2,
           position: "relative",
           height: 3,
           borderTop: "1px solid var(--neutral-foreground-2-link-hover-3)",
@@ -447,7 +447,6 @@ export function Link(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "column",
-        gap: -2,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -464,6 +463,7 @@ export function Link(_p = {}) {
           flexShrink: 0,
         }}>{props.text}</span>
         <div style={{
+          marginTop: -2,
           position: "relative",
           height: 3,
           borderTop: "1px solid var(--neutral-foreground-2-link-pressed-3)",
@@ -506,7 +506,6 @@ export function Link(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "column",
-        gap: -2,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -523,6 +522,7 @@ export function Link(_p = {}) {
           flexShrink: 0,
         }}>{props.text}</span>
         <div style={{
+          marginTop: -2,
           position: "relative",
           height: 3,
           borderTop: "1px solid var(--neutral-stroke-focus-2-rest-4)",
@@ -565,7 +565,6 @@ export function Link(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "column",
-        gap: -2,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -583,6 +582,7 @@ export function Link(_p = {}) {
         }}>{props.text}</span>
         {props.inlineStyle && (
         <div style={{
+          marginTop: -2,
           position: "relative",
           height: 3,
           borderTop: "1px solid var(--neutral-foreground-inverted-link-rest-3)",
@@ -626,7 +626,6 @@ export function Link(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "column",
-        gap: -2,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -643,6 +642,7 @@ export function Link(_p = {}) {
           flexShrink: 0,
         }}>{props.text}</span>
         <div style={{
+          marginTop: -2,
           position: "relative",
           height: 3,
           borderTop: "1px solid var(--neutral-foreground-inverted-link-hover-3)",
@@ -685,7 +685,6 @@ export function Link(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "column",
-        gap: -2,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -702,6 +701,7 @@ export function Link(_p = {}) {
           flexShrink: 0,
         }}>{props.text}</span>
         <div style={{
+          marginTop: -2,
           position: "relative",
           height: 3,
           borderTop: "1px solid var(--neutral-foreground-inverted-link-pressed-3)",
@@ -744,7 +744,6 @@ export function Link(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "column",
-        gap: -2,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -761,6 +760,7 @@ export function Link(_p = {}) {
           flexShrink: 0,
         }}>{props.text}</span>
         <div style={{
+          marginTop: -2,
           position: "relative",
           height: 3,
           borderTop: "1px solid var(--neutral-foreground-inverted-link-rest-3)",

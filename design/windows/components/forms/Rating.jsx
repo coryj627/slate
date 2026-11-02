@@ -11,7 +11,7 @@ const __vkey = (p) => "type=" + __venc(p.type) + '|' + "size=" + __venc(p.size) 
 
 export function Rating(_p = {}) {
   _p = __slateNorm(_p, {"type":["interactive","display"],"size":["sm","md","lg","xl"],"shape":["stars","circles","square"]});
-  const props = { ..._p, ratingQuantity: _p.ratingQuantity ?? "1,160", type: _p.type ?? "interactive", size: _p.size ?? "sm", compact: _p.compact ?? true, shape: _p.shape ?? "stars" };
+  const props = { ..._p, ratingQuantity: _p.ratingQuantity ?? "1,160", type: _p.type ?? "interactive", size: _p.size ?? "sm", compact: _p.compact ?? ((_p.type ?? "interactive") !== "interactive"), shape: _p.shape ?? "stars" };
   const __body0 = () => (
     <div className={props.className} style={{
       width: "fit-content",
@@ -27,7 +27,6 @@ export function Rating(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "row",
-        gap: -148,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -113,7 +112,6 @@ export function Rating(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "row",
-        gap: -148,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -199,7 +197,6 @@ export function Rating(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "row",
-        gap: -148,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -285,7 +282,6 @@ export function Rating(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "row",
-        gap: -148,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -347,6 +343,8 @@ export function Rating(_p = {}) {
           />
         </div>
         <div style={{
+          marginLeft: -148,
+          clipPath: "inset(0 44px 0 0)",
           position: "relative",
           display: "flex",
           flexDirection: "row",
@@ -416,30 +414,6 @@ export function Rating(_p = {}) {
             size={"28"}
             theme={"filled"}
           />
-        </div>
-        <div style={{
-          position: "absolute",
-          left: -95,
-          top: 0,
-          display: "flex",
-          flexDirection: "column",
-          gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-          padding: "0px 44px 0px 44px",
-          alignItems: "flex-end",
-          flexWrap: "nowrap",
-          boxSizing: "border-box",
-          paddingLeft: "calc(var(--xlarge) * 1px)",
-          paddingRight: "calc(var(--xlarge) * 1px)",
-        }}>
-          <svg width={155} height={28} viewBox="0 0 155 28" fill="none" style={{
-            position: "relative",
-            width: 155,
-            height: 28,
-            flexShrink: 0,
-            color: "var(--foreground-2)",
-          }}>
-            <path d={"M 0 0 L 155 0 L 155 28 L 0 28 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-          </svg>
         </div>
       </div>
       <div style={{
@@ -505,7 +479,6 @@ export function Rating(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "row",
-        gap: -148,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -567,6 +540,8 @@ export function Rating(_p = {}) {
           />
         </div>
         <div style={{
+          marginLeft: -148,
+          clipPath: "inset(0 44px 0 0)",
           position: "relative",
           display: "flex",
           flexDirection: "row",
@@ -636,30 +611,6 @@ export function Rating(_p = {}) {
             size={"28"}
             theme={"filled"}
           />
-        </div>
-        <div style={{
-          position: "absolute",
-          left: -95,
-          top: 0,
-          display: "flex",
-          flexDirection: "column",
-          gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-          padding: "0px 44px 0px 44px",
-          alignItems: "flex-end",
-          flexWrap: "nowrap",
-          boxSizing: "border-box",
-          paddingLeft: "calc(var(--xlarge) * 1px)",
-          paddingRight: "calc(var(--xlarge) * 1px)",
-        }}>
-          <svg width={155} height={28} viewBox="0 0 155 28" fill="none" style={{
-            position: "relative",
-            width: 155,
-            height: 28,
-            flexShrink: 0,
-            color: "var(--foreground-2)",
-          }}>
-            <path d={"M 0 0 L 155 0 L 155 28 L 0 28 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-          </svg>
         </div>
       </div>
       <div style={{
@@ -725,7 +676,6 @@ export function Rating(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "row",
-        gap: -148,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -787,6 +737,8 @@ export function Rating(_p = {}) {
           />
         </div>
         <div style={{
+          marginLeft: -148,
+          clipPath: "inset(0 44px 0 0)",
           position: "relative",
           display: "flex",
           flexDirection: "row",
@@ -856,30 +808,6 @@ export function Rating(_p = {}) {
             size={"28"}
             theme={"filled"}
           />
-        </div>
-        <div style={{
-          position: "absolute",
-          left: -95,
-          top: 0,
-          display: "flex",
-          flexDirection: "column",
-          gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-          padding: "0px 44px 0px 44px",
-          alignItems: "flex-end",
-          flexWrap: "nowrap",
-          boxSizing: "border-box",
-          paddingLeft: "calc(var(--xlarge) * 1px)",
-          paddingRight: "calc(var(--xlarge) * 1px)",
-        }}>
-          <svg width={155} height={28} viewBox="0 0 155 28" fill="none" style={{
-            position: "relative",
-            width: 155,
-            height: 28,
-            flexShrink: 0,
-            color: "var(--foreground-2)",
-          }}>
-            <path d={"M 0 0 L 155 0 L 155 28 L 0 28 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-          </svg>
         </div>
       </div>
       <div style={{
@@ -945,7 +873,6 @@ export function Rating(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "row",
-        gap: -148,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -1007,6 +934,8 @@ export function Rating(_p = {}) {
           />
         </div>
         <div style={{
+          marginLeft: -148,
+          clipPath: "inset(0 152px 0 0)",
           position: "relative",
           display: "flex",
           flexDirection: "row",
@@ -1077,30 +1006,6 @@ export function Rating(_p = {}) {
             theme={"filled"}
           />
         </div>
-        <div style={{
-          position: "absolute",
-          left: -311,
-          top: 0,
-          display: "flex",
-          flexDirection: "column",
-          gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-          padding: "0px 152px 0px 152px",
-          alignItems: "flex-end",
-          flexWrap: "nowrap",
-          boxSizing: "border-box",
-          paddingLeft: "calc(var(--xlarge) * 1px)",
-          paddingRight: "calc(var(--xlarge) * 1px)",
-        }}>
-          <svg width={155} height={28} viewBox="0 0 155 28" fill="none" style={{
-            position: "relative",
-            width: 155,
-            height: 28,
-            flexShrink: 0,
-            color: "var(--foreground-2)",
-          }}>
-            <path d={"M 0 0 L 155 0 L 155 28 L 0 28 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-          </svg>
-        </div>
       </div>
     </div>
   );
@@ -1119,7 +1024,6 @@ export function Rating(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "row",
-        gap: -148,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -1181,6 +1085,8 @@ export function Rating(_p = {}) {
           />
         </div>
         <div style={{
+          marginLeft: -148,
+          clipPath: "inset(0 152px 0 0)",
           position: "relative",
           display: "flex",
           flexDirection: "row",
@@ -1251,30 +1157,6 @@ export function Rating(_p = {}) {
             theme={"filled"}
           />
         </div>
-        <div style={{
-          position: "absolute",
-          left: -311,
-          top: 0,
-          display: "flex",
-          flexDirection: "column",
-          gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-          padding: "0px 152px 0px 152px",
-          alignItems: "flex-end",
-          flexWrap: "nowrap",
-          boxSizing: "border-box",
-          paddingLeft: "calc(var(--xlarge) * 1px)",
-          paddingRight: "calc(var(--xlarge) * 1px)",
-        }}>
-          <svg width={155} height={28} viewBox="0 0 155 28" fill="none" style={{
-            position: "relative",
-            width: 155,
-            height: 28,
-            flexShrink: 0,
-            color: "var(--foreground-2)",
-          }}>
-            <path d={"M 0 0 L 155 0 L 155 28 L 0 28 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-          </svg>
-        </div>
       </div>
     </div>
   );
@@ -1293,7 +1175,6 @@ export function Rating(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "row",
-        gap: -148,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -1355,6 +1236,8 @@ export function Rating(_p = {}) {
           />
         </div>
         <div style={{
+          marginLeft: -148,
+          clipPath: "inset(0 152px 0 0)",
           position: "relative",
           display: "flex",
           flexDirection: "row",
@@ -1425,30 +1308,6 @@ export function Rating(_p = {}) {
             theme={"filled"}
           />
         </div>
-        <div style={{
-          position: "absolute",
-          left: -311,
-          top: 0,
-          display: "flex",
-          flexDirection: "column",
-          gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-          padding: "0px 152px 0px 152px",
-          alignItems: "flex-end",
-          flexWrap: "nowrap",
-          boxSizing: "border-box",
-          paddingLeft: "calc(var(--xlarge) * 1px)",
-          paddingRight: "calc(var(--xlarge) * 1px)",
-        }}>
-          <svg width={155} height={28} viewBox="0 0 155 28" fill="none" style={{
-            position: "relative",
-            width: 155,
-            height: 28,
-            flexShrink: 0,
-            color: "var(--foreground-2)",
-          }}>
-            <path d={"M 0 0 L 155 0 L 155 28 L 0 28 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-          </svg>
-        </div>
       </div>
     </div>
   );
@@ -1467,7 +1326,6 @@ export function Rating(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "row",
-        gap: -108,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -1555,7 +1413,6 @@ export function Rating(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "row",
-        gap: -108,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -1643,7 +1500,6 @@ export function Rating(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "row",
-        gap: -108,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -1731,7 +1587,6 @@ export function Rating(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "row",
-        gap: -108,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -1793,6 +1648,8 @@ export function Rating(_p = {}) {
           />
         </div>
         <div style={{
+          marginLeft: -108,
+          clipPath: "inset(0 33px 0 0)",
           position: "relative",
           display: "flex",
           flexDirection: "row",
@@ -1862,31 +1719,6 @@ export function Rating(_p = {}) {
             size={"20"}
             theme={"filled"}
           />
-        </div>
-        <div style={{
-          position: "absolute",
-          left: -6,
-          top: 0,
-          width: 115,
-          display: "flex",
-          flexDirection: "column",
-          gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-          padding: "0px 33px 0px 33px",
-          alignItems: "flex-end",
-          flexWrap: "nowrap",
-          boxSizing: "border-box",
-          paddingLeft: "calc(var(--large) * 1px)",
-          paddingRight: "calc(var(--large) * 1px)",
-        }}>
-          <svg width={108} height={20} viewBox="0 0 108 20" fill="none" style={{
-            position: "relative",
-            width: 108,
-            height: 20,
-            flexShrink: 0,
-            color: "var(--foreground-2)",
-          }}>
-            <path d={"M 0 0 L 108 0 L 108 20 L 0 20 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-          </svg>
         </div>
       </div>
       <div style={{
@@ -1954,7 +1786,6 @@ export function Rating(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "row",
-        gap: -108,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -2016,6 +1847,8 @@ export function Rating(_p = {}) {
           />
         </div>
         <div style={{
+          marginLeft: -108,
+          clipPath: "inset(0 33px 0 0)",
           position: "relative",
           display: "flex",
           flexDirection: "row",
@@ -2085,31 +1918,6 @@ export function Rating(_p = {}) {
             size={"20"}
             theme={"filled"}
           />
-        </div>
-        <div style={{
-          position: "absolute",
-          left: -6,
-          top: 0,
-          width: 115,
-          display: "flex",
-          flexDirection: "column",
-          gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-          padding: "0px 33px 0px 33px",
-          alignItems: "flex-end",
-          flexWrap: "nowrap",
-          boxSizing: "border-box",
-          paddingLeft: "calc(var(--large) * 1px)",
-          paddingRight: "calc(var(--large) * 1px)",
-        }}>
-          <svg width={108} height={20} viewBox="0 0 108 20" fill="none" style={{
-            position: "relative",
-            width: 108,
-            height: 20,
-            flexShrink: 0,
-            color: "var(--foreground-2)",
-          }}>
-            <path d={"M 0 0 L 108 0 L 108 20 L 0 20 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-          </svg>
         </div>
       </div>
       <div style={{
@@ -2177,7 +1985,6 @@ export function Rating(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "row",
-        gap: -108,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -2239,6 +2046,8 @@ export function Rating(_p = {}) {
           />
         </div>
         <div style={{
+          marginLeft: -108,
+          clipPath: "inset(0 33px 0 0)",
           position: "relative",
           display: "flex",
           flexDirection: "row",
@@ -2308,31 +2117,6 @@ export function Rating(_p = {}) {
             size={"20"}
             theme={"filled"}
           />
-        </div>
-        <div style={{
-          position: "absolute",
-          left: -6,
-          top: 0,
-          width: 115,
-          display: "flex",
-          flexDirection: "column",
-          gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-          padding: "0px 33px 0px 33px",
-          alignItems: "flex-end",
-          flexWrap: "nowrap",
-          boxSizing: "border-box",
-          paddingLeft: "calc(var(--large) * 1px)",
-          paddingRight: "calc(var(--large) * 1px)",
-        }}>
-          <svg width={108} height={20} viewBox="0 0 108 20" fill="none" style={{
-            position: "relative",
-            width: 108,
-            height: 20,
-            flexShrink: 0,
-            color: "var(--foreground-2)",
-          }}>
-            <path d={"M 0 0 L 108 0 L 108 20 L 0 20 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-          </svg>
         </div>
       </div>
       <div style={{
@@ -2400,7 +2184,6 @@ export function Rating(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "row",
-        gap: -108,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -2462,6 +2245,8 @@ export function Rating(_p = {}) {
           />
         </div>
         <div style={{
+          marginLeft: -108,
+          clipPath: "inset(0 109px 0 0)",
           position: "relative",
           display: "flex",
           flexDirection: "row",
@@ -2532,31 +2317,6 @@ export function Rating(_p = {}) {
             theme={"filled"}
           />
         </div>
-        <div style={{
-          position: "absolute",
-          left: -6,
-          top: 0,
-          width: 115,
-          display: "flex",
-          flexDirection: "column",
-          gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-          padding: "0px 109px 0px 109px",
-          alignItems: "flex-end",
-          flexWrap: "nowrap",
-          boxSizing: "border-box",
-          paddingLeft: "calc(var(--large) * 1px)",
-          paddingRight: "calc(var(--large) * 1px)",
-        }}>
-          <svg width={108} height={20} viewBox="0 0 108 20" fill="none" style={{
-            position: "relative",
-            width: 108,
-            height: 20,
-            flexShrink: 0,
-            color: "var(--foreground-2)",
-          }}>
-            <path d={"M 0 0 L 108 0 L 108 20 L 0 20 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-          </svg>
-        </div>
       </div>
     </div>
   );
@@ -2575,7 +2335,6 @@ export function Rating(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "row",
-        gap: -108,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -2637,6 +2396,8 @@ export function Rating(_p = {}) {
           />
         </div>
         <div style={{
+          marginLeft: -108,
+          clipPath: "inset(0 109px 0 0)",
           position: "relative",
           display: "flex",
           flexDirection: "row",
@@ -2707,31 +2468,6 @@ export function Rating(_p = {}) {
             theme={"filled"}
           />
         </div>
-        <div style={{
-          position: "absolute",
-          left: -6,
-          top: 0,
-          width: 115,
-          display: "flex",
-          flexDirection: "column",
-          gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-          padding: "0px 109px 0px 109px",
-          alignItems: "flex-end",
-          flexWrap: "nowrap",
-          boxSizing: "border-box",
-          paddingLeft: "calc(var(--large) * 1px)",
-          paddingRight: "calc(var(--large) * 1px)",
-        }}>
-          <svg width={108} height={20} viewBox="0 0 108 20" fill="none" style={{
-            position: "relative",
-            width: 108,
-            height: 20,
-            flexShrink: 0,
-            color: "var(--foreground-2)",
-          }}>
-            <path d={"M 0 0 L 108 0 L 108 20 L 0 20 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-          </svg>
-        </div>
       </div>
     </div>
   );
@@ -2750,7 +2486,6 @@ export function Rating(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "row",
-        gap: -108,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -2812,6 +2547,8 @@ export function Rating(_p = {}) {
           />
         </div>
         <div style={{
+          marginLeft: -108,
+          clipPath: "inset(0 109px 0 0)",
           position: "relative",
           display: "flex",
           flexDirection: "row",
@@ -2882,31 +2619,6 @@ export function Rating(_p = {}) {
             theme={"filled"}
           />
         </div>
-        <div style={{
-          position: "absolute",
-          left: -6,
-          top: 0,
-          width: 115,
-          display: "flex",
-          flexDirection: "column",
-          gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-          padding: "0px 109px 0px 109px",
-          alignItems: "flex-end",
-          flexWrap: "nowrap",
-          boxSizing: "border-box",
-          paddingLeft: "calc(var(--large) * 1px)",
-          paddingRight: "calc(var(--large) * 1px)",
-        }}>
-          <svg width={108} height={20} viewBox="0 0 108 20" fill="none" style={{
-            position: "relative",
-            width: 108,
-            height: 20,
-            flexShrink: 0,
-            color: "var(--foreground-2)",
-          }}>
-            <path d={"M 0 0 L 108 0 L 108 20 L 0 20 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-          </svg>
-        </div>
       </div>
     </div>
   );
@@ -2925,7 +2637,6 @@ export function Rating(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "row",
-        gap: -88,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -3015,7 +2726,6 @@ export function Rating(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "row",
-        gap: -88,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -3105,7 +2815,6 @@ export function Rating(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "row",
-        gap: -88,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -3195,7 +2904,6 @@ export function Rating(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "row",
-        gap: -88,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -3257,6 +2965,8 @@ export function Rating(_p = {}) {
           />
         </div>
         <div style={{
+          marginLeft: -88,
+          clipPath: "inset(0 25px 0 0)",
           position: "relative",
           display: "flex",
           flexDirection: "row",
@@ -3326,31 +3036,6 @@ export function Rating(_p = {}) {
             size={"16"}
             theme={"filled"}
           />
-        </div>
-        <div style={{
-          position: "absolute",
-          left: -28,
-          top: 0,
-          width: 115,
-          display: "flex",
-          flexDirection: "column",
-          gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-          padding: "0px 25px 0px 25px",
-          alignItems: "flex-end",
-          flexWrap: "nowrap",
-          boxSizing: "border-box",
-          paddingLeft: "calc(var(--medium-2) * 1px)",
-          paddingRight: "calc(var(--medium-2) * 1px)",
-        }}>
-          <svg width={88} height={16} viewBox="0 0 88 16" fill="none" style={{
-            position: "relative",
-            width: 88,
-            height: 16,
-            flexShrink: 0,
-            color: "var(--foreground-2)",
-          }}>
-            <path d={"M 0 0 L 88 0 L 88 16 L 0 16 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-          </svg>
         </div>
       </div>
       <div style={{
@@ -3420,7 +3105,6 @@ export function Rating(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "row",
-        gap: -88,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -3482,6 +3166,8 @@ export function Rating(_p = {}) {
           />
         </div>
         <div style={{
+          marginLeft: -88,
+          clipPath: "inset(0 25px 0 0)",
           position: "relative",
           display: "flex",
           flexDirection: "row",
@@ -3551,31 +3237,6 @@ export function Rating(_p = {}) {
             size={"16"}
             theme={"filled"}
           />
-        </div>
-        <div style={{
-          position: "absolute",
-          left: -28,
-          top: 0,
-          width: 115,
-          display: "flex",
-          flexDirection: "column",
-          gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-          padding: "0px 25px 0px 25px",
-          alignItems: "flex-end",
-          flexWrap: "nowrap",
-          boxSizing: "border-box",
-          paddingLeft: "calc(var(--medium-2) * 1px)",
-          paddingRight: "calc(var(--medium-2) * 1px)",
-        }}>
-          <svg width={88} height={16} viewBox="0 0 88 16" fill="none" style={{
-            position: "relative",
-            width: 88,
-            height: 16,
-            flexShrink: 0,
-            color: "var(--foreground-2)",
-          }}>
-            <path d={"M 0 0 L 88 0 L 88 16 L 0 16 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-          </svg>
         </div>
       </div>
       <div style={{
@@ -3645,7 +3306,6 @@ export function Rating(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "row",
-        gap: -88,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -3707,6 +3367,8 @@ export function Rating(_p = {}) {
           />
         </div>
         <div style={{
+          marginLeft: -88,
+          clipPath: "inset(0 25px 0 0)",
           position: "relative",
           display: "flex",
           flexDirection: "row",
@@ -3776,31 +3438,6 @@ export function Rating(_p = {}) {
             size={"16"}
             theme={"filled"}
           />
-        </div>
-        <div style={{
-          position: "absolute",
-          left: -28,
-          top: 0,
-          width: 115,
-          display: "flex",
-          flexDirection: "column",
-          gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-          padding: "0px 25px 0px 25px",
-          alignItems: "flex-end",
-          flexWrap: "nowrap",
-          boxSizing: "border-box",
-          paddingLeft: "calc(var(--medium-2) * 1px)",
-          paddingRight: "calc(var(--medium-2) * 1px)",
-        }}>
-          <svg width={88} height={16} viewBox="0 0 88 16" fill="none" style={{
-            position: "relative",
-            width: 88,
-            height: 16,
-            flexShrink: 0,
-            color: "var(--foreground-2)",
-          }}>
-            <path d={"M 0 0 L 88 0 L 88 16 L 0 16 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-          </svg>
         </div>
       </div>
       <div style={{
@@ -3870,7 +3507,6 @@ export function Rating(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "row",
-        gap: -88,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -3932,6 +3568,8 @@ export function Rating(_p = {}) {
           />
         </div>
         <div style={{
+          marginLeft: -88,
+          clipPath: "inset(0 87px 0 0)",
           position: "relative",
           display: "flex",
           flexDirection: "row",
@@ -4002,31 +3640,6 @@ export function Rating(_p = {}) {
             theme={"filled"}
           />
         </div>
-        <div style={{
-          position: "absolute",
-          left: -28,
-          top: 0,
-          width: 115,
-          display: "flex",
-          flexDirection: "column",
-          gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-          padding: "0px 87px 0px 87px",
-          alignItems: "flex-end",
-          flexWrap: "nowrap",
-          boxSizing: "border-box",
-          paddingLeft: "calc(var(--medium-2) * 1px)",
-          paddingRight: "calc(var(--medium-2) * 1px)",
-        }}>
-          <svg width={88} height={16} viewBox="0 0 88 16" fill="none" style={{
-            position: "relative",
-            width: 88,
-            height: 16,
-            flexShrink: 0,
-            color: "var(--foreground-2)",
-          }}>
-            <path d={"M 0 0 L 88 0 L 88 16 L 0 16 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-          </svg>
-        </div>
       </div>
     </div>
   );
@@ -4045,7 +3658,6 @@ export function Rating(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "row",
-        gap: -88,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -4107,6 +3719,8 @@ export function Rating(_p = {}) {
           />
         </div>
         <div style={{
+          marginLeft: -88,
+          clipPath: "inset(0 87px 0 0)",
           position: "relative",
           display: "flex",
           flexDirection: "row",
@@ -4177,31 +3791,6 @@ export function Rating(_p = {}) {
             theme={"filled"}
           />
         </div>
-        <div style={{
-          position: "absolute",
-          left: -28,
-          top: 0,
-          width: 115,
-          display: "flex",
-          flexDirection: "column",
-          gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-          padding: "0px 87px 0px 87px",
-          alignItems: "flex-end",
-          flexWrap: "nowrap",
-          boxSizing: "border-box",
-          paddingLeft: "calc(var(--medium-2) * 1px)",
-          paddingRight: "calc(var(--medium-2) * 1px)",
-        }}>
-          <svg width={88} height={16} viewBox="0 0 88 16" fill="none" style={{
-            position: "relative",
-            width: 88,
-            height: 16,
-            flexShrink: 0,
-            color: "var(--foreground-2)",
-          }}>
-            <path d={"M 0 0 L 88 0 L 88 16 L 0 16 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-          </svg>
-        </div>
       </div>
     </div>
   );
@@ -4220,7 +3809,6 @@ export function Rating(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "row",
-        gap: -88,
         alignItems: "flex-start",
         flexWrap: "nowrap",
         flexShrink: 0,
@@ -4282,6 +3870,8 @@ export function Rating(_p = {}) {
           />
         </div>
         <div style={{
+          marginLeft: -88,
+          clipPath: "inset(0 87px 0 0)",
           position: "relative",
           display: "flex",
           flexDirection: "row",
@@ -4352,31 +3942,6 @@ export function Rating(_p = {}) {
             theme={"filled"}
           />
         </div>
-        <div style={{
-          position: "absolute",
-          left: -28,
-          top: 0,
-          width: 115,
-          display: "flex",
-          flexDirection: "column",
-          gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-          padding: "0px 87px 0px 87px",
-          alignItems: "flex-end",
-          flexWrap: "nowrap",
-          boxSizing: "border-box",
-          paddingLeft: "calc(var(--medium-2) * 1px)",
-          paddingRight: "calc(var(--medium-2) * 1px)",
-        }}>
-          <svg width={88} height={16} viewBox="0 0 88 16" fill="none" style={{
-            position: "relative",
-            width: 88,
-            height: 16,
-            flexShrink: 0,
-            color: "var(--foreground-2)",
-          }}>
-            <path d={"M 0 0 L 88 0 L 88 16 L 0 16 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-          </svg>
-        </div>
       </div>
     </div>
   );
@@ -4395,7 +3960,6 @@ export function Rating(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "row",
-        gap: -68,
         padding: "2px 0px 2px 0px",
         alignItems: "flex-start",
         flexWrap: "nowrap",
@@ -4489,7 +4053,6 @@ export function Rating(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "row",
-        gap: -68,
         padding: "2px 0px 2px 0px",
         alignItems: "flex-start",
         flexWrap: "nowrap",
@@ -4583,7 +4146,6 @@ export function Rating(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "row",
-        gap: -68,
         padding: "2px 0px 2px 0px",
         alignItems: "flex-start",
         flexWrap: "nowrap",
@@ -4677,7 +4239,6 @@ export function Rating(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "row",
-        gap: -68,
         padding: "2px 0px 2px 0px",
         alignItems: "flex-start",
         flexWrap: "nowrap",
@@ -4743,6 +4304,8 @@ export function Rating(_p = {}) {
           />
         </div>
         <div style={{
+          marginLeft: -68,
+          clipPath: "inset(0 19px 0 0)",
           position: "relative",
           display: "flex",
           flexDirection: "row",
@@ -4812,31 +4375,6 @@ export function Rating(_p = {}) {
             size={"12"}
             theme={"filled"}
           />
-        </div>
-        <div style={{
-          position: "absolute",
-          left: -48,
-          top: 2,
-          width: 115,
-          display: "flex",
-          flexDirection: "column",
-          gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-          padding: "0px 19px 0px 19px",
-          alignItems: "flex-end",
-          flexWrap: "nowrap",
-          boxSizing: "border-box",
-          paddingLeft: "calc(var(--small-2) * 1px)",
-          paddingRight: "calc(var(--small-2) * 1px)",
-        }}>
-          <svg width={68} height={12} viewBox="0 0 68 12" fill="none" style={{
-            position: "relative",
-            width: 68,
-            height: 12,
-            flexShrink: 0,
-            color: "var(--foreground-2)",
-          }}>
-            <path d={"M 0 0 L 68 0 L 68 12 L 0 12 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-          </svg>
         </div>
       </div>
       <div style={{
@@ -4906,7 +4444,6 @@ export function Rating(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "row",
-        gap: -68,
         padding: "2px 0px 2px 0px",
         alignItems: "flex-start",
         flexWrap: "nowrap",
@@ -4972,10 +4509,12 @@ export function Rating(_p = {}) {
           />
         </div>
         <div style={{
+          marginLeft: -68,
+          clipPath: "inset(0 19px 0 0)",
           position: "relative",
           display: "flex",
           flexDirection: "row",
-          gap: "calc(var(--small) * 1px)",
+          gap: "calc(var(--corner-radius-small) * 1px)",
           alignItems: "flex-start",
           flexWrap: "nowrap",
           flexShrink: 0,
@@ -5041,31 +4580,6 @@ export function Rating(_p = {}) {
             size={"12"}
             theme={"filled"}
           />
-        </div>
-        <div style={{
-          position: "absolute",
-          left: -48,
-          top: 2,
-          width: 115,
-          display: "flex",
-          flexDirection: "column",
-          gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-          padding: "0px 19px 0px 19px",
-          alignItems: "flex-end",
-          flexWrap: "nowrap",
-          boxSizing: "border-box",
-          paddingLeft: "calc(var(--small-2) * 1px)",
-          paddingRight: "calc(var(--small-2) * 1px)",
-        }}>
-          <svg width={68} height={12} viewBox="0 0 68 12" fill="none" style={{
-            position: "relative",
-            width: 68,
-            height: 12,
-            flexShrink: 0,
-            color: "var(--foreground-2)",
-          }}>
-            <path d={"M 0 0 L 68 0 L 68 12 L 0 12 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-          </svg>
         </div>
       </div>
       <div style={{
@@ -5135,7 +4649,6 @@ export function Rating(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "row",
-        gap: -68,
         padding: "2px 0px 2px 0px",
         alignItems: "flex-start",
         flexWrap: "nowrap",
@@ -5201,10 +4714,12 @@ export function Rating(_p = {}) {
           />
         </div>
         <div style={{
+          marginLeft: -68,
+          clipPath: "inset(0 19px 0 0)",
           position: "relative",
           display: "flex",
           flexDirection: "row",
-          gap: "calc(var(--small) * 1px)",
+          gap: "calc(var(--corner-radius-small) * 1px)",
           alignItems: "flex-start",
           flexWrap: "nowrap",
           flexShrink: 0,
@@ -5270,31 +4785,6 @@ export function Rating(_p = {}) {
             size={"12"}
             theme={"filled"}
           />
-        </div>
-        <div style={{
-          position: "absolute",
-          left: -48,
-          top: 2,
-          width: 115,
-          display: "flex",
-          flexDirection: "column",
-          gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-          padding: "0px 19px 0px 19px",
-          alignItems: "flex-end",
-          flexWrap: "nowrap",
-          boxSizing: "border-box",
-          paddingLeft: "calc(var(--small-2) * 1px)",
-          paddingRight: "calc(var(--small-2) * 1px)",
-        }}>
-          <svg width={68} height={12} viewBox="0 0 68 12" fill="none" style={{
-            position: "relative",
-            width: 68,
-            height: 12,
-            flexShrink: 0,
-            color: "var(--foreground-2)",
-          }}>
-            <path d={"M 0 0 L 68 0 L 68 12 L 0 12 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-          </svg>
         </div>
       </div>
       <div style={{
@@ -5364,7 +4854,6 @@ export function Rating(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "row",
-        gap: -68,
         padding: "2px 0px 2px 0px",
         alignItems: "flex-start",
         flexWrap: "nowrap",
@@ -5430,6 +4919,8 @@ export function Rating(_p = {}) {
           />
         </div>
         <div style={{
+          marginLeft: -68,
+          clipPath: "inset(0 73px 0 0)",
           position: "relative",
           display: "flex",
           flexDirection: "row",
@@ -5500,31 +4991,6 @@ export function Rating(_p = {}) {
             theme={"filled"}
           />
         </div>
-        <div style={{
-          position: "absolute",
-          left: -48,
-          top: 2,
-          width: 115,
-          display: "flex",
-          flexDirection: "column",
-          gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-          padding: "0px 73px 0px 73px",
-          alignItems: "flex-end",
-          flexWrap: "nowrap",
-          boxSizing: "border-box",
-          paddingLeft: "calc(var(--small-2) * 1px)",
-          paddingRight: "calc(var(--small-2) * 1px)",
-        }}>
-          <svg width={68} height={12} viewBox="0 0 68 12" fill="none" style={{
-            position: "relative",
-            width: 68,
-            height: 12,
-            flexShrink: 0,
-            color: "var(--foreground-2)",
-          }}>
-            <path d={"M 0 0 L 68 0 L 68 12 L 0 12 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-          </svg>
-        </div>
       </div>
     </div>
   );
@@ -5543,7 +5009,6 @@ export function Rating(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "row",
-        gap: -68,
         padding: "2px 0px 2px 0px",
         alignItems: "flex-start",
         flexWrap: "nowrap",
@@ -5609,10 +5074,12 @@ export function Rating(_p = {}) {
           />
         </div>
         <div style={{
+          marginLeft: -68,
+          clipPath: "inset(0 73px 0 0)",
           position: "relative",
           display: "flex",
           flexDirection: "row",
-          gap: "calc(var(--small) * 1px)",
+          gap: "calc(var(--corner-radius-small) * 1px)",
           alignItems: "flex-start",
           flexWrap: "nowrap",
           flexShrink: 0,
@@ -5679,31 +5146,6 @@ export function Rating(_p = {}) {
             theme={"filled"}
           />
         </div>
-        <div style={{
-          position: "absolute",
-          left: -48,
-          top: 2,
-          width: 115,
-          display: "flex",
-          flexDirection: "column",
-          gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-          padding: "0px 73px 0px 73px",
-          alignItems: "flex-end",
-          flexWrap: "nowrap",
-          boxSizing: "border-box",
-          paddingLeft: "calc(var(--small-2) * 1px)",
-          paddingRight: "calc(var(--small-2) * 1px)",
-        }}>
-          <svg width={68} height={12} viewBox="0 0 68 12" fill="none" style={{
-            position: "relative",
-            width: 68,
-            height: 12,
-            flexShrink: 0,
-            color: "var(--foreground-2)",
-          }}>
-            <path d={"M 0 0 L 68 0 L 68 12 L 0 12 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-          </svg>
-        </div>
       </div>
     </div>
   );
@@ -5722,7 +5164,6 @@ export function Rating(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "row",
-        gap: -68,
         padding: "2px 0px 2px 0px",
         alignItems: "flex-start",
         flexWrap: "nowrap",
@@ -5788,10 +5229,12 @@ export function Rating(_p = {}) {
           />
         </div>
         <div style={{
+          marginLeft: -68,
+          clipPath: "inset(0 73px 0 0)",
           position: "relative",
           display: "flex",
           flexDirection: "row",
-          gap: "calc(var(--small) * 1px)",
+          gap: "calc(var(--corner-radius-small) * 1px)",
           alignItems: "flex-start",
           flexWrap: "nowrap",
           flexShrink: 0,
@@ -5857,31 +5300,6 @@ export function Rating(_p = {}) {
             size={"12"}
             theme={"filled"}
           />
-        </div>
-        <div style={{
-          position: "absolute",
-          left: -48,
-          top: 2,
-          width: 115,
-          display: "flex",
-          flexDirection: "column",
-          gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-          padding: "0px 73px 0px 73px",
-          alignItems: "flex-end",
-          flexWrap: "nowrap",
-          boxSizing: "border-box",
-          paddingLeft: "calc(var(--small-2) * 1px)",
-          paddingRight: "calc(var(--small-2) * 1px)",
-        }}>
-          <svg width={68} height={12} viewBox="0 0 68 12" fill="none" style={{
-            position: "relative",
-            width: 68,
-            height: 12,
-            flexShrink: 0,
-            color: "var(--foreground-2)",
-          }}>
-            <path d={"M 0 0 L 68 0 L 68 12 L 0 12 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-          </svg>
         </div>
       </div>
     </div>

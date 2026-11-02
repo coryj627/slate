@@ -12593,7 +12593,6 @@ function Persona(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "column",
-      gap: -2,
       padding: "2px 0px 2px 0px",
       alignItems: "flex-start",
       flexWrap: "nowrap",
@@ -12616,6 +12615,7 @@ function Persona(_p = {}) {
     }
   }, props.primaryString), props.subtext && /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: -2,
       position: "relative",
       display: "flex",
       flexDirection: "column",
@@ -12739,7 +12739,6 @@ function Persona(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "column",
-      gap: -2,
       padding: "2px 0px 2px 0px",
       alignItems: "flex-start",
       flexWrap: "nowrap",
@@ -12762,6 +12761,7 @@ function Persona(_p = {}) {
     }
   }, props.primaryString), props.subtext && /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: -2,
       position: "relative",
       display: "flex",
       flexDirection: "column",
@@ -12885,7 +12885,6 @@ function Persona(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "column",
-      gap: -2,
       padding: "2px 0px 2px 0px",
       alignItems: "flex-start",
       flexWrap: "nowrap",
@@ -12908,6 +12907,7 @@ function Persona(_p = {}) {
     }
   }, props.primaryString), props.subtext && /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: -2,
       position: "relative",
       display: "flex",
       flexDirection: "column",
@@ -13031,7 +13031,6 @@ function Persona(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "column",
-      gap: -2,
       padding: "2px 0px 2px 0px",
       alignItems: "flex-start",
       flexWrap: "nowrap",
@@ -13054,6 +13053,7 @@ function Persona(_p = {}) {
     }
   }, props.primaryString), props.subtext && /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: -2,
       position: "relative",
       display: "flex",
       flexDirection: "column",
@@ -13112,7 +13112,6 @@ function Persona(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "column",
-      gap: -2,
       padding: "2px 0px 2px 0px",
       alignItems: "flex-start",
       flexWrap: "nowrap",
@@ -13135,6 +13134,7 @@ function Persona(_p = {}) {
     }
   }, props.primaryString), props.subtext && /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: -2,
       position: "relative",
       display: "flex",
       flexDirection: "column",
@@ -13258,7 +13258,6 @@ function Persona(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "column",
-      gap: -2,
       padding: "2px 0px 2px 0px",
       alignItems: "flex-start",
       flexWrap: "nowrap",
@@ -13281,6 +13280,7 @@ function Persona(_p = {}) {
     }
   }, props.primaryString), props.subtext && /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: -2,
       position: "relative",
       display: "flex",
       flexDirection: "column",
@@ -13404,7 +13404,6 @@ function Persona(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "column",
-      gap: -2,
       padding: "2px 0px 2px 0px",
       alignItems: "flex-start",
       flexWrap: "nowrap",
@@ -13427,6 +13426,7 @@ function Persona(_p = {}) {
     }
   }, props.primaryString), props.subtext && /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: -2,
       position: "relative",
       display: "flex",
       flexDirection: "column",
@@ -13550,7 +13550,6 @@ function Persona(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "column",
-      gap: -2,
       padding: "2px 0px 2px 0px",
       alignItems: "flex-start",
       flexWrap: "nowrap",
@@ -13573,6 +13572,7 @@ function Persona(_p = {}) {
     }
   }, props.primaryString), props.subtext && /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: -2,
       position: "relative",
       display: "flex",
       flexDirection: "column",
@@ -13761,7 +13761,6 @@ function Persona(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "column",
-      gap: -2,
       padding: "2px 0px 2px 0px",
       alignItems: "center",
       flexWrap: "nowrap",
@@ -13785,6 +13784,7 @@ function Persona(_p = {}) {
     }
   }, props.primaryString), props.subtext && /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: -2,
       position: "relative",
       display: "flex",
       flexDirection: "column",
@@ -13912,7 +13912,6 @@ function Persona(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "column",
-      gap: -2,
       padding: "2px 0px 2px 0px",
       alignItems: "center",
       flexWrap: "nowrap",
@@ -13937,6 +13936,7 @@ function Persona(_p = {}) {
     }
   }, props.primaryString), props.subtext && /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: -2,
       position: "relative",
       display: "flex",
       flexDirection: "column",
@@ -14035,7 +14035,6 @@ function Persona(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "column",
-      gap: -2,
       padding: "2px 0px 2px 0px",
       alignItems: "flex-start",
       flexWrap: "nowrap",
@@ -14058,6 +14057,7 @@ function Persona(_p = {}) {
     }
   }, props.primaryString), props.subtext && /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: -2,
       position: "relative",
       display: "flex",
       flexDirection: "column",
@@ -14166,7 +14166,6 @@ function Persona(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "column",
-      gap: -2,
       padding: "2px 0px 2px 0px",
       alignItems: "flex-start",
       flexWrap: "nowrap",
@@ -14189,6 +14188,7 @@ function Persona(_p = {}) {
     }
   }, props.primaryString), props.subtext && /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: -2,
       position: "relative",
       display: "flex",
       flexDirection: "column",
@@ -14275,7 +14275,6 @@ function Persona(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "column",
-      gap: -2,
       padding: "2px 0px 2px 0px",
       alignItems: "flex-start",
       flexWrap: "nowrap",
@@ -14298,6 +14297,7 @@ function Persona(_p = {}) {
     }
   }, props.primaryString), props.subtext && /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: -2,
       position: "relative",
       display: "flex",
       flexDirection: "column",
@@ -14398,7 +14398,6 @@ function Persona(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "column",
-      gap: -2,
       padding: "2px 0px 2px 0px",
       alignItems: "flex-start",
       flexWrap: "nowrap",
@@ -14421,6 +14420,7 @@ function Persona(_p = {}) {
     }
   }, props.primaryString), props.subtext && /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: -2,
       position: "relative",
       display: "flex",
       flexDirection: "column",
@@ -117837,7 +117837,6 @@ function Toast(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "column",
-      gap: -2,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -117900,7 +117899,6 @@ function Toast(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "column",
-      gap: -2,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -121246,7 +121244,6 @@ function Link(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "column",
-      gap: -2,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -121265,6 +121262,7 @@ function Link(_p = {}) {
     }
   }, props.text), props.inlineStyle && /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: -2,
       position: "relative",
       height: 3,
       borderTop: "1px solid var(--brand-foreground-link-rest-3)",
@@ -121309,7 +121307,6 @@ function Link(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "column",
-      gap: -2,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -121328,6 +121325,7 @@ function Link(_p = {}) {
     }
   }, props.text), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: -2,
       position: "relative",
       height: 3,
       borderTop: "1px solid var(--brand-foreground-link-hover-3)",
@@ -121372,7 +121370,6 @@ function Link(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "column",
-      gap: -2,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -121391,6 +121388,7 @@ function Link(_p = {}) {
     }
   }, props.text), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: -2,
       position: "relative",
       height: 3,
       borderTop: "1px solid var(--brand-foreground-link-pressed-3)",
@@ -121435,7 +121433,6 @@ function Link(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "column",
-      gap: -2,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -121454,6 +121451,7 @@ function Link(_p = {}) {
     }
   }, props.text), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: -2,
       position: "relative",
       height: 3,
       borderTop: "1px solid var(--neutral-stroke-focus-2-rest-4)",
@@ -121498,7 +121496,6 @@ function Link(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "column",
-      gap: -2,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -121517,6 +121514,7 @@ function Link(_p = {}) {
     }
   }, props.text), props.inlineStyle && /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: -2,
       position: "relative",
       height: 3,
       borderTop: "1px solid var(--neutral-foreground-disabled-rest-4)",
@@ -121561,7 +121559,6 @@ function Link(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "column",
-      gap: -2,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -121580,6 +121577,7 @@ function Link(_p = {}) {
     }
   }, props.text), props.inlineStyle && /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: -2,
       position: "relative",
       height: 3,
       borderTop: "1px solid var(--neutral-foreground-2-rest-3)",
@@ -121624,7 +121622,6 @@ function Link(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "column",
-      gap: -2,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -121643,6 +121640,7 @@ function Link(_p = {}) {
     }
   }, props.text), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: -2,
       position: "relative",
       height: 3,
       borderTop: "1px solid var(--neutral-foreground-2-link-hover-3)",
@@ -121687,7 +121685,6 @@ function Link(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "column",
-      gap: -2,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -121706,6 +121703,7 @@ function Link(_p = {}) {
     }
   }, props.text), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: -2,
       position: "relative",
       height: 3,
       borderTop: "1px solid var(--neutral-foreground-2-link-pressed-3)",
@@ -121750,7 +121748,6 @@ function Link(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "column",
-      gap: -2,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -121769,6 +121766,7 @@ function Link(_p = {}) {
     }
   }, props.text), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: -2,
       position: "relative",
       height: 3,
       borderTop: "1px solid var(--neutral-stroke-focus-2-rest-4)",
@@ -121813,7 +121811,6 @@ function Link(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "column",
-      gap: -2,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -121832,6 +121829,7 @@ function Link(_p = {}) {
     }
   }, props.text), props.inlineStyle && /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: -2,
       position: "relative",
       height: 3,
       borderTop: "1px solid var(--neutral-foreground-inverted-link-rest-3)",
@@ -121876,7 +121874,6 @@ function Link(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "column",
-      gap: -2,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -121895,6 +121892,7 @@ function Link(_p = {}) {
     }
   }, props.text), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: -2,
       position: "relative",
       height: 3,
       borderTop: "1px solid var(--neutral-foreground-inverted-link-hover-3)",
@@ -121939,7 +121937,6 @@ function Link(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "column",
-      gap: -2,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -121958,6 +121955,7 @@ function Link(_p = {}) {
     }
   }, props.text), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: -2,
       position: "relative",
       height: 3,
       borderTop: "1px solid var(--neutral-foreground-inverted-link-pressed-3)",
@@ -122002,7 +122000,6 @@ function Link(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "column",
-      gap: -2,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -122021,6 +122018,7 @@ function Link(_p = {}) {
     }
   }, props.text), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: -2,
       position: "relative",
       height: 3,
       borderTop: "1px solid var(--neutral-foreground-inverted-link-rest-3)",
@@ -157022,7 +157020,6 @@ function DataGridCellLarge(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "column",
-      gap: -2,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -157041,6 +157038,7 @@ function DataGridCellLarge(_p = {}) {
     }
   }, "Link"), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: -2,
       position: "relative",
       height: 3,
       borderTop: "1px solid var(--brand-foreground-link-rest)",
@@ -157907,7 +157905,6 @@ function DataGridCellMedium(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "column",
-      gap: -2,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -157926,6 +157923,7 @@ function DataGridCellMedium(_p = {}) {
     }
   }, "Link"), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: -2,
       position: "relative",
       height: 3,
       borderTop: "1px solid var(--brand-foreground-link-rest)",
@@ -158634,7 +158632,6 @@ function DataGridCellSmall(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "column",
-      gap: -2,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -158653,6 +158650,7 @@ function DataGridCellSmall(_p = {}) {
     }
   }, "Link"), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: -2,
       position: "relative",
       height: 3,
       borderTop: "1px solid var(--brand-foreground-link-rest)",
@@ -159369,7 +159367,6 @@ function DataGridCellSmaller(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "column",
-      gap: -2,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -159388,6 +159385,7 @@ function DataGridCellSmaller(_p = {}) {
     }
   }, "Link"), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: -2,
       position: "relative",
       height: 3,
       borderTop: "1px solid var(--brand-foreground-link-rest)",
@@ -224045,7 +224043,7 @@ function Rating(_p = {}) {
     ratingQuantity: _p.ratingQuantity ?? "1,160",
     type: _p.type ?? "interactive",
     size: _p.size ?? "sm",
-    compact: _p.compact ?? true,
+    compact: _p.compact ?? ((_p.type ?? "interactive") !== "interactive"),
     shape: _p.shape ?? "stars"
   };
   const __body0 = () => /*#__PURE__*/React.createElement("div", {
@@ -224065,7 +224063,6 @@ function Rating(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: -148,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -224158,7 +224155,6 @@ function Rating(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: -148,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -224251,7 +224247,6 @@ function Rating(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: -148,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -224344,7 +224339,6 @@ function Rating(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: -148,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -224422,6 +224416,8 @@ function Rating(_p = {}) {
     theme: "filled"
   })), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginLeft: -148,
+      clipPath: "inset(0 44px 0 0)",
       position: "relative",
       display: "flex",
       flexDirection: "row",
@@ -224486,38 +224482,7 @@ function Rating(_p = {}) {
     },
     size: "28",
     theme: "filled"
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: "absolute",
-      left: -95,
-      top: 0,
-      display: "flex",
-      flexDirection: "column",
-      gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-      padding: "0px 44px 0px 44px",
-      alignItems: "flex-end",
-      flexWrap: "nowrap",
-      boxSizing: "border-box",
-      paddingLeft: "calc(var(--xlarge) * 1px)",
-      paddingRight: "calc(var(--xlarge) * 1px)"
-    }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: 155,
-    height: 28,
-    viewBox: "0 0 155 28",
-    fill: "none",
-    style: {
-      position: "relative",
-      width: 155,
-      height: 28,
-      flexShrink: 0,
-      color: "var(--foreground-2)"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 155 0 L 155 28 L 0 28 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  })))), /*#__PURE__*/React.createElement("div", {
+  }))), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       display: "flex",
@@ -224584,7 +224549,6 @@ function Rating(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: -148,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -224662,6 +224626,8 @@ function Rating(_p = {}) {
     theme: "filled"
   })), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginLeft: -148,
+      clipPath: "inset(0 44px 0 0)",
       position: "relative",
       display: "flex",
       flexDirection: "row",
@@ -224726,38 +224692,7 @@ function Rating(_p = {}) {
     },
     size: "28",
     theme: "filled"
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: "absolute",
-      left: -95,
-      top: 0,
-      display: "flex",
-      flexDirection: "column",
-      gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-      padding: "0px 44px 0px 44px",
-      alignItems: "flex-end",
-      flexWrap: "nowrap",
-      boxSizing: "border-box",
-      paddingLeft: "calc(var(--xlarge) * 1px)",
-      paddingRight: "calc(var(--xlarge) * 1px)"
-    }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: 155,
-    height: 28,
-    viewBox: "0 0 155 28",
-    fill: "none",
-    style: {
-      position: "relative",
-      width: 155,
-      height: 28,
-      flexShrink: 0,
-      color: "var(--foreground-2)"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 155 0 L 155 28 L 0 28 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  })))), /*#__PURE__*/React.createElement("div", {
+  }))), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       display: "flex",
@@ -224824,7 +224759,6 @@ function Rating(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: -148,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -224902,6 +224836,8 @@ function Rating(_p = {}) {
     theme: "filled"
   })), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginLeft: -148,
+      clipPath: "inset(0 44px 0 0)",
       position: "relative",
       display: "flex",
       flexDirection: "row",
@@ -224966,38 +224902,7 @@ function Rating(_p = {}) {
     },
     size: "28",
     theme: "filled"
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: "absolute",
-      left: -95,
-      top: 0,
-      display: "flex",
-      flexDirection: "column",
-      gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-      padding: "0px 44px 0px 44px",
-      alignItems: "flex-end",
-      flexWrap: "nowrap",
-      boxSizing: "border-box",
-      paddingLeft: "calc(var(--xlarge) * 1px)",
-      paddingRight: "calc(var(--xlarge) * 1px)"
-    }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: 155,
-    height: 28,
-    viewBox: "0 0 155 28",
-    fill: "none",
-    style: {
-      position: "relative",
-      width: 155,
-      height: 28,
-      flexShrink: 0,
-      color: "var(--foreground-2)"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 155 0 L 155 28 L 0 28 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  })))), /*#__PURE__*/React.createElement("div", {
+  }))), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       display: "flex",
@@ -225064,7 +224969,6 @@ function Rating(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: -148,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -225142,6 +225046,8 @@ function Rating(_p = {}) {
     theme: "regular"
   })), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginLeft: -148,
+      clipPath: "inset(0 152px 0 0)",
       position: "relative",
       display: "flex",
       flexDirection: "row",
@@ -225206,38 +225112,7 @@ function Rating(_p = {}) {
     },
     size: "28",
     theme: "filled"
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: "absolute",
-      left: -311,
-      top: 0,
-      display: "flex",
-      flexDirection: "column",
-      gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-      padding: "0px 152px 0px 152px",
-      alignItems: "flex-end",
-      flexWrap: "nowrap",
-      boxSizing: "border-box",
-      paddingLeft: "calc(var(--xlarge) * 1px)",
-      paddingRight: "calc(var(--xlarge) * 1px)"
-    }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: 155,
-    height: 28,
-    viewBox: "0 0 155 28",
-    fill: "none",
-    style: {
-      position: "relative",
-      width: 155,
-      height: 28,
-      flexShrink: 0,
-      color: "var(--foreground-2)"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 155 0 L 155 28 L 0 28 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  })))));
+  }))));
   const __body7 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
@@ -225255,7 +225130,6 @@ function Rating(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: -148,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -225333,6 +225207,8 @@ function Rating(_p = {}) {
     theme: "regular"
   })), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginLeft: -148,
+      clipPath: "inset(0 152px 0 0)",
       position: "relative",
       display: "flex",
       flexDirection: "row",
@@ -225397,38 +225273,7 @@ function Rating(_p = {}) {
     },
     size: "28",
     theme: "filled"
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: "absolute",
-      left: -311,
-      top: 0,
-      display: "flex",
-      flexDirection: "column",
-      gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-      padding: "0px 152px 0px 152px",
-      alignItems: "flex-end",
-      flexWrap: "nowrap",
-      boxSizing: "border-box",
-      paddingLeft: "calc(var(--xlarge) * 1px)",
-      paddingRight: "calc(var(--xlarge) * 1px)"
-    }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: 155,
-    height: 28,
-    viewBox: "0 0 155 28",
-    fill: "none",
-    style: {
-      position: "relative",
-      width: 155,
-      height: 28,
-      flexShrink: 0,
-      color: "var(--foreground-2)"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 155 0 L 155 28 L 0 28 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  })))));
+  }))));
   const __body8 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
@@ -225446,7 +225291,6 @@ function Rating(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: -148,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -225524,6 +225368,8 @@ function Rating(_p = {}) {
     theme: "regular"
   })), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginLeft: -148,
+      clipPath: "inset(0 152px 0 0)",
       position: "relative",
       display: "flex",
       flexDirection: "row",
@@ -225588,38 +225434,7 @@ function Rating(_p = {}) {
     },
     size: "28",
     theme: "filled"
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: "absolute",
-      left: -311,
-      top: 0,
-      display: "flex",
-      flexDirection: "column",
-      gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-      padding: "0px 152px 0px 152px",
-      alignItems: "flex-end",
-      flexWrap: "nowrap",
-      boxSizing: "border-box",
-      paddingLeft: "calc(var(--xlarge) * 1px)",
-      paddingRight: "calc(var(--xlarge) * 1px)"
-    }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: 155,
-    height: 28,
-    viewBox: "0 0 155 28",
-    fill: "none",
-    style: {
-      position: "relative",
-      width: 155,
-      height: 28,
-      flexShrink: 0,
-      color: "var(--foreground-2)"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 155 0 L 155 28 L 0 28 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  })))));
+  }))));
   const __body9 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
@@ -225637,7 +225452,6 @@ function Rating(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: -108,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -225732,7 +225546,6 @@ function Rating(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: -108,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -225827,7 +225640,6 @@ function Rating(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: -108,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -225922,7 +225734,6 @@ function Rating(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: -108,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -226000,6 +225811,8 @@ function Rating(_p = {}) {
     theme: "filled"
   })), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginLeft: -108,
+      clipPath: "inset(0 33px 0 0)",
       position: "relative",
       display: "flex",
       flexDirection: "row",
@@ -226064,39 +225877,7 @@ function Rating(_p = {}) {
     },
     size: "20",
     theme: "filled"
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: "absolute",
-      left: -6,
-      top: 0,
-      width: 115,
-      display: "flex",
-      flexDirection: "column",
-      gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-      padding: "0px 33px 0px 33px",
-      alignItems: "flex-end",
-      flexWrap: "nowrap",
-      boxSizing: "border-box",
-      paddingLeft: "calc(var(--large) * 1px)",
-      paddingRight: "calc(var(--large) * 1px)"
-    }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: 108,
-    height: 20,
-    viewBox: "0 0 108 20",
-    fill: "none",
-    style: {
-      position: "relative",
-      width: 108,
-      height: 20,
-      flexShrink: 0,
-      color: "var(--foreground-2)"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 108 0 L 108 20 L 0 20 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  })))), /*#__PURE__*/React.createElement("div", {
+  }))), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       display: "flex",
@@ -226165,7 +225946,6 @@ function Rating(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: -108,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -226243,6 +226023,8 @@ function Rating(_p = {}) {
     theme: "filled"
   })), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginLeft: -108,
+      clipPath: "inset(0 33px 0 0)",
       position: "relative",
       display: "flex",
       flexDirection: "row",
@@ -226307,39 +226089,7 @@ function Rating(_p = {}) {
     },
     size: "20",
     theme: "filled"
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: "absolute",
-      left: -6,
-      top: 0,
-      width: 115,
-      display: "flex",
-      flexDirection: "column",
-      gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-      padding: "0px 33px 0px 33px",
-      alignItems: "flex-end",
-      flexWrap: "nowrap",
-      boxSizing: "border-box",
-      paddingLeft: "calc(var(--large) * 1px)",
-      paddingRight: "calc(var(--large) * 1px)"
-    }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: 108,
-    height: 20,
-    viewBox: "0 0 108 20",
-    fill: "none",
-    style: {
-      position: "relative",
-      width: 108,
-      height: 20,
-      flexShrink: 0,
-      color: "var(--foreground-2)"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 108 0 L 108 20 L 0 20 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  })))), /*#__PURE__*/React.createElement("div", {
+  }))), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       display: "flex",
@@ -226408,7 +226158,6 @@ function Rating(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: -108,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -226486,6 +226235,8 @@ function Rating(_p = {}) {
     theme: "filled"
   })), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginLeft: -108,
+      clipPath: "inset(0 33px 0 0)",
       position: "relative",
       display: "flex",
       flexDirection: "row",
@@ -226550,39 +226301,7 @@ function Rating(_p = {}) {
     },
     size: "20",
     theme: "filled"
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: "absolute",
-      left: -6,
-      top: 0,
-      width: 115,
-      display: "flex",
-      flexDirection: "column",
-      gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-      padding: "0px 33px 0px 33px",
-      alignItems: "flex-end",
-      flexWrap: "nowrap",
-      boxSizing: "border-box",
-      paddingLeft: "calc(var(--large) * 1px)",
-      paddingRight: "calc(var(--large) * 1px)"
-    }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: 108,
-    height: 20,
-    viewBox: "0 0 108 20",
-    fill: "none",
-    style: {
-      position: "relative",
-      width: 108,
-      height: 20,
-      flexShrink: 0,
-      color: "var(--foreground-2)"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 108 0 L 108 20 L 0 20 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  })))), /*#__PURE__*/React.createElement("div", {
+  }))), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       display: "flex",
@@ -226651,7 +226370,6 @@ function Rating(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: -108,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -226729,6 +226447,8 @@ function Rating(_p = {}) {
     theme: "regular"
   })), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginLeft: -108,
+      clipPath: "inset(0 109px 0 0)",
       position: "relative",
       display: "flex",
       flexDirection: "row",
@@ -226793,39 +226513,7 @@ function Rating(_p = {}) {
     },
     size: "20",
     theme: "filled"
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: "absolute",
-      left: -6,
-      top: 0,
-      width: 115,
-      display: "flex",
-      flexDirection: "column",
-      gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-      padding: "0px 109px 0px 109px",
-      alignItems: "flex-end",
-      flexWrap: "nowrap",
-      boxSizing: "border-box",
-      paddingLeft: "calc(var(--large) * 1px)",
-      paddingRight: "calc(var(--large) * 1px)"
-    }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: 108,
-    height: 20,
-    viewBox: "0 0 108 20",
-    fill: "none",
-    style: {
-      position: "relative",
-      width: 108,
-      height: 20,
-      flexShrink: 0,
-      color: "var(--foreground-2)"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 108 0 L 108 20 L 0 20 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  })))));
+  }))));
   const __body16 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
@@ -226843,7 +226531,6 @@ function Rating(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: -108,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -226921,6 +226608,8 @@ function Rating(_p = {}) {
     theme: "regular"
   })), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginLeft: -108,
+      clipPath: "inset(0 109px 0 0)",
       position: "relative",
       display: "flex",
       flexDirection: "row",
@@ -226985,39 +226674,7 @@ function Rating(_p = {}) {
     },
     size: "20",
     theme: "filled"
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: "absolute",
-      left: -6,
-      top: 0,
-      width: 115,
-      display: "flex",
-      flexDirection: "column",
-      gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-      padding: "0px 109px 0px 109px",
-      alignItems: "flex-end",
-      flexWrap: "nowrap",
-      boxSizing: "border-box",
-      paddingLeft: "calc(var(--large) * 1px)",
-      paddingRight: "calc(var(--large) * 1px)"
-    }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: 108,
-    height: 20,
-    viewBox: "0 0 108 20",
-    fill: "none",
-    style: {
-      position: "relative",
-      width: 108,
-      height: 20,
-      flexShrink: 0,
-      color: "var(--foreground-2)"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 108 0 L 108 20 L 0 20 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  })))));
+  }))));
   const __body17 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
@@ -227035,7 +226692,6 @@ function Rating(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: -108,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -227113,6 +226769,8 @@ function Rating(_p = {}) {
     theme: "regular"
   })), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginLeft: -108,
+      clipPath: "inset(0 109px 0 0)",
       position: "relative",
       display: "flex",
       flexDirection: "row",
@@ -227177,39 +226835,7 @@ function Rating(_p = {}) {
     },
     size: "20",
     theme: "filled"
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: "absolute",
-      left: -6,
-      top: 0,
-      width: 115,
-      display: "flex",
-      flexDirection: "column",
-      gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-      padding: "0px 109px 0px 109px",
-      alignItems: "flex-end",
-      flexWrap: "nowrap",
-      boxSizing: "border-box",
-      paddingLeft: "calc(var(--large) * 1px)",
-      paddingRight: "calc(var(--large) * 1px)"
-    }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: 108,
-    height: 20,
-    viewBox: "0 0 108 20",
-    fill: "none",
-    style: {
-      position: "relative",
-      width: 108,
-      height: 20,
-      flexShrink: 0,
-      color: "var(--foreground-2)"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 108 0 L 108 20 L 0 20 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  })))));
+  }))));
   const __body18 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
@@ -227227,7 +226853,6 @@ function Rating(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: -88,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -227324,7 +226949,6 @@ function Rating(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: -88,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -227421,7 +227045,6 @@ function Rating(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: -88,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -227518,7 +227141,6 @@ function Rating(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: -88,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -227596,6 +227218,8 @@ function Rating(_p = {}) {
     theme: "filled"
   })), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginLeft: -88,
+      clipPath: "inset(0 25px 0 0)",
       position: "relative",
       display: "flex",
       flexDirection: "row",
@@ -227660,39 +227284,7 @@ function Rating(_p = {}) {
     },
     size: "16",
     theme: "filled"
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: "absolute",
-      left: -28,
-      top: 0,
-      width: 115,
-      display: "flex",
-      flexDirection: "column",
-      gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-      padding: "0px 25px 0px 25px",
-      alignItems: "flex-end",
-      flexWrap: "nowrap",
-      boxSizing: "border-box",
-      paddingLeft: "calc(var(--medium-2) * 1px)",
-      paddingRight: "calc(var(--medium-2) * 1px)"
-    }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: 88,
-    height: 16,
-    viewBox: "0 0 88 16",
-    fill: "none",
-    style: {
-      position: "relative",
-      width: 88,
-      height: 16,
-      flexShrink: 0,
-      color: "var(--foreground-2)"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 88 0 L 88 16 L 0 16 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  })))), /*#__PURE__*/React.createElement("div", {
+  }))), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       display: "flex",
@@ -227763,7 +227355,6 @@ function Rating(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: -88,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -227841,6 +227432,8 @@ function Rating(_p = {}) {
     theme: "filled"
   })), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginLeft: -88,
+      clipPath: "inset(0 25px 0 0)",
       position: "relative",
       display: "flex",
       flexDirection: "row",
@@ -227905,39 +227498,7 @@ function Rating(_p = {}) {
     },
     size: "16",
     theme: "filled"
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: "absolute",
-      left: -28,
-      top: 0,
-      width: 115,
-      display: "flex",
-      flexDirection: "column",
-      gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-      padding: "0px 25px 0px 25px",
-      alignItems: "flex-end",
-      flexWrap: "nowrap",
-      boxSizing: "border-box",
-      paddingLeft: "calc(var(--medium-2) * 1px)",
-      paddingRight: "calc(var(--medium-2) * 1px)"
-    }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: 88,
-    height: 16,
-    viewBox: "0 0 88 16",
-    fill: "none",
-    style: {
-      position: "relative",
-      width: 88,
-      height: 16,
-      flexShrink: 0,
-      color: "var(--foreground-2)"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 88 0 L 88 16 L 0 16 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  })))), /*#__PURE__*/React.createElement("div", {
+  }))), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       display: "flex",
@@ -228008,7 +227569,6 @@ function Rating(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: -88,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -228086,6 +227646,8 @@ function Rating(_p = {}) {
     theme: "filled"
   })), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginLeft: -88,
+      clipPath: "inset(0 25px 0 0)",
       position: "relative",
       display: "flex",
       flexDirection: "row",
@@ -228150,39 +227712,7 @@ function Rating(_p = {}) {
     },
     size: "16",
     theme: "filled"
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: "absolute",
-      left: -28,
-      top: 0,
-      width: 115,
-      display: "flex",
-      flexDirection: "column",
-      gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-      padding: "0px 25px 0px 25px",
-      alignItems: "flex-end",
-      flexWrap: "nowrap",
-      boxSizing: "border-box",
-      paddingLeft: "calc(var(--medium-2) * 1px)",
-      paddingRight: "calc(var(--medium-2) * 1px)"
-    }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: 88,
-    height: 16,
-    viewBox: "0 0 88 16",
-    fill: "none",
-    style: {
-      position: "relative",
-      width: 88,
-      height: 16,
-      flexShrink: 0,
-      color: "var(--foreground-2)"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 88 0 L 88 16 L 0 16 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  })))), /*#__PURE__*/React.createElement("div", {
+  }))), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       display: "flex",
@@ -228253,7 +227783,6 @@ function Rating(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: -88,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -228331,6 +227860,8 @@ function Rating(_p = {}) {
     theme: "regular"
   })), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginLeft: -88,
+      clipPath: "inset(0 87px 0 0)",
       position: "relative",
       display: "flex",
       flexDirection: "row",
@@ -228395,39 +227926,7 @@ function Rating(_p = {}) {
     },
     size: "16",
     theme: "filled"
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: "absolute",
-      left: -28,
-      top: 0,
-      width: 115,
-      display: "flex",
-      flexDirection: "column",
-      gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-      padding: "0px 87px 0px 87px",
-      alignItems: "flex-end",
-      flexWrap: "nowrap",
-      boxSizing: "border-box",
-      paddingLeft: "calc(var(--medium-2) * 1px)",
-      paddingRight: "calc(var(--medium-2) * 1px)"
-    }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: 88,
-    height: 16,
-    viewBox: "0 0 88 16",
-    fill: "none",
-    style: {
-      position: "relative",
-      width: 88,
-      height: 16,
-      flexShrink: 0,
-      color: "var(--foreground-2)"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 88 0 L 88 16 L 0 16 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  })))));
+  }))));
   const __body25 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
@@ -228445,7 +227944,6 @@ function Rating(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: -88,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -228523,6 +228021,8 @@ function Rating(_p = {}) {
     theme: "regular"
   })), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginLeft: -88,
+      clipPath: "inset(0 87px 0 0)",
       position: "relative",
       display: "flex",
       flexDirection: "row",
@@ -228587,39 +228087,7 @@ function Rating(_p = {}) {
     },
     size: "16",
     theme: "filled"
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: "absolute",
-      left: -28,
-      top: 0,
-      width: 115,
-      display: "flex",
-      flexDirection: "column",
-      gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-      padding: "0px 87px 0px 87px",
-      alignItems: "flex-end",
-      flexWrap: "nowrap",
-      boxSizing: "border-box",
-      paddingLeft: "calc(var(--medium-2) * 1px)",
-      paddingRight: "calc(var(--medium-2) * 1px)"
-    }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: 88,
-    height: 16,
-    viewBox: "0 0 88 16",
-    fill: "none",
-    style: {
-      position: "relative",
-      width: 88,
-      height: 16,
-      flexShrink: 0,
-      color: "var(--foreground-2)"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 88 0 L 88 16 L 0 16 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  })))));
+  }))));
   const __body26 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
@@ -228637,7 +228105,6 @@ function Rating(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: -88,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -228715,6 +228182,8 @@ function Rating(_p = {}) {
     theme: "regular"
   })), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginLeft: -88,
+      clipPath: "inset(0 87px 0 0)",
       position: "relative",
       display: "flex",
       flexDirection: "row",
@@ -228779,39 +228248,7 @@ function Rating(_p = {}) {
     },
     size: "16",
     theme: "filled"
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: "absolute",
-      left: -28,
-      top: 0,
-      width: 115,
-      display: "flex",
-      flexDirection: "column",
-      gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-      padding: "0px 87px 0px 87px",
-      alignItems: "flex-end",
-      flexWrap: "nowrap",
-      boxSizing: "border-box",
-      paddingLeft: "calc(var(--medium-2) * 1px)",
-      paddingRight: "calc(var(--medium-2) * 1px)"
-    }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: 88,
-    height: 16,
-    viewBox: "0 0 88 16",
-    fill: "none",
-    style: {
-      position: "relative",
-      width: 88,
-      height: 16,
-      flexShrink: 0,
-      color: "var(--foreground-2)"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 88 0 L 88 16 L 0 16 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  })))));
+  }))));
   const __body27 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
@@ -228829,7 +228266,6 @@ function Rating(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: -68,
       padding: "2px 0px 2px 0px",
       alignItems: "flex-start",
       flexWrap: "nowrap",
@@ -228930,7 +228366,6 @@ function Rating(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: -68,
       padding: "2px 0px 2px 0px",
       alignItems: "flex-start",
       flexWrap: "nowrap",
@@ -229031,7 +228466,6 @@ function Rating(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: -68,
       padding: "2px 0px 2px 0px",
       alignItems: "flex-start",
       flexWrap: "nowrap",
@@ -229132,7 +228566,6 @@ function Rating(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: -68,
       padding: "2px 0px 2px 0px",
       alignItems: "flex-start",
       flexWrap: "nowrap",
@@ -229214,6 +228647,8 @@ function Rating(_p = {}) {
     theme: "filled"
   })), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginLeft: -68,
+      clipPath: "inset(0 19px 0 0)",
       position: "relative",
       display: "flex",
       flexDirection: "row",
@@ -229278,39 +228713,7 @@ function Rating(_p = {}) {
     },
     size: "12",
     theme: "filled"
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: "absolute",
-      left: -48,
-      top: 2,
-      width: 115,
-      display: "flex",
-      flexDirection: "column",
-      gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-      padding: "0px 19px 0px 19px",
-      alignItems: "flex-end",
-      flexWrap: "nowrap",
-      boxSizing: "border-box",
-      paddingLeft: "calc(var(--small-2) * 1px)",
-      paddingRight: "calc(var(--small-2) * 1px)"
-    }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: 68,
-    height: 12,
-    viewBox: "0 0 68 12",
-    fill: "none",
-    style: {
-      position: "relative",
-      width: 68,
-      height: 12,
-      flexShrink: 0,
-      color: "var(--foreground-2)"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 68 0 L 68 12 L 0 12 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  })))), /*#__PURE__*/React.createElement("div", {
+  }))), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       display: "flex",
@@ -229381,7 +228784,6 @@ function Rating(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: -68,
       padding: "2px 0px 2px 0px",
       alignItems: "flex-start",
       flexWrap: "nowrap",
@@ -229463,10 +228865,12 @@ function Rating(_p = {}) {
     theme: "filled"
   })), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginLeft: -68,
+      clipPath: "inset(0 19px 0 0)",
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: "calc(var(--small) * 1px)",
+      gap: "calc(var(--corner-radius-small) * 1px)",
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -229527,39 +228931,7 @@ function Rating(_p = {}) {
     },
     size: "12",
     theme: "filled"
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: "absolute",
-      left: -48,
-      top: 2,
-      width: 115,
-      display: "flex",
-      flexDirection: "column",
-      gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-      padding: "0px 19px 0px 19px",
-      alignItems: "flex-end",
-      flexWrap: "nowrap",
-      boxSizing: "border-box",
-      paddingLeft: "calc(var(--small-2) * 1px)",
-      paddingRight: "calc(var(--small-2) * 1px)"
-    }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: 68,
-    height: 12,
-    viewBox: "0 0 68 12",
-    fill: "none",
-    style: {
-      position: "relative",
-      width: 68,
-      height: 12,
-      flexShrink: 0,
-      color: "var(--foreground-2)"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 68 0 L 68 12 L 0 12 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  })))), /*#__PURE__*/React.createElement("div", {
+  }))), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       display: "flex",
@@ -229630,7 +229002,6 @@ function Rating(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: -68,
       padding: "2px 0px 2px 0px",
       alignItems: "flex-start",
       flexWrap: "nowrap",
@@ -229712,10 +229083,12 @@ function Rating(_p = {}) {
     theme: "filled"
   })), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginLeft: -68,
+      clipPath: "inset(0 19px 0 0)",
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: "calc(var(--small) * 1px)",
+      gap: "calc(var(--corner-radius-small) * 1px)",
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -229776,39 +229149,7 @@ function Rating(_p = {}) {
     },
     size: "12",
     theme: "filled"
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: "absolute",
-      left: -48,
-      top: 2,
-      width: 115,
-      display: "flex",
-      flexDirection: "column",
-      gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-      padding: "0px 19px 0px 19px",
-      alignItems: "flex-end",
-      flexWrap: "nowrap",
-      boxSizing: "border-box",
-      paddingLeft: "calc(var(--small-2) * 1px)",
-      paddingRight: "calc(var(--small-2) * 1px)"
-    }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: 68,
-    height: 12,
-    viewBox: "0 0 68 12",
-    fill: "none",
-    style: {
-      position: "relative",
-      width: 68,
-      height: 12,
-      flexShrink: 0,
-      color: "var(--foreground-2)"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 68 0 L 68 12 L 0 12 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  })))), /*#__PURE__*/React.createElement("div", {
+  }))), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       display: "flex",
@@ -229879,7 +229220,6 @@ function Rating(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: -68,
       padding: "2px 0px 2px 0px",
       alignItems: "flex-start",
       flexWrap: "nowrap",
@@ -229961,6 +229301,8 @@ function Rating(_p = {}) {
     theme: "regular"
   })), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginLeft: -68,
+      clipPath: "inset(0 73px 0 0)",
       position: "relative",
       display: "flex",
       flexDirection: "row",
@@ -230025,39 +229367,7 @@ function Rating(_p = {}) {
     },
     size: "12",
     theme: "filled"
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: "absolute",
-      left: -48,
-      top: 2,
-      width: 115,
-      display: "flex",
-      flexDirection: "column",
-      gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-      padding: "0px 73px 0px 73px",
-      alignItems: "flex-end",
-      flexWrap: "nowrap",
-      boxSizing: "border-box",
-      paddingLeft: "calc(var(--small-2) * 1px)",
-      paddingRight: "calc(var(--small-2) * 1px)"
-    }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: 68,
-    height: 12,
-    viewBox: "0 0 68 12",
-    fill: "none",
-    style: {
-      position: "relative",
-      width: 68,
-      height: 12,
-      flexShrink: 0,
-      color: "var(--foreground-2)"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 68 0 L 68 12 L 0 12 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  })))));
+  }))));
   const __body34 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
@@ -230075,7 +229385,6 @@ function Rating(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: -68,
       padding: "2px 0px 2px 0px",
       alignItems: "flex-start",
       flexWrap: "nowrap",
@@ -230157,10 +229466,12 @@ function Rating(_p = {}) {
     theme: "regular"
   })), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginLeft: -68,
+      clipPath: "inset(0 73px 0 0)",
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: "calc(var(--small) * 1px)",
+      gap: "calc(var(--corner-radius-small) * 1px)",
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -230221,39 +229532,7 @@ function Rating(_p = {}) {
     },
     size: "12",
     theme: "filled"
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: "absolute",
-      left: -48,
-      top: 2,
-      width: 115,
-      display: "flex",
-      flexDirection: "column",
-      gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-      padding: "0px 73px 0px 73px",
-      alignItems: "flex-end",
-      flexWrap: "nowrap",
-      boxSizing: "border-box",
-      paddingLeft: "calc(var(--small-2) * 1px)",
-      paddingRight: "calc(var(--small-2) * 1px)"
-    }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: 68,
-    height: 12,
-    viewBox: "0 0 68 12",
-    fill: "none",
-    style: {
-      position: "relative",
-      width: 68,
-      height: 12,
-      flexShrink: 0,
-      color: "var(--foreground-2)"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 68 0 L 68 12 L 0 12 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  })))));
+  }))));
   const __body35 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
@@ -230271,7 +229550,6 @@ function Rating(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: -68,
       padding: "2px 0px 2px 0px",
       alignItems: "flex-start",
       flexWrap: "nowrap",
@@ -230353,10 +229631,12 @@ function Rating(_p = {}) {
     theme: "regular"
   })), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginLeft: -68,
+      clipPath: "inset(0 73px 0 0)",
       position: "relative",
       display: "flex",
       flexDirection: "row",
-      gap: "calc(var(--small) * 1px)",
+      gap: "calc(var(--corner-radius-small) * 1px)",
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -230417,39 +229697,7 @@ function Rating(_p = {}) {
     },
     size: "12",
     theme: "filled"
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: "absolute",
-      left: -48,
-      top: 2,
-      width: 115,
-      display: "flex",
-      flexDirection: "column",
-      gap: "calc(var(--spacing-horizontal-xs-2) * 1px)",
-      padding: "0px 73px 0px 73px",
-      alignItems: "flex-end",
-      flexWrap: "nowrap",
-      boxSizing: "border-box",
-      paddingLeft: "calc(var(--small-2) * 1px)",
-      paddingRight: "calc(var(--small-2) * 1px)"
-    }
-  }, /*#__PURE__*/React.createElement("svg", {
-    width: 68,
-    height: 12,
-    viewBox: "0 0 68 12",
-    fill: "none",
-    style: {
-      position: "relative",
-      width: 68,
-      height: 12,
-      flexShrink: 0,
-      color: "var(--foreground-2)"
-    }
-  }, /*#__PURE__*/React.createElement("path", {
-    d: "M 0 0 L 68 0 L 68 12 L 0 12 L 0 0 Z",
-    fill: "currentColor",
-    fillRule: "nonzero"
-  })))));
+  }))));
   const __impls = {
     // figma: Type=Display, Size=XLarge, Compact=True, Shape=Stars
     "type=display|size=xl|compact=true|shape=stars": __body0,
@@ -234924,7 +234172,6 @@ function TeachingPopoverContent(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "column",
-      gap: -2,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -234943,6 +234190,7 @@ function TeachingPopoverContent(_p = {}) {
     }
   }, "Always underline links"), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: -2,
       position: "relative",
       height: 3,
       borderTop: "1px solid var(--brand-foreground-link-rest)",
@@ -235821,7 +235069,6 @@ function TeachingPopoverContentOnBrand(_p = {}) {
       position: "relative",
       display: "flex",
       flexDirection: "column",
-      gap: -2,
       alignItems: "flex-start",
       flexWrap: "nowrap",
       flexShrink: 0,
@@ -235840,6 +235087,7 @@ function TeachingPopoverContentOnBrand(_p = {}) {
     }
   }, "Always underline links"), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: -2,
       position: "relative",
       height: 3,
       borderTop: "1px solid var(--neutral-foreground-inverted-link-rest)",

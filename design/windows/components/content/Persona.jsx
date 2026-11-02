@@ -77,7 +77,6 @@ export function Persona(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "column",
-        gap: -2,
         padding: "2px 0px 2px 0px",
         alignItems: "flex-start",
         flexWrap: "nowrap",
@@ -99,6 +98,7 @@ export function Persona(_p = {}) {
         }}>{props.primaryString}</span>
         {props.subtext && (
         <div style={{
+          marginTop: -2,
           position: "relative",
           display: "flex",
           flexDirection: "column",
@@ -216,7 +216,6 @@ export function Persona(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "column",
-        gap: -2,
         padding: "2px 0px 2px 0px",
         alignItems: "flex-start",
         flexWrap: "nowrap",
@@ -238,6 +237,7 @@ export function Persona(_p = {}) {
         }}>{props.primaryString}</span>
         {props.subtext && (
         <div style={{
+          marginTop: -2,
           position: "relative",
           display: "flex",
           flexDirection: "column",
@@ -355,7 +355,6 @@ export function Persona(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "column",
-        gap: -2,
         padding: "2px 0px 2px 0px",
         alignItems: "flex-start",
         flexWrap: "nowrap",
@@ -377,6 +376,7 @@ export function Persona(_p = {}) {
         }}>{props.primaryString}</span>
         {props.subtext && (
         <div style={{
+          marginTop: -2,
           position: "relative",
           display: "flex",
           flexDirection: "column",
@@ -494,7 +494,6 @@ export function Persona(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "column",
-        gap: -2,
         padding: "2px 0px 2px 0px",
         alignItems: "flex-start",
         flexWrap: "nowrap",
@@ -516,6 +515,7 @@ export function Persona(_p = {}) {
         }}>{props.primaryString}</span>
         {props.subtext && (
         <div style={{
+          marginTop: -2,
           position: "relative",
           display: "flex",
           flexDirection: "column",
@@ -577,7 +577,6 @@ export function Persona(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "column",
-        gap: -2,
         padding: "2px 0px 2px 0px",
         alignItems: "flex-start",
         flexWrap: "nowrap",
@@ -599,6 +598,7 @@ export function Persona(_p = {}) {
         }}>{props.primaryString}</span>
         {props.subtext && (
         <div style={{
+          marginTop: -2,
           position: "relative",
           display: "flex",
           flexDirection: "column",
@@ -716,7 +716,6 @@ export function Persona(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "column",
-        gap: -2,
         padding: "2px 0px 2px 0px",
         alignItems: "flex-start",
         flexWrap: "nowrap",
@@ -738,6 +737,7 @@ export function Persona(_p = {}) {
         }}>{props.primaryString}</span>
         {props.subtext && (
         <div style={{
+          marginTop: -2,
           position: "relative",
           display: "flex",
           flexDirection: "column",
@@ -855,7 +855,6 @@ export function Persona(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "column",
-        gap: -2,
         padding: "2px 0px 2px 0px",
         alignItems: "flex-start",
         flexWrap: "nowrap",
@@ -877,6 +876,7 @@ export function Persona(_p = {}) {
         }}>{props.primaryString}</span>
         {props.subtext && (
         <div style={{
+          marginTop: -2,
           position: "relative",
           display: "flex",
           flexDirection: "column",
@@ -994,7 +994,6 @@ export function Persona(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "column",
-        gap: -2,
         padding: "2px 0px 2px 0px",
         alignItems: "flex-start",
         flexWrap: "nowrap",
@@ -1016,6 +1015,7 @@ export function Persona(_p = {}) {
         }}>{props.primaryString}</span>
         {props.subtext && (
         <div style={{
+          marginTop: -2,
           position: "relative",
           display: "flex",
           flexDirection: "column",
@@ -1189,7 +1189,6 @@ export function Persona(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "column",
-        gap: -2,
         padding: "2px 0px 2px 0px",
         alignItems: "center",
         flexWrap: "nowrap",
@@ -1212,6 +1211,7 @@ export function Persona(_p = {}) {
         }}>{props.primaryString}</span>
         {props.subtext && (
         <div style={{
+          marginTop: -2,
           position: "relative",
           display: "flex",
           flexDirection: "column",
@@ -1333,7 +1333,6 @@ export function Persona(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "column",
-        gap: -2,
         padding: "2px 0px 2px 0px",
         alignItems: "center",
         flexWrap: "nowrap",
@@ -1357,6 +1356,7 @@ export function Persona(_p = {}) {
         }}>{props.primaryString}</span>
         {props.subtext && (
         <div style={{
+          marginTop: -2,
           position: "relative",
           display: "flex",
           flexDirection: "column",
@@ -1451,7 +1451,6 @@ export function Persona(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "column",
-        gap: -2,
         padding: "2px 0px 2px 0px",
         alignItems: "flex-start",
         flexWrap: "nowrap",
@@ -1473,6 +1472,7 @@ export function Persona(_p = {}) {
         }}>{props.primaryString}</span>
         {props.subtext && (
         <div style={{
+          marginTop: -2,
           position: "relative",
           display: "flex",
           flexDirection: "column",
@@ -1577,7 +1577,6 @@ export function Persona(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "column",
-        gap: -2,
         padding: "2px 0px 2px 0px",
         alignItems: "flex-start",
         flexWrap: "nowrap",
@@ -1599,6 +1598,7 @@ export function Persona(_p = {}) {
         }}>{props.primaryString}</span>
         {props.subtext && (
         <div style={{
+          marginTop: -2,
           position: "relative",
           display: "flex",
           flexDirection: "column",
@@ -1681,7 +1681,6 @@ export function Persona(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "column",
-        gap: -2,
         padding: "2px 0px 2px 0px",
         alignItems: "flex-start",
         flexWrap: "nowrap",
@@ -1703,6 +1702,7 @@ export function Persona(_p = {}) {
         }}>{props.primaryString}</span>
         {props.subtext && (
         <div style={{
+          marginTop: -2,
           position: "relative",
           display: "flex",
           flexDirection: "column",
@@ -1799,7 +1799,6 @@ export function Persona(_p = {}) {
         position: "relative",
         display: "flex",
         flexDirection: "column",
-        gap: -2,
         padding: "2px 0px 2px 0px",
         alignItems: "flex-start",
         flexWrap: "nowrap",
@@ -1821,6 +1820,7 @@ export function Persona(_p = {}) {
         }}>{props.primaryString}</span>
         {props.subtext && (
         <div style={{
+          marginTop: -2,
           position: "relative",
           display: "flex",
           flexDirection: "column",
