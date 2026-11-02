@@ -71,7 +71,7 @@ Every component accepts short, consistent values. The original Figma values stil
 - `assets/logo/slate-gold.png`: the logo. `assets/icons/`: the `Icon` component, `icon-data.js` (70 Fluent icon families), and the icon-font cards.
 - `guidelines/`: foundation cards (Colors, Type, Spacing, Brand).
 - `spikes-issue.md`: the six WPF validation spikes as a paste-ready GitHub issue, with the follow-up for each failure.
-- `wpf-feasibility.md`: what WPF's Fluent theme already covers, what needs templates or code, and suggested design-system changes.
+- `wpf-feasibility.md`: what WPF's Fluent theme already covers, what needs templates or code, suggested design-system changes, and the spike results. `spikes/` holds their screenshots.
 - `winui-review.md`: the WinUI kit compared with this system and the WPF Fluent theme, with proposed changes.
 - `xaml/`: `Slate.Light.xaml` and `Slate.Dark.xaml`, generated drop-in replacements for the app's theme files (accent roles, Slate keys, shadows, Fluent brush overrides), and `README.md` with the accent rules, theme setting, shadow values and text-size rules.
 - `ui_kits/slate-windows/`: the interactive Windows workspace.
