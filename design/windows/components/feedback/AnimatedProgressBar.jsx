@@ -5,7 +5,7 @@ const __vkey = (p) => "style2=" + __venc(p.style2) + '|' + "size=" + __venc(p.si
 
 export function AnimatedProgressBar(_p = {}) {
   _p = __slateNorm(_p, {"style2":["indeterminate","determinate"],"size":["medium (default)","lg"],"state":["default","success","error","warning"],"status":["not started","in progress","complete","after","before","gradient after","gradient before","99% complete"]});
-  const props = { ..._p, style2: _p.style2 ?? "indeterminate", size: _p.size ?? "medium (default)", state: _p.state ?? "default", status: _p.status ?? "not started" };
+  const props = { ..._p, style2: _p.style2 ?? "indeterminate", size: _p.size ?? "medium (default)", state: _p.state ?? "default", status: _p.status ?? ((_p.style2 ?? "indeterminate") === "indeterminate" ? "gradient before" : "not started") };
   const __body0 = () => (
     <div className={props.className} style={{
       width: 492,

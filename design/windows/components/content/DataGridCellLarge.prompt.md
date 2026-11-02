@@ -2,7 +2,7 @@ Fluent 2 "DataGridCellLarge" component re-themed to Slate (gold brand ramp) — 
 
 ```jsx
 const { DataGridCellLarge } = window.SlateDesignSystem_326dc9;
-<DataGridCellLarge layout="text" appearance="none" />
+<DataGridCellLarge layout="text" appearance="primary" />
 ```
 
 Props (from DataGridCellLarge.d.ts):

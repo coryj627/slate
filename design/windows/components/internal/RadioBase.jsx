@@ -6,7 +6,7 @@ const __vkey = (p) => "layout=" + __venc(p.layout) + '|' + "state=" + __venc(p.s
 
 export function RadioBase(_p = {}) {
   _p = __slateNorm(_p, {"layout":["icon only","icon+label after","icon+label below"],"state":["default","checked","unchecked"]});
-  const props = { ..._p, subtextString: _p.subtextString ?? "Subtext", subtext: _p.subtext ?? false, layout: _p.layout ?? "icon only", state: _p.state ?? "default" };
+  const props = { ..._p, subtextString: _p.subtextString ?? "Subtext", subtext: _p.subtext ?? false, layout: _p.layout ?? "icon only", state: _p.state ?? (_p.layout === "icon+label below" ? "default" : "checked") };
   const __body0 = () => (
     <div className={props.className} style={{
       width: "fit-content",

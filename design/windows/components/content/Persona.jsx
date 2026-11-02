@@ -5,7 +5,7 @@ const __vkey = (p) => "layout=" + __venc(p.layout) + '|' + "style2=" + __venc(p.
 
 export function Persona(_p = {}) {
   _p = __slateNorm(_p, {"layout":["text after (default)","text before (avatar only)","text below (avatar only)"],"style2":["avatar (default)","presence badge"],"size":["small (badge only)","medium (default)","lg"],"alignment":["center (default)","top"]});
-  const props = { ..._p, primaryString: _p.primaryString ?? "Primary string", subtext: _p.subtext ?? true, tertiaryString: _p.tertiaryString ?? "Tertiary string", secondaryString: _p.secondaryString ?? "Secondary string", quaternaryText: _p.quaternaryText ?? false, tertiaryText: _p.tertiaryText ?? false, quaternaryString: _p.quaternaryString ?? "Quaternary string", layout: _p.layout ?? "text after (default)", style2: _p.style2 ?? "avatar (default)", size: _p.size ?? "small (badge only)", alignment: _p.alignment ?? "center (default)" };
+  const props = { ..._p, primaryString: _p.primaryString ?? "Primary string", subtext: _p.subtext ?? true, tertiaryString: _p.tertiaryString ?? "Tertiary string", secondaryString: _p.secondaryString ?? "Secondary string", quaternaryText: _p.quaternaryText ?? false, tertiaryText: _p.tertiaryText ?? false, quaternaryString: _p.quaternaryString ?? "Quaternary string", layout: _p.layout ?? "text after (default)", style2: _p.style2 ?? "avatar (default)", size: _p.size ?? (_p.style2 === "presence badge" ? "small (badge only)" : "medium (default)"), alignment: _p.alignment ?? "center (default)" };
   const __body0 = () => (
     <div className={props.className} style={{
       width: "fit-content",

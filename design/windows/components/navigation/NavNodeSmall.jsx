@@ -8,7 +8,7 @@ const __vkey = (p) => "group=" + __venc(p.group) + '|' + "selected=" + __venc(p.
 
 export function NavNodeSmall(_p = {}) {
   _p = __slateNorm(_p, {"state":["rest","hover","pressed"]});
-  const props = { ..._p, group: _p.group ?? false, selected: _p.selected ?? false, state: _p.state ?? "rest", open: _p.open ?? true, secondaryActions: _p.secondaryActions ?? false, focus: _p.focus ?? false, content: _p.content ?? "Nav content" };
+  const props = { ..._p, group: _p.group ?? false, selected: _p.selected ?? false, state: _p.state ?? "rest", open: _p.open ?? (_p.group === true && _p.selected !== true), secondaryActions: _p.secondaryActions ?? false, focus: _p.focus ?? false, content: _p.content ?? "Nav content" };
   const __body0 = () => (
     <div className={props.className} style={{
       width: 260,

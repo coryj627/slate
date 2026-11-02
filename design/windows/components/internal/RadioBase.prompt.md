@@ -2,7 +2,7 @@ Fluent 2 "RadioBase" component re-themed to Slate (gold brand ramp) — use it w
 
 ```jsx
 const { RadioBase } = window.SlateDesignSystem_326dc9;
-<RadioBase layout="icon only" state="default" />
+<RadioBase layout="icon only" state="checked" />
 ```
 
 Props (from RadioBase.d.ts):

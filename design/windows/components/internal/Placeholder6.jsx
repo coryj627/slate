@@ -342,6 +342,7 @@ export function Placeholder6(_p = {}) {
     "size=16|theme=filled": __body9,
     // figma: Size=12, Theme=z
     "size=12|theme=z": __body10,
+    "size=12|theme=regular": __body10,
     // figma: Size=12, Theme=Filled
     "size=12|theme=filled": __body11,
     // figma: Size=48, Theme=Filled

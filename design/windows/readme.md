@@ -46,6 +46,7 @@ Every component accepts short, consistent values. The original Figma values stil
 - `size="small" | "medium" | "large"` (also `"extra small"` / `"extra large"` where they exist) instead of `"sm"`, `"medium (default)"`, `"lg"`.
 - Booleans for on/off props (`checked={true}` on Radio, `icon={false}` on BreadcrumbItem).
 - Placeholder content is on by default, because it is in Figma. Turn it off explicitly: `icon={false}`, `avatar={false}`, `image={false}`, `leftIcon={false}`.
+- Not every combination exists. A component renders only the frames in its Figma component set, listed in `__impls` in its `.jsx`. A combination with no frame renders the component's first frame, with no warning, so set enough props to name a real one.
 
 ## Sources
 
