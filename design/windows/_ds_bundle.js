@@ -160129,7 +160129,7 @@ function Accordion(_p = {}) {
     text: _p.text ?? "Text",
     size: _p.size ?? "md",
     state: _p.state ?? "rest",
-    expanded: _p.expanded ?? true,
+    expanded: _p.state === "disabled" ? false : _p.expanded ?? true,
     chevron: _p.chevron ?? "before"
   };
   const __body0 = () => /*#__PURE__*/React.createElement("div", {
@@ -160193,7 +160193,7 @@ function Accordion(_p = {}) {
     direction: "down",
     size: "20",
     theme: "regular"
-  })), /*#__PURE__*/React.createElement("div", {
+  })), props.icon && /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       flexShrink: 0,
@@ -160709,7 +160709,7 @@ function Accordion(_p = {}) {
     direction: "down",
     size: "20",
     theme: "regular"
-  })), /*#__PURE__*/React.createElement("div", {
+  })), props.icon && /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       flexShrink: 0,
@@ -161700,7 +161700,7 @@ function Accordion(_p = {}) {
     direction: "down",
     size: "20",
     theme: "regular"
-  })), /*#__PURE__*/React.createElement("div", {
+  })), props.icon && /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       flexShrink: 0,
