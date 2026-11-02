@@ -10,7 +10,6 @@ export interface NavNodeSmallProps {
   focus?: boolean;
   content?: string;
   iconBeforeRegular?: React.ReactNode;
-  iconAfter?: React.ReactNode;
   iconBeforeFilled?: React.ReactNode;
   /** Swappable nested instance; defaults to the design's. */
   icon1?: React.ReactNode;

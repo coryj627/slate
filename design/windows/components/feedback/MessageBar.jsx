@@ -48,14 +48,13 @@ export function MessageBar(_p = {}) {
       <span style={{
         position: "relative",
         fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
-        fontWeight: 600,
+        fontWeight: 400,
         fontSize: 12,
         whiteSpace: "nowrap",
         overflow: "hidden",
         textOverflow: "ellipsis",
         lineHeight: "16px",
         color: "var(--neutral-foreground-1-rest)",
-        textDecoration: "underline",
         flexGrow: 1,
       }}>{props.textString}</span>
       {props.actions && (
@@ -310,11 +309,10 @@ export function MessageBar(_p = {}) {
             position: "relative",
             width: 520,
             fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
-            fontWeight: 600,
+            fontWeight: 400,
             fontSize: 12,
             lineHeight: "16px",
             color: "var(--neutral-foreground-1-rest)",
-            textDecoration: "underline",
             flexShrink: 0,
           }}>{props.textString}</span>
         </div>

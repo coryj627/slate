@@ -6,7 +6,6 @@ const { Toast } = window.SlateDesignSystem_326dc9;
 ```
 
 Props (from Toast.d.ts):
-- `pxIcon20?: React.ReactNode`
 - `titleString?: string`
 - `endContent?: boolean`
 - `timestampString?: string`

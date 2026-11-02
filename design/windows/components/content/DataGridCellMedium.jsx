@@ -83,7 +83,7 @@ export function DataGridCellMedium(_p = {}) {
               lineHeight: "20px",
               color: "var(--brand-foreground-link-rest)",
               flexShrink: 0,
-            }}>Link</span>
+            }}>{_p.content ?? "Link"}</span>
           </div>
           <div style={{
             position: "relative",
