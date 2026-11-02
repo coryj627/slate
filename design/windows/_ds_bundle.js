@@ -1538,10 +1538,10 @@ function CompoundButton(_p = {}) {
       alignItems: "center",
       flexWrap: "nowrap",
       boxSizing: "border-box",
-      paddingLeft: "calc(var(--spacing-horizontal-l-2) * 1px)",
-      paddingTop: "calc(var(--vertical-l) * 1px)",
-      paddingRight: "calc(var(--spacing-horizontal-l-2) * 1px)",
-      paddingBottom: "calc(var(--vertical-l) * 1px)",
+      paddingLeft: "max(0px, calc(var(--spacing-horizontal-l-2) * 1px - 1px))",
+      paddingTop: "max(0px, calc(var(--vertical-l) * 1px - 1px))",
+      paddingRight: "max(0px, calc(var(--spacing-horizontal-l-2) * 1px - 1px))",
+      paddingBottom: "max(0px, calc(var(--vertical-l) * 1px - 1px))",
       position: "relative",
       ...props.style
     }
@@ -3119,10 +3119,10 @@ function CompoundButton(_p = {}) {
       alignItems: "center",
       flexWrap: "nowrap",
       boxSizing: "border-box",
-      paddingLeft: "calc(var(--spacing-horizontal-s-2) * 1px)",
-      paddingTop: "calc(var(--vertical-s) * 1px)",
-      paddingRight: "calc(var(--spacing-horizontal-s-2) * 1px)",
-      paddingBottom: "calc(var(--vertical-s) * 1px)",
+      paddingLeft: "max(0px, calc(var(--spacing-horizontal-s-2) * 1px - 1px))",
+      paddingTop: "max(0px, calc(var(--vertical-s) * 1px - 1px))",
+      paddingRight: "max(0px, calc(var(--spacing-horizontal-s-2) * 1px - 1px))",
+      paddingBottom: "max(0px, calc(var(--vertical-s) * 1px - 1px))",
       position: "relative",
       ...props.style
     }
@@ -4700,10 +4700,10 @@ function CompoundButton(_p = {}) {
       alignItems: "center",
       flexWrap: "nowrap",
       boxSizing: "border-box",
-      paddingLeft: "calc(var(--spacing-horizontal-m-2) * 1px)",
-      paddingTop: "calc(var(--vertical-m) * 1px)",
-      paddingRight: "calc(var(--spacing-horizontal-m-2) * 1px)",
-      paddingBottom: "calc(var(--vertical-m) * 1px)",
+      paddingLeft: "max(0px, calc(var(--spacing-horizontal-m-2) * 1px - 1px))",
+      paddingTop: "max(0px, calc(var(--vertical-m) * 1px - 1px))",
+      paddingRight: "max(0px, calc(var(--spacing-horizontal-m-2) * 1px - 1px))",
+      paddingBottom: "max(0px, calc(var(--vertical-m) * 1px - 1px))",
       position: "relative",
       ...props.style
     }
@@ -39670,7 +39670,7 @@ function Slider(_p = {}) {
   const __body9 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
-      width: "fit-content",
+      width: 120,
       borderRadius: 2,
       display: "flex",
       flexDirection: "column",
@@ -98855,7 +98855,7 @@ function Input(_p = {}) {
   const __body0 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
-      width: "fit-content",
+      width: 280,
       overflow: "hidden",
       borderRadius: 4,
       display: "flex",
@@ -136343,7 +136343,8 @@ function DEPRECATEDAvatar(_p = {}) {
     viewBox: "0 0 120 120",
     fill: "none",
     style: {
-      position: "absolute",
+      color: "var(--neutral-background-6-rest)",
+position: "absolute",
       left: 0,
       top: 0,
       width: 120,
@@ -136413,7 +136414,8 @@ function DEPRECATEDAvatar(_p = {}) {
     viewBox: "0 0 96 96",
     fill: "none",
     style: {
-      position: "absolute",
+      color: "var(--neutral-background-6-rest)",
+position: "absolute",
       left: 0,
       top: 0,
       width: 96,
@@ -136571,7 +136573,8 @@ function DEPRECATEDAvatar(_p = {}) {
     viewBox: "0 0 72 72",
     fill: "none",
     style: {
-      position: "absolute",
+      color: "var(--neutral-background-6-rest)",
+position: "absolute",
       left: 0,
       top: 0,
       width: 72,
@@ -136641,7 +136644,8 @@ function DEPRECATEDAvatar(_p = {}) {
     viewBox: "0 0 64 64",
     fill: "none",
     style: {
-      position: "absolute",
+      color: "var(--neutral-background-6-rest)",
+position: "absolute",
       left: 0,
       top: 0,
       width: 64,
@@ -136711,7 +136715,8 @@ function DEPRECATEDAvatar(_p = {}) {
     viewBox: "0 0 56 56",
     fill: "none",
     style: {
-      position: "absolute",
+      color: "var(--neutral-background-6-rest)",
+position: "absolute",
       left: 0,
       top: 0,
       width: 56,
@@ -136789,7 +136794,8 @@ function DEPRECATEDAvatar(_p = {}) {
     viewBox: "0 0 48 48",
     fill: "none",
     style: {
-      position: "absolute",
+      color: "var(--neutral-background-6-rest)",
+position: "absolute",
       left: 0,
       top: 0,
       width: 48,
@@ -136867,7 +136873,8 @@ function DEPRECATEDAvatar(_p = {}) {
     viewBox: "0 0 40 40",
     fill: "none",
     style: {
-      position: "absolute",
+      color: "var(--neutral-background-6-rest)",
+position: "absolute",
       left: 0,
       top: 0,
       width: 40,
@@ -136945,7 +136952,8 @@ function DEPRECATEDAvatar(_p = {}) {
     viewBox: "0 0 36 36",
     fill: "none",
     style: {
-      position: "absolute",
+      color: "var(--neutral-background-6-rest)",
+position: "absolute",
       left: 0,
       top: 0,
       width: 36,
@@ -137023,7 +137031,8 @@ function DEPRECATEDAvatar(_p = {}) {
     viewBox: "0 0 32 32",
     fill: "none",
     style: {
-      position: "absolute",
+      color: "var(--neutral-background-6-rest)",
+position: "absolute",
       left: 0,
       top: 0,
       width: 32,
@@ -137101,7 +137110,8 @@ function DEPRECATEDAvatar(_p = {}) {
     viewBox: "0 0 28 28",
     fill: "none",
     style: {
-      position: "absolute",
+      color: "var(--neutral-background-6-rest)",
+position: "absolute",
       left: 0,
       top: 0,
       width: 28,
@@ -137179,7 +137189,8 @@ function DEPRECATEDAvatar(_p = {}) {
     viewBox: "0 0 24 24",
     fill: "none",
     style: {
-      position: "absolute",
+      color: "var(--neutral-background-6-rest)",
+position: "absolute",
       left: 0,
       top: 0,
       width: 24,
@@ -137249,7 +137260,8 @@ function DEPRECATEDAvatar(_p = {}) {
     viewBox: "0 0 20 20",
     fill: "none",
     style: {
-      position: "absolute",
+      color: "var(--neutral-background-6-rest)",
+position: "absolute",
       left: 0,
       top: 0,
       width: 20,
@@ -137319,7 +137331,8 @@ function DEPRECATEDAvatar(_p = {}) {
     viewBox: "0 0 16 16",
     fill: "none",
     style: {
-      position: "absolute",
+      color: "var(--neutral-background-6-rest)",
+position: "absolute",
       left: 0,
       top: 0,
       width: 16,
@@ -142241,9 +142254,8 @@ function LinkTags(_p = {}) {
     style: {
       position: "relative",
       width: 28,
-      flexShrink: 0,
-      alignSelf: "stretch",
-      height: "auto"
+      height: 28,
+      flexShrink: 0
     },
     layout: "image",
     size: "28",
@@ -142333,9 +142345,8 @@ function LinkTags(_p = {}) {
     style: {
       position: "relative",
       width: 28,
-      flexShrink: 0,
-      alignSelf: "stretch",
-      height: "auto"
+      height: 28,
+      flexShrink: 0
     },
     layout: "icon",
     size: "28",
@@ -145630,10 +145641,10 @@ function __FluentWebButton(_p = {}) {
       alignItems: "center",
       flexWrap: "nowrap",
       boxSizing: "border-box",
-      paddingLeft: "calc(var(--spacing-horizontal-s) * 1px)",
-      paddingTop: "calc(var(--vertical-s) * 1px)",
-      paddingRight: "calc(var(--spacing-horizontal-s) * 1px)",
-      paddingBottom: "calc(var(--vertical-s) * 1px)",
+      paddingLeft: "max(0px, calc(var(--spacing-horizontal-s) * 1px - 2px))",
+      paddingTop: "max(0px, calc(var(--vertical-s) * 1px - 2px))",
+      paddingRight: "max(0px, calc(var(--spacing-horizontal-s) * 1px - 2px))",
+      paddingBottom: "max(0px, calc(var(--vertical-s) * 1px - 2px))",
       position: "relative",
       ...props.style
     }
@@ -145693,10 +145704,10 @@ function __FluentWebButton(_p = {}) {
       alignItems: "center",
       flexWrap: "nowrap",
       boxSizing: "border-box",
-      paddingLeft: "calc(var(--spacing-horizontal-l) * 1px)",
-      paddingTop: "calc(var(--vertical-s) * 1px)",
-      paddingRight: "calc(var(--spacing-horizontal-l) * 1px)",
-      paddingBottom: "calc(var(--vertical-s) * 1px)",
+      paddingLeft: "max(0px, calc(var(--spacing-horizontal-l) * 1px - 2px))",
+      paddingTop: "max(0px, calc(var(--vertical-s) * 1px - 2px))",
+      paddingRight: "max(0px, calc(var(--spacing-horizontal-l) * 1px - 2px))",
+      paddingBottom: "max(0px, calc(var(--vertical-s) * 1px - 2px))",
       position: "relative",
       ...props.style
     }
@@ -149404,10 +149415,10 @@ function __FluentWebButton(_p = {}) {
       alignItems: "center",
       flexWrap: "nowrap",
       boxSizing: "border-box",
-      paddingLeft: "calc(var(--spacing-horizontal-xxs) * 1px)",
-      paddingTop: "calc(var(--vertical-xxs) * 1px)",
-      paddingRight: "calc(var(--spacing-horizontal-xxs) * 1px)",
-      paddingBottom: "calc(var(--vertical-xxs) * 1px)",
+      paddingLeft: "max(0px, calc(var(--spacing-horizontal-xxs) * 1px - 2px))",
+      paddingTop: "max(0px, calc(var(--vertical-xxs) * 1px - 2px))",
+      paddingRight: "max(0px, calc(var(--spacing-horizontal-xxs) * 1px - 2px))",
+      paddingBottom: "max(0px, calc(var(--vertical-xxs) * 1px - 2px))",
       position: "relative",
       ...props.style
     }
@@ -149467,10 +149478,10 @@ function __FluentWebButton(_p = {}) {
       alignItems: "center",
       flexWrap: "nowrap",
       boxSizing: "border-box",
-      paddingLeft: "calc(var(--spacing-horizontal-s) * 1px)",
-      paddingTop: "calc(var(--vertical-xxs) * 1px)",
-      paddingRight: "calc(var(--spacing-horizontal-s) * 1px)",
-      paddingBottom: "calc(var(--vertical-xxs) * 1px)",
+      paddingLeft: "max(0px, calc(var(--spacing-horizontal-s) * 1px - 2px))",
+      paddingTop: "max(0px, calc(var(--vertical-xxs) * 1px - 2px))",
+      paddingRight: "max(0px, calc(var(--spacing-horizontal-s) * 1px - 2px))",
+      paddingBottom: "max(0px, calc(var(--vertical-xxs) * 1px - 2px))",
       position: "relative",
       ...props.style
     }
@@ -153178,10 +153189,10 @@ function __FluentWebButton(_p = {}) {
       alignItems: "center",
       flexWrap: "nowrap",
       boxSizing: "border-box",
-      paddingLeft: "calc(var(--spacing-horizontal-snudge) * 1px)",
-      paddingTop: "calc(var(--vertical-snudge) * 1px)",
-      paddingRight: "calc(var(--spacing-horizontal-snudge) * 1px)",
-      paddingBottom: "calc(var(--vertical-snudge) * 1px)",
+      paddingLeft: "max(0px, calc(var(--spacing-horizontal-snudge) * 1px - 2px))",
+      paddingTop: "max(0px, calc(var(--vertical-snudge) * 1px - 2px))",
+      paddingRight: "max(0px, calc(var(--spacing-horizontal-snudge) * 1px - 2px))",
+      paddingBottom: "max(0px, calc(var(--vertical-snudge) * 1px - 2px))",
       position: "relative",
       ...props.style
     }
@@ -153241,10 +153252,10 @@ function __FluentWebButton(_p = {}) {
       alignItems: "center",
       flexWrap: "nowrap",
       boxSizing: "border-box",
-      paddingLeft: "calc(var(--spacing-horizontal-m) * 1px)",
-      paddingTop: "calc(var(--vertical-snudge) * 1px)",
-      paddingRight: "calc(var(--spacing-horizontal-m) * 1px)",
-      paddingBottom: "calc(var(--vertical-snudge) * 1px)",
+      paddingLeft: "max(0px, calc(var(--spacing-horizontal-m) * 1px - 2px))",
+      paddingTop: "max(0px, calc(var(--vertical-snudge) * 1px - 2px))",
+      paddingRight: "max(0px, calc(var(--spacing-horizontal-m) * 1px - 2px))",
+      paddingBottom: "max(0px, calc(var(--vertical-snudge) * 1px - 2px))",
       position: "relative",
       ...props.style
     }
@@ -193307,9 +193318,9 @@ function RadioBase(_p = {}) {
     style: {
       position: "relative",
       width: 16,
+      height: 16,
       overflow: "hidden",
-      flexShrink: 0,
-      alignSelf: "stretch"
+      flexShrink: 0
     }
   }, /*#__PURE__*/React.createElement("svg", {
     width: 16,
@@ -193375,9 +193386,9 @@ function RadioBase(_p = {}) {
     style: {
       position: "relative",
       width: 16,
+      height: 16,
       overflow: "hidden",
-      flexShrink: 0,
-      alignSelf: "stretch"
+      flexShrink: 0
     }
   }, /*#__PURE__*/React.createElement("svg", {
     width: 16,
@@ -200492,10 +200503,10 @@ function SplitButton(_p = {}) {
       flexWrap: "nowrap",
       boxSizing: "border-box",
       gap: "calc(var(--horizontal-none) * 1px)",
-      paddingLeft: "calc(var(--spacing-horizontal-s-2) * 1px)",
-      paddingTop: "calc(var(--vertical-s) * 1px)",
-      paddingRight: "calc(var(--spacing-horizontal-s-2) * 1px)",
-      paddingBottom: "calc(var(--vertical-s) * 1px)",
+      paddingLeft: "max(0px, calc(var(--spacing-horizontal-s-2) * 1px - 2px))",
+      paddingTop: "max(0px, calc(var(--vertical-s) * 1px - 2px))",
+      paddingRight: "max(0px, calc(var(--spacing-horizontal-s-2) * 1px - 2px))",
+      paddingBottom: "max(0px, calc(var(--vertical-s) * 1px - 2px))",
       flexShrink: 0,
       alignSelf: "stretch"
     }
@@ -200565,10 +200576,10 @@ function SplitButton(_p = {}) {
       alignItems: "center",
       flexWrap: "nowrap",
       boxSizing: "border-box",
-      paddingLeft: "calc(var(--spacing-horizontal-l-2) * 1px)",
-      paddingTop: "calc(var(--vertical-s) * 1px)",
-      paddingRight: "calc(var(--spacing-horizontal-l-2) * 1px)",
-      paddingBottom: "calc(var(--vertical-s) * 1px)",
+      paddingLeft: "max(0px, calc(var(--spacing-horizontal-l-2) * 1px - 2px))",
+      paddingTop: "max(0px, calc(var(--vertical-s) * 1px - 2px))",
+      paddingRight: "max(0px, calc(var(--spacing-horizontal-l-2) * 1px - 2px))",
+      paddingBottom: "max(0px, calc(var(--vertical-s) * 1px - 2px))",
       flexShrink: 0,
       alignSelf: "stretch"
     }
@@ -204963,10 +204974,10 @@ function SplitButton(_p = {}) {
       flexWrap: "nowrap",
       boxSizing: "border-box",
       gap: "calc(var(--spacing-horizontal-none-2) * 1px)",
-      paddingLeft: "calc(var(--spacing-horizontal-snudge-2) * 1px)",
-      paddingTop: "calc(var(--spacing-vertical-snudge-2) * 1px)",
-      paddingRight: "calc(var(--spacing-horizontal-snudge-2) * 1px)",
-      paddingBottom: "calc(var(--spacing-vertical-snudge-2) * 1px)",
+      paddingLeft: "max(0px, calc(var(--spacing-horizontal-snudge-2) * 1px - 2px))",
+      paddingTop: "max(0px, calc(var(--spacing-vertical-snudge-2) * 1px - 2px))",
+      paddingRight: "max(0px, calc(var(--spacing-horizontal-snudge-2) * 1px - 2px))",
+      paddingBottom: "max(0px, calc(var(--spacing-vertical-snudge-2) * 1px - 2px))",
       flexShrink: 0,
       alignSelf: "stretch"
     }
@@ -205035,10 +205046,10 @@ function SplitButton(_p = {}) {
       alignItems: "center",
       flexWrap: "nowrap",
       boxSizing: "border-box",
-      paddingLeft: "calc(var(--spacing-horizontal-m-2) * 1px)",
-      paddingTop: "calc(var(--spacing-vertical-snudge-2) * 1px)",
-      paddingRight: "calc(var(--spacing-horizontal-m-2) * 1px)",
-      paddingBottom: "calc(var(--spacing-vertical-snudge-2) * 1px)",
+      paddingLeft: "max(0px, calc(var(--spacing-horizontal-m-2) * 1px - 2px))",
+      paddingTop: "max(0px, calc(var(--spacing-vertical-snudge-2) * 1px - 2px))",
+      paddingRight: "max(0px, calc(var(--spacing-horizontal-m-2) * 1px - 2px))",
+      paddingBottom: "max(0px, calc(var(--spacing-vertical-snudge-2) * 1px - 2px))",
       flexShrink: 0,
       alignSelf: "stretch"
     }
@@ -209570,10 +209581,10 @@ function SplitButton(_p = {}) {
       flexWrap: "nowrap",
       boxSizing: "border-box",
       gap: "calc(var(--spacing-horizontal-none-2) * 1px)",
-      paddingLeft: "calc(var(--spacing-horizontal-xxs-2) * 1px)",
-      paddingTop: "calc(var(--spacing-vertical-xxs) * 1px)",
-      paddingRight: "calc(var(--spacing-horizontal-xxs-2) * 1px)",
-      paddingBottom: "calc(var(--spacing-vertical-xxs) * 1px)",
+      paddingLeft: "max(0px, calc(var(--spacing-horizontal-xxs-2) * 1px - 2px))",
+      paddingTop: "max(0px, calc(var(--spacing-vertical-xxs) * 1px - 2px))",
+      paddingRight: "max(0px, calc(var(--spacing-horizontal-xxs-2) * 1px - 2px))",
+      paddingBottom: "max(0px, calc(var(--spacing-vertical-xxs) * 1px - 2px))",
       flexShrink: 0,
       alignSelf: "stretch"
     }
@@ -209641,10 +209652,10 @@ function SplitButton(_p = {}) {
       alignItems: "center",
       flexWrap: "nowrap",
       boxSizing: "border-box",
-      paddingLeft: "calc(var(--spacing-horizontal-s-2) * 1px)",
-      paddingTop: "calc(var(--spacing-vertical-xxs) * 1px)",
-      paddingRight: "calc(var(--spacing-horizontal-s-2) * 1px)",
-      paddingBottom: "calc(var(--spacing-vertical-xxs) * 1px)",
+      paddingLeft: "max(0px, calc(var(--spacing-horizontal-s-2) * 1px - 2px))",
+      paddingTop: "max(0px, calc(var(--spacing-vertical-xxs) * 1px - 2px))",
+      paddingRight: "max(0px, calc(var(--spacing-horizontal-s-2) * 1px - 2px))",
+      paddingBottom: "max(0px, calc(var(--spacing-vertical-xxs) * 1px - 2px))",
       flexShrink: 0,
       alignSelf: "stretch"
     }
@@ -230237,6 +230248,7 @@ function Switch(_p = {}) {
   const __body3 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "-2px -2px",
       width: "fit-content",
       borderRadius: 4,
       boxShadow: "inset 0 0 0 3px var(--neutral-stroke-focus-1-rest)",
@@ -230438,6 +230450,7 @@ function Switch(_p = {}) {
   const __body6 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "-2px -2px",
       width: "fit-content",
       borderRadius: 4,
       boxShadow: "inset 0 0 0 3px var(--neutral-stroke-focus-1-rest)",
@@ -230661,6 +230674,7 @@ function Switch(_p = {}) {
   const __body9 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "-2px -2px",
       width: "fit-content",
       borderRadius: 4,
       boxShadow: "inset 0 0 0 3px var(--neutral-stroke-focus-1-rest)",
@@ -230890,6 +230904,7 @@ function Switch(_p = {}) {
   const __body12 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "-2px -2px",
       width: "fit-content",
       borderRadius: 4,
       boxShadow: "inset 0 0 0 3px var(--neutral-stroke-focus-1-rest)",
@@ -231234,6 +231249,7 @@ function Switch(_p = {}) {
   const __body17 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "-2px -2px",
       width: "fit-content",
       borderRadius: 4,
       boxShadow: "inset 0 0 0 3px var(--neutral-stroke-focus-1-rest)",
@@ -231477,6 +231493,7 @@ function Switch(_p = {}) {
   const __body20 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "-2px -2px",
       width: "fit-content",
       borderRadius: 4,
       boxShadow: "inset 0 0 0 3px var(--neutral-stroke-focus-1-rest)",
@@ -231823,6 +231840,7 @@ function Switch(_p = {}) {
   const __body23 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "-2px -2px",
       width: "fit-content",
       borderRadius: 4,
       boxShadow: "inset 0 0 0 3px var(--neutral-stroke-focus-1-rest)",
@@ -232176,6 +232194,7 @@ function Switch(_p = {}) {
   const __body26 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "-2px -2px",
       width: "fit-content",
       borderRadius: 4,
       boxShadow: "inset 0 0 0 3px var(--neutral-stroke-focus-1-rest)",
@@ -246498,6 +246517,7 @@ function HorizontalTab(_p = {}) {
   const __body3 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "-0.5px -1px",
       width: 76,
       borderRadius: 2,
       backgroundColor: "rgba(255,255,255,0)",
@@ -246952,6 +246972,7 @@ function HorizontalTab(_p = {}) {
   const __body8 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "-0.5px -0.5px",
       width: 75,
       borderRadius: 2,
       backgroundColor: "rgba(255,255,255,0)",
@@ -247307,6 +247328,7 @@ function HorizontalTab(_p = {}) {
   const __body12 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "-0.5px -1px",
       width: 76,
       borderRadius: 2,
       boxShadow: "0 0 0 3px var(--neutral-stroke-focus-2-rest)",
@@ -247593,6 +247615,7 @@ function HorizontalTab(_p = {}) {
   const __body15 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "-0.5px -0.5px",
       width: 75,
       borderRadius: 2,
       boxShadow: "0 0 0 3px var(--neutral-stroke-focus-2-rest)",
@@ -247958,6 +247981,7 @@ function HorizontalTab(_p = {}) {
   const __body19 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "-4px -4px",
       width: 64,
       borderRadius: 2,
       backgroundColor: "rgba(255,255,255,0)",
@@ -248415,6 +248439,7 @@ function HorizontalTab(_p = {}) {
   const __body24 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "-4px -3.5px",
       width: 63,
       borderRadius: 2,
       backgroundColor: "rgba(255,255,255,0)",
@@ -248773,6 +248798,7 @@ function HorizontalTab(_p = {}) {
   const __body28 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "-4px -4px",
       width: 64,
       borderRadius: 2,
       borderTop: "3px solid var(--neutral-stroke-focus-2-rest)",
@@ -249062,6 +249088,7 @@ function HorizontalTab(_p = {}) {
   const __body31 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "-4px -3.5px",
       width: 63,
       borderRadius: 2,
       borderTop: "3px solid var(--neutral-stroke-focus-2-rest)",
@@ -257272,6 +257299,7 @@ function ListItem(_p = {}) {
   const __body9 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "-3px -3px",
       width: 272,
       height: 32,
       borderRadius: 4,
@@ -257372,6 +257400,7 @@ function ListItem(_p = {}) {
   const __body10 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "-3px -3px",
       width: 272,
       height: 32,
       borderRadius: 4,
@@ -273876,6 +273905,7 @@ function NavSubItem(_p = {}) {
     className: props.className,
     style: {
       width: 260,
+      height: 32,
       display: "flex",
       flexDirection: "row",
       gap: "calc(var(--horizontal-xxs) * 1px)",
@@ -287394,6 +287424,7 @@ function VerticalTab(_p = {}) {
   const __body3 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "-3px -4px",
       width: "fit-content",
       height: 32,
       borderRadius: 2,
@@ -287847,6 +287878,7 @@ function VerticalTab(_p = {}) {
   const __body8 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "-3px -4px",
       width: "fit-content",
       height: 32,
       borderRadius: 2,
@@ -288201,6 +288233,7 @@ function VerticalTab(_p = {}) {
   const __body12 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "-3px -4px",
       width: "fit-content",
       height: 32,
       borderRadius: 2,
@@ -288486,6 +288519,7 @@ function VerticalTab(_p = {}) {
   const __body15 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "-3px -4px",
       width: "fit-content",
       height: 32,
       borderRadius: 2,
@@ -288850,6 +288884,7 @@ function VerticalTab(_p = {}) {
   const __body19 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "-3px -4px",
       width: "fit-content",
       height: 24,
       borderRadius: 2,
@@ -289303,6 +289338,7 @@ function VerticalTab(_p = {}) {
   const __body24 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "-3px -4px",
       width: "fit-content",
       height: 24,
       borderRadius: 2,
@@ -289746,6 +289782,7 @@ function VerticalTab(_p = {}) {
   const __body29 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "-3px -4px",
       width: "fit-content",
       height: 24,
       borderRadius: 2,
@@ -290119,6 +290156,7 @@ function VerticalTab(_p = {}) {
   const __body33 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "-3px -4px",
       width: "fit-content",
       height: 24,
       borderRadius: 2,
@@ -290824,6 +290862,7 @@ function VerticalTab(_p = {}) {
   const __body42 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "-3px -4px",
       width: "fit-content",
       height: 32,
       borderRadius: 9999,
@@ -291498,6 +291537,7 @@ function VerticalTab(_p = {}) {
   const __body51 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "-3px -4px",
       width: "fit-content",
       height: 32,
       borderRadius: 9999,
@@ -292196,6 +292236,7 @@ function VerticalTab(_p = {}) {
   const __body60 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "-3px -4px",
       width: "fit-content",
       height: 24,
       borderRadius: 9999,
@@ -292870,6 +292911,7 @@ function VerticalTab(_p = {}) {
   const __body69 = () => /*#__PURE__*/React.createElement("div", {
     className: props.className,
     style: {
+      margin: "-3px -4px",
       width: "fit-content",
       height: 24,
       borderRadius: 9999,

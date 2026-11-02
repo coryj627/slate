@@ -262,6 +262,7 @@ export function VerticalTab(_p = {}) {
   );
   const __body3 = () => (
     <div className={props.className} style={{
+      margin: "-3px -4px",
       width: "fit-content",
       height: 32,
       borderRadius: 2,
@@ -690,6 +691,7 @@ export function VerticalTab(_p = {}) {
   );
   const __body8 = () => (
     <div className={props.className} style={{
+      margin: "-3px -4px",
       width: "fit-content",
       height: 32,
       borderRadius: 2,
@@ -1024,6 +1026,7 @@ export function VerticalTab(_p = {}) {
   );
   const __body12 = () => (
     <div className={props.className} style={{
+      margin: "-3px -4px",
       width: "fit-content",
       height: 32,
       borderRadius: 2,
@@ -1294,6 +1297,7 @@ export function VerticalTab(_p = {}) {
   );
   const __body15 = () => (
     <div className={props.className} style={{
+      margin: "-3px -4px",
       width: "fit-content",
       height: 32,
       borderRadius: 2,
@@ -1638,6 +1642,7 @@ export function VerticalTab(_p = {}) {
   );
   const __body19 = () => (
     <div className={props.className} style={{
+      margin: "-3px -4px",
       width: "fit-content",
       height: 24,
       borderRadius: 2,
@@ -2066,6 +2071,7 @@ export function VerticalTab(_p = {}) {
   );
   const __body24 = () => (
     <div className={props.className} style={{
+      margin: "-3px -4px",
       width: "fit-content",
       height: 24,
       borderRadius: 2,
@@ -2484,6 +2490,7 @@ export function VerticalTab(_p = {}) {
   );
   const __body29 = () => (
     <div className={props.className} style={{
+      margin: "-3px -4px",
       width: "fit-content",
       height: 24,
       borderRadius: 2,
@@ -2837,6 +2844,7 @@ export function VerticalTab(_p = {}) {
   );
   const __body33 = () => (
     <div className={props.className} style={{
+      margin: "-3px -4px",
       width: "fit-content",
       height: 24,
       borderRadius: 2,
@@ -3505,6 +3513,7 @@ export function VerticalTab(_p = {}) {
   );
   const __body42 = () => (
     <div className={props.className} style={{
+      margin: "-3px -4px",
       width: "fit-content",
       height: 32,
       borderRadius: 9999,
@@ -4143,6 +4152,7 @@ export function VerticalTab(_p = {}) {
   );
   const __body51 = () => (
     <div className={props.className} style={{
+      margin: "-3px -4px",
       width: "fit-content",
       height: 32,
       borderRadius: 9999,
@@ -4805,6 +4815,7 @@ export function VerticalTab(_p = {}) {
   );
   const __body60 = () => (
     <div className={props.className} style={{
+      margin: "-3px -4px",
       width: "fit-content",
       height: 24,
       borderRadius: 9999,
@@ -5443,6 +5454,7 @@ export function VerticalTab(_p = {}) {
   );
   const __body69 = () => (
     <div className={props.className} style={{
+      margin: "-3px -4px",
       width: "fit-content",
       height: 24,
       borderRadius: 9999,

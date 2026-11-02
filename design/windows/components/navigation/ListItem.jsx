@@ -908,6 +908,7 @@ export function ListItem(_p = {}) {
   );
   const __body9 = () => (
     <div className={props.className} style={{
+      margin: "-3px -3px",
       width: 272,
       height: 32,
       borderRadius: 4,
@@ -1003,6 +1004,7 @@ export function ListItem(_p = {}) {
   );
   const __body10 = () => (
     <div className={props.className} style={{
+      margin: "-3px -3px",
       width: 272,
       height: 32,
       borderRadius: 4,

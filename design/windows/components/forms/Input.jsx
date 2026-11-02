@@ -12,7 +12,7 @@ export function Input(_p = {}) {
   const props = { ..._p, style2: _p.style2 ?? "outline", size: _p.size ?? "sm", state: _p.state ?? "rest", iconAfter1: _p.iconAfter1 ?? false, iconAfter2: _p.iconAfter2 ?? true, iconBefore: _p.iconBefore ?? false };
   const __body0 = () => (
     <div className={props.className} style={{
-      width: "fit-content",
+      width: 280,
       overflow: "hidden",
       borderRadius: 4,
       display: "flex",

@@ -262,6 +262,7 @@ export function HorizontalTab(_p = {}) {
   );
   const __body3 = () => (
     <div className={props.className} style={{
+      margin: "-0.5px -1px",
       width: 76,
       borderRadius: 2,
       backgroundColor: "rgba(255,255,255,0)",
@@ -691,6 +692,7 @@ export function HorizontalTab(_p = {}) {
   );
   const __body8 = () => (
     <div className={props.className} style={{
+      margin: "-0.5px -0.5px",
       width: 75,
       borderRadius: 2,
       backgroundColor: "rgba(255,255,255,0)",
@@ -1026,6 +1028,7 @@ export function HorizontalTab(_p = {}) {
   );
   const __body12 = () => (
     <div className={props.className} style={{
+      margin: "-0.5px -1px",
       width: 76,
       borderRadius: 2,
       boxShadow: "0 0 0 3px var(--neutral-stroke-focus-2-rest)",
@@ -1297,6 +1300,7 @@ export function HorizontalTab(_p = {}) {
   );
   const __body15 = () => (
     <div className={props.className} style={{
+      margin: "-0.5px -0.5px",
       width: 75,
       borderRadius: 2,
       boxShadow: "0 0 0 3px var(--neutral-stroke-focus-2-rest)",
@@ -1642,6 +1646,7 @@ export function HorizontalTab(_p = {}) {
   );
   const __body19 = () => (
     <div className={props.className} style={{
+      margin: "-4px -4px",
       width: 64,
       borderRadius: 2,
       backgroundColor: "rgba(255,255,255,0)",
@@ -2074,6 +2079,7 @@ export function HorizontalTab(_p = {}) {
   );
   const __body24 = () => (
     <div className={props.className} style={{
+      margin: "-4px -3.5px",
       width: 63,
       borderRadius: 2,
       backgroundColor: "rgba(255,255,255,0)",
@@ -2412,6 +2418,7 @@ export function HorizontalTab(_p = {}) {
   );
   const __body28 = () => (
     <div className={props.className} style={{
+      margin: "-4px -4px",
       width: 64,
       borderRadius: 2,
       borderTop: "3px solid var(--neutral-stroke-focus-2-rest)",
@@ -2686,6 +2693,7 @@ export function HorizontalTab(_p = {}) {
   );
   const __body31 = () => (
     <div className={props.className} style={{
+      margin: "-4px -3.5px",
       width: 63,
       borderRadius: 2,
       borderTop: "3px solid var(--neutral-stroke-focus-2-rest)",

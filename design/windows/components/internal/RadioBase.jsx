@@ -28,9 +28,9 @@ export function RadioBase(_p = {}) {
       <div style={{
         position: "relative",
         width: 16,
+        height: 16,
         overflow: "hidden",
         flexShrink: 0,
-        alignSelf: "stretch",
       }}>
         <svg width={16} height={16} viewBox="0 0 16 16" fill="none" style={{
           position: "absolute",
@@ -87,9 +87,9 @@ export function RadioBase(_p = {}) {
         <div style={{
           position: "relative",
           width: 16,
+          height: 16,
           overflow: "hidden",
           flexShrink: 0,
-          alignSelf: "stretch",
         }}>
           <svg width={16} height={16} viewBox="0 0 16 16" fill="none" style={{
             position: "absolute",
