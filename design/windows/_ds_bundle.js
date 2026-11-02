@@ -121251,6 +121251,8 @@ function Link(_p = {}) {
     }
   }, /*#__PURE__*/React.createElement("span", {
     style: {
+      textDecoration: props.inlineStyle ? "underline" : "none",
+      textDecorationColor: "var(--brand-foreground-link-rest-3)",
       position: "relative",
       fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
       fontWeight: 400,
@@ -121260,19 +121262,7 @@ function Link(_p = {}) {
       color: "var(--brand-foreground-link-rest-3)",
       flexShrink: 0
     }
-  }, props.text), props.inlineStyle && /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: -2,
-      position: "relative",
-      height: 3,
-      borderTop: "1px solid var(--brand-foreground-link-rest-3)",
-      borderRight: "1px solid var(--brand-foreground-link-rest-3)",
-      borderBottom: "1px solid var(--brand-foreground-link-rest-3)",
-      borderLeft: "1px solid var(--brand-foreground-link-rest-3)",
-      flexShrink: 0,
-      alignSelf: "stretch"
-    }
-  })), props.showIcon && /*#__PURE__*/React.createElement("div", {
+  }, props.text)), props.showIcon && /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       width: 20,
@@ -121314,6 +121304,8 @@ function Link(_p = {}) {
     }
   }, /*#__PURE__*/React.createElement("span", {
     style: {
+      textDecoration: "underline",
+      textDecorationColor: "var(--brand-foreground-link-hover-3)",
       position: "relative",
       fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
       fontWeight: 400,
@@ -121323,19 +121315,7 @@ function Link(_p = {}) {
       color: "var(--brand-foreground-link-hover-3)",
       flexShrink: 0
     }
-  }, props.text), /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: -2,
-      position: "relative",
-      height: 3,
-      borderTop: "1px solid var(--brand-foreground-link-hover-3)",
-      borderRight: "1px solid var(--brand-foreground-link-hover-3)",
-      borderBottom: "1px solid var(--brand-foreground-link-hover-3)",
-      borderLeft: "1px solid var(--brand-foreground-link-hover-3)",
-      flexShrink: 0,
-      alignSelf: "stretch"
-    }
-  })), props.showIcon && /*#__PURE__*/React.createElement("div", {
+  }, props.text)), props.showIcon && /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       width: 20,
@@ -121377,6 +121357,8 @@ function Link(_p = {}) {
     }
   }, /*#__PURE__*/React.createElement("span", {
     style: {
+      textDecoration: "underline",
+      textDecorationColor: "var(--brand-foreground-link-pressed-3)",
       position: "relative",
       fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
       fontWeight: 400,
@@ -121386,19 +121368,7 @@ function Link(_p = {}) {
       color: "var(--brand-foreground-link-pressed-3)",
       flexShrink: 0
     }
-  }, props.text), /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: -2,
-      position: "relative",
-      height: 3,
-      borderTop: "1px solid var(--brand-foreground-link-pressed-3)",
-      borderRight: "1px solid var(--brand-foreground-link-pressed-3)",
-      borderBottom: "1px solid var(--brand-foreground-link-pressed-3)",
-      borderLeft: "1px solid var(--brand-foreground-link-pressed-3)",
-      flexShrink: 0,
-      alignSelf: "stretch"
-    }
-  })), props.showIcon && /*#__PURE__*/React.createElement("div", {
+  }, props.text)), props.showIcon && /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       width: 20,
@@ -121440,6 +121410,8 @@ function Link(_p = {}) {
     }
   }, /*#__PURE__*/React.createElement("span", {
     style: {
+      textDecoration: "underline",
+      textDecorationColor: "var(--neutral-stroke-focus-2-rest-4)",
       position: "relative",
       fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
       fontWeight: 400,
@@ -121449,19 +121421,7 @@ function Link(_p = {}) {
       color: "var(--brand-foreground-link-rest-3)",
       flexShrink: 0
     }
-  }, props.text), /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: -2,
-      position: "relative",
-      height: 3,
-      borderTop: "1px solid var(--neutral-stroke-focus-2-rest-4)",
-      borderRight: "1px solid var(--neutral-stroke-focus-2-rest-4)",
-      borderBottom: "1px solid var(--neutral-stroke-focus-2-rest-4)",
-      borderLeft: "1px solid var(--neutral-stroke-focus-2-rest-4)",
-      flexShrink: 0,
-      alignSelf: "stretch"
-    }
-  })), props.showIcon && /*#__PURE__*/React.createElement("div", {
+  }, props.text)), props.showIcon && /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       width: 20,
@@ -121503,6 +121463,8 @@ function Link(_p = {}) {
     }
   }, /*#__PURE__*/React.createElement("span", {
     style: {
+      textDecoration: props.inlineStyle ? "underline" : "none",
+      textDecorationColor: "var(--neutral-foreground-disabled-rest-4)",
       position: "relative",
       fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
       fontWeight: 400,
@@ -121512,19 +121474,7 @@ function Link(_p = {}) {
       color: "var(--neutral-foreground-disabled-rest-4)",
       flexShrink: 0
     }
-  }, props.text), props.inlineStyle && /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: -2,
-      position: "relative",
-      height: 3,
-      borderTop: "1px solid var(--neutral-foreground-disabled-rest-4)",
-      borderRight: "1px solid var(--neutral-foreground-disabled-rest-4)",
-      borderBottom: "1px solid var(--neutral-foreground-disabled-rest-4)",
-      borderLeft: "1px solid var(--neutral-foreground-disabled-rest-4)",
-      flexShrink: 0,
-      alignSelf: "stretch"
-    }
-  })), props.showIcon && /*#__PURE__*/React.createElement("div", {
+  }, props.text)), props.showIcon && /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       width: 20,
@@ -121566,6 +121516,8 @@ function Link(_p = {}) {
     }
   }, /*#__PURE__*/React.createElement("span", {
     style: {
+      textDecoration: props.inlineStyle ? "underline" : "none",
+      textDecorationColor: "var(--neutral-foreground-2-rest-3)",
       position: "relative",
       fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
       fontWeight: 400,
@@ -121575,19 +121527,7 @@ function Link(_p = {}) {
       color: "var(--neutral-foreground-2-link-rest-3)",
       flexShrink: 0
     }
-  }, props.text), props.inlineStyle && /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: -2,
-      position: "relative",
-      height: 3,
-      borderTop: "1px solid var(--neutral-foreground-2-rest-3)",
-      borderRight: "1px solid var(--neutral-foreground-2-rest-3)",
-      borderBottom: "1px solid var(--neutral-foreground-2-rest-3)",
-      borderLeft: "1px solid var(--neutral-foreground-2-rest-3)",
-      flexShrink: 0,
-      alignSelf: "stretch"
-    }
-  })), props.showIcon && /*#__PURE__*/React.createElement("div", {
+  }, props.text)), props.showIcon && /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       width: 20,
@@ -121629,6 +121569,8 @@ function Link(_p = {}) {
     }
   }, /*#__PURE__*/React.createElement("span", {
     style: {
+      textDecoration: "underline",
+      textDecorationColor: "var(--neutral-foreground-2-link-hover-3)",
       position: "relative",
       fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
       fontWeight: 400,
@@ -121638,19 +121580,7 @@ function Link(_p = {}) {
       color: "var(--neutral-foreground-2-link-hover-3)",
       flexShrink: 0
     }
-  }, props.text), /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: -2,
-      position: "relative",
-      height: 3,
-      borderTop: "1px solid var(--neutral-foreground-2-link-hover-3)",
-      borderRight: "1px solid var(--neutral-foreground-2-link-hover-3)",
-      borderBottom: "1px solid var(--neutral-foreground-2-link-hover-3)",
-      borderLeft: "1px solid var(--neutral-foreground-2-link-hover-3)",
-      flexShrink: 0,
-      alignSelf: "stretch"
-    }
-  })), props.showIcon && /*#__PURE__*/React.createElement("div", {
+  }, props.text)), props.showIcon && /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       width: 20,
@@ -121692,6 +121622,8 @@ function Link(_p = {}) {
     }
   }, /*#__PURE__*/React.createElement("span", {
     style: {
+      textDecoration: "underline",
+      textDecorationColor: "var(--neutral-foreground-2-link-pressed-3)",
       position: "relative",
       fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
       fontWeight: 400,
@@ -121701,19 +121633,7 @@ function Link(_p = {}) {
       color: "var(--neutral-foreground-2-link-pressed-3)",
       flexShrink: 0
     }
-  }, props.text), /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: -2,
-      position: "relative",
-      height: 3,
-      borderTop: "1px solid var(--neutral-foreground-2-link-pressed-3)",
-      borderRight: "1px solid var(--neutral-foreground-2-link-pressed-3)",
-      borderBottom: "1px solid var(--neutral-foreground-2-link-pressed-3)",
-      borderLeft: "1px solid var(--neutral-foreground-2-link-pressed-3)",
-      flexShrink: 0,
-      alignSelf: "stretch"
-    }
-  })), props.showIcon && /*#__PURE__*/React.createElement("div", {
+  }, props.text)), props.showIcon && /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       width: 20,
@@ -121755,6 +121675,8 @@ function Link(_p = {}) {
     }
   }, /*#__PURE__*/React.createElement("span", {
     style: {
+      textDecoration: "underline",
+      textDecorationColor: "var(--neutral-stroke-focus-2-rest-4)",
       position: "relative",
       fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
       fontWeight: 400,
@@ -121764,19 +121686,7 @@ function Link(_p = {}) {
       color: "var(--neutral-foreground-2-link-rest-3)",
       flexShrink: 0
     }
-  }, props.text), /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: -2,
-      position: "relative",
-      height: 3,
-      borderTop: "1px solid var(--neutral-stroke-focus-2-rest-4)",
-      borderRight: "1px solid var(--neutral-stroke-focus-2-rest-4)",
-      borderBottom: "1px solid var(--neutral-stroke-focus-2-rest-4)",
-      borderLeft: "1px solid var(--neutral-stroke-focus-2-rest-4)",
-      flexShrink: 0,
-      alignSelf: "stretch"
-    }
-  })), props.showIcon && /*#__PURE__*/React.createElement("div", {
+  }, props.text)), props.showIcon && /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       width: 20,
@@ -121818,6 +121728,8 @@ function Link(_p = {}) {
     }
   }, /*#__PURE__*/React.createElement("span", {
     style: {
+      textDecoration: props.inlineStyle ? "underline" : "none",
+      textDecorationColor: "var(--neutral-foreground-inverted-link-rest-3)",
       position: "relative",
       fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
       fontWeight: 400,
@@ -121827,19 +121739,7 @@ function Link(_p = {}) {
       color: "var(--neutral-foreground-inverted-link-rest-3)",
       flexShrink: 0
     }
-  }, props.text), props.inlineStyle && /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: -2,
-      position: "relative",
-      height: 3,
-      borderTop: "1px solid var(--neutral-foreground-inverted-link-rest-3)",
-      borderRight: "1px solid var(--neutral-foreground-inverted-link-rest-3)",
-      borderBottom: "1px solid var(--neutral-foreground-inverted-link-rest-3)",
-      borderLeft: "1px solid var(--neutral-foreground-inverted-link-rest-3)",
-      flexShrink: 0,
-      alignSelf: "stretch"
-    }
-  })), props.showIcon && /*#__PURE__*/React.createElement("div", {
+  }, props.text)), props.showIcon && /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       width: 20,
@@ -121881,6 +121781,8 @@ function Link(_p = {}) {
     }
   }, /*#__PURE__*/React.createElement("span", {
     style: {
+      textDecoration: "underline",
+      textDecorationColor: "var(--neutral-foreground-inverted-link-hover-3)",
       position: "relative",
       fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
       fontWeight: 400,
@@ -121890,19 +121792,7 @@ function Link(_p = {}) {
       color: "var(--neutral-foreground-inverted-link-hover-3)",
       flexShrink: 0
     }
-  }, props.text), /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: -2,
-      position: "relative",
-      height: 3,
-      borderTop: "1px solid var(--neutral-foreground-inverted-link-hover-3)",
-      borderRight: "1px solid var(--neutral-foreground-inverted-link-hover-3)",
-      borderBottom: "1px solid var(--neutral-foreground-inverted-link-hover-3)",
-      borderLeft: "1px solid var(--neutral-foreground-inverted-link-hover-3)",
-      flexShrink: 0,
-      alignSelf: "stretch"
-    }
-  })), props.showIcon && /*#__PURE__*/React.createElement("div", {
+  }, props.text)), props.showIcon && /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       width: 20,
@@ -121944,6 +121834,8 @@ function Link(_p = {}) {
     }
   }, /*#__PURE__*/React.createElement("span", {
     style: {
+      textDecoration: "underline",
+      textDecorationColor: "var(--neutral-foreground-inverted-link-pressed-3)",
       position: "relative",
       fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
       fontWeight: 400,
@@ -121953,19 +121845,7 @@ function Link(_p = {}) {
       color: "var(--neutral-foreground-inverted-link-pressed-3)",
       flexShrink: 0
     }
-  }, props.text), /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: -2,
-      position: "relative",
-      height: 3,
-      borderTop: "1px solid var(--neutral-foreground-inverted-link-pressed-3)",
-      borderRight: "1px solid var(--neutral-foreground-inverted-link-pressed-3)",
-      borderBottom: "1px solid var(--neutral-foreground-inverted-link-pressed-3)",
-      borderLeft: "1px solid var(--neutral-foreground-inverted-link-pressed-3)",
-      flexShrink: 0,
-      alignSelf: "stretch"
-    }
-  })), props.showIcon && /*#__PURE__*/React.createElement("div", {
+  }, props.text)), props.showIcon && /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       width: 20,
@@ -122007,6 +121887,8 @@ function Link(_p = {}) {
     }
   }, /*#__PURE__*/React.createElement("span", {
     style: {
+      textDecoration: "underline",
+      textDecorationColor: "var(--neutral-foreground-inverted-link-rest-3)",
       position: "relative",
       fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
       fontWeight: 400,
@@ -122016,19 +121898,7 @@ function Link(_p = {}) {
       color: "var(--neutral-foreground-inverted-link-rest-3)",
       flexShrink: 0
     }
-  }, props.text), /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: -2,
-      position: "relative",
-      height: 3,
-      borderTop: "1px solid var(--neutral-foreground-inverted-link-rest-3)",
-      borderRight: "1px solid var(--neutral-foreground-inverted-link-rest-3)",
-      borderBottom: "1px solid var(--neutral-foreground-inverted-link-rest-3)",
-      borderLeft: "1px solid var(--neutral-foreground-inverted-link-rest-3)",
-      flexShrink: 0,
-      alignSelf: "stretch"
-    }
-  })), props.showIcon && /*#__PURE__*/React.createElement("div", {
+  }, props.text)), props.showIcon && /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       width: 20,
@@ -157027,6 +156897,8 @@ function DataGridCellLarge(_p = {}) {
     }
   }, /*#__PURE__*/React.createElement("span", {
     style: {
+      textDecoration: "underline",
+      textDecorationColor: "var(--brand-foreground-link-rest)",
       position: "relative",
       fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
       fontWeight: 400,
@@ -157036,19 +156908,7 @@ function DataGridCellLarge(_p = {}) {
       color: "var(--brand-foreground-link-rest)",
       flexShrink: 0
     }
-  }, "Link"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: -2,
-      position: "relative",
-      height: 3,
-      borderTop: "1px solid var(--brand-foreground-link-rest)",
-      borderRight: "1px solid var(--brand-foreground-link-rest)",
-      borderBottom: "1px solid var(--brand-foreground-link-rest)",
-      borderLeft: "1px solid var(--brand-foreground-link-rest)",
-      flexShrink: 0,
-      alignSelf: "stretch"
-    }
-  })), /*#__PURE__*/React.createElement("div", {
+  }, "Link")), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       width: 20,
@@ -157912,6 +157772,8 @@ function DataGridCellMedium(_p = {}) {
     }
   }, /*#__PURE__*/React.createElement("span", {
     style: {
+      textDecoration: "underline",
+      textDecorationColor: "var(--brand-foreground-link-rest)",
       position: "relative",
       fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
       fontWeight: 400,
@@ -157921,19 +157783,7 @@ function DataGridCellMedium(_p = {}) {
       color: "var(--brand-foreground-link-rest)",
       flexShrink: 0
     }
-  }, "Link"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: -2,
-      position: "relative",
-      height: 3,
-      borderTop: "1px solid var(--brand-foreground-link-rest)",
-      borderRight: "1px solid var(--brand-foreground-link-rest)",
-      borderBottom: "1px solid var(--brand-foreground-link-rest)",
-      borderLeft: "1px solid var(--brand-foreground-link-rest)",
-      flexShrink: 0,
-      alignSelf: "stretch"
-    }
-  })), /*#__PURE__*/React.createElement("div", {
+  }, "Link")), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       width: 20,
@@ -158639,6 +158489,8 @@ function DataGridCellSmall(_p = {}) {
     }
   }, /*#__PURE__*/React.createElement("span", {
     style: {
+      textDecoration: "underline",
+      textDecorationColor: "var(--brand-foreground-link-rest)",
       position: "relative",
       fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
       fontWeight: 400,
@@ -158648,19 +158500,7 @@ function DataGridCellSmall(_p = {}) {
       color: "var(--brand-foreground-link-rest)",
       flexShrink: 0
     }
-  }, "Link"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: -2,
-      position: "relative",
-      height: 3,
-      borderTop: "1px solid var(--brand-foreground-link-rest)",
-      borderRight: "1px solid var(--brand-foreground-link-rest)",
-      borderBottom: "1px solid var(--brand-foreground-link-rest)",
-      borderLeft: "1px solid var(--brand-foreground-link-rest)",
-      flexShrink: 0,
-      alignSelf: "stretch"
-    }
-  })), /*#__PURE__*/React.createElement("div", {
+  }, "Link")), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       width: 20,
@@ -159374,6 +159214,8 @@ function DataGridCellSmaller(_p = {}) {
     }
   }, /*#__PURE__*/React.createElement("span", {
     style: {
+      textDecoration: "underline",
+      textDecorationColor: "var(--brand-foreground-link-rest)",
       position: "relative",
       fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
       fontWeight: 400,
@@ -159383,19 +159225,7 @@ function DataGridCellSmaller(_p = {}) {
       color: "var(--brand-foreground-link-rest)",
       flexShrink: 0
     }
-  }, "Link"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: -2,
-      position: "relative",
-      height: 3,
-      borderTop: "1px solid var(--brand-foreground-link-rest)",
-      borderRight: "1px solid var(--brand-foreground-link-rest)",
-      borderBottom: "1px solid var(--brand-foreground-link-rest)",
-      borderLeft: "1px solid var(--brand-foreground-link-rest)",
-      flexShrink: 0,
-      alignSelf: "stretch"
-    }
-  })), /*#__PURE__*/React.createElement("div", {
+  }, "Link")), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       width: 20,
@@ -234179,6 +234009,8 @@ function TeachingPopoverContent(_p = {}) {
     }
   }, /*#__PURE__*/React.createElement("span", {
     style: {
+      textDecoration: "underline",
+      textDecorationColor: "var(--brand-foreground-link-rest)",
       position: "relative",
       fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
       fontWeight: 400,
@@ -234188,19 +234020,7 @@ function TeachingPopoverContent(_p = {}) {
       color: "var(--brand-foreground-link-rest)",
       flexShrink: 0
     }
-  }, "Always underline links"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: -2,
-      position: "relative",
-      height: 3,
-      borderTop: "1px solid var(--brand-foreground-link-rest)",
-      borderRight: "1px solid var(--brand-foreground-link-rest)",
-      borderBottom: "1px solid var(--brand-foreground-link-rest)",
-      borderLeft: "1px solid var(--brand-foreground-link-rest)",
-      flexShrink: 0,
-      alignSelf: "stretch"
-    }
-  })), /*#__PURE__*/React.createElement("div", {
+  }, "Always underline links")), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       width: 20,
@@ -235076,6 +234896,8 @@ function TeachingPopoverContentOnBrand(_p = {}) {
     }
   }, /*#__PURE__*/React.createElement("span", {
     style: {
+      textDecoration: "underline",
+      textDecorationColor: "var(--neutral-foreground-inverted-link-rest)",
       position: "relative",
       fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
       fontWeight: 400,
@@ -235085,19 +234907,7 @@ function TeachingPopoverContentOnBrand(_p = {}) {
       color: "var(--neutral-foreground-inverted-link-rest)",
       flexShrink: 0
     }
-  }, "Always underline links"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: -2,
-      position: "relative",
-      height: 3,
-      borderTop: "1px solid var(--neutral-foreground-inverted-link-rest)",
-      borderRight: "1px solid var(--neutral-foreground-inverted-link-rest)",
-      borderBottom: "1px solid var(--neutral-foreground-inverted-link-rest)",
-      borderLeft: "1px solid var(--neutral-foreground-inverted-link-rest)",
-      flexShrink: 0,
-      alignSelf: "stretch"
-    }
-  })), /*#__PURE__*/React.createElement("div", {
+  }, "Always underline links")), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       width: 20,
