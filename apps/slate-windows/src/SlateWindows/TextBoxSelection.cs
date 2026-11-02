@@ -15,6 +15,11 @@ namespace SlateWindows;
 /// <see cref="TextBoxBase.SelectionTextBrush"/>, whose default is white, so
 /// the two go together. Spike 6 in design/windows/wpf-feasibility.md proved the
 /// switch with right-to-left text.
+/// <para>A <see cref="RichTextBox"/> ignores the switch and always draws its
+/// selection on top of the text, so the reading view sets its own brush
+/// (<see cref="Reading.ReadingSurface"/>). This handler couldn't reach it:
+/// WPF only raises Loaded on an element whose style or instance asks for it,
+/// and the surface has neither.</para>
 /// </summary>
 internal static class TextBoxSelection
 {
@@ -22,6 +27,7 @@ internal static class TextBoxSelection
         "Switch.System.Windows.Controls.Text.UseAdornerForTextboxSelectionRendering";
     internal const string BackgroundBrushKey = "Slate.SelectionBackgroundBrush";
     internal const string TextBrushKey = "Slate.SelectionTextBrush";
+    internal const string ReadingBrushKey = "Slate.ReadingSelectionBrush";
 
     private static int _installed;
 

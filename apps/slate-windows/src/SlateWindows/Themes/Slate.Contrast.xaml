@@ -31,6 +31,9 @@
                      Color="{DynamicResource {x:Static SystemColors.HighlightColorKey}}" />
     <SolidColorBrush x:Key="Slate.SelectionTextBrush"
                      Color="{DynamicResource {x:Static SystemColors.HighlightTextColorKey}}" />
+    <SolidColorBrush x:Key="Slate.ReadingSelectionBrush"
+                     Color="{DynamicResource {x:Static SystemColors.HighlightColorKey}}"
+                     Opacity="0.4" />
     <SolidColorBrush x:Key="Slate.FocusBrush"
                      Color="{DynamicResource {x:Static SystemColors.HighlightColorKey}}" />
     <SolidColorBrush x:Key="Slate.ErrorBrush"

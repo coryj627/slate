@@ -88,6 +88,17 @@ internal static class SlateAccent
 }
 ```
 
+### Selection in the reading view
+
+A `RichTextBox`, which the reading view is, always draws its selection as an overlay on top of the text. It ignores `UseAdornerForTextboxSelectionRendering` and `SelectionTextBrush`, so the solid text box pair would paint over the words. `ReadingSurface` sets `Slate.ReadingSelectionBrush` at `SelectionOpacity="1"` in its constructor. It has no Fluent style, so without that it stays system blue, and a `Loaded` class handler can't reach it because WPF only raises `Loaded` on an element whose style or instance asks for it:
+
+| Theme | Overlay | Highlight on the surface | Stands off the surface | Selected primary text, surface / raised |
+| --- | --- | --- | --- | --- |
+| Light | `#A57A00` at 20% | `#EDE4CC` | 1.27:1 | Lc 85.0 / 77.9 |
+| Dark | `#E2AD24` at 24% | `#4D401F` | 1.64:1 | Lc 80.4 / 77.5 |
+
+An overlay tints the text as well as the background, so no overlay that shows at all keeps every colour above Lc 75. Selected secondary text measures Lc 75.6 in light and 65.1 in dark, and accent text about 63-65. Primary text under the blue overlay this replaced measured Lc 57-61. In High Contrast the brush is `SystemColors.Highlight` at 40%, the opacity Fluent's default gives. If the Windows accent setting is added, this overlay needs its own rule in the contrast gate.
+
 `PassesContrastGate` is the list above, using the WCAG 2 contrast ratio. `Mix` blends two opaque colours channel by channel.
 
 ## Theme setting

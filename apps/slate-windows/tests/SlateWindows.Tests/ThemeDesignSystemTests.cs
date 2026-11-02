@@ -146,6 +146,35 @@ public sealed class ThemeDesignSystemTests
         Assert.Equal(1, opacity);
     }
 
+    /// <summary>The reading view is a RichTextBox, which always draws its
+    /// selection as an overlay on top of the text, so the text box's solid
+    /// pair would paint over the words. With no style of its own it would stay
+    /// system blue. The opacity lives in the brush, so High Contrast keeps its
+    /// own. The pixels are ReadingView_ASelectionStandsOutAndKeepsItsText.</summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void TheReadingViewSelectsInTheThemesOverlay(bool dark, bool highContrast)
+    {
+        (Color? brush, double brushOpacity, Color? want, double wantOpacity, double opacity) =
+            InRealWindow(dark, highContrast, window =>
+            {
+                var surface = new SlateWindows.Reading.ReadingSurface();
+                window.Content = surface;
+                window.UpdateLayout();
+                Pump();
+                var selection = surface.SelectionBrush as SolidColorBrush;
+                var theme = window.FindResource(TextBoxSelection.ReadingBrushKey) as SolidColorBrush;
+                return (selection?.Color, selection?.Opacity ?? 0, theme?.Color, theme?.Opacity ?? 0, surface.SelectionOpacity);
+            });
+
+        Assert.NotNull(brush);
+        Assert.Equal(want, brush);
+        Assert.Equal(wantOpacity, brushOpacity);
+        Assert.Equal(1, opacity);
+    }
+
     /// <summary>The handler only reaches the app if startup installs it, and
     /// before any window exists: WPF reads the switch once.</summary>
     [Fact]

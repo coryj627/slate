@@ -113,6 +113,63 @@ public sealed class ThemeTokenContrastTests
         }
     }
 
+    /// <summary>#1755: the reading view's selection is an overlay on top of the
+    /// text, so it tints the text as well as the background. Primary text keeps
+    /// the floor under it on the surface and the raised code block, and the
+    /// highlight stands off both at least as far as the text box's solid light
+    /// gold stands off white (1.22:1). Secondary and accent text sit lower
+    /// under any overlay that shows at all: about |Lc| 65-76, against 55-61 for
+    /// primary text under the blue overlay this replaced.</summary>
+    [Theory]
+    [InlineData("Slate.Light.xaml")]
+    [InlineData("Slate.Dark.xaml")]
+    public void TheReadingSelectionOverlayKeepsTextAboveTheFloorAndStandsOff(string fileName)
+    {
+        IReadOnlyDictionary<string, Rgb> colors = ReadColors(fileName);
+        (Rgb overlay, double alpha) = ReadAlphaColor(fileName, "Slate.ReadingSelectionColor");
+        foreach (string surfaceKey in new[] { "Slate.SurfaceColor", "Slate.RaisedSurfaceColor" })
+        {
+            Rgb surface = colors[surfaceKey];
+            Rgb highlight = Over(overlay, alpha, surface);
+            double text = Math.Abs(ApcaLc(Over(overlay, alpha, colors["Slate.TextColor"]), highlight));
+            Assert.True(text > 75, $"{fileName} selected text on {surfaceKey} measured |Lc| {text:F2}; expected > 75.");
+            double standOff = WcagRatio(highlight, surface);
+            Assert.True(standOff >= 1.2, $"{fileName} highlight on {surfaceKey} stands off {standOff:F2}:1; expected >= 1.2.");
+        }
+    }
+
+    private static Rgb Over(Rgb top, double alpha, Rgb under) => new(
+        (alpha * top.Red) + ((1 - alpha) * under.Red),
+        (alpha * top.Green) + ((1 - alpha) * under.Green),
+        (alpha * top.Blue) + ((1 - alpha) * under.Blue));
+
+    private static double WcagRatio(Rgb first, Rgb second)
+    {
+        static double Channel(double c) => c <= 0.03928 ? c / 12.92 : Math.Pow((c + 0.055) / 1.055, 2.4);
+        static double Luminance(Rgb c) =>
+            (0.2126 * Channel(c.Red)) + (0.7152 * Channel(c.Green)) + (0.0722 * Channel(c.Blue));
+
+        double a = Luminance(first);
+        double b = Luminance(second);
+        return (Math.Max(a, b) + 0.05) / (Math.Min(a, b) + 0.05);
+    }
+
+    private static (Rgb Color, double Alpha) ReadAlphaColor(string fileName, string key)
+    {
+        string filePath = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "..", "..", "..", "..", "..",
+            "src", "SlateWindows", "Themes", fileName));
+        XNamespace presentation = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
+        XNamespace x = "http://schemas.microsoft.com/winfx/2006/xaml";
+        string hex = XDocument.Load(filePath)
+            .Root!
+            .Elements(presentation + "Color")
+            .Single(element => element.Attribute(x + "Key")!.Value == key)
+            .Value.Trim().TrimStart('#');
+        return (Rgb.Parse(hex), int.Parse(hex[..2], NumberStyles.HexNumber, CultureInfo.InvariantCulture) / 255.0);
+    }
+
     /// <summary>D13's hostile hex row: a raw author color takes the
     /// SAME composite the preset tokens precompute
     /// (<see cref="SlateWindows.Canvas.CanvasPalette"/>), and the text

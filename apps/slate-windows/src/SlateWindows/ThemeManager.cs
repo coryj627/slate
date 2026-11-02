@@ -43,6 +43,7 @@ internal sealed class ThemeManager : IDisposable
         "Slate.AccentBrush",
         "Slate.SelectionBackgroundBrush",
         "Slate.SelectionTextBrush",
+        TextBoxSelection.ReadingBrushKey,
         "Slate.FocusBrush",
         "Slate.ErrorBrush",
         "Slate.WarningBrush",

@@ -59,6 +59,11 @@ internal sealed class ReadingSurface : RichTextBox
         // the APCA pairs (#1050) are gated against it.
         this.SetResourceReference(BackgroundProperty, "Slate.SurfaceBrush");
         this.SetResourceReference(ForegroundProperty, "Slate.TextBrush");
+        // #1755: a RichTextBox draws its selection on top of the text, so the
+        // opaque text box pair would paint over the words. The theme's overlay
+        // carries its own opacity, chosen so the text keeps its contrast.
+        this.SetResourceReference(SelectionBrushProperty, TextBoxSelection.ReadingBrushKey);
+        SelectionOpacity = 1;
         SpellCheck.IsEnabled = false;
 
         AutomationProperties.SetAutomationId(this, "ReadingSurface");

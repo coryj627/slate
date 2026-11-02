@@ -38,6 +38,7 @@
 --focus-ring:var(--wpf-text);
 --selection-bg:var(--gold-150);
 --selection-text:#171717;
+--selection-overlay:rgba(165,122,0,0.2);
 --status-error:var(--wpf-error);
 --status-warning:var(--wpf-warning);
 --status-success:#0E700E;
@@ -80,6 +81,7 @@
 --focus-ring:var(--wpf-text);
 --selection-bg:var(--gold-70);
 --selection-text:#F5F5F5;
+--selection-overlay:rgba(226,173,36,0.24);
 --status-success:#54B054;
 --text-disabled:#919191;
 --border-disabled:#757575;
