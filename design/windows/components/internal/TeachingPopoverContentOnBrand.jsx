@@ -306,7 +306,6 @@ export function TeachingPopoverContentOnBrand(_p = {}) {
                 position: "relative",
                 display: "flex",
                 flexDirection: "column",
-                gap: -2,
                 alignItems: "flex-start",
                 flexWrap: "nowrap",
                 flexShrink: 0,
@@ -323,6 +322,7 @@ export function TeachingPopoverContentOnBrand(_p = {}) {
                   flexShrink: 0,
                 }}>Always underline links</span>
                 <div style={{
+                  marginTop: -2,
                   position: "relative",
                   height: 3,
                   borderTop: "1px solid var(--neutral-foreground-inverted-link-rest)",
