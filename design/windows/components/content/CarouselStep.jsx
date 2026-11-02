@@ -39,10 +39,10 @@ export function CarouselStep(_p = {}) {
         <div style={{
           position: "relative",
           width: 16,
+          height: 8,
           borderRadius: 9999,
           backgroundColor: "var(--rest)",
           flexShrink: 0,
-          alignSelf: "stretch",
         }} />
       </div>
       {props.showFocus && (
@@ -105,10 +105,10 @@ export function CarouselStep(_p = {}) {
         <div style={{
           position: "relative",
           width: 16,
+          height: 8,
           borderRadius: 9999,
           backgroundColor: "var(--hover)",
           flexShrink: 0,
-          alignSelf: "stretch",
         }} />
       </div>
     </div>
@@ -146,10 +146,10 @@ export function CarouselStep(_p = {}) {
         <div style={{
           position: "relative",
           width: 16,
+          height: 8,
           borderRadius: 9999,
           backgroundColor: "var(--pressed)",
           flexShrink: 0,
-          alignSelf: "stretch",
         }} />
       </div>
     </div>
@@ -176,11 +176,11 @@ export function CarouselStep(_p = {}) {
       <div style={{
         position: "relative",
         width: 8,
+        height: 8,
         opacity: 0.3,
         borderRadius: 9999,
         backgroundColor: "var(--rest)",
         flexShrink: 0,
-        alignSelf: "stretch",
       }} />
       {props.showFocus && (
       <div style={{
@@ -231,10 +231,10 @@ export function CarouselStep(_p = {}) {
       <div style={{
         position: "relative",
         width: 8,
+        height: 8,
         borderRadius: 9999,
         backgroundColor: "var(--hover)",
         flexShrink: 0,
-        alignSelf: "stretch",
       }} />
     </div>
   );
@@ -260,10 +260,10 @@ export function CarouselStep(_p = {}) {
       <div style={{
         position: "relative",
         width: 8,
+        height: 8,
         borderRadius: 9999,
         backgroundColor: "var(--pressed)",
         flexShrink: 0,
-        alignSelf: "stretch",
       }} />
     </div>
   );

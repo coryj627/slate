@@ -39,10 +39,10 @@ export function DEPRECATEDCarouselStepOnBrand(_p = {}) {
         <div style={{
           position: "relative",
           width: 16,
+          height: 8,
           borderRadius: 9999,
           backgroundColor: "var(--neutral-foreground-on-brand-rest-3)",
           flexShrink: 0,
-          alignSelf: "stretch",
         }} />
       </div>
       {props.showFocus && (
@@ -105,10 +105,10 @@ export function DEPRECATEDCarouselStepOnBrand(_p = {}) {
         <div style={{
           position: "relative",
           width: 16,
+          height: 8,
           borderRadius: 9999,
           backgroundColor: "var(--neutral-foreground-on-brand-rest-3)",
           flexShrink: 0,
-          alignSelf: "stretch",
         }} />
       </div>
     </div>
@@ -135,11 +135,11 @@ export function DEPRECATEDCarouselStepOnBrand(_p = {}) {
       <div style={{
         position: "relative",
         width: 8,
+        height: 8,
         opacity: 0.3,
         borderRadius: 9999,
         backgroundColor: "var(--neutral-foreground-on-brand-rest-3)",
         flexShrink: 0,
-        alignSelf: "stretch",
       }} />
       {props.showFocus && (
       <div style={{
@@ -190,10 +190,10 @@ export function DEPRECATEDCarouselStepOnBrand(_p = {}) {
       <div style={{
         position: "relative",
         width: 8,
+        height: 8,
         borderRadius: 9999,
         backgroundColor: "var(--neutral-foreground-on-brand-rest-3)",
         flexShrink: 0,
-        alignSelf: "stretch",
       }} />
     </div>
   );

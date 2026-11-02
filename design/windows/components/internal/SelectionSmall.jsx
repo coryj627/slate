@@ -25,9 +25,8 @@ export function SelectionSmall(_p = {}) {
       <div style={{
           position: "relative",
           width: 14,
+          height: 14,
           flexShrink: 0,
-          alignSelf: "stretch",
-          height: "auto",
           color: "var(--neutral-foreground-2-rest)",
         }}>{props.icon1 ?? <Checkmark2 size={"16"} theme={"regular"} />}</div>
     </div>
@@ -50,11 +49,11 @@ export function SelectionSmall(_p = {}) {
       <div style={{
         position: "relative",
         width: 14,
+        height: 14,
         overflow: "hidden",
         borderRadius: 2,
         backgroundColor: "var(--brand-background-1-rest)",
         flexShrink: 0,
-        alignSelf: "stretch",
       }}>
         <svg width={7.500} height={5.500} viewBox="0 0 7.500 5.500" fill="none" style={{
           position: "absolute",
@@ -88,9 +87,9 @@ export function SelectionSmall(_p = {}) {
       <div style={{
         position: "relative",
         width: 14,
+        height: 14,
         overflow: "hidden",
         flexShrink: 0,
-        alignSelf: "stretch",
       }}>
         <svg width={14} height={14} viewBox="0 0 14 14" fill="none" style={{
           position: "absolute",

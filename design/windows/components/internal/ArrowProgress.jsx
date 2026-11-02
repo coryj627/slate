@@ -20,8 +20,8 @@ export function ArrowProgress(_p = {}) {
       <div className="fig-asset-f66a8489f99c6736" style={{
         position: "relative",
         width: 512,
+        height: 512,
         flexShrink: 0,
-        alignSelf: "stretch",
       }} />
     </div>
   );
@@ -39,8 +39,8 @@ export function ArrowProgress(_p = {}) {
       <div className="fig-asset-49c666980d9a4682" style={{
         position: "relative",
         width: 512,
+        height: 512,
         flexShrink: 0,
-        alignSelf: "stretch",
       }} />
     </div>
   );
@@ -58,8 +58,8 @@ export function ArrowProgress(_p = {}) {
       <div className="fig-asset-f66a8489f99c6736" style={{
         position: "relative",
         width: 384,
+        height: 384,
         flexShrink: 0,
-        alignSelf: "stretch",
       }} />
     </div>
   );
@@ -77,8 +77,8 @@ export function ArrowProgress(_p = {}) {
       <div className="fig-asset-49c666980d9a4682" style={{
         position: "relative",
         width: 384,
+        height: 384,
         flexShrink: 0,
-        alignSelf: "stretch",
       }} />
     </div>
   );
@@ -96,8 +96,8 @@ export function ArrowProgress(_p = {}) {
       <div className="fig-asset-f66a8489f99c6736" style={{
         position: "relative",
         width: 256,
+        height: 256,
         flexShrink: 0,
-        alignSelf: "stretch",
       }} />
     </div>
   );
@@ -115,8 +115,8 @@ export function ArrowProgress(_p = {}) {
       <div className="fig-asset-49c666980d9a4682" style={{
         position: "relative",
         width: 256,
+        height: 256,
         flexShrink: 0,
-        alignSelf: "stretch",
       }} />
     </div>
   );
@@ -134,8 +134,8 @@ export function ArrowProgress(_p = {}) {
       <div className="fig-asset-f66a8489f99c6736" style={{
         position: "relative",
         width: 192,
+        height: 192,
         flexShrink: 0,
-        alignSelf: "stretch",
       }} />
     </div>
   );
@@ -153,8 +153,8 @@ export function ArrowProgress(_p = {}) {
       <div className="fig-asset-49c666980d9a4682" style={{
         position: "relative",
         width: 192,
+        height: 192,
         flexShrink: 0,
-        alignSelf: "stretch",
       }} />
     </div>
   );
@@ -174,8 +174,8 @@ export function ArrowProgress(_p = {}) {
       <div className="fig-asset-f66a8489f99c6736" style={{
         position: "relative",
         width: 128,
+        height: 128,
         flexShrink: 0,
-        alignSelf: "stretch",
       }} />
     </div>
   );
@@ -195,8 +195,8 @@ export function ArrowProgress(_p = {}) {
       <div className="fig-asset-49c666980d9a4682" style={{
         position: "relative",
         width: 128,
+        height: 128,
         flexShrink: 0,
-        alignSelf: "stretch",
       }} />
     </div>
   );
@@ -214,8 +214,8 @@ export function ArrowProgress(_p = {}) {
       <div className="fig-asset-5cb816d2346efda3" style={{
         position: "relative",
         width: 384,
+        height: 384,
         flexShrink: 0,
-        alignSelf: "stretch",
       }} />
     </div>
   );
@@ -233,8 +233,8 @@ export function ArrowProgress(_p = {}) {
       <div className="fig-asset-46cdcc01de926091" style={{
         position: "relative",
         width: 384,
+        height: 384,
         flexShrink: 0,
-        alignSelf: "stretch",
       }} />
     </div>
   );
@@ -252,8 +252,8 @@ export function ArrowProgress(_p = {}) {
       <div className="fig-asset-5cb816d2346efda3" style={{
         position: "relative",
         width: 256,
+        height: 256,
         flexShrink: 0,
-        alignSelf: "stretch",
       }} />
     </div>
   );
@@ -271,8 +271,8 @@ export function ArrowProgress(_p = {}) {
       <div className="fig-asset-46cdcc01de926091" style={{
         position: "relative",
         width: 256,
+        height: 256,
         flexShrink: 0,
-        alignSelf: "stretch",
       }} />
     </div>
   );
@@ -290,8 +290,8 @@ export function ArrowProgress(_p = {}) {
       <div className="fig-asset-5cb816d2346efda3" style={{
         position: "relative",
         width: 192,
+        height: 192,
         flexShrink: 0,
-        alignSelf: "stretch",
       }} />
     </div>
   );
@@ -309,8 +309,8 @@ export function ArrowProgress(_p = {}) {
       <div className="fig-asset-46cdcc01de926091" style={{
         position: "relative",
         width: 192,
+        height: 192,
         flexShrink: 0,
-        alignSelf: "stretch",
       }} />
     </div>
   );
@@ -328,8 +328,8 @@ export function ArrowProgress(_p = {}) {
       <div className="fig-asset-5cb816d2346efda3" style={{
         position: "relative",
         width: 512,
+        height: 512,
         flexShrink: 0,
-        alignSelf: "stretch",
       }} />
     </div>
   );
@@ -347,8 +347,8 @@ export function ArrowProgress(_p = {}) {
       <div className="fig-asset-46cdcc01de926091" style={{
         position: "relative",
         width: 512,
+        height: 512,
         flexShrink: 0,
-        alignSelf: "stretch",
       }} />
     </div>
   );
@@ -368,8 +368,8 @@ export function ArrowProgress(_p = {}) {
       <div className="fig-asset-5cb816d2346efda3" style={{
         position: "relative",
         width: 128,
+        height: 128,
         flexShrink: 0,
-        alignSelf: "stretch",
       }} />
     </div>
   );
@@ -389,8 +389,8 @@ export function ArrowProgress(_p = {}) {
       <div className="fig-asset-46cdcc01de926091" style={{
         position: "relative",
         width: 128,
+        height: 128,
         flexShrink: 0,
-        alignSelf: "stretch",
       }} />
     </div>
   );
