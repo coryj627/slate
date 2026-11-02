@@ -14,7 +14,6 @@ Props (from NavNodeSmall.d.ts):
 - `focus?: boolean`
 - `content?: string`
 - `iconBeforeRegular?: React.ReactNode`
-- `iconAfter?: React.ReactNode`
 - `iconBeforeFilled?: React.ReactNode`
 - `icon1?: React.ReactNode`
 

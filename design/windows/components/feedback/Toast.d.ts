@@ -2,7 +2,6 @@ import * as React from 'react';
 export interface ToastProps {
   className?: string;
   style?: React.CSSProperties;
-  pxIcon20?: React.ReactNode;
   titleString?: string;
   endContent?: boolean;
   timestampString?: string;

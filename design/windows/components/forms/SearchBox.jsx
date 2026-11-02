@@ -87,7 +87,7 @@ export function SearchBox(_p = {}) {
               color: "var(--neutral-foreground-4-rest)",
               flexGrow: 1,
               alignSelf: "stretch",
-            }}>Search</span>
+            }}>{props.placeholder ?? "Search"}</span>
           </div>
         </div>
       </div>
@@ -175,7 +175,7 @@ export function SearchBox(_p = {}) {
               color: "var(--neutral-foreground-4-rest)",
               flexGrow: 1,
               alignSelf: "stretch",
-            }}>Search</span>
+            }}>{props.placeholder ?? "Search"}</span>
           </div>
         </div>
       </div>
@@ -254,7 +254,7 @@ export function SearchBox(_p = {}) {
               color: "var(--neutral-foreground-4-rest)",
               flexGrow: 1,
               alignSelf: "stretch",
-            }}>Search</span>
+            }}>{props.placeholder ?? "Search"}</span>
           </div>
         </div>
       </div>
@@ -330,7 +330,7 @@ export function SearchBox(_p = {}) {
               color: "var(--neutral-foreground-4-rest)",
               flexGrow: 1,
               alignSelf: "stretch",
-            }}>Search</span>
+            }}>{props.placeholder ?? "Search"}</span>
           </div>
         </div>
       </div>
@@ -924,7 +924,7 @@ export function SearchBox(_p = {}) {
               color: "var(--neutral-foreground-4-rest)",
               flexGrow: 1,
               alignSelf: "stretch",
-            }}>Search</span>
+            }}>{props.placeholder ?? "Search"}</span>
           </div>
         </div>
       </div>
@@ -1016,7 +1016,7 @@ export function SearchBox(_p = {}) {
               color: "var(--neutral-foreground-4-rest)",
               flexGrow: 1,
               alignSelf: "stretch",
-            }}>Search</span>
+            }}>{props.placeholder ?? "Search"}</span>
           </div>
         </div>
       </div>
@@ -1104,7 +1104,7 @@ export function SearchBox(_p = {}) {
               color: "var(--neutral-foreground-4-rest)",
               flexGrow: 1,
               alignSelf: "stretch",
-            }}>Search</span>
+            }}>{props.placeholder ?? "Search"}</span>
           </div>
         </div>
       </div>
@@ -1183,7 +1183,7 @@ export function SearchBox(_p = {}) {
               color: "var(--neutral-foreground-4-rest)",
               flexGrow: 1,
               alignSelf: "stretch",
-            }}>Search</span>
+            }}>{props.placeholder ?? "Search"}</span>
           </div>
         </div>
       </div>
@@ -1259,7 +1259,7 @@ export function SearchBox(_p = {}) {
               color: "var(--neutral-foreground-4-rest)",
               flexGrow: 1,
               alignSelf: "stretch",
-            }}>Search</span>
+            }}>{props.placeholder ?? "Search"}</span>
           </div>
         </div>
       </div>
@@ -1844,7 +1844,7 @@ export function SearchBox(_p = {}) {
               color: "var(--neutral-foreground-4-rest)",
               flexGrow: 1,
               alignSelf: "stretch",
-            }}>Search</span>
+            }}>{props.placeholder ?? "Search"}</span>
           </div>
         </div>
       </div>
@@ -1937,7 +1937,7 @@ export function SearchBox(_p = {}) {
               color: "var(--neutral-foreground-4-rest)",
               flexGrow: 1,
               alignSelf: "stretch",
-            }}>Search</span>
+            }}>{props.placeholder ?? "Search"}</span>
           </div>
         </div>
       </div>
@@ -2026,7 +2026,7 @@ export function SearchBox(_p = {}) {
               color: "var(--neutral-foreground-4-rest)",
               flexGrow: 1,
               alignSelf: "stretch",
-            }}>Search</span>
+            }}>{props.placeholder ?? "Search"}</span>
           </div>
         </div>
       </div>
@@ -2106,7 +2106,7 @@ export function SearchBox(_p = {}) {
               color: "var(--neutral-foreground-4-rest)",
               flexGrow: 1,
               alignSelf: "stretch",
-            }}>Search</span>
+            }}>{props.placeholder ?? "Search"}</span>
           </div>
         </div>
       </div>
@@ -2183,7 +2183,7 @@ export function SearchBox(_p = {}) {
               color: "var(--neutral-foreground-4-rest)",
               flexGrow: 1,
               alignSelf: "stretch",
-            }}>Search</span>
+            }}>{props.placeholder ?? "Search"}</span>
           </div>
         </div>
       </div>
@@ -2784,7 +2784,7 @@ export function SearchBox(_p = {}) {
               color: "var(--neutral-foreground-4-rest)",
               flexGrow: 1,
               alignSelf: "stretch",
-            }}>Search</span>
+            }}>{props.placeholder ?? "Search"}</span>
           </div>
         </div>
       </div>

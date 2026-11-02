@@ -6,7 +6,6 @@ const { NavBodyMedium } = window.SlateDesignSystem_326dc9;
 ```
 
 Props (from NavBodyMedium.d.ts):
-- `navBody?: React.ReactNode`
 
 Short values are accepted everywhere: `appearance` (alias of `style2`), sizes `small|medium|large`, booleans for on/off props. The Figma values still work.
 
