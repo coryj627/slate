@@ -34,6 +34,8 @@ export function Link(_p = {}) {
         alignSelf: "stretch",
       }}>
         <span style={{
+          textDecoration: props.inlineStyle ? "underline" : "none",
+          textDecorationColor: "var(--brand-foreground-link-rest-3)",
           position: "relative",
           fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
           fontWeight: 400,
@@ -43,19 +45,6 @@ export function Link(_p = {}) {
           color: "var(--brand-foreground-link-rest-3)",
           flexShrink: 0,
         }}>{props.text}</span>
-        {props.inlineStyle && (
-        <div style={{
-          marginTop: -2,
-          position: "relative",
-          height: 3,
-          borderTop: "1px solid var(--brand-foreground-link-rest-3)",
-          borderRight: "1px solid var(--brand-foreground-link-rest-3)",
-          borderBottom: "1px solid var(--brand-foreground-link-rest-3)",
-          borderLeft: "1px solid var(--brand-foreground-link-rest-3)",
-          flexShrink: 0,
-          alignSelf: "stretch",
-        }} />
-        )}
       </div>
       {props.showIcon && (
       <div style={{
@@ -95,6 +84,8 @@ export function Link(_p = {}) {
         alignSelf: "stretch",
       }}>
         <span style={{
+          textDecoration: "underline",
+          textDecorationColor: "var(--brand-foreground-link-hover-3)",
           position: "relative",
           fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
           fontWeight: 400,
@@ -104,17 +95,6 @@ export function Link(_p = {}) {
           color: "var(--brand-foreground-link-hover-3)",
           flexShrink: 0,
         }}>{props.text}</span>
-        <div style={{
-          marginTop: -2,
-          position: "relative",
-          height: 3,
-          borderTop: "1px solid var(--brand-foreground-link-hover-3)",
-          borderRight: "1px solid var(--brand-foreground-link-hover-3)",
-          borderBottom: "1px solid var(--brand-foreground-link-hover-3)",
-          borderLeft: "1px solid var(--brand-foreground-link-hover-3)",
-          flexShrink: 0,
-          alignSelf: "stretch",
-        }} />
       </div>
       {props.showIcon && (
       <div style={{
@@ -154,6 +134,8 @@ export function Link(_p = {}) {
         alignSelf: "stretch",
       }}>
         <span style={{
+          textDecoration: "underline",
+          textDecorationColor: "var(--brand-foreground-link-pressed-3)",
           position: "relative",
           fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
           fontWeight: 400,
@@ -163,17 +145,6 @@ export function Link(_p = {}) {
           color: "var(--brand-foreground-link-pressed-3)",
           flexShrink: 0,
         }}>{props.text}</span>
-        <div style={{
-          marginTop: -2,
-          position: "relative",
-          height: 3,
-          borderTop: "1px solid var(--brand-foreground-link-pressed-3)",
-          borderRight: "1px solid var(--brand-foreground-link-pressed-3)",
-          borderBottom: "1px solid var(--brand-foreground-link-pressed-3)",
-          borderLeft: "1px solid var(--brand-foreground-link-pressed-3)",
-          flexShrink: 0,
-          alignSelf: "stretch",
-        }} />
       </div>
       {props.showIcon && (
       <div style={{
@@ -213,6 +184,8 @@ export function Link(_p = {}) {
         alignSelf: "stretch",
       }}>
         <span style={{
+          textDecoration: "underline",
+          textDecorationColor: "var(--neutral-stroke-focus-2-rest-4)",
           position: "relative",
           fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
           fontWeight: 400,
@@ -222,17 +195,6 @@ export function Link(_p = {}) {
           color: "var(--brand-foreground-link-rest-3)",
           flexShrink: 0,
         }}>{props.text}</span>
-        <div style={{
-          marginTop: -2,
-          position: "relative",
-          height: 3,
-          borderTop: "1px solid var(--neutral-stroke-focus-2-rest-4)",
-          borderRight: "1px solid var(--neutral-stroke-focus-2-rest-4)",
-          borderBottom: "1px solid var(--neutral-stroke-focus-2-rest-4)",
-          borderLeft: "1px solid var(--neutral-stroke-focus-2-rest-4)",
-          flexShrink: 0,
-          alignSelf: "stretch",
-        }} />
       </div>
       {props.showIcon && (
       <div style={{
@@ -272,6 +234,8 @@ export function Link(_p = {}) {
         alignSelf: "stretch",
       }}>
         <span style={{
+          textDecoration: props.inlineStyle ? "underline" : "none",
+          textDecorationColor: "var(--neutral-foreground-disabled-rest-4)",
           position: "relative",
           fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
           fontWeight: 400,
@@ -281,19 +245,6 @@ export function Link(_p = {}) {
           color: "var(--neutral-foreground-disabled-rest-4)",
           flexShrink: 0,
         }}>{props.text}</span>
-        {props.inlineStyle && (
-        <div style={{
-          marginTop: -2,
-          position: "relative",
-          height: 3,
-          borderTop: "1px solid var(--neutral-foreground-disabled-rest-4)",
-          borderRight: "1px solid var(--neutral-foreground-disabled-rest-4)",
-          borderBottom: "1px solid var(--neutral-foreground-disabled-rest-4)",
-          borderLeft: "1px solid var(--neutral-foreground-disabled-rest-4)",
-          flexShrink: 0,
-          alignSelf: "stretch",
-        }} />
-        )}
       </div>
       {props.showIcon && (
       <div style={{
@@ -333,6 +284,8 @@ export function Link(_p = {}) {
         alignSelf: "stretch",
       }}>
         <span style={{
+          textDecoration: props.inlineStyle ? "underline" : "none",
+          textDecorationColor: "var(--neutral-foreground-2-rest-3)",
           position: "relative",
           fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
           fontWeight: 400,
@@ -342,19 +295,6 @@ export function Link(_p = {}) {
           color: "var(--neutral-foreground-2-link-rest-3)",
           flexShrink: 0,
         }}>{props.text}</span>
-        {props.inlineStyle && (
-        <div style={{
-          marginTop: -2,
-          position: "relative",
-          height: 3,
-          borderTop: "1px solid var(--neutral-foreground-2-rest-3)",
-          borderRight: "1px solid var(--neutral-foreground-2-rest-3)",
-          borderBottom: "1px solid var(--neutral-foreground-2-rest-3)",
-          borderLeft: "1px solid var(--neutral-foreground-2-rest-3)",
-          flexShrink: 0,
-          alignSelf: "stretch",
-        }} />
-        )}
       </div>
       {props.showIcon && (
       <div style={{
@@ -394,6 +334,8 @@ export function Link(_p = {}) {
         alignSelf: "stretch",
       }}>
         <span style={{
+          textDecoration: "underline",
+          textDecorationColor: "var(--neutral-foreground-2-link-hover-3)",
           position: "relative",
           fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
           fontWeight: 400,
@@ -403,17 +345,6 @@ export function Link(_p = {}) {
           color: "var(--neutral-foreground-2-link-hover-3)",
           flexShrink: 0,
         }}>{props.text}</span>
-        <div style={{
-          marginTop: -2,
-          position: "relative",
-          height: 3,
-          borderTop: "1px solid var(--neutral-foreground-2-link-hover-3)",
-          borderRight: "1px solid var(--neutral-foreground-2-link-hover-3)",
-          borderBottom: "1px solid var(--neutral-foreground-2-link-hover-3)",
-          borderLeft: "1px solid var(--neutral-foreground-2-link-hover-3)",
-          flexShrink: 0,
-          alignSelf: "stretch",
-        }} />
       </div>
       {props.showIcon && (
       <div style={{
@@ -453,6 +384,8 @@ export function Link(_p = {}) {
         alignSelf: "stretch",
       }}>
         <span style={{
+          textDecoration: "underline",
+          textDecorationColor: "var(--neutral-foreground-2-link-pressed-3)",
           position: "relative",
           fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
           fontWeight: 400,
@@ -462,17 +395,6 @@ export function Link(_p = {}) {
           color: "var(--neutral-foreground-2-link-pressed-3)",
           flexShrink: 0,
         }}>{props.text}</span>
-        <div style={{
-          marginTop: -2,
-          position: "relative",
-          height: 3,
-          borderTop: "1px solid var(--neutral-foreground-2-link-pressed-3)",
-          borderRight: "1px solid var(--neutral-foreground-2-link-pressed-3)",
-          borderBottom: "1px solid var(--neutral-foreground-2-link-pressed-3)",
-          borderLeft: "1px solid var(--neutral-foreground-2-link-pressed-3)",
-          flexShrink: 0,
-          alignSelf: "stretch",
-        }} />
       </div>
       {props.showIcon && (
       <div style={{
@@ -512,6 +434,8 @@ export function Link(_p = {}) {
         alignSelf: "stretch",
       }}>
         <span style={{
+          textDecoration: "underline",
+          textDecorationColor: "var(--neutral-stroke-focus-2-rest-4)",
           position: "relative",
           fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
           fontWeight: 400,
@@ -521,17 +445,6 @@ export function Link(_p = {}) {
           color: "var(--neutral-foreground-2-link-rest-3)",
           flexShrink: 0,
         }}>{props.text}</span>
-        <div style={{
-          marginTop: -2,
-          position: "relative",
-          height: 3,
-          borderTop: "1px solid var(--neutral-stroke-focus-2-rest-4)",
-          borderRight: "1px solid var(--neutral-stroke-focus-2-rest-4)",
-          borderBottom: "1px solid var(--neutral-stroke-focus-2-rest-4)",
-          borderLeft: "1px solid var(--neutral-stroke-focus-2-rest-4)",
-          flexShrink: 0,
-          alignSelf: "stretch",
-        }} />
       </div>
       {props.showIcon && (
       <div style={{
@@ -571,6 +484,8 @@ export function Link(_p = {}) {
         alignSelf: "stretch",
       }}>
         <span style={{
+          textDecoration: props.inlineStyle ? "underline" : "none",
+          textDecorationColor: "var(--neutral-foreground-inverted-link-rest-3)",
           position: "relative",
           fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
           fontWeight: 400,
@@ -580,19 +495,6 @@ export function Link(_p = {}) {
           color: "var(--neutral-foreground-inverted-link-rest-3)",
           flexShrink: 0,
         }}>{props.text}</span>
-        {props.inlineStyle && (
-        <div style={{
-          marginTop: -2,
-          position: "relative",
-          height: 3,
-          borderTop: "1px solid var(--neutral-foreground-inverted-link-rest-3)",
-          borderRight: "1px solid var(--neutral-foreground-inverted-link-rest-3)",
-          borderBottom: "1px solid var(--neutral-foreground-inverted-link-rest-3)",
-          borderLeft: "1px solid var(--neutral-foreground-inverted-link-rest-3)",
-          flexShrink: 0,
-          alignSelf: "stretch",
-        }} />
-        )}
       </div>
       {props.showIcon && (
       <div style={{
@@ -632,6 +534,8 @@ export function Link(_p = {}) {
         alignSelf: "stretch",
       }}>
         <span style={{
+          textDecoration: "underline",
+          textDecorationColor: "var(--neutral-foreground-inverted-link-hover-3)",
           position: "relative",
           fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
           fontWeight: 400,
@@ -641,17 +545,6 @@ export function Link(_p = {}) {
           color: "var(--neutral-foreground-inverted-link-hover-3)",
           flexShrink: 0,
         }}>{props.text}</span>
-        <div style={{
-          marginTop: -2,
-          position: "relative",
-          height: 3,
-          borderTop: "1px solid var(--neutral-foreground-inverted-link-hover-3)",
-          borderRight: "1px solid var(--neutral-foreground-inverted-link-hover-3)",
-          borderBottom: "1px solid var(--neutral-foreground-inverted-link-hover-3)",
-          borderLeft: "1px solid var(--neutral-foreground-inverted-link-hover-3)",
-          flexShrink: 0,
-          alignSelf: "stretch",
-        }} />
       </div>
       {props.showIcon && (
       <div style={{
@@ -691,6 +584,8 @@ export function Link(_p = {}) {
         alignSelf: "stretch",
       }}>
         <span style={{
+          textDecoration: "underline",
+          textDecorationColor: "var(--neutral-foreground-inverted-link-pressed-3)",
           position: "relative",
           fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
           fontWeight: 400,
@@ -700,17 +595,6 @@ export function Link(_p = {}) {
           color: "var(--neutral-foreground-inverted-link-pressed-3)",
           flexShrink: 0,
         }}>{props.text}</span>
-        <div style={{
-          marginTop: -2,
-          position: "relative",
-          height: 3,
-          borderTop: "1px solid var(--neutral-foreground-inverted-link-pressed-3)",
-          borderRight: "1px solid var(--neutral-foreground-inverted-link-pressed-3)",
-          borderBottom: "1px solid var(--neutral-foreground-inverted-link-pressed-3)",
-          borderLeft: "1px solid var(--neutral-foreground-inverted-link-pressed-3)",
-          flexShrink: 0,
-          alignSelf: "stretch",
-        }} />
       </div>
       {props.showIcon && (
       <div style={{
@@ -750,6 +634,8 @@ export function Link(_p = {}) {
         alignSelf: "stretch",
       }}>
         <span style={{
+          textDecoration: "underline",
+          textDecorationColor: "var(--neutral-foreground-inverted-link-rest-3)",
           position: "relative",
           fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
           fontWeight: 400,
@@ -759,17 +645,6 @@ export function Link(_p = {}) {
           color: "var(--neutral-foreground-inverted-link-rest-3)",
           flexShrink: 0,
         }}>{props.text}</span>
-        <div style={{
-          marginTop: -2,
-          position: "relative",
-          height: 3,
-          borderTop: "1px solid var(--neutral-foreground-inverted-link-rest-3)",
-          borderRight: "1px solid var(--neutral-foreground-inverted-link-rest-3)",
-          borderBottom: "1px solid var(--neutral-foreground-inverted-link-rest-3)",
-          borderLeft: "1px solid var(--neutral-foreground-inverted-link-rest-3)",
-          flexShrink: 0,
-          alignSelf: "stretch",
-        }} />
       </div>
       {props.showIcon && (
       <div style={{

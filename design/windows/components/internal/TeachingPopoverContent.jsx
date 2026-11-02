@@ -314,6 +314,8 @@ export function TeachingPopoverContent(_p = {}) {
                 alignSelf: "stretch",
               }}>
                 <span style={{
+                  textDecoration: "underline",
+                  textDecorationColor: "var(--brand-foreground-link-rest)",
                   position: "relative",
                   fontFamily: "\"Segoe UI\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
                   fontWeight: 400,
@@ -323,17 +325,6 @@ export function TeachingPopoverContent(_p = {}) {
                   color: "var(--brand-foreground-link-rest)",
                   flexShrink: 0,
                 }}>Always underline links</span>
-                <div style={{
-                  marginTop: -2,
-                  position: "relative",
-                  height: 3,
-                  borderTop: "1px solid var(--brand-foreground-link-rest)",
-                  borderRight: "1px solid var(--brand-foreground-link-rest)",
-                  borderBottom: "1px solid var(--brand-foreground-link-rest)",
-                  borderLeft: "1px solid var(--brand-foreground-link-rest)",
-                  flexShrink: 0,
-                  alignSelf: "stretch",
-                }} />
               </div>
               <div style={{
                 position: "relative",
