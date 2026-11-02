@@ -136,9 +136,9 @@ on:
       # sources — a change to any of them must run the lane. Only the plan
       # documents the censuses read are listed, top-level ones by name:
       # the ten contracts documents a check reads, the Windows port
-      # folder, and one spec a ledger decision cites. Every other plan
-      # document (the unread contracts, plans 43 and 44, any design or
-      # planning folder) does not start the lane. scripts/
+      # folder, and the specs a ledger decision cites. Every other plan
+      # document (the unread contracts, the rest of plans 43 and 44, any
+      # design or planning folder) does not start the lane. scripts/
       # check_windows_docs_trigger.py fails the lane if a check reads a
       # docs path this list misses.
       - 'docs/plans/22_property_panel_contracts.md'
@@ -153,6 +153,8 @@ on:
       - 'docs/plans/40_nvda_matrix_remediation_contracts.md'
       - 'docs/plans/18_windows_port/**'
       - 'docs/plans/15_files_sidebar/specs/fl4_spec.md'
+      # WB-29a: the seven hot-exit trigger designations cite it (#1525).
+      - 'docs/plans/44_windows_backlog/specs/wb29a_hot_exit_shared_design_and_core_store.md'
       - 'docs/help/**'
       - 'scripts/**'
       - 'apps/slate-mac/**'
