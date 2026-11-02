@@ -1070,7 +1070,7 @@ the hooks' returned `HotExitFault` (§1).
 |---|---|---|
 | `EveryStoreCallIsRecordedBeforeItIsIssued` | at `BeforeCallForTests`, the ledger already holds the call's obligation | record on return |
 | `ADirtyTabClaimsAndWritesAtOnce` | the first edit claims `RecoveryEntryId` and writes generation 1 without the debounce | write only on the debounce |
-| `AChangedSnapshotIsWrittenAfterTheDebounce` (Theory: an edit, a rename while dirty, a save landing behind further edits) | one write of the new snapshot 1 s after the change; the entry's path, hash and identity match the tab's | watch the generation only |
+| `AChangedSnapshotIsWrittenAfterTheDebounce` | an edit: one write of the new snapshot 1 s after the change; the entry's path, hash and identity match the tab's (a baseline change is written at once: `ABaselineChangeIsWrittenAtOnce`) | watch the generation only |
 | `TheWriterReadsATabAfterItsMutation` (Theory: a peer's save mirrored clean, a peer's edit mirrored dirty, a reload, opening into a dirty peer's path) | each ends or starts the episode it should | decide at the bump |
 | `ACleanTabRetiresItsEntry` (Theory: save, undo to clean, reload) | the store holds nothing for the id; a held retirement does not block the dispatcher | keep it; or retire on the dispatcher |
 | `ALateClaimNeverDisplacesANewerEpisode` | C1 held before issue; clean, then a new edit; C2 is issued only after C1 and C1's retirement resolve (O2, by `BeforeCallForTests` order); C2 claims and writes; a close is `ClosedKept`; the crash shape then restores C2's text | issue C2 without the queue |
@@ -1080,7 +1080,7 @@ the hooks' returned `HotExitFault` (§1).
 | `ARetriedRetirementNeverDisplacesASuccessor` | a restored tab; a store outage (the seam fails every call) errors its adopting claim and the retirement of a Discard by navigation that keeps the tab's `Id`; the outage ends; an edit to the new document retries the retirement first, then claims and writes C; the crash shape: reopening restores C's text and not the restored text | retire through an adopting claim and a release (the old shape); or issue the claim ahead of the errored retirement |
 | `AnErroredClaimIsRetriedWithItsOwnIncarnation` | the seam fails a claim after its publication; the next change retries it: `Claimed` with the same incarnation, then the write | make a new incarnation on retry (the retry is then `Superseded { Claim }`) |
 | `AnAdoptingClaimTakenByAnotherClaimIsNotKept` | a reopen's snapshot read; before its adopting claim, the test claims the entry through the core store directly (expecting the observed claim); the adopting claim is `Superseded { Claim }`: the close prompts with core's taken-over reason and the tab retires nothing | treat it as kept; or retire the inherited payload anyway |
-| `AnOldClaimsLateOutcomeNeverCountsForANewOne` | C1's write held; clean, then C2; C1's late `Durable` and `Superseded { Claim }` change nothing for C2 | record any outcome |
+| `AnOldClaimsLateOutcomeNeverCountsForANewOne` (Theory: C1's write held in `After` so its real `Durable` returns late; held in `Before` so it lands after C1's retirement and returns `Superseded { Claim }`) | clean, then C2; neither late outcome changes anything for C2 | record any outcome |
 | `ASaveNeverWaitsOnARecoveryWrite` | a write held; Ctrl+S reaches `SaveWriteHookForTests` at once and lands | route writes through `Admit` |
 | `AKeptCloseClosesWithoutAPrompt` (Theory: application close, switch) | an edit after the last debounce and one typed inside the settle's frame; outcome `ClosedKept`, the prompt never invoked; reopening restores the final text dirty, the file unchanged | `continue` on `Kept` (the rounds run out: `Refused`) |
 | `AKeptCloseReSettlesWhenASaveSlipsIn` | a Ctrl+S admitted during the settle's frame: the round loop settles the save, then closes `Closed` | return `ClosedKept` without the re-check |
@@ -1112,7 +1112,7 @@ the hooks' returned `HotExitFault` (§1).
 | `CloseVaultThatKeepsTheCopiesSpeaksOneCloseLine` | Close Vault, a retirement held past 4 s, Close and keep the copies: `VaultClosed` spoken once | no case in `AnnounceTeardown` |
 | `HostCodeNeverPairsAHashWithASeparateIdentity` (census) | no file under `SlateWindows/` calls `NoteFileIdentity`; every statement that assigns a tab's content hash assigns `FileIdentity` beside it, from `IdentifiedText`, `NotePartsBundle`, `SaveReport`, `PublishedUnindexed`, a restored `HotExitEntry`, another tab's baseline, or null beside a null hash (`ReplaceItem`'s clear, `WorkspaceViewModel.cs:647`) | read the identity with `NoteFileIdentity` at load; or set a hash without its identity (the task splice; the property rebaseline) |
 | `AStalledWriteInOneVaultNeverHoldsAnother` | A's write held; the switch's settle times out and its prompt opens; Save All lands, A's retirement confirms and the held write is moot, the switch completes `ClosedAllSaved`; B's edits kept, B's close `ClosedKept` | one process-wide gate |
-| `AReopenWaitsForTheLastSessionsObligations` | Close and keep the copies with a retirement held, then a reopen in the same process: released within 4 s, the read waits for it and restores nothing of the retired text; held past 4 s: no hot exit that session — nothing read, no claim, its close prompts with core's timed-out reason, and its Discard All calls nothing | read without waiting; or read anyway after the wait; or hand the key |
+| `AReopenWaitsForTheLastSessionsObligations` | Close and keep the copies with a retirement held, then a reopen in the same process: released within 4 s, the read waits for it and restores nothing of the retired text; held past 4 s: no hot exit that session — nothing read, no claim, its close prompts with core's earlier-work-pending reason, and its Discard All calls nothing | read without waiting; or read anyway after the wait; or hand the key |
 | `AnErroredRetirementLeftByCloseAndKeepNeverDisablesTheNextOpen` | a retirement errors (`Before` fault), Close and keep the copies, the fault ends; with no workspace the store host's retry confirms it; a reopen in the same process has hot exit and restores nothing of the retired text | retry only from a settle or a queued call |
 | `ADiscardedUnkeptTabEditedLaterIsKept` | after a refused Discard All resolves, an unchanged covered tab is edited: it claims with `expected` none, writes, and a kept close restores the edit | leave it unkept for the session |
 | `AClosedTabRetiresWhatItInherited` (Theory: an orphan claim; a restored entry) | the tab carrying it is closed before any edit: a new process restores nothing for the id and the claim is gone | retire only ended episodes |
@@ -1227,8 +1227,15 @@ entry (.NET's `FileSystemAccessRule`, not `icacls /deny`, whose
 vault (its store read and its hold taken, so the open is not inert),
 and undoes it after:
 
+`Start-Slate` waits for Slate to exit, so scenario (5) runs in two
+PowerShell windows: the first launches Slate with `Start-Slate $vault`
+and blocks; once the vault-opened sentence is heard, the second (with
+the same `$device`) applies the deny below, the reader types and
+presses Alt+F4 in Slate, and after Slate exits the second window
+undoes the deny.
+
 ```powershell
-Start-Slate $vault   # scenario (5): wait for the vault-opened sentence before the deny
+# second window, while Slate is open from the first:
 $hotExit = Join-Path $device 'hot-exit'
 if (-not (Test-Path -LiteralPath $hotExit -PathType Container)) { throw "no hot-exit store at $hotExit (scenario (1) writes it)" }
 $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
