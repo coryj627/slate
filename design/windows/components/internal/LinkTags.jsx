@@ -52,9 +52,8 @@ export function LinkTags(_p = {}) {
             style={{
               position: "relative",
               width: 28,
+              height: 28,
               flexShrink: 0,
-              alignSelf: "stretch",
-              height: "auto",
             }}
             layout={"image"}
             size={"28"}
@@ -144,9 +143,8 @@ export function LinkTags(_p = {}) {
             style={{
               position: "relative",
               width: 28,
+              height: 28,
               flexShrink: 0,
-              alignSelf: "stretch",
-              height: "auto",
             }}
             layout={"icon"}
             size={"28"}

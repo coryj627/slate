@@ -1721,7 +1721,7 @@ export function Slider(_p = {}) {
   );
   const __body9 = () => (
     <div className={props.className} style={{
-      width: "fit-content",
+      width: 120,
       borderRadius: 2,
       display: "flex",
       flexDirection: "column",

@@ -1721,7 +1721,8 @@ export function DEPRECATEDAvatar(_p = {}) {
       ...props.style,
     }}>
       <svg width={120} height={120} viewBox="0 0 120 120" fill="none" style={{
-        position: "absolute",
+        color: "var(--neutral-background-6-rest)",
+position: "absolute",
         left: 0,
         top: 0,
         width: 120,
@@ -1774,7 +1775,8 @@ export function DEPRECATEDAvatar(_p = {}) {
       ...props.style,
     }}>
       <svg width={96} height={96} viewBox="0 0 96 96" fill="none" style={{
-        position: "absolute",
+        color: "var(--neutral-background-6-rest)",
+position: "absolute",
         left: 0,
         top: 0,
         width: 96,
@@ -1891,7 +1893,8 @@ export function DEPRECATEDAvatar(_p = {}) {
       ...props.style,
     }}>
       <svg width={72} height={72} viewBox="0 0 72 72" fill="none" style={{
-        position: "absolute",
+        color: "var(--neutral-background-6-rest)",
+position: "absolute",
         left: 0,
         top: 0,
         width: 72,
@@ -1944,7 +1947,8 @@ export function DEPRECATEDAvatar(_p = {}) {
       ...props.style,
     }}>
       <svg width={64} height={64} viewBox="0 0 64 64" fill="none" style={{
-        position: "absolute",
+        color: "var(--neutral-background-6-rest)",
+position: "absolute",
         left: 0,
         top: 0,
         width: 64,
@@ -1997,7 +2001,8 @@ export function DEPRECATEDAvatar(_p = {}) {
       ...props.style,
     }}>
       <svg width={56} height={56} viewBox="0 0 56 56" fill="none" style={{
-        position: "absolute",
+        color: "var(--neutral-background-6-rest)",
+position: "absolute",
         left: 0,
         top: 0,
         width: 56,
@@ -2058,7 +2063,8 @@ export function DEPRECATEDAvatar(_p = {}) {
       ...props.style,
     }}>
       <svg width={48} height={48} viewBox="0 0 48 48" fill="none" style={{
-        position: "absolute",
+        color: "var(--neutral-background-6-rest)",
+position: "absolute",
         left: 0,
         top: 0,
         width: 48,
@@ -2119,7 +2125,8 @@ export function DEPRECATEDAvatar(_p = {}) {
       ...props.style,
     }}>
       <svg width={40} height={40} viewBox="0 0 40 40" fill="none" style={{
-        position: "absolute",
+        color: "var(--neutral-background-6-rest)",
+position: "absolute",
         left: 0,
         top: 0,
         width: 40,
@@ -2180,7 +2187,8 @@ export function DEPRECATEDAvatar(_p = {}) {
       ...props.style,
     }}>
       <svg width={36} height={36} viewBox="0 0 36 36" fill="none" style={{
-        position: "absolute",
+        color: "var(--neutral-background-6-rest)",
+position: "absolute",
         left: 0,
         top: 0,
         width: 36,
@@ -2241,7 +2249,8 @@ export function DEPRECATEDAvatar(_p = {}) {
       ...props.style,
     }}>
       <svg width={32} height={32} viewBox="0 0 32 32" fill="none" style={{
-        position: "absolute",
+        color: "var(--neutral-background-6-rest)",
+position: "absolute",
         left: 0,
         top: 0,
         width: 32,
@@ -2302,7 +2311,8 @@ export function DEPRECATEDAvatar(_p = {}) {
       ...props.style,
     }}>
       <svg width={28} height={28} viewBox="0 0 28 28" fill="none" style={{
-        position: "absolute",
+        color: "var(--neutral-background-6-rest)",
+position: "absolute",
         left: 0,
         top: 0,
         width: 28,
@@ -2363,7 +2373,8 @@ export function DEPRECATEDAvatar(_p = {}) {
       ...props.style,
     }}>
       <svg width={24} height={24} viewBox="0 0 24 24" fill="none" style={{
-        position: "absolute",
+        color: "var(--neutral-background-6-rest)",
+position: "absolute",
         left: 0,
         top: 0,
         width: 24,
@@ -2416,7 +2427,8 @@ export function DEPRECATEDAvatar(_p = {}) {
       ...props.style,
     }}>
       <svg width={20} height={20} viewBox="0 0 20 20" fill="none" style={{
-        position: "absolute",
+        color: "var(--neutral-background-6-rest)",
+position: "absolute",
         left: 0,
         top: 0,
         width: 20,
@@ -2469,7 +2481,8 @@ export function DEPRECATEDAvatar(_p = {}) {
       ...props.style,
     }}>
       <svg width={16} height={16} viewBox="0 0 16 16" fill="none" style={{
-        position: "absolute",
+        color: "var(--neutral-background-6-rest)",
+position: "absolute",
         left: 0,
         top: 0,
         width: 16,
