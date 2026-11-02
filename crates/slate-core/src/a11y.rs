@@ -1528,7 +1528,9 @@ pub enum A11yEvent {
     UnsavedNotesNotKept {
         reason: String,
     },
-    /// A Discard All whose fence did not commit: the vault stays open.
+    /// A close the store could not finish (a discard or retirement not
+    /// confirmed): the message of the discard-pending prompt, whose
+    /// choices are `HOT_EXIT_CHOICE_*` (plan 44 WB-29 §4; owner call D-1).
     UnsavedNotesNotDiscarded,
 
     HostComposed {
@@ -2711,7 +2713,8 @@ impl A11yEvent {
                 format!("Your unsaved notes cannot be kept for next time: {reason}.")
             }
             UnsavedNotesNotDiscarded => "Slate could not yet discard the kept copies of your \
-                 unsaved notes, so the vault stays open. Try again, or cancel."
+                 unsaved notes. If you close anyway, any copies not yet discarded are kept, \
+                 and they come back as unsaved notes the next time you open this vault."
                 .to_owned(),
 
             Canvas { event } => event.render(),
@@ -3495,7 +3498,27 @@ pub const HOT_EXIT_REASON_VAULT_FULL: &str = "the store for this vault is full";
 pub const HOT_EXIT_REASON_TOO_MANY_VAULTS: &str = "the store holds notes for too many vaults";
 pub const HOT_EXIT_REASON_STORE_UNWRITABLE: &str = "the store could not be written";
 pub const HOT_EXIT_REASON_DAMAGED: &str = "the store's records for this vault are damaged";
-pub const HOT_EXIT_REASON_TIMED_OUT: &str = "saving them took longer than 5 seconds";
+pub const HOT_EXIT_REASON_TIMED_OUT: &str = "saving them took longer than 4 seconds";
+/// Plan 44 WB-29 §7: the host's own reasons.
+pub const HOT_EXIT_REASON_TAKEN_OVER: &str =
+    "Slate no longer holds the kept copy of one of these notes";
+pub const HOT_EXIT_REASON_DISCARD_PENDING: &str =
+    "an earlier discard of the kept copies has not finished";
+pub const HOT_EXIT_REASON_DISCARDED: &str = "you chose to discard them";
+pub const HOT_EXIT_REASON_HELD_ELSEWHERE: &str =
+    "another Slate window is still using this vault's kept copies";
+pub const HOT_EXIT_REASON_EARLIER_WORK_PENDING: &str =
+    "Slate is still finishing earlier work on this vault's kept copies";
+
+/// The discard-pending prompt's choices (plan 44 WB-29 §4, §7; owner call
+/// D-1): its message is [`A11yEvent::UnsavedNotesNotDiscarded`].
+pub const HOT_EXIT_CHOICE_TRY_AGAIN: &str = "Try again";
+pub const HOT_EXIT_CHOICE_CLOSE_KEEPING_COPIES: &str = "Close and keep the copies";
+pub const HOT_EXIT_CHOICE_CANCEL: &str = "Cancel";
+/// For a host whose dialog cannot relabel its buttons (Windows'
+/// Yes/No/Cancel message box).
+pub const HOT_EXIT_CHOICES_YES_NO_CANCEL: &str = "Choose Yes to try again, No to close and keep the \
+     copies, or Cancel to keep the vault open.";
 
 /// A vault error as the detail a person hears or reads (W7-7, #1249):
 /// the words of mac's `humanReadableVaultError`, arm for arm, rendered
