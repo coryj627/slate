@@ -931,10 +931,11 @@ internal sealed partial class VaultLifecycleViewModel
                     {
                         try
                         {
-                            string text = session.ReadText(stored);
+                            IdentifiedText identified = session.ReadTextIdentified(stored);
                             read = new WorkspaceViewModel.RescanRead(
-                                text,
-                                SlateUniffiMethods.EditorTextContentHash(text));
+                                identified.Text,
+                                SlateUniffiMethods.EditorTextContentHash(identified.Text),
+                                identified.FileIdentity);
                         }
                         catch (VaultException exception) when (exception is not VaultException.Cancelled)
                         {
@@ -969,8 +970,11 @@ internal sealed partial class VaultLifecycleViewModel
 
                 try
                 {
-                    string text = session.ReadText(path);
-                    return new WorkspaceViewModel.RescanRead(text, SlateUniffiMethods.EditorTextContentHash(text));
+                    IdentifiedText identified = session.ReadTextIdentified(path);
+                    return new WorkspaceViewModel.RescanRead(
+                        identified.Text,
+                        SlateUniffiMethods.EditorTextContentHash(identified.Text),
+                        identified.FileIdentity);
                 }
                 catch (VaultException exception) when (exception is not VaultException.Cancelled)
                 {

@@ -282,6 +282,18 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     public EditorInteractionCoordinator? EditorInteractions => _editorInteractions;
     internal string? SavedContentHash => _contentHash;
 
+    /// <summary>WB-29 §3: the identity of the file version
+    /// <see cref="SavedContentHash"/> describes, from the one core read or
+    /// save that gave the hash (never a separate lookup, so a file replaced
+    /// between the two cannot lend the baseline its identity). Null where
+    /// core has none. Every hot-exit entry carries it.</summary>
+    internal string? FileIdentity { get; private set; }
+
+    /// <summary>WB-29 §5: this baseline came from a hot-exit entry, so its
+    /// identity is enforced on the next save, through every copy of the
+    /// buffer, until a save lands.</summary>
+    internal bool EnforcesFileIdentity { get; private set; }
+
     private long _contentGeneration;
 
     /// <summary>W7-7 PR 7 (#1252, R-9): a monotonic generation of what this
@@ -666,6 +678,8 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
 
         _text = string.Empty;
         _contentHash = null;
+        FileIdentity = null;
+        EnforcesFileIdentity = false;
         // Navigation reuses the tab IN PLACE, so the previous item's
         // Bases/dashboard documents must not survive the replacement
         // (red team round 1: base B's title over base A's rows). The
@@ -813,6 +827,8 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         BumpContentGeneration();
         _text = source._text;
         _contentHash = source._contentHash;
+        FileIdentity = source.FileIdentity;
+        EnforcesFileIdentity = source.EnforcesFileIdentity;
         IsExternallyStale = source.IsExternallyStale;
         // WB-10 (codex round 3): with the hash it was marked against, so a
         // duplicate follows another session's rename as its source does.
@@ -868,6 +884,8 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             case EditorDocumentUpdateFinished:
                 session.EndPeerUpdate();
                 _contentHash = source._contentHash;
+                FileIdentity = source.FileIdentity;
+                EnforcesFileIdentity = source.EnforcesFileIdentity;
                 _isDirty = source._isDirty;
                 if (_isDirty)
                 {
@@ -1120,6 +1138,9 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             snapshot.Text,
             snapshot.Revision,
             _contentHash,
+            // WB-29 §5: checked only beside a hash, and only for a baseline
+            // that came from a hot-exit entry.
+            EnforcesFileIdentity && _contentHash is not null ? FileIdentity : null,
             _saveEpoch,
             _itemEpoch,
             TaskRepairs,
@@ -1168,13 +1189,14 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         string Text,
         long Revision,
         string? ExpectedContentHash,
+        string? ExpectedFileIdentity,
         int Epoch,
         int ItemEpoch,
         Panels.TaskIndexRepairCoordinator? Repairs,
         IReadOnlyList<Action> OnSaved,
         bool Announce);
 
-    private sealed record SaveWrite(string NewContentHash, string? Caveat);
+    private sealed record SaveWrite(string NewContentHash, string? FileIdentity, string? Caveat);
 
     /// <summary>The worker half: the synchronous core write, off the
     /// dispatcher (locked decision 05 §4.1).</summary>
@@ -1197,18 +1219,22 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             return _session.CreateExclusiveReporting(request.Path, request.Text) switch
             {
                 CreateExclusiveOutcome.Committed committed =>
-                    new SaveWrite(committed.Report.NewContentHash, null),
+                    new SaveWrite(committed.Report.NewContentHash, committed.Report.FileIdentity, null),
                 CreateExclusiveOutcome.PublishedUnindexed published => new SaveWrite(
                     published.ContentHash,
+                    published.FileIdentity,
                     CreateOutcomes.PublishedUnindexedCaveat(
                         System.IO.Path.GetFileName(request.Path), published.ErrorMessage)),
                 _ => throw new InvalidOperationException("unknown create outcome"),
             };
         }
-        return new SaveWrite(
-            _session.SaveText(request.Path, request.Text, request.ExpectedContentHash)
-                .NewContentHash,
-            null);
+        // WB-29 §5: a baseline restored from a hot-exit entry also checks the
+        // identity it was kept with, so a file replaced while Slate was away
+        // refuses even with the same bytes. Any other save is as ever.
+        SaveReport report = request.ExpectedFileIdentity is { } identity
+            ? _session.SaveTextChecked(request.Path, request.Text, request.ExpectedContentHash, identity)
+            : _session.SaveText(request.Path, request.Text, request.ExpectedContentHash);
+        return new SaveWrite(report.NewContentHash, report.FileIdentity, null);
     }
 
     /// <summary>The dispatcher half after the write: settle the lease,
@@ -1331,6 +1357,8 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         LoadFailure = null;
         LoadFailureEvent = null;
         _contentHash = saved.NewContentHash;
+        FileIdentity = saved.FileIdentity;
+        EnforcesFileIdentity = false;
         IsExternallyStale = false;
         if (_editorSession is { } session)
         {
@@ -1700,6 +1728,8 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         _editorSession.Document.Replace(statusStartUtf16, statusLengthUtf16, nextStatus);
         _text = updatedText;
         _contentHash = report.NewContentHash;
+        FileIdentity = report.FileIdentity;
+        EnforcesFileIdentity = false;
         IsExternallyStale = false;
         _editorSession.MarkSavedAfterVerifiedDelta(
             new EditorSavedBaseline(
@@ -1959,6 +1989,10 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     // W7-7 PR 7 (round 28): text a worker read for an in-place reload.
     private string? _preloadedText;
 
+    /// <summary>WB-29 §3: the identity the worker's read of
+    /// <see cref="_preloadedText"/> reported.</summary>
+    private string? _preloadedFileIdentity;
+
     /// <summary>W7-7 PR 7 (round 28): the in-place replace, from text a
     /// worker already read — the rescan's clean-tab reload. Its
     /// <paramref name="rescan"/> token (codex PR 7 round 4, finding 3) makes
@@ -1967,9 +2001,11 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     internal void ReplaceItemWithReadText(
         WorkspaceItemState item,
         string text,
-        CancellationToken rescan = default)
+        CancellationToken rescan = default,
+        string? fileIdentity = null)
     {
         _preloadedText = text;
+        _preloadedFileIdentity = fileIdentity;
         _rescanReload = rescan;
         _reloadingForRescan = true;
         RescanReadingPublication = Task.CompletedTask;
@@ -1987,6 +2023,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         {
             reload.End();
             _preloadedText = null;
+            _preloadedFileIdentity = null;
             _reloadingForRescan = false;
             _rescanReload = default;
         }
@@ -2020,7 +2057,17 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         {
             // W7-7 PR 7 (round 28): a rescan's reload hands in text its
             // worker already read, so no core read runs on the dispatcher.
-            _text = _preloadedText ?? _session.ReadText(Path);
+            if (_preloadedText is { } preloaded)
+            {
+                _text = preloaded;
+                FileIdentity = _preloadedFileIdentity;
+            }
+            else
+            {
+                IdentifiedText read = _session.ReadTextIdentified(Path);
+                _text = read.Text;
+                FileIdentity = read.FileIdentity;
+            }
             _contentHash = SlateUniffiMethods.EditorTextContentHash(_text);
             _isDirty = false;
         }

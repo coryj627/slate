@@ -142,6 +142,8 @@ public partial class App : Application
         // data only here, before any vault opens; any other process (a test
         // host) keeps a private temporary folder.
         SidebarWriteJournal.InstallProductionLocation();
+        // WB-29 §1: the hot-exit store too; a test host keeps today's prompt.
+        HotExitStoreHost.InstallProductionLocation();
         base.OnStartup(e);
         _mainWindow = new MainWindow();
         _themeManager?.WatchSystemAccent(_mainWindow);

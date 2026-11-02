@@ -51,6 +51,7 @@ internal enum HostDiagnosticEvent
     GraphConfigReadFailed,
     GraphLayoutRefreshFailed,
     GraphTopologyFetchFailed,
+    HotExitStoreUnavailable,
     MonitorEnumerationFailed,
     PaletteQueryChangeTimed,
     PaletteWorkFailed,
