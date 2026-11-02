@@ -294,7 +294,7 @@ re-planned here. The chunk is plan 44's; its spec is in
 | #1510 | WB-17 | |
 | #1515 #1522 | WB-6 | WD3 |
 | #1519 | WB-10a | |
-| #1525 (Windows half) | WB-29 | after plan 43 PR 29's core store is on `main` (WD20) |
+| #1525 (Windows half) | WB-29 | after plan 44 WB-29a's core store is on `main` (WD20 as answered 2026-10-26) |
 | #1526 | WB-21b | the mac follow-up WB-0 files closes it (WD13) |
 
 ## 10. How an implementing agent works a chunk
