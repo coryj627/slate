@@ -177,7 +177,7 @@ export function Badge(_p = {}) {
             width: 16,
             height: 16,
             flexShrink: 0,
-            color: "var(--neutral-foreground-on-brand-rest-3)",
+            color: "var(--colors-neutral-grey-white)",
           }}>
             <path d={"M 8 16 C 12.418 16 16 12.418 16 8 C 16 3.582 12.418 0 8 0 C 3.582 0 0 3.582 0 8 C 0 12.418 3.582 16 8 16 Z M 8 15 C 4.134 15 1 11.866 1 8 C 1 4.134 4.134 1 8 1 C 11.866 1 15 4.134 15 8 C 15 11.866 11.866 15 8 15 Z"} fill="currentColor" fillRule="evenodd" />
           </svg>
@@ -207,7 +207,7 @@ export function Badge(_p = {}) {
           textAlign: "center",
           whiteSpace: "nowrap",
           lineHeight: "16px",
-          color: "var(--neutral-foreground-on-brand-rest-3)",
+          color: "var(--colors-neutral-grey-white)",
           flexShrink: 0,
         }}>{props.text}</span>
       </div>
@@ -239,7 +239,7 @@ export function Badge(_p = {}) {
             width: 16,
             height: 16,
             flexShrink: 0,
-            color: "var(--neutral-foreground-on-brand-rest-3)",
+            color: "var(--colors-neutral-grey-white)",
           }}>
             <path d={"M 8 16 C 12.418 16 16 12.418 16 8 C 16 3.582 12.418 0 8 0 C 3.582 0 0 3.582 0 8 C 0 12.418 3.582 16 8 16 Z M 8 15 C 4.134 15 1 11.866 1 8 C 1 4.134 4.134 1 8 1 C 11.866 1 15 4.134 15 8 C 15 11.866 11.866 15 8 15 Z"} fill="currentColor" fillRule="evenodd" />
           </svg>
@@ -297,7 +297,7 @@ export function Badge(_p = {}) {
             width: 16,
             height: 16,
             flexShrink: 0,
-            color: "var(--neutral-foreground-on-brand-rest-3)",
+            color: "var(--colors-neutral-grey-white)",
           }}>
             <path d={"M 8 16 C 12.418 16 16 12.418 16 8 C 16 3.582 12.418 0 8 0 C 3.582 0 0 3.582 0 8 C 0 12.418 3.582 16 8 16 Z M 8 15 C 4.134 15 1 11.866 1 8 C 1 4.134 4.134 1 8 1 C 11.866 1 15 4.134 15 8 C 15 11.866 11.866 15 8 15 Z"} fill="currentColor" fillRule="evenodd" />
           </svg>
@@ -327,7 +327,7 @@ export function Badge(_p = {}) {
           textAlign: "center",
           whiteSpace: "nowrap",
           lineHeight: "16px",
-          color: "var(--neutral-foreground-on-brand-rest-3)",
+          color: "var(--colors-neutral-grey-white)",
           flexShrink: 0,
         }}>{props.text}</span>
       </div>
@@ -359,7 +359,7 @@ export function Badge(_p = {}) {
             width: 16,
             height: 16,
             flexShrink: 0,
-            color: "var(--neutral-foreground-on-brand-rest-3)",
+            color: "var(--colors-neutral-grey-white)",
           }}>
             <path d={"M 8 16 C 12.418 16 16 12.418 16 8 C 16 3.582 12.418 0 8 0 C 3.582 0 0 3.582 0 8 C 0 12.418 3.582 16 8 16 Z M 8 15 C 4.134 15 1 11.866 1 8 C 1 4.134 4.134 1 8 1 C 11.866 1 15 4.134 15 8 C 15 11.866 11.866 15 8 15 Z"} fill="currentColor" fillRule="evenodd" />
           </svg>
@@ -1019,7 +1019,7 @@ export function Badge(_p = {}) {
             width: 12,
             height: 12,
             flexShrink: 0,
-            color: "var(--neutral-foreground-on-brand-rest-3)",
+            color: "var(--colors-neutral-grey-white)",
           }}>
             <path d={"M 6 12 C 9.314 12 12 9.314 12 6 C 12 2.686 9.314 0 6 0 C 2.686 0 0 2.686 0 6 C 0 9.314 2.686 12 6 12 Z M 6 11 C 3.239 11 1 8.761 1 6 C 1 3.239 3.239 1 6 1 C 8.761 1 11 3.239 11 6 C 11 8.761 8.761 11 6 11 Z"} fill="currentColor" fillRule="evenodd" />
           </svg>
@@ -1049,7 +1049,7 @@ export function Badge(_p = {}) {
           textAlign: "center",
           whiteSpace: "nowrap",
           lineHeight: "16px",
-          color: "var(--neutral-foreground-on-brand-rest-3)",
+          color: "var(--colors-neutral-grey-white)",
           flexShrink: 0,
         }}>{props.text}</span>
       </div>
@@ -1081,7 +1081,7 @@ export function Badge(_p = {}) {
             width: 12,
             height: 12,
             flexShrink: 0,
-            color: "var(--neutral-foreground-on-brand-rest-3)",
+            color: "var(--colors-neutral-grey-white)",
           }}>
             <path d={"M 6 12 C 9.314 12 12 9.314 12 6 C 12 2.686 9.314 0 6 0 C 2.686 0 0 2.686 0 6 C 0 9.314 2.686 12 6 12 Z M 6 11 C 3.239 11 1 8.761 1 6 C 1 3.239 3.239 1 6 1 C 8.761 1 11 3.239 11 6 C 11 8.761 8.761 11 6 11 Z"} fill="currentColor" fillRule="evenodd" />
           </svg>
@@ -1139,7 +1139,7 @@ export function Badge(_p = {}) {
             width: 12,
             height: 12,
             flexShrink: 0,
-            color: "var(--neutral-foreground-on-brand-rest-3)",
+            color: "var(--colors-neutral-grey-white)",
           }}>
             <path d={"M 6 12 C 9.314 12 12 9.314 12 6 C 12 2.686 9.314 0 6 0 C 2.686 0 0 2.686 0 6 C 0 9.314 2.686 12 6 12 Z M 6 11 C 3.239 11 1 8.761 1 6 C 1 3.239 3.239 1 6 1 C 8.761 1 11 3.239 11 6 C 11 8.761 8.761 11 6 11 Z"} fill="currentColor" fillRule="evenodd" />
           </svg>
@@ -1169,7 +1169,7 @@ export function Badge(_p = {}) {
           textAlign: "center",
           whiteSpace: "nowrap",
           lineHeight: "16px",
-          color: "var(--neutral-foreground-on-brand-rest-3)",
+          color: "var(--colors-neutral-grey-white)",
           flexShrink: 0,
         }}>{props.text}</span>
       </div>
@@ -1201,7 +1201,7 @@ export function Badge(_p = {}) {
             width: 12,
             height: 12,
             flexShrink: 0,
-            color: "var(--neutral-foreground-on-brand-rest-3)",
+            color: "var(--colors-neutral-grey-white)",
           }}>
             <path d={"M 6 12 C 9.314 12 12 9.314 12 6 C 12 2.686 9.314 0 6 0 C 2.686 0 0 2.686 0 6 C 0 9.314 2.686 12 6 12 Z M 6 11 C 3.239 11 1 8.761 1 6 C 1 3.239 3.239 1 6 1 C 8.761 1 11 3.239 11 6 C 11 8.761 8.761 11 6 11 Z"} fill="currentColor" fillRule="evenodd" />
           </svg>
@@ -1861,7 +1861,7 @@ export function Badge(_p = {}) {
             width: 8,
             height: 8,
             flexShrink: 0,
-            color: "var(--neutral-foreground-on-brand-rest-3)",
+            color: "var(--colors-neutral-grey-white)",
           }}>
             <path d={"M 4 8 C 6.209 8 8 6.209 8 4 C 8 1.791 6.209 0 4 0 C 1.791 0 0 1.791 0 4 C 0 6.209 1.791 8 4 8 Z M 4 7 C 2.343 7 1 5.657 1 4 C 1 2.343 2.343 1 4 1 C 5.657 1 7 2.343 7 4 C 7 5.657 5.657 7 4 7 Z"} fill="currentColor" fillRule="evenodd" />
           </svg>
@@ -1891,7 +1891,7 @@ export function Badge(_p = {}) {
           textAlign: "center",
           whiteSpace: "nowrap",
           lineHeight: "14px",
-          color: "var(--neutral-foreground-on-brand-rest-3)",
+          color: "var(--colors-neutral-grey-white)",
           flexShrink: 0,
         }}>{props.text}</span>
       </div>
@@ -1923,7 +1923,7 @@ export function Badge(_p = {}) {
             width: 8,
             height: 8,
             flexShrink: 0,
-            color: "var(--neutral-foreground-on-brand-rest-3)",
+            color: "var(--colors-neutral-grey-white)",
           }}>
             <path d={"M 4 8 C 6.209 8 8 6.209 8 4 C 8 1.791 6.209 0 4 0 C 1.791 0 0 1.791 0 4 C 0 6.209 1.791 8 4 8 Z M 4 7 C 2.343 7 1 5.657 1 4 C 1 2.343 2.343 1 4 1 C 5.657 1 7 2.343 7 4 C 7 5.657 5.657 7 4 7 Z"} fill="currentColor" fillRule="evenodd" />
           </svg>
@@ -1981,7 +1981,7 @@ export function Badge(_p = {}) {
             width: 8,
             height: 8,
             flexShrink: 0,
-            color: "var(--neutral-foreground-on-brand-rest-3)",
+            color: "var(--colors-neutral-grey-white)",
           }}>
             <path d={"M 4 8 C 6.209 8 8 6.209 8 4 C 8 1.791 6.209 0 4 0 C 1.791 0 0 1.791 0 4 C 0 6.209 1.791 8 4 8 Z M 4 7 C 2.343 7 1 5.657 1 4 C 1 2.343 2.343 1 4 1 C 5.657 1 7 2.343 7 4 C 7 5.657 5.657 7 4 7 Z"} fill="currentColor" fillRule="evenodd" />
           </svg>
@@ -2011,7 +2011,7 @@ export function Badge(_p = {}) {
           textAlign: "center",
           whiteSpace: "nowrap",
           lineHeight: "14px",
-          color: "var(--neutral-foreground-on-brand-rest-3)",
+          color: "var(--colors-neutral-grey-white)",
           flexShrink: 0,
         }}>{props.text}</span>
       </div>
@@ -2043,7 +2043,7 @@ export function Badge(_p = {}) {
             width: 8,
             height: 8,
             flexShrink: 0,
-            color: "var(--neutral-foreground-on-brand-rest-3)",
+            color: "var(--colors-neutral-grey-white)",
           }}>
             <path d={"M 4 8 C 6.209 8 8 6.209 8 4 C 8 1.791 6.209 0 4 0 C 1.791 0 0 1.791 0 4 C 0 6.209 1.791 8 4 8 Z M 4 7 C 2.343 7 1 5.657 1 4 C 1 2.343 2.343 1 4 1 C 5.657 1 7 2.343 7 4 C 7 5.657 5.657 7 4 7 Z"} fill="currentColor" fillRule="evenodd" />
           </svg>
@@ -2700,7 +2700,7 @@ export function Badge(_p = {}) {
             width: 8,
             height: 8,
             flexShrink: 0,
-            color: "var(--neutral-foreground-on-brand-rest-3)",
+            color: "var(--colors-neutral-grey-white)",
           }}>
             <path d={"M 4 8 C 6.209 8 8 6.209 8 4 C 8 1.791 6.209 0 4 0 C 1.791 0 0 1.791 0 4 C 0 6.209 1.791 8 4 8 Z M 4 7 C 2.343 7 1 5.657 1 4 C 1 2.343 2.343 1 4 1 C 5.657 1 7 2.343 7 4 C 7 5.657 5.657 7 4 7 Z"} fill="currentColor" fillRule="evenodd" />
           </svg>
@@ -2730,7 +2730,7 @@ export function Badge(_p = {}) {
           textAlign: "center",
           whiteSpace: "nowrap",
           lineHeight: "14px",
-          color: "var(--neutral-foreground-on-brand-rest-3)",
+          color: "var(--colors-neutral-grey-white)",
           flexShrink: 0,
         }}>{props.text}</span>
       </div>
@@ -2762,7 +2762,7 @@ export function Badge(_p = {}) {
             width: 8,
             height: 8,
             flexShrink: 0,
-            color: "var(--neutral-foreground-on-brand-rest-3)",
+            color: "var(--colors-neutral-grey-white)",
           }}>
             <path d={"M 4 8 C 6.209 8 8 6.209 8 4 C 8 1.791 6.209 0 4 0 C 1.791 0 0 1.791 0 4 C 0 6.209 1.791 8 4 8 Z M 4 7 C 2.343 7 1 5.657 1 4 C 1 2.343 2.343 1 4 1 C 5.657 1 7 2.343 7 4 C 7 5.657 5.657 7 4 7 Z"} fill="currentColor" fillRule="evenodd" />
           </svg>
@@ -2820,7 +2820,7 @@ export function Badge(_p = {}) {
             width: 8,
             height: 8,
             flexShrink: 0,
-            color: "var(--neutral-foreground-on-brand-rest-3)",
+            color: "var(--colors-neutral-grey-white)",
           }}>
             <path d={"M 4 8 C 6.209 8 8 6.209 8 4 C 8 1.791 6.209 0 4 0 C 1.791 0 0 1.791 0 4 C 0 6.209 1.791 8 4 8 Z M 4 7 C 2.343 7 1 5.657 1 4 C 1 2.343 2.343 1 4 1 C 5.657 1 7 2.343 7 4 C 7 5.657 5.657 7 4 7 Z"} fill="currentColor" fillRule="evenodd" />
           </svg>
@@ -2850,7 +2850,7 @@ export function Badge(_p = {}) {
           textAlign: "center",
           whiteSpace: "nowrap",
           lineHeight: "14px",
-          color: "var(--neutral-foreground-on-brand-rest-3)",
+          color: "var(--colors-neutral-grey-white)",
           flexShrink: 0,
         }}>{props.text}</span>
       </div>
@@ -2882,7 +2882,7 @@ export function Badge(_p = {}) {
             width: 8,
             height: 8,
             flexShrink: 0,
-            color: "var(--neutral-foreground-on-brand-rest-3)",
+            color: "var(--colors-neutral-grey-white)",
           }}>
             <path d={"M 4 8 C 6.209 8 8 6.209 8 4 C 8 1.791 6.209 0 4 0 C 1.791 0 0 1.791 0 4 C 0 6.209 1.791 8 4 8 Z M 4 7 C 2.343 7 1 5.657 1 4 C 1 2.343 2.343 1 4 1 C 5.657 1 7 2.343 7 4 C 7 5.657 5.657 7 4 7 Z"} fill="currentColor" fillRule="evenodd" />
           </svg>

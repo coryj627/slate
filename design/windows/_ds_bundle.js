@@ -15766,7 +15766,7 @@ function Badge(_p = {}) {
       width: 16,
       height: 16,
       flexShrink: 0,
-      color: "var(--neutral-foreground-on-brand-rest-3)"
+      color: "var(--colors-neutral-grey-white)"
     }
   }, /*#__PURE__*/React.createElement("path", {
     d: "M 8 16 C 12.418 16 16 12.418 16 8 C 16 3.582 12.418 0 8 0 C 3.582 0 0 3.582 0 8 C 0 12.418 3.582 16 8 16 Z M 8 15 C 4.134 15 1 11.866 1 8 C 1 4.134 4.134 1 8 1 C 11.866 1 15 4.134 15 8 C 15 11.866 11.866 15 8 15 Z",
@@ -15796,7 +15796,7 @@ function Badge(_p = {}) {
       textAlign: "center",
       whiteSpace: "nowrap",
       lineHeight: "16px",
-      color: "var(--neutral-foreground-on-brand-rest-3)",
+      color: "var(--colors-neutral-grey-white)",
       flexShrink: 0
     }
   }, props.text)), props.rightIcon && /*#__PURE__*/React.createElement("div", {
@@ -15832,7 +15832,7 @@ function Badge(_p = {}) {
       width: 16,
       height: 16,
       flexShrink: 0,
-      color: "var(--neutral-foreground-on-brand-rest-3)"
+      color: "var(--colors-neutral-grey-white)"
     }
   }, /*#__PURE__*/React.createElement("path", {
     d: "M 8 16 C 12.418 16 16 12.418 16 8 C 16 3.582 12.418 0 8 0 C 3.582 0 0 3.582 0 8 C 0 12.418 3.582 16 8 16 Z M 8 15 C 4.134 15 1 11.866 1 8 C 1 4.134 4.134 1 8 1 C 11.866 1 15 4.134 15 8 C 15 11.866 11.866 15 8 15 Z",
@@ -15895,7 +15895,7 @@ function Badge(_p = {}) {
       width: 16,
       height: 16,
       flexShrink: 0,
-      color: "var(--neutral-foreground-on-brand-rest-3)"
+      color: "var(--colors-neutral-grey-white)"
     }
   }, /*#__PURE__*/React.createElement("path", {
     d: "M 8 16 C 12.418 16 16 12.418 16 8 C 16 3.582 12.418 0 8 0 C 3.582 0 0 3.582 0 8 C 0 12.418 3.582 16 8 16 Z M 8 15 C 4.134 15 1 11.866 1 8 C 1 4.134 4.134 1 8 1 C 11.866 1 15 4.134 15 8 C 15 11.866 11.866 15 8 15 Z",
@@ -15925,7 +15925,7 @@ function Badge(_p = {}) {
       textAlign: "center",
       whiteSpace: "nowrap",
       lineHeight: "16px",
-      color: "var(--neutral-foreground-on-brand-rest-3)",
+      color: "var(--colors-neutral-grey-white)",
       flexShrink: 0
     }
   }, props.text)), props.rightIcon && /*#__PURE__*/React.createElement("div", {
@@ -15961,7 +15961,7 @@ function Badge(_p = {}) {
       width: 16,
       height: 16,
       flexShrink: 0,
-      color: "var(--neutral-foreground-on-brand-rest-3)"
+      color: "var(--colors-neutral-grey-white)"
     }
   }, /*#__PURE__*/React.createElement("path", {
     d: "M 8 16 C 12.418 16 16 12.418 16 8 C 16 3.582 12.418 0 8 0 C 3.582 0 0 3.582 0 8 C 0 12.418 3.582 16 8 16 Z M 8 15 C 4.134 15 1 11.866 1 8 C 1 4.134 4.134 1 8 1 C 11.866 1 15 4.134 15 8 C 15 11.866 11.866 15 8 15 Z",
@@ -16671,7 +16671,7 @@ function Badge(_p = {}) {
       width: 12,
       height: 12,
       flexShrink: 0,
-      color: "var(--neutral-foreground-on-brand-rest-3)"
+      color: "var(--colors-neutral-grey-white)"
     }
   }, /*#__PURE__*/React.createElement("path", {
     d: "M 6 12 C 9.314 12 12 9.314 12 6 C 12 2.686 9.314 0 6 0 C 2.686 0 0 2.686 0 6 C 0 9.314 2.686 12 6 12 Z M 6 11 C 3.239 11 1 8.761 1 6 C 1 3.239 3.239 1 6 1 C 8.761 1 11 3.239 11 6 C 11 8.761 8.761 11 6 11 Z",
@@ -16701,7 +16701,7 @@ function Badge(_p = {}) {
       textAlign: "center",
       whiteSpace: "nowrap",
       lineHeight: "16px",
-      color: "var(--neutral-foreground-on-brand-rest-3)",
+      color: "var(--colors-neutral-grey-white)",
       flexShrink: 0
     }
   }, props.text)), props.rightIcon && /*#__PURE__*/React.createElement("div", {
@@ -16737,7 +16737,7 @@ function Badge(_p = {}) {
       width: 12,
       height: 12,
       flexShrink: 0,
-      color: "var(--neutral-foreground-on-brand-rest-3)"
+      color: "var(--colors-neutral-grey-white)"
     }
   }, /*#__PURE__*/React.createElement("path", {
     d: "M 6 12 C 9.314 12 12 9.314 12 6 C 12 2.686 9.314 0 6 0 C 2.686 0 0 2.686 0 6 C 0 9.314 2.686 12 6 12 Z M 6 11 C 3.239 11 1 8.761 1 6 C 1 3.239 3.239 1 6 1 C 8.761 1 11 3.239 11 6 C 11 8.761 8.761 11 6 11 Z",
@@ -16800,7 +16800,7 @@ function Badge(_p = {}) {
       width: 12,
       height: 12,
       flexShrink: 0,
-      color: "var(--neutral-foreground-on-brand-rest-3)"
+      color: "var(--colors-neutral-grey-white)"
     }
   }, /*#__PURE__*/React.createElement("path", {
     d: "M 6 12 C 9.314 12 12 9.314 12 6 C 12 2.686 9.314 0 6 0 C 2.686 0 0 2.686 0 6 C 0 9.314 2.686 12 6 12 Z M 6 11 C 3.239 11 1 8.761 1 6 C 1 3.239 3.239 1 6 1 C 8.761 1 11 3.239 11 6 C 11 8.761 8.761 11 6 11 Z",
@@ -16830,7 +16830,7 @@ function Badge(_p = {}) {
       textAlign: "center",
       whiteSpace: "nowrap",
       lineHeight: "16px",
-      color: "var(--neutral-foreground-on-brand-rest-3)",
+      color: "var(--colors-neutral-grey-white)",
       flexShrink: 0
     }
   }, props.text)), props.rightIcon && /*#__PURE__*/React.createElement("div", {
@@ -16866,7 +16866,7 @@ function Badge(_p = {}) {
       width: 12,
       height: 12,
       flexShrink: 0,
-      color: "var(--neutral-foreground-on-brand-rest-3)"
+      color: "var(--colors-neutral-grey-white)"
     }
   }, /*#__PURE__*/React.createElement("path", {
     d: "M 6 12 C 9.314 12 12 9.314 12 6 C 12 2.686 9.314 0 6 0 C 2.686 0 0 2.686 0 6 C 0 9.314 2.686 12 6 12 Z M 6 11 C 3.239 11 1 8.761 1 6 C 1 3.239 3.239 1 6 1 C 8.761 1 11 3.239 11 6 C 11 8.761 8.761 11 6 11 Z",
@@ -17576,7 +17576,7 @@ function Badge(_p = {}) {
       width: 8,
       height: 8,
       flexShrink: 0,
-      color: "var(--neutral-foreground-on-brand-rest-3)"
+      color: "var(--colors-neutral-grey-white)"
     }
   }, /*#__PURE__*/React.createElement("path", {
     d: "M 4 8 C 6.209 8 8 6.209 8 4 C 8 1.791 6.209 0 4 0 C 1.791 0 0 1.791 0 4 C 0 6.209 1.791 8 4 8 Z M 4 7 C 2.343 7 1 5.657 1 4 C 1 2.343 2.343 1 4 1 C 5.657 1 7 2.343 7 4 C 7 5.657 5.657 7 4 7 Z",
@@ -17606,7 +17606,7 @@ function Badge(_p = {}) {
       textAlign: "center",
       whiteSpace: "nowrap",
       lineHeight: "14px",
-      color: "var(--neutral-foreground-on-brand-rest-3)",
+      color: "var(--colors-neutral-grey-white)",
       flexShrink: 0
     }
   }, props.text)), props.rightIcon && /*#__PURE__*/React.createElement("div", {
@@ -17642,7 +17642,7 @@ function Badge(_p = {}) {
       width: 8,
       height: 8,
       flexShrink: 0,
-      color: "var(--neutral-foreground-on-brand-rest-3)"
+      color: "var(--colors-neutral-grey-white)"
     }
   }, /*#__PURE__*/React.createElement("path", {
     d: "M 4 8 C 6.209 8 8 6.209 8 4 C 8 1.791 6.209 0 4 0 C 1.791 0 0 1.791 0 4 C 0 6.209 1.791 8 4 8 Z M 4 7 C 2.343 7 1 5.657 1 4 C 1 2.343 2.343 1 4 1 C 5.657 1 7 2.343 7 4 C 7 5.657 5.657 7 4 7 Z",
@@ -17705,7 +17705,7 @@ function Badge(_p = {}) {
       width: 8,
       height: 8,
       flexShrink: 0,
-      color: "var(--neutral-foreground-on-brand-rest-3)"
+      color: "var(--colors-neutral-grey-white)"
     }
   }, /*#__PURE__*/React.createElement("path", {
     d: "M 4 8 C 6.209 8 8 6.209 8 4 C 8 1.791 6.209 0 4 0 C 1.791 0 0 1.791 0 4 C 0 6.209 1.791 8 4 8 Z M 4 7 C 2.343 7 1 5.657 1 4 C 1 2.343 2.343 1 4 1 C 5.657 1 7 2.343 7 4 C 7 5.657 5.657 7 4 7 Z",
@@ -17735,7 +17735,7 @@ function Badge(_p = {}) {
       textAlign: "center",
       whiteSpace: "nowrap",
       lineHeight: "14px",
-      color: "var(--neutral-foreground-on-brand-rest-3)",
+      color: "var(--colors-neutral-grey-white)",
       flexShrink: 0
     }
   }, props.text)), props.rightIcon && /*#__PURE__*/React.createElement("div", {
@@ -17771,7 +17771,7 @@ function Badge(_p = {}) {
       width: 8,
       height: 8,
       flexShrink: 0,
-      color: "var(--neutral-foreground-on-brand-rest-3)"
+      color: "var(--colors-neutral-grey-white)"
     }
   }, /*#__PURE__*/React.createElement("path", {
     d: "M 4 8 C 6.209 8 8 6.209 8 4 C 8 1.791 6.209 0 4 0 C 1.791 0 0 1.791 0 4 C 0 6.209 1.791 8 4 8 Z M 4 7 C 2.343 7 1 5.657 1 4 C 1 2.343 2.343 1 4 1 C 5.657 1 7 2.343 7 4 C 7 5.657 5.657 7 4 7 Z",
@@ -18478,7 +18478,7 @@ function Badge(_p = {}) {
       width: 8,
       height: 8,
       flexShrink: 0,
-      color: "var(--neutral-foreground-on-brand-rest-3)"
+      color: "var(--colors-neutral-grey-white)"
     }
   }, /*#__PURE__*/React.createElement("path", {
     d: "M 4 8 C 6.209 8 8 6.209 8 4 C 8 1.791 6.209 0 4 0 C 1.791 0 0 1.791 0 4 C 0 6.209 1.791 8 4 8 Z M 4 7 C 2.343 7 1 5.657 1 4 C 1 2.343 2.343 1 4 1 C 5.657 1 7 2.343 7 4 C 7 5.657 5.657 7 4 7 Z",
@@ -18508,7 +18508,7 @@ function Badge(_p = {}) {
       textAlign: "center",
       whiteSpace: "nowrap",
       lineHeight: "14px",
-      color: "var(--neutral-foreground-on-brand-rest-3)",
+      color: "var(--colors-neutral-grey-white)",
       flexShrink: 0
     }
   }, props.text)), props.rightIcon && /*#__PURE__*/React.createElement("div", {
@@ -18544,7 +18544,7 @@ function Badge(_p = {}) {
       width: 8,
       height: 8,
       flexShrink: 0,
-      color: "var(--neutral-foreground-on-brand-rest-3)"
+      color: "var(--colors-neutral-grey-white)"
     }
   }, /*#__PURE__*/React.createElement("path", {
     d: "M 4 8 C 6.209 8 8 6.209 8 4 C 8 1.791 6.209 0 4 0 C 1.791 0 0 1.791 0 4 C 0 6.209 1.791 8 4 8 Z M 4 7 C 2.343 7 1 5.657 1 4 C 1 2.343 2.343 1 4 1 C 5.657 1 7 2.343 7 4 C 7 5.657 5.657 7 4 7 Z",
@@ -18607,7 +18607,7 @@ function Badge(_p = {}) {
       width: 8,
       height: 8,
       flexShrink: 0,
-      color: "var(--neutral-foreground-on-brand-rest-3)"
+      color: "var(--colors-neutral-grey-white)"
     }
   }, /*#__PURE__*/React.createElement("path", {
     d: "M 4 8 C 6.209 8 8 6.209 8 4 C 8 1.791 6.209 0 4 0 C 1.791 0 0 1.791 0 4 C 0 6.209 1.791 8 4 8 Z M 4 7 C 2.343 7 1 5.657 1 4 C 1 2.343 2.343 1 4 1 C 5.657 1 7 2.343 7 4 C 7 5.657 5.657 7 4 7 Z",
@@ -18637,7 +18637,7 @@ function Badge(_p = {}) {
       textAlign: "center",
       whiteSpace: "nowrap",
       lineHeight: "14px",
-      color: "var(--neutral-foreground-on-brand-rest-3)",
+      color: "var(--colors-neutral-grey-white)",
       flexShrink: 0
     }
   }, props.text)), props.rightIcon && /*#__PURE__*/React.createElement("div", {
@@ -18673,7 +18673,7 @@ function Badge(_p = {}) {
       width: 8,
       height: 8,
       flexShrink: 0,
-      color: "var(--neutral-foreground-on-brand-rest-3)"
+      color: "var(--colors-neutral-grey-white)"
     }
   }, /*#__PURE__*/React.createElement("path", {
     d: "M 4 8 C 6.209 8 8 6.209 8 4 C 8 1.791 6.209 0 4 0 C 1.791 0 0 1.791 0 4 C 0 6.209 1.791 8 4 8 Z M 4 7 C 2.343 7 1 5.657 1 4 C 1 2.343 2.343 1 4 1 C 5.657 1 7 2.343 7 4 C 7 5.657 5.657 7 4 7 Z",
@@ -50009,7 +50009,7 @@ function AnatomyBadge(_p = {}) {
       whiteSpace: "nowrap",
       lineHeight: 1.5,
       letterSpacing: "-0.010em",
-      color: "var(--neutral-foreground-2-rest)",
+      color: "var(--neutral-foreground-static-rest-3)",
       flexShrink: 0,
       alignSelf: "stretch"
     }
@@ -169284,7 +169284,8 @@ function Avatar(_p = {}) {
     viewBox: "0 0 120 120",
     fill: "none",
     style: {
-      position: "absolute",
+      color: "var(--neutral-background-6-rest)",
+position: "absolute",
       left: 0,
       top: 0,
       width: 120,
@@ -169336,7 +169337,8 @@ function Avatar(_p = {}) {
     viewBox: "0 0 96 96",
     fill: "none",
     style: {
-      position: "absolute",
+      color: "var(--neutral-background-6-rest)",
+position: "absolute",
       left: 0,
       top: 0,
       width: 96,
@@ -169388,7 +169390,8 @@ function Avatar(_p = {}) {
     viewBox: "0 0 72 72",
     fill: "none",
     style: {
-      position: "absolute",
+      color: "var(--neutral-background-6-rest)",
+position: "absolute",
       left: 0,
       top: 0,
       width: 72,
@@ -169440,7 +169443,8 @@ function Avatar(_p = {}) {
     viewBox: "0 0 64 64",
     fill: "none",
     style: {
-      position: "absolute",
+      color: "var(--neutral-background-6-rest)",
+position: "absolute",
       left: 0,
       top: 0,
       width: 64,
@@ -169492,7 +169496,8 @@ function Avatar(_p = {}) {
     viewBox: "0 0 56 56",
     fill: "none",
     style: {
-      position: "absolute",
+      color: "var(--neutral-background-6-rest)",
+position: "absolute",
       left: 0,
       top: 0,
       width: 56,
@@ -169544,7 +169549,8 @@ function Avatar(_p = {}) {
     viewBox: "0 0 48 48",
     fill: "none",
     style: {
-      position: "absolute",
+      color: "var(--neutral-background-6-rest)",
+position: "absolute",
       left: 0,
       top: 0,
       width: 48,
@@ -169596,7 +169602,8 @@ function Avatar(_p = {}) {
     viewBox: "0 0 40 40",
     fill: "none",
     style: {
-      position: "absolute",
+      color: "var(--neutral-background-6-rest)",
+position: "absolute",
       left: 0,
       top: 0,
       width: 40,
@@ -169648,7 +169655,8 @@ function Avatar(_p = {}) {
     viewBox: "0 0 36 36",
     fill: "none",
     style: {
-      position: "absolute",
+      color: "var(--neutral-background-6-rest)",
+position: "absolute",
       left: 0,
       top: 0,
       width: 36,
@@ -169700,7 +169708,8 @@ function Avatar(_p = {}) {
     viewBox: "0 0 32 32",
     fill: "none",
     style: {
-      position: "absolute",
+      color: "var(--neutral-background-6-rest)",
+position: "absolute",
       left: 0,
       top: 0,
       width: 32,
@@ -169752,7 +169761,8 @@ function Avatar(_p = {}) {
     viewBox: "0 0 28 28",
     fill: "none",
     style: {
-      position: "absolute",
+      color: "var(--neutral-background-6-rest)",
+position: "absolute",
       left: 0,
       top: 0,
       width: 28,
@@ -169804,7 +169814,8 @@ function Avatar(_p = {}) {
     viewBox: "0 0 24 24",
     fill: "none",
     style: {
-      position: "absolute",
+      color: "var(--neutral-background-6-rest)",
+position: "absolute",
       left: 0,
       top: 0,
       width: 24,
@@ -169856,7 +169867,8 @@ function Avatar(_p = {}) {
     viewBox: "0 0 20 20",
     fill: "none",
     style: {
-      position: "absolute",
+      color: "var(--neutral-background-6-rest)",
+position: "absolute",
       left: 0,
       top: 0,
       width: 20,
@@ -169908,7 +169920,8 @@ function Avatar(_p = {}) {
     viewBox: "0 0 16 16",
     fill: "none",
     style: {
-      position: "absolute",
+      color: "var(--neutral-background-6-rest)",
+position: "absolute",
       left: 0,
       top: 0,
       width: 16,
@@ -238227,7 +238240,7 @@ function StateTags(_p = {}) {
       fontSize: 14,
       whiteSpace: "nowrap",
       lineHeight: "20px",
-      color: "rgb(151,71,255)",
+      color: "rgb(131,62,222)",
       flexShrink: 0,
       alignSelf: "stretch"
     }
@@ -238327,7 +238340,7 @@ function StateTags(_p = {}) {
       fontSize: 14,
       whiteSpace: "nowrap",
       lineHeight: "20px",
-      color: "rgb(30,169,135)",
+      color: "rgb(22,123,99)",
       flexShrink: 0,
       alignSelf: "stretch"
     }
@@ -238377,7 +238390,7 @@ function StateTags(_p = {}) {
       fontSize: 14,
       whiteSpace: "nowrap",
       lineHeight: "20px",
-      color: "rgb(30,169,135)",
+      color: "rgb(22,123,99)",
       flexShrink: 0,
       alignSelf: "stretch"
     }
@@ -238427,7 +238440,7 @@ function StateTags(_p = {}) {
       fontSize: 14,
       whiteSpace: "nowrap",
       lineHeight: "20px",
-      color: "rgb(221,13,200)",
+      color: "rgb(192,11,174)",
       flexShrink: 0,
       alignSelf: "stretch"
     }
@@ -238477,7 +238490,7 @@ function StateTags(_p = {}) {
       fontSize: 14,
       whiteSpace: "nowrap",
       lineHeight: "20px",
-      color: "rgb(213,54,19)",
+      color: "rgb(196,50,17)",
       flexShrink: 0,
       alignSelf: "stretch"
     }
