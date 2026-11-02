@@ -545,6 +545,20 @@ Where it differs from the design above, it wins.
 - **A recovered name** avoids every kept entry's path, and its search is
   bounded: it stops at an answer that is not "no such file" and falls back
   to `Recovered note {entry id}.md`.
+- **Durable includes every directory name above an entry:** opening the
+  store syncs `vaults`, `v1`, `hot-exit` and the device root each time, and
+  every claim syncs `vaults` before it publishes, so a vault directory a
+  concurrent creator renamed into place but had not yet synced (or failed
+  to sync) is made durable by the caller relying on it.
+- **A claim from a later epoch than the vault's is damage, not age:** the
+  read returns `Damaged` and deletes nothing, and Discard All moves past
+  the highest epoch any claim names as well as the counter.
+- **Recovered names compare without case** (NTFS and APFS defaults), and
+  the fallback is unique among kept and chosen names.
+- **Out of this PR:** on macOS and Linux the provider's `stat` and `read`
+  (and so `classify_hot_exit_entries` and `note_file_identity`) resolve by
+  pathname while writes use the held root, as before this PR; filed as
+  #1733.
 - **Two records fold into others:** `release_entry` returns `()`, since
   `HotExitReleaseOutcome` had the one variant `Released`; and
   `HotExitUnavailable` is `HotExitKeyResult::Unavailable { reason }`. Claim

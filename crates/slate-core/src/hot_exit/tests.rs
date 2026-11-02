@@ -277,25 +277,30 @@ fn durable_means_synced_then_renamed_then_synced() {
             HotExitStep::SyncDir
         ]
     );
-    // A claim and the epoch use the same sequence.
+    // A claim and the epoch use the same sequence, after the claim has made
+    // the vault's own name durable (its creator may not have, §2).
     f.fs.clear();
     let _ = claim(&f.store, &k, "tab2");
-    let steps: Vec<HotExitStep> = f.fs.steps().into_iter().map(|(step, _)| step).collect();
+    let recorded = f.fs.steps();
+    let steps: Vec<HotExitStep> = recorded.iter().map(|(step, _)| *step).collect();
     assert_eq!(
         steps,
         [
+            HotExitStep::SyncDir,
             HotExitStep::WriteFile,
             HotExitStep::SyncFile,
             HotExitStep::Rename,
             HotExitStep::SyncDir
         ]
     );
+    assert_eq!(recorded[0].1, VAULTS_DIR);
     f.fs.clear();
     f.store.discard_vault(&k).unwrap();
     let steps: Vec<HotExitStep> = f.fs.steps().into_iter().map(|(step, _)| step).collect();
     assert_eq!(
-        &steps[..4],
+        &steps[..5],
         [
+            HotExitStep::SyncDir,
             HotExitStep::WriteFile,
             HotExitStep::SyncFile,
             HotExitStep::Rename,
@@ -303,7 +308,61 @@ fn durable_means_synced_then_renamed_then_synced() {
         ],
         "the epoch is durable before any delete"
     );
-    assert!(steps[4..].contains(&HotExitStep::Remove));
+    assert!(steps[5..].contains(&HotExitStep::Remove));
+}
+
+/// Opening the store makes its whole directory chain durable, up to the
+/// device root, so no acknowledged write lives under an unsynced name.
+#[test]
+fn opening_the_store_syncs_its_directory_chain() {
+    let dir = tempfile::tempdir().unwrap();
+    let fs = Arc::new(Recording::default());
+    let _store = HotExitStore::open_with(
+        dir.path(),
+        Arc::clone(&fs) as Arc<dyn HotExitFs>,
+        Arc::new(SystemTime::now),
+    )
+    .unwrap();
+    // The log keeps each path's last component.
+    let synced: Vec<String> = fs
+        .steps()
+        .into_iter()
+        .filter(|(step, _)| *step == HotExitStep::SyncDir)
+        .map(|(_, name)| name)
+        .collect();
+    let device = dir.path().file_name().unwrap().to_str().unwrap();
+    for chain in [VAULTS_DIR, VERSION_DIR, STORE_DIR, device] {
+        assert!(
+            synced.iter().any(|name| name == chain),
+            "{chain} not synced: {synced:?}"
+        );
+    }
+}
+
+/// A claim naming a later epoch than the vault's proves the epoch damaged
+/// (a counter gone backwards), not its entry stale: the read fails closed
+/// and the text stays; Discard All then moves past every claimed epoch.
+#[test]
+fn a_claim_from_a_later_epoch_keeps_its_entry() {
+    let f = Fixture::new();
+    let k = key("vault-a");
+    f.store.discard_vault(&k).unwrap();
+    let c = claim(&f.store, &k, "tab1");
+    assert!(c.epoch >= 1);
+    durable(f.store.write_buffer(&k, &c, 1, &entry("unread")));
+    std::fs::write(f.vault_dir(&k).join(EPOCH_FILE), b"0").unwrap();
+    assert!(matches!(
+        f.store.read_buffers(&k),
+        Err(HotExitError::Damaged)
+    ));
+    assert_eq!(f.on_disk(&k, "tab1").unwrap().text, "unread");
+    assert!(f.files_in(&k, CLAIMS_DIR).contains(&"tab1".to_string()));
+    let next = f.store.discard_vault(&k).unwrap();
+    assert!(
+        next > c.epoch,
+        "{next} must pass the claimed epoch {}",
+        c.epoch
+    );
 }
 
 #[test]
@@ -620,13 +679,22 @@ fn a_stalled_payload_write_never_blocks_a_discard() {
         std::thread::spawn(move || f.store.write_buffer(&k, &c, 1, &entry("held")))
     };
     f.fs.wait_until_holding();
-    let started = std::time::Instant::now();
-    f.store.discard_vault(&k).unwrap();
-    assert!(
-        started.elapsed() < Duration::from_secs(5),
-        "the discard waited"
-    );
+    // The discard runs apart and is awaited with a limit: if staging ever
+    // moved under the vault lock it would wait on the held writer, and the
+    // fact must fail (releasing the writer) rather than hang.
+    let (done, discarded) = std::sync::mpsc::channel();
+    {
+        let f = Arc::clone(&f);
+        let k = k.clone();
+        std::thread::spawn(move || {
+            let _ = done.send(f.store.discard_vault(&k));
+        });
+    }
+    let outcome = discarded.recv_timeout(Duration::from_secs(5));
     f.fs.release_hold();
+    outcome
+        .expect("the discard waited on a stalled payload write")
+        .unwrap();
     assert!(matches!(
         writer.join().unwrap().unwrap(),
         HotExitWriteOutcome::Superseded(HotExitSupersession::Epoch { .. })

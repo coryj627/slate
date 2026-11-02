@@ -87,17 +87,13 @@ fn classify_decides_each_row() {
             path: "stale.md".into(),
         },
     ];
-    // Where the platform gives file identities, the replacement is told
-    // apart; with none on either side it is the recorded accepted risk.
-    if session.note_file_identity("replaced.md").unwrap().is_some() {
-        expected.push(HotExitRestore::ExistsNow {
-            path: "replaced.md".into(),
-        });
-    } else {
-        expected.push(HotExitRestore::Restore {
-            path: "replaced.md".into(),
-        });
-    }
+    // The file-system provider gives every platform an identity, so the
+    // replacement is told apart (with none on either side it would be the
+    // recorded accepted risk, which this provider never reaches).
+    assert!(session.note_file_identity("replaced.md").unwrap().is_some());
+    expected.push(HotExitRestore::ExistsNow {
+        path: "replaced.md".into(),
+    });
     expected.extend([
         HotExitRestore::ExistsNow {
             path: "new-over.md".into(),
@@ -135,10 +131,12 @@ fn the_first_save_refuses_a_file_put_at_the_path_after_classification() {
     std::fs::write(root.join("note.md"), "# Baseline\n").unwrap();
     let session = session_at(root);
     let baseline = hash_of(root, "note.md");
-    let Some(identity) = session.note_file_identity("note.md").unwrap() else {
-        // A platform with no file identity checks the hash alone.
-        return;
-    };
+    // The file-system provider gives every platform an identity; the fact
+    // must exercise the refusal, never pass by skipping it.
+    let identity = session
+        .note_file_identity("note.md")
+        .unwrap()
+        .expect("a local note has a file identity");
     // A backup restore puts another file with the same bytes at the path.
     std::fs::remove_file(root.join("note.md")).unwrap();
     std::fs::write(root.join("other.md"), "keep the inode busy").unwrap();
@@ -212,6 +210,49 @@ fn a_recovered_name_never_takes_another_kept_entrys_path() {
                 path: "Recovered note 2.md".into()
             }
         ]
+    );
+}
+
+/// NTFS and APFS compare names without case: a kept `recovered NOTE.md`
+/// takes `Recovered note.md` from a recovered tab too.
+#[test]
+fn a_recovered_name_never_takes_a_case_alias_of_a_kept_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let session = session_at(tmp.path());
+    let alias = kept("recovered NOTE.md", Some("h".into()), None);
+    let outside = kept("../x.md", None, None);
+    assert_eq!(
+        session.classify_hot_exit_entries(&[alias, outside])[1],
+        HotExitRestore::Recovered {
+            path: "Recovered note 2.md".into()
+        }
+    );
+}
+
+/// With every numbered name spoken for, the fallback is still unique among
+/// the kept paths, including one that is the fallback's first spelling.
+#[test]
+fn the_recovered_fallback_name_is_unique_among_kept_paths() {
+    let tmp = tempfile::tempdir().unwrap();
+    let session = session_at(tmp.path());
+    let mut entries: Vec<HotExitEntry> = (1..=1_000)
+        .map(|n| {
+            let path = if n == 1 {
+                "Recovered note.md".to_string()
+            } else {
+                format!("Recovered note {n}.md")
+            };
+            kept(&path, Some("h".into()), None)
+        })
+        .collect();
+    entries.push(kept("Recovered note tab1.md", Some("h".into()), None));
+    entries.push(kept("../x.md", None, None));
+    let decisions = session.classify_hot_exit_entries(&entries);
+    assert_eq!(
+        decisions.last().unwrap(),
+        &HotExitRestore::Recovered {
+            path: "Recovered note tab1 2.md".into()
+        }
     );
 }
 

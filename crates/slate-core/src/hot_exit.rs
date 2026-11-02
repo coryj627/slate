@@ -444,7 +444,20 @@ impl HotExitStore {
         now: Arc<dyn Fn() -> SystemTime + Send + Sync>,
     ) -> Result<Self, HotExitError> {
         let root = device_root.join(STORE_DIR).join(VERSION_DIR);
-        std::fs::create_dir_all(root.join(VAULTS_DIR))?;
+        let vaults = root.join(VAULTS_DIR);
+        std::fs::create_dir_all(&vaults)?;
+        // Each directory's entry is durable only once its parent is synced:
+        // sync the chain up to the device root, every time (a concurrent
+        // opener may have created a link this caller did not), so nothing
+        // acknowledged later can vanish with an unsynced ancestor (§2).
+        for dir in [
+            &vaults,
+            &root,
+            &device_root.join(STORE_DIR),
+            &device_root.to_path_buf(),
+        ] {
+            fs.sync_dir(dir)?;
+        }
         Ok(Self {
             root,
             fs,
@@ -644,7 +657,9 @@ impl HotExitStore {
         };
         let _guard = self.lock_vault(key)?;
         let next = match self.read_epoch(&dir) {
-            Ok(epoch) => epoch + 1,
+            // Above every epoch a claim names too, should the counter have
+            // gone backwards.
+            Ok(epoch) => (epoch + 1).max(self.highest_claim_epoch(&dir)? + 1),
             // A lost epoch is re-anchored above any epoch it can have held:
             // the highest a claim names, or the clock's milliseconds, which
             // exceed every counted epoch (§3, §6).
@@ -703,6 +718,17 @@ impl HotExitStore {
             }
             Err(error) => return Err(error.into()),
         };
+        // A claim is only ever written at the vault's current epoch, so one
+        // naming a later epoch proves the epoch itself damaged (a counter
+        // gone backwards), not its entry stale: refuse before deleting
+        // anything on that evidence (§3).
+        for name in &claim_names {
+            if let Some(record) = self.read_claim(&dir, name)?
+                && record.epoch > epoch
+            {
+                return Err(HotExitError::Damaged);
+            }
+        }
         // Claims and the epoch are published under this lock, so a temp
         // file beside them is a dead publisher's, whatever its age.
         for (temps_dir, names) in [
@@ -744,6 +770,9 @@ impl HotExitStore {
             };
             match self.read_claim(&dir, id)? {
                 Some(record) if record.epoch == epoch => entries.push(entry),
+                // No claim (a release or discard cut short) or an older
+                // epoch's: proven superseded. A newer epoch than the vault's
+                // was refused above as damage.
                 _ => {
                     self.fs.remove(&path)?;
                     changed = true;
@@ -756,7 +785,7 @@ impl HotExitStore {
         let mut stale_claims = false;
         for name in claim_names {
             if let Some(record) = self.read_claim(&dir, &name)?
-                && record.epoch != epoch
+                && record.epoch < epoch
             {
                 self.fs.remove(&claims_dir.join(&name))?;
                 stale_claims = true;
@@ -783,22 +812,27 @@ impl HotExitStore {
 
     /// The vault's directory, created (with epoch 0, its sub-directories and
     /// lock file, each durable) on its first claim under the store lock,
-    /// where the vault cap is checked (§1).
+    /// where the vault cap is checked (§1). A directory found already in
+    /// place is made durable by this caller too: its creator may not yet
+    /// have synced the parent after the rename, or that sync may have
+    /// failed, and nothing may be acknowledged inside an unsynced name (§2).
     fn ensure_vault(
         &self,
         key: &HotExitVaultKey,
     ) -> Result<Result<PathBuf, HotExitRefusal>, HotExitError> {
         let dir = self.vault_dir(key);
+        let vaults = self.root.join(VAULTS_DIR);
         if dir.exists() {
+            self.fs.sync_dir(&vaults)?;
             return Ok(Ok(dir));
         }
         let _store = self.store_lock.lock().expect("hot-exit store mutex");
         let lock_file = self.open_lock(&self.root.join(STORE_LOCK_FILE))?;
         lock_file.lock()?;
         if dir.exists() {
+            self.fs.sync_dir(&vaults)?;
             return Ok(Ok(dir));
         }
-        let vaults = self.root.join(VAULTS_DIR);
         let names = self.fs.list(&vaults)?;
         // Vault directories are only ever built under this lock, so a
         // staging directory here is a dead creator's (best effort).
@@ -861,6 +895,16 @@ impl HotExitStore {
     }
 
     fn reanchored_epoch(&self, dir: &Path) -> Result<u64, HotExitError> {
+        let highest = self.highest_claim_epoch(dir)?;
+        let millis = (self.now)()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        Ok((highest + 1).max(millis))
+    }
+
+    /// The highest epoch any readable claim names (0 with none).
+    fn highest_claim_epoch(&self, dir: &Path) -> Result<u64, HotExitError> {
         let mut highest = 0u64;
         let names = match self.fs.list(&dir.join(CLAIMS_DIR)) {
             Ok(names) => names,
@@ -868,18 +912,15 @@ impl HotExitStore {
             Err(error) => return Err(error.into()),
         };
         for name in names {
-            // An unreadable claim names no epoch; the clock still bounds it.
+            // An unreadable claim names no epoch (a re-anchor still has the
+            // clock to bound it).
             match self.read_claim(dir, &name) {
                 Ok(Some(record)) => highest = highest.max(record.epoch),
                 Ok(None) | Err(HotExitError::Damaged) => {}
                 Err(error) => return Err(error),
             }
         }
-        let millis = (self.now)()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
-        Ok((highest + 1).max(millis))
+        Ok(highest)
     }
 
     fn read_claim(&self, dir: &Path, entry_id: &str) -> Result<Option<ClaimRecord>, HotExitError> {

@@ -4369,13 +4369,19 @@ impl VaultSession {
     /// entry id; a save there still refuses an existing file (§3).
     fn free_recovered_name(&self, taken: &[String], entry_id: &str) -> String {
         const TRIES: u32 = 1_000;
+        // NTFS and APFS compare names without case by default, so a kept
+        // `recovered NOTE.md` takes `Recovered note.md` too.
+        let is_taken = |name: &str| {
+            let name = name.to_lowercase();
+            taken.iter().any(|path| path.to_lowercase() == name)
+        };
         for n in 1..=TRIES {
             let name = if n == 1 {
                 "Recovered note.md".to_string()
             } else {
                 format!("Recovered note {n}.md")
             };
-            if taken.contains(&name) {
+            if is_taken(&name) {
                 continue;
             }
             match self.provider.stat(&name) {
@@ -4393,7 +4399,18 @@ impl VaultSession {
             .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
             .take(64)
             .collect();
-        format!("Recovered note {id}.md")
+        // Unique among the kept and chosen names too (no disk read: the
+        // vault did not answer); a save there refuses an existing file.
+        (1..=taken.len() + 1)
+            .map(|k| {
+                if k == 1 {
+                    format!("Recovered note {id}.md")
+                } else {
+                    format!("Recovered note {id} {k}.md")
+                }
+            })
+            .find(|name| !is_taken(name))
+            .expect("one of taken.len() + 1 names is free")
     }
 
     /// Body of `save_text` minus the path validation, size check, and
