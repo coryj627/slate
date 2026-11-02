@@ -382,6 +382,15 @@ final class A11yCorpusCensusTests: XCTestCase {
             .templatePickerOpened(count: 7),
             .templateNoteCreated(name: "Meeting 2026-08-20.md", template: "Meeting"),
             .hostComposed(text: "Composed by a host engine.", priority: .high),
+            .unsavedNotesRestored(count: 1),
+            .unsavedNotesRestored(count: 3),
+            .restoredNoteChangedOnDisk(name: "Ideas.md"),
+            .restoredNoteMissingOnDisk(name: "Ideas.md"),
+            .restoredNoteExistsOnDisk(name: "Ideas.md"),
+            .restoredNoteRecovered(name: "Recovered note.md"),
+            .unsavedNotesNotKept(
+                reason: "this folder's file system cannot keep a lasting identity for the vault"),
+            .unsavedNotesNotDiscarded,
             // --- Canvas (W6-1 0a, #745) ---
             .canvas(event: .canvasMovedTo(verbosity: .terse, kindLabel: "text", title: "Research", ordinalN: 2, totalM: 5, container: "Q3", connectionCount: 3, colorName: "red", marked: true)),
             .canvas(event: .canvasMovedTo(verbosity: .standard, kindLabel: "text", title: "Research", ordinalN: 2, totalM: 5, container: "Q3", connectionCount: 3, colorName: "red", marked: true)),

@@ -9770,6 +9770,26 @@ pub enum A11yEvent {
     Graph {
         event: GraphA11yEvent,
     },
+    /// Plan 44 WB-29a (#1525): the hot-exit family.
+    UnsavedNotesRestored {
+        count: u32,
+    },
+    RestoredNoteChangedOnDisk {
+        name: String,
+    },
+    RestoredNoteMissingOnDisk {
+        name: String,
+    },
+    RestoredNoteExistsOnDisk {
+        name: String,
+    },
+    RestoredNoteRecovered {
+        name: String,
+    },
+    UnsavedNotesNotKept {
+        reason: String,
+    },
+    UnsavedNotesNotDiscarded,
     HostComposed {
         text: String,
         priority: A11yPriority,
@@ -11499,6 +11519,13 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::Graph { event } => C::Graph {
                 event: event.into(),
             },
+            F::UnsavedNotesRestored { count } => C::UnsavedNotesRestored { count },
+            F::RestoredNoteChangedOnDisk { name } => C::RestoredNoteChangedOnDisk { name },
+            F::RestoredNoteMissingOnDisk { name } => C::RestoredNoteMissingOnDisk { name },
+            F::RestoredNoteExistsOnDisk { name } => C::RestoredNoteExistsOnDisk { name },
+            F::RestoredNoteRecovered { name } => C::RestoredNoteRecovered { name },
+            F::UnsavedNotesNotKept { reason } => C::UnsavedNotesNotKept { reason },
+            F::UnsavedNotesNotDiscarded => C::UnsavedNotesNotDiscarded,
             F::HostComposed { text, priority } => C::HostComposed {
                 text,
                 priority: priority.into(),
