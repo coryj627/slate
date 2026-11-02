@@ -2338,6 +2338,48 @@ impl VaultProvider for FsVaultProvider {
         Ok(Some(spelling))
     }
 
+    fn file_identity(&self, relative: &str) -> Result<Option<String>, VaultError> {
+        let missing = |error: &VaultError| matches!(error, VaultError::Io(io_err) if io_err.kind() == io::ErrorKind::NotFound);
+        // Windows: the same handle-read identity the conditional rename
+        // captures (FileIdInfo and the volume serial).
+        #[cfg(windows)]
+        {
+            match self.mutation_identity(relative) {
+                Ok(identity) => Ok(Some(identity)),
+                Err(error) if missing(&error) => Ok(None),
+                Err(error) => Err(error),
+            }
+        }
+        // Unix: the device, the inode and the birth time of the entry
+        // itself (a link is its own entry, never its target).
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            let path = self.resolve(relative)?;
+            match fs::symlink_metadata(&path) {
+                Ok(meta) => Ok(Some(format!(
+                    "unix:{:x}-{:x}-{}",
+                    meta.dev(),
+                    meta.ino(),
+                    birthtime_ms_of(&meta)
+                ))),
+                Err(error) => {
+                    let error = VaultError::Io(error);
+                    if missing(&error) {
+                        Ok(None)
+                    } else {
+                        Err(error)
+                    }
+                }
+            }
+        }
+        #[cfg(not(any(windows, unix)))]
+        {
+            let _ = (relative, missing);
+            Ok(None)
+        }
+    }
+
     fn stat(&self, relative: &str) -> Result<FileStat, VaultError> {
         let path = self.resolve(relative)?;
         // `metadata()` follows symlinks; the indexer wants the target's

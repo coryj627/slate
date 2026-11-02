@@ -7484,6 +7484,32 @@ mod tests {
             (Medium, "Template picker opened. 7 templates available."),
             (High, "Created Meeting 2026-08-20.md from Meeting."),
             (High, "Composed by a host engine."),
+            (Medium, "Restored 1 unsaved note."),
+            (Medium, "Restored 3 unsaved notes."),
+            (
+                Medium,
+                "Ideas.md changed on disk after its unsaved edits were kept. The edits are restored; saving will stop and say so before anything is overwritten.",
+            ),
+            (
+                Medium,
+                "Ideas.md is no longer on disk. Its unsaved edits are restored as a new note.",
+            ),
+            (
+                Medium,
+                "Another file is now at Ideas.md. Its unsaved edits are restored as a new note, and saving will not overwrite that file.",
+            ),
+            (
+                Medium,
+                "An unsaved note whose place is no longer in the vault is restored as Recovered note.md.",
+            ),
+            (
+                High,
+                "Your unsaved notes cannot be kept for next time: this folder's file system cannot keep a lasting identity for the vault.",
+            ),
+            (
+                High,
+                "Slate could not yet discard the kept copies of your unsaved notes, so the vault stays open. Try again, or cancel.",
+            ),
             // --- Canvas (W6-1 0a, #745) ---
             (Medium, "Research"),
             (Medium, "Text card \"Research\", 2 of 5 in Q3"),

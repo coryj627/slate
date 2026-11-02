@@ -4242,6 +4242,134 @@ impl VaultSession {
         self.save_text_locked(&mut conn, path, contents, expected_content_hash, &[])
     }
 
+    /// [`save_text`](Self::save_text) with a second precondition (plan 44
+    /// WB-29a §3): with `expected_content_hash` given, the file at `path`
+    /// must also have `expected_file_identity`
+    /// ([`note_file_identity`](Self::note_file_identity)), checked in the
+    /// same cross-process step as the hash. A different file put at the
+    /// path — even one with the same bytes — returns `WriteConflict`. A
+    /// restored hot-exit buffer saves through this until a save lands.
+    pub fn save_text_checked(
+        &self,
+        path: &str,
+        contents: &str,
+        expected_content_hash: Option<&str>,
+        expected_file_identity: Option<&str>,
+    ) -> Result<SaveReport, VaultError> {
+        validate_save_path(path)?;
+        let new_size = contents.len() as u64;
+        if new_size > self.config.large_file_refuse_bytes {
+            return Err(VaultError::FileTooLarge {
+                path: path.to_string(),
+                size: new_size,
+            });
+        }
+        let mut conn = self.conn.lock().expect("session connection mutex");
+        self.save_text_locked_checked(
+            &mut conn,
+            path,
+            contents,
+            expected_content_hash,
+            expected_file_identity,
+            &[],
+        )
+    }
+
+    /// Plan 44 WB-29a §1: the vault's hot-exit store key, or core's reason
+    /// it has none (a weak, sentinel or remote root identity; no held
+    /// root). Plain data: the store never borrows this session (§8).
+    pub fn hot_exit_key(&self) -> crate::hot_exit::HotExitKeyResult {
+        use crate::hot_exit::{HotExitKeyResult, HotExitVaultKey};
+        match self.held_root.as_ref().map(|root| root.hot_exit_key_text()) {
+            Some(Ok(text)) => HotExitKeyResult::Key(HotExitVaultKey { text }),
+            Some(Err(reason)) => HotExitKeyResult::Unavailable { reason },
+            None => HotExitKeyResult::Unavailable {
+                reason: crate::a11y::HOT_EXIT_REASON_WEAK_ROOT,
+            },
+        }
+    }
+
+    /// Plan 44 WB-29a §3: the file system's identity for the note at
+    /// `path`, kept beside a buffer's baseline; `None` where the platform
+    /// gives none or no file is there.
+    pub fn note_file_identity(&self, path: &str) -> Result<Option<String>, VaultError> {
+        validate_save_path(path)?;
+        self.provider.file_identity(path)
+    }
+
+    /// Plan 44 WB-29a §3: how each kept entry comes back, read beneath the
+    /// held root (no index, no scan). An entry whose path no longer
+    /// validates comes back under a free `Recovered note.md` name at the
+    /// vault root, so nothing is dropped unread.
+    pub fn classify_hot_exit_entries(
+        &self,
+        entries: &[crate::hot_exit::HotExitEntry],
+    ) -> Vec<crate::hot_exit::HotExitRestore> {
+        use crate::hot_exit::HotExitRestore;
+        let mut taken: Vec<String> = Vec::new();
+        entries
+            .iter()
+            .map(|entry| {
+                let path = entry.path.clone();
+                if validate_save_path(&path).is_err() {
+                    let name = self.free_recovered_name(&taken);
+                    taken.push(name.clone());
+                    return HotExitRestore::Recovered { path: name };
+                }
+                match self.provider.stat(&path) {
+                    Err(VaultError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                        return HotExitRestore::Gone { path };
+                    }
+                    Err(_) => return HotExitRestore::ExistsNow { path },
+                    Ok(stat) if stat.kind != crate::vault::EntryKind::File => {
+                        return HotExitRestore::ExistsNow { path };
+                    }
+                    Ok(_) => {}
+                }
+                let Some(baseline) = entry.baseline_hash.as_deref() else {
+                    return HotExitRestore::ExistsNow { path };
+                };
+                let identity_now = self.provider.file_identity(&path).ok().flatten();
+                if let (Some(kept), Some(now)) =
+                    (entry.baseline_file_id.as_deref(), identity_now.as_deref())
+                    && kept != now
+                {
+                    return HotExitRestore::ExistsNow { path };
+                }
+                match read_disk_contents_and_hash(
+                    self.provider.as_ref(),
+                    &path,
+                    self.config.large_file_refuse_bytes,
+                ) {
+                    Ok((_, hash, _)) if hash == baseline => HotExitRestore::Restore { path },
+                    Ok(_) => HotExitRestore::RestoreStale { path },
+                    Err(_) => HotExitRestore::ExistsNow { path },
+                }
+            })
+            .collect()
+    }
+
+    /// The first `Recovered note.md`, `Recovered note 2.md`, … that names
+    /// nothing in the vault and nothing already chosen.
+    fn free_recovered_name(&self, taken: &[String]) -> String {
+        (1..)
+            .map(|n: u32| {
+                if n == 1 {
+                    "Recovered note.md".to_string()
+                } else {
+                    format!("Recovered note {n}.md")
+                }
+            })
+            .find(|name| {
+                !taken.contains(name)
+                    && matches!(
+                        self.provider.stat(name),
+                        Err(VaultError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound
+                    )
+            })
+            .expect("an unbounded run of names has a free one")
+    }
+
     /// Body of `save_text` minus the path validation, size check, and
     /// mutex acquisition. Callers must hold the session connection
     /// mutex (via `conn`) for the duration of this call.
@@ -4336,6 +4464,27 @@ impl VaultSession {
         path: &str,
         contents: &str,
         expected_content_hash: Option<&str>,
+        annotations: &[crate::oplog::OpAnnotation],
+    ) -> Result<SaveReport, VaultError> {
+        self.save_text_locked_checked(
+            conn,
+            path,
+            contents,
+            expected_content_hash,
+            None,
+            annotations,
+        )
+    }
+
+    /// `save_text_locked` with WB-29a's identity precondition, checked
+    /// beside the hash inside the same cross-process transaction.
+    fn save_text_locked_checked(
+        &self,
+        conn: &mut Connection,
+        path: &str,
+        contents: &str,
+        expected_content_hash: Option<&str>,
+        expected_file_identity: Option<&str>,
         annotations: &[crate::oplog::OpAnnotation],
     ) -> Result<SaveReport, VaultError> {
         // #1077 (I2/I3): bind the stored spelling BEFORE anything keys on
@@ -4579,6 +4728,27 @@ impl VaultSession {
                     expected_content_hash: expected.to_string(),
                     current_mtime_ms,
                 });
+            }
+            // WB-29a §3: the same step refuses a different file at the path,
+            // whatever its bytes.
+            if let Some(expected_identity) = expected_file_identity {
+                let identity_now = match self.provider.file_identity(path) {
+                    Ok(identity) => identity,
+                    Err(e) => {
+                        drop(tx);
+                        self.clear_own_intent_registration(conn, path, intent_token);
+                        return Err(e);
+                    }
+                };
+                if identity_now.as_deref() != Some(expected_identity) {
+                    drop(tx);
+                    self.clear_own_intent_registration(conn, path, intent_token);
+                    return Err(VaultError::WriteConflict {
+                        current_content_hash: current_hash,
+                        expected_content_hash: expected.to_string(),
+                        current_mtime_ms,
+                    });
+                }
             }
             (current_hash, String::from_utf8(old_bytes).ok())
         } else {
@@ -22587,6 +22757,8 @@ mod tests {
     mod descriptor_interior;
 
     mod held_root_windows;
+
+    mod hot_exit_session;
 
     mod fault_guard;
     mod rename_planning;

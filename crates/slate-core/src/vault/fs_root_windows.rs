@@ -586,6 +586,80 @@ pub(crate) fn reopen_for_caller(dir: &fs::File) -> io::Result<fs::File> {
     }
 }
 
+/// Plan 44 WB-29a §1 (Windows): `win:{volume}-{id}-{created}` for a
+/// persistent, non-sentinel identity on a local volume; core's reason
+/// otherwise. The creation time keeps a deleted root's reused file id
+/// from naming the folder made later.
+pub(crate) fn hot_exit_key_text(
+    root: &fs::File,
+    identity: Option<VaultRootIdentity>,
+    opened_as: &Path,
+) -> Result<String, &'static str> {
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_BASIC_INFO, FILE_REMOTE_PROTOCOL_INFO, FileBasicInfo, FileRemoteProtocolInfo,
+    };
+    let weak = crate::a11y::HOT_EXIT_REASON_WEAK_ROOT;
+    let seam = |name: &str| {
+        std::env::var_os(name).is_some_and(|trigger| {
+            !trigger.is_empty()
+                && opened_as
+                    .to_string_lossy()
+                    .contains(trigger.to_string_lossy().as_ref())
+        })
+    };
+    let Some(mut identity) = identity.filter(|identity| identity.persistent) else {
+        return Err(weak);
+    };
+    if seam("SLATE_TEST_HOT_EXIT_SENTINEL_ID") {
+        identity.id_high = u64::MAX;
+        identity.id_low = u64::MAX;
+    }
+    if seam("SLATE_TEST_HOT_EXIT_REUSED_ID") {
+        identity.id_high = 0x5eed;
+        identity.id_low = 0x5eed;
+    }
+    let sentinel = (identity.id_high == 0 && identity.id_low == 0)
+        || (identity.id_high == u64::MAX && identity.id_low == u64::MAX);
+    if sentinel || identity.volume == 0 {
+        return Err(weak);
+    }
+    // A remote volume answers FileRemoteProtocolInfo; a local one refuses
+    // it. 8-aligned: the call answers ERROR_NOACCESS otherwise (WB-27).
+    #[repr(C, align(8))]
+    struct Aligned(FILE_REMOTE_PROTOCOL_INFO);
+    let mut protocol = Aligned(FILE_REMOTE_PROTOCOL_INFO::default());
+    // SAFETY: a live handle and the exact, initialised, aligned structure.
+    let remote = unsafe {
+        GetFileInformationByHandleEx(
+            root.as_raw_handle(),
+            FileRemoteProtocolInfo,
+            (&mut protocol.0 as *mut FILE_REMOTE_PROTOCOL_INFO).cast(),
+            std::mem::size_of::<FILE_REMOTE_PROTOCOL_INFO>() as u32,
+        )
+    } != 0;
+    if remote || seam("SLATE_TEST_HOT_EXIT_REMOTE") {
+        return Err(crate::a11y::HOT_EXIT_REASON_REMOTE);
+    }
+    // SAFETY: zeroed storage of the type the call fills.
+    let mut basic: FILE_BASIC_INFO = unsafe { std::mem::zeroed() };
+    // SAFETY: a live handle and a buffer of exactly FILE_BASIC_INFO's size.
+    let ok = unsafe {
+        GetFileInformationByHandleEx(
+            root.as_raw_handle(),
+            FileBasicInfo,
+            (&mut basic as *mut FILE_BASIC_INFO).cast(),
+            std::mem::size_of::<FILE_BASIC_INFO>() as u32,
+        )
+    };
+    if ok == 0 {
+        return Err(weak);
+    }
+    Ok(format!(
+        "win:{:016x}-{:016x}{:016x}-{:016x}",
+        identity.volume, identity.id_high, identity.id_low, basic.CreationTime as u64
+    ))
+}
+
 /// `FileIdInfo`: the 64-bit volume serial and the 128-bit file id, the
 /// file system's own identity (`persistent`).
 fn file_id_info(file: &fs::File) -> io::Result<VaultRootIdentity> {

@@ -169,7 +169,11 @@ impl Fixture {
         }
     }
 
-    fn store_on(root: &Path, fs: &Arc<Recording>, clock: &Arc<StdMutex<SystemTime>>) -> HotExitStore {
+    fn store_on(
+        root: &Path,
+        fs: &Arc<Recording>,
+        clock: &Arc<StdMutex<SystemTime>>,
+    ) -> HotExitStore {
         let clock = Arc::clone(clock);
         HotExitStore::open_with(
             root,
@@ -194,7 +198,9 @@ impl Fixture {
     }
 
     fn entry_file(&self, key: &HotExitVaultKey, id: &str) -> PathBuf {
-        self.vault_dir(key).join(ENTRIES_DIR).join(format!("{id}{ENTRY_EXT}"))
+        self.vault_dir(key)
+            .join(ENTRIES_DIR)
+            .join(format!("{id}{ENTRY_EXT}"))
     }
 
     fn on_disk(&self, key: &HotExitVaultKey, id: &str) -> Option<HotExitEntry> {
@@ -310,13 +316,18 @@ fn a_failed_sync_is_never_reported_durable() {
         durable(f.store.write_buffer(&k, &c, 1, &entry("old")));
         f.fs.fail_nth(step, n);
         let outcome = f.store.write_buffer(&k, &c, 2, &entry("new"));
-        assert!(outcome.is_err(), "{step:?} failed but the write said {outcome:?}");
+        assert!(
+            outcome.is_err(),
+            "{step:?} failed but the write said {outcome:?}"
+        );
         f.fs.heal();
         if step != HotExitStep::SyncDir {
             assert_eq!(f.on_disk(&k, "tab1").unwrap().text, "old", "{step:?}");
         }
         assert!(
-            f.files_in(&k, ENTRIES_DIR).iter().all(|n| !n.contains(TEMP_MARK)),
+            f.files_in(&k, ENTRIES_DIR)
+                .iter()
+                .all(|n| !n.contains(TEMP_MARK)),
             "{step:?} left its temp file"
         );
     }
@@ -345,7 +356,9 @@ fn an_older_generation_never_replaces_a_newer_one() {
     durable(f.store.write_buffer(&k, &c, 5, &entry("five")));
     for older in [5, 4] {
         assert_eq!(
-            f.store.write_buffer(&k, &c, older, &entry("stale")).unwrap(),
+            f.store
+                .write_buffer(&k, &c, older, &entry("stale"))
+                .unwrap(),
             HotExitWriteOutcome::Superseded(HotExitSupersession::Newer {
                 stored_generation: 5
             })
@@ -377,7 +390,9 @@ fn newer_is_never_vouched_for_without_durability() {
     );
     let steps: Vec<HotExitStep> = f.fs.steps().into_iter().map(|(step, _)| step).collect();
     assert!(
-        steps.windows(2).any(|w| w == [HotExitStep::SyncFile, HotExitStep::SyncDir]),
+        steps
+            .windows(2)
+            .any(|w| w == [HotExitStep::SyncFile, HotExitStep::SyncDir]),
         "Newer re-synced the stored entry: {steps:?}"
     );
 }
@@ -449,7 +464,10 @@ fn a_release_retires_its_payload_after_the_next_claim() {
     // The tab's next dirty lifetime claims before the release lands.
     let _c2 = claim(&f.store, &k, "tab1");
     f.store.release_entry(&k, &c).unwrap();
-    assert!(f.on_disk(&k, "tab1").is_none(), "the discarded payload stayed");
+    assert!(
+        f.on_disk(&k, "tab1").is_none(),
+        "the discarded payload stayed"
+    );
     // Killed before C2 publishes: nothing restores.
     assert!(f.reopen().read_buffers(&k).unwrap().entries.is_empty());
 }
@@ -575,9 +593,15 @@ fn a_discard_cut_short_after_its_epoch_hides_every_older_entry() {
     let cut_short = f.store.discard_vault(&k);
     INJECTED_STOP.with(|cell| *cell.borrow_mut() = None);
     assert!(cut_short.is_err());
-    assert!(f.on_disk(&k, "tab1").is_some(), "premise: the delete never ran");
+    assert!(
+        f.on_disk(&k, "tab1").is_some(),
+        "premise: the delete never ran"
+    );
     assert!(f.reopen().read_buffers(&k).unwrap().entries.is_empty());
-    assert!(f.on_disk(&k, "tab1").is_none(), "the read deleted the older entry");
+    assert!(
+        f.on_disk(&k, "tab1").is_none(),
+        "the read deleted the older entry"
+    );
 }
 
 #[test]
@@ -595,7 +619,10 @@ fn a_stalled_payload_write_never_blocks_a_discard() {
     f.fs.wait_until_holding();
     let started = std::time::Instant::now();
     f.store.discard_vault(&k).unwrap();
-    assert!(started.elapsed() < Duration::from_secs(5), "the discard waited");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "the discard waited"
+    );
     f.fs.release_hold();
     assert!(matches!(
         writer.join().unwrap().unwrap(),
@@ -611,7 +638,10 @@ fn a_lost_epoch_fails_closed() {
     let c = claim(&f.store, &k, "tab1");
     f.store.discard_vault(&k).unwrap();
     std::fs::remove_file(f.vault_dir(&k).join(EPOCH_FILE)).unwrap();
-    assert!(matches!(f.store.read_buffers(&k), Err(HotExitError::Damaged)));
+    assert!(matches!(
+        f.store.read_buffers(&k),
+        Err(HotExitError::Damaged)
+    ));
     assert!(matches!(
         f.store.claim_entry(&k, 0, "tab2", None),
         Err(HotExitError::Damaged)
@@ -670,7 +700,9 @@ fn a_write_or_claim_over_a_cap_is_refused_and_changes_nothing() {
     let _ = g.store.write_buffer(&kb, &last, 1, &entry(&two_more));
     let ci = claim(&g.store, &kb, "past");
     assert_eq!(
-        g.store.write_buffer(&kb, &ci, 1, &entry(&two_more)).unwrap(),
+        g.store
+            .write_buffer(&kb, &ci, 1, &entry(&two_more))
+            .unwrap(),
         HotExitWriteOutcome::Refused(HotExitRefusal::VaultFull)
     );
     assert!(g.on_disk(&kb, "past").is_none());
@@ -698,9 +730,12 @@ fn the_vault_cap_holds_under_racing_first_claims() {
         .filter(|o| matches!(o, HotExitClaimOutcome::Claimed(_)))
         .count();
     assert_eq!(claimed, 1, "{outcomes:?}");
-    assert!(outcomes.iter().any(|o| *o == HotExitClaimOutcome::Refused(HotExitRefusal::TooManyVaults)));
+    assert!(outcomes.contains(&HotExitClaimOutcome::Refused(HotExitRefusal::TooManyVaults)));
     let vaults = RealHotExitFs.list(&f.store.root.join(VAULTS_DIR)).unwrap();
-    assert_eq!(vaults.iter().filter(|n| !n.contains(TEMP_MARK)).count(), MAX_VAULTS);
+    assert_eq!(
+        vaults.iter().filter(|n| !n.contains(TEMP_MARK)).count(),
+        MAX_VAULTS
+    );
 }
 
 #[test]
@@ -731,10 +766,16 @@ fn a_cut_short_write_keeps_the_previous_entry() {
         .join(ENTRIES_DIR)
         .join(format!("tab1{ENTRY_EXT}{TEMP_MARK}dead"));
     std::fs::write(&temp, b"half").unwrap();
-    assert_eq!(f.store.read_buffers(&k).unwrap().entries[0].text, "previous");
+    assert_eq!(
+        f.store.read_buffers(&k).unwrap().entries[0].text,
+        "previous"
+    );
     assert!(temp.exists(), "a young temp may be a live write's");
     f.advance(ORPHAN_TEMP_AGE + Duration::from_secs(1));
-    assert_eq!(f.store.read_buffers(&k).unwrap().entries[0].text, "previous");
+    assert_eq!(
+        f.store.read_buffers(&k).unwrap().entries[0].text,
+        "previous"
+    );
     assert!(!temp.exists(), "an hour-old temp is an orphan");
 }
 
@@ -756,7 +797,14 @@ fn two_vault_keys_never_read_each_others_entries() {
 fn an_invalid_entry_id_is_refused() {
     let f = Fixture::new();
     let k = key("vault-a");
-    for bad in ["", "a/b", "..", "a.b", "tab one", &"x".repeat(MAX_ENTRY_ID_LEN + 1)] {
+    for bad in [
+        "",
+        "a/b",
+        "..",
+        "a.b",
+        "tab one",
+        &"x".repeat(MAX_ENTRY_ID_LEN + 1),
+    ] {
         assert!(
             matches!(
                 f.store.claim_entry(&k, 0, bad, None),
@@ -795,13 +843,20 @@ fn the_vault_lock_excludes_another_process() {
     let k = key("vault-shared");
     let _ = claim(&store, &k, "tab1");
     let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "hot_exit::tests::hot_exit_child_holds_the_vault_lock", "--nocapture"])
+        .args([
+            "--exact",
+            "hot_exit::tests::hot_exit_child_holds_the_vault_lock",
+            "--nocapture",
+        ])
         .env("SLATE_HOT_EXIT_CHILD_ROOT", dir.path())
         .spawn()
         .unwrap();
     let deadline = std::time::Instant::now() + Duration::from_secs(60);
     while !dir.path().join("child-holding").exists() {
-        assert!(std::time::Instant::now() < deadline, "the child never took the lock");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the child never took the lock"
+        );
         std::thread::sleep(Duration::from_millis(20));
     }
     std::fs::write(dir.path().join("parent-done-waiting"), b"").unwrap();
@@ -833,7 +888,9 @@ fn two_processes_restoring_one_tab_never_both_count_as_kept() {
     let mine = claim(&f.store, &k, "tab1");
     durable(f.store.write_buffer(&k, &mine, 1, &entry("mine")));
     assert_eq!(
-        other.write_buffer(&k, &theirs, 2, &entry("theirs 2")).unwrap(),
+        other
+            .write_buffer(&k, &theirs, 2, &entry("theirs 2"))
+            .unwrap(),
         HotExitWriteOutcome::Superseded(HotExitSupersession::Claim)
     );
     assert_eq!(f.on_disk(&k, "tab1").unwrap().text, "mine");

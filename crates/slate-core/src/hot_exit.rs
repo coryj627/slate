@@ -155,6 +155,34 @@ impl HotExitRefusal {
     }
 }
 
+/// What `VaultSession::hot_exit_key` answers (§1, §7).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HotExitKeyResult {
+    Key(HotExitVaultKey),
+    /// No lasting, local identity: no hot exit for this vault. `reason`
+    /// is one of `a11y::HOT_EXIT_REASON_*`.
+    Unavailable {
+        reason: &'static str,
+    },
+}
+
+/// How one kept entry comes back into the open vault (§3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HotExitRestore {
+    /// The note is as the buffer was loaded: reopen it, dirty.
+    Restore { path: String },
+    /// The note changed on disk: reopen it dirty and externally stale.
+    RestoreStale { path: String },
+    /// Another file sits at the path (or the buffer was a new note): a
+    /// new note whose first save is create-exclusive.
+    ExistsNow { path: String },
+    /// Nothing at the path: a new note there.
+    Gone { path: String },
+    /// The path no longer validates: a new note at `path`, a free
+    /// `Recovered note.md` name at the vault root.
+    Recovered { path: String },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HotExitClaimOutcome {
     Claimed(HotExitClaim),
@@ -381,7 +409,11 @@ struct VaultGuard {
 impl HotExitStore {
     /// Opens (creating) the store under `<device_root>/hot-exit/v1/`.
     pub fn open(device_root: &Path) -> Result<Self, HotExitError> {
-        Self::open_with(device_root, Arc::new(RealHotExitFs), Arc::new(SystemTime::now))
+        Self::open_with(
+            device_root,
+            Arc::new(RealHotExitFs),
+            Arc::new(SystemTime::now),
+        )
     }
 
     /// The store over an I/O seam and a clock (facts).
@@ -426,9 +458,9 @@ impl HotExitStore {
         let _guard = self.lock_vault(key)?;
         let current = self.read_epoch(&dir)?;
         if epoch != current {
-            return Ok(HotExitClaimOutcome::Superseded(HotExitSupersession::Epoch {
-                current,
-            }));
+            return Ok(HotExitClaimOutcome::Superseded(
+                HotExitSupersession::Epoch { current },
+            ));
         }
         let incarnation = fresh_incarnation()?;
         let record = ClaimRecord {
@@ -513,9 +545,9 @@ impl HotExitStore {
         let _guard = self.lock_vault(key)?;
         let current = self.read_epoch(dir)?;
         if claim.epoch != current {
-            return Ok(HotExitWriteOutcome::Superseded(HotExitSupersession::Epoch {
-                current,
-            }));
+            return Ok(HotExitWriteOutcome::Superseded(
+                HotExitSupersession::Epoch { current },
+            ));
         }
         match self.read_claim(dir, &claim.entry_id)? {
             Some(record) if record.incarnation == claim.incarnation => {}
@@ -531,9 +563,11 @@ impl HotExitStore {
             // write whose own durability step failed must not count (§2).
             self.fs.sync_file(&target)?;
             self.fs.sync_dir(&entries_dir)?;
-            return Ok(HotExitWriteOutcome::Superseded(HotExitSupersession::Newer {
-                stored_generation: stored.generation,
-            }));
+            return Ok(HotExitWriteOutcome::Superseded(
+                HotExitSupersession::Newer {
+                    stored_generation: stored.generation,
+                },
+            ));
         }
         let (count, bytes) = self.vault_usage(&entries_dir, &claim.entry_id)?;
         if count + 1 > MAX_ENTRIES_PER_VAULT || bytes + new_size > MAX_BYTES_PER_VAULT {
@@ -706,7 +740,12 @@ impl HotExitStore {
             return Ok(Ok(dir));
         }
         let vaults = self.root.join(VAULTS_DIR);
-        let count = self.fs.list(&vaults)?.iter().filter(|n| !n.contains(TEMP_MARK)).count();
+        let count = self
+            .fs
+            .list(&vaults)?
+            .iter()
+            .filter(|n| !n.contains(TEMP_MARK))
+            .count();
         if count >= MAX_VAULTS {
             return Ok(Err(HotExitRefusal::TooManyVaults));
         }
@@ -796,7 +835,11 @@ impl HotExitStore {
 
     /// Entries and bytes the vault holds, not counting `entry_id`'s own
     /// file (a write replaces it).
-    fn vault_usage(&self, entries_dir: &Path, entry_id: &str) -> Result<(usize, u64), HotExitError> {
+    fn vault_usage(
+        &self,
+        entries_dir: &Path,
+        entry_id: &str,
+    ) -> Result<(usize, u64), HotExitError> {
         let own = format!("{entry_id}{ENTRY_EXT}");
         let mut count = 0;
         let mut bytes = 0;
@@ -831,7 +874,7 @@ impl HotExitStore {
     fn inject(&self, step: HotExitStep) -> Result<(), HotExitError> {
         let _ = step;
         #[cfg(test)]
-        if let Some(fail) = tests::INJECTED_STOP.with(|cell| cell.borrow().clone())
+        if let Some(fail) = tests::INJECTED_STOP.with(|cell| *cell.borrow())
             && fail == step
         {
             return Err(HotExitError::Io {
