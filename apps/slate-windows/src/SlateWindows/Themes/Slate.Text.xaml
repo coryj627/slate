@@ -1,0 +1,19 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- The two type-ramp styles Fluent doesn't ship (design/windows/xaml/README.md).
+         They stay out of Slate.Light.xaml and Slate.Dark.xaml, which are generated,
+         and every appearance merges them, High Contrast included. They aren't based
+         on Fluent's BodyTextBlockStyle because a StaticResource can't reach a sibling
+         merged dictionary. -->
+    <Style x:Key="Slate.BodyLargeTextBlockStyle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
+        <Setter Property="FontSize" Value="18" />
+        <Setter Property="LineHeight" Value="24" />
+        <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
+    </Style>
+    <Style x:Key="Slate.BodyLargeStrongTextBlockStyle"
+           TargetType="TextBlock"
+           BasedOn="{StaticResource Slate.BodyLargeTextBlockStyle}">
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+</ResourceDictionary>

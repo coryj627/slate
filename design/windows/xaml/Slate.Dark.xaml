@@ -9,11 +9,11 @@
 
     <!-- 1. Accent roles. Every accent brush reads these with DynamicResource, so the app can swap
          Slate gold for the Windows accent at runtime by writing these nine keys (xaml/README.md). -->
-    <Color x:Key="Slate.AccentColor">#FFE2AD24</Color> <!-- Fill for primary buttons, checked boxes, switches, sliders, progress and focused input underlines -->
-    <Color x:Key="Slate.AccentHoverColor">#FFEABD4B</Color> <!-- Accent fill on pointer-over -->
-    <Color x:Key="Slate.AccentPressedColor">#FFC9960D</Color> <!-- Accent fill when pressed -->
-    <Color x:Key="Slate.AccentTextColor">#FFE2AD24</Color> <!-- Links, wikilinks, tags, headings in the editor -->
-    <Color x:Key="Slate.AccentIndicatorColor">#FFE2AD24</Color> <!-- Selected-row pill and selected-tab underline -->
+    <Color x:Key="Slate.AccentColor">#FFEECF7E</Color> <!-- Fill for primary buttons, checked boxes, switches, sliders, progress and focused input underlines -->
+    <Color x:Key="Slate.AccentHoverColor">#FFF0D590</Color> <!-- Accent fill on pointer-over -->
+    <Color x:Key="Slate.AccentPressedColor">#FFEDCB75</Color> <!-- Accent fill when pressed -->
+    <Color x:Key="Slate.AccentTextColor">#FFEECF7E</Color> <!-- Links, wikilinks, tags, headings in the editor -->
+    <Color x:Key="Slate.AccentIndicatorColor">#FFEECF7E</Color> <!-- Selected-row pill and selected-tab underline -->
     <Color x:Key="Slate.TextOnAccentColor">#FF171717</Color> <!-- Text and glyphs on an accent fill -->
     <Color x:Key="Slate.SelectedSurfaceColor">#FF33291A</Color> <!-- Selected list and tree rows -->
     <Color x:Key="Slate.SelectionBackgroundColor">#FF6B4D00</Color> <!-- Text selection -->
@@ -78,7 +78,7 @@
     <Color x:Key="Slate.Graph.EdgeColor">#FFAAAAAA</Color>
     <Color x:Key="Slate.Graph.LabelColor">#FFF5F5F5</Color>
     <Color x:Key="Slate.Graph.RingColor">#FFF5F5F5</Color>
-    <Color x:Key="Slate.Graph.AccentColor">#FFE2AD24</Color>
+    <Color x:Key="Slate.Graph.AccentColor">#FFEECF7E</Color>
     <Color x:Key="Slate.CodeKeywordColor">#FFE6CCF2</Color>
     <Color x:Key="Slate.CodeStringColor">#FFFFCDD2</Color>
     <Color x:Key="Slate.CodeNumberColor">#FF9CDCFE</Color>

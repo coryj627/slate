@@ -37,14 +37,22 @@ public sealed class ThemeTokenContrastTests
             // accent pairing that was only gated against window must be
             // gated here too.
             ("accent/surface", "Slate.AccentColor", "Slate.SurfaceColor"),
-            // NOT gated: accent/raised measures |Lc| 74.46 in the light
-            // theme — a real near-miss against the >75 floor, found while
-            // adding accent/surface. Deliberately left ungated rather
-            // than silently passing: fixing it means retuning
-            // Slate.AccentColor, which is shared with selection and focus
-            // and whose final values W8-2 owns (the palette is marked
-            // provisional). No surface renders accent text on the raised
-            // background today. Tracked so it is a decision, not a gap.
+            // NOT gated: accent/raised measures |Lc| 71.61 in the light
+            // theme (74.46 before the design system's gold, #1755) — a real
+            // miss against the >75 floor, found while adding accent/surface.
+            // Deliberately left ungated rather than silently passing: fixing
+            // it means retuning Slate.AccentColor, whose final values W8-2
+            // owns (the palette is marked provisional). No surface renders
+            // accent text on the raised background today. Tracked (#1051) so
+            // it is a decision, not a gap.
+            // #1755: the accent text role, which links, wikilinks, tags and
+            // editor headings use, and the text on every gold fill.
+            ("accent-text/window", "Slate.AccentTextColor", "Slate.WindowBackgroundColor"),
+            ("accent-text/surface", "Slate.AccentTextColor", "Slate.SurfaceColor"),
+            ("accent-text/raised", "Slate.AccentTextColor", "Slate.RaisedSurfaceColor"),
+            ("on-accent/rest", "Slate.TextOnAccentColor", "Slate.AccentColor"),
+            ("on-accent/hover", "Slate.TextOnAccentColor", "Slate.AccentHoverColor"),
+            ("on-accent/pressed", "Slate.TextOnAccentColor", "Slate.AccentPressedColor"),
             ("selection", "Slate.SelectionTextColor", "Slate.SelectionBackgroundColor"),
             ("error/surface", "Slate.ErrorColor", "Slate.SurfaceColor"),
             // W3-4 code-token palette: token text renders on the code

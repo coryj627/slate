@@ -71,11 +71,12 @@
 --surface-selected:#33291A;
 --text-on-accent:#171717;
 --border-subtle:#3D3D3D;
---accent:var(--gold-110);
---accent-hover:var(--gold-120);
---accent-pressed:var(--gold-100);
---accent-text:var(--gold-110);
---accent-indicator:var(--gold-110);
+/* Paler than logo gold so text in and on it clears the project's APCA Lc 75 floor (design/windows/CLAUDE.md). */
+--accent:#EECF7E;
+--accent-hover:#F0D590;
+--accent-pressed:#EDCB75;
+--accent-text:#EECF7E;
+--accent-indicator:#EECF7E;
 --focus-ring:var(--wpf-text);
 --selection-bg:var(--gold-70);
 --selection-text:#F5F5F5;

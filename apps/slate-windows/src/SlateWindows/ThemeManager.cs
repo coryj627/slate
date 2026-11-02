@@ -27,8 +27,7 @@ internal sealed class ThemeManager : IDisposable
         "pack://application:,,,/SlateWindows;component/Themes/";
 
     private readonly Application _application;
-    private ResourceDictionary? _fluentResources;
-    private ResourceDictionary? _slateResources;
+    private ResourceDictionary[] _resources = [];
     private SlateTheme _theme;
 
     internal static event EventHandler? ResourcesChanged;
@@ -114,6 +113,8 @@ internal sealed class ThemeManager : IDisposable
                 }
             }
         }
+
+        _ = LoadDictionary(SlateRoot + "Slate.Text.xaml");
     }
 
     public void SetTheme(SlateTheme theme)
@@ -186,10 +187,11 @@ internal sealed class ThemeManager : IDisposable
 
     /// <summary>
     /// The application-level dictionaries a theme resolves to, in merge
-    /// order: Fluent first, Slate's tokens last. <see cref="ApplyResources"/>
-    /// merges exactly these; a hosted test merges the same pair into its own
-    /// window to realize a surface under the app's real resources without
-    /// touching the process-wide <see cref="Application.Resources"/>.
+    /// order: Fluent first, then Slate's tokens, then Slate's text styles,
+    /// which build on Fluent's. <see cref="ApplyResources"/> merges exactly
+    /// these; a hosted test merges the same layers into its own window to
+    /// realize a surface under the app's real resources without touching the
+    /// process-wide <see cref="Application.Resources"/>.
     /// </summary>
     internal static ResourceDictionary[] DictionariesFor(SlateTheme theme, bool highContrast)
     {
@@ -199,32 +201,32 @@ internal sealed class ThemeManager : IDisposable
         string slateName = highContrast
             ? "Slate.Contrast.xaml"
             : theme == SlateTheme.Dark ? "Slate.Dark.xaml" : "Slate.Light.xaml";
-        return [LoadDictionary(FluentRoot + fluentName), LoadDictionary(SlateRoot + slateName)];
+        return
+        [
+            LoadDictionary(FluentRoot + fluentName),
+            LoadDictionary(SlateRoot + slateName),
+            LoadDictionary(SlateRoot + "Slate.Text.xaml"),
+        ];
     }
 
     private void ApplyResources()
     {
         ResourceDictionary[] layers = DictionariesFor(_theme, SystemParameters.HighContrast);
-        ResourceDictionary fluentResources = layers[0];
-        ResourceDictionary slateResources = layers[1];
 
         var dictionaries = _application.Resources.MergedDictionaries;
-        if (_fluentResources is not null)
+        foreach (ResourceDictionary previous in _resources)
         {
-            dictionaries.Remove(_fluentResources);
+            dictionaries.Remove(previous);
         }
 
-        if (_slateResources is not null)
-        {
-            dictionaries.Remove(_slateResources);
-        }
-
-        // Fluent first; Slate tokens last so Slate-owned surfaces always
+        // Fluent first; Slate after it so Slate-owned surfaces always
         // resolve through our explicit light/dark/Contrast layer.
-        dictionaries.Add(fluentResources);
-        dictionaries.Add(slateResources);
-        _fluentResources = fluentResources;
-        _slateResources = slateResources;
+        foreach (ResourceDictionary layer in layers)
+        {
+            dictionaries.Add(layer);
+        }
+
+        _resources = layers;
         ResourcesChanged?.Invoke(this, EventArgs.Empty);
     }
 

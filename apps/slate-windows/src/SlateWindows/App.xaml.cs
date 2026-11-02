@@ -33,6 +33,7 @@ public partial class App : Application
         // window exists, because it is a class handler for every TextBox
         // the app will ever create.
         TextBoxAccessibility.Install();
+        TextBoxSelection.Install();
         if (!DpiAwarenessProbe.EnsurePerMonitorV2())
         {
             HostLog.Write(HostDiagnosticEvent.DpiAwarenessFailed);
