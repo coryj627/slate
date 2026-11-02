@@ -178,9 +178,80 @@ fn save_text_still_saves_without_an_identity() {
     );
 }
 
+#[test]
+fn an_identity_without_a_hash_is_refused_not_skipped() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("note.md"), "a").unwrap();
+    let session = session_at(tmp.path());
+    let refused = session.save_text_checked("note.md", "b", None, Some("any-identity"));
+    assert!(
+        matches!(refused, Err(VaultError::InvalidArgument { .. })),
+        "{refused:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("note.md")).unwrap(),
+        "a"
+    );
+}
+
+#[test]
+fn a_recovered_name_never_takes_another_kept_entrys_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let session = session_at(tmp.path());
+    // A kept note named "Recovered note.md" whose file is gone: its tab
+    // will save there, so the recovered tab must not.
+    let gone = kept("Recovered note.md", Some("h".into()), None);
+    let outside = kept("../x.md", None, None);
+    assert_eq!(
+        session.classify_hot_exit_entries(&[gone, outside]),
+        [
+            HotExitRestore::Gone {
+                path: "Recovered note.md".into()
+            },
+            HotExitRestore::Recovered {
+                path: "Recovered note 2.md".into()
+            }
+        ]
+    );
+}
+
+/// macOS gives a volume a new `st_dev` when it remounts, so a note's
+/// identity is its inode and birth time alone (the key names the volume).
+#[cfg(unix)]
+#[test]
+fn a_notes_unix_identity_never_carries_st_dev() {
+    use std::os::unix::fs::MetadataExt as _;
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("note.md"), "a").unwrap();
+    let session = session_at(tmp.path());
+    let identity = session.note_file_identity("note.md").unwrap().unwrap();
+    let meta = std::fs::symlink_metadata(tmp.path().join("note.md")).unwrap();
+    assert!(
+        identity.starts_with(&format!("unix:{:x}-", meta.ino())),
+        "{identity}"
+    );
+    assert_eq!(identity.matches('-').count(), 1, "{identity}");
+}
+
 #[cfg(windows)]
 mod windows {
     use super::*;
+
+    /// A note that is itself a reparse point (here a symbolic link; a
+    /// cloud placeholder alike) has no identity to vouch for: `None`, not
+    /// an error that would fail every restore and save beside it.
+    #[test]
+    fn a_reparse_point_note_has_no_identity_rather_than_an_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("target.md"), "a").unwrap();
+        if std::os::windows::fs::symlink_file("target.md", tmp.path().join("link.md")).is_err() {
+            // Creating a link needs Developer Mode or the privilege.
+            return;
+        }
+        let session = session_at(tmp.path());
+        assert_eq!(session.note_file_identity("link.md").unwrap(), None);
+        assert!(session.note_file_identity("target.md").unwrap().is_some());
+    }
 
     fn key_of(root: &Path) -> HotExitKeyResult {
         VaultSession::from_filesystem(root.to_path_buf())

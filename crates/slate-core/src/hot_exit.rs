@@ -340,13 +340,26 @@ fn durable_rename(from: &Path, to: &Path) -> io::Result<()> {
     use windows_sys::Win32::Storage::FileSystem::{
         MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
     };
-    let wide = |path: &Path| -> Vec<u16> {
-        path.as_os_str()
+    // A raw Win32 call gets none of std's long-path handling, so a store
+    // under a deep profile would pass MAX_PATH: hand it the verbatim form.
+    let wide = |path: &Path| -> io::Result<Vec<u16>> {
+        let absolute: Vec<u16> = std::path::absolute(path)?
+            .as_os_str()
             .encode_wide()
-            .chain(std::iter::once(0))
-            .collect()
+            .collect();
+        let utf16 = |text: &str| text.encode_utf16().collect::<Vec<u16>>();
+        let mut verbatim =
+            if absolute.starts_with(&utf16(r"\\?\")) || absolute.starts_with(&utf16(r"\\.\")) {
+                absolute
+            } else if absolute.starts_with(&utf16(r"\\")) {
+                [utf16(r"\\?\UNC"), absolute[1..].to_vec()].concat()
+            } else {
+                [utf16(r"\\?\"), absolute].concat()
+            };
+        verbatim.push(0);
+        Ok(verbatim)
     };
-    let (from, to) = (wide(from), wide(to));
+    let (from, to) = (wide(from)?, wide(to)?);
     // MOVEFILE_WRITE_THROUGH: the call returns only once the rename is on
     // disk, the documented way to make a rename durable on Windows (§2).
     // SAFETY: both buffers are NUL-terminated and outlive the call.
@@ -369,10 +382,18 @@ fn durable_rename(from: &Path, to: &Path) -> io::Result<()> {
 }
 
 #[cfg(windows)]
-fn sync_directory(_dir: &Path) -> io::Result<()> {
-    // A write-through rename is already durable; Windows has no directory
-    // handle to flush the way POSIX does.
-    Ok(())
+fn sync_directory(dir: &Path) -> io::Result<()> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
+    // FlushFileBuffers on a directory opened for writing commits its
+    // entries, as fsync on a directory does on POSIX: a delete (a release,
+    // a discard) is durable once this returns, not only a write-through
+    // rename (§2, §6).
+    std::fs::OpenOptions::new()
+        .write(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(dir)?
+        .sync_all()
 }
 
 #[cfg(not(windows))]
@@ -613,10 +634,14 @@ impl HotExitStore {
     /// Discards every entry of the vault: the epoch advances durably
     /// first, then every claim and entry goes (§6). Returns the new epoch.
     pub fn discard_vault(&self, key: &HotExitVaultKey) -> Result<u64, HotExitError> {
-        let dir = self.vault_dir(key);
-        if !dir.exists() {
-            return Ok(0);
-        }
+        // A vault with no directory yet still gets its fence: a first claim
+        // issued at epoch 0 before this discard may be creating it now, and
+        // must meet epoch 1 under the lock (§6). A vault the cap refuses has
+        // nothing to discard, and no claim can create it either.
+        let dir = match self.ensure_vault(key)? {
+            Ok(dir) => dir,
+            Err(_) => return Ok(0),
+        };
         let _guard = self.lock_vault(key)?;
         let next = match self.read_epoch(&dir) {
             Ok(epoch) => epoch + 1,
@@ -633,7 +658,17 @@ impl HotExitStore {
             // A temp file may be a live write's staging file; that write
             // meets the new epoch under the lock and removes it (§6), and a
             // dead one's is cleaned by a read once it is an hour old (§3).
-            for name in self.fs.list(&sub_dir)? {
+            let names = match self.fs.list(&sub_dir) {
+                Ok(names) => names,
+                // A damaged vault missing a sub-directory gets it back.
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    self.fs.create_dir(&sub_dir)?;
+                    self.fs.sync_dir(&dir)?;
+                    Vec::new()
+                }
+                Err(error) => return Err(error.into()),
+            };
+            for name in names {
                 if !name.contains(TEMP_MARK) {
                     self.fs.remove(&sub_dir.join(name))?;
                 }
@@ -659,6 +694,30 @@ impl HotExitStore {
         let epoch = self.read_epoch(&dir)?;
         let claims_dir = dir.join(CLAIMS_DIR);
         let entries_dir = dir.join(ENTRIES_DIR);
+        // Without the claims directory no entry can be judged current, and
+        // nothing unread is deleted on a guess: the vault is damaged (§3).
+        let claim_names = match self.fs.list(&claims_dir) {
+            Ok(names) => names,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Err(HotExitError::Damaged);
+            }
+            Err(error) => return Err(error.into()),
+        };
+        // Claims and the epoch are published under this lock, so a temp
+        // file beside them is a dead publisher's, whatever its age.
+        for (temps_dir, names) in [
+            (&claims_dir, claim_names.clone()),
+            (&dir, self.fs.list(&dir)?),
+        ] {
+            let mut removed = false;
+            for name in names.iter().filter(|name| name.contains(TEMP_MARK)) {
+                self.fs.remove(&temps_dir.join(name))?;
+                removed = true;
+            }
+            if removed {
+                self.fs.sync_dir(temps_dir)?;
+            }
+        }
         let now = (self.now)();
         let mut entries = Vec::new();
         let mut changed = false;
@@ -695,7 +754,7 @@ impl HotExitStore {
             self.fs.sync_dir(&entries_dir)?;
         }
         let mut stale_claims = false;
-        for name in self.fs.list(&claims_dir)? {
+        for name in claim_names {
             if let Some(record) = self.read_claim(&dir, &name)?
                 && record.epoch != epoch
             {
@@ -740,12 +799,13 @@ impl HotExitStore {
             return Ok(Ok(dir));
         }
         let vaults = self.root.join(VAULTS_DIR);
-        let count = self
-            .fs
-            .list(&vaults)?
-            .iter()
-            .filter(|n| !n.contains(TEMP_MARK))
-            .count();
+        let names = self.fs.list(&vaults)?;
+        // Vault directories are only ever built under this lock, so a
+        // staging directory here is a dead creator's (best effort).
+        for name in names.iter().filter(|n| n.contains(TEMP_MARK)) {
+            let _ = std::fs::remove_dir_all(vaults.join(name));
+        }
+        let count = names.iter().filter(|n| !n.contains(TEMP_MARK)).count();
         if count >= MAX_VAULTS {
             return Ok(Err(HotExitRefusal::TooManyVaults));
         }
@@ -802,9 +862,17 @@ impl HotExitStore {
 
     fn reanchored_epoch(&self, dir: &Path) -> Result<u64, HotExitError> {
         let mut highest = 0u64;
-        for name in self.fs.list(&dir.join(CLAIMS_DIR))? {
-            if let Some(record) = self.read_claim(dir, &name)? {
-                highest = highest.max(record.epoch);
+        let names = match self.fs.list(&dir.join(CLAIMS_DIR)) {
+            Ok(names) => names,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => return Err(error.into()),
+        };
+        for name in names {
+            // An unreadable claim names no epoch; the clock still bounds it.
+            match self.read_claim(dir, &name) {
+                Ok(Some(record)) => highest = highest.max(record.epoch),
+                Ok(None) | Err(HotExitError::Damaged) => {}
+                Err(error) => return Err(error),
             }
         }
         let millis = (self.now)()
@@ -819,7 +887,11 @@ impl HotExitStore {
             return Ok(None);
         }
         match self.fs.read(&dir.join(CLAIMS_DIR).join(entry_id)) {
-            Ok(bytes) => Ok(serde_json::from_slice(&bytes).ok()),
+            // A claim that exists but does not parse fails closed, like a
+            // lost epoch: reading it as absent would delete its entry unread.
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .map(Some)
+                .map_err(|_| HotExitError::Damaged),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(error.into()),
         }

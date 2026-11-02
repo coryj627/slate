@@ -517,7 +517,44 @@ Where it differs from the design above, it wins.
   constructs them until WB-29 and plan 43 PR 29.
 - **The macOS key reads** (`fgetattrlist`, `getattrlist` at the mount
   point, `fstatfs`) were written without a Mac to run them; the Mac lane's
-  build and the macOS-only facts are their first run.
+  build and the macOS-only facts are their first run. Both ask for
+  `ATTR_CMN_RETURNED_ATTRS` with `FSOPT_PACK_INVAL_ATTRS` and give no key
+  unless the volume returned the creation time, the file id and the UUID,
+  so a file system lacking one gives no key rather than a shifted one.
+- **Discard All fences a vault that has no directory yet:** it creates the
+  vault (under the store lock and the cap) and advances its epoch, so a
+  first claim issued at epoch 0 before the discard meets the new epoch.
+- **Windows syncs directories too:** `FlushFileBuffers` on the directory
+  opened for writing (`FILE_FLAG_BACKUP_SEMANTICS`), so a release's and a
+  discard's deletes are durable when the call returns, not only the
+  write-through rename. The rename takes the verbatim (`\\?\`) form, so a
+  store under a deep profile is not held to `MAX_PATH`.
+- **Nothing unread is deleted on a guess:** a claim that exists but does not
+  parse, or a missing claims directory, makes the read return `Damaged`
+  and leaves every entry in place; Discard All still clears such a vault
+  (an unreadable claim names no epoch when the epoch is re-anchored).
+- **Dead temp files are cleaned:** claim and epoch temps under the vault
+  lock (their publishers hold it, so any found is dead) and staging vault
+  directories under the store lock; entry temps keep the hour, being staged
+  outside the lock.
+- **A note's identity carries no device:** `unix:{inode}-{birth}` (macOS
+  renumbers `st_dev` on a remount; the key names the volume), and a Windows
+  note that is itself a reparse point has none (`None`, not an error).
+- **`save_text_checked` refuses an identity without a hash** rather than
+  skipping the check.
+- **A recovered name** avoids every kept entry's path, and its search is
+  bounded: it stops at an answer that is not "no such file" and falls back
+  to `Recovered note {entry id}.md`.
+- **Two records fold into others:** `release_entry` returns `()`, since
+  `HotExitReleaseOutcome` had the one variant `Released`; and
+  `HotExitUnavailable` is `HotExitKeyResult::Unavailable { reason }`. Claim
+  files are not capped apart from entries: one exists per open tab, and a
+  read removes every claim of an older epoch.
+- **Accepted, not built:** two byte-cloned volumes (a `dd` copy, a cloned
+  VHD) share serial, id and creation time and so one key; and remote
+  detection on Windows is `FileRemoteProtocolInfo` alone, so a redirector
+  that refuses that call but reports a persistent `FileIdInfo` would get a
+  key. Neither can be shown failing on the development machine.
 
 ## The core store PR (after this design merges)
 

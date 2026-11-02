@@ -832,10 +832,16 @@ fn hot_exit_child_holds_the_vault_lock() {
     let k = key("vault-shared");
     let _guard = store.lock_vault(&k).unwrap();
     std::fs::write(root.join("child-holding"), b"").unwrap();
-    while !root.join("parent-done-waiting").exists() {
+    // Held until the parent has seen its claim blocked, however slow the
+    // machine: no timer decides when the lock goes.
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    while !root.join("parent-saw-blocked").exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the parent never answered"
+        );
         std::thread::sleep(Duration::from_millis(20));
     }
-    std::thread::sleep(Duration::from_millis(300));
     std::fs::write(root.join("child-releasing"), b"").unwrap();
 }
 
@@ -862,15 +868,148 @@ fn the_vault_lock_excludes_another_process() {
         );
         std::thread::sleep(Duration::from_millis(20));
     }
-    std::fs::write(dir.path().join("parent-done-waiting"), b"").unwrap();
     // The parent's claim must wait for the child's lock to go.
-    let outcome = store.claim_entry(&k, 0, "tab2", None).unwrap();
+    let parent = std::thread::spawn({
+        let root = dir.path().to_path_buf();
+        let k = k.clone();
+        move || {
+            HotExitStore::open(&root)
+                .unwrap()
+                .claim_entry(&k, 0, "tab2", None)
+        }
+    });
+    std::thread::sleep(Duration::from_millis(500));
     assert!(
-        dir.path().join("child-releasing").exists(),
+        !parent.is_finished(),
         "the parent's claim ran while the child held the vault lock"
     );
+    std::fs::write(dir.path().join("parent-saw-blocked"), b"").unwrap();
+    let outcome = parent.join().unwrap().unwrap();
+    assert!(dir.path().join("child-releasing").exists());
     assert!(matches!(outcome, HotExitClaimOutcome::Claimed(_)));
     assert!(child.wait().unwrap().success());
+    drop(store);
+}
+
+/// The store-wide lock is a file lock too: a vault's first claim waits
+/// while another handle (another process) holds `store.lock`, so two
+/// processes never both pass the vault cap (§1, §8).
+#[test]
+fn a_first_claim_waits_for_the_store_lock_held_elsewhere() {
+    let f = Fixture::new();
+    let held = f
+        .store
+        .open_lock(&f.store.root.join(STORE_LOCK_FILE))
+        .unwrap();
+    held.lock().unwrap();
+    let store = f.reopen();
+    let first = std::thread::spawn(move || {
+        let k = key("vault-new");
+        store.claim_entry(&k, 0, "tab1", None)
+    });
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(
+        !first.is_finished(),
+        "a first claim created its vault while the store lock was held"
+    );
+    held.unlock().unwrap();
+    assert!(matches!(
+        first.join().unwrap().unwrap(),
+        HotExitClaimOutcome::Claimed(_)
+    ));
+}
+
+/// Discard All on a vault whose first claim may still be creating it is
+/// still a fence: a claim issued at epoch 0 before the discard meets the
+/// new epoch (§6).
+#[test]
+fn a_discard_before_the_vault_exists_still_fences_the_first_claim() {
+    let f = Fixture::new();
+    let k = key("vault-new");
+    let next = f.store.discard_vault(&k).unwrap();
+    assert!(next >= 1);
+    assert!(matches!(
+        f.store.claim_entry(&k, 0, "tab1", None).unwrap(),
+        HotExitClaimOutcome::Superseded(HotExitSupersession::Epoch { current }) if current == next
+    ));
+}
+
+/// An entry is never deleted on a guess: an unreadable claim or a missing
+/// claims directory makes the read fail closed, and the text stays for a
+/// later read or an explicit discard (§3).
+#[test]
+fn an_unreadable_claim_keeps_its_entry_unread() {
+    let f = Fixture::new();
+    let k = key("vault-a");
+    let c = claim(&f.store, &k, "tab1");
+    durable(f.store.write_buffer(&k, &c, 1, &entry("keep me")));
+    let claim_file = f.vault_dir(&k).join(CLAIMS_DIR).join("tab1");
+    std::fs::write(&claim_file, b"{ not json").unwrap();
+    assert!(matches!(
+        f.store.read_buffers(&k),
+        Err(HotExitError::Damaged)
+    ));
+    assert_eq!(f.on_disk(&k, "tab1").unwrap().text, "keep me");
+
+    std::fs::remove_dir_all(f.vault_dir(&k).join(CLAIMS_DIR)).unwrap();
+    assert!(matches!(
+        f.store.read_buffers(&k),
+        Err(HotExitError::Damaged)
+    ));
+    assert_eq!(f.on_disk(&k, "tab1").unwrap().text, "keep me");
+
+    // Discard All still clears the damaged vault and leaves it usable.
+    f.store.discard_vault(&k).unwrap();
+    assert!(f.store.read_buffers(&k).unwrap().entries.is_empty());
+    assert!(f.on_disk(&k, "tab1").is_none());
+    let c = claim(&f.store, &k, "tab2");
+    durable(f.store.write_buffer(&k, &c, 1, &entry("again")));
+}
+
+/// A claim or epoch temp is published under the vault lock, so a read
+/// (which holds it) removes any it finds; a staging vault directory goes
+/// when the next vault is created under the store lock.
+#[test]
+fn dead_temps_beside_claims_the_epoch_and_vaults_are_cleaned() {
+    let f = Fixture::new();
+    let k = key("vault-a");
+    let _ = claim(&f.store, &k, "tab1");
+    let vault = f.vault_dir(&k);
+    let claim_temp = vault.join(CLAIMS_DIR).join(format!("tab9{TEMP_MARK}dead"));
+    let epoch_temp = vault.join(format!("{EPOCH_FILE}{TEMP_MARK}dead"));
+    std::fs::write(&claim_temp, b"{}").unwrap();
+    std::fs::write(&epoch_temp, b"7").unwrap();
+    f.store.read_buffers(&k).unwrap();
+    assert!(!claim_temp.exists());
+    assert!(!epoch_temp.exists());
+
+    let staging = f
+        .store
+        .root
+        .join(VAULTS_DIR)
+        .join(format!("abc{TEMP_MARK}dead"));
+    std::fs::create_dir_all(staging.join(CLAIMS_DIR)).unwrap();
+    let _ = claim(&f.store, &key("vault-b"), "tab1");
+    assert!(!staging.exists());
+}
+
+/// The publishing rename reaches past MAX_PATH: a store under a deep root
+/// still writes (Windows hands MoveFileExW the verbatim form).
+#[cfg(windows)]
+#[test]
+fn a_store_under_a_long_path_still_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let deep = dir.path().join("d".repeat(120)).join("e".repeat(120));
+    std::fs::create_dir_all(&deep).unwrap();
+    let store = HotExitStore::open(&deep).unwrap();
+    let k = key("vault-a");
+    let c = claim(&store, &k, "tab1");
+    assert!(
+        store.vault_dir(&k).join(ENTRIES_DIR).as_os_str().len() > 260,
+        "the fact must exercise a path past MAX_PATH"
+    );
+    durable(store.write_buffer(&k, &c, 1, &entry("deep")));
+    assert_eq!(store.read_buffers(&k).unwrap().entries[0].text, "deep");
 }
 
 #[test]

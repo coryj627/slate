@@ -4257,6 +4257,13 @@ impl VaultSession {
         expected_file_identity: Option<&str>,
     ) -> Result<SaveReport, VaultError> {
         validate_save_path(path)?;
+        // The identity is checked in the hash's step; without a hash there
+        // is no step, and silently skipping the check would be worse.
+        if expected_file_identity.is_some() && expected_content_hash.is_none() {
+            return Err(VaultError::InvalidArgument {
+                message: "A file identity is checked only with a content hash".into(),
+            });
+        }
         let new_size = contents.len() as u64;
         if new_size > self.config.large_file_refuse_bytes {
             return Err(VaultError::FileTooLarge {
@@ -4306,13 +4313,19 @@ impl VaultSession {
         entries: &[crate::hot_exit::HotExitEntry],
     ) -> Vec<crate::hot_exit::HotExitRestore> {
         use crate::hot_exit::HotExitRestore;
-        let mut taken: Vec<String> = Vec::new();
+        // Every kept path is spoken for, so a recovered tab never shares a
+        // name with another entry's tab (a Gone note's, say).
+        let mut taken: Vec<String> = entries
+            .iter()
+            .filter(|entry| validate_save_path(&entry.path).is_ok())
+            .map(|entry| entry.path.clone())
+            .collect();
         entries
             .iter()
             .map(|entry| {
                 let path = entry.path.clone();
                 if validate_save_path(&path).is_err() {
-                    let name = self.free_recovered_name(&taken);
+                    let name = self.free_recovered_name(&taken, &entry.entry_id);
                     taken.push(name.clone());
                     return HotExitRestore::Recovered { path: name };
                 }
@@ -4350,24 +4363,37 @@ impl VaultSession {
     }
 
     /// The first `Recovered note.md`, `Recovered note 2.md`, … that names
-    /// nothing in the vault and nothing already chosen.
-    fn free_recovered_name(&self, taken: &[String]) -> String {
-        (1..)
-            .map(|n: u32| {
-                if n == 1 {
-                    "Recovered note.md".to_string()
-                } else {
-                    format!("Recovered note {n}.md")
+    /// nothing in the vault and nothing already chosen. The search is
+    /// bounded and stops at the first answer that is not "no such file" (a
+    /// vault that has gone away), falling back to a name made unique by the
+    /// entry id; a save there still refuses an existing file (§3).
+    fn free_recovered_name(&self, taken: &[String], entry_id: &str) -> String {
+        const TRIES: u32 = 1_000;
+        for n in 1..=TRIES {
+            let name = if n == 1 {
+                "Recovered note.md".to_string()
+            } else {
+                format!("Recovered note {n}.md")
+            };
+            if taken.contains(&name) {
+                continue;
+            }
+            match self.provider.stat(&name) {
+                Err(VaultError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                    return name;
                 }
-            })
-            .find(|name| {
-                !taken.contains(name)
-                    && matches!(
-                        self.provider.stat(name),
-                        Err(VaultError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound
-                    )
-            })
-            .expect("an unbounded run of names has a free one")
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+        // A host may hand in an entry it built itself: only the store's
+        // own id alphabet reaches the name.
+        let id: String = entry_id
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+            .take(64)
+            .collect();
+        format!("Recovered note {id}.md")
     }
 
     /// Body of `save_text` minus the path validation, size check, and

@@ -1375,16 +1375,32 @@ pub(crate) mod sys {
     const ATTR_VOL_INFO: u32 = 0x8000_0000;
     #[cfg(target_os = "macos")]
     const ATTR_VOL_UUID: u32 = 0x0004_0000;
+    /// Always packed first, before the requested attributes: the
+    /// `attribute_set_t` of those the volume actually returned.
+    #[cfg(target_os = "macos")]
+    const ATTR_CMN_RETURNED_ATTRS: u32 = 0x8000_0000;
+    /// Packs an attribute the volume lacks as a default value, so every
+    /// offset holds, and the returned set says which ones are real.
+    #[cfg(target_os = "macos")]
+    const FSOPT_PACK_INVAL_ATTRS: libc::c_uint = 0x0000_0008;
+    /// The length (`u32`) and the returned `attribute_set_t` (five `u32`s)
+    /// before the first requested attribute.
+    #[cfg(target_os = "macos")]
+    const FIRST_ATTRIBUTE: usize = 4 + 20;
 
     /// The held folder's creation time (nanoseconds) and file id: one
-    /// `fgetattrlist`, attributes packed in bit order after the length.
+    /// `fgetattrlist`, attributes packed in bit order after the length and
+    /// the returned set. `None` unless the volume returned both, so a file
+    /// system without creation times gives no key rather than a shifted
+    /// one.
     #[cfg(target_os = "macos")]
     fn common_attributes(root: &std::fs::File) -> Option<(u64, u64)> {
         use std::os::fd::AsRawFd as _;
+        let wanted = ATTR_CMN_CRTIME | ATTR_CMN_FILEID;
         let mut list = AttrList {
             bitmapcount: ATTR_BIT_MAP_COUNT,
             reserved: 0,
-            commonattr: ATTR_CMN_CRTIME | ATTR_CMN_FILEID,
+            commonattr: ATTR_CMN_RETURNED_ATTRS | wanted,
             volattr: 0,
             dirattr: 0,
             fileattr: 0,
@@ -1398,16 +1414,20 @@ pub(crate) mod sys {
                 &mut list,
                 buf.as_mut_ptr().cast(),
                 buf.len(),
-                0,
+                FSOPT_PACK_INVAL_ATTRS,
             )
         };
         if got != 0 {
             return None;
         }
+        let returned = u32::from_ne_bytes(buf[4..8].try_into().ok()?);
+        if returned & wanted != wanted {
+            return None;
+        }
         let read = |at: usize| u64::from_ne_bytes(buf[at..at + 8].try_into().ok()?).into();
-        let seconds: Option<u64> = read(4);
-        let nanos: Option<u64> = read(12);
-        let file_id: Option<u64> = read(20);
+        let seconds: Option<u64> = read(FIRST_ATTRIBUTE);
+        let nanos: Option<u64> = read(FIRST_ATTRIBUTE + 8);
+        let file_id: Option<u64> = read(FIRST_ATTRIBUTE + 16);
         Some((
             seconds?.wrapping_mul(1_000_000_000).wrapping_add(nanos?),
             file_id?,
@@ -1415,19 +1435,19 @@ pub(crate) mod sys {
     }
 
     /// The volume's UUID, read at its mount point (`getattrlist` answers
-    /// volume attributes only there).
+    /// volume attributes only there); `None` unless the volume returned it.
     #[cfg(target_os = "macos")]
     fn volume_uuid(mount: &std::ffi::CStr) -> Option<[u8; 16]> {
         let mut list = AttrList {
             bitmapcount: ATTR_BIT_MAP_COUNT,
             reserved: 0,
-            commonattr: 0,
+            commonattr: ATTR_CMN_RETURNED_ATTRS,
             volattr: ATTR_VOL_INFO | ATTR_VOL_UUID,
             dirattr: 0,
             fileattr: 0,
             forkattr: 0,
         };
-        let mut buf = [0u8; 32];
+        let mut buf = [0u8; 64];
         // SAFETY: a NUL-terminated path, a valid list and a buffer of its size.
         let got = unsafe {
             getattrlist(
@@ -1435,13 +1455,18 @@ pub(crate) mod sys {
                 &mut list,
                 buf.as_mut_ptr().cast(),
                 buf.len(),
-                0,
+                FSOPT_PACK_INVAL_ATTRS,
             )
         };
         if got != 0 {
             return None;
         }
-        buf[4..20].try_into().ok()
+        // The returned set's second word is its volume attributes.
+        let returned = u32::from_ne_bytes(buf[8..12].try_into().ok()?);
+        if returned & ATTR_VOL_UUID == 0 {
+            return None;
+        }
+        buf[FIRST_ATTRIBUTE..FIRST_ATTRIBUTE + 16].try_into().ok()
     }
 
     use std::ffi::{CStr, CString, OsString};
