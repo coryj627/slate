@@ -1,5 +1,26 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Slate Design System theme layer (Dark). Generated from tokens/colors.css, tokens/brand.css,
+         tokens/fluent-slate.css and tokens/spacing.css. Drop-in replacement for Themes/Slate.Dark.xaml:
+         ThemeManager already merges it after Fluent.Dark.xaml, so every key below wins.
+         Sections: 1 accent roles, 2 Slate colours and brushes (existing keys kept), 3 new Slate keys,
+         4 shadows, 5 Fluent colour keys, 6 Fluent brushes re-pointed to Slate, 7 Fluent control borders.
+         High Contrast is untouched: keep Fluent.HC.xaml + Slate.Contrast.xaml, no gold. -->
+
+    <!-- 1. Accent roles. Every accent brush reads these with DynamicResource, so the app can swap
+         Slate gold for the Windows accent at runtime by writing these nine keys (xaml/README.md). -->
+    <Color x:Key="Slate.AccentColor">#FFEECF7E</Color> <!-- Fill for primary buttons, checked boxes, switches, sliders, progress and focused input underlines -->
+    <Color x:Key="Slate.AccentHoverColor">#FFF0D590</Color> <!-- Accent fill on pointer-over -->
+    <Color x:Key="Slate.AccentPressedColor">#FFEDCB75</Color> <!-- Accent fill when pressed -->
+    <Color x:Key="Slate.AccentTextColor">#FFEECF7E</Color> <!-- Links, wikilinks, tags, headings in the editor -->
+    <Color x:Key="Slate.AccentIndicatorColor">#FFEECF7E</Color> <!-- Selected-row pill and selected-tab underline -->
+    <Color x:Key="Slate.TextOnAccentColor">#FF171717</Color> <!-- Text and glyphs on an accent fill -->
+    <Color x:Key="Slate.SelectedSurfaceColor">#FF33291A</Color> <!-- Selected list and tree rows -->
+    <Color x:Key="Slate.SelectionBackgroundColor">#FF6B4D00</Color> <!-- Text selection -->
+    <Color x:Key="Slate.SelectionTextColor">#FFF5F5F5</Color> <!-- Text inside a selection -->
+    <Color x:Key="Slate.ReadingSelectionColor">#3DE2AD24</Color> <!-- Reading view selection: an overlay on top of the text, #E2AD24 at 24% -->
+
+    <!-- 2. Slate colours and brushes. -->
     <!-- Provisional W1 palette; W8-2 owns final values and APCA CI. -->
     <Color x:Key="Slate.WindowBackgroundColor">#FF121212</Color>
     <Color x:Key="Slate.SurfaceColor">#FF1E1E1E</Color>
@@ -16,9 +37,6 @@
          caption role dims by SIZE only here. W8-2 owns retuning. -->
     <Color x:Key="Slate.TertiaryTextColor">#FFD4D4D4</Color>
     <Color x:Key="Slate.BorderColor">#FFAAAAAA</Color>
-    <Color x:Key="Slate.AccentColor">#FFB9D9FF</Color>
-    <Color x:Key="Slate.SelectionBackgroundColor">#FFB9D9FF</Color>
-    <Color x:Key="Slate.SelectionTextColor">#FF101010</Color>
     <Color x:Key="Slate.ErrorColor">#FFFFD1D6</Color>
     <Color x:Key="Slate.WarningColor">#FFFFDB94</Color>
 
@@ -61,7 +79,7 @@
     <Color x:Key="Slate.Graph.EdgeColor">#FFAAAAAA</Color>
     <Color x:Key="Slate.Graph.LabelColor">#FFF5F5F5</Color>
     <Color x:Key="Slate.Graph.RingColor">#FFF5F5F5</Color>
-    <Color x:Key="Slate.Graph.AccentColor">#FFB9D9FF</Color>
+    <Color x:Key="Slate.Graph.AccentColor">#FFEECF7E</Color>
     <Color x:Key="Slate.CodeKeywordColor">#FFE6CCF2</Color>
     <Color x:Key="Slate.CodeStringColor">#FFFFCDD2</Color>
     <Color x:Key="Slate.CodeNumberColor">#FF9CDCFE</Color>
@@ -88,25 +106,27 @@
     <SolidColorBrush x:Key="Slate.BorderBrush"
                      Color="{StaticResource Slate.BorderColor}" />
     <SolidColorBrush x:Key="Slate.AccentBrush"
-                     Color="{StaticResource Slate.AccentColor}" />
+                     Color="{DynamicResource Slate.AccentColor}" />
     <SolidColorBrush x:Key="Slate.SelectionBackgroundBrush"
-                     Color="{StaticResource Slate.SelectionBackgroundColor}" />
+                     Color="{DynamicResource Slate.SelectionBackgroundColor}" />
     <SolidColorBrush x:Key="Slate.SelectionTextBrush"
-                     Color="{StaticResource Slate.SelectionTextColor}" />
+                     Color="{DynamicResource Slate.SelectionTextColor}" />
+    <SolidColorBrush x:Key="Slate.ReadingSelectionBrush"
+                     Color="{DynamicResource Slate.ReadingSelectionColor}" />
     <SolidColorBrush x:Key="Slate.FocusBrush"
-                     Color="{StaticResource Slate.AccentColor}" />
+                     Color="{StaticResource Slate.TextColor}" />
     <SolidColorBrush x:Key="Slate.ErrorBrush"
                      Color="{StaticResource Slate.ErrorColor}" />
     <SolidColorBrush x:Key="Slate.WarningBrush"
                      Color="{StaticResource Slate.WarningColor}" />
     <SolidColorBrush x:Key="Slate.EditorHeadingBrush"
-                     Color="{StaticResource Slate.AccentColor}" />
+                     Color="{DynamicResource Slate.AccentTextColor}" />
     <SolidColorBrush x:Key="Slate.EditorCodeBrush"
                      Color="{StaticResource Slate.SecondaryTextColor}" />
     <SolidColorBrush x:Key="Slate.EditorWikilinkBrush"
-                     Color="{StaticResource Slate.AccentColor}" />
+                     Color="{DynamicResource Slate.AccentTextColor}" />
     <SolidColorBrush x:Key="Slate.EditorTagBrush"
-                     Color="{StaticResource Slate.AccentColor}" />
+                     Color="{DynamicResource Slate.AccentTextColor}" />
     <SolidColorBrush x:Key="Slate.EditorMetadataBrush"
                      Color="{StaticResource Slate.SecondaryTextColor}" />
     <SolidColorBrush x:Key="Slate.CodeKeywordBrush"
@@ -152,5 +172,478 @@
     <SolidColorBrush x:Key="Slate.Graph.EdgeBrush" Color="{StaticResource Slate.Graph.EdgeColor}" />
     <SolidColorBrush x:Key="Slate.Graph.LabelBrush" Color="{StaticResource Slate.Graph.LabelColor}" />
     <SolidColorBrush x:Key="Slate.Graph.RingBrush" Color="{StaticResource Slate.Graph.RingColor}" />
-    <SolidColorBrush x:Key="Slate.Graph.AccentBrush" Color="{StaticResource Slate.Graph.AccentColor}" />
+    <SolidColorBrush x:Key="Slate.Graph.AccentBrush" Color="{DynamicResource Slate.AccentColor}" />
+
+    <!-- 3. New Slate keys (design-system roles the app didn't have yet). -->
+    <SolidColorBrush x:Key="Slate.AccentHoverBrush" Color="{DynamicResource Slate.AccentHoverColor}" />
+    <SolidColorBrush x:Key="Slate.AccentPressedBrush" Color="{DynamicResource Slate.AccentPressedColor}" />
+    <SolidColorBrush x:Key="Slate.AccentTextBrush" Color="{DynamicResource Slate.AccentTextColor}" />
+    <SolidColorBrush x:Key="Slate.AccentIndicatorBrush" Color="{DynamicResource Slate.AccentIndicatorColor}" />
+    <SolidColorBrush x:Key="Slate.TextOnAccentBrush" Color="{DynamicResource Slate.TextOnAccentColor}" />
+    <SolidColorBrush x:Key="Slate.SelectedSurfaceBrush" Color="{DynamicResource Slate.SelectedSurfaceColor}" />
+    <Color x:Key="Slate.SubtleBorderColor">#FF3D3D3D</Color>
+    <Color x:Key="Slate.ControlStrokeHoverColor">#FFC2C2C2</Color>
+    <Color x:Key="Slate.ControlStrokePressedColor">#FFD4D4D4</Color>
+    <Color x:Key="Slate.ControlFillColor">#FF292929</Color>
+    <Color x:Key="Slate.ControlFillHoverColor">#FF363636</Color>
+    <Color x:Key="Slate.ControlFillPressedColor">#FF3E3E3E</Color>
+    <Color x:Key="Slate.DisabledTextColor">#FF919191</Color>
+    <Color x:Key="Slate.DisabledBorderColor">#FF757575</Color>
+    <Color x:Key="Slate.DisabledSurfaceColor">#FF141414</Color>
+    <Color x:Key="Slate.SuccessColor">#FF54B054</Color>
+    <Color x:Key="Slate.HoverOverlayColor">#0FFFFFFF</Color>
+    <Color x:Key="Slate.PressedOverlayColor">#1AFFFFFF</Color>
+    <Color x:Key="Slate.ScrimColor">#4D000000</Color>
+    <SolidColorBrush x:Key="Slate.SubtleBorderBrush" Color="{StaticResource Slate.SubtleBorderColor}" />
+    <SolidColorBrush x:Key="Slate.ControlStrokeHoverBrush" Color="{StaticResource Slate.ControlStrokeHoverColor}" />
+    <SolidColorBrush x:Key="Slate.ControlStrokePressedBrush" Color="{StaticResource Slate.ControlStrokePressedColor}" />
+    <SolidColorBrush x:Key="Slate.ControlFillBrush" Color="{StaticResource Slate.ControlFillColor}" />
+    <SolidColorBrush x:Key="Slate.ControlFillHoverBrush" Color="{StaticResource Slate.ControlFillHoverColor}" />
+    <SolidColorBrush x:Key="Slate.ControlFillPressedBrush" Color="{StaticResource Slate.ControlFillPressedColor}" />
+    <SolidColorBrush x:Key="Slate.DisabledTextBrush" Color="{StaticResource Slate.DisabledTextColor}" />
+    <SolidColorBrush x:Key="Slate.DisabledBorderBrush" Color="{StaticResource Slate.DisabledBorderColor}" />
+    <SolidColorBrush x:Key="Slate.DisabledSurfaceBrush" Color="{StaticResource Slate.DisabledSurfaceColor}" />
+    <SolidColorBrush x:Key="Slate.SuccessBrush" Color="{StaticResource Slate.SuccessColor}" />
+    <SolidColorBrush x:Key="Slate.HoverOverlayBrush" Color="{StaticResource Slate.HoverOverlayColor}" />
+    <SolidColorBrush x:Key="Slate.PressedOverlayBrush" Color="{StaticResource Slate.PressedOverlayColor}" />
+    <SolidColorBrush x:Key="Slate.ScrimBrush" Color="{StaticResource Slate.ScrimColor}" />
+
+    <!-- 4. Shadows: one DropShadowEffect per level (WPF takes one effect per element). Direction 270 = straight down.
+         BlurRadius = 1.5 x the CSS blur (same Gaussian spread). Put the effect on a background-only Border
+         behind the content, never on a text parent, or ClearType turns off. Check by eye in the app. -->
+    <DropShadowEffect x:Key="Slate.Shadow2" Color="#FF000000" Direction="270" ShadowDepth="1" BlurRadius="3" Opacity="0.36" />
+    <DropShadowEffect x:Key="Slate.Shadow4" Color="#FF000000" Direction="270" ShadowDepth="2" BlurRadius="6" Opacity="0.36" />
+    <DropShadowEffect x:Key="Slate.Shadow8" Color="#FF000000" Direction="270" ShadowDepth="4" BlurRadius="12" Opacity="0.36" />
+    <DropShadowEffect x:Key="Slate.Shadow16" Color="#FF000000" Direction="270" ShadowDepth="8" BlurRadius="24" Opacity="0.36" />
+    <DropShadowEffect x:Key="Slate.Shadow28" Color="#FF000000" Direction="270" ShadowDepth="14" BlurRadius="42" Opacity="0.36" />
+    <DropShadowEffect x:Key="Slate.Shadow64" Color="#FF000000" Direction="270" ShadowDepth="32" BlurRadius="96" Opacity="0.36" />
+
+    <!-- 5. Fluent colour keys with Slate values (for templates that read a Color with DynamicResource). -->
+    <Color x:Key="TextFillColorPrimary">#FFF5F5F5</Color>
+    <Color x:Key="TextFillColorSecondary">#FFD4D4D4</Color>
+    <Color x:Key="TextFillColorTertiary">#FFD4D4D4</Color>
+    <Color x:Key="TextFillColorDisabled">#FF919191</Color>
+    <Color x:Key="AccentTextFillColorDisabled">#FF919191</Color>
+    <Color x:Key="TextOnAccentFillColorDisabled">#FF919191</Color>
+    <Color x:Key="AccentFillColorDisabled">#FF141414</Color>
+    <Color x:Key="ControlFillColorDefault">#FF292929</Color>
+    <Color x:Key="ControlFillColorSecondary">#FF363636</Color>
+    <Color x:Key="ControlFillColorTertiary">#FF3E3E3E</Color>
+    <Color x:Key="ControlFillColorDisabled">#FF141414</Color>
+    <Color x:Key="ControlFillColorInputActive">#FF292929</Color>
+    <Color x:Key="SubtleFillColorSecondary">#0FFFFFFF</Color>
+    <Color x:Key="SubtleFillColorTertiary">#1AFFFFFF</Color>
+    <Color x:Key="ControlStrongFillColorDefault">#FFAAAAAA</Color>
+    <Color x:Key="ControlStrongFillColorDisabled">#FF757575</Color>
+    <Color x:Key="ControlStrongStrokeColorDefault">#FFAAAAAA</Color>
+    <Color x:Key="ControlStrongStrokeColorDisabled">#FF757575</Color>
+    <Color x:Key="CardStrokeColorDefault">#FF3D3D3D</Color>
+    <Color x:Key="CardStrokeColorDefaultSolid">#FF3D3D3D</Color>
+    <Color x:Key="DividerStrokeColorDefault">#FF3D3D3D</Color>
+    <Color x:Key="SurfaceStrokeColorFlyout">#FF3D3D3D</Color>
+    <Color x:Key="KeyboardFocusBorderColor">#FFF5F5F5</Color>
+    <Color x:Key="FocusStrokeColorOuter">#FFF5F5F5</Color>
+    <Color x:Key="ApplicationBackgroundColor">#FF121212</Color>
+    <Color x:Key="SolidBackgroundFillColorBase">#FF121212</Color>
+    <Color x:Key="SolidBackgroundFillColorQuarternary">#FF292929</Color>
+    <Color x:Key="CardBackgroundFillColorDefault">#FF1E1E1E</Color>
+    <Color x:Key="LayerFillColorDefault">#FF1E1E1E</Color>
+    <Color x:Key="AcrylicBackgroundFillColorDefault">#FF292929</Color>
+    <Color x:Key="SmokeFillColorDefault">#4D000000</Color>
+    <Color x:Key="SystemFillColorCritical">#FFFFD1D6</Color>
+    <Color x:Key="SystemFillColorCaution">#FFFFDB94</Color>
+    <Color x:Key="SystemFillColorSuccess">#FF54B054</Color>
+
+    <!-- 6a. Fluent accent brushes (81) re-pointed to the accent roles. Fluent's 0.9/0.8 opacity
+         hover/pressed steps become the solid AccentHover/AccentPressed roles, as in the HTML components. -->
+    <!-- Accent -->
+    <SolidColorBrush x:Key="AccentButtonBackground" Color="{DynamicResource Slate.AccentColor}" />
+    <SolidColorBrush x:Key="AccentFillColorDefaultBrush" Color="{DynamicResource Slate.AccentColor}" />
+    <SolidColorBrush x:Key="AccentFillColorSecondaryBrush" Color="{DynamicResource Slate.AccentColor}" />
+    <SolidColorBrush x:Key="AccentFillColorTertiaryBrush" Color="{DynamicResource Slate.AccentColor}" />
+    <SolidColorBrush x:Key="CalendarViewSelectedBackground" Color="{DynamicResource Slate.AccentColor}" />
+    <SolidColorBrush x:Key="CalendarViewSelectedBorderBrush" Color="{DynamicResource Slate.AccentColor}" />
+    <SolidColorBrush x:Key="CalendarViewTodayBackground" Color="{DynamicResource Slate.AccentColor}" />
+    <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillChecked" Color="{DynamicResource Slate.AccentColor}" />
+    <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillIndeterminate" Color="{DynamicResource Slate.AccentColor}" />
+    <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeChecked" Color="{DynamicResource Slate.AccentColor}" />
+    <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeIndeterminate" Color="{DynamicResource Slate.AccentColor}" />
+    <SolidColorBrush x:Key="ComboBoxBorderBrushFocused" Color="{DynamicResource Slate.AccentColor}" />
+    <SolidColorBrush x:Key="DataGridRowSelectedBackgroundThemeBrush" Color="{DynamicResource Slate.AccentColor}" />
+    <SolidColorBrush x:Key="DatePickerBorderBrushFocused" Color="{DynamicResource Slate.AccentColor}" />
+    <SolidColorBrush x:Key="DatePickerFocusedBorderBrush" Color="{DynamicResource Slate.AccentColor}" />
+    <SolidColorBrush x:Key="InfoBarInformationalSeverityIconBackground" Color="{DynamicResource Slate.AccentColor}" />
+    <SolidColorBrush x:Key="ProgressBarForeground" Color="{DynamicResource Slate.AccentColor}" />
+    <SolidColorBrush x:Key="ProgressRingForegroundThemeBrush" Color="{DynamicResource Slate.AccentColor}" />
+    <SolidColorBrush x:Key="RadioButtonOuterEllipseCheckedFill" Color="{DynamicResource Slate.AccentColor}" />
+    <SolidColorBrush x:Key="RadioButtonOuterEllipseCheckedStroke" Color="{DynamicResource Slate.AccentColor}" />
+    <SolidColorBrush x:Key="RatingControlSelectedForeground" Color="{DynamicResource Slate.AccentColor}" />
+    <SolidColorBrush x:Key="SliderThumbBackground" Color="{DynamicResource Slate.AccentColor}" />
+    <SolidColorBrush x:Key="SystemFillColorAttentionBrush" Color="{DynamicResource Slate.AccentColor}" />
+    <SolidColorBrush x:Key="TextControlFocusedBorderBrush" Color="{DynamicResource Slate.AccentColor}" />
+    <SolidColorBrush x:Key="ThumbRateForeground" Color="{DynamicResource Slate.AccentColor}" />
+    <SolidColorBrush x:Key="ToggleButtonBackgroundChecked" Color="{DynamicResource Slate.AccentColor}" />
+    <SolidColorBrush x:Key="ToggleSwitchFillOn" Color="{DynamicResource Slate.AccentColor}" />
+    <SolidColorBrush x:Key="ToggleSwitchStrokeOn" Color="{DynamicResource Slate.AccentColor}" />
+    <!-- AccentHover -->
+    <SolidColorBrush x:Key="AccentButtonBackgroundPointerOver" Color="{DynamicResource Slate.AccentHoverColor}" />
+    <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillCheckedPointerOver" Color="{DynamicResource Slate.AccentHoverColor}" />
+    <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillIndeterminatePointerOver" Color="{DynamicResource Slate.AccentHoverColor}" />
+    <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeCheckedPointerOver" Color="{DynamicResource Slate.AccentHoverColor}" />
+    <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeIndeterminatePointerOver" Color="{DynamicResource Slate.AccentHoverColor}" />
+    <SolidColorBrush x:Key="HyperlinkButtonForegroundPointerOver" Color="{DynamicResource Slate.AccentHoverColor}" />
+    <SolidColorBrush x:Key="HyperlinkForegroundPointerOver" Color="{DynamicResource Slate.AccentHoverColor}" />
+    <SolidColorBrush x:Key="RadioButtonCheckOuterEllipseCheckedFillPointerOver" Color="{DynamicResource Slate.AccentHoverColor}" />
+    <SolidColorBrush x:Key="RadioButtonOuterEllipseCheckedStrokePointerOver" Color="{DynamicResource Slate.AccentHoverColor}" />
+    <SolidColorBrush x:Key="SliderThumbBackgroundPointerOver" Color="{DynamicResource Slate.AccentHoverColor}" />
+    <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPointerOver" Color="{DynamicResource Slate.AccentHoverColor}" />
+    <SolidColorBrush x:Key="ToggleSwitchFillOnPointerOver" Color="{DynamicResource Slate.AccentHoverColor}" />
+    <SolidColorBrush x:Key="ToggleSwitchStrokeOnPointerOver" Color="{DynamicResource Slate.AccentHoverColor}" />
+    <!-- AccentIndicator -->
+    <SolidColorBrush x:Key="ComboBoxItemPillFillBrush" Color="{DynamicResource Slate.AccentIndicatorColor}" />
+    <SolidColorBrush x:Key="ListViewItemPillFillBrush" Color="{DynamicResource Slate.AccentIndicatorColor}" />
+    <SolidColorBrush x:Key="NavigationViewSelectionIndicatorForeground" Color="{DynamicResource Slate.AccentIndicatorColor}" />
+    <SolidColorBrush x:Key="TreeViewItemSelectionIndicatorForeground" Color="{DynamicResource Slate.AccentIndicatorColor}" />
+    <!-- AccentPressed -->
+    <SolidColorBrush x:Key="AccentButtonBackgroundPressed" Color="{DynamicResource Slate.AccentPressedColor}" />
+    <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillCheckedPressed" Color="{DynamicResource Slate.AccentPressedColor}" />
+    <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillIndeterminatePressed" Color="{DynamicResource Slate.AccentPressedColor}" />
+    <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeCheckedPressed" Color="{DynamicResource Slate.AccentPressedColor}" />
+    <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeIndeterminatePressed" Color="{DynamicResource Slate.AccentPressedColor}" />
+    <SolidColorBrush x:Key="HyperlinkButtonForegroundPressed" Color="{DynamicResource Slate.AccentPressedColor}" />
+    <SolidColorBrush x:Key="RadioButtonCheckOuterEllipseCheckedFillPressed" Color="{DynamicResource Slate.AccentPressedColor}" />
+    <SolidColorBrush x:Key="RadioButtonCheckOuterEllipseCheckedStrokePressed" Color="{DynamicResource Slate.AccentPressedColor}" />
+    <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPressed" Color="{DynamicResource Slate.AccentPressedColor}" />
+    <!-- AccentText -->
+    <SolidColorBrush x:Key="AccentTextFillColorPrimaryBrush" Color="{DynamicResource Slate.AccentTextColor}" />
+    <SolidColorBrush x:Key="AccentTextFillColorSecondaryBrush" Color="{DynamicResource Slate.AccentTextColor}" />
+    <SolidColorBrush x:Key="AccentTextFillColorTertiaryBrush" Color="{DynamicResource Slate.AccentTextColor}" />
+    <SolidColorBrush x:Key="HyperlinkButtonForeground" Color="{DynamicResource Slate.AccentTextColor}" />
+    <SolidColorBrush x:Key="HyperlinkForeground" Color="{DynamicResource Slate.AccentTextColor}" />
+    <!-- SelectedSurface -->
+    <SolidColorBrush x:Key="ListBoxItemBackgroundSelectedPressedThemeBrush" Color="{DynamicResource Slate.SelectedSurfaceColor}" />
+    <SolidColorBrush x:Key="ListBoxItemSelectedBackgroundPointerOverThemeBrush" Color="{DynamicResource Slate.SelectedSurfaceColor}" />
+    <SolidColorBrush x:Key="ListBoxItemSelectedBackgroundPressedThemeBrush" Color="{DynamicResource Slate.SelectedSurfaceColor}" />
+    <SolidColorBrush x:Key="ListBoxItemSelectedBackgroundThemeBrush" Color="{DynamicResource Slate.SelectedSurfaceColor}" />
+    <!-- SelectionBackground -->
+    <SolidColorBrush x:Key="AccentFillColorSelectedTextBackgroundBrush" Color="{DynamicResource Slate.SelectionBackgroundColor}" />
+    <SolidColorBrush x:Key="TextControlSelectionHighlightColor" Color="{DynamicResource Slate.SelectionBackgroundColor}" />
+    <!-- SelectionText -->
+    <SolidColorBrush x:Key="TextOnAccentFillColorSelectedTextBrush" Color="{DynamicResource Slate.SelectionTextColor}" />
+    <!-- TextOnAccent -->
+    <SolidColorBrush x:Key="AccentButtonForeground" Color="{DynamicResource Slate.TextOnAccentColor}" />
+    <SolidColorBrush x:Key="AccentButtonForegroundPointerOver" Color="{DynamicResource Slate.TextOnAccentColor}" />
+    <SolidColorBrush x:Key="AccentButtonForegroundPressed" Color="{DynamicResource Slate.TextOnAccentColor}" />
+    <SolidColorBrush x:Key="CalendarViewTodayForeground" Color="{DynamicResource Slate.TextOnAccentColor}" />
+    <SolidColorBrush x:Key="CheckBoxCheckGlyphForeground" Color="{DynamicResource Slate.TextOnAccentColor}" />
+    <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundPressed" Color="{DynamicResource Slate.TextOnAccentColor}" />
+    <SolidColorBrush x:Key="DataGridRowSelectedForegroundThemeBrush" Color="{DynamicResource Slate.TextOnAccentColor}" />
+    <SolidColorBrush x:Key="RadioButtonCheckGlyphFill" Color="{DynamicResource Slate.TextOnAccentColor}" />
+    <SolidColorBrush x:Key="TextOnAccentFillColorPrimaryBrush" Color="{DynamicResource Slate.TextOnAccentColor}" />
+    <SolidColorBrush x:Key="TextOnAccentFillColorSecondaryBrush" Color="{DynamicResource Slate.TextOnAccentColor}" />
+    <SolidColorBrush x:Key="ToggleButtonForegroundChecked" Color="{DynamicResource Slate.TextOnAccentColor}" />
+    <SolidColorBrush x:Key="ToggleButtonForegroundCheckedPressed" Color="{DynamicResource Slate.TextOnAccentColor}" />
+    <SolidColorBrush x:Key="ToggleSwitchKnobFillOn" Color="{DynamicResource Slate.TextOnAccentColor}" />
+    <SolidColorBrush x:Key="ToggleSwitchKnobFillOnPointerOver" Color="{DynamicResource Slate.TextOnAccentColor}" />
+    <SolidColorBrush x:Key="ToggleSwitchKnobFillOnPressed" Color="{DynamicResource Slate.TextOnAccentColor}" />
+
+    <!-- 6b. Fluent neutral brushes (268) re-pointed to Slate text, surface, stroke and disabled roles. -->
+    <SolidColorBrush x:Key="ApplicationBackgroundBrush" Color="{StaticResource ApplicationBackgroundColor}" />
+    <SolidColorBrush x:Key="KeyboardFocusBorderColorBrush" Color="{StaticResource KeyboardFocusBorderColor}" />
+    <SolidColorBrush x:Key="AccentTextFillColorDisabledBrush" Color="{StaticResource AccentTextFillColorDisabled}" />
+    <SolidColorBrush x:Key="TextOnAccentFillColorDisabledBrush" Color="{StaticResource TextOnAccentFillColorDisabled}" />
+    <SolidColorBrush x:Key="AccentFillColorDisabledBrush" Color="{StaticResource AccentFillColorDisabled}" />
+    <SolidColorBrush x:Key="TextFillColorPrimaryBrush" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="TextFillColorSecondaryBrush" Color="{StaticResource TextFillColorSecondary}" />
+    <SolidColorBrush x:Key="TextFillColorTertiaryBrush" Color="{StaticResource TextFillColorTertiary}" />
+    <SolidColorBrush x:Key="TextFillColorDisabledBrush" Color="{StaticResource TextFillColorDisabled}" />
+    <SolidColorBrush x:Key="ControlFillColorDefaultBrush" Color="{StaticResource ControlFillColorDefault}" />
+    <SolidColorBrush x:Key="ControlFillColorSecondaryBrush" Color="{StaticResource ControlFillColorSecondary}" />
+    <SolidColorBrush x:Key="ControlFillColorTertiaryBrush" Color="{StaticResource ControlFillColorTertiary}" />
+    <SolidColorBrush x:Key="ControlFillColorDisabledBrush" Color="{StaticResource ControlFillColorDisabled}" />
+    <SolidColorBrush x:Key="ControlFillColorInputActiveBrush" Color="{StaticResource ControlFillColorInputActive}" />
+    <SolidColorBrush x:Key="ControlStrongFillColorDefaultBrush" Color="{StaticResource ControlStrongFillColorDefault}" />
+    <SolidColorBrush x:Key="ControlStrongFillColorDisabledBrush" Color="{StaticResource ControlStrongFillColorDisabled}" />
+    <SolidColorBrush x:Key="SubtleFillColorSecondaryBrush" Color="{StaticResource SubtleFillColorSecondary}" />
+    <SolidColorBrush x:Key="SubtleFillColorTertiaryBrush" Color="{StaticResource SubtleFillColorTertiary}" />
+    <SolidColorBrush x:Key="CardStrokeColorDefaultBrush" Color="{StaticResource CardStrokeColorDefault}" />
+    <SolidColorBrush x:Key="CardStrokeColorDefaultSolidBrush" Color="{StaticResource CardStrokeColorDefaultSolid}" />
+    <SolidColorBrush x:Key="ControlStrongStrokeColorDefaultBrush" Color="{StaticResource ControlStrongStrokeColorDefault}" />
+    <SolidColorBrush x:Key="ControlStrongStrokeColorDisabledBrush" Color="{StaticResource ControlStrongStrokeColorDisabled}" />
+    <SolidColorBrush x:Key="SurfaceStrokeColorFlyoutBrush" Color="{StaticResource SurfaceStrokeColorFlyout}" />
+    <SolidColorBrush x:Key="DividerStrokeColorDefaultBrush" Color="{StaticResource DividerStrokeColorDefault}" />
+    <SolidColorBrush x:Key="FocusStrokeColorOuterBrush" Color="{StaticResource FocusStrokeColorOuter}" />
+    <SolidColorBrush x:Key="CardBackgroundFillColorDefaultBrush" Color="{StaticResource CardBackgroundFillColorDefault}" />
+    <SolidColorBrush x:Key="SmokeFillColorDefaultBrush" Color="{StaticResource SmokeFillColorDefault}" />
+    <SolidColorBrush x:Key="LayerFillColorDefaultBrush" Color="{StaticResource LayerFillColorDefault}" />
+    <SolidColorBrush x:Key="SolidBackgroundFillColorBaseBrush" Color="{StaticResource SolidBackgroundFillColorBase}" />
+    <SolidColorBrush x:Key="SolidBackgroundFillColorQuarternaryBrush" Color="{StaticResource SolidBackgroundFillColorQuarternary}" />
+    <SolidColorBrush x:Key="SystemFillColorSuccessBrush" Color="{StaticResource SystemFillColorSuccess}" />
+    <SolidColorBrush x:Key="SystemFillColorCautionBrush" Color="{StaticResource SystemFillColorCaution}" />
+    <SolidColorBrush x:Key="SystemFillColorCriticalBrush" Color="{StaticResource SystemFillColorCritical}" />
+    <SolidColorBrush x:Key="TextControlButtonBackgroundPointerOver" Color="{StaticResource SubtleFillColorSecondary}" />
+    <SolidColorBrush x:Key="TextControlButtonBackgroundPressed" Color="{StaticResource SubtleFillColorTertiary}" />
+    <SolidColorBrush x:Key="TextControlButtonForeground" Color="{StaticResource TextFillColorSecondary}" />
+    <SolidColorBrush x:Key="TextControlButtonForegroundPointerOver" Color="{StaticResource TextFillColorSecondary}" />
+    <SolidColorBrush x:Key="TextControlButtonForegroundPressed" Color="{StaticResource TextFillColorTertiary}" />
+    <SolidColorBrush x:Key="BreadcrumbBarNormalForegroundBrush" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="BreadcrumbBarHoverForegroundBrush" Color="{StaticResource TextFillColorSecondary}" />
+    <SolidColorBrush x:Key="BreadcrumbBarCurrentNormalForegroundBrush" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="AccentButtonBackgroundDisabled" Color="{StaticResource AccentFillColorDisabled}" />
+    <SolidColorBrush x:Key="AccentButtonForegroundDisabled" Color="{StaticResource TextOnAccentFillColorDisabled}" />
+    <SolidColorBrush x:Key="ButtonBackground" Color="{StaticResource ControlFillColorDefault}" />
+    <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="{StaticResource ControlFillColorSecondary}" />
+    <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="{StaticResource ControlFillColorTertiary}" />
+    <SolidColorBrush x:Key="ButtonBackgroundDisabled" Color="{StaticResource ControlFillColorDisabled}" />
+    <SolidColorBrush x:Key="ButtonForeground" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="ButtonForegroundPointerOver" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="ButtonForegroundPressed" Color="{StaticResource TextFillColorSecondary}" />
+    <SolidColorBrush x:Key="ButtonForegroundDisabled" Color="{StaticResource TextFillColorDisabled}" />
+    <SolidColorBrush x:Key="ButtonBorderBrushPressed" Color="{StaticResource Slate.ControlStrokePressedColor}" />
+    <SolidColorBrush x:Key="ButtonBorderBrushDisabled" Color="{StaticResource Slate.DisabledBorderColor}" />
+    <SolidColorBrush x:Key="CalendarViewForeground" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="CalendarViewBackground" Color="{StaticResource ControlFillColorInputActive}" />
+    <SolidColorBrush x:Key="CalendarViewItemBackgroundPointerOver" Color="{StaticResource SubtleFillColorSecondary}" />
+    <SolidColorBrush x:Key="CalendarViewNavigationButtonForeground" Color="{StaticResource TextFillColorSecondary}" />
+    <SolidColorBrush x:Key="CardBackground" Color="{StaticResource CardBackgroundFillColorDefault}" />
+    <SolidColorBrush x:Key="CardBackgroundPointerOver" Color="{StaticResource ControlFillColorSecondary}" />
+    <SolidColorBrush x:Key="CardBackgroundPressed" Color="{StaticResource ControlFillColorTertiary}" />
+    <SolidColorBrush x:Key="CardBackgroundDisabled" Color="{StaticResource ControlFillColorDisabled}" />
+    <SolidColorBrush x:Key="CardForeground" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="CardForegroundPointerOver" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="CardForegroundPressed" Color="{StaticResource TextFillColorSecondary}" />
+    <SolidColorBrush x:Key="CardForegroundDisabled" Color="{StaticResource TextFillColorDisabled}" />
+    <SolidColorBrush x:Key="CardBorderBrush" Color="{StaticResource CardStrokeColorDefault}" />
+    <SolidColorBrush x:Key="CardBorderBrushPressed" Color="{StaticResource Slate.ControlStrokePressedColor}" />
+    <SolidColorBrush x:Key="CardBorderBrushDisabled" Color="{StaticResource Slate.DisabledBorderColor}" />
+    <SolidColorBrush x:Key="CheckBoxForegroundUnchecked" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="CheckBoxForegroundUncheckedDisabled" Color="{StaticResource TextFillColorDisabled}" />
+    <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeUnchecked" Color="{StaticResource ControlStrongStrokeColorDefault}" />
+    <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeUncheckedPointerOver" Color="{StaticResource ControlStrongStrokeColorDefault}" />
+    <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeUncheckedPressed" Color="{StaticResource ControlStrongStrokeColorDisabled}" />
+    <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeUncheckedDisabled" Color="{StaticResource ControlStrongStrokeColorDisabled}" />
+    <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundDisabled" Color="{StaticResource TextFillColorDisabled}" />
+    <SolidColorBrush x:Key="ComboBoxBackground" Color="{StaticResource ControlFillColorDefault}" />
+    <SolidColorBrush x:Key="ComboBoxBackgroundPointerOver" Color="{StaticResource ControlFillColorSecondary}" />
+    <SolidColorBrush x:Key="ComboBoxBackgroundPressed" Color="{StaticResource ControlFillColorTertiary}" />
+    <SolidColorBrush x:Key="ComboBoxBackgroundDisabled" Color="{StaticResource ControlFillColorDisabled}" />
+    <SolidColorBrush x:Key="ComboBoxForeground" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="ComboBoxForegroundPointerOver" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="ComboBoxForegroundPressed" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="ComboBoxForegroundDisabled" Color="{StaticResource TextFillColorDisabled}" />
+    <SolidColorBrush x:Key="ComboBoxForegroundFocused" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="ComboBoxForegroundFocusedPressed" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="ComboBoxBorderBrushPressed" Color="{StaticResource Slate.ControlStrokePressedColor}" />
+    <SolidColorBrush x:Key="ComboBoxBorderBrushDisabled" Color="{StaticResource Slate.DisabledBorderColor}" />
+    <SolidColorBrush x:Key="ComboBoxDropDownGlyphForeground" Color="{StaticResource TextFillColorSecondary}" />
+    <SolidColorBrush x:Key="ComboBoxDropDownGlyphForegroundFocused" Color="{StaticResource TextFillColorSecondary}" />
+    <SolidColorBrush x:Key="ComboBoxDropDownGlyphForegroundFocusedPressed" Color="{StaticResource TextFillColorSecondary}" />
+    <SolidColorBrush x:Key="ComboBoxDropDownGlyphForegroundDisabled" Color="{StaticResource TextFillColorDisabled}" />
+    <SolidColorBrush x:Key="ComboBoxDropDownForeground" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="ComboBoxDropDownBackground" Color="{StaticResource AcrylicBackgroundFillColorDefault}" />
+    <SolidColorBrush x:Key="ComboBoxDropDownBorderBrush" Color="{StaticResource SurfaceStrokeColorFlyout}" />
+    <SolidColorBrush x:Key="ComboBoxDropDownBackgroundPointerOver" Color="{StaticResource SubtleFillColorSecondary}" />
+    <SolidColorBrush x:Key="ComboBoxDropDownBackgroundPointerPressed" Color="{StaticResource SubtleFillColorTertiary}" />
+    <SolidColorBrush x:Key="ComboBoxEditableDropDownGlyphForeground" Color="{StaticResource TextFillColorSecondary}" />
+    <SolidColorBrush x:Key="ComboBoxItemBackgroundSelected" Color="{StaticResource SubtleFillColorSecondary}" />
+    <SolidColorBrush x:Key="ComboBoxItemForeground" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="ComboBoxItemForegroundSelected" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="ContentDialogSmokeFill" Color="{StaticResource SmokeFillColorDefault}" />
+    <SolidColorBrush x:Key="ContentDialogBackground" Color="{StaticResource SolidBackgroundFillColorBase}" />
+    <SolidColorBrush x:Key="ContentDialogSeparatorBorderBrush" Color="{StaticResource CardStrokeColorDefault}" />
+    <SolidColorBrush x:Key="ContentDialogForeground" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="ContextMenuBackground" Color="{StaticResource AcrylicBackgroundFillColorDefault}" />
+    <SolidColorBrush x:Key="ContextMenuBorderBrush" Color="{StaticResource SurfaceStrokeColorFlyout}" />
+    <SolidColorBrush x:Key="ContextMenuForeground" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="DataGridColumnFloatingHeaderBorderBrush" Color="{StaticResource ControlStrongStrokeColorDefault}" />
+    <SolidColorBrush x:Key="DataGridHeaderDropSeparatorBackground" Color="{StaticResource ControlStrongStrokeColorDefault}" />
+    <SolidColorBrush x:Key="DataGridColumnHeaderForeground" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="DataGridHeaderBackground" Color="{StaticResource SubtleFillColorTertiary}" />
+    <SolidColorBrush x:Key="DataGridHeaderBackgroundPointerOver" Color="{StaticResource SubtleFillColorSecondary}" />
+    <SolidColorBrush x:Key="DataGridHeaderBackgroundPressed" Color="{StaticResource SubtleFillColorTertiary}" />
+    <SolidColorBrush x:Key="DataGridHeaderBackgroundSelected" Color="{StaticResource SubtleFillColorTertiary}" />
+    <SolidColorBrush x:Key="DataGridHeaderForegroundDisabled" Color="{StaticResource TextFillColorDisabled}" />
+    <SolidColorBrush x:Key="DatePickerForeground" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="DatePickerBackground" Color="{StaticResource ControlFillColorDefault}" />
+    <SolidColorBrush x:Key="DatePickerTextBoxForeground" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="DatePickerTextBoxCaretBrush" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="DatePickerBackgroundFocused" Color="{StaticResource ControlFillColorInputActive}" />
+    <SolidColorBrush x:Key="DatePickerBackgroundPointerOver" Color="{StaticResource ControlFillColorSecondary}" />
+    <SolidColorBrush x:Key="DatePickerPopupBackground" Color="{StaticResource AcrylicBackgroundFillColorDefault}" />
+    <SolidColorBrush x:Key="ScrollBarButtonArrowForeground" Color="{StaticResource ControlStrongFillColorDefault}" />
+    <SolidColorBrush x:Key="ScrollBarThumbFill" Color="{StaticResource ControlStrongFillColorDefault}" />
+    <SolidColorBrush x:Key="ExpanderHeaderBackground" Color="{StaticResource CardBackgroundFillColorDefault}" />
+    <SolidColorBrush x:Key="ExpanderHeaderForeground" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="ExpanderHeaderBorderBrush" Color="{StaticResource CardStrokeColorDefault}" />
+    <SolidColorBrush x:Key="ExpanderHeaderBorderPointerOverBrush" Color="{StaticResource CardStrokeColorDefault}" />
+    <SolidColorBrush x:Key="ExpanderHeaderDisabledForeground" Color="{StaticResource TextFillColorDisabled}" />
+    <SolidColorBrush x:Key="ExpanderHeaderDisabledBorderBrush" Color="{StaticResource CardStrokeColorDefault}" />
+    <SolidColorBrush x:Key="WindowBackground" Color="{StaticResource ApplicationBackgroundColor}" />
+    <SolidColorBrush x:Key="WindowForeground" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="FlyoutBackground" Color="{StaticResource AcrylicBackgroundFillColorDefault}" />
+    <SolidColorBrush x:Key="FlyoutBorderBrush" Color="{StaticResource SurfaceStrokeColorFlyout}" />
+    <SolidColorBrush x:Key="FrameForeground" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="FrameMenuItemBackgroundSelected" Color="{StaticResource SubtleFillColorTertiary}" />
+    <SolidColorBrush x:Key="FrameMenuItemForegroundDisabled" Color="{StaticResource TextFillColorDisabled}" />
+    <SolidColorBrush x:Key="GridsplitterForeground" Color="{StaticResource ControlStrongFillColorDefault}" />
+    <SolidColorBrush x:Key="GridViewColumnHeaderForeground" Color="{StaticResource TextFillColorSecondary}" />
+    <SolidColorBrush x:Key="GridViewColumnHeaderBackgroundPointerOver" Color="{StaticResource SubtleFillColorSecondary}" />
+    <SolidColorBrush x:Key="GridViewColumnHeaderBackgroundPressed" Color="{StaticResource SubtleFillColorTertiary}" />
+    <SolidColorBrush x:Key="GroupBoxHeaderForeground" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="HyperlinkForegroundDisabled" Color="{StaticResource TextFillColorDisabled}" />
+    <SolidColorBrush x:Key="HyperlinkButtonBackgroundPointerOver" Color="{StaticResource SubtleFillColorSecondary}" />
+    <SolidColorBrush x:Key="HyperlinkButtonBackgroundPressed" Color="{StaticResource SubtleFillColorTertiary}" />
+    <SolidColorBrush x:Key="HyperlinkButtonForegroundDisabled" Color="{StaticResource TextFillColorDisabled}" />
+    <SolidColorBrush x:Key="InfoBarBorderBrush" Color="{StaticResource CardStrokeColorDefault}" />
+    <SolidColorBrush x:Key="InfoBarTitleForeground" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="InfoBarErrorSeverityIconBackground" Color="{StaticResource SystemFillColorCritical}" />
+    <SolidColorBrush x:Key="InfoBarWarningSeverityIconBackground" Color="{StaticResource SystemFillColorCaution}" />
+    <SolidColorBrush x:Key="InfoBarSuccessSeverityIconBackground" Color="{StaticResource SystemFillColorSuccess}" />
+    <SolidColorBrush x:Key="LabelForeground" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="ListBoxBackground" Color="{StaticResource CardBackgroundFillColorDefault}" />
+    <SolidColorBrush x:Key="ListBoxItemForeground" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="ListBoxItemSelectedForegroundThemeBrush" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="ListViewItemForeground" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="ListViewItemBackgroundPointerOver" Color="{StaticResource SubtleFillColorSecondary}" />
+    <SolidColorBrush x:Key="LoadingScreenBackground" Color="{StaticResource ApplicationBackgroundColor}" />
+    <SolidColorBrush x:Key="LoadingScreenForeground" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="MenuBarForeground" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="MenuBarItemBackgroundSelected" Color="{StaticResource SubtleFillColorTertiary}" />
+    <SolidColorBrush x:Key="MenuBarItemBackgroundPointerOver" Color="{StaticResource SubtleFillColorTertiary}" />
+    <SolidColorBrush x:Key="MessageBoxBackground" Color="{StaticResource SolidBackgroundFillColorBase}" />
+    <SolidColorBrush x:Key="MessageBoxForeground" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="MessageBoxSeparatorBorderBrush" Color="{StaticResource CardStrokeColorDefault}" />
+    <SolidColorBrush x:Key="NavigationViewItemForeground" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="NavigationViewItemForegroundPointerOver" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="NavigationViewItemForegroundPressed" Color="{StaticResource TextFillColorSecondary}" />
+    <SolidColorBrush x:Key="NavigationViewItemSeparatorForeground" Color="{StaticResource DividerStrokeColorDefault}" />
+    <SolidColorBrush x:Key="NavigationViewItemBackgroundPointerOver" Color="{StaticResource SubtleFillColorSecondary}" />
+    <SolidColorBrush x:Key="NavigationViewItemBackgroundSelected" Color="{StaticResource SubtleFillColorSecondary}" />
+    <SolidColorBrush x:Key="NavigationViewItemBackgroundPressed" Color="{StaticResource SubtleFillColorTertiary}" />
+    <SolidColorBrush x:Key="NavigationViewContentBackground" Color="{StaticResource LayerFillColorDefault}" />
+    <SolidColorBrush x:Key="NavigationViewContentGridBorderBrush" Color="{StaticResource CardStrokeColorDefault}" />
+    <SolidColorBrush x:Key="NavigationViewItemBackgroundSelectedLeftFluent" Color="{StaticResource ControlFillColorDefault}" />
+    <SolidColorBrush x:Key="NavigationViewItemForegroundLeftFluent" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="NavigationViewItemForegroundPointerOverLeftFluent" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="NavigationWindowBackground" Color="{StaticResource ApplicationBackgroundColor}" />
+    <SolidColorBrush x:Key="NavigationWindowForeground" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="PageForeground" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="ProgressBarBackground" Color="{StaticResource ControlStrongStrokeColorDefault}" />
+    <SolidColorBrush x:Key="RadioButtonForeground" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="RadioButtonForegroundDisabled" Color="{StaticResource TextFillColorDisabled}" />
+    <SolidColorBrush x:Key="RadioButtonOuterEllipseStroke" Color="{StaticResource ControlStrongStrokeColorDefault}" />
+    <SolidColorBrush x:Key="RadioButtonOuterEllipseStrokePointerOver" Color="{StaticResource ControlStrongStrokeColorDefault}" />
+    <SolidColorBrush x:Key="RadioButtonOuterEllipseStrokePressed" Color="{StaticResource ControlStrongStrokeColorDisabled}" />
+    <SolidColorBrush x:Key="RadioButtonOuterEllipseStrokeDisabled" Color="{StaticResource ControlStrongStrokeColorDisabled}" />
+    <SolidColorBrush x:Key="RadioButtonOuterEllipseCheckedFillDisabled" Color="{StaticResource AccentFillColorDisabled}" />
+    <SolidColorBrush x:Key="RadioButtonOuterEllipseCheckedStrokeDisabled" Color="{StaticResource AccentFillColorDisabled}" />
+    <SolidColorBrush x:Key="RepeatButtonBackground" Color="{StaticResource ControlFillColorDefault}" />
+    <SolidColorBrush x:Key="RepeatButtonBackgroundPointerOver" Color="{StaticResource ControlFillColorSecondary}" />
+    <SolidColorBrush x:Key="RepeatButtonBackgroundPressed" Color="{StaticResource ControlFillColorTertiary}" />
+    <SolidColorBrush x:Key="RepeatButtonBackgroundDisabled" Color="{StaticResource ControlFillColorDisabled}" />
+    <SolidColorBrush x:Key="RepeatButtonBorderBrushDisabled" Color="{StaticResource Slate.DisabledBorderColor}" />
+    <SolidColorBrush x:Key="RepeatButtonBorderBrushPressed" Color="{StaticResource Slate.ControlStrokePressedColor}" />
+    <SolidColorBrush x:Key="RepeatButtonForeground" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="RepeatButtonForegroundPressed" Color="{StaticResource TextFillColorSecondary}" />
+    <SolidColorBrush x:Key="RepeatButtonForegroundDisabled" Color="{StaticResource TextFillColorDisabled}" />
+    <SolidColorBrush x:Key="ResizeGripForeground" Color="{StaticResource ControlStrongFillColorDefault}" />
+    <SolidColorBrush x:Key="ScrollBarTrackFillPointerOver" Color="{StaticResource AcrylicBackgroundFillColorDefault}" />
+    <SolidColorBrush x:Key="SeparatorBorderBrush" Color="{StaticResource DividerStrokeColorDefault}" />
+    <SolidColorBrush x:Key="SliderTrackFill" Color="{StaticResource ControlStrongFillColorDefault}" />
+    <SolidColorBrush x:Key="SliderTrackFillPointerOver" Color="{StaticResource ControlStrongFillColorDefault}" />
+    <SolidColorBrush x:Key="SliderTickBarFill" Color="{StaticResource ControlStrongFillColorDefault}" />
+    <SolidColorBrush x:Key="SnackBarBackground" Color="{StaticResource AcrylicBackgroundFillColorDefault}" />
+    <SolidColorBrush x:Key="SnackBarForeground" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="SnackBarBorderBrush" Color="{StaticResource SurfaceStrokeColorFlyout}" />
+    <SolidColorBrush x:Key="StatusBarItemBackgroundDisabled" Color="{StaticResource ControlFillColorDisabled}" />
+    <SolidColorBrush x:Key="StatusBarItemForegroundDisabled" Color="{StaticResource TextFillColorDisabled}" />
+    <SolidColorBrush x:Key="TabViewForeground" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="TabViewItemForegroundSelected" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="TabViewBorderBrush" Color="{StaticResource CardStrokeColorDefault}" />
+    <SolidColorBrush x:Key="TabViewSelectedItemBorderBrush" Color="{StaticResource CardStrokeColorDefault}" />
+    <SolidColorBrush x:Key="TextControlBackground" Color="{StaticResource ControlFillColorDefault}" />
+    <SolidColorBrush x:Key="TextControlBackgroundPointerOver" Color="{StaticResource ControlFillColorSecondary}" />
+    <SolidColorBrush x:Key="TextControlBackgroundFocused" Color="{StaticResource ControlFillColorInputActive}" />
+    <SolidColorBrush x:Key="TextControlBackgroundDisabled" Color="{StaticResource ControlFillColorDisabled}" />
+    <SolidColorBrush x:Key="TextControlForeground" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="TextControlForegroundPointerOver" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="TextControlForegroundFocused" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="TextControlForegroundDisabled" Color="{StaticResource TextFillColorDisabled}" />
+    <SolidColorBrush x:Key="TextControlBorderBrushDisabled" Color="{StaticResource Slate.DisabledBorderColor}" />
+    <SolidColorBrush x:Key="TextControlPlaceholderForeground" Color="{StaticResource TextFillColorSecondary}" />
+    <SolidColorBrush x:Key="ThumbBackground" Color="{StaticResource ControlStrongFillColorDefault}" />
+    <SolidColorBrush x:Key="ThumbBackgroundDisabled" Color="{StaticResource ControlStrongFillColorDisabled}" />
+    <SolidColorBrush x:Key="TimePickerButtonBackground" Color="{StaticResource ControlFillColorTertiary}" />
+    <SolidColorBrush x:Key="TimePickerButtonBackgroundPointerOver" Color="{StaticResource ControlFillColorSecondary}" />
+    <SolidColorBrush x:Key="TimePickerButtonBackgroundPressed" Color="{StaticResource ControlFillColorTertiary}" />
+    <SolidColorBrush x:Key="TimePickerButtonBackgroundDisabled" Color="{StaticResource ControlFillColorDisabled}" />
+    <SolidColorBrush x:Key="TimePickerButtonBorderBrushPressed" Color="{StaticResource Slate.ControlStrokePressedColor}" />
+    <SolidColorBrush x:Key="TimePickerButtonBorderBrushDisabled" Color="{StaticResource Slate.DisabledBorderColor}" />
+    <SolidColorBrush x:Key="TimePickerButtonForegroundDefault" Color="{StaticResource TextFillColorSecondary}" />
+    <SolidColorBrush x:Key="TimePickerButtonForegroundPointerOver" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="TimePickerButtonForegroundPressed" Color="{StaticResource TextFillColorSecondary}" />
+    <SolidColorBrush x:Key="TimePickerButtonForegroundDisabled" Color="{StaticResource TextFillColorDisabled}" />
+    <SolidColorBrush x:Key="ToggleButtonBackground" Color="{StaticResource ControlFillColorDefault}" />
+    <SolidColorBrush x:Key="ToggleButtonBackgroundPointerOver" Color="{StaticResource ControlFillColorSecondary}" />
+    <SolidColorBrush x:Key="ToggleButtonBackgroundPressed" Color="{StaticResource ControlFillColorTertiary}" />
+    <SolidColorBrush x:Key="ToggleButtonBackgroundDisabled" Color="{StaticResource ControlFillColorDisabled}" />
+    <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedDisabled" Color="{StaticResource AccentFillColorDisabled}" />
+    <SolidColorBrush x:Key="ToggleButtonBorderBrushDisabled" Color="{StaticResource Slate.DisabledBorderColor}" />
+    <SolidColorBrush x:Key="ToggleButtonBorderBrushPressed" Color="{StaticResource Slate.ControlStrokePressedColor}" />
+    <SolidColorBrush x:Key="ToggleButtonForeground" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="ToggleButtonForegroundPressed" Color="{StaticResource TextFillColorSecondary}" />
+    <SolidColorBrush x:Key="ToggleButtonForegroundDisabled" Color="{StaticResource TextFillColorDisabled}" />
+    <SolidColorBrush x:Key="ToggleButtonForegroundCheckedDisabled" Color="{StaticResource TextOnAccentFillColorDisabled}" />
+    <SolidColorBrush x:Key="ToggleSwitchContentForeground" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="ToggleSwitchContentForegroundDisabled" Color="{StaticResource TextFillColorDisabled}" />
+    <SolidColorBrush x:Key="ToggleSwitchStrokeOff" Color="{StaticResource ControlStrongStrokeColorDefault}" />
+    <SolidColorBrush x:Key="ToggleSwitchStrokeOffPointerOver" Color="{StaticResource ControlStrongStrokeColorDefault}" />
+    <SolidColorBrush x:Key="ToggleSwitchStrokeOffDisabled" Color="{StaticResource ControlStrongStrokeColorDisabled}" />
+    <SolidColorBrush x:Key="ToggleSwitchStrokeOnDisabled" Color="{StaticResource AccentFillColorDisabled}" />
+    <SolidColorBrush x:Key="ToggleSwitchFillOnDisabled" Color="{StaticResource AccentFillColorDisabled}" />
+    <SolidColorBrush x:Key="ToggleSwitchKnobFillOff" Color="{StaticResource TextFillColorSecondary}" />
+    <SolidColorBrush x:Key="ToggleSwitchKnobFillOffPointerOver" Color="{StaticResource TextFillColorSecondary}" />
+    <SolidColorBrush x:Key="ToggleSwitchKnobFillOffPressed" Color="{StaticResource TextFillColorSecondary}" />
+    <SolidColorBrush x:Key="ToggleSwitchKnobFillOffDisabled" Color="{StaticResource TextFillColorDisabled}" />
+    <SolidColorBrush x:Key="ToggleSwitchKnobFillOnDisabled" Color="{StaticResource TextOnAccentFillColorDisabled}" />
+    <SolidColorBrush x:Key="ToolTipBackgroundBrush" Color="{StaticResource AcrylicBackgroundFillColorDefault}" />
+    <SolidColorBrush x:Key="ToolTipBorderBrush" Color="{StaticResource SurfaceStrokeColorFlyout}" />
+    <SolidColorBrush x:Key="ToolTipForegroundBrush" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="ToolTipBackground" Color="{StaticResource AcrylicBackgroundFillColorDefault}" />
+    <SolidColorBrush x:Key="ToolTipForeground" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="TreeViewItemBackgroundPointerOver" Color="{StaticResource SubtleFillColorSecondary}" />
+    <SolidColorBrush x:Key="TreeViewItemBackgroundSelected" Color="{StaticResource SubtleFillColorSecondary}" />
+    <SolidColorBrush x:Key="TreeViewItemForeground" Color="{StaticResource TextFillColorPrimary}" />
+    <SolidColorBrush x:Key="CalendarViewButtonForeground" Color="{StaticResource TextFillColorSecondary}" />
+    <SolidColorBrush x:Key="MenuBarItemBackgroundMousePointer" Color="{StaticResource SubtleFillColorTertiary}" />
+
+    <!-- 7. Fluent control borders: the gradient "elevation" strokes become Slate's flat 1px control stroke
+         (3:1 against the surface). Focused text fields keep a 2px accent underline. -->
+    <SolidColorBrush x:Key="ControlElevationBorderBrush" Color="{StaticResource Slate.BorderColor}" />
+    <SolidColorBrush x:Key="CircleElevationBorderBrush" Color="{StaticResource Slate.BorderColor}" />
+    <SolidColorBrush x:Key="TextControlElevationBorderBrush" Color="{StaticResource Slate.BorderColor}" />
+    <SolidColorBrush x:Key="ButtonBorderBrush" Color="{StaticResource Slate.BorderColor}" />
+    <SolidColorBrush x:Key="ComboBoxBorderBrush" Color="{StaticResource Slate.BorderColor}" />
+    <SolidColorBrush x:Key="TextControlBorderBrush" Color="{StaticResource Slate.BorderColor}" />
+    <SolidColorBrush x:Key="ButtonBorderBrushPointerOver" Color="{StaticResource Slate.ControlStrokeHoverColor}" />
+    <SolidColorBrush x:Key="ComboBoxBorderBrushPointerOver" Color="{StaticResource Slate.ControlStrokeHoverColor}" />
+    <SolidColorBrush x:Key="TextControlBorderBrushPointerOver" Color="{StaticResource Slate.ControlStrokeHoverColor}" />
+    <LinearGradientBrush x:Key="TextControlElevationBorderFocusedBrush" MappingMode="Absolute" StartPoint="0,0" EndPoint="0,2">
+        <LinearGradientBrush.RelativeTransform>
+            <ScaleTransform ScaleY="-1" CenterY="0.5" />
+        </LinearGradientBrush.RelativeTransform>
+        <LinearGradientBrush.GradientStops>
+            <GradientStop Offset="1.0" Color="{DynamicResource Slate.AccentColor}" />
+            <GradientStop Offset="1.0" Color="{StaticResource Slate.BorderColor}" />
+        </LinearGradientBrush.GradientStops>
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="TextControlBorderBrushFocused" MappingMode="Absolute" StartPoint="0,0" EndPoint="0,2">
+        <LinearGradientBrush.RelativeTransform>
+            <ScaleTransform ScaleY="-1" CenterY="0.5" />
+        </LinearGradientBrush.RelativeTransform>
+        <LinearGradientBrush.GradientStops>
+            <GradientStop Offset="1.0" Color="{DynamicResource Slate.AccentColor}" />
+            <GradientStop Offset="1.0" Color="{StaticResource Slate.BorderColor}" />
+        </LinearGradientBrush.GradientStops>
+    </LinearGradientBrush>
 </ResourceDictionary>

@@ -1,6 +1,6 @@
 # Validate the design system against WPF (six spikes)
 
-All six ran on 2 November 2026 and none failed. The results are in `wpf-feasibility.md` under "Spikes to run first". The steps under "When all six are recorded" are still to do, apart from updating the Ratings table and "Short answer".
+All six ran on 2 November 2026 and none failed. The results are in `wpf-feasibility.md` under "Spikes to run first". Of the steps under "When all six are recorded", only syncing the design project is still to do (#1756).
 
 Paste this as a GitHub issue on coryj627/slate, or hand it to Claude Code in the repo.
 

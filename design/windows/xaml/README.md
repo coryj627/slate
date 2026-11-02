@@ -37,11 +37,11 @@ Slate gold and the Windows default blue pass every check in both themes.
 
 | Role (`Slate.<Role>Color`) | Gold, light | Gold, dark | Windows accent, light | Windows accent, dark |
 | --- | --- | --- | --- | --- |
-| `Accent` | `#7D5A00` | `#E2AD24` | `AccentColorDark1` | `AccentColorLight2` |
-| `AccentHover` | `#6B4D00` | `#EABD4B` | `AccentColorDark2` | `AccentColorLight3` |
-| `AccentPressed` | `#563D04` | `#C9960D` | `AccentColorDark3` | `AccentColorLight1` |
-| `AccentText` | `#6B4D00` | `#E2AD24` | `AccentColorDark2` | `AccentColorLight3` |
-| `AccentIndicator` | `#A57A00` | `#E2AD24` | `AccentColorDark1` | `AccentColorLight2` |
+| `Accent` | `#7D5A00` | `#EECF7E` | `AccentColorDark1` | `AccentColorLight2` |
+| `AccentHover` | `#6B4D00` | `#F0D590` | `AccentColorDark2` | `AccentColorLight3` |
+| `AccentPressed` | `#563D04` | `#EDCB75` | `AccentColorDark3` | `AccentColorLight1` |
+| `AccentText` | `#6B4D00` | `#EECF7E` | `AccentColorDark2` | `AccentColorLight3` |
+| `AccentIndicator` | `#A57A00` | `#EECF7E` | `AccentColorDark1` | `AccentColorLight2` |
 | `TextOnAccent` | `#FFFFFF` | `#171717` | `#FFFFFF` | `#000000` |
 | `SelectedSurface` | `#FDF5E1` | `#33291A` | `AccentColor` 12% over the surface | `AccentColor` 11% over the surface |
 | `SelectionBackground` | `#F9E7B8` | `#6B4D00` | `AccentColor` | `AccentColor` |
@@ -88,6 +88,17 @@ internal static class SlateAccent
 }
 ```
 
+### Selection in the reading view
+
+A `RichTextBox`, which the reading view is, always draws its selection as an overlay on top of the text. It ignores `UseAdornerForTextboxSelectionRendering` and `SelectionTextBrush`, so the solid text box pair would paint over the words. `ReadingSurface` sets `Slate.ReadingSelectionBrush` at `SelectionOpacity="1"` in its constructor. It has no Fluent style, so without that it stays system blue, and a `Loaded` class handler can't reach it because WPF only raises `Loaded` on an element whose style or instance asks for it:
+
+| Theme | Overlay | Highlight on the surface | Stands off the surface | Selected primary text, surface / raised |
+| --- | --- | --- | --- | --- |
+| Light | `#A57A00` at 20% | `#EDE4CC` | 1.27:1 | Lc 85.0 / 77.9 |
+| Dark | `#E2AD24` at 24% | `#4D401F` | 1.64:1 | Lc 80.4 / 77.5 |
+
+An overlay tints the text as well as the background, so no overlay that shows at all keeps every colour above Lc 75. Selected secondary text measures Lc 75.6 in light and 65.1 in dark, and accent text about 63-65. Primary text under the blue overlay this replaced measured Lc 57-61. In High Contrast the brush is `SystemColors.Highlight` at 40%, the opacity Fluent's default gives. If the Windows accent setting is added, this overlay needs its own rule in the contrast gate.
+
 `PassesContrastGate` is the list above, using the WCAG 2 contrast ratio. `Mix` blends two opaque colours channel by channel.
 
 ## Theme setting
@@ -112,8 +123,11 @@ The UI uses the WinUI type ramp. WPF's Fluent theme already ships most of the `T
 | `--type-title-large` | 40/52 semibold, Display | `TitleLargeTextBlockStyle` |
 | `--type-display` | 68/92 semibold, Display | `DisplayTextBlockStyle` |
 
+The app has them in `Themes/Slate.Text.xaml`, merged after the Slate dictionary in every appearance. They set the family themselves rather than basing on `BodyTextBlockStyle`, because a `StaticResource` can't reach a sibling merged dictionary:
+
 ```xml
-<Style x:Key="Slate.BodyLargeTextBlockStyle" TargetType="TextBlock" BasedOn="{StaticResource BodyTextBlockStyle}">
+<Style x:Key="Slate.BodyLargeTextBlockStyle" TargetType="TextBlock">
+    <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
     <Setter Property="FontSize" Value="18" />
     <Setter Property="LineHeight" Value="24" />
     <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
@@ -141,7 +155,7 @@ An effect turns off ClearType for the text inside it. Put the effect on a backgr
 
 ## Text size
 
-WPF doesn't apply the Windows "Text size" setting (Settings › Accessibility › Text size, 100% to 225%) to fixed font sizes. Read `UISettings.TextScaleFactor`, multiply every UI font size by it and update when `TextScaleFactorChanged` fires. Don't scale icon glyphs.
+WPF doesn't apply the Windows "Text size" setting (Settings › Accessibility › Text size, 100% to 225%) to fixed font sizes, though text with no explicit `FontSize` grows through `SystemFonts`. Read `UISettings.TextScaleFactor`, multiply every UI font size by it and update when `TextScaleFactorChanged` fires. Don't scale icon glyphs.
 
 Heights that hold text are minimums, so they grow with the text instead of clipping it at 225%. Use `MinHeight`, never `Height`: title bar 48, tab strip 36, status bar 24, and every list, tree, menu and setting row. The CSS tokens are `--titlebar-min-height`, `--tabstrip-min-height` and `--statusbar-min-height`.
 

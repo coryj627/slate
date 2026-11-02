@@ -79,7 +79,7 @@ Reviewed on 2026-11-01 against the Fluent 2 Web kit, the `coryj627/slate` repo, 
 | B | Dark-mode icon fills | Done. 102 duplicate role tokens that were only defined for light mode now follow their base role. The fixed greys and blue in Tag, InteractionTag, TagPicker, BreadcrumbItem, Rating and Star now use tokens. |
 | C | Short prop aliases | Done. `appearance` works for `style2`, `small|medium|large` for every size scale, and booleans for on/off props. Old values still work, and the `.d.ts` files list both. |
 | D | Internals to `/internal` | Done. 146 pieces moved there: icon components, placeholders, numbered duplicates, `*Base` parts and deprecated sets. |
-| E | One dark primary | Done. Fluent's dark brand roles now use gold #E2AD24 with #171717 text, the same as `--accent`. |
+| E | One dark primary | Done. Fluent's dark brand roles now use `--accent` (#EECF7E since 2 November 2026) with #171717 text. |
 | F | Unify neutrals | Done. `tokens/fluent-slate.css` maps Fluent text, stroke and background-1/2 roles to the Slate xaml values. |
 | — | Gold text selection | Done. Light #F9E7B8 with #171717 text, dark #6B4D00 with #F5F5F5 text. `::selection` is set in base.css. |
 | G | One icon order | Done. Segoe Fluent Icons first, then `Icon` SVGs. The UI kit no longer loads the online (CDN) icons. |

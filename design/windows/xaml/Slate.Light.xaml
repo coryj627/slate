@@ -18,6 +18,7 @@
     <Color x:Key="Slate.SelectedSurfaceColor">#FFFDF5E1</Color> <!-- Selected list and tree rows -->
     <Color x:Key="Slate.SelectionBackgroundColor">#FFF9E7B8</Color> <!-- Text selection -->
     <Color x:Key="Slate.SelectionTextColor">#FF171717</Color> <!-- Text inside a selection -->
+    <Color x:Key="Slate.ReadingSelectionColor">#33A57A00</Color> <!-- Reading view selection: an overlay on top of the text, #A57A00 at 20% -->
 
     <!-- 2. Slate colours and brushes. -->
     <!-- Provisional W1 palette. Text-bearing pairs are intentionally high
@@ -106,6 +107,8 @@
                      Color="{DynamicResource Slate.SelectionBackgroundColor}" />
     <SolidColorBrush x:Key="Slate.SelectionTextBrush"
                      Color="{DynamicResource Slate.SelectionTextColor}" />
+    <SolidColorBrush x:Key="Slate.ReadingSelectionBrush"
+                     Color="{DynamicResource Slate.ReadingSelectionColor}" />
     <SolidColorBrush x:Key="Slate.FocusBrush"
                      Color="{StaticResource Slate.TextColor}" />
     <SolidColorBrush x:Key="Slate.ErrorBrush"
