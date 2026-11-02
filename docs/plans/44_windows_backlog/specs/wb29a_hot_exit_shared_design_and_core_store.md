@@ -546,13 +546,21 @@ Where it differs from the design above, it wins.
   bounded: it stops at an answer that is not "no such file" and falls back
   to `Recovered note {entry id}.md`.
 - **Durable includes every directory name above an entry:** opening the
-  store syncs `vaults`, `v1`, `hot-exit` and the device root each time, and
+  store syncs `vaults`, `v1`, `hot-exit`, the device root and every parent
+  it had to create, up to the nearest directory that already existed, each
+  time, and
   every claim syncs `vaults` before it publishes, so a vault directory a
   concurrent creator renamed into place but had not yet synced (or failed
   to sync) is made durable by the caller relying on it.
 - **A claim from a later epoch than the vault's is damage, not age:** the
   read returns `Damaged` and deletes nothing, and Discard All moves past
   the highest epoch any claim names as well as the counter.
+- **No epoch follows `u64::MAX`:** an epoch or claim at the maximum makes
+  Discard All return `Damaged` before it changes anything, rather than
+  panicking across the FFI or wrapping below the claims it must pass.
+- **A release always syncs both directories** before it returns, so a retry
+  after a failed sync, finding the records already removed, still makes
+  that removal durable before it reports the release done.
 - **Recovered names compare without case** (NTFS and APFS defaults), and
   the fallback is unique among kept and chosen names.
 - **Out of this PR:** on macOS and Linux the provider's `stat` and `read`

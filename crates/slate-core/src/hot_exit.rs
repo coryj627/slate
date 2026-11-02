@@ -445,17 +445,31 @@ impl HotExitStore {
     ) -> Result<Self, HotExitError> {
         let root = device_root.join(STORE_DIR).join(VERSION_DIR);
         let vaults = root.join(VAULTS_DIR);
+        // The nearest ancestor of the device root that already exists: every
+        // directory below it may be created here, its name new in its parent.
+        let mut anchor = device_root;
+        while !anchor.exists()
+            && let Some(parent) = anchor.parent()
+        {
+            anchor = parent;
+        }
         std::fs::create_dir_all(&vaults)?;
         // Each directory's entry is durable only once its parent is synced:
-        // sync the chain up to the device root, every time (a concurrent
-        // opener may have created a link this caller did not), so nothing
-        // acknowledged later can vanish with an unsynced ancestor (§2).
-        for dir in [
-            &vaults,
-            &root,
-            &device_root.join(STORE_DIR),
-            &device_root.to_path_buf(),
-        ] {
+        // sync the chain from `vaults` up to that existing ancestor, every
+        // time (a concurrent opener may have created a link this caller did
+        // not), so nothing acknowledged later can vanish with an unsynced
+        // ancestor (§2).
+        let mut chain = vec![vaults.clone(), root.clone(), device_root.join(STORE_DIR)];
+        chain.extend(
+            device_root
+                .ancestors()
+                .take_while(|dir| *dir != anchor)
+                .map(Path::to_path_buf),
+        );
+        if !anchor.as_os_str().is_empty() {
+            chain.push(anchor.to_path_buf());
+        }
+        for dir in &chain {
             fs.sync_dir(dir)?;
         }
         Ok(Self {
@@ -630,8 +644,11 @@ impl HotExitStore {
             && record.incarnation == claim.incarnation
         {
             self.fs.remove(&claims_dir.join(&claim.entry_id))?;
-            self.fs.sync_dir(&claims_dir)?;
         }
+        // Synced whether or not this call removed anything: a retry after a
+        // failed sync finds the records already gone, and must still make
+        // that removal durable before it reports the release done (§6).
+        self.fs.sync_dir(&claims_dir)?;
         let entries_dir = dir.join(ENTRIES_DIR);
         let target = entries_dir.join(format!("{}{ENTRY_EXT}", claim.entry_id));
         if let Some(stored) = self.read_entry(&target)?
@@ -639,8 +656,8 @@ impl HotExitStore {
                 || claim.adopted.as_deref() == Some(stored.incarnation.as_str()))
         {
             self.fs.remove(&target)?;
-            self.fs.sync_dir(&entries_dir)?;
         }
+        self.fs.sync_dir(&entries_dir)?;
         Ok(())
     }
 
@@ -659,7 +676,11 @@ impl HotExitStore {
         let next = match self.read_epoch(&dir) {
             // Above every epoch a claim names too, should the counter have
             // gone backwards.
-            Ok(epoch) => (epoch + 1).max(self.highest_claim_epoch(&dir)? + 1),
+            // No successor past u64::MAX: damage, refused before any change.
+            Ok(epoch) => epoch
+                .max(self.highest_claim_epoch(&dir)?)
+                .checked_add(1)
+                .ok_or(HotExitError::Damaged)?,
             // A lost epoch is re-anchored above any epoch it can have held:
             // the highest a claim names, or the clock's milliseconds, which
             // exceed every counted epoch (§3, §6).
@@ -900,7 +921,10 @@ impl HotExitStore {
             .duration_since(SystemTime::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
-        Ok((highest + 1).max(millis))
+        Ok(highest
+            .checked_add(1)
+            .ok_or(HotExitError::Damaged)?
+            .max(millis))
     }
 
     /// The highest epoch any readable claim names (0 with none).

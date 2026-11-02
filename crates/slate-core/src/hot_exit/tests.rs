@@ -339,6 +339,107 @@ fn opening_the_store_syncs_its_directory_chain() {
     }
 }
 
+/// A device root this call creates, and any parent it creates with it, is
+/// a new name in an existing directory: the chain is synced up to that
+/// existing ancestor, not only to the device root.
+#[test]
+fn a_new_device_root_and_its_new_parents_are_synced() {
+    let dir = tempfile::tempdir().unwrap();
+    let device = dir.path().join("new-parent").join("new-device");
+    let fs = Arc::new(Recording::default());
+    let _store = HotExitStore::open_with(
+        &device,
+        Arc::clone(&fs) as Arc<dyn HotExitFs>,
+        Arc::new(SystemTime::now),
+    )
+    .unwrap();
+    let synced: Vec<String> = fs
+        .steps()
+        .into_iter()
+        .filter(|(step, _)| *step == HotExitStep::SyncDir)
+        .map(|(_, name)| name)
+        .collect();
+    let existing = dir.path().file_name().unwrap().to_str().unwrap();
+    for chain in [
+        VAULTS_DIR,
+        VERSION_DIR,
+        STORE_DIR,
+        "new-device",
+        "new-parent",
+        existing,
+    ] {
+        assert!(
+            synced.iter().any(|name| name == chain),
+            "{chain} not synced: {synced:?}"
+        );
+    }
+}
+
+/// No epoch follows u64::MAX: a counter or claim at the maximum is damage,
+/// refused before anything changes, never a panic across the FFI or a wrap
+/// back below the claims it must pass.
+#[test]
+fn a_maximal_epoch_is_refused_before_any_change() {
+    let f = Fixture::new();
+    let k = key("vault-a");
+    let c = claim(&f.store, &k, "tab1");
+    durable(f.store.write_buffer(&k, &c, 1, &entry("kept")));
+    std::fs::write(
+        f.vault_dir(&k).join(EPOCH_FILE),
+        u64::MAX.to_string().as_bytes(),
+    )
+    .unwrap();
+    assert!(matches!(
+        f.store.discard_vault(&k),
+        Err(HotExitError::Damaged)
+    ));
+    assert_eq!(f.on_disk(&k, "tab1").unwrap().text, "kept");
+
+    std::fs::write(f.vault_dir(&k).join(EPOCH_FILE), b"0").unwrap();
+    std::fs::write(
+        f.vault_dir(&k).join(CLAIMS_DIR).join("tab1"),
+        format!(
+            r#"{{"incarnation":"{}","epoch":{}}}"#,
+            c.incarnation,
+            u64::MAX
+        ),
+    )
+    .unwrap();
+    assert!(matches!(
+        f.store.discard_vault(&k),
+        Err(HotExitError::Damaged)
+    ));
+    assert_eq!(f.on_disk(&k, "tab1").unwrap().text, "kept");
+
+    // A lost epoch with a maximal claim cannot be re-anchored either.
+    std::fs::remove_file(f.vault_dir(&k).join(EPOCH_FILE)).unwrap();
+    assert!(matches!(
+        f.store.discard_vault(&k),
+        Err(HotExitError::Damaged)
+    ));
+    assert_eq!(f.on_disk(&k, "tab1").unwrap().text, "kept");
+}
+
+/// A release reports done only once its removals are durable, including a
+/// retry that finds them already made (its first try's sync failed).
+#[test]
+fn a_release_that_finds_nothing_left_still_syncs() {
+    let f = Fixture::new();
+    let k = key("vault-a");
+    let c = claim(&f.store, &k, "tab1");
+    durable(f.store.write_buffer(&k, &c, 1, &entry("x")));
+    f.store.release_entry(&k, &c).unwrap();
+    f.fs.clear();
+    f.store.release_entry(&k, &c).unwrap();
+    let synced: Vec<String> =
+        f.fs.steps()
+            .into_iter()
+            .filter(|(step, _)| *step == HotExitStep::SyncDir)
+            .map(|(_, name)| name)
+            .collect();
+    assert_eq!(synced, [CLAIMS_DIR, ENTRIES_DIR]);
+}
+
 /// A claim naming a later epoch than the vault's proves the epoch damaged
 /// (a counter gone backwards), not its entry stale: the read fails closed
 /// and the text stays; Discard All then moves past every claimed epoch.
