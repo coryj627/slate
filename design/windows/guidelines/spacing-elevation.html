@@ -1,0 +1,12 @@
+<!-- @dsCard group="Spacing" viewport="700x210" name="Elevation" subtitle="One shadow per level, with WPF DropShadowEffect values: 2 card media, 4/8 card, 8 tooltip, 16 menu and popover, 28 command palette, 64 dialog" -->
+<!DOCTYPE html><html><head><meta charset="utf-8"><link rel="stylesheet" href="../styles.css"><style>body{margin:0;padding:16px 20px;background:var(--surface-card);color:var(--text-primary);font-family:var(--font-ui)}.row{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:16px;padding:16px 12px 12px;background:var(--surface-window);border-radius:6px}.t{height:64px;border-radius:6px;background:var(--surface-card);display:flex;align-items:center;justify-content:center;font:600 12px/16px var(--font-ui)}.v{margin-top:10px;font:12px/16px var(--font-ui);color:var(--text-secondary)}.v code{font:12px/16px var(--font-editor);color:var(--text-primary)}.n{margin-top:12px;font:12px/16px var(--font-ui);color:var(--text-secondary)}</style></head><body>
+<div class="row">
+<div><div class="t" style="box-shadow:var(--shadow-2)">2</div><div class="v"><code>0 1 2</code><br>Depth 1 · Blur 3</div></div>
+<div><div class="t" style="box-shadow:var(--shadow-4)">4</div><div class="v"><code>0 2 4</code><br>Depth 2 · Blur 6</div></div>
+<div><div class="t" style="box-shadow:var(--shadow-8)">8</div><div class="v"><code>0 4 8</code><br>Depth 4 · Blur 12</div></div>
+<div><div class="t" style="box-shadow:var(--shadow-16)">16</div><div class="v"><code>0 8 16</code><br>Depth 8 · Blur 24</div></div>
+<div><div class="t" style="box-shadow:var(--shadow-28)">28</div><div class="v"><code>0 14 28</code><br>Depth 14 · Blur 42</div></div>
+<div><div class="t" style="box-shadow:var(--shadow-64)">64</div><div class="v"><code>0 32 64</code><br>Depth 32 · Blur 96</div></div>
+</div>
+<div class="n">CSS: black at 18% (light) or 36% (dark). WPF: <code style="font:12px/16px var(--font-editor);color:var(--text-primary)">Slate.Shadow&lt;level&gt;</code>, Direction 270, same opacity, on a background-only Border.</div>
+</body></html>

@@ -1,0 +1,12 @@
+<!-- @dsCard group="Components" viewport="700x170" name="Internal pieces" subtitle="146 kit internals: icon components, placeholders, numbered duplicates, deprecated sets — not for direct use" -->
+<!DOCTYPE html><html><head><meta charset="utf-8"><link rel="stylesheet" href="../../styles.css">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script>
+<style>body{margin:0;padding:20px;background:var(--surface-card);color:var(--text-primary);overflow:hidden}.row{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:14px}.k{font:12px/16px var(--font-ui);color:var(--text-tertiary);width:84px;flex:none;padding-top:6px}</style></head>
+<body><div id="root"></div>
+<script type="text/babel">
+const NS=window.SlateDesignSystem_326dc9||{};const ic=["Search","Settings","Pin","Star","Info","Dismiss","MoreHorizontal","Navigation","Code","Filter","Clock","Delete","Open","Lightbulb","BranchFork","ArrowSync","Checkmark","Flag","Mail","Person","Chat","Warning","ErrorCircle","QuestionCircle"];
+ReactDOM.createRoot(document.getElementById('root')).render(<div><div style={{display:"grid",gridTemplateColumns:"repeat(12,1fr)",gap:12}}>{ic.map(n=>{const X=NS[n];return <div key={n} title={n} style={{display:"flex",justifyContent:"center",color:"var(--text-primary)"}}>{X?<X size="20" theme="regular"/>:null}</div>})}</div><p style={{font:"12px/16px var(--font-ui)",color:"var(--text-secondary)",margin:"16px 0 0"}}>Use the Icon component or Segoe Fluent Icons instead of these. They stay exported only because other components are built from them.</p></div>);
+</script></body></html>

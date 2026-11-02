@@ -1,0 +1,38 @@
+/* Fluent 2 global spacing, radius, stroke, elevation and motion — px values of the
+   unitless Layout/Global tokens in fluent/fig-tokens.css.
+   Shadows are one layer per level so WPF can draw them with one DropShadowEffect
+   (xaml/README.md has the XAML values). Fluent's two-layer ramp was 0 0 2px 12% + 0 Ypx 2Ypx 14%.
+   Shell heights are minimums: they grow with the Windows text size (up to 225%). */
+:root{
+--space-none:0px;--space-xxs:2px;--space-xs:4px;--space-snudge:6px;--space-s:8px;--space-mnudge:10px;--space-m:12px;--space-l:16px;--space-xl:20px;--space-xxl:24px;--space-xxxl:32px;
+--radius-none:0px;--radius-small:2px;--radius-medium:4px;--radius-large:6px;--radius-xlarge:8px;--radius-circular:9999px;
+--stroke-thin:1px;--stroke-thick:2px;--stroke-thicker:3px;--stroke-thickest:4px;
+--shadow-2:0 1px 2px rgba(0,0,0,0.18);
+--shadow-4:0 2px 4px rgba(0,0,0,0.18);
+--shadow-8:0 4px 8px rgba(0,0,0,0.18);
+--shadow-16:0 8px 16px rgba(0,0,0,0.18);
+--shadow-28:0 14px 28px rgba(0,0,0,0.18);
+--shadow-64:0 32px 64px rgba(0,0,0,0.18);
+--duration-ultra-fast:50ms; /* @kind other */
+--duration-faster:100ms; /* @kind other */
+--duration-fast:150ms; /* @kind other */
+--duration-normal:200ms; /* @kind other */
+--duration-gentle:250ms; /* @kind other */
+--duration-slow:300ms; /* @kind other */
+--duration-slower:400ms; /* @kind other */
+--curve-decelerate-mid:cubic-bezier(0,0,0,1); /* @kind other */
+--curve-accelerate-mid:cubic-bezier(1,0,1,1); /* @kind other */
+--curve-easy-ease:cubic-bezier(0.33,0,0.67,1); /* @kind other */
+--curve-linear:cubic-bezier(0,0,1,1); /* @kind other */
+--titlebar-min-height:48px;--tabstrip-min-height:36px;--statusbar-min-height:24px;--sidebar-width:260px;--rightpane-width:300px;
+/* deprecated aliases (renamed 2026-11): use the -min-height tokens with min-height */
+--titlebar-height:var(--titlebar-min-height);--tabstrip-height:var(--tabstrip-min-height);--statusbar-height:var(--statusbar-min-height);
+}
+:root[data-theme="dark"],.dark{
+--shadow-2:0 1px 2px rgba(0,0,0,0.36);
+--shadow-4:0 2px 4px rgba(0,0,0,0.36);
+--shadow-8:0 4px 8px rgba(0,0,0,0.36);
+--shadow-16:0 8px 16px rgba(0,0,0,0.36);
+--shadow-28:0 14px 28px rgba(0,0,0,0.36);
+--shadow-64:0 32px 64px rgba(0,0,0,0.36);
+}

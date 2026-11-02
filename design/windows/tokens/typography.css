@@ -1,0 +1,43 @@
+/* Three type voices: UI chrome (Segoe UI, per Fluent), Reader (Open Sans), Editor (Cascadia Code).
+   Ramp = Fluent 2 type ramp (Typography collection in the Fluent 2 Web kit). */
+:root{
+--font-ui:"Segoe UI Variable Text","Segoe UI","Segoe UI Web (West European)",-apple-system,BlinkMacSystemFont,Roboto,"Helvetica Neue",sans-serif;
+--font-ui-small:"Segoe UI Variable Small","Segoe UI",sans-serif;
+--font-ui-display:"Segoe UI Variable Display","Segoe UI",-apple-system,BlinkMacSystemFont,sans-serif;
+--font-reader:"Open Sans","Segoe UI",sans-serif;
+--font-icons:"Segoe Fluent Icons","Segoe MDL2 Assets";
+--font-editor:"Cascadia Code","Cascadia Mono",Consolas,"Courier New",monospace;
+--weight-regular:400;--weight-semibold:600;--weight-bold:700;
+--type-caption2-size:10px;--type-caption2-lh:14px;
+--type-caption1-size:12px;--type-caption1-lh:16px;
+--type-body1-size:14px;--type-body1-lh:20px;
+--type-body2-size:16px;--type-body2-lh:22px;
+--type-subtitle2-size:16px;--type-subtitle2-lh:22px;
+--type-subtitle1-size:20px;--type-subtitle1-lh:28px;
+--type-title3-size:24px;--type-title3-lh:32px;
+--type-title2-size:28px;--type-title2-lh:36px;
+--type-title1-size:32px;--type-title1-lh:40px;
+--type-large-title-size:40px;--type-large-title-lh:52px;
+--type-display-size:68px;--type-display-lh:92px;
+/* UI ramp = WinUI type ramp (Windows UI kit › Typography). Use as font: var(--type-body). WPF TextBlock style in brackets;
+   WPF has no Body Large, so Slate defines it (xaml/README.md). The Fluent Web ramp above stays for the Web components. */
+--type-caption:400 12px/16px var(--font-ui-small); /* CaptionTextBlockStyle */
+--type-body:400 14px/20px var(--font-ui); /* BodyTextBlockStyle */
+--type-body-strong:600 14px/20px var(--font-ui); /* BodyStrongTextBlockStyle */
+--type-body-large:400 18px/24px var(--font-ui); /* Slate.BodyLargeTextBlockStyle */
+--type-body-large-strong:600 18px/24px var(--font-ui); /* Slate.BodyLargeStrongTextBlockStyle */
+--type-subtitle:600 20px/28px var(--font-ui-display); /* SubtitleTextBlockStyle */
+--type-title:600 28px/36px var(--font-ui-display); /* TitleTextBlockStyle */
+--type-title-large:600 40px/52px var(--font-ui-display); /* TitleLargeTextBlockStyle */
+--type-display:600 68px/92px var(--font-ui-display); /* DisplayTextBlockStyle */
+/* Reader ramp (Open Sans) — long-form reading, 16px base, 1.6 leading */
+--reader-body-size:16px;--reader-body-lh:26px;
+--reader-h1-size:32px;--reader-h1-lh:40px;
+--reader-h2-size:24px;--reader-h2-lh:32px;
+--reader-h3-size:20px;--reader-h3-lh:28px;
+--reader-h4-size:18px;--reader-h4-lh:26px;
+--reader-small-size:14px;--reader-small-lh:22px;
+--reader-measure:72ch;
+/* Editor ramp (Cascadia Code) */
+--editor-size:14px;--editor-lh:22px;--editor-gutter-size:12px;
+}

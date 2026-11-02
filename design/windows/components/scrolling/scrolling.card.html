@@ -1,0 +1,22 @@
+<!-- @dsCard group="Components" viewport="700x240" name="Scrolling · Scroll bar" subtitle="ScrollBar: 2 px thumb at rest, 12 px track with carets on hover; vertical and horizontal" -->
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>Scrolling</title><link rel="stylesheet" href="../../styles.css">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script>
+<style>body{margin:0;padding:20px;background:var(--surface-card);color:var(--text-primary);font:var(--type-body);overflow:hidden}.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:16px}.k{font:var(--type-caption);color:var(--text-tertiary);width:84px;flex:none}</style></head>
+<body><div id="root"></div>
+<script type="text/babel">
+const NS = window.SlateDesignSystem_326dc9 || {};
+class Safe extends React.Component{constructor(p){super(p);this.state={e:null}}static getDerivedStateFromError(e){return{e}}render(){return this.state.e?<span style={{font:"11px monospace",color:"var(--status-error)"}}>{this.props.n}: render error</span>:this.props.children}}
+const C = ({n, ...p}) => { const X = NS[n]; return X ? <Safe n={n}><X {...p}/></Safe> : <span style={{font:"11px monospace",color:"var(--status-error)"}}>{n} missing</span>; };
+const Row = ({k, children, style}) => <div className="row" style={style}><span className="k">{k}</span>{children}</div>;
+function Pane({expanded}){const [p,setP]=React.useState(0.15);return <div style={{position:"relative",width:180,height:180,border:"1px solid var(--border-subtle)",borderRadius:8,overflow:"hidden",background:"var(--surface-card)"}}>
+<div style={{padding:"8px 20px 8px 12px",transform:"translateY("+(-p*180)+"px)"}}>{["Daily notes","Lectures","Linear algebra lecture 3","Projects","Reading list","Recipes","Why Slate","Inbox","Archive","Templates","Attachments","Bibliography"].map(t=><div key={t} style={{height:32,display:"flex",alignItems:"center",font:"var(--type-body)"}}>{t}</div>)}</div>
+<div style={{position:"absolute",right:0,top:0}}><C n="ScrollBar" length={180} thumb={0.5} position={p} onChange={setP} expanded={expanded}/></div></div>}
+function Demo(){return <div>
+<Row k="Vertical" style={{alignItems:"flex-start"}}><Pane/><Pane expanded/><span style={{font:"var(--type-caption)",color:"var(--text-secondary)",width:200}}>Left: at rest (hover it). Right: expanded. Drag the thumb or click the track.</span></Row>
+<Row k="Horizontal"><C n="ScrollBar" orientation="horizontal" length={300} thumb={0.4} position={0.3}/><C n="ScrollBar" orientation="horizontal" length={300} thumb={0.4} position={0.3} expanded/></Row>
+</div>}
+ReactDOM.createRoot(document.getElementById('root')).render(<Demo/>);
+</script></body></html>

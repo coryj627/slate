@@ -1,0 +1,8 @@
+/* Minimal element defaults so cards and kits pick up Slate's voice. */
+html{color-scheme:light}
+html[data-theme="dark"]{color-scheme:dark}
+body{font-family:var(--font-ui);font-size:var(--type-body1-size);line-height:var(--type-body1-lh);color:var(--text-primary);background:var(--surface-window);-webkit-font-smoothing:antialiased}
+a{color:var(--accent-text);text-decoration:underline;text-underline-offset:2px}
+a:hover{color:var(--accent-hover)}
+:focus-visible{outline:2px solid var(--focus-ring);outline-offset:1px}
+::selection{background:var(--selection-bg);color:var(--selection-text)}

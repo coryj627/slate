@@ -1,0 +1,83 @@
+<!-- @dsCard group="Slate for Windows" viewport="1280x800" name="Workspace" subtitle="One-row title bar with logo app menu (Alt+F), Files sidebar, tabs, note header, reader/editor, right-pane switcher, settings, palette — light & dark" -->
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Slate — Windows workspace</title>
+<link rel="stylesheet" href="../../styles.css">
+<style>html,body{margin:0;height:100%;overflow:hidden}.slate-menuitem:hover{background:var(--surface-hover)}button:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--focus-ring);outline-offset:-2px}</style>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script>
+<script type="text/babel" src="Kit.jsx"></script>
+<script type="text/babel" src="Chrome.jsx"></script>
+<script type="text/babel" src="Sidebar.jsx"></script>
+<script type="text/babel" src="Document.jsx"></script>
+<script type="text/babel" src="Panes.jsx"></script>
+<script type="text/babel" src="SettingsWindow.jsx"></script>
+</head><body><div id="root"></div>
+<script type="text/babel">
+function App() {
+  const [theme, setTheme] = React.useState(localStorage.getItem('slate-kit-theme-pref') || 'system');
+  const [sysDark, setSysDark] = React.useState(() => matchMedia('(prefers-color-scheme: dark)').matches);
+  React.useEffect(() => { const m = matchMedia('(prefers-color-scheme: dark)'); const f = (e) => setSysDark(e.matches); m.addEventListener('change', f); return () => m.removeEventListener('change', f); }, []);
+  const shown = theme === 'system' ? (sysDark ? 'dark' : 'light') : theme;
+  const [tabs, setTabs] = React.useState(['Linear algebra lecture 3', 'Why Slate']);
+  const [active, setActive] = React.useState('Linear algebra lecture 3');
+  const [mode, setMode] = React.useState('read');
+  const [palette, setPalette] = React.useState(false);
+  const [right, setRight] = React.useState(true);
+  const [left, setLeft] = React.useState(true);
+  const [toast, setToast] = React.useState(null);
+  const [settings, setSettings] = React.useState(false);
+  const [hist, setHist] = React.useState({ stack: ['Linear algebra lecture 3'], i: 0 });
+  React.useEffect(() => { document.documentElement.setAttribute('data-theme', shown); localStorage.setItem('slate-kit-theme-pref', theme); }, [theme, shown]);
+  const say = m => { setToast(m); clearTimeout(window.__t); window.__t = setTimeout(() => setToast(null), 2600); };
+  const show = name => { setTabs(t => t.includes(name) ? t : [...t, name]); setActive(name); };
+  const open = n => { const name = n.split('#')[0]; show(name); setHist(h => { const s = h.stack.slice(0, h.i + 1); if (s[s.length - 1] !== name) s.push(name); return { stack: s, i: s.length - 1 }; }); };
+  const go = d => { const i = hist.i + d; if (i < 0 || i >= hist.stack.length) return; setHist({ ...hist, i }); show(hist.stack[i]); };
+  const folderOf = n => (SLATE_VAULT.find(f => f.children.some(c => c.name === n)) || {}).name;
+  const close = n => { setTabs(t => { const r = t.filter(x => x !== n); if (n === active) setActive(r[r.length - 1] || null); return r; }); };
+  const run = c => { setPalette(false);
+    if (c === 'Toggle Reading Mode') { setMode(m => m === 'read' ? 'edit' : 'read'); say(mode === 'read' ? 'Source mode.' : 'Reading mode.'); }
+    else if (c === 'Toggle Right Pane') setRight(r => !r);
+    else if (c === 'Toggle Files Sidebar') setLeft(l => !l);
+    else if (c === 'Split Right') say('Split right — not shown in this kit.');
+    else if (c === 'Settings') setSettings(true);
+    else if (c === 'Close Tab') { if (active) close(active); }
+    else if (c === 'Command Palette') setPalette(true);
+    else say(c.replace('…', '') + '.'); };
+  React.useEffect(() => { const k = e => {
+    if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'p') { e.preventDefault(); setPalette(true); }
+    if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'e') { e.preventDefault(); run('Toggle Reading Mode'); }
+    if (e.ctrlKey && e.altKey && e.key.toLowerCase() === 'i') { e.preventDefault(); setRight(r => !r); } };
+    window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k); });
+  const isLecture = active === 'Linear algebra lecture 3';
+  const { NoteHeader, EmptyStateLauncher } = SLATE_NS;
+  const cmd = (label, shortcut) => ({ label, shortcut, onSelect: () => run(label) });
+  const noteMenu = [cmd('Toggle Reading Mode', 'Ctrl+Shift+E'), cmd('Duplicate Tab', 'Ctrl+T'), cmd('Split Right', 'Ctrl+\\'), { separator: true }, cmd('Add Property…'), cmd('Bulk Rename Properties…', 'Ctrl+Shift+R'), { separator: true },
+    cmd('Citation Summary', 'Ctrl+Shift+J'), cmd('Jump to Bibliography', 'Ctrl+J'), { separator: true }, cmd('Pin Note'), cmd('Add to Shortcuts'), { separator: true }, cmd('Close Tab', 'Ctrl+W')];
+  const launch = [{ label: 'Quick Open…', shortcut: 'Ctrl+O', icon: 'E8E5', onClick: () => run('Quick Open…') }, { label: 'New Note from Template…', shortcut: 'Ctrl+Shift+N', icon: 'E710', onClick: () => run('New Note from Template…') },
+    { label: 'Search Vault…', shortcut: 'Ctrl+Shift+F', icon: 'E721', onClick: () => run('Search Vault…') }, { label: 'Command Palette', shortcut: 'Ctrl+Shift+P', icon: 'E756', onClick: () => setPalette(true) }];
+  return <div style={{ position: 'relative', height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--surface-window)', color: 'var(--text-primary)' }}>
+    <TitleBar title={(active ? active + ' — ' : '') + 'demo-vault — Slate'} onSearch={() => setPalette(true)} onCommand={run} />
+    <div style={{ flex: 1, display: 'flex', minHeight: 0, borderTop: '1px solid var(--border-subtle)' }}>
+      {left && <Sidebar current={active} onOpen={open} />}
+      <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+        <NoteTabs tabs={tabs} active={active} onPick={setActive} onClose={close} />
+        {active && NoteHeader && <NoteHeader path={[folderOf(active), active].filter(Boolean)} canGoBack={hist.i > 0} canGoForward={hist.i < hist.stack.length - 1} onBack={() => go(-1)} onForward={() => go(1)}
+          mode={mode === 'read' ? 'reading' : 'source'} onModeChange={m => setMode(m === 'reading' ? 'read' : 'edit')} shortcuts={{ mode: 'Ctrl+Shift+E' }} moreItems={noteMenu} onNavigate={() => setLeft(true)} />}
+        {!active ? (EmptyStateLauncher ? <EmptyStateLauncher logo="../../assets/logo/slate-gold.png" title="No note open" actions={launch} /> : null)
+        : isLecture ? (mode === 'read' ? <ReaderView note={SLATE_NOTE} onOpen={open} /> : <EditorView note={SLATE_NOTE} />)
+        : <div style={{ flex: 1, background: 'var(--surface-card)', overflow: 'auto' }}><article style={{ maxWidth: 'var(--reader-measure)', margin: '0 auto', padding: '40px', fontFamily: 'var(--font-reader)' }}>
+            <h1 style={{ font: '700 32px/40px var(--font-reader)', margin: '0 0 16px' }}>{active}</h1>
+            <p style={{ font: '16px/26px var(--font-reader)', color: 'var(--text-secondary)' }}>This note is abbreviated in the UI kit. Open “Linear algebra lecture 3” for the full reader and editor recreation.</p></article></div>}
+      </main>
+      {right && <RightPane onOpen={open} />}
+    </div>
+    <StatusBar mode={mode} words={isLecture ? 612 : 0} left={left} onLeft={() => setLeft(l => !l)} right={right} onRight={() => setRight(r => !r)} />
+    <CommandPalette open={palette} onClose={() => setPalette(false)} onRun={run} theme={theme} onTheme={(t) => { setTheme(t); setPalette(false); say('Theme: ' + SLATE_THEMES.find((x) => x.value === t).label + '.'); }} />
+    {settings && <SettingsWindow onClose={() => setSettings(false)} theme={theme} onTheme={setTheme} />}
+    {toast && <div role="status" aria-live="polite" style={{ position: 'absolute', right: 20, bottom: 40, zIndex: 60 }}>{SLATE_NS.Toast ? <SLATE_NS.Toast titleString={toast} secondaryString="" endContent={false} additionalContent={false} quickActions={false} additionalAction={false} tertiaryInformation={false} progressBar={false} /> : toast}</div>}
+  </div>;
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script></body></html>

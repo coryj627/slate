@@ -1,0 +1,25 @@
+<!-- @dsCard group="Components" viewport="700x220" name="Tree" subtitle="TreeItem — folders and notes at the medium size; the selected row carries the gold indicator pill" -->
+<!DOCTYPE html><html><head><meta charset="utf-8"><link rel="stylesheet" href="../../styles.css">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script>
+<style>body{margin:0;padding:20px;background:var(--surface-card);color:var(--text-primary);overflow:hidden}.row{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:14px}.k{font:12px/16px var(--font-ui);color:var(--text-tertiary);width:84px;flex:none;padding-top:6px}</style></head>
+<body><div id="root"></div>
+<script type="text/babel">
+const NS = window.SlateDesignSystem_326dc9 || {};
+class Safe extends React.Component{constructor(p){super(p);this.state={e:null}}static getDerivedStateFromError(e){return{e}}render(){return this.state.e?<span style={{font:"11px monospace",color:"var(--status-error)"}}>{this.props.n}: render error</span>:this.props.children}}
+const C = ({n, ...p}) => { const X = NS[n]; return X ? <Safe n={n}><X {...p}/></Safe> : <span style={{font:"11px monospace",color:"var(--status-error)"}}>{n} missing</span>; };
+const Row = ({k, children}) => <div className="row"><span className="k">{k}</span>{children}</div>;
+/* Segoe Fluent Icons glyph (G-order rule: icon font first). */
+const G = ({c, s=20}) => <span aria-hidden="true" style={{fontFamily:"var(--font-icons)",fontSize:s,lineHeight:s+"px",width:s,height:s,display:"inline-flex",alignItems:"center",justifyContent:"center",fontStyle:"normal"}}>{String.fromCharCode(parseInt(c,16))}</span>;
+const ico = (c) => ({xOutline20:<G c={c}/>, xFilled20:<G c={c}/>, xOutline24:<G c={c} s={24}/>, xFilled24:<G c={c} s={24}/>, icon1:<G c={c}/>});
+function Demo(){const fo={iconBeforeRegular20px:<G c="E8B7"/>,iconBeforeFilled20px:<G c="E8B7"/>,iconBeforeRegular16px:<G c="E8B7" s={16}/>,iconBeforeFilled16px:<G c="E8B7" s={16}/>};const doc={iconBeforeRegular20px:<G c="E8A5"/>,iconBeforeFilled20px:<G c="E8A5"/>,iconBeforeRegular16px:<G c="E8A5" s={16}/>,iconBeforeFilled16px:<G c="E8A5" s={16}/>};const x={iconAfter:false,badges:false,quickActions:false};return <div style={{width:340}}>
+<C n="TreeItem" primaryText="learning" size="medium (default)" {...fo} {...x}/>
+<C n="TreeItem" primaryText="Linear algebra lecture 2" size="medium (default)" leafNode={true} state="hover" {...doc} {...x}/>
+<C n="TreeItem" primaryText="Linear algebra lecture 3" size="medium (default)" leafNode={true} state="selected" {...doc} {...x}/>
+<C n="TreeItem" primaryText="reference" size="medium (default)" {...fo} {...x}/>
+<C n="TreeItem" primaryText="Archived" size="medium (default)" state="disabled" {...fo} {...x}/>
+</div>}
+ReactDOM.createRoot(document.getElementById('root')).render(<Demo/>);
+</script></body></html>
