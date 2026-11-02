@@ -300,6 +300,8 @@ internal sealed class HotExitWriter
 
     private HotExitVaultKey? ActiveKey => _open.IsInert ? null : _open.Key;
 
+    internal bool IsInertForTests => _open.IsInert;
+
     /// <summary>The vault's key, kept for a damaged vault's repair too.</summary>
     internal HotExitVaultKey? Key => _open.Key;
 
@@ -490,14 +492,17 @@ internal sealed class HotExitWriter
         string incarnation,
         HotExitResult<HotExitClaimOutcome> result)
     {
-        state.ClaimInFlight = false;
+        // O3: an outcome counts only for the current token. An older
+        // episode's claim is already named by that episode's retirement.
+        bool current = token == state.Token && state.EpisodeLive;
+        if (token == state.Token)
+        {
+            state.ClaimInFlight = false;
+        }
         if (result.Moot)
         {
             return;
         }
-        // O3: an outcome counts only for the current token. An older
-        // episode's claim is already named by that episode's retirement.
-        bool current = token == state.Token && state.EpisodeLive;
         if (result.ErrorReason is { } reason)
         {
             if (current)
@@ -580,6 +585,8 @@ internal sealed class HotExitWriter
     {
         state.CancelDebounce();
         state.Token++;
+        state.ClaimInFlight = false;
+        state.WriteInFlight = false;
         state.EpisodeLive = false;
         state.LiveClaim = null;
         state.ClaimIncarnation = null;
@@ -756,6 +763,10 @@ internal sealed class HotExitWriter
             incarnations.Add(pending);
         }
         state.Token++;
+        // In-flight flags belong to the episode: a held call of this one
+        // never stops the next one's, and the store orders them (O2, O3).
+        state.ClaimInFlight = false;
+        state.WriteInFlight = false;
         state.EpisodeLive = false;
         state.LiveClaim = null;
         state.ClaimIncarnation = null;
@@ -793,15 +804,15 @@ internal sealed class HotExitWriter
             _dispatcher,
             _dispatcher.InvokeAsync(static () => { }, DispatcherPriority.Background).Task);
         bool epochChecked = false;
+        int attempt = ++_settleAttempt;
         while (true)
         {
             DrainPending();
             _host.RetryParkedRetirements(key);
-            if (mode == HotExitSettleMode.Normal)
-            {
-                IssueLatest();
-            }
-            if (!_host.HasUnresolved(key))
+            bool issued = mode == HotExitSettleMode.Normal && IssueLatest(attempt);
+            // An outcome is posted after its obligation resolves: the writer
+            // decides only once it has read every one.
+            if (!issued && !_host.HasUnresolved(key) && !AnyCallInFlight())
             {
                 if (mode == HotExitSettleMode.RetireOnly)
                 {
@@ -818,25 +829,31 @@ internal sealed class HotExitWriter
                     }
                     continue;
                 }
-                // The epoch was read; this frame's changes get one more turn.
-                if (AllDirtyKept())
-                {
-                    return new HotExitSettleResult(true, null);
-                }
+                // Each failed call had its one try: nothing further can
+                // change, so the settle says so now.
+                return AllDirtyKept()
+                    ? new HotExitSettleResult(true, null)
+                    : new HotExitSettleResult(false, FirstReason(key));
             }
-            TimeSpan remaining = deadline - DateTime.UtcNow;
-            if (remaining <= TimeSpan.Zero)
+            if (DateTime.UtcNow >= deadline)
             {
-                return new HotExitSettleResult(false, FirstReason(key));
+                return mode == HotExitSettleMode.Normal && !_host.HasUnresolved(key) && AllDirtyKept()
+                    ? new HotExitSettleResult(true, null)
+                    : new HotExitSettleResult(false, FirstReason(key));
             }
-            // A tab that cannot be kept now says so at once.
-            if (!_host.HasUnresolved(key) && HopelessReason() is { } hopeless)
-            {
-                return new HotExitSettleResult(false, hopeless);
-            }
-            PumpBounded(WhenSomethingMoved(key), deadline);
+            // Always a real frame: a posted outcome runs in it.
+            PumpBounded(
+                _host.HasUnresolved(key)
+                    ? Task.WhenAny(_host.WhenSettled(key), Task.Delay(TimeSpan.FromMilliseconds(50)))
+                    : Task.Delay(TimeSpan.FromMilliseconds(5)),
+                deadline);
         }
     }
+
+    private int _settleAttempt;
+
+    private bool AnyCallInFlight() =>
+        _states.Values.Any(state => state.ClaimInFlight || state.WriteInFlight);
 
     private HotExitSettleResult SettleInert(HotExitSettleMode mode)
     {
@@ -849,11 +866,6 @@ internal sealed class HotExitWriter
             : new HotExitSettleResult(true, null);
     }
 
-    /// <summary>Wakes the settle when obligations resolve, or soon after, so
-    /// it re-reads the tabs (a posted outcome runs in the pumped frame).</summary>
-    private Task WhenSomethingMoved(HotExitVaultKey key) =>
-        Task.WhenAny(_host.WhenSettled(key), Task.Delay(TimeSpan.FromMilliseconds(50)));
-
     private void PumpBounded(Task task, DateTime deadline)
     {
         TimeSpan remaining = deadline - DateTime.UtcNow;
@@ -865,13 +877,15 @@ internal sealed class HotExitWriter
     }
 
     /// <summary>Issues what the debounce was holding, and retries an errored
-    /// claim or write, for every dirty tab not kept at its latest.</summary>
-    private void IssueLatest()
+    /// claim or write once per settle, for every dirty tab not kept at its
+    /// latest. True when it issued anything.</summary>
+    private bool IssueLatest(int attempt)
     {
         if (_fenced)
         {
-            return;
+            return false;
         }
+        bool issued = false;
         foreach (WorkspaceTabViewModel tab in _tabs())
         {
             if (tab.IsDisposed || !tab.IsDirty || !tab.IsMarkdown)
@@ -880,20 +894,33 @@ internal sealed class HotExitWriter
             }
             TabState state = StateFor(tab);
             state.CancelDebounce();
-            if (state.DiscardedUnkept || state.ClaimLost)
+            if (state.DiscardedUnkept || state.ClaimLost || state.ClaimInFlight || state.WriteInFlight)
             {
                 continue;
             }
-            if (!state.EpisodeLive || state.LiveClaim is null)
+            Snapshot now = SnapshotOf(tab);
+            if (state.LastKept == now)
             {
-                Evaluate(tab);
                 continue;
             }
-            if (state.LastKept != SnapshotOf(tab) && !state.WriteInFlight)
+            // New text is always tried; a failure of this same snapshot once.
+            if (state.SettleAttempt == attempt && state.LastIssued == now)
+            {
+                continue;
+            }
+            state.SettleAttempt = attempt;
+            if (state.EpisodeLive && state.LiveClaim is not null)
             {
                 IssueWrite(state);
             }
+            else if (state.SettleClaimAttempt != attempt)
+            {
+                state.SettleClaimAttempt = attempt;
+                Evaluate(tab);
+            }
+            issued |= state.ClaimInFlight || state.WriteInFlight;
         }
+        return issued;
     }
 
     private bool AllDirtyKept() =>
@@ -1191,6 +1218,10 @@ internal sealed class HotExitWriter
         internal int CoveredIdentity { get; set; }
 
         internal long CoveredRevision { get; set; }
+
+        internal int SettleAttempt { get; set; }
+
+        internal int SettleClaimAttempt { get; set; }
 
         internal DispatcherTimer? Debounce { get; set; }
 

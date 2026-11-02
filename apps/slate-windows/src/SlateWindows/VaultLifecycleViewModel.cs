@@ -1874,6 +1874,9 @@ internal sealed partial class VaultLifecycleViewModel
     /// obligations before it goes without hot exit.</summary>
     internal static TimeSpan HotExitReopenWait { get; set; } = TimeSpan.FromSeconds(4);
 
+    /// <summary>WB-29: a fact runs a route's teardown decision by itself.</summary>
+    internal WorkspaceTeardown TryCloseForTests(TeardownRoute route) => TryCloseWorkspace(route);
+
     /// <summary>A fact's own store host; production uses the shared one.</summary>
     internal HotExitStoreHost? HotExitHostForTests { get; set; }
 
