@@ -199,8 +199,10 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         bool? startInteractionBackgroundWork = null,
         Func<string, string, string, uint?>? anchorResolver = null,
         Func<EditorInteractionWorkerKind, Exception?>?
-            interactionBackgroundFaultForTests = null)
+            interactionBackgroundFaultForTests = null,
+        string? preloadedTextForRestore = null)
     {
+        _preloadedText = preloadedTextForRestore;
         _session = session;
         _documentChanged = documentChanged;
         _navigate = navigate;
@@ -236,6 +238,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         PropsCollapsed = state.PropsCollapsed;
         ActiveCanvasSurface = state.ActiveCanvasSurface;
         Load();
+        _preloadedText = null;
         InitializeEditorSession();
 
         // A tab RESTORED with the persisted "reading" token must project
@@ -304,7 +307,45 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     /// unchanged in the dispatcher turn of the apply.</summary>
     internal long ContentGeneration => _contentGeneration;
 
-    private void BumpContentGeneration() => _contentGeneration++;
+    private void BumpContentGeneration()
+    {
+        _contentGeneration++;
+        HotExitChanged?.Invoke(this);
+    }
+
+    /// <summary>WB-29 §3 (O7): the writer hears every change that can move
+    /// this tab's snapshot, and re-evaluates after the mutation returned.</summary>
+    internal Action<WorkspaceTabViewModel>? HotExitChanged { get; set; }
+
+    private string? _recoveryEntryId;
+
+    /// <summary>WB-29 §2: the id every claim, write and retirement of this
+    /// tab uses, exactly as stored: its own id, or a restored entry's that
+    /// this host never wrote.</summary>
+    internal string RecoveryEntryId
+    {
+        get => _recoveryEntryId ?? Id.ToString("D");
+        set => _recoveryEntryId = value;
+    }
+
+    /// <summary>WB-29 §5: this tab takes a hot-exit entry's text, dirty, with
+    /// the entry's baseline when the entry's note is still the file at the
+    /// path. Nothing is read from disk for it.</summary>
+    internal void AdoptHotExitEntry(
+        string text,
+        string? baselineHash,
+        string? baselineFileIdentity,
+        bool externallyStale)
+    {
+        // The editor's own baseline stays what it loaded, so undoing back to
+        // it is clean; the entry's hash is what the first save checks.
+        Text = text;
+        _contentHash = baselineHash;
+        FileIdentity = baselineFileIdentity;
+        EnforcesFileIdentity = baselineHash is not null && baselineFileIdentity is not null;
+        IsExternallyStale = externallyStale;
+        BumpContentGeneration();
+    }
     internal string? LoadFailure { get; private set; }
 
     /// <summary>#1266: the event a failed load renders in the tab's status
@@ -781,6 +822,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         LoadFailure = null;
         LoadFailureEvent = null;
         NotifyItemChanged();
+        HotExitChanged?.Invoke(this);
     }
 
     /// <summary>W7-7 PR 7 (#1252, R-9; codex's final merge-delta check,
@@ -811,6 +853,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         IsMissingFromDisk = true;
         Status = $"{Path} no longer exists on disk. Unsaved editor content is preserved.";
         _documentChanged?.Invoke(this, null);
+        HotExitChanged?.Invoke(this);
     }
 
     public void InvalidateExternalState() =>
@@ -905,6 +948,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
                 OnPropertyChanged(nameof(DirtyMarker));
                 OnPropertyChanged(nameof(IsMissingFromDisk));
                 OnPropertyChanged(nameof(Status));
+                HotExitChanged?.Invoke(this);
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(syncEvent));
@@ -1359,6 +1403,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         _contentHash = saved.NewContentHash;
         FileIdentity = saved.FileIdentity;
         EnforcesFileIdentity = false;
+        HotExitChanged?.Invoke(this);
         IsExternallyStale = false;
         if (_editorSession is { } session)
         {
@@ -2347,8 +2392,12 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         AppPreferencesStore? preferencesStore = null,
         Func<string, bool>? externalOpener = null,
         Action<RenderedAnnouncement>? announceRendered = null,
-        Func<int>? lifecycleGeneration = null)
+        Func<int>? lifecycleGeneration = null,
+        HotExitStoreHost? hotExitHost = null,
+        HotExitOpen? hotExitOpen = null)
     {
+        _hotExitOpen = hotExitOpen ?? HotExitOpen.None(null);
+        _hotExitHost = hotExitHost ?? HotExitStoreHost.Shared;
         _session = session;
         _persistence = new WorkspacePersistence(vaultRoot, root: VaultRootAnchor.Of(session));
         _vaultRoot = vaultRoot;
@@ -2559,7 +2608,11 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // success and failure — the leaf's notice region is the
         // surface (W4-5 contract 5).
         SeedBibliographySources(synchronousForTests: !_startInteractionBackgroundWork);
-        (_root, _activeGroup) = Restore(_persistence.Load());
+        HotExitRestorePlan hotExitPlan = HotExitRestorePlan.For(_hotExitOpen, _persistence.Load());
+        _hotExitPlan = hotExitPlan;
+        (_root, _activeGroup) = Restore(hotExitPlan.Layout);
+        _hotExitPlan = null;
+        InstallHotExit(hotExitPlan);
         SyncPanels();
         // W6-2 PR B (rule C, Term 3(a), B-1): the first sync was the initial
         // value, not a change; launch with the pane visible and the leaf
@@ -3564,6 +3617,9 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
 
     public void Dispose()
     {
+        // WB-29 §4: disposal abandons. Timers stop and nothing is retired,
+        // as a crash leaves it; it waits for nothing.
+        _hotExit?.Detach();
         if (_titledTab is not null)
         {
             _titledTab.PropertyChanged -= ActiveTab_TitleChanged;

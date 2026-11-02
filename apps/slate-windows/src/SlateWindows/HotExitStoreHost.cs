@@ -298,13 +298,13 @@ internal sealed class HotExitStoreHost
     internal Task<HotExitResult<ulong>> EpochAsync(HotExitVaultKey key) =>
         Unqueued(
             key,
-            new HotExitStoreCall(HotExitCallKind.Epoch, key.@text, null, [], 0),
+            new HotExitStoreCall(HotExitCallKind.Epoch, key.Text, null, [], 0),
             store => store.CurrentEpoch(key));
 
     internal Task<HotExitResult<HotExitSnapshot>> ReadAsync(HotExitVaultKey key) =>
         Unqueued(
             key,
-            new HotExitStoreCall(HotExitCallKind.Read, key.@text, null, [], 0),
+            new HotExitStoreCall(HotExitCallKind.Read, key.Text, null, [], 0),
             store => store.ReadBuffers(key));
 
     /// <summary>A write is ordered by the claim it carries and has no queue
@@ -318,13 +318,13 @@ internal sealed class HotExitStoreHost
             key,
             new HotExitStoreCall(
                 HotExitCallKind.Write,
-                key.@text,
-                claim.@entryId,
-                [claim.@incarnation],
+                key.Text,
+                claim.EntryId,
+                [claim.Incarnation],
                 generation),
             store => store.WriteBuffer(key, claim, generation, entry),
-            incarnations: [claim.@incarnation],
-            claimedAtEpoch: claim.@epoch);
+            incarnations: [claim.Incarnation],
+            claimedAtEpoch: claim.Epoch);
 
     /// <summary>A discard joins no entry's queue: it fences at the epoch.
     /// Only a returned epoch commits it (§0 O5), and that makes older calls
@@ -332,7 +332,7 @@ internal sealed class HotExitStoreHost
     internal Task<HotExitResult<ulong>> DiscardAsync(HotExitVaultKey key) =>
         Unqueued(
             key,
-            new HotExitStoreCall(HotExitCallKind.Discard, key.@text, null, [], 0),
+            new HotExitStoreCall(HotExitCallKind.Discard, key.Text, null, [], 0),
             store =>
             {
                 ulong epoch = store.DiscardVault(key);
@@ -353,7 +353,7 @@ internal sealed class HotExitStoreHost
         Queued(
             key,
             entryId,
-            new HotExitStoreCall(HotExitCallKind.Claim, key.@text, entryId, [incarnation], 0),
+            new HotExitStoreCall(HotExitCallKind.Claim, key.Text, entryId, [incarnation], 0),
             store => store.ClaimEntry(key, epoch, entryId, expected, incarnation),
             incarnations: [incarnation],
             claimedAtEpoch: epoch,
@@ -372,7 +372,7 @@ internal sealed class HotExitStoreHost
         Queued(
             key,
             entryId,
-            new HotExitStoreCall(HotExitCallKind.Retire, key.@text, entryId, incarnations, 0),
+            new HotExitStoreCall(HotExitCallKind.Retire, key.Text, entryId, incarnations, 0),
             store =>
             {
                 store.RetireEntry(key, entryId, [.. incarnations]);
@@ -679,10 +679,10 @@ internal sealed class HotExitStoreHost
 
     private VaultLedger LedgerFor(HotExitVaultKey key)
     {
-        if (!_ledgers.TryGetValue(key.@text, out VaultLedger? ledger))
+        if (!_ledgers.TryGetValue(key.Text, out VaultLedger? ledger))
         {
             ledger = new VaultLedger();
-            _ledgers[key.@text] = ledger;
+            _ledgers[key.Text] = ledger;
         }
         return ledger;
     }
