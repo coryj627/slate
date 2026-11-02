@@ -1499,6 +1499,38 @@ pub enum A11yEvent {
         event: GraphA11yEvent,
     },
 
+    // --- Hot exit (plan 44 WB-29a, #1525) ---
+    /// Unsaved notes came back in their tabs when the vault reopened.
+    UnsavedNotesRestored {
+        count: u32,
+    },
+    /// A restored note's file changed on disk after its edits were kept;
+    /// its next save stops at the conflict.
+    RestoredNoteChangedOnDisk {
+        name: String,
+    },
+    /// A restored note's file is gone; its edits are a new note there.
+    RestoredNoteMissingOnDisk {
+        name: String,
+    },
+    /// Another file now sits at a restored note's path; its edits are a
+    /// new note whose save will not overwrite that file.
+    RestoredNoteExistsOnDisk {
+        name: String,
+    },
+    /// A restored note whose path no longer validates, restored under a
+    /// recovered name.
+    RestoredNoteRecovered {
+        name: String,
+    },
+    /// Application close or a vault switch fell back to the prompt.
+    /// `reason` is one of core's `HOT_EXIT_REASON_*` fragments.
+    UnsavedNotesNotKept {
+        reason: String,
+    },
+    /// A Discard All whose fence did not commit: the vault stays open.
+    UnsavedNotesNotDiscarded,
+
     HostComposed {
         text: String,
         priority: A11yPriority,
@@ -1910,7 +1942,9 @@ impl A11yEvent {
             | RestoredVersionFrom { .. }
             | RestoredFile { .. }
             | RestoredFileAs { .. }
-            | TemplateNoteCreated { .. } => A11yPriority::High,
+            | TemplateNoteCreated { .. }
+            | UnsavedNotesNotKept { .. }
+            | UnsavedNotesNotDiscarded => A11yPriority::High,
             // The canvas family owns its own tiering (t0 §1.5).
             Canvas { event } => event.priority(),
             Graph { event } => event.priority(),
@@ -2654,6 +2688,31 @@ impl A11yEvent {
             TemplateNoteCreated { name, template } => {
                 format!("Created {name} from {template}.")
             }
+
+            UnsavedNotesRestored { count } => match count {
+                1 => "Restored 1 unsaved note.".to_owned(),
+                n => format!("Restored {n} unsaved notes."),
+            },
+            RestoredNoteChangedOnDisk { name } => format!(
+                "{name} changed on disk after its unsaved edits were kept. The edits are \
+                 restored; saving will stop and say so before anything is overwritten."
+            ),
+            RestoredNoteMissingOnDisk { name } => format!(
+                "{name} is no longer on disk. Its unsaved edits are restored as a new note."
+            ),
+            RestoredNoteExistsOnDisk { name } => format!(
+                "Another file is now at {name}. Its unsaved edits are restored as a new \
+                 note, and saving will not overwrite that file."
+            ),
+            RestoredNoteRecovered { name } => format!(
+                "An unsaved note whose place is no longer in the vault is restored as {name}."
+            ),
+            UnsavedNotesNotKept { reason } => {
+                format!("Your unsaved notes cannot be kept for next time: {reason}.")
+            }
+            UnsavedNotesNotDiscarded => "Slate could not yet discard the kept copies of your \
+                 unsaved notes, so the vault stays open. Try again, or cancel."
+                .to_owned(),
 
             Canvas { event } => event.render(),
             Graph { event } => event.render(),
@@ -3424,6 +3483,19 @@ fn embed_unavailable_reason(reason: &EmbedUnresolvedReason) -> String {
 /// `VaultError::Io` whose message crosses the FFI verbatim, so the host
 /// speaks it through `vault_error_detail` with no corpus or event change.
 pub const VAULT_ROOT_IDENTITY_UNAVAILABLE: &str = "This folder's file system gives Slate no file identity for it, so Slate cannot keep the vault anchored to it.";
+
+/// Why hot exit keeps nothing for a vault, or failed this time (plan 44
+/// WB-29a §4): the `reason` of [`A11yEvent::UnsavedNotesNotKept`],
+/// completing "Your unsaved notes cannot be kept for next time: …".
+pub const HOT_EXIT_REASON_WEAK_ROOT: &str =
+    "this folder's file system cannot keep a lasting identity for the vault";
+pub const HOT_EXIT_REASON_REMOTE: &str = "this vault is on a network drive";
+pub const HOT_EXIT_REASON_ENTRY_TOO_LARGE: &str = "a note is larger than the 8 MB the store keeps";
+pub const HOT_EXIT_REASON_VAULT_FULL: &str = "the store for this vault is full";
+pub const HOT_EXIT_REASON_TOO_MANY_VAULTS: &str = "the store holds notes for too many vaults";
+pub const HOT_EXIT_REASON_STORE_UNWRITABLE: &str = "the store could not be written";
+pub const HOT_EXIT_REASON_DAMAGED: &str = "the store's records for this vault are damaged";
+pub const HOT_EXIT_REASON_TIMED_OUT: &str = "saving them took longer than 5 seconds";
 
 /// A vault error as the detail a person hears or reads (W7-7, #1249):
 /// the words of mac's `humanReadableVaultError`, arm for arm, rendered
@@ -5018,6 +5090,24 @@ pub fn corpus() -> Vec<A11yEvent> {
             text: "Composed by a host engine.".into(),
             priority: A11yPriority::High,
         },
+        UnsavedNotesRestored { count: 1 },
+        UnsavedNotesRestored { count: 3 },
+        RestoredNoteChangedOnDisk {
+            name: "Ideas.md".into(),
+        },
+        RestoredNoteMissingOnDisk {
+            name: "Ideas.md".into(),
+        },
+        RestoredNoteExistsOnDisk {
+            name: "Ideas.md".into(),
+        },
+        RestoredNoteRecovered {
+            name: "Recovered note.md".into(),
+        },
+        UnsavedNotesNotKept {
+            reason: HOT_EXIT_REASON_WEAK_ROOT.into(),
+        },
+        UnsavedNotesNotDiscarded,
     ];
     // The canvas family (W6-1 0a, #745) is APPENDED as one block, so
     // every pre-existing index — and therefore both host mirrors —
@@ -7394,6 +7484,32 @@ mod tests {
             (Medium, "Template picker opened. 7 templates available."),
             (High, "Created Meeting 2026-08-20.md from Meeting."),
             (High, "Composed by a host engine."),
+            (Medium, "Restored 1 unsaved note."),
+            (Medium, "Restored 3 unsaved notes."),
+            (
+                Medium,
+                "Ideas.md changed on disk after its unsaved edits were kept. The edits are restored; saving will stop and say so before anything is overwritten.",
+            ),
+            (
+                Medium,
+                "Ideas.md is no longer on disk. Its unsaved edits are restored as a new note.",
+            ),
+            (
+                Medium,
+                "Another file is now at Ideas.md. Its unsaved edits are restored as a new note, and saving will not overwrite that file.",
+            ),
+            (
+                Medium,
+                "An unsaved note whose place is no longer in the vault is restored as Recovered note.md.",
+            ),
+            (
+                High,
+                "Your unsaved notes cannot be kept for next time: this folder's file system cannot keep a lasting identity for the vault.",
+            ),
+            (
+                High,
+                "Slate could not yet discard the kept copies of your unsaved notes, so the vault stays open. Try again, or cancel.",
+            ),
             // --- Canvas (W6-1 0a, #745) ---
             (Medium, "Research"),
             (Medium, "Text card \"Research\", 2 of 5 in Q3"),
@@ -8474,8 +8590,9 @@ mod tests {
             // task outcomes, TaskToggled and TaskToggleFailed, 221; plan 43
             // PR 21a (#1293) the change feed's uncounted rescan sentence,
             // VaultRescanFinishedUncounted, 222; plan 45 XB-9 (#1591) the
-            // reading view's on-request math source, MathSourceSpoken, 223.
-            223,
+            // reading view's on-request math source, MathSourceSpoken, 223;
+            // plan 44 WB-29a (#1525) the seven hot-exit events, 230.
+            230,
             "A11yEvent's top-level variant count moved; uniffi caps an enum at 256"
         );
     }

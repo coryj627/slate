@@ -731,6 +731,20 @@ impl FsRoot {
         self.verified_current_path()
             .unwrap_or_else(|| self.opened_as.clone())
     }
+
+    /// Plan 44 WB-29a §1: the hot-exit key text for this held root, or
+    /// core's reason it has none — only a lasting, local identity, with
+    /// the root's creation time, keys a vault's kept notes.
+    pub(crate) fn hot_exit_key_text(&self) -> Result<String, &'static str> {
+        #[cfg(any(windows, target_os = "macos"))]
+        {
+            sys::hot_exit_key_text(&self.root, self.identity, &self.opened_as)
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
+        {
+            Err(crate::a11y::HOT_EXIT_REASON_WEAK_ROOT)
+        }
+    }
 }
 
 /// The held form: macOS and Linux.
@@ -1275,6 +1289,186 @@ fn slate_refusal(root: &fs::File, slate: &Path, error: io::Error) -> VaultError 
     target_pointer_width = "64"
 ))]
 pub(crate) mod sys {
+    /// Plan 44 WB-29a §1 (macOS): `mac:{volume-uuid}-{inode}-{birth}` from
+    /// the held root, never `st_dev` (reused across removable media, and
+    /// it can change on a remount). No key on a volume that reports no
+    /// UUID, is not local, or is FAT or exFAT.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn hot_exit_key_text(
+        root: &std::fs::File,
+        _identity: Option<super::VaultRootIdentity>,
+        opened_as: &std::path::Path,
+    ) -> Result<String, &'static str> {
+        use std::os::fd::AsRawFd as _;
+        let weak = crate::a11y::HOT_EXIT_REASON_WEAK_ROOT;
+        let seam = |name: &str| {
+            std::env::var_os(name).is_some_and(|trigger| {
+                !trigger.is_empty()
+                    && opened_as
+                        .to_string_lossy()
+                        .contains(trigger.to_string_lossy().as_ref())
+            })
+        };
+        // SAFETY: zeroed storage the call fills; a live descriptor.
+        let mut volume: libc::statfs = unsafe { std::mem::zeroed() };
+        if unsafe { libc::fstatfs(root.as_raw_fd(), &mut volume) } != 0 {
+            return Err(weak);
+        }
+        // SAFETY: f_fstypename is a NUL-terminated C array.
+        let kind = unsafe { std::ffi::CStr::from_ptr(volume.f_fstypename.as_ptr()) }
+            .to_string_lossy()
+            .to_ascii_lowercase();
+        if seam("SLATE_TEST_HOT_EXIT_REMOTE") || volume.f_flags & (libc::MNT_LOCAL as u32) == 0 {
+            return Err(crate::a11y::HOT_EXIT_REASON_REMOTE);
+        }
+        if seam("SLATE_TEST_HOT_EXIT_EXCLUDED_VOLUME") || kind == "msdos" || kind == "exfat" {
+            return Err(weak);
+        }
+        let (birth, inode) = common_attributes(root).ok_or(weak)?;
+        // SAFETY: f_mntonname is a NUL-terminated C array.
+        let mount = unsafe { std::ffi::CStr::from_ptr(volume.f_mntonname.as_ptr()) };
+        let uuid = volume_uuid(mount).ok_or(weak)?;
+        if uuid.iter().all(|b| *b == 0) {
+            return Err(weak);
+        }
+        let uuid: String = uuid.iter().map(|b| format!("{b:02x}")).collect();
+        Ok(format!("mac:{uuid}-{inode:016x}-{birth:016x}"))
+    }
+
+    #[cfg(target_os = "macos")]
+    #[repr(C)]
+    struct AttrList {
+        bitmapcount: u16,
+        reserved: u16,
+        commonattr: u32,
+        volattr: u32,
+        dirattr: u32,
+        fileattr: u32,
+        forkattr: u32,
+    }
+
+    #[cfg(target_os = "macos")]
+    unsafe extern "C" {
+        fn fgetattrlist(
+            fd: libc::c_int,
+            list: *mut AttrList,
+            buf: *mut libc::c_void,
+            size: libc::size_t,
+            options: libc::c_uint,
+        ) -> libc::c_int;
+        fn getattrlist(
+            path: *const libc::c_char,
+            list: *mut AttrList,
+            buf: *mut libc::c_void,
+            size: libc::size_t,
+            options: libc::c_uint,
+        ) -> libc::c_int;
+    }
+
+    #[cfg(target_os = "macos")]
+    const ATTR_BIT_MAP_COUNT: u16 = 5;
+    #[cfg(target_os = "macos")]
+    const ATTR_CMN_CRTIME: u32 = 0x0000_0200;
+    #[cfg(target_os = "macos")]
+    const ATTR_CMN_FILEID: u32 = 0x0200_0000;
+    #[cfg(target_os = "macos")]
+    const ATTR_VOL_INFO: u32 = 0x8000_0000;
+    #[cfg(target_os = "macos")]
+    const ATTR_VOL_UUID: u32 = 0x0004_0000;
+    /// Always packed first, before the requested attributes: the
+    /// `attribute_set_t` of those the volume actually returned.
+    #[cfg(target_os = "macos")]
+    const ATTR_CMN_RETURNED_ATTRS: u32 = 0x8000_0000;
+    /// Packs an attribute the volume lacks as a default value, so every
+    /// offset holds, and the returned set says which ones are real.
+    #[cfg(target_os = "macos")]
+    const FSOPT_PACK_INVAL_ATTRS: libc::c_uint = 0x0000_0008;
+    /// The length (`u32`) and the returned `attribute_set_t` (five `u32`s)
+    /// before the first requested attribute.
+    #[cfg(target_os = "macos")]
+    const FIRST_ATTRIBUTE: usize = 4 + 20;
+
+    /// The held folder's creation time (nanoseconds) and file id: one
+    /// `fgetattrlist`, attributes packed in bit order after the length and
+    /// the returned set. `None` unless the volume returned both, so a file
+    /// system without creation times gives no key rather than a shifted
+    /// one.
+    #[cfg(target_os = "macos")]
+    fn common_attributes(root: &std::fs::File) -> Option<(u64, u64)> {
+        use std::os::fd::AsRawFd as _;
+        let wanted = ATTR_CMN_CRTIME | ATTR_CMN_FILEID;
+        let mut list = AttrList {
+            bitmapcount: ATTR_BIT_MAP_COUNT,
+            reserved: 0,
+            commonattr: ATTR_CMN_RETURNED_ATTRS | wanted,
+            volattr: 0,
+            dirattr: 0,
+            fileattr: 0,
+            forkattr: 0,
+        };
+        let mut buf = [0u8; 64];
+        // SAFETY: a live descriptor, a valid list and a buffer of its size.
+        let got = unsafe {
+            fgetattrlist(
+                root.as_raw_fd(),
+                &mut list,
+                buf.as_mut_ptr().cast(),
+                buf.len(),
+                FSOPT_PACK_INVAL_ATTRS,
+            )
+        };
+        if got != 0 {
+            return None;
+        }
+        let returned = u32::from_ne_bytes(buf[4..8].try_into().ok()?);
+        if returned & wanted != wanted {
+            return None;
+        }
+        let read = |at: usize| u64::from_ne_bytes(buf[at..at + 8].try_into().ok()?).into();
+        let seconds: Option<u64> = read(FIRST_ATTRIBUTE);
+        let nanos: Option<u64> = read(FIRST_ATTRIBUTE + 8);
+        let file_id: Option<u64> = read(FIRST_ATTRIBUTE + 16);
+        Some((
+            seconds?.wrapping_mul(1_000_000_000).wrapping_add(nanos?),
+            file_id?,
+        ))
+    }
+
+    /// The volume's UUID, read at its mount point (`getattrlist` answers
+    /// volume attributes only there); `None` unless the volume returned it.
+    #[cfg(target_os = "macos")]
+    fn volume_uuid(mount: &std::ffi::CStr) -> Option<[u8; 16]> {
+        let mut list = AttrList {
+            bitmapcount: ATTR_BIT_MAP_COUNT,
+            reserved: 0,
+            commonattr: ATTR_CMN_RETURNED_ATTRS,
+            volattr: ATTR_VOL_INFO | ATTR_VOL_UUID,
+            dirattr: 0,
+            fileattr: 0,
+            forkattr: 0,
+        };
+        let mut buf = [0u8; 64];
+        // SAFETY: a NUL-terminated path, a valid list and a buffer of its size.
+        let got = unsafe {
+            getattrlist(
+                mount.as_ptr(),
+                &mut list,
+                buf.as_mut_ptr().cast(),
+                buf.len(),
+                FSOPT_PACK_INVAL_ATTRS,
+            )
+        };
+        if got != 0 {
+            return None;
+        }
+        // The returned set's second word is its volume attributes.
+        let returned = u32::from_ne_bytes(buf[8..12].try_into().ok()?);
+        if returned & ATTR_VOL_UUID == 0 {
+            return None;
+        }
+        buf[FIRST_ATTRIBUTE..FIRST_ATTRIBUTE + 16].try_into().ok()
+    }
+
     use std::ffi::{CStr, CString, OsString};
     use std::os::fd::{AsRawFd as _, FromRawFd as _};
     use std::os::unix::ffi::OsStrExt as _;

@@ -543,6 +543,7 @@ mod census_live {
     pub static CANCEL_TOKENS: AtomicI64 = AtomicI64::new(0);
     pub static REGISTRIES: AtomicI64 = AtomicI64::new(0);
     pub static LAYOUT_SESSIONS: AtomicI64 = AtomicI64::new(0);
+    pub static HOT_EXIT_STORES: AtomicI64 = AtomicI64::new(0);
 
     /// RAII marker: one live native object of its kind.
     pub struct Marker(&'static AtomicI64);
@@ -569,6 +570,7 @@ pub struct LiveObjectCounts {
     pub cancel_tokens: i64,
     pub registries: i64,
     pub layout_sessions: i64,
+    pub hot_exit_stores: i64,
 }
 
 /// Snapshot the census live-object counters (see [`census_live`]).
@@ -581,6 +583,7 @@ pub fn census_live_object_counts() -> LiveObjectCounts {
         cancel_tokens: census_live::CANCEL_TOKENS.load(Ordering::Acquire),
         registries: census_live::REGISTRIES.load(Ordering::Acquire),
         layout_sessions: census_live::LAYOUT_SESSIONS.load(Ordering::Acquire),
+        hot_exit_stores: census_live::HOT_EXIT_STORES.load(Ordering::Acquire),
     }
 }
 
@@ -1369,6 +1372,59 @@ impl VaultSession {
             .inner
             .save_text(&path, &contents, expected_content_hash.as_deref())?;
         Ok(report.into())
+    }
+
+    /// Plan 44 WB-29a §3: `save_text` with a second precondition — with
+    /// `expected_content_hash` given, the file at `path` must also have
+    /// `expected_file_identity`, checked in the same step; a different
+    /// file at the path returns `WriteConflict`. A restored hot-exit
+    /// buffer saves through this until a save lands.
+    pub fn save_text_checked(
+        &self,
+        path: String,
+        contents: String,
+        expected_content_hash: Option<String>,
+        expected_file_identity: Option<String>,
+    ) -> Result<SaveReport, VaultError> {
+        let report = self.inner.save_text_checked(
+            &path,
+            &contents,
+            expected_content_hash.as_deref(),
+            expected_file_identity.as_deref(),
+        )?;
+        Ok(report.into())
+    }
+
+    /// Plan 44 WB-29a §1: this vault's hot-exit store key, or core's
+    /// reason there is none. Plain data the host passes to the store.
+    pub fn hot_exit_key(&self) -> HotExitKeyResult {
+        match self.inner.hot_exit_key() {
+            core::hot_exit::HotExitKeyResult::Key(key) => HotExitKeyResult::Key {
+                key: HotExitVaultKey { text: key.text },
+            },
+            core::hot_exit::HotExitKeyResult::Unavailable { reason } => {
+                HotExitKeyResult::Unavailable {
+                    reason: reason.to_string(),
+                }
+            }
+        }
+    }
+
+    /// Plan 44 WB-29a §3: the note's file identity, kept beside a buffer's
+    /// baseline; nil where the platform gives none or nothing is there.
+    pub fn note_file_identity(&self, path: String) -> Result<Option<String>, VaultError> {
+        Ok(self.inner.note_file_identity(&path)?)
+    }
+
+    /// Plan 44 WB-29a §3: how each kept entry comes back into this vault.
+    pub fn classify_hot_exit_entries(&self, entries: Vec<HotExitEntry>) -> Vec<HotExitRestore> {
+        let core_entries: Vec<core::hot_exit::HotExitEntry> =
+            entries.into_iter().map(Into::into).collect();
+        self.inner
+            .classify_hot_exit_entries(&core_entries)
+            .into_iter()
+            .map(Into::into)
+            .collect()
     }
 
     /// Read a note split into `{ fm_source, body }` plus the whole-file
@@ -8780,6 +8836,356 @@ fn truncate_action_message(mut message: String) -> String {
     message
 }
 
+// =====================================================================
+// Hot exit (plan 44 WB-29a, #1525)
+// =====================================================================
+
+/// A vault's hot-exit store key: opaque text core makes; the host passes
+/// it back unread.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct HotExitVaultKey {
+    pub text: String,
+}
+
+impl From<HotExitVaultKey> for core::hot_exit::HotExitVaultKey {
+    fn from(key: HotExitVaultKey) -> Self {
+        Self { text: key.text }
+    }
+}
+
+/// What `VaultSession.hot_exit_key` answers.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum HotExitKeyResult {
+    Key {
+        key: HotExitVaultKey,
+    },
+    /// No hot exit for this vault; `reason` completes core's
+    /// `UnsavedNotesNotKept` sentence.
+    Unavailable {
+        reason: String,
+    },
+}
+
+/// A tab's ownership of its entry (WB-29a §2).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct HotExitClaim {
+    pub entry_id: String,
+    pub incarnation: String,
+    pub epoch: u64,
+    pub adopted: Option<String>,
+}
+
+impl From<HotExitClaim> for core::hot_exit::HotExitClaim {
+    fn from(claim: HotExitClaim) -> Self {
+        Self {
+            entry_id: claim.entry_id,
+            incarnation: claim.incarnation,
+            epoch: claim.epoch,
+            adopted: claim.adopted,
+        }
+    }
+}
+
+impl From<core::hot_exit::HotExitClaim> for HotExitClaim {
+    fn from(claim: core::hot_exit::HotExitClaim) -> Self {
+        Self {
+            entry_id: claim.entry_id,
+            incarnation: claim.incarnation,
+            epoch: claim.epoch,
+            adopted: claim.adopted,
+        }
+    }
+}
+
+/// Why a claim or write was not applied (WB-29a §2).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum HotExitSupersession {
+    Epoch { current: u64 },
+    Claim,
+    Newer { stored_generation: u64 },
+}
+
+impl From<core::hot_exit::HotExitSupersession> for HotExitSupersession {
+    fn from(by: core::hot_exit::HotExitSupersession) -> Self {
+        use core::hot_exit::HotExitSupersession as S;
+        match by {
+            S::Epoch { current } => Self::Epoch { current },
+            S::Claim => Self::Claim,
+            S::Newer { stored_generation } => Self::Newer { stored_generation },
+        }
+    }
+}
+
+/// A cap the store will not exceed (WB-29a §1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum HotExitRefusal {
+    EntryTooLarge,
+    VaultFull,
+    TooManyVaults,
+}
+
+impl From<core::hot_exit::HotExitRefusal> for HotExitRefusal {
+    fn from(refusal: core::hot_exit::HotExitRefusal) -> Self {
+        use core::hot_exit::HotExitRefusal as R;
+        match refusal {
+            R::EntryTooLarge => Self::EntryTooLarge,
+            R::VaultFull => Self::VaultFull,
+            R::TooManyVaults => Self::TooManyVaults,
+        }
+    }
+}
+
+impl From<HotExitRefusal> for core::hot_exit::HotExitRefusal {
+    fn from(refusal: HotExitRefusal) -> Self {
+        match refusal {
+            HotExitRefusal::EntryTooLarge => Self::EntryTooLarge,
+            HotExitRefusal::VaultFull => Self::VaultFull,
+            HotExitRefusal::TooManyVaults => Self::TooManyVaults,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum HotExitClaimOutcome {
+    Claimed { claim: HotExitClaim },
+    Superseded { by: HotExitSupersession },
+    Refused { refusal: HotExitRefusal },
+}
+
+impl From<core::hot_exit::HotExitClaimOutcome> for HotExitClaimOutcome {
+    fn from(outcome: core::hot_exit::HotExitClaimOutcome) -> Self {
+        use core::hot_exit::HotExitClaimOutcome as O;
+        match outcome {
+            O::Claimed(claim) => Self::Claimed {
+                claim: claim.into(),
+            },
+            O::Superseded(by) => Self::Superseded { by: by.into() },
+            O::Refused(refusal) => Self::Refused {
+                refusal: refusal.into(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum HotExitWriteOutcome {
+    Durable { generation: u64 },
+    Superseded { by: HotExitSupersession },
+    Refused { refusal: HotExitRefusal },
+}
+
+impl From<core::hot_exit::HotExitWriteOutcome> for HotExitWriteOutcome {
+    fn from(outcome: core::hot_exit::HotExitWriteOutcome) -> Self {
+        use core::hot_exit::HotExitWriteOutcome as O;
+        match outcome {
+            O::Durable { generation } => Self::Durable { generation },
+            O::Superseded(by) => Self::Superseded { by: by.into() },
+            O::Refused(refusal) => Self::Refused {
+                refusal: refusal.into(),
+            },
+        }
+    }
+}
+
+/// What a write carries besides its claim.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct HotExitEntryWrite {
+    pub path: String,
+    pub text: String,
+    pub baseline_hash: Option<String>,
+    pub baseline_file_id: Option<String>,
+}
+
+/// A kept entry, as `read_buffers` returns it.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct HotExitEntry {
+    pub entry_id: String,
+    pub incarnation: String,
+    pub generation: u64,
+    pub path: String,
+    pub text: String,
+    pub baseline_hash: Option<String>,
+    pub baseline_file_id: Option<String>,
+    pub written_at: String,
+}
+
+impl From<core::hot_exit::HotExitEntry> for HotExitEntry {
+    fn from(entry: core::hot_exit::HotExitEntry) -> Self {
+        Self {
+            entry_id: entry.entry_id,
+            incarnation: entry.incarnation,
+            generation: entry.generation,
+            path: entry.path,
+            text: entry.text,
+            baseline_hash: entry.baseline_hash,
+            baseline_file_id: entry.baseline_file_id,
+            written_at: entry.written_at,
+        }
+    }
+}
+
+impl From<HotExitEntry> for core::hot_exit::HotExitEntry {
+    fn from(entry: HotExitEntry) -> Self {
+        Self {
+            schema: 1,
+            entry_id: entry.entry_id,
+            incarnation: entry.incarnation,
+            generation: entry.generation,
+            path: entry.path,
+            text: entry.text,
+            baseline_hash: entry.baseline_hash,
+            baseline_file_id: entry.baseline_file_id,
+            written_at: entry.written_at,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct HotExitSnapshot {
+    pub epoch: u64,
+    pub entries: Vec<HotExitEntry>,
+}
+
+/// How one kept entry comes back (WB-29a §3).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum HotExitRestore {
+    Restore { path: String },
+    RestoreStale { path: String },
+    ExistsNow { path: String },
+    Gone { path: String },
+    Recovered { path: String },
+}
+
+impl From<core::hot_exit::HotExitRestore> for HotExitRestore {
+    fn from(restore: core::hot_exit::HotExitRestore) -> Self {
+        use core::hot_exit::HotExitRestore as R;
+        match restore {
+            R::Restore { path } => Self::Restore { path },
+            R::RestoreStale { path } => Self::RestoreStale { path },
+            R::ExistsNow { path } => Self::ExistsNow { path },
+            R::Gone { path } => Self::Gone { path },
+            R::Recovered { path } => Self::Recovered { path },
+        }
+    }
+}
+
+/// A hot-exit store failure; `reason` completes core's
+/// `UnsavedNotesNotKept` sentence.
+#[derive(Debug, thiserror::Error, uniffi::Error)]
+pub enum HotExitError {
+    #[error("hot-exit store I/O failed: {detail}")]
+    Io { detail: String, reason: String },
+    #[error("hot-exit entry id is not a tab id")]
+    InvalidEntryId { reason: String },
+    #[error("hot-exit records for this vault are damaged")]
+    Damaged { reason: String },
+}
+
+impl From<core::hot_exit::HotExitError> for HotExitError {
+    fn from(error: core::hot_exit::HotExitError) -> Self {
+        let reason = error.reason().to_string();
+        match error {
+            core::hot_exit::HotExitError::Io { detail } => Self::Io { detail, reason },
+            core::hot_exit::HotExitError::InvalidEntryId => Self::InvalidEntryId { reason },
+            core::hot_exit::HotExitError::Damaged => Self::Damaged { reason },
+        }
+    }
+}
+
+/// Plan 44 WB-29a: the process-lifetime hot-exit store over the host's
+/// device-local root. Its calls take a vault key and a claim, never a
+/// `VaultSession` (§8); the object is safe to call from any thread.
+#[derive(uniffi::Object)]
+pub struct HotExitStore {
+    inner: core::hot_exit::HotExitStore,
+    _census: census_live::Marker,
+}
+
+#[uniffi::export]
+impl HotExitStore {
+    /// Opens (creating) the store under `<device_root>/hot-exit/v1/`.
+    #[uniffi::constructor]
+    pub fn open(device_root: String) -> Result<Arc<Self>, HotExitError> {
+        Ok(Arc::new(Self {
+            inner: core::hot_exit::HotExitStore::open(std::path::Path::new(&device_root))?,
+            _census: census_live::Marker::count(&census_live::HOT_EXIT_STORES),
+        }))
+    }
+
+    pub fn current_epoch(&self, key: HotExitVaultKey) -> Result<u64, HotExitError> {
+        Ok(self.inner.current_epoch(&key.into())?)
+    }
+
+    /// A restored tab's first claim passes the entry's incarnation as
+    /// `adopts`; every other claim passes nil.
+    pub fn claim_entry(
+        &self,
+        key: HotExitVaultKey,
+        epoch: u64,
+        entry_id: String,
+        adopts: Option<String>,
+    ) -> Result<HotExitClaimOutcome, HotExitError> {
+        Ok(self
+            .inner
+            .claim_entry(&key.into(), epoch, &entry_id, adopts.as_deref())?
+            .into())
+    }
+
+    pub fn write_buffer(
+        &self,
+        key: HotExitVaultKey,
+        claim: HotExitClaim,
+        generation: u64,
+        entry: HotExitEntryWrite,
+    ) -> Result<HotExitWriteOutcome, HotExitError> {
+        let entry = core::hot_exit::HotExitEntryWrite {
+            path: entry.path,
+            text: entry.text,
+            baseline_hash: entry.baseline_hash,
+            baseline_file_id: entry.baseline_file_id,
+        };
+        Ok(self
+            .inner
+            .write_buffer(&key.into(), &claim.into(), generation, &entry)?
+            .into())
+    }
+
+    pub fn release_entry(
+        &self,
+        key: HotExitVaultKey,
+        claim: HotExitClaim,
+    ) -> Result<(), HotExitError> {
+        Ok(self.inner.release_entry(&key.into(), &claim.into())?)
+    }
+
+    /// Returns the vault's new epoch.
+    pub fn discard_vault(&self, key: HotExitVaultKey) -> Result<u64, HotExitError> {
+        Ok(self.inner.discard_vault(&key.into())?)
+    }
+
+    pub fn read_buffers(&self, key: HotExitVaultKey) -> Result<HotExitSnapshot, HotExitError> {
+        let snapshot = self.inner.read_buffers(&key.into())?;
+        Ok(HotExitSnapshot {
+            epoch: snapshot.epoch,
+            entries: snapshot.entries.into_iter().map(Into::into).collect(),
+        })
+    }
+}
+
+/// The reason a refusal completes core's `UnsavedNotesNotKept` sentence.
+#[uniffi::export]
+pub fn hot_exit_refusal_reason(refusal: HotExitRefusal) -> String {
+    core::hot_exit::HotExitRefusal::from(refusal)
+        .reason()
+        .to_string()
+}
+
+/// The reason a flush that ran past its 5 s budget gives.
+#[uniffi::export]
+pub fn hot_exit_reason_timed_out() -> String {
+    core::a11y::HOT_EXIT_REASON_TIMED_OUT.to_string()
+}
+
 /// FFI-exposed command registry. Wraps `slate_core::CommandRegistry`.
 ///
 /// Construct with `CommandRegistry()` on the foreign side. The
@@ -9770,6 +10176,26 @@ pub enum A11yEvent {
     Graph {
         event: GraphA11yEvent,
     },
+    /// Plan 44 WB-29a (#1525): the hot-exit family.
+    UnsavedNotesRestored {
+        count: u32,
+    },
+    RestoredNoteChangedOnDisk {
+        name: String,
+    },
+    RestoredNoteMissingOnDisk {
+        name: String,
+    },
+    RestoredNoteExistsOnDisk {
+        name: String,
+    },
+    RestoredNoteRecovered {
+        name: String,
+    },
+    UnsavedNotesNotKept {
+        reason: String,
+    },
+    UnsavedNotesNotDiscarded,
     HostComposed {
         text: String,
         priority: A11yPriority,
@@ -11499,6 +11925,13 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::Graph { event } => C::Graph {
                 event: event.into(),
             },
+            F::UnsavedNotesRestored { count } => C::UnsavedNotesRestored { count },
+            F::RestoredNoteChangedOnDisk { name } => C::RestoredNoteChangedOnDisk { name },
+            F::RestoredNoteMissingOnDisk { name } => C::RestoredNoteMissingOnDisk { name },
+            F::RestoredNoteExistsOnDisk { name } => C::RestoredNoteExistsOnDisk { name },
+            F::RestoredNoteRecovered { name } => C::RestoredNoteRecovered { name },
+            F::UnsavedNotesNotKept { reason } => C::UnsavedNotesNotKept { reason },
+            F::UnsavedNotesNotDiscarded => C::UnsavedNotesNotDiscarded,
             F::HostComposed { text, priority } => C::HostComposed {
                 text,
                 priority: priority.into(),
@@ -13988,6 +14421,58 @@ impl VaultSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Plan 44 WB-29a: the hot-exit store through the exported object —
+    /// open, claim, write, read, release, discard — and its refusal and
+    /// error reasons in core's words.
+    #[test]
+    fn hot_exit_store_round_trips_through_the_binding() {
+        let root = tempfile::tempdir().unwrap();
+        let store = HotExitStore::open(root.path().to_string_lossy().into_owned()).unwrap();
+        let key = HotExitVaultKey {
+            text: "win:test-vault".into(),
+        };
+        let epoch = store.current_epoch(key.clone()).unwrap();
+        let HotExitClaimOutcome::Claimed { claim } = store
+            .claim_entry(key.clone(), epoch, "tab1".into(), None)
+            .unwrap()
+        else {
+            panic!("claim refused");
+        };
+        let entry = HotExitEntryWrite {
+            path: "a.md".into(),
+            text: "unsaved".into(),
+            baseline_hash: Some("h".into()),
+            baseline_file_id: None,
+        };
+        assert_eq!(
+            store
+                .write_buffer(key.clone(), claim.clone(), 1, entry)
+                .unwrap(),
+            HotExitWriteOutcome::Durable { generation: 1 }
+        );
+        let snapshot = store.read_buffers(key.clone()).unwrap();
+        assert_eq!(snapshot.entries.len(), 1);
+        assert_eq!(snapshot.entries[0].text, "unsaved");
+        store.release_entry(key.clone(), claim).unwrap();
+        assert!(store.read_buffers(key.clone()).unwrap().entries.is_empty());
+        assert!(store.discard_vault(key.clone()).unwrap() > epoch);
+        assert!(census_live_object_counts().hot_exit_stores >= 1);
+        assert_eq!(
+            hot_exit_refusal_reason(HotExitRefusal::VaultFull),
+            core::a11y::HOT_EXIT_REASON_VAULT_FULL
+        );
+        assert_eq!(
+            hot_exit_reason_timed_out(),
+            core::a11y::HOT_EXIT_REASON_TIMED_OUT
+        );
+        match store.claim_entry(key, 0, "bad id".into(), None) {
+            Err(HotExitError::InvalidEntryId { reason }) => {
+                assert_eq!(reason, core::a11y::HOT_EXIT_REASON_STORE_UNWRITABLE)
+            }
+            other => panic!("an invalid id was accepted: {other:?}"),
+        }
+    }
 
     /// W7-7 PR 7 (rounds 25-26; locked decision 05's memory-bounded rule):
     /// thousands of failing files cross the FFI as the EXACT error count

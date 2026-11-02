@@ -1610,6 +1610,46 @@
     "text": "Composed by a host engine."
   },
   {
+    "event": "UnsavedNotesRestored { count: 1 }",
+    "priority": "medium",
+    "text": "Restored 1 unsaved note."
+  },
+  {
+    "event": "UnsavedNotesRestored { count: 3 }",
+    "priority": "medium",
+    "text": "Restored 3 unsaved notes."
+  },
+  {
+    "event": "RestoredNoteChangedOnDisk { name: \"Ideas.md\" }",
+    "priority": "medium",
+    "text": "Ideas.md changed on disk after its unsaved edits were kept. The edits are restored; saving will stop and say so before anything is overwritten."
+  },
+  {
+    "event": "RestoredNoteMissingOnDisk { name: \"Ideas.md\" }",
+    "priority": "medium",
+    "text": "Ideas.md is no longer on disk. Its unsaved edits are restored as a new note."
+  },
+  {
+    "event": "RestoredNoteExistsOnDisk { name: \"Ideas.md\" }",
+    "priority": "medium",
+    "text": "Another file is now at Ideas.md. Its unsaved edits are restored as a new note, and saving will not overwrite that file."
+  },
+  {
+    "event": "RestoredNoteRecovered { name: \"Recovered note.md\" }",
+    "priority": "medium",
+    "text": "An unsaved note whose place is no longer in the vault is restored as Recovered note.md."
+  },
+  {
+    "event": "UnsavedNotesNotKept { reason: \"this folder's file system cannot keep a lasting identity for the vault\" }",
+    "priority": "high",
+    "text": "Your unsaved notes cannot be kept for next time: this folder's file system cannot keep a lasting identity for the vault."
+  },
+  {
+    "event": "UnsavedNotesNotDiscarded",
+    "priority": "high",
+    "text": "Slate could not yet discard the kept copies of your unsaved notes, so the vault stays open. Try again, or cancel."
+  },
+  {
     "event": "Canvas { event: CanvasMovedTo { verbosity: Terse, kind_label: \"text\", title: \"Research\", ordinal_n: 2, total_m: 5, container: Some(\"Q3\"), connection_count: 3, color_name: Some(\"red\"), marked: true } }",
     "priority": "medium",
     "text": "Research"

@@ -378,6 +378,15 @@ public sealed class A11yCorpusCensus
         new A11yEvent.TemplatePickerOpened(Count: 7),
         new A11yEvent.TemplateNoteCreated(Name: "Meeting 2026-08-20.md", Template: "Meeting"),
         new A11yEvent.HostComposed(Text: "Composed by a host engine.", Priority: A11yPriority.High),
+        new A11yEvent.UnsavedNotesRestored(Count: 1),
+        new A11yEvent.UnsavedNotesRestored(Count: 3),
+        new A11yEvent.RestoredNoteChangedOnDisk(Name: "Ideas.md"),
+        new A11yEvent.RestoredNoteMissingOnDisk(Name: "Ideas.md"),
+        new A11yEvent.RestoredNoteExistsOnDisk(Name: "Ideas.md"),
+        new A11yEvent.RestoredNoteRecovered(Name: "Recovered note.md"),
+        new A11yEvent.UnsavedNotesNotKept(
+            Reason: "this folder's file system cannot keep a lasting identity for the vault"),
+        new A11yEvent.UnsavedNotesNotDiscarded(),
         // --- Canvas (W6-1 0a, #745) ---
         new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasMovedTo(Verbosity: CanvasVerbosity.Terse, KindLabel: "text", Title: "Research", OrdinalN: 2, TotalM: 5, Container: "Q3", ConnectionCount: 3, ColorName: "red", Marked: true)),
         new A11yEvent.Canvas(Event: new CanvasA11yEvent.CanvasMovedTo(Verbosity: CanvasVerbosity.Standard, KindLabel: "text", Title: "Research", OrdinalN: 2, TotalM: 5, Container: "Q3", ConnectionCount: 3, ColorName: "red", Marked: true)),

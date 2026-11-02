@@ -479,6 +479,114 @@ recovery write.
    writes and closing prompts. A later host command can offer to review
    or discard them.
 
+## Delivery record, the core store PR (2026-11-02)
+
+Where it differs from the design above, it wins.
+
+- **The vault directory name is a blake3 hash of the key text**, not
+  SHA-256: core already depends on blake3 and on no SHA-2 crate, and the
+  name only has to be stable and collision-free.
+- **One lock, not two.** Every call opens its own handle on the vault's
+  `lock` file and takes an exclusive `File::lock` on it. The lock belongs
+  to the handle (`LockFileEx`; `flock` on an open file description), so it
+  serialises two threads of one process exactly as it serialises two
+  processes, and the in-process mutex the design names is not needed.
+  The store-wide vault cap uses an in-process mutex and a `store.lock`
+  file the same way. A vault directory is built under a temp name and
+  renamed into place, so it never exists without its epoch.
+- **A vault discard leaves temp files alone.** A temp file may be a live
+  write's staging file: that write meets the new epoch under the lock and
+  removes it; a dead writer's is cleaned by a read once an hour old.
+- **The identity check is a sibling export,** `save_text_checked`, rather
+  than a new parameter on `save_text`: every existing call on both hosts
+  keeps its signature, and `save_text` delegates with no identity. The
+  check runs inside `save_text_locked`'s transaction, beside the hash.
+- **A note's file identity** is the provider's new `file_identity`: on
+  Windows the same capture the conditional rename uses; on Unix the
+  entry's device, inode and birth time.
+- **A lost epoch is re-anchored by Close Vault's Discard All** above any
+  epoch it can have held (the highest a claim names, or the clock's
+  milliseconds, which exceed every counted epoch).
+- **The reason fragments are core constants**
+  (`a11y::HOT_EXIT_REASON_*`), carried by `HotExitError` and
+  `HotExitKeyResult` across the FFI, with `hot_exit_refusal_reason` and
+  `hot_exit_reason_timed_out` for the host's status line.
+- **The seven events are designated, not constructed,** in
+  `a11y_trigger_designations.json` for both hosts, and contract 38's
+  ledger lists them (`scripts/a11y_trigger_ledger.py --write`): no host
+  constructs them until WB-29 and plan 43 PR 29.
+- **The macOS key reads** (`fgetattrlist`, `getattrlist` at the mount
+  point, `fstatfs`) were written without a Mac to run them; the Mac lane's
+  build and the macOS-only facts are their first run. Both ask for
+  `ATTR_CMN_RETURNED_ATTRS` with `FSOPT_PACK_INVAL_ATTRS` and give no key
+  unless the volume returned the creation time, the file id and the UUID,
+  so a file system lacking one gives no key rather than a shifted one.
+- **Discard All fences a vault that has no directory yet:** it creates the
+  vault (under the store lock and the cap) and advances its epoch, so a
+  first claim issued at epoch 0 before the discard meets the new epoch.
+- **Windows syncs directories too:** `FlushFileBuffers` on the directory
+  opened for writing (`FILE_FLAG_BACKUP_SEMANTICS`), so a release's and a
+  discard's deletes are durable when the call returns, not only the
+  write-through rename. The rename takes the verbatim (`\\?\`) form, so a
+  store under a deep profile is not held to `MAX_PATH`.
+- **Nothing unread is deleted on a guess:** a claim that exists but does not
+  parse, or a missing claims directory, makes the read return `Damaged`
+  and leaves every entry in place; Discard All still clears such a vault
+  (an unreadable claim names no epoch when the epoch is re-anchored).
+- **Dead temp files are cleaned:** claim and epoch temps under the vault
+  lock (their publishers hold it, so any found is dead) and staging vault
+  directories under the store lock; entry temps keep the hour, being staged
+  outside the lock.
+- **A note's identity carries no device:** `unix:{inode}-{birth}` (macOS
+  renumbers `st_dev` on a remount; the key names the volume), and a Windows
+  note that is itself a reparse point has none (`None`, not an error).
+- **`save_text_checked` refuses an identity without a hash** rather than
+  skipping the check.
+- **A recovered name** avoids every kept entry's path, and its search is
+  bounded: it stops at an answer that is not "no such file" and falls back
+  to `Recovered note {entry id}.md`.
+- **The device root is the host's, and must exist:** `open` refuses a
+  device root that is relative or missing and creates nothing above
+  `hot-exit`, because existence cannot prove a directory durable (another
+  opener may have just made it, unsynced) and a parent above the host's
+  app-data folder may not even be writable. The host's existing app-data
+  folder (the one its settings already live in) is the durable anchor.
+- **Durable includes every directory name below that anchor:** opening the
+  store syncs `vaults`, `v1`, `hot-exit` and the device root on every open,
+  whoever created them, and
+  every claim syncs `vaults` before it publishes, so a vault directory a
+  concurrent creator renamed into place but had not yet synced (or failed
+  to sync) is made durable by the caller relying on it.
+- **A claim from a later epoch than the vault's is damage, not age:** the
+  read returns `Damaged` and deletes nothing, and Discard All moves past
+  the highest epoch any claim names as well as the counter.
+- **An entry's files are named by its id in hex,** not by the id: two
+  valid ids may differ only by case (`TabA`, `taba`), and NTFS and APFS
+  compare names without case, so the id as a name would let one tab's
+  write replace another's unread text. The entry's JSON keeps the id itself.
+- **No epoch follows `u64::MAX`:** an epoch or claim at the maximum makes
+  Discard All return `Damaged` before it changes anything, rather than
+  panicking across the FFI or wrapping below the claims it must pass.
+- **A release always syncs both directories** before it returns, so a retry
+  after a failed sync, finding the records already removed, still makes
+  that removal durable before it reports the release done.
+- **Recovered names compare without case** (NTFS and APFS defaults), and
+  the fallback is unique among kept and chosen names.
+- **Out of this PR:** on macOS and Linux the provider's `stat` and `read`
+  (and so `classify_hot_exit_entries` and `note_file_identity`) resolve by
+  pathname while writes use the held root, as before this PR; filed as
+  #1733.
+- **Two records fold into others:** `release_entry` returns `()`, since
+  `HotExitReleaseOutcome` had the one variant `Released`; and
+  `HotExitUnavailable` is `HotExitKeyResult::Unavailable { reason }`. Claim
+  files are not capped apart from entries: one exists per open tab, and a
+  read removes every claim of an older epoch.
+- **Accepted, not built:** two byte-cloned volumes (a `dd` copy, a cloned
+  VHD) share serial, id and creation time and so one key; and remote
+  detection on Windows is `FileRemoteProtocolInfo` alone, so a redirector
+  that refuses that call but reports a persistent `FileIdInfo` would get a
+  key. Neither can be shown failing on the development machine.
+
 ## The core store PR (after this design merges)
 
 New module `crates/slate-core/src/hot_exit.rs` (the store, its claims,

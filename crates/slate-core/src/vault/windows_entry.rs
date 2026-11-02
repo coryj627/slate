@@ -894,6 +894,17 @@ pub(super) fn open_unheld_root(root: &Path) -> Result<fs::File, VaultError> {
 }
 
 fn open(root: &fs::File, relative: &Path, access: u32) -> Result<PinnedEntry, VaultError> {
+    open_leaf(root, relative, access)?.ok_or_else(refused)
+}
+
+/// [`open`], with a leaf that is itself a reparse point answered as `None`
+/// rather than refused. The ancestors are walked exactly as `open` walks
+/// them.
+fn open_leaf(
+    root: &fs::File,
+    relative: &Path,
+    access: u32,
+) -> Result<Option<PinnedEntry>, VaultError> {
     let mut ancestors = vec![root.try_clone()?];
     let components = relative.components().collect::<Vec<_>>();
     if components.is_empty() {
@@ -915,12 +926,12 @@ fn open(root: &fs::File, relative: &Path, access: u32) -> Result<PinnedEntry, Va
         )?;
         if last {
             if child.metadata()?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-                return Err(refused());
+                return Ok(None);
             }
-            return Ok(PinnedEntry {
+            return Ok(Some(PinnedEntry {
                 file: child,
                 _ancestors: ancestors,
-            });
+            }));
         }
         directory(&child)?;
         ancestors.push(child);
@@ -951,6 +962,18 @@ fn identity(file: &fs::File) -> Result<String, VaultError> {
 
 pub(super) fn capture(root: &fs::File, relative: &Path) -> Result<String, VaultError> {
     identity(&open(root, relative, FILE_READ_ATTRIBUTES)?.file)
+}
+
+/// Plan 44 WB-29a §3: a note's identity for a hot-exit baseline, `None`
+/// for a note that is itself a reparse point (a cloud placeholder, a
+/// link), which has no identity to vouch for, rather than an error.
+pub(super) fn note_identity(
+    root: &fs::File,
+    relative: &Path,
+) -> Result<Option<String>, VaultError> {
+    open_leaf(root, relative, FILE_READ_ATTRIBUTES)?
+        .map(|entry| identity(&entry.file))
+        .transpose()
 }
 
 pub(super) fn rename(

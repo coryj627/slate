@@ -185,6 +185,41 @@
         "reason": "The Mac sentence promises Command-O and Open Vault focus. Windows uses native welcome controls and their focus/name semantics; do not post the platform-specific Mac sentence.",
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "recorded"
+      },
+      "UnsavedNotesRestored": {
+        "reason": "Plan 44 WB-29a (#1525): core's hot-exit copy ships with the core store; no Windows construction site until WB-29 adopts hot exit.",
+        "decision": "docs/plans/44_windows_backlog/specs/wb29a_hot_exit_shared_design_and_core_store.md",
+        "status": "recorded"
+      },
+      "RestoredNoteChangedOnDisk": {
+        "reason": "Plan 44 WB-29a (#1525): core's hot-exit copy ships with the core store; no Windows construction site until WB-29 adopts hot exit.",
+        "decision": "docs/plans/44_windows_backlog/specs/wb29a_hot_exit_shared_design_and_core_store.md",
+        "status": "recorded"
+      },
+      "RestoredNoteMissingOnDisk": {
+        "reason": "Plan 44 WB-29a (#1525): core's hot-exit copy ships with the core store; no Windows construction site until WB-29 adopts hot exit.",
+        "decision": "docs/plans/44_windows_backlog/specs/wb29a_hot_exit_shared_design_and_core_store.md",
+        "status": "recorded"
+      },
+      "RestoredNoteExistsOnDisk": {
+        "reason": "Plan 44 WB-29a (#1525): core's hot-exit copy ships with the core store; no Windows construction site until WB-29 adopts hot exit.",
+        "decision": "docs/plans/44_windows_backlog/specs/wb29a_hot_exit_shared_design_and_core_store.md",
+        "status": "recorded"
+      },
+      "RestoredNoteRecovered": {
+        "reason": "Plan 44 WB-29a (#1525): core's hot-exit copy ships with the core store; no Windows construction site until WB-29 adopts hot exit.",
+        "decision": "docs/plans/44_windows_backlog/specs/wb29a_hot_exit_shared_design_and_core_store.md",
+        "status": "recorded"
+      },
+      "UnsavedNotesNotKept": {
+        "reason": "Plan 44 WB-29a (#1525): core's hot-exit copy ships with the core store; no Windows construction site until WB-29 adopts hot exit.",
+        "decision": "docs/plans/44_windows_backlog/specs/wb29a_hot_exit_shared_design_and_core_store.md",
+        "status": "recorded"
+      },
+      "UnsavedNotesNotDiscarded": {
+        "reason": "Plan 44 WB-29a (#1525): core's hot-exit copy ships with the core store; no Windows construction site until WB-29 adopts hot exit.",
+        "decision": "docs/plans/44_windows_backlog/specs/wb29a_hot_exit_shared_design_and_core_store.md",
+        "status": "recorded"
       }
     },
     "Mac": {
@@ -277,6 +312,41 @@
         "reason": "W7-7 R-3 (#1250, codex PR 2 round 1): Windows keeps one always-visible sidebar status line, so a clear - Clear Sidebar Filter or the field emptied by the user - replaces the cleared filter's summary with this sentence and speaks it once. Mac's filter overlay, with its summary, disappears on Escape, which stays silent; no Mac construction site.",
         "decision": "docs/plans/15_files_sidebar/specs/fl4_spec.md",
         "status": "proposed"
+      },
+      "UnsavedNotesRestored": {
+        "reason": "Plan 44 WB-29a (#1525): core's hot-exit copy ships with the core store; no Mac construction site until plan 43 PR 29 adopts hot exit.",
+        "decision": "docs/plans/44_windows_backlog/specs/wb29a_hot_exit_shared_design_and_core_store.md",
+        "status": "recorded"
+      },
+      "RestoredNoteChangedOnDisk": {
+        "reason": "Plan 44 WB-29a (#1525): core's hot-exit copy ships with the core store; no Mac construction site until plan 43 PR 29 adopts hot exit.",
+        "decision": "docs/plans/44_windows_backlog/specs/wb29a_hot_exit_shared_design_and_core_store.md",
+        "status": "recorded"
+      },
+      "RestoredNoteMissingOnDisk": {
+        "reason": "Plan 44 WB-29a (#1525): core's hot-exit copy ships with the core store; no Mac construction site until plan 43 PR 29 adopts hot exit.",
+        "decision": "docs/plans/44_windows_backlog/specs/wb29a_hot_exit_shared_design_and_core_store.md",
+        "status": "recorded"
+      },
+      "RestoredNoteExistsOnDisk": {
+        "reason": "Plan 44 WB-29a (#1525): core's hot-exit copy ships with the core store; no Mac construction site until plan 43 PR 29 adopts hot exit.",
+        "decision": "docs/plans/44_windows_backlog/specs/wb29a_hot_exit_shared_design_and_core_store.md",
+        "status": "recorded"
+      },
+      "RestoredNoteRecovered": {
+        "reason": "Plan 44 WB-29a (#1525): core's hot-exit copy ships with the core store; no Mac construction site until plan 43 PR 29 adopts hot exit.",
+        "decision": "docs/plans/44_windows_backlog/specs/wb29a_hot_exit_shared_design_and_core_store.md",
+        "status": "recorded"
+      },
+      "UnsavedNotesNotKept": {
+        "reason": "Plan 44 WB-29a (#1525): core's hot-exit copy ships with the core store; no Mac construction site until plan 43 PR 29 adopts hot exit.",
+        "decision": "docs/plans/44_windows_backlog/specs/wb29a_hot_exit_shared_design_and_core_store.md",
+        "status": "recorded"
+      },
+      "UnsavedNotesNotDiscarded": {
+        "reason": "Plan 44 WB-29a (#1525): core's hot-exit copy ships with the core store; no Mac construction site until plan 43 PR 29 adopts hot exit.",
+        "decision": "docs/plans/44_windows_backlog/specs/wb29a_hot_exit_shared_design_and_core_store.md",
+        "status": "recorded"
       }
     }
   },

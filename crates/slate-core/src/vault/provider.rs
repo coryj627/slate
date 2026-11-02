@@ -231,6 +231,14 @@ pub trait VaultProvider: Send + Sync {
     /// Cheap metadata: size, mtime, kind.
     fn stat(&self, relative: &str) -> Result<FileStat, VaultError>;
 
+    /// Plan 44 WB-29a §3: the file system's identity for the file at
+    /// `relative`, opaque, or `None` where the provider gives none or
+    /// nothing is there. Hot exit keeps it beside a buffer's baseline so
+    /// a different file later put at the path is told apart.
+    fn file_identity(&self, _relative: &str) -> Result<Option<String>, VaultError> {
+        Ok(None)
+    }
+
     /// Best-effort change subscription (plan 43 PR 20a, #1267). Returns
     /// `Ok(None)` if the platform or the provider has no filesystem events
     /// for this vault, and an error when the platform refuses the watch;

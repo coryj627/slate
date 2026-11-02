@@ -66,6 +66,7 @@ pub mod graph_metrics;
 pub mod graph_queries;
 pub mod graph_summary;
 pub mod history_prefs;
+pub mod hot_exit;
 mod line_index;
 pub mod link_resolver;
 pub mod link_rewrite;

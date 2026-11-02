@@ -2338,6 +2338,57 @@ impl VaultProvider for FsVaultProvider {
         Ok(Some(spelling))
     }
 
+    fn file_identity(&self, relative: &str) -> Result<Option<String>, VaultError> {
+        let missing = |error: &VaultError| matches!(error, VaultError::Io(io_err) if io_err.kind() == io::ErrorKind::NotFound);
+        // Windows: the same handle-read identity the conditional rename
+        // captures (FileIdInfo and the volume serial); none for a note that
+        // is itself a reparse point.
+        #[cfg(windows)]
+        {
+            let identity = self.resolve_for_mutation(relative).and_then(|path| {
+                let relative =
+                    path.strip_prefix(&self.root)
+                        .map_err(|_| VaultError::InvalidArgument {
+                            message: "Mutation path is outside the vault".into(),
+                        })?;
+                super::windows_entry::note_identity(&self.identity_root()?, relative)
+            });
+            match identity {
+                Err(error) if missing(&error) => Ok(None),
+                other => other,
+            }
+        }
+        // Unix: the inode and the birth time of the entry itself (a link is
+        // its own entry, never its target). Not the device: macOS gives a
+        // volume a new `st_dev` when it remounts, and the vault's key
+        // already names the volume (§1).
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            let path = self.resolve(relative)?;
+            match fs::symlink_metadata(&path) {
+                Ok(meta) => Ok(Some(format!(
+                    "unix:{:x}-{}",
+                    meta.ino(),
+                    birthtime_ms_of(&meta)
+                ))),
+                Err(error) => {
+                    let error = VaultError::Io(error);
+                    if missing(&error) {
+                        Ok(None)
+                    } else {
+                        Err(error)
+                    }
+                }
+            }
+        }
+        #[cfg(not(any(windows, unix)))]
+        {
+            let _ = (relative, missing);
+            Ok(None)
+        }
+    }
+
     fn stat(&self, relative: &str) -> Result<FileStat, VaultError> {
         let path = self.resolve(relative)?;
         // `metadata()` follows symlinks; the indexer wants the target's
