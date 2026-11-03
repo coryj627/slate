@@ -56,7 +56,7 @@ gh issue view 1756 --repo coryj627/slate --comments
 
 ## Acceptance
 
-- [ ] Every row of plan 46 §2.3 has one answer in the design's documents. The rows waiting on DSD3, DSD9, DSD10 and DSD14 are noted as such.
+- [ ] Every row of plan 46 §2.3 has one answer in the design's documents. The rows waiting on DSD3, DSD9, DSD10, DSD14 and DSD15 are noted as such.
 - [ ] One issue per chunk, each naming its spec.
 - [ ] #1756, #751 and #752 carry their comments.
 - [ ] `git diff --stat` touches only `design/windows/**/*.md`.

@@ -9,7 +9,7 @@ Windows Settings › Accessibility › Text size changes every piece of Slate's 
 ## Current state on main
 
 - **The one reader:** `Canvas/CanvasTextScaleService.cs`. It reads `HKCU\Software\Microsoft\Accessibility\TextScaleFactor` (`:23-24`, `:95-114`), clamps to 1 to 2.25 (`:103-105`), subscribes to `SystemEvents.UserPreferenceChanged` (`:32`) and marshals to its dispatcher (`:71-76`). Its facts call `RefreshForTests` (`:53`), so nothing has shown a real change arrive.
-- **Consumers:** one instance per view: `Canvas/CanvasRendererView.cs:37-38`, and lazily `Graph/GraphDiagramView.cs:230-236`, used for drawn labels.
+- **Consumers:** one instance per view: `Canvas/CanvasRendererView.cs:37-38`, and lazily `Graph/GraphDiagramView.cs:230-236`, used for drawn labels. Each view disposes its own at `Shutdown` (`Canvas/CanvasRendererView.cs:590`, `Graph/GraphDiagramView.cs:226-227`). The canvas subscribes with a lambda it can't detach (`Canvas/CanvasRendererView.cs:38`), and the graph with `Redraw` (`Graph/GraphDiagramView.cs:237`). The views come from XAML templates with no injection point (`MainWindow.xaml.cs:149-151`).
 - **The rest of the shell** doesn't scale explicit sizes. Spike 5 (`wpf-feasibility.md:170`) found that text with no size of its own grows through `SystemFonts.MessageFontSize` (27 at 225%). DS-2 gives that text an explicit size from the factor read once at startup, so after DS-2 the ramp follows the setting only across a restart.
 - **`ThemeManager` can't be built in a hosted test:** `_application` (`ThemeManager.cs:31`), against `ShownShell.cs:31`.
 - **Hosted tests and the setting.** At 225% on the desktop, about 29 shell tests fail because unset sizes become 27. `ThemeManager.DictionariesFor` is what hosted tests merge.
@@ -23,7 +23,9 @@ Windows Settings › Accessibility › Text size changes every piece of Slate's 
 
 ## Design
 
-1. **One service.** `CanvasTextScaleService` moves to `TextScaleService.cs`, unchanged in substance: `Factor`, `Revision`, `Changed`, `Dispose`, the clamp, the marshal. `App.OnStartup` creates it before `ThemeManager`, and it's handed to the canvas and graph views, so they stop creating their own. Rename the facts with it. Source per DSD3: the registry, behind a `Func<double>` seam.
+1. **One service, owned by the app.** `CanvasTextScaleService` moves to `TextScaleService.cs`, unchanged in substance: `Factor`, `Revision`, `Changed`, `Dispose`, the clamp, the marshal. `App.OnStartup` creates it before `ThemeManager`, installs it as `TextScaleService.Current`, and alone disposes it, at exit. The canvas and graph views read that static, as they read `CanvasSurfaceView.ShellOverlayIsOpen`. With none installed, a hosted fact's normal state, a view draws at factor 1 and subscribes to nothing. A fact that needs a live service installs its own and restores the slot in `finally`. Rename the facts with it. Source per DSD3: the registry, behind a `Func<double>` seam.
+
+   **Views attach and detach, and never dispose.** If a view kept its `Dispose`, closing one board would stop scaling for the whole app. If both simply dropped it, the shared `Changed` would hold every closed view. So each view's handler becomes a named method, `Shutdown` detaches it, and a view coming back attaches again. A change made while it was detached raised nothing for it, so it catches up from the current `Revision`: the canvas through `CommitTextScaleRevision`, the graph with a redraw.
 2. **A test seam for launched runs.** `SLATE_TEXT_SCALE_FOR_TESTS`, honoured only when `SLATE_CENSUS_INSTANCE_ID` is set, as the capture and census modes already key off. `ShellLaunch.ApplyDeviceState` defaults it to `1`, so the shell gate no longer depends on the machine's setting. One gate fact sets `2.25`.
 3. **The ramp follows.** `TypeRamp.Apply(ResourceDictionary, double factor)` is the pure part: it writes new values into a ramp dictionary. `ThemeManager` holds the dictionary and calls it on `Changed`, replacing DS-2's startup read. Every `DynamicResource` updates in place, with no re-merge and no `ResourcesChanged`, so theme listeners don't rebuild. `DictionariesFor` gets `double textScale = 1`, and only `ApplyResources` passes the live factor, so hosted tests are independent of the desktop's setting. That also ends the 29 failures at 225%.
 4. **Straight multiplication,** as `xaml/README.md:164` says and spike 5 ran, for chrome, reading keys and menus. `wpf-feasibility.md:62` mentions Microsoft's guidance to scale small text more than large; a curve would need its own design, and isn't taken here.
@@ -45,6 +47,10 @@ Failing first:
 - `IconGlyphsKeepTheirSize` (census).
 - `NoShellTextIsClippedAtTheLargestSize`: hosted at 2.25: welcome view, a vault with a note open, the Files tree, the rail. No `TextBlock` without trimming has a non-null `LayoutInformation.GetLayoutClip`. Trimmed text is allowed where it already trims.
 - `TextScaleServiceTests`: the seam's read drives `Factor`, `Revision` and `Changed`, as the canvas facts do today.
+- `ClosingOneViewLeavesScalingRunningForTheOthers`: a canvas and a diagram on one installed service. Shut one down, change the factor, and the other redraws while the service stays live, in both orders.
+- `AClosedViewIsReleased`: a `WeakReference` to a shut-down canvas renderer and to a shut-down diagram goes dead after a collection, with the service still alive.
+- `AViewComingBackUsesTheCurrentFactor`: change the factor while a view is detached, attach it, and it draws at the new factor.
+- `AHostedViewWithNoServiceDrawsAtOne`.
 - `AHostedTestIgnoresTheDesktopsSetting`: `DictionariesFor` with no factor gives base sizes, whatever the registry says.
 - Gate: `ThemedShell_AtTheLargestTextTheShellGrows`: launched at the seam's 2.25, status bar and tab strip exceed their 100% heights, and `FluentShell_UiaPatternsKeyboardFocusAndAxe_AreClean` still passes.
 
@@ -64,7 +70,8 @@ AT: NVDA at the seam's 2.25, a menu and a sheet. Sizes aren't spoken, so the exp
 
 ## Acceptance
 
-- [ ] One service, created once. `CanvasTextScaleService` is gone.
+- [ ] One service, created once and disposed only by `App`. `CanvasTextScaleService` is gone.
+- [ ] Closing a board or a graph leaves scaling running, and holds no reference to the closed view.
 - [ ] The facts pass, and the gate fact passes at 2.25.
 - [ ] A discovery pass at 2.25 finds nothing clipped.
 - [ ] The owner's check is recorded in the PR, or the PR stays open for it.
@@ -72,4 +79,4 @@ AT: NVDA at the seam's 2.25, a menu and a sheet. Sizes aren't spoken, so the exp
 
 ## Brief
 
-Read `Canvas/CanvasTextScaleService.cs`, `Canvas/CanvasRendererView.cs:30-40`, `Graph/GraphDiagramView.cs:225-240`, `ThemeManager.cs:204-259`, `TypeRamp.cs` from DS-2, `EditorInteractions.cs:296-320`, `design/windows/xaml/README.md:162-166`. Move the service, add `TypeRamp.Apply` and wire it, add the editor's effective size and the launched seam. Facts first. Work through the fixed widths at 2.25 in the launched app. Hand the owner the two-minute check before asking to merge. Commit: `feat(windows): windows text size scales the whole shell, live, up to 225 percent`.
+Read `Canvas/CanvasTextScaleService.cs`, `Canvas/CanvasRendererView.cs:30-40`, `Canvas/CanvasRendererView.cs:581-591`, `Graph/GraphDiagramView.cs:221-241`, `ThemeManager.cs:204-259`, `TypeRamp.cs` from DS-2, `EditorInteractions.cs:296-320`, `design/windows/xaml/README.md:162-166`. Move the service, add `TypeRamp.Apply` and wire it, add the editor's effective size and the launched seam. Facts first. Work through the fixed widths at 2.25 in the launched app. Hand the owner the two-minute check before asking to merge. Commit: `feat(windows): windows text size scales the whole shell, live, up to 225 percent`.

@@ -33,7 +33,7 @@ real cost, §3 asks.
 | Title bar | One 48 row: title, palette, settings, caption buttons, Snap Layouts | The Windows title bar plus a separate menu bar, about 74 together | DS-12 |
 | App menu | The menus cascade from the logo; Alt+letter opens them | A menu bar | DS-13 |
 | Narrow windows | 500 wide or less, panes collapse | `MinWidth` 760 | DS-14 |
-| Note header | Back, forward, breadcrumb, Source/Reading, ⋯ | None | DS-15 |
+| Note header | Back, forward, breadcrumb, Source/Reading, ⋯ | None | DS-15, without Back and Forward (DSD15) |
 | Pane switcher | Icon strip with a gold pill | A 17-row text list | DS-16 |
 | Files toolbar | PanelToolbar with Sort and group, New note, collapse/expand | A stack of fields, toggles and expanders | DS-17 |
 | Leaf toolbars, count rows | PanelToolbar on each leaf, CountListRow | A heading and plain rows | DS-18 |
@@ -73,9 +73,11 @@ real cost, §3 asks.
 - **Sort, expand-all and search on right-pane leaves.** `PanelToolbar.prompt.md`
   describes them, but no leaf has those verbs (searched). DS-18's toolbars show a
   title and a count until a feature adds them.
-- **Backlink rows that expand into tree nodes** (`wpf-feasibility.md:148`,
-  `ui_kits/slate-windows/Panes.jsx:39`). It changes the leaf's role from a list to a
-  tree, so it needs its own design and pass.
+- **Backlink rows that count mentions per note or expand into tree nodes**
+  (`wpf-feasibility.md:148`, `ui_kits/slate-windows/Panes.jsx:39`). Today's rows are
+  occurrences with a snippet, and a page holds at most 200, so a per-note count needs
+  a grouped query in core, the FFI and both hosts. Expanding also changes the leaf's
+  role from a list to a tree, so it needs its own design and pass.
 - **The Files pane's Shortcuts and Recents sections.** The kit's arrangement
   (`ui_kits/slate-windows/Sidebar.jsx:1`) differs from today's expanders, which hold
   real actions. DS-17 keeps those.
@@ -131,6 +133,7 @@ DS-0 settles these in the documents, so no later chunk has to.
 | A tab's corner radius | `readme.md:101`, `winui-review.md:31`: 6 | `TabView.prompt.md`: 8 | 8, the component's own spec |
 | How far the focus ring sits out | `wpf-feasibility.md:89`: Fluent draws 3 out, the design says 1, so set `Margin="-1"` | `tokens/base.css:7`: a 2px outline offset 1. A `Rectangle` strokes inside its bounds, so Fluent's `-3` already has its inner edge 1 out | Fluent is right, and DS-0 corrects `wpf-feasibility.md:89`. `-1` would straddle the control's border |
 | Text size source | `xaml/README.md:164`: `UISettings` | `CanvasTextScaleService.cs:23-24`: the registry | DSD3 |
+| A note's Back and Forward | `NoteHeader.prompt.md:27`: `BrowseBack`, so a note history | `Commands/ChordTable.cs:1509`: the only history is the sidebar's | DSD15 |
 | An accent's contrast bar | `xaml/README.md:35-42`: WCAG, 4.5:1 for text | `ThemeTokenContrastTests.cs:18`: \|Lc\| > 75 for every text pair | The floor, and both for text (DSD14). DS-0 notes it, and DS-11 rewrites the README when it ships |
 | Window title | Static "Slate" (`MainWindow.xaml:11`) | `ui_kits/slate-windows/index.html:61`: note, vault, Slate | DSD9 |
 
@@ -144,7 +147,7 @@ DS-0 settles these in the documents, so no later chunk has to.
 - **The design cycle** (`claude/design-pass`) has its own discovery passes. A
   defect they find is fixed there, not here.
 
-## 3. Decisions for the owner (DSD1 to DSD14)
+## 3. Decisions for the owner (DSD1 to DSD15)
 
 Each has a recommendation, and a chunk can start on it. Only a change of mind
 costs anything.
@@ -161,10 +164,11 @@ costs anything.
 | DSD8 | DS-16 | The design hides panels past `maxVisible` behind a More menu. Keep all 17 in one list that scrolls? | One list. A screen reader user hears "1 of 17" and can reach every panel by arrows today, and that shouldn't get worse. `ListBox`, keeping `RightPaneLeaves` and the rail's settled selection. The icons in `Kit.jsx:54-56` also need your review, as `assessment.md:113` says |
 | DSD9 | DS-12, DS-17 | The kit's title is "note — vault — Slate", and it has no band for the vault's name and path | Take both. The title comes from core (it's read aloud), and DS-17 moves the vault's name, still heading level 1, into the Files toolbar, with the path in its tooltip |
 | DSD10 | DS-4 | A menu row's keyboard ring: the full row, as `readme.md:176` and `review-2026-11.md:54` record, or the inset highlight, as WinUI does? | The full row, as recorded. It's the larger target, and it's the same 2px ring rows have everywhere else. The inset ring looks closer to WinUI, and that's the only thing it has going for it |
-| DSD11 | DS-15 | The note header adds up to five Tab stops before a note's Properties and text. Keep them all? | Keep the path and the mode switch as stops, and take Back and Forward out of Tab order, since they have chords. F6 and Ctrl+Tab already skip the bar. The AT pass can change this |
+| DSD11 | DS-15 | The note header adds Tab stops before a note's Properties and text: one per folder, the mode switch and ⋯. Keep them all? | Keep them. A folder segment has no other route, and F6 and Ctrl+Tab already skip the bar. The AT pass can change this |
 | DSD12 | DS-17 | Sort moves from a combo box to a menu. A combo says its value on focus ("File sort order, Name A to Z"); a menu button says only its name until it's opened | Take the menu and name the button with its value through core ("Sort and group, Name A to Z"), so a reader doesn't lose the value. If that reads badly in the pass, the combo stays beside the toolbar |
 | DSD13 | DS-12 | With the native caption gone, UIA may still expose native minimize, maximize and close alongside Slate's. Two Close buttons is a defect, and WPF can't hide a peer from the raw view | Measure first. If they double, keep Slate's visible ones as `AutomationPresentation`-style peers out of the control view and leave the native ones to carry the pattern. If native ones are gone, keep Slate's. The PR shows the tree |
 | DSD14 | DS-11 | The README gates an accent by WCAG and takes its dark fills from Fluent. The project's floor for text is \|Lc\| > 75, and black on Fluent's dark fill measures Lc 65.4 on the default blue. Holding an accent to the floor means a paler dark fill than Fluent's, and more hues falling back to gold without a word | Hold it to the floor, with DS-11's table. It's the bar gold clears, and readable text is this app's first promise. The other way is WCAG alone for text on a fill, which looks closer to Windows at Lc 65 on a primary button. Selected rows need their own brush either way. How many of Windows' presets pass is unknown, because reading another palette means changing a system setting, so your look at a few accents settles whether the bar costs too much |
+| DSD15 | DS-15 | The design's Back and Forward assume a note history. The only history here is "Back in Sidebar History", on both platforms, which Quick Open and links don't feed. Bound to it, Back sits disabled after Quick Open or walks sidebar selections | Leave both buttons out of DS-15, by the same rule as DS-18's toolbars: a button that misleads is worse than none. The other ways are drawing the sidebar's, named as such, or building a per-tab note history. That one is new behaviour the Mac doesn't have, with its own chords, and DS-15 lists what it takes. It's a chunk of its own if you want it |
 
 ## 4. Rules (every chunk)
 
@@ -233,10 +237,10 @@ work the chunk carries.
 | DS-12 | `WindowChrome`: one row with title, palette, settings and caption buttons; Snap Layouts | — | L | windows, rust, swift | NVDA and Narrator pass | DSD9, DSD13 |
 | DS-13 | The menus cascade from the logo; Alt+letter; F10 | — | L | windows | Full NVDA and Narrator menu pass | DSD7 |
 | DS-14 | `MinWidth` 500; panes collapse by width without losing the reader's place | — | M | windows | NVDA spot | — |
-| DS-15 | NoteHeader above a note | — | L | windows | NVDA and Narrator pass | DSD11 |
+| DS-15 | NoteHeader above a note, each control acting on its own note | — | L | windows | NVDA and Narrator pass | DSD11, DSD15 |
 | DS-16 | The right-pane rail as an icon strip; panes at the design's default widths | — | M | windows | NVDA and Narrator spot | DSD8 |
 | DS-17 | The Files pane under a PanelToolbar | — | L | windows, rust, swift | NVDA and Narrator pass | DSD9, DSD12 |
-| DS-18 | PanelToolbar on each right-pane leaf; CountListRow for tags and backlinks | — | L | windows | NVDA spot | — |
+| DS-18 | PanelToolbar on each right-pane leaf; CountListRow for tags | — | L | windows | NVDA spot | — |
 | DS-19 | EmptyStateLauncher in an empty pane | — | S | windows | NVDA spot | — |
 
 ### Closure matrix
@@ -302,7 +306,7 @@ needs rebuilding.
 | The live Text size check: run the app, set Settings › Accessibility › Text size to 150%, Apply, then back to 100% | When DS-5's PR is up | It changes a system setting, which an agent doesn't do. Two minutes. Expected: the shell's text changes within about a second, with no restart |
 | Review of the right-pane icons (`Kit.jsx:54-56`) | Before DS-16 | `assessment.md:113`: "my picks and need your review" |
 | A look at a few Windows accents under `Windows accent` | When DS-11's PR is up | It changes a system setting, which an agent doesn't do. It shows how many hues DSD14's bar sends back to gold |
-| Adopting this plan, and DSD1 to DSD14 | Before DS-1 | — |
+| Adopting this plan, and DSD1 to DSD15 | Before DS-1 | — |
 
 ## 9. How an implementing agent works a chunk
 
@@ -335,7 +339,7 @@ document.
 | DS-15 | `specs/ds15_note_header.md` | A note has a header with its place and its mode |
 | DS-16 | `specs/ds16_pane_switcher.md` | The right-pane rail is an icon strip that reads as it does today |
 | DS-17 | `specs/ds17_files_toolbar.md` | The Files pane sits under one toolbar |
-| DS-18 | `specs/ds18_leaf_toolbars_and_count_rows.md` | Each leaf has the toolbar, and tags and backlinks use count rows |
+| DS-18 | `specs/ds18_leaf_toolbars_and_count_rows.md` | Each leaf has the toolbar, and tags use count rows |
 | DS-19 | `specs/ds19_empty_state_launcher.md` | An empty pane offers its next actions |
 
 ## 10. Risks
