@@ -812,6 +812,7 @@
                  menu bar. Focusable and IsTabStop follow HasItems, so focus
                  requests fail closed and the window's fallback seats the
                  Files tree instead. -->
+            <Grid>
             <TabControl ItemsSource="{Binding Tabs}"
                         Background="{DynamicResource Slate.SurfaceBrush}"
                         BorderBrush="{DynamicResource Slate.BorderBrush}"
@@ -897,6 +898,28 @@
                     </Style>
                 </TabControl.ItemContainerStyle>
             </TabControl>
+            <!-- #1774: with no tabs the pane was blank. A screen reader hears the empty
+                 pane's line when it lands here, so this stays out of the tree. -->
+            <local:AutomationPresentationTextBlock Text="Open a note from the Files list, or press Ctrl+O to find one."
+                                                   Margin="24"
+                                                   HorizontalAlignment="Center"
+                                                   VerticalAlignment="Center"
+                                                   TextAlignment="Center"
+                                                   TextWrapping="Wrap"
+                                                   IsHitTestVisible="False"
+                                                   Foreground="{DynamicResource Slate.SecondaryTextBrush}">
+                <local:AutomationPresentationTextBlock.Style>
+                    <Style TargetType="local:AutomationPresentationTextBlock">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding Tabs.Count}" Value="0">
+                                <Setter Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </local:AutomationPresentationTextBlock.Style>
+            </local:AutomationPresentationTextBlock>
+            </Grid>
         </local:AutomationLandmarkBorder>
     </DataTemplate>
 
