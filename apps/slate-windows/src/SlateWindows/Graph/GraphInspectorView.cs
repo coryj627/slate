@@ -555,7 +555,7 @@ internal sealed class GraphInspectorView : UserControl
     {
         var style = new Style(typeof(ComboBoxItem));
         style.Setters.Add(new Setter(AutomationProperties.NameProperty, SiblingNames.ContainerNameBinding()));
-        return style;
+        return ClassicRows.Apply(style);
     }
 
     private void SyncRow(Panel panel, GraphInspectorGroupRow row)

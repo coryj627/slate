@@ -325,7 +325,7 @@
     "xaml-trigger MainWindow.xaml SyncDiagnosticsLeafBody Visibility": "RightPaneHideLandingTests.ALeafSwitchedUnderTheKeysLandsThemInTheShownLeaf",
     "xaml-trigger MainWindow.xaml TasksLeafBody Visibility": "RightPaneHideLandingTests.ALeafSwitchedUnderTheKeysLandsThemInTheShownLeaf",
     "xaml-trigger MainWindow.xaml TasksReviewLeafBody Visibility": "RightPaneHideLandingTests.ALeafSwitchedUnderTheKeysLandsThemInTheShownLeaf",
-    "xaml-trigger MainWindow.xaml TextBox in BuilderConditions#0 IsEnabled": "guard: BuilderConditions",
+    "xaml-binding MainWindow.xaml TextBox in BuilderConditions#0 IsEnabled": "guard: BuilderConditions",
     "xaml-trigger MainWindow.xaml WelcomeRoot IsEnabled": "exempt: disabled only while a modal overlay opens over the welcome view and takes the keys itself",
     "xaml-trigger MainWindow.xaml WorkspaceRoot IsEnabled": "exempt: disabled only while a modal overlay (Quick Open, Search, the palette) opens and takes the keys itself",
     "xaml-trigger WorkspaceTemplates.xaml Button in PropertyRowTemplate#0 IsEnabled": "guard: ContentPaneBorder",

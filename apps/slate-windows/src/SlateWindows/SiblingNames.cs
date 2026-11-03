@@ -137,7 +137,7 @@ internal static class SiblingNames
     {
         var style = new Style(containerType);
         style.Setters.Add(new Setter(AutomationProperties.NameProperty, ContainerNameBinding()));
-        return style;
+        return ClassicRows.Apply(style);
     }
 
     /// <summary>A container's Name through the rule — for a code-built

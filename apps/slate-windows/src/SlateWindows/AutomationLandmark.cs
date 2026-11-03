@@ -21,7 +21,7 @@ internal static class ItemContainerNames
     {
         var style = new Style(containerType);
         style.Setters.Add(new Setter(AutomationProperties.NameProperty, new Binding()));
-        return style;
+        return ClassicRows.Apply(style);
     }
 }
 

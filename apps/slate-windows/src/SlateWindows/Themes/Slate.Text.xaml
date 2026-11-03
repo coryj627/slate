@@ -85,4 +85,73 @@
             </Setter.Value>
         </Setter>
     </Style>
+    <!-- #1762, #1781: list rows and dropdown rows, here so a style built in code can
+         reach them. Selection is a shape too, not colour alone. -->
+    <ControlTemplate x:Key="Slate.PanelRowTemplate" TargetType="ListBoxItem">
+        <Border Padding="{TemplateBinding Padding}"
+                CornerRadius="4"
+                Background="{TemplateBinding Background}">
+            <Grid>
+                <!-- The pill: selection is a shape too, not colour alone. -->
+                <Rectangle Width="3"
+                           Height="16"
+                           Margin="-7,0,0,0"
+                           RadiusX="1.5"
+                           RadiusY="1.5"
+                           HorizontalAlignment="Left"
+                           VerticalAlignment="Center"
+                           Fill="{TemplateBinding BorderBrush}" />
+                <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                  VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+            </Grid>
+        </Border>
+        <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Background" Value="{DynamicResource Slate.RaisedSurfaceBrush}" />
+            </Trigger>
+            <Trigger Property="IsSelected" Value="True">
+                <Setter Property="Background" Value="{DynamicResource Slate.SelectedSurfaceBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource Slate.SelectionTextBrush}" />
+                <Setter Property="BorderBrush" Value="{DynamicResource Slate.AccentIndicatorBrush}" />
+            </Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.GrayTextBrushKey}}" />
+            </Trigger>
+        </ControlTemplate.Triggers>
+    </ControlTemplate>
+    <ControlTemplate x:Key="Slate.ComboRowTemplate" TargetType="ComboBoxItem">
+        <Border Margin="4,1"
+                Padding="{TemplateBinding Padding}"
+                CornerRadius="4"
+                Background="{TemplateBinding Background}">
+            <Grid>
+                <Rectangle Width="3"
+                           Height="16"
+                           Margin="-7,0,0,0"
+                           RadiusX="1.5"
+                           RadiusY="1.5"
+                           HorizontalAlignment="Left"
+                           VerticalAlignment="Center"
+                           Fill="{TemplateBinding BorderBrush}" />
+                <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                  VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+            </Grid>
+        </Border>
+        <ControlTemplate.Triggers>
+            <!-- The popup is already the raised surface, so a row the pointer or the
+                 keys are on takes the selected surface; the pill marks the chosen one. -->
+            <Trigger Property="IsHighlighted" Value="True">
+                <Setter Property="Background" Value="{DynamicResource Slate.SelectedSurfaceBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource Slate.SelectionTextBrush}" />
+            </Trigger>
+            <Trigger Property="IsSelected" Value="True">
+                <Setter Property="Background" Value="{DynamicResource Slate.SelectedSurfaceBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource Slate.SelectionTextBrush}" />
+                <Setter Property="BorderBrush" Value="{DynamicResource Slate.AccentIndicatorBrush}" />
+            </Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.GrayTextBrushKey}}" />
+            </Trigger>
+        </ControlTemplate.Triggers>
+    </ControlTemplate>
 </ResourceDictionary>

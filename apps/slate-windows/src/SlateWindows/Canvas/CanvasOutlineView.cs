@@ -271,15 +271,11 @@ internal sealed class CanvasOutlineItem : LandingTreeViewItem
 
     /// <summary>#1772: the outline's style is built in code and can't be based on
     /// the shell's row, so the row takes the shell's template directly, once it's
-    /// where the shell's resources can be found. A resource reference won't do: a
-    /// key it can't find leaves a row with no template at all.</summary>
+    /// where the shell's resources can be found.</summary>
     protected override void OnVisualParentChanged(DependencyObject oldParent)
     {
         base.OnVisualParentChanged(oldParent);
-        if (TryFindResource("Slate.TreeRowTemplate") is ControlTemplate template)
-        {
-            Template = template;
-        }
+        ClassicRows.TakeTreeRow(this);
     }
 
     protected override DependencyObject GetContainerForItemOverride() =>

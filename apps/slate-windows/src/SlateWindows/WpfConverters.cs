@@ -56,6 +56,15 @@ internal sealed class NullToVisibilityConverter : IValueConverter
 /// <c>IsOpen</c> flags, but the seven sheets are object properties, and
 /// a trigger can only equality-match a value.
 /// </summary>
+internal sealed class InverseBooleanConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture) =>
+        value is not true;
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
+        value is not true;
+}
+
 internal sealed class IsNotNullConverter : IValueConverter
 {
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture) =>
