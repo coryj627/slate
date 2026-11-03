@@ -73,4 +73,15 @@
             </Trigger>
         </Style.Triggers>
     </Style>
+    <!-- A row header's peer takes its name from the header's content, not from what
+         the template draws. With no gripper parts, a row can't be resized by pointer. -->
+    <Style x:Key="Slate.GridRowHeaderStyle" TargetType="DataGridRowHeader">
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="DataGridRowHeader">
+                    <Border Background="Transparent" />
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
 </ResourceDictionary>

@@ -152,6 +152,33 @@ public sealed partial class ShellAccessibilityTests
             Assert.False(rail.Patterns.Scroll.Pattern.HorizontallyScrollable.Value, "the rail scrolls sideways.");
 
             AssertAxeClean(process, "rail-fit");
+    /// <summary>#1769: an open overlay disables the shell behind it, and Fluent's
+    /// grid animates its Disabled state to a fixed white under the theme's pale
+    /// text. A hosted window doesn't show it, so this reads the launched app.</summary>
+    [Fact]
+    public void ThemedShell_ADisabledGridStaysOnItsSurface() =>
+        RunFindInNoteJourney("disabled-grid", (process, window, automation, editor) =>
+        {
+            Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_P);
+            AutomationElement search = WaitForElement(window, "CommandPaletteSearch", TimeSpan.FromSeconds(10));
+            search.Patterns.Value.Pattern.SetValue("Open Graph");
+            Thread.Sleep(500);
+            PressKey(VirtualKeyShort.ENTER);
+            AutomationElement grid = WaitForElement(window, "GraphTableGrid", TimeSpan.FromSeconds(20));
+            Thread.Sleep(500);
+            Color enabled = MostCommonColor(grid);
+
+            Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_F);
+            WaitForElement(window, "SearchOverlay", TimeSpan.FromSeconds(10));
+            Thread.Sleep(500);
+            Assert.False(grid.IsEnabled, "premise: the overlay didn't disable the grid.");
+
+            Color disabled = MostCommonColor(grid);
+            Assert.True(
+                enabled == disabled,
+                $"the grid's surface was {enabled} and is {disabled} while disabled. Most common colours {MostCommonColors(grid)}.");
+
+            AssertAxeClean(process, "disabled-grid");
         });
 
     private static void AssertReadable(AutomationElement surface, string name)
