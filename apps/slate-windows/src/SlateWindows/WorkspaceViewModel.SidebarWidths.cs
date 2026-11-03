@@ -54,8 +54,35 @@ internal sealed partial class WorkspaceViewModel
     public double RightPaneWidth
     {
         get => _rightPaneWidth;
-        set => HoldWidth(ref _rightPaneWidth, value, ShellSidebar.RightPane);
+        set
+        {
+            HoldWidth(ref _rightPaneWidth, value, ShellSidebar.RightPane);
+            OnPropertyChanged(nameof(RightPaneColumnWidth));
+        }
     }
+
+    /// <summary>#1790: the right pane's column, bound both ways: the pane's width while
+    /// it shows, and nothing while it's hidden, so the editor can take the room. A
+    /// splitter drag writes the width through here; a hidden pane's width is kept for
+    /// when it comes back.</summary>
+    public double RightPaneColumnWidth
+    {
+        get => IsRightPaneVisible ? _rightPaneWidth : 0;
+        set
+        {
+            if (IsRightPaneVisible)
+            {
+                RightPaneWidth = value;
+            }
+        }
+    }
+
+    /// <summary>The column's floor. A fixed floor would hold a hidden pane's column
+    /// open.</summary>
+    public double RightPaneColumnMinimumWidth => IsRightPaneVisible ? MinimumSidebarWidth : 0;
+
+    /// <summary>The splitter's column, which goes with the pane.</summary>
+    public double RightPaneSplitterWidth => IsRightPaneVisible ? SplitterWidth : 0;
 
     /// <summary>The width of the row the two sidebars and the editor share,
     /// as the window lays it out; zero until it has been laid out, when
@@ -69,9 +96,29 @@ internal sealed partial class WorkspaceViewModel
         set
         {
             _workspaceRowWidth = value;
-            FilesSidebarWidth = _filesSidebarWidth;
+            HoldBothWidths();
+        }
+    }
+
+    /// <summary>Files first, so a sidebar that spread into a hidden pane's room gives
+    /// it back. A hidden pane's own width waits: it takes no room to hold it to.</summary>
+    private void HoldBothWidths()
+    {
+        FilesSidebarWidth = _filesSidebarWidth;
+        if (IsRightPaneVisible)
+        {
             RightPaneWidth = _rightPaneWidth;
         }
+    }
+
+    /// <summary>#1790: the pane's column and splitter follow it, and a Files sidebar
+    /// that spread into its room makes way when it comes back.</summary>
+    private void RaiseRightPaneColumnStates()
+    {
+        OnPropertyChanged(nameof(RightPaneColumnWidth));
+        OnPropertyChanged(nameof(RightPaneColumnMinimumWidth));
+        OnPropertyChanged(nameof(RightPaneSplitterWidth));
+        HoldBothWidths();
     }
 
     private double _workspaceRowWidth;
@@ -123,8 +170,8 @@ internal sealed partial class WorkspaceViewModel
             return MaximumSidebarWidth;
         }
 
-        double other = sidebar == ShellSidebar.Files ? RightPaneWidth : FilesSidebarWidth;
-        double room = WorkspaceRowWidth - other - MinimumEditorWidth - (2 * SplitterWidth);
+        double other = sidebar == ShellSidebar.Files ? RightPaneColumnWidth : FilesSidebarWidth;
+        double room = WorkspaceRowWidth - other - MinimumEditorWidth - SplitterWidth - RightPaneSplitterWidth;
         return Math.Max(MinimumSidebarWidth, Math.Min(MaximumSidebarWidth, room));
     }
 

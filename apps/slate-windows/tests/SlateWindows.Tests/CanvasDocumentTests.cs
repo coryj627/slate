@@ -5493,6 +5493,72 @@ public sealed class CanvasDocumentTests : IDisposable
             ((System.Windows.Controls.TextBlock)board.TooltipChromeForTests.Child).ReadLocalValue(System.Windows.Controls.TextBlock.ForegroundProperty));
     });
 
+    /// <summary>#1790: a popup is its own topmost window, so it sat on top of a
+    /// sheet's fields.</summary>
+    [Fact]
+    public void AModalSurfaceClosesTheBoardsTooltipAndClosingItBringsItBack() => RunSta(() =>
+    {
+        WriteLongTitleCanvas();
+        CanvasDocumentViewModel document = NewDocument("longtitle.canvas");
+        document.Load();
+        var surface = new CanvasSurfaceView { Model = document };
+        using HostedWindow host = Host(surface);
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        PumpUntil(() => surface.VisualForTests.Engine.Current is not null);
+        document.SelectNode("long");
+        PumpUntil(() => surface.VisualForTests.Engine.Current!.Selection == "long");
+        Assert.True(surface.VisualForTests.TooltipIsOpenForTests, "premise: the selection did not open it.");
+
+        Func<bool> overlayWas = CanvasSurfaceView.ShellOverlayIsOpen;
+        try
+        {
+            CanvasSurfaceView.ShellOverlayIsOpen = static () => true;
+            CanvasSurfaceView.RaiseShellOverlayChanged();
+            Assert.False(surface.VisualForTests.TooltipIsOpenForTests, "the popup is still over the sheet.");
+
+            CanvasSurfaceView.ShellOverlayIsOpen = overlayWas;
+            CanvasSurfaceView.RaiseShellOverlayChanged();
+            Assert.True(surface.VisualForTests.TooltipIsOpenForTests, "closing the sheet did not bring it back.");
+        }
+        finally
+        {
+            CanvasSurfaceView.ShellOverlayIsOpen = overlayWas;
+        }
+    });
+
+    /// <summary>#1790: a popup's window is topmost (measured: WS_EX_TOPMOST), so it
+    /// stayed above other applications with Slate in the background.</summary>
+    [Fact]
+    public void LeavingTheWindowClosesTheBoardsTooltipAndComingBackBringsItBack() => RunSta(() =>
+    {
+        WriteLongTitleCanvas();
+        CanvasDocumentViewModel document = NewDocument("longtitle.canvas");
+        document.Load();
+        var surface = new CanvasSurfaceView { Model = document };
+        using HostedWindow host = Host(surface);
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        PumpUntil(() => surface.VisualForTests.Engine.Current is not null);
+        document.SelectNode("long");
+        PumpUntil(() => surface.VisualForTests.Engine.Current!.Selection == "long");
+        Assert.True(surface.VisualForTests.TooltipIsOpenForTests, "premise: the selection did not open it.");
+        Window window = Window.GetWindow(surface);
+
+        RaiseWindowEvent(window, "OnDeactivated");
+        Assert.False(surface.VisualForTests.TooltipIsOpenForTests, "the popup stayed above other applications.");
+
+        RaiseWindowEvent(window, "OnActivated");
+        Assert.True(surface.VisualForTests.TooltipIsOpenForTests, "coming back did not bring it back.");
+    });
+
+    /// <summary>A window only activates when the desktop lets it, which a test
+    /// runner's doesn't, so this raises the window's own event.</summary>
+    private static void RaiseWindowEvent(Window window, string method) =>
+        _ = typeof(Window)
+            .GetMethod(method, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .Invoke(window, [EventArgs.Empty]);
+
     [Fact]
     public void TheTooltipClosesOnlyWhenEveryTriggerHasDeparted() => RunSta(() =>
     {

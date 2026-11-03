@@ -380,6 +380,54 @@ public sealed partial class GraphDiagramTests
         });
     }
 
+    /// <summary>#1790: the same gap as the board's popup. A sheet opened from the
+    /// keyboard leaves the pointer where it was.</summary>
+    [Fact]
+    public void AModalSurfaceClosesTheDiagramsTooltip()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(3, "diagram-sheet-tooltip");
+            GraphDocumentViewModel document = host.Open();
+            (_, _, GraphDiagramView diagram, _) = LiveDiagram(host, document);
+            diagram.PointerEnteredForTests(diagram.VisibleIds[0]);
+            Assert.True(diagram.TooltipIsOpenForTests, "premise: hover did not open it.");
+
+            Func<bool> overlayWas = Canvas.CanvasSurfaceView.ShellOverlayIsOpen;
+            try
+            {
+                Canvas.CanvasSurfaceView.ShellOverlayIsOpen = static () => true;
+                Canvas.CanvasSurfaceView.RaiseShellOverlayChanged();
+                Assert.False(diagram.TooltipIsOpenForTests, "the popup is still over the sheet.");
+            }
+            finally
+            {
+                Canvas.CanvasSurfaceView.ShellOverlayIsOpen = overlayWas;
+            }
+        });
+    }
+
+    /// <summary>#1790: its window is topmost, so an Alt+Tab with the pointer resting
+    /// on a node left it above other applications.</summary>
+    [Fact]
+    public void LeavingTheWindowClosesTheDiagramsTooltip()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(3, "diagram-inactive-tooltip");
+            GraphDocumentViewModel document = host.Open();
+            (_, _, GraphDiagramView diagram, _) = LiveDiagram(host, document);
+            diagram.PointerEnteredForTests(diagram.VisibleIds[0]);
+            Assert.True(diagram.TooltipIsOpenForTests, "premise: hover did not open it.");
+
+            _ = typeof(Window)
+                .GetMethod("OnDeactivated", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .Invoke(Window.GetWindow(diagram), [EventArgs.Empty]);
+
+            Assert.False(diagram.TooltipIsOpenForTests, "the popup stayed above other applications.");
+        });
+    }
+
     [Fact]
     public void TheTooltipIsTheInventorysComposedLabel()
     {

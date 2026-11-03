@@ -937,8 +937,8 @@
                         <ColumnDefinition Width="{Binding Workspace.FilesSidebarWidth, Mode=TwoWay, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=270}" MinWidth="200" MaxWidth="640" />
                         <ColumnDefinition Width="5" />
                         <ColumnDefinition Width="*" MinWidth="300" />
-                        <ColumnDefinition Width="5" />
-                        <ColumnDefinition Width="{Binding Workspace.RightPaneWidth, Mode=TwoWay, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=320}" MinWidth="200" MaxWidth="640" />
+                        <ColumnDefinition Width="{Binding Workspace.RightPaneSplitterWidth, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=5}" />
+                        <ColumnDefinition Width="{Binding Workspace.RightPaneColumnWidth, Mode=TwoWay, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=320}" MinWidth="{Binding Workspace.RightPaneColumnMinimumWidth, FallbackValue=200}" MaxWidth="640" />
                     </Grid.ColumnDefinitions>
                     <local:AutomationLandmarkBorder x:Name="FilesPaneBorder"
                             KeyboardNavigation.DirectionalNavigation="Contained"
@@ -1297,6 +1297,7 @@
                                         AutomationProperties.Name="Workspace editor panes" />
                     </local:AutomationLandmarkBorder>
                     <GridSplitter Grid.Column="3"
+                                  Visibility="{Binding Workspace.IsRightPaneVisible, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}"
                                   KeyboardNavigation.IsTabStop="False"
                                   Style="{DynamicResource Slate.ShellSplitterStyle}"
                                   ResizeDirection="Columns"
@@ -2127,7 +2128,9 @@
                                     </Style>
                                 </DockPanel.Style>
                                 <WrapPanel DockPanel.Dock="Top" Orientation="Horizontal">
-                                    <TextBlock Text="Queries"
+                                    <TextBlock Margin="0,0,12,4"
+                                               VerticalAlignment="Center"
+                                               Text="Queries"
                                                FontSize="16"
                                                FontWeight="SemiBold"
                                                AutomationProperties.HeadingLevel="Level2" />
@@ -2141,7 +2144,8 @@
                                             Click="QueriesRefresh_Click" />
                                 </WrapPanel>
                                 <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto">
-                                    <StackPanel>
+                                    <!-- #1790: the scroll bar draws over its content, so nothing sits under it. -->
+                                    <StackPanel Margin="0,0,12,0">
                                         <TextBlock Margin="0,8,0,2" Text="SAVED QUERIES" FontSize="11"
                                                    Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                                         <TextBlock Text="No saved queries"
@@ -2160,11 +2164,17 @@
                                         <ListBox x:Name="QueriesSavedList"
                                                  MaxHeight="200"
                                                  ItemsSource="{Binding SavedQueries}"
-                                                 DisplayMemberPath="Name"
+                                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                                  MouseDoubleClick="QueriesSavedList_DoubleClick"
                                                  AutomationProperties.AutomationId="QueriesSavedList" local:SiblingNames.NamePath="Name" local:SiblingNames.Noun="query"
                                                  AutomationProperties.Name="Saved queries">
-                                            <!-- R-4 (#1246): DisplayMemberPath templates the text only;
+                                            <!-- #1790: a long row wraps, rather than running under the leaf's scroll bar. -->
+                                            <ListBox.ItemTemplate>
+                                                <DataTemplate>
+                                                    <TextBlock Text="{Binding Name}" TextWrapping="Wrap" />
+                                                </DataTemplate>
+                                            </ListBox.ItemTemplate>
+                                            <!-- R-4 (#1246): the template draws the text only;
                                                  the container read the saved query record dump. -->
                                             <ListBox.ItemContainerStyle>
                                                 <Style TargetType="ListBoxItem" BasedOn="{StaticResource Slate.PanelRowBase}">
@@ -2229,11 +2239,17 @@
                                         <ListBox x:Name="QueriesBaseFilesList"
                                                  MaxHeight="160"
                                                  ItemsSource="{Binding BaseFiles}"
-                                                 DisplayMemberPath="Path"
+                                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                                  MouseDoubleClick="QueriesBaseFilesList_DoubleClick"
                                                  AutomationProperties.AutomationId="QueriesBaseFilesList"
                                                  AutomationProperties.Name="Base files">
-                                            <!-- R-4 (#1246): DisplayMemberPath templates the text only;
+                                            <!-- #1790: a long row wraps, rather than running under the leaf's scroll bar. -->
+                                            <ListBox.ItemTemplate>
+                                                <DataTemplate>
+                                                    <TextBlock Text="{Binding Path}" TextWrapping="Wrap" />
+                                                </DataTemplate>
+                                            </ListBox.ItemTemplate>
+                                            <!-- R-4 (#1246): the template draws the text only;
                                                  the container read the base file record dump. -->
                                             <ListBox.ItemContainerStyle>
                                                 <Style TargetType="ListBoxItem" BasedOn="{StaticResource Slate.PanelRowBase}">
@@ -2281,11 +2297,17 @@
                                         <ListBox x:Name="QueriesDashboardsList"
                                                  MaxHeight="160"
                                                  ItemsSource="{Binding Dashboards}"
-                                                 DisplayMemberPath="Name"
+                                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                                  MouseDoubleClick="QueriesDashboardsList_DoubleClick"
                                                  AutomationProperties.AutomationId="QueriesDashboardsList" local:SiblingNames.NamePath="Name" local:SiblingNames.Noun="dashboard"
                                                  AutomationProperties.Name="Dashboards">
-                                            <!-- R-4 (#1246): DisplayMemberPath templates the text only;
+                                            <!-- #1790: a long row wraps, rather than running under the leaf's scroll bar. -->
+                                            <ListBox.ItemTemplate>
+                                                <DataTemplate>
+                                                    <TextBlock Text="{Binding Name}" TextWrapping="Wrap" />
+                                                </DataTemplate>
+                                            </ListBox.ItemTemplate>
+                                            <!-- R-4 (#1246): the template draws the text only;
                                                  the container read the dashboard record dump. -->
                                             <ListBox.ItemContainerStyle>
                                                 <Style TargetType="ListBoxItem" BasedOn="{StaticResource Slate.PanelRowBase}">
@@ -3754,27 +3776,37 @@
                                         <Button Content="Remove" Margin="4,0,0,0" Click="DashboardEditorRemoveSection_Click"
                                                 AutomationProperties.Name="{Binding AutomationName, StringFormat=Remove {0}}" />
                                     </StackPanel>
-                                    <StackPanel>
-                                        <TextBlock Text="{Binding SavedQueryName}" FontWeight="SemiBold" />
-                                        <DockPanel Margin="0,2,0,0">
-                                            <TextBlock Text="Heading:" VerticalAlignment="Center" />
-                                            <TextBox Margin="6,0,0,0"
-                                                     Text="{Binding HeadingOverride, UpdateSourceTrigger=PropertyChanged}"
-                                                     AutomationProperties.Name="{Binding AutomationName, StringFormat=Heading override for {0}}" />
-                                        </DockPanel>
-                                        <DockPanel Margin="0,2,0,0">
-                                            <TextBlock Text="View:" VerticalAlignment="Center" />
-                                            <ComboBox Margin="6,0,0,0"
-                                                      MinWidth="120"
-                                                      SelectedValuePath="Tag"
-                                                      SelectedValue="{Binding ViewOverride}"
-                                                      AutomationProperties.Name="{Binding AutomationName, StringFormat=View override for {0}}">
-                                                <ComboBoxItem Content="Default" Tag="" />
-                                                <ComboBoxItem Content="Table" Tag="table" />
-                                                <ComboBoxItem Content="List" Tag="list" />
-                                            </ComboBox>
-                                        </DockPanel>
-                                    </StackPanel>
+                                    <!-- #1790: one label column, so the fields start together. -->
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <TextBlock Grid.ColumnSpan="2" Text="{Binding SavedQueryName}" FontWeight="SemiBold" />
+                                        <TextBlock Grid.Row="1" Margin="0,2,0,0" Text="Heading:" VerticalAlignment="Center" />
+                                        <TextBox Grid.Row="1"
+                                                 Grid.Column="1"
+                                                 Margin="6,2,0,0"
+                                                 Text="{Binding HeadingOverride, UpdateSourceTrigger=PropertyChanged}"
+                                                 AutomationProperties.Name="{Binding AutomationName, StringFormat=Heading override for {0}}" />
+                                        <TextBlock Grid.Row="2" Margin="0,2,0,0" Text="View:" VerticalAlignment="Center" />
+                                        <ComboBox Grid.Row="2"
+                                                  Grid.Column="1"
+                                                  Margin="6,2,0,0"
+                                                  MinWidth="120"
+                                                  SelectedValuePath="Tag"
+                                                  SelectedValue="{Binding ViewOverride}"
+                                                  AutomationProperties.Name="{Binding AutomationName, StringFormat=View override for {0}}">
+                                            <ComboBoxItem Content="Default" Tag="" />
+                                            <ComboBoxItem Content="Table" Tag="table" />
+                                            <ComboBoxItem Content="List" Tag="list" />
+                                        </ComboBox>
+                                    </Grid>
                                 </DockPanel>
                             </DataTemplate>
                         </ListBox.ItemTemplate>

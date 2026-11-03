@@ -911,6 +911,73 @@ public sealed class ThemeDesignSystemTests
         Assert.Same(host.Shell.FindResource("Slate.RowFocusVisual"), cell.FocusVisualStyle);
     });
 
+    /// <summary>#1790: they shared a wrap panel with nothing between them.</summary>
+    [Fact]
+    public void TheQueriesHeadingStandsOffItsButton() => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        host.Workspace.ActiveLeaf = WorkspaceViewModel.Leaves.First(leaf => leaf.Id == "queries");
+        host.Settle();
+
+        Button button = ShownShell.Descendants(host.Shell).OfType<Button>()
+            .Single(item => System.Windows.Automation.AutomationProperties.GetAutomationId(item) == "QueriesNewDashboard");
+        var panel = (Panel)VisualTreeHelper.GetParent(button);
+        TextBlock heading = panel.Children.OfType<TextBlock>().Single();
+        Point headingEnd = heading.TranslatePoint(new Point(heading.ActualWidth, 0), panel);
+        Point buttonStart = button.TranslatePoint(default, panel);
+
+        Assert.True(
+            buttonStart.Y >= headingEnd.Y + heading.ActualHeight || buttonStart.X - headingEnd.X >= 8,
+            $"the heading ends at {headingEnd.X} and the button starts at {buttonStart.X}");
+    });
+
+    /// <summary>#1790: a long row ran under the leaf's scroll bar, and the list's own
+    /// thin scroll bar lay under the last row, where it read as an underline.</summary>
+    [Theory]
+    [InlineData("QueriesSavedList")]
+    [InlineData("QueriesBaseFilesList")]
+    [InlineData("QueriesDashboardsList")]
+    public void AQueriesListWrapsALongRowInsteadOfScrollingIt(string listName) => StaThread.Run(() =>
+    {
+        const string Long = "bases/a file whose name is long enough to pass the end of the pane every time.base";
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        WorkspaceViewModel workspace = host.Workspace;
+        workspace.ActiveLeaf = WorkspaceViewModel.Leaves.First(leaf => leaf.Id == "queries");
+        host.Settle();
+        workspace.SavedQueries.Add(new uniffi.slate_uniffi.SavedQuerySummary("query", Long, null, default, 0, 0, null));
+        workspace.BaseFiles.Add(new uniffi.slate_uniffi.BaseFileSummary(Long, Long, 1, 0, false, 0));
+        workspace.Dashboards.Add(new uniffi.slate_uniffi.DashboardSummary("dashboard", Long, 1, 0, 0));
+        host.Settle();
+
+        var list = Assert.IsType<ListBox>(host.Shell.FindName(listName));
+        Assert.Equal(ScrollBarVisibility.Disabled, ScrollViewer.GetHorizontalScrollBarVisibility(list));
+        var row = Assert.IsType<ListBoxItem>(list.ItemContainerGenerator.ContainerFromIndex(0));
+        TextBlock text = ShownShell.Descendants(row).OfType<TextBlock>().Single();
+        Assert.Equal(TextWrapping.Wrap, text.TextWrapping);
+        Assert.True(
+            text.TranslatePoint(new Point(text.ActualWidth, 0), list).X <= list.ActualWidth + 0.5,
+            $"the row's text ends past the list's {list.ActualWidth}");
+    });
+
+    /// <summary>#1790: each field started where its own label ended.</summary>
+    [Fact]
+    public void ADashboardSectionsFieldsStartInOneColumn() => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        host.Workspace.OpenDashboardEditor(dashboardId: null);
+        var editor = Assert.IsType<Bases.DashboardEditorViewModel>(host.Workspace.DashboardEditorSheet);
+        editor.Sections.Add(new Bases.DashboardEditorSection("query", "A saved query"));
+        host.Settle();
+
+        ListBox sections = ShownShell.Descendants(host.Shell).OfType<ListBox>()
+            .Single(item => System.Windows.Automation.AutomationProperties.GetAutomationId(item) == "DashboardEditorSections");
+        var row = Assert.IsType<ListBoxItem>(sections.ItemContainerGenerator.ContainerFromIndex(0));
+        TextBox heading = ShownShell.Descendants(row).OfType<TextBox>().First(item => item.IsVisible);
+        ComboBox view = ShownShell.Descendants(row).OfType<ComboBox>().Single();
+
+        Assert.Equal(heading.TranslatePoint(default, row).X, view.TranslatePoint(default, row).X, 1);
+    });
+
     /// <summary>The classic list turns fixed white when disabled, which every
     /// open overlay does to the shell behind it.</summary>
     [Theory]
