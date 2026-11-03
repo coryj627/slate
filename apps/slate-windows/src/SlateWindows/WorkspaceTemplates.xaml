@@ -13,6 +13,20 @@
          TreeViewItem style in the shell is based on one of these, and a test enforces
          it. They live here, the first dictionary MainWindow merges, so both files
          can reach them. -->
+    <!-- #1772: Fluent's focus ring is drawn outside its element, and a list clips a
+         row at its edges, so a row's ring is drawn inside the row. -->
+    <Style x:Key="Slate.RowFocusVisual">
+        <Setter Property="Control.Template">
+            <Setter.Value>
+                <ControlTemplate>
+                    <Border BorderBrush="{DynamicResource Slate.FocusBrush}"
+                            BorderThickness="2"
+                            CornerRadius="4"
+                            SnapsToDevicePixels="True" />
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
     <Style x:Key="Slate.PanelListBase" TargetType="ListBox">
         <!-- With no border or padding, an empty list would have no rectangle. -->
         <Setter Property="MinHeight" Value="1" />
@@ -80,15 +94,10 @@
         </Setter>
     </Style>
     <BooleanToVisibilityConverter x:Key="Slate.TreeBoolToVisibility" />
-    <Style x:Key="Slate.TreeRowBase" TargetType="TreeViewItem">
-        <Setter Property="Background" Value="Transparent" />
-        <Setter Property="BorderBrush" Value="Transparent" />
-        <Setter Property="Foreground" Value="{DynamicResource Slate.TextBrush}" />
-        <Setter Property="Padding" Value="4,2" />
-        <Setter Property="FocusVisualStyle" Value="{DynamicResource DefaultControlFocusVisualStyle}" />
-        <Setter Property="Template">
-            <Setter.Value>
-                <ControlTemplate TargetType="TreeViewItem">
+    <!-- A separate key because the canvas outline's rows take it from code, which
+         can't base a style on one here. A folder's item includes its children, so the
+         focus ring is the row's own, not a focus visual around the whole subtree. -->
+    <ControlTemplate x:Key="Slate.TreeRowTemplate" TargetType="TreeViewItem">
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="19" />
@@ -128,7 +137,7 @@
                                 <!-- The pill: selection is a shape too, not colour alone. -->
                                 <Rectangle Width="3"
                                            Height="16"
-                                           Margin="-3,0,0,0"
+                                           Margin="-6,0,0,0"
                                            RadiusX="1.5"
                                            RadiusY="1.5"
                                            HorizontalAlignment="Left"
@@ -137,6 +146,12 @@
                                 <ContentPresenter x:Name="PART_Header" ContentSource="Header" />
                             </Grid>
                         </Border>
+                        <Border Grid.Column="1"
+                                BorderBrush="{DynamicResource Slate.FocusBrush}"
+                                BorderThickness="2"
+                                CornerRadius="4"
+                                IsHitTestVisible="False"
+                                Visibility="{Binding IsKeyboardFocused, RelativeSource={RelativeSource TemplatedParent}, Converter={StaticResource Slate.TreeBoolToVisibility}}" />
                         <ItemsPresenter Grid.Row="1"
                                         Grid.Column="1"
                                         Visibility="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}, Converter={StaticResource Slate.TreeBoolToVisibility}}" />
@@ -154,9 +169,14 @@
                             <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.GrayTextBrushKey}}" />
                         </Trigger>
                     </ControlTemplate.Triggers>
-                </ControlTemplate>
-            </Setter.Value>
-        </Setter>
+    </ControlTemplate>
+    <Style x:Key="Slate.TreeRowBase" TargetType="TreeViewItem">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource Slate.TextBrush}" />
+        <Setter Property="Padding" Value="8,2" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="Template" Value="{StaticResource Slate.TreeRowTemplate}" />
     </Style>
     <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
     <local:InverseBooleanToVisibilityConverter x:Key="InverseBooleanToVisibilityConverter" />
@@ -192,12 +212,22 @@
                       IsChecked="{Binding IsBatchSelected}"
                       Visibility="{Binding IsBatchSelectable, Converter={StaticResource BooleanToVisibilityConverter}}"
                       AutomationProperties.Name="{Binding AutomationName, StringFormat=Select {0} for batch actions}" />
-            <StackPanel Grid.Column="1">
+            <StackPanel Grid.Column="1" VerticalAlignment="Center">
                 <TextBlock Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis" />
                 <TextBlock Text="{Binding MetadataText}"
                            FontSize="11"
                            Foreground="{DynamicResource Slate.SecondaryTextBrush}"
-                           TextTrimming="CharacterEllipsis" />
+                           TextTrimming="CharacterEllipsis">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Style.Triggers>
+                                <Trigger Property="Text" Value="">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                </Trigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
             </StackPanel>
         </Grid>
     </HierarchicalDataTemplate>

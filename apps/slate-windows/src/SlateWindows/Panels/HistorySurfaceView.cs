@@ -73,10 +73,7 @@ internal sealed class HistorySurfaceView : UserControl
         AutomationProperties.SetAutomationId(
             _segmentDeleted, "HistorySegmentDeleted");
         _segmentDeleted.Checked += (_, _) => SwitchSegment(deleted: true);
-        var segments = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-        };
+        var segments = new WrapPanel();
         segments.Children.Add(_segmentThisNote);
         segments.Children.Add(_segmentDeleted);
         // W7-7 PR 4 (#1247, R-5; the owner's S2, the sweep's G2): a Windows
@@ -313,13 +310,14 @@ internal sealed class HistorySurfaceView : UserControl
             Text = model.HeaderText,
             FontWeight = FontWeights.SemiBold,
             VerticalAlignment = VerticalAlignment.Center,
+            TextWrapping = TextWrapping.Wrap,
         };
         AutomationProperties.SetHeadingLevel(title, AutomationHeadingLevel.Level3);
         AutomationProperties.SetAutomationId(title, "HistoryVersionHeader");
         var markers = new CheckBox
         {
             Content = "Show markers",
-            Margin = new Thickness(12, 0, 0, 0),
+            Margin = new Thickness(0, 0, 12, 0),
             VerticalAlignment = VerticalAlignment.Center,
             IsChecked = model.ShowMarkers,
         };
@@ -338,7 +336,7 @@ internal sealed class HistorySurfaceView : UserControl
         };
         AutomationProperties.SetAutomationId(compare, "HistoryCompareSelected");
         compare.Click += (_, _) => Model?.CompareSelected();
-        var row = new StackPanel { Orientation = Orientation.Horizontal };
+        var row = new WrapPanel();
         row.Children.Add(title);
         row.Children.Add(markers);
         row.Children.Add(compare);

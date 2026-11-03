@@ -266,6 +266,81 @@ public sealed class ThemeDesignSystemTests
         Assert.True(cellStyle, "the grid doesn't use the theme's cell style.");
     }
 
+    /// <summary>#1772: the canvas outline's rows are subclasses with a style built
+    /// in code, so they kept WPF's classic row.</summary>
+    [Fact]
+    public void TheCanvasOutlineUsesTheShellsTreeRows() => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        var row = new SlateWindows.Canvas.CanvasOutlineItem { Header = "A card" };
+        host.Shell.Content = new TreeView { Items = { row } };
+        host.Settle();
+
+        Assert.Same(host.Shell.FindResource("Slate.TreeRowTemplate"), row.Template);
+    });
+
+    /// <summary>#1772: a task's text ran past the pane and was cut mid-word, because
+    /// its row was a horizontal stack that gave the text unlimited width. The Tasks and
+    /// Tasks Review leaves each have their own row.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ATaskRowWrapsItsTextInsideTheRow(bool review) => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        var list = new ListBox
+        {
+            Style = (Style)host.Shell.RightPaneBorder.FindResource("PanelListBox"),
+            ItemTemplate = review
+                ? host.Shell.PanelReviewList.ItemTemplate
+                : (DataTemplate)host.Shell.RightPaneBorder.FindResource("PanelTaskRowTemplate"),
+            ItemContainerStyle = (Style)host.Shell.FindResource("Slate.PanelRowBase"),
+            ItemsSource = new[]
+            {
+                new
+                {
+                    FileName = "A note with quite a long file name that also has to fit.md",
+                    DisplayText = "Reply to the accessibility review before the end of the week",
+                    MetadataCaption = "Due 2026-06-01 and priority highest and a little more besides",
+                    Completed = false,
+                    HasMetadata = true,
+                    CheckboxLabel = "Task",
+                    CheckboxHelpText = "Help",
+                },
+            },
+            Width = 160,
+            Height = 200,
+            HorizontalAlignment = HorizontalAlignment.Left,
+        };
+        host.Shell.Content = list;
+        host.Settle();
+
+        TextBlock[] texts = ShownShell.Descendants(list).OfType<TextBlock>().ToArray();
+        Assert.NotEmpty(texts);
+        double right = texts.Max(block => block.TranslatePoint(new Point(block.ActualWidth, 0), list).X);
+        Assert.True(right <= 160, $"the row's text reaches {right:F0}px in a 160px list.");
+    });
+
+    /// <summary>#1772: the right pane can be 200px wide, and a horizontal stack cuts
+    /// off whatever doesn't fit: Queries' buttons, Bibliography's second radio button.</summary>
+    [Fact]
+    public void TheRightPaneHasNoHorizontalStacks()
+    {
+        XNamespace presentation = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
+        XNamespace xaml = "http://schemas.microsoft.com/winfx/2006/xaml";
+        XElement leafHost = XDocument
+            .Load(Path.Combine(SourceText.ShellSourceRoot(), "MainWindow.xaml"), LoadOptions.SetLineInfo)
+            .Descendants(presentation + "Grid")
+            .Single(grid => (string?)grid.Attribute(xaml + "Name") == "RightPaneLeafHost");
+
+        string[] stacks = [.. leafHost
+            .Descendants(presentation + "StackPanel")
+            .Where(stack => (string?)stack.Attribute("Orientation") == "Horizontal")
+            .Select(stack => $"line {((System.Xml.IXmlLineInfo)stack).LineNumber}")];
+
+        Assert.Empty(stacks);
+    }
+
     /// <summary>The classic list turns fixed white when disabled, which every
     /// open overlay does to the shell behind it.</summary>
     [Theory]

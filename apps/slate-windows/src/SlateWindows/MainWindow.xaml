@@ -33,10 +33,10 @@
                  classic template, which hard-codes a blue selection. Every ListBoxItem
                  style in this window is based on this one. -->
             <Style x:Key="Slate.PanelRowBase" TargetType="ListBoxItem">
-                <Setter Property="Padding" Value="6,3" />
+                <Setter Property="Padding" Value="10,3" />
                 <Setter Property="Background" Value="Transparent" />
                 <Setter Property="BorderBrush" Value="Transparent" />
-                <Setter Property="FocusVisualStyle" Value="{DynamicResource DefaultControlFocusVisualStyle}" />
+                <Setter Property="FocusVisualStyle" Value="{DynamicResource Slate.RowFocusVisual}" />
                 <Setter Property="Template">
                     <Setter.Value>
                         <ControlTemplate TargetType="ListBoxItem">
@@ -47,7 +47,7 @@
                                     <!-- The pill: selection is a shape too, not colour alone. -->
                                     <Rectangle Width="3"
                                                Height="16"
-                                               Margin="-4,0,0,0"
+                                               Margin="-7,0,0,0"
                                                RadiusX="1.5"
                                                RadiusY="1.5"
                                                HorizontalAlignment="Left"
@@ -959,7 +959,7 @@
                         <ColumnDefinition Width="5" />
                         <ColumnDefinition Width="*" MinWidth="300" />
                         <ColumnDefinition Width="5" />
-                        <ColumnDefinition Width="{Binding Workspace.RightPaneWidth, Mode=TwoWay, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=280}" MinWidth="200" MaxWidth="640" />
+                        <ColumnDefinition Width="{Binding Workspace.RightPaneWidth, Mode=TwoWay, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=320}" MinWidth="200" MaxWidth="640" />
                     </Grid.ColumnDefinitions>
                     <local:AutomationLandmarkBorder x:Name="FilesPaneBorder"
                             KeyboardNavigation.DirectionalNavigation="Contained"
@@ -1108,14 +1108,14 @@
                                     <StackPanel>
                                         <TextBox Text="{Binding TagInput, UpdateSourceTrigger=PropertyChanged}"
                                                  AutomationProperties.Name="Tag name" />
-                                        <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                        <WrapPanel Orientation="Horizontal" Margin="0,4,0,0">
                                             <Button Content="Add" Command="{Binding AddTagCommand}" />
                                             <Button Margin="4,0,0,0" Content="Remove" Command="{Binding RemoveTagCommand}" />
-                                        </StackPanel>
-                                        <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                        </WrapPanel>
+                                        <WrapPanel Orientation="Horizontal" Margin="0,4,0,0">
                                             <Button Content="Move to…" Command="{Binding MoveToCommand}" />
                                             <Button Margin="4,0,0,0" Content="Move checked to Recycle Bin" Command="{Binding BatchTrashCommand}" />
-                                        </StackPanel>
+                                        </WrapPanel>
                                     </StackPanel>
                                 </Expander>
                                 <Expander x:Name="SidebarFileActionsExpander"
@@ -1350,6 +1350,7 @@
                             <Style x:Key="PanelHeading" TargetType="TextBlock">
                                 <Setter Property="FontSize" Value="16" />
                                 <Setter Property="FontWeight" Value="SemiBold" />
+                                <Setter Property="TextWrapping" Value="Wrap" />
                                 <Setter Property="AutomationProperties.HeadingLevel" Value="Level2" />
                             </Style>
                             <!-- Rows carry the composed mac label + per-state hint. -->
@@ -1366,7 +1367,11 @@
                                  toggle; Space on the row is the keyboard route)
                                  plus text and the optional metadata caption. -->
                             <DataTemplate x:Key="PanelTaskRowTemplate">
-                                <StackPanel Margin="0,2" Orientation="Horizontal">
+                                <Grid Margin="0,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
                                     <CheckBox IsChecked="{Binding Completed, Mode=OneWay}"
                                               Focusable="False"
                                               Margin="0,2,6,0"
@@ -1374,16 +1379,17 @@
                                               Click="PanelTaskCheckbox_Click"
                                               AutomationProperties.Name="{Binding CheckboxLabel}"
                                               AutomationProperties.HelpText="{Binding CheckboxHelpText}" />
-                                    <StackPanel>
+                                    <StackPanel Grid.Column="1">
                                         <local:AutomationPresentationTextBlock x:Name="TaskText"
                                                                                Text="{Binding DisplayText}"
                                                                                TextWrapping="Wrap" />
                                         <local:AutomationPresentationTextBlock x:Name="TaskMetadata"
                                                                                Text="{Binding MetadataCaption}"
                                                                                FontSize="11"
+                                                                               TextWrapping="Wrap"
                                                                                Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                                     </StackPanel>
-                                </StackPanel>
+                                </Grid>
                                 <DataTemplate.Triggers>
                                     <DataTrigger Binding="{Binding Completed}" Value="True">
                                         <Setter TargetName="TaskText" Property="TextDecorations" Value="Strikethrough" />
@@ -1397,7 +1403,7 @@
                         <Grid x:Name="RightPaneLeafHost">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="92" />
+                                <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
                             <!-- W4-2 (#734): the four link/structure leaves. The
                                  inactive bodies collapse (out of the UIA tree - the
@@ -1507,7 +1513,7 @@
                                     <ListBox.ItemTemplate>
                                         <DataTemplate>
                                             <StackPanel Margin="0,2">
-                                                <StackPanel Orientation="Horizontal">
+                                                <WrapPanel Orientation="Horizontal">
                                                     <local:AutomationPresentationTextBlock x:Name="TargetText"
                                                                                            Text="{Binding DisplayTarget}"
                                                                                            FontWeight="SemiBold" />
@@ -1523,7 +1529,7 @@
                                                                                                FontSize="11"
                                                                                                Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                                                     </Border>
-                                                </StackPanel>
+                                                </WrapPanel>
                                                 <local:AutomationPresentationTextBlock x:Name="SnippetText"
                                                                                        Text="{Binding Snippet}"
                                                                                        Foreground="{DynamicResource Slate.SecondaryTextBrush}"
@@ -1585,10 +1591,10 @@
                                     </ListBox.ItemContainerStyle>
                                     <ListBox.ItemTemplate>
                                         <DataTemplate>
-                                            <StackPanel Orientation="Horizontal" Margin="0,2">
-                                                <Border Width="{Binding Indent}" />
-                                                <local:AutomationPresentationTextBlock Text="{Binding Text}" />
-                                            </StackPanel>
+                                            <DockPanel Margin="0,2">
+                                                <Border DockPanel.Dock="Left" Width="{Binding Indent}" />
+                                                <local:AutomationPresentationTextBlock Text="{Binding Text}" TextWrapping="Wrap" />
+                                            </DockPanel>
                                         </DataTemplate>
                                     </ListBox.ItemTemplate>
                                 </ListBox>
@@ -1826,7 +1832,11 @@
                                          AutomationProperties.Name="Tasks Review">
                                     <ListBox.ItemTemplate>
                                         <DataTemplate>
-                                            <StackPanel Margin="0,2" Orientation="Horizontal">
+                                            <Grid Margin="0,2">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
                                                 <CheckBox IsChecked="{Binding Completed, Mode=OneWay}"
                                                           Focusable="False"
                                                           Margin="0,2,6,0"
@@ -1834,9 +1844,10 @@
                                                           Click="PanelReviewCheckbox_Click"
                                                           AutomationProperties.Name="{Binding CheckboxLabel}"
                                                           AutomationProperties.HelpText="{Binding CheckboxHelpText}" />
-                                                <StackPanel>
+                                                <StackPanel Grid.Column="1">
                                                     <local:AutomationPresentationTextBlock Text="{Binding FileName}"
                                                                                            FontSize="11"
+                                                                                           TextTrimming="CharacterEllipsis"
                                                                                            Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                                                     <local:AutomationPresentationTextBlock x:Name="ReviewTaskText"
                                                                                            Text="{Binding DisplayText}"
@@ -1844,9 +1855,10 @@
                                                     <local:AutomationPresentationTextBlock x:Name="ReviewTaskMetadata"
                                                                                            Text="{Binding MetadataCaption}"
                                                                                            FontSize="11"
+                                                                                           TextWrapping="Wrap"
                                                                                            Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                                                 </StackPanel>
-                                            </StackPanel>
+                                            </Grid>
                                             <DataTemplate.Triggers>
                                                 <DataTrigger Binding="{Binding Completed}" Value="True">
                                                     <Setter TargetName="ReviewTaskText" Property="TextDecorations" Value="Strikethrough" />
@@ -1997,7 +2009,7 @@
                                      grid stayed on screen), Cycle keeps every other
                                      arrow in the group, one Tab stop, the checked
                                      segment its stop. -->
-                                <StackPanel Orientation="Horizontal"
+                                <WrapPanel Orientation="Horizontal"
                                             KeyboardNavigation.TabNavigation="Once"
                                             KeyboardNavigation.DirectionalNavigation="Cycle"
                                             local:RadioGroupArrows.IsEnabled="True">
@@ -2014,7 +2026,7 @@
                                                  IsChecked="{Binding Bibliography.ShowUnresolved, Mode=OneWay}"
                                                  Checked="BibliographyUnresolvedSegment_Checked"
                                                  AutomationProperties.AutomationId="BibliographySegmentUnresolved" />
-                                </StackPanel>
+                                </WrapPanel>
                                 </local:AutomationLandmarkBorder>
                                 <TextBox x:Name="BibliographySearchBox"
                                          DockPanel.Dock="Top"
@@ -2140,7 +2152,7 @@
                                         </Style.Triggers>
                                     </Style>
                                 </DockPanel.Style>
-                                <StackPanel DockPanel.Dock="Top" Orientation="Horizontal">
+                                <WrapPanel DockPanel.Dock="Top" Orientation="Horizontal">
                                     <TextBlock Text="Queries"
                                                FontSize="16"
                                                FontWeight="SemiBold"
@@ -2153,7 +2165,7 @@
                                             Content="Refresh queries"
                                             AutomationProperties.AutomationId="QueriesRefresh"
                                             Click="QueriesRefresh_Click" />
-                                </StackPanel>
+                                </WrapPanel>
                                 <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto">
                                     <StackPanel>
                                         <TextBlock Margin="0,8,0,2" Text="SAVED QUERIES" FontSize="11"
@@ -2195,8 +2207,8 @@
                                                 </Style>
                                             </ListBox.Style>
                                         </ListBox>
-                                        <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-                                            <StackPanel.Resources>
+                                        <WrapPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                            <WrapPanel.Resources>
                                                 <!-- Selection-scoped actions disable without a
                                                      selection instead of clicking into silence
                                                      (red team round 1). -->
@@ -2207,7 +2219,7 @@
                                                         </DataTrigger>
                                                     </Style.Triggers>
                                                 </Style>
-                                            </StackPanel.Resources>
+                                            </WrapPanel.Resources>
                                             <Button Content="Run" AutomationProperties.Name="Run saved query" AutomationProperties.AutomationId="QueriesRun" Click="QueriesRun_Click" />
                                             <Button Content="Pin/Unpin" Margin="4,0,0,0" AutomationProperties.Name="Pin or unpin saved query" AutomationProperties.AutomationId="QueriesPin" Click="QueriesPin_Click" />
                                             <Button Content="Edit in Builder" Margin="4,0,0,0" AutomationProperties.Name="Edit saved query in builder" AutomationProperties.AutomationId="QueriesEditInBuilder" Click="QueriesEditInBuilder_Click" />
@@ -2215,7 +2227,7 @@
                                             <Button Content="Export as .base…" Margin="4,0,0,0" AutomationProperties.Name="Export saved query as base file" AutomationProperties.AutomationId="QueriesExport" Click="QueriesExport_Click" />
                                             <Button Content="Dock" Margin="4,0,0,0" AutomationProperties.Name="Dock saved query" AutomationProperties.AutomationId="QueriesDockQuery" Click="QueriesDockQuery_Click" />
                                             <Button Content="Delete…" Margin="4,0,0,0" AutomationProperties.Name="Delete saved query" AutomationProperties.AutomationId="QueriesDelete" Click="QueriesDelete_Click" />
-                                        </StackPanel>
+                                        </WrapPanel>
                                         <DockPanel x:Name="QueriesRenameRow" Visibility="Collapsed" Margin="0,4,0,0">
                                             <TextBlock Text="New name:" VerticalAlignment="Center" />
                                             <TextBox x:Name="QueriesRenameBox"
@@ -2264,8 +2276,8 @@
                                                 </Style>
                                             </ListBox.Style>
                                         </ListBox>
-                                        <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-                                            <StackPanel.Resources>
+                                        <WrapPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                            <WrapPanel.Resources>
                                                 <Style TargetType="Button" BasedOn="{StaticResource Slate.ButtonBase}">
                                                     <Style.Triggers>
                                                         <DataTrigger Binding="{Binding SelectedItem, ElementName=QueriesBaseFilesList}" Value="{x:Null}">
@@ -2273,10 +2285,10 @@
                                                         </DataTrigger>
                                                     </Style.Triggers>
                                                 </Style>
-                                            </StackPanel.Resources>
+                                            </WrapPanel.Resources>
                                             <Button Content="Open" AutomationProperties.Name="Open base file" AutomationProperties.AutomationId="QueriesOpenBaseFile" Click="QueriesOpenBaseFile_Click" />
                                             <Button Content="Dock" Margin="4,0,0,0" AutomationProperties.Name="Dock base file" AutomationProperties.AutomationId="QueriesDockBaseFile" Click="QueriesDockBaseFile_Click" />
-                                        </StackPanel>
+                                        </WrapPanel>
                                         <TextBlock Margin="0,12,0,2" Text="DASHBOARDS" FontSize="11"
                                                    Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                                         <TextBlock Text="No dashboards"
@@ -2316,8 +2328,8 @@
                                                 </Style>
                                             </ListBox.Style>
                                         </ListBox>
-                                        <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-                                            <StackPanel.Resources>
+                                        <WrapPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                            <WrapPanel.Resources>
                                                 <Style TargetType="Button" BasedOn="{StaticResource Slate.ButtonBase}">
                                                     <Style.Triggers>
                                                         <DataTrigger Binding="{Binding SelectedItem, ElementName=QueriesDashboardsList}" Value="{x:Null}">
@@ -2325,12 +2337,12 @@
                                                         </DataTrigger>
                                                     </Style.Triggers>
                                                 </Style>
-                                            </StackPanel.Resources>
+                                            </WrapPanel.Resources>
                                             <Button Content="Open" AutomationProperties.Name="Open dashboard" AutomationProperties.AutomationId="QueriesOpenDashboard" Click="QueriesOpenDashboard_Click" />
                                             <Button Content="Edit…" Margin="4,0,0,0" AutomationProperties.Name="Edit dashboard" AutomationProperties.AutomationId="QueriesEditDashboard" Click="QueriesEditDashboard_Click" />
                                             <Button Content="Dock" Margin="4,0,0,0" AutomationProperties.Name="Dock dashboard" AutomationProperties.AutomationId="QueriesDockDashboard" Click="QueriesDockDashboard_Click" />
                                             <Button Content="Delete…" Margin="4,0,0,0" AutomationProperties.Name="Delete dashboard" AutomationProperties.AutomationId="QueriesDeleteDashboard" Click="QueriesDeleteDashboard_Click" />
-                                        </StackPanel>
+                                        </WrapPanel>
                                     </StackPanel>
                                 </ScrollViewer>
                             </DockPanel>
@@ -2578,6 +2590,7 @@
                                      SelectedItem="{Binding ActiveLeaf, Mode=TwoWay}"
                                      DisplayMemberPath="Title"
                                      VirtualizingStackPanel.IsVirtualizing="False"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                      AutomationProperties.AutomationId="RightPaneLeaves"
                                      AutomationProperties.Name="Right pane panels">
                                 <!-- Explicit names: content-derived ListItem names
