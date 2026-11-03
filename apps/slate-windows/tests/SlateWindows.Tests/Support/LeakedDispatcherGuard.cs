@@ -86,6 +86,9 @@ internal sealed class LeakedDispatcherGuardAttribute : Xunit.v3.BeforeAfterTestA
 
     public override void After(MethodInfo methodUnderTest, Xunit.v3.IXunitTest test)
     {
+        // #1790: a window installs its overlay answer in this static and nothing takes
+        // it out, so a palette a fact left open would close the next fact's popups.
+        Canvas.CanvasSurfaceView.ShellOverlayIsOpen = static () => false;
         string fact = $"{methodUnderTest.DeclaringType?.Name}.{methodUnderTest.Name}";
         FactBaseline baseline = s_baseline ?? FactBaseline.Capture();
         s_baseline = null;

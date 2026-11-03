@@ -253,10 +253,16 @@ public partial class MainWindow : IShellRegionHost
     {
         bool open = OpenModalSurface is not null;
         bool opened = open && !_modalSurfaceWasOpen;
+        bool changed = open != _modalSurfaceWasOpen;
         _modalSurfaceWasOpen = open;
         if (opened)
         {
             _editorLandings.ModalOpened();
+        }
+
+        if (changed)
+        {
+            Canvas.CanvasSurfaceView.RaiseShellOverlayChanged();
         }
     }
 

@@ -5135,7 +5135,7 @@ public sealed class CanvasDocumentTests : IDisposable
 
     /// <summary>A shown, laid-out window: containers exist, focus is
     /// real, and a raised key event has a live PresentationSource.</summary>
-    private static HostedWindow Host(UIElement content)
+    private static HostedWindow Host(UIElement content, bool active = true)
     {
         var window = new Window
         {
@@ -5147,6 +5147,11 @@ public sealed class CanvasDocumentTests : IDisposable
             ShowActivated = false,
         };
         window.Show();
+        if (active)
+        {
+            WindowActivation.Activate(window);
+        }
+
         window.UpdateLayout();
         return new HostedWindow(window);
     }
@@ -5154,6 +5159,8 @@ public sealed class CanvasDocumentTests : IDisposable
     private sealed class HostedWindow(Window window) : IDisposable
     {
         internal void UpdateLayout() => window.UpdateLayout();
+
+        internal void Activate() => WindowActivation.Activate(window);
 
         internal IInputElement? FocusedElement() =>
             System.Windows.Input.FocusManager.GetFocusedElement(window);
@@ -5491,6 +5498,88 @@ public sealed class CanvasDocumentTests : IDisposable
         Assert.NotEqual(
             DependencyProperty.UnsetValue,
             ((System.Windows.Controls.TextBlock)board.TooltipChromeForTests.Child).ReadLocalValue(System.Windows.Controls.TextBlock.ForegroundProperty));
+    });
+
+    /// <summary>#1790: a popup is its own topmost window, so it sat on top of a
+    /// sheet's fields.</summary>
+    [Fact]
+    public void AModalSurfaceClosesTheBoardsTooltipAndClosingItBringsItBack() => RunSta(() =>
+    {
+        WriteLongTitleCanvas();
+        CanvasDocumentViewModel document = NewDocument("longtitle.canvas");
+        document.Load();
+        var surface = new CanvasSurfaceView { Model = document };
+        using HostedWindow host = Host(surface);
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        PumpUntil(() => surface.VisualForTests.Engine.Current is not null);
+        document.SelectNode("long");
+        PumpUntil(() => surface.VisualForTests.Engine.Current!.Selection == "long");
+        Assert.True(surface.VisualForTests.TooltipIsOpenForTests, "premise: the selection did not open it.");
+
+        Func<bool> overlayWas = CanvasSurfaceView.ShellOverlayIsOpen;
+        try
+        {
+            CanvasSurfaceView.ShellOverlayIsOpen = static () => true;
+            CanvasSurfaceView.RaiseShellOverlayChanged();
+            Assert.False(surface.VisualForTests.TooltipIsOpenForTests, "the popup is still over the sheet.");
+
+            CanvasSurfaceView.ShellOverlayIsOpen = overlayWas;
+            CanvasSurfaceView.RaiseShellOverlayChanged();
+            Assert.True(surface.VisualForTests.TooltipIsOpenForTests, "closing the sheet did not bring it back.");
+        }
+        finally
+        {
+            CanvasSurfaceView.ShellOverlayIsOpen = overlayWas;
+        }
+    });
+
+    /// <summary>#1790: a popup's window is topmost (measured: WS_EX_TOPMOST), so it
+    /// stayed above other applications with Slate in the background.</summary>
+    [Fact]
+    public void LeavingTheWindowClosesTheBoardsTooltipAndComingBackBringsItBack() => RunSta(() =>
+    {
+        WriteLongTitleCanvas();
+        CanvasDocumentViewModel document = NewDocument("longtitle.canvas");
+        document.Load();
+        var surface = new CanvasSurfaceView { Model = document };
+        using HostedWindow host = Host(surface);
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        PumpUntil(() => surface.VisualForTests.Engine.Current is not null);
+        document.SelectNode("long");
+        PumpUntil(() => surface.VisualForTests.Engine.Current!.Selection == "long");
+        Assert.True(surface.VisualForTests.TooltipIsOpenForTests, "premise: the selection did not open it.");
+        Window window = Window.GetWindow(surface);
+
+        WindowActivation.Deactivate(window);
+        Assert.False(surface.VisualForTests.TooltipIsOpenForTests, "the popup stayed above other applications.");
+
+        WindowActivation.Activate(window);
+        Assert.True(surface.VisualForTests.TooltipIsOpenForTests, "coming back did not bring it back.");
+    });
+
+    /// <summary>#1790: a vault can finish opening after the reader has switched
+    /// applications, so the board arrives in a window already in the background.</summary>
+    [Fact]
+    public void ABoardLoadedIntoAnInactiveWindowHoldsItsTooltipUntilTheWindowComesBack() => RunSta(() =>
+    {
+        WriteLongTitleCanvas();
+        CanvasDocumentViewModel document = NewDocument("longtitle.canvas");
+        document.Load();
+        var surface = new CanvasSurfaceView { Model = document };
+        using HostedWindow host = Host(surface, active: false);
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        PumpUntil(() => surface.VisualForTests.Engine.Current is not null);
+        document.SelectNode("long");
+        PumpUntil(() => surface.VisualForTests.Engine.Current!.Selection == "long");
+
+        Assert.False(surface.VisualForTests.TooltipIsOpenForTests, "the popup opened above other applications.");
+
+        host.Activate();
+
+        Assert.True(surface.VisualForTests.TooltipIsOpenForTests, "coming back did not open it.");
     });
 
     [Fact]

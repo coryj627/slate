@@ -47,6 +47,7 @@ internal sealed class CanvasRendererView : FrameworkElement
         SizeChanged += (_, e) => _engine.CommitViewport(
             v => v.WithViewSize(e.NewSize.Width, e.NewSize.Height));
         IsVisibleChanged += OnIsVisibleChanged;
+        _tooltipGate = new ShellPopupGate(this, UpdateTooltip);
         _tooltipText = new System.Windows.Controls.TextBlock
         {
             Padding = new Thickness(6, 4, 6, 4),
@@ -1321,8 +1322,7 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// truncated).</summary>
     private void UpdateTooltip()
     {
-        // #1786: a popup is its own window, so a hidden board has to close it.
-        string? subject = IsVisible ? TooltipSubject() : null;
+        string? subject = _tooltipGate.Allows ? TooltipSubject() : null;
         if (subject is null)
         {
             _tooltip.IsOpen = false;
@@ -1367,6 +1367,7 @@ internal sealed class CanvasRendererView : FrameworkElement
     }
 
     private string? _tooltipTextSubject;
+    private readonly ShellPopupGate _tooltipGate;
 
     /// <summary>Esc's answer, called by the surface rung (DD-3: the
     /// tooltip is the most transient — first inside the rung, after

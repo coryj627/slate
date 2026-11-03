@@ -2832,6 +2832,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 NotifyGraphInspectorShownChanged();
                 // W7-7 PR 4b (AR-38): the right pane's two steps follow.
                 RaiseRightPaneResizeStates();
+                RaiseRightPaneColumnStates();
             }
         }
     }
