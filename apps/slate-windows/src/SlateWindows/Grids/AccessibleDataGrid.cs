@@ -136,6 +136,11 @@ internal sealed class AccessibleDataGrid : UserControl
         _grid.SetResourceReference(BackgroundProperty, "Slate.SurfaceBrush");
         // #1767: the selected cell draws the theme's selected state.
         _grid.SetResourceReference(DataGrid.CellStyleProperty, "Slate.GridCellStyle");
+        // #1769: the row header is the row's identity for a screen reader, and
+        // the first column already shows it, so it draws nothing. The width
+        // keeps its rectangle: an on-screen element needs one.
+        _grid.SetResourceReference(DataGrid.RowHeaderStyleProperty, "Slate.GridRowHeaderStyle");
+        _grid.RowHeaderWidth = 2;
         _grid.CurrentCellChanged += OnCurrentCellChanged;
         _grid.CellEditEnding += OnCellEditEnding;
         _grid.Sorting += OnHeaderSorting;

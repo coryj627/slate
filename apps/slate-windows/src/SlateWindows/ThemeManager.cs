@@ -4,6 +4,7 @@
 using System.IO;
 using System.Security;
 using System.Windows;
+using System.Windows.Media;
 using Microsoft.Win32;
 
 namespace SlateWindows;
@@ -207,17 +208,23 @@ internal sealed class ThemeManager : IDisposable
         string slateName = highContrast
             ? "Slate.Contrast.xaml"
             : theme == SlateTheme.Dark ? "Slate.Dark.xaml" : "Slate.Light.xaml";
+        ResourceDictionary slate = LoadDictionary(SlateRoot + slateName);
+        // #1769: Fluent's DataGrid animates its Disabled state to these keys, and
+        // every Fluent theme gives them fixed colours, so a table behind an open
+        // overlay turned white under the theme's pale text.
+        slate["ControlLightColor"] = highContrast ? SystemColors.WindowColor : (Color)slate["Slate.SurfaceColor"];
+        slate["DisabledForegroundColor"] = highContrast ? SystemColors.GrayTextColor : (Color)slate["Slate.DisabledTextColor"];
         return highContrast
             ?
             [
                 LoadDictionary(FluentRoot + fluentName),
-                LoadDictionary(SlateRoot + slateName),
+                slate,
                 LoadDictionary(SlateRoot + "Slate.Text.xaml"),
             ]
             :
             [
                 LoadDictionary(FluentRoot + fluentName),
-                LoadDictionary(SlateRoot + slateName),
+                slate,
                 LoadDictionary(SlateRoot + "Slate.SystemColors.xaml"),
                 LoadDictionary(SlateRoot + "Slate.Text.xaml"),
             ];

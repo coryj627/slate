@@ -266,6 +266,62 @@ public sealed class ThemeDesignSystemTests
         Assert.True(cellStyle, "the grid doesn't use the theme's cell style.");
     }
 
+    /// <summary>Fluent's grid animates its Disabled state to fixed colours by these
+    /// keys, and every open overlay disables the shell behind it: the table turned
+    /// white under the theme's pale text. The pixels are checked in
+    /// ThemedShell_ADisabledGridStaysOnItsSurface.</summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void TheGridsDisabledStateUsesTheThemesColours(bool dark, bool highContrast)
+    {
+        (Color surface, Color text, Color disabledSurface, Color disabledText) = InRealWindow(dark, highContrast, window => (
+            highContrast ? SystemColors.WindowColor : (Color)window.FindResource("Slate.SurfaceColor"),
+            highContrast ? SystemColors.GrayTextColor : (Color)window.FindResource("Slate.DisabledTextColor"),
+            (Color)window.FindResource("ControlLightColor"),
+            (Color)window.FindResource("DisabledForegroundColor")));
+
+        Assert.Equal(surface, disabledSurface);
+        Assert.Equal(text, disabledText);
+    }
+
+    /// <summary>The row header showed the clipped first letters of each row left
+    /// of the first column, which already shows them. It's still the row's
+    /// identity for a screen reader, so it keeps its name and its rectangle.</summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void TheRowHeaderDrawsNoTextAndKeepsItsName(bool dark, bool highContrast)
+    {
+        (string[] texts, int grips, double width, string name) = InRealWindow(dark, highContrast, window =>
+        {
+            var grid = new SlateWindows.Grids.AccessibleDataGrid();
+            window.Content = grid;
+            grid.Bind(
+                [new SlateWindows.Grids.AccessibleGridColumn { Header = "Name", Cell = row => (string)row, IsRowHeader = true }],
+                ["A row"],
+                "1 row.",
+                "Rows",
+                rowAutomationName: row => (string)row,
+                rowKey: row => (string)row);
+            window.UpdateLayout();
+            Pump();
+            var header = ShownShell.Descendants(grid).OfType<System.Windows.Controls.Primitives.DataGridRowHeader>().Single();
+            return (
+                ShownShell.Descendants(header).OfType<TextBlock>().Select(block => block.Text).ToArray(),
+                ShownShell.Descendants(header).OfType<System.Windows.Controls.Primitives.Thumb>().Count(),
+                header.ActualWidth,
+                System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(header).GetName());
+        });
+
+        Assert.Empty(texts);
+        Assert.Equal(0, grips);
+        Assert.True(width > 0, "the row header has no rectangle.");
+        Assert.Equal("A row", name);
+    }
+
     /// <summary>The classic list turns fixed white when disabled, which every
     /// open overlay does to the shell behind it.</summary>
     [Theory]
