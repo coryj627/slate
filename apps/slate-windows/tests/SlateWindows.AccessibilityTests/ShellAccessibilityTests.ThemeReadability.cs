@@ -11,6 +11,9 @@
 using System.Drawing;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Definitions;
+using FlaUI.Core.Input;
+using FlaUI.Core.WindowsAPI;
+using Microsoft.Win32;
 
 namespace SlateWindows.AccessibilityTests;
 
@@ -31,6 +34,38 @@ public sealed partial class ShellAccessibilityTests
             AssertReadable(tab, "the open tab");
 
             AssertAxeClean(process, "theme-readability");
+        });
+
+    /// <summary>#1763: the editor's selection in the launched app. It's the solid
+    /// pair, drawn under the text, so the words stay readable on it.</summary>
+    [Fact]
+    public void ThemedShell_TheEditorSelectionStandsOutAndKeepsItsText() =>
+        RunFindInNoteJourney("editor-selection", (process, window, automation, editor) =>
+        {
+            editor.Focus();
+            Color highlight = Registry.GetValue(
+                @"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+                "AppsUseLightTheme",
+                1) is 0
+                ? Color.FromArgb(0x6B, 0x4D, 0x00)
+                : Color.FromArgb(0xF9, 0xE7, 0xB8);
+            Thread.Sleep(300);
+            int before = Measure(editor, highlight).Highlight;
+            Assert.True(before < 50, $"premise: {before} pixels are the highlight with nothing selected.");
+
+            using (Keyboard.Pressing(VirtualKeyShort.CONTROL))
+            {
+                Keyboard.Type(VirtualKeyShort.KEY_A);
+            }
+
+            Thread.Sleep(400);
+            (int selected, double ink) = Measure(editor, highlight);
+            Assert.True(
+                selected > 500,
+                $"only {selected} pixels are the highlight {highlight}. Most common colours {MostCommonColors(editor)}.");
+            Assert.True(ink >= 4.5, $"the selected text's strongest ink measures {ink:F2}:1 on the highlight.");
+
+            AssertAxeClean(process, "editor-selection");
         });
 
     private static void AssertReadable(AutomationElement surface, string name)

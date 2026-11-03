@@ -37,14 +37,10 @@ public sealed class ThemeTokenContrastTests
             // accent pairing that was only gated against window must be
             // gated here too.
             ("accent/surface", "Slate.AccentColor", "Slate.SurfaceColor"),
-            // NOT gated: accent/raised measures |Lc| 71.61 in the light
-            // theme (74.46 before the design system's gold, #1755) — a real
-            // miss against the >75 floor, found while adding accent/surface.
-            // Deliberately left ungated rather than silently passing: fixing
-            // it means retuning Slate.AccentColor, whose final values W8-2
-            // owns (the palette is marked provisional). No surface renders
-            // accent text on the raised background today. Tracked (#1051) so
-            // it is a decision, not a gap.
+            // NOT gated on purpose: the accent FILL on the raised surface measures
+            // |Lc| 71.61 in the light theme. #1051 closed by rule: no text draws
+            // in the fill role (ThemeDesignSystemTests.NoTextDrawsInTheAccentFillRole),
+            // and the accent text role, gated below, clears all three surfaces.
             // #1755: the accent text role, which links, wikilinks, tags and
             // editor headings use, and the text on every gold fill.
             ("accent-text/window", "Slate.AccentTextColor", "Slate.WindowBackgroundColor"),
@@ -54,6 +50,10 @@ public sealed class ThemeTokenContrastTests
             ("on-accent/hover", "Slate.TextOnAccentColor", "Slate.AccentHoverColor"),
             ("on-accent/pressed", "Slate.TextOnAccentColor", "Slate.AccentPressedColor"),
             ("selection", "Slate.SelectionTextColor", "Slate.SelectionBackgroundColor"),
+            // #1762: a selected panel row, with its secondary captions and links.
+            ("selected-row/text", "Slate.SelectionTextColor", "Slate.SelectedSurfaceColor"),
+            ("selected-row/secondary", "Slate.SecondaryTextColor", "Slate.SelectedSurfaceColor"),
+            ("selected-row/accent-text", "Slate.AccentTextColor", "Slate.SelectedSurfaceColor"),
             ("error/surface", "Slate.ErrorColor", "Slate.SurfaceColor"),
             // W3-4 code-token palette: token text renders on the code
             // block's raised background inside the reading surface, so

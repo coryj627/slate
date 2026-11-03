@@ -176,6 +176,130 @@ public sealed class ThemeDesignSystemTests
         Assert.Equal(1, opacity);
     }
 
+    /// <summary>#1762: a list row with its own style would otherwise fall back to
+    /// WPF's classic template, whose blue selection no resource key can change.
+    /// A style added later without the base brings it back, so this reads every
+    /// XAML file.</summary>
+    [Fact]
+    public void EveryListRowStyleIsBasedOnThePanelRow()
+    {
+        string[] stray = [.. Directory
+            .EnumerateFiles(SourceText.ShellSourceRoot(), "*.xaml", SearchOption.AllDirectories)
+            .Where(file => !file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                && !file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .SelectMany(file => XDocument.Load(file, LoadOptions.SetLineInfo)
+                .Descendants()
+                .Where(element => element.Name.LocalName == "Style"
+                    && (string?)element.Attribute("TargetType") is "ListBoxItem" or "{x:Type ListBoxItem}"
+                    && (string?)element.Attribute(Xaml + "Key") != "Slate.PanelRowBase"
+                    && (string?)element.Attribute("BasedOn") != "{StaticResource Slate.PanelRowBase}")
+                .Select(element => $"{Path.GetFileName(file)}:{((System.Xml.IXmlLineInfo)element).LineNumber}"))];
+
+        Assert.True(stray.Length == 0, $"not based on the panel row: {string.Join(", ", stray)}");
+    }
+
+    /// <summary>The panel row draws the design's selected state, the selected
+    /// surface and a gold pill, with or without the keyboard focus.</summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void ASelectedPanelRowDrawsTheThemesSelection(bool dark, bool highContrast) => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        ApplyTheme(host, dark, highContrast);
+        var list = new ListBox
+        {
+            ItemContainerStyle = new Style(typeof(ListBoxItem), (Style)host.Shell.FindResource("Slate.PanelRowBase")),
+            ItemTemplate = TextRowTemplate(),
+            ItemsSource = new[] { "A row" },
+            SelectedIndex = 0,
+        };
+        host.Shell.Content = list;
+        host.Settle();
+
+        var row = Assert.IsType<ListBoxItem>(list.ItemContainerGenerator.ContainerFromIndex(0));
+        Border chrome = ShownShell.Descendants(row).OfType<Border>().First();
+        TextBlock text = ShownShell.Descendants(row).OfType<TextBlock>().Single();
+        Color Theme(string key) => Assert.IsType<SolidColorBrush>(host.Shell.FindResource(key)).Color;
+        Color fill = Assert.IsType<SolidColorBrush>(chrome.Background).Color;
+        Color ink = Assert.IsType<SolidColorBrush>(text.Foreground).Color;
+
+        System.Windows.Shapes.Rectangle pill = ShownShell.Descendants(row).OfType<System.Windows.Shapes.Rectangle>().Single();
+        Assert.Equal(Theme("Slate.SelectedSurfaceBrush"), fill);
+        Assert.Equal(Theme(TextBoxSelection.TextBrushKey), ink);
+        Assert.Equal(Theme("Slate.AccentIndicatorBrush"), Assert.IsType<SolidColorBrush>(pill.Fill).Color);
+        return 0;
+    }, TimeSpan.FromSeconds(60), "the row test timed out.");
+
+    /// <summary>#1763: the editor's selection is the solid pair, because
+    /// AvalonEdit draws it under the text. The border keeps the current find
+    /// match apart from the others, whose fill is close to it in both themes.</summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void TheEditorSelectsInTheThemesColors(bool dark, bool highContrast)
+    {
+        (Color? fill, Color? ink, Color? border, Color? wantFill, Color? wantInk, Color? wantBorder) = InRealWindow(dark, highContrast, window =>
+        {
+            var editor = new SlateTextEditor();
+            window.Content = editor;
+            window.UpdateLayout();
+            Pump();
+            Color? Theme(string key) => (window.FindResource(key) as SolidColorBrush)?.Color;
+            return (
+                (editor.TextArea.SelectionBrush as SolidColorBrush)?.Color,
+                (editor.TextArea.SelectionForeground as SolidColorBrush)?.Color,
+                (editor.TextArea.SelectionBorder?.Brush as SolidColorBrush)?.Color,
+                Theme(TextBoxSelection.BackgroundBrushKey),
+                Theme(TextBoxSelection.TextBrushKey),
+                Theme("Slate.AccentTextBrush"));
+        });
+
+        Assert.NotNull(fill);
+        Assert.Equal(wantFill, fill);
+        Assert.Equal(wantInk, ink);
+        Assert.NotNull(border);
+        Assert.Equal(wantBorder, border);
+    }
+
+    /// <summary>#1051: the accent fill is under the floor on the raised surface,
+    /// so text takes the accent text role, which clears it. The one reading use
+    /// left is a quote's border. A later `Foreground` on the fill role fails here.</summary>
+    [Fact]
+    public void NoTextDrawsInTheAccentFillRole()
+    {
+        string[] uses = [.. Directory
+            .EnumerateFiles(SourceText.ShellSourceRoot(), "*.*", SearchOption.AllDirectories)
+            .Where(file => file.EndsWith(".cs", StringComparison.Ordinal) || file.EndsWith(".xaml", StringComparison.Ordinal))
+            .Where(file => !file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                && !file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                && !file.Contains($"{Path.DirectorySeparatorChar}Themes{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                && !file.EndsWith("ThemeManager.cs", StringComparison.Ordinal))
+            .SelectMany(file => File.ReadLines(file)
+                .Where(line => line.Contains("Slate.AccentBrush", StringComparison.Ordinal)
+                    && !line.Contains("BorderBrush", StringComparison.Ordinal))
+                .Select(line => $"{Path.GetFileName(file)}: {line.Trim()}"))];
+
+        Assert.True(uses.Length == 0, $"the accent fill role names something other than a border: {string.Join(" | ", uses)}");
+    }
+
+    private static void ApplyTheme(ShownShell host, bool dark, bool highContrast)
+    {
+        ResourceDictionary[] layers = ThemeManager.DictionariesFor(dark ? SlateTheme.Dark : SlateTheme.Light, highContrast);
+        Collection<ResourceDictionary> merged = host.Shell.Resources.MergedDictionaries;
+        for (int index = ThemeManager.DictionariesFor(SlateTheme.Light, highContrast: false).Length - 1; index >= 0; index--)
+        {
+            merged.RemoveAt(index);
+        }
+
+        for (int index = 0; index < layers.Length; index++)
+        {
+            merged.Insert(index, layers[index]);
+        }
+    }
+
     /// <summary>#1758: a row with its own ItemContainerStyle loses Fluent's
     /// implicit style and paints from the system colours, which in the dark
     /// theme meant black text on a dark panel and a Windows blue selection.
@@ -263,17 +387,7 @@ public sealed class ThemeDesignSystemTests
     public void TheOpenTabDrawsTheThemesColorsAndAFocusRing(bool dark, bool highContrast) => StaThread.Run(() =>
     {
         using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
-        ResourceDictionary[] layers = ThemeManager.DictionariesFor(dark ? SlateTheme.Dark : SlateTheme.Light, highContrast);
-        Collection<ResourceDictionary> merged = host.Shell.Resources.MergedDictionaries;
-        for (int index = ThemeManager.DictionariesFor(SlateTheme.Light, highContrast: false).Length - 1; index >= 0; index--)
-        {
-            merged.RemoveAt(index);
-        }
-
-        for (int index = 0; index < layers.Length; index++)
-        {
-            merged.Insert(index, layers[index]);
-        }
+        ApplyTheme(host, dark, highContrast);
 
         PumpedDispatcher.PumpUntilDrained(host.Workspace.SeedWorkForTests);
         host.Workspace.OpenPath("Lecture.md");

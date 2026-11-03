@@ -530,7 +530,7 @@ internal static class ReadingDocumentBuilder
             Tag = source,
         };
         copy.SetResourceReference(
-            TextElement.ForegroundProperty, "Slate.AccentBrush");
+            TextElement.ForegroundProperty, "Slate.AccentTextBrush");
         ReadingSemantics.MarkCodeCopy(copy);
         AutomationProperties.SetName(copy, "Copy code");
         AutomationProperties.SetHelpText(
@@ -1608,7 +1608,7 @@ internal static class ReadingDocumentBuilder
             Tag = new ReadingInlineRunKind.Embed(key),
         };
         link.SetResourceReference(
-            TextElement.ForegroundProperty, "Slate.AccentBrush");
+            TextElement.ForegroundProperty, "Slate.AccentTextBrush");
         // A destination is REQUIRED: without NavigateUri NVDA
         // announces "Link has no apparent destination" (W3-1,
         // measured).
@@ -1936,7 +1936,7 @@ internal static class ReadingDocumentBuilder
             TextElement.ForegroundProperty,
             kind is ReadingInlineRunKind.Wikilink { Resolved: false }
                 ? "Slate.WarningBrush"
-                : "Slate.AccentBrush");
+                : "Slate.AccentTextBrush");
 
         // A destination is REQUIRED: without NavigateUri NVDA announces
         // "Link has no apparent destination" on every link (measured).
