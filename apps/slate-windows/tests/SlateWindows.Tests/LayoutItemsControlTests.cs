@@ -145,7 +145,9 @@ public sealed class LayoutItemsControlTests
         AutomationPeer peer = UIElementAutomationPeer.CreatePeerForElement(pane);
         Assert.Equal(AutomationControlType.Pane, peer.GetAutomationControlType());
         Assert.Equal(string.Empty, peer.GetName());
-        Assert.IsType<TabControl>(pane.Child);
+        // #1774: the Grid holds the tab control and the empty workspace's message.
+        // A Grid has no peer, so the pane is still the one stop above the tabs.
+        Assert.Single(Assert.IsType<Grid>(pane.Child).Children.OfType<TabControl>());
     });
 
     /// <summary>Codex PR 3 round 1: the Bases warning banners are built in
