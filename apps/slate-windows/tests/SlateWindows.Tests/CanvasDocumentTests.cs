@@ -5135,7 +5135,7 @@ public sealed class CanvasDocumentTests : IDisposable
 
     /// <summary>A shown, laid-out window: containers exist, focus is
     /// real, and a raised key event has a live PresentationSource.</summary>
-    private static HostedWindow Host(UIElement content)
+    private static HostedWindow Host(UIElement content, bool active = true)
     {
         var window = new Window
         {
@@ -5147,6 +5147,11 @@ public sealed class CanvasDocumentTests : IDisposable
             ShowActivated = false,
         };
         window.Show();
+        if (active)
+        {
+            WindowActivation.Activate(window);
+        }
+
         window.UpdateLayout();
         return new HostedWindow(window);
     }
@@ -5154,6 +5159,8 @@ public sealed class CanvasDocumentTests : IDisposable
     private sealed class HostedWindow(Window window) : IDisposable
     {
         internal void UpdateLayout() => window.UpdateLayout();
+
+        internal void Activate() => WindowActivation.Activate(window);
 
         internal IInputElement? FocusedElement() =>
             System.Windows.Input.FocusManager.GetFocusedElement(window);
@@ -5545,19 +5552,35 @@ public sealed class CanvasDocumentTests : IDisposable
         Assert.True(surface.VisualForTests.TooltipIsOpenForTests, "premise: the selection did not open it.");
         Window window = Window.GetWindow(surface);
 
-        RaiseWindowEvent(window, "OnDeactivated");
+        WindowActivation.Deactivate(window);
         Assert.False(surface.VisualForTests.TooltipIsOpenForTests, "the popup stayed above other applications.");
 
-        RaiseWindowEvent(window, "OnActivated");
+        WindowActivation.Activate(window);
         Assert.True(surface.VisualForTests.TooltipIsOpenForTests, "coming back did not bring it back.");
     });
 
-    /// <summary>A window only activates when the desktop lets it, which a test
-    /// runner's doesn't, so this raises the window's own event.</summary>
-    private static void RaiseWindowEvent(Window window, string method) =>
-        _ = typeof(Window)
-            .GetMethod(method, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-            .Invoke(window, [EventArgs.Empty]);
+    /// <summary>#1790: a vault can finish opening after the reader has switched
+    /// applications, so the board arrives in a window already in the background.</summary>
+    [Fact]
+    public void ABoardLoadedIntoAnInactiveWindowHoldsItsTooltipUntilTheWindowComesBack() => RunSta(() =>
+    {
+        WriteLongTitleCanvas();
+        CanvasDocumentViewModel document = NewDocument("longtitle.canvas");
+        document.Load();
+        var surface = new CanvasSurfaceView { Model = document };
+        using HostedWindow host = Host(surface, active: false);
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        PumpUntil(() => surface.VisualForTests.Engine.Current is not null);
+        document.SelectNode("long");
+        PumpUntil(() => surface.VisualForTests.Engine.Current!.Selection == "long");
+
+        Assert.False(surface.VisualForTests.TooltipIsOpenForTests, "the popup opened above other applications.");
+
+        host.Activate();
+
+        Assert.True(surface.VisualForTests.TooltipIsOpenForTests, "coming back did not open it.");
+    });
 
     [Fact]
     public void TheTooltipClosesOnlyWhenEveryTriggerHasDeparted() => RunSta(() =>

@@ -19,7 +19,6 @@ internal sealed class ShellPopupGate
     private readonly FrameworkElement _owner;
     private readonly Action _changed;
     private Window? _window;
-    private bool _windowInactive;
 
     internal ShellPopupGate(FrameworkElement owner, Action changed)
     {
@@ -29,46 +28,41 @@ internal sealed class ShellPopupGate
         owner.Unloaded += (_, _) => Detach();
     }
 
+    /// <summary>Reads the window instead of remembering its events, so an owner that arrives
+    /// in a window already in the background answers the same as one that saw it go.</summary>
     internal bool Allows =>
-        _owner.IsVisible && !_windowInactive && !CanvasSurfaceView.ShellOverlayIsOpen();
+        _owner.IsVisible
+        && Window.GetWindow(_owner) is not { IsActive: false }
+        && !CanvasSurfaceView.ShellOverlayIsOpen();
 
     /// <summary>The overlay's event is static, so the subscription is the owner's time in
-    /// the tree, and a surface out of it holds no reference from there.</summary>
+    /// the tree, and a surface out of it holds no reference from there. Arriving asks too:
+    /// the owner has been visible since before its Loaded, with no one telling it.</summary>
     private void Attach()
     {
         Detach();
         _window = Window.GetWindow(_owner);
         if (_window is not null)
         {
-            _window.Activated += OnWindowActivated;
-            _window.Deactivated += OnWindowDeactivated;
+            _window.Activated += OnWindowActivationChanged;
+            _window.Deactivated += OnWindowActivationChanged;
         }
 
         CanvasSurfaceView.ShellOverlayChanged += _changed;
+        _changed();
     }
 
     private void Detach()
     {
         if (_window is not null)
         {
-            _window.Activated -= OnWindowActivated;
-            _window.Deactivated -= OnWindowDeactivated;
+            _window.Activated -= OnWindowActivationChanged;
+            _window.Deactivated -= OnWindowActivationChanged;
             _window = null;
         }
 
         CanvasSurfaceView.ShellOverlayChanged -= _changed;
-        _windowInactive = false;
     }
 
-    private void OnWindowActivated(object? sender, EventArgs e)
-    {
-        _windowInactive = false;
-        _changed();
-    }
-
-    private void OnWindowDeactivated(object? sender, EventArgs e)
-    {
-        _windowInactive = true;
-        _changed();
-    }
+    private void OnWindowActivationChanged(object? sender, EventArgs e) => _changed();
 }

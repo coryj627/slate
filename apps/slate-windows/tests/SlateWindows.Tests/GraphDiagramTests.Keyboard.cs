@@ -420,11 +420,28 @@ public sealed partial class GraphDiagramTests
             diagram.PointerEnteredForTests(diagram.VisibleIds[0]);
             Assert.True(diagram.TooltipIsOpenForTests, "premise: hover did not open it.");
 
-            _ = typeof(Window)
-                .GetMethod("OnDeactivated", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                .Invoke(Window.GetWindow(diagram), [EventArgs.Empty]);
+            WindowActivation.Deactivate(Window.GetWindow(diagram));
 
             Assert.False(diagram.TooltipIsOpenForTests, "the popup stayed above other applications.");
+        });
+    }
+
+    /// <summary>#1790: the same for a diagram that arrives with the window already in
+    /// the background.</summary>
+    [Fact]
+    public void ADiagramLoadedIntoAnInactiveWindowHoldsItsTooltipUntilTheWindowComesBack()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(3, "diagram-loaded-inactive-tooltip");
+            GraphDocumentViewModel document = host.Open();
+            (_, HostedWindow window, GraphDiagramView diagram, _) = LiveDiagram(host, document, active: false);
+
+            diagram.PointerEnteredForTests(diagram.VisibleIds[0]);
+            Assert.False(diagram.TooltipIsOpenForTests, "the popup opened above other applications.");
+
+            WindowActivation.Activate(window.Window);
+            Assert.True(diagram.TooltipIsOpenForTests, "coming back did not open it.");
         });
     }
 
