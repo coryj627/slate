@@ -898,12 +898,18 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
         // the await cannot suspend.
         seed.Complete(new BibliographySeedOutcome(BibliographySeedStatus.Seeded, []));
 
+        // Inline means on the caller's thread while EnsureLoaded is still on
+        // its stack. A thread id alone cannot say that (#1785): once the caller
+        // awaits, the pool may run the body on that same thread.
         int callerThread = Environment.CurrentManagedThreadId;
-        int bodyThread = 0;
-        leaf.InterleaveForTests =
-            () => Volatile.Write(ref bodyThread, Environment.CurrentManagedThreadId);
+        int ensuring = 1;
+        int ranInline = -1;
+        leaf.InterleaveForTests = () => Volatile.Write(
+            ref ranInline,
+            Volatile.Read(ref ensuring) == 1 && Environment.CurrentManagedThreadId == callerThread ? 1 : 0);
 
         leaf.EnsureLoaded();
+        Volatile.Write(ref ensuring, 0);
 
         for (int round = 0; round < 40; round++)
         {
@@ -911,8 +917,8 @@ public sealed class CitationAsyncInterleavingTests : IDisposable
             await Task.Delay(2);
         }
 
-        Assert.NotEqual(0, Volatile.Read(ref bodyThread));
-        Assert.NotEqual(callerThread, Volatile.Read(ref bodyThread));
+        Assert.NotEqual(-1, Volatile.Read(ref ranInline));
+        Assert.Equal(0, Volatile.Read(ref ranInline));
     }
 
     /// <summary>
