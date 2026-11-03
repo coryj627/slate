@@ -1,10 +1,12 @@
 # 46 — Windows design system: the features not yet built
 
-Status: the owner's decisions recorded 2026-11-03 (§3); per-chunk specs in
-`46_windows_design_system/specs/`, one per PR. Red-teamed once by a fresh
-Claude agent and reviewed three times by Codex, with every finding checked
-against the tree and applied. Not merged; nothing in this plan has started.
-Baseline: `main` at 9f4194c0 (#1787).
+Status: adopted 2026-11-03, with the owner's decisions in §3. Wave 1 waits for the
+owner's go-ahead, and nothing in this plan has started. Per-chunk specs are in
+`46_windows_design_system/specs/`, one per PR. Red-teamed once by a fresh Claude
+agent and reviewed four times by Codex, with every finding checked against the tree
+and applied. Baseline: `main` at 9f4194c0 (#1787). #1792 landed just after it and
+moved `MainWindow.xaml` and the right pane's widths, so a spec's line numbers are as
+of the baseline (§9).
 
 The owner asked for "the plan and spec for the features not yet built" while
 the design cycle's last PR sat in CI. What is wanted comes from `design/windows`:
@@ -156,7 +158,7 @@ plan first recommended, and their specs follow the owner's call.
 
 | # | Chunk | Question | Decided |
 |---|---|---|---|
-| DSD1 | all | Everything here, or only what #1756 waits on? | Wave 1 now (DS-0 to DS-5). It closes #1756's checks and makes every later template scale for free. Later waves one at a time, each when the owner says, because they change how the app works rather than how it looks |
+| DSD1 | all | Everything here, or only what #1756 waits on? | Wave 1 first (DS-0 to DS-5), when the owner says: on 2026-11-03 they asked that it not start yet. It closes #1756's checks and makes every later template scale for free. Later waves one at a time, each when the owner says, because they change how the app works rather than how it looks |
 | DSD2 | DS-1 | Ship the fonts by linking `design/windows/fonts` or by copying them into the app? | Link. One copy in history instead of 3.6 MB twice. Costs one line in `windows.yml`'s path list |
 | DSD3 | DS-5 | Read Windows Text size from the registry or from `UISettings`? | The registry, with `SystemEvents.UserPreferenceChanged`, as `CanvasTextScaleService` already does. `UISettings` is a WinRT API with no projection under plain `net10.0-windows`, and the standard route, a versioned target framework, ships the projection of the whole Windows SDK (`Microsoft.Windows.SDK.NET.dll`, 24.9 MB, and `WinRT.Runtime.dll`) for one number. The owner's two-minute live check (§8) confirms it. If that shows the registry path misses a change, `UISettings` it is |
 | DSD4 | DS-2 | Unset text goes from 12 to 14. Accept the whole shell growing? | Yes. It is the design's body size, and the reason to do it first is that everything after it is judged at the real size |
@@ -308,7 +310,7 @@ needs rebuilding.
 | The live Text size check: run the app, set Settings › Accessibility › Text size to 150%, Apply, then back to 100% | When DS-5's PR is up | It changes a system setting, which an agent doesn't do. Two minutes. Expected: the shell's text changes within about a second, with no restart |
 | Review of the right-pane icons (`Kit.jsx:54-56`) | Before DS-16 | `assessment.md:113`: "my picks and need your review" |
 | A look at a few Windows accents under `Windows accent` | When DS-11's PR is up | It changes a system setting, which an agent doesn't do. It shows how many hues fall back to gold under DSD14's bar |
-| Merging this plan | Before DS-0 | It's the owner's to read |
+| The go-ahead for Wave 1 | Before DS-0 | The owner adopted this plan on 2026-11-03 and asked that Wave 1 not start yet |
 
 ## 9. How an implementing agent works a chunk
 
