@@ -185,6 +185,7 @@ public sealed class ThemeDesignSystemTests
     [InlineData("ListBox", "Slate.PanelListBase")]
     [InlineData("Button", "Slate.ButtonBase")]
     [InlineData("TreeViewItem", "Slate.TreeRowBase")]
+    [InlineData("ComboBoxItem", "Slate.ComboRowBase")]
     public void EveryLocalStyleOfAClassicControlIsBasedOnItsSlateBase(string target, string baseKey)
     {
         string[] stray = [.. Directory
@@ -794,6 +795,107 @@ public sealed class ThemeDesignSystemTests
             Assert.True(second.DesiredSize.Height <= 200, $"a half-height pane was measured {second.DesiredSize.Height:F0} high.");
         }
     });
+
+    /// <summary>#1781: dropdown rows selected in the classic blue, and rows whose
+    /// styles are built in code have no XAML for the census to read.</summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void CodeBuiltRowsDrawTheTheme(bool dark, bool highContrast) => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        ApplyTheme(host, dark, highContrast);
+        var combo = new ComboBoxItem { Style = ItemContainerNames.BySelf(typeof(ComboBoxItem)), Content = "A row", IsSelected = true };
+        var list = new ListBoxItem { Style = SiblingNames.ContainerStyle(typeof(ListBoxItem)), Content = "A row", IsSelected = true };
+        host.Shell.Content = new StackPanel { Children = { new ComboBox { Items = { combo } }, new ListBox { Items = { list } } } };
+        host.Settle();
+        object selected = host.Shell.FindResource("Slate.SelectedSurfaceBrush");
+
+        Assert.Same(host.Shell.FindResource("Slate.ComboRowTemplate"), combo.Template);
+        Assert.Same(selected, combo.Background);
+        Assert.Same(host.Shell.FindResource("Slate.PanelRowTemplate"), list.Template);
+        Assert.Same(selected, list.Background);
+    });
+
+    /// <summary>#1781: a row style built in code has to say which template it wants,
+    /// because nothing else stops it falling back to WPF's classic row.</summary>
+    [Fact]
+    public void EveryCodeBuiltRowStyleTakesTheThemesRow()
+    {
+        string[] stray = [.. Directory
+            .EnumerateFiles(SourceText.ShellSourceRoot(), "*.cs", SearchOption.AllDirectories)
+            .Where(path => Regex.IsMatch(File.ReadAllText(path), @"new Style\(typeof\((ComboBoxItem|ListBoxItem)\)\)"))
+            .Where(path => !File.ReadAllText(path).Contains("ClassicRows.Apply(", StringComparison.Ordinal))
+            .Select(Path.GetFileName)!];
+
+        Assert.Empty(stray);
+    }
+
+    /// <summary>#1781: a local TextBox style with no base draws WPF's classic field.
+    /// There's no Fluent style a XAML BasedOn can reach, so none are left.</summary>
+    [Fact]
+    public void NoLocalStyleDropsATextBoxsFluentStyle()
+    {
+        XNamespace presentation = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
+        string[] stray = [.. XDocument
+            .Load(Path.Combine(SourceText.ShellSourceRoot(), "MainWindow.xaml"), LoadOptions.SetLineInfo)
+            .Descendants(presentation + "Style")
+            .Where(style => (string?)style.Attribute("TargetType") == "TextBox" && style.Attribute("BasedOn") is null)
+            .Select(style => $"line {((System.Xml.IXmlLineInfo)style).LineNumber}")];
+
+        Assert.Empty(stray);
+    }
+
+    /// <summary>#1781: the Connections tree kept WPF's classic row, and its rows ran
+    /// under the pane's edge with a sideways scrollbar.</summary>
+    [Fact]
+    public void TheConnectionsTreeUsesTheShellsRowsAndFitsItsPane() => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        var row = new SlateWindows.Graph.ConnectionsTreeItem
+        {
+            Header = new TextBlock { TextWrapping = TextWrapping.Wrap, Text = string.Concat(Enumerable.Repeat("words that wrap ", 30)) },
+        };
+        var tree = new SlateWindows.Graph.ConnectionsTree { Width = 200, Height = 300, HorizontalAlignment = HorizontalAlignment.Left, Items = { row } };
+        host.Shell.Content = tree;
+        host.Settle();
+
+        Assert.Same(host.Shell.FindResource("Slate.TreeRowTemplate"), row.Template);
+        double right = row.TranslatePoint(new Point(row.ActualWidth, 0), tree).X;
+        Assert.True(right <= 200, $"the row ends at {right:F0}px in a 200px tree.");
+        Assert.Equal(ScrollBarVisibility.Disabled, ScrollViewer.GetHorizontalScrollBarVisibility(tree));
+    });
+
+    /// <summary>#1781: left-aligned, the filter sized to its minimum and showed
+    /// "Filter gra..." with empty space beside it.</summary>
+    [Fact]
+    public void TheGraphFilterTakesTheRoomItHas() => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        var view = new SlateWindows.Graph.GraphSurfaceView { Width = 900, HorizontalAlignment = HorizontalAlignment.Left };
+        host.Shell.Content = view;
+        host.Settle();
+
+        var field = ShownShell.Descendants(view)
+            .OfType<TextBox>()
+            .Single(box => System.Windows.Automation.AutomationProperties.GetAutomationId(box) == "GraphFilterField");
+        // Layout rounds to the display's pixels.
+        Assert.InRange(field.ActualWidth, 219, 221);
+    });
+
+    /// <summary>#1781: the dashboard editor's picker was a blank box with no label.</summary>
+    [Fact]
+    public void TheDashboardQueryPickerHasAVisibleLabel()
+    {
+        XNamespace xaml = "http://schemas.microsoft.com/winfx/2006/xaml";
+        XElement picker = XDocument.Load(Path.Combine(SourceText.ShellSourceRoot(), "MainWindow.xaml"))
+            .Descendants()
+            .Single(element => (string?)element.Attribute(xaml + "Name") == "DashboardEditorQueryPicker");
+
+        Assert.Contains(picker.ElementsBeforeSelf(), element =>
+            element.Name.LocalName == "TextBlock" && (string?)element.Attribute("Text") == "Saved query:");
+    }
 
     /// <summary>The classic list turns fixed white when disabled, which every
     /// open overlay does to the shell behind it.</summary>

@@ -54,6 +54,14 @@
             </Setter.Value>
         </Setter>
     </Style>
+    <!-- #1781: its template is in the theme layer, with the list row's. -->
+    <Style x:Key="Slate.ComboRowBase" TargetType="ComboBoxItem">
+        <Setter Property="Padding" Value="10,4" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource Slate.RowFocusVisual}" />
+        <Setter Property="Template" Value="{DynamicResource Slate.ComboRowTemplate}" />
+    </Style>
     <Style x:Key="Slate.ButtonBase" TargetType="Button">
         <Setter Property="Background" Value="{DynamicResource ButtonBackground}" />
         <Setter Property="Foreground" Value="{DynamicResource ButtonForeground}" />
@@ -195,6 +203,7 @@
         <Setter Property="Template" Value="{StaticResource Slate.TreeRowTemplate}" />
     </Style>
     <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
+    <local:InverseBooleanConverter x:Key="InverseBooleanConverter" />
     <local:InverseBooleanToVisibilityConverter x:Key="InverseBooleanToVisibilityConverter" />
     <local:AxisToOrientationConverter x:Key="AxisToOrientationConverter" />
     <local:NullToVisibilityConverter x:Key="NullToVisibilityConverter" />

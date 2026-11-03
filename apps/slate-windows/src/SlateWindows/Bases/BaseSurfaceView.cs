@@ -1324,7 +1324,7 @@ internal sealed class BaseSurfaceView : UserControl
         style.Setters.Add(new Setter(
             AutomationProperties.NameProperty,
             SiblingNames.ContainerNameBinding()));
-        return style;
+        return ClassicRows.Apply(style);
     }
 
     private static Style BuildListItemStyle()
@@ -1343,7 +1343,7 @@ internal sealed class BaseSurfaceView : UserControl
         };
         headerTrigger.Setters.Add(new Setter(IsEnabledProperty, false));
         style.Triggers.Add(headerTrigger);
-        return style;
+        return ClassicRows.Apply(style);
     }
 
     private static TextBlock BannerText()

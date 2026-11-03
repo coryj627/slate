@@ -210,6 +210,26 @@ public sealed partial class ShellAccessibilityTests
             AssertAxeClean(process, "field-prompt");
         });
 
+    /// <summary>#1781: the selected dropdown row was WPF's classic blue, the last
+    /// blue in the app. Slate's selection is a warm surface in both themes.</summary>
+    [Fact]
+    public void ThemedShell_TheSelectedDropdownRowIsNotBlue() =>
+        RunFindInNoteJourney("dropdown-row", (process, window, automation, editor) =>
+        {
+            AutomationElement combo = WaitForElement(window, "SidebarSortOrder", TimeSpan.FromSeconds(10));
+            combo.Patterns.ExpandCollapse.Pattern.Expand();
+            Thread.Sleep(500);
+            AutomationElement row = combo.FindAllDescendants(cf => cf.ByControlType(ControlType.ListItem))
+                .First(item => item.Patterns.SelectionItem.Pattern.IsSelected.Value);
+
+            Color fill = MostCommonColor(row);
+            Assert.True(fill.B <= fill.R, $"the selected row is {fill}.");
+
+            combo.Patterns.ExpandCollapse.Pattern.Collapse();
+            Thread.Sleep(300);
+            AssertAxeClean(process, "dropdown-row");
+        });
+
     private static void AssertReadable(AutomationElement surface, string name)
     {
         Color background = MostCommonColor(surface);

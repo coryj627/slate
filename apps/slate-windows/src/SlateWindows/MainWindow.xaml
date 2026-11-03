@@ -37,42 +37,7 @@
                 <Setter Property="Background" Value="Transparent" />
                 <Setter Property="BorderBrush" Value="Transparent" />
                 <Setter Property="FocusVisualStyle" Value="{DynamicResource Slate.RowFocusVisual}" />
-                <Setter Property="Template">
-                    <Setter.Value>
-                        <ControlTemplate TargetType="ListBoxItem">
-                            <Border Padding="{TemplateBinding Padding}"
-                                    CornerRadius="4"
-                                    Background="{TemplateBinding Background}">
-                                <Grid>
-                                    <!-- The pill: selection is a shape too, not colour alone. -->
-                                    <Rectangle Width="3"
-                                               Height="16"
-                                               Margin="-7,0,0,0"
-                                               RadiusX="1.5"
-                                               RadiusY="1.5"
-                                               HorizontalAlignment="Left"
-                                               VerticalAlignment="Center"
-                                               Fill="{TemplateBinding BorderBrush}" />
-                                    <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
-                                                      VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
-                                </Grid>
-                            </Border>
-                            <ControlTemplate.Triggers>
-                                <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter Property="Background" Value="{DynamicResource Slate.RaisedSurfaceBrush}" />
-                                </Trigger>
-                                <Trigger Property="IsSelected" Value="True">
-                                    <Setter Property="Background" Value="{DynamicResource Slate.SelectedSurfaceBrush}" />
-                                    <Setter Property="Foreground" Value="{DynamicResource Slate.SelectionTextBrush}" />
-                                    <Setter Property="BorderBrush" Value="{DynamicResource Slate.AccentIndicatorBrush}" />
-                                </Trigger>
-                                <Trigger Property="IsEnabled" Value="False">
-                                    <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.GrayTextBrushKey}}" />
-                                </Trigger>
-                            </ControlTemplate.Triggers>
-                        </ControlTemplate>
-                    </Setter.Value>
-                </Setter>
+                <Setter Property="Template" Value="{DynamicResource Slate.PanelRowTemplate}" />
             </Style>
         </ResourceDictionary>
     </Window.Resources>
@@ -1052,7 +1017,7 @@
                                         <!-- R-4 (#1246): the item is the enum, so an
                                              unnamed ComboBoxItem read "NameAscending". -->
                                         <ComboBox.ItemContainerStyle>
-                                            <Style TargetType="ComboBoxItem">
+                                            <Style TargetType="ComboBoxItem" BasedOn="{StaticResource Slate.ComboRowBase}">
                                                 <Setter Property="AutomationProperties.Name" Value="{Binding Converter={StaticResource SidebarSortModeLabelConverter}}" />
                                             </Style>
                                         </ComboBox.ItemContainerStyle>
@@ -3276,7 +3241,7 @@
                               AutomationProperties.Name="Property type">
                         <!-- R-4 (#1246): every item host names its containers. -->
                         <ComboBox.ItemContainerStyle>
-                            <Style TargetType="ComboBoxItem">
+                            <Style TargetType="ComboBoxItem" BasedOn="{StaticResource Slate.ComboRowBase}">
                                 <Setter Property="AutomationProperties.Name" Value="{Binding}" />
                             </Style>
                         </ComboBox.ItemContainerStyle>
@@ -3378,7 +3343,7 @@
                                      dump "KeyTypeChoice { Label = Any key type, Kind = }";
                                      DisplayMemberPath templates the text only. -->
                                 <ComboBox.ItemContainerStyle>
-                                    <Style TargetType="ComboBoxItem">
+                                    <Style TargetType="ComboBoxItem" BasedOn="{StaticResource Slate.ComboRowBase}">
                                         <Setter Property="AutomationProperties.Name" Value="{Binding Label}" />
                                     </Style>
                                 </ComboBox.ItemContainerStyle>
@@ -3736,6 +3701,7 @@
                                  AutomationProperties.Name="Dashboard name" />
                     </DockPanel>
                     <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,10,0,0">
+                        <TextBlock Text="Saved query:" Margin="0,0,6,0" VerticalAlignment="Center" />
                         <ComboBox x:Name="DashboardEditorQueryPicker"
                                   MinWidth="200"
                                   ItemsSource="{Binding DataContext.Workspace.SavedQueries, RelativeSource={RelativeSource AncestorType=Window}}"
@@ -3744,7 +3710,7 @@
                                   AutomationProperties.Name="Saved query to add">
                             <!-- R-4 (#1246): as the saved-queries list. -->
                             <ComboBox.ItemContainerStyle>
-                                <Style TargetType="ComboBoxItem">
+                                <Style TargetType="ComboBoxItem" BasedOn="{StaticResource Slate.ComboRowBase}">
                                     <Setter Property="AutomationProperties.Name" Value="{Binding RelativeSource={RelativeSource Self}, Converter={x:Static local:SiblingNames.Converter}}" />
                                 </Style>
                             </ComboBox.ItemContainerStyle>
@@ -3943,18 +3909,9 @@
                                                         AutomationProperties.Name="{Binding RemoveName}" />
                                                 <TextBox Margin="6,0,6,0"
                                                          Text="{Binding Expression, UpdateSourceTrigger=PropertyChanged}"
+                                                         IsEnabled="{Binding IsPreserved, Converter={StaticResource InverseBooleanConverter}}"
                                                          TextChanged="BuilderExpression_TextChanged"
-                                                         AutomationProperties.Name="{Binding ExpressionName}">
-                                                    <TextBox.Style>
-                                                        <Style TargetType="TextBox">
-                                                            <Style.Triggers>
-                                                                <DataTrigger Binding="{Binding IsPreserved}" Value="True">
-                                                                    <Setter Property="IsEnabled" Value="False" />
-                                                                </DataTrigger>
-                                                            </Style.Triggers>
-                                                        </Style>
-                                                    </TextBox.Style>
-                                                </TextBox>
+                                                         AutomationProperties.Name="{Binding ExpressionName}" />
                                             </DockPanel>
                                             <TextBlock Text="{Binding ValidationMessage}"
                                                        Foreground="{DynamicResource Slate.WarningBrush}"

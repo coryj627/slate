@@ -94,9 +94,7 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         _filterField = new TextBox
         {
             MinWidth = 80,
-            MaxWidth = 220,
             Margin = new Thickness(0, 0, 6, 0),
-            HorizontalAlignment = HorizontalAlignment.Left,
             VerticalAlignment = VerticalAlignment.Center,
             TabIndex = 1,
         };
@@ -242,12 +240,15 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
 
         // #1773: the field takes the room that's left, so nothing beside it cuts it
         // off. Tab order comes from the TabIndexes above, not from this order.
-        var filterRegion = new DockPanel { VerticalAlignment = VerticalAlignment.Center };
-        DockPanel.SetDock(_clearFilter, Dock.Right);
-        filterRegion.Children.Add(_clearFilter);
-        DockPanel.SetDock(_filterSummary, Dock.Right);
-        filterRegion.Children.Add(_filterSummary);
+        var filterRegion = new Grid { VerticalAlignment = VerticalAlignment.Center };
+        filterRegion.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MaxWidth = 226 });
+        filterRegion.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        filterRegion.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        Grid.SetColumn(_filterSummary, 1);
+        Grid.SetColumn(_clearFilter, 2);
         filterRegion.Children.Add(_filterField);
+        filterRegion.Children.Add(_filterSummary);
+        filterRegion.Children.Add(_clearFilter);
 
         var header = new DockPanel();
         DockPanel.SetDock(_inspectorToggle, Dock.Right);

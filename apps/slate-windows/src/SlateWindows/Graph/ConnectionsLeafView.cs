@@ -142,6 +142,9 @@ internal sealed class ConnectionsRowViewModel : BindableBase
 /// <see cref="ConnectionsTreeItem"/> carrying Invoke (B-9, B-13).</summary>
 internal sealed class ConnectionsTree : LandingTreeView
 {
+    // #1781: rows wrap to the pane; they ran under its edge.
+    public ConnectionsTree() => ScrollViewer.SetHorizontalScrollBarVisibility(this, ScrollBarVisibility.Disabled);
+
     protected override DependencyObject GetContainerForItemOverride() => new ConnectionsTreeItem();
 
     protected override bool IsItemItsOwnContainerOverride(object item) => item is ConnectionsTreeItem;
@@ -209,6 +212,13 @@ internal sealed class ConnectionsAnchorAutomationPeer : FrameworkElementAutomati
 
 internal sealed class ConnectionsTreeItem : LandingTreeViewItem
 {
+    // #1781: as CanvasOutlineItem, whose style is built in code too.
+    protected override void OnVisualParentChanged(DependencyObject oldParent)
+    {
+        base.OnVisualParentChanged(oldParent);
+        ClassicRows.TakeTreeRow(this);
+    }
+
     protected override DependencyObject GetContainerForItemOverride() => new ConnectionsTreeItem();
 
     protected override bool IsItemItsOwnContainerOverride(object item) => item is ConnectionsTreeItem;
@@ -1212,10 +1222,12 @@ internal sealed class ConnectionsLeafView : UserControl
         var factory = new FrameworkElementFactory(typeof(StackPanel));
         var name = new FrameworkElementFactory(typeof(TextBlock));
         name.SetBinding(TextBlock.TextProperty, new Binding(nameof(ConnectionsRowViewModel.Display)));
+        name.SetValue(TextBlock.TextWrappingProperty, TextWrapping.Wrap);
         factory.AppendChild(name);
         var snippet = new FrameworkElementFactory(typeof(TextBlock));
         snippet.SetBinding(TextBlock.TextProperty, new Binding(nameof(ConnectionsRowViewModel.Snippet)));
         snippet.SetValue(TextBlock.FontSizeProperty, 11.0);
+        snippet.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis);
         snippet.SetValue(OpacityProperty, 0.75);
         snippet.SetBinding(VisibilityProperty, new Binding(nameof(ConnectionsRowViewModel.Snippet))
         {
@@ -1232,6 +1244,8 @@ internal sealed class ConnectionsLeafView : UserControl
     private static Style RowContainerStyle()
     {
         var style = new Style(typeof(ConnectionsTreeItem));
+        style.Setters.Add(new Setter(PaddingProperty, new Thickness(8, 2, 8, 2)));
+        style.Setters.Add(new Setter(FocusVisualStyleProperty, null));
         style.Setters.Add(new Setter(TreeViewItem.IsExpandedProperty, new Binding(nameof(ConnectionsRowViewModel.IsExpanded)) { Mode = BindingMode.TwoWay }));
         style.Setters.Add(new Setter(TreeViewItem.IsSelectedProperty, new Binding(nameof(ConnectionsRowViewModel.IsSelected)) { Mode = BindingMode.TwoWay }));
         style.Setters.Add(new Setter(AutomationProperties.NameProperty, SiblingNames.ContainerNameBinding()));
