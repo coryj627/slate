@@ -84,6 +84,7 @@ internal sealed class GraphDiagramView : FrameworkElement
     private readonly Dictionary<ulong, string> _fillKeys = [];
     private readonly Dictionary<ulong, (double Width, double[]? Dash)> _ringStyles = [];
     private CanvasTextScaleService? _textScale;
+    private readonly ShellPopupGate _tooltipGate;
     private GraphDocumentViewModel? _model;
     private GraphDiagramModel? _diagram;
     private CanvasViewportState _viewport = CanvasViewportState.Seed();
@@ -123,6 +124,7 @@ internal sealed class GraphDiagramView : FrameworkElement
             RaiseStructureChanged();
             UpdateTooltip();
         };
+        _tooltipGate = new ShellPopupGate(this, UpdateTooltip);
         Loaded += (_, _) => SubscribeToTheme();
         Unloaded += (_, _) => ReleaseTheme();
         WireMenu();
@@ -1330,8 +1332,7 @@ internal sealed class GraphDiagramView : FrameworkElement
 
     private void UpdateTooltip()
     {
-        // #1786: a popup is its own window, so a hidden diagram has to close it.
-        ulong? subject = !IsVisible
+        ulong? subject = !_tooltipGate.Allows
             ? null
             : _hoverNode is { } hovered && _entries.ContainsKey(hovered)
                 ? hovered

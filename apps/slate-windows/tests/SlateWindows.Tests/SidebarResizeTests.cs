@@ -134,6 +134,96 @@ public sealed class SidebarResizeTests : IDisposable
         Assert.Equal((2, 2, 2), (widen, narrow, registered));
     });
 
+    /// <summary>#1790: hiding the right pane collapsed its contents and kept its
+    /// column and splitter, so the editor couldn't take the room.</summary>
+    [Fact]
+    public void HidingTheRightPaneGivesTheEditorItsRoom() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "# A\n"));
+        WorkspaceViewModel workspace = host.Workspace;
+        double shown = host.Shell.ContentPaneBorder.ActualWidth;
+        double room = workspace.RightPaneWidth + WorkspaceViewModel.SplitterWidth;
+
+        workspace.IsRightPaneVisible = false;
+        host.Settle();
+
+        Assert.Equal(shown + room, host.Shell.ContentPaneBorder.ActualWidth, 1);
+        GridSplitter splitter = ShownShell.Descendants(host.Shell).OfType<GridSplitter>().Single(item => Grid.GetColumn(item) == 3);
+        Assert.Equal(Visibility.Collapsed, splitter.Visibility);
+
+        workspace.IsRightPaneVisible = true;
+        host.Settle();
+
+        Assert.Equal(shown, host.Shell.ContentPaneBorder.ActualWidth, 1);
+        Assert.Equal(Visibility.Visible, splitter.Visibility);
+    });
+
+    [Fact]
+    public void AHiddenRightPaneKeepsItsWidth() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "# A\n"));
+        WorkspaceViewModel workspace = host.Workspace;
+        workspace.RightPaneWidth = 280;
+        host.Settle();
+
+        workspace.IsRightPaneVisible = false;
+        host.Settle();
+        ColumnDefinition column = host.Shell.WorkspaceColumns.ColumnDefinitions[4];
+        Assert.Equal(0, column.ActualWidth, 1);
+        Assert.Equal(280, workspace.RightPaneWidth);
+
+        workspace.IsRightPaneVisible = true;
+        host.Settle();
+
+        Assert.Equal(280, workspace.RightPaneWidth);
+        Assert.Equal(280, column.ActualWidth, 1);
+    });
+
+    /// <summary>#1790: while the right pane is hidden, its room is the Files
+    /// sidebar's to use, and it goes back when the pane does.</summary>
+    [Fact]
+    public void TheFilesSidebarCanUseAHiddenPanesRoomUntilThePaneComesBack() => RunSta(() =>
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.WorkspaceRowWidth = 1000;
+        double widestBesideThePane = workspace.WidestSidebarWidth(ShellSidebar.Files);
+
+        workspace.IsRightPaneVisible = false;
+
+        Assert.Equal(WorkspaceViewModel.MaximumSidebarWidth, workspace.WidestSidebarWidth(ShellSidebar.Files));
+        workspace.FilesSidebarWidth = WorkspaceViewModel.MaximumSidebarWidth;
+        Assert.Equal(WorkspaceViewModel.MaximumSidebarWidth, workspace.FilesSidebarWidth);
+
+        double rightPane = workspace.RightPaneWidth;
+        workspace.IsRightPaneVisible = true;
+
+        Assert.Equal(widestBesideThePane, workspace.FilesSidebarWidth);
+        Assert.Equal(rightPane, workspace.RightPaneWidth);
+    });
+
+    /// <summary>#1790: the window shrinking under a wide Files sidebar isn't the
+    /// hidden pane's concern, and its width is still there when it comes back.</summary>
+    [Fact]
+    public void AWindowResizeLeavesAHiddenPanesWidthAlone() => RunSta(() =>
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.WorkspaceRowWidth = 1000;
+        workspace.IsRightPaneVisible = false;
+        workspace.FilesSidebarWidth = WorkspaceViewModel.MaximumSidebarWidth;
+        double rightPane = workspace.RightPaneWidth;
+
+        workspace.WorkspaceRowWidth = 900;
+
+        Assert.Equal(rightPane, workspace.RightPaneWidth);
+
+        workspace.IsRightPaneVisible = true;
+
+        Assert.Equal(rightPane, workspace.RightPaneWidth);
+        Assert.Equal(
+            900 - rightPane - WorkspaceViewModel.MinimumEditorWidth - (2 * WorkspaceViewModel.SplitterWidth),
+            workspace.FilesSidebarWidth);
+    });
+
     /// <summary>The window's two sidebar columns follow the widths, and a
     /// splitter drag — which writes the column's width — writes the width
     /// back, so the next step starts from where the pointer left it.</summary>

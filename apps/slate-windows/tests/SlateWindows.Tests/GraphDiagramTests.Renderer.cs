@@ -23,10 +23,10 @@ public sealed partial class GraphDiagramTests
 {
     /// <summary>The surface in Diagram mode with a live, settled model whose
     /// first epoch landed; the renderer laid out.</summary>
-    private static (GraphSurfaceView Surface, HostedWindow Window, GraphDiagramView Diagram, GraphDiagramModel Model) LiveDiagram(Host host, GraphDocumentViewModel document)
+    private static (GraphSurfaceView Surface, HostedWindow Window, GraphDiagramView Diagram, GraphDiagramModel Model) LiveDiagram(Host host, GraphDocumentViewModel document, bool active = true)
     {
         GraphSurfaceView surface = SurfaceFor(host, document);
-        HostedWindow window = HostInWindow(surface);
+        HostedWindow window = HostInWindow(surface, active);
         Assert.True(document.SetMode(GraphSurfaceMode.Diagram));
         GraphDiagramModel model = SettledModel(host, document);
         window.UpdateLayout();

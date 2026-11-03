@@ -57,6 +57,20 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     /// </remarks>
     internal static Func<bool> ShellOverlayIsOpen { get; set; } = static () => false;
 
+    /// <summary>#1790: a modal surface opened or closed, for what can't sit under one
+    /// (<see cref="ShellPopupGate"/>). Per thread, as a surface is: one whose window
+    /// closed without unloading it can't be reached from another thread's shell.</summary>
+    internal static event Action? ShellOverlayChanged
+    {
+        add => t_shellOverlayChanged += value;
+        remove => t_shellOverlayChanged -= value;
+    }
+
+    [ThreadStatic]
+    private static Action? t_shellOverlayChanged;
+
+    internal static void RaiseShellOverlayChanged() => t_shellOverlayChanged?.Invoke();
+
     private readonly TextBlock _title;
     private readonly AutomationNamedWrapPanel _switcher;
     private readonly RadioButton _outlineChoice;

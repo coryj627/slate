@@ -193,6 +193,7 @@
     "xaml-binding MainWindow.xaml FilesTree Visibility": "guard: FilesPaneBorder",
     "xaml-binding MainWindow.xaml FilterResultsList Visibility": "guard: FilesPaneBorder",
     "xaml-binding MainWindow.xaml Grid(SearchOverlayClearRecents) Visibility": "guard: SearchOverlay",
+    "xaml-binding MainWindow.xaml GridSplitter in WorkspaceColumns#1 Visibility": "RightPaneHideLandingTests.HidingTheRightPaneUnderItsSplitterLandsTheKeysInTheEditorOnce",
     "xaml-binding MainWindow.xaml MoveToOverlay Visibility": "exempt: a sheet's close is its dismissal: its own restore puts the keys back on the element that held them before it opened (ModalSurfaceTests' covered restore sites), landing a dead one in its scopes (LandToken)",
     "xaml-binding MainWindow.xaml MoveToRetry Visibility": "guard: MoveToOverlay",
     "xaml-binding MainWindow.xaml PanelBacklinksNotice Focusable": "guard: BacklinksLeafBody",

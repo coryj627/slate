@@ -85,7 +85,7 @@ public sealed partial class GraphDiagramTests
         public void Dispose() => window.Close();
     }
 
-    private static HostedWindow HostInWindow(UIElement content)
+    private static HostedWindow HostInWindow(UIElement content, bool active = true)
     {
         var window = new Window
         {
@@ -97,6 +97,11 @@ public sealed partial class GraphDiagramTests
             ShowActivated = false,
         };
         window.Show();
+        if (active)
+        {
+            WindowActivation.Activate(window);
+        }
+
         window.UpdateLayout();
         return new HostedWindow(window);
     }
