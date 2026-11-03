@@ -152,6 +152,8 @@ public sealed partial class ShellAccessibilityTests
             Assert.False(rail.Patterns.Scroll.Pattern.HorizontallyScrollable.Value, "the rail scrolls sideways.");
 
             AssertAxeClean(process, "rail-fit");
+        });
+
     /// <summary>#1769: an open overlay disables the shell behind it, and Fluent's
     /// grid animates its Disabled state to a fixed white under the theme's pale
     /// text. A hosted window doesn't show it, so this reads the launched app.</summary>

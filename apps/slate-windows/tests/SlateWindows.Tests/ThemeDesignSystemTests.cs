@@ -429,6 +429,15 @@ public sealed class ThemeDesignSystemTests
 
         Assert.Equal(active, typeof(VaultLifecycleViewModel).GetProperty("IsProgressActive")?.GetValue(lifecycle));
     });
+
+    /// <summary>Fluent's grid animates its Disabled state to fixed colours by these
+    /// keys, and every open overlay disables the shell behind it: the table turned
+    /// white under the theme's pale text. The pixels are checked in
+    /// ThemedShell_ADisabledGridStaysOnItsSurface.</summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
     public void TheGridsDisabledStateUsesTheThemesColours(bool dark, bool highContrast)
     {
         (Color surface, Color text, Color disabledSurface, Color disabledText) = InRealWindow(dark, highContrast, window => (
