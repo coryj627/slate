@@ -2576,6 +2576,11 @@
   },
   {
     "Source": "WorkspaceTemplates.xaml",
+    "Expression": "PART_Header",
+    "Surface": "Files tree"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
     "Expression": "MarkdownEditor",
     "Surface": "Editor document"
   },

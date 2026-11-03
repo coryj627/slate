@@ -176,6 +176,112 @@ public sealed class ThemeDesignSystemTests
         Assert.Equal(1, opacity);
     }
 
+    /// <summary>#1767: a local style replaces Fluent's and falls back to WPF's
+    /// classic template, whose literal colours no resource key can change. Each of
+    /// these control types has a Slate base, and a new local style without it
+    /// fails here.</summary>
+    [Theory]
+    [InlineData("ListBoxItem", "Slate.PanelRowBase")]
+    [InlineData("ListBox", "Slate.PanelListBase")]
+    [InlineData("Button", "Slate.ButtonBase")]
+    [InlineData("TreeViewItem", "Slate.TreeRowBase")]
+    public void EveryLocalStyleOfAClassicControlIsBasedOnItsSlateBase(string target, string baseKey)
+    {
+        string[] stray = [.. Directory
+            .EnumerateFiles(SourceText.ShellSourceRoot(), "*.xaml", SearchOption.AllDirectories)
+            .Where(file => !file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                && !file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .SelectMany(file => XDocument.Load(file, LoadOptions.SetLineInfo)
+                .Descendants()
+                .Where(element => element.Name.LocalName == "Style"
+                    && (string?)element.Attribute("TargetType") == target
+                    && (string?)element.Attribute(Xaml + "Key") != baseKey
+                    && (string?)element.Attribute("BasedOn") != $"{{StaticResource {baseKey}}}")
+                .Select(element => $"{Path.GetFileName(file)}:{((System.Xml.IXmlLineInfo)element).LineNumber}"))];
+
+        Assert.True(stray.Length == 0, $"{target} styles not based on {baseKey}: {string.Join(", ", stray)}");
+    }
+
+    /// <summary>A subclass gets no implicit style, because those are keyed on
+    /// the exact type. The command palette's list painted classic white under
+    /// the dark theme's pale text.</summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void TheSubclassedListAndTreeTakeFluentsStyles(bool dark, bool highContrast)
+    {
+        (bool list, bool tree) = InRealWindow(dark, highContrast, window =>
+        {
+            var box = new AutomationVisibilityListBox();
+            var view = new LandingTreeView();
+            window.Content = new StackPanel { Children = { box, view } };
+            window.UpdateLayout();
+            Pump();
+            return (
+                ReferenceEquals(box.Style, window.FindResource(typeof(ListBox))),
+                ReferenceEquals(view.Style, window.FindResource(typeof(TreeView))));
+        });
+
+        Assert.True(list, "the palette's list has no Fluent style.");
+        Assert.True(tree, "the tree has no Fluent style.");
+    }
+
+    /// <summary>The selected cell drew pale text on bright gold.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TheGridTakesTheThemesCell(bool dark)
+    {
+        bool cellStyle = InRealWindow(dark, highContrast: false, window =>
+        {
+            var grid = new SlateWindows.Grids.AccessibleDataGrid();
+            window.Content = grid;
+            window.UpdateLayout();
+            Pump();
+            DataGrid inner = ShownShell.Descendants(grid).OfType<DataGrid>().Single();
+            return ReferenceEquals(inner.CellStyle, window.FindResource("Slate.GridCellStyle"));
+        });
+
+        Assert.True(cellStyle, "the grid doesn't use the theme's cell style.");
+    }
+
+    /// <summary>The classic list turns fixed white when disabled, which every
+    /// open overlay does to the shell behind it.</summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void TheBaseControlsDrawTheThemeInEveryState(bool dark, bool highContrast) => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        ApplyTheme(host, dark, highContrast);
+        var list = new ListBox { Style = (Style)host.Shell.FindResource("Slate.PanelListBase"), IsEnabled = false, ItemsSource = new[] { "A row" } };
+        var enabled = new Button { Style = (Style)host.Shell.FindResource("Slate.ButtonBase"), Content = "Save" };
+        var disabled = new Button { Style = (Style)host.Shell.FindResource("Slate.ButtonBase"), Content = "Delete", IsEnabled = false };
+        var row = new TreeViewItem { Style = (Style)host.Shell.FindResource("Slate.TreeRowBase"), Header = "A row", IsSelected = true, IsExpanded = true, Items = { new TreeViewItem { Style = (Style)host.Shell.FindResource("Slate.TreeRowBase"), Header = "A child" } } };
+        var cell = new DataGridCell { Style = (Style)host.Shell.FindResource("Slate.GridCellStyle"), Content = "A cell", IsSelected = true };
+        host.Shell.Content = new StackPanel { Children = { list, enabled, disabled, new TreeView { Items = { row } }, cell } };
+        host.Settle();
+
+        Color Theme(string key) => Assert.IsType<SolidColorBrush>(host.Shell.FindResource(key)).Color;
+        Color Fill(DependencyObject element) => Assert.IsType<SolidColorBrush>(
+            ShownShell.Descendants(element).OfType<Border>().First().Background).Color;
+
+        Assert.Equal(Colors.Transparent, Fill(list));
+        Assert.Equal(Theme("ButtonBackground"), Fill(enabled));
+        Assert.Equal(Theme("ButtonForeground"), Assert.IsType<SolidColorBrush>(enabled.Foreground).Color);
+        Assert.Equal(Theme("ButtonBackgroundDisabled"), Fill(disabled));
+        Assert.Equal(Theme("ButtonForegroundDisabled"), Assert.IsType<SolidColorBrush>(disabled.Foreground).Color);
+        Assert.Equal(Theme("Slate.SelectedSurfaceBrush"), ShownShell.Descendants(row).OfType<Border>()
+            .Select(border => border.Background).OfType<SolidColorBrush>().First(brush => brush.Color.A > 0).Color);
+        Assert.Equal(Theme("Slate.AccentIndicatorBrush"), Assert.IsType<SolidColorBrush>(
+            ShownShell.Descendants(row).OfType<System.Windows.Shapes.Rectangle>().First().Fill).Color);
+        Assert.Equal(Theme("Slate.SelectedSurfaceBrush"), Fill(cell));
+        Assert.Equal(Theme(TextBoxSelection.TextBrushKey), Assert.IsType<SolidColorBrush>(cell.Foreground).Color);
+        return 0;
+    }, TimeSpan.FromSeconds(60), "the base control test timed out.");
+
     /// <summary>#1762: a list row with its own style would otherwise fall back to
     /// WPF's classic template, whose blue selection no resource key can change.
     /// A style added later without the base brings it back, so this reads every
@@ -402,6 +508,10 @@ public sealed class ThemeDesignSystemTests
         Assert.Equal(Theme("Slate.AccentBrush"), Assert.IsType<SolidColorBrush>(chrome.BorderBrush).Color);
         Assert.Equal(Theme("Slate.TextBrush"), Assert.IsType<SolidColorBrush>(tab.Foreground).Color);
         Assert.NotNull(tab.FocusVisualStyle);
+        // The classic tab control's panel is fixed white. A disabled grid goes
+        // transparent behind an overlay, so that white showed through it (#1767).
+        TabControl tabs = ShownShell.Descendants(host.Shell).OfType<TabControl>().Single();
+        Assert.Equal(Theme("Slate.SurfaceBrush"), Assert.IsType<SolidColorBrush>(tabs.Background).Color);
         return 0;
     }, TimeSpan.FromSeconds(60), "the tab test timed out.");
 

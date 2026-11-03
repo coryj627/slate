@@ -134,6 +134,8 @@ internal sealed class AccessibleDataGrid : UserControl
         ScrollViewer.SetIsDeferredScrollingEnabled(_grid, true);
         _grid.SetResourceReference(ForegroundProperty, "Slate.TextBrush");
         _grid.SetResourceReference(BackgroundProperty, "Slate.SurfaceBrush");
+        // #1767: the selected cell draws the theme's selected state.
+        _grid.SetResourceReference(DataGrid.CellStyleProperty, "Slate.GridCellStyle");
         _grid.CurrentCellChanged += OnCurrentCellChanged;
         _grid.CellEditEnding += OnCellEditEnding;
         _grid.Sorting += OnHeaderSorting;
@@ -1858,7 +1860,6 @@ internal sealed class AccessibleGridTextColumn : DataGridTextColumn
             Text = _column.Cell(dataItem),
             Margin = new Thickness(8, 2, 8, 2),
         };
-        text.SetResourceReference(TextBlock.ForegroundProperty, "Slate.TextBrush");
         AutomationProperties.SetName(cell, $"{_column.Header}: {_column.Cell(dataItem)}");
         if (_column.AccessibilityHint?.Invoke(dataItem) is { Length: > 0 } hint)
         {

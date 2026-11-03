@@ -130,6 +130,10 @@ internal sealed class AutomationNamedRowPeer : FrameworkElementAutomationPeer
 /// </summary>
 internal sealed class AutomationVisibilityListBox : ListBox
 {
+    // #1767: an implicit style is keyed on the exact type, so a subclass gets
+    // none and falls back to WPF's classic template, which paints fixed white.
+    public AutomationVisibilityListBox() => SetResourceReference(StyleProperty, typeof(ListBox));
+
     protected override AutomationPeer OnCreateAutomationPeer() =>
         new AutomationVisibilityListBoxPeer(this);
 }

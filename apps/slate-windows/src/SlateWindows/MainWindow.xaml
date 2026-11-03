@@ -1080,7 +1080,7 @@
                                           AutomationProperties.AutomationId="SidebarTagTree"
                                           AutomationProperties.Name="Tags">
                                     <local:LandingTreeView.ItemContainerStyle>
-                                        <Style TargetType="TreeViewItem">
+                                        <Style TargetType="TreeViewItem" BasedOn="{StaticResource Slate.TreeRowBase}">
                                             <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
                                             <!-- W7-7 (R-3): two-way, so a filter clear releases the
                                                  selection and the same tag can be applied again. -->
@@ -1228,7 +1228,7 @@
                                               AutomationProperties.Name="Files"
                                               AutomationProperties.HelpText="{x:Static cmd:NavigationHelp.FilesTree}">
                                         <local:LandingTreeView.ItemContainerStyle>
-                                            <Style TargetType="TreeViewItem">
+                                            <Style TargetType="TreeViewItem" BasedOn="{StaticResource Slate.TreeRowBase}">
                                                 <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
                                                 <!-- W5-4 verification: the VM→view selection
                                                      channel — a mutation's publication re-seats
@@ -1357,7 +1357,7 @@
                                 <Setter Property="AutomationProperties.Name" Value="{Binding RelativeSource={RelativeSource Self}, Converter={x:Static local:SiblingNames.Converter}}" />
                                 <Setter Property="AutomationProperties.HelpText" Value="{Binding AutomationHelpText}" />
                             </Style>
-                            <Style x:Key="PanelListBox" TargetType="ListBox">
+                            <Style x:Key="PanelListBox" TargetType="ListBox" BasedOn="{StaticResource Slate.PanelListBase}">
                                 <Setter Property="Background" Value="Transparent" />
                                 <Setter Property="BorderThickness" Value="0" />
                                 <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
@@ -2186,7 +2186,7 @@
                                                 </Style>
                                             </ListBox.ItemContainerStyle>
                                             <ListBox.Style>
-                                                <Style TargetType="ListBox">
+                                                <Style TargetType="ListBox" BasedOn="{StaticResource Slate.PanelListBase}">
                                                     <Style.Triggers>
                                                         <DataTrigger Binding="{Binding SavedQueries.Count}" Value="0">
                                                             <Setter Property="Visibility" Value="Collapsed" />
@@ -2200,7 +2200,7 @@
                                                 <!-- Selection-scoped actions disable without a
                                                      selection instead of clicking into silence
                                                      (red team round 1). -->
-                                                <Style TargetType="Button">
+                                                <Style TargetType="Button" BasedOn="{StaticResource Slate.ButtonBase}">
                                                     <Style.Triggers>
                                                         <DataTrigger Binding="{Binding SelectedItem, ElementName=QueriesSavedList}" Value="{x:Null}">
                                                             <Setter Property="IsEnabled" Value="False" />
@@ -2255,7 +2255,7 @@
                                                 </Style>
                                             </ListBox.ItemContainerStyle>
                                             <ListBox.Style>
-                                                <Style TargetType="ListBox">
+                                                <Style TargetType="ListBox" BasedOn="{StaticResource Slate.PanelListBase}">
                                                     <Style.Triggers>
                                                         <DataTrigger Binding="{Binding BaseFiles.Count}" Value="0">
                                                             <Setter Property="Visibility" Value="Collapsed" />
@@ -2266,7 +2266,7 @@
                                         </ListBox>
                                         <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
                                             <StackPanel.Resources>
-                                                <Style TargetType="Button">
+                                                <Style TargetType="Button" BasedOn="{StaticResource Slate.ButtonBase}">
                                                     <Style.Triggers>
                                                         <DataTrigger Binding="{Binding SelectedItem, ElementName=QueriesBaseFilesList}" Value="{x:Null}">
                                                             <Setter Property="IsEnabled" Value="False" />
@@ -2307,7 +2307,7 @@
                                                 </Style>
                                             </ListBox.ItemContainerStyle>
                                             <ListBox.Style>
-                                                <Style TargetType="ListBox">
+                                                <Style TargetType="ListBox" BasedOn="{StaticResource Slate.PanelListBase}">
                                                     <Style.Triggers>
                                                         <DataTrigger Binding="{Binding Dashboards.Count}" Value="0">
                                                             <Setter Property="Visibility" Value="Collapsed" />
@@ -2318,7 +2318,7 @@
                                         </ListBox>
                                         <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
                                             <StackPanel.Resources>
-                                                <Style TargetType="Button">
+                                                <Style TargetType="Button" BasedOn="{StaticResource Slate.ButtonBase}">
                                                     <Style.Triggers>
                                                         <DataTrigger Binding="{Binding SelectedItem, ElementName=QueriesDashboardsList}" Value="{x:Null}">
                                                             <Setter Property="IsEnabled" Value="False" />
@@ -2689,6 +2689,7 @@
                     </local:AutomationVisibilityListBox>
                     <DockPanel Grid.Row="2">
                         <local:AutomationPresentationTextBlock Text="{Binding ResultSummary}"
+                                                               Margin="0,0,12,0"
                                                                Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}"
                                                                Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                         <local:AutomationPresentationTextBlock DockPanel.Dock="Right"
@@ -3827,7 +3828,7 @@
                                 <!-- Only an edit-view context can save to a view
                                      (red team round 1: the button sat enabled in
                                      every context and clicked into silence). -->
-                                <Style TargetType="Button">
+                                <Style TargetType="Button" BasedOn="{StaticResource Slate.ButtonBase}">
                                     <Style.Triggers>
                                         <DataTrigger Binding="{Binding Context.ViewPath}" Value="{x:Null}">
                                             <Setter Property="Visibility" Value="Collapsed" />
@@ -3841,7 +3842,7 @@
                                 AutomationProperties.AutomationId="BuilderUpdateSavedQuery"
                                 Click="BuilderUpdateSavedQuery_Click">
                             <Button.Style>
-                                <Style TargetType="Button">
+                                <Style TargetType="Button" BasedOn="{StaticResource Slate.ButtonBase}">
                                     <Style.Triggers>
                                         <DataTrigger Binding="{Binding Context.SavedQueryId}" Value="{x:Null}">
                                             <Setter Property="Visibility" Value="Collapsed" />
