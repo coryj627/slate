@@ -5453,6 +5453,47 @@ public sealed class CanvasDocumentTests : IDisposable
     /// card keeps it (all-triggers-departed, not first-departure), and
     /// selecting an untruncated card closes it.</summary>
     [Fact]
+    public void AHiddenBoardClosesItsTooltipAndShowingItBringsItBack() => RunSta(() =>
+    {
+        WriteLongTitleCanvas();
+        CanvasDocumentViewModel document = NewDocument("longtitle.canvas");
+        document.Load();
+        var surface = new CanvasSurfaceView { Model = document };
+        using HostedWindow host = Host(surface);
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        PumpUntil(() => surface.VisualForTests.Engine.Current is not null);
+        document.SelectNode("long");
+        PumpUntil(() => surface.VisualForTests.Engine.Current!.Selection == "long");
+        Assert.True(surface.VisualForTests.TooltipIsOpenForTests, "premise: the selection did not open it.");
+
+        document.ShowSurface(CanvasSurfaceKind.Outline);
+        host.UpdateLayout();
+        PumpUntil(() => !surface.VisualForTests.IsVisible);
+        Assert.False(surface.VisualForTests.TooltipIsOpenForTests, "the hidden board's popup is still on screen.");
+
+        document.ShowSurface(CanvasSurfaceKind.Visual);
+        host.UpdateLayout();
+        PumpUntil(() => surface.VisualForTests.IsVisible);
+        Assert.True(surface.VisualForTests.TooltipIsOpenForTests, "showing the board again did not bring it back.");
+    });
+
+    /// <summary>#1786: the popup had no brushes, so it drew black in every theme.
+    /// It's its own window with no logical parent, so a hosted window can't resolve
+    /// the keys; the launched app does, through the application's resources.</summary>
+    [Fact]
+    public void TheTooltipNamesTheThemesColours() => RunSta(() =>
+    {
+        var board = new CanvasRendererView();
+
+        Assert.NotEqual(DependencyProperty.UnsetValue, board.TooltipChromeForTests.ReadLocalValue(System.Windows.Controls.Border.BackgroundProperty));
+        Assert.NotEqual(DependencyProperty.UnsetValue, board.TooltipChromeForTests.ReadLocalValue(System.Windows.Controls.Border.BorderBrushProperty));
+        Assert.NotEqual(
+            DependencyProperty.UnsetValue,
+            ((System.Windows.Controls.TextBlock)board.TooltipChromeForTests.Child).ReadLocalValue(System.Windows.Controls.TextBlock.ForegroundProperty));
+    });
+
+    [Fact]
     public void TheTooltipClosesOnlyWhenEveryTriggerHasDeparted() => RunSta(() =>
     {
         WriteLongTitleCanvas();

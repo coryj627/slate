@@ -118,7 +118,11 @@ internal sealed class GraphDiagramView : FrameworkElement
         };
         // The container's children follow the cluster's visibility (Term M5):
         // a collapsed board exposes none, so the peer's cache is reset here.
-        IsVisibleChanged += (_, _) => RaiseStructureChanged();
+        IsVisibleChanged += (_, _) =>
+        {
+            RaiseStructureChanged();
+            UpdateTooltip();
+        };
         Loaded += (_, _) => SubscribeToTheme();
         Unloaded += (_, _) => ReleaseTheme();
         WireMenu();
@@ -1326,9 +1330,12 @@ internal sealed class GraphDiagramView : FrameworkElement
 
     private void UpdateTooltip()
     {
-        ulong? subject = _hoverNode is { } hovered && _entries.ContainsKey(hovered)
-            ? hovered
-            : _pointerOnTooltip && _tooltip is { IsOpen: true } ? _tooltipSubject : null;
+        // #1786: a popup is its own window, so a hidden diagram has to close it.
+        ulong? subject = !IsVisible
+            ? null
+            : _hoverNode is { } hovered && _entries.ContainsKey(hovered)
+                ? hovered
+                : _pointerOnTooltip && _tooltip is { IsOpen: true } ? _tooltipSubject : null;
         if (subject is not { } id || _diagram is null || !_diagram.Positions.ContainsKey(id))
         {
             if (_tooltip is not null)
