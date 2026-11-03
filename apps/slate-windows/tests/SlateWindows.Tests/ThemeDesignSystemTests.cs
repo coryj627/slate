@@ -691,6 +691,36 @@ public sealed class ThemeDesignSystemTests
         Assert.Empty(stray);
     }
 
+    /// <summary>#1778: every pane was measured at the whole split's size and arranged
+    /// at its share, so its content was laid out too wide and cut off: wrapped text,
+    /// the canvas radios, a table's right edge.</summary>
+    [Theory]
+    [InlineData(Orientation.Horizontal)]
+    [InlineData(Orientation.Vertical)]
+    public void ASplitPaneIsMeasuredAtItsShare(Orientation orientation) => StaThread.Run(() =>
+    {
+        TextBlock Pane() => new() { TextWrapping = TextWrapping.Wrap, Text = string.Concat(Enumerable.Repeat("words that wrap ", 60)) };
+        var panel = new WeightedSplitPanel { Orientation = orientation };
+        TextBlock first = Pane();
+        TextBlock second = Pane();
+        panel.Children.Add(first);
+        panel.Children.Add(second);
+
+        panel.Measure(new Size(400, 400));
+        panel.Arrange(new Rect(0, 0, 400, 400));
+
+        if (orientation == Orientation.Horizontal)
+        {
+            Assert.True(first.DesiredSize.Width <= 200, $"a half-width pane was measured {first.DesiredSize.Width:F0} wide.");
+            Assert.True(second.DesiredSize.Width <= 200, $"a half-width pane was measured {second.DesiredSize.Width:F0} wide.");
+        }
+        else
+        {
+            Assert.True(first.DesiredSize.Height <= 200, $"a half-height pane was measured {first.DesiredSize.Height:F0} high.");
+            Assert.True(second.DesiredSize.Height <= 200, $"a half-height pane was measured {second.DesiredSize.Height:F0} high.");
+        }
+    });
+
     /// <summary>The classic list turns fixed white when disabled, which every
     /// open overlay does to the shell behind it.</summary>
     [Theory]

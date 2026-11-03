@@ -888,7 +888,7 @@
                                TextWrapping="Wrap"
                                Text="{Binding StatusText}"
                                Visibility="{Binding IsOpening, Converter={StaticResource BooleanToVisibilityConverter}}" />
-                    <Button Margin="0,0,4,4" x:Name="OpenVaultButton"
+                    <Button x:Name="OpenVaultButton"
                             AutomationProperties.AutomationId="OpenVaultButton"
                             Content="_Open Vault…"
                             Command="{Binding OpenVaultCommand}"
@@ -989,7 +989,7 @@
                                                FontSize="16"
                                                FontWeight="SemiBold"
                                                AutomationProperties.HeadingLevel="Level2" />
-                                    <Button Margin="0,0,4,4" DockPanel.Dock="Right"
+                                    <Button DockPanel.Dock="Right"
                                             Padding="6,2"
                                             Content="↻"
                                             ToolTip="Refresh"
@@ -1035,7 +1035,7 @@
                                              Padding="6,4"
                                              ToolTip="Filter by words, #tag, path:, ext:, has:task, or @date." />
                                     <Button Grid.Column="1"
-                                            Margin="0,0,4,4"
+                                            Margin="4,0,0,0"
                                             Padding="6,2"
                                             Content="Clear"
                                             AutomationProperties.AutomationId="SidebarFilterClear"
