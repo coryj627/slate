@@ -486,6 +486,143 @@ public sealed class ThemeDesignSystemTests
         Assert.Equal("A row", name);
     }
 
+    /// <summary>#1774: an empty search or filter field was a blank box to anyone
+    /// reading the screen. The prompt is drawn inside the field, so an overlay covers
+    /// it like the rest of the field, and it's never the field's value.</summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void AnEmptyFieldShowsItsPurposeAndNotAsItsValue(bool dark, bool highContrast)
+    {
+        (string prompt, bool shownEmpty, bool shownWithText, string value, bool inTheTree) = InRealWindow(dark, highContrast, window =>
+        {
+            var box = new TextBox();
+            System.Windows.Automation.AutomationProperties.SetName(box, "Filter files");
+            FieldPrompt.SetIsEnabled(box, true);
+            window.Content = box;
+            window.UpdateLayout();
+            Pump();
+            TextBlock text = ShownShell.Descendants(box).OfType<TextBlock>().Single(block => block.Text == "Filter files");
+            bool empty = text.IsVisible;
+            string emptyValue = box.Text;
+            var peer = System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(box);
+            bool tree = peer.GetChildren()?.Any(child =>
+                child.GetName() == "Filter files" && (child.IsControlElement() || child.IsContentElement())) == true;
+            box.Text = "a";
+            window.UpdateLayout();
+            Pump();
+            return (text.Text, empty, text.IsVisible, emptyValue, tree);
+        });
+
+        Assert.Equal("Filter files", prompt);
+        Assert.True(shownEmpty, "an empty field doesn't show its prompt.");
+        Assert.False(shownWithText, "a field with text still shows its prompt.");
+        Assert.Equal(string.Empty, value);
+        Assert.False(inTheTree, "the prompt is in the field's control or content view.");
+    }
+
+    /// <summary>#1774: a long prompt made its field wider, which pushed the Base
+    /// filter into the Refresh button. A prompt trims to the field; it never sizes it.</summary>
+    [Fact]
+    public void APromptDoesNotSizeItsField()
+    {
+        (double plain, double prompted) = InRealWindow(dark: false, highContrast: false, window =>
+        {
+            TextBox Field(bool prompt)
+            {
+                var box = new TextBox { MinWidth = 160, HorizontalAlignment = HorizontalAlignment.Left };
+                System.Windows.Automation.AutomationProperties.SetName(box, "A name far longer than the field it belongs to has any room to show");
+                FieldPrompt.SetIsEnabled(box, prompt);
+                return box;
+            }
+
+            TextBox without = Field(false);
+            TextBox with = Field(true);
+            window.Content = new StackPanel { Children = { without, with } };
+            window.UpdateLayout();
+            Pump();
+            return (without.ActualWidth, with.ActualWidth);
+        });
+
+        Assert.Equal(plain, prompted);
+    }
+
+    /// <summary>#1774: a long prompt was cut off mid-letter, because the text was
+    /// measured at full width. It trims to the field. A disabled field's prompt dims
+    /// with the rest of the shell behind an overlay.</summary>
+    [Fact]
+    public void ALongPromptTrimsAndADisabledOneDims()
+    {
+        (double textWidth, double fieldWidth, double enabled, double disabled) = InRealWindow(dark: false, highContrast: false, window =>
+        {
+            // No width of its own, in a stack that offers unlimited room: the Base filter's layout.
+            var box = new TextBox { MinWidth = 160 };
+            System.Windows.Automation.AutomationProperties.SetName(box, "A name far longer than the field it belongs to has any room to show");
+            FieldPrompt.SetIsEnabled(box, true);
+            window.Content = new StackPanel { Orientation = Orientation.Horizontal, Children = { box } };
+            window.UpdateLayout();
+            Pump();
+            TextBlock text = ShownShell.Descendants(box).OfType<TextBlock>().Single(block => block.Text.StartsWith("A name", StringComparison.Ordinal));
+            double width = text.DesiredSize.Width;
+            double before = EffectiveOpacity(text, box);
+            box.IsEnabled = false;
+            window.UpdateLayout();
+            Pump();
+            return (width, box.ActualWidth, before, EffectiveOpacity(text, box));
+        });
+
+        Assert.True(textWidth <= fieldWidth, $"the prompt is {textWidth:F0}px wide in a {fieldWidth:F0}px field.");
+        Assert.Equal(1, enabled);
+        Assert.True(disabled < 1, "a disabled field's prompt doesn't dim.");
+    }
+
+    private static double EffectiveOpacity(UIElement element, UIElement root)
+    {
+        double opacity = 1;
+        for (DependencyObject? node = element; node is not null && !ReferenceEquals(node, root); node = VisualTreeHelper.GetParent(node))
+        {
+            opacity *= (node as UIElement)?.Opacity ?? 1;
+        }
+
+        return opacity;
+    }
+
+    /// <summary>#1774: every field with no visible label says what it's for.</summary>
+    [Theory]
+    [InlineData("MainWindow.xaml", "SidebarFilterTextBox")]
+    [InlineData("MainWindow.xaml", "BibliographySearchBox")]
+    [InlineData("MainWindow.xaml", "QuickSwitcherSearchTextBox")]
+    public void AnUnlabelledFieldHasAPrompt(string file, string name)
+    {
+        XNamespace xaml = "http://schemas.microsoft.com/winfx/2006/xaml";
+        XElement box = XDocument.Load(Path.Combine(SourceText.ShellSourceRoot(), file))
+            .Descendants()
+            .Single(element => (string?)element.Attribute(xaml + "Name") == name);
+        Assert.Contains(box.Attributes(), attribute => attribute.Name.LocalName == "FieldPrompt.IsEnabled" && attribute.Value == "True");
+    }
+
+    /// <summary>#1774: with no tabs open, the middle of the window was a blank pane.
+    /// A screen reader already hears the empty pane's line when it lands there, so
+    /// this adds nothing to the automation tree.</summary>
+    [Fact]
+    public void AnEmptyWorkspaceSaysWhatToDoNext() => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        ApplyTheme(host, dark: false, highContrast: false);
+        host.Settle();
+        TextBlock Message() => ShownShell.Descendants(host.Shell)
+            .OfType<TextBlock>()
+            .Single(block => block.Text.StartsWith("Open a note", StringComparison.Ordinal));
+
+        Assert.True(Message().IsVisible, "an empty workspace is blank.");
+        Assert.IsType<AutomationPresentationTextBlock>(Message());
+
+        host.Workspace.OpenPath("Lecture.md");
+        host.Settle();
+        Assert.False(Message().IsVisible, "the message stays over an open note.");
+    });
+
     /// <summary>The classic list turns fixed white when disabled, which every
     /// open overlay does to the shell behind it.</summary>
     [Theory]

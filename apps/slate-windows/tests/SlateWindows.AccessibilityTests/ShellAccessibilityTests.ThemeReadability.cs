@@ -183,6 +183,33 @@ public sealed partial class ShellAccessibilityTests
             AssertAxeClean(process, "disabled-grid");
         });
 
+    /// <summary>#1774: the launched app's empty field has readable ink inside its
+    /// border: a blank box has none at all.</summary>
+    [Fact]
+    public void ThemedShell_AnEmptyFieldShowsItsPurpose() =>
+        RunFindInNoteJourney("field-prompt", (process, window, automation, editor) =>
+        {
+            AutomationElement filter = WaitForElement(window, "SidebarFilter", TimeSpan.FromSeconds(10));
+            Assert.True(string.IsNullOrEmpty(filter.Patterns.Value.Pattern.Value.Value), "premise: the filter has text.");
+            Thread.Sleep(300);
+
+            using FlaUI.Core.Capturing.CaptureImage capture = CapturePhysicalPixels(filter);
+            Bitmap bitmap = capture.Bitmap;
+            Color fill = MostCommonColor(filter);
+            int ink = 0;
+            for (int y = bitmap.Height / 4; y < bitmap.Height * 3 / 4; y++)
+            {
+                for (int x = bitmap.Width / 16; x < bitmap.Width / 2; x++)
+                {
+                    ink += Contrast(bitmap.GetPixel(x, y), fill) >= 4.5 ? 1 : 0;
+                }
+            }
+
+            Assert.True(ink > 20, $"only {ink} pixels of readable ink inside the empty filter, on {fill}.");
+
+            AssertAxeClean(process, "field-prompt");
+        });
+
     private static void AssertReadable(AutomationElement surface, string name)
     {
         Color background = MostCommonColor(surface);

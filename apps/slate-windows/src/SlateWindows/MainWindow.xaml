@@ -1027,7 +1027,7 @@
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
-                                    <TextBox x:Name="SidebarFilterTextBox"
+                                    <TextBox x:Name="SidebarFilterTextBox" local:FieldPrompt.IsEnabled="True"
                                              Grid.Column="0"
                                              AutomationProperties.AutomationId="SidebarFilter"
                                              AutomationProperties.Name="Filter files"
@@ -2040,7 +2040,7 @@
                                                  AutomationProperties.AutomationId="BibliographySegmentUnresolved" />
                                 </WrapPanel>
                                 </local:AutomationLandmarkBorder>
-                                <TextBox x:Name="BibliographySearchBox"
+                                <TextBox x:Name="BibliographySearchBox" local:FieldPrompt.IsEnabled="True"
                                          DockPanel.Dock="Top"
                                          Margin="0,0,0,6"
                                          Text="{Binding Bibliography.SearchText, UpdateSourceTrigger=PropertyChanged}"
@@ -2658,7 +2658,7 @@
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <TextBox x:Name="QuickSwitcherSearchTextBox"
+                        <TextBox x:Name="QuickSwitcherSearchTextBox" local:FieldPrompt.IsEnabled="True"
                                  Grid.Column="0"
                                  Padding="10,8"
                                  FontSize="18"
@@ -2779,7 +2779,7 @@
                         <!-- "Search vault" with NO trailing period — mac's
                              actual label (its own doc comment claiming the
                              period is recorded stale, contracts doc item 3). -->
-                        <TextBox x:Name="SearchOverlaySearchTextBox"
+                        <TextBox local:FieldPrompt.IsEnabled="True" x:Name="SearchOverlaySearchTextBox"
                                  Grid.Column="0"
                                  Padding="10,8"
                                  FontSize="18"
@@ -3071,7 +3071,8 @@
                              FontSize="18"
                              Text="{Binding Query, UpdateSourceTrigger=PropertyChanged}"
                              PreviewKeyDown="CommandPaletteSearch_PreviewKeyDown"
-                             AutomationProperties.AutomationId="CommandPaletteSearch"
+                             local:FieldPrompt.IsEnabled="True"
+                                 AutomationProperties.AutomationId="CommandPaletteSearch"
                              AutomationProperties.Name="Search commands"
                              Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}"
                              AutomationProperties.HelpText="Up and Down move selection. Home, End, Page Up and Page Down jump. Enter runs the selected command. Escape closes the palette." />

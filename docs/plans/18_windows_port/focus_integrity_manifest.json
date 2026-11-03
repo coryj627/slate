@@ -123,6 +123,7 @@
     "ui-state SlateWindows.Canvas.CanvasSurfaceView.RenderMode _modeCommit Visibility": "guard: ContentPaneBorder",
     "ui-state SlateWindows.Canvas.CanvasSurfaceView.RenderWhereAmI _whereAmIPanel Visibility": "guard: ContentPaneBorder",
     "ui-state SlateWindows.Canvas.CanvasSurfaceView.SetBanner banner Visibility": "guard: ContentPaneBorder",
+    "ui-state SlateWindows.FieldPrompt.Update prompt Visibility": "exempt: a field's prompt is presentation-only text that can't take focus or the pointer, so the keys are never in it",
     "ui-state SlateWindows.Graph.ConnectionsLeafView.RenderCore _anchor Visibility": "guard: ConnectionsLeafBody",
     "ui-state SlateWindows.Graph.ConnectionsLeafView.RenderCore _depth IsEnabled": "guard: ConnectionsLeafBody",
     "ui-state SlateWindows.Graph.ConnectionsLeafView.RenderCore _summary Visibility": "guard: ConnectionsLeafBody",

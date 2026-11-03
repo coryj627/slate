@@ -154,6 +154,7 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
             VerticalAlignment = VerticalAlignment.Center,
         };
         AutomationProperties.SetAutomationId(_filterField, "CanvasFilterField");
+        FieldPrompt.SetIsEnabled(_filterField, true);
         AutomationProperties.SetName(_filterField, CanvasPhrase.FilterFieldName);
         AutomationProperties.SetHelpText(_filterField, CanvasPhrase.FilterFieldHint);
         _filterField.TextChanged += OnFilterTextChanged;
