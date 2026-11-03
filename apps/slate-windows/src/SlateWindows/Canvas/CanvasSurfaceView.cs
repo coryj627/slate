@@ -192,9 +192,10 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         _modeCommit.Click += (_, _) => Model?.Navigator.CommitMode();
         _modeCancel.Click += (_, _) => Model?.Navigator.CancelMode();
 
-        var header = new StackPanel
+        // #1773: wraps, so the filter moves to a line of its own instead of losing
+        // its right edge.
+        var header = new WrapPanel
         {
-            Orientation = Orientation.Horizontal,
             Margin = new Thickness(12, 8, 12, 4),
         };
         header.Children.Add(_title);
@@ -1090,6 +1091,7 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         var choice = new RadioButton
         {
             Content = label,
+            MinWidth = 0,
             Margin = new Thickness(0, 0, 8, 0),
             VerticalAlignment = VerticalAlignment.Center,
             GroupName = "CanvasSurface",

@@ -93,8 +93,10 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         // C-5: the FIELD — an Edit peer with the mac's label and hint.
         _filterField = new TextBox
         {
-            Width = 220,
+            MinWidth = 80,
+            MaxWidth = 220,
             Margin = new Thickness(0, 0, 6, 0),
+            HorizontalAlignment = HorizontalAlignment.Left,
             VerticalAlignment = VerticalAlignment.Center,
             TabIndex = 1,
         };
@@ -237,14 +239,14 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         AutomationProperties.SetAutomationId(_whereAmIPanel, "GraphWhereAmIPanel");
         AutomationProperties.SetName(_whereAmIPanel, WhereAmIHeading);
 
-        var filterRegion = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        filterRegion.Children.Add(_filterField);
-        filterRegion.Children.Add(_filterSummary);
+        // #1773: the field takes the room that's left, so nothing beside it cuts it
+        // off. Tab order comes from the TabIndexes above, not from this order.
+        var filterRegion = new DockPanel { VerticalAlignment = VerticalAlignment.Center };
+        DockPanel.SetDock(_clearFilter, Dock.Right);
         filterRegion.Children.Add(_clearFilter);
+        DockPanel.SetDock(_filterSummary, Dock.Right);
+        filterRegion.Children.Add(_filterSummary);
+        filterRegion.Children.Add(_filterField);
 
         var header = new DockPanel();
         DockPanel.SetDock(_inspectorToggle, Dock.Right);
@@ -614,6 +616,7 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
                 {
                     Content = spec.Title,
                     GroupName = "GraphSurfaceMode",
+                    MinWidth = 0,
                     Margin = new Thickness(0, 0, 8, 0),
                     IsChecked = spec.Mode == model.ViewState.Mode,
                     // W6-2 PR D (rule M, Term M2): both modes live — A-11's

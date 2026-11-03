@@ -341,6 +341,91 @@ public sealed class ThemeDesignSystemTests
         Assert.Empty(stacks);
     }
 
+    /// <summary>#1773: the filter was a fixed 220px in whatever room was left, and
+    /// the switcher beside it cut off its right edge.</summary>
+    [Fact]
+    public void TheGraphFilterStopsBeforeTheSwitcher() => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        var view = new SlateWindows.Graph.GraphSurfaceView { Width = 320, HorizontalAlignment = HorizontalAlignment.Left };
+        host.Shell.Content = view;
+        host.Settle();
+
+        FrameworkElement Find(string id) => ShownShell.Descendants(view)
+            .OfType<FrameworkElement>()
+            .Single(element => System.Windows.Automation.AutomationProperties.GetAutomationId(element) == id);
+        FrameworkElement field = Find("GraphFilterField");
+        double right = field.TranslatePoint(new Point(field.ActualWidth, 0), view).X;
+        double switcher = Find("GraphSurfaceSwitcher").TranslatePoint(new Point(0, 0), view).X;
+        Assert.True(right <= switcher, $"the filter ends at {right:F0}px and the switcher starts at {switcher:F0}px.");
+    });
+
+    /// <summary>#1773: a list property's item was a horizontal stack with a 140px
+    /// field, so its Remove button was cut off in a narrow editor.</summary>
+    [Fact]
+    public void AListPropertysRemoveButtonStaysInItsRow() => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        var presenter = new ContentPresenter
+        {
+            ContentTemplate = (DataTemplate)host.Shell.FindResource("PropertyListEditorTemplate"),
+            Content = new
+            {
+                AddItemVisibleText = "Add item",
+                AddItemLabel = "Add item",
+                Items = new[] { new ListItemRow() },
+            },
+        };
+        var row = new Border { Width = 170, HorizontalAlignment = HorizontalAlignment.Left, Child = presenter };
+        host.Shell.Content = row;
+        host.Settle();
+
+        Button remove = ShownShell.Descendants(presenter).OfType<Button>().Single(button => button.Content is "Remove");
+        double right = remove.TranslatePoint(new Point(remove.ActualWidth, 0), row).X;
+        Assert.True(right <= 170, $"Remove ends at {right:F0}px in a 170px row.");
+    });
+
+    /// <summary>#1773: the splitters were 7px bars of the border colour. They keep
+    /// that width to grab and draw one line.</summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void TheSplittersDrawAThinLine(bool dark, bool highContrast) => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        ApplyTheme(host, dark, highContrast);
+        host.Settle();
+
+        GridSplitter[] splitters = [.. ShownShell.Descendants(host.Shell).OfType<GridSplitter>()];
+        Assert.NotEmpty(splitters);
+        foreach (GridSplitter splitter in splitters)
+        {
+            System.Windows.Shapes.Rectangle line = Assert.Single(ShownShell.Descendants(splitter).OfType<System.Windows.Shapes.Rectangle>());
+            Assert.Equal(1, line.ActualWidth);
+        }
+    });
+
+    /// <summary>#1773: the bar stays in the UIA tree after a scan, because a reader
+    /// can ask how the last one ended, but gold there says nothing and competes with
+    /// real selection, so it only draws fully while work is running.</summary>
+    [Theory]
+    [InlineData(0, 1, false, false)]
+    [InlineData(1, 2, false, true)]
+    [InlineData(2, 2, false, false)]
+    [InlineData(0, 1, true, true)]
+    public void TheStatusBarProgressKnowsWhenWorkIsRunning(double value, double maximum, bool indeterminate, bool active) => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        var lifecycle = Assert.IsType<VaultLifecycleViewModel>(host.Shell.DataContext);
+        void Set(string name, object content) => typeof(VaultLifecycleViewModel).GetProperty(name)!.SetValue(lifecycle, content);
+        Set(nameof(VaultLifecycleViewModel.ProgressMaximum), maximum);
+        Set(nameof(VaultLifecycleViewModel.ProgressValue), value);
+        Set(nameof(VaultLifecycleViewModel.IsProgressIndeterminate), indeterminate);
+
+        Assert.Equal(active, typeof(VaultLifecycleViewModel).GetProperty("IsProgressActive")?.GetValue(lifecycle));
+    });
+
     /// <summary>The classic list turns fixed white when disabled, which every
     /// open overlay does to the shell behind it.</summary>
     [Theory]
@@ -714,6 +799,15 @@ public sealed class ThemeDesignSystemTests
             .ToDictionary(
                 color => color.Attribute(Xaml + "Key")!.Value,
                 color => color.Value.Trim().ToUpperInvariant());
+
+    private sealed class ListItemRow
+    {
+        public string Text { get; set; } = "- [ ] a value long enough to fill the field";
+
+        public string ItemLabel => "Item";
+
+        public string RemoveLabel => "Remove";
+    }
 
     private static XDocument Document(string fileName) =>
         XDocument.Load(Path.Combine(SourceText.ShellSourceRoot(), "Themes", fileName));

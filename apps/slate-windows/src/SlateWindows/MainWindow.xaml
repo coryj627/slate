@@ -819,13 +819,27 @@
                 </StatusBarItem>
                 <Separator />
                 <StatusBarItem HorizontalContentAlignment="Stretch" Width="180">
-                    <ProgressBar Minimum="0"
-                                 AutomationProperties.AutomationId="VaultScanProgress"
-                                 Maximum="{Binding ProgressMaximum}"
-                                 Value="{Binding ProgressValue, Mode=OneWay}"
-                                 IsIndeterminate="{Binding IsProgressIndeterminate}"
-                                 Height="6"
-                                 AutomationProperties.Name="Vault scan progress" />
+                    <!-- #1773: a reader can still ask how the last scan ended, so the
+                         bar stays in the tree. It only draws fully while work runs. -->
+                    <Border>
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Opacity" Value="0.35" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsProgressActive}" Value="True">
+                                        <Setter Property="Opacity" Value="1" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <ProgressBar Minimum="0"
+                                     AutomationProperties.AutomationId="VaultScanProgress"
+                                     Maximum="{Binding ProgressMaximum}"
+                                     Value="{Binding ProgressValue, Mode=OneWay}"
+                                     IsIndeterminate="{Binding IsProgressIndeterminate}"
+                                     Height="6"
+                                     AutomationProperties.Name="Vault scan progress" />
+                    </Border>
                 </StatusBarItem>
             </StatusBar>
         </Border>
@@ -972,7 +986,7 @@
                             DataContext="{Binding FileSidebar}">
                         <DockPanel Margin="10">
                             <StackPanel DockPanel.Dock="Top">
-                                <DockPanel Margin="0,0,0,8">
+                                <DockPanel Margin="0,0,0,8" LastChildFill="False">
                                     <TextBlock Text="Files"
                                                FontSize="16"
                                                FontWeight="SemiBold"
@@ -1298,8 +1312,7 @@
                     </local:AutomationLandmarkBorder>
                     <GridSplitter Grid.Column="1"
                                   KeyboardNavigation.IsTabStop="False"
-                                  Background="{DynamicResource Slate.BorderBrush}"
-                                  HorizontalAlignment="Stretch"
+                                  Style="{DynamicResource Slate.ShellSplitterStyle}"
                                   ResizeDirection="Columns"
                                   AutomationProperties.Name="Resize files sidebar" />
                     <!-- W7-6 (#1240): F6 lands here; Tab never does. W7-7
@@ -1321,8 +1334,7 @@
                     </local:AutomationLandmarkBorder>
                     <GridSplitter Grid.Column="3"
                                   KeyboardNavigation.IsTabStop="False"
-                                  Background="{DynamicResource Slate.BorderBrush}"
-                                  HorizontalAlignment="Stretch"
+                                  Style="{DynamicResource Slate.ShellSplitterStyle}"
                                   ResizeDirection="Columns"
                                   AutomationProperties.Name="Resize right pane" />
                     <local:AutomationLandmarkBorder x:Name="RightPaneBorder"

@@ -367,12 +367,15 @@
                                       IsTabStop="False">
                 <local:LayoutItemsControl.ItemTemplate>
                     <DataTemplate DataType="{x:Type panels:PropertyListItemViewModel}">
-                        <StackPanel Margin="0,2" Orientation="Horizontal">
+                        <Grid Margin="0,2">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
                             <!-- Enter commits the ROW (contract 2 —
                                  lists have the same commit triggers
                                  as scalars), Esc reverts it. -->
-                            <TextBox MinWidth="140"
-                                     Text="{Binding Text, UpdateSourceTrigger=PropertyChanged}"
+                            <TextBox Text="{Binding Text, UpdateSourceTrigger=PropertyChanged}"
                                      AutomationProperties.Name="{Binding ItemLabel}">
                                 <TextBox.InputBindings>
                                     <KeyBinding Key="Return" Command="{Binding CommitCommand}" />
@@ -380,12 +383,13 @@
                                     <KeyBinding Key="Back" Modifiers="Control" Command="{Binding DeleteCommand}" />
                                 </TextBox.InputBindings>
                             </TextBox>
-                            <Button Margin="6,0,0,0"
+                            <Button Grid.Column="1"
+                                    Margin="6,0,0,0"
                                     Padding="8,2"
                                     Content="Remove"
                                     Command="{Binding RemoveCommand}"
                                     AutomationProperties.Name="{Binding RemoveLabel}" />
-                        </StackPanel>
+                        </Grid>
                     </DataTemplate>
                 </local:LayoutItemsControl.ItemTemplate>
             </local:LayoutItemsControl>
@@ -542,7 +546,7 @@
                                    Text="{Binding Properties.HeaderText}"
                                    AutomationProperties.HeadingLevel="Level2" />
                         <Button DockPanel.Dock="Right"
-                                Margin="8,0,0,0"
+                                Margin="8,0,8,0"
                                 MinHeight="28"
                                 Padding="8,2"
                                 Content="Rename property across the vault"

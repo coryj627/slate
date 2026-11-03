@@ -418,20 +418,37 @@ internal sealed partial class VaultLifecycleViewModel
     public double ProgressMaximum
     {
         get => _progressMaximum;
-        private set => SetField(ref _progressMaximum, value);
+        private set
+        {
+            SetField(ref _progressMaximum, value);
+            OnPropertyChanged(nameof(IsProgressActive));
+        }
     }
 
     public double ProgressValue
     {
         get => _progressValue;
-        private set => SetField(ref _progressValue, value);
+        private set
+        {
+            SetField(ref _progressValue, value);
+            OnPropertyChanged(nameof(IsProgressActive));
+        }
     }
 
     public bool IsProgressIndeterminate
     {
         get => _isProgressIndeterminate;
-        private set => SetField(ref _isProgressIndeterminate, value);
+        private set
+        {
+            SetField(ref _isProgressIndeterminate, value);
+            OnPropertyChanged(nameof(IsProgressActive));
+        }
     }
+
+    /// <summary>#1773: whether the status bar's progress is showing work now, rather
+    /// than nothing yet or how the last scan ended.</summary>
+    public bool IsProgressActive =>
+        _isProgressIndeterminate || (_progressValue > 0 && _progressValue < _progressMaximum);
 
     public FilesSidebarViewModel? FileSidebar
     {
