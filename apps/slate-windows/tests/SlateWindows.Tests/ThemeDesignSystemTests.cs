@@ -187,36 +187,36 @@ public sealed class ThemeDesignSystemTests
     {
         IReadOnlyDictionary<string, string> colors = ColorsIn(fileName);
 
-        (string? listText, string? treeSelected, string? treeSelectedText) = InRealWindow(dark, highContrast: false, window =>
-        {
-            var list = new ListBox
+        // The selected tree row's state depends on the window having focus, which
+        // a session 0 runner never gives it, so that row is checked through the
+        // keys its classic template reads.
+        (string? listText, string? selection, string? selectionText, string? inactive, string? inactiveText) =
+            InRealWindow(dark, highContrast: false, window =>
             {
-                ItemContainerStyle = new Style(typeof(ListBoxItem)),
-                ItemTemplate = TextRowTemplate(),
-                ItemsSource = new[] { "A row" },
-            };
-            var selected = new TreeViewItem { Header = "A tree row", IsSelected = true };
-            var tree = new TreeView { ItemContainerStyle = new Style(typeof(TreeViewItem)), Items = { selected } };
-            window.Content = new StackPanel { Children = { list, tree } };
-            window.UpdateLayout();
-            Pump();
-            TextBlock row = ShownShell.Descendants(list).OfType<TextBlock>().Single();
-            Border chrome = ShownShell.Descendants(selected).OfType<Border>()
-                .First(border => border.Background is SolidColorBrush { Color.A: > 0 });
-            TextBlock header = ShownShell.Descendants(selected).OfType<TextBlock>().Single();
-            return (
-                (row.Foreground as SolidColorBrush)?.Color.ToString(),
-                (chrome.Background as SolidColorBrush)?.Color.ToString(),
-                (header.Foreground as SolidColorBrush)?.Color.ToString());
-        });
+                var list = new ListBox
+                {
+                    ItemContainerStyle = new Style(typeof(ListBoxItem)),
+                    ItemTemplate = TextRowTemplate(),
+                    ItemsSource = new[] { "A row" },
+                };
+                window.Content = list;
+                window.UpdateLayout();
+                Pump();
+                TextBlock row = ShownShell.Descendants(list).OfType<TextBlock>().Single();
+                string? Key(object key) => (window.FindResource(key) as SolidColorBrush)?.Color.ToString();
+                return (
+                    (row.Foreground as SolidColorBrush)?.Color.ToString(),
+                    Key(SystemColors.HighlightBrushKey),
+                    Key(SystemColors.HighlightTextBrushKey),
+                    Key(SystemColors.InactiveSelectionHighlightBrushKey),
+                    Key(SystemColors.InactiveSelectionHighlightTextBrushKey));
+            });
 
         Assert.Equal(colors["Slate.TextColor"], listText);
-        Assert.True(
-            treeSelected == colors["Slate.SelectionBackgroundColor"] || treeSelected == colors["Slate.SelectedSurfaceColor"],
-            $"{fileName}: the selected tree row paints {treeSelected}.");
-        Assert.True(
-            treeSelectedText == colors["Slate.SelectionTextColor"] || treeSelectedText == colors["Slate.TextColor"],
-            $"{fileName}: the selected tree row's text is {treeSelectedText}.");
+        Assert.Equal(colors["Slate.SelectionBackgroundColor"], selection);
+        Assert.Equal(colors["Slate.SelectionTextColor"], selectionText);
+        Assert.Equal(colors["Slate.SelectedSurfaceColor"], inactive);
+        Assert.Equal(colors["Slate.TextColor"], inactiveText);
     }
 
     /// <summary>High Contrast keeps the real system colours: there they are
@@ -280,7 +280,7 @@ public sealed class ThemeDesignSystemTests
         host.Settle();
 
         TabItem tab = ShownShell.Descendants(host.Shell).OfType<TabItem>().Single();
-        var chrome = Assert.IsType<Border>(tab.Template.FindName("TabChrome", tab));
+        Border chrome = ShownShell.Descendants(tab).OfType<Border>().First();
         Color Theme(string key) => Assert.IsType<SolidColorBrush>(host.Shell.FindResource(key)).Color;
 
         Assert.True(tab.IsSelected);
