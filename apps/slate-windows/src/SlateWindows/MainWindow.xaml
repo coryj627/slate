@@ -29,6 +29,51 @@
             <ResourceDictionary.MergedDictionaries>
                 <ResourceDictionary Source="WorkspaceTemplates.xaml" />
             </ResourceDictionary.MergedDictionaries>
+            <!-- #1762: a row with its own style loses Fluent's and falls back to WPF's
+                 classic template, which hard-codes a blue selection. Every ListBoxItem
+                 style in this window is based on this one. -->
+            <Style x:Key="Slate.PanelRowBase" TargetType="ListBoxItem">
+                <Setter Property="Padding" Value="6,3" />
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="BorderBrush" Value="Transparent" />
+                <Setter Property="FocusVisualStyle" Value="{DynamicResource DefaultControlFocusVisualStyle}" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ListBoxItem">
+                            <Border Padding="{TemplateBinding Padding}"
+                                    CornerRadius="4"
+                                    Background="{TemplateBinding Background}">
+                                <Grid>
+                                    <!-- The pill: selection is a shape too, not colour alone. -->
+                                    <Rectangle Width="3"
+                                               Height="16"
+                                               Margin="-4,0,0,0"
+                                               RadiusX="1.5"
+                                               RadiusY="1.5"
+                                               HorizontalAlignment="Left"
+                                               VerticalAlignment="Center"
+                                               Fill="{TemplateBinding BorderBrush}" />
+                                    <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                                      VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+                                </Grid>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter Property="Background" Value="{DynamicResource Slate.RaisedSurfaceBrush}" />
+                                </Trigger>
+                                <Trigger Property="IsSelected" Value="True">
+                                    <Setter Property="Background" Value="{DynamicResource Slate.SelectedSurfaceBrush}" />
+                                    <Setter Property="Foreground" Value="{DynamicResource Slate.SelectionTextBrush}" />
+                                    <Setter Property="BorderBrush" Value="{DynamicResource Slate.AccentIndicatorBrush}" />
+                                </Trigger>
+                                <Trigger Property="IsEnabled" Value="False">
+                                    <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.GrayTextBrushKey}}" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
         </ResourceDictionary>
     </Window.Resources>
     <Window.InputBindings>
@@ -1130,7 +1175,7 @@
                                             <!-- R-4 (#1246): DisplayMemberPath templates the
                                                  text only; the container read the record dump. -->
                                             <ListBox.ItemContainerStyle>
-                                                <Style TargetType="ListBoxItem">
+                                                <Style TargetType="ListBoxItem" BasedOn="{StaticResource Slate.PanelRowBase}">
                                                     <Setter Property="AutomationProperties.Name" Value="{Binding RelativeSource={RelativeSource Self}, Converter={x:Static local:SiblingNames.Converter}}" />
                                                 </Style>
                                             </ListBox.ItemContainerStyle>
@@ -1212,7 +1257,7 @@
                                              "SlateWindows.FileTreeNodeViewModel, not selected,
                                              1 of 2". -->
                                         <ListBox.ItemContainerStyle>
-                                            <Style TargetType="ListBoxItem">
+                                            <Style TargetType="ListBoxItem" BasedOn="{StaticResource Slate.PanelRowBase}">
                                                 <Setter Property="AutomationProperties.Name" Value="{Binding RelativeSource={RelativeSource Self}, Converter={x:Static local:SiblingNames.Converter}}" />
                                             </Style>
                                         </ListBox.ItemContainerStyle>
@@ -1243,7 +1288,7 @@
                                          AutomationProperties.Name="Files in selected folder">
                                     <!-- R-4 (#1246): as the filter results above. -->
                                     <ListBox.ItemContainerStyle>
-                                        <Style TargetType="ListBoxItem">
+                                        <Style TargetType="ListBoxItem" BasedOn="{StaticResource Slate.PanelRowBase}">
                                             <Setter Property="AutomationProperties.Name" Value="{Binding RelativeSource={RelativeSource Self}, Converter={x:Static local:SiblingNames.Converter}}" />
                                         </Style>
                                     </ListBox.ItemContainerStyle>
@@ -1308,7 +1353,7 @@
                                 <Setter Property="AutomationProperties.HeadingLevel" Value="Level2" />
                             </Style>
                             <!-- Rows carry the composed mac label + per-state hint. -->
-                            <Style x:Key="PanelRowContainer" TargetType="ListBoxItem">
+                            <Style x:Key="PanelRowContainer" TargetType="ListBoxItem" BasedOn="{StaticResource Slate.PanelRowBase}">
                                 <Setter Property="AutomationProperties.Name" Value="{Binding RelativeSource={RelativeSource Self}, Converter={x:Static local:SiblingNames.Converter}}" />
                                 <Setter Property="AutomationProperties.HelpText" Value="{Binding AutomationHelpText}" />
                             </Style>
@@ -1534,7 +1579,7 @@
                                          AutomationProperties.AutomationId="PanelOutlineList" local:SiblingNames.NamePath="AutomationName" local:SiblingNames.Noun="heading"
                                          AutomationProperties.Name="Outline">
                                     <ListBox.ItemContainerStyle>
-                                        <Style TargetType="ListBoxItem">
+                                        <Style TargetType="ListBoxItem" BasedOn="{StaticResource Slate.PanelRowBase}">
                                             <Setter Property="AutomationProperties.Name" Value="{Binding RelativeSource={RelativeSource Self}, Converter={x:Static local:SiblingNames.Converter}}" />
                                         </Style>
                                     </ListBox.ItemContainerStyle>
@@ -1886,7 +1931,7 @@
                                          AutomationProperties.AutomationId="PanelCitationsList" local:SiblingNames.NamePath="AutomationName" local:SiblingNames.Noun="citation"
                                          AutomationProperties.Name="{x:Static panels:CitationPhrase.CitationsHeading}">
                                     <ListBox.ItemContainerStyle>
-                                        <Style TargetType="ListBoxItem">
+                                        <Style TargetType="ListBoxItem" BasedOn="{StaticResource Slate.PanelRowBase}">
                                             <Setter Property="AutomationProperties.Name" Value="{Binding RelativeSource={RelativeSource Self}, Converter={x:Static local:SiblingNames.Converter}}" />
                                             <Setter Property="AutomationProperties.HelpText" Value="{Binding AutomationHelpText}" />
                                         </Style>
@@ -2136,7 +2181,7 @@
                                             <!-- R-4 (#1246): DisplayMemberPath templates the text only;
                                                  the container read the saved query record dump. -->
                                             <ListBox.ItemContainerStyle>
-                                                <Style TargetType="ListBoxItem">
+                                                <Style TargetType="ListBoxItem" BasedOn="{StaticResource Slate.PanelRowBase}">
                                                     <Setter Property="AutomationProperties.Name" Value="{Binding RelativeSource={RelativeSource Self}, Converter={x:Static local:SiblingNames.Converter}}" />
                                                 </Style>
                                             </ListBox.ItemContainerStyle>
@@ -2205,7 +2250,7 @@
                                             <!-- R-4 (#1246): DisplayMemberPath templates the text only;
                                                  the container read the base file record dump. -->
                                             <ListBox.ItemContainerStyle>
-                                                <Style TargetType="ListBoxItem">
+                                                <Style TargetType="ListBoxItem" BasedOn="{StaticResource Slate.PanelRowBase}">
                                                     <Setter Property="AutomationProperties.Name" Value="{Binding Path}" />
                                                 </Style>
                                             </ListBox.ItemContainerStyle>
@@ -2257,7 +2302,7 @@
                                             <!-- R-4 (#1246): DisplayMemberPath templates the text only;
                                                  the container read the dashboard record dump. -->
                                             <ListBox.ItemContainerStyle>
-                                                <Style TargetType="ListBoxItem">
+                                                <Style TargetType="ListBoxItem" BasedOn="{StaticResource Slate.PanelRowBase}">
                                                     <Setter Property="AutomationProperties.Name" Value="{Binding RelativeSource={RelativeSource Self}, Converter={x:Static local:SiblingNames.Converter}}" />
                                                 </Style>
                                             </ListBox.ItemContainerStyle>
@@ -2540,7 +2585,7 @@
                                      Open row precedent), and a rail entry an AT
                                      cannot name is unusable. -->
                                 <ListBox.ItemContainerStyle>
-                                    <Style TargetType="ListBoxItem">
+                                    <Style TargetType="ListBoxItem" BasedOn="{StaticResource Slate.PanelRowBase}">
                                         <Setter Property="AutomationProperties.Name" Value="{Binding Title}" />
                                     </Style>
                                 </ListBox.ItemContainerStyle>
@@ -2620,7 +2665,7 @@
                              AutomationProperties.Name="Quick Open results"
                              AutomationProperties.ItemStatus="{Binding ResultSummary}">
                         <ListBox.ItemContainerStyle>
-                            <Style TargetType="ListBoxItem">
+                            <Style TargetType="ListBoxItem" BasedOn="{StaticResource Slate.PanelRowBase}">
                                 <Setter Property="AutomationProperties.Name" Value="{Binding RelativeSource={RelativeSource Self}, Converter={x:Static local:SiblingNames.Converter}}" />
                                 <Setter Property="AutomationProperties.HelpText" Value="{Binding Path}" />
                             </Style>
@@ -2783,7 +2828,7 @@
                                  AutomationProperties.Name="Search results"
                                  AutomationProperties.ItemStatus="{Binding Summary}">
                             <ListBox.ItemContainerStyle>
-                                <Style TargetType="ListBoxItem">
+                                <Style TargetType="ListBoxItem" BasedOn="{StaticResource Slate.PanelRowBase}">
                                     <Setter Property="AutomationProperties.Name" Value="{Binding RelativeSource={RelativeSource Self}, Converter={x:Static local:SiblingNames.Converter}}" />
                                     <Setter Property="ToolTip" Value="{Binding Path}" />
                                 </Style>
@@ -3043,7 +3088,7 @@
                              AutomationProperties.AutomationId="CommandPaletteResults"
                              AutomationProperties.Name="Command results">
                         <ListBox.ItemContainerStyle>
-                            <Style TargetType="ListBoxItem">
+                            <Style TargetType="ListBoxItem" BasedOn="{StaticResource Slate.PanelRowBase}">
                                 <!-- ONE name per row (contract P6): label plus the
                                      spoken chord. The visible chord and the bolded
                                      runs below are presentation-only, so they never
@@ -3442,7 +3487,7 @@
                              AutomationProperties.AutomationId="CitationDetailsFields"
                              AutomationProperties.Name="{x:Static panels:CitationPhrase.DetailsFieldsLabel}">
                         <ListBox.ItemContainerStyle>
-                            <Style TargetType="ListBoxItem">
+                            <Style TargetType="ListBoxItem" BasedOn="{StaticResource Slate.PanelRowBase}">
                                 <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
                             </Style>
                         </ListBox.ItemContainerStyle>
@@ -3614,7 +3659,7 @@
                              AutomationProperties.AutomationId="FilesCitingList"
                              AutomationProperties.Name="{Binding Heading}">
                         <ListBox.ItemContainerStyle>
-                            <Style TargetType="ListBoxItem">
+                            <Style TargetType="ListBoxItem" BasedOn="{StaticResource Slate.PanelRowBase}">
                                 <Setter Property="AutomationProperties.Name" Value="{Binding}" />
                             </Style>
                         </ListBox.ItemContainerStyle>
@@ -3704,7 +3749,7 @@
                              its place, and so is every control in it: Add
                              section takes one query twice (codex PR 3 round 2). -->
                         <ListBox.ItemContainerStyle>
-                            <Style TargetType="ListBoxItem">
+                            <Style TargetType="ListBoxItem" BasedOn="{StaticResource Slate.PanelRowBase}">
                                 <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
                             </Style>
                         </ListBox.ItemContainerStyle>
@@ -4097,7 +4142,7 @@
                                  AutomationProperties.AutomationId="TemplatePickerList" local:SiblingNames.NamePath="AccessibleName" local:SiblingNames.Noun="template"
                                  AutomationProperties.Name="Templates">
                             <ListBox.ItemContainerStyle>
-                                <Style TargetType="ListBoxItem">
+                                <Style TargetType="ListBoxItem" BasedOn="{StaticResource Slate.PanelRowBase}">
                                     <Setter Property="AutomationProperties.Name" Value="{Binding RelativeSource={RelativeSource Self}, Converter={x:Static local:SiblingNames.Converter}}" />
                                     <Setter Property="AutomationProperties.HelpText" Value="Activate to use this template for a new note." />
                                     <Setter Property="Padding" Value="8,6" />
@@ -4364,7 +4409,7 @@
                              AutomationProperties.AutomationId="MoveToList" local:SiblingNames.NamePath="AccessibleName" local:SiblingNames.DistinguisherPath="Place" local:SiblingNames.Noun="destination"
                              AutomationProperties.Name="Destination folders">
                         <ListBox.ItemContainerStyle>
-                            <Style TargetType="ListBoxItem">
+                            <Style TargetType="ListBoxItem" BasedOn="{StaticResource Slate.PanelRowBase}">
                                 <Setter Property="AutomationProperties.Name" Value="{Binding RelativeSource={RelativeSource Self}, Converter={x:Static local:SiblingNames.Converter}}" />
                                 <Setter Property="AutomationProperties.HelpText" Value="{Binding DataContext.RowHelpText, RelativeSource={RelativeSource AncestorType=ListBox}}" />
                                 <Setter Property="Padding" Value="8,6" />
@@ -4464,7 +4509,7 @@
                              file) rides the item's UIA ItemStatus; §G2 TG2-9: its UIA Name
                              is the row's LABEL, never the record's ToString. -->
                         <ListBox.ItemContainerStyle>
-                            <Style TargetType="ListBoxItem">
+                            <Style TargetType="ListBoxItem" BasedOn="{StaticResource Slate.PanelRowBase}">
                                 <Setter Property="AutomationProperties.Name" Value="{Binding RelativeSource={RelativeSource Self}, Converter={x:Static local:SiblingNames.Converter}}" />
                                 <Setter Property="AutomationProperties.ItemStatus" Value="{Binding Status}" />
                             </Style>
@@ -4515,7 +4560,7 @@
                              record's container otherwise names itself by ToString, and the
                              journey heard "CanvasPromptChoice { Value = … }" for a row. -->
                         <ListBox.ItemContainerStyle>
-                            <Style TargetType="ListBoxItem">
+                            <Style TargetType="ListBoxItem" BasedOn="{StaticResource Slate.PanelRowBase}">
                                 <Setter Property="AutomationProperties.Name" Value="{Binding RelativeSource={RelativeSource Self}, Converter={x:Static local:SiblingNames.Converter}}" />
                                 <Setter Property="AutomationProperties.ItemStatus" Value="{Binding Status}" />
                             </Style>

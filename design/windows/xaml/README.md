@@ -26,6 +26,10 @@ Settings › Appearance › **Accent color**: `Automatic` (default) · `Slate go
 - **Windows accent:** the colour chosen in Windows Settings › Personalization › Colors.
 - **Automatic:** gold while Windows uses its default accent (`#0078D4`). Once the user picks another colour, or lets Windows pick one from the wallpaper, Slate follows it.
 
+Selected panel rows use `SelectedSurface` with an `AccentIndicator` pill, so selection is a shape as well as a colour, and all their text clears the floor: primary, secondary and `AccentText`.
+
+Text draws in `AccentText`, never in `Accent`: the fill measures Lc 71.61 on the raised surface in light, and the text role clears all three surfaces (#1051). A test enforces this.
+
 Everything that is gold follows the setting. That is the nine roles below, which drive primary buttons, checked boxes, radios, switches and sliders, progress, focused-field underlines, links, editor headings, wikilinks and tags, the selected-row pill, the tab underline, selected rows and text selection.
 
 **Contrast gate.** Before using a Windows accent, check every pair below in the current theme. If any pair fails, use gold without telling the user. Check again whenever the accent or the theme changes.
@@ -99,7 +103,7 @@ A `RichTextBox`, which the reading view is, always draws its selection as an ove
 | Light | `#A57A00` at 20% | `#EDE4CC` | 1.27:1 | Lc 85.0 / 77.9 |
 | Dark | `#E2AD24` at 24% | `#4D401F` | 1.64:1 | Lc 80.4 / 77.5 |
 
-An overlay tints the text as well as the background, so no overlay that shows at all keeps every colour above Lc 75. Selected secondary text measures Lc 75.6 in light and 65.1 in dark, and accent text about 63-65. Primary text under the blue overlay this replaced measured Lc 57-61. In High Contrast the brush is `SystemColors.Highlight` at 40%, the opacity Fluent's default gives. If the Windows accent setting is added, this overlay needs its own rule in the contrast gate.
+An overlay tints the text as well as the background, so no overlay that shows at all keeps every colour above Lc 75. Selected secondary text measures Lc 75.6 in light and 65.1 in dark. Selected links use `AccentText`, and they measure below the floor too. Primary text under the blue overlay this replaced measured Lc 57-61. In High Contrast the brush is `SystemColors.Highlight` at 40%, the opacity Fluent's default gives. If the Windows accent setting is added, this overlay needs its own rule in the contrast gate.
 
 `PassesContrastGate` is the list above, using the WCAG 2 contrast ratio. `Mix` blends two opaque colours channel by channel.
 

@@ -28,6 +28,7 @@ internal static class TextBoxSelection
     internal const string BackgroundBrushKey = "Slate.SelectionBackgroundBrush";
     internal const string TextBrushKey = "Slate.SelectionTextBrush";
     internal const string ReadingBrushKey = "Slate.ReadingSelectionBrush";
+    internal const string EditorBorderPenKey = "Slate.EditorSelectionBorderPen";
 
     private static int _installed;
 

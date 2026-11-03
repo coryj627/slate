@@ -66,6 +66,12 @@ internal sealed class SlateTextEditor : TextEditor
         TextArea.TextView.SetResourceReference(
             ICSharpCode.AvalonEdit.Rendering.TextView.LinkTextForegroundBrushProperty,
             EditorSyntaxPalette.WikilinkBrushKey);
+        // #1763: AvalonEdit draws its selection under the text, so it takes the
+        // solid pair. The border keeps the current find match apart from the
+        // others, whose fill is close to the selection's in both themes.
+        TextArea.SetResourceReference(ICSharpCode.AvalonEdit.Editing.TextArea.SelectionBrushProperty, TextBoxSelection.BackgroundBrushKey);
+        TextArea.SetResourceReference(ICSharpCode.AvalonEdit.Editing.TextArea.SelectionForegroundProperty, TextBoxSelection.TextBrushKey);
+        TextArea.SetResourceReference(ICSharpCode.AvalonEdit.Editing.TextArea.SelectionBorderProperty, TextBoxSelection.EditorBorderPenKey);
         TextArea.Caret.PositionChanged += Caret_PositionChanged;
         AddHandler(TextCompositionManager.PreviewTextInputStartEvent,
             new TextCompositionEventHandler(Composition_Started), handledEventsToo: true);

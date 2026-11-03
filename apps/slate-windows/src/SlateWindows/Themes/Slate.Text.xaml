@@ -16,4 +16,8 @@
            BasedOn="{StaticResource Slate.BodyLargeTextBlockStyle}">
         <Setter Property="FontWeight" Value="SemiBold" />
     </Style>
+    <!-- The editor's selection border, here for the same reason: it isn't generated. -->
+    <Pen x:Key="Slate.EditorSelectionBorderPen"
+         Brush="{DynamicResource Slate.AccentTextBrush}"
+         Thickness="1" />
 </ResourceDictionary>
