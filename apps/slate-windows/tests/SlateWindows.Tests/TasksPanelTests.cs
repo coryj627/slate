@@ -1201,13 +1201,15 @@ public sealed class TasksPanelTests : IDisposable
         Assert.StartsWith("Could not load tasks: ", panels.TasksEmptyMessage);
         Assert.Empty(panels.OpenTasks);
 
-        // The next load runs against the repaired index and settles.
+        // The next load runs against the repaired index and settles. With no
+        // dispatcher here the publish runs on the worker, and it adds the
+        // rows before it clears the error, so the fact waits for both.
         panels.NoteSaved("todo.md");
         Assert.True(
             SpinWait.SpinUntil(
-                () => panels.OpenTasks.Count == 3, TimeSpan.FromSeconds(20)),
-            "the post-repair reload never landed");
-        Assert.Null(panels.TasksEmptyMessage);
+                () => panels.OpenTasks.Count == 3 && panels.TasksEmptyMessage is null,
+                TimeSpan.FromSeconds(20)),
+            $"the post-repair reload never landed: {panels.OpenTasks.Count} rows, message '{panels.TasksEmptyMessage}'");
     }
 
     [Fact]

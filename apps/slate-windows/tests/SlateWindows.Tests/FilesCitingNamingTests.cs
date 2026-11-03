@@ -48,20 +48,32 @@ public sealed class FilesCitingNamingTests : IDisposable
     [Fact]
     public void TheSheetDoesNotClaimACountBeforeTheLookupLands()
     {
-        // Async mode: Load() queues the query rather than running it,
-        // so the sheet is observable in exactly the state the user's
-        // screen reader sees at open.
+        // Async mode, with the publish held so the sheet is observable in
+        // exactly the state the user's screen reader sees at open. Without
+        // the hold, a fast lookup can publish before the first assertion
+        // (#1759).
+        using var hold = new ManualResetEventSlim();
         var sheet = new FilesCitingViewModel(
-            _session, "knuth1984", returnFocusToken: null, synchronousForTests: false);
+            _session, "knuth1984", returnFocusToken: null, synchronousForTests: false)
+        {
+            InterleaveForTests = () => hold.Wait(TimeSpan.FromSeconds(30)),
+        };
 
         sheet.Load();
 
-        Assert.True(sheet.IsLoading);
-        Assert.DoesNotContain("0 file", sheet.AutomationName, StringComparison.OrdinalIgnoreCase);
-        // And it does not assert the empty state either, which would
-        // put "No files in this vault cite this entry." on screen over
-        // a query that has not returned.
-        Assert.False(sheet.ShowEmptyState);
+        try
+        {
+            Assert.True(sheet.IsLoading);
+            Assert.DoesNotContain("0 file", sheet.AutomationName, StringComparison.OrdinalIgnoreCase);
+            // And it does not assert the empty state either, which would
+            // put "No files in this vault cite this entry." on screen over
+            // a query that has not returned.
+            Assert.False(sheet.ShowEmptyState);
+        }
+        finally
+        {
+            hold.Set();
+        }
     }
 
     [Fact]
