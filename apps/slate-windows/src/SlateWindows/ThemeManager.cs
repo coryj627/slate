@@ -116,6 +116,7 @@ internal sealed class ThemeManager : IDisposable
         }
 
         _ = LoadDictionary(SlateRoot + "Slate.Text.xaml");
+        _ = LoadDictionary(SlateRoot + "Slate.SystemColors.xaml");
     }
 
     public void SetTheme(SlateTheme theme)
@@ -188,8 +189,9 @@ internal sealed class ThemeManager : IDisposable
 
     /// <summary>
     /// The application-level dictionaries a theme resolves to, in merge
-    /// order: Fluent first, then Slate's tokens, then Slate's text styles,
-    /// which build on Fluent's. <see cref="ApplyResources"/> merges exactly
+    /// order: Fluent first, then Slate's tokens, then outside High Contrast the
+    /// system colours those tokens answer for, then Slate's text styles.
+    /// <see cref="ApplyResources"/> merges exactly
     /// these; a hosted test merges the same layers into its own window to
     /// realize a surface under the app's real resources without touching the
     /// process-wide <see cref="Application.Resources"/>.
@@ -202,12 +204,20 @@ internal sealed class ThemeManager : IDisposable
         string slateName = highContrast
             ? "Slate.Contrast.xaml"
             : theme == SlateTheme.Dark ? "Slate.Dark.xaml" : "Slate.Light.xaml";
-        return
-        [
-            LoadDictionary(FluentRoot + fluentName),
-            LoadDictionary(SlateRoot + slateName),
-            LoadDictionary(SlateRoot + "Slate.Text.xaml"),
-        ];
+        return highContrast
+            ?
+            [
+                LoadDictionary(FluentRoot + fluentName),
+                LoadDictionary(SlateRoot + slateName),
+                LoadDictionary(SlateRoot + "Slate.Text.xaml"),
+            ]
+            :
+            [
+                LoadDictionary(FluentRoot + fluentName),
+                LoadDictionary(SlateRoot + slateName),
+                LoadDictionary(SlateRoot + "Slate.SystemColors.xaml"),
+                LoadDictionary(SlateRoot + "Slate.Text.xaml"),
+            ];
     }
 
     private void ApplyResources()

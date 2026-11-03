@@ -1,0 +1,22 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- #1758: a control with a local style loses Fluent's implicit style and falls
+         back to WPF's classic one, which paints from the system colours. In a dark
+         theme that means black text and a Windows blue selection on every list and
+         tree row with its own ItemContainerStyle. BasedOn can't help: MainWindow is
+         built before the hosted tests merge the theme, and a StaticResource can't
+         reach a sibling merged dictionary. So the two light and dark themes answer
+         for those keys. High Contrast leaves them alone: there they ARE the theme. -->
+    <SolidColorBrush x:Key="{x:Static SystemColors.ControlTextBrushKey}" Color="{DynamicResource Slate.TextColor}" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.WindowTextBrushKey}" Color="{DynamicResource Slate.TextColor}" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.MenuTextBrushKey}" Color="{DynamicResource Slate.TextColor}" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.GrayTextBrushKey}" Color="{DynamicResource Slate.DisabledTextColor}" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.WindowBrushKey}" Color="{DynamicResource Slate.SurfaceColor}" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.ControlBrushKey}" Color="{DynamicResource Slate.RaisedSurfaceColor}" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.MenuBrushKey}" Color="{DynamicResource Slate.RaisedSurfaceColor}" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.MenuBarBrushKey}" Color="{DynamicResource Slate.WindowBackgroundColor}" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="{DynamicResource Slate.SelectionBackgroundColor}" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.HighlightTextBrushKey}" Color="{DynamicResource Slate.SelectionTextColor}" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightBrushKey}" Color="{DynamicResource Slate.SelectedSurfaceColor}" />
+    <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightTextBrushKey}" Color="{DynamicResource Slate.TextColor}" />
+</ResourceDictionary>

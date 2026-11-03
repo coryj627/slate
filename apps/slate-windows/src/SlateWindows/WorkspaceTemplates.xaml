@@ -656,6 +656,39 @@
                              only the status. -->
                         <Setter Property="AutomationProperties.Name" Value="{Binding RelativeSource={RelativeSource Self}, Converter={x:Static local:SiblingNames.Converter}}" />
                         <Setter Property="AutomationProperties.ItemStatus" Value="Saved" />
+                        <!-- #1758: WPF's classic TabItem template hard-codes a white
+                             selected tab, so this style has to bring its own. -->
+                        <Setter Property="Foreground" Value="{DynamicResource Slate.SecondaryTextBrush}" />
+                        <Setter Property="Background" Value="Transparent" />
+                        <Setter Property="FocusVisualStyle" Value="{DynamicResource DefaultControlFocusVisualStyle}" />
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="TabItem">
+                                    <Border x:Name="TabChrome"
+                                            Margin="0,0,2,0"
+                                            Padding="8,4"
+                                            CornerRadius="6,6,0,0"
+                                            Background="{TemplateBinding Background}"
+                                            BorderBrush="Transparent"
+                                            BorderThickness="0,0,0,3">
+                                        <ContentPresenter ContentSource="Header"
+                                                          RecognizesAccessKey="True"
+                                                          VerticalAlignment="Center" />
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter Property="Background" Value="{DynamicResource Slate.RaisedSurfaceBrush}" />
+                                            <Setter Property="Foreground" Value="{DynamicResource Slate.TextBrush}" />
+                                        </Trigger>
+                                        <Trigger Property="IsSelected" Value="True">
+                                            <Setter Property="Background" Value="{DynamicResource Slate.SurfaceBrush}" />
+                                            <Setter Property="Foreground" Value="{DynamicResource Slate.TextBrush}" />
+                                            <Setter TargetName="TabChrome" Property="BorderBrush" Value="{DynamicResource Slate.AccentBrush}" />
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
                         <Style.Triggers>
                             <DataTrigger Binding="{Binding IsDirty}" Value="True">
                                 <Setter Property="AutomationProperties.ItemStatus"
