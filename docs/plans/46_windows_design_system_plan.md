@@ -113,6 +113,8 @@ AvalonEdit 6.3.1.120, throwaway WPF apps outside the repo.
 | What does `UISettings` cost? | The project moves to `net10.0-windows10.0.19041.0` and ships `Microsoft.Windows.SDK.NET.dll` (24,877,600 bytes) and `WinRT.Runtime.dll` (528,944 bytes). It read 1 with the registry at 100. Its change event was not exercised: that needs a system setting changed |
 | How tall are the shell's rows now? | From a 200% capture of the launched app: title bar about 29 and menu bar about 45 (design: one 48), status bar about 48 (24), tab strip about 30 (36) |
 | How tall do menus get at a 40 pitch? | Workspace 1015 (25 rows), Base 821, Canvas 664, Editor 575, Graph 415, File 301 |
+| What does the default blue read through `SystemColors`? | `AccentColor` `#0078D4`; Light1, 2 and 3 `#0091F8`, `#4CC2FF`, `#99EBFF`; Dark1, 2 and 3 `#0067C0`, `#003E92`, `#001A68`. `xaml/README.md:56`'s `#005FB8` and `#60CDFF` are WinUI's brush constants |
+| Does the README's accent table clear the project's floor on that blue? | No. A selected row in light draws white on `#E0EFFA` (Lc 9.8, 1.17:1), because the templates use `SelectionText` there and the README's gate doesn't check that pair. In dark, black measures Lc 65.4 on the rest fill and 44.7 on the pressed fill, though both pass the README's WCAG list. DS-11's corrected table passes everything on that blue (DSD14) |
 
 ### 2.3 Where the design's documents disagree
 
@@ -129,6 +131,7 @@ DS-0 settles these in the documents, so no later chunk has to.
 | A tab's corner radius | `readme.md:101`, `winui-review.md:31`: 6 | `TabView.prompt.md`: 8 | 8, the component's own spec |
 | How far the focus ring sits out | `wpf-feasibility.md:89`: Fluent draws 3 out, the design says 1, so set `Margin="-1"` | `tokens/base.css:7`: a 2px outline offset 1. A `Rectangle` strokes inside its bounds, so Fluent's `-3` already has its inner edge 1 out | Fluent is right, and DS-0 corrects `wpf-feasibility.md:89`. `-1` would straddle the control's border |
 | Text size source | `xaml/README.md:164`: `UISettings` | `CanvasTextScaleService.cs:23-24`: the registry | DSD3 |
+| An accent's contrast bar | `xaml/README.md:35-42`: WCAG, 4.5:1 for text | `ThemeTokenContrastTests.cs:18`: \|Lc\| > 75 for every text pair | The floor, and both for text (DSD14). DS-0 notes it, and DS-11 rewrites the README when it ships |
 | Window title | Static "Slate" (`MainWindow.xaml:11`) | `ui_kits/slate-windows/index.html:61`: note, vault, Slate | DSD9 |
 
 ### 2.4 Where this plan meets other work
@@ -141,7 +144,7 @@ DS-0 settles these in the documents, so no later chunk has to.
 - **The design cycle** (`claude/design-pass`) has its own discovery passes. A
   defect they find is fixed there, not here.
 
-## 3. Decisions for the owner (DSD1 to DSD13)
+## 3. Decisions for the owner (DSD1 to DSD14)
 
 Each has a recommendation, and a chunk can start on it. Only a change of mind
 costs anything.
@@ -161,6 +164,7 @@ costs anything.
 | DSD11 | DS-15 | The note header adds up to five Tab stops before a note's Properties and text. Keep them all? | Keep the path and the mode switch as stops, and take Back and Forward out of Tab order, since they have chords. F6 and Ctrl+Tab already skip the bar. The AT pass can change this |
 | DSD12 | DS-17 | Sort moves from a combo box to a menu. A combo says its value on focus ("File sort order, Name A to Z"); a menu button says only its name until it's opened | Take the menu and name the button with its value through core ("Sort and group, Name A to Z"), so a reader doesn't lose the value. If that reads badly in the pass, the combo stays beside the toolbar |
 | DSD13 | DS-12 | With the native caption gone, UIA may still expose native minimize, maximize and close alongside Slate's. Two Close buttons is a defect, and WPF can't hide a peer from the raw view | Measure first. If they double, keep Slate's visible ones as `AutomationPresentation`-style peers out of the control view and leave the native ones to carry the pattern. If native ones are gone, keep Slate's. The PR shows the tree |
+| DSD14 | DS-11 | The README gates an accent by WCAG and takes its dark fills from Fluent. The project's floor for text is \|Lc\| > 75, and black on Fluent's dark fill measures Lc 65.4 on the default blue. Holding an accent to the floor means a paler dark fill than Fluent's, and more hues falling back to gold without a word | Hold it to the floor, with DS-11's table. It's the bar gold clears, and readable text is this app's first promise. The other way is WCAG alone for text on a fill, which looks closer to Windows at Lc 65 on a primary button. Selected rows need their own brush either way. How many of Windows' presets pass is unknown, because reading another palette means changing a system setting, so your look at a few accents settles whether the bar costs too much |
 
 ## 4. Rules (every chunk)
 
@@ -225,7 +229,7 @@ work the chunk carries.
 | DS-8 | The tab strip as the design's TabView | — | M | windows | NVDA and Narrator spot | — |
 | DS-9 | Subtle icon button and SearchBox styles; every text glyph on a button becomes an icon with a name | — | S–M | windows | NVDA spot | DSD6 |
 | DS-10 | A Settings sheet (SettingsLayout, SettingRow), Appearance › Theme, the theme preference, Settings… and Switch Theme… | Refs #751 | L | windows | NVDA and Narrator pass | — |
-| DS-11 | Appearance › Accent color, the rules and contrast gate in `xaml/README.md` | — | M | windows | — | — |
+| DS-11 | Appearance › Accent color, with the rules in `xaml/README.md`, a contrast gate at the project's floor, and selected rows' own text brush | — | M | windows | — | DSD14 |
 | DS-12 | `WindowChrome`: one row with title, palette, settings and caption buttons; Snap Layouts | — | L | windows, rust, swift | NVDA and Narrator pass | DSD9, DSD13 |
 | DS-13 | The menus cascade from the logo; Alt+letter; F10 | — | L | windows | Full NVDA and Narrator menu pass | DSD7 |
 | DS-14 | `MinWidth` 500; panes collapse by width without losing the reader's place | — | M | windows | NVDA spot | — |
@@ -297,7 +301,8 @@ needs rebuilding.
 | `/design-sync`, with the map in `design/windows/github.md` | After DS-0 merges, and again whenever you like | The project has none of the repo's hand fixes until it runs, and only you start it |
 | The live Text size check: run the app, set Settings › Accessibility › Text size to 150%, Apply, then back to 100% | When DS-5's PR is up | It changes a system setting, which an agent doesn't do. Two minutes. Expected: the shell's text changes within about a second, with no restart |
 | Review of the right-pane icons (`Kit.jsx:54-56`) | Before DS-16 | `assessment.md:113`: "my picks and need your review" |
-| Adopting this plan, and DSD1 to DSD13 | Before DS-1 | — |
+| A look at a few Windows accents under `Windows accent` | When DS-11's PR is up | It changes a system setting, which an agent doesn't do. It shows how many hues DSD14's bar sends back to gold |
+| Adopting this plan, and DSD1 to DSD14 | Before DS-1 | — |
 
 ## 9. How an implementing agent works a chunk
 

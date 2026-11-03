@@ -20,6 +20,7 @@ Later chunks read one answer from the design's documents. The measurements plan 
 - `design/windows/wpf-feasibility.md:103` lists five menu columns. `design/windows/readme.md:176` and `components/navigation/menu-states.card.html` have one leading column and a shared end column.
 - `design/windows/readme.md:101` and `winui-review.md:31` give tabs a radius of 6. `components/shell/TabView.prompt.md` gives 8.
 - `design/windows/readme.md:141` says Small at 11 and under.
+- `design/windows/xaml/README.md:35-42` gates an accent by WCAG and `design/windows/xaml/README.md:44-54` takes its dark fills from Fluent. The app's floor for text is |Lc| > 75 (`ThemeTokenContrastTests.cs:18`), and that table doesn't clear it (plan 46 §2.2). `design/windows/xaml/README.md:56`'s blue isn't what `SystemColors` returns.
 
 ## Reference
 
@@ -34,8 +35,9 @@ Plan 46 §2.2 and §2.3. The design's voice: plain sentences, `design/windows/wp
 5. `wpf-feasibility.md:61`: add the composite font file for the editor's 14/22, with the numbers from plan 46 §2.2.
 6. `wpf-feasibility.md`, "Suggested order": a sentence pointing at plan 46 §6.
 7. `wpf-feasibility.md:89`: the ring is right as Fluent draws it, with the reason above. `readme.md:101`: tabs are 8, from the TabView card. `wpf-feasibility.md:103`: the columns from `readme.md:176`.
-8. Issues. One `gh issue create` per chunk DS-1 to DS-19, labels `windows` and `design` (the triage labels in `docs/agents/triage-labels.md` don't exist on the repo, and `--label` fails outright on a missing one). Title: `windows: <the spec's "what becomes true">`. Body: one sentence, the spec's path, `Refs #1756` where it applies.
-9. Comments. On #1756: which chunk carries each item, and that the 200% item is met by captures rather than a rebuilt throwaway app. On #751: DS-10 builds the surface and Appearance. On #752: DS-2 and DS-5 deliver "system font-size respect". Use `--body-file`, and confirm each comment landed by reading it back.
+8. `xaml/README.md:35`: a sentence saying DS-11 corrects the gate and the table, pending DSD14, with plan 46 §2.2's measurements. `xaml/README.md:56`: the values `SystemColors` returns.
+9. Issues. One `gh issue create` per chunk DS-1 to DS-19, labels `windows` and `design` (the triage labels in `docs/agents/triage-labels.md` don't exist on the repo, and `--label` fails outright on a missing one). Title: `windows: <the spec's "what becomes true">`. Body: one sentence, the spec's path, `Refs #1756` where it applies.
+10. Comments. On #1756: which chunk carries each item, and that the 200% item is met by captures rather than a rebuilt throwaway app. On #751: DS-10 builds the surface and Appearance. On #752: DS-2 and DS-5 deliver "system font-size respect". Use `--body-file`, and confirm each comment landed by reading it back.
 
 ## Tests
 
@@ -54,11 +56,11 @@ gh issue view 1756 --repo coryj627/slate --comments
 
 ## Acceptance
 
-- [ ] Every row of plan 46 §2.3 has one answer in the design's documents. The rows waiting on DSD3, DSD9 and DSD10 are noted as such.
+- [ ] Every row of plan 46 §2.3 has one answer in the design's documents. The rows waiting on DSD3, DSD9, DSD10 and DSD14 are noted as such.
 - [ ] One issue per chunk, each naming its spec.
 - [ ] #1756, #751 and #752 carry their comments.
 - [ ] `git diff --stat` touches only `design/windows/**/*.md`.
 
 ## Brief
 
-Read plan 46 §2.2 and §2.3, then edit `design/windows/components/overlays/Dialog.prompt.md`, `components/patterns/PaneSwitcher.prompt.md`, `PanelToolbar.prompt.md`, `NoteHeader.prompt.md`, `winui-review.md` and `wpf-feasibility.md` as Design says. No `.jsx`, no `_ds_bundle.js`. File the issues with `--label windows --label design`, then comment on #1756, #751 and #752 with `--body-file`. Commit: `docs(windows): the design's documents agree on the scrim, the rail, icon buttons and font sizes`. Tell the owner `/design-sync` can run once this merges.
+Read plan 46 §2.2 and §2.3, then edit `design/windows/components/overlays/Dialog.prompt.md`, `components/patterns/PaneSwitcher.prompt.md`, `PanelToolbar.prompt.md`, `NoteHeader.prompt.md`, `winui-review.md`, `wpf-feasibility.md` and `xaml/README.md` as Design says. No `.jsx`, no `_ds_bundle.js`. File the issues with `--label windows --label design`, then comment on #1756, #751 and #752 with `--body-file`. Commit: `docs(windows): the design's documents agree on the scrim, the rail, icon buttons and font sizes`. Tell the owner `/design-sync` can run once this merges.
