@@ -959,6 +959,20 @@ public sealed class ThemeDesignSystemTests
             $"the row's text ends past the list's {list.ActualWidth}");
     });
 
+    /// <summary>#1790: the same for the sheet's own two fields.</summary>
+    [Fact]
+    public void TheDashboardEditorsFieldsStartInOneColumn() => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        host.Workspace.OpenDashboardEditor(dashboardId: null);
+        host.Settle();
+
+        Assert.Equal(
+            host.Shell.DashboardEditorNameBox.TranslatePoint(default, host.Shell).X,
+            host.Shell.DashboardEditorQueryPicker.TranslatePoint(default, host.Shell).X,
+            1);
+    });
+
     /// <summary>#1790: each field started where its own label ended.</summary>
     [Fact]
     public void ADashboardSectionsFieldsStartInOneColumn() => StaThread.Run(() =>
