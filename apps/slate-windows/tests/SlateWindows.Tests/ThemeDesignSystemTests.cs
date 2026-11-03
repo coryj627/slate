@@ -588,11 +588,85 @@ public sealed class ThemeDesignSystemTests
         return opacity;
     }
 
+    /// <summary>#1779: Fluent's menu item hard-codes its shortcut text to the disabled
+    /// brush at 11 points, so an available shortcut read as unavailable. A disabled
+    /// row's shortcut still dims with the row.</summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void AMenuShortcutMatchesItsRow(bool dark, bool highContrast)
+    {
+        (bool enabledBrush, bool sameSize, bool disabledDims) = InRealWindow(dark, highContrast, window =>
+        {
+            var item = new MenuItem { Header = "Copy", InputGestureText = "Ctrl+C" };
+            window.Content = item;
+            window.UpdateLayout();
+            Pump();
+            TextBlock text = ShownShell.Descendants(item).OfType<TextBlock>().Single(block => block.Text == "Ctrl+C");
+            bool brush = ReferenceEquals(text.Foreground, window.FindResource("Slate.SecondaryTextBrush"));
+            bool size = text.FontSize == item.FontSize;
+            item.IsEnabled = false;
+            window.UpdateLayout();
+            Pump();
+            return (brush, size, !ReferenceEquals(text.Foreground, window.FindResource("Slate.SecondaryTextBrush")));
+        });
+
+        Assert.True(enabledBrush, "an enabled shortcut doesn't use the secondary text brush.");
+        Assert.True(sameSize, "the shortcut isn't the row's size.");
+        Assert.True(disabledDims, "a disabled row's shortcut doesn't dim.");
+    }
+
+    /// <summary>#1779: the canvas card editor's name is bound, so it arrives after the
+    /// field loads, and a prompt that read it once stayed blank.</summary>
+    [Fact]
+    public void APromptFollowsItsFieldsName()
+    {
+        string prompt = InRealWindow(dark: false, highContrast: false, window =>
+        {
+            var box = new TextBox();
+            FieldPrompt.SetIsEnabled(box, true);
+            window.Content = box;
+            window.UpdateLayout();
+            Pump();
+            System.Windows.Automation.AutomationProperties.SetName(box, "Card text");
+            window.UpdateLayout();
+            Pump();
+            return ShownShell.Descendants(box)
+                .OfType<AutomationPresentationTextBlock>()
+                .Single()
+                .Text;
+        });
+
+        Assert.Equal("Card text", prompt);
+    }
+
+    /// <summary>#1779: while editing, the card editor has no button, and how to finish
+    /// was only in the field's help text, which a screen reader hears and nobody sees.</summary>
+    [Fact]
+    public void TheCanvasCardEditorShowsHowToFinish()
+    {
+        XNamespace xaml = "http://schemas.microsoft.com/winfx/2006/xaml";
+        XElement overlay = XDocument.Load(Path.Combine(SourceText.ShellSourceRoot(), "MainWindow.xaml"))
+            .Descendants()
+            .Single(element => (string?)element.Attribute(xaml + "Name") == "CanvasCardEditorOverlay");
+
+        Assert.Contains(overlay.Descendants(), element =>
+            element.Name.LocalName == "AutomationPresentationTextBlock"
+            && (string?)element.Attribute("Text") == "{Binding EditorHint}");
+    }
+
     /// <summary>#1774: every field with no visible label says what it's for.</summary>
     [Theory]
     [InlineData("MainWindow.xaml", "SidebarFilterTextBox")]
     [InlineData("MainWindow.xaml", "BibliographySearchBox")]
     [InlineData("MainWindow.xaml", "QuickSwitcherSearchTextBox")]
+    [InlineData("MainWindow.xaml", "BuilderSavePathBox")]
+    [InlineData("MainWindow.xaml", "BuilderSaveNameBox")]
+    [InlineData("MainWindow.xaml", "QueriesRenameBox")]
+    [InlineData("MainWindow.xaml", "SidebarMutationNameTextBox")]
+    [InlineData("FindInNoteBar.xaml", "QueryBox")]
+    [InlineData("FindInNoteBar.xaml", "ReplaceBox")]
     public void AnUnlabelledFieldHasAPrompt(string file, string name)
     {
         XNamespace xaml = "http://schemas.microsoft.com/winfx/2006/xaml";

@@ -1119,6 +1119,7 @@
                                           AutomationProperties.AutomationId="SidebarBatchActions">
                                     <StackPanel>
                                         <TextBox Text="{Binding TagInput, UpdateSourceTrigger=PropertyChanged}"
+                                                 local:FieldPrompt.IsEnabled="True"
                                                  AutomationProperties.Name="Tag name" />
                                         <WrapPanel Orientation="Horizontal" Margin="0,4,0,0">
                                             <Button Margin="0,0,4,4" Content="Add" Command="{Binding AddTagCommand}" />
@@ -1135,7 +1136,7 @@
                                           Margin="0,2"
                                           AutomationProperties.AutomationId="SidebarFileActions">
                                     <StackPanel>
-                                        <TextBox x:Name="SidebarMutationNameTextBox"
+                                        <TextBox x:Name="SidebarMutationNameTextBox" local:FieldPrompt.IsEnabled="True"
                                                  Text="{Binding MutationName, UpdateSourceTrigger=PropertyChanged}"
                                                  PreviewKeyDown="SidebarMutationNameTextBox_PreviewKeyDown"
                                                  AutomationProperties.AutomationId="SidebarMutationName"
@@ -2238,7 +2239,7 @@
                                         </WrapPanel>
                                         <DockPanel x:Name="QueriesRenameRow" Visibility="Collapsed" Margin="0,4,0,0">
                                             <TextBlock Text="New name:" VerticalAlignment="Center" />
-                                            <TextBox x:Name="QueriesRenameBox"
+                                            <TextBox x:Name="QueriesRenameBox" local:FieldPrompt.IsEnabled="True"
                                                      Margin="6,0,0,0"
                                                      MinWidth="180"
                                                      KeyDown="QueriesRenameBox_KeyDown"
@@ -4040,11 +4041,11 @@
                                        Focusable="True"
                                        AutomationProperties.AutomationId="BuilderPreviewLine" />
                             <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                                <TextBox x:Name="BuilderSavePathBox"
+                                <TextBox x:Name="BuilderSavePathBox" local:FieldPrompt.IsEnabled="True"
                                          MinWidth="180"
                                          AutomationProperties.AutomationId="BuilderSavePathBox"
                                          AutomationProperties.Name="New .base path" />
-                                <TextBox x:Name="BuilderSaveNameBox"
+                                <TextBox x:Name="BuilderSaveNameBox" local:FieldPrompt.IsEnabled="True"
                                          MinWidth="140"
                                          Margin="8,0,0,0"
                                          AutomationProperties.AutomationId="BuilderSaveNameBox"
@@ -4477,7 +4478,7 @@
                     <TextBlock Text="{Binding Title}"
                                FontWeight="SemiBold"
                                Margin="0,0,0,8" />
-                    <TextBox Text="{Binding Draft, UpdateSourceTrigger=PropertyChanged}"
+                    <TextBox local:FieldPrompt.IsEnabled="True" Text="{Binding Draft, UpdateSourceTrigger=PropertyChanged}"
                              IsReadOnly="{Binding InspectionOnly}"
                              AcceptsReturn="True"
                              MinHeight="120"
@@ -4486,6 +4487,12 @@
                              AutomationProperties.AutomationId="CanvasCardEditorText"
                              AutomationProperties.Name="{Binding TextName}"
                              AutomationProperties.HelpText="{Binding EditorHint}" />
+                    <local:AutomationPresentationTextBlock Text="{Binding EditorHint}"
+                                                           Margin="0,6,0,0"
+                                                           MaxWidth="420"
+                                                           HorizontalAlignment="Left"
+                                                           TextWrapping="Wrap"
+                                                           Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                     <Button Content="Close"
                             HorizontalAlignment="Right"
                             Margin="0,8,0,0"
