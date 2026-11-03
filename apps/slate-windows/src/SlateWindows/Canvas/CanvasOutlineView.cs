@@ -269,6 +269,19 @@ internal sealed class CanvasOutlineItem : LandingTreeViewItem
         ContextMenu = new ContextMenu();
     }
 
+    /// <summary>#1772: the outline's style is built in code and can't be based on
+    /// the shell's row, so the row takes the shell's template directly, once it's
+    /// where the shell's resources can be found. A resource reference won't do: a
+    /// key it can't find leaves a row with no template at all.</summary>
+    protected override void OnVisualParentChanged(DependencyObject oldParent)
+    {
+        base.OnVisualParentChanged(oldParent);
+        if (TryFindResource("Slate.TreeRowTemplate") is ControlTemplate template)
+        {
+            Template = template;
+        }
+    }
+
     protected override DependencyObject GetContainerForItemOverride() =>
         new CanvasOutlineItem();
 
@@ -1375,6 +1388,8 @@ internal sealed class CanvasOutlineView : UserControl
     private static Style RowContainerStyle()
     {
         var style = new Style(typeof(TreeViewItem));
+        style.Setters.Add(new Setter(PaddingProperty, new Thickness(8, 2, 8, 2)));
+        style.Setters.Add(new Setter(FocusVisualStyleProperty, null));
         style.Setters.Add(new Setter(
             TreeViewItem.IsExpandedProperty,
             new Binding(nameof(CanvasOutlineRowViewModel.IsExpanded))

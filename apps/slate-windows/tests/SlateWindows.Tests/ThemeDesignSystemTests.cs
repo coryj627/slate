@@ -266,6 +266,170 @@ public sealed class ThemeDesignSystemTests
         Assert.True(cellStyle, "the grid doesn't use the theme's cell style.");
     }
 
+    /// <summary>#1772: the canvas outline's rows are subclasses with a style built
+    /// in code, so they kept WPF's classic row.</summary>
+    [Fact]
+    public void TheCanvasOutlineUsesTheShellsTreeRows() => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        var row = new SlateWindows.Canvas.CanvasOutlineItem { Header = "A card" };
+        host.Shell.Content = new TreeView { Items = { row } };
+        host.Settle();
+
+        Assert.Same(host.Shell.FindResource("Slate.TreeRowTemplate"), row.Template);
+    });
+
+    /// <summary>#1772: a task's text ran past the pane and was cut mid-word, because
+    /// its row was a horizontal stack that gave the text unlimited width. The Tasks and
+    /// Tasks Review leaves each have their own row.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ATaskRowWrapsItsTextInsideTheRow(bool review) => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        var list = new ListBox
+        {
+            Style = (Style)host.Shell.RightPaneBorder.FindResource("PanelListBox"),
+            ItemTemplate = review
+                ? host.Shell.PanelReviewList.ItemTemplate
+                : (DataTemplate)host.Shell.RightPaneBorder.FindResource("PanelTaskRowTemplate"),
+            ItemContainerStyle = (Style)host.Shell.FindResource("Slate.PanelRowBase"),
+            ItemsSource = new[]
+            {
+                new
+                {
+                    FileName = "A note with quite a long file name that also has to fit.md",
+                    DisplayText = "Reply to the accessibility review before the end of the week",
+                    MetadataCaption = "Due 2026-06-01 and priority highest and a little more besides",
+                    Completed = false,
+                    HasMetadata = true,
+                    CheckboxLabel = "Task",
+                    CheckboxHelpText = "Help",
+                },
+            },
+            Width = 160,
+            Height = 200,
+            HorizontalAlignment = HorizontalAlignment.Left,
+        };
+        host.Shell.Content = list;
+        host.Settle();
+
+        TextBlock[] texts = ShownShell.Descendants(list).OfType<TextBlock>().ToArray();
+        Assert.NotEmpty(texts);
+        double right = texts.Max(block => block.TranslatePoint(new Point(block.ActualWidth, 0), list).X);
+        Assert.True(right <= 160, $"the row's text reaches {right:F0}px in a 160px list.");
+    });
+
+    /// <summary>#1772: the right pane can be 200px wide, and a horizontal stack cuts
+    /// off whatever doesn't fit: Queries' buttons, Bibliography's second radio button.</summary>
+    [Fact]
+    public void TheRightPaneHasNoHorizontalStacks()
+    {
+        XNamespace presentation = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
+        XNamespace xaml = "http://schemas.microsoft.com/winfx/2006/xaml";
+        XElement leafHost = XDocument
+            .Load(Path.Combine(SourceText.ShellSourceRoot(), "MainWindow.xaml"), LoadOptions.SetLineInfo)
+            .Descendants(presentation + "Grid")
+            .Single(grid => (string?)grid.Attribute(xaml + "Name") == "RightPaneLeafHost");
+
+        string[] stacks = [.. leafHost
+            .Descendants(presentation + "StackPanel")
+            .Where(stack => (string?)stack.Attribute("Orientation") == "Horizontal")
+            .Select(stack => $"line {((System.Xml.IXmlLineInfo)stack).LineNumber}")];
+
+        Assert.Empty(stacks);
+    }
+
+    /// <summary>#1773: the filter was a fixed 220px in whatever room was left, and
+    /// the switcher beside it cut off its right edge.</summary>
+    [Fact]
+    public void TheGraphFilterStopsBeforeTheSwitcher() => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        var view = new SlateWindows.Graph.GraphSurfaceView { Width = 320, HorizontalAlignment = HorizontalAlignment.Left };
+        host.Shell.Content = view;
+        host.Settle();
+
+        FrameworkElement Find(string id) => ShownShell.Descendants(view)
+            .OfType<FrameworkElement>()
+            .Single(element => System.Windows.Automation.AutomationProperties.GetAutomationId(element) == id);
+        FrameworkElement field = Find("GraphFilterField");
+        double right = field.TranslatePoint(new Point(field.ActualWidth, 0), view).X;
+        double switcher = Find("GraphSurfaceSwitcher").TranslatePoint(new Point(0, 0), view).X;
+        Assert.True(right <= switcher, $"the filter ends at {right:F0}px and the switcher starts at {switcher:F0}px.");
+    });
+
+    /// <summary>#1773: a list property's item was a horizontal stack with a 140px
+    /// field, so its Remove button was cut off in a narrow editor.</summary>
+    [Fact]
+    public void AListPropertysRemoveButtonStaysInItsRow() => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        var presenter = new ContentPresenter
+        {
+            ContentTemplate = (DataTemplate)host.Shell.FindResource("PropertyListEditorTemplate"),
+            Content = new
+            {
+                AddItemVisibleText = "Add item",
+                AddItemLabel = "Add item",
+                Items = new[] { new ListItemRow() },
+            },
+        };
+        var row = new Border { Width = 170, HorizontalAlignment = HorizontalAlignment.Left, Child = presenter };
+        host.Shell.Content = row;
+        host.Settle();
+
+        Button remove = ShownShell.Descendants(presenter).OfType<Button>().Single(button => button.Content is "Remove");
+        double right = remove.TranslatePoint(new Point(remove.ActualWidth, 0), row).X;
+        Assert.True(right <= 170, $"Remove ends at {right:F0}px in a 170px row.");
+    });
+
+    /// <summary>#1773: the splitters were 7px bars of the border colour. They keep
+    /// that width to grab and draw one line.</summary>
+    /// <summary>Fluent's grid animates its Disabled state to fixed colours by these
+    /// keys, and every open overlay disables the shell behind it: the table turned
+    /// white under the theme's pale text. The pixels are checked in
+    /// ThemedShell_ADisabledGridStaysOnItsSurface.</summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void TheSplittersDrawAThinLine(bool dark, bool highContrast) => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        ApplyTheme(host, dark, highContrast);
+        host.Settle();
+
+        GridSplitter[] splitters = [.. ShownShell.Descendants(host.Shell).OfType<GridSplitter>()];
+        Assert.NotEmpty(splitters);
+        foreach (GridSplitter splitter in splitters)
+        {
+            System.Windows.Shapes.Rectangle line = Assert.Single(ShownShell.Descendants(splitter).OfType<System.Windows.Shapes.Rectangle>());
+            Assert.Equal(1, line.ActualWidth);
+        }
+    });
+
+    /// <summary>#1773: the bar stays in the UIA tree after a scan, because a reader
+    /// can ask how the last one ended, but gold there says nothing and competes with
+    /// real selection, so it only draws fully while work is running.</summary>
+    [Theory]
+    [InlineData(0, 1, false, false)]
+    [InlineData(1, 2, false, true)]
+    [InlineData(2, 2, false, false)]
+    [InlineData(0, 1, true, true)]
+    public void TheStatusBarProgressKnowsWhenWorkIsRunning(double value, double maximum, bool indeterminate, bool active) => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        var lifecycle = Assert.IsType<VaultLifecycleViewModel>(host.Shell.DataContext);
+        void Set(string name, object content) => typeof(VaultLifecycleViewModel).GetProperty(name)!.SetValue(lifecycle, content);
+        Set(nameof(VaultLifecycleViewModel.ProgressMaximum), maximum);
+        Set(nameof(VaultLifecycleViewModel.ProgressValue), value);
+        Set(nameof(VaultLifecycleViewModel.IsProgressIndeterminate), indeterminate);
+
+        Assert.Equal(active, typeof(VaultLifecycleViewModel).GetProperty("IsProgressActive")?.GetValue(lifecycle));
+    });
+
     /// <summary>Fluent's grid animates its Disabled state to fixed colours by these
     /// keys, and every open overlay disables the shell behind it: the table turned
     /// white under the theme's pale text. The pixels are checked in
@@ -695,6 +859,15 @@ public sealed class ThemeDesignSystemTests
             .ToDictionary(
                 color => color.Attribute(Xaml + "Key")!.Value,
                 color => color.Value.Trim().ToUpperInvariant());
+
+    private sealed class ListItemRow
+    {
+        public string Text { get; set; } = "- [ ] a value long enough to fill the field";
+
+        public string ItemLabel => "Item";
+
+        public string RemoveLabel => "Remove";
+    }
 
     private static XDocument Document(string fileName) =>
         XDocument.Load(Path.Combine(SourceText.ShellSourceRoot(), "Themes", fileName));

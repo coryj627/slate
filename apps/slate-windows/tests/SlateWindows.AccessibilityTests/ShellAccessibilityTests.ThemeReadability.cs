@@ -83,6 +83,77 @@ public sealed partial class ShellAccessibilityTests
             AssertAxeClean(process, "palette-readability");
         });
 
+    /// <summary>#1772: Fluent's focus ring is drawn outside the row, and the list
+    /// clips it: the rail showed only its top and bottom lines.</summary>
+    [Fact]
+    public void ThemedShell_AFocusedPanelRowShowsItsWholeRing() =>
+        RunFindInNoteJourney("row-focus", (process, window, automation, editor) =>
+        {
+            AutomationElement rail = WaitForElement(window, "RightPaneLeaves", TimeSpan.FromSeconds(10));
+            AutomationElement[] rows = rail.FindAllChildren(cf => cf.ByControlType(ControlType.ListItem));
+            rows[1].Focus();
+            PressKey(VirtualKeyShort.DOWN);
+            Thread.Sleep(500);
+            AutomationElement row = rail
+                .FindAllChildren(cf => cf.ByControlType(ControlType.ListItem))
+                .Single(item => item.Properties.HasKeyboardFocus.ValueOrDefault);
+
+            using FlaUI.Core.Capturing.CaptureImage capture = CapturePhysicalPixels(row);
+            Bitmap bitmap = capture.Bitmap;
+            Color surface = MostCommonColor(row);
+            int RingCount(IEnumerable<(int X, int Y)> line) =>
+                line.Count(point => Contrast(bitmap.GetPixel(point.X, point.Y), surface) >= 3);
+            int Column(int x) => RingCount(Enumerable.Range(0, bitmap.Height).Select(y => (x, y)));
+            int Row(int y) => RingCount(Enumerable.Range(0, bitmap.Width).Select(x => (x, y)));
+            int left = Enumerable.Range(0, 6).Max(Column);
+            int right = Enumerable.Range(bitmap.Width - 6, 6).Max(Column);
+            int top = Enumerable.Range(0, 6).Max(Row);
+            int bottom = Enumerable.Range(bitmap.Height - 6, 6).Max(Row);
+            Assert.True(
+                left > bitmap.Height / 2 && right > bitmap.Height / 2 && top > bitmap.Width / 2 && bottom > bitmap.Width / 2,
+                $"the ring in a {bitmap.Width}x{bitmap.Height} row measures left {left}, right {right}, top {top}, bottom {bottom}.");
+
+            AssertAxeClean(process, "row-focus");
+        });
+
+    /// <summary>#1772: the name sat above the middle of its checkbox, because an
+    /// empty metadata line still took its height under it.</summary>
+    [Fact]
+    public void ThemedShell_TreeRowLabelsLineUpWithTheirCheckboxes() =>
+        RunFindInNoteJourney("tree-row-alignment", (process, window, automation, editor) =>
+        {
+            AutomationElement tree = WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(10));
+            AutomationElement row = tree.FindFirstChild(cf => cf.ByControlType(ControlType.TreeItem))
+                ?? throw new Xunit.Sdk.XunitException("no row in the Files tree.");
+            AutomationElement box = row.FindFirstChild(cf => cf.ByControlType(ControlType.CheckBox))
+                ?? throw new Xunit.Sdk.XunitException("no checkbox on the row.");
+            // A file has a metadata line under its name; the two are centred together.
+            AutomationElement[] texts = row.FindAllChildren(cf => cf.ByControlType(ControlType.Text));
+            Assert.NotEmpty(texts);
+            double top = texts.Min(text => text.BoundingRectangle.Top);
+            double bottom = texts.Max(text => text.BoundingRectangle.Bottom);
+            double middle = box.BoundingRectangle.Top + (box.BoundingRectangle.Height / 2.0);
+            double offset = Math.Abs(middle - ((top + bottom) / 2.0));
+            Assert.True(
+                offset <= box.BoundingRectangle.Height / 8.0,
+                $"the row's text is {offset:F1}px from the middle of its checkbox: {top} to {bottom}, and {box.BoundingRectangle}.");
+
+            AssertAxeClean(process, "tree-row-alignment");
+        });
+
+    /// <summary>#1772: "Graph inspector" ran to the window's edge, and the rail
+    /// scrolled sideways.</summary>
+    [Fact]
+    public void ThemedShell_TheRightPaneRailFitsItsLabels() =>
+        RunFindInNoteJourney("rail-fit", (process, window, automation, editor) =>
+        {
+            AutomationElement rail = WaitForElement(window, "RightPaneLeaves", TimeSpan.FromSeconds(10));
+            Assert.True(rail.Patterns.Scroll.IsSupported, "premise: the rail has no scroll pattern.");
+            Assert.False(rail.Patterns.Scroll.Pattern.HorizontallyScrollable.Value, "the rail scrolls sideways.");
+
+            AssertAxeClean(process, "rail-fit");
+        });
+
     /// <summary>#1769: an open overlay disables the shell behind it, and Fluent's
     /// grid animates its Disabled state to a fixed white under the theme's pale
     /// text. A hosted window doesn't show it, so this reads the launched app.</summary>

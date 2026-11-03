@@ -38,7 +38,7 @@ internal sealed partial class WorkspaceViewModel
     internal const double SplitterWidth = 5;
 
     private double _filesSidebarWidth = 270;
-    private double _rightPaneWidth = 280;
+    private double _rightPaneWidth = 320;
 
     /// <summary>The Files sidebar's width, bound both ways to its column,
     /// and held inside its range whoever writes it (codex PR 4b r1 F7): a

@@ -20,6 +20,31 @@
     <Pen x:Key="Slate.EditorSelectionBorderPen"
          Brush="{DynamicResource Slate.AccentTextBrush}"
          Thickness="1" />
+    <!-- #1773: the shell's splitters keep their width to grab and draw one line. -->
+    <Style x:Key="Slate.ShellSplitterStyle" TargetType="GridSplitter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource Slate.BorderBrush}" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="GridSplitter">
+                    <Border Background="{TemplateBinding Background}">
+                        <Rectangle Width="1"
+                                   HorizontalAlignment="Center"
+                                   Fill="{TemplateBinding Foreground}" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter Property="Foreground" Value="{DynamicResource Slate.AccentIndicatorBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsDragging" Value="True">
+                            <Setter Property="Foreground" Value="{DynamicResource Slate.AccentIndicatorBrush}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
     <!-- A grid cell's selected state, for the same reason: it isn't generated, and the
          cell's text inherits this foreground, so it pairs in every appearance. -->
     <Style x:Key="Slate.GridCellStyle" TargetType="DataGridCell">
