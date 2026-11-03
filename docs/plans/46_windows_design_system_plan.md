@@ -1,17 +1,17 @@
 # 46 — Windows design system: the features not yet built
 
-Status: draft for the owner's review, 2026-11-03; per-chunk specs in
+Status: the owner's decisions recorded 2026-11-03 (§3); per-chunk specs in
 `46_windows_design_system/specs/`, one per PR. Red-teamed once by a fresh
-Claude agent, with its findings checked against the tree and applied. Not
-codex-reviewed. Not adopted; nothing in this plan has started. Baseline: `main` at 9f4194c0
-(#1787).
+Claude agent and reviewed three times by Codex, with every finding checked
+against the tree and applied. Not merged; nothing in this plan has started.
+Baseline: `main` at 9f4194c0 (#1787).
 
 The owner asked for "the plan and spec for the features not yet built" while
 the design cycle's last PR sat in CI. What is wanted comes from `design/windows`:
 `readme.md`, `wpf-feasibility.md`, `winui-review.md` ("Decisions"),
 `xaml/README.md`, `tokens/` and the components' `.prompt.md` files. Where those
 agree, this plan does not reopen them. Where they disagree, or a choice has a
-real cost, §3 asks.
+real cost, §3 records the owner's call.
 
 ## 1. Scope
 
@@ -34,7 +34,7 @@ real cost, §3 asks.
 | App menu | The menus cascade from the logo; Alt+letter opens them | A menu bar | DS-13 |
 | Narrow windows | 500 wide or less, panes collapse | `MinWidth` 760 | DS-14 |
 | Note header | Back, forward, breadcrumb, Source/Reading, ⋯ | None | DS-15, without Back and Forward (DSD15) |
-| Pane switcher | Icon strip with a gold pill | A 17-row text list | DS-16 |
+| Pane switcher | Icon strip with a gold pill and a More menu | A 17-row text list | DS-16 |
 | Files toolbar | PanelToolbar with Sort and group, New note, collapse/expand | A stack of fields, toggles and expanders | DS-17 |
 | Leaf toolbars, count rows | PanelToolbar on each leaf, CountListRow | A heading and plain rows | DS-18 |
 | Empty pane | EmptyStateLauncher with actions and chords | One line of text | DS-19 |
@@ -117,7 +117,7 @@ AvalonEdit 6.3.1.120, throwaway WPF apps outside the repo.
 | How tall do menus get at a 40 pitch? | Workspace 1015 (25 rows), Base 821, Canvas 664, Editor 575, Graph 415, File 301 |
 | How does a `ToggleButton` reach state? | A click flips `IsChecked` and runs `Command`. UIA's `IToggleProvider.Toggle` flips `IsChecked` and doesn't run `Command`, so `Command` with a one-way binding leaves the button and the state apart. A two-way binding, `IsChecked`'s default, writes back on both. DS-7 is built on this |
 | What does the default blue read through `SystemColors`? | `AccentColor` `#0078D4`; Light1, 2 and 3 `#0091F8`, `#4CC2FF`, `#99EBFF`; Dark1, 2 and 3 `#0067C0`, `#003E92`, `#001A68`. `xaml/README.md:56`'s `#005FB8` and `#60CDFF` are WinUI's brush constants |
-| Does the README's accent table clear the project's floor on that blue? | No. A selected row in light draws white on `#E0EFFA` (Lc 9.8, 1.17:1), because the templates use `SelectionText` there and the README's gate doesn't check that pair. In dark, black measures Lc 65.4 on the rest fill and 44.7 on the pressed fill, though both pass the README's WCAG list. DS-11's corrected table passes everything on that blue (DSD14) |
+| Does the README's accent table clear the project's floor on that blue? | No. A selected row in light draws white on `#E0EFFA` (Lc 9.8, 1.17:1), because the templates use `SelectionText` there and the README's gate doesn't check that pair. In dark, black measures Lc 65.4 on the rest fill and 44.7 on the pressed fill, though both pass the README's WCAG list. The owner took the README's bar (DSD14), so DS-11 keeps the table and gives selected rows their own text brush, and everything then passes it on that blue |
 
 ### 2.3 Where the design's documents disagree
 
@@ -126,17 +126,18 @@ DS-0 settles these in the documents, so no later chunk has to.
 | Topic | One says | Another says | Taken here |
 |---|---|---|---|
 | Modal scrim | `Dialog.prompt.md:29`: 20% | `xaml/README.md:145`, `winui-review.md:74`: 30% | 30%, the recorded decision |
-| PaneSwitcher's control | `PaneSwitcher.prompt.md`: `TabControl` | `wpf-feasibility.md:144`: `ListBox` | `ListBox` (DSD8) |
+| PaneSwitcher's control | `PaneSwitcher.prompt.md`: `TabControl` | `wpf-feasibility.md:144`: `ListBox` | `ListBox`, plus a button for More |
+| PaneSwitcher's overflow | `PaneSwitcher.jsx:6`: a fixed `maxVisible`, six by default | `wpf-feasibility.md:144`: computed on `SizeChanged` | Fixed at six slots (DSD8) |
 | Subtle icon button | `winui-review.md:77`: 40 × 40 with a 30 × 30 fill | The pattern prompts: 32 px | 32 in toolbars, 40 in the title bar (DSD6) |
 | Segoe UI Variable Small | `wpf-feasibility.md:60`: under 12. `readme.md:141`: at 11 and under | `tokens/typography.css:24`, `xaml/README.md:122`: at 12 | The tokens |
 | A menu's columns | `wpf-feasibility.md:103`: check, icon, label, shortcut, chevron | `readme.md:176` and `menu-states.card.html`: one leading column, and shortcut and chevron share the end column | `readme.md:176` |
-| A menu row's focus ring | `readme.md:176`, `review-2026-11.md:54`: full row width | WinUI rings the inset highlight | DSD10 |
+| A menu row's focus ring | `readme.md:176`, `review-2026-11.md:54`: full row width | WinUI rings the inset highlight | The inset highlight (DSD10) |
 | A tab's corner radius | `readme.md:101`, `winui-review.md:31`: 6 | `TabView.prompt.md`: 8 | 8, the component's own spec |
 | How far the focus ring sits out | `wpf-feasibility.md:89`: Fluent draws 3 out, the design says 1, so set `Margin="-1"` | `tokens/base.css:7`: a 2px outline offset 1. A `Rectangle` strokes inside its bounds, so Fluent's `-3` already has its inner edge 1 out | Fluent is right, and DS-0 corrects `wpf-feasibility.md:89`. `-1` would straddle the control's border |
-| Text size source | `xaml/README.md:164`: `UISettings` | `CanvasTextScaleService.cs:23-24`: the registry | DSD3 |
-| A note's Back and Forward | `NoteHeader.prompt.md:27`: `BrowseBack`, so a note history | `Commands/ChordTable.cs:1509`: the only history is the sidebar's | DSD15 |
-| An accent's contrast bar | `xaml/README.md:35-42`: WCAG, 4.5:1 for text | `ThemeTokenContrastTests.cs:18`: \|Lc\| > 75 for every text pair | The floor, and both for text (DSD14). DS-0 notes it, and DS-11 rewrites the README when it ships |
-| Window title | Static "Slate" (`MainWindow.xaml:11`) | `ui_kits/slate-windows/index.html:61`: note, vault, Slate | DSD9 |
+| Text size source | `xaml/README.md:164`: `UISettings` | `CanvasTextScaleService.cs:23-24`: the registry | The registry, pending the owner's check (DSD3) |
+| A note's Back and Forward | `NoteHeader.prompt.md:27`: `BrowseBack`, so a note history | `Commands/ChordTable.cs:1509`: the only history is the sidebar's | Left out for now (DSD15) |
+| An accent's contrast bar | `xaml/README.md:35-42`: WCAG, 4.5:1 for text | `ThemeTokenContrastTests.cs:18`: \|Lc\| > 75 for every text pair | The README's, for an accent. Gold stays at the floor (DSD14) |
+| Window title | Static "Slate" (`MainWindow.xaml:11`) | `ui_kits/slate-windows/index.html:61`: note, vault, Slate | The kit's (DSD9) |
 
 ### 2.4 Where this plan meets other work
 
@@ -148,28 +149,28 @@ DS-0 settles these in the documents, so no later chunk has to.
 - **The design cycle** (`claude/design-pass`) has its own discovery passes. A
   defect they find is fixed there, not here.
 
-## 3. Decisions for the owner (DSD1 to DSD15)
+## 3. The owner's decisions (DSD1 to DSD15)
 
-Each has a recommendation, and a chunk can start on it. Only a change of mind
-costs anything.
+Settled with the owner on 2026-11-03. DSD8, DSD10 and DSD14 differ from what this
+plan first recommended, and their specs follow the owner's call.
 
-| # | Chunk | Question | Recommendation and why |
+| # | Chunk | Question | Decided |
 |---|---|---|---|
-| DSD1 | all | Everything here, or only what #1756 waits on? | Wave 1 now (DS-0 to DS-5). It closes #1756's checks and makes every later template scale for free. Later waves one at a time, because they change how the app works rather than how it looks |
+| DSD1 | all | Everything here, or only what #1756 waits on? | Wave 1 now (DS-0 to DS-5). It closes #1756's checks and makes every later template scale for free. Later waves one at a time, each when the owner says, because they change how the app works rather than how it looks |
 | DSD2 | DS-1 | Ship the fonts by linking `design/windows/fonts` or by copying them into the app? | Link. One copy in history instead of 3.6 MB twice. Costs one line in `windows.yml`'s path list |
-| DSD3 | DS-5 | Read Windows Text size from the registry or from `UISettings`? | The registry, with `SystemEvents.UserPreferenceChanged`, as `CanvasTextScaleService` already does. `UISettings` costs 25 MB and a target framework change for one number. Decided only after the owner's two-minute live check (§8). If that shows the registry path misses a change, `UISettings` it is |
+| DSD3 | DS-5 | Read Windows Text size from the registry or from `UISettings`? | The registry, with `SystemEvents.UserPreferenceChanged`, as `CanvasTextScaleService` already does. `UISettings` is a WinRT API with no projection under plain `net10.0-windows`, and the standard route, a versioned target framework, ships the projection of the whole Windows SDK (`Microsoft.Windows.SDK.NET.dll`, 24.9 MB, and `WinRT.Runtime.dll`) for one number. The owner's two-minute live check (§8) confirms it. If that shows the registry path misses a change, `UISettings` it is |
 | DSD4 | DS-2 | Unset text goes from 12 to 14. Accept the whole shell growing? | Yes. It is the design's body size, and the reason to do it first is that everything after it is judged at the real size |
-| DSD5 | DS-4 | Menu rows at the recorded 40 pitch leave Workspace 1015 tall, past a 1080p screen's room once the taskbar and title bar are counted, so it scrolls | Keep 40 as decided on 2 November, and look at it in the launched app. If scrolling a menu feels wrong, 36 keeps the inset highlight and brings Workspace to about 915 |
+| DSD5 | DS-4 | Menu rows at the recorded 40 pitch leave Workspace 1015 tall, past a 1080p screen's room once the taskbar and title bar are counted, so it scrolls | Keep 40, as decided on 2 November, and look at it in the launched app. If scrolling a menu feels wrong, 36 keeps the inset highlight and brings Workspace to about 915 |
 | DSD6 | DS-9 | Subtle icon buttons: 40 × 40 (`winui-review.md`) or 32 (the pattern prompts)? | 32 in panel toolbars and the note header, where the prompts are specific and the rows are 40. 40 × 40 with the 30 fill in the title bar |
-| DSD7 | DS-13 | The design hosts the menus in "a `ContextMenu` or popup" with hand-built keys (`readme.md:120`, `wpf-feasibility.md:115`). Keep a real `Menu` instead, with the logo as its one top-level item? | Keep the `Menu`. Alt, F10, the UIA menu bar, the F6 landing, `MenuBarCensus` and the NVDA-tested behaviour of W7-5 and W7-7 all come from that control. Only Alt+letter needs code. Step 0 of DS-13 is an NVDA and Narrator check you read before the code goes further |
-| DSD8 | DS-16 | The design hides panels past `maxVisible` behind a More menu. Keep all 17 in one list that scrolls? | One list. A screen reader user hears "1 of 17" and can reach every panel by arrows today, and that shouldn't get worse. `ListBox`, keeping `RightPaneLeaves` and the rail's settled selection. The icons in `Kit.jsx:54-56` also need your review, as `assessment.md:113` says |
+| DSD7 | DS-13 | The design hosts the menus in "a `ContextMenu` or popup" with hand-built keys (`readme.md:120`, `wpf-feasibility.md:115`). Keep a real `Menu` instead, with the logo as its one top-level item? | Keep the `Menu`. Alt, F10, the UIA menu bar, the F6 landing, `MenuBarCensus` and the NVDA-tested behaviour of W7-5 and W7-7 all come from that control. Only Alt+letter needs code. Step 0 of DS-13 is an NVDA and Narrator check the owner reads before the code goes further |
+| DSD8 | DS-16 | The design hides panels past `maxVisible` behind a More menu. Keep all 17 in one list that scrolls? | The design's More menu, at its default six slots: Outline, Backlinks, Outgoing links, Connections and Graph inspector in the strip, and the other 12 in More panels. A reader hears "2 of 5", the same at any window size, and a panel in the menu takes more keys to reach than today, so DS-16 gets a full NVDA and Narrator pass with the owner's read. The icons in `Kit.jsx:54-56` also need the owner's review, as `assessment.md:113` says |
 | DSD9 | DS-12, DS-17 | The kit's title is "note — vault — Slate", and it has no band for the vault's name and path | Take both. The title comes from core (it's read aloud), and DS-17 moves the vault's name, still heading level 1, into the Files toolbar, with the path in its tooltip |
-| DSD10 | DS-4 | A menu row's keyboard ring: the full row, as `readme.md:176` and `review-2026-11.md:54` record, or the inset highlight, as WinUI does? | The full row, as recorded. It's the larger target, and it's the same 2px ring rows have everywhere else. The inset ring looks closer to WinUI, and that's the only thing it has going for it |
+| DSD10 | DS-4 | A menu row's keyboard ring: the full row, as `readme.md:176` and `review-2026-11.md:54` record, or the inset highlight, as WinUI does? | The inset highlight, as WinUI does. It's a different shape from the full-row ring rows have elsewhere, still 2px. DS-0 corrects the two records |
 | DSD11 | DS-15 | The note header adds Tab stops before a note's Properties and text: one per folder, the mode switch and ⋯. Keep them all? | Keep them. A folder segment has no other route, and F6 and Ctrl+Tab already skip the bar. The AT pass can change this |
 | DSD12 | DS-17 | Sort moves from a combo box to a menu. A combo says its value on focus ("File sort order, Name A to Z"); a menu button says only its name until it's opened | Take the menu and name the button with its value through core ("Sort and group, Name A to Z"), so a reader doesn't lose the value. If that reads badly in the pass, the combo stays beside the toolbar |
 | DSD13 | DS-12 | With the native caption gone, UIA may still expose native minimize, maximize and close alongside Slate's. Two Close buttons is a defect, and WPF can't hide a peer from the raw view | Measure first. If they double, keep Slate's visible ones as `AutomationPresentation`-style peers out of the control view and leave the native ones to carry the pattern. If native ones are gone, keep Slate's. The PR shows the tree |
-| DSD14 | DS-11 | The README gates an accent by WCAG and takes its dark fills from Fluent. The project's floor for text is \|Lc\| > 75, and black on Fluent's dark fill measures Lc 65.4 on the default blue. Holding an accent to the floor means a paler dark fill than Fluent's, and more hues falling back to gold without a word | Hold it to the floor, with DS-11's table. It's the bar gold clears, and readable text is this app's first promise. The other way is WCAG alone for text on a fill, which looks closer to Windows at Lc 65 on a primary button. Selected rows need their own brush either way. How many of Windows' presets pass is unknown, because reading another palette means changing a system setting, so your look at a few accents settles whether the bar costs too much |
-| DSD15 | DS-15 | The design's Back and Forward assume a note history. The only history here is "Back in Sidebar History", on both platforms, which Quick Open and links don't feed. Bound to it, Back sits disabled after Quick Open or walks sidebar selections | Leave both buttons out of DS-15, by the same rule as DS-18's toolbars: a button that misleads is worse than none. The other ways are drawing the sidebar's, named as such, or building a per-tab note history. That one is new behaviour the Mac doesn't have, with its own chords, and DS-15 lists what it takes. It's a chunk of its own if you want it |
+| DSD14 | DS-11 | The README gates an accent by WCAG and takes its dark fills from Fluent. The project's floor for text is \|Lc\| > 75, and black on Fluent's dark fill measures Lc 65.4 on the default blue. What must a Windows accent pass? | The README's gate: text at 4.5:1, fills and marks at 3:1. Gold stays at the floor. A chosen accent may sit below it, so on the default blue in dark, black on the primary fill is 10.47:1 and Lc 65.4. In exchange the dark fills stay Fluent's, and fewer hues fall back to gold. Selected rows get their own text brush regardless, because white on the tint fails any bar |
+| DSD15 | DS-15 | The design's Back and Forward assume a note history. The only history here is "Back in Sidebar History", on both platforms, which Quick Open and links don't feed. Bound to it, Back sits disabled after Quick Open or walks sidebar selections | Leave both buttons out of DS-15, by the same rule as DS-18's toolbars: a button that misleads is worse than none. A per-tab note history is new behaviour the Mac doesn't have, with its own chords, and DS-15 lists what it takes. It can be its own chunk later |
 
 ## 4. Rules (every chunk)
 
@@ -234,12 +235,12 @@ work the chunk carries.
 | DS-8 | The tab strip as the design's TabView | — | M | windows | NVDA and Narrator spot | — |
 | DS-9 | Subtle icon button and SearchBox styles; every text glyph on a button becomes an icon with a name | — | S–M | windows | NVDA spot | DSD6 |
 | DS-10 | A Settings sheet (SettingsLayout, SettingRow), Appearance › Theme, the theme preference, Settings… and Switch Theme… | Refs #751 | L | windows | NVDA and Narrator pass | — |
-| DS-11 | Appearance › Accent color, with the rules in `xaml/README.md`, a contrast gate at the project's floor, and selected rows' own text brush | — | M | windows | — | DSD14 |
+| DS-11 | Appearance › Accent color, with the rules and contrast gate in `xaml/README.md`, and selected rows' own text brush | — | M | windows | — | DSD14 |
 | DS-12 | `WindowChrome`: one row with title, palette, settings and caption buttons; Snap Layouts | — | L | windows, rust, swift | NVDA and Narrator pass | DSD9, DSD13 |
 | DS-13 | The menus cascade from the logo; Alt+letter; F10 | — | L | windows | Full NVDA and Narrator menu pass | DSD7 |
 | DS-14 | `MinWidth` 500; panes collapse by width without losing the reader's place | — | M | windows | NVDA spot | — |
 | DS-15 | NoteHeader above a note, each control acting on its own note | — | L | windows | NVDA and Narrator pass | DSD11, DSD15 |
-| DS-16 | The right-pane rail as an icon strip; panes at the design's default widths | — | M | windows | NVDA and Narrator spot | DSD8 |
+| DS-16 | The right-pane rail as an icon strip with a More menu; panes at the design's default widths | — | L | windows | NVDA and Narrator pass | DSD8 |
 | DS-17 | The Files pane under a PanelToolbar | — | L | windows, rust, swift | NVDA and Narrator pass | DSD9, DSD12 |
 | DS-18 | PanelToolbar on each right-pane leaf; CountListRow for tags | — | L | windows | NVDA spot | — |
 | DS-19 | EmptyStateLauncher in an empty pane | — | S | windows | NVDA spot | — |
@@ -306,8 +307,8 @@ needs rebuilding.
 | `/design-sync`, with the map in `design/windows/github.md` | After DS-0 merges, and again whenever you like | The project has none of the repo's hand fixes until it runs, and only you start it |
 | The live Text size check: run the app, set Settings › Accessibility › Text size to 150%, Apply, then back to 100% | When DS-5's PR is up | It changes a system setting, which an agent doesn't do. Two minutes. Expected: the shell's text changes within about a second, with no restart |
 | Review of the right-pane icons (`Kit.jsx:54-56`) | Before DS-16 | `assessment.md:113`: "my picks and need your review" |
-| A look at a few Windows accents under `Windows accent` | When DS-11's PR is up | It changes a system setting, which an agent doesn't do. It shows how many hues DSD14's bar sends back to gold |
-| Adopting this plan, and DSD1 to DSD15 | Before DS-1 | — |
+| A look at a few Windows accents under `Windows accent` | When DS-11's PR is up | It changes a system setting, which an agent doesn't do. It shows how many hues fall back to gold under DSD14's bar |
+| Merging this plan | Before DS-0 | It's the owner's to read |
 
 ## 9. How an implementing agent works a chunk
 
@@ -338,7 +339,7 @@ document.
 | DS-13 | `specs/ds13_app_menu.md` | The menus open from the logo, with every key they had |
 | DS-14 | `specs/ds14_narrow_window.md` | The window can be 500 wide, and panes make room |
 | DS-15 | `specs/ds15_note_header.md` | A note has a header with its place and its mode |
-| DS-16 | `specs/ds16_pane_switcher.md` | The right-pane rail is an icon strip that reads as it does today |
+| DS-16 | `specs/ds16_pane_switcher.md` | The right-pane rail is an icon strip with a More menu |
 | DS-17 | `specs/ds17_files_toolbar.md` | The Files pane sits under one toolbar |
 | DS-18 | `specs/ds18_leaf_toolbars_and_count_rows.md` | Each leaf has the toolbar, and tags use count rows |
 | DS-19 | `specs/ds19_empty_state_launcher.md` | An empty pane offers its next actions |

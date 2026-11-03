@@ -23,7 +23,7 @@ Each right-pane leaf opens with the same 40 row: its title, and its count where 
 1. **Toolbars.** Every leaf's heading becomes `PanelToolbarView` with `HeadingLevel` 2 and the same text binding. A count where `Panes.jsx:22-28` shows one and the leaf has the number: Backlinks, Outgoing links, Citations. No leaf has sort, expand-all or search verbs today (searched), and a button that does nothing is worse than none, so none is drawn (plan 46 §1). The slots stay in `PanelToolbarView` for when a leaf has one. Bibliography (`MainWindow.xaml:2005`) keeps its own field, per "`search={false}` when the panel already has a filter field".
 2. **The count's name.** It's in the heading's text only if core's header string already says it (`Panels.BacklinksHeader`). Otherwise it's a presentation-only caption, and a number a reader wants goes through core.
 3. **`Slate.CountRowTemplate`,** on `Slate.TreeRowBase`, for tags. 32 medium, 24 small; icon 16, label Body from `Segment`, count Caption from `FileCount` with tabular figures in `Slate.TertiaryTextBrush`, right-aligned; selected uses the pill and semibold label; hover `Slate.HoverOverlayBrush`.
-4. **A selected count.** `Slate.SelectedCaptionBrush`: `Slate.TertiaryTextColor` in light and dark, as the design draws it, and `SystemColors.HighlightTextColorKey` in `Slate.Contrast.xaml`, so High Contrast doesn't put window text on the highlight. It joins `RequiredSlateBrushKeys` (`ThemeManager.cs:37-69`). DS-11's gate holds tertiary to the floor on `SelectedSurface`, so an accepted accent can't break it.
+4. **A selected count.** `Slate.SelectedCaptionBrush`: `Slate.TertiaryTextColor` in light and dark, as the design draws it, and `SystemColors.HighlightTextColorKey` in `Slate.Contrast.xaml`, so High Contrast doesn't put window text on the highlight. It joins `RequiredSlateBrushKeys` (`ThemeManager.cs:37-69`). Gold's tertiary clears the floor on `SelectedSurface`, and DS-11's gate holds an accent's to 4.5:1 there.
 5. **Names don't change.** A tag's name already says its count, so the row needs nothing folded in.
 6. **Backlinks keep their rows.** Each is one occurrence, with the file name and the snippet a reader opened the leaf for. They get the toolbar and the new hover, and their content, names and list role stay. Counting mentions per note, or expanding rows into tree nodes, needs a grouped query that counts past the loaded page: core, the FFI and both hosts. That's out of this plan (plan 46 §1).
 7. **The hover.** `Slate.PanelRowTemplate`'s hover moves to `Slate.HoverOverlayBrush`, and the `Slate.Contrast.xaml` key arrives from DS-4.
@@ -35,7 +35,7 @@ Failing first:
 - `EveryLeafOpensWithTheToolbar`: a theory over `Leaves`; heading level 2, its text unchanged, no empty button.
 - `ACountRowDrawsLabelAndCount`, `ACountRowIsThirtyTwoAndItsSmallTwinTwentyFour`.
 - `ASelectedCountRowHasThePillAndASemiboldLabel`.
-- `ASelectedCountClearsTheFloor`: a selected tag row in a real window, in light and dark: the count's resolved foreground on the row's resolved background at |Lc| > 75, under gold and, once DS-11 has shipped, under the default blue's computed dictionary. In the contrast dictionary, `Slate.SelectedCaptionBrush` is `HighlightText`.
+- `ASelectedCountClearsTheFloor`: a selected tag row in a real window, in light and dark: the count's resolved foreground on the row's resolved background, at |Lc| > 75 under gold and, once DS-11 has shipped, at 4.5:1 under the default blue's computed dictionary. In the contrast dictionary, `Slate.SelectedCaptionBrush` is `HighlightText`.
 - `ARowsNameIsUnchanged`: backlink and tag names before and after, from the same fixture.
 - `ABacklinkRowKeepsItsFileAndSnippet`.
 - Holding: `RightPanePanels_LeafBodiesCarryRowsAndBacklinkNavigates`, `ALocallyStyledRowDrawsTheThemesColors`, `FocusIntegrityManifestCensus`.
@@ -57,7 +57,7 @@ AT: NVDA, heading navigation through two leaves; a backlink row and a tag row; t
 - [ ] All 17 leaves share the row.
 - [ ] Row names are unchanged.
 - [ ] Backlink rows still show their file and snippet.
-- [ ] A selected count clears the floor, and High Contrast keeps its pair.
+- [ ] A selected count clears its bar, and High Contrast keeps its pair.
 - [ ] No button is drawn that does nothing.
 
 ## Brief

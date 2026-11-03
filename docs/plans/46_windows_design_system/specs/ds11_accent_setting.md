@@ -4,7 +4,7 @@ Issues: filed by DS-0. Size M. Lanes: windows. AT: — (no spoken change; the fa
 
 ## Goal
 
-Appearance gets its second row: Accent color: Automatic, Slate gold or Windows accent. Everything gold follows it. Every text pair an accepted accent draws clears the floor gold clears, selected rows included. A Windows accent that can't falls back to gold without a message, as the design says.
+Appearance gets its second row: Accent color: Automatic, Slate gold or Windows accent. Everything gold follows it. Every text an accepted accent draws clears 4.5:1, and every fill and mark 3:1, selected rows included (DSD14). A Windows accent that can't falls back to gold without a message, as the design says.
 
 ## Current state on main
 
@@ -32,47 +32,32 @@ Read from `SystemColors` on this desktop on 2026-11-03 (Windows 11 build 26300, 
 | Black on `AccentColorLight1`: `#0091F8` | A pressed primary button, dark | Lc 44.7, 6.41:1 | Passes |
 | `AccentColorLight1` on the surface | A pressed link, dark | Lc 40.6, 5.09:1 | Doesn't check it |
 
-Compiled as written, the sketch makes selected rows unreadable in light. Held to the floor as written, it sends `Windows accent` back to gold on every dark default Windows, against `xaml/README.md:42`. So the table changes as well as the gate.
+Compiled as written, the sketch makes selected rows unreadable in light, so they get their own brush and the gate gains their pairs. The other three rows pass the owner's bar (DSD14), and they sit below the floor gold clears. That's accepted for an accent the reader chose, so the table stays.
 
 ## Design
 
 1. **`SlateAccent.cs`,** from the README's sketch, with the colours passed in so facts can feed them: `AccentSource { Automatic, SlateGold, WindowsAccent }`, an `AccentPalette` record of the seven `SystemColors` values, and `TryApplyWindowsAccent(ResourceDictionary, AccentSource, AccentPalette, bool dark, bool highContrast)`, returning false when gold applies: High Contrast, the Slate gold setting, Automatic with `#0078D4`, or a failed check.
 2. **A selected row's text gets its own brush.** `Slate.SelectedTextBrush`, beside `Slate.SelectedSurfaceBrush`: `Slate.TextColor` in light and dark, and `SystemColors.HighlightTextColorKey` in `Slate.Contrast.xaml`, so High Contrast keeps today's pair. The five setters above move to it, and it joins `RequiredSlateBrushKeys` (`ThemeManager.cs:37-69`). The accent doesn't write it, since primary text doesn't follow the accent. `SelectionText` is then only what its name says: `SelectionBackground`'s partner in a text box (`TextBoxSelection.cs:60`), in the editor (`SlateTextEditor.cs:73`) and in the classic `Highlight` pair (`Slate.SystemColors.xaml:18-19`). The classic inactive pair already draws primary text (`Slate.SystemColors.xaml:20-21`). Nothing changes under gold, because the two values are equal. For that reason `ThemeDesignSystemTests.cs:946` and `ThemeDesignSystemTests.cs:1001`, which compare a selected cell's and row's ink with the selection brush, would pass either way, so they move to the new key.
-3. **The role table,** corrected from `xaml/README.md:44-54` (DSD14). The README's columns hold except for the dark fills and the overlay, which it left open.
+3. **The role table** is `xaml/README.md:44-54`'s, dark fills included, with the overlay added: `Slate.ReadingSelectionColor` is `AccentColor` at gold's alphas, 20% in light and 24% in dark.
+4. **The gate (DSD14).** It runs on the computed dictionary, and every check must pass.
+   - **Text, at 4.5:1:** `TextOnAccent` on `Accent`, `AccentHover` and `AccentPressed`. `AccentText` on surface, window, raised and `SelectedSurface`. `AccentHover` and `AccentPressed` on surface, for links. `SelectionText` on `SelectionBackground`. `Slate.TextColor`, `Slate.SecondaryTextColor` and `Slate.TertiaryTextColor` on `SelectedSurface`, the last for DS-18's counts.
+   - **Fills and marks, at 3:1:** `Accent` and `AccentIndicator` on surface, and `AccentIndicator` on `SelectedSurface`.
+   - **The overlay:** primary text under it at 4.5:1 on surface and raised, and the highlight at 1.2:1 off both, the stand-off gold is held to (`ThemeTokenContrastTests.cs:126`). There's no search for an alpha that fits. A hue that fails falls back.
 
-   | Role | Windows accent, light | Windows accent, dark |
-   |---|---|---|
-   | `Accent` | `AccentColorDark1` | `AccentColorLight3` mixed 25% toward `AccentColorLight2` |
-   | `AccentHover` | `AccentColorDark2` | `AccentColorLight3` |
-   | `AccentPressed` | `AccentColorDark3` | `AccentColorLight3` mixed 40% toward `AccentColorLight2` |
-   | `AccentText` | `AccentColorDark2` | `AccentColorLight3` |
-   | `AccentIndicator` | `AccentColorDark1` | `AccentColorLight2` |
-   | `TextOnAccent` | white | black |
-   | `SelectedSurface` | `AccentColor` 12% over the surface | `AccentColor` 11% over the surface |
-   | `SelectionBackground` | `AccentColor` | `AccentColor` |
-   | `SelectionText` | white | white |
-   | `ReadingSelection` | `AccentColor` at 20% | `AccentColorLight2` at 24% |
-
-   The dark fills keep gold's shape: hover lighter than rest, pressed a little darker. `AccentColor` at gold's 24% is too strong for the overlay in dark, at Lc 74.3 on the surface and 72.1 on raised.
-4. **The gate.** It runs on the computed dictionary, and every check must pass.
-   - **Text, at |Lc| > 75 and 4.5:1:** `TextOnAccent` on `Accent`, `AccentHover` and `AccentPressed`. `AccentText` on surface, window, raised and `SelectedSurface`. `AccentHover` and `AccentPressed` on surface, for links. `SelectionText` on `SelectionBackground`. `Slate.TextColor`, `Slate.SecondaryTextColor` and `Slate.TertiaryTextColor` on `SelectedSurface`, the last for DS-18's counts.
-   - **Marks, at 3:1:** `Accent` and `AccentIndicator` on surface, and `AccentIndicator` on `SelectedSurface`.
-   - **The overlay:** primary text under it at |Lc| > 75 on surface and raised, and the highlight at 1.2:1 off both, the measure gold is held to (`ThemeTokenContrastTests.cs:126`). There's no search for an alpha that fits. A hue that fails falls back.
-
-   The text pairs are one list, `SlateAccent.TextPairs`, and `EveryTextBearingPairClearsProjectApcaFloor` runs it over the gold files too, so the gate and gold's fact can't drift apart. Gold's `accent/window` and `accent/surface` stay in its own fact and out of this list: no text draws in the fill role (`ThemeDesignSystemTests.NoTextDrawsInTheAccentFillRole`), and `#0067C0` on the window measures Lc 72.9. `ApcaLc` and `WcagRatio` move unchanged to `SlateContrast.cs` in the app, and the facts call them. Their constants still match `APCAContrast.swift`.
+   The text pairs are one list, `SlateAccent.TextPairs`. The gate runs it, and a fact runs it over the gold files, so a pair added for one reaches the other. `EveryTextBearingPairClearsProjectApcaFloor` keeps holding gold to |Lc| > 75. `WcagRatio` moves unchanged to `SlateContrast.cs` in the app, and the facts call it. `ApcaLc` stays in the test.
 
    Measured on the default blue, where everything passes:
 
    | | Light | Dark |
    |---|---|---|
-   | Lowest text pair | `Slate.TertiaryTextColor` on `SelectedSurface`: Lc 75.1, 6.35:1 | `AccentPressed` on surface: Lc 75.5, 10.64:1 |
-   | Text selection | Lc 76.2, 4.53:1 | Lc 76.2, 4.53:1 |
-   | A selected row: primary, secondary, tertiary, `AccentText` | Lc 93.9, 85.4, 75.1, 81.5 | Lc 98.1, 77.3, 77.3, 83.9 |
-   | Text on the fills: rest, hover, pressed | Lc 82.9, 96.6, 104.5 | Lc 81.4, 87.1, 78.1 |
-   | Marks: `Accent` and `AccentIndicator` on surface, `AccentIndicator` on `SelectedSurface` | 5.67:1, 5.67:1, 4.84:1 | 11.29:1, 8.31:1, 7.50:1 |
-   | The overlay: primary on surface and raised, then the highlight off each | Lc 83.6, 76.2; 1.31:1, 1.29:1 | Lc 80.3, 77.4; 1.65:1, 1.65:1 |
+   | Lowest text pair | Text selection: 4.53:1 | Text selection: 4.53:1 |
+   | A selected row: primary, secondary, tertiary, `AccentText` | 15.28:1, 9.69:1, 6.35:1, 8.51:1 | 13.80:1, 10.15:1, 10.15:1, 11.23:1 |
+   | Text on the fills: rest, hover, pressed | 5.67:1, 9.98:1, 15.58:1 | 10.47:1, 15.68:1, 6.41:1 |
+   | Links: rest, hover, pressed, on the surface | 9.98:1, 9.98:1, 15.58:1 | 12.45:1, 12.45:1, 5.09:1 |
+   | Fills and marks: `Accent` and `AccentIndicator` on surface, `AccentIndicator` on `SelectedSurface` | 5.67:1, 5.67:1, 4.84:1 | 8.31:1, 8.31:1, 7.50:1 |
+   | The overlay: primary on surface and raised, then the highlight off each | 11.23:1, 9.92:1; 1.31:1, 1.29:1 | 8.63:1, 7.68:1; 1.29:1, 1.27:1 |
 
-   The margin is thin: `#0070D4`, a hair from the default blue, puts tertiary at Lc 74.7 on its tint and falls back. That's the bar working, and part of DSD14's cost. Nothing here measures a real palette for another hue. Reading one means changing a system setting, so how many of Windows' presets pass is unknown until the owner looks (DSD14).
+   Text selection clears by a hair, so a hue a little lighter than the default blue falls back on that pair alone. Nothing here measures a real palette for another hue. Reading one means changing a system setting, so how many of Windows' presets pass is unknown until the owner looks (plan 46 §8).
 5. **Automatic's test** is exactly `SystemColors.AccentColor == #0078D4`, as the README says. Windows' own wallpaper-derived accents count as chosen.
 6. **The preference.** `AppPreferencesState.AccentColor`, default `automatic`. A `ThemeManager.SetAccent`. `DictionariesFor` gains the source as a parameter, default `SlateGold`, so hosted facts stay gold unless they ask.
 7. **Reapply.** On `UserPreferenceChanged` General or Color, re-run `ApplyResources` when the accent source isn't gold and the read colour changed. The test is a pure `SlateAccent.ChangeNeedsReapply(source, previous, current)`, since `ThemeManager` can't be built under test. `ResourcesChanged` already reaches the editor's highlighter (`EditorHighlighting.cs:219`), `FieldPrompt` and the graph.
@@ -83,13 +68,13 @@ Compiled as written, the sketch makes selected rows unreadable in light. Held to
 
 Failing first, feeding colours through the palette, since a fact can't change the Windows accent:
 
-- `ASelectedRowClearsTheFloorUnderAnAcceptedAccent`: the regression for the white-on-tint pair. In a real window, in light and dark, under the default blue's computed dictionary, a selected grid cell, panel row, dropdown row and tree row: what each resolves for its foreground on what it resolves for its background, at |Lc| > 75. It reads the controls and not the keys, so a template that goes back to `SelectionText` fails it, at Lc 9.8 in light.
+- `ASelectedRowIsReadableUnderAnAcceptedAccent`: the regression for the white-on-tint pair. In a real window, in light and dark, under the default blue's computed dictionary, a selected grid cell, panel row, dropdown row and tree row: what each resolves for its foreground on what it resolves for its background, at 4.5:1. It reads the controls and not the keys, so a template that goes back to `SelectionText` fails it, at 1.17:1 in light.
 - `TheDefaultBlueIsGoldUnderAutomatic`, `AChosenAccentIsFollowedUnderAutomatic`, `SlateGoldIgnoresWindows`, `WindowsAccentFollowsWhenItPasses`.
-- `AnAccentThatFailsAnyCheckFallsBackToGold`: a theory with one palette per rule, including pale yellow in light, dark navy in dark, one that passes the README's WCAG list and fails the floor, and `#0070D4` with the default blue's shades, which fails only tertiary on `SelectedSurface`.
+- `AnAccentThatFailsAnyCheckFallsBackToGold`: a theory with one palette per rule, including pale yellow in light and dark navy in dark.
 - `TheDefaultBluePassesEveryCheckInBothThemes`: the palette measured above, every pair, the overlay included.
 - `GoldClearsEveryPairTheGateChecks`: `SlateAccent.TextPairs` over both gold files.
 - `ASelectedRowLooksTheSameUnderGold`: `Slate.SelectedTextBrush` draws the value `Slate.SelectionTextColor` holds in both gold themes, and `HighlightText` in the contrast dictionary.
-- `TheRoleTableMatchesTheReadme`: role to `SystemColors` property or mix, light and dark.
+- `TheRoleTableMatchesTheReadme`: role to `SystemColors` property, light and dark.
 - `EverythingGoldFollowsTheAccent`: under a test accent, a primary button, a selected row's pill, a checked box, a focused field's underline and a pressed link resolve to their table entries.
 - `AnAccentChangeNeedsOneReapply`: over `ChangeNeedsReapply`.
 
@@ -97,7 +82,7 @@ Launched app: can't be driven without changing a system setting, so a hosted ren
 
 ## Docs and registers
 
-`xaml/README.md`: the gate (`xaml/README.md:35-42`), the table (`xaml/README.md:44-54`) and the values (`xaml/README.md:56`) become what's above, "sketch, not compiled" (`xaml/README.md:58`) becomes what shipped, and the overlay's rule goes in at `xaml/README.md:106`. `design/windows/xaml/Slate.Light.xaml` and `Slate.Dark.xaml` get `Slate.SelectedTextBrush`, and `design/windows/CLAUDE.md:22` gets a line on it, since regenerating the theme without that key fails `ThemeManager`'s census. The Claude Design project picks this up at the owner's next `/design-sync`. `readme.md:107` holds: it says what a design shows, not what the app reads.
+`xaml/README.md`: the gate (`xaml/README.md:35-42`) gains the selected row's and the links' pairs, `SelectionText` is named as text selection's alone (`xaml/README.md:54`), "sketch, not compiled" (`xaml/README.md:58`) becomes what shipped, and the overlay's rule goes in at `xaml/README.md:106`. `design/windows/xaml/Slate.Light.xaml` and `Slate.Dark.xaml` get `Slate.SelectedTextBrush`, and `design/windows/CLAUDE.md:22` gets a line on it, since regenerating the theme without that key fails `ThemeManager`'s census. The Claude Design project picks this up at the owner's next `/design-sync`. `readme.md:107` holds: it says what a design shows, not what the app reads.
 
 ## Verification
 
@@ -106,11 +91,11 @@ Plan 46 §7's loop with `--filter "FullyQualifiedName~SlateAccent|FullyQualified
 ## Acceptance
 
 - [ ] The README's every claim has a fact.
-- [ ] A selected row clears the floor under every accepted accent, in every template, by a fact that reads the controls.
+- [ ] A selected row's text clears 4.5:1 under every accepted accent, in every template, by a fact that reads the controls.
 - [ ] The gate and gold's fact run one list of text pairs.
 - [ ] The overlay's rule is written down with measurements.
 - [ ] Gold stays the default on a default Windows, and a selected row under gold draws the colours it drew before.
 
 ## Brief
 
-Read `design/windows/xaml/README.md:21-108`, `ThemeManager.cs:204-259`, `ThemeTokenContrastTests.cs`, `Slate.Text.xaml:51-157`, `AppPreferencesStore.cs`, DS-10's row. The README's sketch isn't the target: this spec's table and gate are. Facts first, through the palette, starting with the selected row. Then `Slate.SelectedTextBrush`, `SlateContrast`, `SlateAccent`, the overlay, the preference, the row and the reapply. Commit: `feat(windows): the accent can follow windows, and an accent that fails contrast falls back to gold`.
+Read `design/windows/xaml/README.md:21-108`, `ThemeManager.cs:204-259`, `ThemeTokenContrastTests.cs`, `Slate.Text.xaml:51-157`, `AppPreferencesStore.cs`, DS-10's row. The target is the README's table, with this spec's gate and brush. Facts first, through the palette, starting with the selected row. Then `Slate.SelectedTextBrush`, `SlateContrast`, `SlateAccent`, the overlay, the preference, the row and the reapply. Commit: `feat(windows): the accent can follow windows, and an accent that fails contrast falls back to gold`.

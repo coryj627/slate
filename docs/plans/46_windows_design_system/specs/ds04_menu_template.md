@@ -39,7 +39,7 @@ One Slate template serves all four menu roles, in the menu bar and in every cont
    | 2 | `SlateMenuEnd` | `TextBlock` named `InputGestureText`, left margin 24, `FontSize` from the row; or on a header row, `E76C` at 12 |
 
    The outer element's height sets the 40 pitch. The highlight is a border with margin `5,3`, radius 3, `MinHeight` 34; the label sits 11 inside it, so 16 from the edge when column 0 is empty. `Grid.IsSharedSizeScope` is on each popup's `ItemsPresenter`, and on `ContextMenu` as Fluent already does (`ContextMenu.xaml:24`). `MinHeight` rather than `Height` throughout: DS-5 grows these rows.
-3. **States.** Highlighted: `Slate.HoverOverlayBrush`. Checked: the glyph in `Slate.TextBrush`. Disabled: `Slate.DisabledTextBrush` on label, shortcut and chevron. Shortcut at rest: `Slate.SecondaryTextBrush`. Focus visual: `Slate.RowFocusVisual`, the full row, as `readme.md:176` and `review-2026-11.md:54` record (DSD10).
+3. **States.** Highlighted: `Slate.HoverOverlayBrush`. Checked: the glyph in `Slate.TextBrush`. Disabled: `Slate.DisabledTextBrush` on label, shortcut and chevron. Shortcut at rest: `Slate.SecondaryTextBrush`. Focus visual: a new `Slate.MenuRowFocusVisual`, the same 2px ring as rows elsewhere, on the inset highlight as WinUI does (DSD10): margin `2,0` and radius 6, so its inner edge sits 1 out from the highlight, as `tokens/base.css:7` says, and its outer edge stays inside the row.
 4. **Top level.** `TopLevelHeader` and `TopLevelItem`: `MinHeight` 32, margin `0,0,2,0`, padding `10,0`, radius 4. At 14 that's 32, under 48 with 16 to spare. Foreground stays `MenuBarForeground` from the bar (`MainWindow.xaml:115`).
 5. **The popup.** A `Grid` with margin room for the shadow. In it: a background-only `Border` carrying `Slate.Shadow16`, radius 8, then the content `Border` with `FlyoutBackground`, `FlyoutBorderBrush`, radius 8, padding `0,3`, `RenderOptions.ClearTypeHint="Enabled"`. `Popup.AllowsTransparency="True"` as Fluent has it. The `ContextMenu` template gets the same pair, in a `Slate.ContextMenuStyle` replacing the one DS-2 built. `MaxHeight` comes from the popup's own screen fit, and its `ScrollViewer` keeps vertical `Auto`.
 6. **Motion.** The 167 ms slide stays only under a `MultiDataTrigger` that also reads a small `ShellMotion` instance, shaped like `Graph/GraphMotionPolicy.cs:25` so a fact can inject the setting, with the real value from `SystemParameters.ClientAreaAnimation`. With animation off, the menu is simply there.
@@ -53,6 +53,7 @@ Failing first, in `ThemeDesignSystemTests.cs` or `MenuTemplateTests.cs`, hosted,
 
 - `EveryRowKindStartsItsLabelInOneColumn`: a menu with a plain `MenuItem`, a `CheckMenuItem`, a checked one and a submenu row; all four headers share an x. Fluent fails this.
 - `ARowsPitchIsFortyAndItsHighlightIsInsetFive`.
+- `AMenuRowsRingSitsOnItsHighlight`: the row's `FocusVisualStyle` is `Slate.MenuRowFocusVisual`, and its ring fits inside the 40 pitch without clipping.
 - `ACheckMenuItemTakesTheSlateTemplate`: its `Template` is `Slate.MenuItemStyle`'s, not Fluent's.
 - `ACheckedRowDrawsABareCheck`: on a `CheckMenuItem`: no `CheckBoxIconBorder`; the glyph is there only when checked.
 - `ATopLevelItemFitsATitleBar`: at `Slate.FontSizeBody`, `ActualHeight` plus margins is at most 48. This is the measurement #1756 asked for.

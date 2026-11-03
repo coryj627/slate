@@ -41,7 +41,7 @@ Measured in plan 46 §2.2, in a throwaway app with `Resource` items linked to `d
 
 ## Design
 
-1. **The files.** Six `Resource` items in `SlateWindows.csproj`, linked per DSD2: `..\..\..\..\design\windows\fonts\CascadiaCode.ttf` with `Link="Fonts\CascadiaCode.ttf"`, and the same for `CascadiaCodeItalic.ttf`, `CascadiaMono.ttf`, `CascadiaMonoItalic.ttf`, `OpenSans-Variable.ttf` and `OpenSans-Italic-Variable.ttf`. That's 3,626,128 bytes. Not the NF or PL files. If the owner picks copying under DSD2, the same six go in `SlateWindows/Fonts/` and the `windows.yml` line below drops.
+1. **The files.** Six `Resource` items in `SlateWindows.csproj`, linked per DSD2: `..\..\..\..\design\windows\fonts\CascadiaCode.ttf` with `Link="Fonts\CascadiaCode.ttf"`, and the same for `CascadiaCodeItalic.ttf`, `CascadiaMono.ttf`, `CascadiaMonoItalic.ttf`, `OpenSans-Variable.ttf` and `OpenSans-Italic-Variable.ttf`. That's 3,626,128 bytes. Not the NF or PL files.
 2. **The lane.** `- 'design/windows/fonts/**'` in `windows.yml`'s path list, with a comment, and a fact in `ci/windows-runner/tests/Workflows.Tests.ps1`.
 3. **The composite.** `SlateWindows/Fonts/SlateEditor.CompositeFont`, as above, as a `Resource` beside the links, so `./#Cascadia Code` resolves against the same folder.
 4. **The keys,** in `Themes/Slate.Text.xaml`, so every appearance has them:
