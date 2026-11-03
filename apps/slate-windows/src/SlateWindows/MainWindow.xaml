@@ -981,8 +981,6 @@
                             AutomationProperties.AutomationId="FilesPane"
                             AutomationProperties.Name="Files"
                             Background="{DynamicResource Slate.SurfaceBrush}"
-                            BorderBrush="{DynamicResource Slate.BorderBrush}"
-                            BorderThickness="0,0,1,0"
                             DataContext="{Binding FileSidebar}">
                         <DockPanel Margin="10">
                             <StackPanel DockPanel.Dock="Top">
@@ -1121,14 +1119,15 @@
                                           AutomationProperties.AutomationId="SidebarBatchActions">
                                     <StackPanel>
                                         <TextBox Text="{Binding TagInput, UpdateSourceTrigger=PropertyChanged}"
+                                                 local:FieldPrompt.IsEnabled="True"
                                                  AutomationProperties.Name="Tag name" />
                                         <WrapPanel Orientation="Horizontal" Margin="0,4,0,0">
-                                            <Button Content="Add" Command="{Binding AddTagCommand}" />
-                                            <Button Margin="4,0,0,0" Content="Remove" Command="{Binding RemoveTagCommand}" />
+                                            <Button Margin="0,0,4,4" Content="Add" Command="{Binding AddTagCommand}" />
+                                            <Button Margin="0,0,4,4" Content="Remove" Command="{Binding RemoveTagCommand}" />
                                         </WrapPanel>
                                         <WrapPanel Orientation="Horizontal" Margin="0,4,0,0">
-                                            <Button Content="Move to…" Command="{Binding MoveToCommand}" />
-                                            <Button Margin="4,0,0,0" Content="Move checked to Recycle Bin" Command="{Binding BatchTrashCommand}" />
+                                            <Button Margin="0,0,4,4" Content="Move to…" Command="{Binding MoveToCommand}" />
+                                            <Button Margin="0,0,4,4" Content="Move checked to Recycle Bin" Command="{Binding BatchTrashCommand}" />
                                         </WrapPanel>
                                     </StackPanel>
                                 </Expander>
@@ -1137,41 +1136,41 @@
                                           Margin="0,2"
                                           AutomationProperties.AutomationId="SidebarFileActions">
                                     <StackPanel>
-                                        <TextBox x:Name="SidebarMutationNameTextBox"
+                                        <TextBox x:Name="SidebarMutationNameTextBox" local:FieldPrompt.IsEnabled="True"
                                                  Text="{Binding MutationName, UpdateSourceTrigger=PropertyChanged}"
                                                  PreviewKeyDown="SidebarMutationNameTextBox_PreviewKeyDown"
                                                  AutomationProperties.AutomationId="SidebarMutationName"
                                                  AutomationProperties.Name="File or folder name" />
                                         <WrapPanel Margin="0,4,0,0">
-                                            <Button Content="New note" Command="{Binding CreateNoteCommand}" />
-                                            <Button Margin="4,0,0,0" Content="New folder" Command="{Binding CreateFolderCommand}" />
-                                            <Button Margin="4,0,0,0" Content="Rename" Command="{Binding RenameCommand}" />
-                                            <Button Margin="4,0,0,0" Content="Delete" Command="{Binding DeleteCommand}" />
+                                            <Button Margin="0,0,4,4" Content="New note" Command="{Binding CreateNoteCommand}" />
+                                            <Button Margin="0,0,4,4" Content="New folder" Command="{Binding CreateFolderCommand}" />
+                                            <Button Margin="0,0,4,4" Content="Rename" Command="{Binding RenameCommand}" />
+                                            <Button Margin="0,0,4,4" Content="Delete" Command="{Binding DeleteCommand}" />
                                         </WrapPanel>
                                         <WrapPanel Margin="0,4,0,0">
-                                            <Button Content="Duplicate" Command="{Binding DuplicateCommand}" />
-                                            <Button Margin="4,0,0,0" Content="Move to…" Command="{Binding MoveToCommand}" />
-                                            <Button Margin="4,0,0,0" Content="Copy path" Command="{Binding CopyPathCommand}" />
-                                            <Button Margin="4,0,0,0" Content="Reveal in File Explorer" Command="{Binding RevealCommand}" />
+                                            <Button Margin="0,0,4,4" Content="Duplicate" Command="{Binding DuplicateCommand}" />
+                                            <Button Margin="0,0,4,4" Content="Move to…" Command="{Binding MoveToCommand}" />
+                                            <Button Margin="0,0,4,4" Content="Copy path" Command="{Binding CopyPathCommand}" />
+                                            <Button Margin="0,0,4,4" Content="Reveal in File Explorer" Command="{Binding RevealCommand}" />
                                         </WrapPanel>
                                         <WrapPanel Margin="0,4,0,0">
-                                            <Button Content="Folder note" Command="{Binding CreateFolderNoteCommand}" />
-                                            <Button Margin="4,0,0,0" Content="Delete folder note" Command="{Binding DeleteFolderNoteCommand}" />
-                                            <Button Margin="4,0,0,0" Content="Copy link" Command="{Binding CopyWikilinkCommand}" />
+                                            <Button Margin="0,0,4,4" Content="Folder note" Command="{Binding CreateFolderNoteCommand}" />
+                                            <Button Margin="0,0,4,4" Content="Delete folder note" Command="{Binding DeleteFolderNoteCommand}" />
+                                            <Button Margin="0,0,4,4" Content="Copy link" Command="{Binding CopyWikilinkCommand}" />
                                         </WrapPanel>
                                         <WrapPanel Margin="0,4,0,0">
-                                            <Button Content="Open" Command="{Binding OpenCurrentCommand}" />
-                                            <Button Margin="4,0,0,0" Content="New tab" Command="{Binding OpenNewTabCommand}" />
-                                            <Button Margin="4,0,0,0" Content="Split" Command="{Binding OpenSplitCommand}" />
+                                            <Button Margin="0,0,4,4" Content="Open" Command="{Binding OpenCurrentCommand}" />
+                                            <Button Margin="0,0,4,4" Content="New tab" Command="{Binding OpenNewTabCommand}" />
+                                            <Button Margin="0,0,4,4" Content="Split" Command="{Binding OpenSplitCommand}" />
                                         </WrapPanel>
                                         <WrapPanel Margin="0,4,0,0">
-                                            <Button Content="Pin" Command="{Binding PinCommand}" />
-                                            <Button Margin="4,0,0,0" Content="Unpin" Command="{Binding UnpinCommand}" />
-                                            <Button Margin="4,0,0,0" Content="Add shortcut" Command="{Binding AddShortcutCommand}" />
+                                            <Button Margin="0,0,4,4" Content="Pin" Command="{Binding PinCommand}" />
+                                            <Button Margin="0,0,4,4" Content="Unpin" Command="{Binding UnpinCommand}" />
+                                            <Button Margin="0,0,4,4" Content="Add shortcut" Command="{Binding AddShortcutCommand}" />
                                         </WrapPanel>
                                         <WrapPanel Margin="0,4,0,0">
-                                            <Button Content="Import…" Command="{Binding ImportCommand}" />
-                                            <Button Margin="4,0,0,0" Content="Cancel import" Command="{Binding CancelImportCommand}" />
+                                            <Button Margin="0,0,4,4" Content="Import…" Command="{Binding ImportCommand}" />
+                                            <Button Margin="0,0,4,4" Content="Cancel import" Command="{Binding CancelImportCommand}" />
                                         </WrapPanel>
                                     </StackPanel>
                                 </Expander>
@@ -1342,8 +1341,6 @@
                             AutomationProperties.AutomationId="InspectorPane"
                             AutomationProperties.Name="Inspector"
                             Background="{DynamicResource Slate.SurfaceBrush}"
-                            BorderBrush="{DynamicResource Slate.BorderBrush}"
-                            BorderThickness="1,0,0,0"
                             DataContext="{Binding Workspace}"
                             Visibility="{Binding IsRightPaneVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
                         <local:AutomationLandmarkBorder.Resources>
@@ -2169,11 +2166,11 @@
                                                FontSize="16"
                                                FontWeight="SemiBold"
                                                AutomationProperties.HeadingLevel="Level2" />
-                                    <Button Margin="12,0,0,0"
+                                    <Button Margin="0,0,12,4"
                                             Content="New dashboard"
                                             AutomationProperties.AutomationId="QueriesNewDashboard"
                                             Click="QueriesNewDashboard_Click" />
-                                    <Button Margin="8,0,0,0"
+                                    <Button Margin="0,0,8,4"
                                             Content="Refresh queries"
                                             AutomationProperties.AutomationId="QueriesRefresh"
                                             Click="QueriesRefresh_Click" />
@@ -2232,17 +2229,17 @@
                                                     </Style.Triggers>
                                                 </Style>
                                             </WrapPanel.Resources>
-                                            <Button Content="Run" AutomationProperties.Name="Run saved query" AutomationProperties.AutomationId="QueriesRun" Click="QueriesRun_Click" />
-                                            <Button Content="Pin/Unpin" Margin="4,0,0,0" AutomationProperties.Name="Pin or unpin saved query" AutomationProperties.AutomationId="QueriesPin" Click="QueriesPin_Click" />
-                                            <Button Content="Edit in Builder" Margin="4,0,0,0" AutomationProperties.Name="Edit saved query in builder" AutomationProperties.AutomationId="QueriesEditInBuilder" Click="QueriesEditInBuilder_Click" />
-                                            <Button Content="Rename…" Margin="4,0,0,0" AutomationProperties.Name="Rename saved query" AutomationProperties.AutomationId="QueriesRename" Click="QueriesRename_Click" />
-                                            <Button Content="Export as .base…" Margin="4,0,0,0" AutomationProperties.Name="Export saved query as base file" AutomationProperties.AutomationId="QueriesExport" Click="QueriesExport_Click" />
-                                            <Button Content="Dock" Margin="4,0,0,0" AutomationProperties.Name="Dock saved query" AutomationProperties.AutomationId="QueriesDockQuery" Click="QueriesDockQuery_Click" />
-                                            <Button Content="Delete…" Margin="4,0,0,0" AutomationProperties.Name="Delete saved query" AutomationProperties.AutomationId="QueriesDelete" Click="QueriesDelete_Click" />
+                                            <Button Margin="0,0,4,4" Content="Run" AutomationProperties.Name="Run saved query" AutomationProperties.AutomationId="QueriesRun" Click="QueriesRun_Click" />
+                                            <Button Content="Pin/Unpin" Margin="0,0,4,4" AutomationProperties.Name="Pin or unpin saved query" AutomationProperties.AutomationId="QueriesPin" Click="QueriesPin_Click" />
+                                            <Button Content="Edit in Builder" Margin="0,0,4,4" AutomationProperties.Name="Edit saved query in builder" AutomationProperties.AutomationId="QueriesEditInBuilder" Click="QueriesEditInBuilder_Click" />
+                                            <Button Content="Rename…" Margin="0,0,4,4" AutomationProperties.Name="Rename saved query" AutomationProperties.AutomationId="QueriesRename" Click="QueriesRename_Click" />
+                                            <Button Content="Export as .base…" Margin="0,0,4,4" AutomationProperties.Name="Export saved query as base file" AutomationProperties.AutomationId="QueriesExport" Click="QueriesExport_Click" />
+                                            <Button Content="Dock" Margin="0,0,4,4" AutomationProperties.Name="Dock saved query" AutomationProperties.AutomationId="QueriesDockQuery" Click="QueriesDockQuery_Click" />
+                                            <Button Content="Delete…" Margin="0,0,4,4" AutomationProperties.Name="Delete saved query" AutomationProperties.AutomationId="QueriesDelete" Click="QueriesDelete_Click" />
                                         </WrapPanel>
                                         <DockPanel x:Name="QueriesRenameRow" Visibility="Collapsed" Margin="0,4,0,0">
                                             <TextBlock Text="New name:" VerticalAlignment="Center" />
-                                            <TextBox x:Name="QueriesRenameBox"
+                                            <TextBox x:Name="QueriesRenameBox" local:FieldPrompt.IsEnabled="True"
                                                      Margin="6,0,0,0"
                                                      MinWidth="180"
                                                      KeyDown="QueriesRenameBox_KeyDown"
@@ -2298,8 +2295,8 @@
                                                     </Style.Triggers>
                                                 </Style>
                                             </WrapPanel.Resources>
-                                            <Button Content="Open" AutomationProperties.Name="Open base file" AutomationProperties.AutomationId="QueriesOpenBaseFile" Click="QueriesOpenBaseFile_Click" />
-                                            <Button Content="Dock" Margin="4,0,0,0" AutomationProperties.Name="Dock base file" AutomationProperties.AutomationId="QueriesDockBaseFile" Click="QueriesDockBaseFile_Click" />
+                                            <Button Margin="0,0,4,4" Content="Open" AutomationProperties.Name="Open base file" AutomationProperties.AutomationId="QueriesOpenBaseFile" Click="QueriesOpenBaseFile_Click" />
+                                            <Button Content="Dock" Margin="0,0,4,4" AutomationProperties.Name="Dock base file" AutomationProperties.AutomationId="QueriesDockBaseFile" Click="QueriesDockBaseFile_Click" />
                                         </WrapPanel>
                                         <TextBlock Margin="0,12,0,2" Text="DASHBOARDS" FontSize="11"
                                                    Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
@@ -2350,10 +2347,10 @@
                                                     </Style.Triggers>
                                                 </Style>
                                             </WrapPanel.Resources>
-                                            <Button Content="Open" AutomationProperties.Name="Open dashboard" AutomationProperties.AutomationId="QueriesOpenDashboard" Click="QueriesOpenDashboard_Click" />
-                                            <Button Content="Edit…" Margin="4,0,0,0" AutomationProperties.Name="Edit dashboard" AutomationProperties.AutomationId="QueriesEditDashboard" Click="QueriesEditDashboard_Click" />
-                                            <Button Content="Dock" Margin="4,0,0,0" AutomationProperties.Name="Dock dashboard" AutomationProperties.AutomationId="QueriesDockDashboard" Click="QueriesDockDashboard_Click" />
-                                            <Button Content="Delete…" Margin="4,0,0,0" AutomationProperties.Name="Delete dashboard" AutomationProperties.AutomationId="QueriesDeleteDashboard" Click="QueriesDeleteDashboard_Click" />
+                                            <Button Margin="0,0,4,4" Content="Open" AutomationProperties.Name="Open dashboard" AutomationProperties.AutomationId="QueriesOpenDashboard" Click="QueriesOpenDashboard_Click" />
+                                            <Button Content="Edit…" Margin="0,0,4,4" AutomationProperties.Name="Edit dashboard" AutomationProperties.AutomationId="QueriesEditDashboard" Click="QueriesEditDashboard_Click" />
+                                            <Button Content="Dock" Margin="0,0,4,4" AutomationProperties.Name="Dock dashboard" AutomationProperties.AutomationId="QueriesDockDashboard" Click="QueriesDockDashboard_Click" />
+                                            <Button Content="Delete…" Margin="0,0,4,4" AutomationProperties.Name="Delete dashboard" AutomationProperties.AutomationId="QueriesDeleteDashboard" Click="QueriesDeleteDashboard_Click" />
                                         </WrapPanel>
                                     </StackPanel>
                                 </ScrollViewer>
@@ -4044,11 +4041,11 @@
                                        Focusable="True"
                                        AutomationProperties.AutomationId="BuilderPreviewLine" />
                             <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                                <TextBox x:Name="BuilderSavePathBox"
+                                <TextBox x:Name="BuilderSavePathBox" local:FieldPrompt.IsEnabled="True"
                                          MinWidth="180"
                                          AutomationProperties.AutomationId="BuilderSavePathBox"
                                          AutomationProperties.Name="New .base path" />
-                                <TextBox x:Name="BuilderSaveNameBox"
+                                <TextBox x:Name="BuilderSaveNameBox" local:FieldPrompt.IsEnabled="True"
                                          MinWidth="140"
                                          Margin="8,0,0,0"
                                          AutomationProperties.AutomationId="BuilderSaveNameBox"
@@ -4481,7 +4478,7 @@
                     <TextBlock Text="{Binding Title}"
                                FontWeight="SemiBold"
                                Margin="0,0,0,8" />
-                    <TextBox Text="{Binding Draft, UpdateSourceTrigger=PropertyChanged}"
+                    <TextBox local:FieldPrompt.IsEnabled="True" Text="{Binding Draft, UpdateSourceTrigger=PropertyChanged}"
                              IsReadOnly="{Binding InspectionOnly}"
                              AcceptsReturn="True"
                              MinHeight="120"
@@ -4490,6 +4487,12 @@
                              AutomationProperties.AutomationId="CanvasCardEditorText"
                              AutomationProperties.Name="{Binding TextName}"
                              AutomationProperties.HelpText="{Binding EditorHint}" />
+                    <local:AutomationPresentationTextBlock Text="{Binding EditorHint}"
+                                                           Margin="0,6,0,0"
+                                                           MaxWidth="420"
+                                                           HorizontalAlignment="Left"
+                                                           TextWrapping="Wrap"
+                                                           Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                     <Button Content="Close"
                             HorizontalAlignment="Right"
                             Margin="0,8,0,0"

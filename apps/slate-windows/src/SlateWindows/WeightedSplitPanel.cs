@@ -57,9 +57,16 @@ internal sealed class WeightedSplitPanel : Panel
 
     protected override Size MeasureOverride(Size availableSize)
     {
-        foreach (UIElement child in InternalChildren)
+        // #1778: each pane is measured at the share it will be arranged at, so its
+        // content lays out to fit rather than being cut off.
+        double total = InternalChildren.Cast<FrameworkElement>()
+            .Sum(child => EffectiveWeight(child.DataContext as WorkspacePaneNodeViewModel));
+        foreach (FrameworkElement child in InternalChildren.Cast<FrameworkElement>())
         {
-            child.Measure(availableSize);
+            double share = EffectiveWeight(child.DataContext as WorkspacePaneNodeViewModel) / total;
+            child.Measure(Orientation == Orientation.Horizontal
+                ? new Size(availableSize.Width * share, availableSize.Height)
+                : new Size(availableSize.Width, availableSize.Height * share));
         }
 
         return availableSize;
@@ -126,6 +133,7 @@ internal sealed class WeightedSplitPanel : Panel
     {
         if (eventArgs.PropertyName == nameof(WorkspacePaneNodeViewModel.Weight))
         {
+            InvalidateMeasure();
             InvalidateArrange();
         }
     }

@@ -141,6 +141,8 @@ internal sealed class GraphInspectorView : UserControl
         _root.Children.Add(_groups);
         _root.Children.Add(_display);
         _root.Children.Add(_forces);
+        // #1778: Fluent's scrollbar overlays its content, so the fields stop short of it.
+        _root.Margin = new Thickness(_root.Margin.Left, _root.Margin.Top, _root.Margin.Right + 12, _root.Margin.Bottom);
         Content = new ScrollViewer { Focusable = false, Content = _root, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
         Loaded += (_, _) => Observe(Model);
         Unloaded += (_, _) => StopObserving();

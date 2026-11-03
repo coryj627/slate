@@ -588,11 +588,85 @@ public sealed class ThemeDesignSystemTests
         return opacity;
     }
 
+    /// <summary>#1779: Fluent's menu item hard-codes its shortcut text to the disabled
+    /// brush at 11 points, so an available shortcut read as unavailable. A disabled
+    /// row's shortcut still dims with the row.</summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void AMenuShortcutMatchesItsRow(bool dark, bool highContrast)
+    {
+        (bool enabledBrush, bool sameSize, bool disabledDims) = InRealWindow(dark, highContrast, window =>
+        {
+            var item = new MenuItem { Header = "Copy", InputGestureText = "Ctrl+C" };
+            window.Content = item;
+            window.UpdateLayout();
+            Pump();
+            TextBlock text = ShownShell.Descendants(item).OfType<TextBlock>().Single(block => block.Text == "Ctrl+C");
+            bool brush = ReferenceEquals(text.Foreground, window.FindResource("Slate.SecondaryTextBrush"));
+            bool size = text.FontSize == item.FontSize;
+            item.IsEnabled = false;
+            window.UpdateLayout();
+            Pump();
+            return (brush, size, !ReferenceEquals(text.Foreground, window.FindResource("Slate.SecondaryTextBrush")));
+        });
+
+        Assert.True(enabledBrush, "an enabled shortcut doesn't use the secondary text brush.");
+        Assert.True(sameSize, "the shortcut isn't the row's size.");
+        Assert.True(disabledDims, "a disabled row's shortcut doesn't dim.");
+    }
+
+    /// <summary>#1779: the canvas card editor's name is bound, so it arrives after the
+    /// field loads, and a prompt that read it once stayed blank.</summary>
+    [Fact]
+    public void APromptFollowsItsFieldsName()
+    {
+        string prompt = InRealWindow(dark: false, highContrast: false, window =>
+        {
+            var box = new TextBox();
+            FieldPrompt.SetIsEnabled(box, true);
+            window.Content = box;
+            window.UpdateLayout();
+            Pump();
+            System.Windows.Automation.AutomationProperties.SetName(box, "Card text");
+            window.UpdateLayout();
+            Pump();
+            return ShownShell.Descendants(box)
+                .OfType<AutomationPresentationTextBlock>()
+                .Single()
+                .Text;
+        });
+
+        Assert.Equal("Card text", prompt);
+    }
+
+    /// <summary>#1779: while editing, the card editor has no button, and how to finish
+    /// was only in the field's help text, which a screen reader hears and nobody sees.</summary>
+    [Fact]
+    public void TheCanvasCardEditorShowsHowToFinish()
+    {
+        XNamespace xaml = "http://schemas.microsoft.com/winfx/2006/xaml";
+        XElement overlay = XDocument.Load(Path.Combine(SourceText.ShellSourceRoot(), "MainWindow.xaml"))
+            .Descendants()
+            .Single(element => (string?)element.Attribute(xaml + "Name") == "CanvasCardEditorOverlay");
+
+        Assert.Contains(overlay.Descendants(), element =>
+            element.Name.LocalName == "AutomationPresentationTextBlock"
+            && (string?)element.Attribute("Text") == "{Binding EditorHint}");
+    }
+
     /// <summary>#1774: every field with no visible label says what it's for.</summary>
     [Theory]
     [InlineData("MainWindow.xaml", "SidebarFilterTextBox")]
     [InlineData("MainWindow.xaml", "BibliographySearchBox")]
     [InlineData("MainWindow.xaml", "QuickSwitcherSearchTextBox")]
+    [InlineData("MainWindow.xaml", "BuilderSavePathBox")]
+    [InlineData("MainWindow.xaml", "BuilderSaveNameBox")]
+    [InlineData("MainWindow.xaml", "QueriesRenameBox")]
+    [InlineData("MainWindow.xaml", "SidebarMutationNameTextBox")]
+    [InlineData("FindInNoteBar.xaml", "QueryBox")]
+    [InlineData("FindInNoteBar.xaml", "ReplaceBox")]
     public void AnUnlabelledFieldHasAPrompt(string file, string name)
     {
         XNamespace xaml = "http://schemas.microsoft.com/winfx/2006/xaml";
@@ -621,6 +695,104 @@ public sealed class ThemeDesignSystemTests
         host.Workspace.OpenPath("Lecture.md");
         host.Settle();
         Assert.False(Message().IsVisible, "the message stays over an open note.");
+    });
+
+    /// <summary>#1778: both surfaces draw in OnRender with nothing clipping them, so
+    /// an edge ran across the menu bar and a node's label landed on the sort dropdown.
+    /// A clip limits hit testing too, so nothing outside the pane takes the pointer.</summary>
+    [Fact]
+    public void TheDiagramAndTheCanvasStayInsideTheirPane() => StaThread.Run(() =>
+    {
+        Assert.True(new SlateWindows.Graph.GraphDiagramView().ClipToBounds, "the graph diagram draws outside its pane.");
+        Assert.True(new SlateWindows.Canvas.CanvasRendererView().ClipToBounds, "the canvas draws outside its pane.");
+    });
+
+    /// <summary>#1778: the split handle's local style dropped Fluent, so it drew
+    /// WPF's classic pale bar. It's a gutter until it's used.</summary>
+    [Fact]
+    public void TheSplitHandlesUseTheQuietTemplate()
+    {
+        string xaml = File.ReadAllText(Path.Combine(SourceText.ShellSourceRoot(), "WorkspaceTemplates.xaml"));
+        Assert.Equal(2, Regex.Count(xaml, Regex.Escape("Value=\"{StaticResource Slate.SplitHandleTemplate}\"")));
+    }
+
+    /// <summary>#1778: each side of the editor drew the side pane's border, the
+    /// splitter's line and the pane group's border. The group's border is the one
+    /// line left while nothing is being resized.</summary>
+    [Fact]
+    public void ThePaneEdgesDrawOneLine() => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        ApplyTheme(host, dark: true, highContrast: false);
+        host.Settle();
+
+        Assert.Equal(new Thickness(0), host.Shell.FilesPaneBorder.BorderThickness);
+        Assert.Equal(new Thickness(0), host.Shell.RightPaneBorder.BorderThickness);
+        foreach (GridSplitter splitter in ShownShell.Descendants(host.Shell).OfType<GridSplitter>())
+        {
+            System.Windows.Shapes.Rectangle line = ShownShell.Descendants(splitter).OfType<System.Windows.Shapes.Rectangle>().Single();
+            Assert.Equal(0, Assert.IsType<SolidColorBrush>(line.Fill).Color.A);
+        }
+    });
+
+    /// <summary>#1778: in a split pane the third radio button lost all but its first
+    /// letter.</summary>
+    [Fact]
+    public void TheCanvasRadiosFitANarrowPane() => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        var view = new SlateWindows.Canvas.CanvasSurfaceView { Width = 130, HorizontalAlignment = HorizontalAlignment.Left };
+        host.Shell.Content = view;
+        host.Settle();
+
+        RadioButton visual = view.VisualChoiceForTests;
+        double right = visual.TranslatePoint(new Point(visual.ActualWidth, 0), view).X;
+        Assert.True(right <= 130, $"the last radio button ends at {right:F0}px in a 130px pane.");
+    });
+
+    /// <summary>#1778: a left margin on a wrapped button indents the row it wraps to.</summary>
+    [Fact]
+    public void AWrappedButtonHasNoLeftMargin()
+    {
+        XNamespace presentation = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
+        string[] stray = [.. XDocument
+            .Load(Path.Combine(SourceText.ShellSourceRoot(), "MainWindow.xaml"), LoadOptions.SetLineInfo)
+            .Descendants(presentation + "WrapPanel")
+            .SelectMany(panel => panel.Elements(presentation + "Button"))
+            .Where(button => (string?)button.Attribute("Margin") is { } margin && !margin.StartsWith("0,", StringComparison.Ordinal))
+            .Select(button => $"line {((System.Xml.IXmlLineInfo)button).LineNumber}")];
+
+        Assert.Empty(stray);
+    }
+
+    /// <summary>#1778: every pane was measured at the whole split's size and arranged
+    /// at its share, so its content was laid out too wide and cut off: wrapped text,
+    /// the canvas radios, a table's right edge.</summary>
+    [Theory]
+    [InlineData(Orientation.Horizontal)]
+    [InlineData(Orientation.Vertical)]
+    public void ASplitPaneIsMeasuredAtItsShare(Orientation orientation) => StaThread.Run(() =>
+    {
+        TextBlock Pane() => new() { TextWrapping = TextWrapping.Wrap, Text = string.Concat(Enumerable.Repeat("words that wrap ", 60)) };
+        var panel = new WeightedSplitPanel { Orientation = orientation };
+        TextBlock first = Pane();
+        TextBlock second = Pane();
+        panel.Children.Add(first);
+        panel.Children.Add(second);
+
+        panel.Measure(new Size(400, 400));
+        panel.Arrange(new Rect(0, 0, 400, 400));
+
+        if (orientation == Orientation.Horizontal)
+        {
+            Assert.True(first.DesiredSize.Width <= 200, $"a half-width pane was measured {first.DesiredSize.Width:F0} wide.");
+            Assert.True(second.DesiredSize.Width <= 200, $"a half-width pane was measured {second.DesiredSize.Width:F0} wide.");
+        }
+        else
+        {
+            Assert.True(first.DesiredSize.Height <= 200, $"a half-height pane was measured {first.DesiredSize.Height:F0} high.");
+            Assert.True(second.DesiredSize.Height <= 200, $"a half-height pane was measured {second.DesiredSize.Height:F0} high.");
+        }
     });
 
     /// <summary>The classic list turns fixed white when disabled, which every

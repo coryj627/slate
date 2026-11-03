@@ -4,6 +4,7 @@
 using System.IO;
 using System.Security;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Media;
 using Microsoft.Win32;
 
@@ -214,16 +215,22 @@ internal sealed class ThemeManager : IDisposable
         // overlay turned white under the theme's pale text.
         slate["ControlLightColor"] = highContrast ? SystemColors.WindowColor : (Color)slate["Slate.SurfaceColor"];
         slate["DisabledForegroundColor"] = highContrast ? SystemColors.GrayTextColor : (Color)slate["Slate.DisabledTextColor"];
+        ResourceDictionary fluent = LoadDictionary(FluentRoot + fluentName);
+        if (fluent[typeof(MenuItem)] is Style menuItem)
+        {
+            slate[typeof(MenuItem)] = MenuShortcuts.StyleFor(menuItem);
+        }
+
         return highContrast
             ?
             [
-                LoadDictionary(FluentRoot + fluentName),
+                fluent,
                 slate,
                 LoadDictionary(SlateRoot + "Slate.Text.xaml"),
             ]
             :
             [
-                LoadDictionary(FluentRoot + fluentName),
+                fluent,
                 slate,
                 LoadDictionary(SlateRoot + "Slate.SystemColors.xaml"),
                 LoadDictionary(SlateRoot + "Slate.Text.xaml"),

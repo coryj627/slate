@@ -4,6 +4,7 @@
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Media;
 using System.Windows.Threading;
 
@@ -64,14 +65,20 @@ internal static class FieldPrompt
         {
             var text = new AutomationPresentationTextBlock
             {
-                VerticalAlignment = VerticalAlignment.Center,
+                // A multi-line field's text starts at its top.
+                VerticalAlignment = box.AcceptsReturn ? VerticalAlignment.Top : VerticalAlignment.Center,
                 TextTrimming = TextTrimming.CharacterEllipsis,
-                Text = AutomationProperties.GetName(box),
                 // The 2px is the text view's own inset, so the prompt starts where
                 // typed text will.
                 Margin = new Thickness(host.Margin.Left + box.Padding.Left + 2, 0, host.Margin.Right + box.Padding.Right, 0),
             };
             text.SetResourceReference(TextBlock.ForegroundProperty, "Slate.SecondaryTextBrush");
+            // A bound name can arrive after the field loads.
+            text.SetBinding(TextBlock.TextProperty, new Binding
+            {
+                Source = box,
+                Path = new PropertyPath(AutomationProperties.NameProperty),
+            });
             var prompt = new PromptHost { IsHitTestVisible = false, Child = text };
             Grid.SetRow(prompt, Grid.GetRow(host));
             Grid.SetColumn(prompt, Grid.GetColumn(host));

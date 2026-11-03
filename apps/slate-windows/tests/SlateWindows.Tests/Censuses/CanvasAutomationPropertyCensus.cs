@@ -48,7 +48,7 @@ public sealed class CanvasAutomationPropertyCensus
         "CanvasOutlineTree", "CanvasOutlineItem", "CanvasSurfaceView",
         // The shared peered containers (AutomationLandmark.cs) — the
         // whole reason that file exists.
-        "AutomationNamedGroupPanel", "AutomationLandmarkGrid",
+        "AutomationNamedGroupPanel", "AutomationNamedWrapPanel", "AutomationLandmarkGrid",
         "AutomationLandmarkBorder", "AutomationNamedRowBorder",
         "AutomationVisibilityListBox", "AutomationPresentationTextBlock",
         "AutomationPresentationItemsControl",
