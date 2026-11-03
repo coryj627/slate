@@ -51,6 +51,10 @@ internal class LandingTreeView : TreeView
 
     static LandingTreeView() => RealizedRowHold.Register(typeof(LandingTreeView));
 
+    // #1767: an implicit style is keyed on the exact type, so a subclass gets
+    // none and falls back to WPF's classic template.
+    public LandingTreeView() => SetResourceReference(StyleProperty, typeof(TreeView));
+
     protected override DependencyObject GetContainerForItemOverride() => new LandingTreeViewItem();
 
     protected override AutomationPeer OnCreateAutomationPeer() => new LandingTreeViewAutomationPeer(this);
@@ -356,5 +360,21 @@ internal static class RealizedRowHold
         {
             e.Cancel = true;
         }
+    }
+}
+
+/// <summary>#1767: the tree row's chevron, pointing right when collapsed and
+/// down when expanded.</summary>
+public static class TreeChevron
+{
+    public static readonly System.Windows.Data.IValueConverter Angle = new AngleConverter();
+
+    private sealed class AngleConverter : System.Windows.Data.IValueConverter
+    {
+        public object Convert(object? value, Type targetType, object? parameter, System.Globalization.CultureInfo culture) =>
+            value is true ? 90.0 : 0.0;
+
+        public object ConvertBack(object? value, Type targetType, object? parameter, System.Globalization.CultureInfo culture) =>
+            throw new NotSupportedException();
     }
 }

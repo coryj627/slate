@@ -68,6 +68,21 @@ public sealed partial class ShellAccessibilityTests
             AssertAxeClean(process, "editor-selection");
         });
 
+    /// <summary>#1767: on main, the palette's list was classic white under the
+    /// dark theme's pale text. Pixels again: every brush was valid.</summary>
+    [Fact]
+    public void ThemedShell_TheCommandPaletteListIsReadable() =>
+        RunFindInNoteJourney("palette-readability", (process, window, automation, editor) =>
+        {
+            Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_P);
+            AutomationElement results = WaitForElement(window, "CommandPaletteResults", TimeSpan.FromSeconds(10));
+            Thread.Sleep(500);
+
+            AssertReadable(results, "the command palette's list");
+
+            AssertAxeClean(process, "palette-readability");
+        });
+
     private static void AssertReadable(AutomationElement surface, string name)
     {
         Color background = MostCommonColor(surface);

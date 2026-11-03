@@ -130,6 +130,16 @@ internal sealed class AutomationNamedRowPeer : FrameworkElementAutomationPeer
 /// </summary>
 internal sealed class AutomationVisibilityListBox : ListBox
 {
+    // #1767: an implicit style is keyed on the exact type, so a subclass gets
+    // none and falls back to WPF's classic template, which paints fixed white.
+    // Fluent's template has no border or padding, so an empty list would measure
+    // nothing and read on-screen with no rectangle.
+    public AutomationVisibilityListBox()
+    {
+        SetResourceReference(StyleProperty, typeof(ListBox));
+        MinHeight = 1;
+    }
+
     protected override AutomationPeer OnCreateAutomationPeer() =>
         new AutomationVisibilityListBoxPeer(this);
 }

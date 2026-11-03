@@ -7,6 +7,157 @@
                     xmlns:bases="clr-namespace:SlateWindows.Bases"
                     xmlns:canvas="clr-namespace:SlateWindows.Canvas"
                     xmlns:graph="clr-namespace:SlateWindows.Graph">
+    <!-- #1767: a control with a local style loses Fluent's and falls back to WPF's
+         classic template, whose colours are literals no resource key can change: a
+         list turns fixed white, a button pale. Every local ListBox, Button and
+         TreeViewItem style in the shell is based on one of these, and a test enforces
+         it. They live here, the first dictionary MainWindow merges, so both files
+         can reach them. -->
+    <Style x:Key="Slate.PanelListBase" TargetType="ListBox">
+        <!-- With no border or padding, an empty list would have no rectangle. -->
+        <Setter Property="MinHeight" Value="1" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource Slate.TextBrush}" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ListBox">
+                    <Border Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            SnapsToDevicePixels="True">
+                        <ScrollViewer Focusable="False" Padding="{TemplateBinding Padding}">
+                            <ItemsPresenter />
+                        </ScrollViewer>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsGrouping" Value="True">
+                            <Setter Property="ScrollViewer.CanContentScroll" Value="False" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <Style x:Key="Slate.ButtonBase" TargetType="Button">
+        <Setter Property="Background" Value="{DynamicResource ButtonBackground}" />
+        <Setter Property="Foreground" Value="{DynamicResource ButtonForeground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource ButtonBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Padding" Value="11,5,11,6" />
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource DefaultControlFocusVisualStyle}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="4"
+                            SnapsToDevicePixels="True">
+                        <ContentPresenter Margin="{TemplateBinding Padding}"
+                                          HorizontalAlignment="Center"
+                                          VerticalAlignment="Center"
+                                          RecognizesAccessKey="True" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter Property="Background" Value="{DynamicResource ButtonBackgroundPointerOver}" />
+                            <Setter Property="BorderBrush" Value="{DynamicResource ButtonBorderBrushPointerOver}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter Property="Background" Value="{DynamicResource ButtonBackgroundPressed}" />
+                            <Setter Property="Foreground" Value="{DynamicResource ButtonForegroundPressed}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Background" Value="{DynamicResource ButtonBackgroundDisabled}" />
+                            <Setter Property="Foreground" Value="{DynamicResource ButtonForegroundDisabled}" />
+                            <Setter Property="BorderBrush" Value="{DynamicResource ButtonBorderBrushDisabled}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <BooleanToVisibilityConverter x:Key="Slate.TreeBoolToVisibility" />
+    <Style x:Key="Slate.TreeRowBase" TargetType="TreeViewItem">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource Slate.TextBrush}" />
+        <Setter Property="Padding" Value="4,2" />
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource DefaultControlFocusVisualStyle}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TreeViewItem">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="19" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <ToggleButton Width="19"
+                                      Focusable="False"
+                                      ClickMode="Press"
+                                      VerticalAlignment="Center"
+                                      IsChecked="{Binding IsExpanded, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"
+                                      Visibility="{Binding HasItems, RelativeSource={RelativeSource TemplatedParent}, Converter={StaticResource Slate.TreeBoolToVisibility}}">
+                            <ToggleButton.Template>
+                                <ControlTemplate TargetType="ToggleButton">
+                                    <Border Background="Transparent">
+                                        <Path HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              Data="M 0 0 L 4 4 L 0 8 Z"
+                                              Fill="{DynamicResource Slate.SecondaryTextBrush}"
+                                              RenderTransformOrigin="0.5,0.5">
+                                            <Path.RenderTransform>
+                                                <RotateTransform Angle="{Binding IsChecked, RelativeSource={RelativeSource TemplatedParent}, Converter={x:Static local:TreeChevron.Angle}}" />
+                                            </Path.RenderTransform>
+                                        </Path>
+                                    </Border>
+                                </ControlTemplate>
+                            </ToggleButton.Template>
+                        </ToggleButton>
+                        <Border Grid.Column="1"
+                                Padding="{TemplateBinding Padding}"
+                                CornerRadius="4"
+                                Background="{TemplateBinding Background}">
+                            <Grid>
+                                <!-- The pill: selection is a shape too, not colour alone. -->
+                                <Rectangle Width="3"
+                                           Height="16"
+                                           Margin="-3,0,0,0"
+                                           RadiusX="1.5"
+                                           RadiusY="1.5"
+                                           HorizontalAlignment="Left"
+                                           VerticalAlignment="Center"
+                                           Fill="{TemplateBinding BorderBrush}" />
+                                <ContentPresenter x:Name="PART_Header" ContentSource="Header" />
+                            </Grid>
+                        </Border>
+                        <ItemsPresenter Grid.Row="1"
+                                        Grid.Column="1"
+                                        Visibility="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}, Converter={StaticResource Slate.TreeBoolToVisibility}}" />
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter Property="Background" Value="{DynamicResource Slate.RaisedSurfaceBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter Property="Background" Value="{DynamicResource Slate.SelectedSurfaceBrush}" />
+                            <Setter Property="Foreground" Value="{DynamicResource Slate.SelectionTextBrush}" />
+                            <Setter Property="BorderBrush" Value="{DynamicResource Slate.AccentIndicatorBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.GrayTextBrushKey}}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
     <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
     <local:InverseBooleanToVisibilityConverter x:Key="InverseBooleanToVisibilityConverter" />
     <local:AxisToOrientationConverter x:Key="AxisToOrientationConverter" />
@@ -275,7 +426,7 @@
                         Command="{Binding CommitCommand}"
                         AutomationProperties.Name="{Binding SaveLabel}">
                     <Button.Style>
-                        <Style TargetType="Button">
+                        <Style TargetType="Button" BasedOn="{StaticResource Slate.ButtonBase}">
                             <Setter Property="IsEnabled" Value="False" />
                             <Style.Triggers>
                                 <DataTrigger Binding="{Binding IsDirty}" Value="True">
@@ -301,7 +452,7 @@
                         Command="{Binding DeleteCommand}"
                         AutomationProperties.Name="{Binding DeleteLabel}">
                     <Button.Style>
-                        <Style TargetType="Button">
+                        <Style TargetType="Button" BasedOn="{StaticResource Slate.ButtonBase}">
                             <Style.Triggers>
                                 <!-- Delete is disabled while the draft
                                      is dirty; the reason is exposed as
@@ -628,6 +779,8 @@
                  requests fail closed and the window's fallback seats the
                  Files tree instead. -->
             <TabControl ItemsSource="{Binding Tabs}"
+                        Background="{DynamicResource Slate.SurfaceBrush}"
+                        BorderBrush="{DynamicResource Slate.BorderBrush}"
                         SelectedItem="{Binding ActiveTab, Mode=TwoWay}"
                         Focusable="{Binding HasItems, RelativeSource={RelativeSource Self}}"
                         IsTabStop="{Binding HasItems, RelativeSource={RelativeSource Self}}"
