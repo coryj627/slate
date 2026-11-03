@@ -556,27 +556,28 @@
                       AutomationProperties.AutomationId="PropertiesHeader"
                       AutomationProperties.Name="{Binding Properties.HeaderGroupName}">
                 <Expander.Header>
-                    <DockPanel LastChildFill="False">
+                    <!-- #1778: wraps, because a half-width split pane can't fit all three.
+                         Tab order is unchanged, and the buttons now draw in that order. -->
+                    <WrapPanel>
                         <TextBlock VerticalAlignment="Center"
+                                   Margin="0,0,16,0"
                                    FontWeight="SemiBold"
                                    Text="{Binding Properties.HeaderText}"
                                    AutomationProperties.HeadingLevel="Level2" />
-                        <Button DockPanel.Dock="Right"
-                                Margin="8,0,8,0"
+                        <Button Margin="0,2,8,2"
                                 MinHeight="28"
                                 Padding="8,2"
                                 Content="Rename property across the vault"
                                 AutomationProperties.AutomationId="PropertiesBulkRenameButton"
                                 Command="{Binding DataContext.Workspace.OpenBulkRenameSheetCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
-                        <Button DockPanel.Dock="Right"
-                                Margin="16,0,0,0"
+                        <Button Margin="0,2,8,2"
                                 MinHeight="28"
                                 Padding="8,2"
                                 Content="Add property"
                                 AutomationProperties.AutomationId="PropertiesAddButton"
                                 AutomationProperties.HelpText="Add a property to this note."
                                 Command="{Binding DataContext.Workspace.OpenAddPropertySheetCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
-                    </DockPanel>
+                    </WrapPanel>
                 </Expander.Header>
                 <StackPanel Margin="4,4,4,8">
                     <TextBlock Text="Loading properties"

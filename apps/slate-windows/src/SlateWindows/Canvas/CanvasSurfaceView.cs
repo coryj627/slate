@@ -92,6 +92,7 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
             FontSize = 16,
             FontWeight = FontWeights.SemiBold,
             VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 12, 0),
         };
         AutomationProperties.SetHeadingLevel(_title, AutomationHeadingLevel.Level2);
 
@@ -112,7 +113,6 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         // the class this and the Invoke defect share.
         _switcher = new AutomationNamedWrapPanel
         {
-            Margin = new Thickness(12, 0, 0, 0),
             VerticalAlignment = VerticalAlignment.Center,
         };
         _switcher.Children.Add(_outlineChoice);
@@ -148,7 +148,7 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         // announcement-only). An Edit peer with mac's label and hint.
         _filterField = new TextBox
         {
-            Width = 220,
+            Width = 160,
             Margin = new Thickness(0, 0, 6, 0),
             VerticalAlignment = VerticalAlignment.Center,
         };
