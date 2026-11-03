@@ -359,6 +359,27 @@ public sealed partial class GraphDiagramTests
         });
     }
 
+    /// <summary>#1786: a popup is its own window, so hiding the diagram under the
+    /// pointer, as a keyboard tab switch does, doesn't hide it.</summary>
+    [Fact]
+    public void AHiddenDiagramClosesItsTooltip()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(3, "diagram-hidden-tooltip");
+            GraphDocumentViewModel document = host.Open();
+            (_, _, GraphDiagramView diagram, _) = LiveDiagram(host, document);
+            diagram.PointerEnteredForTests(diagram.VisibleIds[0]);
+            Assert.True(diagram.TooltipIsOpenForTests, "premise: hover did not open it.");
+
+            diagram.Visibility = System.Windows.Visibility.Collapsed;
+            diagram.UpdateLayout();
+
+            Assert.False(diagram.IsVisible, "premise: the diagram is still visible.");
+            Assert.False(diagram.TooltipIsOpenForTests, "the hidden diagram's popup is still on screen.");
+        });
+    }
+
     [Fact]
     public void TheTooltipIsTheInventorysComposedLabel()
     {

@@ -58,6 +58,9 @@ internal sealed class CanvasRendererView : FrameworkElement
             Child = _tooltipText,
             BorderThickness = new Thickness(1),
         };
+        tooltipBorder.SetResourceReference(System.Windows.Controls.Border.BackgroundProperty, "Slate.SurfaceBrush");
+        tooltipBorder.SetResourceReference(System.Windows.Controls.Border.BorderBrushProperty, "Slate.BorderBrush");
+        _tooltipText.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, "Slate.TextBrush");
         _tooltip = new System.Windows.Controls.Primitives.Popup
         {
             Child = tooltipBorder,
@@ -1132,6 +1135,7 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// that gives it its size, since showing it may bring no install.</summary>
     private void OnIsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
+        UpdateTooltip();
         if (e.NewValue is true && _owedReveal is not null)
         {
             _ = Dispatcher.BeginInvoke(
@@ -1317,7 +1321,8 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// truncated).</summary>
     private void UpdateTooltip()
     {
-        string? subject = TooltipSubject();
+        // #1786: a popup is its own window, so a hidden board has to close it.
+        string? subject = IsVisible ? TooltipSubject() : null;
         if (subject is null)
         {
             _tooltip.IsOpen = false;
@@ -1413,6 +1418,8 @@ internal sealed class CanvasRendererView : FrameworkElement
     }
 
     internal bool TooltipIsOpenForTests => _tooltip.IsOpen;
+
+    internal System.Windows.Controls.Border TooltipChromeForTests => (System.Windows.Controls.Border)_tooltip.Child;
 
     internal string TooltipTextForTests => _tooltipText.Text;
 }

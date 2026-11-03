@@ -897,6 +897,20 @@ public sealed class ThemeDesignSystemTests
             element.Name.LocalName == "TextBlock" && (string?)element.Attribute("Text") == "Saved query:");
     }
 
+    /// <summary>#1786: Fluent's ring is drawn outside the cell, and the column header
+    /// cut off its top.</summary>
+    [Fact]
+    public void AGridCellsRingIsDrawnInsideTheCell() => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        ApplyTheme(host, dark: true, highContrast: false);
+        var cell = new DataGridCell { Style = (Style)host.Shell.FindResource("Slate.GridCellStyle"), Content = "A cell" };
+        host.Shell.Content = cell;
+        host.Settle();
+
+        Assert.Same(host.Shell.FindResource("Slate.RowFocusVisual"), cell.FocusVisualStyle);
+    });
+
     /// <summary>The classic list turns fixed white when disabled, which every
     /// open overlay does to the shell behind it.</summary>
     [Theory]
