@@ -2598,7 +2598,7 @@
                  input. The underlying shell is disabled above, so UIA clients
                  cannot invoke commands behind the visible overlay either. -->
             <Border Background="Transparent"
-                    Visibility="{Binding QuickSwitcher.IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                    Visibility="{Binding QuickSwitcher.IsOpen, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}" />
             <local:AutomationLandmarkBorder x:Name="QuickSwitcherOverlay"
                     KeyboardNavigation.DirectionalNavigation="Contained"
                     Width="600"
@@ -2610,7 +2610,7 @@
                     Background="{DynamicResource Slate.SurfaceBrush}"
                     BorderBrush="{DynamicResource Slate.BorderBrush}"
                     BorderThickness="1"
-                    Visibility="{Binding DataContext.QuickSwitcher.IsOpen, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BooleanToVisibilityConverter}}"
+                    Visibility="{Binding DataContext.QuickSwitcher.IsOpen, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}"
                     DataContext="{Binding QuickSwitcher}"
                     FocusManager.IsFocusScope="True"
                     local:SheetKeyboardFence.IsEnabled="True"
@@ -2638,7 +2638,7 @@
                                  Padding="10,8"
                                  FontSize="18"
                                  Text="{Binding Query, UpdateSourceTrigger=PropertyChanged}"
-                                 Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                 Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}"
                                  PreviewKeyDown="QuickSwitcherSearch_PreviewKeyDown"
                                  AutomationProperties.AutomationId="QuickSwitcherSearch"
                                  AutomationProperties.Name="Search files"
@@ -2648,7 +2648,7 @@
                                 Padding="10,4"
                                 Content="Close"
                                 Command="{Binding DismissCommand}"
-                                Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}"
                                 AutomationProperties.AutomationId="QuickSwitcherClose"
                                 AutomationProperties.Name="Close Quick Open" />
                     </Grid>
@@ -2659,7 +2659,7 @@
                              Margin="0,8"
                              ItemsSource="{Binding Results}"
                              SelectedItem="{Binding SelectedRow, Mode=TwoWay}"
-                             Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}"
+                             Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}"
                              MouseDoubleClick="QuickSwitcherResults_MouseDoubleClick"
                              AutomationProperties.AutomationId="QuickSwitcherResults" local:SiblingNames.NamePath="DisplayName" local:SiblingNames.DistinguisherPath="Path" local:SiblingNames.Noun="result"
                              AutomationProperties.Name="Quick Open results"
@@ -2690,11 +2690,11 @@
                     <DockPanel Grid.Row="2">
                         <local:AutomationPresentationTextBlock Text="{Binding ResultSummary}"
                                                                Margin="0,0,12,0"
-                                                               Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                                               Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}"
                                                                Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                         <local:AutomationPresentationTextBlock DockPanel.Dock="Right"
                                                                Text="Enter open · Ctrl+Enter tab · Ctrl+Alt+Enter split · Esc close"
-                                                               Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                                               Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}"
                                                                Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                     </DockPanel>
                 </Grid>

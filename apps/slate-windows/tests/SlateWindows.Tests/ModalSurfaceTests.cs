@@ -22,6 +22,64 @@ namespace SlateWindows.Tests;
 /// </remarks>
 public sealed class ModalSurfaceTests
 {
+    /// <summary>The shell gate's welcome scan: with no vault there is no Quick
+    /// Open view model, and a binding whose path fails leaves Visibility at its
+    /// default, Visible, unless it names a fallback. The overlay drew an empty
+    /// box over the welcome view, and its hit-test layer took the pointer.</summary>
+    [Fact]
+    public void WithNoVaultNoOverlayShowsAndThePointerReachesTheWelcomeView()
+    {
+        Func<bool> priorOverlayProbe = Canvas.CanvasSurfaceView.ShellOverlayIsOpen;
+        try
+        {
+            StaThread.RunPumped(
+                () =>
+                {
+                    using var host = new ShownShell();
+                    host.ShowWelcomeWithoutAWorkspace();
+                    MainWindow shell = host.Shell;
+                    Assert.Null(Assert.IsType<VaultLifecycleViewModel>(shell.DataContext).QuickSwitcher);
+
+                    // Every layer after the workspace is an overlay or its hit-test layer.
+                    var root = (System.Windows.Controls.Panel)shell.WorkspaceRoot.Parent;
+                    string[] shown = root.Children
+                        .OfType<System.Windows.FrameworkElement>()
+                        .SkipWhile(child => !ReferenceEquals(child, shell.WorkspaceRoot))
+                        .Skip(1)
+                        .Where(child => child.IsVisible)
+                        .Select(child => System.Windows.Automation.AutomationProperties.GetAutomationId(child) is { Length: > 0 } id
+                            ? id
+                            : $"{child.GetType().Name} at index {root.Children.IndexOf(child)}")
+                        .ToArray();
+                    Assert.Empty(shown);
+
+                    System.Windows.Controls.Button open = shell.OpenVaultButton;
+                    System.Windows.Point center = open.TranslatePoint(
+                        new System.Windows.Point(open.ActualWidth / 2, open.ActualHeight / 2), shell);
+                    bool reached = false;
+                    for (var node = shell.InputHitTest(center) as System.Windows.DependencyObject;
+                        node is not null && !reached;
+                        node = FocusAncestry.Parent(node))
+                    {
+                        reached = ReferenceEquals(node, open);
+                    }
+
+                    Assert.True(reached, $"the pointer over Open Vault reached {shell.InputHitTest(center)}.");
+
+                    Assert.False(
+                        System.Windows.Automation.Peers.UIElementAutomationPeer
+                            .CreatePeerForElement(shell.QuickSwitcherResultsList).IsControlElement(),
+                        "the hidden Quick Open list is still in the control view.");
+                },
+                TimeSpan.FromSeconds(90),
+                "STA test body timed out.");
+        }
+        finally
+        {
+            Canvas.CanvasSurfaceView.ShellOverlayIsOpen = priorOverlayProbe;
+        }
+    }
+
     [Theory]
     // Clipboard and undo must survive the modal swallow.
     [InlineData(Key.A, ModifierKeys.Control, true)]

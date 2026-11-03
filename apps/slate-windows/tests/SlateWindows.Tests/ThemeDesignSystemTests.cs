@@ -227,6 +227,26 @@ public sealed class ThemeDesignSystemTests
         Assert.True(tree, "the tree has no Fluent style.");
     }
 
+    /// <summary>Fluent's list has no border or padding, so an empty one measured
+    /// nothing, and an on-screen element with no rectangle is an accessibility
+    /// error: a query with no matches left the reader on a list with no bounds.</summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void AnEmptyListStillHasARectangle(bool dark, bool highContrast) => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        ApplyTheme(host, dark, highContrast);
+        var overlay = new AutomationVisibilityListBox();
+        var panel = new ListBox { Style = (Style)host.Shell.FindResource("Slate.PanelListBase") };
+        host.Shell.Content = new StackPanel { Children = { overlay, panel } };
+        host.Settle();
+
+        Assert.True(overlay.ActualHeight > 0, "an empty overlay list has no rectangle.");
+        Assert.True(panel.ActualHeight > 0, "an empty panel list has no rectangle.");
+    });
+
     /// <summary>The selected cell drew pale text on bright gold.</summary>
     [Theory]
     [InlineData(false)]
