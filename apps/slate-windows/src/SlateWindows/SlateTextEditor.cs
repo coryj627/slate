@@ -61,6 +61,11 @@ internal sealed class SlateTextEditor : TextEditor
     {
         Loaded += SlateTextEditor_Loaded;
         Unloaded += SlateTextEditor_Unloaded;
+        // #1758: AvalonEdit's default link colour is pure blue, |Lc| 15.6 on
+        // the dark editor. A URL is a link, so it takes the link role.
+        TextArea.TextView.SetResourceReference(
+            ICSharpCode.AvalonEdit.Rendering.TextView.LinkTextForegroundBrushProperty,
+            EditorSyntaxPalette.WikilinkBrushKey);
         TextArea.Caret.PositionChanged += Caret_PositionChanged;
         AddHandler(TextCompositionManager.PreviewTextInputStartEvent,
             new TextCompositionEventHandler(Composition_Started), handledEventsToo: true);

@@ -10,7 +10,7 @@ Checked on 1 November 2026 against:
 Yes. Nothing in the system needs WinUI. Slate already runs on .NET 10, merges the Fluent theme dictionaries itself and loads its own `Slate.Light / Dark / Contrast` dictionaries after them, so most of the system is a resource layer on top of what ships.
 
 Four areas need real engineering:
-1. **Recolouring Fluent controls.** Done in #1755. Slate's theme files now override Fluent's brush keys, so check boxes, accent buttons, sliders, focus rings and menus use the gold and neutrals this system specifies.
+1. **Recolouring Fluent controls.** Done in #1755. Slate's theme files now override Fluent's brush keys, so check boxes, accent buttons, sliders, focus rings and menus use the gold and neutrals this system specifies. A control with a local style loses those overrides and falls back to WPF's classic style, so #1758 points the system colours at the same tokens. WPF's classic `ListBoxItem` and `TabItem` templates also hard-code some colours: the tab now has its own template, and a selected `ListBoxItem` still shows the classic blue tint until the rows get one.
 2. **Menus.** WPF's Fluent `MenuItem` template causes the misalignment seen in the Editor menu and draws shortcut text in the disabled colour.
 3. **The 48px title bar.** Slate uses the standard Windows title bar today. The merged title bar needs `WindowChrome` plus a native hook for Snap Layouts.
 4. **Text scaling.** WPF doesn't apply the Windows "Make text bigger" setting to fixed font sizes. WinUI does.

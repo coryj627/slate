@@ -16,6 +16,8 @@
 
 If you add one of the new section-3 brushes to Slate-drawn UI, add the same key to `Slate.Contrast.xaml`, mapped to a `SystemColors` brush.
 
+The app also merges `Themes/Slate.SystemColors.xaml` in light and dark, not in High Contrast. A control with a local style, which about 25 of the shell's lists and trees have, loses Fluent's implicit style and falls back to WPF's classic one, which paints from `SystemColors`. That file points those keys at Slate's tokens. Without it, those rows draw black text in the dark theme and select in Windows blue.
+
 ## Accent rules
 
 Settings › Appearance › **Accent color**: `Automatic` (default) · `Slate gold` · `Windows accent`.

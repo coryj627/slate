@@ -103,6 +103,7 @@
               KeyboardNavigation.TabNavigation="None"
               KeyboardNavigation.DirectionalNavigation="None"
               Foreground="{DynamicResource MenuBarForeground}"
+              Background="{DynamicResource Slate.WindowBackgroundBrush}"
               AutomationProperties.Name="Application commands"
               PreviewKeyDown="MainMenu_PreviewKeyDown">
             <!-- The menu disables under EVERY modal surface — mac

@@ -7,6 +7,7 @@
 // brush with DynamicResource: a brush that doesn't resolve paints nothing, and
 // no XML check can see that.
 
+using System.Collections.ObjectModel;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
@@ -173,6 +174,151 @@ public sealed class ThemeDesignSystemTests
         Assert.Equal(want, brush);
         Assert.Equal(wantOpacity, brushOpacity);
         Assert.Equal(1, opacity);
+    }
+
+    /// <summary>#1758: a row with its own ItemContainerStyle loses Fluent's
+    /// implicit style and paints from the system colours, which in the dark
+    /// theme meant black text on a dark panel and a Windows blue selection.
+    /// About 25 lists and trees in the shell have one.</summary>
+    [Theory]
+    [InlineData(false, "Slate.Light.xaml")]
+    [InlineData(true, "Slate.Dark.xaml")]
+    public void ALocallyStyledRowDrawsTheThemesColors(bool dark, string fileName)
+    {
+        IReadOnlyDictionary<string, string> colors = ColorsIn(fileName);
+
+        // The selected tree row's state depends on the window having focus, which
+        // a session 0 runner never gives it, so that row is checked through the
+        // keys its classic template reads.
+        (string? listText, string? selection, string? selectionText, string? inactive, string? inactiveText) =
+            InRealWindow(dark, highContrast: false, window =>
+            {
+                var list = new ListBox
+                {
+                    ItemContainerStyle = new Style(typeof(ListBoxItem)),
+                    ItemTemplate = TextRowTemplate(),
+                    ItemsSource = new[] { "A row" },
+                };
+                window.Content = list;
+                window.UpdateLayout();
+                Pump();
+                TextBlock row = ShownShell.Descendants(list).OfType<TextBlock>().Single();
+                string? Key(object key) => (window.FindResource(key) as SolidColorBrush)?.Color.ToString();
+                return (
+                    (row.Foreground as SolidColorBrush)?.Color.ToString(),
+                    Key(SystemColors.HighlightBrushKey),
+                    Key(SystemColors.HighlightTextBrushKey),
+                    Key(SystemColors.InactiveSelectionHighlightBrushKey),
+                    Key(SystemColors.InactiveSelectionHighlightTextBrushKey));
+            });
+
+        Assert.Equal(colors["Slate.TextColor"], listText);
+        Assert.Equal(colors["Slate.SelectionBackgroundColor"], selection);
+        Assert.Equal(colors["Slate.SelectionTextColor"], selectionText);
+        Assert.Equal(colors["Slate.SelectedSurfaceColor"], inactive);
+        Assert.Equal(colors["Slate.TextColor"], inactiveText);
+    }
+
+    /// <summary>High Contrast keeps the real system colours: there they are
+    /// the theme, and overriding them would take the user's own palette away.</summary>
+    [Fact]
+    public void HighContrastLeavesTheSystemColorsAlone()
+    {
+        (Color? text, Color? highlight) = InRealWindow(dark: false, highContrast: true, window => (
+            (window.FindResource(SystemColors.ControlTextBrushKey) as SolidColorBrush)?.Color,
+            (window.FindResource(SystemColors.HighlightBrushKey) as SolidColorBrush)?.Color));
+
+        Assert.Equal(SystemColors.ControlTextColor, text);
+        Assert.Equal(SystemColors.HighlightColor, highlight);
+    }
+
+    /// <summary>The menu bar has a local style for its modal block, so it paints
+    /// WPF's classic fixed light bar unless it names its own background. The
+    /// dark theme's light text on that bar was close to unreadable.</summary>
+    [Theory]
+    [InlineData(false, "Slate.Light.xaml")]
+    [InlineData(true, "Slate.Dark.xaml")]
+    public void TheMenuBarDrawsTheThemesTextOnTheThemesWindow(bool dark, string fileName)
+    {
+        IReadOnlyDictionary<string, string> colors = ColorsIn(fileName);
+        XElement menu = XDocument.Load(Path.Combine(SourceText.ShellSourceRoot(), "MainWindow.xaml"))
+            .Descendants()
+            .Single(element => element.Name.LocalName == "Menu"
+                && (string?)element.Attribute(Xaml + "Name") == "MainMenu");
+
+        string? foreground = InRealWindow(dark, highContrast: false, window =>
+            (window.FindResource("MenuBarForeground") as SolidColorBrush)?.Color.ToString());
+
+        Assert.Equal("{DynamicResource Slate.WindowBackgroundBrush}", (string?)menu.Attribute("Background"));
+        Assert.Equal(colors["Slate.TextColor"], foreground);
+    }
+
+    /// <summary>The tab's local style brings its own template, because WPF's
+    /// classic one hard-codes a white selected tab. Its focus visual has to
+    /// resolve too, or the tab would take the keys with no ring.</summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void TheOpenTabDrawsTheThemesColorsAndAFocusRing(bool dark, bool highContrast) => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        ResourceDictionary[] layers = ThemeManager.DictionariesFor(dark ? SlateTheme.Dark : SlateTheme.Light, highContrast);
+        Collection<ResourceDictionary> merged = host.Shell.Resources.MergedDictionaries;
+        for (int index = ThemeManager.DictionariesFor(SlateTheme.Light, highContrast: false).Length - 1; index >= 0; index--)
+        {
+            merged.RemoveAt(index);
+        }
+
+        for (int index = 0; index < layers.Length; index++)
+        {
+            merged.Insert(index, layers[index]);
+        }
+
+        PumpedDispatcher.PumpUntilDrained(host.Workspace.SeedWorkForTests);
+        host.Workspace.OpenPath("Lecture.md");
+        host.Settle();
+
+        TabItem tab = ShownShell.Descendants(host.Shell).OfType<TabItem>().Single();
+        Border chrome = ShownShell.Descendants(tab).OfType<Border>().First();
+        Color Theme(string key) => Assert.IsType<SolidColorBrush>(host.Shell.FindResource(key)).Color;
+
+        Assert.True(tab.IsSelected);
+        Assert.Equal(Theme("Slate.SurfaceBrush"), Assert.IsType<SolidColorBrush>(chrome.Background).Color);
+        Assert.Equal(Theme("Slate.AccentBrush"), Assert.IsType<SolidColorBrush>(chrome.BorderBrush).Color);
+        Assert.Equal(Theme("Slate.TextBrush"), Assert.IsType<SolidColorBrush>(tab.Foreground).Color);
+        Assert.NotNull(tab.FocusVisualStyle);
+        return 0;
+    }, TimeSpan.FromSeconds(60), "the tab test timed out.");
+
+    /// <summary>AvalonEdit's default link colour is pure blue, |Lc| 15.6 on the
+    /// dark editor.</summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void AnEditorLinkDrawsTheThemesLinkColor(bool dark, bool highContrast)
+    {
+        (Color? link, Color? want) = InRealWindow(dark, highContrast, window =>
+        {
+            var editor = new SlateTextEditor();
+            window.Content = editor;
+            window.UpdateLayout();
+            Pump();
+            return (
+                (editor.TextArea.TextView.LinkTextForegroundBrush as SolidColorBrush)?.Color,
+                (window.FindResource(EditorSyntaxPalette.WikilinkBrushKey) as SolidColorBrush)?.Color);
+        });
+
+        Assert.NotNull(link);
+        Assert.Equal(want, link);
+    }
+
+    private static DataTemplate TextRowTemplate()
+    {
+        var text = new FrameworkElementFactory(typeof(TextBlock));
+        text.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding());
+        return new DataTemplate { VisualTree = text };
     }
 
     /// <summary>The handler only reaches the app if startup installs it, and
