@@ -623,6 +623,74 @@ public sealed class ThemeDesignSystemTests
         Assert.False(Message().IsVisible, "the message stays over an open note.");
     });
 
+    /// <summary>#1778: both surfaces draw in OnRender with nothing clipping them, so
+    /// an edge ran across the menu bar and a node's label landed on the sort dropdown.
+    /// A clip limits hit testing too, so nothing outside the pane takes the pointer.</summary>
+    [Fact]
+    public void TheDiagramAndTheCanvasStayInsideTheirPane() => StaThread.Run(() =>
+    {
+        Assert.True(new SlateWindows.Graph.GraphDiagramView().ClipToBounds, "the graph diagram draws outside its pane.");
+        Assert.True(new SlateWindows.Canvas.CanvasRendererView().ClipToBounds, "the canvas draws outside its pane.");
+    });
+
+    /// <summary>#1778: the split handle's local style dropped Fluent, so it drew
+    /// WPF's classic pale bar. It's a gutter until it's used.</summary>
+    [Fact]
+    public void TheSplitHandlesUseTheQuietTemplate()
+    {
+        string xaml = File.ReadAllText(Path.Combine(SourceText.ShellSourceRoot(), "WorkspaceTemplates.xaml"));
+        Assert.Equal(2, Regex.Count(xaml, Regex.Escape("Value=\"{StaticResource Slate.SplitHandleTemplate}\"")));
+    }
+
+    /// <summary>#1778: each side of the editor drew the side pane's border, the
+    /// splitter's line and the pane group's border. The group's border is the one
+    /// line left while nothing is being resized.</summary>
+    [Fact]
+    public void ThePaneEdgesDrawOneLine() => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        ApplyTheme(host, dark: true, highContrast: false);
+        host.Settle();
+
+        Assert.Equal(new Thickness(0), host.Shell.FilesPaneBorder.BorderThickness);
+        Assert.Equal(new Thickness(0), host.Shell.RightPaneBorder.BorderThickness);
+        foreach (GridSplitter splitter in ShownShell.Descendants(host.Shell).OfType<GridSplitter>())
+        {
+            System.Windows.Shapes.Rectangle line = ShownShell.Descendants(splitter).OfType<System.Windows.Shapes.Rectangle>().Single();
+            Assert.Equal(0, Assert.IsType<SolidColorBrush>(line.Fill).Color.A);
+        }
+    });
+
+    /// <summary>#1778: in a split pane the third radio button lost all but its first
+    /// letter.</summary>
+    [Fact]
+    public void TheCanvasRadiosFitANarrowPane() => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        var view = new SlateWindows.Canvas.CanvasSurfaceView { Width = 130, HorizontalAlignment = HorizontalAlignment.Left };
+        host.Shell.Content = view;
+        host.Settle();
+
+        RadioButton visual = view.VisualChoiceForTests;
+        double right = visual.TranslatePoint(new Point(visual.ActualWidth, 0), view).X;
+        Assert.True(right <= 130, $"the last radio button ends at {right:F0}px in a 130px pane.");
+    });
+
+    /// <summary>#1778: a left margin on a wrapped button indents the row it wraps to.</summary>
+    [Fact]
+    public void AWrappedButtonHasNoLeftMargin()
+    {
+        XNamespace presentation = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
+        string[] stray = [.. XDocument
+            .Load(Path.Combine(SourceText.ShellSourceRoot(), "MainWindow.xaml"), LoadOptions.SetLineInfo)
+            .Descendants(presentation + "WrapPanel")
+            .SelectMany(panel => panel.Elements(presentation + "Button"))
+            .Where(button => (string?)button.Attribute("Margin") is { } margin && !margin.StartsWith("0,", StringComparison.Ordinal))
+            .Select(button => $"line {((System.Xml.IXmlLineInfo)button).LineNumber}")];
+
+        Assert.Empty(stray);
+    }
+
     /// <summary>The classic list turns fixed white when disabled, which every
     /// open overlay does to the shell behind it.</summary>
     [Theory]

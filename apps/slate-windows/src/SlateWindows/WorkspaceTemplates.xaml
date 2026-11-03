@@ -93,6 +93,22 @@
             </Setter.Value>
         </Setter>
     </Style>
+    <!-- #1778: a split handle's local style drops Fluent, and WPF's classic thumb is a
+         pale bar. It's a gutter until it's used, and fills when it has the keys. -->
+    <ControlTemplate x:Key="Slate.SplitHandleTemplate" TargetType="Thumb">
+        <Border Background="{TemplateBinding Background}" />
+        <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Background" Value="{DynamicResource Slate.AccentIndicatorBrush}" />
+            </Trigger>
+            <Trigger Property="IsDragging" Value="True">
+                <Setter Property="Background" Value="{DynamicResource Slate.AccentIndicatorBrush}" />
+            </Trigger>
+            <Trigger Property="IsKeyboardFocused" Value="True">
+                <Setter Property="Background" Value="{DynamicResource Slate.FocusBrush}" />
+            </Trigger>
+        </ControlTemplate.Triggers>
+    </ControlTemplate>
     <BooleanToVisibilityConverter x:Key="Slate.TreeBoolToVisibility" />
     <!-- A separate key because the canvas outline's rows take it from code, which
          can't base a style on one here. A folder's item includes its children, so the
@@ -948,6 +964,9 @@
                    AutomationProperties.HelpText="{x:Static cmd:NavigationHelp.HorizontalSplitter}">
                 <Thumb.Style>
                     <Style TargetType="Thumb">
+                        <Setter Property="Background" Value="Transparent" />
+                        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                        <Setter Property="Template" Value="{StaticResource Slate.SplitHandleTemplate}" />
                         <Setter Property="Visibility" Value="Collapsed" />
                         <Style.Triggers>
                             <DataTrigger Binding="{Binding DataContext.Axis, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
@@ -974,6 +993,9 @@
                    AutomationProperties.HelpText="{x:Static cmd:NavigationHelp.VerticalSplitter}">
                 <Thumb.Style>
                     <Style TargetType="Thumb">
+                        <Setter Property="Background" Value="Transparent" />
+                        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                        <Setter Property="Template" Value="{StaticResource Slate.SplitHandleTemplate}" />
                         <Setter Property="Visibility" Value="Collapsed" />
                         <Style.Triggers>
                             <DataTrigger Binding="{Binding DataContext.Axis, RelativeSource={RelativeSource AncestorType=ItemsControl}}"

@@ -58,7 +58,7 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     internal static Func<bool> ShellOverlayIsOpen { get; set; } = static () => false;
 
     private readonly TextBlock _title;
-    private readonly AutomationNamedGroupPanel _switcher;
+    private readonly AutomationNamedWrapPanel _switcher;
     private readonly RadioButton _outlineChoice;
     private readonly RadioButton _tableChoice;
     private readonly RadioButton _visualChoice;
@@ -110,9 +110,8 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         // below reached no client at all and the three choices appeared
         // flattened under the surface — inert a11y properties, which is
         // the class this and the Invoke defect share.
-        _switcher = new AutomationNamedGroupPanel
+        _switcher = new AutomationNamedWrapPanel
         {
-            Orientation = Orientation.Horizontal,
             Margin = new Thickness(12, 0, 0, 0),
             VerticalAlignment = VerticalAlignment.Center,
         };
@@ -150,7 +149,7 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         _filterField = new TextBox
         {
             Width = 220,
-            Margin = new Thickness(12, 0, 6, 0),
+            Margin = new Thickness(0, 0, 6, 0),
             VerticalAlignment = VerticalAlignment.Center,
         };
         AutomationProperties.SetAutomationId(_filterField, "CanvasFilterField");

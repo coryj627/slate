@@ -27,6 +27,9 @@ internal sealed class CanvasRendererView : FrameworkElement
 
     public CanvasRendererView()
     {
+        // #1778: this draws in OnRender, so nothing else keeps it inside its pane, for
+        // painting or for the pointer.
+        ClipToBounds = true;
         Focusable = true;
         System.Windows.Automation.AutomationProperties.SetAutomationId(
             this, "CanvasVisualBoard");

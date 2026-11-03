@@ -20,10 +20,11 @@
     <Pen x:Key="Slate.EditorSelectionBorderPen"
          Brush="{DynamicResource Slate.AccentTextBrush}"
          Thickness="1" />
-    <!-- #1773: the shell's splitters keep their width to grab and draw one line. -->
+    <!-- #1773, #1778: the shell's splitters keep their width to grab, and draw a line
+         only while in use: the pane group's border is the edge the rest of the time. -->
     <Style x:Key="Slate.ShellSplitterStyle" TargetType="GridSplitter">
         <Setter Property="Background" Value="Transparent" />
-        <Setter Property="Foreground" Value="{DynamicResource Slate.BorderBrush}" />
+        <Setter Property="Foreground" Value="Transparent" />
         <Setter Property="HorizontalAlignment" Value="Stretch" />
         <Setter Property="Template">
             <Setter.Value>

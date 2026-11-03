@@ -97,6 +97,9 @@ internal sealed class GraphDiagramView : FrameworkElement
 
     public GraphDiagramView()
     {
+        // #1778: this draws in OnRender, so nothing else keeps it inside its pane, for
+        // painting or for the pointer.
+        ClipToBounds = true;
         // Term N2: the projection's ONE focus stop; the node peers take no keys.
         Focusable = true;
         KeyboardNavigation.SetTabNavigation(this, KeyboardNavigationMode.None);
