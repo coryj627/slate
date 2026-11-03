@@ -1,0 +1,68 @@
+# DS-7 — The status bar is 24 high, and either pane can be hidden, giving its room back
+
+Issues: filed by DS-0. Size M. Lanes: windows, rust, swift (compile). AT: NVDA spot. Wave 2. Depends on: DS-2, DS-9 (the toggle style). Decision: none. Interlock: the design cycle's next pass checks the right pane's column; if it fixes that first, this chunk builds on the fix.
+
+## Goal
+
+The status bar is the design's 24 row with a pane toggle in each corner. The Files sidebar can be hidden, which it can't be today, and hiding either pane gives the editor its room.
+
+## Current state on main
+
+- **The bar:** `MainWindow.xaml:753-810`. Fluent's style makes it about 48 tall (plan 46 §2.2). `:786` is a fixed 180 for the progress item. "The bar is its own stop - its items take no focus" (`:748-752`), and `:768` is a focusable Cancel button only while a trash runs.
+- **No Files toggle:** `chords.json` has only `slate.workspace.widenFilesSidebar` and `narrowFilesSidebar`. `FilesPaneBorder` (`:943`) has no visibility binding.
+- **The right pane's toggle:** `WorkspaceViewModel.cs:2558-2565`, the property at `:2819-2837`, which announces through core (`A11yEvent.RightPaneShown`, `RightPaneHidden`; text at `crates/slate-core/src/a11y.rs:2025`, FFI at `crates/slate-uniffi/src/lib.rs:9611`). Visibility isn't persisted.
+- **A hidden pane keeps its column.** `RightPaneBorder` collapses (`MainWindow.xaml:1310`), but its column (`MainWindow.xaml:941`) has a pixel width from a two-way binding and `MinWidth="200"`, and its splitter column (`MainWindow.xaml:940`) stays. `ContentPaneBorder` is in column 2 only (`MainWindow.xaml:1286`). Reading this, the editor can't take the space. The cycle's discovery pass measures it (`ContentPane` width, shown against hidden).
+- **Other routes to Files:** Ctrl+Alt+Left at the window's edge (`WorkspaceFocusBoundary.Files`, `WorkspaceViewModel.cs:29-30`, handled at `MainWindow.xaml.cs:947`), and the editor's fallback (`MainWindow.xaml.cs:2409`).
+- **A core event has company.** `A11yCorpusCensus.cs:77` lists each event, `tests/fixtures/a11y/corpus.json:93` holds its text, `apps/slate-mac/Tests/SlateMacTests/A11yCorpusCensusTests.swift:70` mirrors the list by hand (`swift-tests.yml:187` runs `swift test`), `crates/slate-uniffi/src/lib.rs:15251-15258` trips locally if the mirror drifts, and `A11yTriggerParityCensus.cs:56-85` needs a row in `38_notification_dispatcher_contracts.md` with a site or a designation per platform.
+- **Room arithmetic:** `WorkspaceViewModel.SidebarWidths.cs:119-129` counts the other sidebar's width whether it's visible or not.
+- **The ring:** `ShellRegionLayout` (`ShellRegionRing.cs:36-39`) has `HasTabs`, `RightPaneVisible` and `RightPaneHasContentStop`, built at `WorkspaceViewModel.Layout.cs:1037`. `Files` is always present. `MainWindow.ShellRegions.cs:198`, `:220` refuse a hidden right pane.
+- **The parity script** extends the Mac catalogue with Windows-only rows at `scripts/generate-parity-matrix.py:420-427`.
+
+## Reference
+
+`design/windows/readme.md:118`: toggles are 24 × 24 flat buttons, pressed while their pane is visible, glyphs `E90C` and `E90D`, Files in the far-left corner, right pane in the far-right, reachable as **Toggle Files Sidebar** and **Toggle Right Pane** in the menus and palette. `ui_kits/slate-windows/Chrome.jsx:125-141`: 12/16 secondary text.
+
+## Design
+
+1. **The bar.** Local values on `ShellStatusBar`, not a XAML style based on Fluent's (plan 46 §4 rule 9): `MinHeight` 24, zero padding, `StatusBarItem` padding `8,0` through `ItemContainerStyle`, Caption's size and family replacing Body's from DS-2. `MainWindow.xaml:786` becomes a `MinWidth` with `MaxWidth`.
+2. **The toggles.** A `ToggleButton` in DS-9's toggle style at each end, 24 × 24, glyph `E90C` or `E90D` in an `AutomationPresentationTextBlock`, `Focusable="False"`, bound both ways to `IsFilesSidebarVisible` and `IsRightPaneVisible`. Names "Files sidebar" and "Right pane"; the Toggle pattern says whether it's on. Tooltip with the chord for the right pane. They're pointer and UIA paths: the keyboard path is the command, which keeps the rule at `MainWindow.xaml:748-752` and `TheF6OnlyLandingsAreNotTabStops`.
+3. **The command.** `ChordTable`: `Ids.ToggleFilesSidebar = "slate.view.toggleFilesSidebar"`, label "Toggle Files Sidebar", section View, no chord. Registrar entry beside `SlateCommandRegistrar.cs:457`. A `MenuItem` beside `MainWindow.xaml:342`. `WINDOWS_ONLY_COMMANDS` row. Rerun `scripts/generate-parity-matrix.py`.
+4. **The announcement.** Core gains `FilesSidebarShown` and `FilesSidebarHidden` in `A11yEvent`, beside `RightPaneShown`, with text "Files sidebar shown." and "Files sidebar hidden.", and the FFI arms. Then all the company above: `corpus()`, `corpus.json`, `A11yCorpusCensus.cs`, the Swift mirror (which can't be run here: `swift-tests.yml` proves it), and the plan 38 row, with the Windows site and a Mac designation saying the Mac has no such toggle (`AppState.swift:9640` is only its right pane).
+5. **The state.** `IsFilesSidebarVisible`, default true, not persisted, like the right pane. `FilesPaneBorder` and its splitter collapse with it, because a zero-width pane that's still there stays tabbable. A hide moves focus to the editor if it was inside the pane. Commands and routes that need the pane show it first, as `WorkspaceViewModel.Connections.cs:187-189` does for the right pane: Focus Sidebar Filter, New Note from the tree, `SelectPathFromSurface`, Ctrl+Alt+Left at the edge. The editor's fallback at `MainWindow.xaml.cs:2409` returns `EditorFallback.None` when hidden, since a fallback shouldn't open a pane.
+6. **The columns.** `GridSplitter` writes `ColumnDefinition.Width` with `SetValue`, and `SidebarResizeTests.cs:158-166` and `:199-203` rely on a local two-way binding carrying that to `HoldWidth`. So the `Width` binding stays local, and points at a computed `FilesColumnWidth` and `RightPaneColumnWidth`: 0 while the pane is hidden, the held width otherwise, ignoring write-backs while hidden, so a width survives a hide and show. Its `MinWidth="200"` moves to a binding too, 0 while hidden, because a local 200 would hold the column open. The splitter columns (`MainWindow.xaml:938`, `:940`) follow the same way. `WidestSidebarWidth` counts a hidden sidebar as 0 and no splitter.
+7. **The ring.** `ShellRegionLayout` gains `FilesVisible`; `IsPresent` removes `Files`; `MainWindow.ShellRegions.cs:153` refuses when hidden.
+
+## Tests
+
+Failing first:
+
+- `HidingTheRightPaneGivesTheEditorItsRoom` and `HidingTheFilesSidebarGivesTheEditorItsRoom`: hosted; `ContentPaneBorder.ActualWidth` grows by the pane's width plus the splitter.
+- `AHiddenPaneKeepsItsWidth`: hide, show, same width.
+- `TheStatusBarIsTwentyFour`: hosted at 14; `ActualHeight` is 24, and grows under DS-5's factor if that has merged.
+- `ToggleFilesSidebarIsAPaletteCommandAndAMenuItem`, `CommandDriftTests` holding.
+- `HidingFilesMovesFocusToTheEditor`, `AHiddenFilesPaneIsNotATabStop`, `CtrlAltLeftAtTheEdgeShowsFiles`.
+- Holding: `SidebarResizeTests`, whose binding assertions now see the computed path.
+- `ShellRegionRingTests`: a layout with Files hidden; every existing shape stays.
+- Rust: `files_sidebar_shown_and_hidden_speak` beside the right pane's in `a11y.rs`, the corpus list at `a11y.rs:4195`, and the uniffi tripwire. Swift: the mirror, on the lane.
+
+Launched app: both panes hidden, each alone, both shown.
+
+## Docs and registers
+
+`parity_matrix.md` regenerated. `chords.json` projection. `38_notification_dispatcher_contracts.md`'s new row. `design/windows/wpf-feasibility.md`: nothing rated changes.
+
+## Verification
+
+Plan 46 §7's loop with `--filter "FullyQualifiedName~ShellRegion|FullyQualifiedName~ModalSurfaceTests|FullyQualifiedName~CommandDriftTests|FullyQualifiedName~SidebarWidth"`. For the core change, in PowerShell: `cargo fmt --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo test -p slate-core a11y::`, per-worktree `CARGO_TARGET_DIR`. `python scripts/generate-parity-matrix.py --check`. `swift-tests.yml` proves the Mac compiles.
+
+AT: NVDA, F6 round the ring with Files hidden; the palette's Toggle Files Sidebar speaks core's sentence; the status bar landing still reads its text; a toggle reads as a toggle in object navigation.
+
+## Acceptance
+
+- [ ] The discovery pass's width measurement shows the editor growing.
+- [ ] The bar is 24 in the launched app at 100%.
+- [ ] `--check` passes on the matrix.
+
+## Brief
+
+Read `MainWindow.xaml:744-810` and `:935-945`, `WorkspaceViewModel.cs:2558-2565`, `:2819-2837`, `WorkspaceViewModel.SidebarWidths.cs`, `ShellRegionRing.cs`, `WorkspaceViewModel.Layout.cs:1037`, `crates/slate-core/src/a11y.rs:669`, `:2025`. Add the core events first with all their company and regenerate bindings. Then the state, columns (the binding stays local), ring, routes, command, bar and toggles. Facts first. Commit: `feat(windows): the status bar is 24 high with a toggle for each pane, and a hidden pane gives the editor its room`.
