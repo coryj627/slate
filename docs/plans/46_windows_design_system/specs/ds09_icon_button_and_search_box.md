@@ -1,6 +1,6 @@
 # DS-9 — Icon-only buttons draw an icon and have a name, and search fields look like search fields
 
-Issues: filed by DS-0. Size S–M. Lanes: windows. AT: NVDA spot. Wave 2. Depends on: DS-2. Decision: DSD6. Interlock: DS-8, DS-12, DS-15, DS-17 and DS-18 use these styles.
+Issues: filed by DS-0. Size S–M. Lanes: windows. AT: NVDA spot. Wave 2. Depends on: DS-2. Decision: DSD6. Interlock: DS-8, DS-12, DS-15, DS-16, DS-17 and DS-18 use these styles.
 
 ## Goal
 

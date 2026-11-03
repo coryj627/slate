@@ -1,6 +1,6 @@
 # DS-0 — The design's documents agree, the measured results are recorded, and each chunk has an issue
 
-Issues: none of its own; `Refs #1756`. Size S. Lanes: none. `design/` and the plan folder aren't on any lane's path list (`.github/workflows/windows.yml:122-164`). AT: —. Wave 1, slot 1. Depends on: the owner adopting plan 46. Decision: none. Interlock: none.
+Issues: none of its own; `Refs #1756`. Size S. Lanes: none. `design/` and the plan folder aren't on any lane's path list (`.github/workflows/windows.yml:122-164`). AT: —. Wave 1, slot 1. Depends on: the owner merging plan 46. Decision: none. Interlock: none.
 
 ## Goal
 

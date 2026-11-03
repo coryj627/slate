@@ -356,6 +356,12 @@ document.
   (DSD7) and doesn't merge without a full pass. If the pass goes badly, the fallback
   is DS-12's row with the menu headers in it, which is a design change for the owner
   to take.
+- **DS-16 puts 12 panels behind a menu.** That's the owner's call (DSD8), against
+  today's single list. Its pass records what reaching them costs, so the owner can
+  judge it on the real thing before it merges.
+- **An accent's text can sit below gold's floor.** That's the owner's call too
+  (DSD14). Their look at a few real accents (§8) shows how it reads, and how many hues
+  fall back.
 - **A composite font is unusual.** `Typeface.TryGetGlyphTypeface` returns false for
   one, which nothing in the app calls today (searched). DS-1's census keeps it that
   way, and `SlateEditor.CompositeFont` is one small file to drop if a problem appears:
