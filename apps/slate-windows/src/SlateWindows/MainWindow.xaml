@@ -2981,11 +2981,12 @@
                                                     Padding="8,4"
                                                     HorizontalAlignment="Stretch"
                                                     HorizontalContentAlignment="Left"
-                                                    Content="{Binding}"
                                                     Click="SearchOverlayRecentRow_Click"
                                                     GotKeyboardFocus="SearchOverlayRecentRow_GotKeyboardFocus"
                                                     AutomationProperties.Name="{Binding (AutomationProperties.Name), RelativeSource={RelativeSource AncestorType=ContentPresenter}}"
-                                                    AutomationProperties.HelpText="Runs this search again." />
+                                                    AutomationProperties.HelpText="Runs this search again.">
+                                                <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+                                            </Button>
                                         </DataTemplate>
                                     </local:LayoutItemsControl.ItemTemplate>
                                 </local:LayoutItemsControl>
@@ -4004,7 +4005,7 @@
                                     <DataTemplate>
                                         <StackPanel Margin="0,2">
                                             <DockPanel>
-                                                <TextBlock Text="{Binding Label}" MinWidth="70" VerticalAlignment="Center" />
+                                                <TextBlock Text="{Binding Label}" MinWidth="70" VerticalAlignment="Center" TextWrapping="Wrap" />
                                                 <Button DockPanel.Dock="Right"
                                                         Content="Remove"
                                                         Click="BuilderRemoveCondition_Click"
@@ -4344,7 +4345,8 @@
                                     <DataTemplate>
                                         <StackPanel Margin="0,0,0,10">
                                             <local:AutomationPresentationTextBlock Margin="0,0,0,2"
-                                                    Text="{Binding Label}" />
+                                                    Text="{Binding Label}"
+                                                    TextWrapping="Wrap" />
                                             <TextBox Padding="6,4"
                                                      Text="{Binding Value, UpdateSourceTrigger=PropertyChanged}"
                                                      AutomationProperties.Name="{Binding (AutomationProperties.Name), RelativeSource={RelativeSource AncestorType=ContentPresenter}}" />

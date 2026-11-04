@@ -420,7 +420,8 @@ public sealed partial class TextScaleTests
         foreach (XElement list in shell.Descendants()
             .Where(element => (string?)element.Attribute("AutomationProperties.IsDialog") == "True")
             .SelectMany(sheet => sheet.Descendants())
-            .Where(element => element.Name.LocalName.EndsWith("ListBox", StringComparison.Ordinal)))
+            .Where(element => element.Name.LocalName.EndsWith("ListBox", StringComparison.Ordinal)
+                || element.Name.LocalName.EndsWith("ItemsControl", StringComparison.Ordinal)))
         {
             string where = $"line {((System.Xml.IXmlLineInfo)list).LineNumber}";
             XElement? template = list.Elements().FirstOrDefault(element => element.Name.LocalName.EndsWith(".ItemTemplate", StringComparison.Ordinal));
@@ -436,10 +437,51 @@ public sealed partial class TextScaleTests
                 .Where(text => (string?)text.Attribute("Text") != "{Binding HotkeyHint}")
                 .Where(text => text.Attribute("TextWrapping") is null && text.Attribute("TextTrimming") is null)
                 .Select(text => $"{where}: {(string?)text.Attribute("Text")} at line {((System.Xml.IXmlLineInfo)text).LineNumber}"));
+            offenders.AddRange(template.Descendants()
+                .Where(element => element.Name.LocalName == "Button")
+                .Where(button => ((string?)button.Attribute("Content"))?.StartsWith("{Binding", StringComparison.Ordinal) == true)
+                .Select(button => $"{where}: a button's {(string?)button.Attribute("Content")} at line {((System.Xml.IXmlLineInfo)button).LineNumber}"));
         }
 
         Assert.True(offenders.Count == 0, "Rows that cut their text:\n" + string.Join('\n', offenders));
     }
+
+    /// <summary>A recent search is what its reader typed, however long they made it, and it
+    /// ran off the end of its row.</summary>
+    [Fact]
+    public void ARecentSearchKeepsItsWholeQuery() => OnOwnThread(() =>
+    {
+        const string Query = "path:Projects/Accessibility meeting notes 2026 tag:review";
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        host.Shell.Width = 1120;
+        host.Shell.Height = 720;
+        TypeRamp.Apply(RampOf(host.Shell), 2.25);
+        host.Settle();
+        var sheet = (FrameworkElement)host.Shell.FindName("SearchOverlay");
+        _ = Open(sheet);
+        host.Settle();
+        host.Settle();
+
+        // The section is collapsed until there's a search, so nothing under it is built.
+        LayoutItemsControl recents = InLogicalTree(sheet).OfType<LayoutItemsControl>()
+            .First(control => System.Windows.Automation.AutomationProperties.GetName(control) == "Recent searches");
+        for (DependencyObject? step = recents; step is not null && !ReferenceEquals(step, sheet); step = LogicalTreeHelper.GetParent(step))
+        {
+            (step as FrameworkElement)?.SetCurrentValue(UIElement.VisibilityProperty, Visibility.Visible);
+        }
+
+        recents.SetCurrentValue(ItemsControl.ItemsSourceProperty, new[] { Query });
+        host.Settle();
+        host.Settle();
+
+        TextBlock text = ShownShell.Descendants(recents).OfType<TextBlock>().Single(found => found.Text == Query);
+        Assert.True(text.ActualHeight > text.FontSize * 2, $"the query stays on one line, {text.ActualWidth:F0} wide.");
+        string[] cut = CutText(sheet);
+        Assert.True(cut.Length == 0, $"{cut.Length} cut:\n" + string.Join('\n', cut));
+    });
+
+    private static IEnumerable<DependencyObject> InLogicalTree(DependencyObject root) =>
+        LogicalTreeHelper.GetChildren(root).OfType<DependencyObject>().SelectMany(child => InLogicalTree(child).Prepend(child));
 
     /// <summary>The canvas lists at the largest size: a long label's end, which is what
     /// tells it from its neighbours, is on screen.</summary>
