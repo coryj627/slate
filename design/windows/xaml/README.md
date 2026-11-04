@@ -41,6 +41,8 @@ Everything that is gold follows the setting. That is the nine roles below, which
 
 Slate gold and the Windows default blue pass every check in both themes.
 
+These ratios are the bar for a chosen accent (plan 46, DSD14). Gold stays at the project's floor for text, |Lc| above 75 (`ThemeTokenContrastTests`), and a chosen accent may sit below that floor. The gate doesn't check a selected row's text, so a selected row needs its own text brush when an accent applies.
+
 | Role (`Slate.<Role>Color`) | Gold, light | Gold, dark | Windows accent, light | Windows accent, dark |
 | --- | --- | --- | --- | --- |
 | `Accent` | `#7D5A00` | `#EECF7E` | `AccentColorDark1` | `AccentColorLight2` |
@@ -53,7 +55,7 @@ Slate gold and the Windows default blue pass every check in both themes.
 | `SelectionBackground` | `#F9E7B8` | `#6B4D00` | `AccentColor` | `AccentColor` |
 | `SelectionText` | `#171717` | `#F5F5F5` | `#FFFFFF` | `#FFFFFF` |
 
-The Windows columns are `SystemColors` properties (.NET 9 and later) and follow Fluent's own mapping. With the default blue they give `#005FB8` (light) and `#60CDFF` (dark), the values the design system uses whenever it needs to show a Windows accent.
+The Windows columns are `SystemColors` properties (.NET 9 and later) and follow Fluent's own mapping. On the default blue, `AccentColor` is `#0078D4`, Light 1 to 3 are `#0091F8`, `#4CC2FF` and `#99EBFF`, and Dark 1 to 3 are `#0067C0`, `#003E92` and `#001A68` (measured 3 November 2026, Windows 11 build 26300). So `Accent` draws as `#0067C0` in light and `#4CC2FF` in dark. WinUI's brush constants for the same blue are `#005FB8` and `#60CDFF`, and those are the values the design system uses whenever it needs to show a Windows accent.
 
 ### Applying it (sketch, not compiled)
 
@@ -161,7 +163,7 @@ An effect turns off ClearType for the text inside it. Put the effect on a backgr
 
 ## Text size
 
-WPF doesn't apply the Windows "Text size" setting (Settings › Accessibility › Text size, 100% to 225%) to fixed font sizes, though text with no explicit `FontSize` grows through `SystemFonts`. Read `UISettings.TextScaleFactor`, multiply every UI font size by it and update when `TextScaleFactorChanged` fires. Don't scale icon glyphs.
+WPF doesn't apply the Windows "Text size" setting (Settings › Accessibility › Text size, 100% to 225%) to fixed font sizes, though text with no explicit `FontSize` grows through `SystemFonts`. Read `HKCU\Software\Microsoft\Accessibility\TextScaleFactor`, a percentage from 100 to 225, and divide it by 100 to get the factor (1 when the value is missing, unreadable or under 100, and never above 2.25). Multiply every UI font size by the factor, and update on `SystemEvents.UserPreferenceChanged`. Don't scale icon glyphs. The registry is plan 46's choice (DSD3), because `UISettings.TextScaleFactor` is WinRT and the standard route to it ships about 25 MB of Windows SDK projection for one number. One live check that a change made in Windows Settings arrives is still to come, and if it fails the source becomes `UISettings`.
 
 Heights that hold text are minimums, so they grow with the text instead of clipping it at 225%. Use `MinHeight`, never `Height`: title bar 48, tab strip 36, status bar 24, and every list, tree, menu and setting row. The CSS tokens are `--titlebar-min-height`, `--tabstrip-min-height` and `--statusbar-min-height`.
 
