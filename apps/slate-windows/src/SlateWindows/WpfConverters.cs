@@ -91,16 +91,21 @@ internal sealed class RecentVaultNameConverter : IMultiValueConverter
         throw new NotSupportedException();
 }
 
-/// <summary>#1795: the most of a height a part may take: a share of it, up to a cap, so
-/// a short window can't give the part all of the room it shares.</summary>
+/// <summary>#1795: the most of a height a part may take: a share of it, less what the
+/// parts beside it have to keep, between a floor and a cap, so a short window can't give
+/// the part all of the room it shares.</summary>
 internal sealed class CappedShareConverter : IValueConverter
 {
     public double Share { get; set; } = 1;
 
     public double Cap { get; set; } = double.PositiveInfinity;
 
+    public double Reserve { get; set; }
+
+    public double Floor { get; set; }
+
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture) =>
-        value is double height ? Math.Min(Cap, height * Share) : Cap;
+        value is double height ? Math.Max(Floor, Math.Min(Cap, (height * Share) - Reserve)) : Cap;
 
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
         Binding.DoNothing;

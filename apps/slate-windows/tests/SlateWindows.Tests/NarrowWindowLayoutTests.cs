@@ -203,6 +203,42 @@ public sealed class NarrowWindowLayoutTests
         Assert.True(editor.ActualHeight >= 112, $"the editor is {editor.ActualHeight:F0}px tall.");
     });
 
+    /// <summary>A short window takes its room back from the rows, and only there: a
+    /// window of ordinary height keeps all of it, and the shortest keeps some.</summary>
+    [Theory]
+    [InlineData(1000, 280)]
+    [InlineData(420, 80)]
+    public void ThePropertyRowsKeepTheirRoomUntilTheWindowIsShort(double height, double rows) => StaThread.Run(() =>
+    {
+        string keys = string.Concat(Enumerable.Range(1, 12).Select(index => $"key{index}: value\n"));
+        using var host = new ShownShell(("Lecture.md", $"---\n{keys}---\n# Lecture\n"));
+        host.Workspace.OpenPath("Lecture.md");
+        host.Settle();
+
+        host.Shell.MinHeight = 0;
+        host.Shell.Height = height;
+        host.Settle();
+        ScrollViewer? scroller = null;
+        System.Threading.SpinWait.SpinUntil(
+            () =>
+            {
+                PumpedDispatcher.Drain();
+                FrameworkElement? shown = ShownShell.Descendants(host.Shell)
+                    .OfType<FrameworkElement>()
+                    .FirstOrDefault(element => System.Windows.Automation.AutomationProperties.GetAutomationId(element) == "PropertiesRows");
+                for (DependencyObject? step = shown; step is not null && scroller is null; step = System.Windows.Media.VisualTreeHelper.GetParent(step))
+                {
+                    scroller = step as ScrollViewer;
+                }
+
+                return scroller is not null;
+            },
+            TimeSpan.FromSeconds(10));
+
+        Assert.NotNull(scroller);
+        Assert.Equal(rows, scroller.MaxHeight);
+    });
+
     /// <summary>The key's fixed column and the buttons took the whole row, which left
     /// the value no width at all and cut off Delete.</summary>
     [Fact]
