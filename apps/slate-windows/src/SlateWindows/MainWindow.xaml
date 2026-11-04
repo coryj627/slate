@@ -2880,6 +2880,7 @@
                                     <StackPanel Margin="4,2">
                                         <local:AutomationPresentationTextBlock
                                                 Text="{Binding Basename}"
+                                                TextWrapping="Wrap"
                                                 FontWeight="SemiBold" />
                                         <!-- Match emphasis. A WrapPanel, not the
                                              palette's horizontal StackPanel: the
@@ -2903,6 +2904,7 @@
                                                 <DataTemplate>
                                                     <local:AutomationPresentationTextBlock
                                                             Text="{Binding Text}"
+                                                            TextWrapping="Wrap"
                                                             FontSize="{DynamicResource Slate.FontSizeCaption}" FontFamily="{DynamicResource Slate.FontFamilySmall}" LineHeight="{DynamicResource Slate.LineHeightCaption}" LineStackingStrategy="BlockLineHeight"
                                                             Foreground="{DynamicResource Slate.SecondaryTextBrush}">
                                                         <local:AutomationPresentationTextBlock.Style>
@@ -3537,6 +3539,7 @@
                             <DataTemplate>
                                 <StackPanel Margin="0,0,0,6">
                                     <local:AutomationPresentationTextBlock Text="{Binding Label}"
+                                                                           TextWrapping="Wrap"
                                                                            Style="{DynamicResource Slate.CaptionTextBlockStyle}"
                                                                            Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                                     <local:AutomationPresentationTextBlock x:Name="FieldValueText"
@@ -3548,7 +3551,7 @@
                                          text. Rendering all of them
                                          identically left the DOI
                                          readable but unreachable. -->
-                                    <TextBlock x:Name="FieldValueLink" Visibility="Collapsed">
+                                    <TextBlock x:Name="FieldValueLink" TextWrapping="Wrap" Visibility="Collapsed">
                                         <Hyperlink Command="{Binding DataContext.Workspace.OpenCitationLinkCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                    CommandParameter="{Binding LinkTarget}">
                                             <Run Text="{Binding Value, Mode=OneWay}" />
@@ -3706,6 +3709,11 @@
                                 <Setter Property="AutomationProperties.Name" Value="{Binding}" />
                             </Style>
                         </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <local:AutomationPresentationTextBlock Text="{Binding}" TextWrapping="Wrap" />
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
                     </ListBox>
                     <StackPanel Margin="0,12,0,0"
                                 HorizontalAlignment="Right"
@@ -3834,7 +3842,7 @@
                                             <RowDefinition Height="Auto" />
                                             <RowDefinition Height="Auto" />
                                         </Grid.RowDefinitions>
-                                        <TextBlock Grid.ColumnSpan="2" Text="{Binding SavedQueryName}" FontWeight="SemiBold" />
+                                        <TextBlock Grid.ColumnSpan="2" Text="{Binding SavedQueryName}" TextWrapping="Wrap" FontWeight="SemiBold" />
                                         <TextBlock Grid.Row="1" Margin="0,2,0,0" Text="Heading:" VerticalAlignment="Center" />
                                         <TextBox Grid.Row="1"
                                                  Grid.Column="1"
@@ -4225,7 +4233,7 @@
                                          every other row template does this). -->
                                     <StackPanel>
                                         <local:AutomationPresentationTextBlock
-                                                Text="{Binding Name}" FontWeight="SemiBold" />
+                                                Text="{Binding Name}" TextWrapping="Wrap" FontWeight="SemiBold" />
                                         <local:AutomationPresentationTextBlock
                                                 Text="{Binding Description}"
                                                 TextWrapping="Wrap"
@@ -4483,7 +4491,7 @@
                             <DataTemplate>
                                 <StackPanel>
                                     <local:AutomationPresentationTextBlock
-                                            Text="{Binding Label}" FontWeight="SemiBold" />
+                                            Text="{Binding Label}" TextWrapping="Wrap" FontWeight="SemiBold" />
                                     <local:AutomationPresentationTextBlock
                                             Text="{Binding Detail}"
                                             TextWrapping="Wrap"
@@ -4571,7 +4579,6 @@
                              Margin="0,0,0,8" />
                     <ListBox ItemsSource="{Binding Rows}"
                              SelectedItem="{Binding SelectedRow}"
-                             DisplayMemberPath="Label"
                              MaxHeight="240"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                              AutomationProperties.AutomationId="CanvasCardPickerRows" local:SiblingNames.NamePath="Label" local:SiblingNames.Noun="card"
@@ -4585,6 +4592,11 @@
                                 <Setter Property="AutomationProperties.ItemStatus" Value="{Binding Status}" />
                             </Style>
                         </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <local:AutomationPresentationTextBlock Text="{Binding Label}" TextWrapping="Wrap" />
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
                     </ListBox>
                 </StackPanel>
             </local:AutomationLandmarkBorder>
@@ -4619,7 +4631,6 @@
                     <ListBox x:Name="CanvasPromptChoicesList"
                              ItemsSource="{Binding Choices}"
                              SelectedItem="{Binding SelectedChoice}"
-                             DisplayMemberPath="Name"
                              Focusable="{Binding HasRows}"
                              Visibility="{Binding HasTextField, Converter={StaticResource InverseBooleanToVisibilityConverter}}"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
@@ -4637,6 +4648,11 @@
                                 <Setter Property="AutomationProperties.ItemStatus" Value="{Binding Status}" />
                             </Style>
                         </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <local:AutomationPresentationTextBlock Text="{Binding Name}" TextWrapping="Wrap" />
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
                     </ListBox>
                     <Button x:Name="CanvasPromptClearMarksButton"
                             Content="Clear All Marks"

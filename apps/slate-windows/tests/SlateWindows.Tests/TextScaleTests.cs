@@ -365,6 +365,73 @@ public sealed partial class TextScaleTests
         Assert.True(sideways.Length == 0, "Lists that scroll sideways: " + string.Join(", ", sideways));
     }
 
+    /// <summary>With no sideways scrolling, a row's text that neither wraps nor trims is
+    /// simply cut: entries sharing a long prefix can't be told apart. A shortcut keeps its
+    /// own column, and a group's name is short.</summary>
+    [Fact]
+    public void ASheetsRowsWrapOrTrimTheirText()
+    {
+        XDocument shell = XDocument.Load(Path.Combine(SourceText.ShellSourceRoot(), "MainWindow.xaml"), LoadOptions.SetLineInfo);
+        var offenders = new List<string>();
+        foreach (XElement list in shell.Descendants()
+            .Where(element => (string?)element.Attribute("AutomationProperties.IsDialog") == "True")
+            .SelectMany(sheet => sheet.Descendants())
+            .Where(element => element.Name.LocalName.EndsWith("ListBox", StringComparison.Ordinal)))
+        {
+            string where = $"line {((System.Xml.IXmlLineInfo)list).LineNumber}";
+            XElement? template = list.Elements().FirstOrDefault(element => element.Name.LocalName.EndsWith(".ItemTemplate", StringComparison.Ordinal));
+            if (template is null)
+            {
+                offenders.Add($"{where}: its rows have no template of their own");
+                continue;
+            }
+
+            offenders.AddRange(template.Descendants()
+                .Where(element => element.Name.LocalName is "TextBlock" or "AutomationPresentationTextBlock")
+                .Where(text => ((string?)text.Attribute("Text"))?.StartsWith("{Binding", StringComparison.Ordinal) == true)
+                .Where(text => (string?)text.Attribute("Text") != "{Binding HotkeyHint}")
+                .Where(text => text.Attribute("TextWrapping") is null && text.Attribute("TextTrimming") is null)
+                .Select(text => $"{where}: {(string?)text.Attribute("Text")} at line {((System.Xml.IXmlLineInfo)text).LineNumber}"));
+        }
+
+        Assert.True(offenders.Count == 0, "Rows that cut their text:\n" + string.Join('\n', offenders));
+    }
+
+    /// <summary>The canvas lists at the largest size: a long label's end, which is what
+    /// tells it from its neighbours, is on screen.</summary>
+    [Theory]
+    [InlineData("CanvasCardPickerRows")]
+    [InlineData("CanvasPromptChoices")]
+    public void ACanvasListKeepsTheEndOfALongLabel(string id) => OnOwnThread(() =>
+    {
+        const string Label = "A card with a long shared prefix that runs on and on and on and on and on, the first";
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        host.Shell.Width = 1120;
+        host.Shell.Height = 720;
+        TypeRamp.Apply(RampOf(host.Shell), 2.25);
+        host.Settle();
+        ListBox list = ShownShell.Descendants(host.Shell).OfType<ListBox>()
+            .First(found => System.Windows.Automation.AutomationProperties.GetAutomationId(found) == id);
+        DependencyObject sheet = list;
+        while (!System.Windows.Automation.AutomationProperties.GetIsDialog(sheet))
+        {
+            sheet = System.Windows.Media.VisualTreeHelper.GetParent(sheet);
+        }
+
+        _ = Open((FrameworkElement)sheet);
+        list.SetCurrentValue(UIElement.VisibilityProperty, Visibility.Visible);
+        list.SetCurrentValue(ItemsControl.ItemsSourceProperty, new[] { new LongRow(Label, Label) });
+        host.Settle();
+        host.Settle();
+
+        TextBlock text = ShownShell.Descendants(list).OfType<TextBlock>().First(found => found.Text == Label);
+        double right = text.TransformToAncestor(list).TransformBounds(new Rect(0, 0, text.ActualWidth, text.ActualHeight)).Right;
+        Assert.True(text.DesiredSize.Height > text.FontSize * 2, $"the label stays on one line, {text.ActualWidth:F0} wide.");
+        Assert.True(right <= list.ActualWidth, $"the label ends at {right:F0} in a list {list.ActualWidth:F0} wide.");
+    });
+
+    private sealed record LongRow(string Label, string Name);
+
     /// <summary>A row's width to stack at is text, so it grows with the text, and a change
     /// in size alone has to reach it.</summary>
     [Fact]
