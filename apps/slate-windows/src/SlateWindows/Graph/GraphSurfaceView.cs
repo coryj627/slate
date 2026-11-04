@@ -89,11 +89,10 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         _title = new TextBlock
         {
             Text = "Graph",
-            FontSize = 16,
-            FontWeight = FontWeights.SemiBold,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(12, 8, 12, 8),
         };
+        _title.SetResourceReference(StyleProperty, TypeRamp.Subtitle.StyleKey);
         AutomationProperties.SetHeadingLevel(_title, AutomationHeadingLevel.Level2);
 
         // C-5: the FIELD — an Edit peer with the mac's label and hint.

@@ -57,35 +57,35 @@ public sealed class SidebarResizeTests : IDisposable
     {
         using WorkspaceViewModel workspace = NewWorkspace();
         workspace.WorkspaceRowWidth = 1600;
-        workspace.RightPaneWidth = 280;
+        workspace.RightPaneWidth = 310;
 
         workspace.NarrowRightPaneCommand.Execute(null);
         Assert.Equal(WorkspaceViewModel.MinimumRightPaneWidth, workspace.RightPaneWidth);
-        Assert.Equal("Right pane resized, 250 pixels.", SlateUniffiMethods.A11yRender(_announced[^1]).Text);
+        Assert.Equal("Right pane resized, 280 pixels.", SlateUniffiMethods.A11yRender(_announced[^1]).Text);
 
         workspace.NarrowRightPaneCommand.Execute(null);
         Assert.Equal(WorkspaceViewModel.MinimumRightPaneWidth, workspace.RightPaneWidth);
-        Assert.Equal("Right pane at its narrowest, 250 pixels.", SlateUniffiMethods.A11yRender(_announced[^1]).Text);
+        Assert.Equal("Right pane at its narrowest, 280 pixels.", SlateUniffiMethods.A11yRender(_announced[^1]).Text);
     });
 
     /// <summary>The editor keeps its minimum between the sidebars: in a
     /// 1,000-pixel row with a 280-pixel right pane, the Files sidebar stops
-    /// at 1,000 − 280 − 300 − 10 = 410 pixels.</summary>
+    /// at 1,000 − 280 − 270 − 10 = 440 pixels.</summary>
     [Fact]
     public void WidenStopsWhereTheEditorWouldBeSqueezed() => RunSta(() =>
     {
         using WorkspaceViewModel workspace = NewWorkspace();
         workspace.WorkspaceRowWidth = 1000;
         workspace.RightPaneWidth = 280;
-        workspace.FilesSidebarWidth = 390;
+        workspace.FilesSidebarWidth = 420;
 
         workspace.WidenFilesSidebarCommand.Execute(null);
-        Assert.Equal(410, workspace.FilesSidebarWidth);
-        Assert.Equal("Files sidebar resized, 410 pixels.", SlateUniffiMethods.A11yRender(_announced[^1]).Text);
+        Assert.Equal(440, workspace.FilesSidebarWidth);
+        Assert.Equal("Files sidebar resized, 440 pixels.", SlateUniffiMethods.A11yRender(_announced[^1]).Text);
 
         workspace.WidenFilesSidebarCommand.Execute(null);
-        Assert.Equal(410, workspace.FilesSidebarWidth);
-        Assert.Equal("Files sidebar at its widest, 410 pixels.", SlateUniffiMethods.A11yRender(_announced[^1]).Text);
+        Assert.Equal(440, workspace.FilesSidebarWidth);
+        Assert.Equal("Files sidebar at its widest, 440 pixels.", SlateUniffiMethods.A11yRender(_announced[^1]).Text);
     });
 
     [Fact]
@@ -298,13 +298,13 @@ public sealed class SidebarResizeTests : IDisposable
             Assert.Equal(600, workspace.FilesSidebarWidth);
             Assert.Equal("Files sidebar resized, 600 pixels.", SlateUniffiMethods.A11yRender(_announced[^1]).Text);
 
-            // The room row: 1,000 − 280 − 300 − 10 leaves the Files sidebar 410.
+            // The room row: 1,000 − 280 − 270 − 10 leaves the Files sidebar 440.
             workspace.WorkspaceRowWidth = 1000;
             workspace.RightPaneWidth = 280;
-            columns.ColumnDefinitions[0].Width = new GridLength(500);
+            columns.ColumnDefinitions[0].Width = new GridLength(520);
             PumpedDispatcher.Drain();
-            Assert.Equal(410, workspace.FilesSidebarWidth);
-            Assert.Equal(new GridLength(410), columns.ColumnDefinitions[0].Width);
+            Assert.Equal(440, workspace.FilesSidebarWidth);
+            Assert.Equal(new GridLength(440), columns.ColumnDefinitions[0].Width);
         }
         finally
         {
@@ -327,12 +327,12 @@ public sealed class SidebarResizeTests : IDisposable
 
         workspace.WorkspaceRowWidth = 1000;
 
-        Assert.Equal(410, workspace.FilesSidebarWidth);
+        Assert.Equal(440, workspace.FilesSidebarWidth);
         workspace.WidenFilesSidebarCommand.Execute(null);
-        Assert.Equal("Files sidebar at its widest, 410 pixels.", SlateUniffiMethods.A11yRender(_announced[^1]).Text);
+        Assert.Equal("Files sidebar at its widest, 440 pixels.", SlateUniffiMethods.A11yRender(_announced[^1]).Text);
         workspace.NarrowFilesSidebarCommand.Execute(null);
-        Assert.Equal(370, workspace.FilesSidebarWidth);
-        Assert.Equal("Files sidebar resized, 370 pixels.", SlateUniffiMethods.A11yRender(_announced[^1]).Text);
+        Assert.Equal(400, workspace.FilesSidebarWidth);
+        Assert.Equal("Files sidebar resized, 400 pixels.", SlateUniffiMethods.A11yRender(_announced[^1]).Text);
     });
 
     /// <summary>#1795: a window that shrank and grew back gives both widths back, and
@@ -347,7 +347,7 @@ public sealed class SidebarResizeTests : IDisposable
 
         workspace.WorkspaceRowWidth = 800;
         Assert.Equal(WorkspaceViewModel.MinimumSidebarWidth, workspace.FilesSidebarWidth);
-        Assert.Equal(290, workspace.RightPaneWidth);
+        Assert.Equal(320, workspace.RightPaneWidth);
 
         workspace.WorkspaceRowWidth = 1600;
         Assert.Equal(300, workspace.FilesSidebarWidth);

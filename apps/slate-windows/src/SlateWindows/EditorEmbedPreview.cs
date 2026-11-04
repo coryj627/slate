@@ -82,7 +82,26 @@ internal sealed class EditorEmbedPreviewView : ContentControl
             Margin = new Thickness(0, 4, 0, 4),
         };
         AutomationProperties.SetName(expander, node.Title);
+        expander.Loaded += static (sender, _) => WrapTitle((DependencyObject)sender);
         return expander;
+    }
+
+    /// <summary>DS-2: a title wraps, so at 14 point in a narrow pane it doesn't run
+    /// under the expander's chevron. Fluent's template ignores HeaderTemplate, and a
+    /// presenter's text has no wrapping of its own, so this sets it where it lands.</summary>
+    private static void WrapTitle(DependencyObject parent)
+    {
+        for (int index = 0; index < VisualTreeHelper.GetChildrenCount(parent); index++)
+        {
+            DependencyObject child = VisualTreeHelper.GetChild(parent, index);
+            if (child is TextBlock { TemplatedParent: ContentPresenter { TemplatedParent: System.Windows.Controls.Primitives.ToggleButton } } title)
+            {
+                title.TextWrapping = TextWrapping.Wrap;
+                return;
+            }
+
+            WrapTitle(child);
+        }
     }
 
     private FrameworkElement BuildNodeContent(EditorEmbedPreviewNode node)

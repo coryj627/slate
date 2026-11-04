@@ -426,8 +426,8 @@ internal sealed class HistorySurfaceView : UserControl
             {
                 Text = string.Join("  ·  ", row.Annotations),
                 TextWrapping = TextWrapping.Wrap,
-                FontSize = 11,
             };
+            chips.SetResourceReference(StyleProperty, TypeRamp.Caption.StyleKey);
             chips.SetResourceReference(
                 TextBlock.ForegroundProperty, "Slate.SecondaryTextBrush");
             panel.Children.Add(chips);
@@ -1088,8 +1088,8 @@ internal sealed class HistorySurfaceView : UserControl
         {
             Text = text,
             TextWrapping = TextWrapping.Wrap,
-            FontSize = 11,
         };
+        block.SetResourceReference(StyleProperty, TypeRamp.Caption.StyleKey);
         block.SetResourceReference(
             TextBlock.ForegroundProperty, "Slate.SecondaryTextBrush");
         return block;
@@ -1101,8 +1101,8 @@ internal sealed class HistorySurfaceView : UserControl
         {
             Text = text,
             TextWrapping = TextWrapping.Wrap,
-            FontSize = 11,
         };
+        block.SetResourceReference(StyleProperty, TypeRamp.Caption.StyleKey);
         block.SetResourceReference(
             TextBlock.ForegroundProperty, "Slate.SecondaryTextBrush");
         return block;

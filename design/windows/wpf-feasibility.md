@@ -30,7 +30,7 @@ The six spikes ran on 2 November 2026 and none failed (see Spikes to run first).
 | --- | --- | --- |
 | Colour tokens, light and dark | Native | Override Fluent's **brush** keys in the Slate dictionaries (see Colour) |
 | High Contrast | Native | Keep `Fluent.HC` + `Slate.Contrast`; never apply gold there |
-| Type ramp, sizes, line heights | Native | CSS px = WPF device-independent pixels, so values carry over 1:1 |
+| Type ramp, sizes, line heights | Native | CSS px = WPF device-independent pixels, so values carry over 1:1; the app's are dynamic keys (`TypeRamp`, #1803), because Fluent's styles can't scale |
 | Segoe UI Variable | Native | Use the named families; spike 1 confirmed them on Windows 11 |
 | Text scaling | Build | Scale font sizes yourself; spike 5 confirmed `MinHeight` rows grow without clipping |
 | Icons | Native | `SymbolThemeFontFamily`; name every icon-only control |

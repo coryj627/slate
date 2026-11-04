@@ -3,6 +3,7 @@
 
 using System.Windows;
 using System.Windows.Automation;
+using System.Windows.Controls;
 using SlateWindows.Graph;
 
 namespace SlateWindows.Tests;
@@ -89,17 +90,89 @@ public sealed class NarrowWindowLayoutTests
         Assert.True(right <= files.ActualWidth, $"Group dates ends at {right:F0}px in a {files.ActualWidth:F0}px sidebar.");
     });
 
-    /// <summary>Fluent's 120px minimum is wider than the label needs, and it would
-    /// wrap the row at the sidebar's default width.</summary>
-    [Fact]
-    public void GroupDatesSharesTheSortRowAtTheDefaultWidth() => StaThread.Run(() =>
+    /// <summary>A ComboBox sizes to its selected row, so a fixed width cut the longer
+    /// labels off at 14 point. Choosing one doesn't move what's beside it either.</summary>
+    [Theory]
+    [InlineData("NameAscending")]
+    [InlineData("NameDescending")]
+    [InlineData("ModifiedNewest")]
+    [InlineData("ModifiedOldest")]
+    [InlineData("CreatedNewest")]
+    [InlineData("CreatedOldest")]
+    public void TheSortBoxHoldsEachLabelWithoutMoving(string name) => StaThread.Run(() =>
     {
         using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        var sort = (ComboBox)host.Body("SidebarSortOrder");
+        // The hosted shell has no sidebar model to bind them from.
+        sort.ItemsSource = Enum.GetValues<SidebarSortMode>();
+        sort.SelectedItem = SidebarSortMode.NameAscending;
+        host.Settle();
+        double before = sort.ActualWidth;
 
-        FrameworkElement group = host.Body("SidebarGroupDates");
-        FrameworkElement sort = host.Body("SidebarSortOrder");
-        double groupMiddle = group.TranslatePoint(new Point(0, group.ActualHeight / 2), sort).Y;
-        Assert.InRange(groupMiddle, 0, sort.ActualHeight);
+        SidebarSortMode mode = Enum.Parse<SidebarSortMode>(name);
+        sort.SelectedItem = mode;
+        host.Settle();
+
+        var label = new TextBlock
+        {
+            Text = (string)new SidebarSortModeLabelConverter().Convert(mode, typeof(string), null!, System.Globalization.CultureInfo.InvariantCulture),
+            FontFamily = sort.FontFamily,
+            FontSize = sort.FontSize,
+        };
+        label.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        ContentPresenter shown = ShownShell.Descendants(sort).OfType<ContentPresenter>().First(presenter => presenter.ActualWidth > 0);
+        Assert.True(shown.ActualWidth >= label.DesiredSize.Width, $"{label.Text} needs {label.DesiredSize.Width:F0}px and has {shown.ActualWidth:F0}px.");
+        Assert.Equal(before, sort.ActualWidth);
+    });
+
+    /// <summary>DS-2: at 14 point an embed's title ran under its chevron, cut off
+    /// mid-word.</summary>
+    [Fact]
+    public void AnEmbedsTitleWrapsInsteadOfRunningUnderItsChevron() => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        const string title = "Embedded note: a title long enough to need a second line";
+        var view = new EditorEmbedPreviewView
+        {
+            Width = 160,
+            Root = new EditorEmbedPreviewNode(title, [], null, null, IsDisclosure: true, InitiallyExpanded: false, IsWarning: false),
+        };
+        DockPanel.SetDock(view, Dock.Top);
+        ((DockPanel)host.Shell.Content).Children.Insert(0, view);
+        host.Settle();
+
+        Expander expander = ShownShell.Descendants(view).OfType<Expander>().Single();
+        TextBlock shown = ShownShell.Descendants(expander).OfType<TextBlock>().First(text => text.Text == title);
+        double right = shown.TranslatePoint(new Point(shown.ActualWidth, 0), expander).X;
+        Assert.True(right <= expander.ActualWidth, $"the title ends at {right:F0}px in a {expander.ActualWidth:F0}px expander.");
+        Assert.True(shown.ActualHeight > shown.FontSize * 2, $"the title is {shown.ActualHeight:F0}px tall, so it didn't wrap.");
+    });
+
+    /// <summary>DS-2: a link's target is one long word, and it sits in a wrap panel, so
+    /// the panel squeezed it and the row cut it off.</summary>
+    [Fact]
+    public void ALongLinkTargetWrapsInTheOutgoingList() => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "[a](https://example.com/a-link-target-far-too-long-for-the-right-pane-to-hold-on-one-line)\n"));
+        host.Workspace.OpenPath("Lecture.md");
+        host.Workspace.ActiveLeaf = WorkspaceViewModel.Leaves.First(leaf => leaf.Title == "Outgoing links");
+        host.Settle();
+
+        FrameworkElement list = host.Body("PanelOutgoingLinksList");
+        TextBlock? target = null;
+        System.Threading.SpinWait.SpinUntil(
+            () =>
+            {
+                host.Settle();
+                target = ShownShell.Descendants(list).OfType<TextBlock>().FirstOrDefault(text => text.Name == "TargetText");
+                return target is not null;
+            },
+            TimeSpan.FromSeconds(10));
+
+        Assert.NotNull(target);
+        double right = target.TranslatePoint(new Point(target.ActualWidth, 0), list).X;
+        Assert.True(right <= list.ActualWidth, $"the target ends at {right:F0}px in a {list.ActualWidth:F0}px list.");
+        Assert.True(target.ActualHeight > target.FontSize * 2, $"the target is {target.ActualHeight:F0}px tall, so it didn't wrap.");
     });
 
     /// <summary>A note with many properties took all of a short window's height from
@@ -126,8 +199,58 @@ public sealed class NarrowWindowLayoutTests
         FrameworkElement editor = ShownShell.Descendants(host.Shell)
             .OfType<SlateTextEditor>()
             .Single(element => element.IsVisible);
-        // Four lines of text inside the editor's own 24px of padding.
-        Assert.True(editor.ActualHeight >= 100, $"the editor is {editor.ActualHeight:F0}px tall.");
+        // Four of its 22px lines, inside the editor's own 24px of padding.
+        Assert.True(editor.ActualHeight >= 112, $"the editor is {editor.ActualHeight:F0}px tall.");
+    });
+
+    /// <summary>A short window takes its room back from the rows, and only there: a
+    /// pane of ordinary height keeps all of it, and the shortest keeps some. This asks
+    /// the shipped converter, because a host's display can't always make a tall window.</summary>
+    [Theory]
+    [InlineData(900, 280)]
+    [InlineData(600, 280)]
+    [InlineData(416, 96)]
+    [InlineData(200, 80)]
+    public void ThePropertyRowsKeepTheirRoomUntilTheWindowIsShort(double pane, double rows) => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        var converter = (System.Windows.Data.IValueConverter)host.Shell.FindResource("PropertyRowsMaxHeightConverter");
+
+        Assert.Equal(rows, converter.Convert(pane, typeof(double), null!, System.Globalization.CultureInfo.InvariantCulture));
+    });
+
+    /// <summary>The rows' room comes from the pane they're in, in the shell itself.</summary>
+    [Fact]
+    public void ThePropertyRowsReadTheirRoomFromThePane() => StaThread.Run(() =>
+    {
+        string keys = string.Concat(Enumerable.Range(1, 12).Select(index => $"key{index}: value\n"));
+        using var host = new ShownShell(("Lecture.md", $"---\n{keys}---\n# Lecture\n"));
+        host.Workspace.OpenPath("Lecture.md");
+        host.Settle();
+
+        ScrollViewer? scroller = null;
+        TabControl? pane = null;
+        System.Threading.SpinWait.SpinUntil(
+            () =>
+            {
+                PumpedDispatcher.Drain();
+                FrameworkElement? shown = ShownShell.Descendants(host.Shell)
+                    .OfType<FrameworkElement>()
+                    .FirstOrDefault(element => AutomationProperties.GetAutomationId(element) == "PropertiesRows");
+                for (DependencyObject? step = shown; step is not null; step = System.Windows.Media.VisualTreeHelper.GetParent(step))
+                {
+                    scroller ??= step as ScrollViewer;
+                    pane ??= step as TabControl;
+                }
+
+                return scroller is not null && pane is not null;
+            },
+            TimeSpan.FromSeconds(10));
+
+        Assert.NotNull(scroller);
+        Assert.NotNull(pane);
+        var converter = (System.Windows.Data.IValueConverter)host.Shell.FindResource("PropertyRowsMaxHeightConverter");
+        Assert.Equal(converter.Convert(pane.ActualHeight, typeof(double), null!, System.Globalization.CultureInfo.InvariantCulture), scroller.MaxHeight);
     });
 
     /// <summary>The key's fixed column and the buttons took the whole row, which left

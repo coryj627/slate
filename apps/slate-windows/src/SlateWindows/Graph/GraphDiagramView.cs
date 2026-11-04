@@ -929,7 +929,7 @@ internal sealed class GraphDiagramView : FrameworkElement
         _labelsShown = showLabels;
         double fontSize = LabelFontSize * TextScale.Factor * _viewport.Zoom;
         Brush labelBrush = styles.Brush(LabelBrushKey);
-        var typeface = new Typeface(SystemFonts.MessageFontFamily, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal);
+        var typeface = new Typeface(TypeRamp.TextFamily, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal);
         double dip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
         foreach (ulong id in _visibleIds)
         {

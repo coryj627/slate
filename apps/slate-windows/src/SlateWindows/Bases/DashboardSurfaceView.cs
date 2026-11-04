@@ -52,10 +52,9 @@ internal sealed class DashboardSurfaceView : UserControl
         AutomationProperties.SetAutomationId(this, "DashboardSurface");
         _title = new TextBlock
         {
-            FontSize = 20,
-            FontWeight = FontWeights.SemiBold,
             Margin = new Thickness(12, 8, 12, 4),
         };
+        _title.SetResourceReference(StyleProperty, TypeRamp.Subtitle.StyleKey);
         AutomationProperties.SetHeadingLevel(
             _title, AutomationHeadingLevel.Level2);
 
@@ -254,10 +253,9 @@ internal sealed class DashboardSurfaceView : UserControl
             var header = new TextBlock
             {
                 Text = section.Title,
-                FontSize = 16,
-                FontWeight = FontWeights.SemiBold,
                 Margin = new Thickness(0, 12, 0, 4),
             };
+            header.SetResourceReference(StyleProperty, TypeRamp.BodyStrong.StyleKey);
             AutomationProperties.SetHeadingLevel(
                 header, AutomationHeadingLevel.Level3);
             _sections.Children.Add(header);

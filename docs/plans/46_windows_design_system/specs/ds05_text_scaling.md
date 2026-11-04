@@ -34,7 +34,8 @@ Windows Settings › Accessibility › Text size changes every piece of Slate's 
 7. **Rows that grow.** Everything in DS-2's and DS-4's templates is already `MinHeight`. Go through the fixed widths under "Current state" at 2.25. Each either wraps, becomes a `MinWidth`, or moves to a `MaxWidth` with a margin. Sheets scroll past `MaxHeight`, which `MainWindow.xaml:2592` already does for Quick Open.
 8. **The reading measure** (DS-3) recomputes when the body key changes.
 9. **The canvas and graph** already take `Factor`. Keep their revision path (`CanvasPresentationEngine.cs:137`).
-10. **The decision recorded.** `xaml/README.md:164` and `wpf-feasibility.md:62` state the source DSD3 settled and why, with the live check's result.
+10. **The calendar.** The `DatePicker` a date property uses opens a `Calendar` whose month heading, weekday labels and date buttons take fixed sizes from Fluent's styles and templates (Codex, on DS-2: at a ramp factor of 2.25 the calendar reports 31.5 and those labels stay 14). They give their sizes to the ramp, in the month, year and decade views, through `Calendar`'s `CalendarItemStyle`, `CalendarButtonStyle` and `CalendarDayButtonStyle` based on Fluent's, or a template where a size is inside one. Navigation glyphs stay their size.
+11. **The decision recorded.** `xaml/README.md:164` and `wpf-feasibility.md:62` state the source DSD3 settled and why, with the live check's result.
 
 ## Tests
 
@@ -45,6 +46,7 @@ Failing first:
 - `ALiveChangeDoesNotRebuildTheReadingDocument`: same `FlowDocument` instance, same caret offset.
 - `TheEditorCombinesItsPreferenceAndTheFactor`: preference 16 at factor 1.5 gives 24; the announced size stays 16.
 - `IconGlyphsKeepTheirSize` (census).
+- `TheOpenCalendarFollowsTheFactor`: month, year and decade views at 1 and 2.25.
 - `NoShellTextIsClippedAtTheLargestSize`: hosted at 2.25: welcome view, a vault with a note open, the Files tree, the rail. No `TextBlock` without trimming has a non-null `LayoutInformation.GetLayoutClip`. Trimmed text is allowed where it already trims.
 - `TextScaleServiceTests`: the seam's read drives `Factor`, `Revision` and `Changed`, as the canvas facts do today.
 - `ClosingOneViewLeavesScalingRunningForTheOthers`: a canvas and a diagram on one installed service. Shut one down, change the factor, and the other redraws while the service stays live, in both orders.

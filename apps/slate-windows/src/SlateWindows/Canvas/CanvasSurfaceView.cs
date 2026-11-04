@@ -103,11 +103,10 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
 
         _title = new TextBlock
         {
-            FontSize = 16,
-            FontWeight = FontWeights.SemiBold,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 0, 12, 0),
         };
+        _title.SetResourceReference(StyleProperty, TypeRamp.Subtitle.StyleKey);
         AutomationProperties.SetHeadingLevel(_title, AutomationHeadingLevel.Level2);
 
         _outlineChoice = SurfaceChoice(
