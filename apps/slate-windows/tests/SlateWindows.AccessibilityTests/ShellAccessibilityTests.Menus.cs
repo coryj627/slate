@@ -54,6 +54,10 @@ public sealed partial class ShellAccessibilityTests
             opener.Patterns.ExpandCollapse.Pattern.Expand();
             System.Drawing.Rectangle openerBounds = opener.BoundingRectangle;
 
+            // Down skips a disabled row, so the row over the item may never take focus.
+            // A menu over its item shows up as rows on both sides of it.
+            bool rowsAbove = false;
+            bool rowsBelow = false;
             AutomationElement? row = null;
             for (int press = 0; press < 40; press++)
             {
@@ -64,11 +68,15 @@ public sealed partial class ShellAccessibilityTests
                 Assert.False(
                     shown.IntersectsWith(openerBounds),
                     $"{row?.Properties.Name.ValueOrDefault} at {shown} covers its menu's item at {openerBounds}.");
+                rowsAbove |= shown.Bottom <= openerBounds.Top;
+                rowsBelow |= shown.Top >= openerBounds.Bottom;
                 if (row?.Properties.Name.ValueOrDefault == lastRow)
                 {
                     break;
                 }
             }
+
+            Assert.False(rowsAbove && rowsBelow, $"The menu has rows on both sides of its item at {openerBounds}, so it covers it.");
 
             Assert.True(
                 row?.Properties.Name.ValueOrDefault == lastRow,
