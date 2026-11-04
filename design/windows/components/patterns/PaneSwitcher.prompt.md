@@ -12,7 +12,7 @@ const { PaneSwitcher } = window.SlateDesignSystem_326dc9;
 
 - Each view is an icon-only subtle Button (32 px) with a tooltip showing its name and chord. The open view gets the selected state and a 3 px gold indicator.
 - Past `maxVisible`, the last slot becomes **More panels** (⋯). Its menu lists the rest with their icons, and the open one shows a check in place of its icon. The ⋯ button takes the selected look while one of those views is open.
-- Keyboard: Tab enters the strip, arrow keys move, Home/End jump, Enter or Space opens. The More button is the next tab stop.
+- Keyboard: Tab enters the strip, arrow keys move, Home/End jump, Enter or Space opens. The More button is the next tab stop. In the app, an arrow opens the view it reaches (see WPF).
 - `orientation="vertical"` stacks the strip, puts the indicator on the left and opens tooltips and the menu to the left.
 - Render the view itself with `role="tabpanel"`.
 
@@ -20,7 +20,7 @@ const { PaneSwitcher } = window.SlateDesignSystem_326dc9;
 
 - **Build as:** `ListBox` with a Slate item template.
 - **Rating:** Template: a new `Style` or `ControlTemplate` on an existing WPF control.
-- The app's rail is already a `ListBox`, and tests pin its automation contract and its settled selection (an arrow chooses a panel, and the panel opens once the arrow is released), so the strip keeps it. Gold indicator on the selected row.
+- The app's rail is already a `ListBox`, and tests pin its automation contract and its settled selection, so the strip keeps it. An arrow opens the panel it reaches at once, so the focused row is always the panel on show. The panel's reload, the queries refresh and the workspace write wait until the arrows settle: the last held arrow is released, or focus leaves the rail. Gold indicator on the selected row.
 - The overflow is the fixed `maxVisible` of six: five views, then "More panels", a `Button` + `ContextMenu` below the list. Nothing is computed on `SizeChanged`, so a reader hears the same count at any window size.
 - Buttons here are 32 px, as in panel toolbars. Only the title bar's are 40 × 40 (`winui-review.md`).
 - If tooltips get in the way while arrowing, set `ToolTipService.ShowsToolTipOnKeyboardFocus="False"`.
