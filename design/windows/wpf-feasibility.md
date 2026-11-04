@@ -34,11 +34,11 @@ The six spikes ran on 2 November 2026 and none failed (see Spikes to run first).
 | Segoe UI Variable | Native | Use the named families; spike 1 confirmed them on Windows 11 |
 | Text scaling | Build | Scale font sizes yourself; spike 5 confirmed `MinHeight` rows grow without clipping |
 | Icons | Native | `SymbolThemeFontFamily`; name every icon-only control |
-| Radii, strokes | Native | 4 and 8 match Fluent; 6px tabs need a template |
+| Radii, strokes | Native | 4 and 8 match Fluent; tabs' top corners need a template |
 | Hover and pressed | Template | Map overlays to Fluent's state brushes |
 | Shadows | Change the design | One shadow per element; on a sibling of the text, with the ClearType hint (spike 4) |
 | Motion | Native | Storyboards with the same curves and durations |
-| Focus ring | Native | One offset differs (1px vs 3px) |
+| Focus ring | Native | Fluent's ring already sits where the tokens put it |
 | Text selection | Native, with a switch | Turn off adorner selection for solid gold; spike 6 confirmed it with right-to-left text |
 | Menus | Template | One shared template for every row type; it scales shortcut text and fits the top-level item in 48px |
 | Tooltips | Native | Keyboard tooltips are built in |
@@ -57,9 +57,9 @@ The six spikes ran on 2 November 2026 and none failed (see Spikes to run first).
 ## Type
 
 - **Sizes and line heights: Native.** One CSS px is one WPF device-independent pixel, so 12/16, 14/20, 20/28 carry over unchanged. To get exact line heights, set `LineHeight` with `LineStackingStrategy="BlockLineHeight"`. The default strategy uses the tallest glyph instead. The tokens use no letter-spacing, which WPF `TextBlock` lacks.
-- **Segoe UI Variable: Native.** WPF's Fluent theme sets only the icon font (`SymbolThemeFontFamily`), so text stays in plain Segoe UI unless the app sets `FontFamily`. WPF can't drive a variable font's axes (its DirectWrite layer has no font-axis APIs), so automatic optical sizing, which WinUI has, isn't available. Use the named families: `Segoe UI Variable Small` under 12px, `Text` for 12–24px, `Display` above 24px, each falling back to `Segoe UI` (Windows 10 doesn't ship the variable font). The system only uses weights 400, 600 and 700, which WPF names directly. Spike 1 confirmed that WPF lists the three named families on Windows 11 and renders 400 and 600 without synthetic bolding.
-- **Open Sans and Cascadia Code: Native.** Embed them as resources. Spike 2 confirmed that Cascadia Code ligatures survive AvalonEdit's colour runs. A colour boundary inside an operator doesn't break the ligature, and the glyph takes the first run's colour or splits by cell.
-- **Text scaling: Build.** WinUI applies the Windows "Make text bigger" setting automatically. WPF only applies it through `SystemFonts`: a control with no explicit `FontSize` grows, and fixed `FontSize` values stay as they are. Read `UISettings.TextScaleFactor` (1 to 2.25) and handle `TextScaleFactorChanged`. Microsoft's guidance is to scale small text more than large text and to leave icon glyphs unscaled. **Design impact (done):** the shell heights (48 title bar, 36 tab strip, 24 status bar) and the 32–36px rows are now minimums that grow with text (`--titlebar-min-height`, `--tabstrip-min-height`, `--statusbar-min-height`; `MinHeight` in WPF), up to 225%.
+- **Segoe UI Variable: Native.** WPF's Fluent theme sets only the icon font (`SymbolThemeFontFamily`), so text stays in plain Segoe UI unless the app sets `FontFamily`. WPF can't drive a variable font's axes (its DirectWrite layer has no font-axis APIs), so automatic optical sizing, which WinUI has, isn't available. That doesn't stop an embedded variable font giving its named instances: through a pack URI, `CascadiaCode.ttf` gives six named weights and `OpenSans-Variable.ttf` five, all with `StyleSimulations` of `None` (measured 3 November 2026). A folder reference such as `./#Open Sans` reaches the italic file, where a single-file reference simulates an oblique. Use the named families, as the tokens do: `Segoe UI Variable Small` at 12px, `Text` at 14–18px, `Display` from 20px, each falling back to `Segoe UI` (Windows 10 doesn't ship the variable font). The system only uses weights 400, 600 and 700, which WPF names directly. Spike 1 confirmed that WPF lists the three named families on Windows 11 and renders 400 and 600 without synthetic bolding.
+- **Open Sans and Cascadia Code: Native.** Embed them as resources. Spike 2 confirmed that Cascadia Code ligatures survive AvalonEdit's colour runs. A colour boundary inside an operator doesn't break the ligature, and the glyph takes the first run's colour or splits by cell. AvalonEdit has no line-height API (`VisualLineTextParagraphProperties` is internal and sealed, and `TextView.DefaultLineHeight` has no setter), so the editor reaches 14/22 through a composite font file: `LineSpacing="1.5714"` (22/14), `Baseline="1.1324"`, target `./#Cascadia Code`. Cascadia's natural 16.27 becomes exactly 22 at 14, and 12.57, 31.43 and 62.86 at 8, 20 and 40. The composite keeps Cascadia's width, its ligatures, real bold and italic, and fallback for other scripts (measured 3 November 2026).
+- **Text scaling: Build.** WinUI applies the Windows "Make text bigger" setting automatically. WPF only applies it through `SystemFonts`: a control with no explicit `FontSize` grows, and fixed `FontSize` values stay as they are. Read `HKCU\Software\Microsoft\Accessibility\TextScaleFactor` (100 to 225, used as 1 to 2.25) and listen for `SystemEvents.UserPreferenceChanged`, as `CanvasTextScaleService` does. `UISettings.TextScaleFactor` is the documented API, but it's WinRT, and the standard route to it under `net10.0-windows` ships the whole Windows SDK projection, about 25 MB, for one number. That choice is plan 46's DSD3, and it waits on one live check that a change made in Windows Settings arrives; if it doesn't, the source becomes `UISettings`. Microsoft's guidance is to scale small text more than large text and to leave icon glyphs unscaled. **Design impact (done):** the shell heights (48 title bar, 36 tab strip, 24 status bar) and the 32–36px rows are now minimums that grow with text (`--titlebar-min-height`, `--tabstrip-min-height`, `--statusbar-min-height`; `MinHeight` in WPF), up to 225%.
 - Expect WPF text to look slightly different from the HTML cards (different rasterizer). Judge type in the running app.
 
 ## Icons
@@ -70,7 +70,7 @@ Every icon-only button needs `AutomationProperties.Name`. Otherwise Narrator rea
 
 ## Shape, state and motion
 
-- **Radii: Native.** Fluent's `ControlCornerRadius` is 4 and `OverlayCornerRadius` is 8, matching the system. 6px tabs and the 3px selection pill go in templates.
+- **Radii: Native.** Fluent's `ControlCornerRadius` is 4 and `OverlayCornerRadius` is 8, matching the system. Tabs' 8px top corners and the 3px selection pill go in templates.
 - **1px strokes: Native.** Set `UseLayoutRounding="True"` on the window so lines stay crisp at 125% and 150% scaling.
 - **Hover and pressed: Template.** The system describes states as overlays (4% / 8% black, 6% / 10% white in dark). Fluent controls use one solid brush per state (`ControlFillColorSecondary`, `ControlFillColorTertiary`), so set those keys to the overlay colours as composited on each surface. Slate-built rows can use semi-transparent brushes in their triggers directly.
 - **Motion: Native.** Durations carry over unchanged. Each `cubic-bezier` token becomes a `KeySpline` with the same four numbers (decelerate-mid is `KeySpline="0,0,0,1"`). Skip animations when `SystemParameters.ClientAreaAnimation` is false (Windows "Animation effects" off).
@@ -86,7 +86,7 @@ Every icon-only button needs `AutomationProperties.Name`. Otherwise Narrator rea
 
 ## Focus and selection
 
-- **Focus ring: Native.** WPF shows `FocusVisualStyle` only for keyboard focus, which matches `:focus-visible`. Fluent's default is a 2px ring with radius 4, drawn 3px outside the control. The system says 1px outside. **Decision:** keep 1px and set `Margin="-1"` in Slate's focus style. Set `KeyboardFocusBorderColorBrush` to the focus-ring token. For list and menu rows, Fluent's collection focus style draws inside the row, which matches the menu fix in this system.
+- **Focus ring: Native.** WPF shows `FocusVisualStyle` only for keyboard focus, which matches `:focus-visible`. Fluent's default is a 2px ring with radius 4 on a `Rectangle` at `Margin="-3"`. A `Rectangle` strokes inside its bounds, so the ring's inner edge sits 1px outside the control and its outer edge 3px, which is exactly what the system says (`tokens/base.css`: a 2px outline, offset 1px). **Decision:** keep Fluent's. `Margin="-1"` would put the stroke across the control's border. Set `KeyboardFocusBorderColorBrush` to the focus-ring token. For list rows, Slate's row focus style draws inside the row, because a list clips Fluent's. A menu row's ring sits on its inset highlight (`readme.md`, Menu rules).
 - **Text selection: Native, with a switch.** By default WPF draws TextBox selection as a translucent overlay (`SelectionOpacity`) and ignores `SelectionTextBrush`, so pale gold with dark text isn't guaranteed. Set the AppContext switch `Switch.System.Windows.Controls.Text.UseAdornerForTextboxSelectionRendering` to `false`, then set `SelectionBrush`, `SelectionTextBrush` and `SelectionOpacity="1"`. The app does this for every `TextBox` (`TextBoxSelection.cs`, #1755). Without it, the pale gold at the default 40% opacity is almost invisible on white. The reading view is a `RichTextBox`, which ignores the switch and always draws selection on top of the text, so it takes a translucent overlay instead (`Slate.ReadingSelectionBrush`, values in `xaml/README.md`). The editor sets AvalonEdit's `SelectionBrush` and `SelectionForeground` to the solid pair, because it draws selection under the text. It also sets `SelectionBorder`, because the gold selection is close to the find-match fill in both themes, and the border keeps the current match apart from the others.
 
 ## Menus
@@ -100,7 +100,7 @@ Spike 5 found two more:
 - **Shortcut text doesn't scale.** It stays small at 2.25 even with the `MenuItem`'s `FontSize` set to 31.5, while the row's label grows.
 - **The top-level item doesn't fit a 48px title bar.** Its text sits in 30px of Fluent's padding and margins. With 14px text, that makes the item about 49px tall before any margin of its own.
 
-Fix: one Slate `MenuItem` template for all four roles (top-level header, top-level item, submenu header, submenu item). Each role uses the same columns (check, icon, label, shortcut, chevron) with `SharedSizeGroup`, and the menu panel sets `Grid.IsSharedSizeScope`. The shortcut column takes its size from the scaled text, and the top-level role fits 48px at 100%. Keep `InputGestureText` and the `AcceleratorKey` binding Slate already uses. Popup values for reference: Fluent uses radius 8, 3px vertical padding and a 167ms slide-in.
+Fix: one Slate `MenuItem` template for all four roles (top-level header, top-level item, submenu header, submenu item). Each row uses the same three columns with `SharedSizeGroup`: one leading column, where a check replaces an icon, then the label, then one end column that the shortcut and the submenu chevron share (`readme.md`, Menu rules). The menu panel sets `Grid.IsSharedSizeScope`. The end column takes its size from the scaled text, and the top-level role fits 48px at 100%. Keep `InputGestureText` and the `AcceleratorKey` binding Slate already uses. Popup values for reference: Fluent uses radius 8, 3px vertical padding and a 167ms slide-in.
 
 ## Tooltips
 
@@ -141,7 +141,7 @@ Fix: one Slate `MenuItem` template for all four roles (top-level header, top-lev
 **Web-only:** Material acrylic.
 
 **Slate patterns** (all buildable):
-- PaneSwitcher: `ListBox` with single selection and a vertical or horizontal panel. Compute the "More panels" overflow on `SizeChanged`.
+- PaneSwitcher: `ListBox` with single selection and a vertical or horizontal panel, plus a `Button` for "More panels". The overflow is the fixed `maxVisible` of six, with nothing computed on `SizeChanged`, so a reader hears the same count at any window size (plan 46, DSD8).
 - PanelToolbar: icon buttons plus a sort `ContextMenu` with checkable items.
 - NoteHeader: switch visual states from `SizeChanged` for the icon-only switch below 520px, since WPF has no `AdaptiveTrigger`.
 - EmptyStateLauncher: a `StackPanel` of buttons.
@@ -150,6 +150,8 @@ Fix: one Slate `MenuItem` template for all four roles (top-level header, top-lev
 - SettingRow: a `Grid` with the Switch template.
 
 ## Suggested order
+
+This is the order first suggested here. Plan 46 §6 (`docs/plans/46_windows_design_system_plan.md`) moves type, menus and text scaling to the front, so each later template is measured at 225% as it's built, and that's the order the work follows.
 
 1. Generate the XAML theme from the tokens: `Slate.*` keys plus Fluent brush overrides for light and dark. This brings gold and Slate's neutrals to every Fluent control at once. **Done** (#1755): the files in `xaml/` are in the app. The accent setting is still to add.
 2. Menu template (fixes the shipped misalignment and shortcut contrast).

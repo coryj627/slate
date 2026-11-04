@@ -18,9 +18,11 @@ const { PaneSwitcher } = window.SlateDesignSystem_326dc9;
 
 ## WPF
 
-- **Build as:** `TabControl` with a Slate template.
+- **Build as:** `ListBox` with a Slate item template.
 - **Rating:** Template: a new `Style` or `ControlTemplate` on an existing WPF control.
-- The strip is the tab panel and the right pane is the content, so Narrator announces tabs. Gold indicator on the selected tab. "More panels" is a `Button` + `ContextMenu`; compute the overflow on `SizeChanged`.
+- The app's rail is already a `ListBox`, and tests pin its automation contract and its settled selection (an arrow chooses a panel, and the panel opens once the arrow is released), so the strip keeps it. Gold indicator on the selected row.
+- The overflow is the fixed `maxVisible` of six: five views, then "More panels", a `Button` + `ContextMenu` below the list. Nothing is computed on `SizeChanged`, so a reader hears the same count at any window size.
+- Buttons here are 32 px, as in panel toolbars. Only the title bar's are 40 × 40 (`winui-review.md`).
 - If tooltips get in the way while arrowing, set `ToolTipService.ShowsToolTipOnKeyboardFocus="False"`.
 - Icon-only versions need `AutomationProperties.Name`; otherwise Narrator reads the icon glyph.
 

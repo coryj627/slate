@@ -18,6 +18,7 @@ const { PanelToolbar } = window.SlateDesignSystem_326dc9;
 - **Build as:** `Grid` (or `ToolBar`).
 - **Rating:** Template: a new `Style` or `ControlTemplate` on an existing WPF control.
 - Title, count, icon buttons. Sort is a `Button` + `ContextMenu` with checkable items.
+- Buttons here are 32 px. Only the title bar's are 40 × 40 (`winui-review.md`).
 - Icon-only versions need `AutomationProperties.Name`; otherwise Narrator reads the icon glyph.
 
 Ratings and theme setup: `wpf-feasibility.md`.
