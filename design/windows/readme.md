@@ -139,8 +139,9 @@ Use Regular at rest and Filled for selected or active states, at 16px in dense r
 ## Fonts
 
 - **Segoe UI Variable** — installed with Windows 11, not in this repo: Text (14–18px), Display (20px and up), Small (12px captions), as `tokens/typography.css` uses them, each Light 300 / Semilight 350 / Regular 400 / Semibold 600 / Bold 700; plus "Segoe UI". The fonts' licence text limits them to the Microsoft product they came with, so the tokens name the installed families, `tokens/fonts.css` reaches Segoe UI and the icon fonts with `local()`, and these pages render them only on Windows 11. Elsewhere the tokens' fallback stacks apply, and `--font-icons` has none.
-- **Open Sans** — shipped (`fonts/`, variable weight 300–800, normal + italic).
-- **Cascadia Code / Mono** — shipped (`fonts/`, variable 200–700, normal + italic, plus NF and PL variants). Editor uses Cascadia Code (ligatures); Cascadia Mono is the no-ligature fallback.
+- **Open Sans** — shipped (`fonts/`, variable weight 300–800, normal + italic), under the SIL Open Font License 1.1 (`fonts/OpenSans-OFL.txt`).
+- **Cascadia Code / Mono** — shipped (`fonts/`, variable 200–700, normal + italic, plus NF and PL variants), under the SIL Open Font License 1.1 with Reserved Font Name Cascadia Code (`fonts/Cascadia-OFL.txt`). Editor uses Cascadia Code (ligatures); Cascadia Mono is the no-ligature fallback, and the reading view's code.
+- The Windows app embeds the normal and italic Cascadia Code, Cascadia Mono and Open Sans files, not the NF or PL ones, and copies both licences to `Licenses\` beside its build.
 - The Fluent kit's tokens also name **Inter** (one docs label; not loaded, the token is re-pointed to Segoe UI) and **Segoe Sans**, a web-only Microsoft face Slate can't ship. Its `@font-face` points at the installed Segoe UI, so every token that names it renders in Segoe UI. The system loads no fonts from the network.
 
 ## Components

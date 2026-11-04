@@ -127,6 +127,9 @@ on:
       - 'rust-toolchain.toml'
       # The .NET SDK pin every dotnet in the lane reads (#1568).
       - 'global.json'
+      # DS-1: the app links its fonts and their licences from the design's
+      # folder, so a change there changes what ships.
+      - 'design/windows/fonts/**'
       - '.github/workflows/windows.yml'
       - 'ci/windows-runner/route/**'
       - 'scripts/verify_windows_model_shards.py'

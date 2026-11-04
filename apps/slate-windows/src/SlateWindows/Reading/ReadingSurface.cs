@@ -1405,6 +1405,11 @@ internal sealed class ReadingSurface : RichTextBox
     /// </summary>
     private void OnCopying(object sender, DataObjectCopyingEventArgs e)
     {
+        if (e.DataObject.GetData(DataFormats.Rtf) is string rtf)
+        {
+            e.DataObject.SetData(DataFormats.Rtf, ShippedFontNames.Named(rtf));
+        }
+
         if (CopyTextOf(Selection.Start, Selection.End) is not { } text)
         {
             return;

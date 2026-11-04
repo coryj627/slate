@@ -50,4 +50,23 @@
     <ProjectReference Include="..\SlateUniffi\SlateUniffi.csproj" />
   </ItemGroup>
 
+  <!-- DS-1: the design's fonts, linked so history holds one copy (plan 46, DSD2),
+       and their licences, which the SIL OFL says must travel with them. The composite
+       sits beside the links because its "./#Cascadia Code" resolves against this folder.
+       A change under design/windows/fonts runs the lane (windows.yml's path list). -->
+  <PropertyGroup>
+    <DesignFonts>..\..\..\..\design\windows\fonts\</DesignFonts>
+  </PropertyGroup>
+  <ItemGroup>
+    <Resource Include="$(DesignFonts)CascadiaCode.ttf" Link="Fonts\CascadiaCode.ttf" />
+    <Resource Include="$(DesignFonts)CascadiaCodeItalic.ttf" Link="Fonts\CascadiaCodeItalic.ttf" />
+    <Resource Include="$(DesignFonts)CascadiaMono.ttf" Link="Fonts\CascadiaMono.ttf" />
+    <Resource Include="$(DesignFonts)CascadiaMonoItalic.ttf" Link="Fonts\CascadiaMonoItalic.ttf" />
+    <Resource Include="$(DesignFonts)OpenSans-Variable.ttf" Link="Fonts\OpenSans-Variable.ttf" />
+    <Resource Include="$(DesignFonts)OpenSans-Italic-Variable.ttf" Link="Fonts\OpenSans-Italic-Variable.ttf" />
+    <Resource Include="Fonts\SlateEditor.CompositeFont" />
+    <Content Include="$(DesignFonts)Cascadia-OFL.txt" Link="Licenses\Cascadia-OFL.txt" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="$(DesignFonts)OpenSans-OFL.txt" Link="Licenses\OpenSans-OFL.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

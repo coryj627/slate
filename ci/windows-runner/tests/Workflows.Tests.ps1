@@ -288,6 +288,13 @@ Describe 'the .NET SDK pin' {
     }
 }
 
+Describe 'windows.yml design paths' {
+    It 'a change to the fonts the app links runs the lane' {
+        # One list, on.push.paths: lane-changes.yml reads it for pull requests too (#1565).
+        ([regex]::Matches($windows, (Get-Lines @("      - 'design/windows/fonts/**'")))).Count | Should -Be 1
+    }
+}
+
 Describe 'a11y-check.yml' {
     # download-artifact extracts first and checks the digest after, so a mismatch fails the step with the
     # unverified files on disk (#1575). The score must never be computed, uploaded or posted from them.
