@@ -106,7 +106,7 @@ Spike 5 found two more:
 
 **ClearType needs the hint below the scroller.** Spike 4's setup, a hint on the opaque surface and the shadow on a sibling, gave no colour fringes at all in a real menu at 200%. The hint doesn't reach the text through the scroller's clip. With the hint on the items host as well, about 70% of a menu's text pixels carry fringes, as window text does. A host that clips loses them the same way, so the context menu's panel dropped Fluent's `ClipToBounds`. That's measured at 200% only, and why a clip does this wasn't established. The slide (radius 8, 3px vertical padding, 167ms) runs only when the system's animation setting allows it.
 
-A menu taller than the display scrolls, and Workspace's 25 rows at 40 are taller than a small one. WPF's menus don't handle Home or End, in Fluent's template or this one.
+A popup is larger than its surface by the shadow's room, and WPF's placement modes flip without flipping their offsets, so popups open from a `PlacementRectangle` (`MenuPlacement.cs`) whose sides are where the surface has to land. That keeps WPF's own flip, slide and height limit, which a custom placement loses. A menu taller than the display scrolls, and Workspace's 25 rows at 40 are taller than a small one. WPF's menus don't handle Home or End, in Fluent's template or this one.
 
 ## Tooltips
 

@@ -221,76 +221,68 @@ public sealed class MenuTemplateTests
         Assert.False(clips, "the panel clips, which turned the menu's ClearType off.");
     }
 
-    /// <summary>WPF's own modes flip without flipping their offsets, which left a surface
-    /// some 48 from its item at a display's edge, a gutter for the pointer to cross. These
-    /// are the surface's edges, past the shadow's room, in the device pixels WPF deals in.</summary>
+    /// <summary>WPF's modes flip without flipping their offsets, which left a surface some
+    /// 48 from its item at a display's edge. A popup opens from the rectangle's sides, so
+    /// these are where the surface lands on each. The item grows with text size.</summary>
     [Theory]
-    [InlineData(1.0)]
-    [InlineData(1.5)]
-    [InlineData(2.0)]
-    public void ABarMenusSurfaceMeetsItsItemBelowOrAbove(double scale)
+    [InlineData(60, 32)]
+    [InlineData(60, 72)]
+    public void ABarMenusSurfaceMeetsItsItemBelowOrAbove(double width, double height)
     {
-        var popup = new Size(300 * scale, 500 * scale);
-        var target = new Size(60 * scale, 32 * scale);
+        Rect rectangle = MenuPlacement.BarRectangle(new Size(width, height));
+        Thickness room = MenuPlacement.BarSurfaceMargin;
 
-        System.Windows.Controls.Primitives.CustomPopupPlacement[] candidates =
-            MenuPlacement.Candidates(MenuOpening.Vertical, popup, target, scale);
-
-        Assert.Equal(2, candidates.Length);
-        Thickness margin = MenuPlacement.SurfaceMargin;
-        double below = candidates[0].Point.Y + (margin.Top * scale);
-        Assert.Equal(target.Height + scale, below, 3);
-        double above = candidates[1].Point.Y + popup.Height - (margin.Bottom * scale);
-        Assert.Equal(-scale, above, 3);
-        Assert.All(candidates, candidate => Assert.Equal(0, candidate.Point.X + (margin.Left * scale), 3));
+        Assert.Equal(height + 1, rectangle.Bottom + room.Top, 3);
+        Assert.Equal(-1, rectangle.Top - room.Bottom, 3);
+        Assert.Equal(0, rectangle.Left + room.Left, 3);
+        Assert.Equal(width, rectangle.Right - room.Right, 3);
     }
 
     [Theory]
-    [InlineData(1.0)]
-    [InlineData(1.5)]
-    [InlineData(2.0)]
-    public void ASubmenusSurfaceMeetsItsRowOnEitherSide(double scale)
+    [InlineData(280, 34)]
+    [InlineData(600, 80)]
+    public void ASubmenusSurfaceMeetsItsRowOnEitherSide(double width, double height)
     {
-        var popup = new Size(300 * scale, 200 * scale);
-        var target = new Size(280 * scale, 34 * scale);
+        Rect rectangle = MenuPlacement.RowRectangle(new Size(width, height));
+        Thickness room = MenuPlacement.RowSurfaceMargin;
 
-        System.Windows.Controls.Primitives.CustomPopupPlacement[] candidates =
-            MenuPlacement.Candidates(MenuOpening.Horizontal, popup, target, scale);
-
-        Assert.Equal(2, candidates.Length);
-        Thickness margin = MenuPlacement.SurfaceMargin;
-        double right = candidates[0].Point.X + (margin.Left * scale);
-        Assert.Equal(target.Width, right, 3);
-        double left = candidates[1].Point.X + popup.Width - (margin.Right * scale);
-        Assert.Equal(0, left, 3);
+        Assert.Equal(width, rectangle.Right + room.Left, 3);
+        Assert.Equal(0, rectangle.Left - room.Right, 3);
 
         // The first row's highlight lines up with the row that opened it: the surface's
         // border and padding, and the row's own inset.
-        Assert.All(candidates, candidate => Assert.Equal(0, candidate.Point.Y + ((margin.Top + 1 + 3 + 3) * scale), 3));
+        Assert.Equal(0, rectangle.Top + room.Top + 1 + 3 + 3, 3);
+        Assert.Equal(height, rectangle.Bottom - room.Bottom - 1 - 3 - 3, 3);
     }
 
-    /// <summary>The numbers above only count if the popups use them, and the template
-    /// keeps the margin they allow for.</summary>
+    /// <summary>The numbers above only count if the popups use them. WPF's own modes are
+    /// what limit a long menu's height, so it scrolls instead of covering its bar item,
+    /// which a custom placement loses.</summary>
     [Fact]
-    public void EveryMenuPopupPlacesItselfAndKeepsTheMargin()
+    public void EveryMenuPopupOpensFromItsRectangleInWpfsOwnMode()
     {
-        (bool bar, bool row, Thickness margin) = InMenu(false, false, (window, top, rows) =>
+        (PlacementMode barMode, Rect bar, Size barItem, Thickness barRoom, PlacementMode rowMode, Thickness rowRoom) = InMenu(false, false, (window, top, rows) =>
         {
             MenuItem header = rows[3];
+            Realize(top);
             header.ApplyTemplate();
             var barPopup = (Popup)top.Template.FindName("PART_Popup", top);
             var rowPopup = (Popup)header.Template.FindName("PART_Popup", header);
-            var surface = (Control)Surface(top);
-            var border = (Border)surface.Template.FindName("Surface", surface);
+            var highlight = (FrameworkElement)top.Template.FindName("Highlight", top);
             return (
-                barPopup.Placement == PlacementMode.Custom && barPopup.CustomPopupPlacementCallback is not null && MenuPlacement.GetOpens(barPopup) == MenuOpening.Vertical,
-                rowPopup.Placement == PlacementMode.Custom && rowPopup.CustomPopupPlacementCallback is not null && MenuPlacement.GetOpens(rowPopup) == MenuOpening.Horizontal,
-                ((FrameworkElement)border.Parent).Margin);
+                barPopup.Placement,
+                barPopup.PlacementRectangle,
+                new Size(highlight.ActualWidth, highlight.ActualHeight),
+                ((Control)barPopup.Child).Padding,
+                rowPopup.Placement,
+                ((Control)rowPopup.Child).Padding);
         });
 
-        Assert.True(bar, "a bar item's popup isn't placed by MenuPlacement.");
-        Assert.True(row, "a row's popup isn't placed by MenuPlacement.");
-        Assert.Equal(MenuPlacement.SurfaceMargin, margin);
+        Assert.Equal(PlacementMode.Bottom, barMode);
+        Assert.Equal(MenuPlacement.BarRectangle(barItem), bar);
+        Assert.Equal(MenuPlacement.BarSurfaceMargin, barRoom);
+        Assert.Equal(PlacementMode.Right, rowMode);
+        Assert.Equal(MenuPlacement.RowSurfaceMargin, rowRoom);
     }
 
     [Theory]

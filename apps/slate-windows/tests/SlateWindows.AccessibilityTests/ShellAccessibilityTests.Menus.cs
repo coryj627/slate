@@ -13,7 +13,8 @@ public sealed partial class ShellAccessibilityTests
 {
     /// <summary>DS-4: a row's 40 pitch makes Workspace taller than a small display, so its
     /// last rows are reached by scrolling. This is launched because a hosted popup can't
-    /// take focus. Arrowing to a row that stays off screen would leave a reader lost.</summary>
+    /// take focus. Arrowing to a row that stays off screen would leave a reader lost, and
+    /// a menu that slides over its own bar item hides that item and its neighbours.</summary>
     [Fact]
     public void Menus_ALongMenuScrollsToItsLastRow()
     {
@@ -42,7 +43,16 @@ public sealed partial class ShellAccessibilityTests
             Window window = WaitForMainWindow(process, automation, Path.Combine(logs, "slate-windows.log"), TimeSpan.FromSeconds(30));
             window.SetForeground();
             WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(30)).Focus();
-            WaitForElement(window, "WorkspaceMenu", TimeSpan.FromSeconds(10)).Patterns.ExpandCollapse.Pattern.Expand();
+
+            // Halfway down the display, where the menu fits neither above nor below.
+            System.Drawing.Rectangle display = automation.GetDesktop().BoundingRectangle;
+            window.Patterns.Transform.Pattern.Move(window.BoundingRectangle.X, display.Top + (display.Height / 2) - 60);
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(500));
+            window.SetForeground();
+
+            AutomationElement opener = WaitForElement(window, "WorkspaceMenu", TimeSpan.FromSeconds(10));
+            opener.Patterns.ExpandCollapse.Pattern.Expand();
+            System.Drawing.Rectangle openerBounds = opener.BoundingRectangle;
 
             AutomationElement? row = null;
             for (int press = 0; press < 40; press++)
@@ -50,6 +60,10 @@ public sealed partial class ShellAccessibilityTests
                 PressKey(VirtualKeyShort.DOWN);
                 Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(150));
                 row = automation.FocusedElement();
+                System.Drawing.Rectangle shown = row?.BoundingRectangle ?? default;
+                Assert.False(
+                    shown.IntersectsWith(openerBounds),
+                    $"{row?.Properties.Name.ValueOrDefault} at {shown} covers its menu's item at {openerBounds}.");
                 if (row?.Properties.Name.ValueOrDefault == lastRow)
                 {
                     break;

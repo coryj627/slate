@@ -9,6 +9,9 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:local="clr-namespace:SlateWindows">
 
+    <local:MenuPlacementRectangleConverter x:Key="Slate.MenuBarPlacement" />
+    <local:MenuPlacementRectangleConverter x:Key="Slate.MenuRowPlacement" IsRow="True" />
+
     <!-- The same 2px ring as rows elsewhere, on the inset highlight: its inner edge sits
          1 out from the highlight, and its outer edge stays inside the row. -->
     <Style x:Key="Slate.MenuRowFocusVisual">
@@ -51,7 +54,7 @@
          pixels after. A host mustn't clip either, which is why the context menu's panel
          has dropped the ClipToBounds Fluent gives it. -->
     <ControlTemplate x:Key="Slate.MenuSurfaceTemplate" TargetType="ContentControl">
-        <Grid Margin="{x:Static local:MenuPlacement.SurfaceMargin}">
+        <Grid Margin="{TemplateBinding Padding}">
             <Border x:Name="Shadow"
                     Background="{DynamicResource FlyoutBackground}"
                     CornerRadius="8"
@@ -89,12 +92,19 @@
                        AllowsTransparency="True"
                        Focusable="False"
                        IsOpen="{TemplateBinding IsSubmenuOpen}"
-                       local:MenuPlacement.Opens="Vertical"
+                       Placement="Bottom"
                        PlacementTarget="{Binding ElementName=Highlight}"
                        PopupAnimation="None">
+                    <Popup.PlacementRectangle>
+                        <MultiBinding Converter="{StaticResource Slate.MenuBarPlacement}">
+                            <Binding ElementName="Highlight" Path="ActualWidth" />
+                            <Binding ElementName="Highlight" Path="ActualHeight" />
+                        </MultiBinding>
+                    </Popup.PlacementRectangle>
                     <ContentControl x:Name="MenuSurface"
                                     Focusable="False"
                                     IsTabStop="False"
+                                    Padding="{x:Static local:MenuPlacement.BarSurfaceMargin}"
                                     Template="{StaticResource Slate.MenuSurfaceTemplate}">
                         <ContentControl.RenderTransform>
                             <TranslateTransform />
@@ -212,12 +222,19 @@
                    AllowsTransparency="True"
                    Focusable="False"
                    IsOpen="{TemplateBinding IsSubmenuOpen}"
-                   local:MenuPlacement.Opens="Horizontal"
+                   Placement="Right"
                    PlacementTarget="{Binding ElementName=Highlight}"
                    PopupAnimation="None">
+                <Popup.PlacementRectangle>
+                    <MultiBinding Converter="{StaticResource Slate.MenuRowPlacement}">
+                        <Binding ElementName="Highlight" Path="ActualWidth" />
+                        <Binding ElementName="Highlight" Path="ActualHeight" />
+                    </MultiBinding>
+                </Popup.PlacementRectangle>
                 <ContentControl x:Name="MenuSurface"
                                 Focusable="False"
                                 IsTabStop="False"
+                                Padding="{x:Static local:MenuPlacement.RowSurfaceMargin}"
                                 Template="{StaticResource Slate.MenuSurfaceTemplate}">
                     <ContentControl.RenderTransform>
                         <TranslateTransform />
@@ -355,6 +372,7 @@
                     <ContentControl x:Name="MenuSurface"
                                     Focusable="False"
                                     IsTabStop="False"
+                                    Padding="{x:Static local:MenuPlacement.RowSurfaceMargin}"
                                     Template="{StaticResource Slate.MenuSurfaceTemplate}">
                         <ContentControl.RenderTransform>
                             <TranslateTransform />

@@ -1,91 +1,76 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Globalization;
 using System.Windows;
-using System.Windows.Controls.Primitives;
-using System.Windows.Media;
+using System.Windows.Data;
 
 namespace SlateWindows;
 
-/// <summary>Which way a menu's popup opens from the item it belongs to.</summary>
-public enum MenuOpening
-{
-    None,
-
-    /// <summary>A bar item's menu: below it, or above when the display runs out.</summary>
-    Vertical,
-
-    /// <summary>A row's submenu: beside it, on the right or on the left.</summary>
-    Horizontal,
-}
-
 /// <summary>
 /// DS-4: where a menu's popup goes. The popup is larger than the surface a reader sees,
-/// by the room the shadow takes, and WPF's own placement modes flip without flipping
-/// their offsets, so a surface at a display's edge landed some 48 away from its item,
-/// a gutter for the pointer to cross. Each candidate here puts the surface itself
-/// against the item, on the side it opens to. WPF chooses between them and slides the
-/// popup to fit, as it does for its own modes.
+/// by the room the shadow takes. WPF's placement modes flip without flipping their
+/// offsets, which left a surface some 48 away from its item at a display's edge. WPF's
+/// modes are kept, for their flipping, sliding and height limit, and placed against a
+/// rectangle instead of the item: the side a popup opens from is the rectangle's, so
+/// each side of it is where that side of the surface has to land.
 /// </summary>
 public static class MenuPlacement
 {
-    /// <summary>The surface's place inside its popup: the shadow's room
-    /// (<c>Slate.Shadow16</c>: blur 24, depth 8). The template reads this.</summary>
-    public static readonly Thickness SurfaceMargin = new(24, 16, 24, 32);
+    /// <summary>A bar menu's surface inside its popup. A popup below its item starts from
+    /// the rectangle's bottom, and one above ends at its top, so a rectangle exists only
+    /// if the top and bottom room together fit the item and two gaps. That's why this
+    /// has less room for the shadow than a row's menu, which opens to the side.</summary>
+    public static readonly Thickness BarSurfaceMargin = new(24, 8, 24, 26);
 
-    /// <summary>A bar menu's gap below its item.</summary>
+    /// <summary>A submenu's or a context menu's surface inside its popup: the shadow's
+    /// room (<c>Slate.Shadow16</c>: blur 24, depth 8).</summary>
+    public static readonly Thickness RowSurfaceMargin = new(24, 16, 24, 32);
+
+    /// <summary>A bar menu's gap from its item.</summary>
     private const double BarGap = 1;
 
     /// <summary>What lines a submenu's first highlight up with the row that opened it:
     /// the surface's border and padding, and the row's inset.</summary>
     private const double FirstRowInset = 1 + 3 + 3;
 
-    public static readonly DependencyProperty OpensProperty = DependencyProperty.RegisterAttached(
-        "Opens",
-        typeof(MenuOpening),
-        typeof(MenuPlacement),
-        new PropertyMetadata(MenuOpening.None, OnOpensChanged));
-
-    public static MenuOpening GetOpens(DependencyObject element) => (MenuOpening)element.GetValue(OpensProperty);
-
-    public static void SetOpens(DependencyObject element, MenuOpening value) => element.SetValue(OpensProperty, value);
-
-    /// <summary>The candidates, in device pixels as WPF's callback deals in them, and
-    /// relative to the target's top left. <paramref name="scale"/> is the display's.</summary>
-    internal static CustomPopupPlacement[] Candidates(MenuOpening opening, Size popup, Size target, double scale)
+    /// <summary>The rectangle a bar item's popup opens from, in the item's coordinates.</summary>
+    internal static Rect BarRectangle(Size item)
     {
-        double left = SurfaceMargin.Left * scale;
-        double top = SurfaceMargin.Top * scale;
-        double right = SurfaceMargin.Right * scale;
-        double bottom = SurfaceMargin.Bottom * scale;
-        if (opening == MenuOpening.Vertical)
-        {
-            double gap = BarGap * scale;
-            return
-            [
-                new CustomPopupPlacement(new Point(-left, target.Height + gap - top), PopupPrimaryAxis.Horizontal),
-                new CustomPopupPlacement(new Point(-left, bottom - gap - popup.Height), PopupPrimaryAxis.Horizontal),
-            ];
-        }
-
-        double y = -top - (FirstRowInset * scale);
-        return
-        [
-            new CustomPopupPlacement(new Point(target.Width - left, y), PopupPrimaryAxis.Vertical),
-            new CustomPopupPlacement(new Point(right - popup.Width, y), PopupPrimaryAxis.Vertical),
-        ];
+        Thickness room = BarSurfaceMargin;
+        double top = room.Bottom - BarGap;
+        double bottom = item.Height + BarGap - room.Top;
+        return new Rect(-room.Left, top, item.Width + room.Left + room.Right, Math.Max(0, bottom - top));
     }
 
-    private static void OnOpensChanged(DependencyObject element, DependencyPropertyChangedEventArgs e)
+    /// <summary>The rectangle a row's popup opens from, in the row's coordinates.</summary>
+    internal static Rect RowRectangle(Size row)
     {
-        if (element is not Popup popup)
+        Thickness room = RowSurfaceMargin;
+        double left = room.Right;
+        double right = row.Width - room.Left;
+        double above = room.Top + FirstRowInset;
+        double below = room.Bottom + FirstRowInset;
+        return new Rect(left, -above, Math.Max(0, right - left), row.Height + above + below);
+    }
+}
+
+/// <summary>A menu item's width and height, to the rectangle its popup opens from.</summary>
+internal sealed class MenuPlacementRectangleConverter : IMultiValueConverter
+{
+    public bool IsRow { get; set; }
+
+    public object Convert(object[] values, Type targetType, object parameter, CultureInfo culture)
+    {
+        if (values is not [double width, double height])
         {
-            return;
+            return Rect.Empty;
         }
 
-        var opening = (MenuOpening)e.NewValue;
-        popup.Placement = PlacementMode.Custom;
-        popup.CustomPopupPlacementCallback = (popupSize, targetSize, _) =>
-            Candidates(opening, popupSize, targetSize, VisualTreeHelper.GetDpi(popup.PlacementTarget ?? popup).DpiScaleX);
+        var size = new Size(width, height);
+        return IsRow ? MenuPlacement.RowRectangle(size) : MenuPlacement.BarRectangle(size);
     }
+
+    public object[] ConvertBack(object value, Type[] targetTypes, object parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
 }
