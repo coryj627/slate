@@ -2707,11 +2707,15 @@
                             <DataTemplate>
                                 <Grid Margin="4">
                                     <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="Auto" MinWidth="180" />
+                                        <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
+                                    <!-- DS-5: the 180 this column always was, times the text
+                                         size. Two notes with one name differ by their paths,
+                                         so a long name has to leave them room. -->
                                     <local:AutomationPresentationTextBlock Text="{Binding DisplayName}"
-                                                                           Margin="0,0,8,0"
+                                                                           Width="{Binding FontSize, RelativeSource={RelativeSource Self}, Converter={StaticResource QuickOpenNameWidthConverter}}"
+                                                                           Padding="0,0,8,0"
                                                                            TextTrimming="CharacterEllipsis"
                                                                            FontWeight="SemiBold" />
                                     <local:AutomationPresentationTextBlock Grid.Column="1"

@@ -5,6 +5,7 @@ using System.IO;
 using System.Security;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Media;
 using Microsoft.Win32;
 
@@ -253,10 +254,10 @@ internal sealed class ThemeManager : IDisposable
                 LoadDictionary(SlateRoot + "Slate.Calendar.xaml")["Slate.CalendarItemStyle"]));
             scaled.Setters.Add(new Setter(
                 Calendar.CalendarButtonStyleProperty,
-                TypeRamp.StyleOn((Style)fluent["DefaultCalendarButtonStyle"], TypeRamp.Body)));
+                CalendarButtonOn((Style)fluent["DefaultCalendarButtonStyle"], 70)));
             scaled.Setters.Add(new Setter(
                 Calendar.CalendarDayButtonStyleProperty,
-                TypeRamp.StyleOn((Style)fluent["DefaultCalendarDayButtonStyle"], TypeRamp.Body)));
+                CalendarButtonOn((Style)fluent["DefaultCalendarDayButtonStyle"], 60)));
             slate["DatePickerCalendarStyle"] = scaled;
         }
 
@@ -278,6 +279,21 @@ internal sealed class ThemeManager : IDisposable
                 LoadDictionary(SlateRoot + "Slate.Text.xaml"),
                 LoadDictionary(SlateRoot + "Slate.Menus.xaml"),
             ];
+    }
+
+    /// <summary>Fluent's date button with the ramp's size, and its largest size, which it
+    /// gives at 14, following the text: a month's short name can be longer than three
+    /// letters.</summary>
+    private static Style CalendarButtonOn(Style fluent, double largestAtBody)
+    {
+        Style style = TypeRamp.StyleOn(fluent, TypeRamp.Body);
+        var largest = new CappedShareConverter { Share = largestAtBody / TypeRamp.Body.Size };
+        foreach (DependencyProperty cap in new[] { FrameworkElement.MaxWidthProperty, FrameworkElement.MaxHeightProperty })
+        {
+            style.Setters.Add(new Setter(cap, new Binding(nameof(Control.FontSize)) { RelativeSource = RelativeSource.Self, Converter = largest }));
+        }
+
+        return style;
     }
 
     private void ApplyResources()

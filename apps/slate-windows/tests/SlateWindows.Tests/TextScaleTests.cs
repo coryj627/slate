@@ -276,6 +276,37 @@ public sealed partial class TextScaleTests
         Assert.True(cut.Length == 0, $"{cut.Length} cut:\n" + string.Join('\n', cut));
     });
 
+    /// <summary>Two notes with one long name differ only by their paths, so a name can't
+    /// take the whole row. At 100% its column is the 180 it always was.</summary>
+    [Theory]
+    [InlineData(1.0)]
+    [InlineData(2.25)]
+    public void AQuickOpenNameLeavesItsPathRoom(double factor) => OnOwnThread(() =>
+    {
+        const string LongName = "A very long file name that goes on and on and on and on and on and on and on";
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        host.Shell.Width = 1120;
+        host.Shell.Height = 720;
+        TypeRamp.Apply(RampOf(host.Shell), factor);
+        host.Settle();
+        var sheet = (FrameworkElement)host.Shell.FindName("QuickSwitcherOverlay");
+        _ = Open(sheet);
+        ListBox list = ShownShell.Descendants(sheet).OfType<ListBox>().First();
+        list.SetCurrentValue(UIElement.VisibilityProperty, Visibility.Visible);
+        list.SetCurrentValue(ItemsControl.ItemsSourceProperty, new[] { new QuickRow(LongName, "reference/one/two.md") });
+        host.Settle();
+        host.Settle();
+
+        TextBlock[] texts = [.. ShownShell.Descendants(list).OfType<TextBlock>()];
+        TextBlock name = texts.First(text => text.Text == LongName);
+        TextBlock path = texts.First(text => text.Text == "reference/one/two.md");
+        Assert.Equal(180 * factor, name.ActualWidth, 1);
+        Assert.True(path.ActualWidth >= 100, $"the path has {path.ActualWidth:F0} beside a name of {name.ActualWidth:F0}.");
+        Assert.True(
+            path.TransformToAncestor(list).TransformBounds(new Rect(0, 0, path.ActualWidth, path.ActualHeight)).Right <= list.ActualWidth + 0.5,
+            "the path runs past the list.");
+    });
+
     private sealed record QuickRow(string DisplayName, string Path);
 
     /// <summary>The palette's rows scrolled sideways, its label couldn't wrap, and its
@@ -694,15 +725,21 @@ public sealed partial class TextScaleTests
     /// weekday labels and date buttons follow the ramp in every view, nothing is cut off,
     /// and its navigation glyphs stay their size.</summary>
     [Theory]
-    [InlineData(CalendarMode.Month, 1.0, 50)]
-    [InlineData(CalendarMode.Year, 1.0, 13)]
-    [InlineData(CalendarMode.Decade, 1.0, 13)]
-    [InlineData(CalendarMode.Month, 2.25, 50)]
-    [InlineData(CalendarMode.Year, 2.25, 13)]
-    [InlineData(CalendarMode.Decade, 2.25, 13)]
-    public void TheOpenCalendarFollowsTheFactor(CalendarMode mode, double factor, int atLeast) => OnOwnThread(() =>
+    [InlineData(CalendarMode.Month, 1.0, 50, "en-US")]
+    [InlineData(CalendarMode.Year, 1.0, 13, "en-US")]
+    [InlineData(CalendarMode.Decade, 1.0, 13, "en-US")]
+    [InlineData(CalendarMode.Month, 2.25, 50, "en-US")]
+    [InlineData(CalendarMode.Year, 2.25, 13, "en-US")]
+    [InlineData(CalendarMode.Decade, 2.25, 13, "en-US")]
+    [InlineData(CalendarMode.Month, 2.25, 50, "ru-RU")]
+    [InlineData(CalendarMode.Year, 2.25, 13, "ru-RU")]
+    public void TheOpenCalendarFollowsTheFactor(CalendarMode mode, double factor, int atLeast, string language) => OnOwnThread(() =>
     {
-        var picker = new DatePicker { SelectedDate = new DateTime(2026, 11, 4) };
+        var picker = new DatePicker
+        {
+            SelectedDate = new DateTime(2026, 11, 4),
+            Language = System.Windows.Markup.XmlLanguage.GetLanguage(language),
+        };
         var window = new Window
         {
             Content = picker,
@@ -747,8 +784,8 @@ public sealed partial class TextScaleTests
                 label.FontSize == TypeRamp.Body.Size * factor,
                 $"\"{label.Text}\" is {label.FontSize} at factor {factor}."));
             string[] clipped = [.. labels
-                .Where(label => LayoutInformation.GetLayoutClip(label) is not null)
-                .Select(label => $"\"{label.Text}\" at {label.FontSize}")];
+                .Where(label => WhyCut(label, calendar) is not null)
+                .Select(label => $"\"{label.Text}\" at {label.FontSize}, by {WhyCut(label, calendar)}")];
             Assert.True(clipped.Length == 0, $"{clipped.Length} clipped:\n" + string.Join('\n', clipped));
         }
         finally
