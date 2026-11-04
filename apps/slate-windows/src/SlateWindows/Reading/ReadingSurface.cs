@@ -81,12 +81,14 @@ internal sealed class ReadingSurface : RichTextBox
         // this document instead (ApplyBuiltDocument).
         Document = new FlowDocument
         {
-            FontSize = 15,
-            PagePadding = new Thickness(16),
+            PagePadding = new Thickness(PagePaddingFloor),
             ColumnWidth = double.PositiveInfinity,
         };
         Document.SetResourceReference(
             FlowDocument.FontFamilyProperty, "Slate.ReadingFontFamily");
+        ReadingDocumentBuilder.ApplyBodyType(Document);
+        SetResourceReference(BodySizeProperty, TypeRamp.ReaderBody.SizeKey);
+        SizeChanged += (_, _) => FitMeasure();
 
         // Activation: clicks and Enter on links/cards route by the run
         // kind the builder STAMPED on the element — never by parsing
@@ -1404,6 +1406,41 @@ internal sealed class ReadingSurface : RichTextBox
     /// text, each such paragraph's fenced source in its speech's place;
     /// any other selection copies as WPF builds it.
     /// </summary>
+    /// <summary>DS-3: the design's measure, in characters. <c>ColumnWidth</c> stays
+    /// infinite, because multi-column reading order is a hazard, so margins hold it:
+    /// that keeps the scroll bar at the pane's edge, needs no rebuild, and can't move
+    /// the caret.</summary>
+    private const int MeasureCharacters = 72;
+
+    private const double PagePaddingFloor = 16;
+
+    /// <summary>The body's size, watched so the measure follows it.</summary>
+    private static readonly DependencyProperty BodySizeProperty = DependencyProperty.Register(
+        "BodySize",
+        typeof(double),
+        typeof(ReadingSurface),
+        new PropertyMetadata(0d, (surface, _) => ((ReadingSurface)surface).FitMeasure()));
+
+    private void FitMeasure()
+    {
+        double side = Math.Max(PagePaddingFloor, (ActualWidth - MeasureWidth()) / 2);
+        var padding = new Thickness(side, PagePaddingFloor, side, PagePaddingFloor);
+        if (Document.PagePadding != padding)
+        {
+            Document.PagePadding = padding;
+        }
+    }
+
+    /// <summary>A <c>ch</c> is the advance of a zero, in the face and size on show.</summary>
+    private double MeasureWidth() => MeasureCharacters * new System.Windows.Media.FormattedText(
+        "0",
+        System.Globalization.CultureInfo.InvariantCulture,
+        FlowDirection.LeftToRight,
+        new System.Windows.Media.Typeface(Document.FontFamily, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal),
+        Document.FontSize,
+        System.Windows.Media.Brushes.Black,
+        System.Windows.Media.VisualTreeHelper.GetDpi(this).PixelsPerDip).WidthIncludingTrailingWhitespace;
+
     /// <summary>DS-1: WPF's XAML formats name each font by its pack URI, and only
     /// another WPF rich text box reads them. Plain text and RTF serve every
     /// recipient, that box included.</summary>
