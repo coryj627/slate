@@ -15,7 +15,7 @@ namespace SlateWindows.Reading;
 /// early. This gives them the family's own name instead. A copy's XAML formats
 /// carry it too, so <see cref="ReadingSurface"/> doesn't offer them.
 /// </summary>
-internal static partial class ShippedFontNames
+internal static class ShippedFontNames
 {
     private static readonly Lazy<string[]> Sources = new(() =>
     [
@@ -24,13 +24,13 @@ internal static partial class ShippedFontNames
     ]);
 
     /// <summary>A family reference: the URI, the family's first name, and any
-    /// fallbacks, up to whatever ends the entry.</summary>
-    [GeneratedRegex(@"pack://[^#{}]*#([^,;{}]+)[^;{}]*", RegexOptions.CultureInvariant)]
-    private static partial Regex PackFamily();
+    /// fallbacks, up to whatever ends the entry. Not a generated regex, because the
+    /// censuses compile the shell's source without the generator.</summary>
+    private static readonly Regex PackFamily = new(@"pack://[^#{}]*#([^,;{}]+)[^;{}]*", RegexOptions.CultureInvariant);
 
     /// <summary><paramref name="text"/> with each family reference replaced by
     /// its name.</summary>
-    internal static string Named(string text) => PackFamily().Replace(text, "$1");
+    internal static string Named(string text) => PackFamily.Replace(text, "$1");
 
     /// <summary><paramref name="rtf"/> with the family references in its font table
     /// replaced by their names. Only there: the same characters in a note's text
