@@ -7,6 +7,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Media.Effects;
 using System.Windows.Threading;
+using System.Xml.Linq;
 
 namespace SlateWindows.Tests;
 
@@ -285,6 +286,9 @@ public sealed class MenuTemplateTests
         Assert.Equal(MenuPlacement.RowSurfaceMargin, rowRoom);
     }
 
+    /// <summary>A row outside a menu bar: it opens with no menu mode to enter. A bar
+    /// item's slide wasn't seen on CI, whose session has no foreground, so this reads the
+    /// row's, in the frame it opens.</summary>
     [Theory]
     [InlineData(false, false)]
     [InlineData(true, true)]
@@ -293,18 +297,42 @@ public sealed class MenuTemplateTests
         Func<bool> saved = ShellMotion.Current.ReadForTests(() => animates);
         try
         {
-            bool moving = InMenu(false, false, (window, top, rows) =>
+            (bool open, bool moving) = InMenu(false, false, (window, top, rows) =>
             {
-                var surface = (FrameworkElement)Surface(top);
-                return ((TranslateTransform)surface.RenderTransform).HasAnimatedProperties;
+                var row = new MenuItem { Header = "Preamble", Items = { new MenuItem { Header = "Inner" } } };
+                ((DockPanel)window.Content).Children.Add(row);
+                Pump();
+                row.IsSubmenuOpen = true;
+                var surface = (FrameworkElement)Surface(row);
+                return (row.IsSubmenuOpen, ((TranslateTransform)surface.RenderTransform).HasAnimatedProperties);
             });
 
+            Assert.True(open, "The row's submenu didn't open, so nothing asked for its slide.");
             Assert.Equal(slides, moving);
         }
         finally
         {
             ShellMotion.Current.ReadForTests(saved);
         }
+    }
+
+    /// <summary>The bar's menu and a context menu slide like a row's, and a hosted fact
+    /// can't open either on CI, so each says here that it asks first.</summary>
+    [Fact]
+    public void EverySlideAsksWhetherTheShellAnimates()
+    {
+        XDocument menus = XDocument.Load(Path.Combine(SourceText.ShellSourceRoot(), "Themes", "Slate.Menus.xaml"));
+        XElement[] slides = [.. menus.Descendants().Where(element => element.Name.LocalName == "BeginStoryboard")];
+
+        Assert.Equal(3, slides.Length);
+        Assert.All(slides, slide =>
+        {
+            XElement trigger = slide.Ancestors().First(ancestor => ancestor.Name.LocalName == "MultiDataTrigger");
+            Assert.Contains(
+                trigger.Descendants().Where(element => element.Name.LocalName == "Condition"),
+                condition => (string?)condition.Attribute("Binding") == "{Binding Animates, Source={x:Static local:ShellMotion.Current}}"
+                    && (string?)condition.Attribute("Value") == "True");
+        });
     }
 
     private static T InMenu<T>(bool dark, bool highContrast, Func<Window, MenuItem, MenuItem[], T> body) =>

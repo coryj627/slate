@@ -2545,6 +2545,71 @@
     "Surface": "Data grids (W4-1 substrate)"
   },
   {
+    "Source": "Themes/Slate.Menus.xaml",
+    "Expression": "Check",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "Themes/Slate.Menus.xaml",
+    "Expression": "Chevron",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "Themes/Slate.Menus.xaml",
+    "Expression": "HeaderHost",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "Themes/Slate.Menus.xaml",
+    "Expression": "Highlight",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "Themes/Slate.Menus.xaml",
+    "Expression": "Icon",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "Themes/Slate.Menus.xaml",
+    "Expression": "InputGestureText",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "Themes/Slate.Menus.xaml",
+    "Expression": "ItemsPresenter",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "Themes/Slate.Menus.xaml",
+    "Expression": "Leading",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "Themes/Slate.Menus.xaml",
+    "Expression": "MenuSurface",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "Themes/Slate.Menus.xaml",
+    "Expression": "PART_Popup",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "Themes/Slate.Menus.xaml",
+    "Expression": "Row",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "Themes/Slate.Menus.xaml",
+    "Expression": "Shadow",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "Themes/Slate.Menus.xaml",
+    "Expression": "Surface",
+    "Surface": "Main window and menu bar"
+  },
+  {
     "Source": "WorkspaceTemplates.xaml",
     "Expression": "EditorActivateAtCursor",
     "Surface": "Editor semantic menu and popover"

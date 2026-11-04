@@ -329,6 +329,7 @@
     "xaml-binding MainWindow.xaml TextBox in BuilderConditions#0 IsEnabled": "guard: BuilderConditions",
     "xaml-trigger MainWindow.xaml WelcomeRoot IsEnabled": "exempt: disabled only while a modal overlay opens over the welcome view and takes the keys itself",
     "xaml-trigger MainWindow.xaml WorkspaceRoot IsEnabled": "exempt: disabled only while a modal overlay (Quick Open, Search, the palette) opens and takes the keys itself",
+    "xaml-trigger Slate.Menus.xaml ControlTemplate:Slate.MenuRowTemplate Visibility": "exempt: a row's template shows and hides its own icon, check, gesture text and chevron, none of which can take the keys, which stay on the row (MenuTemplateTests.EveryRowKindStartsItsLabelInOneColumn)",
     "xaml-trigger WorkspaceTemplates.xaml Button in PropertyRowTemplate#0 IsEnabled": "guard: ContentPaneBorder",
     "xaml-trigger WorkspaceTemplates.xaml Button in PropertyRowTemplate#2 IsEnabled": "guard: ContentPaneBorder",
     "xaml-trigger WorkspaceTemplates.xaml WorkspaceSplitHandle Visibility": "guard: ContentPaneBorder",
