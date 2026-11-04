@@ -111,7 +111,6 @@ public sealed class FontPackagingTests
         double measured = InRealWindow(dark: false, highContrast: false, window =>
         {
             var editor = new SlateTextEditor { Text = "first\nsecond\n", FontSize = size };
-            editor.SetResourceReference(Control.FontFamilyProperty, EditorKey);
             window.Content = editor;
             window.UpdateLayout();
             Pump();
@@ -144,7 +143,6 @@ public sealed class FontPackagingTests
         {
             const string text = "rest bold italic";
             var editor = new SlateTextEditor { Text = text, FontSize = 14 };
-            editor.SetResourceReference(Control.FontFamilyProperty, EditorKey);
             editor.TextArea.TextView.LineTransformers.Add(new WeightAndStyle(
                 text.IndexOf("bold", StringComparison.Ordinal),
                 text.IndexOf("italic", StringComparison.Ordinal),
@@ -185,7 +183,6 @@ public sealed class FontPackagingTests
         {
             using var session = new AvalonDocumentBufferSession(text, _ => { });
             var editor = new SlateTextEditor { Document = session.Document, HighlightSession = session, FontSize = 14 };
-            editor.SetResourceReference(Control.FontFamilyProperty, EditorKey);
             window.Content = editor;
             window.UpdateLayout();
             Pump();
@@ -202,7 +199,7 @@ public sealed class FontPackagingTests
 
             // The control: Cascadia Mono has no such alternates, so a check that
             // can't tell the two apart proves nothing.
-            editor.SetResourceReference(Control.FontFamilyProperty, CodeKey);
+            editor.TextArea.TextView.SetResourceReference(TextElement.FontFamilyProperty, CodeKey);
             window.UpdateLayout();
             Pump();
             return (code, Joined(RunsOf(editor, line), op));
@@ -260,32 +257,104 @@ public sealed class FontPackagingTests
 
     /// <summary>WPF writes a family's source into a copy's RTF font table as the font's
     /// name. A pack URI means nothing to Word, which would show it in its font box,
-    /// and the URI's semicolon ends the table's entry early.</summary>
+    /// and the URI's semicolon ends the table's entry early. This is WPF's own copy
+    /// path, stopped before the clipboard, and its note holds text that looks just
+    /// like a font's address, which belongs to the note.</summary>
     [Fact]
     public void ACopyNamesFontsAnotherAppCanFind()
     {
-        string rtf = InRealWindow(dark: false, highContrast: false, window =>
+        const string lookalike = "Plain pack://application:,,,/SlateWindows;component/Fonts/#Open Sans, Segoe UI and {braces} and ";
+        (string[] formats, string rtf, string pasted) = InRealWindow(dark: false, highContrast: false, window =>
         {
-            var surface = new ReadingSurface();
-            window.Content = surface;
-            var code = new Run("code");
-            code.SetResourceReference(TextElement.FontFamilyProperty, CodeKey);
-            surface.Document.Blocks.Add(new Paragraph { Inlines = { new Run("Plain words and "), code } });
-            window.UpdateLayout();
-            Pump();
+            ReadingSurface surface = SurfaceWithCode(window, lookalike);
+            surface.SelectAll();
+            IDataObject? copied = null;
+            DataObject.AddCopyingHandler(surface, (_, e) =>
+            {
+                copied = e.DataObject;
+                e.CancelCommand();
+            });
+            surface.Copy();
+            Assert.NotNull(copied);
 
-            using var saved = new MemoryStream();
-            new TextRange(surface.Document.ContentStart, surface.Document.ContentEnd).Save(saved, DataFormats.Rtf);
-            var copied = new DataObject(DataFormats.Rtf, System.Text.Encoding.ASCII.GetString(saved.ToArray()));
-            Assert.Contains("pack://", (string)copied.GetData(DataFormats.Rtf), StringComparison.Ordinal);
-
-            surface.RaiseEvent(new DataObjectCopyingEventArgs(copied, isDragDrop: false));
-            return (string)copied.GetData(DataFormats.Rtf);
+            string text = (string)copied.GetData(DataFormats.Rtf);
+            var recipient = new FlowDocument();
+            var range = new TextRange(recipient.ContentStart, recipient.ContentEnd);
+            using var bytes = new MemoryStream(System.Text.Encoding.ASCII.GetBytes(text));
+            range.Load(bytes, DataFormats.Rtf);
+            return (copied.GetFormats(), text, range.Text);
         });
 
+        Assert.Contains(DataFormats.UnicodeText, formats);
+        Assert.Contains(DataFormats.Rtf, formats);
+        Assert.DoesNotContain(DataFormats.Xaml, formats);
+        Assert.DoesNotContain(DataFormats.XamlPackage, formats);
+
+        string table = rtf[rtf.IndexOf(@"{\fonttbl", StringComparison.Ordinal)..rtf.IndexOf(@"{\colortbl", StringComparison.Ordinal)];
+        Assert.DoesNotContain("pack://", table, StringComparison.Ordinal);
+        Assert.Contains(@"\fcharset0 Open Sans;", table, StringComparison.Ordinal);
+        Assert.Contains(@"\fcharset0 Cascadia Mono;", table, StringComparison.Ordinal);
+        Assert.Contains(lookalike, pasted, StringComparison.Ordinal);
+    }
+
+    /// <summary>A drag asks the same two questions of the surface as a copy does.</summary>
+    [Fact]
+    public void ADragNamesFontsAnotherAppCanFind()
+    {
+        (bool xaml, bool package, string rtf) = InRealWindow(dark: false, highContrast: false, window =>
+        {
+            ReadingSurface surface = SurfaceWithCode(window, "Plain words and ");
+            using var saved = new MemoryStream();
+            new TextRange(surface.Document.ContentStart, surface.Document.ContentEnd).Save(saved, DataFormats.Rtf);
+            var dragged = new DataObject(DataFormats.Rtf, System.Text.Encoding.ASCII.GetString(saved.ToArray()));
+            surface.RaiseEvent(new DataObjectCopyingEventArgs(dragged, isDragDrop: true));
+
+            var asksXaml = new DataObjectSettingDataEventArgs(dragged, DataFormats.Xaml);
+            surface.RaiseEvent(asksXaml);
+            var asksPackage = new DataObjectSettingDataEventArgs(dragged, DataFormats.XamlPackage);
+            surface.RaiseEvent(asksPackage);
+            return (asksXaml.CommandCancelled, asksPackage.CommandCancelled, (string)dragged.GetData(DataFormats.Rtf));
+        });
+
+        Assert.True(xaml);
+        Assert.True(package);
         Assert.DoesNotContain("pack://", rtf, StringComparison.Ordinal);
-        Assert.Contains(@"\fcharset0 Open Sans;", rtf, StringComparison.Ordinal);
-        Assert.Contains(@"\fcharset0 Cascadia Mono;", rtf, StringComparison.Ordinal);
+    }
+
+    /// <summary>AvalonEdit hands the text area's family to the native IME as a LOGFONT
+    /// face name, cut at 31 characters. A pack URI there would name no font at all, so
+    /// the area keeps a face Windows has while the view inside it draws the text.</summary>
+    [Fact]
+    public void TheImeAsksForAFontWindowsHas()
+    {
+        (string face, bool installed, double lineHeight) = InRealWindow(dark: false, highContrast: false, window =>
+        {
+            var editor = new SlateTextEditor { Text = "first\n", FontSize = 14 };
+            window.Content = editor;
+            window.UpdateLayout();
+            Pump();
+            string source = editor.TextArea.FontFamily.Source;
+            return (
+                source,
+                Fonts.SystemFontFamilies.Any(family => family.Source == source),
+                editor.TextArea.TextView.DefaultLineHeight);
+        });
+
+        Assert.True(face.Length < 32, $"{face} doesn't fit a LOGFONT.");
+        Assert.True(installed, $"{face} isn't a font Windows has.");
+        Assert.Equal(22, lineHeight, 2);
+    }
+
+    private static ReadingSurface SurfaceWithCode(Window window, string text)
+    {
+        var surface = new ReadingSurface();
+        window.Content = surface;
+        var code = new Run("code");
+        code.SetResourceReference(TextElement.FontFamilyProperty, CodeKey);
+        surface.Document.Blocks.Add(new Paragraph { Inlines = { new Run(text), code } });
+        window.UpdateLayout();
+        Pump();
+        return surface;
     }
 
     /// <summary>NVDA reads UI Automation's font name under Report Font Name, and WPF
@@ -296,14 +365,7 @@ public sealed class FontPackagingTests
     {
         (object? plain, object? code, object? both, string? found) = InRealWindow(dark: false, highContrast: false, window =>
         {
-            var surface = new ReadingSurface();
-            window.Content = surface;
-            var run = new Run("code");
-            run.SetResourceReference(TextElement.FontFamilyProperty, CodeKey);
-            surface.Document.Blocks.Add(new Paragraph { Inlines = { new Run("Plain words and "), run } });
-            window.UpdateLayout();
-            Pump();
-
+            ReadingSurface surface = SurfaceWithCode(window, "Plain words and ");
             var peer = System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(surface);
             var text = (ITextProvider)peer.GetPattern(System.Windows.Automation.Peers.PatternInterface.Text);
             ITextRangeProvider document = text.DocumentRange;

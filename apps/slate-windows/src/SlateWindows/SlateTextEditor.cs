@@ -61,6 +61,12 @@ internal sealed class SlateTextEditor : TextEditor
     {
         Loaded += SlateTextEditor_Loaded;
         Unloaded += SlateTextEditor_Unloaded;
+        // DS-1: the view draws the text in the shipped composite family, which is
+        // what makes the editor 14/22. AvalonEdit also hands the text area's family
+        // to the native IME as a face name, which a pack URI can't be, so the area
+        // keeps a font Windows has.
+        TextArea.TextView.SetResourceReference(System.Windows.Documents.TextElement.FontFamilyProperty, "Slate.EditorFontFamily");
+        TextArea.SetResourceReference(FontFamilyProperty, "Slate.EditorImeFontFamily");
         // #1758: AvalonEdit's default link colour is pure blue, |Lc| 15.6 on
         // the dark editor. A URL is a link, so it takes the link role.
         TextArea.TextView.SetResourceReference(

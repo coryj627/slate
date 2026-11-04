@@ -70,6 +70,7 @@ internal sealed class ReadingSurface : RichTextBox
         AutomationProperties.SetName(this, "Reading view");
         AutomationProperties.SetHelpText(this, Commands.NavigationHelp.Reading);
         DataObject.AddCopyingHandler(this, OnCopying);
+        DataObject.AddSettingDataHandler(this, OnSettingData);
 
         // ONE document for the surface's whole life. Replacing the
         // Document property on a live RichTextBox breaks the UIA
@@ -1403,11 +1404,22 @@ internal sealed class ReadingSurface : RichTextBox
     /// text, each such paragraph's fenced source in its speech's place;
     /// any other selection copies as WPF builds it.
     /// </summary>
+    /// <summary>DS-1: WPF's XAML formats name each font by its pack URI, and only
+    /// another WPF rich text box reads them. Plain text and RTF serve every
+    /// recipient, that box included.</summary>
+    private static void OnSettingData(object sender, DataObjectSettingDataEventArgs e)
+    {
+        if (e.Format == DataFormats.Xaml || e.Format == DataFormats.XamlPackage)
+        {
+            e.CancelCommand();
+        }
+    }
+
     private void OnCopying(object sender, DataObjectCopyingEventArgs e)
     {
         if (e.DataObject.GetData(DataFormats.Rtf) is string rtf)
         {
-            e.DataObject.SetData(DataFormats.Rtf, ShippedFontNames.Named(rtf));
+            e.DataObject.SetData(DataFormats.Rtf, ShippedFontNames.InRtfFontTable(rtf));
         }
 
         if (CopyTextOf(Selection.Start, Selection.End) is not { } text)
