@@ -83,7 +83,7 @@ internal sealed class GraphDiagramView : FrameworkElement
     private readonly HashSet<ulong> _labelled = [];
     private readonly Dictionary<ulong, string> _fillKeys = [];
     private readonly Dictionary<ulong, (double Width, double[]? Dash)> _ringStyles = [];
-    private CanvasTextScaleService? _textScale;
+    private TextScaleService? _textScale;
     private readonly ShellPopupGate _tooltipGate;
     private GraphDocumentViewModel? _model;
     private GraphDiagramModel? _diagram;
@@ -220,25 +220,36 @@ internal sealed class GraphDiagramView : FrameworkElement
 
     internal bool IsSubscribedToThemeForTests => _themeSubscribed;
 
-    /// <summary>The surface's unload: the model dropped, the owned text-scale
-    /// service disposed (Term T4: one per renderer, disposed at Shutdown).</summary>
+    /// <summary>The surface's unload: the model dropped, and the view off the app's
+    /// text-scale service, which outlives it (DS-5).</summary>
     internal void Shutdown()
     {
         Model = null;
-        _textScale?.Dispose();
-        _textScale = null;
+        if (_textScale is { } service)
+        {
+            service.Changed -= Redraw;
+            _textScale = null;
+        }
     }
 
-    private CanvasTextScaleService TextScale
+    /// <summary>Whether a text size change reaches this view.</summary>
+    internal bool IsAttachedToTextScaleForTests => _textScale is not null;
+
+    internal double TextScaleFactorForTests => TextScaleFactor;
+
+    /// <summary>The factor to draw at. Reading it attaches the view, and it's a redraw
+    /// that reads it, so a view coming back has caught up by then.</summary>
+    private double TextScaleFactor
     {
         get
         {
-            if (_textScale is null)
+            if (_textScale is null && TextScaleService.Current is { } service)
             {
-                _textScale = new CanvasTextScaleService();
-                _textScale.Changed += Redraw;
+                _textScale = service;
+                service.Changed += Redraw;
             }
-            return _textScale;
+
+            return TextScaleService.CurrentFactor;
         }
     }
 
@@ -927,7 +938,7 @@ internal sealed class GraphDiagramView : FrameworkElement
         GraphDisplay display = Display;
         bool showLabels = _viewport.Zoom >= display.TextFadeZoom;
         _labelsShown = showLabels;
-        double fontSize = LabelFontSize * TextScale.Factor * _viewport.Zoom;
+        double fontSize = LabelFontSize * TextScaleFactor * _viewport.Zoom;
         Brush labelBrush = styles.Brush(LabelBrushKey);
         var typeface = new Typeface(TypeRamp.TextFamily, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal);
         double dip = VisualTreeHelper.GetDpi(this).PixelsPerDip;

@@ -29,9 +29,7 @@ internal sealed class ThemeManager : IDisposable
         "pack://application:,,,/SlateWindows;component/Themes/";
 
     private readonly Application _application;
-    // DS-2: making unset text explicit stops it following Windows Text size through
-    // SystemFonts, so a reader at 225% keeps their size from here, read at startup.
-    private readonly double _textScale = Canvas.CanvasTextScaleService.ReadFactor();
+    private readonly TextScaleService? _textScale;
     private ResourceDictionary[] _resources = [];
     private SlateTheme _theme;
 
@@ -75,7 +73,13 @@ internal sealed class ThemeManager : IDisposable
     {
         _application = application;
         _theme = theme;
+        _textScale = TextScaleService.Current;
         ApplyResources();
+        if (_textScale is not null)
+        {
+            _textScale.Changed += OnTextScaleChanged;
+        }
+
         SystemParameters.StaticPropertyChanged += SystemParameters_StaticPropertyChanged;
         SystemEvents.UserPreferenceChanged += SystemEvents_UserPreferenceChanged;
     }
@@ -141,9 +145,18 @@ internal sealed class ThemeManager : IDisposable
 
     public void Dispose()
     {
+        if (_textScale is not null)
+        {
+            _textScale.Changed -= OnTextScaleChanged;
+        }
+
         SystemParameters.StaticPropertyChanged -= SystemParameters_StaticPropertyChanged;
         SystemEvents.UserPreferenceChanged -= SystemEvents_UserPreferenceChanged;
     }
+
+    /// <summary>The ramp is always the first layer. Writing to it is what makes a change
+    /// live, and it isn't a theme change, so <see cref="ResourcesChanged"/> stays quiet.</summary>
+    private void OnTextScaleChanged() => TypeRamp.Apply(_resources[0], _textScale!.Factor);
 
     private void SystemEvents_UserPreferenceChanged(
         object sender,
@@ -251,7 +264,7 @@ internal sealed class ThemeManager : IDisposable
 
     private void ApplyResources()
     {
-        ResourceDictionary[] layers = DictionariesFor(_theme, SystemParameters.HighContrast, _textScale);
+        ResourceDictionary[] layers = DictionariesFor(_theme, SystemParameters.HighContrast, TextScaleService.CurrentFactor);
 
         var dictionaries = _application.Resources.MergedDictionaries;
         foreach (ResourceDictionary previous in _resources)

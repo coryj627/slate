@@ -52,6 +52,7 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
     private readonly Action<A11yEvent> _announce;
     private readonly IEditorSpellingService _spellingService;
     private readonly AppPreferencesStore? _preferencesStore;
+    private readonly TextScaleService? _textScale;
     private double _fontSize = ActualFontSize;
     private bool _isSpellCheckEnabled;
     private bool _openReadingLinksInNewTab;
@@ -142,6 +143,12 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
     {
         _announce = announce ?? (_ => { });
         _preferencesStore = preferencesStore;
+        _textScale = TextScaleService.Current;
+        if (_textScale is not null)
+        {
+            _textScale.Changed += OnTextScaleChanged;
+        }
+
         // No store (tab-owned instances in tests) = the same default a
         // fresh install decodes to.
         AppPreferencesState? loaded = preferencesStore?.Load();
@@ -299,6 +306,10 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
             _ => FontSize > MinimumFontSize);
     }
 
+    /// <summary>DS-5: what's drawn. <see cref="FontSize"/> stays the size the reader
+    /// chose, in points, with its bounds and its sentence.</summary>
+    public double EffectiveFontSize => _fontSize * TextScaleService.CurrentFactor;
+
     public double FontSize
     {
         get => _fontSize;
@@ -307,6 +318,7 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
             double clamped = Math.Clamp(value, MinimumFontSize, MaximumFontSize);
             if (SetField(ref _fontSize, clamped))
             {
+                OnPropertyChanged(nameof(EffectiveFontSize));
                 ((RelayCommand)ZoomInCommand).RaiseCanExecuteChanged();
                 ((RelayCommand)ZoomOutCommand).RaiseCanExecuteChanged();
                 _announce(new A11yEvent.HostComposed(
@@ -532,8 +544,15 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
 
     internal IEditorSpellingService SpellingService => _spellingService;
 
+    private void OnTextScaleChanged() => OnPropertyChanged(nameof(EffectiveFontSize));
+
     public void Dispose()
     {
+        if (_textScale is not null)
+        {
+            _textScale.Changed -= OnTextScaleChanged;
+        }
+
         _spellingService.Dispose();
     }
 }

@@ -6,6 +6,7 @@ using System.Windows.Automation;
 using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Shapes;
 
 namespace SlateWindows.Reading;
@@ -26,6 +27,15 @@ internal sealed class ReadingMathElement : ContentControl
 
     private static readonly ControlTemplate DrawingTemplate = NewDrawingTemplate();
 
+    /// <summary>DS-5: the body's size, watched so a drawing follows it. A drawing is
+    /// geometry at WPF-Math's fixed size, so text size can't reach it any other way, and
+    /// a live change can't rebuild the document.</summary>
+    private static readonly DependencyProperty BodySizeProperty = DependencyProperty.Register(
+        "BodySize",
+        typeof(double),
+        typeof(ReadingMathElement),
+        new PropertyMetadata(0d, (element, _) => ((ReadingMathElement)element).ScaleDrawing()));
+
     public ReadingMathElement(
         string speech, string mathMl, string source, string braille)
     {
@@ -34,6 +44,7 @@ internal sealed class ReadingMathElement : ContentControl
         Source = source;
         Braille = braille;
         Focusable = true;
+        SetResourceReference(BodySizeProperty, TypeRamp.ReaderBody.SizeKey);
         AutomationProperties.SetName(this, speech);
         // #1591: the source is spoken on request, never on focus. It is
         // not HelpText (NVDA reads HelpText on Tab), and the peer answers
@@ -107,6 +118,17 @@ internal sealed class ReadingMathElement : ContentControl
         if (newContent is Path)
         {
             Template = DrawingTemplate;
+            ScaleDrawing();
+        }
+    }
+
+    private void ScaleDrawing()
+    {
+        double size = (double)GetValue(BodySizeProperty);
+        if (Content is Path drawing && size > 0)
+        {
+            double scale = size / TypeRamp.ReaderBody.Size;
+            drawing.LayoutTransform = scale == 1 ? null : new ScaleTransform(scale, scale);
         }
     }
 

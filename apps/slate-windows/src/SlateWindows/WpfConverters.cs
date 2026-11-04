@@ -94,8 +94,18 @@ internal sealed class RecentVaultNameConverter : IMultiValueConverter
 /// <summary>#1795: the most of a height a part may take: a share of it, less what the
 /// parts beside it have to keep, between a floor and a cap, so a short window can't give
 /// the part all of the room it shares.</summary>
-internal sealed class CappedShareConverter : IValueConverter
+internal sealed class CappedShareConverter : IValueConverter, IMultiValueConverter
 {
+    /// <summary>DS-5: a height and the text size beside it. What the reserve holds room
+    /// for is text, so it grows with the size, and a text size change reaches it.</summary>
+    public object Convert(object[] values, Type targetType, object parameter, CultureInfo culture) =>
+        values is [double height, double fontSize]
+            ? Limit(height, Reserve * (fontSize / TypeRamp.Body.Size))
+            : Cap;
+
+    public object[] ConvertBack(object value, Type[] targetTypes, object parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+
     public double Share { get; set; } = 1;
 
     public double Cap { get; set; } = double.PositiveInfinity;
@@ -105,7 +115,9 @@ internal sealed class CappedShareConverter : IValueConverter
     public double Floor { get; set; }
 
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture) =>
-        value is double height ? Math.Max(Floor, Math.Min(Cap, (height * Share) - Reserve)) : Cap;
+        value is double height ? Limit(height, Reserve) : Cap;
+
+    private double Limit(double height, double reserve) => Math.Max(Floor, Math.Min(Cap, (height * Share) - reserve));
 
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
         Binding.DoNothing;

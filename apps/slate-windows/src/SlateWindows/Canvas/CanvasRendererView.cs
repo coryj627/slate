@@ -18,7 +18,7 @@ namespace SlateWindows.Canvas;
 internal sealed class CanvasRendererView : FrameworkElement
 {
     private readonly CanvasPresentationEngine _engine;
-    private readonly CanvasTextScaleService _textScale;
+    private TextScaleService? _textScale;
     private readonly VisualCollection _visuals;
     private readonly DrawingVisual _cards;
     private readonly DrawingVisual _edges;
@@ -34,8 +34,8 @@ internal sealed class CanvasRendererView : FrameworkElement
         System.Windows.Automation.AutomationProperties.SetAutomationId(
             this, "CanvasVisualBoard");
         _engine = new CanvasPresentationEngine();
-        _textScale = new CanvasTextScaleService();
-        _textScale.Changed += () => _engine.CommitTextScaleRevision(_textScale.Revision);
+        Loaded += (_, _) => AttachTextScale();
+        Unloaded += (_, _) => DetachTextScale();
         _engine.StateInstalled += OnStateInstalled;
         _visuals = new VisualCollection(this);
         _edges = new DrawingVisual();
@@ -281,7 +281,7 @@ internal sealed class CanvasRendererView : FrameworkElement
         double zoom = state.Viewport.Zoom;
         double panX = state.Viewport.PanX;
         double panY = state.Viewport.PanY;
-        double fontSize = 12.0 * _textScale.Factor * zoom;
+        double fontSize = 12.0 * TextScaleService.CurrentFactor * zoom;
         var matched = MatchedIds(state);
         foreach (System.Collections.Generic.KeyValuePair<CanvasPeerKey, CanvasPeerPlacement>
             entry in state.Topology.Placements)
@@ -576,8 +576,43 @@ internal sealed class CanvasRendererView : FrameworkElement
         return Zoomed(context);
     }
 
-    /// <summary>The view's teardown half: detach the model, dispose
-    /// the owned service — the lifecycle facts pin that handler counts
+    /// <summary>Whether a text size change reaches this view.</summary>
+    internal bool IsAttachedToTextScaleForTests => _textScale is not null;
+
+    internal int TextScaleRevisionForTests => _engine.TextScaleRevisionForTests;
+
+    /// <summary>DS-5: the app's service outlives this view, so its event must not hold
+    /// the view past its life. A change while it was out raised nothing for it, so it
+    /// catches up from the current revision.</summary>
+    internal void AttachTextScale()
+    {
+        if (_textScale is null && TextScaleService.Current is { } service)
+        {
+            _textScale = service;
+            service.Changed += OnTextScaleChanged;
+            _engine.CommitTextScaleRevision(service.Revision);
+        }
+    }
+
+    private void DetachTextScale()
+    {
+        if (_textScale is { } service)
+        {
+            service.Changed -= OnTextScaleChanged;
+            _textScale = null;
+        }
+    }
+
+    private void OnTextScaleChanged()
+    {
+        if (_textScale is { } service)
+        {
+            _engine.CommitTextScaleRevision(service.Revision);
+        }
+    }
+
+    /// <summary>The view's teardown half: detach the model and the
+    /// shared service — the lifecycle facts pin that handler counts
     /// return to baseline.</summary>
     internal void Shutdown()
     {
@@ -588,7 +623,7 @@ internal sealed class CanvasRendererView : FrameworkElement
         // becomes true, so an in-flight or queued install can never
         // draw into a detached view.
         _engine.Shutdown();
-        _textScale.Dispose();
+        DetachTextScale();
     }
 
     // --- The peer surface (§D D3): identity-stable, state-read -----------

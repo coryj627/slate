@@ -615,13 +615,19 @@
                                Visibility="{Binding Properties.ShowEmptyState, Converter={StaticResource BooleanToVisibilityConverter}}"
                                AutomationProperties.Name="{Binding Properties.EmptyStateText}" />
                     <!-- Hugs small sets, scrolls internally past
-                         ~280px (mac parity), or past a third of a short
-                         pane, so the note keeps room for its text (#1795). -->
+                         ~280px (mac parity), or past what a short pane
+                         leaves once the note has room for its text (#1795).
+                         The room is text, so it follows the text's size. -->
                     <ScrollViewer Focusable="False"
-                                  MaxHeight="{Binding ActualHeight, RelativeSource={RelativeSource AncestorType=TabControl}, Converter={StaticResource PropertyRowsMaxHeightConverter}, FallbackValue=280}"
                                   VerticalScrollBarVisibility="Auto"
                                   HorizontalScrollBarVisibility="Disabled"
                                   Visibility="{Binding Properties.HasRows, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <ScrollViewer.MaxHeight>
+                            <MultiBinding Converter="{StaticResource PropertyRowsMaxHeightConverter}" FallbackValue="280">
+                                <Binding Path="ActualHeight" RelativeSource="{RelativeSource AncestorType=TabControl}" />
+                                <Binding Path="FontSize" RelativeSource="{RelativeSource AncestorType=TabControl}" />
+                            </MultiBinding>
+                        </ScrollViewer.MaxHeight>
                         <!-- W7-7 PR 3 (#1246, R-4's one-stop rule): a row's
                              container is layout. As a plain ItemsControl
                              container NVDA read "SlateWindows.Panels.
@@ -654,7 +660,7 @@
                                    ShowLineNumbers="False"
                                    VerticalScrollBarVisibility="Auto"
                                    HorizontalScrollBarVisibility="Auto"
-                                   FontSize="{Binding EditorPreferences.FontSize}"
+                                   FontSize="{Binding EditorPreferences.EffectiveFontSize}"
                                    SpellingPreferences="{Binding EditorPreferences}"
                                    Background="{DynamicResource Slate.WindowBackgroundBrush}"
                                    Foreground="{DynamicResource Slate.TextBrush}"
@@ -688,7 +694,7 @@
                                     Margin="12"
                                     Padding="12"
                                     Model="{Binding Reading}"
-                                    FontSize="{Binding EditorPreferences.FontSize}"
+                                    FontSize="{Binding EditorPreferences.EffectiveFontSize}"
                                     Visibility="{Binding IsReadingVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
             <!-- W4-6 (#738): the .base tab body — same shared cell,
                  collapsed unless this tab IS a base, so UIA only ever
