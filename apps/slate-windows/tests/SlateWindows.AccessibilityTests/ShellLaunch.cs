@@ -28,6 +28,10 @@ internal static class ShellLaunch
 {
     internal const string Variable = "SLATE_LOCAL_APP_DATA";
 
+    /// <summary>DS-5: the text scale a launch reads in place of the machine's Text size.
+    /// The app honours it only under a census instance.</summary>
+    internal const string TextScaleVariable = "SLATE_TEXT_SCALE_FOR_TESTS";
+
     private static readonly Lazy<string> RunRoot = new(CreateRoot, LazyThreadSafetyMode.ExecutionAndPublication);
 
     /// <summary>The variable when the run already sets it, else a
@@ -35,9 +39,13 @@ internal static class ShellLaunch
     /// use and removed when the run ends.</summary>
     internal static string Root => RunRoot.Value;
 
-    /// <summary>Points a shell launch's device state at <see cref="Root"/>.</summary>
-    internal static void ApplyDeviceState(ProcessStartInfo startInfo) =>
+    /// <summary>Points a shell launch's device state at <see cref="Root"/>, and its text
+    /// scale at 1, so the gate doesn't depend on the machine's setting.</summary>
+    internal static void ApplyDeviceState(ProcessStartInfo startInfo)
+    {
         startInfo.Environment[Variable] = Root;
+        startInfo.Environment[TextScaleVariable] = "1";
+    }
 
     private static string CreateRoot()
     {

@@ -36,6 +36,39 @@ public sealed partial class ShellAccessibilityTests
             AssertAxeClean(process, "theme-readability");
         });
 
+    /// <summary>DS-5: launched at the seam's largest size, the chrome's minimums give way
+    /// to its text, and the shell stays clean. Spike 5 measured a status bar of 39.9 and a
+    /// tab strip of 45.9 at this size.</summary>
+    [Fact]
+    public void ThemedShell_AtTheLargestTextTheShellGrows()
+    {
+        (double status, double tab) = ChromeHeights("largest-text-base", "1");
+        (double largerStatus, double largerTab) = ChromeHeights("largest-text", "2.25");
+
+        Assert.True(status > 0 && tab > 0, $"the launch drew a {status} status bar and a {tab} tab.");
+        Assert.True(largerStatus > status, $"the status bar stayed {status} at 225%, and reads {largerStatus}.");
+        Assert.True(largerTab > tab, $"the open tab stayed {tab} at 225%, and reads {largerTab}.");
+    }
+
+    private static (double Status, double Tab) ChromeHeights(string name, string textScale)
+    {
+        (double, double) heights = default;
+        RunFindInNoteJourney(
+            name,
+            (process, window, automation, editor) =>
+            {
+                AutomationElement tabs = WaitForElement(window, "WorkspaceTabs", TimeSpan.FromSeconds(10));
+                AutomationElement tab = tabs.FindFirstChild(cf => cf.ByControlType(ControlType.TabItem))
+                    ?? throw new Xunit.Sdk.XunitException("no open tab in the window.");
+                AutomationElement status = window.FindFirstDescendant(cf => cf.ByControlType(ControlType.StatusBar))
+                    ?? throw new Xunit.Sdk.XunitException("no status bar in the window.");
+                heights = (status.BoundingRectangle.Height, tab.BoundingRectangle.Height);
+                AssertAxeClean(process, name);
+            },
+            textScale);
+        return heights;
+    }
+
     /// <summary>#1763: the editor's selection in the launched app. It's the solid
     /// pair, drawn under the text, so the words stay readable on it.</summary>
     [Fact]

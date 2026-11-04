@@ -152,7 +152,7 @@ public sealed partial class ShellAccessibilityTests
         editor.Patterns.Text.Pattern.GetSelection().Single().GetText(-1);
 
     private static void RunFindInNoteJourney(
-        string name, Action<Process, Window, UIA3Automation, AutomationElement> journey)
+        string name, Action<Process, Window, UIA3Automation, AutomationElement> journey, string textScale = "1")
     {
         string testRoot = Path.Combine(Path.GetTempPath(), $"slate-{name}-{Guid.NewGuid():N}");
         string vaultRoot = Path.Combine(testRoot, "Find Vault");
@@ -170,6 +170,7 @@ public sealed partial class ShellAccessibilityTests
                 UseShellExecute = false,
             };
             ShellLaunch.ApplyDeviceState(startInfo);
+            startInfo.Environment[ShellLaunch.TextScaleVariable] = textScale;
             startInfo.ArgumentList.Add(vaultRoot);
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] = $"slate-{name}-{Guid.NewGuid():N}";
             startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
