@@ -61,6 +61,15 @@ internal static class TypeRamp
         return style;
     }
 
+    /// <summary>A window of the app's own: nothing above it sets a size, so it sets
+    /// Body itself, as the main window's XAML does. <c>TypeRampCensus</c> holds every
+    /// window to this.</summary>
+    internal static void UseBody(Window window)
+    {
+        window.SetResourceReference(Control.FontFamilyProperty, TextFamilyKey);
+        window.SetResourceReference(Control.FontSizeProperty, Body.SizeKey);
+    }
+
     /// <summary>The ramp's keys at <paramref name="factor"/> times their size.</summary>
     internal static ResourceDictionary DictionaryFor(double factor = 1)
     {

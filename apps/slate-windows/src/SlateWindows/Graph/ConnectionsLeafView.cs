@@ -1226,7 +1226,7 @@ internal sealed class ConnectionsLeafView : UserControl
         factory.AppendChild(name);
         var snippet = new FrameworkElementFactory(typeof(TextBlock));
         snippet.SetBinding(TextBlock.TextProperty, new Binding(nameof(ConnectionsRowViewModel.Snippet)));
-        snippet.SetValue(TextBlock.FontSizeProperty, 11.0);
+        snippet.SetResourceReference(StyleProperty, TypeRamp.Caption.StyleKey);
         snippet.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis);
         snippet.SetValue(OpacityProperty, 0.75);
         snippet.SetBinding(VisibilityProperty, new Binding(nameof(ConnectionsRowViewModel.Snippet))

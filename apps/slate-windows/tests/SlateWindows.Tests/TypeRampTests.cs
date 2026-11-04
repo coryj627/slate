@@ -164,6 +164,26 @@ public sealed class TypeRampTests
         Assert.Equal(TypeRamp.SmallFamily.Source, tipFamily);
     }
 
+    /// <summary>The table's own window, with the ramp where the app's application
+    /// resources would put it: a hosted window has no Application above it.</summary>
+    [Fact]
+    public void ATableWindowTakesTheRamp() => StaThread.Run(() =>
+    {
+        RegisterPackScheme();
+        Window? window = SlateWindows.Reading.ReadingTableGrid.Show("| a | b |\n|---|---|\n| 1 | 2 |\n", owner: null, activate: false);
+        Assert.NotNull(window);
+        try
+        {
+            window.Resources.MergedDictionaries.Add(TypeRamp.DictionaryFor(2.25));
+            Assert.Equal(31.5, window.FontSize);
+            Assert.Equal(TypeRamp.TextFamily.Source, window.FontFamily.Source);
+        }
+        finally
+        {
+            window.Close();
+        }
+    });
+
     [Fact]
     public void AHeadingStyleCarriesItsLineHeight()
     {

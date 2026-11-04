@@ -48,8 +48,7 @@ internal static class ReadingTableGrid
         // owns, first on every route — ahead of the Escape-close below.
         ShellSeal.Admit(window);
         window.SetResourceReference(Window.BackgroundProperty, "Slate.SurfaceBrush");
-        window.SetResourceReference(Window.FontFamilyProperty, TypeRamp.TextFamilyKey);
-        window.SetResourceReference(Window.FontSizeProperty, TypeRamp.Body.SizeKey);
+        TypeRamp.UseBody(window);
         AutomationProperties.SetAutomationId(window, "ReadingTableGridWindow");
         // Escape returns to the reading caret — closing an owned
         // window reactivates the owner, and the RichTextBox keeps its

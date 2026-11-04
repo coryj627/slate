@@ -23,8 +23,55 @@ public sealed partial class TypeRampCensus
         (@"Reading\ReadingSurface.cs", "FontSize = 15,", "the reading view's scale is DS-3's"),
     ];
 
-    [GeneratedRegex(@"FontSize=""\d|Property=""FontSize""\s+Value=""\d|\b\w*FontSize\s*=\s*\d")]
+    /// <summary>The app's one window that never shows text: it reads a system
+    /// metric at startup and closes.</summary>
+    private const string ProbeWindowFile = "App.xaml.cs";
+
+    /// <summary>A size as an attribute, in a setter either way round, as a property
+    /// element, assigned, or passed with its dependency property.</summary>
+    [GeneratedRegex(@"FontSize=""\d|Property=""[\w.]*FontSize""\s+Value=""\d|Value=""\d[^""]*""\s+Property=""[\w.]*FontSize""|\.FontSize>\s*\d|\b\w*FontSize\s*=\s*\d|FontSizeProperty\s*,\s*\d")]
     private static partial Regex LiteralSize();
+
+    /// <summary>The census's teeth: each way of writing a size is a hit, and each
+    /// way of reading one from the ramp isn't.</summary>
+    [Theory]
+    [InlineData("<TextBlock FontSize=\"11\" />", true)]
+    [InlineData("<Run TextElement.FontSize=\"11\" />", true)]
+    [InlineData("<Setter Property=\"FontSize\" Value=\"11\" />", true)]
+    [InlineData("<Setter Value=\"11\" Property=\"FontSize\" />", true)]
+    [InlineData("<Setter Property=\"TextBlock.FontSize\"\n        Value=\"11\" />", true)]
+    [InlineData("<TextBlock.FontSize>11</TextBlock.FontSize>", true)]
+    [InlineData("text.FontSize = 11;", true)]
+    [InlineData("new TextBlock { FontSize = 11.5 }", true)]
+    [InlineData("internal const double LabelFontSize = 11;", true)]
+    [InlineData("snippet.SetValue(TextBlock.FontSizeProperty, 11.0);", true)]
+    [InlineData("new Setter(Control.FontSizeProperty, 11d)", true)]
+    [InlineData("<TextBlock FontSize=\"{DynamicResource Slate.FontSizeBody}\" />", false)]
+    [InlineData("<Setter Property=\"FontSize\" Value=\"{DynamicResource Slate.FontSizeBody}\" />", false)]
+    [InlineData("window.SetResourceReference(Control.FontSizeProperty, Body.SizeKey);", false)]
+    [InlineData("text.FontSize = item.FontSize;", false)]
+    public void TheCensusSeesEveryWayOfWritingASize(string source, bool literal) =>
+        Assert.Equal(literal, LiteralSize().IsMatch(source));
+
+    /// <summary>Nothing above a window of its own sets a size, so one that forgot would
+    /// draw at the system's 12 in plain Segoe UI.</summary>
+    [Fact]
+    public void EveryWindowTakesTheRamp()
+    {
+        string root = SourceText.ShellSourceRoot();
+        string[] without = [.. Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
+            .Where(file => !IsBuildOutput(Path.GetRelativePath(root, file)) && Path.GetFileName(file) != ProbeWindowFile)
+            .Where(file =>
+            {
+                string source = File.ReadAllText(file);
+                return Regex.IsMatch(source, @"\bnew Window\b") && !source.Contains("TypeRamp.UseBody(", StringComparison.Ordinal);
+            })
+            .Select(file => Path.GetRelativePath(root, file))];
+        Assert.True(without.Length == 0, "A window with no ramp: " + string.Join(", ", without));
+    }
+
+    private static bool IsBuildOutput(string relative) =>
+        relative.Split(Path.DirectorySeparatorChar)[0] is "bin" or "obj";
 
     [Fact]
     public void EverySizeIsAStepOfTheRamp()
@@ -36,7 +83,7 @@ public sealed partial class TypeRampCensus
             .Where(path => path.EndsWith(".cs", StringComparison.Ordinal) || path.EndsWith(".xaml", StringComparison.Ordinal)))
         {
             string relative = Path.GetRelativePath(root, file);
-            if (relative.Split(Path.DirectorySeparatorChar)[0] is "bin" or "obj")
+            if (IsBuildOutput(relative))
             {
                 continue;
             }
