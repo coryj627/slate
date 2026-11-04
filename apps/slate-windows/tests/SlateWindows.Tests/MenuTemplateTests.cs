@@ -179,8 +179,8 @@ public sealed class MenuTemplateTests
         Assert.Same(shadow, beside);
     }
 
-    /// <summary>The hint on the surface doesn't cross the layer the scroller's clip needs
-    /// at 150%, so menu text was greyscale with the shadow and the hint both in place.
+    /// <summary>The hint on the surface doesn't reach the text through the scroller's clip,
+    /// so menu text was greyscale with the shadow and the hint both in place.
     /// Rendering isn't available to a hosted fact, so this pins where the hint is, and a
     /// launched capture measures the fringes.</summary>
     [Fact]
@@ -200,8 +200,8 @@ public sealed class MenuTemplateTests
         Assert.Equal(ClearTypeHint.Enabled, submenu);
     }
 
-    /// <summary>A context menu's panel is its items host, so it can't clip as well, or it
-    /// needs the layer itself.</summary>
+    /// <summary>A context menu's panel is its items host, so it can't clip either, or the
+    /// hint on it doesn't reach the text.</summary>
     [Fact]
     public void AContextMenusPanelHasTheHintAndNoClip()
     {
@@ -218,7 +218,79 @@ public sealed class MenuTemplateTests
         });
 
         Assert.Equal(ClearTypeHint.Enabled, hint);
-        Assert.False(clips, "the panel clips, which needs a layer between the hint and the text.");
+        Assert.False(clips, "the panel clips, which turned the menu's ClearType off.");
+    }
+
+    /// <summary>WPF's own modes flip without flipping their offsets, which left a surface
+    /// some 48 from its item at a display's edge, a gutter for the pointer to cross. These
+    /// are the surface's edges, past the shadow's room, in the device pixels WPF deals in.</summary>
+    [Theory]
+    [InlineData(1.0)]
+    [InlineData(1.5)]
+    [InlineData(2.0)]
+    public void ABarMenusSurfaceMeetsItsItemBelowOrAbove(double scale)
+    {
+        var popup = new Size(300 * scale, 500 * scale);
+        var target = new Size(60 * scale, 32 * scale);
+
+        System.Windows.Controls.Primitives.CustomPopupPlacement[] candidates =
+            MenuPlacement.Candidates(MenuOpening.Vertical, popup, target, scale);
+
+        Assert.Equal(2, candidates.Length);
+        Thickness margin = MenuPlacement.SurfaceMargin;
+        double below = candidates[0].Point.Y + (margin.Top * scale);
+        Assert.Equal(target.Height + scale, below, 3);
+        double above = candidates[1].Point.Y + popup.Height - (margin.Bottom * scale);
+        Assert.Equal(-scale, above, 3);
+        Assert.All(candidates, candidate => Assert.Equal(0, candidate.Point.X + (margin.Left * scale), 3));
+    }
+
+    [Theory]
+    [InlineData(1.0)]
+    [InlineData(1.5)]
+    [InlineData(2.0)]
+    public void ASubmenusSurfaceMeetsItsRowOnEitherSide(double scale)
+    {
+        var popup = new Size(300 * scale, 200 * scale);
+        var target = new Size(280 * scale, 34 * scale);
+
+        System.Windows.Controls.Primitives.CustomPopupPlacement[] candidates =
+            MenuPlacement.Candidates(MenuOpening.Horizontal, popup, target, scale);
+
+        Assert.Equal(2, candidates.Length);
+        Thickness margin = MenuPlacement.SurfaceMargin;
+        double right = candidates[0].Point.X + (margin.Left * scale);
+        Assert.Equal(target.Width, right, 3);
+        double left = candidates[1].Point.X + popup.Width - (margin.Right * scale);
+        Assert.Equal(0, left, 3);
+
+        // The first row's highlight lines up with the row that opened it: the surface's
+        // border and padding, and the row's own inset.
+        Assert.All(candidates, candidate => Assert.Equal(0, candidate.Point.Y + ((margin.Top + 1 + 3 + 3) * scale), 3));
+    }
+
+    /// <summary>The numbers above only count if the popups use them, and the template
+    /// keeps the margin they allow for.</summary>
+    [Fact]
+    public void EveryMenuPopupPlacesItselfAndKeepsTheMargin()
+    {
+        (bool bar, bool row, Thickness margin) = InMenu(false, false, (window, top, rows) =>
+        {
+            MenuItem header = rows[3];
+            header.ApplyTemplate();
+            var barPopup = (Popup)top.Template.FindName("PART_Popup", top);
+            var rowPopup = (Popup)header.Template.FindName("PART_Popup", header);
+            var surface = (Control)Surface(top);
+            var border = (Border)surface.Template.FindName("Surface", surface);
+            return (
+                barPopup.Placement == PlacementMode.Custom && barPopup.CustomPopupPlacementCallback is not null && MenuPlacement.GetOpens(barPopup) == MenuOpening.Vertical,
+                rowPopup.Placement == PlacementMode.Custom && rowPopup.CustomPopupPlacementCallback is not null && MenuPlacement.GetOpens(rowPopup) == MenuOpening.Horizontal,
+                ((FrameworkElement)border.Parent).Margin);
+        });
+
+        Assert.True(bar, "a bar item's popup isn't placed by MenuPlacement.");
+        Assert.True(row, "a row's popup isn't placed by MenuPlacement.");
+        Assert.Equal(MenuPlacement.SurfaceMargin, margin);
     }
 
     [Theory]

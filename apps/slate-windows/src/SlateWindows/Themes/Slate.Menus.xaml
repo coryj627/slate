@@ -42,17 +42,16 @@
 
     <!-- The surface every menu opens on. The shadow is on a sibling that draws only a
          background, because an Effect on the border holding the items turns ClearType
-         off for their text. The margin is the room the shadow takes (Slate.Shadow16:
-         blur 24, depth 8).
+         off for their text. The margin is the room the shadow takes, and MenuPlacement
+         allows for it.
 
-         The hint is here and again on each items host, below the scroller. Where the
-         scroller's clip doesn't land on whole pixels, as at 150%, it needs a layer, and
-         the surface's hint doesn't cross that: menus measured no colour fringes at all
-         until the hosts had it, and about 70% of their text pixels after. A host mustn't
-         clip as well, or it needs that layer itself, which is why the context menu's
-         panel has dropped the ClipToBounds Fluent gives it. -->
+         The hint is here and again on each items host, below the scroller. The surface's
+         hint doesn't reach the text through the scroller's clip: at 200%, menus measured
+         no colour fringes at all until the hosts had it, and about 70% of their text
+         pixels after. A host mustn't clip either, which is why the context menu's panel
+         has dropped the ClipToBounds Fluent gives it. -->
     <ControlTemplate x:Key="Slate.MenuSurfaceTemplate" TargetType="ContentControl">
-        <Grid Margin="24,16,24,32">
+        <Grid Margin="{x:Static local:MenuPlacement.SurfaceMargin}">
             <Border x:Name="Shadow"
                     Background="{DynamicResource FlyoutBackground}"
                     CornerRadius="8"
@@ -89,12 +88,10 @@
                 <Popup x:Name="PART_Popup"
                        AllowsTransparency="True"
                        Focusable="False"
-                       HorizontalOffset="-24"
                        IsOpen="{TemplateBinding IsSubmenuOpen}"
-                       Placement="Bottom"
+                       local:MenuPlacement.Opens="Vertical"
                        PlacementTarget="{Binding ElementName=Highlight}"
-                       PopupAnimation="None"
-                       VerticalOffset="-15">
+                       PopupAnimation="None">
                     <ContentControl x:Name="MenuSurface"
                                     Focusable="False"
                                     IsTabStop="False"
@@ -214,12 +211,10 @@
             <Popup x:Name="PART_Popup"
                    AllowsTransparency="True"
                    Focusable="False"
-                   HorizontalOffset="-24"
                    IsOpen="{TemplateBinding IsSubmenuOpen}"
-                   Placement="Right"
+                   local:MenuPlacement.Opens="Horizontal"
                    PlacementTarget="{Binding ElementName=Highlight}"
-                   PopupAnimation="None"
-                   VerticalOffset="-23">
+                   PopupAnimation="None">
                 <ContentControl x:Name="MenuSurface"
                                 Focusable="False"
                                 IsTabStop="False"
@@ -347,6 +342,9 @@
         <Setter Property="TextElement.Foreground" Value="{DynamicResource ContextMenuForeground}" />
         <Setter Property="MinWidth" Value="140" />
         <Setter Property="HasDropShadow" Value="False" />
+        <!-- The surface's own corner opens where the menu was asked to, past the shadow's room. -->
+        <Setter Property="HorizontalOffset" Value="-24" />
+        <Setter Property="VerticalOffset" Value="-16" />
         <Setter Property="Grid.IsSharedSizeScope" Value="True" />
         <Setter Property="Popup.PopupAnimation" Value="None" />
         <Setter Property="SnapsToDevicePixels" Value="True" />
