@@ -110,6 +110,7 @@
                             <TranslateTransform />
                         </ContentControl.RenderTransform>
                         <ScrollViewer CanContentScroll="True"
+                                      Focusable="False"
                                       HorizontalScrollBarVisibility="Disabled"
                                       VerticalScrollBarVisibility="Auto">
                             <ItemsPresenter x:Name="ItemsPresenter" RenderOptions.ClearTypeHint="Enabled"
@@ -240,6 +241,7 @@
                         <TranslateTransform />
                     </ContentControl.RenderTransform>
                     <ScrollViewer CanContentScroll="True"
+                                  Focusable="False"
                                   HorizontalScrollBarVisibility="Disabled"
                                   VerticalScrollBarVisibility="Auto">
                         <ItemsPresenter x:Name="ItemsPresenter" RenderOptions.ClearTypeHint="Enabled"
@@ -378,6 +380,7 @@
                             <TranslateTransform />
                         </ContentControl.RenderTransform>
                         <ScrollViewer CanContentScroll="True"
+                                      Focusable="False"
                                       HorizontalScrollBarVisibility="Disabled"
                                       VerticalScrollBarVisibility="Auto">
                             <StackPanel RenderOptions.ClearTypeHint="Enabled"

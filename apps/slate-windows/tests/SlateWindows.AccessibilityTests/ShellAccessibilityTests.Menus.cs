@@ -87,6 +87,7 @@ public sealed partial class ShellAccessibilityTests
             Assert.True(
                 bounds.Top >= screen.Top && bounds.Bottom <= screen.Bottom,
                 $"{lastRow} is at {bounds} on a display of {screen}, so it wasn't scrolled into view.");
+            AssertItemNamesAreSpeakable(process, "long-menu");
             PressKey(VirtualKeyShort.ESCAPE);
         }
         finally

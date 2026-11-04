@@ -233,7 +233,9 @@ public sealed class NarrowWindowLayoutTests
         System.Threading.SpinWait.SpinUntil(
             () =>
             {
-                PumpedDispatcher.Drain();
+                // Rows that arrive after the first pass still need laying out, and a drain
+                // alone leaves that to the next render.
+                host.Settle();
                 FrameworkElement? shown = ShownShell.Descendants(host.Shell)
                     .OfType<FrameworkElement>()
                     .FirstOrDefault(element => AutomationProperties.GetAutomationId(element) == "PropertiesRows");
