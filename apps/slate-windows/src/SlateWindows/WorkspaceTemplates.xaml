@@ -490,13 +490,13 @@
                     </Style>
                 </ContentControl.Style>
             </ContentControl>
-            <StackPanel Grid.Column="2"
-                        Margin="8,0,0,0"
-                        Orientation="Horizontal"
-                        VerticalAlignment="Center">
+            <WrapPanel Grid.Column="2"
+                       Margin="8,0,0,0"
+                       VerticalAlignment="Center">
                 <!-- Row traversal: editor → Save → Revert (dirty
                      only) → Delete → validation error (§2.3). -->
-                <Button Padding="8,2"
+                <Button Margin="0,0,6,2"
+                        Padding="8,2"
                         Content="Save"
                         Command="{Binding CommitCommand}"
                         AutomationProperties.Name="{Binding SaveLabel}">
@@ -514,14 +514,14 @@
                         </Style>
                     </Button.Style>
                 </Button>
-                <Button Margin="6,0,0,0"
+                <Button Margin="0,0,6,2"
                         Padding="8,2"
                         Content="Revert"
                         Command="{Binding RevertCommand}"
                         Visibility="{Binding IsDirty, Converter={StaticResource BooleanToVisibilityConverter}}"
                         AutomationProperties.Name="{Binding RevertLabel}"
                         AutomationProperties.HelpText="{Binding RevertHint}" />
-                <Button Margin="6,0,0,0"
+                <Button Margin="0,0,0,2"
                         Padding="8,2"
                         Content="Delete"
                         Command="{Binding DeleteCommand}"
@@ -541,7 +541,7 @@
                         </Style>
                     </Button.Style>
                 </Button>
-            </StackPanel>
+            </WrapPanel>
             <TextBlock Grid.Row="1"
                        Grid.Column="1"
                        Grid.ColumnSpan="2"
@@ -808,20 +808,20 @@
                                          AutomationProperties.Name="Preview content" />
                             </StackPanel>
                         </StackPanel>
-                        <StackPanel Grid.Row="2"
-                                    HorizontalAlignment="Right"
-                                    Orientation="Horizontal">
-                            <Button Margin="0,0,8,0"
+                        <WrapPanel Grid.Row="2"
+                                   HorizontalAlignment="Right">
+                            <Button Margin="0,0,8,4"
                                     Content="Open source"
                                     KeyboardNavigation.TabIndex="1"
                                     AutomationProperties.AutomationId="EditorPopoverOpenSource"
                                     Command="{Binding EditorInteractions.OpenPopoverSourceCommand}"
                                     Visibility="{Binding EditorInteractions.CanOpenPopoverSource, Converter={StaticResource BooleanToVisibilityConverter}}" />
-                            <Button Content="Close"
+                            <Button Margin="0,0,0,4"
+                                    Content="Close"
                                     KeyboardNavigation.TabIndex="0"
                                     AutomationProperties.AutomationId="EditorPopoverClose"
                                     Command="{Binding EditorInteractions.ClosePopoverCommand}" />
-                        </StackPanel>
+                        </WrapPanel>
                     </Grid>
                     </Border>
                 </local:EditorInteractionPopoverHost>

@@ -480,6 +480,64 @@ public sealed partial class TextScaleTests
         Assert.True(offenders.Count == 0, "Rows that cut their text:\n" + string.Join('\n', offenders));
     }
 
+    /// <summary>A pane can be as narrow as a split leaves it, so buttons side by side have
+    /// to be able to wrap. A sheet's width is fixed, and the sheet facts read its text.</summary>
+    [Theory]
+    [InlineData("MainWindow.xaml")]
+    [InlineData("WorkspaceTemplates.xaml")]
+    public void APanesButtonsCanWrap(string file)
+    {
+        XDocument source = XDocument.Load(Path.Combine(SourceText.ShellSourceRoot(), file), LoadOptions.SetLineInfo);
+        string[] offenders = source.Descendants()
+            .Where(element => element.Name.LocalName == "StackPanel" && (string?)element.Attribute("Orientation") == "Horizontal")
+            .Where(row => row.Elements().Count(child => child.Name.LocalName == "Button") >= 2)
+            .Where(row => !row.Ancestors().Any(ancestor => (string?)ancestor.Attribute("AutomationProperties.IsDialog") == "True"))
+            .Select(row => $"line {((System.Xml.IXmlLineInfo)row).LineNumber}")
+            .ToArray();
+
+        Assert.True(offenders.Length == 0, "Buttons in a row that can't wrap: " + string.Join(", ", offenders));
+    }
+
+    /// <summary>With both sidebars open and a split, a property row has little more than a
+    /// button's width, and Delete lost most of its word. Revert only shows on a dirty row.</summary>
+    [Fact]
+    public void APropertyRowsButtonsWrapInANarrowPane() => OnOwnThread(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "---\nkey: value\n---\n# Lecture\n"));
+        host.Workspace.OpenPath("Lecture.md");
+        host.Shell.Width = 1120;
+        host.Shell.Height = 720;
+        System.Threading.SpinWait.SpinUntil(
+            () =>
+            {
+                host.Settle();
+                return host.Workspace.ActiveGroup.ActiveTab is WorkspaceTabViewModel { Properties.Rows.Count: > 0 };
+            },
+            TimeSpan.FromSeconds(10));
+        TypeRamp.Apply(RampOf(host.Shell), 2.25);
+        host.Settle();
+        PropertyRowGrid row = ShownShell.Descendants(host.Shell).OfType<PropertyRowGrid>().Single();
+        row.SetCurrentValue(FrameworkElement.WidthProperty, 180.0);
+        Button[] buttons = ShownShell.Descendants(row).OfType<Button>().Where(button => button.Content is "Save" or "Revert" or "Delete").ToArray();
+        Assert.Equal(3, buttons.Length);
+        foreach (Button button in buttons)
+        {
+            button.SetCurrentValue(UIElement.VisibilityProperty, Visibility.Visible);
+        }
+
+        host.Settle();
+        host.Settle();
+
+        foreach (Button button in buttons)
+        {
+            Rect bounds = button.TransformToAncestor(row).TransformBounds(new Rect(0, 0, button.ActualWidth, button.ActualHeight));
+            Assert.True(bounds.Right <= row.ActualWidth + 0.5, $"{button.Content} ends at {bounds.Right:F0} of {row.ActualWidth:F0}.");
+        }
+
+        string[] cut = CutText(row);
+        Assert.True(cut.Length == 0, $"{cut.Length} cut:\n" + string.Join('\n', cut));
+    });
+
     /// <summary>Text a sheet binds is as long as what it names: a tag's whole path, or a
     /// file's name in a title. A hosted sheet has none of it to measure, so each one says
     /// what it does with too little room. A key hint keeps a column of its own.</summary>
