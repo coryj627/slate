@@ -82,3 +82,18 @@ AT: NVDA at the seam's 2.25, a menu and a sheet. Sizes aren't spoken, so the exp
 ## Brief
 
 Read `Canvas/CanvasTextScaleService.cs`, `Canvas/CanvasRendererView.cs:30-40`, `Canvas/CanvasRendererView.cs:581-591`, `Graph/GraphDiagramView.cs:221-241`, `ThemeManager.cs:204-259`, `TypeRamp.cs` from DS-2, `EditorInteractions.cs:296-320`, `design/windows/xaml/README.md:162-166`. Move the service, add `TypeRamp.Apply` and wire it, add the editor's effective size and the launched seam. Facts first. Work through the fixed widths at 2.25 in the launched app. Hand the owner the two-minute check before asking to merge. Commit: `feat(windows): windows text size scales the whole shell, live, up to 225 percent`.
+
+## Notes from the build
+
+A launched pass at the seam's 2.25, in the 1120 × 720 the app opens at, found what this spec didn't list:
+
+- **The right pane.** A rail that fits its labels took two thirds of a 320 pane, and the leaf wrapped a letter at a time. `RightPaneRail` puts the rail under the leaf when the leaf would have under eight ems. Item 6 stands: the pane's width stays what it was.
+- **Reserves and stacking widths.** The property rows' reserve, the properties card's reserve and `PropertyRowGrid.StackBelow` are figures at the body size, multiplied by the text size. The card scrolls past what leaves the note about three lines, which it didn't have at all.
+- **A drawn formula.** It's geometry at WPF-Math's fixed size, so it takes a `LayoutTransform` from the reader body's size. The document isn't rebuilt.
+- **The Files toolbar** scrolls in 60% of its pane. At 225% in a short window it was taller than all of it.
+- **Lists in sheets** don't scroll sideways. One that did measured its rows at any width, so nothing wrapped or trimmed, and text ended at the sheet's edge.
+- **The canvas filter's 160 stays.** A text box scrolls its own text and its prompt trims, as the other fields' do. The status bar's 180 holds a progress bar, not text.
+
+`CanvasTextScaleService` stays in the frozen canvas and graph contract records, which are append-only. `ContractsCitationCensus.RetiredNames` says what it's called now, and a fact holds that the new name exists and the old one is gone.
+
+A fact whose thread ends with a focused text box's text services still up can end the test host, because `msctf` tears them down by calling managed code after the runtime has let the thread go. The facts here shut their dispatchers down first. The hazard is wider than this file's: see the issue this PR files.

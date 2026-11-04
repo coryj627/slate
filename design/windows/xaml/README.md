@@ -167,6 +167,8 @@ WPF doesn't apply the Windows "Text size" setting (Settings â€º Accessibility â€
 
 Heights that hold text are minimums, so they grow with the text instead of clipping it at 225%. Use `MinHeight`, never `Height`: title bar 48, tab strip 36, status bar 24, and every list, tree, menu and setting row. The CSS tokens are `--titlebar-min-height`, `--tabstrip-min-height` and `--statusbar-min-height`.
 
+Layout pixels don't scale, so whatever holds text has to make room for it. In the app, one `TextScaleService` owned by `App` reads the setting, and `TypeRamp.Apply` writes the new sizes into the ramp's dictionary, so every `DynamicResource` follows with no re-merge. A sheet keeps its width and its text wraps, and a list in a sheet doesn't scroll sideways, because that measures its rows at any width and nothing in them wraps. A width or height reserved for text is a figure at the body size, multiplied by the text size. The right pane's rail goes under its leaf when the leaf would have under eight ems beside it, and scrolls in 40% of the pane's height.
+
 ## Regenerating
 
 The files are generated, not hand-edited. When a token in `tokens/` changes, regenerate both files and copy them into the app. The Fluent brush list comes from the `dotnet/wpf` theme files, so regenerate after a .NET update too.

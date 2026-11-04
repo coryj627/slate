@@ -365,6 +365,71 @@ public sealed partial class TextScaleTests
         Assert.Equal(0, Grid.GetRow(row.Children[1]));
     });
 
+    /// <summary>A row's width doesn't have to change for its text to outgrow it.</summary>
+    [Fact]
+    public void ASizeChangeAloneReachesAPropertyRow() => OnOwnThread(() =>
+    {
+        var row = new PropertyRowGrid { Width = 500 };
+        row.ColumnDefinitions.Add(new ColumnDefinition());
+        row.ColumnDefinitions.Add(new ColumnDefinition());
+        row.ColumnDefinitions.Add(new ColumnDefinition());
+        for (int index = 0; index < 4; index++)
+        {
+            _ = row.Children.Add(new Border());
+        }
+
+        var window = new Window
+        {
+            Content = row,
+            Width = 800,
+            Height = 200,
+            Left = -20_000,
+            Top = -20_000,
+            ShowActivated = false,
+            ShowInTaskbar = false,
+            WindowStyle = WindowStyle.None,
+        };
+        try
+        {
+            window.FontSize = TypeRamp.Body.Size;
+            window.Show();
+            PumpedDispatcher.Drain();
+            Assert.Equal(0, Grid.GetRow(row.Children[1]));
+
+            window.FontSize = TypeRamp.Body.Size * 2.25;
+            PumpedDispatcher.Drain();
+            Assert.Equal(1, Grid.GetRow(row.Children[1]));
+
+            window.FontSize = TypeRamp.Body.Size;
+            PumpedDispatcher.Drain();
+            Assert.Equal(0, Grid.GetRow(row.Children[1]));
+        }
+        finally
+        {
+            window.Close();
+            PumpedDispatcher.Drain();
+        }
+    });
+
+    /// <summary>A hosted fact can't build a <see cref="ThemeManager"/>, which needs an
+    /// Application, so this reaches its handler on one built without its constructor. That
+    /// the constructor subscribes it is the owner's live check.</summary>
+    [Fact]
+    public void TheThemeManagerWritesAChangeIntoItsRamp() => WithService(1.0, (service, factor) =>
+    {
+        ResourceDictionary ramp = TypeRamp.DictionaryFor();
+        var manager = (ThemeManager)RuntimeHelpers.GetUninitializedObject(typeof(ThemeManager));
+        const System.Reflection.BindingFlags Private = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+        typeof(ThemeManager).GetField("_resources", Private)!.SetValue(manager, new[] { ramp });
+        typeof(ThemeManager).GetField("_textScale", Private)!.SetValue(manager, service);
+        factor.Value = 2;
+        service.RefreshForTests();
+
+        typeof(ThemeManager).GetMethod("OnTextScaleChanged", Private)!.Invoke(manager, null);
+
+        Assert.Equal(TypeRamp.Body.Size * 2, (double)ramp[TypeRamp.Body.SizeKey]);
+    });
+
     /// <summary>The header, its buttons and a row left a note none of its text at 225% in
     /// the window the app opens at.</summary>
     [Fact]
