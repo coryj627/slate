@@ -3650,10 +3650,10 @@
                     <TextBlock Margin="0,6,0,0"
                                Text="{Binding Body}"
                                TextWrapping="Wrap" />
-                    <StackPanel Margin="0,12,0,0"
-                                HorizontalAlignment="Right"
-                                Orientation="Horizontal">
+                    <WrapPanel Margin="0,12,0,0"
+                               HorizontalAlignment="Right">
                         <Button x:Name="CitationSummaryWalkButton"
+                                Margin="0,0,8,4"
                                 Padding="10,4"
                                 Content="{Binding WalkActionText}"
                                 IsEnabled="{Binding CanWalkThrough}"
@@ -3661,13 +3661,13 @@
                                 AutomationProperties.AutomationId="CitationSummaryWalk"
                                 AutomationProperties.HelpText="{Binding WalkActionHelp}" />
                         <Button x:Name="CitationSummaryDismissButton"
-                                Margin="8,0,0,0"
+                                Margin="0,0,0,4"
                                 Padding="10,4"
                                 Content="{Binding DismissText}"
                                 Command="{Binding DataContext.Workspace.CloseCitationSummaryCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                 AutomationProperties.AutomationId="CitationSummaryDismiss"
                                 AutomationProperties.HelpText="{Binding DismissHelp}" />
-                    </StackPanel>
+                    </WrapPanel>
                 </StackPanel>
                 </ScrollViewer>
             </local:AutomationLandmarkBorder>

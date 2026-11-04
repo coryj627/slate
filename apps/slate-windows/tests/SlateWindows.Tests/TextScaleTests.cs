@@ -249,6 +249,47 @@ public sealed partial class TextScaleTests
         Assert.True(cut.Count == 0, $"{cut.Count} cut:\n" + string.Join('\n', cut));
     });
 
+    /// <summary>A sheet's buttons can take their text from what it shows, so a hosted sheet
+    /// has none to measure. "Walk through citations" ran off the start of its sheet, beside
+    /// Done. Each button with no text here gets text that long.</summary>
+    [Fact]
+    public void ASheetsButtonsHaveRoomForTheirBoundText() => OnOwnThread(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        host.Shell.Width = 1120;
+        host.Shell.Height = 720;
+        TypeRamp.Apply(RampOf(host.Shell), 2.25);
+        host.Settle();
+
+        FrameworkElement[] sheets = ShownShell.Descendants(host.Shell)
+            .OfType<FrameworkElement>()
+            .Where(System.Windows.Automation.AutomationProperties.GetIsDialog).ToArray();
+        var cut = new List<string>();
+        int filled = 0;
+        foreach (FrameworkElement sheet in sheets)
+        {
+            FrameworkElement[] opened = Open(sheet);
+            host.Settle();
+            host.Settle();
+            foreach (Button button in ShownShell.Descendants(sheet).OfType<Button>().Where(button => button.Content is null or ""))
+            {
+                button.SetCurrentValue(ContentControl.ContentProperty, "Walk through citations");
+                filled++;
+            }
+
+            host.Settle();
+            host.Settle();
+            cut.AddRange(CutText(sheet).Select(line => $"{System.Windows.Automation.AutomationProperties.GetAutomationId(sheet)}: {line}"));
+            foreach (FrameworkElement hidden in opened)
+            {
+                hidden.SetCurrentValue(UIElement.VisibilityProperty, Visibility.Collapsed);
+            }
+        }
+
+        Assert.True(filled >= 3, $"only {filled} buttons had no text.");
+        Assert.True(cut.Count == 0, $"{cut.Count} cut:\n" + string.Join('\n', cut));
+    });
+
     /// <summary>Quick Open's rows gave a name a fixed 180, and its keys a line that
     /// couldn't wrap.</summary>
     [Fact]
@@ -1211,6 +1252,15 @@ public sealed partial class TextScaleTests
             step is not null && !ReferenceEquals(step, root);
             step = System.Windows.Media.VisualTreeHelper.GetParent(step))
         {
+            // A scroller's cut is its job only along a way it scrolls.
+            if (step is ScrollContentPresenter { ScrollOwner.HorizontalScrollBarVisibility: ScrollBarVisibility.Disabled } view)
+            {
+                Rect inView = text.TransformToAncestor(view).TransformBounds(mine);
+                return inView.Left < -0.5 || inView.Right > view.ActualWidth + 0.5
+                    ? $"the side of a scroller, at {inView} of {view.ActualWidth:F0} wide"
+                    : null;
+            }
+
             if (step is ScrollViewer or ScrollContentPresenter)
             {
                 return null;
