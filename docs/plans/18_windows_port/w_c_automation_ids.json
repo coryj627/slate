@@ -2545,6 +2545,41 @@
     "Surface": "Data grids (W4-1 substrate)"
   },
   {
+    "Source": "Themes/Slate.Calendar.xaml",
+    "Expression": "PART_DisabledVisual",
+    "Surface": "Properties header + sheets (W4-4)"
+  },
+  {
+    "Source": "Themes/Slate.Calendar.xaml",
+    "Expression": "PART_HeaderButton",
+    "Surface": "Properties header + sheets (W4-4)"
+  },
+  {
+    "Source": "Themes/Slate.Calendar.xaml",
+    "Expression": "PART_MonthView",
+    "Surface": "Properties header + sheets (W4-4)"
+  },
+  {
+    "Source": "Themes/Slate.Calendar.xaml",
+    "Expression": "PART_NextButton",
+    "Surface": "Properties header + sheets (W4-4)"
+  },
+  {
+    "Source": "Themes/Slate.Calendar.xaml",
+    "Expression": "PART_PreviousButton",
+    "Surface": "Properties header + sheets (W4-4)"
+  },
+  {
+    "Source": "Themes/Slate.Calendar.xaml",
+    "Expression": "PART_Root",
+    "Surface": "Properties header + sheets (W4-4)"
+  },
+  {
+    "Source": "Themes/Slate.Calendar.xaml",
+    "Expression": "PART_YearView",
+    "Surface": "Properties header + sheets (W4-4)"
+  },
+  {
     "Source": "Themes/Slate.Menus.xaml",
     "Expression": "Check",
     "Surface": "Main window and menu bar"

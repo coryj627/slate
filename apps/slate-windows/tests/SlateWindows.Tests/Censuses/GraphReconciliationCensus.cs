@@ -334,7 +334,7 @@ public sealed class GraphReconciliationCensus
 
     private static HashSet<string> DeclaredNames()
     {
-        var names = new HashSet<string>(StringComparer.Ordinal);
+        var names = new HashSet<string>(ContractsCitationCensus.RetiredNames.Keys, StringComparer.Ordinal);
         string root = Path.Combine(RepoRoot, "apps", "slate-windows");
         foreach (string file in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories))
         {
