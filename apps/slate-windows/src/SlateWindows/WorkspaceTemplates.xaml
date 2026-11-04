@@ -208,7 +208,8 @@
     <local:AxisToOrientationConverter x:Key="AxisToOrientationConverter" />
     <local:NullToVisibilityConverter x:Key="NullToVisibilityConverter" />
     <local:PixelGridLengthConverter x:Key="PixelGridLengthConverter" />
-    <local:PropertyRowsMaxHeightConverter x:Key="PropertyRowsMaxHeightConverter" />
+    <local:CappedShareConverter x:Key="PropertyRowsMaxHeightConverter" Share="0.3333" Cap="280" />
+    <local:CappedShareConverter x:Key="DualPaneListMaxHeightConverter" Share="0.5" Cap="150" />
     <local:IsNotNullConverter x:Key="IsNotNullConverter" />
     <local:SidebarSortModeLabelConverter x:Key="SidebarSortModeLabelConverter" />
     <local:RecentVaultNameConverter x:Key="RecentVaultNameConverter" />

@@ -296,6 +296,21 @@ public sealed class NarrowWindowLayoutTests
         Assert.Equal(TextWrapping.Wrap, text.TextWrapping);
     });
 
+    /// <summary>The dual pane's list kept a fixed 150, and the tree above it got what
+    /// was left, about one row in a default window.</summary>
+    [Fact]
+    public void TheDualPanesListLeavesTheFilesTreeRoom() => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        host.Shell.Height = 620;
+        host.Settle();
+
+        FrameworkElement list = host.Body("SidebarDualPane");
+        var holder = Assert.IsType<System.Windows.Controls.Grid>(System.Windows.Media.VisualTreeHelper.GetParent(list));
+        Assert.True(holder.ActualHeight > 0);
+        Assert.True(list.MaxHeight <= holder.ActualHeight / 2, $"the list can take {list.MaxHeight:F0}px of {holder.ActualHeight:F0}px.");
+    });
+
     /// <summary>The graph's summary ran past half of a split pane.</summary>
     [Fact]
     public void AGridsSummaryWrapsInANarrowPane() => StaThread.Run(() =>
