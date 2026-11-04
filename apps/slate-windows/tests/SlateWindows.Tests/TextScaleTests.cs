@@ -431,14 +431,19 @@ public sealed partial class TextScaleTests
     });
 
     /// <summary>The prompt's list sat in a stack with no height of its own, so wrapped rows
-    /// ran off the window, where no scrolling could reach them or Clear All Marks.</summary>
-    [Fact]
-    public void ACanvasPromptsChoicesScrollInsideTheWindow() => OnOwnThread(() =>
+    /// ran off the window, where no scrolling could reach them or Clear All Marks. 480 is
+    /// the window's minimum.</summary>
+    [Theory]
+    [InlineData(720, 1.0)]
+    [InlineData(480, 1.0)]
+    [InlineData(720, 2.25)]
+    [InlineData(480, 2.25)]
+    public void ACanvasPromptsChoicesScrollInsideTheWindow(double height, double factor) => OnOwnThread(() =>
     {
         using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
         host.Shell.Width = 1120;
-        host.Shell.Height = 720;
-        TypeRamp.Apply(RampOf(host.Shell), 2.25);
+        host.Shell.Height = height;
+        TypeRamp.Apply(RampOf(host.Shell), factor);
         host.Settle();
         var list = (ListBox)host.Shell.FindName("CanvasPromptChoicesList");
         var sheet = (FrameworkElement)host.Shell.FindName("CanvasPromptOverlay");
@@ -447,15 +452,17 @@ public sealed partial class TextScaleTests
         list.SetCurrentValue(UIElement.VisibilityProperty, Visibility.Visible);
         list.SetCurrentValue(
             ItemsControl.ItemsSourceProperty,
-            Enumerable.Range(1, 12).Select(index => new LongRow(string.Empty, $"A long choice that wraps onto a second line at this size, number {index}")).ToArray());
+            Enumerable.Range(1, 30).Select(index => new LongRow(string.Empty, $"A long choice that wraps onto a second line at this size, number {index}")).ToArray());
         host.Settle();
         host.Settle();
 
         ScrollViewer scroller = ShownShell.Descendants(list).OfType<ScrollViewer>().First();
         var root = (FrameworkElement)host.Shell.Content;
-        double bottom = clear.TransformToAncestor(root).Transform(new Point(0, clear.ActualHeight)).Y;
+        double bottom = clear.TransformToAncestor(sheet).Transform(new Point(0, clear.ActualHeight)).Y;
+        double sheetBottom = sheet.TransformToAncestor(root).Transform(new Point(0, sheet.ActualHeight)).Y;
         Assert.True(scroller.ScrollableHeight > 0, "the list has nothing to scroll, so its rows run past it.");
-        Assert.True(bottom <= root.ActualHeight, $"Clear All Marks ends at {bottom:F0} in a {root.ActualHeight:F0} window.");
+        Assert.True(bottom <= sheet.ActualHeight, $"Clear All Marks ends at {bottom:F0} in a sheet {sheet.ActualHeight:F0} tall.");
+        Assert.True(sheetBottom <= root.ActualHeight, $"the sheet ends at {sheetBottom:F0} in a {root.ActualHeight:F0} window.");
     });
 
     private sealed record LongRow(string Label, string Name);

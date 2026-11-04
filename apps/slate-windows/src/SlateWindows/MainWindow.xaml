@@ -4619,21 +4619,31 @@
                     AutomationProperties.AutomationId="CanvasPromptSheet"
                     AutomationProperties.Name="Canvas prompt"
                     AutomationProperties.IsDialog="True">
-                <StackPanel>
+                <!-- DS-5: the choices take what the title and Clear All Marks leave of the
+                     window, and scroll in it, so wrapped rows can't push the button off. -->
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
                     <TextBlock Text="{Binding Title}"
+                               TextWrapping="Wrap"
                                FontWeight="SemiBold"
                                Margin="0,0,0,8" />
                     <TextBox x:Name="CanvasPromptDraftBox"
+                             Grid.Row="1"
                              Text="{Binding Draft, UpdateSourceTrigger=PropertyChanged}"
                              Visibility="{Binding HasTextField, Converter={StaticResource BooleanToVisibilityConverter}}"
                              AutomationProperties.AutomationId="CanvasPromptDraft"
                              AutomationProperties.Name="Answer. Enter submits, Escape cancels." />
                     <ListBox x:Name="CanvasPromptChoicesList"
+                             Grid.Row="2"
                              ItemsSource="{Binding Choices}"
                              SelectedItem="{Binding SelectedChoice}"
                              Focusable="{Binding HasRows}"
                              Visibility="{Binding HasTextField, Converter={StaticResource InverseBooleanToVisibilityConverter}}"
-                             MaxHeight="{Binding ActualHeight, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource CanvasPromptListMaxHeightConverter}}"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                              AutomationProperties.AutomationId="CanvasPromptChoices" local:SiblingNames.NamePath="Name" local:SiblingNames.Noun="choice"
                              AutomationProperties.Name="Choices. Enter submits; on the marks list Enter jumps and Delete unmarks.">
@@ -4656,6 +4666,7 @@
                         </ListBox.ItemTemplate>
                     </ListBox>
                     <Button x:Name="CanvasPromptClearMarksButton"
+                            Grid.Row="3"
                             Content="Clear All Marks"
                             Command="{Binding DataContext.Workspace.CanvasPromptClearMarksCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                             Visibility="{Binding ShowsClearMarks, Converter={StaticResource BooleanToVisibilityConverter}}"
@@ -4663,7 +4674,7 @@
                             HorizontalAlignment="Left"
                             AutomationProperties.AutomationId="CanvasPromptClearMarks"
                             AutomationProperties.Name="Clear all marks" />
-                </StackPanel>
+                </Grid>
             </local:AutomationLandmarkBorder>
         </Grid>
     </DockPanel>
