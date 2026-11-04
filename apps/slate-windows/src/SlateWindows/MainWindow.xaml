@@ -3903,6 +3903,7 @@
                     AutomationProperties.AutomationId="BaseQueryBuilderSheet"
                     AutomationProperties.Name="{Binding Title}"
                     AutomationProperties.IsDialog="True">
+                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto">
                 <DockPanel>
                     <TextBlock DockPanel.Dock="Top"
                                Text="{Binding Title}"
@@ -4111,6 +4112,7 @@
                         </StackPanel>
                     </ScrollViewer>
                 </DockPanel>
+                </ScrollViewer>
             </local:AutomationLandmarkBorder>
             <!-- ==========================================================
                  W5-3 (#743): the template picker sheet. Focus lands per
@@ -4287,6 +4289,7 @@
                 <local:AutomationLandmarkBorder.Effect>
                     <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
                 </local:AutomationLandmarkBorder.Effect>
+                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto">
                 <Grid>
                     <DockPanel Visibility="{Binding IsPromptStep, Converter={StaticResource BooleanToVisibilityConverter}}">
                         <StackPanel DockPanel.Dock="Top">
@@ -4383,11 +4386,11 @@
                                     AutomationProperties.AutomationId="TemplateNameCreate"
                                     AutomationProperties.HelpText="Render the template and open the new note. Enter." />
                         </StackPanel>
-                        <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto">
                         <StackPanel>
                             <local:AutomationPresentationTextBlock Margin="0,0,0,2" Text="New note name" />
                             <local:AutomationPresentationTextBlock Margin="0,0,0,4"
                                     Text="{Binding NameHint}"
+                                    TextWrapping="Wrap"
                                     Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                             <TextBox x:Name="TemplateFlowNameTextBox"
                                      Padding="6,4"
@@ -4403,9 +4406,9 @@
                                        AutomationProperties.Name="{Binding ValidationErrorAccessibleName}"
                                        Visibility="{Binding ValidationError, Converter={StaticResource NullToVisibilityConverter}}" />
                         </StackPanel>
-                        </ScrollViewer>
                     </DockPanel>
                 </Grid>
+                </ScrollViewer>
             </local:AutomationLandmarkBorder>
             <!-- ==========================================================
                  W5-4 (#744) F4: the Move-To folder picker — the keyboard-

@@ -492,21 +492,34 @@ public sealed partial class TextScaleTests
         Assert.True(list.ActualHeight >= 120, $"the list has {list.ActualHeight:F0} of height in a {sheet.ActualHeight:F0} sheet.");
     });
 
-    /// <summary>The name step's field and its error sit between a title and buttons that
-    /// don't scroll, so they need a scroller of their own, as the prompt step has.</summary>
+    /// <summary>A long subtitle took all of the step's room, so its field had no height,
+    /// and a scroller round the field alone couldn't help. The whole step scrolls, so keys
+    /// reach the field wherever a long subtitle pushes it.</summary>
     [Fact]
-    public void TheTemplateNameStepsFieldsCanScroll()
+    public void TheTemplateNameFieldIsReachableUnderALongSubtitle() => OnOwnThread(() =>
     {
-        XDocument shell = XDocument.Load(Path.Combine(SourceText.ShellSourceRoot(), "MainWindow.xaml"));
-        XElement step = shell.Descendants()
-            .Single(element => (string?)element.Attribute("AutomationProperties.AutomationId") == "TemplateNameSubtitle")
-            .Ancestors()
-            .First(ancestor => ancestor.Name.LocalName == "DockPanel");
-        XElement scroller = step.Elements().Last();
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        host.Shell.Width = 1120;
+        host.Shell.Height = 480;
+        TypeRamp.Apply(RampOf(host.Shell), 2.25);
+        host.Settle();
+        var sheet = (FrameworkElement)host.Shell.FindName("TemplateFlowOverlay");
+        _ = Open(sheet);
+        host.Settle();
+        host.Settle();
+        FrameworkElement[] elements = ShownShell.Descendants(sheet).OfType<FrameworkElement>().ToArray();
+        var subtitle = (TextBlock)elements.First(element => System.Windows.Automation.AutomationProperties.GetAutomationId(element) == "TemplateNameSubtitle");
+        subtitle.SetCurrentValue(TextBlock.TextProperty, string.Concat(Enumerable.Repeat("from Accessibility research meeting notes, in a folder with a long path. ", 5)));
+        var name = (TextBox)elements.First(element => System.Windows.Automation.AutomationProperties.GetAutomationId(element) == "TemplateFlowName");
+        host.Settle();
+        name.BringIntoView();
+        host.Settle();
+        host.Settle();
 
-        Assert.Equal("ScrollViewer", scroller.Name.LocalName);
-        Assert.Equal("False", (string?)scroller.Attribute("Focusable"));
-    }
+        Rect bounds = name.TransformToAncestor(sheet).TransformBounds(new Rect(0, 0, name.ActualWidth, name.ActualHeight));
+        Assert.True(bounds.Height >= 30, $"the field is {bounds.Height:F0} tall.");
+        Assert.True(bounds.Top >= 0 && bounds.Bottom <= sheet.ActualHeight, $"the field is at {bounds} in a sheet {sheet.ActualHeight:F0} tall.");
+    });
 
     private sealed record LongRow(string Label, string Name);
 
