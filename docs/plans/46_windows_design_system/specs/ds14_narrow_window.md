@@ -8,7 +8,7 @@ Snap Layouts can put Slate in a half or a quarter of a small screen. Below the w
 
 ## Current state on main
 
-- `MainWindow.xaml:13`: `MinHeight="480" MinWidth="775"` (760 at the baseline; #1795).
+- `MainWindow.xaml:13`: `MinHeight="480" MinWidth="780"` (760 at the baseline; #1795).
 - `MainWindow.xaml:937-941`: Files `MinWidth="200"`, the right pane 250 (200 at the baseline; #1795), the editor `MinWidth="300"`, two 5 splitters. So with both panes the shell needs 760 at the minimum.
 - `WorkspaceViewModel.SidebarWidths.cs:60-72`: a narrower row brings widths back in, and `:119-129` computes the room. Nothing ever hides a pane. Since #1795 the row's width comes from `WorkspaceRowHost`, because the columns grid never reports less than the sum of its columns, and each width comes back when there's room again.
 - `IsRightPaneVisible` isn't persisted (`WorkspaceViewModel.cs:2819`), and its setter announces (`WorkspaceViewModel.cs:2826`).

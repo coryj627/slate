@@ -24,6 +24,8 @@ public sealed class NarrowWindowLayoutTests
         Assert.True(right <= host.Shell.ActualWidth, $"the rail ends at {right:F0}px in a {host.Shell.ActualWidth:F0}px window.");
     });
 
+    /// <summary>The window's borders take 16px at 100% display scale and 13px at 200%,
+    /// so a minimum that only just fits at one scale can miss at another.</summary>
     [Fact]
     public void TheWindowsMinimumHasRoomForEveryColumnsFloor() => StaThread.Run(() =>
     {

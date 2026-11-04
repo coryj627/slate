@@ -10,7 +10,7 @@
         xmlns:graph="clr-namespace:SlateWindows.Graph"
         Title="Slate"
         Height="720" Width="1120"
-        MinHeight="480" MinWidth="775"
+        MinHeight="480" MinWidth="780"
         UseLayoutRounding="True"
         AutomationProperties.AutomationId="Slate.MainWindow"
         Background="{DynamicResource Slate.WindowBackgroundBrush}"
