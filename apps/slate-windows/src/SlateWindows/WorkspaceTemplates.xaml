@@ -212,6 +212,7 @@
     <local:CappedShareConverter x:Key="PropertyRowsMaxHeightConverter" Reserve="320" Floor="80" Cap="280" />
     <local:CappedShareConverter x:Key="PropertiesCardMaxHeightConverter" Reserve="150" Floor="120" Cap="100000" />
     <local:CappedShareConverter x:Key="QuickOpenNameWidthConverter" Share="12.8572" />
+    <local:CappedShareConverter x:Key="CanvasPromptListMaxHeightConverter" Share="0.5" />
     <local:CappedShareConverter x:Key="DualPaneListMaxHeightConverter" Share="0.5" Cap="150" />
     <local:IsNotNullConverter x:Key="IsNotNullConverter" />
     <local:SidebarSortModeLabelConverter x:Key="SidebarSortModeLabelConverter" />

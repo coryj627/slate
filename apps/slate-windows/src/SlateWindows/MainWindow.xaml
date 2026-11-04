@@ -4633,6 +4633,7 @@
                              SelectedItem="{Binding SelectedChoice}"
                              Focusable="{Binding HasRows}"
                              Visibility="{Binding HasTextField, Converter={StaticResource InverseBooleanToVisibilityConverter}}"
+                             MaxHeight="{Binding ActualHeight, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource CanvasPromptListMaxHeightConverter}}"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                              AutomationProperties.AutomationId="CanvasPromptChoices" local:SiblingNames.NamePath="Name" local:SiblingNames.Noun="choice"
                              AutomationProperties.Name="Choices. Enter submits; on the marks list Enter jumps and Delete unmarks.">
