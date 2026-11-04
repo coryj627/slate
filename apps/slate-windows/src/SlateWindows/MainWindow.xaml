@@ -2729,7 +2729,7 @@
                         </ListBox.ItemTemplate>
                     </local:AutomationVisibilityListBox>
                     <DockPanel Grid.Row="2">
-                        <local:AutomationPresentationTextBlock Text="{Binding ResultSummary}"
+                        <local:AutomationPresentationTextBlock Text="{Binding ResultSummary}" TextWrapping="Wrap"
                                                                Margin="0,0,12,0"
                                                                Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}"
                                                                Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
@@ -2851,7 +2851,7 @@
                                     AutomationProperties.HelpText="Removes the tag filter and searches the whole vault." />
                             <local:AutomationPresentationTextBlock
                                     VerticalAlignment="Center"
-                                    Text="{Binding TagScopeName, StringFormat='Tag: {0}'}" />
+                                    Text="{Binding TagScopeName, StringFormat='Tag: {0}'}" TextWrapping="Wrap" />
                         </DockPanel>
                     </local:AutomationNamedRowBorder>
                     <Grid Grid.Row="2" Margin="0,8,0,0">
@@ -3034,7 +3034,7 @@
                          source of truth; ItemStatus carries the UIA copy). -->
                     <local:AutomationPresentationTextBlock Grid.Row="3"
                             Margin="4,8,4,0"
-                            Text="{Binding Summary}"
+                            Text="{Binding Summary}" TextWrapping="Wrap"
                             Visibility="{Binding ShowsResultRows, Converter={StaticResource BooleanToVisibilityConverter}}"
                             Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                 </Grid>
@@ -3162,7 +3162,7 @@
                             <GroupStyle>
                                 <GroupStyle.HeaderTemplate>
                                     <DataTemplate>
-                                        <TextBlock Text="{Binding Name}"
+                                        <TextBlock Text="{Binding Name}" TextWrapping="Wrap"
                                                    Margin="4,8,4,2"
                                                    FontWeight="SemiBold"
                                                    Foreground="{DynamicResource Slate.SecondaryTextBrush}"
@@ -3240,7 +3240,7 @@
                                 Visibility="{Binding ShowsEmptyState, Converter={StaticResource BooleanToVisibilityConverter}}"
                                 AutomationProperties.Name="{Binding EmptyStateAccessibleName}">
                         <StackPanel>
-                        <local:AutomationPresentationTextBlock Text="{Binding EmptyStateTitle}"
+                        <local:AutomationPresentationTextBlock Text="{Binding EmptyStateTitle}" TextWrapping="Wrap"
                                                                FontWeight="SemiBold" />
                         <local:AutomationPresentationTextBlock Text="{Binding EmptyStateDetail}"
                                                                Foreground="{DynamicResource Slate.SecondaryTextBrush}"
@@ -3418,7 +3418,7 @@
                         </StackPanel>
                     </Grid>
                     <StackPanel Grid.Row="2" Margin="0,8,0,0">
-                        <TextBlock Text="{Binding ProgressText}"
+                        <TextBlock Text="{Binding ProgressText}" TextWrapping="Wrap"
                                    Foreground="{DynamicResource Slate.SecondaryTextBrush}"
                                    Visibility="{Binding ProgressText, Converter={StaticResource NullToVisibilityConverter}}" />
                         <TextBlock Text="{Binding ErrorText}"
@@ -3428,7 +3428,7 @@
                     </StackPanel>
                     <TextBlock Grid.Row="3"
                                Margin="0,12"
-                               Text="{Binding EmptyStateText}"
+                               Text="{Binding EmptyStateText}" TextWrapping="Wrap"
                                Foreground="{DynamicResource Slate.SecondaryTextBrush}"
                                Visibility="{Binding ShowEmptyState, Converter={StaticResource BooleanToVisibilityConverter}}"
                                AutomationProperties.Name="{Binding EmptyStateText}" />
@@ -3439,7 +3439,7 @@
                                               MaxHeight="280"
                                               Visibility="{Binding ShowEmptyState, Converter={StaticResource InverseBooleanToVisibilityConverter}}" />
                     <TextBlock Grid.Row="4"
-                               Text="{Binding FooterText}"
+                               Text="{Binding FooterText}" TextWrapping="Wrap"
                                Foreground="{DynamicResource Slate.SecondaryTextBrush}"
                                AutomationProperties.AutomationId="BulkRenameFooter" />
                     <StackPanel Grid.Row="5"
@@ -3507,7 +3507,7 @@
                          (contract 7): the sheet says so plainly rather
                          than showing empty fields. -->
                     <StackPanel Visibility="{Binding IsUnresolved, Converter={StaticResource BooleanToVisibilityConverter}}">
-                        <TextBlock Text="{Binding UnresolvedHeading}"
+                        <TextBlock Text="{Binding UnresolvedHeading}" TextWrapping="Wrap"
                                    FontWeight="SemiBold"
                                    AutomationProperties.HeadingLevel="Level2" />
                         <TextBlock Margin="0,6,0,0"
@@ -3645,7 +3645,7 @@
                 </local:AutomationLandmarkBorder.Effect>
                 <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <StackPanel>
-                    <TextBlock Text="{Binding Heading}"
+                    <TextBlock Text="{Binding Heading}" TextWrapping="Wrap"
                                FontWeight="SemiBold"
                                AutomationProperties.HeadingLevel="Level2" />
                     <TextBlock Margin="0,6,0,0"
@@ -3703,7 +3703,7 @@
                 </local:AutomationLandmarkBorder.Effect>
                 <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <StackPanel>
-                    <TextBlock Text="{Binding Heading}"
+                    <TextBlock Text="{Binding Heading}" TextWrapping="Wrap"
                                FontWeight="SemiBold"
                                AutomationProperties.HeadingLevel="Level2" />
                     <TextBlock Margin="0,6,0,0"
@@ -3765,7 +3765,7 @@
                 <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <DockPanel>
                     <TextBlock DockPanel.Dock="Top"
-                               Text="{Binding Title}"
+                               Text="{Binding Title}" TextWrapping="Wrap"
                                Style="{DynamicResource Slate.SubtitleTextBlockStyle}"
                                AutomationProperties.HeadingLevel="Level2" />
                     <!-- #1790: one label column, so the fields start together. -->
@@ -3909,7 +3909,7 @@
                 <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <DockPanel>
                     <TextBlock DockPanel.Dock="Top"
-                               Text="{Binding Title}"
+                               Text="{Binding Title}" TextWrapping="Wrap"
                                Style="{DynamicResource Slate.SubtitleTextBlockStyle}"
                                AutomationProperties.HeadingLevel="Level2" />
                     <WrapPanel DockPanel.Dock="Bottom" HorizontalAlignment="Right" Margin="0,6,0,0">
@@ -4442,7 +4442,7 @@
                 <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <DockPanel>
                     <StackPanel DockPanel.Dock="Top">
-                        <TextBlock Text="{Binding Title}"
+                        <TextBlock Text="{Binding Title}" TextWrapping="Wrap"
                                    Style="{DynamicResource Slate.SubtitleTextBlockStyle}"
                                    AutomationProperties.HeadingLevel="Level2" />
                         <TextBlock Margin="0,4,0,8"
@@ -4541,7 +4541,7 @@
                     AutomationProperties.IsDialog="True">
                 <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <StackPanel>
-                    <TextBlock Text="{Binding Title}"
+                    <TextBlock Text="{Binding Title}" TextWrapping="Wrap"
                                FontWeight="SemiBold"
                                Margin="0,0,0,8" />
                     <TextBox local:FieldPrompt.IsEnabled="True" Text="{Binding Draft, UpdateSourceTrigger=PropertyChanged}"
@@ -4589,7 +4589,7 @@
                     AutomationProperties.IsDialog="True">
                 <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <StackPanel>
-                    <TextBlock Text="{Binding Title}"
+                    <TextBlock Text="{Binding Title}" TextWrapping="Wrap"
                                FontWeight="SemiBold"
                                Margin="0,0,0,8" />
                     <TextBox x:Name="CanvasCardPickerFilterBox"

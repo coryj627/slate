@@ -446,6 +446,26 @@ public sealed partial class TextScaleTests
         Assert.True(offenders.Count == 0, "Rows that cut their text:\n" + string.Join('\n', offenders));
     }
 
+    /// <summary>Text a sheet binds is as long as what it names: a tag's whole path, or a
+    /// file's name in a title. A hosted sheet has none of it to measure, so each one says
+    /// what it does with too little room. A key hint keeps a column of its own.</summary>
+    [Fact]
+    public void ASheetsBoundTextWrapsOrTrims()
+    {
+        XDocument shell = XDocument.Load(Path.Combine(SourceText.ShellSourceRoot(), "MainWindow.xaml"), LoadOptions.SetLineInfo);
+        string[] offenders = shell.Descendants()
+            .Where(element => (string?)element.Attribute("AutomationProperties.IsDialog") == "True")
+            .SelectMany(sheet => sheet.Descendants())
+            .Where(element => element.Name.LocalName is "TextBlock" or "AutomationPresentationTextBlock")
+            .Where(text => ((string?)text.Attribute("Text"))?.StartsWith("{Binding", StringComparison.Ordinal) == true)
+            .Where(text => (string?)text.Attribute("Text") != "{Binding HotkeyHint}")
+            .Where(text => text.Attribute("TextWrapping") is null && text.Attribute("TextTrimming") is null)
+            .Select(text => $"{(string?)text.Attribute("Text")} at line {((System.Xml.IXmlLineInfo)text).LineNumber}")
+            .ToArray();
+
+        Assert.True(offenders.Length == 0, "Bound text with no room to spare:\n" + string.Join('\n', offenders));
+    }
+
     /// <summary>A recent search is what its reader typed, however long they made it, and it
     /// ran off the end of its row.</summary>
     [Fact]
