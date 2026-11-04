@@ -23,6 +23,16 @@ internal sealed record TypeRampStep(string Name, double Size, double LineHeight,
         : TypeRamp.TextFamilyKey;
 }
 
+/// <summary>One step of the reading view's own scale, the tokens' <c>--reader-*</c>.
+/// They aren't ramp steps, because the ramp is for chrome. They're keys so text size
+/// scales them with everything else.</summary>
+internal sealed record ReaderStep(string Name, double Size, double LineHeight)
+{
+    internal string SizeKey => "Slate.FontSizeReader" + Name;
+
+    internal string LineHeightKey => "Slate.LineHeightReader" + Name;
+}
+
 /// <summary>
 /// DS-2: the shell's one type scale, the WinUI ramp the design adopted
 /// (design/windows/tokens/typography.css), as dynamic resources so text size can
@@ -50,6 +60,26 @@ internal static class TypeRamp
 
     internal static readonly IReadOnlyList<TypeRampStep> Steps =
         [Caption, Body, BodyStrong, BodyLarge, BodyLargeStrong, Subtitle, Title];
+
+    internal static readonly ReaderStep ReaderBody = new("Body", 16, 26);
+    internal static readonly ReaderStep ReaderH1 = new("H1", 32, 40);
+    internal static readonly ReaderStep ReaderH2 = new("H2", 24, 32);
+    internal static readonly ReaderStep ReaderH3 = new("H3", 20, 28);
+    internal static readonly ReaderStep ReaderH4 = new("H4", 18, 26);
+    internal static readonly ReaderStep ReaderSmall = new("Small", 14, 22);
+
+    internal static readonly IReadOnlyList<ReaderStep> ReaderSteps =
+        [ReaderBody, ReaderH1, ReaderH2, ReaderH3, ReaderH4, ReaderSmall];
+
+    /// <summary>A heading's step. Levels 5 and 6 fold into H4, the smallest the
+    /// tokens name.</summary>
+    internal static ReaderStep ReaderHeading(byte level) => level switch
+    {
+        1 => ReaderH1,
+        2 => ReaderH2,
+        3 => ReaderH3,
+        _ => ReaderH4,
+    };
 
     /// <summary><paramref name="fluent"/> with <paramref name="step"/>'s family and
     /// size. Built here because a dictionary can't reach a sibling's style.</summary>
@@ -80,6 +110,12 @@ internal static class TypeRamp
             [DisplayFamilyKey] = DisplayFamily,
         };
         foreach (TypeRampStep step in Steps)
+        {
+            ramp[step.SizeKey] = step.Size * factor;
+            ramp[step.LineHeightKey] = step.LineHeight * factor;
+        }
+
+        foreach (ReaderStep step in ReaderSteps)
         {
             ramp[step.SizeKey] = step.Size * factor;
             ramp[step.LineHeightKey] = step.LineHeight * factor;

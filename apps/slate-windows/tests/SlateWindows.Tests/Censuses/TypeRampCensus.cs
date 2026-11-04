@@ -18,9 +18,6 @@ public sealed partial class TypeRampCensus
         ("EditorInteractions.cs", "MinimumFontSize = 8", "that preference's bounds"),
         ("EditorInteractions.cs", "MaximumFontSize = 40", "that preference's bounds"),
         (@"Graph\GraphDiagramView.cs", "LabelFontSize = 11", "drawn labels, already scaled by text size and zoom"),
-        (@"Reading\ReadingDocumentBuilder.cs", "FontSize = 15,", "the reading view's scale is DS-3's"),
-        (@"Reading\ReadingDocumentBuilder.cs", "PreambleCaptionFontSize = 12", "the reading view's scale is DS-3's"),
-        (@"Reading\ReadingSurface.cs", "FontSize = 15,", "the reading view's scale is DS-3's"),
     ];
 
     /// <summary>The app's one window that never shows text: it reads a system
