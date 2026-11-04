@@ -207,6 +207,54 @@ public sealed class ReadingTypeTests
         Assert.True(paddingAfter > paddingBefore, $"the padding stayed at {paddingAfter:F0}.");
     }
 
+    /// <summary>A theme or a text size swaps dictionaries, and each key passes through
+    /// unset on the way. The document's own values lag behind that, so a measure read
+    /// from them landed on the old font, with nothing to repair it until a resize.</summary>
+    [Theory]
+    [InlineData(true, false, 1.0)]
+    [InlineData(false, true, 1.0)]
+    [InlineData(false, false, 1.5)]
+    [InlineData(false, false, 2.25)]
+    public void AThemeOrTextSizeChangeRefitsTheMeasure(bool dark, bool highContrast, double scale)
+    {
+        SlateTheme theme = dark ? SlateTheme.Dark : SlateTheme.Light;
+        (double padding, double width, double digit, bool sameDocument, int before, int after) = OnSurface(1400, surface =>
+        {
+            Show(surface, Words);
+            FlowDocument document = surface.Document;
+            surface.CaretPosition = document.ContentStart.GetPositionAtOffset(25)!;
+            int caret = document.ContentStart.GetOffsetToPosition(surface.CaretPosition);
+
+            var window = (Window)surface.Parent;
+            var merged = window.Resources.MergedDictionaries;
+            foreach (ResourceDictionary old in merged.ToArray())
+            {
+                merged.Remove(old);
+            }
+
+            foreach (ResourceDictionary layer in ThemeManager.DictionariesFor(theme, highContrast, scale))
+            {
+                merged.Add(layer);
+            }
+
+            surface.UpdateLayout();
+            Pump();
+            double zero = new FormattedText(
+                "0",
+                CultureInfo.InvariantCulture,
+                FlowDirection.LeftToRight,
+                new Typeface(document.FontFamily, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal),
+                document.FontSize,
+                Brushes.Black,
+                VisualTreeHelper.GetDpi(surface).PixelsPerDip).WidthIncludingTrailingWhitespace;
+            return (document.PagePadding.Left, surface.ActualWidth, zero, ReferenceEquals(document, surface.Document), caret, document.ContentStart.GetOffsetToPosition(surface.CaretPosition));
+        });
+
+        Assert.Equal(Math.Max(16, (width - (72 * digit)) / 2), padding, 0);
+        Assert.True(sameDocument, "the change replaced the document.");
+        Assert.Equal(before, after);
+    }
+
     private static Paragraph Show(ReadingSurface surface, string text)
     {
         var paragraph = new Paragraph(new Run(text));

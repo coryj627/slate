@@ -88,6 +88,7 @@ internal sealed class ReadingSurface : RichTextBox
             FlowDocument.FontFamilyProperty, "Slate.ReadingFontFamily");
         ReadingDocumentBuilder.ApplyBodyType(Document);
         SetResourceReference(BodySizeProperty, TypeRamp.ReaderBody.SizeKey);
+        SetResourceReference(BodyFamilyProperty, "Slate.ReadingFontFamily");
         SizeChanged += (_, _) => FitMeasure();
 
         // Activation: clicks and Enter on links/cards route by the run
@@ -1414,16 +1415,32 @@ internal sealed class ReadingSurface : RichTextBox
 
     private const double PagePaddingFloor = 16;
 
-    /// <summary>The body's size, watched so the measure follows it.</summary>
+    /// <summary>The body's size and face, watched so the measure follows them. They're
+    /// the surface's own because the document's values lag these callbacks when a theme
+    /// or text size swaps dictionaries, which left the measure on the old font.</summary>
     private static readonly DependencyProperty BodySizeProperty = DependencyProperty.Register(
         "BodySize",
         typeof(double),
         typeof(ReadingSurface),
         new PropertyMetadata(0d, (surface, _) => ((ReadingSurface)surface).FitMeasure()));
 
+    private static readonly DependencyProperty BodyFamilyProperty = DependencyProperty.Register(
+        "BodyFamily",
+        typeof(System.Windows.Media.FontFamily),
+        typeof(ReadingSurface),
+        new PropertyMetadata(null, (surface, _) => ((ReadingSurface)surface).FitMeasure()));
+
     private void FitMeasure()
     {
-        double side = Math.Max(PagePaddingFloor, (ActualWidth - MeasureWidth()) / 2);
+        // Each key passes through unset during a swap, and a surface outside the shell
+        // has none, so there's nothing to measure with until they resolve.
+        double size = (double)GetValue(BodySizeProperty);
+        if (size <= 0 || GetValue(BodyFamilyProperty) is not System.Windows.Media.FontFamily family)
+        {
+            return;
+        }
+
+        double side = Math.Max(PagePaddingFloor, (ActualWidth - MeasureWidth(family, size)) / 2);
         var padding = new Thickness(side, PagePaddingFloor, side, PagePaddingFloor);
         if (Document.PagePadding != padding)
         {
@@ -1432,12 +1449,12 @@ internal sealed class ReadingSurface : RichTextBox
     }
 
     /// <summary>A <c>ch</c> is the advance of a zero, in the face and size on show.</summary>
-    private double MeasureWidth() => MeasureCharacters * new System.Windows.Media.FormattedText(
+    private double MeasureWidth(System.Windows.Media.FontFamily family, double size) => MeasureCharacters * new System.Windows.Media.FormattedText(
         "0",
         System.Globalization.CultureInfo.InvariantCulture,
         FlowDirection.LeftToRight,
-        new System.Windows.Media.Typeface(Document.FontFamily, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal),
-        Document.FontSize,
+        new System.Windows.Media.Typeface(family, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal),
+        size,
         System.Windows.Media.Brushes.Black,
         System.Windows.Media.VisualTreeHelper.GetDpi(this).PixelsPerDip).WidthIncludingTrailingWhitespace;
 

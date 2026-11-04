@@ -693,13 +693,17 @@ internal static class ReadingDocumentBuilder
     /// style, not a document value, because <c>Block.LineHeight</c> inherits, and would
     /// follow into the text blocks of cards and tables. Paragraphs keep the default
     /// stacking, under which it's a floor, so a math or diagram object grows its line
-    /// instead of overlapping what follows.</summary>
+    /// instead of overlapping what follows. It would also inherit through an inline's
+    /// child, a formula's fallback source among them, so the container stops it.</summary>
     internal static void ApplyBodyType(FlowDocument document)
     {
         document.SetResourceReference(FlowDocument.FontSizeProperty, TypeRamp.ReaderBody.SizeKey);
         var body = new Style(typeof(Paragraph));
         body.Setters.Add(new Setter(Block.LineHeightProperty, new DynamicResourceExtension(TypeRamp.ReaderBody.LineHeightKey)));
         document.Resources[typeof(Paragraph)] = body;
+        var inlineObject = new Style(typeof(InlineUIContainer));
+        inlineObject.Setters.Add(new Setter(Block.LineHeightProperty, double.NaN));
+        document.Resources[typeof(InlineUIContainer)] = inlineObject;
     }
 
     /// <summary>A heading's size, line height and weight (DS-3): Reader H1 is the one
@@ -815,6 +819,15 @@ internal static class ReadingDocumentBuilder
                 Data = geometry,
                 Stretch = System.Windows.Media.Stretch.None,
             };
+            // Natural size, downscale-only to fit, as an image embed does: the math
+            // element clips what its line can't hold, which cut a wide formula's terms
+            // off. Uniform takes the smaller scale, so holding the width holds the height.
+            // A formula that draws nothing has no width, and MaxWidth refuses what it reports.
+            if (geometry.Bounds.Width > 0)
+            {
+                path.Stretch = System.Windows.Media.Stretch.Uniform;
+                path.MaxWidth = geometry.Bounds.Width;
+            }
             path.SetResourceReference(
                 System.Windows.Shapes.Path.FillProperty, "Slate.TextBrush");
             return path;

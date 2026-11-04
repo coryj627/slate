@@ -262,6 +262,70 @@ public sealed class ReadingMathTests
             Assert.DoesNotContain("$", range, StringComparison.Ordinal);
         });
 
+    /// <summary>DS-3: the measure made a drawn formula's room narrower, and the
+    /// element clips what doesn't fit, so terms disappeared. A wide one now shrinks to
+    /// fit, in the path the reader's speech and braille are beside.</summary>
+    [Fact]
+    public void AWideFormulaFitsInsteadOfBeingCutOff()
+        => WithReadingSurface("reading-math-wide", "$$" + string.Concat(Enumerable.Repeat("x+", 40)) + "x$$\n", (_, surface, _) =>
+            WithHostedSurface(surface, 900, () =>
+            {
+                ReadingMathElement element = Assert.Single(FindMathElements(surface.Document));
+                var formula = Assert.IsType<System.Windows.Shapes.Path>(element.Content);
+                double natural = formula.Data.Bounds.Width;
+                Assert.True(natural > element.ActualWidth, $"at {natural:F0} the formula doesn't test this.");
+                double drawn = formula.RenderedGeometry.Bounds.Right;
+                Assert.True(drawn <= element.ActualWidth + 0.5, $"the formula reaches {drawn:F0} in a {element.ActualWidth:F0} element.");
+                Assert.True(drawn > element.ActualWidth / 2, $"the formula shrank to {drawn:F0}.");
+            }));
+
+    /// <summary>A formula that fits is drawn at its own size, never scaled up to the
+    /// room it's given.</summary>
+    [Fact]
+    public void ASmallFormulaKeepsItsSize()
+        => WithReadingSurface("reading-math-small", "$$x^2$$\n", (_, surface, _) =>
+            WithHostedSurface(surface, 900, () =>
+            {
+                ReadingMathElement element = Assert.Single(FindMathElements(surface.Document));
+                var formula = Assert.IsType<System.Windows.Shapes.Path>(element.Content);
+                System.Windows.Rect drawn = formula.RenderedGeometry.Bounds;
+                Assert.Equal(formula.Data.Bounds.Width, drawn.Width, 1);
+                Assert.Equal(formula.Data.Bounds.Height, drawn.Height, 1);
+
+                // A line measures with an unbounded height, where Uniform happens not
+                // to grow anything, so only a bounded one shows the cap.
+                formula.Measure(new System.Windows.Size(400, 400));
+                Assert.Equal(formula.Data.Bounds.Width, formula.DesiredSize.Width, 1);
+            }));
+
+    /// <summary>A formula that draws nothing has no bounds to hold it to, and
+    /// <c>MaxWidth</c> refuses what an empty geometry reports, which would have failed
+    /// the whole note's reading view.</summary>
+    [Fact]
+    public void AFormulaThatDrawsNothingStillBuilds()
+        => WithReadingSurface("reading-math-empty", "$$\\,$$\n", (_, surface, _) =>
+        {
+            ReadingMathElement element = Assert.Single(FindMathElements(surface.Document));
+            var formula = Assert.IsType<System.Windows.Shapes.Path>(element.Content);
+            Assert.True(formula.Data.Bounds.IsEmpty, $"this formula has bounds of {formula.Data.Bounds}.");
+        });
+
+    /// <summary>LineHeight inherits through an inline's child, so the body's would have
+    /// spaced a formula's fallback source out, where it isn't body text.</summary>
+    [Fact]
+    public void AFormulasFallbackTextKeepsItsOwnLineHeight()
+        => WithReadingSurface("reading-math-gap-leading", "$$\\mathbb{R}$$\n", (_, surface, _) =>
+        {
+            surface.Resources.MergedDictionaries.Add(TypeRamp.DictionaryFor());
+            WithHostedSurface(surface, 900, () =>
+            {
+                ReadingMathElement element = Assert.Single(FindMathElements(surface.Document));
+                var fallback = Assert.IsType<System.Windows.Controls.TextBlock>(element.Content);
+                Assert.True(double.IsNaN(fallback.LineHeight), $"the fallback inherited a line height of {fallback.LineHeight}.");
+                Assert.Equal(TypeRamp.ReaderBody.LineHeight, MathParagraphOf(element).LineHeight);
+            });
+        });
+
     /// <summary>#1595: core's fallback (a source pulldown-latex cannot
     /// parse) reads as core's fallback speech, not as the fenced
     /// source.</summary>
