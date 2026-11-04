@@ -152,6 +152,18 @@ internal sealed class FormulaScroller : ScrollViewer
     protected override void OnMouseWheel(MouseWheelEventArgs e)
     {
     }
+
+    /// <summary>Fluent's template lets the content span the bar's row, so a formula that
+    /// scrolls keeps room below it, or the bar would run through its ink.</summary>
+    protected override void OnScrollChanged(ScrollChangedEventArgs e)
+    {
+        base.OnScrollChanged(e);
+        double room = ScrollableWidth > 0 && GetTemplateChild("PART_HorizontalScrollBar") is FrameworkElement bar ? bar.ActualHeight : 0;
+        if (Padding.Bottom != room)
+        {
+            Padding = new Thickness(0, 0, 0, room);
+        }
+    }
 }
 
 /// <summary>

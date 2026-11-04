@@ -281,7 +281,32 @@ public sealed class ReadingMathTests
                     $"{element.ActualWidth:F0} plus a scroll of {scroller.ScrollableWidth:F0} doesn't reach {natural:F0}.");
             }));
 
-    /// <summary>A formula that fits has nothing to scroll.</summary>
+    /// <summary>Fluent's scroll viewer lets its content span the bar's row, which ran
+    /// the bar through a short formula like a strikethrough.</summary>
+    [Fact]
+    public void AWideFormulasBarSitsBelowIt()
+        => WithReadingSurface("reading-math-bar", WideFormula, (_, surface, _) =>
+        {
+            foreach (System.Windows.ResourceDictionary layer in ThemeManager.DictionariesFor(SlateTheme.Light, highContrast: false))
+            {
+                surface.Resources.MergedDictionaries.Add(layer);
+            }
+
+            WithHostedSurface(surface, 900, () =>
+            {
+                surface.UpdateLayout();
+                ReadingMathElement element = Assert.Single(FindMathElements(surface.Document));
+                var formula = Assert.IsType<System.Windows.Shapes.Path>(element.Content);
+                var scroller = Assert.IsType<FormulaScroller>(element.Scroller);
+                var bar = Assert.IsType<System.Windows.Controls.Primitives.ScrollBar>(scroller.Template.FindName("PART_HorizontalScrollBar", scroller));
+                Assert.Equal(System.Windows.Visibility.Visible, bar.Visibility);
+                double top = bar.TranslatePoint(default, element).Y;
+                double ink = formula.TranslatePoint(new System.Windows.Point(0, formula.ActualHeight), element).Y;
+                Assert.True(top >= ink - 0.5, $"the bar starts at {top:F1}, over ink reaching {ink:F1}.");
+            });
+        });
+
+    /// <summary>A formula that fits has nothing to scroll, and no room kept for a bar.</summary>
     [Fact]
     public void ASmallFormulaKeepsItsSize()
         => WithReadingSurface("reading-math-small", "$$x^2$$\n", (_, surface, _) =>
@@ -290,7 +315,9 @@ public sealed class ReadingMathTests
                 ReadingMathElement element = Assert.Single(FindMathElements(surface.Document));
                 var formula = Assert.IsType<System.Windows.Shapes.Path>(element.Content);
                 Assert.Equal(formula.Data.Bounds.Width, formula.RenderedGeometry.Bounds.Width, 1);
-                Assert.Equal(0, Assert.IsType<FormulaScroller>(element.Scroller).ScrollableWidth);
+                var scroller = Assert.IsType<FormulaScroller>(element.Scroller);
+                Assert.Equal(0, scroller.ScrollableWidth);
+                Assert.Equal(0, scroller.Padding.Bottom);
             }));
 
     /// <summary>A sighted keyboard reader reaches the rest of a wide formula from its
