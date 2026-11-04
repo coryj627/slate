@@ -256,6 +256,46 @@ public sealed class NarrowWindowLayoutTests
         Assert.False(titleBox.IntersectsWith(switcher), $"the title at {titleBox} is under the switcher at {switcher}.");
     });
 
+    /// <summary>#1797: at the right pane's floor the dock's surface is about 150 wide.
+    /// Refresh stayed docked beside the title, which left it about 50, and the filter's
+    /// 160 minimum ran past the surface's edge.</summary>
+    [Fact]
+    public void ABaseInTheDockKeepsItsHeaderWhole() => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        var view = new SlateWindows.Bases.BaseSurfaceView { Width = 150, HorizontalAlignment = HorizontalAlignment.Left };
+        host.Shell.Content = view;
+        host.Settle();
+
+        Rect filter = BoxIn(Named(view, "BaseQuickFilter"), view);
+        Rect refresh = BoxIn(Named(view, "BaseRefresh"), view);
+        Assert.True(filter.Right <= 150, $"the filter ends at {filter.Right:F0}px in a 150px surface.");
+        Assert.True(refresh.Right <= 150, $"Refresh ends at {refresh.Right:F0}px in a 150px surface.");
+        Assert.False(filter.IntersectsWith(refresh), $"the filter at {filter} is under Refresh at {refresh}.");
+
+        var title = ShownShell.Descendants(view)
+            .OfType<System.Windows.Controls.TextBlock>()
+            .First(text => AutomationProperties.GetHeadingLevel(text) == AutomationHeadingLevel.Level2);
+        Assert.Equal(TextWrapping.Wrap, title.TextWrapping);
+    });
+
+    /// <summary>#1797: a list row was cut off mid-word, with no way to read the rest.</summary>
+    [Fact]
+    public void ABasesListRowWraps() => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        var view = new SlateWindows.Bases.BaseSurfaceView { Width = 200, Height = 300, HorizontalAlignment = HorizontalAlignment.Left };
+        view.ListForTests.Visibility = Visibility.Visible;
+        view.ListForTests.ItemsSource = new[] { new SlateWindows.Bases.BaseListHeaderViewModel(string.Concat(Enumerable.Repeat("words that wrap ", 12))) };
+        host.Shell.Content = view;
+        host.Settle();
+
+        var text = ShownShell.Descendants(view.ListForTests)
+            .OfType<System.Windows.Controls.TextBlock>()
+            .Single(block => block.Text.StartsWith("words", StringComparison.Ordinal));
+        Assert.Equal(TextWrapping.Wrap, text.TextWrapping);
+    });
+
     /// <summary>The graph's summary ran past half of a split pane.</summary>
     [Fact]
     public void AGridsSummaryWrapsInANarrowPane() => StaThread.Run(() =>
