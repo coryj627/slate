@@ -101,6 +101,11 @@ Codex's rounds went on to the window's 480 minimum at 225%, which the launched p
 - **`WheelChain`** sits on the outer scroller, because an inner scroller takes the wheel even with nowhere to go. It leaves the wheel to an inner scroller that can move that way and otherwise takes it. What's in a popup keeps its own. A closed combo box under the pointer no longer steps its value, which it only did with focus inside it.
 - **Quick Open's name column** is 180 at the body size, multiplied by the text size, because an `Auto` column doesn't bound and a long name left its path no room.
 - **The calendar's buttons** take their `MaxWidth` and `MaxHeight` from their own text size, because Russian's month names clipped at Fluent's fixed caps. The calendar's frame is a copy of Fluent's `CalendarItem` template, `Themes/Slate.Calendar.xaml`, since the heading's size is inside it.
+- **Text a sheet binds wraps.** A hosted sheet has none of it to measure, so `ASheetsBoundTextWrapsOrTrims` reads it from the XAML. Titles, the tag scope chip and Bulk Rename's footer wrap now, and so does a recent search, in a button of its own. The launched pass found "Walk through citations" cut at its start beside Done, so that footer wraps, and `ASheetsButtonsHaveRoomForTheirBoundText` gives each such button text that long.
+- **Quick Open's footer is a `WrapPanel`.** Its error summary is a sentence, and it left the keys beside it 108 wide and 461 tall.
+- **Buttons side by side in a pane wrap.** A narrow split leaves a property row little more than a button's width. `APanesButtonsCanWrap` holds this for every pane.
+
+Left as they are, because they're the same at 100% with a long enough value: the Files filter's results scroll sideways, a closed combo box cuts a selection longer than itself, and a field's prompt trims.
 
 `CanvasTextScaleService` stays in the frozen canvas and graph contract records, which are append-only. `ContractsCitationCensus.RetiredNames` says what it's called now, and a fact holds that the new name exists and the old one is gone.
 
