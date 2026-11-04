@@ -215,14 +215,17 @@ public sealed partial class TextScaleTests
         Assert.True(cut.Length == 0, $"{cut.Length} cut:\n" + string.Join('\n', cut));
     });
 
-    /// <summary>Every sheet, opened by hand, so what it shows is what it declares. The
-    /// launched pass reads their contents.</summary>
-    [Fact]
-    public void NoSheetTextIsCutAtTheLargestSize() => OnOwnThread(() =>
+    /// <summary>Every sheet, opened by hand, so what it shows is what it declares, in the
+    /// window the app opens at and at its minimum height. Past that a sheet scrolls, and
+    /// keys reach what's scrolled off. The launched pass reads their contents.</summary>
+    [Theory]
+    [InlineData(720)]
+    [InlineData(480)]
+    public void NoSheetTextIsCutAtTheLargestSize(double height) => OnOwnThread(() =>
     {
         using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
         host.Shell.Width = 1120;
-        host.Shell.Height = 720;
+        host.Shell.Height = height;
         TypeRamp.Apply(RampOf(host.Shell), 2.25);
         host.Settle();
 
@@ -400,9 +403,9 @@ public sealed partial class TextScaleTests
     /// <summary>The canvas lists at the largest size: a long label's end, which is what
     /// tells it from its neighbours, is on screen.</summary>
     [Theory]
-    [InlineData("CanvasCardPickerRows")]
-    [InlineData("CanvasPromptChoices")]
-    public void ACanvasListKeepsTheEndOfALongLabel(string id) => OnOwnThread(() =>
+    [InlineData("CanvasCardPickerOverlay", "CanvasCardPickerRows")]
+    [InlineData("CanvasPromptOverlay", "CanvasPromptChoices")]
+    public void ACanvasListKeepsTheEndOfALongLabel(string sheetName, string id) => OnOwnThread(() =>
     {
         const string Label = "A card with a long shared prefix that runs on and on and on and on and on, the first";
         using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
@@ -410,15 +413,11 @@ public sealed partial class TextScaleTests
         host.Shell.Height = 720;
         TypeRamp.Apply(RampOf(host.Shell), 2.25);
         host.Settle();
-        ListBox list = ShownShell.Descendants(host.Shell).OfType<ListBox>()
+        var sheet = (FrameworkElement)host.Shell.FindName(sheetName);
+        _ = Open(sheet);
+        host.Settle();
+        ListBox list = ShownShell.Descendants(sheet).OfType<ListBox>()
             .First(found => System.Windows.Automation.AutomationProperties.GetAutomationId(found) == id);
-        DependencyObject sheet = list;
-        while (!System.Windows.Automation.AutomationProperties.GetIsDialog(sheet))
-        {
-            sheet = System.Windows.Media.VisualTreeHelper.GetParent(sheet);
-        }
-
-        _ = Open((FrameworkElement)sheet);
         list.SetCurrentValue(UIElement.VisibilityProperty, Visibility.Visible);
         list.SetCurrentValue(ItemsControl.ItemsSourceProperty, new[] { new LongRow(Label, Label) });
         host.Settle();

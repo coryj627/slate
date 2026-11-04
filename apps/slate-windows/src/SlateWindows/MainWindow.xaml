@@ -3279,6 +3279,7 @@
                 <local:AutomationLandmarkBorder.Effect>
                     <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
                 </local:AutomationLandmarkBorder.Effect>
+                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto">
                 <StackPanel>
                     <TextBlock Text="Add property"
                                Style="{DynamicResource Slate.SubtitleTextBlockStyle}"
@@ -3329,6 +3330,7 @@
                                 AutomationProperties.AutomationId="AddPropertyCancel" />
                     </StackPanel>
                 </StackPanel>
+                </ScrollViewer>
             </local:AutomationLandmarkBorder>
             <!-- ==========================================================
                  W4-4 (#736): the bulk-rename sheet. Default action is
@@ -3361,6 +3363,7 @@
                 <local:AutomationLandmarkBorder.Effect>
                     <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
                 </local:AutomationLandmarkBorder.Effect>
+                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -3430,6 +3433,7 @@
                                               Grid.Row="3"
                                               Margin="0,8"
                                               MinHeight="120"
+                                              MaxHeight="280"
                                               Visibility="{Binding ShowEmptyState, Converter={StaticResource InverseBooleanToVisibilityConverter}}" />
                     <TextBlock Grid.Row="4"
                                Text="{Binding FooterText}"
@@ -3458,6 +3462,7 @@
                                 AutomationProperties.AutomationId="BulkRenameClose" />
                     </StackPanel>
                 </Grid>
+                </ScrollViewer>
             </local:AutomationLandmarkBorder>
 
             <!-- ==========================================================
@@ -3493,6 +3498,7 @@
                 <local:AutomationLandmarkBorder.Effect>
                     <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
                 </local:AutomationLandmarkBorder.Effect>
+                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto">
                 <StackPanel>
                     <!-- An unresolved key is a real state, not an error
                          (contract 7): the sheet says so plainly rather
@@ -3601,6 +3607,7 @@
                                 AutomationProperties.HelpText="{Binding CloseHelp}" />
                     </StackPanel>
                 </StackPanel>
+                </ScrollViewer>
             </local:AutomationLandmarkBorder>
 
             <!-- ==========================================================
@@ -3633,6 +3640,7 @@
                 <local:AutomationLandmarkBorder.Effect>
                     <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
                 </local:AutomationLandmarkBorder.Effect>
+                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto">
                 <StackPanel>
                     <TextBlock Text="{Binding Heading}"
                                FontWeight="SemiBold"
@@ -3659,6 +3667,7 @@
                                 AutomationProperties.HelpText="{Binding DismissHelp}" />
                     </StackPanel>
                 </StackPanel>
+                </ScrollViewer>
             </local:AutomationLandmarkBorder>
 
             <!-- ==========================================================
@@ -3689,6 +3698,7 @@
                 <local:AutomationLandmarkBorder.Effect>
                     <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
                 </local:AutomationLandmarkBorder.Effect>
+                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto">
                 <StackPanel>
                     <TextBlock Text="{Binding Heading}"
                                FontWeight="SemiBold"
@@ -3725,6 +3735,7 @@
                                 AutomationProperties.AutomationId="FilesCitingClose" />
                     </StackPanel>
                 </StackPanel>
+                </ScrollViewer>
             </local:AutomationLandmarkBorder>
             <Border Background="Transparent"
                     Visibility="{Binding Workspace.DashboardEditorSheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
@@ -4522,6 +4533,7 @@
                     AutomationProperties.AutomationId="CanvasCardEditorSheet"
                     AutomationProperties.Name="{Binding SheetName}"
                     AutomationProperties.IsDialog="True">
+                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto">
                 <StackPanel>
                     <TextBlock Text="{Binding Title}"
                                FontWeight="SemiBold"
@@ -4549,6 +4561,7 @@
                             AutomationProperties.AutomationId="CanvasInspectionClose"
                             AutomationProperties.Name="Close card text" />
                 </StackPanel>
+                </ScrollViewer>
             </local:AutomationLandmarkBorder>
             <local:AutomationLandmarkBorder x:Name="CanvasCardPickerOverlay"
                     KeyboardNavigation.DirectionalNavigation="Contained"
@@ -4568,6 +4581,7 @@
                     AutomationProperties.AutomationId="CanvasCardPickerSheet"
                     AutomationProperties.Name="{Binding SheetName}"
                     AutomationProperties.IsDialog="True">
+                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto">
                 <StackPanel>
                     <TextBlock Text="{Binding Title}"
                                FontWeight="SemiBold"
@@ -4599,6 +4613,7 @@
                         </ListBox.ItemTemplate>
                     </ListBox>
                 </StackPanel>
+                </ScrollViewer>
             </local:AutomationLandmarkBorder>
 
             <local:AutomationLandmarkBorder x:Name="CanvasPromptOverlay"
