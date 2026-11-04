@@ -210,6 +210,7 @@
     <local:PixelGridLengthConverter x:Key="PixelGridLengthConverter" />
     <!-- What the rows leave: the tab strip, the rows' own header, the editor's margins, four of its 22px lines and the line under it, which is 280 here. CI measured 11 more, so it holds 40 in hand. -->
     <local:CappedShareConverter x:Key="PropertyRowsMaxHeightConverter" Reserve="320" Floor="80" Cap="280" />
+    <local:CappedShareConverter x:Key="PropertiesCardMaxHeightConverter" Reserve="150" Floor="120" Cap="100000" />
     <local:CappedShareConverter x:Key="DualPaneListMaxHeightConverter" Share="0.5" Cap="150" />
     <local:IsNotNullConverter x:Key="IsNotNullConverter" />
     <local:SidebarSortModeLabelConverter x:Key="SidebarSortModeLabelConverter" />
@@ -572,8 +573,19 @@
                  the file). Shown in editing and reading modes;
                  collapsed until the per-tab VM attaches (markdown tabs
                  only). -->
-            <Expander Grid.Row="0"
-                      Margin="12,8,12,0"
+            <!-- DS-5: the card scrolls past what leaves the note a few lines of its own.
+                 Those lines and the tab strip are text, so the room follows the text's size. -->
+            <ScrollViewer Grid.Row="0"
+                          Focusable="False"
+                          VerticalScrollBarVisibility="Auto"
+                          Visibility="{Binding Properties, Converter={StaticResource NullToVisibilityConverter}}">
+                <ScrollViewer.MaxHeight>
+                    <MultiBinding Converter="{StaticResource PropertiesCardMaxHeightConverter}" FallbackValue="395">
+                        <Binding Path="ActualHeight" RelativeSource="{RelativeSource AncestorType=TabControl}" />
+                        <Binding Path="FontSize" RelativeSource="{RelativeSource AncestorType=TabControl}" />
+                    </MultiBinding>
+                </ScrollViewer.MaxHeight>
+            <Expander Margin="12,8,12,0"
                       IsExpanded="{Binding Properties.IsExpanded, Mode=TwoWay}"
                       Visibility="{Binding Properties, Converter={StaticResource NullToVisibilityConverter}}"
                       AutomationProperties.AutomationId="PropertiesHeader"
@@ -585,14 +597,17 @@
                         <TextBlock VerticalAlignment="Center"
                                    Margin="0,0,16,0"
                                    FontWeight="SemiBold"
+                                   TextWrapping="Wrap"
                                    Text="{Binding Properties.HeaderText}"
                                    AutomationProperties.HeadingLevel="Level2" />
                         <Button Margin="0,2,8,2"
                                 MinHeight="28"
                                 Padding="8,2"
-                                Content="Rename property across the vault"
+                                AutomationProperties.Name="Rename property across the vault"
                                 AutomationProperties.AutomationId="PropertiesBulkRenameButton"
-                                Command="{Binding DataContext.Workspace.OpenBulkRenameSheetCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
+                                Command="{Binding DataContext.Workspace.OpenBulkRenameSheetCommand, RelativeSource={RelativeSource AncestorType=Window}}">
+                            <TextBlock Text="Rename property across the vault" TextWrapping="Wrap" />
+                        </Button>
                         <Button Margin="0,2,8,2"
                                 MinHeight="28"
                                 Padding="8,2"
@@ -611,6 +626,7 @@
                                TextWrapping="Wrap"
                                Visibility="{Binding Properties.LoadError, Converter={StaticResource NullToVisibilityConverter}}" />
                     <TextBlock Text="{Binding Properties.EmptyStateText}"
+                               TextWrapping="Wrap"
                                Foreground="{DynamicResource Slate.SecondaryTextBrush}"
                                Visibility="{Binding Properties.ShowEmptyState, Converter={StaticResource BooleanToVisibilityConverter}}"
                                AutomationProperties.Name="{Binding Properties.EmptyStateText}" />
@@ -648,6 +664,7 @@
                     </ScrollViewer>
                 </StackPanel>
             </Expander>
+            </ScrollViewer>
             <local:SlateTextEditor x:Name="MarkdownEditor"
                                    Grid.Row="1"
                                    Margin="12"

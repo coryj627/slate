@@ -129,6 +129,7 @@ internal sealed class ThemeManager : IDisposable
 
         _ = LoadDictionary(SlateRoot + "Slate.Text.xaml");
         _ = LoadDictionary(SlateRoot + "Slate.Menus.xaml");
+        _ = LoadDictionary(SlateRoot + "Slate.Calendar.xaml");
         _ = LoadDictionary(SlateRoot + "Slate.SystemColors.xaml");
     }
 
@@ -240,6 +241,23 @@ internal sealed class ThemeManager : IDisposable
         if (fluent[typeof(ToolTip)] is Style toolTip)
         {
             slate[typeof(ToolTip)] = TypeRamp.StyleOn(toolTip, TypeRamp.Caption);
+        }
+
+        // DS-5: Fluent fixes a calendar's labels at 14, and a date picker asks for its
+        // calendar's style by this key.
+        if (fluent["DatePickerCalendarStyle"] is Style calendar)
+        {
+            var scaled = new Style(typeof(Calendar), calendar);
+            scaled.Setters.Add(new Setter(
+                Calendar.CalendarItemStyleProperty,
+                LoadDictionary(SlateRoot + "Slate.Calendar.xaml")["Slate.CalendarItemStyle"]));
+            scaled.Setters.Add(new Setter(
+                Calendar.CalendarButtonStyleProperty,
+                TypeRamp.StyleOn((Style)fluent["DefaultCalendarButtonStyle"], TypeRamp.Body)));
+            scaled.Setters.Add(new Setter(
+                Calendar.CalendarDayButtonStyleProperty,
+                TypeRamp.StyleOn((Style)fluent["DefaultCalendarDayButtonStyle"], TypeRamp.Body)));
+            slate["DatePickerCalendarStyle"] = scaled;
         }
 
         return highContrast

@@ -7,6 +7,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
+using System.Xml.Linq;
 using SlateWindows.Canvas;
 using SlateWindows.Graph;
 using SlateWindows.Reading;
@@ -187,24 +188,253 @@ public sealed partial class TextScaleTests
     }
 
     /// <summary>What a reader at the largest size most needs: nothing that doesn't trim
-    /// on purpose is cut off by its slot. Trimmed text is allowed where it already trims.</summary>
-    [Fact]
-    public void NoShellTextIsClippedAtTheLargestSize() => OnOwnThread(() =>
+    /// on purpose is cut off, at the size the app opens at and at a narrower one. Trimmed
+    /// text is allowed where it already trims.</summary>
+    [Theory]
+    [InlineData(1120, 720)]
+    [InlineData(1000, 700)]
+    public void NoShellTextIsClippedAtTheLargestSize(double width, double height) => OnOwnThread(() =>
     {
-        using var host = new ShownShell(("Lecture.md", "# Lecture\n\nA line of text.\n"));
+        using var host = new ShownShell(("Lecture.md", "---\nkey: value\n---\n# Lecture\n\nA line of text.\n"));
         host.Workspace.OpenPath("Lecture.md");
         host.Settle();
-        host.Shell.Width = 1600;
-        host.Shell.Height = 1000;
+        System.Threading.SpinWait.SpinUntil(
+            () =>
+            {
+                host.Settle();
+                return host.Workspace.ActiveGroup.ActiveTab is WorkspaceTabViewModel { Properties.Rows.Count: > 0 };
+            },
+            TimeSpan.FromSeconds(10));
+        host.Shell.Width = width;
+        host.Shell.Height = height;
+        TypeRamp.Apply(RampOf(host.Shell), 2.25);
+        host.Settle();
+        host.Settle();
+
+        string[] cut = CutText((FrameworkElement)host.Shell.Content);
+        Assert.True(cut.Length == 0, $"{cut.Length} cut:\n" + string.Join('\n', cut));
+    });
+
+    /// <summary>Every sheet, opened by hand, so what it shows is what it declares. The
+    /// launched pass reads their contents.</summary>
+    [Fact]
+    public void NoSheetTextIsCutAtTheLargestSize() => OnOwnThread(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        host.Shell.Width = 1120;
+        host.Shell.Height = 720;
         TypeRamp.Apply(RampOf(host.Shell), 2.25);
         host.Settle();
 
-        string[] clipped = [.. ShownShell.Descendants(host.Shell)
-            .OfType<TextBlock>()
-            .Where(text => text.IsVisible && text.TextTrimming == TextTrimming.None && !string.IsNullOrEmpty(text.Text))
-            .Where(text => LayoutInformation.GetLayoutClip(text) is not null)
-            .Select(text => $"\"{text.Text}\" at {text.FontSize:F1}")];
-        Assert.True(clipped.Length == 0, $"{clipped.Length} clipped:\n" + string.Join('\n', clipped));
+        FrameworkElement[] sheets = [.. ShownShell.Descendants(host.Shell)
+            .OfType<FrameworkElement>()
+            .Where(System.Windows.Automation.AutomationProperties.GetIsDialog)];
+        Assert.True(sheets.Length >= 10, $"only {sheets.Length} sheets were found.");
+        var cut = new List<string>();
+        foreach (FrameworkElement sheet in sheets)
+        {
+            FrameworkElement[] opened = Open(sheet);
+            host.Settle();
+            host.Settle();
+            cut.AddRange(CutText(sheet).Select(line => $"{System.Windows.Automation.AutomationProperties.GetAutomationId(sheet)}: {line}"));
+            foreach (FrameworkElement hidden in opened)
+            {
+                hidden.SetCurrentValue(UIElement.VisibilityProperty, Visibility.Collapsed);
+            }
+        }
+
+        Assert.True(cut.Count == 0, $"{cut.Count} cut:\n" + string.Join('\n', cut));
+    });
+
+    /// <summary>Quick Open's rows gave a name a fixed 180, and its keys a line that
+    /// couldn't wrap.</summary>
+    [Fact]
+    public void QuickOpenKeepsAResultsNameAndItsKeysWhole() => OnOwnThread(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        host.Shell.Width = 1120;
+        host.Shell.Height = 720;
+        TypeRamp.Apply(RampOf(host.Shell), 2.25);
+        host.Settle();
+        var sheet = (FrameworkElement)host.Shell.FindName("QuickSwitcherOverlay");
+        _ = Open(sheet);
+        foreach (TextBlock text in ShownShell.Descendants(sheet).OfType<TextBlock>())
+        {
+            text.SetCurrentValue(UIElement.VisibilityProperty, Visibility.Visible);
+        }
+
+        ListBox list = ShownShell.Descendants(sheet).OfType<ListBox>().First();
+        list.SetCurrentValue(UIElement.VisibilityProperty, Visibility.Visible);
+        list.SetCurrentValue(ItemsControl.ItemsSourceProperty, new[] { new QuickRow("Markdown features", "reference/Markdown features.md") });
+        host.Settle();
+        host.Settle();
+
+        TextBlock name = ShownShell.Descendants(sheet).OfType<TextBlock>().First(text => text.Text == "Markdown features");
+        Assert.Equal(TextTrimming.CharacterEllipsis, name.TextTrimming);
+        Assert.True(name.ActualWidth + 1 >= MeasuredWidth(name), $"the name is {name.ActualWidth:F0} wide and needs {MeasuredWidth(name):F0}.");
+        string[] cut = CutText(sheet);
+        Assert.True(cut.Length == 0, $"{cut.Length} cut:\n" + string.Join('\n', cut));
+    });
+
+    private sealed record QuickRow(string DisplayName, string Path);
+
+    /// <summary>The palette's rows scrolled sideways, its label couldn't wrap, and its
+    /// reason was held to two lines of 100% text.</summary>
+    [Fact]
+    public void ThePalettesRowsKeepTheirTextWhole() => OnOwnThread(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        host.Shell.Width = 1120;
+        host.Shell.Height = 720;
+        TypeRamp.Apply(RampOf(host.Shell), 2.25);
+        host.Settle();
+        var list = (ListBox)host.Shell.FindName("CommandPaletteResultsList");
+        var sheet = (FrameworkElement)System.Windows.Media.VisualTreeHelper.GetParent(System.Windows.Media.VisualTreeHelper.GetParent(list));
+        for (DependencyObject? step = list; step is not null && !System.Windows.Automation.AutomationProperties.GetIsDialog(step); step = System.Windows.Media.VisualTreeHelper.GetParent(step))
+        {
+            sheet = step as FrameworkElement ?? sheet;
+        }
+
+        sheet = (FrameworkElement)System.Windows.Media.VisualTreeHelper.GetParent(sheet);
+        _ = Open(sheet);
+        list.SetCurrentValue(UIElement.VisibilityProperty, Visibility.Visible);
+        list.SetCurrentValue(ItemsControl.ItemsSourceProperty, new[]
+        {
+            new PaletteRow([new PaletteSegment("Focus Previous Region", false)], "Ctrl+Shift+F6", true, "This command is not available right now, and this reason runs on."),
+        });
+        host.Settle();
+        host.Settle();
+
+        Assert.Equal(ScrollBarVisibility.Disabled, ScrollViewer.GetHorizontalScrollBarVisibility(list));
+        TextBlock reason = ShownShell.Descendants(sheet).OfType<TextBlock>().First(text => text.Text.StartsWith("This command", StringComparison.Ordinal));
+        Assert.True(double.IsPositiveInfinity(reason.MaxHeight), $"the reason is held to {reason.MaxHeight}.");
+        string[] cut = CutText(sheet);
+        Assert.True(cut.Length == 0, $"{cut.Length} cut:\n" + string.Join('\n', cut));
+    });
+
+    private sealed record PaletteSegment(string Text, bool IsMatch);
+
+    private sealed record PaletteRow(PaletteSegment[] LabelSegments, string HotkeyHint, bool IsUnavailable, string DisabledReason);
+
+    /// <summary>A list that scrolls sideways measures its rows at any width, so nothing
+    /// in them wraps or trims, and what doesn't fit is cut at the sheet's edge.</summary>
+    [Fact]
+    public void ASheetsListsDontScrollSideways()
+    {
+        XDocument shell = XDocument.Load(Path.Combine(SourceText.ShellSourceRoot(), "MainWindow.xaml"), LoadOptions.SetLineInfo);
+        XElement[] lists = [.. shell.Descendants()
+            .Where(element => (string?)element.Attribute("AutomationProperties.IsDialog") == "True")
+            .SelectMany(sheet => sheet.Descendants())
+            .Where(element => element.Name.LocalName.EndsWith("ListBox", StringComparison.Ordinal))];
+        string[] sideways = [.. lists
+            .Where(list => (string?)list.Attribute("ScrollViewer.HorizontalScrollBarVisibility") != "Disabled")
+            .Select(list => $"line {((System.Xml.IXmlLineInfo)list).LineNumber}")];
+
+        Assert.True(lists.Length >= 6, $"only {lists.Length} lists were found in the sheets.");
+        Assert.True(sideways.Length == 0, "Lists that scroll sideways: " + string.Join(", ", sideways));
+    }
+
+    /// <summary>A row's width to stack at is text, so it grows with the text, and a change
+    /// in size alone has to reach it.</summary>
+    [Fact]
+    public void APropertyRowStacksWhenTheTextNeedsTheRoom() => OnOwnThread(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "---\nkey: value\n---\n# Lecture\n"));
+        host.Workspace.OpenPath("Lecture.md");
+        host.Shell.Width = 1120;
+        host.Shell.Height = 720;
+        System.Threading.SpinWait.SpinUntil(
+            () =>
+            {
+                host.Settle();
+                return host.Workspace.ActiveGroup.ActiveTab is WorkspaceTabViewModel { Properties.Rows.Count: > 0 };
+            },
+            TimeSpan.FromSeconds(10));
+        host.Settle();
+        PropertyRowGrid row = ShownShell.Descendants(host.Shell).OfType<PropertyRowGrid>().Single();
+        Assert.Equal(0, Grid.GetRow(row.Children[1]));
+
+        TypeRamp.Apply(RampOf(host.Shell), 2.25);
+        host.Settle();
+        host.Settle();
+        Assert.Equal(1, Grid.GetRow(row.Children[1]));
+
+        TypeRamp.Apply(RampOf(host.Shell), 1);
+        host.Settle();
+        host.Settle();
+        Assert.Equal(0, Grid.GetRow(row.Children[1]));
+    });
+
+    /// <summary>The header, its buttons and a row left a note none of its text at 225% in
+    /// the window the app opens at.</summary>
+    [Fact]
+    public void ThePropertiesCardLeavesTheNoteItsText() => OnOwnThread(() =>
+    {
+        string keys = string.Concat(Enumerable.Range(1, 12).Select(index => $"key{index}: value\n"));
+        using var host = new ShownShell(("Lecture.md", $"---\n{keys}---\n# Lecture\n"));
+        host.Workspace.OpenPath("Lecture.md");
+        host.Shell.Width = 1120;
+        host.Shell.Height = 720;
+        TypeRamp.Apply(RampOf(host.Shell), 2.25);
+        System.Threading.SpinWait.SpinUntil(
+            () =>
+            {
+                host.Settle();
+                return host.Workspace.ActiveGroup.ActiveTab is WorkspaceTabViewModel { Properties.Rows.Count: > 0 };
+            },
+            TimeSpan.FromSeconds(10));
+        host.Settle();
+        host.Settle();
+
+        FrameworkElement card = host.Body("PropertiesHeader");
+        ICSharpCode.AvalonEdit.TextEditor note = ShownShell.Descendants(host.Shell).OfType<ICSharpCode.AvalonEdit.TextEditor>().First(editor => editor.IsVisible);
+        Assert.True(
+            note.ActualHeight >= 3 * TypeRamp.Body.LineHeight * 2.25,
+            $"the note has {note.ActualHeight:F0} of height under a {card.ActualHeight:F0} card.");
+    });
+
+    /// <summary>At 225% in a short window the toolbar alone was taller than the pane.</summary>
+    [Fact]
+    public void TheFilesTreeKeepsRoomUnderItsToolbar() => OnOwnThread(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        host.Shell.Width = 1000;
+        host.Shell.Height = 700;
+        TypeRamp.Apply(RampOf(host.Shell), 2.25);
+        host.Settle();
+        host.Settle();
+
+        FrameworkElement tree = host.Body("FilesTree");
+        Assert.True(tree.ActualHeight >= 40, $"the tree has {tree.ActualHeight:F0} of height.");
+    });
+
+    /// <summary>A rail that fits its labels took two thirds of a 320 pane at 225%, and
+    /// the leaf beside it wrapped a letter at a time.</summary>
+    [Fact]
+    public void TheRailGoesUnderTheLeafWhenTheTextNeedsTheRoom() => OnOwnThread(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        host.Shell.Width = 1120;
+        host.Shell.Height = 720;
+        host.Settle();
+        host.Settle();
+        var rail = (ListBox)host.Shell.FindName("RightPaneLeavesList");
+        var leaves = (Grid)host.Shell.FindName("RightPaneLeafHost");
+        Assert.True(rail.TranslatePoint(default, leaves).X > 0, "at 100% the rail isn't beside the leaf.");
+
+        TypeRamp.Apply(RampOf(host.Shell), 2.25);
+        host.Settle();
+        host.Settle();
+        Point under = rail.TranslatePoint(default, leaves);
+        Assert.Equal(0, under.X, 1);
+        Assert.True(under.Y > 0, "at 225% the rail isn't under the leaf.");
+        Assert.Equal(leaves.ActualWidth, rail.ActualWidth, 1);
+        Assert.True(rail.ActualHeight <= (leaves.ActualHeight * 0.4) + 1, $"the rail takes {rail.ActualHeight:F0} of {leaves.ActualHeight:F0}.");
+
+        TypeRamp.Apply(RampOf(host.Shell), 1);
+        host.Settle();
+        host.Settle();
+        Assert.True(rail.TranslatePoint(default, leaves).X > 0, "the rail didn't come back beside the leaf.");
     });
 
     [Fact]
@@ -395,7 +625,168 @@ public sealed partial class TextScaleTests
         }
     });
 
-    /// <summary>A fact's thread, with its dispatcher shut down before the thread ends. A window or an editor's text services left to the thread's exit can run managed code after the runtime has let the thread go, and that takes the test host down.</summary>
+    /// <summary>A date property's calendar, the one its picker really opens. Its heading,
+    /// weekday labels and date buttons follow the ramp in every view, nothing is cut off,
+    /// and its navigation glyphs stay their size.</summary>
+    [Theory]
+    [InlineData(CalendarMode.Month, 1.0, 50)]
+    [InlineData(CalendarMode.Year, 1.0, 13)]
+    [InlineData(CalendarMode.Decade, 1.0, 13)]
+    [InlineData(CalendarMode.Month, 2.25, 50)]
+    [InlineData(CalendarMode.Year, 2.25, 13)]
+    [InlineData(CalendarMode.Decade, 2.25, 13)]
+    public void TheOpenCalendarFollowsTheFactor(CalendarMode mode, double factor, int atLeast) => OnOwnThread(() =>
+    {
+        var picker = new DatePicker { SelectedDate = new DateTime(2026, 11, 4) };
+        var window = new Window
+        {
+            Content = picker,
+            Width = 400,
+            Height = 200,
+            Left = -20_000,
+            Top = -20_000,
+            ShowActivated = false,
+            ShowInTaskbar = false,
+            WindowStyle = WindowStyle.None,
+        };
+        foreach (ResourceDictionary layer in ThemeManager.DictionariesFor(SlateTheme.Light, highContrast: false))
+        {
+            window.Resources.MergedDictionaries.Add(layer);
+        }
+
+        try
+        {
+            window.Show();
+            PumpedDispatcher.Drain();
+            TypeRamp.Apply(RampOf(window), factor);
+
+            // A popup on a hosted runner opens without laying out its children.
+            var calendar = (Calendar)((Popup)picker.Template.FindName("PART_Popup", picker)).Child;
+            calendar.DisplayMode = mode;
+            calendar.Measure(new Size(4000, 4000));
+            calendar.Arrange(new Rect(calendar.DesiredSize));
+            calendar.UpdateLayout();
+            PumpedDispatcher.Drain();
+            calendar.Measure(new Size(4000, 4000));
+            calendar.Arrange(new Rect(calendar.DesiredSize));
+            calendar.UpdateLayout();
+
+            TextBlock[] texts = [.. ShownShell.Descendants(calendar).OfType<TextBlock>().Where(text => !string.IsNullOrEmpty(text.Text))];
+            TextBlock[] glyphs = [.. texts.Where(text => text.Text is "" or "")];
+            TextBlock[] labels = [.. texts.Except(glyphs).Where(text => InShownView(text, calendar))];
+
+            Assert.Equal(2, glyphs.Length);
+            Assert.All(glyphs, glyph => Assert.Equal(8, glyph.FontSize));
+            Assert.True(labels.Length >= atLeast, $"only {labels.Length} labels in the {mode} view.");
+            Assert.All(labels, label => Assert.True(
+                label.FontSize == TypeRamp.Body.Size * factor,
+                $"\"{label.Text}\" is {label.FontSize} at factor {factor}."));
+            string[] clipped = [.. labels
+                .Where(label => LayoutInformation.GetLayoutClip(label) is not null)
+                .Select(label => $"\"{label.Text}\" at {label.FontSize}")];
+            Assert.True(clipped.Length == 0, $"{clipped.Length} clipped:\n" + string.Join('\n', clipped));
+        }
+        finally
+        {
+            window.Close();
+            PumpedDispatcher.Drain();
+        }
+    });
+
+    /// <summary>Text cut off by its own slot, by anything above it short of a scroll
+    /// viewer, whose cut is its job, or by the edge of <paramref name="root"/>. Text that
+    /// trims says so itself.</summary>
+    private static string[] CutText(FrameworkElement root) =>
+        [.. ShownShell.Descendants(root)
+            .OfType<TextBlock>()
+            .Where(text => text.IsVisible && text.TextTrimming == TextTrimming.None && !string.IsNullOrEmpty(text.Text))
+            .Select(text => (Text: text, Why: WhyCut(text, root)))
+            .Where(found => found.Why is not null)
+            .Select(found => $"\"{found.Text.Text}\" at {found.Text.FontSize:F1}, by {found.Why}")];
+
+    private static string? WhyCut(TextBlock text, FrameworkElement root)
+    {
+        for (DependencyObject? step = text; step is not null; step = System.Windows.Media.VisualTreeHelper.GetParent(step))
+        {
+            // Its arrows are glyphs, and a short bar squeezes them.
+            if (step is ScrollBar)
+            {
+                return null;
+            }
+        }
+
+        if (LayoutInformation.GetLayoutClip(text) is not null)
+        {
+            return "its own slot";
+        }
+
+        var mine = new Rect(0, 0, text.ActualWidth, text.ActualHeight);
+        for (DependencyObject? step = System.Windows.Media.VisualTreeHelper.GetParent(text);
+            step is not null && !ReferenceEquals(step, root);
+            step = System.Windows.Media.VisualTreeHelper.GetParent(step))
+        {
+            if (step is ScrollViewer or ScrollContentPresenter)
+            {
+                return null;
+            }
+
+            if (step is FrameworkElement ancestor
+                && LayoutInformation.GetLayoutClip(ancestor) is { } clip
+                && !clip.Bounds.Contains(text.TransformToAncestor(ancestor).TransformBounds(mine)))
+            {
+                return $"{ancestor.GetType().Name} {ancestor.Name}";
+            }
+        }
+
+        Rect bounds = text.TransformToAncestor(root).TransformBounds(mine);
+        return bounds.Right > root.ActualWidth + 0.5 || bounds.Bottom > root.ActualHeight + 0.5 || bounds.Left < -0.5 || bounds.Top < -0.5
+            ? $"the edge, at {bounds} of {root.ActualWidth:F0}x{root.ActualHeight:F0}"
+            : null;
+    }
+
+    /// <summary>A sheet and what hides it, shown by hand; what was hidden comes back to
+    /// hide again.</summary>
+    private static FrameworkElement[] Open(FrameworkElement sheet)
+    {
+        var opened = new List<FrameworkElement>();
+        for (DependencyObject? step = sheet; step is not null; step = System.Windows.Media.VisualTreeHelper.GetParent(step))
+        {
+            if (step is FrameworkElement { Visibility: not Visibility.Visible } hidden)
+            {
+                opened.Add(hidden);
+                hidden.SetCurrentValue(UIElement.VisibilityProperty, Visibility.Visible);
+            }
+        }
+
+        return [.. opened];
+    }
+
+    private static double MeasuredWidth(TextBlock text)
+    {
+        var copy = new TextBlock { Text = text.Text, FontSize = text.FontSize, FontFamily = text.FontFamily, FontWeight = text.FontWeight };
+        copy.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        return copy.DesiredSize.Width;
+    }
+
+    /// <summary>The month grid and the year grid share a cell, and one is hidden.</summary>
+    private static bool InShownView(DependencyObject element, DependencyObject root)
+    {
+        for (DependencyObject? step = element; step is not null && !ReferenceEquals(step, root); step = System.Windows.Media.VisualTreeHelper.GetParent(step))
+        {
+            if (step is UIElement { Visibility: not Visibility.Visible })
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>A fact's thread, with its dispatcher shut down before the thread ends.
+    /// Windows' text services (msctf) tear down at the thread's exit by calling managed
+    /// code, after the runtime has let the thread go, and that ends the test host; a dispatcher's
+    /// shutdown takes them down first. These facts have closed their windows by then, so
+    /// it hands away no foreground, which is what <see cref="StaThread"/> warns of.</summary>
     private static void OnOwnThread(Action body) => StaThread.Run(() =>
     {
         try
