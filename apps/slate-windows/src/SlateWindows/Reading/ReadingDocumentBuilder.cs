@@ -711,11 +711,18 @@ internal static class ReadingDocumentBuilder
         ReaderStep step = TypeRamp.ReaderHeading(level);
         heading.SetResourceReference(TextElement.FontSizeProperty, step.SizeKey);
         heading.SetResourceReference(Block.LineHeightProperty, step.LineHeightKey);
-        heading.LineStackingStrategy = heading.Inlines.OfType<InlineUIContainer>().Any()
+        heading.LineStackingStrategy = HoldsAnObject(heading.Inlines)
             ? LineStackingStrategy.MaxHeight
             : LineStackingStrategy.BlockLineHeight;
         heading.FontWeight = level == 1 ? FontWeights.Bold : FontWeights.SemiBold;
     }
+
+    private static bool HoldsAnObject(InlineCollection inlines) => inlines.Any(inline => inline switch
+    {
+        InlineUIContainer => true,
+        Span span => HoldsAnObject(span.Inlines),
+        _ => false,
+    });
 
     /// <summary>The face for code and for source shown in place of a render,
     /// from the type layer, so it's the one the app ships (DS-1).</summary>

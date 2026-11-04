@@ -83,38 +83,46 @@ public sealed class ReadingTypeTests
     [Fact]
     public void AHeadingHoldingAnObjectKeepsItsLineGrowing()
     {
-        (LineStackingStrategy plain, LineStackingStrategy holding) = OnSurface(600, _ =>
+        (LineStackingStrategy plain, LineStackingStrategy holding, LineStackingStrategy inSpan) = OnSurface(600, _ =>
         {
             var words = new Paragraph(new Run("Words"));
             ReadingDocumentBuilder.ApplyHeadingType(words, 2);
             var withObject = new Paragraph(new Run("Words"));
             withObject.Inlines.Add(new InlineUIContainer(new Border { Width = 10, Height = 10 }));
             ReadingDocumentBuilder.ApplyHeadingType(withObject, 2);
-            return (words.LineStackingStrategy, withObject.LineStackingStrategy);
+            var nested = new Paragraph(new Span(new Bold(new InlineUIContainer(new Border { Width = 10, Height = 10 }))));
+            ReadingDocumentBuilder.ApplyHeadingType(nested, 2);
+            return (words.LineStackingStrategy, withObject.LineStackingStrategy, nested.LineStackingStrategy);
         });
 
         Assert.Equal(LineStackingStrategy.BlockLineHeight, plain);
         Assert.Equal(LineStackingStrategy.MaxHeight, holding);
+        Assert.Equal(LineStackingStrategy.MaxHeight, inSpan);
     }
 
-    /// <summary>The body's line height is a floor, so a tall inline grows its line
-    /// instead of drawing over the next paragraph.</summary>
+    /// <summary>The body's line height is a floor, so a tall inline grows its line. As
+    /// an exact one, the object would stand up out of its line, over what's before it.</summary>
     [Fact]
     public void AMathBlockDoesNotOverlapWhatFollows()
     {
-        (double objectBottom, double nextTop) = OnSurface(600, surface =>
+        (double beforeBottom, double objectTop, double objectBottom, double nextTop) = OnSurface(600, surface =>
         {
+            var before = new Paragraph(new Run("What comes before."));
             var tall = new Border { Width = 40, Height = 120 };
-            surface.Document.Blocks.Add(new Paragraph(new InlineUIContainer(tall)));
             var next = new Paragraph(new Run("What follows."));
+            surface.Document.Blocks.Add(before);
+            surface.Document.Blocks.Add(new Paragraph(new InlineUIContainer(tall)));
             surface.Document.Blocks.Add(next);
             surface.UpdateLayout();
             Pump();
             return (
+                before.ContentEnd.GetCharacterRect(LogicalDirection.Backward).Bottom,
+                tall.TranslatePoint(default, surface).Y,
                 tall.TranslatePoint(new Point(0, tall.ActualHeight), surface).Y,
-                next.ContentStart.GetCharacterRect(LogicalDirection.Forward).Top);
+                next.ContentStart.GetInsertionPosition(LogicalDirection.Forward).GetCharacterRect(LogicalDirection.Forward).Top);
         });
 
+        Assert.True(objectTop >= beforeBottom, $"the object starts at {objectTop:F0} and what's before it ends at {beforeBottom:F0}.");
         Assert.True(nextTop >= objectBottom, $"the next paragraph starts at {nextTop:F0} and the object ends at {objectBottom:F0}.");
     }
 
