@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DS-1: the editor's 14/22. AvalonEdit has no line-height API, so the line spacing
+     lives here, and it scales with the editor's size. LineSpacing is 22/14. Baseline is
+     Cascadia's own 0.9277 plus half of the added spacing, (1.5714 - 1.1621) / 2, which
+     centres the glyphs in the taller line. "./" is this folder, where the csproj links
+     the font files. Without this file the editor takes Cascadia's natural line height. -->
+<FontFamily xmlns="http://schemas.microsoft.com/winfx/2006/xaml/composite-font"
+            xmlns:System="clr-namespace:System;assembly=mscorlib"
+            xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+            Baseline="1.1324"
+            LineSpacing="1.5714">
+    <FontFamily.FamilyNames>
+        <System:String x:Key="en-US">Slate Editor</System:String>
+    </FontFamily.FamilyNames>
+    <FontFamily.FamilyMaps>
+        <FontFamilyMap Target="./#Cascadia Code" />
+    </FontFamily.FamilyMaps>
+</FontFamily>

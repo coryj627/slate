@@ -60,6 +60,10 @@ internal sealed class HeadingStyleTextProvider : ITextProvider
     /// <summary>The style name answered for quote paragraphs.</summary>
     internal const string QuoteStyleName = "Quote";
 
+    /// <summary>UIA_FontNameAttributeId: WPF answers with the family's source,
+    /// which for a font shipped with the app is a pack URI.</summary>
+    internal const int FontNameAttribute = 40005;
+
     private readonly ITextProvider _inner;
 
     public HeadingStyleTextProvider(ITextProvider inner)
@@ -118,7 +122,10 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
         {
             return SyntheticAttributeValue(attributeId);
         }
-        return _inner.GetAttributeValue(attributeId);
+        object? value = _inner.GetAttributeValue(attributeId);
+        return attributeId == HeadingStyleTextProvider.FontNameAttribute && value is string family
+            ? ShippedFontNames.Named(family)
+            : value;
     }
 
     /// <summary>
@@ -483,6 +490,10 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
             }
             ITextRangeProvider? found = match is null ? null : query.RangeOf(match);
             return found is null ? null : new HeadingStyleTextRange(found);
+        }
+        if (attribute == HeadingStyleTextProvider.FontNameAttribute && value is string name)
+        {
+            value = ShippedFontNames.SourceOf(name);
         }
         ITextRangeProvider? foundInner = _inner.FindAttribute(attribute, value, backward);
         return foundInner is null ? null : new HeadingStyleTextRange(foundInner);

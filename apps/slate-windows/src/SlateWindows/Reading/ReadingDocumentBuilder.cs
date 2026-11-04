@@ -695,6 +695,10 @@ internal static class ReadingDocumentBuilder
     };
 
     /// <summary>The width a speech run's whole line may give it.</summary>
+    /// <summary>The face for code and for source shown in place of a render,
+    /// from the type layer, so it's the one the app ships (DS-1).</summary>
+    private const string CodeFontKey = "Slate.CodeFontFamily";
+
     private const double SpeechRunWidthBudget = 24;
 
     private static double SpeechRunFontSize(string speech) =>
@@ -708,12 +712,16 @@ internal static class ReadingDocumentBuilder
 
     /// <summary>The source a coverage gap or core's fallback shows, in the
     /// monospace face the in-range source used.</summary>
-    private static TextBlock SourceContent(string source) => new()
+    private static TextBlock SourceContent(string source)
     {
-        Text = source,
-        FontFamily = new FontFamily("Cascadia Mono, Consolas, monospace"),
-        TextWrapping = TextWrapping.Wrap,
-    };
+        var content = new TextBlock
+        {
+            Text = source,
+            TextWrapping = TextWrapping.Wrap,
+        };
+        content.SetResourceReference(TextBlock.FontFamilyProperty, CodeFontKey);
+        return content;
+    }
 
     /// <summary>The braille artifact decodes as UTF-8 (Nemeth is
     /// ASCII, UEB is Unicode cells — MathCAT emits per the session
@@ -882,9 +890,9 @@ internal static class ReadingDocumentBuilder
         }
         var paragraph = new Paragraph
         {
-            FontFamily = new FontFamily("Cascadia Mono, Consolas, monospace"),
             Padding = new Thickness(8),
         };
+        paragraph.SetResourceReference(TextElement.FontFamilyProperty, CodeFontKey);
         paragraph.SetResourceReference(Block.BackgroundProperty, "Slate.RaisedSurfaceBrush");
 
         int cursor = 0;
@@ -1211,10 +1219,8 @@ internal static class ReadingDocumentBuilder
         if (source.Length > 0)
         {
             paragraph.Inlines.InsertBefore(container, new LineBreak());
-            sourceRun = new Run(source)
-            {
-                FontFamily = new FontFamily("Cascadia Mono, Consolas, monospace"),
-            };
+            sourceRun = new Run(source);
+            sourceRun.SetResourceReference(TextElement.FontFamilyProperty, CodeFontKey);
             paragraph.Inlines.InsertBefore(container, sourceRun);
         }
         ReadingSemantics.MarkDiagramBlock(paragraph, failed.Landing);
@@ -1280,9 +1286,9 @@ internal static class ReadingDocumentBuilder
         var run = new Run(text);
         var paragraph = new Paragraph(run)
         {
-            FontFamily = new FontFamily("Cascadia Mono, Consolas, monospace"),
             Padding = new Thickness(8),
         };
+        paragraph.SetResourceReference(TextElement.FontFamilyProperty, CodeFontKey);
         paragraph.SetResourceReference(Block.BackgroundProperty, "Slate.RaisedSurfaceBrush");
         return paragraph;
     }
@@ -1912,7 +1918,7 @@ internal static class ReadingDocumentBuilder
                     body.TextDecorations = TextDecorations.Strikethrough;
                     break;
                 case ReadingInlineStyle.InlineCode:
-                    body.FontFamily = new FontFamily("Cascadia Mono, Consolas, monospace");
+                    body.SetResourceReference(TextElement.FontFamilyProperty, CodeFontKey);
                     body.SetResourceReference(TextElement.ForegroundProperty, "Slate.EditorCodeBrush");
                     break;
             }

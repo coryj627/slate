@@ -28,9 +28,21 @@ public sealed class FindInNoteBarTests
     /// <summary>A note open in the shipped shell, its text replaced.</summary>
     private sealed class Shell : IDisposable
     {
-        public Shell(string? text = "a b a b a", string path = "note0.md", bool savedQuery = false, Action<string>? seed = null)
+        public Shell(string? text = "a b a b a", string path = "note0.md", bool savedQuery = false, Action<string>? seed = null, bool themed = false)
         {
             Host = new CommandPaletteTests.ShippedShellHost(shown: true, savedQuery: savedQuery, seed: seed);
+            if (themed)
+            {
+                // The editor's font is a theme key, and a rectangle's columns only
+                // line up in the monospaced face the app draws.
+                System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(typeof(Application).TypeHandle);
+                System.Windows.ResourceDictionary[] layers = ThemeManager.DictionariesFor(SlateTheme.Light, highContrast: false);
+                for (int index = 0; index < layers.Length; index++)
+                {
+                    Host.Shell.Resources.MergedDictionaries.Insert(index, layers[index]);
+                }
+            }
+
             Workspace = Host.AttachWorkspace(Heard.Add, path);
             if (text is not null)
             {
@@ -791,7 +803,7 @@ public sealed class FindInNoteBarTests
     [Fact]
     public void ARectangularSelectionComesBackAsTheSameRectangle() => RunSta(() =>
     {
-        using var shell = new Shell("abcd\nefgh\nijkl");
+        using var shell = new Shell("abcd\nefgh\nijkl", themed: true);
         ICSharpCode.AvalonEdit.Editing.TextArea area = shell.Editor.TextArea;
         shell.FocusEditor();
         area.Selection = new ICSharpCode.AvalonEdit.Editing.RectangleSelection(
@@ -839,7 +851,7 @@ public sealed class FindInNoteBarTests
     [Fact]
     public void AVirtualSpaceRectangleComesBackAndStillTypesOnEveryLine() => RunSta(() =>
     {
-        using var shell = new Shell("abcd\nefgh\nijkl");
+        using var shell = new Shell("abcd\nefgh\nijkl", themed: true);
         ICSharpCode.AvalonEdit.Editing.TextArea area = shell.Editor.TextArea;
         shell.FocusEditor();
         area.Selection = new ICSharpCode.AvalonEdit.Editing.RectangleSelection(

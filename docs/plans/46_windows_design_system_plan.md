@@ -1,7 +1,8 @@
 # 46 — Windows design system: the features not yet built
 
-Status: adopted 2026-11-03, with the owner's decisions in §3. Wave 1 waits for the
-owner's go-ahead, and nothing in this plan has started. Per-chunk specs are in
+Status: adopted 2026-11-03, with the owner's decisions in §3. The owner started
+Wave 1 on 2026-11-04, and each of its chunks runs `codex:adversarial-review` until
+Codex approves before its PR opens. Later waves wait for the owner. Per-chunk specs are in
 `46_windows_design_system/specs/`, one per PR. Red-teamed once by a fresh Claude
 agent and reviewed four times by Codex, with every finding checked against the tree
 and applied. Baseline: `main` at 9f4194c0 (#1787). #1792 landed just after it and
@@ -310,7 +311,7 @@ needs rebuilding.
 | The live Text size check: run the app, set Settings › Accessibility › Text size to 150%, Apply, then back to 100% | When DS-5's PR is up | It changes a system setting, which an agent doesn't do. Two minutes. Expected: the shell's text changes within about a second, with no restart |
 | Review of the right-pane icons (`Kit.jsx:54-56`) | Before DS-16 | `assessment.md:113`: "my picks and need your review" |
 | A look at a few Windows accents under `Windows accent` | When DS-11's PR is up | It changes a system setting, which an agent doesn't do. It shows how many hues fall back to gold under DSD14's bar |
-| The go-ahead for Wave 1 | Before DS-0 | The owner adopted this plan on 2026-11-03 and asked that Wave 1 not start yet |
+| The go-ahead for each later wave | Before its first chunk | DSD1: they change how the app works, one wave at a time |
 
 ## 9. How an implementing agent works a chunk
 

@@ -653,7 +653,6 @@
                                    ShowLineNumbers="False"
                                    VerticalScrollBarVisibility="Auto"
                                    HorizontalScrollBarVisibility="Auto"
-                                   FontFamily="Consolas"
                                    FontSize="{Binding EditorPreferences.FontSize}"
                                    SpellingPreferences="{Binding EditorPreferences}"
                                    Background="{DynamicResource Slate.WindowBackgroundBrush}"

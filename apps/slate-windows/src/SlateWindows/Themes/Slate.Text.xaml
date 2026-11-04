@@ -1,5 +1,13 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- DS-1: the fonts the app ships, the one place outside Fonts\ that names them
+         (FontNameCensus). A family that isn't shipped is only ever a fallback. -->
+    <FontFamily x:Key="Slate.EditorFontFamily">pack://application:,,,/SlateWindows;component/Fonts/SlateEditor.CompositeFont#Slate Editor</FontFamily>
+    <!-- What the editor names to a native IME: a face Windows has, because a shipped
+         family has no name outside the app. The editor doesn't draw with it. -->
+    <FontFamily x:Key="Slate.EditorImeFontFamily">Consolas</FontFamily>
+    <FontFamily x:Key="Slate.ReadingFontFamily">pack://application:,,,/SlateWindows;component/Fonts/#Open Sans, Segoe UI</FontFamily>
+    <FontFamily x:Key="Slate.CodeFontFamily">pack://application:,,,/SlateWindows;component/Fonts/#Cascadia Mono, Consolas</FontFamily>
     <!-- The two type-ramp styles Fluent doesn't ship (design/windows/xaml/README.md).
          They stay out of Slate.Light.xaml and Slate.Dark.xaml, which are generated,
          and every appearance merges them, High Contrast included. They aren't based
