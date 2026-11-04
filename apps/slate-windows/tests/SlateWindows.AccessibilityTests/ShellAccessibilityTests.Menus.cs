@@ -88,7 +88,8 @@ public sealed partial class ShellAccessibilityTests
                 bounds.Top >= screen.Top && bounds.Bottom <= screen.Bottom,
                 $"{lastRow} is at {bounds} on a display of {screen}, so it wasn't scrolled into view.");
             // The census sees the open menu's rows, so its verdict covers them.
-            Assert.Contains(lastRow, NamedItems(automation, process).Select(item => item.Properties.Name.ValueOrDefault));
+            string?[] namedItems = NamedItems(automation, process).Select(item => item.Properties.Name.ValueOrDefault).ToArray();
+            Assert.Contains(lastRow, namedItems);
             AssertItemNamesAreSpeakable(process, "long-menu");
             PressKey(VirtualKeyShort.ESCAPE);
         }

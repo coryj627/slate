@@ -264,7 +264,7 @@ public sealed class NarrowWindowLayoutTests
             WorkspaceTabViewModel open => $"tab {open.Title} has no properties",
             null => "no active tab",
         };
-        DependencyObject[] tree = [.. ShownShell.Descendants(host.Shell)];
+        DependencyObject[] tree = ShownShell.Descendants(host.Shell).ToArray();
         return $"{tab}; shell visible {host.Shell.IsVisible}, {host.Shell.ActualWidth:F0}x{host.Shell.ActualHeight:F0}, "
             + $"{tree.Length} elements, {tree.OfType<TabControl>().Count()} tab controls, "
             + $"{tree.OfType<Expander>().Count(expander => expander.IsVisible)} visible expanders, "
