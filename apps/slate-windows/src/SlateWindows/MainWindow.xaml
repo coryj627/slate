@@ -3759,6 +3759,7 @@
                     AutomationProperties.AutomationId="DashboardEditorSheet"
                     AutomationProperties.Name="{Binding Title}"
                     AutomationProperties.IsDialog="True">
+                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto">
                 <DockPanel>
                     <TextBlock DockPanel.Dock="Top"
                                Text="{Binding Title}"
@@ -3878,6 +3879,7 @@
                         </ListBox.ItemTemplate>
                     </ListBox>
                 </DockPanel>
+                </ScrollViewer>
             </local:AutomationLandmarkBorder>
             <Border Background="Transparent"
                     Visibility="{Binding Workspace.BaseQueryBuilderSheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
@@ -4142,6 +4144,7 @@
                 <local:AutomationLandmarkBorder.Effect>
                     <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
                 </local:AutomationLandmarkBorder.Effect>
+                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto">
                 <DockPanel>
                     <StackPanel DockPanel.Dock="Top">
                         <TextBlock Text="Choose a template"
@@ -4179,10 +4182,8 @@
                                        Foreground="{DynamicResource Slate.SecondaryTextBrush}"
                                        AutomationProperties.Name="Loading templates." />
                         </StackPanel>
-                        <ScrollViewer Focusable="False"
-                                      VerticalScrollBarVisibility="Auto"
-                                      Visibility="{Binding IsEmpty, Converter={StaticResource BooleanToVisibilityConverter}}">
-                        <StackPanel VerticalAlignment="Center">
+                        <StackPanel Visibility="{Binding IsEmpty, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                    VerticalAlignment="Center">
                             <TextBlock Text="No templates found."
                                        FontWeight="SemiBold" />
                             <TextBlock Margin="0,4,0,8"
@@ -4197,11 +4198,8 @@
                                     AutomationProperties.AutomationId="TemplatePickerTryAgain"
                                     AutomationProperties.HelpText="Reloads templates for the same destination." />
                         </StackPanel>
-                        </ScrollViewer>
-                        <ScrollViewer Focusable="False"
-                                      VerticalScrollBarVisibility="Auto"
-                                      Visibility="{Binding IsFailed, Converter={StaticResource BooleanToVisibilityConverter}}">
-                        <StackPanel VerticalAlignment="Center">
+                        <StackPanel Visibility="{Binding IsFailed, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                    VerticalAlignment="Center">
                             <TextBlock Text="Couldn’t load templates"
                                        FontWeight="SemiBold" />
                             <TextBlock Margin="0,4,0,8"
@@ -4216,8 +4214,8 @@
                                     AutomationProperties.AutomationId="TemplatePickerFailedTryAgain"
                                     AutomationProperties.HelpText="Reloads templates for the same destination." />
                         </StackPanel>
-                        </ScrollViewer>
                         <ListBox x:Name="TemplatePickerList"
+                                 MaxHeight="260"
                                  Visibility="{Binding IsAvailable, Converter={StaticResource BooleanToVisibilityConverter}}"
                                  ItemsSource="{Binding Rows}"
                                  BorderThickness="0"
@@ -4256,6 +4254,7 @@
                         </ListBox>
                     </Grid>
                 </DockPanel>
+                </ScrollViewer>
             </local:AutomationLandmarkBorder>
             <!-- ==========================================================
                  W5-3 (#743): the prompt/name flow sheet — one sheet, two
@@ -4384,6 +4383,7 @@
                                     AutomationProperties.AutomationId="TemplateNameCreate"
                                     AutomationProperties.HelpText="Render the template and open the new note. Enter." />
                         </StackPanel>
+                        <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto">
                         <StackPanel>
                             <local:AutomationPresentationTextBlock Margin="0,0,0,2" Text="New note name" />
                             <local:AutomationPresentationTextBlock Margin="0,0,0,4"
@@ -4403,6 +4403,7 @@
                                        AutomationProperties.Name="{Binding ValidationErrorAccessibleName}"
                                        Visibility="{Binding ValidationError, Converter={StaticResource NullToVisibilityConverter}}" />
                         </StackPanel>
+                        </ScrollViewer>
                     </DockPanel>
                 </Grid>
             </local:AutomationLandmarkBorder>
@@ -4436,6 +4437,7 @@
                 <local:AutomationLandmarkBorder.Effect>
                     <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
                 </local:AutomationLandmarkBorder.Effect>
+                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto">
                 <DockPanel>
                     <StackPanel DockPanel.Dock="Top">
                         <TextBlock Text="{Binding Title}"
@@ -4482,6 +4484,7 @@
                          journey finding). -->
                     <ListBox x:Name="MoveToList"
                              MinHeight="48"
+                             MaxHeight="260"
                              Margin="0,8,0,0"
                              ItemsSource="{Binding Rows}"
                              SelectedItem="{Binding SelectedRow}"
@@ -4513,6 +4516,7 @@
                         </ListBox.ItemTemplate>
                     </ListBox>
                 </DockPanel>
+                </ScrollViewer>
             </local:AutomationLandmarkBorder>
 
             <local:AutomationLandmarkBorder x:Name="CanvasCardEditorOverlay"

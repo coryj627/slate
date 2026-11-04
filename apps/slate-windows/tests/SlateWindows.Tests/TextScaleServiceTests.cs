@@ -75,9 +75,12 @@ public sealed class TextScaleServiceTests
             Environment.SetEnvironmentVariable(TextScaleService.TestFactorVariable, "9");
             Assert.Equal(2.25, TextScaleService.ReadFactor());
 
+            // With no instance it reads the desktop, which can be set to anything.
             Environment.SetEnvironmentVariable("SLATE_CENSUS_INSTANCE_ID", null);
-            Environment.SetEnvironmentVariable(TextScaleService.TestFactorVariable, "1.75");
-            Assert.NotEqual(1.75, TextScaleService.ReadFactor());
+            Environment.SetEnvironmentVariable(TextScaleService.TestFactorVariable, null);
+            double desktop = TextScaleService.ReadFactor();
+            Environment.SetEnvironmentVariable(TextScaleService.TestFactorVariable, desktop == 2 ? "1.5" : "2");
+            Assert.Equal(desktop, TextScaleService.ReadFactor());
         }
         finally
         {

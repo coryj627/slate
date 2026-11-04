@@ -229,9 +229,9 @@ public sealed partial class TextScaleTests
         TypeRamp.Apply(RampOf(host.Shell), 2.25);
         host.Settle();
 
-        FrameworkElement[] sheets = [.. ShownShell.Descendants(host.Shell)
+        FrameworkElement[] sheets = ShownShell.Descendants(host.Shell)
             .OfType<FrameworkElement>()
-            .Where(System.Windows.Automation.AutomationProperties.GetIsDialog)];
+            .Where(System.Windows.Automation.AutomationProperties.GetIsDialog).ToArray();
         Assert.True(sheets.Length >= 10, $"only {sheets.Length} sheets were found.");
         var cut = new List<string>();
         foreach (FrameworkElement sheet in sheets)
@@ -300,7 +300,7 @@ public sealed partial class TextScaleTests
         host.Settle();
         host.Settle();
 
-        TextBlock[] texts = [.. ShownShell.Descendants(list).OfType<TextBlock>()];
+        TextBlock[] texts = ShownShell.Descendants(list).OfType<TextBlock>().ToArray();
         TextBlock name = texts.First(text => text.Text == LongName);
         TextBlock path = texts.First(text => text.Text == "reference/one/two.md");
         Assert.Equal(180 * factor, name.ActualWidth, 1);
@@ -356,13 +356,13 @@ public sealed partial class TextScaleTests
     public void ASheetsListsDontScrollSideways()
     {
         XDocument shell = XDocument.Load(Path.Combine(SourceText.ShellSourceRoot(), "MainWindow.xaml"), LoadOptions.SetLineInfo);
-        XElement[] lists = [.. shell.Descendants()
+        XElement[] lists = shell.Descendants()
             .Where(element => (string?)element.Attribute("AutomationProperties.IsDialog") == "True")
             .SelectMany(sheet => sheet.Descendants())
-            .Where(element => element.Name.LocalName.EndsWith("ListBox", StringComparison.Ordinal))];
-        string[] sideways = [.. lists
+            .Where(element => element.Name.LocalName.EndsWith("ListBox", StringComparison.Ordinal)).ToArray();
+        string[] sideways = lists
             .Where(list => (string?)list.Attribute("ScrollViewer.HorizontalScrollBarVisibility") != "Disabled")
-            .Select(list => $"line {((System.Xml.IXmlLineInfo)list).LineNumber}")];
+            .Select(list => $"line {((System.Xml.IXmlLineInfo)list).LineNumber}").ToArray();
 
         Assert.True(lists.Length >= 6, $"only {lists.Length} lists were found in the sheets.");
         Assert.True(sideways.Length == 0, "Lists that scroll sideways: " + string.Join(", ", sideways));
@@ -463,6 +463,50 @@ public sealed partial class TextScaleTests
         Assert.True(bottom <= sheet.ActualHeight, $"Clear All Marks ends at {bottom:F0} in a sheet {sheet.ActualHeight:F0} tall.");
         Assert.True(sheetBottom <= root.ActualHeight, $"the sheet ends at {sheetBottom:F0} in a {root.ActualHeight:F0} window.");
     });
+
+    /// <summary>A sheet's title, status and buttons can take all of a short window, and a
+    /// list that only scrolls itself then has no room to show a row. Its whole body scrolls
+    /// instead, so the list keeps its size.</summary>
+    [Theory]
+    [InlineData("MoveToOverlay", "MoveToList")]
+    [InlineData("TemplatePickerOverlay", "TemplatePickerList")]
+    [InlineData("DashboardEditorOverlay", "DashboardEditorSections")]
+    public void ASheetsListKeepsItsRowsInTheShortestWindow(string sheetName, string id) => OnOwnThread(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        host.Shell.Width = 1120;
+        host.Shell.Height = 480;
+        TypeRamp.Apply(RampOf(host.Shell), 2.25);
+        host.Settle();
+        var sheet = (FrameworkElement)host.Shell.FindName(sheetName);
+        _ = Open(sheet);
+        host.Settle();
+        host.Settle();
+        ListBox list = ShownShell.Descendants(sheet).OfType<ListBox>()
+            .First(found => System.Windows.Automation.AutomationProperties.GetAutomationId(found) == id);
+        list.SetCurrentValue(UIElement.VisibilityProperty, Visibility.Visible);
+        list.SetCurrentValue(ItemsControl.ItemsSourceProperty, Enumerable.Range(1, 20).Select(index => new LongRow($"Row {index}", $"Row {index}")).ToArray());
+        host.Settle();
+        host.Settle();
+
+        Assert.True(list.ActualHeight >= 120, $"the list has {list.ActualHeight:F0} of height in a {sheet.ActualHeight:F0} sheet.");
+    });
+
+    /// <summary>The name step's field and its error sit between a title and buttons that
+    /// don't scroll, so they need a scroller of their own, as the prompt step has.</summary>
+    [Fact]
+    public void TheTemplateNameStepsFieldsCanScroll()
+    {
+        XDocument shell = XDocument.Load(Path.Combine(SourceText.ShellSourceRoot(), "MainWindow.xaml"));
+        XElement step = shell.Descendants()
+            .Single(element => (string?)element.Attribute("AutomationProperties.AutomationId") == "TemplateNameSubtitle")
+            .Ancestors()
+            .First(ancestor => ancestor.Name.LocalName == "DockPanel");
+        XElement scroller = step.Elements().Last();
+
+        Assert.Equal("ScrollViewer", scroller.Name.LocalName);
+        Assert.Equal("False", (string?)scroller.Attribute("Focusable"));
+    }
 
     private sealed record LongRow(string Label, string Name);
 
@@ -874,9 +918,9 @@ public sealed partial class TextScaleTests
             calendar.Arrange(new Rect(calendar.DesiredSize));
             calendar.UpdateLayout();
 
-            TextBlock[] texts = [.. ShownShell.Descendants(calendar).OfType<TextBlock>().Where(text => !string.IsNullOrEmpty(text.Text))];
-            TextBlock[] glyphs = [.. texts.Where(text => text.Text is "" or "")];
-            TextBlock[] labels = [.. texts.Except(glyphs).Where(text => InShownView(text, calendar))];
+            TextBlock[] texts = ShownShell.Descendants(calendar).OfType<TextBlock>().Where(text => !string.IsNullOrEmpty(text.Text)).ToArray();
+            TextBlock[] glyphs = texts.Where(text => text.Text is "" or "").ToArray();
+            TextBlock[] labels = texts.Except(glyphs).Where(text => InShownView(text, calendar)).ToArray();
 
             Assert.Equal(2, glyphs.Length);
             Assert.All(glyphs, glyph => Assert.Equal(8, glyph.FontSize));
@@ -884,9 +928,9 @@ public sealed partial class TextScaleTests
             Assert.All(labels, label => Assert.True(
                 label.FontSize == TypeRamp.Body.Size * factor,
                 $"\"{label.Text}\" is {label.FontSize} at factor {factor}."));
-            string[] clipped = [.. labels
+            string[] clipped = labels
                 .Where(label => WhyCut(label, calendar) is not null)
-                .Select(label => $"\"{label.Text}\" at {label.FontSize}, by {WhyCut(label, calendar)}")];
+                .Select(label => $"\"{label.Text}\" at {label.FontSize}, by {WhyCut(label, calendar)}").ToArray();
             Assert.True(clipped.Length == 0, $"{clipped.Length} clipped:\n" + string.Join('\n', clipped));
         }
         finally
@@ -900,12 +944,12 @@ public sealed partial class TextScaleTests
     /// viewer, whose cut is its job, or by the edge of <paramref name="root"/>. Text that
     /// trims says so itself.</summary>
     private static string[] CutText(FrameworkElement root) =>
-        [.. ShownShell.Descendants(root)
+        ShownShell.Descendants(root)
             .OfType<TextBlock>()
             .Where(text => text.IsVisible && text.TextTrimming == TextTrimming.None && !string.IsNullOrEmpty(text.Text))
             .Select(text => (Text: text, Why: WhyCut(text, root)))
             .Where(found => found.Why is not null)
-            .Select(found => $"\"{found.Text.Text}\" at {found.Text.FontSize:F1}, by {found.Why}")];
+            .Select(found => $"\"{found.Text.Text}\" at {found.Text.FontSize:F1}, by {found.Why}").ToArray();
 
     private static string? WhyCut(TextBlock text, FrameworkElement root)
     {
@@ -961,7 +1005,7 @@ public sealed partial class TextScaleTests
             }
         }
 
-        return [.. opened];
+        return opened.ToArray();
     }
 
     private static double MeasuredWidth(TextBlock text)

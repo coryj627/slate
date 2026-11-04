@@ -1318,10 +1318,10 @@ public sealed class ContractsCitationCensus
     public void ARetiredNameHasGoneAndWhatReplacedItExists()
     {
         HashSet<string> declared = DeclaredNames();
-        string[] shell = [.. Directory
+        string[] shell = Directory
             .EnumerateFiles(SourceText.ShellSourceRoot(), "*.cs", SearchOption.AllDirectories)
             .Where(file => !file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
-            .Select(File.ReadAllText)];
+            .Select(File.ReadAllText).ToArray();
         foreach ((string retired, string now) in RetiredNames)
         {
             Assert.Contains(now, declared);
