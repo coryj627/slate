@@ -322,7 +322,7 @@ public sealed class MenuTemplateTests
     public void EverySlideAsksWhetherTheShellAnimates()
     {
         XDocument menus = XDocument.Load(Path.Combine(SourceText.ShellSourceRoot(), "Themes", "Slate.Menus.xaml"));
-        XElement[] slides = [.. menus.Descendants().Where(element => element.Name.LocalName == "BeginStoryboard")];
+        XElement[] slides = menus.Descendants().Where(element => element.Name.LocalName == "BeginStoryboard").ToArray();
 
         Assert.Equal(3, slides.Length);
         Assert.All(slides, slide =>
