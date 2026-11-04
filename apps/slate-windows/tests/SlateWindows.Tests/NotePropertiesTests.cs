@@ -815,6 +815,37 @@ public sealed class NotePropertiesTests
             bareBefore, File.ReadAllText(Path.Combine(fixture.Root, "bare.md")));
     }
 
+    /// <summary>#1794: navigation reuses the tab in place, and the header stayed over
+    /// whatever opened into it. It goes with the note, and the tab remembers whether
+    /// the reader had collapsed it.</summary>
+    [Fact]
+    public void ABaseOpenedIntoANotesTabTakesTheNotesHeaderAway() => RunSta(() =>
+    {
+        using FixtureVault fixture = MakeVault("props-other-kind");
+        File.WriteAllText(Path.Combine(fixture.Root, "table.base"), "views:\n  - type: table\n    name: All\n");
+        using VaultSession session = OpenScanned(fixture.Root);
+        using var workspace = new WorkspaceViewModel(
+            session, fixture.Root, () => [], _ => { }, startInteractionBackgroundWork: false);
+        NotePropertiesViewModel header = AttachProperties(workspace, "props.md");
+        header.IsExpanded = false;
+        header.Rows[0].EditorText = "a draft";
+        var tab = Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+
+        workspace.OpenPath("table.base");
+
+        Assert.Same(tab, workspace.ActiveGroup.ActiveTab);
+        Assert.Null(tab.Properties);
+        Assert.True(tab.Snapshot().PropsCollapsed);
+
+        NotePropertiesViewModel back = AttachProperties(workspace, "props.md");
+
+        Assert.Same(tab, workspace.ActiveGroup.ActiveTab);
+        Assert.NotSame(header, back);
+        Assert.False(back.IsExpanded);
+        Assert.NotEmpty(back.Rows);
+        Assert.False(back.AnyRowDirty);
+    });
+
     [Fact]
     public void KeepMineOnAConflictedDeleteStaysADelete()
     {

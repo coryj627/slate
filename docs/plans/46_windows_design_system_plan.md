@@ -34,7 +34,7 @@ real cost, §3 records the owner's call.
 | Accent | Automatic, Slate gold, Windows accent, with a contrast gate | Gold only | DS-11 |
 | Title bar | One 48 row: title, palette, settings, caption buttons, Snap Layouts | The Windows title bar plus a separate menu bar, about 74 together | DS-12 |
 | App menu | The menus cascade from the logo; Alt+letter opens them | A menu bar | DS-13 |
-| Narrow windows | 500 wide or less, panes collapse | `MinWidth` 760 | DS-14 |
+| Narrow windows | 500 wide or less, panes collapse | `MinWidth` 775 | DS-14 |
 | Note header | Back, forward, breadcrumb, Source/Reading, ⋯ | None | DS-15, without Back and Forward (DSD15) |
 | Pane switcher | Icon strip with a gold pill and a More menu | A 17-row text list | DS-16 |
 | Files toolbar | PanelToolbar with Sort and group, New note, collapse/expand | A stack of fields, toggles and expanders | DS-17 |

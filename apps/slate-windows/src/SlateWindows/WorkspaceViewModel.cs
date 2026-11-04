@@ -266,7 +266,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     public Guid Id { get; }
     public WorkspaceItemState Item { get; private set; }
     public string? Mode { get; private set; }
-    public bool? PropsCollapsed { get; }
+    public bool? PropsCollapsed { get; private set; }
     /// <summary>W6-1 PR A (contract A15): the persisted surface token,
     /// `"table" | "visual"` with outline written as ABSENT. The surface
     /// switcher drives it through
@@ -643,6 +643,11 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         _editorSession?.Dispose();
         _editorSession = null;
         Item = item;
+        if (!IsMarkdown)
+        {
+            RetireProperties();
+        }
+
         _text = string.Empty;
         _contentHash = null;
         // Navigation reuses the tab IN PLACE, so the previous item's

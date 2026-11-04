@@ -27,6 +27,10 @@ internal sealed partial class WorkspaceViewModel
     /// MinWidth.</summary>
     internal const double MinimumSidebarWidth = 200;
 
+    /// <summary>#1795: the narrowest the right pane goes: its rail, and room beside it
+    /// for a panel's buttons.</summary>
+    internal const double MinimumRightPaneWidth = 250;
+
     /// <summary>The widest a sidebar goes, whatever room the window has.</summary>
     internal const double MaximumSidebarWidth = 640;
 
@@ -40,13 +44,22 @@ internal sealed partial class WorkspaceViewModel
     private double _filesSidebarWidth = 270;
     private double _rightPaneWidth = 320;
 
+    // #1795: the widths a reader chose, which a narrow window holds down for as long
+    // as it's narrow.
+    private double _filesSidebarChosenWidth = 270;
+    private double _rightPaneChosenWidth = 320;
+
     /// <summary>The Files sidebar's width, bound both ways to its column,
     /// and held inside its range whoever writes it (codex PR 4b r1 F7): a
     /// splitter drag or arrow is bounded only by the column's minimum.</summary>
     public double FilesSidebarWidth
     {
         get => _filesSidebarWidth;
-        set => HoldWidth(ref _filesSidebarWidth, value, ShellSidebar.Files);
+        set
+        {
+            HoldWidth(ref _filesSidebarWidth, value, ShellSidebar.Files);
+            _filesSidebarChosenWidth = _filesSidebarWidth;
+        }
     }
 
     /// <summary>The right pane's width, bound both ways to its column, and
@@ -57,6 +70,7 @@ internal sealed partial class WorkspaceViewModel
         set
         {
             HoldWidth(ref _rightPaneWidth, value, ShellSidebar.RightPane);
+            _rightPaneChosenWidth = _rightPaneWidth;
             OnPropertyChanged(nameof(RightPaneColumnWidth));
         }
     }
@@ -79,7 +93,7 @@ internal sealed partial class WorkspaceViewModel
 
     /// <summary>The column's floor. A fixed floor would hold a hidden pane's column
     /// open.</summary>
-    public double RightPaneColumnMinimumWidth => IsRightPaneVisible ? MinimumSidebarWidth : 0;
+    public double RightPaneColumnMinimumWidth => IsRightPaneVisible ? MinimumRightPaneWidth : 0;
 
     /// <summary>The splitter's column, which goes with the pane.</summary>
     public double RightPaneSplitterWidth => IsRightPaneVisible ? SplitterWidth : 0;
@@ -101,13 +115,15 @@ internal sealed partial class WorkspaceViewModel
     }
 
     /// <summary>Files first, so a sidebar that spread into a hidden pane's room gives
-    /// it back. A hidden pane's own width waits: it takes no room to hold it to.</summary>
+    /// it back. A hidden pane's own width waits: it takes no room to hold it to. Each
+    /// holds what the reader chose, so more room gives a narrowed width back.</summary>
     private void HoldBothWidths()
     {
-        FilesSidebarWidth = _filesSidebarWidth;
+        HoldWidth(ref _filesSidebarWidth, _filesSidebarChosenWidth, ShellSidebar.Files, nameof(FilesSidebarWidth));
         if (IsRightPaneVisible)
         {
-            RightPaneWidth = _rightPaneWidth;
+            HoldWidth(ref _rightPaneWidth, _rightPaneChosenWidth, ShellSidebar.RightPane, nameof(RightPaneWidth));
+            OnPropertyChanged(nameof(RightPaneColumnWidth));
         }
     }
 
@@ -130,7 +146,10 @@ internal sealed partial class WorkspaceViewModel
     /// two-way binding converts, and WPF reads a converted source back after
     /// the write (SidebarResizeTests.ADraggedWidthIsHeldInsideTheRoom).</summary>
     private void HoldWidth(ref double field, double value, ShellSidebar sidebar, [CallerMemberName] string? name = null) =>
-        SetField(ref field, Math.Clamp(value, MinimumSidebarWidth, WidestSidebarWidth(sidebar)), name);
+        SetField(ref field, Math.Clamp(value, NarrowestWidth(sidebar), WidestSidebarWidth(sidebar)), name);
+
+    private static double NarrowestWidth(ShellSidebar sidebar) =>
+        sidebar == ShellSidebar.Files ? MinimumSidebarWidth : MinimumRightPaneWidth;
 
     public ICommand WidenFilesSidebarCommand => _widenFilesSidebarCommand ??=
         new RelayCommand(_ => StepSidebar(ShellSidebar.Files, +1), _ => true);
@@ -172,7 +191,7 @@ internal sealed partial class WorkspaceViewModel
 
         double other = sidebar == ShellSidebar.Files ? RightPaneColumnWidth : FilesSidebarWidth;
         double room = WorkspaceRowWidth - other - MinimumEditorWidth - SplitterWidth - RightPaneSplitterWidth;
-        return Math.Max(MinimumSidebarWidth, Math.Min(MaximumSidebarWidth, room));
+        return Math.Max(NarrowestWidth(sidebar), Math.Min(MaximumSidebarWidth, room));
     }
 
     /// <summary>One step wider (+1) or narrower (−1), bounded; a step
@@ -181,7 +200,8 @@ internal sealed partial class WorkspaceViewModel
     {
         double current = sidebar == ShellSidebar.Files ? FilesSidebarWidth : RightPaneWidth;
         double widest = WidestSidebarWidth(sidebar);
-        bool atLimit = direction > 0 ? current >= widest : current <= MinimumSidebarWidth;
+        double narrowest = NarrowestWidth(sidebar);
+        bool atLimit = direction > 0 ? current >= widest : current <= narrowest;
         if (atLimit)
         {
             _announce(new A11yEvent.SidebarResized(
@@ -191,7 +211,7 @@ internal sealed partial class WorkspaceViewModel
             return;
         }
 
-        double next = Math.Clamp(current + (direction * SidebarWidthStep), MinimumSidebarWidth, widest);
+        double next = Math.Clamp(current + (direction * SidebarWidthStep), narrowest, widest);
         if (sidebar == ShellSidebar.Files)
         {
             FilesSidebarWidth = next;

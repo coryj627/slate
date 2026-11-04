@@ -75,6 +75,7 @@ internal sealed class BaseSurfaceView : UserControl
 
         _title = new TextBlock
         {
+            Margin = new Thickness(0, 0, 12, 4),
             FontSize = 16,
             FontWeight = FontWeights.SemiBold,
             VerticalAlignment = VerticalAlignment.Center,
@@ -84,7 +85,7 @@ internal sealed class BaseSurfaceView : UserControl
 
         _viewPicker = new ComboBox
         {
-            Margin = new Thickness(12, 0, 0, 0),
+            Margin = new Thickness(0, 0, 12, 4),
             MinWidth = 120,
             VerticalAlignment = VerticalAlignment.Center,
             DisplayMemberPath = nameof(ItemOccurrence<BaseViewSummary>.Name),
@@ -105,7 +106,7 @@ internal sealed class BaseSurfaceView : UserControl
 
         _countReadout = new TextBlock
         {
-            Margin = new Thickness(12, 0, 0, 0),
+            Margin = new Thickness(0, 0, 12, 4),
             VerticalAlignment = VerticalAlignment.Center,
         };
         _countReadout.SetResourceReference(
@@ -114,7 +115,7 @@ internal sealed class BaseSurfaceView : UserControl
 
         _quickFilter = new TextBox
         {
-            Margin = new Thickness(12, 0, 0, 0),
+            Margin = new Thickness(0, 0, 0, 4),
             MinWidth = 160,
             VerticalAlignment = VerticalAlignment.Center,
             Padding = new Thickness(6, 2, 6, 2),
@@ -156,7 +157,9 @@ internal sealed class BaseSurfaceView : UserControl
         var header = new DockPanel { Margin = new Thickness(12, 8, 12, 4) };
         DockPanel.SetDock(_refresh, Dock.Right);
         header.Children.Add(_refresh);
-        var titleRow = new StackPanel { Orientation = Orientation.Horizontal };
+        // #1795: wraps, so a narrow pane moves the filter to a line of its own instead
+        // of cutting it off at Refresh.
+        var titleRow = new WrapPanel();
         titleRow.Children.Add(_title);
         titleRow.Children.Add(_viewPicker);
         titleRow.Children.Add(_countReadout);

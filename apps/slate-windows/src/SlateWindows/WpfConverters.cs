@@ -91,6 +91,18 @@ internal sealed class RecentVaultNameConverter : IMultiValueConverter
         throw new NotSupportedException();
 }
 
+/// <summary>#1795: how tall a note's property rows go in a pane of the given height.</summary>
+internal sealed class PropertyRowsMaxHeightConverter : IValueConverter
+{
+    private const double Tallest = 280;
+
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture) =>
+        value is double paneHeight ? Math.Min(Tallest, paneHeight / 3) : Tallest;
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
+        Binding.DoNothing;
+}
+
 internal sealed class SidebarSortModeLabelConverter : IValueConverter
 {
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture) =>

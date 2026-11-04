@@ -749,7 +749,7 @@ public partial class MainWindow : IShellRegionHost
     /// <summary>W7-7 PR 4b (#1247, AR-38): the row the sidebars and the
     /// editor share tells the workspace how much room a sidebar resize
     /// step has.</summary>
-    private void WorkspaceColumns_SizeChanged(object sender, SizeChangedEventArgs e)
+    private void WorkspaceRow_SizeChanged(object sender, SizeChangedEventArgs e)
     {
         if (_viewModel.Workspace is WorkspaceViewModel workspace)
         {
