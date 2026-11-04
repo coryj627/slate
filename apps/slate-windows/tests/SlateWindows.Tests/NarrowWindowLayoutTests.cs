@@ -249,11 +249,27 @@ public sealed class NarrowWindowLayoutTests
             },
             TimeSpan.FromSeconds(10));
 
-        Assert.NotNull(scroller);
-        Assert.NotNull(pane);
+        Assert.True(scroller is not null && pane is not null, WhatTheShellShows(host));
         var converter = (System.Windows.Data.IValueConverter)host.Shell.FindResource("PropertyRowsMaxHeightConverter");
         Assert.Equal(converter.Convert(pane.ActualHeight, typeof(double), null!, System.Globalization.CultureInfo.InvariantCulture), scroller.MaxHeight);
     });
+
+    /// <summary>What a fact that couldn't find the rows needs to say about why.</summary>
+    private static string WhatTheShellShows(ShownShell host)
+    {
+        string tab = host.Workspace.ActiveGroup.ActiveTab switch
+        {
+            WorkspaceTabViewModel { Properties: { } properties } open =>
+                $"tab {open.Title}: {properties.Rows.Count} rows, loading {properties.IsLoading}, error '{properties.LoadError}', expanded {properties.IsExpanded}",
+            WorkspaceTabViewModel open => $"tab {open.Title} has no properties",
+            null => "no active tab",
+        };
+        DependencyObject[] tree = [.. ShownShell.Descendants(host.Shell)];
+        return $"{tab}; shell visible {host.Shell.IsVisible}, {host.Shell.ActualWidth:F0}x{host.Shell.ActualHeight:F0}, "
+            + $"{tree.Length} elements, {tree.OfType<TabControl>().Count()} tab controls, "
+            + $"{tree.OfType<Expander>().Count(expander => expander.IsVisible)} visible expanders, "
+            + $"{tree.OfType<PropertyRowGrid>().Count()} rows drawn.";
+    }
 
     /// <summary>The key's fixed column and the buttons took the whole row, which left
     /// the value no width at all and cut off Delete.</summary>
