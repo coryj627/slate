@@ -92,7 +92,7 @@ internal sealed class CanvasTextScaleService : IDisposable
         Changed?.Invoke();
     }
 
-    private static double ReadFactor()
+    internal static double ReadFactor()
     {
         try
         {

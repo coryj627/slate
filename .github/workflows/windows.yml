@@ -130,6 +130,8 @@ on:
       # DS-1: the app links its fonts and their licences from the design's
       # folder, so a change there changes what ships.
       - 'design/windows/fonts/**'
+      # DS-2: EveryRampStepIsItsToken reads the type tokens.
+      - 'design/windows/tokens/**'
       - '.github/workflows/windows.yml'
       - 'ci/windows-runner/route/**'
       - 'scripts/verify_windows_model_shards.py'

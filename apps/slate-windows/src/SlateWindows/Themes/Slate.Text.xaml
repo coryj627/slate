@@ -8,20 +8,58 @@
     <FontFamily x:Key="Slate.EditorImeFontFamily">Consolas</FontFamily>
     <FontFamily x:Key="Slate.ReadingFontFamily">pack://application:,,,/SlateWindows;component/Fonts/#Open Sans, Segoe UI</FontFamily>
     <FontFamily x:Key="Slate.CodeFontFamily">pack://application:,,,/SlateWindows;component/Fonts/#Cascadia Mono, Consolas</FontFamily>
-    <!-- The two type-ramp styles Fluent doesn't ship (design/windows/xaml/README.md).
-         They stay out of Slate.Light.xaml and Slate.Dark.xaml, which are generated,
-         and every appearance merges them, High Contrast included. They aren't based
-         on Fluent's BodyTextBlockStyle because a StaticResource can't reach a sibling
-         merged dictionary. -->
-    <Style x:Key="Slate.BodyLargeTextBlockStyle" TargetType="TextBlock">
-        <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
-        <Setter Property="FontSize" Value="18" />
-        <Setter Property="LineHeight" Value="24" />
+    <!-- DS-2: the ramp's text styles (design/windows/xaml/README.md), with every value
+         from TypeRamp, which the app merges first. Fluent's TextBlock styles take their
+         sizes by StaticResource, so they can't follow text size. They stay out of
+         Slate.Light.xaml and Slate.Dark.xaml, which are generated, and every appearance
+         merges them, High Contrast included. -->
+    <Style x:Key="Slate.CaptionTextBlockStyle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{DynamicResource Slate.FontFamilySmall}" />
+        <Setter Property="FontSize" Value="{DynamicResource Slate.FontSizeCaption}" />
+        <Setter Property="LineHeight" Value="{DynamicResource Slate.LineHeightCaption}" />
         <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
+        <Setter Property="FontWeight" Value="Normal" />
     </Style>
-    <Style x:Key="Slate.BodyLargeStrongTextBlockStyle"
-           TargetType="TextBlock"
-           BasedOn="{StaticResource Slate.BodyLargeTextBlockStyle}">
+    <Style x:Key="Slate.BodyTextBlockStyle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{DynamicResource Slate.FontFamilyText}" />
+        <Setter Property="FontSize" Value="{DynamicResource Slate.FontSizeBody}" />
+        <Setter Property="LineHeight" Value="{DynamicResource Slate.LineHeightBody}" />
+        <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
+        <Setter Property="FontWeight" Value="Normal" />
+    </Style>
+    <Style x:Key="Slate.BodyStrongTextBlockStyle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{DynamicResource Slate.FontFamilyText}" />
+        <Setter Property="FontSize" Value="{DynamicResource Slate.FontSizeBodyStrong}" />
+        <Setter Property="LineHeight" Value="{DynamicResource Slate.LineHeightBodyStrong}" />
+        <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style x:Key="Slate.BodyLargeTextBlockStyle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{DynamicResource Slate.FontFamilyText}" />
+        <Setter Property="FontSize" Value="{DynamicResource Slate.FontSizeBodyLarge}" />
+        <Setter Property="LineHeight" Value="{DynamicResource Slate.LineHeightBodyLarge}" />
+        <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
+        <Setter Property="FontWeight" Value="Normal" />
+    </Style>
+    <Style x:Key="Slate.BodyLargeStrongTextBlockStyle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{DynamicResource Slate.FontFamilyText}" />
+        <Setter Property="FontSize" Value="{DynamicResource Slate.FontSizeBodyLargeStrong}" />
+        <Setter Property="LineHeight" Value="{DynamicResource Slate.LineHeightBodyLargeStrong}" />
+        <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style x:Key="Slate.SubtitleTextBlockStyle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{DynamicResource Slate.FontFamilyDisplay}" />
+        <Setter Property="FontSize" Value="{DynamicResource Slate.FontSizeSubtitle}" />
+        <Setter Property="LineHeight" Value="{DynamicResource Slate.LineHeightSubtitle}" />
+        <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style x:Key="Slate.TitleTextBlockStyle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{DynamicResource Slate.FontFamilyDisplay}" />
+        <Setter Property="FontSize" Value="{DynamicResource Slate.FontSizeTitle}" />
+        <Setter Property="LineHeight" Value="{DynamicResource Slate.LineHeightTitle}" />
+        <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
         <Setter Property="FontWeight" Value="SemiBold" />
     </Style>
     <!-- The editor's selection border, here for the same reason: it isn't generated. -->

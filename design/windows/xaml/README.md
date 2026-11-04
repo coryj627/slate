@@ -117,29 +117,27 @@ Settings › Appearance › **Theme**: `Light` · `Dark` · `Use Windows setting
 
 ## Type ramp
 
-The UI uses the WinUI type ramp. WPF's Fluent theme already ships most of the `TextBlock` styles. Body Large isn't one of them, so add Slate's own styles in the app (not in these generated files):
+The UI uses the WinUI type ramp, and these are the styles to use. WPF's Fluent theme ships most of them as `TextBlock` styles, but those take their sizes by `StaticResource`, so they can't follow Windows Text size. The app's are in `Themes/Slate.Text.xaml`, and read keys from `TypeRamp.cs`, which the app merges first in every appearance:
 
-| Token | Size / line height | WPF style |
-| --- | --- | --- |
-| `--type-caption` | 12/16, Segoe UI Variable Small | `CaptionTextBlockStyle` |
-| `--type-body` | 14/20, Text | `BodyTextBlockStyle` |
-| `--type-body-strong` | 14/20 semibold, Text | `BodyStrongTextBlockStyle` |
-| `--type-body-large` | 18/24, Text | `Slate.BodyLargeTextBlockStyle` (add) |
-| `--type-body-large-strong` | 18/24 semibold, Text | `Slate.BodyLargeStrongTextBlockStyle` (add) |
-| `--type-subtitle` | 20/28 semibold, Display | `SubtitleTextBlockStyle` |
-| `--type-title` | 28/36 semibold, Display | `TitleTextBlockStyle` |
-| `--type-title-large` | 40/52 semibold, Display | `TitleLargeTextBlockStyle` |
-| `--type-display` | 68/92 semibold, Display | `DisplayTextBlockStyle` |
+| Token | Size / line height | Slate style | Keys |
+| --- | --- | --- | --- |
+| `--type-caption` | 12/16, Segoe UI Variable Small | `Slate.CaptionTextBlockStyle` | `Slate.FontSizeCaption`, `Slate.LineHeightCaption` |
+| `--type-body` | 14/20, Text | `Slate.BodyTextBlockStyle` | `Slate.FontSizeBody`, `Slate.LineHeightBody` |
+| `--type-body-strong` | 14/20 semibold, Text | `Slate.BodyStrongTextBlockStyle` | `Slate.FontSizeBodyStrong`, `Slate.LineHeightBodyStrong` |
+| `--type-body-large` | 18/24, Text | `Slate.BodyLargeTextBlockStyle` | `Slate.FontSizeBodyLarge`, `Slate.LineHeightBodyLarge` |
+| `--type-body-large-strong` | 18/24 semibold, Text | `Slate.BodyLargeStrongTextBlockStyle` | `Slate.FontSizeBodyLargeStrong`, `Slate.LineHeightBodyLargeStrong` |
+| `--type-subtitle` | 20/28 semibold, Display | `Slate.SubtitleTextBlockStyle` | `Slate.FontSizeSubtitle`, `Slate.LineHeightSubtitle` |
+| `--type-title` | 28/36 semibold, Display | `Slate.TitleTextBlockStyle` | `Slate.FontSizeTitle`, `Slate.LineHeightTitle` |
 
-The app has them in `Themes/Slate.Text.xaml`, merged after the Slate dictionary in every appearance. They set the family themselves rather than basing on `BodyTextBlockStyle`, because a `StaticResource` can't reach a sibling merged dictionary:
+The families are `Slate.FontFamilySmall`, `Slate.FontFamilyText` and `Slate.FontFamilyDisplay`. `--type-title-large` and `--type-display` have no style, because no Slate surface uses them.
+
+Text with no size of its own is Body: the window sets the family and size, so it inherits them. A control whose default style sets a size doesn't inherit, so `MainMenu` and `ShellStatusBar` set both, and `ContextMenu` and `ToolTip`, which aren't in the window's tree, get theirs from styles built on Fluent's (`TypeRamp.StyleOn`). The window sets no line height, because `TextBlock.LineHeight` inherits and a fixed value would follow into every size.
+
+Set a size through a style or a key, never a number. `TypeRampCensus` fails on a literal, apart from the few it names with a reason. A control's own value, such as a `TextBox`'s, takes the key directly:
 
 ```xml
-<Style x:Key="Slate.BodyLargeTextBlockStyle" TargetType="TextBlock">
-    <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
-    <Setter Property="FontSize" Value="18" />
-    <Setter Property="LineHeight" Value="24" />
-    <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
-</Style>
+<TextBlock Text="Add property" Style="{DynamicResource Slate.SubtitleTextBlockStyle}" />
+<TextBox FontSize="{DynamicResource Slate.FontSizeBodyLarge}" />
 ```
 
 ## Scrim

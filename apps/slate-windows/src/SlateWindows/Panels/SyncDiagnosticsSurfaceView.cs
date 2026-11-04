@@ -360,9 +360,9 @@ internal sealed class SyncDiagnosticsSurfaceView : UserControl
         {
             Text = SyncPhrase.RiskWord(provider.RiskLevel),
             Margin = new Thickness(0, 0, 8, 0),
-            FontSize = 11,
             VerticalAlignment = VerticalAlignment.Center,
         };
+        risk.SetResourceReference(StyleProperty, TypeRamp.Caption.StyleKey);
         risk.SetResourceReference(
             TextBlock.ForegroundProperty, RiskBrushKey(provider.RiskLevel));
         heading.Children.Add(risk);

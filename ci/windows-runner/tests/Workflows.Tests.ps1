@@ -293,6 +293,9 @@ Describe 'windows.yml design paths' {
         # One list, on.push.paths: lane-changes.yml reads it for pull requests too (#1565).
         ([regex]::Matches($windows, (Get-Lines @("      - 'design/windows/fonts/**'")))).Count | Should -Be 1
     }
+    It 'a change to the tokens the type ramp is checked against runs the lane' {
+        ([regex]::Matches($windows, (Get-Lines @("      - 'design/windows/tokens/**'")))).Count | Should -Be 1
+    }
 }
 
 Describe 'a11y-check.yml' {

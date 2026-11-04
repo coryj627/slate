@@ -29,6 +29,9 @@ internal sealed class ThemeManager : IDisposable
         "pack://application:,,,/SlateWindows;component/Themes/";
 
     private readonly Application _application;
+    // DS-2: making unset text explicit stops it following Windows Text size through
+    // SystemFonts, so a reader at 225% keeps their size from here, read at startup.
+    private readonly double _textScale = Canvas.CanvasTextScaleService.ReadFactor();
     private ResourceDictionary[] _resources = [];
     private SlateTheme _theme;
 
@@ -194,14 +197,16 @@ internal sealed class ThemeManager : IDisposable
 
     /// <summary>
     /// The application-level dictionaries a theme resolves to, in merge
-    /// order: Fluent first, then Slate's tokens, then outside High Contrast the
-    /// system colours those tokens answer for, then Slate's text styles.
+    /// order: the type ramp at <paramref name="textScale"/>, Fluent, then Slate's
+    /// tokens, then outside High Contrast the system colours those tokens answer
+    /// for, then Slate's text styles. Only the app passes a scale, so a hosted test
+    /// doesn't depend on the desktop's Text size.
     /// <see cref="ApplyResources"/> merges exactly
     /// these; a hosted test merges the same layers into its own window to
     /// realize a surface under the app's real resources without touching the
     /// process-wide <see cref="Application.Resources"/>.
     /// </summary>
-    internal static ResourceDictionary[] DictionariesFor(SlateTheme theme, bool highContrast)
+    internal static ResourceDictionary[] DictionariesFor(SlateTheme theme, bool highContrast, double textScale = 1)
     {
         string fluentName = highContrast
             ? "Fluent.HC.xaml"
@@ -221,15 +226,29 @@ internal sealed class ThemeManager : IDisposable
             slate[typeof(MenuItem)] = MenuShortcuts.StyleFor(menuItem);
         }
 
+        // DS-2: neither of these is in the window's tree, so the window's size
+        // can't reach them.
+        if (fluent[typeof(ContextMenu)] is Style contextMenu)
+        {
+            slate[typeof(ContextMenu)] = TypeRamp.StyleOn(contextMenu, TypeRamp.Body);
+        }
+
+        if (fluent[typeof(ToolTip)] is Style toolTip)
+        {
+            slate[typeof(ToolTip)] = TypeRamp.StyleOn(toolTip, TypeRamp.Caption);
+        }
+
         return highContrast
             ?
             [
+                TypeRamp.DictionaryFor(textScale),
                 fluent,
                 slate,
                 LoadDictionary(SlateRoot + "Slate.Text.xaml"),
             ]
             :
             [
+                TypeRamp.DictionaryFor(textScale),
                 fluent,
                 slate,
                 LoadDictionary(SlateRoot + "Slate.SystemColors.xaml"),
@@ -239,7 +258,7 @@ internal sealed class ThemeManager : IDisposable
 
     private void ApplyResources()
     {
-        ResourceDictionary[] layers = DictionariesFor(_theme, SystemParameters.HighContrast);
+        ResourceDictionary[] layers = DictionariesFor(_theme, SystemParameters.HighContrast, _textScale);
 
         var dictionaries = _application.Resources.MergedDictionaries;
         foreach (ResourceDictionary previous in _resources)

@@ -81,11 +81,10 @@ internal sealed class BaseSurfaceView : UserControl
         _title = new TextBlock
         {
             Margin = new Thickness(0, 0, 12, 4),
-            FontSize = 16,
-            FontWeight = FontWeights.SemiBold,
             VerticalAlignment = VerticalAlignment.Center,
             TextWrapping = TextWrapping.Wrap,
         };
+        _title.SetResourceReference(StyleProperty, TypeRamp.Subtitle.StyleKey);
         AutomationProperties.SetHeadingLevel(
             _title, AutomationHeadingLevel.Level2);
 
@@ -207,10 +206,9 @@ internal sealed class BaseSurfaceView : UserControl
         var failedHeading = new TextBlock
         {
             Text = BasePhrase.LoadFailedHeading,
-            FontSize = 15,
-            FontWeight = FontWeights.SemiBold,
             TextWrapping = TextWrapping.Wrap,
         };
+        failedHeading.SetResourceReference(StyleProperty, TypeRamp.BodyStrong.StyleKey);
         AutomationProperties.SetHeadingLevel(failedHeading, AutomationHeadingLevel.Level2);
         _failedMessage = new TextBlock
         {

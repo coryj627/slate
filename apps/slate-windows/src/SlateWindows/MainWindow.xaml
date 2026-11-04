@@ -12,6 +12,8 @@
         Height="720" Width="1120"
         MinHeight="480" MinWidth="780"
         UseLayoutRounding="True"
+        FontFamily="{DynamicResource Slate.FontFamilyText}"
+        FontSize="{DynamicResource Slate.FontSizeBody}"
         AutomationProperties.AutomationId="Slate.MainWindow"
         Background="{DynamicResource Slate.WindowBackgroundBrush}"
         Foreground="{DynamicResource Slate.TextBrush}"
@@ -112,6 +114,8 @@
               Focusable="False"
               KeyboardNavigation.TabNavigation="None"
               KeyboardNavigation.DirectionalNavigation="None"
+              FontFamily="{DynamicResource Slate.FontFamilyText}"
+              FontSize="{DynamicResource Slate.FontSizeBody}"
               Foreground="{DynamicResource MenuBarForeground}"
               Background="{DynamicResource Slate.WindowBackgroundBrush}"
               AutomationProperties.Name="Application commands"
@@ -753,6 +757,8 @@
         <Border x:Name="ShellStatusBarBorder" DockPanel.Dock="Bottom"
                 KeyboardNavigation.DirectionalNavigation="Contained">
             <StatusBar x:Name="ShellStatusBar"
+                       FontFamily="{DynamicResource Slate.FontFamilyText}"
+                       FontSize="{DynamicResource Slate.FontSizeBody}"
                        Focusable="True"
                        KeyboardNavigation.IsTabStop="False"
                        AutomationProperties.AutomationId="StatusBar"
@@ -839,8 +845,8 @@
                     <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
                 <StackPanel Grid.Column="1" Margin="0,56,0,32">
-                    <TextBlock Text="Welcome to Slate" FontSize="30" FontWeight="SemiBold" AutomationProperties.HeadingLevel="Level1" />
-                    <TextBlock Margin="0,8,0,24" FontSize="15" Foreground="{DynamicResource Slate.SecondaryTextBrush}" Text="Open a folder of Markdown files to start." />
+                    <TextBlock Text="Welcome to Slate" Style="{DynamicResource Slate.TitleTextBlockStyle}" AutomationProperties.HeadingLevel="Level1" />
+                    <TextBlock Margin="0,8,0,24" Style="{DynamicResource Slate.BodyTextBlockStyle}" Foreground="{DynamicResource Slate.SecondaryTextBrush}" Text="Open a folder of Markdown files to start." />
                     <!-- WB-9 (#1319, WD4): the welcome view holds the keys while a
                          vault opens; its status says what the open is doing. Pull,
                          not push (LiveSetting Off, as every readback here): a
@@ -862,7 +868,7 @@
                             Padding="16,8"
                             AutomationProperties.HelpText="Choose a folder to open as a Slate vault." />
                     <StackPanel Visibility="{Binding HasRecentVaults, Converter={StaticResource BooleanToVisibilityConverter}}">
-                        <TextBlock Margin="0,32,0,8" FontSize="18" FontWeight="SemiBold" Text="Recent Vaults" AutomationProperties.HeadingLevel="Level2" />
+                        <TextBlock Margin="0,32,0,8" Style="{DynamicResource Slate.BodyLargeStrongTextBlockStyle}" Text="Recent Vaults" AutomationProperties.HeadingLevel="Level2" />
                         <!-- W7-7 PR 3 (#1246, R-4): the Button is the stop; its
                              container is layout. As a plain ItemsControl each
                              container was a DataItem named by the RecentVault
@@ -888,7 +894,7 @@
                                         </AutomationProperties.Name>
                                         <StackPanel>
                                             <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" />
-                                            <TextBlock Text="{Binding Path}" FontSize="12" Foreground="{DynamicResource Slate.SecondaryTextBrush}" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Text="{Binding Path}" Style="{DynamicResource Slate.CaptionTextBlockStyle}" Foreground="{DynamicResource Slate.SecondaryTextBrush}" TextTrimming="CharacterEllipsis" />
                                         </StackPanel>
                                     </Button>
                                 </DataTemplate>
@@ -924,8 +930,8 @@
                 </Grid.RowDefinitions>
                 <Border Grid.Row="0" Padding="12,8" Background="{DynamicResource Slate.RaisedSurfaceBrush}" BorderBrush="{DynamicResource Slate.BorderBrush}" BorderThickness="0,0,0,1">
                     <StackPanel>
-                        <TextBlock Text="{Binding VaultDisplayName}" FontSize="18" FontWeight="SemiBold" AutomationProperties.HeadingLevel="Level1" />
-                        <TextBlock Text="{Binding VaultPath}" FontSize="12" Foreground="{DynamicResource Slate.SecondaryTextBrush}" TextTrimming="CharacterEllipsis" />
+                        <TextBlock Text="{Binding VaultDisplayName}" Style="{DynamicResource Slate.BodyLargeStrongTextBlockStyle}" AutomationProperties.HeadingLevel="Level1" />
+                        <TextBlock Text="{Binding VaultPath}" Style="{DynamicResource Slate.CaptionTextBlockStyle}" Foreground="{DynamicResource Slate.SecondaryTextBrush}" TextTrimming="CharacterEllipsis" />
                     </StackPanel>
                 </Border>
                 <!-- W7-7 PR 4b (#1247, AR-38): the sidebar widths are the
@@ -937,9 +943,9 @@
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="{Binding Workspace.FilesSidebarWidth, Mode=TwoWay, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=270}" MinWidth="200" MaxWidth="640" />
                         <ColumnDefinition Width="5" />
-                        <ColumnDefinition Width="*" MinWidth="300" />
+                        <ColumnDefinition Width="*" MinWidth="270" />
                         <ColumnDefinition Width="{Binding Workspace.RightPaneSplitterWidth, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=5}" />
-                        <ColumnDefinition Width="{Binding Workspace.RightPaneColumnWidth, Mode=TwoWay, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=320}" MinWidth="{Binding Workspace.RightPaneColumnMinimumWidth, FallbackValue=250}" MaxWidth="640" />
+                        <ColumnDefinition Width="{Binding Workspace.RightPaneColumnWidth, Mode=TwoWay, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=320}" MinWidth="{Binding Workspace.RightPaneColumnMinimumWidth, FallbackValue=280}" MaxWidth="640" />
                     </Grid.ColumnDefinitions>
                     <local:AutomationLandmarkBorder x:Name="FilesPaneBorder"
                             KeyboardNavigation.DirectionalNavigation="Contained"
@@ -952,8 +958,7 @@
                             <StackPanel>
                                 <DockPanel Margin="0,0,0,8" LastChildFill="False">
                                     <TextBlock Text="Files"
-                                               FontSize="16"
-                                               FontWeight="SemiBold"
+                                               Style="{DynamicResource Slate.BodyStrongTextBlockStyle}"
                                                AutomationProperties.HeadingLevel="Level2" />
                                     <Button DockPanel.Dock="Right"
                                             Padding="6,2"
@@ -970,7 +975,7 @@
                                 <StackPanel Margin="0,0,0,8"
                                             Visibility="{Binding HasSettingsNotice, Converter={StaticResource BooleanToVisibilityConverter}}">
                                     <TextBlock Text="{Binding SettingsNotice}"
-                                               FontSize="11"
+                                               Style="{DynamicResource Slate.CaptionTextBlockStyle}"
                                                Foreground="{DynamicResource Slate.WarningBrush}"
                                                TextWrapping="Wrap"
                                                AutomationProperties.AutomationId="SidebarSettingsNotice" />
@@ -1010,9 +1015,11 @@
                                             Command="{Binding ClearFilterCommand}" />
                                 </Grid>
                                 <!-- #1795: wraps, so a narrow sidebar moves Group dates to a
-                                     line of its own instead of cutting off its label. -->
+                                     line of its own instead of cutting off its label. A
+                                     ComboBox sizes to its selected row, so the minimum holds
+                                     the longest label and choosing one doesn't move the row. -->
                                 <WrapPanel Margin="0,6,0,2">
-                                    <ComboBox Width="145"
+                                    <ComboBox MinWidth="170"
                                               Margin="0,0,8,4"
                                               ItemsSource="{Binding SortModes}"
                                               SelectedItem="{Binding SortMode}"
@@ -1081,7 +1088,7 @@
                               <StackPanel>
                                 <TextBlock Margin="0,6,0,2"
                                            Text="{Binding BatchSelectionSummary}"
-                                           FontSize="11"
+                                           Style="{DynamicResource Slate.CaptionTextBlockStyle}"
                                            Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                                 <Expander Header="Batch actions"
                                           Margin="0,2"
@@ -1170,7 +1177,7 @@
                                 </Expander>
                                 <TextBlock Margin="0,4,0,0"
                                            Text="{Binding Status}"
-                                           FontSize="11"
+                                           Style="{DynamicResource Slate.CaptionTextBlockStyle}"
                                            Foreground="{DynamicResource Slate.SecondaryTextBrush}"
                                            TextWrapping="Wrap" />
                               </StackPanel>
@@ -1248,7 +1255,7 @@
                                                 <StackPanel>
                                                     <TextBlock Text="{Binding DisplayName}" />
                                                     <TextBlock Text="{Binding Path}"
-                                                               FontSize="11"
+                                                               Style="{DynamicResource Slate.CaptionTextBlockStyle}"
                                                                Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                                                 </StackPanel>
                                             </DataTemplate>
@@ -1327,7 +1334,10 @@
                                 </Style.Triggers>
                             </Style>
                             <Style x:Key="PanelHeading" TargetType="TextBlock">
-                                <Setter Property="FontSize" Value="16" />
+                                <Setter Property="FontFamily" Value="{DynamicResource Slate.FontFamilyText}" />
+                                <Setter Property="FontSize" Value="{DynamicResource Slate.FontSizeBodyStrong}" />
+                                <Setter Property="LineHeight" Value="{DynamicResource Slate.LineHeightBodyStrong}" />
+                                <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
                                 <Setter Property="FontWeight" Value="SemiBold" />
                                 <Setter Property="TextWrapping" Value="Wrap" />
                                 <Setter Property="AutomationProperties.HeadingLevel" Value="Level2" />
@@ -1364,7 +1374,7 @@
                                                                                TextWrapping="Wrap" />
                                         <local:AutomationPresentationTextBlock x:Name="TaskMetadata"
                                                                                Text="{Binding MetadataCaption}"
-                                                                               FontSize="11"
+                                                                               Style="{DynamicResource Slate.CaptionTextBlockStyle}"
                                                                                TextWrapping="Wrap"
                                                                                Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                                     </StackPanel>
@@ -1505,7 +1515,7 @@
                                                             BorderThickness="0.5"
                                                             BorderBrush="{DynamicResource Slate.BorderBrush}">
                                                         <local:AutomationPresentationTextBlock Text="{Binding Badge}"
-                                                                                               FontSize="11"
+                                                                                               Style="{DynamicResource Slate.CaptionTextBlockStyle}"
                                                                                                Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                                                     </Border>
                                                 </WrapPanel>
@@ -1825,7 +1835,7 @@
                                                           AutomationProperties.HelpText="{Binding CheckboxHelpText}" />
                                                 <StackPanel Grid.Column="1">
                                                     <local:AutomationPresentationTextBlock Text="{Binding FileName}"
-                                                                                           FontSize="11"
+                                                                                           Style="{DynamicResource Slate.CaptionTextBlockStyle}"
                                                                                            TextTrimming="CharacterEllipsis"
                                                                                            Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                                                     <local:AutomationPresentationTextBlock x:Name="ReviewTaskText"
@@ -1833,7 +1843,7 @@
                                                                                            TextWrapping="Wrap" />
                                                     <local:AutomationPresentationTextBlock x:Name="ReviewTaskMetadata"
                                                                                            Text="{Binding MetadataCaption}"
-                                                                                           FontSize="11"
+                                                                                           Style="{DynamicResource Slate.CaptionTextBlockStyle}"
                                                                                            TextWrapping="Wrap"
                                                                                            Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                                                 </StackPanel>
@@ -1932,7 +1942,7 @@
                                             <StackPanel Margin="0,2">
                                                 <local:AutomationPresentationTextBlock x:Name="CitationBadge"
                                                                                        Text="{Binding UnresolvedBadge}"
-                                                                                       FontSize="11"
+                                                                                       Style="{DynamicResource Slate.CaptionTextBlockStyle}"
                                                                                        Foreground="{DynamicResource Slate.WarningBrush}" />
                                                 <local:AutomationPresentationTextBlock Text="{Binding DisplayText}"
                                                                                        TextWrapping="Wrap" />
@@ -2135,8 +2145,7 @@
                                     <TextBlock Margin="0,0,12,4"
                                                VerticalAlignment="Center"
                                                Text="Queries"
-                                               FontSize="16"
-                                               FontWeight="SemiBold"
+                                               Style="{DynamicResource Slate.BodyStrongTextBlockStyle}"
                                                AutomationProperties.HeadingLevel="Level2" />
                                     <Button Margin="0,0,12,4"
                                             Content="New dashboard"
@@ -2150,7 +2159,7 @@
                                 <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto">
                                     <!-- #1790: the scroll bar draws over its content, so nothing sits under it. -->
                                     <StackPanel Margin="0,0,12,0">
-                                        <TextBlock Margin="0,8,0,2" Text="SAVED QUERIES" FontSize="11"
+                                        <TextBlock Margin="0,8,0,2" Text="SAVED QUERIES" Style="{DynamicResource Slate.CaptionTextBlockStyle}"
                                                    Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                                         <TextBlock Text="No saved queries"
                                                    Foreground="{DynamicResource Slate.SecondaryTextBrush}">
@@ -2225,7 +2234,7 @@
                                                      AutomationProperties.AutomationId="QueriesRenameBox"
                                                      AutomationProperties.Name="New saved query name" />
                                         </DockPanel>
-                                        <TextBlock Margin="0,12,0,2" Text="BASE FILES" FontSize="11"
+                                        <TextBlock Margin="0,12,0,2" Text="BASE FILES" Style="{DynamicResource Slate.CaptionTextBlockStyle}"
                                                    Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                                         <TextBlock Text="No base files"
                                                    Foreground="{DynamicResource Slate.SecondaryTextBrush}">
@@ -2283,7 +2292,7 @@
                                             <Button Margin="0,0,4,4" Content="Open" AutomationProperties.Name="Open base file" AutomationProperties.AutomationId="QueriesOpenBaseFile" Click="QueriesOpenBaseFile_Click" />
                                             <Button Content="Dock" Margin="0,0,4,4" AutomationProperties.Name="Dock base file" AutomationProperties.AutomationId="QueriesDockBaseFile" Click="QueriesDockBaseFile_Click" />
                                         </WrapPanel>
-                                        <TextBlock Margin="0,12,0,2" Text="DASHBOARDS" FontSize="11"
+                                        <TextBlock Margin="0,12,0,2" Text="DASHBOARDS" Style="{DynamicResource Slate.CaptionTextBlockStyle}"
                                                    Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                                         <TextBlock Text="No dashboards"
                                                    Foreground="{DynamicResource Slate.SecondaryTextBrush}">
@@ -2364,8 +2373,7 @@
                                 </DockPanel.Style>
                                 <TextBlock DockPanel.Dock="Top"
                                            Text="Base dock"
-                                           FontSize="16"
-                                           FontWeight="SemiBold"
+                                           Style="{DynamicResource Slate.BodyStrongTextBlockStyle}"
                                            AutomationProperties.HeadingLevel="Level2" />
                                 <TextBlock x:Name="BasesDockEmptyState"
                                            DockPanel.Dock="Top"
@@ -2488,8 +2496,7 @@
                                 </DockPanel.Style>
                                 <TextBlock DockPanel.Dock="Top"
                                            Text="History"
-                                           FontSize="16"
-                                           FontWeight="SemiBold"
+                                           Style="{DynamicResource Slate.BodyStrongTextBlockStyle}"
                                            AutomationProperties.HeadingLevel="Level2" />
                                 <panels:HistorySurfaceView Model="{Binding History}" />
                             </DockPanel>
@@ -2513,8 +2520,7 @@
                                 </DockPanel.Style>
                                 <TextBlock DockPanel.Dock="Top"
                                            Text="Sync"
-                                           FontSize="16"
-                                           FontWeight="SemiBold"
+                                           Style="{DynamicResource Slate.BodyStrongTextBlockStyle}"
                                            AutomationProperties.HeadingLevel="Level2" />
                                 <panels:SyncDiagnosticsSurfaceView Model="{Binding SyncDiagnostics}" />
                             </DockPanel>
@@ -2575,8 +2581,7 @@
                                     </Style>
                                 </StackPanel.Style>
                                 <TextBlock Text="{Binding ActiveLeaf.Title}"
-                                           FontSize="16"
-                                           FontWeight="SemiBold"
+                                           Style="{DynamicResource Slate.BodyStrongTextBlockStyle}"
                                            AutomationProperties.HeadingLevel="Level2" />
                                 <TextBlock Margin="0,8,0,0"
                                            Text="This panel is docked and ready for its feature surface."
@@ -2650,7 +2655,7 @@
                         <TextBox x:Name="QuickSwitcherSearchTextBox" local:FieldPrompt.IsEnabled="True"
                                  Grid.Column="0"
                                  Padding="10,8"
-                                 FontSize="18"
+                                 FontSize="{DynamicResource Slate.FontSizeBodyLarge}"
                                  Text="{Binding Query, UpdateSourceTrigger=PropertyChanged}"
                                  Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}"
                                  PreviewKeyDown="QuickSwitcherSearch_PreviewKeyDown"
@@ -2771,7 +2776,7 @@
                         <TextBox local:FieldPrompt.IsEnabled="True" x:Name="SearchOverlaySearchTextBox"
                                  Grid.Column="0"
                                  Padding="10,8"
-                                 FontSize="18"
+                                 FontSize="{DynamicResource Slate.FontSizeBodyLarge}"
                                  Text="{Binding Query, UpdateSourceTrigger=PropertyChanged}"
                                  PreviewKeyDown="SearchOverlaySearch_PreviewKeyDown"
                                  AutomationProperties.AutomationId="SearchOverlaySearch"
@@ -2876,7 +2881,7 @@
                                                 <DataTemplate>
                                                     <local:AutomationPresentationTextBlock
                                                             Text="{Binding Text}"
-                                                            FontSize="12"
+                                                            FontSize="{DynamicResource Slate.FontSizeCaption}" FontFamily="{DynamicResource Slate.FontFamilySmall}" LineHeight="{DynamicResource Slate.LineHeightCaption}" LineStackingStrategy="BlockLineHeight"
                                                             Foreground="{DynamicResource Slate.SecondaryTextBrush}">
                                                         <local:AutomationPresentationTextBlock.Style>
                                                             <Style TargetType="local:AutomationPresentationTextBlock">
@@ -3057,7 +3062,7 @@
                     <TextBox x:Name="CommandPaletteSearchTextBox"
                              Grid.Row="0"
                              Padding="10,8"
-                             FontSize="18"
+                             FontSize="{DynamicResource Slate.FontSizeBodyLarge}"
                              Text="{Binding Query, UpdateSourceTrigger=PropertyChanged}"
                              PreviewKeyDown="CommandPaletteSearch_PreviewKeyDown"
                              local:FieldPrompt.IsEnabled="True"
@@ -3252,8 +3257,7 @@
                 </local:AutomationLandmarkBorder.Effect>
                 <StackPanel>
                     <TextBlock Text="Add property"
-                               FontSize="16"
-                               FontWeight="SemiBold"
+                               Style="{DynamicResource Slate.SubtitleTextBlockStyle}"
                                AutomationProperties.HeadingLevel="Level2" />
                     <local:AutomationPresentationTextBlock Margin="0,10,0,2" Text="Property key" />
                     <TextBox x:Name="AddPropertyKeyTextBox"
@@ -3343,8 +3347,7 @@
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
                     <TextBlock Text="Rename property across the vault"
-                               FontSize="16"
-                               FontWeight="SemiBold"
+                               Style="{DynamicResource Slate.SubtitleTextBlockStyle}"
                                AutomationProperties.HeadingLevel="Level2" />
                     <Grid Grid.Row="1" Margin="0,10,0,0">
                         <Grid.ColumnDefinitions>
@@ -3511,7 +3514,7 @@
                             <DataTemplate>
                                 <StackPanel Margin="0,0,0,6">
                                     <local:AutomationPresentationTextBlock Text="{Binding Label}"
-                                                                           FontSize="11"
+                                                                           Style="{DynamicResource Slate.CaptionTextBlockStyle}"
                                                                            Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                                     <local:AutomationPresentationTextBlock x:Name="FieldValueText"
                                                                            Text="{Binding Value}"
@@ -3716,8 +3719,7 @@
                 <DockPanel>
                     <TextBlock DockPanel.Dock="Top"
                                Text="{Binding Title}"
-                               FontSize="16"
-                               FontWeight="SemiBold"
+                               Style="{DynamicResource Slate.SubtitleTextBlockStyle}"
                                AutomationProperties.HeadingLevel="Level2" />
                     <!-- #1790: one label column, so the fields start together. -->
                     <Grid DockPanel.Dock="Top" Margin="0,10,0,0">
@@ -3858,8 +3860,7 @@
                 <DockPanel>
                     <TextBlock DockPanel.Dock="Top"
                                Text="{Binding Title}"
-                               FontSize="16"
-                               FontWeight="SemiBold"
+                               Style="{DynamicResource Slate.SubtitleTextBlockStyle}"
                                AutomationProperties.HeadingLevel="Level2" />
                     <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
                         <Button Content="Save to View"
@@ -4042,7 +4043,7 @@
                                     </Style>
                                 </TextBlock.Style>
                             </TextBlock>
-                            <TextBlock Margin="0,10,0,2" Text="PREVIEW" FontSize="11"
+                            <TextBlock Margin="0,10,0,2" Text="PREVIEW" Style="{DynamicResource Slate.CaptionTextBlockStyle}"
                                        Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                             <TextBlock x:Name="BuilderPreviewLine"
                                        Text="Preview not loaded."
@@ -4099,8 +4100,7 @@
                 <DockPanel>
                     <StackPanel DockPanel.Dock="Top">
                         <TextBlock Text="Choose a template"
-                                   FontSize="16"
-                                   FontWeight="SemiBold"
+                                   Style="{DynamicResource Slate.SubtitleTextBlockStyle}"
                                    AutomationProperties.HeadingLevel="Level2" />
                         <!-- A plain TextBlock, deliberately: the subtitle
                              carries the DESTINATION, which an AT user can
@@ -4240,8 +4240,7 @@
                     <DockPanel Visibility="{Binding IsPromptStep, Converter={StaticResource BooleanToVisibilityConverter}}">
                         <StackPanel DockPanel.Dock="Top">
                             <TextBlock Text="Fill in template details"
-                                       FontSize="16"
-                                       FontWeight="SemiBold"
+                                       Style="{DynamicResource Slate.SubtitleTextBlockStyle}"
                                        AutomationProperties.HeadingLevel="Level2" />
                             <!-- Plain TextBlock: carries the template name
                                  and destination, which AT can learn nowhere
@@ -4306,8 +4305,7 @@
                     <DockPanel Visibility="{Binding IsNameStep, Converter={StaticResource BooleanToVisibilityConverter}}">
                         <StackPanel DockPanel.Dock="Top">
                             <TextBlock Text="Name the new note"
-                                       FontSize="16"
-                                       FontWeight="SemiBold"
+                                       Style="{DynamicResource Slate.SubtitleTextBlockStyle}"
                                        AutomationProperties.HeadingLevel="Level2" />
                             <!-- Plain TextBlock: the template name lives
                                  here (mac exposes it). -->
@@ -4389,8 +4387,7 @@
                 <DockPanel>
                     <StackPanel DockPanel.Dock="Top">
                         <TextBlock Text="{Binding Title}"
-                                   FontSize="16"
-                                   FontWeight="SemiBold"
+                                   Style="{DynamicResource Slate.SubtitleTextBlockStyle}"
                                    AutomationProperties.HeadingLevel="Level2" />
                         <TextBlock Margin="0,4,0,8"
                                    Text="{Binding Subtitle}"

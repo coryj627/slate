@@ -28,6 +28,8 @@ internal static class HistoryConfirmationDialog
             ShowInTaskbar = false,
             MaxWidth = 460,
         };
+        dialog.SetResourceReference(Control.FontFamilyProperty, TypeRamp.TextFamilyKey);
+        dialog.SetResourceReference(Control.FontSizeProperty, TypeRamp.Body.SizeKey);
         // Owned whenever the main window has been SHOWN (Owner
         // assignment throws on a never-shown window; a minimized or
         // hidden one must still own the modal, or it loses modality

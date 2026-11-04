@@ -208,7 +208,7 @@
     <local:AxisToOrientationConverter x:Key="AxisToOrientationConverter" />
     <local:NullToVisibilityConverter x:Key="NullToVisibilityConverter" />
     <local:PixelGridLengthConverter x:Key="PixelGridLengthConverter" />
-    <local:CappedShareConverter x:Key="PropertyRowsMaxHeightConverter" Share="0.3333" Cap="280" />
+    <local:CappedShareConverter x:Key="PropertyRowsMaxHeightConverter" Share="0.28" Cap="280" />
     <local:CappedShareConverter x:Key="DualPaneListMaxHeightConverter" Share="0.5" Cap="150" />
     <local:IsNotNullConverter x:Key="IsNotNullConverter" />
     <local:SidebarSortModeLabelConverter x:Key="SidebarSortModeLabelConverter" />
@@ -242,7 +242,7 @@
             <StackPanel Grid.Column="1" VerticalAlignment="Center">
                 <TextBlock Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis" />
                 <TextBlock Text="{Binding MetadataText}"
-                           FontSize="11"
+                           FontSize="{DynamicResource Slate.FontSizeCaption}" FontFamily="{DynamicResource Slate.FontFamilySmall}" LineHeight="{DynamicResource Slate.LineHeightCaption}" LineStackingStrategy="BlockLineHeight"
                            Foreground="{DynamicResource Slate.SecondaryTextBrush}"
                            TextTrimming="CharacterEllipsis">
                     <TextBlock.Style>
@@ -742,8 +742,7 @@
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
                         <TextBlock Text="{Binding EditorInteractions.PopoverTitle}"
-                                   FontSize="16"
-                                   FontWeight="SemiBold"
+                                   Style="{DynamicResource Slate.BodyStrongTextBlockStyle}"
                                    AutomationProperties.HeadingLevel="Level2" />
                         <StackPanel Grid.Row="1" Margin="0,10,0,10">
                             <!-- W7-7 (#1251, R-8): not a focus stop of its own. Its
@@ -807,8 +806,7 @@
                         VerticalAlignment="Center"
                         Visibility="{Binding IsPlaceholder, Converter={StaticResource BooleanToVisibilityConverter}}">
                 <TextBlock Text="{Binding KindLabel}"
-                           FontSize="22"
-                           FontWeight="SemiBold"
+                           Style="{DynamicResource Slate.SubtitleTextBlockStyle}"
                            HorizontalAlignment="Center"
                            AutomationProperties.HeadingLevel="Level2" />
                 <TextBlock Margin="0,8,0,0"

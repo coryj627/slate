@@ -415,7 +415,7 @@ internal sealed class CanvasRendererView : FrameworkElement
             node.Title,
             System.Globalization.CultureInfo.CurrentUICulture,
             FlowDirection.LeftToRight,
-            new Typeface("Segoe UI"),
+            new Typeface(TypeRamp.TextFamily, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal),
             fontSize,
             BrushOf("Slate.Canvas.TextBrush"),
             VisualTreeHelper.GetDpi(this).PixelsPerDip)
@@ -431,7 +431,7 @@ internal sealed class CanvasRendererView : FrameworkElement
             node.Title,
             System.Globalization.CultureInfo.CurrentUICulture,
             FlowDirection.LeftToRight,
-            new Typeface("Segoe UI"),
+            new Typeface(TypeRamp.TextFamily, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal),
             fontSize,
             Brushes.Transparent,
             VisualTreeHelper.GetDpi(this).PixelsPerDip);

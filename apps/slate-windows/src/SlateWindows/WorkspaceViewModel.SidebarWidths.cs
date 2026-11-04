@@ -28,15 +28,16 @@ internal sealed partial class WorkspaceViewModel
     internal const double MinimumSidebarWidth = 200;
 
     /// <summary>#1795: the narrowest the right pane goes: its rail, and room beside it
-    /// for a panel's buttons.</summary>
-    internal const double MinimumRightPaneWidth = 250;
+    /// for a panel's buttons at 14 point (DS-2).</summary>
+    internal const double MinimumRightPaneWidth = 280;
 
     /// <summary>The widest a sidebar goes, whatever room the window has.</summary>
     internal const double MaximumSidebarWidth = 640;
 
     /// <summary>The editor keeps at least this much between the sidebars —
-    /// its column's own MinWidth.</summary>
-    internal const double MinimumEditorWidth = 300;
+    /// its column's own MinWidth. DS-2 moved 30 of it to the right pane, because
+    /// the window's minimum can't grow past half of a common screen.</summary>
+    internal const double MinimumEditorWidth = 270;
 
     /// <summary>The two splitters' own width.</summary>
     internal const double SplitterWidth = 5;

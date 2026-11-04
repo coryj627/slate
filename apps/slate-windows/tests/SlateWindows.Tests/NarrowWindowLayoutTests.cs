@@ -3,6 +3,7 @@
 
 using System.Windows;
 using System.Windows.Automation;
+using System.Windows.Controls;
 using SlateWindows.Graph;
 
 namespace SlateWindows.Tests;
@@ -89,17 +90,39 @@ public sealed class NarrowWindowLayoutTests
         Assert.True(right <= files.ActualWidth, $"Group dates ends at {right:F0}px in a {files.ActualWidth:F0}px sidebar.");
     });
 
-    /// <summary>Fluent's 120px minimum is wider than the label needs, and it would
-    /// wrap the row at the sidebar's default width.</summary>
-    [Fact]
-    public void GroupDatesSharesTheSortRowAtTheDefaultWidth() => StaThread.Run(() =>
+    /// <summary>A ComboBox sizes to its selected row, so a fixed width cut the longer
+    /// labels off at 14 point. Choosing one doesn't move what's beside it either.</summary>
+    [Theory]
+    [InlineData("NameAscending")]
+    [InlineData("NameDescending")]
+    [InlineData("ModifiedNewest")]
+    [InlineData("ModifiedOldest")]
+    [InlineData("CreatedNewest")]
+    [InlineData("CreatedOldest")]
+    public void TheSortBoxHoldsEachLabelWithoutMoving(string name) => StaThread.Run(() =>
     {
         using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        var sort = (ComboBox)host.Body("SidebarSortOrder");
+        // The hosted shell has no sidebar model to bind them from.
+        sort.ItemsSource = Enum.GetValues<SidebarSortMode>();
+        sort.SelectedItem = SidebarSortMode.NameAscending;
+        host.Settle();
+        double before = sort.ActualWidth;
 
-        FrameworkElement group = host.Body("SidebarGroupDates");
-        FrameworkElement sort = host.Body("SidebarSortOrder");
-        double groupMiddle = group.TranslatePoint(new Point(0, group.ActualHeight / 2), sort).Y;
-        Assert.InRange(groupMiddle, 0, sort.ActualHeight);
+        SidebarSortMode mode = Enum.Parse<SidebarSortMode>(name);
+        sort.SelectedItem = mode;
+        host.Settle();
+
+        var label = new TextBlock
+        {
+            Text = (string)new SidebarSortModeLabelConverter().Convert(mode, typeof(string), null!, System.Globalization.CultureInfo.InvariantCulture),
+            FontFamily = sort.FontFamily,
+            FontSize = sort.FontSize,
+        };
+        label.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        ContentPresenter shown = ShownShell.Descendants(sort).OfType<ContentPresenter>().First(presenter => presenter.ActualWidth > 0);
+        Assert.True(shown.ActualWidth >= label.DesiredSize.Width, $"{label.Text} needs {label.DesiredSize.Width:F0}px and has {shown.ActualWidth:F0}px.");
+        Assert.Equal(before, sort.ActualWidth);
     });
 
     /// <summary>A note with many properties took all of a short window's height from
@@ -126,8 +149,8 @@ public sealed class NarrowWindowLayoutTests
         FrameworkElement editor = ShownShell.Descendants(host.Shell)
             .OfType<SlateTextEditor>()
             .Single(element => element.IsVisible);
-        // Four lines of text inside the editor's own 24px of padding.
-        Assert.True(editor.ActualHeight >= 100, $"the editor is {editor.ActualHeight:F0}px tall.");
+        // Four of its 22px lines, inside the editor's own 24px of padding.
+        Assert.True(editor.ActualHeight >= 112, $"the editor is {editor.ActualHeight:F0}px tall.");
     });
 
     /// <summary>The key's fixed column and the buttons took the whole row, which left
