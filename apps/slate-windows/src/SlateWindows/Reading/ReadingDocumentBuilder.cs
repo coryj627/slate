@@ -207,13 +207,13 @@ internal static class ReadingDocumentBuilder
     {
         var document = new FlowDocument
         {
-            FontSize = 15,
             PagePadding = new Thickness(16),
             // Column layout off: the reading view is a single flow, and
             // multi-column reading order is a §W-C hazard.
             ColumnWidth = double.PositiveInfinity,
         };
         document.SetResourceReference(FlowDocument.FontFamilyProperty, "Slate.ReadingFontFamily");
+        ApplyBodyType(document);
 
         List<(WpfList List, bool Ordered, ListItem? LastItem)> stack = context.Stack;
 
@@ -344,14 +344,7 @@ internal static class ReadingDocumentBuilder
             case ReadingBlockKind.Heading heading:
                 {
                     Paragraph paragraph = InlineParagraph(inlines, taskRange: null);
-                    paragraph.FontSize = heading.Level switch
-                    {
-                        1 => 26,
-                        2 => 21,
-                        3 => 18,
-                        _ => 16,
-                    };
-                    paragraph.FontWeight = FontWeights.SemiBold;
+                    ApplyHeadingType(paragraph, heading.Level);
                     // Narrator (and any future UIA consumer of the property)
                     // reads this; NVDA does not during linear reading — the
                     // measured limitation G21 records. The chorded commands
@@ -514,8 +507,9 @@ internal static class ReadingDocumentBuilder
         var preambleParagraph = new Paragraph
         {
             Margin = new Thickness(0, 2, 0, 0),
-            FontSize = PreambleCaptionFontSize,
         };
+        preambleParagraph.SetResourceReference(TextElement.FontSizeProperty, TypeRamp.ReaderSmall.SizeKey);
+        preambleParagraph.SetResourceReference(Block.LineHeightProperty, TypeRamp.ReaderSmall.LineHeightKey);
         var preambleRun = new Run(preamble)
         {
             FontStyle = FontStyles.Italic,
@@ -695,6 +689,45 @@ internal static class ReadingDocumentBuilder
     };
 
     /// <summary>The width a speech run's whole line may give it.</summary>
+    /// <summary>The body's size and line height (DS-3). The line height is a paragraph
+    /// style, not a document value, because <c>Block.LineHeight</c> inherits, and would
+    /// follow into the text blocks of cards and tables. Paragraphs keep the default
+    /// stacking, under which it's a floor, so a math or diagram object grows its line
+    /// instead of overlapping what follows. It would also inherit through an inline's
+    /// child, a formula's fallback source among them, so the container stops it.</summary>
+    internal static void ApplyBodyType(FlowDocument document)
+    {
+        document.SetResourceReference(FlowDocument.FontSizeProperty, TypeRamp.ReaderBody.SizeKey);
+        var body = new Style(typeof(Paragraph));
+        body.Setters.Add(new Setter(Block.LineHeightProperty, new DynamicResourceExtension(TypeRamp.ReaderBody.LineHeightKey)));
+        document.Resources[typeof(Paragraph)] = body;
+        var inlineObject = new Style(typeof(InlineUIContainer));
+        inlineObject.Setters.Add(new Setter(Block.LineHeightProperty, double.NaN));
+        document.Resources[typeof(InlineUIContainer)] = inlineObject;
+    }
+
+    /// <summary>A heading's size, line height and weight (DS-3): Reader H1 is the one
+    /// 700 the design has. Open Sans's natural height passes the token at 32 and 24,
+    /// so a heading's line height is exact, unless it holds an object, whose line has
+    /// to grow or it would overlap what follows.</summary>
+    internal static void ApplyHeadingType(Paragraph heading, byte level)
+    {
+        ReaderStep step = TypeRamp.ReaderHeading(level);
+        heading.SetResourceReference(TextElement.FontSizeProperty, step.SizeKey);
+        heading.SetResourceReference(Block.LineHeightProperty, step.LineHeightKey);
+        heading.LineStackingStrategy = HoldsAnObject(heading.Inlines)
+            ? LineStackingStrategy.MaxHeight
+            : LineStackingStrategy.BlockLineHeight;
+        heading.FontWeight = level == 1 ? FontWeights.Bold : FontWeights.SemiBold;
+    }
+
+    private static bool HoldsAnObject(InlineCollection inlines) => inlines.Any(inline => inline switch
+    {
+        InlineUIContainer => true,
+        Span span => HoldsAnObject(span.Inlines),
+        _ => false,
+    });
+
     /// <summary>The face for code and for source shown in place of a render,
     /// from the type layer, so it's the one the app ships (DS-1).</summary>
     private const string CodeFontKey = "Slate.CodeFontFamily";
@@ -812,10 +845,6 @@ internal static class ReadingDocumentBuilder
     /// </summary>
     internal const int MaximumHighlightTokens = 4_000;
 
-    /// <summary>Code preamble caption size — 0.8x the 15px body
-    /// (owner call, field pass 3 2026-07-31: a caption, not a
-    /// paragraph; mac hides its preamble entirely).</summary>
-    internal const double PreambleCaptionFontSize = 12;
 
     /// <summary>The projection-wide pool the per-fence cap draws from
     /// (see <see cref="ReadingListBuildContext.RemainingHighlightTokens"/>):

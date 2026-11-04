@@ -81,12 +81,15 @@ internal sealed class ReadingSurface : RichTextBox
         // this document instead (ApplyBuiltDocument).
         Document = new FlowDocument
         {
-            FontSize = 15,
-            PagePadding = new Thickness(16),
+            PagePadding = new Thickness(PagePaddingFloor),
             ColumnWidth = double.PositiveInfinity,
         };
         Document.SetResourceReference(
             FlowDocument.FontFamilyProperty, "Slate.ReadingFontFamily");
+        ReadingDocumentBuilder.ApplyBodyType(Document);
+        SetResourceReference(BodySizeProperty, TypeRamp.ReaderBody.SizeKey);
+        SetResourceReference(BodyFamilyProperty, "Slate.ReadingFontFamily");
+        SizeChanged += (_, _) => FitMeasure();
 
         // Activation: clicks and Enter on links/cards route by the run
         // kind the builder STAMPED on the element — never by parsing
@@ -338,6 +341,8 @@ internal sealed class ReadingSurface : RichTextBox
             _ = Focus();
         }
 
+        // A formula's place is for this note's next projection, not the next note's.
+        _formulaScrolls.Clear();
         Document.Blocks.Clear();
         var placeholder = new Paragraph(new Run("Loading reading view…"))
         {
@@ -368,10 +373,14 @@ internal sealed class ReadingSurface : RichTextBox
             ApplyModel();
         }
         else if (e.PropertyName is nameof(ReadingContentViewModel.RefreshInFlight)
-            && _focusLandingPending
             && _model is { RefreshInFlight: false })
         {
-            ScheduleSettledLanding();
+            // Every formula has arrived, so a place left over has lost its formula.
+            _formulaScrolls.Clear();
+            if (_focusLandingPending)
+            {
+                ScheduleSettledLanding();
+            }
         }
     }
 
@@ -383,6 +392,7 @@ internal sealed class ReadingSurface : RichTextBox
     /// </summary>
     private void Model_BlocksAppended(FlowDocument fragment)
     {
+        ResumeFormulaScrolls(fragment, _landmarks);
         while (fragment.Blocks.FirstBlock is { } block)
         {
             fragment.Blocks.Remove(block);
@@ -396,6 +406,11 @@ internal sealed class ReadingSurface : RichTextBox
     }
 
     private FlowDocument? _lastMerged;
+
+    /// <summary>DS-3: where formulas had scrolled to when a merge replaced them. A long
+    /// note's later formulas arrive after the merge, so their places wait here until the
+    /// refresh settles or the note changes.</summary>
+    private readonly Dictionary<(string Source, int Nth), double> _formulaScrolls = [];
     private IReadOnlyList<ReadingLandmark> _landmarks = Array.Empty<ReadingLandmark>();
     private bool _focusLandingPending;
     private object? _focusLandingToken;
@@ -690,6 +705,18 @@ internal sealed class ReadingSurface : RichTextBox
             caretAnchor = null;
         }
 
+        // DS-3: a formula's sideways scroll lives in the element this merge replaces.
+        // The new one has to know before it joins the document, which lays it out at once.
+        foreach (((string Source, int Nth) key, ReadingMathElement element) in NumberedFormulas(_landmarks, []))
+        {
+            if (element.Scroller is { HorizontalOffset: > 0 } scroller)
+            {
+                _formulaScrolls[key] = scroller.HorizontalOffset;
+            }
+        }
+
+        ResumeFormulaScrolls(built, []);
+
         Document.Blocks.Clear();
         while (built.Blocks.FirstBlock is { } block)
         {
@@ -719,6 +746,45 @@ internal sealed class ReadingSurface : RichTextBox
         // ApplyModel after the merge, and nothing else lands.
         ShowsSearchableContent = true;
         RaiseContentChanged(ReadingContentChange.Replaced);
+    }
+
+    /// <summary>Hands out the places <see cref="_formulaScrolls"/> holds to the formulas
+    /// arriving in <paramref name="incoming"/>, counting from those already on the page.</summary>
+    private void ResumeFormulaScrolls(FlowDocument incoming, IReadOnlyList<ReadingLandmark> onThePage)
+    {
+        if (_formulaScrolls.Count == 0)
+        {
+            return;
+        }
+
+        var seen = new Dictionary<string, int>(StringComparer.Ordinal);
+        _ = NumberedFormulas(onThePage, seen).Count();
+        foreach (((string Source, int Nth) key, ReadingMathElement element) in NumberedFormulas(ReadingDocumentBuilder.CollectLandmarks(incoming), seen))
+        {
+            if (_formulaScrolls.Remove(key, out double offset))
+            {
+                element.ResumeScrollAt = offset;
+            }
+        }
+    }
+
+    /// <summary>The formulas under <paramref name="landmarks"/>, each named by its source
+    /// and by which of that source it is, so a merge can pair them up.</summary>
+    private static IEnumerable<((string Source, int Nth) Key, ReadingMathElement Element)> NumberedFormulas(
+        IReadOnlyList<ReadingLandmark> landmarks,
+        Dictionary<string, int> seen)
+    {
+        foreach (ReadingLandmark landmark in landmarks)
+        {
+            if (landmark.Kind == ReadingLandmarkKind.Math
+                && landmark.Position.Paragraph is { } paragraph
+                && MathElementOf(paragraph) is { } element)
+            {
+                int nth = seen.GetValueOrDefault(element.Source);
+                seen[element.Source] = nth + 1;
+                yield return ((element.Source, nth), element);
+            }
+        }
     }
 
     /// <summary>The caret as its top-level block's index and the offset
@@ -1404,6 +1470,57 @@ internal sealed class ReadingSurface : RichTextBox
     /// text, each such paragraph's fenced source in its speech's place;
     /// any other selection copies as WPF builds it.
     /// </summary>
+    /// <summary>DS-3: the design's measure, in characters. <c>ColumnWidth</c> stays
+    /// infinite, because multi-column reading order is a hazard, so margins hold it:
+    /// that keeps the scroll bar at the pane's edge, needs no rebuild, and can't move
+    /// the caret.</summary>
+    private const int MeasureCharacters = 72;
+
+    private const double PagePaddingFloor = 16;
+
+    /// <summary>The body's size and face, watched so the measure follows them. They're
+    /// the surface's own because the document's values lag these callbacks when a theme
+    /// or text size swaps dictionaries, which left the measure on the old font.</summary>
+    private static readonly DependencyProperty BodySizeProperty = DependencyProperty.Register(
+        "BodySize",
+        typeof(double),
+        typeof(ReadingSurface),
+        new PropertyMetadata(0d, (surface, _) => ((ReadingSurface)surface).FitMeasure()));
+
+    private static readonly DependencyProperty BodyFamilyProperty = DependencyProperty.Register(
+        "BodyFamily",
+        typeof(System.Windows.Media.FontFamily),
+        typeof(ReadingSurface),
+        new PropertyMetadata(null, (surface, _) => ((ReadingSurface)surface).FitMeasure()));
+
+    private void FitMeasure()
+    {
+        // Each key passes through unset during a swap, and a surface outside the shell
+        // has none, so there's nothing to measure with until they resolve.
+        double size = (double)GetValue(BodySizeProperty);
+        if (size <= 0 || GetValue(BodyFamilyProperty) is not System.Windows.Media.FontFamily family)
+        {
+            return;
+        }
+
+        double side = Math.Max(PagePaddingFloor, (ActualWidth - MeasureWidth(family, size)) / 2);
+        var padding = new Thickness(side, PagePaddingFloor, side, PagePaddingFloor);
+        if (Document.PagePadding != padding)
+        {
+            Document.PagePadding = padding;
+        }
+    }
+
+    /// <summary>A <c>ch</c> is the advance of a zero, in the face and size on show.</summary>
+    private double MeasureWidth(System.Windows.Media.FontFamily family, double size) => MeasureCharacters * new System.Windows.Media.FormattedText(
+        "0",
+        System.Globalization.CultureInfo.InvariantCulture,
+        FlowDirection.LeftToRight,
+        new System.Windows.Media.Typeface(family, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal),
+        size,
+        System.Windows.Media.Brushes.Black,
+        System.Windows.Media.VisualTreeHelper.GetDpi(this).PixelsPerDip).WidthIncludingTrailingWhitespace;
+
     /// <summary>DS-1: WPF's XAML formats name each font by its pack URI, and only
     /// another WPF rich text box reads them. Plain text and RTF serve every
     /// recipient, that box included.</summary>

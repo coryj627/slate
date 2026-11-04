@@ -262,6 +262,296 @@ public sealed class ReadingMathTests
             Assert.DoesNotContain("$", range, StringComparison.Ordinal);
         });
 
+    /// <summary>DS-3: the measure made a drawn formula's room narrower, and the
+    /// element clips what doesn't fit, so terms disappeared. Shrinking one to fit left
+    /// it too small to read, so it keeps its size and scrolls.</summary>
+    [Fact]
+    public void AWideFormulaScrollsAtItsOwnSize()
+        => WithReadingSurface("reading-math-wide", WideFormula, (_, surface, _) =>
+            WithHostedSurface(surface, 900, () =>
+            {
+                ReadingMathElement element = Assert.Single(FindMathElements(surface.Document));
+                var formula = Assert.IsType<System.Windows.Shapes.Path>(element.Content);
+                double natural = formula.Data.Bounds.Width;
+                Assert.True(natural > element.ActualWidth, $"at {natural:F0} the formula doesn't test this.");
+                Assert.Equal(natural, formula.RenderedGeometry.Bounds.Width, 1);
+                var scroller = Assert.IsType<FormulaScroller>(element.Scroller);
+                Assert.True(
+                    element.ActualWidth + scroller.ScrollableWidth >= natural - 1,
+                    $"{element.ActualWidth:F0} plus a scroll of {scroller.ScrollableWidth:F0} doesn't reach {natural:F0}.");
+            }));
+
+    /// <summary>Fluent's scroll viewer lets its content span the bar's row, which ran
+    /// the bar through a short formula like a strikethrough.</summary>
+    [Fact]
+    public void AWideFormulasBarSitsBelowIt()
+        => WithReadingSurface("reading-math-bar", WideFormula, (_, surface, _) =>
+        {
+            foreach (System.Windows.ResourceDictionary layer in ThemeManager.DictionariesFor(SlateTheme.Light, highContrast: false))
+            {
+                surface.Resources.MergedDictionaries.Add(layer);
+            }
+
+            WithHostedSurface(surface, 900, () =>
+            {
+                surface.UpdateLayout();
+                ReadingMathElement element = Assert.Single(FindMathElements(surface.Document));
+                var formula = Assert.IsType<System.Windows.Shapes.Path>(element.Content);
+                var scroller = Assert.IsType<FormulaScroller>(element.Scroller);
+                var bar = Assert.IsType<System.Windows.Controls.Primitives.ScrollBar>(scroller.Template.FindName("PART_HorizontalScrollBar", scroller));
+                Assert.Equal(System.Windows.Visibility.Visible, bar.Visibility);
+                double top = bar.TranslatePoint(default, element).Y;
+                double ink = formula.TranslatePoint(new System.Windows.Point(0, formula.ActualHeight), element).Y;
+                Assert.True(top >= ink - 0.5, $"the bar starts at {top:F1}, over ink reaching {ink:F1}.");
+            });
+        });
+
+    /// <summary>A watcher or a dependency can republish the note while someone reads
+    /// the far end of a formula. The merge replaces every element, which threw them back
+    /// to its first term. Formulas keep their places by source and by which of the same
+    /// source they are, so two copies of one formula keep their own.</summary>
+    [Fact]
+    public void AScrolledFormulaKeepsItsPlaceWhenTheNoteRepublishes()
+        => WithReadingSurface("reading-math-republish", WideFormula + "\nBetween.\n\n" + WideFormula, (tab, surface, _) =>
+            WithHostedSurface(surface, 900, () =>
+            {
+                ReadingMathElement[] before = FindMathElements(surface.Document).ToArray();
+                Assert.Equal(2, before.Length);
+                FormulaScroller first = Assert.IsType<FormulaScroller>(before[0].Scroller);
+                FormulaScroller second = Assert.IsType<FormulaScroller>(before[1].Scroller);
+                first.ScrollToHorizontalOffset(120);
+                second.ScrollToHorizontalOffset(300);
+                surface.UpdateLayout();
+                PumpedDispatcher.Drain();
+                Assert.Equal(120, first.HorizontalOffset, 0);
+                Assert.Equal(300, second.HorizontalOffset, 0);
+
+                tab.EditorDocument!.Replace(tab.Text.IndexOf("Between", StringComparison.Ordinal), 7, "Amid");
+                tab.Reading!.Refresh();
+                WaitForUi(() => !FindMathElements(surface.Document).Contains(before[0]));
+                surface.UpdateLayout();
+                PumpedDispatcher.Drain();
+                surface.UpdateLayout();
+
+                ReadingMathElement[] after = FindMathElements(surface.Document).ToArray();
+                Assert.Equal(2, after.Length);
+                Assert.Equal(120, Assert.IsType<FormulaScroller>(after[0].Scroller).HorizontalOffset, 0);
+                Assert.Equal(300, Assert.IsType<FormulaScroller>(after[1].Scroller).HorizontalOffset, 0);
+            }));
+
+    /// <summary>A long note streams in chunks after the merge, so a formula in a later
+    /// chunk arrives without one, and still gets its place back.</summary>
+    [Fact]
+    public void AScrolledFormulaLateInALongNoteKeepsItsPlace()
+    {
+        RunSta(() =>
+        {
+            var text = new System.Text.StringBuilder("First words.\n\n");
+            for (int i = 0; i < 300; i++)
+            {
+                text.Append("Paragraph number ").Append(i).Append(".\n\n");
+            }
+
+            text.Append(WideFormula).Append("\nThe end.\n");
+
+            using var fixture = FixtureVault.Create(1, "reading-math-stream");
+            File.WriteAllText(Path.Combine(fixture.Root, "note0.md"), text.ToString());
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            using var reading = new SlateWindows.Reading.ReadingContentViewModel(session, tab, _ => { });
+            var surface = new ReadingSurface { Model = reading };
+
+            WithHostedSurface(surface, 900, () =>
+            {
+                reading.Refresh();
+                WaitForUi(() => FindMathElements(surface.Document).Any());
+                ReadingMathElement before = Assert.Single(FindMathElements(surface.Document));
+                surface.UpdateLayout();
+                surface.ScrollToEnd();
+                surface.UpdateLayout();
+                WaitForUi(() => before.Scroller is not null);
+                FormulaScroller scroller = Assert.IsType<FormulaScroller>(before.Scroller);
+                scroller.ScrollToHorizontalOffset(120);
+                surface.UpdateLayout();
+                PumpedDispatcher.Drain();
+                Assert.Equal(120, scroller.HorizontalOffset, 0);
+
+                tab.EditorDocument!.Replace(tab.Text.IndexOf("First", StringComparison.Ordinal), 5, "Early");
+                reading.Refresh();
+                WaitForUi(() => FindMathElements(surface.Document).Any() && !FindMathElements(surface.Document).Contains(before));
+                ReadingMathElement after = Assert.Single(FindMathElements(surface.Document));
+                surface.ScrollToEnd();
+                WaitForUi(() =>
+                {
+                    surface.UpdateLayout();
+                    return after.Scroller is { HorizontalOffset: > 119 };
+                });
+                Assert.Equal(120, after.Scroller!.HorizontalOffset, 0);
+            });
+        });
+    }
+
+    /// <summary>A place belongs to the note it was read in. One still waiting for its
+    /// formula, as a long note's do, opened another note's copy of that formula part way
+    /// along, hiding how it starts.</summary>
+    [Fact]
+    public void AFormulasPlaceStaysWithItsNote()
+        => WithReadingSurface("reading-math-place-a", WideFormula, (_, surface, _) =>
+            WithHostedSurface(surface, 900, () =>
+            {
+                ReadingMathElement first = Assert.Single(FindMathElements(surface.Document));
+                first.Scroller!.ScrollToHorizontalOffset(300);
+                surface.UpdateLayout();
+                PumpedDispatcher.Drain();
+                Assert.Equal(300, first.Scroller!.HorizontalOffset, 0);
+                surface.ApplyBuiltDocument(new System.Windows.Documents.FlowDocument(
+                    new System.Windows.Documents.Paragraph(new System.Windows.Documents.Run("Nothing here."))));
+
+                using var fixture = FixtureVault.Create(1, "reading-math-place-b");
+                File.WriteAllText(Path.Combine(fixture.Root, "note0.md"), WideFormula);
+                using var session = VaultSession.OpenFilesystem(fixture.Root);
+                using var cancel = new CancelToken();
+                session.ScanInitial(cancel);
+                using var other = new WorkspaceTabViewModel(
+                    session,
+                    new WorkspaceTabState(Guid.NewGuid(), new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                    startInteractionBackgroundWork: false);
+                other.ToggleViewMode();
+                surface.Model = other.Reading;
+                WaitForUi(() => FindMathElements(surface.Document).Any());
+                surface.UpdateLayout();
+                PumpedDispatcher.Drain();
+                surface.UpdateLayout();
+
+                Assert.Equal(0, Assert.Single(FindMathElements(surface.Document)).Scroller!.HorizontalOffset, 0);
+            }));
+
+    /// <summary>A place whose formula was edited away is dropped when the refresh settles.
+    /// Kept, it came back the moment the edit was undone, and places piled up with every
+    /// edit.</summary>
+    [Fact]
+    public void AnEditedFormulaGivesUpItsPlace()
+        => WithReadingSurface("reading-math-place-edit", WideFormula, (tab, surface, _) =>
+            WithHostedSurface(surface, 900, () =>
+            {
+                ReadingMathElement first = Assert.Single(FindMathElements(surface.Document));
+                first.Scroller!.ScrollToHorizontalOffset(300);
+                surface.UpdateLayout();
+                PumpedDispatcher.Drain();
+                Assert.Equal(300, first.Scroller!.HorizontalOffset, 0);
+
+                tab.EditorDocument!.Replace(tab.Text.IndexOf("x+", StringComparison.Ordinal), 1, "y");
+                tab.Reading!.Refresh();
+                tab.EditorDocument!.Replace(tab.Text.IndexOf("y+", StringComparison.Ordinal), 1, "x");
+                tab.Reading!.Refresh();
+                surface.UpdateLayout();
+                PumpedDispatcher.Drain();
+                surface.UpdateLayout();
+
+                ReadingMathElement back = Assert.Single(FindMathElements(surface.Document));
+                Assert.NotSame(first, back);
+                Assert.Equal(0, Assert.IsType<FormulaScroller>(back.Scroller).HorizontalOffset, 0);
+            }));
+
+    /// <summary>A formula that fits has nothing to scroll, and no room kept for a bar.</summary>
+    [Fact]
+    public void ASmallFormulaKeepsItsSize()
+        => WithReadingSurface("reading-math-small", "$$x^2$$\n", (_, surface, _) =>
+            WithHostedSurface(surface, 900, () =>
+            {
+                ReadingMathElement element = Assert.Single(FindMathElements(surface.Document));
+                var formula = Assert.IsType<System.Windows.Shapes.Path>(element.Content);
+                Assert.Equal(formula.Data.Bounds.Width, formula.RenderedGeometry.Bounds.Width, 1);
+                var scroller = Assert.IsType<FormulaScroller>(element.Scroller);
+                Assert.Equal(0, scroller.ScrollableWidth);
+                Assert.Equal(0, scroller.Padding.Bottom);
+            }));
+
+    /// <summary>A sighted keyboard reader reaches the rest of a wide formula from its
+    /// focus, and the scroller doesn't add a stop to the Tab order.</summary>
+    [Fact]
+    public void AWideFormulaScrollsFromTheKeyboard()
+        => WithReadingSurface("reading-math-keys", WideFormula, (_, surface, _) =>
+            WithHostedSurface(surface, 900, () =>
+            {
+                ReadingMathElement element = Assert.Single(FindMathElements(surface.Document));
+                var scroller = Assert.IsType<FormulaScroller>(element.Scroller);
+                Assert.False(scroller.Focusable);
+                Assert.False(scroller.IsTabStop);
+
+                Assert.True(PressOn(element, System.Windows.Input.Key.Right), "Right didn't scroll a formula with more to show.");
+                surface.UpdateLayout();
+                double moved = scroller.HorizontalOffset;
+                Assert.True(moved > 0, "Right left the formula where it was.");
+
+                Assert.True(PressOn(element, System.Windows.Input.Key.Left), "Left didn't scroll a formula with more to show.");
+                surface.UpdateLayout();
+                Assert.True(scroller.HorizontalOffset < moved, "Left left the formula where it was.");
+            }));
+
+    /// <summary>The arrows are the reading view's whenever there's nothing to scroll,
+    /// so a formula that fits changes nothing about moving through a note.</summary>
+    [Fact]
+    public void AFormulaThatFitsLeavesTheArrowsToTheReader()
+        => WithReadingSurface("reading-math-keys-small", "$$x^2$$\n", (_, surface, _) =>
+            WithHostedSurface(surface, 900, () =>
+            {
+                ReadingMathElement element = Assert.Single(FindMathElements(surface.Document));
+                Assert.False(PressOn(element, System.Windows.Input.Key.Right), "a formula that fits took Right.");
+                Assert.False(PressOn(element, System.Windows.Input.Key.Left), "a formula that fits took Left.");
+            }));
+
+    /// <summary>A scroll viewer takes the wheel by default, which would have stopped
+    /// the note scrolling with a formula under the pointer.</summary>
+    [Fact]
+    public void AFormulaLeavesTheWheelToTheNote()
+        => WithReadingSurface("reading-math-wheel", WideFormula, (_, surface, _) =>
+            WithHostedSurface(surface, 900, () =>
+            {
+                ReadingMathElement element = Assert.Single(FindMathElements(surface.Document));
+                var wheel = new System.Windows.Input.MouseWheelEventArgs(System.Windows.Input.Mouse.PrimaryDevice, 0, -120)
+                {
+                    RoutedEvent = System.Windows.Input.Mouse.MouseWheelEvent,
+                };
+                Assert.IsType<FormulaScroller>(element.Scroller).RaiseEvent(wheel);
+                Assert.False(wheel.Handled, "the formula took the wheel.");
+            }));
+
+    /// <summary>A coverage gap's source is text, which wraps, so it has no scroller
+    /// and no sideways scroll.</summary>
+    [Fact]
+    public void AFormulasFallbackWrapsInsteadOfScrolling()
+        => WithReadingSurface("reading-math-gap-wrap", "$$\\mathbb{R}$$\n", (_, surface, _) =>
+            WithHostedSurface(surface, 900, () =>
+            {
+                ReadingMathElement element = Assert.Single(FindMathElements(surface.Document));
+                Assert.IsType<System.Windows.Controls.TextBlock>(element.Content);
+                Assert.Null(element.Scroller);
+            }));
+
+    /// <summary>LineHeight inherits through an inline's child, so the body's would have
+    /// spaced a formula's fallback source out, where it isn't body text.</summary>
+    [Fact]
+    public void AFormulasFallbackTextKeepsItsOwnLineHeight()
+        => WithReadingSurface("reading-math-gap-leading", "$$\\mathbb{R}$$\n", (_, surface, _) =>
+        {
+            surface.Resources.MergedDictionaries.Add(TypeRamp.DictionaryFor());
+            WithHostedSurface(surface, 900, () =>
+            {
+                ReadingMathElement element = Assert.Single(FindMathElements(surface.Document));
+                var fallback = Assert.IsType<System.Windows.Controls.TextBlock>(element.Content);
+                Assert.True(double.IsNaN(fallback.LineHeight), $"the fallback inherited a line height of {fallback.LineHeight}.");
+                Assert.Equal(TypeRamp.ReaderBody.LineHeight, MathParagraphOf(element).LineHeight);
+            });
+        });
+
     /// <summary>#1595: core's fallback (a source pulldown-latex cannot
     /// parse) reads as core's fallback speech, not as the fenced
     /// source.</summary>
@@ -1187,6 +1477,27 @@ public sealed class ReadingMathTests
             tab.ToggleViewMode();
             body(tab, new ReadingSurface { Model = tab.Reading }, announced);
         });
+    }
+
+    private static readonly string WideFormula = "$$" + string.Concat(Enumerable.Repeat("x+", 40)) + "x$$\n";
+
+    /// <summary>A key at the element, as focus delivers it. True when the element took
+    /// it: the reading view above it takes an arrow too, moving the caret.</summary>
+    private static bool PressOn(ReadingMathElement element, System.Windows.Input.Key key)
+    {
+        bool taken = false;
+        System.Windows.Input.KeyEventHandler watch = (_, args) => taken = args.Handled;
+        element.AddHandler(System.Windows.Input.Keyboard.KeyDownEvent, watch, handledEventsToo: true);
+        element.RaiseEvent(new System.Windows.Input.KeyEventArgs(
+            System.Windows.Input.Keyboard.PrimaryDevice,
+            System.Windows.PresentationSource.FromVisual(element),
+            0,
+            key)
+        {
+            RoutedEvent = System.Windows.Input.Keyboard.KeyDownEvent,
+        });
+        element.RemoveHandler(System.Windows.Input.Keyboard.KeyDownEvent, watch);
+        return taken;
     }
 
     /// <summary>The surface in a laid-out window of this width, off
