@@ -169,6 +169,8 @@ Heights that hold text are minimums, so they grow with the text instead of clipp
 
 Layout pixels don't scale, so whatever holds text has to make room for it. In the app, one `TextScaleService` owned by `App` reads the setting, and `TypeRamp.Apply` writes the new sizes into the ramp's dictionary, so every `DynamicResource` follows with no re-merge. A sheet keeps its width and its text wraps, and a list in a sheet doesn't scroll sideways, because that measures its rows at any width and nothing in them wraps. A width or height reserved for text is a figure at the body size, multiplied by the text size. The right pane's rail goes under its leaf when the leaf would have under eight ems beside it, and scrolls in 40% of the pane's height.
 
+A sheet's whole body scrolls, and so does the welcome view, because at the window's 480 minimum a long subtitle alone can take all the room a field has. A list inside that scroller has a `MaxHeight`, since a star row under an infinite height realizes every row, and `WheelChain` on the scroller passes the wheel down only to an inner scroller that can move that way. Without it, a short list stops the sheet under the pointer.
+
 ## Regenerating
 
 The files are generated, not hand-edited. When a token in `tokens/` changes, regenerate both files and copy them into the app. The Fluent brush list comes from the `dotnet/wpf` theme files, so regenerate after a .NET update too.

@@ -94,6 +94,14 @@ A launched pass at the seam's 2.25, in the 1120 × 720 the app opens at, found w
 - **Lists in sheets** don't scroll sideways. One that did measured its rows at any width, so nothing wrapped or trimmed, and text ended at the sheet's edge.
 - **The canvas filter's 160 stays.** A text box scrolls its own text and its prompt trims, as the other fields' do. The status bar's 180 holds a progress bar, not text.
 
+Codex's rounds went on to the window's 480 minimum at 225%, which the launched pass at 720 hadn't reached:
+
+- **Sheets scroll whole, and so does the welcome view.** A long subtitle can take all of a step's room, so a scroller round the field alone doesn't help, and a recent vault below the fold had nothing to reach it. Item 7's `MaxHeight` wasn't enough on its own.
+- **A list inside that scroller has a `MaxHeight`,** except Canvas Prompt's, whose star row already holds it. With an infinite height a star row realizes every row and pushes the sheet's buttons off the end.
+- **`WheelChain`** sits on the outer scroller, because an inner scroller takes the wheel even with nowhere to go. It leaves the wheel to an inner scroller that can move that way and otherwise takes it. What's in a popup keeps its own. A closed combo box under the pointer no longer steps its value, which it only did with focus inside it.
+- **Quick Open's name column** is 180 at the body size, multiplied by the text size, because an `Auto` column doesn't bound and a long name left its path no room.
+- **The calendar's buttons** take their `MaxWidth` and `MaxHeight` from their own text size, because Russian's month names clipped at Fluent's fixed caps. The calendar's frame is a copy of Fluent's `CalendarItem` template, `Themes/Slate.Calendar.xaml`, since the heading's size is inside it.
+
 `CanvasTextScaleService` stays in the frozen canvas and graph contract records, which are append-only. `ContractsCitationCensus.RetiredNames` says what it's called now, and a fact holds that the new name exists and the old one is gone.
 
-A fact whose thread ends with a focused text box's text services still up can end the test host, because `msctf` tears them down by calling managed code after the runtime has let the thread go. The facts here shut their dispatchers down first. The hazard is wider than this file's: see the issue this PR files.
+A fact whose thread ends with a focused text box's text services still up can end the test host, because `msctf` tears them down by calling managed code after the runtime has let the thread go. The facts here shut their dispatchers down first. The hazard is wider than this file's: see #1826.

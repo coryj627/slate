@@ -617,16 +617,82 @@ public sealed partial class TextScaleTests
         Wheel(row);
         host.Settle();
         Assert.True(body.VerticalOffset > 0, $"the sheet stayed put under a list with {inner.ScrollableHeight:F0} to scroll.");
+
+        // And back: a list at its top passes on a notch up.
+        double sheetWasAt = body.VerticalOffset;
+        inner.ScrollToHome();
+        host.Settle();
+        host.Settle();
+        row = ShownShell.Descendants(list).OfType<TextBlock>().First(text => text.Text.StartsWith("Row", StringComparison.Ordinal));
+        Wheel(row, 120);
+        host.Settle();
+        Assert.True(body.VerticalOffset < sheetWasAt, $"the sheet stayed at {sheetWasAt:F0} under a list at its top.");
     });
 
-    /// <summary>A wheel notch down, as input delivers it: the preview, then the event.</summary>
-    private static void Wheel(UIElement element)
+    /// <summary>An open combo box's list is in a popup, so the walk up from it never meets
+    /// the sheet's scroller. It keeps its own wheel, and the sheet stays where it is.</summary>
+    [Fact]
+    public void AComboBoxsOpenListKeepsItsOwnWheel() => OnOwnThread(() =>
     {
-        var preview = new System.Windows.Input.MouseWheelEventArgs(System.Windows.Input.Mouse.PrimaryDevice, 0, -120) { RoutedEvent = UIElement.PreviewMouseWheelEvent };
+        var combo = new ComboBox { ItemsSource = Enumerable.Range(1, 40).Select(index => $"Row {index}").ToArray() };
+        var scroller = new ScrollViewer
+        {
+            Focusable = false,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            Content = new StackPanel { Children = { combo, new Border { Height = 2000 } } },
+        };
+        WheelChain.SetIsEnabled(scroller, true);
+        var window = new Window
+        {
+            Content = scroller,
+            Width = 400,
+            Height = 200,
+            Left = -20_000,
+            Top = -20_000,
+            ShowActivated = false,
+            ShowInTaskbar = false,
+            WindowStyle = WindowStyle.None,
+        };
+        foreach (ResourceDictionary layer in ThemeManager.DictionariesFor(SlateTheme.Light, highContrast: false))
+        {
+            window.Resources.MergedDictionaries.Add(layer);
+        }
+
+        try
+        {
+            window.Show();
+            PumpedDispatcher.Drain();
+            combo.IsDropDownOpen = true;
+            PumpedDispatcher.Drain();
+            UIElement list = ((Popup)combo.Template.FindName("PART_Popup", combo)).Child;
+
+            Wheel(list);
+            window.UpdateLayout();
+            PumpedDispatcher.Drain();
+            Assert.Equal(0, scroller.VerticalOffset);
+
+            combo.IsDropDownOpen = false;
+            PumpedDispatcher.Drain();
+            Wheel(combo);
+            window.UpdateLayout();
+            PumpedDispatcher.Drain();
+            Assert.True(scroller.VerticalOffset > 0, "premise: the wheel over the closed combo box should move the scroller.");
+        }
+        finally
+        {
+            window.Close();
+            PumpedDispatcher.Drain();
+        }
+    });
+
+    /// <summary>A wheel notch, as input delivers it: the preview, then the event.</summary>
+    private static void Wheel(UIElement element, int delta = -120)
+    {
+        var preview = new System.Windows.Input.MouseWheelEventArgs(System.Windows.Input.Mouse.PrimaryDevice, 0, delta) { RoutedEvent = UIElement.PreviewMouseWheelEvent };
         element.RaiseEvent(preview);
         if (!preview.Handled)
         {
-            element.RaiseEvent(new System.Windows.Input.MouseWheelEventArgs(System.Windows.Input.Mouse.PrimaryDevice, 0, -120) { RoutedEvent = UIElement.MouseWheelEvent });
+            element.RaiseEvent(new System.Windows.Input.MouseWheelEventArgs(System.Windows.Input.Mouse.PrimaryDevice, 0, delta) { RoutedEvent = UIElement.MouseWheelEvent });
         }
     }
 
