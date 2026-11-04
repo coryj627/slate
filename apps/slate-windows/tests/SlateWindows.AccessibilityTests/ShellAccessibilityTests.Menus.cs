@@ -87,6 +87,8 @@ public sealed partial class ShellAccessibilityTests
             Assert.True(
                 bounds.Top >= screen.Top && bounds.Bottom <= screen.Bottom,
                 $"{lastRow} is at {bounds} on a display of {screen}, so it wasn't scrolled into view.");
+            // The census sees the open menu's rows, so its verdict covers them.
+            Assert.Contains(lastRow, NamedItems(automation, process).Select(item => item.Properties.Name.ValueOrDefault));
             AssertItemNamesAreSpeakable(process, "long-menu");
             PressKey(VirtualKeyShort.ESCAPE);
         }
@@ -102,7 +104,13 @@ public sealed partial class ShellAccessibilityTests
                 process.Dispose();
             }
 
-            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+            try
+            {
+                Directory.Delete(root, recursive: true);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+            }
         }
     }
 }

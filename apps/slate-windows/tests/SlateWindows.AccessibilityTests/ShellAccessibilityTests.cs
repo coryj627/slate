@@ -1075,6 +1075,7 @@ public sealed partial class ShellAccessibilityTests
         ControlType.ComboBox,
         ControlType.Custom,
         ControlType.Group,
+        ControlType.MenuItem,
     ];
 
     /// <summary>A .NET type name as <c>ToString()</c> prints one: ROOTED in a
@@ -1191,52 +1192,57 @@ public sealed partial class ShellAccessibilityTests
             + string.Join(Environment.NewLine + "  ", offenders));
     }
 
-    private static string[] UnspeakableItemNames(UIA3Automation automation, Process process)
+    /// <summary>What the census judges: the named items of every window of the process,
+    /// an open menu's popup among them.</summary>
+    private static IEnumerable<AutomationElement> NamedItems(UIA3Automation automation, Process process)
     {
         var factory = automation.ConditionFactory;
         var condition = new FlaUI.Core.Conditions.OrCondition(
             NamedItemControlTypes.Select(type => (FlaUI.Core.Conditions.ConditionBase)factory.ByControlType(type)).ToArray());
+        return automation.GetDesktop()
+            .FindAllChildren(factory.ByProcessId(process.Id))
+            .SelectMany(window => window.FindAllDescendants(condition));
+    }
+
+    private static string[] UnspeakableItemNames(UIA3Automation automation, Process process)
+    {
         var offenders = new List<string>();
-        foreach (AutomationElement window in automation.GetDesktop()
-            .FindAllChildren(factory.ByProcessId(process.Id)))
+        foreach (AutomationElement element in NamedItems(automation, process))
         {
-            foreach (AutomationElement element in window.FindAllDescendants(condition))
+            string? name = element.Properties.Name.ValueOrDefault;
+            // The HelpText is read only for a name the patterns flag.
+            if (IsUnspeakableItemName(name)
+                && IsUnspeakableItemName(name, element.Properties.HelpText.ValueOrDefault))
             {
-                string? name = element.Properties.Name.ValueOrDefault;
-                // The HelpText is read only for a name the patterns flag.
-                if (IsUnspeakableItemName(name)
-                    && IsUnspeakableItemName(name, element.Properties.HelpText.ValueOrDefault))
+                offenders.Add(ElementPath(automation, element));
+            }
+            if (element.Properties.ControlType.ValueOrDefault != ControlType.ComboBox)
+            {
+                continue;
+            }
+            if (element.Patterns.Selection.PatternOrDefault is { } selection)
+            {
+                foreach (AutomationElement selected in selection.Selection.ValueOrDefault ?? [])
                 {
-                    offenders.Add(ElementPath(automation, element));
-                }
-                if (element.Properties.ControlType.ValueOrDefault != ControlType.ComboBox)
-                {
-                    continue;
-                }
-                if (element.Patterns.Selection.PatternOrDefault is { } selection)
-                {
-                    foreach (AutomationElement selected in selection.Selection.ValueOrDefault ?? [])
+                    // A transient fault here propagates: the whole
+                    // state is re-read, never judged as "no name".
+                    string? value = selected.Properties.Name.ValueOrDefault;
+                    if (string.IsNullOrWhiteSpace(value))
                     {
-                        // A transient fault here propagates: the whole
-                        // state is re-read, never judged as "no name".
-                        string? value = selected.Properties.Name.ValueOrDefault;
-                        if (string.IsNullOrWhiteSpace(value))
-                        {
-                            offenders.Add($"{ElementPath(automation, element)} → a selected item with no name");
-                        }
-                        else if (IsUnspeakableItemName(value)
-                            && IsUnspeakableItemName(value, selected.Properties.HelpText.ValueOrDefault))
-                        {
-                            offenders.Add($"{ElementPath(automation, element)} → selected item '{value}'");
-                        }
+                        offenders.Add($"{ElementPath(automation, element)} → a selected item with no name");
+                    }
+                    else if (IsUnspeakableItemName(value)
+                        && IsUnspeakableItemName(value, selected.Properties.HelpText.ValueOrDefault))
+                    {
+                        offenders.Add($"{ElementPath(automation, element)} → selected item '{value}'");
                     }
                 }
-                if (element.Patterns.Value.PatternOrDefault is { } valuePattern
-                    && valuePattern.Value.ValueOrDefault is { } text
-                    && IsUnspeakableItemName(text))
-                {
-                    offenders.Add($"{ElementPath(automation, element)} → value '{text}'");
-                }
+            }
+            if (element.Patterns.Value.PatternOrDefault is { } valuePattern
+                && valuePattern.Value.ValueOrDefault is { } text
+                && IsUnspeakableItemName(text))
+            {
+                offenders.Add($"{ElementPath(automation, element)} → value '{text}'");
             }
         }
         return [.. offenders];
