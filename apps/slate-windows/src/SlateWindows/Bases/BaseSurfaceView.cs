@@ -40,6 +40,11 @@ internal sealed class BaseSurfaceView : UserControl
             typeof(BaseSurfaceView),
             new PropertyMetadata(null, OnModelChanged));
 
+    private const double QuickFilterWidth = 160;
+
+    /// <summary>The filter, Refresh and the gap between them.</summary>
+    private const double HeaderSharesALineFrom = 245;
+
     private readonly TextBlock _title;
     private readonly ComboBox _viewPicker;
 
@@ -79,6 +84,7 @@ internal sealed class BaseSurfaceView : UserControl
             FontSize = 16,
             FontWeight = FontWeights.SemiBold,
             VerticalAlignment = VerticalAlignment.Center,
+            TextWrapping = TextWrapping.Wrap,
         };
         AutomationProperties.SetHeadingLevel(
             _title, AutomationHeadingLevel.Level2);
@@ -116,7 +122,7 @@ internal sealed class BaseSurfaceView : UserControl
         _quickFilter = new TextBox
         {
             Margin = new Thickness(0, 0, 0, 4),
-            MinWidth = 160,
+            MinWidth = QuickFilterWidth,
             VerticalAlignment = VerticalAlignment.Center,
             Padding = new Thickness(6, 2, 6, 2),
         };
@@ -165,6 +171,7 @@ internal sealed class BaseSurfaceView : UserControl
         titleRow.Children.Add(_countReadout);
         titleRow.Children.Add(_quickFilter);
         header.Children.Add(titleRow);
+        header.SizeChanged += (_, args) => FitHeader(args.NewSize.Width);
 
         _stateBanner = BannerText();
         AutomationProperties.SetAutomationId(_stateBanner, "BaseStateBanner");
@@ -255,6 +262,7 @@ internal sealed class BaseSurfaceView : UserControl
         {
             Visibility = Visibility.Collapsed,
             SelectionMode = SelectionMode.Single,
+            ItemTemplate = ListRowTemplate(),
         };
         AutomationProperties.SetAutomationId(_list, "BaseTabList");
         SiblingNames.SetNamePath(_list, nameof(BaseListItemViewModel.AccessibleName));
@@ -1360,6 +1368,27 @@ internal sealed class BaseSurfaceView : UserControl
         text.SetResourceReference(
             TextBlock.ForegroundProperty, "Slate.WarningBrush");
         return text;
+    }
+
+    /// <summary>#1797: in a surface too narrow for the filter and Refresh to share a
+    /// line, Refresh takes its own and the filter fits what's left. The dock's surface
+    /// can be about 150 wide at the right pane's floor.</summary>
+    private void FitHeader(double width)
+    {
+        bool narrow = width < HeaderSharesALineFrom;
+        DockPanel.SetDock(_refresh, narrow ? Dock.Bottom : Dock.Right);
+        _refresh.HorizontalAlignment = narrow ? HorizontalAlignment.Left : HorizontalAlignment.Stretch;
+        _refresh.Margin = new Thickness(narrow ? 0 : 12, 0, 0, 0);
+        _quickFilter.MinWidth = Math.Min(QuickFilterWidth, width);
+    }
+
+    /// <summary>#1797: a row wraps, so a narrow pane doesn't cut it off mid-word.</summary>
+    private static DataTemplate ListRowTemplate()
+    {
+        var text = new FrameworkElementFactory(typeof(TextBlock));
+        text.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding(nameof(BaseListItemViewModel.AccessibleName)));
+        text.SetValue(TextBlock.TextWrappingProperty, TextWrapping.Wrap);
+        return new DataTemplate { VisualTree = text };
     }
 
     private static DataTemplate WarningTemplate()
