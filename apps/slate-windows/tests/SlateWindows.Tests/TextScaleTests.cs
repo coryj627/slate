@@ -539,6 +539,41 @@ public sealed partial class TextScaleTests
         Assert.True(body.VerticalOffset > 0, "the wheel didn't move the sheet.");
     });
 
+    /// <summary>The welcome view's recent vaults sat below a short window, where nothing
+    /// could reach them. Its text is what a reader meets first, so none of it is cut.</summary>
+    [Fact]
+    public void TheWelcomeViewReachesItsLastRecentVault() => OnOwnThread(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        host.Shell.Width = 1120;
+        host.Shell.Height = 480;
+        TypeRamp.Apply(RampOf(host.Shell), 2.25);
+        host.SetVaultOpen(false);
+        var welcome = (FrameworkElement)host.Shell.FindName("WelcomeRoot");
+        _ = Open(welcome);
+        host.Settle();
+        host.Settle();
+        LayoutItemsControl recents = ShownShell.Descendants(welcome).OfType<LayoutItemsControl>().First();
+        for (DependencyObject? step = recents; step is not null && !ReferenceEquals(step, welcome); step = System.Windows.Media.VisualTreeHelper.GetParent(step))
+        {
+            (step as FrameworkElement)?.SetCurrentValue(UIElement.VisibilityProperty, Visibility.Visible);
+        }
+
+        recents.SetCurrentValue(ItemsControl.ItemsSourceProperty, Enumerable.Range(1, 4).Select(index => new RecentVault($@"C:\vaults\v{index}", $"v{index}", index)).ToArray());
+        host.Settle();
+        host.Settle();
+
+        Button last = ShownShell.Descendants(recents).OfType<Button>().Last();
+        last.BringIntoView();
+        host.Settle();
+        host.Settle();
+
+        Rect bounds = last.TransformToAncestor(welcome).TransformBounds(new Rect(0, 0, last.ActualWidth, last.ActualHeight));
+        Assert.True(bounds.Bottom <= welcome.ActualHeight + 1, $"the last vault ends at {bounds.Bottom:F0} in {welcome.ActualHeight:F0} of welcome view.");
+        string[] cut = CutText(welcome);
+        Assert.True(cut.Length == 0, $"{cut.Length} cut:\n" + string.Join('\n', cut));
+    });
+
     /// <summary>A short list has nowhere to scroll, and still took the wheel, so the sheet
     /// stopped under the pointer. A long one gets the wheel until it reaches its end.</summary>
     [Theory]

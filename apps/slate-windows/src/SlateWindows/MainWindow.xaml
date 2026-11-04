@@ -844,9 +844,10 @@
                     <ColumnDefinition Width="520" />
                     <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
-                <StackPanel Grid.Column="1" Margin="0,56,0,32">
-                    <TextBlock Text="Welcome to Slate" Style="{DynamicResource Slate.TitleTextBlockStyle}" AutomationProperties.HeadingLevel="Level1" />
-                    <TextBlock Margin="0,8,0,24" Style="{DynamicResource Slate.BodyTextBlockStyle}" Foreground="{DynamicResource Slate.SecondaryTextBrush}" Text="Open a folder of Markdown files to start." />
+                <ScrollViewer Grid.Column="1" Focusable="False" VerticalScrollBarVisibility="Auto">
+                <StackPanel Margin="0,56,0,32">
+                    <TextBlock Text="Welcome to Slate" TextWrapping="Wrap" Style="{DynamicResource Slate.TitleTextBlockStyle}" AutomationProperties.HeadingLevel="Level1" />
+                    <TextBlock Margin="0,8,0,24" TextWrapping="Wrap" Style="{DynamicResource Slate.BodyTextBlockStyle}" Foreground="{DynamicResource Slate.SecondaryTextBrush}" Text="Open a folder of Markdown files to start." />
                     <!-- WB-9 (#1319, WD4): the welcome view holds the keys while a
                          vault opens; its status says what the open is doing. Pull,
                          not push (LiveSetting Off, as every readback here): a
@@ -893,7 +894,7 @@
                                             </MultiBinding>
                                         </AutomationProperties.Name>
                                         <StackPanel>
-                                            <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" />
+                                            <TextBlock Text="{Binding DisplayName}" TextWrapping="Wrap" FontWeight="SemiBold" />
                                             <TextBlock Text="{Binding Path}" Style="{DynamicResource Slate.CaptionTextBlockStyle}" Foreground="{DynamicResource Slate.SecondaryTextBrush}" TextTrimming="CharacterEllipsis" />
                                         </StackPanel>
                                     </Button>
@@ -902,6 +903,7 @@
                         </local:LayoutItemsControl>
                     </StackPanel>
                 </StackPanel>
+                </ScrollViewer>
             </local:AutomationLandmarkGrid>
 
             <local:AutomationLandmarkGrid x:Name="WorkspaceRoot"
