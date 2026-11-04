@@ -539,6 +539,84 @@ public sealed partial class TextScaleTests
         Assert.True(body.VerticalOffset > 0, "the wheel didn't move the sheet.");
     });
 
+    /// <summary>A short list has nowhere to scroll, and still took the wheel, so the sheet
+    /// stopped under the pointer. A long one gets the wheel until it reaches its end.</summary>
+    [Theory]
+    [InlineData(2)]
+    [InlineData(30)]
+    public void AListInASheetPassesOnTheWheelItCantUse(int rows) => OnOwnThread(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        host.Shell.Width = 1120;
+        host.Shell.Height = 480;
+        TypeRamp.Apply(RampOf(host.Shell), 2.25);
+        host.Settle();
+        var sheet = (FrameworkElement)host.Shell.FindName("MoveToOverlay");
+        _ = Open(sheet);
+        host.Settle();
+        host.Settle();
+        var list = (ListBox)host.Shell.FindName("MoveToList");
+        list.SetCurrentValue(UIElement.VisibilityProperty, Visibility.Visible);
+        list.SetCurrentValue(ItemsControl.ItemsSourceProperty, Enumerable.Range(1, rows).Select(index => new LongRow($"Row {index}", $"Row {index}")).ToArray());
+        host.Settle();
+        host.Settle();
+        ScrollViewer body = ShownShell.Descendants(sheet).OfType<ScrollViewer>().First();
+        ScrollViewer inner = ShownShell.Descendants(list).OfType<ScrollViewer>().First();
+        TextBlock row = ShownShell.Descendants(list).OfType<TextBlock>().First(text => text.Text == "Row 1");
+        Assert.True(body.ScrollableHeight > 0, "premise: the sheet doesn't overflow here.");
+
+        if (inner.ScrollableHeight > 0)
+        {
+            Wheel(row);
+            host.Settle();
+            Assert.True(inner.VerticalOffset > 0, "a list that can scroll didn't get the wheel.");
+            Assert.Equal(0, body.VerticalOffset);
+            inner.ScrollToEnd();
+            host.Settle();
+            host.Settle();
+
+            // The first rows have been virtualized away by now.
+            row = ShownShell.Descendants(list).OfType<TextBlock>().First(text => text.Text.StartsWith("Row", StringComparison.Ordinal));
+        }
+
+        Wheel(row);
+        host.Settle();
+        Assert.True(body.VerticalOffset > 0, $"the sheet stayed put under a list with {inner.ScrollableHeight:F0} to scroll.");
+    });
+
+    /// <summary>A wheel notch down, as input delivers it: the preview, then the event.</summary>
+    private static void Wheel(UIElement element)
+    {
+        var preview = new System.Windows.Input.MouseWheelEventArgs(System.Windows.Input.Mouse.PrimaryDevice, 0, -120) { RoutedEvent = UIElement.PreviewMouseWheelEvent };
+        element.RaiseEvent(preview);
+        if (!preview.Handled)
+        {
+            element.RaiseEvent(new System.Windows.Input.MouseWheelEventArgs(System.Windows.Input.Mouse.PrimaryDevice, 0, -120) { RoutedEvent = UIElement.MouseWheelEvent });
+        }
+    }
+
+    /// <summary>Each sheet's own scroller passes the wheel down only to what can use it.</summary>
+    [Fact]
+    public void ASheetsScrollerChainsTheWheel()
+    {
+        XDocument shell = XDocument.Load(Path.Combine(SourceText.ShellSourceRoot(), "MainWindow.xaml"), LoadOptions.SetLineInfo);
+        XElement[] scrollers = shell.Descendants()
+            .Where(element => (string?)element.Attribute("AutomationProperties.IsDialog") == "True")
+            .SelectMany(sheet => sheet.Descendants())
+            .Where(element => element.Name.LocalName == "ScrollViewer" && element.Attribute("MaxHeight") is null)
+            .Where(element => element.Descendants().Any(child => child.Name.LocalName == "ScrollViewer"
+                || child.Name.LocalName.EndsWith("ListBox", StringComparison.Ordinal)
+                || child.Name.LocalName == "AccessibleDataGrid"))
+            .ToArray();
+        string[] unchained = scrollers
+            .Where(element => !element.Attributes().Any(attribute => attribute.Name.LocalName == "WheelChain.IsEnabled"))
+            .Select(element => $"line {((System.Xml.IXmlLineInfo)element).LineNumber}")
+            .ToArray();
+
+        Assert.True(scrollers.Length >= 5, $"only {scrollers.Length} sheet scrollers hold something that scrolls.");
+        Assert.True(unchained.Length == 0, "Sheet scrollers that don't chain the wheel: " + string.Join(", ", unchained));
+    }
+
     /// <summary>A long subtitle took all of the step's room, so its field had no height,
     /// and a scroller round the field alone couldn't help. The whole step scrolls, so keys
     /// reach the field wherever a long subtitle pushes it.</summary>

@@ -955,7 +955,7 @@
                             Background="{DynamicResource Slate.SurfaceBrush}"
                             DataContext="{Binding FileSidebar}">
                         <local:FilesPanePanel Margin="10">
-                            <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto">
+                            <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                             <StackPanel>
                                 <DockPanel Margin="0,0,0,8" LastChildFill="False">
                                     <TextBlock Text="Files"
@@ -3279,7 +3279,7 @@
                 <local:AutomationLandmarkBorder.Effect>
                     <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
                 </local:AutomationLandmarkBorder.Effect>
-                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto">
+                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <StackPanel>
                     <TextBlock Text="Add property"
                                Style="{DynamicResource Slate.SubtitleTextBlockStyle}"
@@ -3363,7 +3363,7 @@
                 <local:AutomationLandmarkBorder.Effect>
                     <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
                 </local:AutomationLandmarkBorder.Effect>
-                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto">
+                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -3498,7 +3498,7 @@
                 <local:AutomationLandmarkBorder.Effect>
                     <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
                 </local:AutomationLandmarkBorder.Effect>
-                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto">
+                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <StackPanel>
                     <!-- An unresolved key is a real state, not an error
                          (contract 7): the sheet says so plainly rather
@@ -3640,7 +3640,7 @@
                 <local:AutomationLandmarkBorder.Effect>
                     <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
                 </local:AutomationLandmarkBorder.Effect>
-                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto">
+                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <StackPanel>
                     <TextBlock Text="{Binding Heading}"
                                FontWeight="SemiBold"
@@ -3698,7 +3698,7 @@
                 <local:AutomationLandmarkBorder.Effect>
                     <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
                 </local:AutomationLandmarkBorder.Effect>
-                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto">
+                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <StackPanel>
                     <TextBlock Text="{Binding Heading}"
                                FontWeight="SemiBold"
@@ -3759,7 +3759,7 @@
                     AutomationProperties.AutomationId="DashboardEditorSheet"
                     AutomationProperties.Name="{Binding Title}"
                     AutomationProperties.IsDialog="True">
-                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto">
+                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <DockPanel>
                     <TextBlock DockPanel.Dock="Top"
                                Text="{Binding Title}"
@@ -3903,7 +3903,7 @@
                     AutomationProperties.AutomationId="BaseQueryBuilderSheet"
                     AutomationProperties.Name="{Binding Title}"
                     AutomationProperties.IsDialog="True">
-                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto">
+                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <DockPanel>
                     <TextBlock DockPanel.Dock="Top"
                                Text="{Binding Title}"
@@ -4144,7 +4144,7 @@
                 <local:AutomationLandmarkBorder.Effect>
                     <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
                 </local:AutomationLandmarkBorder.Effect>
-                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto">
+                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <DockPanel>
                     <StackPanel DockPanel.Dock="Top">
                         <TextBlock Text="Choose a template"
@@ -4287,7 +4287,7 @@
                 <local:AutomationLandmarkBorder.Effect>
                     <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
                 </local:AutomationLandmarkBorder.Effect>
-                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto">
+                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <Grid>
                     <DockPanel Visibility="{Binding IsPromptStep, Converter={StaticResource BooleanToVisibilityConverter}}">
                         <StackPanel DockPanel.Dock="Top">
@@ -4435,7 +4435,7 @@
                 <local:AutomationLandmarkBorder.Effect>
                     <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
                 </local:AutomationLandmarkBorder.Effect>
-                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto">
+                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <DockPanel>
                     <StackPanel DockPanel.Dock="Top">
                         <TextBlock Text="{Binding Title}"
@@ -4535,7 +4535,7 @@
                     AutomationProperties.AutomationId="CanvasCardEditorSheet"
                     AutomationProperties.Name="{Binding SheetName}"
                     AutomationProperties.IsDialog="True">
-                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto">
+                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <StackPanel>
                     <TextBlock Text="{Binding Title}"
                                FontWeight="SemiBold"
@@ -4583,7 +4583,7 @@
                     AutomationProperties.AutomationId="CanvasCardPickerSheet"
                     AutomationProperties.Name="{Binding SheetName}"
                     AutomationProperties.IsDialog="True">
-                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto">
+                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <StackPanel>
                     <TextBlock Text="{Binding Title}"
                                FontWeight="SemiBold"
