@@ -320,6 +320,40 @@ public sealed partial class TextScaleTests
         Assert.True(cut.Length == 0, $"{cut.Length} cut:\n" + string.Join('\n', cut));
     });
 
+    /// <summary>When ranking fails the summary is a sentence, and it took the row from the
+    /// keys beside it, which wrapped a word at a time and left the results no room.</summary>
+    [Theory]
+    [InlineData(720)]
+    [InlineData(480)]
+    public void QuickOpensErrorSummaryLeavesItsKeysAndResultsRoom(double height) => OnOwnThread(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        host.Shell.Width = 1120;
+        host.Shell.Height = height;
+        TypeRamp.Apply(RampOf(host.Shell), 2.25);
+        host.Settle();
+        var sheet = (FrameworkElement)host.Shell.FindName("QuickSwitcherOverlay");
+        _ = Open(sheet);
+        foreach (TextBlock text in ShownShell.Descendants(sheet).OfType<TextBlock>())
+        {
+            text.SetCurrentValue(UIElement.VisibilityProperty, Visibility.Visible);
+        }
+
+        ListBox list = ShownShell.Descendants(sheet).OfType<ListBox>().First();
+        list.SetCurrentValue(UIElement.VisibilityProperty, Visibility.Visible);
+        list.SetCurrentValue(ItemsControl.ItemsSourceProperty, Enumerable.Range(1, 5).Select(index => new QuickRow($"Note {index}", $"Note {index}.md")).ToArray());
+        TextBlock keys = ShownShell.Descendants(sheet).OfType<TextBlock>().First(text => text.Text.StartsWith("Enter open", StringComparison.Ordinal));
+        TextBlock summary = ShownShell.Descendants(System.Windows.Media.VisualTreeHelper.GetParent(keys)).OfType<TextBlock>().First();
+        summary.SetCurrentValue(TextBlock.TextProperty, "Quick Open could not rank files.");
+        host.Settle();
+        host.Settle();
+
+        Assert.True(keys.ActualHeight <= keys.FontSize * 4, $"the keys are {keys.ActualHeight:F0} tall and {keys.ActualWidth:F0} wide.");
+        Assert.True(list.ActualHeight >= keys.FontSize * 2, $"the results have {list.ActualHeight:F0}.");
+        string[] cut = CutText(sheet);
+        Assert.True(cut.Length == 0, $"{cut.Length} cut:\n" + string.Join('\n', cut));
+    });
+
     /// <summary>Two notes with one long name differ only by their paths, so a name can't
     /// take the whole row. At 100% its column is the 180 it always was.</summary>
     [Theory]
