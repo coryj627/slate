@@ -819,15 +819,6 @@ internal static class ReadingDocumentBuilder
                 Data = geometry,
                 Stretch = System.Windows.Media.Stretch.None,
             };
-            // Natural size, downscale-only to fit, as an image embed does: the math
-            // element clips what its line can't hold, which cut a wide formula's terms
-            // off. Uniform takes the smaller scale, so holding the width holds the height.
-            // A formula that draws nothing has no width, and MaxWidth refuses what it reports.
-            if (geometry.Bounds.Width > 0)
-            {
-                path.Stretch = System.Windows.Media.Stretch.Uniform;
-                path.MaxWidth = geometry.Bounds.Width;
-            }
             path.SetResourceReference(
                 System.Windows.Shapes.Path.FillProperty, "Slate.TextBrush");
             return path;

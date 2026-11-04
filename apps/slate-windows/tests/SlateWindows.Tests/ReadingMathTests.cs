@@ -263,24 +263,25 @@ public sealed class ReadingMathTests
         });
 
     /// <summary>DS-3: the measure made a drawn formula's room narrower, and the
-    /// element clips what doesn't fit, so terms disappeared. A wide one now shrinks to
-    /// fit, in the path the reader's speech and braille are beside.</summary>
+    /// element clips what doesn't fit, so terms disappeared. Shrinking one to fit left
+    /// it too small to read, so it keeps its size and scrolls.</summary>
     [Fact]
-    public void AWideFormulaFitsInsteadOfBeingCutOff()
-        => WithReadingSurface("reading-math-wide", "$$" + string.Concat(Enumerable.Repeat("x+", 40)) + "x$$\n", (_, surface, _) =>
+    public void AWideFormulaScrollsAtItsOwnSize()
+        => WithReadingSurface("reading-math-wide", WideFormula, (_, surface, _) =>
             WithHostedSurface(surface, 900, () =>
             {
                 ReadingMathElement element = Assert.Single(FindMathElements(surface.Document));
                 var formula = Assert.IsType<System.Windows.Shapes.Path>(element.Content);
                 double natural = formula.Data.Bounds.Width;
                 Assert.True(natural > element.ActualWidth, $"at {natural:F0} the formula doesn't test this.");
-                double drawn = formula.RenderedGeometry.Bounds.Right;
-                Assert.True(drawn <= element.ActualWidth + 0.5, $"the formula reaches {drawn:F0} in a {element.ActualWidth:F0} element.");
-                Assert.True(drawn > element.ActualWidth / 2, $"the formula shrank to {drawn:F0}.");
+                Assert.Equal(natural, formula.RenderedGeometry.Bounds.Width, 1);
+                var scroller = Assert.IsType<FormulaScroller>(element.Scroller);
+                Assert.True(
+                    element.ActualWidth + scroller.ScrollableWidth >= natural - 1,
+                    $"{element.ActualWidth:F0} plus a scroll of {scroller.ScrollableWidth:F0} doesn't reach {natural:F0}.");
             }));
 
-    /// <summary>A formula that fits is drawn at its own size, never scaled up to the
-    /// room it's given.</summary>
+    /// <summary>A formula that fits has nothing to scroll.</summary>
     [Fact]
     public void ASmallFormulaKeepsItsSize()
         => WithReadingSurface("reading-math-small", "$$x^2$$\n", (_, surface, _) =>
@@ -288,27 +289,71 @@ public sealed class ReadingMathTests
             {
                 ReadingMathElement element = Assert.Single(FindMathElements(surface.Document));
                 var formula = Assert.IsType<System.Windows.Shapes.Path>(element.Content);
-                System.Windows.Rect drawn = formula.RenderedGeometry.Bounds;
-                Assert.Equal(formula.Data.Bounds.Width, drawn.Width, 1);
-                Assert.Equal(formula.Data.Bounds.Height, drawn.Height, 1);
-
-                // A line measures with an unbounded height, where Uniform happens not
-                // to grow anything, so only a bounded one shows the cap.
-                formula.Measure(new System.Windows.Size(400, 400));
-                Assert.Equal(formula.Data.Bounds.Width, formula.DesiredSize.Width, 1);
+                Assert.Equal(formula.Data.Bounds.Width, formula.RenderedGeometry.Bounds.Width, 1);
+                Assert.Equal(0, Assert.IsType<FormulaScroller>(element.Scroller).ScrollableWidth);
             }));
 
-    /// <summary>A formula that draws nothing has no bounds to hold it to, and
-    /// <c>MaxWidth</c> refuses what an empty geometry reports, which would have failed
-    /// the whole note's reading view.</summary>
+    /// <summary>A sighted keyboard reader reaches the rest of a wide formula from its
+    /// focus, and the scroller doesn't add a stop to the Tab order.</summary>
     [Fact]
-    public void AFormulaThatDrawsNothingStillBuilds()
-        => WithReadingSurface("reading-math-empty", "$$\\,$$\n", (_, surface, _) =>
-        {
-            ReadingMathElement element = Assert.Single(FindMathElements(surface.Document));
-            var formula = Assert.IsType<System.Windows.Shapes.Path>(element.Content);
-            Assert.True(formula.Data.Bounds.IsEmpty, $"this formula has bounds of {formula.Data.Bounds}.");
-        });
+    public void AWideFormulaScrollsFromTheKeyboard()
+        => WithReadingSurface("reading-math-keys", WideFormula, (_, surface, _) =>
+            WithHostedSurface(surface, 900, () =>
+            {
+                ReadingMathElement element = Assert.Single(FindMathElements(surface.Document));
+                var scroller = Assert.IsType<FormulaScroller>(element.Scroller);
+                Assert.False(scroller.Focusable);
+                Assert.False(scroller.IsTabStop);
+
+                Assert.True(PressOn(element, System.Windows.Input.Key.Right), "Right didn't scroll a formula with more to show.");
+                surface.UpdateLayout();
+                double moved = scroller.HorizontalOffset;
+                Assert.True(moved > 0, "Right left the formula where it was.");
+
+                Assert.True(PressOn(element, System.Windows.Input.Key.Left), "Left didn't scroll a formula with more to show.");
+                surface.UpdateLayout();
+                Assert.True(scroller.HorizontalOffset < moved, "Left left the formula where it was.");
+            }));
+
+    /// <summary>The arrows are the reading view's whenever there's nothing to scroll,
+    /// so a formula that fits changes nothing about moving through a note.</summary>
+    [Fact]
+    public void AFormulaThatFitsLeavesTheArrowsToTheReader()
+        => WithReadingSurface("reading-math-keys-small", "$$x^2$$\n", (_, surface, _) =>
+            WithHostedSurface(surface, 900, () =>
+            {
+                ReadingMathElement element = Assert.Single(FindMathElements(surface.Document));
+                Assert.False(PressOn(element, System.Windows.Input.Key.Right), "a formula that fits took Right.");
+                Assert.False(PressOn(element, System.Windows.Input.Key.Left), "a formula that fits took Left.");
+            }));
+
+    /// <summary>A scroll viewer takes the wheel by default, which would have stopped
+    /// the note scrolling with a formula under the pointer.</summary>
+    [Fact]
+    public void AFormulaLeavesTheWheelToTheNote()
+        => WithReadingSurface("reading-math-wheel", WideFormula, (_, surface, _) =>
+            WithHostedSurface(surface, 900, () =>
+            {
+                ReadingMathElement element = Assert.Single(FindMathElements(surface.Document));
+                var wheel = new System.Windows.Input.MouseWheelEventArgs(System.Windows.Input.Mouse.PrimaryDevice, 0, -120)
+                {
+                    RoutedEvent = System.Windows.Input.Mouse.MouseWheelEvent,
+                };
+                Assert.IsType<FormulaScroller>(element.Scroller).RaiseEvent(wheel);
+                Assert.False(wheel.Handled, "the formula took the wheel.");
+            }));
+
+    /// <summary>A coverage gap's source is text, which wraps, so it has no scroller
+    /// and no sideways scroll.</summary>
+    [Fact]
+    public void AFormulasFallbackWrapsInsteadOfScrolling()
+        => WithReadingSurface("reading-math-gap-wrap", "$$\\mathbb{R}$$\n", (_, surface, _) =>
+            WithHostedSurface(surface, 900, () =>
+            {
+                ReadingMathElement element = Assert.Single(FindMathElements(surface.Document));
+                Assert.IsType<System.Windows.Controls.TextBlock>(element.Content);
+                Assert.Null(element.Scroller);
+            }));
 
     /// <summary>LineHeight inherits through an inline's child, so the body's would have
     /// spaced a formula's fallback source out, where it isn't body text.</summary>
@@ -1255,6 +1300,27 @@ public sealed class ReadingMathTests
 
     /// <summary>The surface in a laid-out window of this width, off
     /// screen and never activated.</summary>
+    private static readonly string WideFormula = "$$" + string.Concat(Enumerable.Repeat("x+", 40)) + "x$$\n";
+
+    /// <summary>A key at the element, as focus delivers it. True when the element took
+    /// it: the reading view above it takes an arrow too, moving the caret.</summary>
+    private static bool PressOn(ReadingMathElement element, System.Windows.Input.Key key)
+    {
+        bool taken = false;
+        System.Windows.Input.KeyEventHandler watch = (_, args) => taken = args.Handled;
+        element.AddHandler(System.Windows.Input.Keyboard.KeyDownEvent, watch, handledEventsToo: true);
+        element.RaiseEvent(new System.Windows.Input.KeyEventArgs(
+            System.Windows.Input.Keyboard.PrimaryDevice,
+            System.Windows.PresentationSource.FromVisual(element),
+            0,
+            key)
+        {
+            RoutedEvent = System.Windows.Input.Keyboard.KeyDownEvent,
+        });
+        element.RemoveHandler(System.Windows.Input.Keyboard.KeyDownEvent, watch);
+        return taken;
+    }
+
     private static void WithHostedSurface(ReadingSurface surface, double width, Action body)
     {
         var window = new System.Windows.Window
