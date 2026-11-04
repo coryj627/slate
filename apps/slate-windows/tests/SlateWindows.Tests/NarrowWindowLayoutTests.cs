@@ -247,7 +247,9 @@ public sealed class NarrowWindowLayoutTests
 
                 return scroller is not null && pane is not null;
             },
-            TimeSpan.FromSeconds(10));
+            // The rows load on the thread pool, and on CI this first shell fact in its class
+            // has found the load still running at 10 s. What's under test is the binding.
+            TimeSpan.FromSeconds(60));
 
         Assert.True(scroller is not null && pane is not null, WhatTheShellShows(host));
         var converter = (System.Windows.Data.IValueConverter)host.Shell.FindResource("PropertyRowsMaxHeightConverter");
