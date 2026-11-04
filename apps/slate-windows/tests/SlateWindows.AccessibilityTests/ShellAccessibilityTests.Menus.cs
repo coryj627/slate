@@ -91,10 +91,17 @@ public sealed partial class ShellAccessibilityTests
         }
         finally
         {
-            if (process is { HasExited: false })
+            if (process is not null)
             {
-                process.Kill(entireProcessTree: true);
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+
+                process.Dispose();
             }
+
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
         }
     }
 }
