@@ -125,6 +125,56 @@ public sealed class NarrowWindowLayoutTests
         Assert.Equal(before, sort.ActualWidth);
     });
 
+    /// <summary>DS-2: at 14 point an embed's title ran under its chevron, cut off
+    /// mid-word.</summary>
+    [Fact]
+    public void AnEmbedsTitleWrapsInsteadOfRunningUnderItsChevron() => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        const string title = "Embedded note: a title long enough to need a second line";
+        var view = new EditorEmbedPreviewView
+        {
+            Width = 160,
+            Root = new EditorEmbedPreviewNode(title, [], null, null, IsDisclosure: true, InitiallyExpanded: false, IsWarning: false),
+        };
+        DockPanel.SetDock(view, Dock.Top);
+        ((DockPanel)host.Shell.Content).Children.Insert(0, view);
+        host.Settle();
+
+        Expander expander = ShownShell.Descendants(view).OfType<Expander>().Single();
+        TextBlock shown = ShownShell.Descendants(expander).OfType<TextBlock>().First(text => text.Text == title);
+        double right = shown.TranslatePoint(new Point(shown.ActualWidth, 0), expander).X;
+        Assert.True(right <= expander.ActualWidth, $"the title ends at {right:F0}px in a {expander.ActualWidth:F0}px expander.");
+        Assert.True(shown.ActualHeight > shown.FontSize * 2, $"the title is {shown.ActualHeight:F0}px tall, so it didn't wrap.");
+    });
+
+    /// <summary>DS-2: a link's target is one long word, and it sits in a wrap panel, so
+    /// the panel squeezed it and the row cut it off.</summary>
+    [Fact]
+    public void ALongLinkTargetWrapsInTheOutgoingList() => StaThread.Run(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "[a](https://example.com/a-link-target-far-too-long-for-the-right-pane-to-hold-on-one-line)\n"));
+        host.Workspace.OpenPath("Lecture.md");
+        host.Workspace.ActiveLeaf = WorkspaceViewModel.Leaves.First(leaf => leaf.Title == "Outgoing links");
+        host.Settle();
+
+        FrameworkElement list = host.Body("PanelOutgoingLinksList");
+        TextBlock? target = null;
+        System.Threading.SpinWait.SpinUntil(
+            () =>
+            {
+                host.Settle();
+                target = ShownShell.Descendants(list).OfType<TextBlock>().FirstOrDefault(text => text.Name == "TargetText");
+                return target is not null;
+            },
+            TimeSpan.FromSeconds(10));
+
+        Assert.NotNull(target);
+        double right = target.TranslatePoint(new Point(target.ActualWidth, 0), list).X;
+        Assert.True(right <= list.ActualWidth, $"the target ends at {right:F0}px in a {list.ActualWidth:F0}px list.");
+        Assert.True(target.ActualHeight > target.FontSize * 2, $"the target is {target.ActualHeight:F0}px tall, so it didn't wrap.");
+    });
+
     /// <summary>A note with many properties took all of a short window's height from
     /// its own text.</summary>
     [Fact]
