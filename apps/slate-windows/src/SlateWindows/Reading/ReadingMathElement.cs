@@ -95,6 +95,10 @@ internal sealed class ReadingMathElement : ContentControl
     /// <summary>What scrolls a drawing; a source has none, because it wraps.</summary>
     internal ScrollViewer? Scroller => GetTemplateChild(ScrollerName) as ScrollViewer;
 
+    /// <summary>Where this element's predecessor had scrolled to, set by the surface's
+    /// merge. The scroller takes it up once it knows its extent.</summary>
+    internal double ResumeScrollAt { get; set; }
+
     /// <summary>DS-3: a drawing can't wrap, and shrinking one to fit the measure left a
     /// long formula too small to read, so it keeps its size and scrolls.</summary>
     protected override void OnContentChanged(object oldContent, object newContent)
@@ -162,6 +166,12 @@ internal sealed class FormulaScroller : ScrollViewer
         if (Padding.Bottom != room)
         {
             Padding = new Thickness(0, 0, 0, room);
+        }
+
+        if (ScrollableWidth > 0 && TemplatedParent is ReadingMathElement { ResumeScrollAt: > 0 } element)
+        {
+            ScrollToHorizontalOffset(element.ResumeScrollAt);
+            element.ResumeScrollAt = 0;
         }
     }
 }

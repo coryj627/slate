@@ -306,6 +306,98 @@ public sealed class ReadingMathTests
             });
         });
 
+    /// <summary>A watcher or a dependency can republish the note while someone reads
+    /// the far end of a formula. The merge replaces every element, which threw them back
+    /// to its first term. Formulas keep their places by source and by which of the same
+    /// source they are, so two copies of one formula keep their own.</summary>
+    [Fact]
+    public void AScrolledFormulaKeepsItsPlaceWhenTheNoteRepublishes()
+        => WithReadingSurface("reading-math-republish", WideFormula + "\nBetween.\n\n" + WideFormula, (tab, surface, _) =>
+            WithHostedSurface(surface, 900, () =>
+            {
+                ReadingMathElement[] before = FindMathElements(surface.Document).ToArray();
+                Assert.Equal(2, before.Length);
+                FormulaScroller first = Assert.IsType<FormulaScroller>(before[0].Scroller);
+                FormulaScroller second = Assert.IsType<FormulaScroller>(before[1].Scroller);
+                first.ScrollToHorizontalOffset(120);
+                second.ScrollToHorizontalOffset(300);
+                surface.UpdateLayout();
+                PumpedDispatcher.Drain();
+                Assert.Equal(120, first.HorizontalOffset, 0);
+                Assert.Equal(300, second.HorizontalOffset, 0);
+
+                tab.EditorDocument!.Replace(tab.Text.IndexOf("Between", StringComparison.Ordinal), 7, "Amid");
+                tab.Reading!.Refresh();
+                WaitForUi(() => !FindMathElements(surface.Document).Contains(before[0]));
+                surface.UpdateLayout();
+                PumpedDispatcher.Drain();
+                surface.UpdateLayout();
+
+                ReadingMathElement[] after = FindMathElements(surface.Document).ToArray();
+                Assert.Equal(2, after.Length);
+                Assert.Equal(120, Assert.IsType<FormulaScroller>(after[0].Scroller).HorizontalOffset, 0);
+                Assert.Equal(300, Assert.IsType<FormulaScroller>(after[1].Scroller).HorizontalOffset, 0);
+            }));
+
+    /// <summary>A long note streams in chunks after the merge, so a formula in a later
+    /// chunk arrives without one, and still gets its place back.</summary>
+    [Fact]
+    public void AScrolledFormulaLateInALongNoteKeepsItsPlace()
+    {
+        RunSta(() =>
+        {
+            var text = new System.Text.StringBuilder("First words.\n\n");
+            for (int i = 0; i < 300; i++)
+            {
+                text.Append("Paragraph number ").Append(i).Append(".\n\n");
+            }
+
+            text.Append(WideFormula).Append("\nThe end.\n");
+
+            using var fixture = FixtureVault.Create(1, "reading-math-stream");
+            File.WriteAllText(Path.Combine(fixture.Root, "note0.md"), text.ToString());
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            using var reading = new SlateWindows.Reading.ReadingContentViewModel(session, tab, _ => { });
+            var surface = new ReadingSurface { Model = reading };
+
+            WithHostedSurface(surface, 900, () =>
+            {
+                reading.Refresh();
+                WaitForUi(() => FindMathElements(surface.Document).Any());
+                ReadingMathElement before = Assert.Single(FindMathElements(surface.Document));
+                surface.UpdateLayout();
+                surface.ScrollToEnd();
+                surface.UpdateLayout();
+                WaitForUi(() => before.Scroller is not null);
+                FormulaScroller scroller = Assert.IsType<FormulaScroller>(before.Scroller);
+                scroller.ScrollToHorizontalOffset(120);
+                surface.UpdateLayout();
+                PumpedDispatcher.Drain();
+                Assert.Equal(120, scroller.HorizontalOffset, 0);
+
+                tab.EditorDocument!.Replace(tab.Text.IndexOf("First", StringComparison.Ordinal), 5, "Early");
+                reading.Refresh();
+                WaitForUi(() => FindMathElements(surface.Document).Any() && !FindMathElements(surface.Document).Contains(before));
+                ReadingMathElement after = Assert.Single(FindMathElements(surface.Document));
+                surface.ScrollToEnd();
+                WaitForUi(() =>
+                {
+                    surface.UpdateLayout();
+                    return after.Scroller is { HorizontalOffset: > 119 };
+                });
+                Assert.Equal(120, after.Scroller!.HorizontalOffset, 0);
+            });
+        });
+    }
+
     /// <summary>A formula that fits has nothing to scroll, and no room kept for a bar.</summary>
     [Fact]
     public void ASmallFormulaKeepsItsSize()

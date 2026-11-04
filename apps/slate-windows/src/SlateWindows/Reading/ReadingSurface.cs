@@ -386,6 +386,7 @@ internal sealed class ReadingSurface : RichTextBox
     /// </summary>
     private void Model_BlocksAppended(FlowDocument fragment)
     {
+        ResumeFormulaScrolls(fragment, _landmarks);
         while (fragment.Blocks.FirstBlock is { } block)
         {
             fragment.Blocks.Remove(block);
@@ -399,6 +400,10 @@ internal sealed class ReadingSurface : RichTextBox
     }
 
     private FlowDocument? _lastMerged;
+
+    /// <summary>DS-3: where formulas had scrolled to when a merge replaced them. A long
+    /// note's later formulas arrive after the merge, so their places wait here.</summary>
+    private readonly Dictionary<(string Source, int Nth), double> _formulaScrolls = [];
     private IReadOnlyList<ReadingLandmark> _landmarks = Array.Empty<ReadingLandmark>();
     private bool _focusLandingPending;
     private object? _focusLandingToken;
@@ -693,6 +698,18 @@ internal sealed class ReadingSurface : RichTextBox
             caretAnchor = null;
         }
 
+        // DS-3: a formula's sideways scroll lives in the element this merge replaces.
+        // The new one has to know before it joins the document, which lays it out at once.
+        foreach (((string Source, int Nth) key, ReadingMathElement element) in NumberedFormulas(_landmarks, []))
+        {
+            if (element.Scroller is { HorizontalOffset: > 0 } scroller)
+            {
+                _formulaScrolls[key] = scroller.HorizontalOffset;
+            }
+        }
+
+        ResumeFormulaScrolls(built, []);
+
         Document.Blocks.Clear();
         while (built.Blocks.FirstBlock is { } block)
         {
@@ -722,6 +739,45 @@ internal sealed class ReadingSurface : RichTextBox
         // ApplyModel after the merge, and nothing else lands.
         ShowsSearchableContent = true;
         RaiseContentChanged(ReadingContentChange.Replaced);
+    }
+
+    /// <summary>Hands out the places <see cref="_formulaScrolls"/> holds to the formulas
+    /// arriving in <paramref name="incoming"/>, counting from those already on the page.</summary>
+    private void ResumeFormulaScrolls(FlowDocument incoming, IReadOnlyList<ReadingLandmark> onThePage)
+    {
+        if (_formulaScrolls.Count == 0)
+        {
+            return;
+        }
+
+        var seen = new Dictionary<string, int>(StringComparer.Ordinal);
+        _ = NumberedFormulas(onThePage, seen).Count();
+        foreach (((string Source, int Nth) key, ReadingMathElement element) in NumberedFormulas(ReadingDocumentBuilder.CollectLandmarks(incoming), seen))
+        {
+            if (_formulaScrolls.Remove(key, out double offset))
+            {
+                element.ResumeScrollAt = offset;
+            }
+        }
+    }
+
+    /// <summary>The formulas under <paramref name="landmarks"/>, each named by its source
+    /// and by which of that source it is, so a merge can pair them up.</summary>
+    private static IEnumerable<((string Source, int Nth) Key, ReadingMathElement Element)> NumberedFormulas(
+        IReadOnlyList<ReadingLandmark> landmarks,
+        Dictionary<string, int> seen)
+    {
+        foreach (ReadingLandmark landmark in landmarks)
+        {
+            if (landmark.Kind == ReadingLandmarkKind.Math
+                && landmark.Position.Paragraph is { } paragraph
+                && MathElementOf(paragraph) is { } element)
+            {
+                int nth = seen.GetValueOrDefault(element.Source);
+                seen[element.Source] = nth + 1;
+                yield return ((element.Source, nth), element);
+            }
+        }
     }
 
     /// <summary>The caret as its top-level block's index and the offset
