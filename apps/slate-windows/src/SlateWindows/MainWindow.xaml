@@ -10,7 +10,7 @@
         xmlns:graph="clr-namespace:SlateWindows.Graph"
         Title="Slate"
         Height="720" Width="1120"
-        MinHeight="480" MinWidth="760"
+        MinHeight="480" MinWidth="780"
         UseLayoutRounding="True"
         AutomationProperties.AutomationId="Slate.MainWindow"
         Background="{DynamicResource Slate.WindowBackgroundBrush}"
@@ -932,13 +932,14 @@
                      workspace's, so Widen/Narrow Files Sidebar and Widen/Narrow
                      Right Pane step them from the keyboard and a splitter drag
                      writes them back. -->
-                <Grid x:Name="WorkspaceColumns" Grid.Row="1" SizeChanged="WorkspaceColumns_SizeChanged">
+                <local:WorkspaceRowHost Grid.Row="1" SizeChanged="WorkspaceRow_SizeChanged">
+                <Grid x:Name="WorkspaceColumns">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="{Binding Workspace.FilesSidebarWidth, Mode=TwoWay, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=270}" MinWidth="200" MaxWidth="640" />
                         <ColumnDefinition Width="5" />
                         <ColumnDefinition Width="*" MinWidth="300" />
                         <ColumnDefinition Width="{Binding Workspace.RightPaneSplitterWidth, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=5}" />
-                        <ColumnDefinition Width="{Binding Workspace.RightPaneColumnWidth, Mode=TwoWay, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=320}" MinWidth="{Binding Workspace.RightPaneColumnMinimumWidth, FallbackValue=200}" MaxWidth="640" />
+                        <ColumnDefinition Width="{Binding Workspace.RightPaneColumnWidth, Mode=TwoWay, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=320}" MinWidth="{Binding Workspace.RightPaneColumnMinimumWidth, FallbackValue=250}" MaxWidth="640" />
                     </Grid.ColumnDefinitions>
                     <local:AutomationLandmarkBorder x:Name="FilesPaneBorder"
                             KeyboardNavigation.DirectionalNavigation="Contained"
@@ -947,8 +948,8 @@
                             AutomationProperties.Name="Files"
                             Background="{DynamicResource Slate.SurfaceBrush}"
                             DataContext="{Binding FileSidebar}">
-                        <DockPanel Margin="10">
-                            <StackPanel DockPanel.Dock="Top">
+                        <local:FilesPanePanel Margin="10">
+                            <StackPanel>
                                 <DockPanel Margin="0,0,0,8" LastChildFill="False">
                                     <TextBlock Text="Files"
                                                FontSize="16"
@@ -1008,8 +1009,11 @@
                                             Click="SidebarFilterClear_Click"
                                             Command="{Binding ClearFilterCommand}" />
                                 </Grid>
-                                <StackPanel Orientation="Horizontal" Margin="0,6,0,6">
+                                <!-- #1795: wraps, so a narrow sidebar moves Group dates to a
+                                     line of its own instead of cutting off its label. -->
+                                <WrapPanel Margin="0,6,0,2">
                                     <ComboBox Width="145"
+                                              Margin="0,0,8,4"
                                               ItemsSource="{Binding SortModes}"
                                               SelectedItem="{Binding SortMode}"
                                               AutomationProperties.AutomationId="SidebarSortOrder"
@@ -1027,12 +1031,13 @@
                                             </DataTemplate>
                                         </ComboBox.ItemTemplate>
                                     </ComboBox>
-                                    <CheckBox Margin="8,0,0,0"
+                                    <CheckBox Margin="0,0,0,4"
+                                              MinWidth="0"
                                               VerticalAlignment="Center"
                                               Content="Group dates"
                                               AutomationProperties.AutomationId="SidebarGroupDates"
                                               IsChecked="{Binding GroupByDate}" />
-                                </StackPanel>
+                                </WrapPanel>
                                 <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
                                     <ToggleButton Content="Tags"
                                                   IsChecked="{Binding ShowTags}"
@@ -1070,8 +1075,7 @@
                                     </local:LandingTreeView.ItemContainerStyle>
                                 </local:LandingTreeView>
                             </StackPanel>
-                            <ScrollViewer Focusable="False" DockPanel.Dock="Bottom"
-                                          MaxHeight="210"
+                            <ScrollViewer Focusable="False"
                                           HorizontalScrollBarVisibility="Disabled"
                                           VerticalScrollBarVisibility="Auto">
                               <StackPanel>
@@ -1272,7 +1276,7 @@
                                     </ListBox.ItemContainerStyle>
                                 </ListBox>
                             </Grid>
-                        </DockPanel>
+                        </local:FilesPanePanel>
                     </local:AutomationLandmarkBorder>
                     <GridSplitter Grid.Column="1"
                                   KeyboardNavigation.IsTabStop="False"
@@ -2602,6 +2606,7 @@
                         </Grid>
                     </local:AutomationLandmarkBorder>
                 </Grid>
+                </local:WorkspaceRowHost>
             </local:AutomationLandmarkGrid>
             <!-- A full-window hit-test layer makes Quick Open modal for pointer
                  input. The underlying shell is disabled above, so UIA clients

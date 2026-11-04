@@ -8,9 +8,9 @@ Snap Layouts can put Slate in a half or a quarter of a small screen. Below the w
 
 ## Current state on main
 
-- `MainWindow.xaml:13`: `MinHeight="480" MinWidth="760"`.
-- `MainWindow.xaml:937-941`: sidebars `MinWidth="200"`, the editor `MinWidth="300"`, two 5 splitters. So with both panes the shell needs 710 at the minimum.
-- `WorkspaceViewModel.SidebarWidths.cs:60-72`: a narrower row brings widths back in, and `:119-129` computes the room. Nothing ever hides a pane.
+- `MainWindow.xaml:13`: `MinHeight="480" MinWidth="780"` (760 at the baseline; #1795).
+- `MainWindow.xaml:937-941`: Files `MinWidth="200"`, the right pane 250 (200 at the baseline; #1795), the editor `MinWidth="300"`, two 5 splitters. So with both panes the shell needs 760 at the minimum.
+- `WorkspaceViewModel.SidebarWidths.cs:60-72`: a narrower row brings widths back in, and `:119-129` computes the room. Nothing ever hides a pane. Since #1795 the row's width comes from `WorkspaceRowHost`, because the columns grid never reports less than the sum of its columns, and each width comes back when there's room again.
 - `IsRightPaneVisible` isn't persisted (`WorkspaceViewModel.cs:2819`), and its setter announces (`WorkspaceViewModel.cs:2826`).
 - **The setter also runs Connections' lifecycle** (`WorkspaceViewModel.cs:2830`, `WorkspaceViewModel.Connections.cs:116-127`). A hide clears the leaf's selection and bumps `ViewStateEpoch` (`Graph/ConnectionsLeafViewModel.cs:766-774`), which clears expansion and pending focus (`Graph/ConnectionsLeafView.cs:520-528`). A show arms a mount whose consume runs an audible load (`WorkspaceViewModel.Connections.cs:134-145`, `Graph/ConnectionsLeafViewModel.cs:429-435`). `35_graph_contracts.md` records these as Term 2 and Term 3(a), and `ConnectionsLeafCensus.cs:514` holds every `IsRightPaneVisible = true` writer to the consume.
 - **A silent reconcile exists.** `Connections.Probe` (`Graph/ConnectionsLeafViewModel.cs:776-785`) loads silently when the presentation is stale or errored, and does nothing when it's current. A note change while unmounted leaves it stale (`Graph/ConnectionsLeafViewModel.cs:458-464`).

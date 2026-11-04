@@ -208,6 +208,7 @@
     <local:AxisToOrientationConverter x:Key="AxisToOrientationConverter" />
     <local:NullToVisibilityConverter x:Key="NullToVisibilityConverter" />
     <local:PixelGridLengthConverter x:Key="PixelGridLengthConverter" />
+    <local:PropertyRowsMaxHeightConverter x:Key="PropertyRowsMaxHeightConverter" />
     <local:IsNotNullConverter x:Key="IsNotNullConverter" />
     <local:SidebarSortModeLabelConverter x:Key="SidebarSortModeLabelConverter" />
     <local:RecentVaultNameConverter x:Key="RecentVaultNameConverter" />
@@ -284,8 +285,7 @@
      ============================================================ -->
     <DataTemplate x:Key="PropertyTextEditorTemplate"
                   DataType="{x:Type panels:PropertyRowViewModel}">
-        <TextBox MinWidth="160"
-                 Text="{Binding EditorText, UpdateSourceTrigger=PropertyChanged}"
+        <TextBox Text="{Binding EditorText, UpdateSourceTrigger=PropertyChanged}"
                  ToolTip="{Binding EditorTooltip}"
                  AutomationProperties.Name="{Binding AutomationName}">
             <TextBox.InputBindings>
@@ -321,9 +321,13 @@
 
     <DataTemplate x:Key="PropertyNumberEditorTemplate"
                   DataType="{x:Type panels:PropertyRowViewModel}">
-        <StackPanel Orientation="Horizontal">
-            <TextBox MinWidth="100"
-                     Text="{Binding EditorText, UpdateSourceTrigger=PropertyChanged}"
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBox Text="{Binding EditorText, UpdateSourceTrigger=PropertyChanged}"
                      AutomationProperties.Name="{Binding AutomationName}">
                 <TextBox.InputBindings>
                     <KeyBinding Key="Return" Command="{Binding CommitCommand}" />
@@ -333,17 +337,19 @@
                     <KeyBinding Key="Back" Modifiers="Control" Command="{Binding DeleteCommand}" />
                 </TextBox.InputBindings>
             </TextBox>
-            <RepeatButton Margin="4,0,0,0"
+            <RepeatButton Grid.Column="1"
+                          Margin="4,0,0,0"
                           Padding="6,0"
                           Content="▲"
                           Command="{Binding StepUpCommand}"
                           AutomationProperties.Name="{Binding StepUpLabel}" />
-            <RepeatButton Margin="2,0,0,0"
+            <RepeatButton Grid.Column="2"
+                          Margin="2,0,0,0"
                           Padding="6,0"
                           Content="▼"
                           Command="{Binding StepDownCommand}"
                           AutomationProperties.Name="{Binding StepDownLabel}" />
-        </StackPanel>
+        </Grid>
     </DataTemplate>
 
     <DataTemplate x:Key="PropertyBooleanEditorTemplate"
@@ -359,9 +365,12 @@
 
     <DataTemplate x:Key="PropertyWikilinkEditorTemplate"
                   DataType="{x:Type panels:PropertyRowViewModel}">
-        <StackPanel Orientation="Horizontal">
-            <TextBox MinWidth="160"
-                     Text="{Binding EditorText, UpdateSourceTrigger=PropertyChanged}"
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBox Text="{Binding EditorText, UpdateSourceTrigger=PropertyChanged}"
                      ToolTip="{Binding EditorTooltip}"
                      AutomationProperties.Name="{Binding AutomationName}">
                 <TextBox.InputBindings>
@@ -370,13 +379,14 @@
                     <KeyBinding Key="Back" Modifiers="Control" Command="{Binding DeleteCommand}" />
                 </TextBox.InputBindings>
             </TextBox>
-            <Button Margin="6,0,0,0"
+            <Button Grid.Column="1"
+                    Margin="6,0,0,0"
                     Padding="8,2"
                     Content="Pick…"
                     Command="{Binding DataContext.Workspace.PickWikilinkTargetCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                     CommandParameter="{Binding}"
                     AutomationProperties.Name="{Binding PickerLabel}" />
-        </StackPanel>
+        </Grid>
     </DataTemplate>
 
     <DataTemplate x:Key="PropertyListEditorTemplate"
@@ -429,13 +439,15 @@
 
     <DataTemplate x:Key="PropertyRowTemplate"
                   DataType="{x:Type panels:PropertyRowViewModel}">
-        <Grid Margin="0,3">
+        <local:PropertyRowGrid Margin="0,3">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="150" />
+                <ColumnDefinition Width="*" MaxWidth="150" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
@@ -535,7 +547,7 @@
                        TextWrapping="Wrap"
                        Visibility="{Binding ValidationError, Converter={StaticResource NullToVisibilityConverter}}"
                        AutomationProperties.Name="{Binding ValidationLabel}" />
-        </Grid>
+        </local:PropertyRowGrid>
     </DataTemplate>
 
     <DataTemplate x:Key="WorkspaceTabContentTemplate"
@@ -601,8 +613,10 @@
                                Visibility="{Binding Properties.ShowEmptyState, Converter={StaticResource BooleanToVisibilityConverter}}"
                                AutomationProperties.Name="{Binding Properties.EmptyStateText}" />
                     <!-- Hugs small sets, scrolls internally past
-                         ~280px (mac parity). -->
-                    <ScrollViewer Focusable="False" MaxHeight="280"
+                         ~280px (mac parity), or past a third of a short
+                         pane, so the note keeps room for its text (#1795). -->
+                    <ScrollViewer Focusable="False"
+                                  MaxHeight="{Binding ActualHeight, RelativeSource={RelativeSource AncestorType=TabControl}, Converter={StaticResource PropertyRowsMaxHeightConverter}, FallbackValue=280}"
                                   VerticalScrollBarVisibility="Auto"
                                   HorizontalScrollBarVisibility="Disabled"
                                   Visibility="{Binding Properties.HasRows, Converter={StaticResource BooleanToVisibilityConverter}}">
@@ -613,7 +627,10 @@
                              named by the editor's label it was a second stop
                              reading the editor's own name; the editor and its
                              buttons already carry the key. -->
+                        <!-- #1795: the margin keeps Delete out from under the
+                             scroll bar, which draws over its content. -->
                         <local:LayoutItemsControl ItemsSource="{Binding Properties.Rows}"
+                                      Margin="0,0,12,0"
                                       ItemTemplate="{StaticResource PropertyRowTemplate}"
                                       Focusable="False"
                                       IsTabStop="False"

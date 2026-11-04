@@ -192,6 +192,7 @@ internal sealed class AccessibleDataGrid : UserControl
         {
             Focusable = true,
             Margin = new Thickness(8, 4, 8, 4),
+            TextWrapping = TextWrapping.Wrap,
         };
         KeyboardNavigation.SetTabIndex(_summary, 1);
         _summary.SetResourceReference(TextBlock.ForegroundProperty, "Slate.SecondaryTextBrush");

@@ -343,12 +343,13 @@ public sealed class ThemeDesignSystemTests
     }
 
     /// <summary>#1773: the filter was a fixed 220px in whatever room was left, and
-    /// the switcher beside it cut off its right edge.</summary>
+    /// the switcher beside it cut off its right edge. #1795: this is wide enough for
+    /// them to share a line.</summary>
     [Fact]
     public void TheGraphFilterStopsBeforeTheSwitcher() => StaThread.Run(() =>
     {
         using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
-        var view = new SlateWindows.Graph.GraphSurfaceView { Width = 320, HorizontalAlignment = HorizontalAlignment.Left };
+        var view = new SlateWindows.Graph.GraphSurfaceView { Width = 560, HorizontalAlignment = HorizontalAlignment.Left };
         host.Shell.Content = view;
         host.Settle();
 

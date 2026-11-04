@@ -57,15 +57,15 @@ public sealed class SidebarResizeTests : IDisposable
     {
         using WorkspaceViewModel workspace = NewWorkspace();
         workspace.WorkspaceRowWidth = 1600;
-        workspace.RightPaneWidth = 230;
+        workspace.RightPaneWidth = 280;
 
         workspace.NarrowRightPaneCommand.Execute(null);
-        Assert.Equal(WorkspaceViewModel.MinimumSidebarWidth, workspace.RightPaneWidth);
-        Assert.Equal("Right pane resized, 200 pixels.", SlateUniffiMethods.A11yRender(_announced[^1]).Text);
+        Assert.Equal(WorkspaceViewModel.MinimumRightPaneWidth, workspace.RightPaneWidth);
+        Assert.Equal("Right pane resized, 250 pixels.", SlateUniffiMethods.A11yRender(_announced[^1]).Text);
 
         workspace.NarrowRightPaneCommand.Execute(null);
-        Assert.Equal(WorkspaceViewModel.MinimumSidebarWidth, workspace.RightPaneWidth);
-        Assert.Equal("Right pane at its narrowest, 200 pixels.", SlateUniffiMethods.A11yRender(_announced[^1]).Text);
+        Assert.Equal(WorkspaceViewModel.MinimumRightPaneWidth, workspace.RightPaneWidth);
+        Assert.Equal("Right pane at its narrowest, 250 pixels.", SlateUniffiMethods.A11yRender(_announced[^1]).Text);
     });
 
     /// <summary>The editor keeps its minimum between the sidebars: in a
@@ -333,6 +333,32 @@ public sealed class SidebarResizeTests : IDisposable
         workspace.NarrowFilesSidebarCommand.Execute(null);
         Assert.Equal(370, workspace.FilesSidebarWidth);
         Assert.Equal("Files sidebar resized, 370 pixels.", SlateUniffiMethods.A11yRender(_announced[^1]).Text);
+    });
+
+    /// <summary>#1795: a window that shrank and grew back gives both widths back, and
+    /// the reader's own step sets what comes back.</summary>
+    [Fact]
+    public void AGrownRowGivesTheWidthsBack() => RunSta(() =>
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.WorkspaceRowWidth = 1600;
+        workspace.FilesSidebarWidth = 300;
+        workspace.RightPaneWidth = 360;
+
+        workspace.WorkspaceRowWidth = 800;
+        Assert.Equal(WorkspaceViewModel.MinimumSidebarWidth, workspace.FilesSidebarWidth);
+        Assert.Equal(290, workspace.RightPaneWidth);
+
+        workspace.WorkspaceRowWidth = 1600;
+        Assert.Equal(300, workspace.FilesSidebarWidth);
+        Assert.Equal(360, workspace.RightPaneWidth);
+
+        workspace.WorkspaceRowWidth = 800;
+        workspace.NarrowRightPaneCommand.Execute(null);
+        Assert.Equal(WorkspaceViewModel.MinimumRightPaneWidth, workspace.RightPaneWidth);
+
+        workspace.WorkspaceRowWidth = 1600;
+        Assert.Equal(WorkspaceViewModel.MinimumRightPaneWidth, workspace.RightPaneWidth);
     });
 
     private WorkspaceViewModel NewWorkspace() =>

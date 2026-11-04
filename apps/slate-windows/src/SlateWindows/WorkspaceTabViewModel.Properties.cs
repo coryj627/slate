@@ -76,6 +76,19 @@ internal sealed partial class WorkspaceTabViewModel
 
     internal void ShutdownProperties() => Properties?.Shutdown();
 
+    /// <summary>#1794: the header belongs to a note. It leaves with the note when
+    /// something else opens into this tab, and the tab keeps whether it was collapsed
+    /// for the next note here.</summary>
+    private void RetireProperties()
+    {
+        if (_properties is { } properties)
+        {
+            PropsCollapsed = properties.IsExpanded ? null : true;
+            properties.Shutdown();
+            Properties = null;
+        }
+    }
+
     /// <summary>A property write (set/delete/rename) rewrote this
     /// tab's file WITHOUT publishing through its buffer. Contract 8:
     /// a CLEAN tab re-baselines — reload the buffer from disk and

@@ -299,6 +299,7 @@ internal sealed class ConnectionsLeafView : UserControl
         {
             FontSize = 16,
             FontWeight = FontWeights.SemiBold,
+            TextWrapping = TextWrapping.Wrap,
         };
         AutomationProperties.SetHeadingLevel(_heading, AutomationHeadingLevel.Level2);
         AutomationProperties.SetAutomationId(_heading, "ConnectionsHeading");
