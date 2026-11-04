@@ -6,10 +6,10 @@
 // items drawn bright. Keyboard navigation skips disabled items, so the
 // reader landed only on the dim ones and, hearing no "unavailable",
 // concluded the disabled items were the ones taking focus. The Slate
-// dictionaries define no menu brushes; everything the menu draws comes
+// dictionaries defined no menu brushes then; everything the menu drew came
 // from Fluent, resolved through the window's resource chain. This test
-// renders a real menu through the REAL dictionaries — Fluent then Slate,
-// the ThemeManager's merge order — and pins the one contract that
+// renders a real menu through the REAL dictionaries, the ThemeManager's
+// layers, and pins the one contract that
 // matters to a reader with low vision: enabled text is the brighter of
 // the two against the popup, in every appearance.
 
@@ -25,17 +25,13 @@ namespace SlateWindows.Tests;
 
 public sealed class MenuItemForegroundTests
 {
-    private const string FluentRoot =
-        "pack://application:,,,/PresentationFramework.Fluent;component/Themes/";
-    private const string SlateRoot =
-        "pack://application:,,,/SlateWindows;component/Themes/";
-
     [Theory]
-    [InlineData("Fluent.Dark.xaml", "Slate.Dark.xaml")]
-    [InlineData("Fluent.Light.xaml", "Slate.Light.xaml")]
-    public void EnabledMenuItemsAreBrighterThanDisabledOnes(string fluent, string slate)
+    [InlineData(true)]
+    [InlineData(false)]
+    public void EnabledMenuItemsAreBrighterThanDisabledOnes(bool dark)
     {
-        Measurement measured = OnStaThread(() => Measure(fluent, slate));
+        string slate = dark ? "dark" : "light";
+        Measurement measured = OnStaThread(() => Measure(dark));
 
         Assert.True(measured.EnabledIsEnabled, "the enabled item reports IsEnabled == false");
         Assert.False(measured.DisabledIsEnabled, "the disabled item reports IsEnabled == true");
@@ -58,7 +54,7 @@ public sealed class MenuItemForegroundTests
         Color PopupBackground,
         string Diagnosis);
 
-    private static Measurement Measure(string fluent, string slate)
+    private static Measurement Measure(bool dark)
     {
         // Runs Application's static constructor (registers the pack:
         // scheme and its application authority) without constructing an
@@ -79,16 +75,13 @@ public sealed class MenuItemForegroundTests
             WindowStartupLocation = WindowStartupLocation.Manual,
         };
         // The window's OWN resources stand in for Application.Resources so
-        // the process-wide theme is left alone; the merge order is the
-        // ThemeManager's (Fluent first, Slate last).
-        window.Resources.MergedDictionaries.Add(new ResourceDictionary
+        // the process-wide theme is left alone. These are the layers the app
+        // merges, so this measures what ships (DS-4).
+        foreach (ResourceDictionary layer in ThemeManager.DictionariesFor(dark ? SlateTheme.Dark : SlateTheme.Light, highContrast: false))
         {
-            Source = new Uri(FluentRoot + fluent, UriKind.Absolute),
-        });
-        window.Resources.MergedDictionaries.Add(new ResourceDictionary
-        {
-            Source = new Uri(SlateRoot + slate, UriKind.Absolute),
-        });
+            window.Resources.MergedDictionaries.Add(layer);
+        }
+
         window.SetResourceReference(Control.BackgroundProperty, "Slate.WindowBackgroundBrush");
         window.SetResourceReference(Control.ForegroundProperty, "Slate.TextBrush");
 

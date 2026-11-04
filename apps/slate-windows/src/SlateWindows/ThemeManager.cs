@@ -124,6 +124,7 @@ internal sealed class ThemeManager : IDisposable
         }
 
         _ = LoadDictionary(SlateRoot + "Slate.Text.xaml");
+        _ = LoadDictionary(SlateRoot + "Slate.Menus.xaml");
         _ = LoadDictionary(SlateRoot + "Slate.SystemColors.xaml");
     }
 
@@ -199,7 +200,7 @@ internal sealed class ThemeManager : IDisposable
     /// The application-level dictionaries a theme resolves to, in merge
     /// order: the type ramp at <paramref name="textScale"/>, Fluent, then Slate's
     /// tokens, then outside High Contrast the system colours those tokens answer
-    /// for, then Slate's text styles. Only the app passes a scale, so a hosted test
+    /// for, then Slate's text styles and menus. Only the app passes a scale, so a hosted test
     /// doesn't depend on the desktop's Text size.
     /// <see cref="ApplyResources"/> merges exactly
     /// these; a hosted test merges the same layers into its own window to
@@ -221,18 +222,8 @@ internal sealed class ThemeManager : IDisposable
         slate["ControlLightColor"] = highContrast ? SystemColors.WindowColor : (Color)slate["Slate.SurfaceColor"];
         slate["DisabledForegroundColor"] = highContrast ? SystemColors.GrayTextColor : (Color)slate["Slate.DisabledTextColor"];
         ResourceDictionary fluent = LoadDictionary(FluentRoot + fluentName);
-        if (fluent[typeof(MenuItem)] is Style menuItem)
-        {
-            slate[typeof(MenuItem)] = MenuShortcuts.StyleFor(menuItem);
-        }
-
-        // DS-2: neither of these is in the window's tree, so the window's size
-        // can't reach them.
-        if (fluent[typeof(ContextMenu)] is Style contextMenu)
-        {
-            slate[typeof(ContextMenu)] = TypeRamp.StyleOn(contextMenu, TypeRamp.Body);
-        }
-
+        // DS-2: this isn't in the window's tree, so the window's size can't reach it.
+        // A context menu is the same, and Slate.Menus.xaml sets its size.
         if (fluent[typeof(ToolTip)] is Style toolTip)
         {
             slate[typeof(ToolTip)] = TypeRamp.StyleOn(toolTip, TypeRamp.Caption);
@@ -245,6 +236,7 @@ internal sealed class ThemeManager : IDisposable
                 fluent,
                 slate,
                 LoadDictionary(SlateRoot + "Slate.Text.xaml"),
+                LoadDictionary(SlateRoot + "Slate.Menus.xaml"),
             ]
             :
             [
@@ -253,6 +245,7 @@ internal sealed class ThemeManager : IDisposable
                 slate,
                 LoadDictionary(SlateRoot + "Slate.SystemColors.xaml"),
                 LoadDictionary(SlateRoot + "Slate.Text.xaml"),
+                LoadDictionary(SlateRoot + "Slate.Menus.xaml"),
             ];
     }
 
