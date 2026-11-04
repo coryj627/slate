@@ -341,6 +341,8 @@ internal sealed class ReadingSurface : RichTextBox
             _ = Focus();
         }
 
+        // A formula's place is for this note's next projection, not the next note's.
+        _formulaScrolls.Clear();
         Document.Blocks.Clear();
         var placeholder = new Paragraph(new Run("Loading reading view…"))
         {
@@ -371,10 +373,14 @@ internal sealed class ReadingSurface : RichTextBox
             ApplyModel();
         }
         else if (e.PropertyName is nameof(ReadingContentViewModel.RefreshInFlight)
-            && _focusLandingPending
             && _model is { RefreshInFlight: false })
         {
-            ScheduleSettledLanding();
+            // Every formula has arrived, so a place left over has lost its formula.
+            _formulaScrolls.Clear();
+            if (_focusLandingPending)
+            {
+                ScheduleSettledLanding();
+            }
         }
     }
 
@@ -402,7 +408,8 @@ internal sealed class ReadingSurface : RichTextBox
     private FlowDocument? _lastMerged;
 
     /// <summary>DS-3: where formulas had scrolled to when a merge replaced them. A long
-    /// note's later formulas arrive after the merge, so their places wait here.</summary>
+    /// note's later formulas arrive after the merge, so their places wait here until the
+    /// refresh settles or the note changes.</summary>
     private readonly Dictionary<(string Source, int Nth), double> _formulaScrolls = [];
     private IReadOnlyList<ReadingLandmark> _landmarks = Array.Empty<ReadingLandmark>();
     private bool _focusLandingPending;

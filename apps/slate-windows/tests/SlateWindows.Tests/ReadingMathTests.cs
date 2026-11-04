@@ -398,6 +398,68 @@ public sealed class ReadingMathTests
         });
     }
 
+    /// <summary>A place belongs to the note it was read in. One still waiting for its
+    /// formula, as a long note's do, opened another note's copy of that formula part way
+    /// along, hiding how it starts.</summary>
+    [Fact]
+    public void AFormulasPlaceStaysWithItsNote()
+        => WithReadingSurface("reading-math-place-a", WideFormula, (_, surface, _) =>
+            WithHostedSurface(surface, 900, () =>
+            {
+                ReadingMathElement first = Assert.Single(FindMathElements(surface.Document));
+                first.Scroller!.ScrollToHorizontalOffset(300);
+                surface.UpdateLayout();
+                PumpedDispatcher.Drain();
+                Assert.Equal(300, first.Scroller!.HorizontalOffset, 0);
+                surface.ApplyBuiltDocument(new System.Windows.Documents.FlowDocument(
+                    new System.Windows.Documents.Paragraph(new System.Windows.Documents.Run("Nothing here."))));
+
+                using var fixture = FixtureVault.Create(1, "reading-math-place-b");
+                File.WriteAllText(Path.Combine(fixture.Root, "note0.md"), WideFormula);
+                using var session = VaultSession.OpenFilesystem(fixture.Root);
+                using var cancel = new CancelToken();
+                session.ScanInitial(cancel);
+                using var other = new WorkspaceTabViewModel(
+                    session,
+                    new WorkspaceTabState(Guid.NewGuid(), new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                    startInteractionBackgroundWork: false);
+                other.ToggleViewMode();
+                surface.Model = other.Reading;
+                WaitForUi(() => FindMathElements(surface.Document).Any());
+                surface.UpdateLayout();
+                PumpedDispatcher.Drain();
+                surface.UpdateLayout();
+
+                Assert.Equal(0, Assert.Single(FindMathElements(surface.Document)).Scroller!.HorizontalOffset, 0);
+            }));
+
+    /// <summary>A place whose formula was edited away is dropped when the refresh settles.
+    /// Kept, it came back the moment the edit was undone, and places piled up with every
+    /// edit.</summary>
+    [Fact]
+    public void AnEditedFormulaGivesUpItsPlace()
+        => WithReadingSurface("reading-math-place-edit", WideFormula, (tab, surface, _) =>
+            WithHostedSurface(surface, 900, () =>
+            {
+                ReadingMathElement first = Assert.Single(FindMathElements(surface.Document));
+                first.Scroller!.ScrollToHorizontalOffset(300);
+                surface.UpdateLayout();
+                PumpedDispatcher.Drain();
+                Assert.Equal(300, first.Scroller!.HorizontalOffset, 0);
+
+                tab.EditorDocument!.Replace(tab.Text.IndexOf("x+", StringComparison.Ordinal), 1, "y");
+                tab.Reading!.Refresh();
+                tab.EditorDocument!.Replace(tab.Text.IndexOf("y+", StringComparison.Ordinal), 1, "x");
+                tab.Reading!.Refresh();
+                surface.UpdateLayout();
+                PumpedDispatcher.Drain();
+                surface.UpdateLayout();
+
+                ReadingMathElement back = Assert.Single(FindMathElements(surface.Document));
+                Assert.NotSame(first, back);
+                Assert.Equal(0, Assert.IsType<FormulaScroller>(back.Scroller).HorizontalOffset, 0);
+            }));
+
     /// <summary>A formula that fits has nothing to scroll, and no room kept for a bar.</summary>
     [Fact]
     public void ASmallFormulaKeepsItsSize()
@@ -1417,8 +1479,6 @@ public sealed class ReadingMathTests
         });
     }
 
-    /// <summary>The surface in a laid-out window of this width, off
-    /// screen and never activated.</summary>
     private static readonly string WideFormula = "$$" + string.Concat(Enumerable.Repeat("x+", 40)) + "x$$\n";
 
     /// <summary>A key at the element, as focus delivers it. True when the element took
@@ -1440,6 +1500,8 @@ public sealed class ReadingMathTests
         return taken;
     }
 
+    /// <summary>The surface in a laid-out window of this width, off
+    /// screen and never activated.</summary>
     private static void WithHostedSurface(ReadingSurface surface, double width, Action body)
     {
         var window = new System.Windows.Window
