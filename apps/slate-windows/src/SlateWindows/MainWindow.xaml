@@ -3954,7 +3954,6 @@
                                 AutomationProperties.AutomationId="BuilderDone"
                                 Click="BuilderDone_Click" />
                     </WrapPanel>
-                    <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto">
                         <StackPanel>
                             <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                                 <TextBlock Text="Match:" VerticalAlignment="Center" />
@@ -4110,7 +4109,6 @@
                                          AutomationProperties.Name="Saved query name" />
                             </StackPanel>
                         </StackPanel>
-                    </ScrollViewer>
                 </DockPanel>
                 </ScrollViewer>
             </local:AutomationLandmarkBorder>
@@ -4321,8 +4319,8 @@
                                     AutomationProperties.AutomationId="TemplatePromptsNext"
                                     AutomationProperties.HelpText="Continue to choose the new note's name. Enter." />
                         </StackPanel>
-                        <!-- Focusable=False on BOTH layout hosts: ScrollViewer
-                             and ItemsControl are Controls, whose Focusable
+                        <!-- Focusable=False on BOTH layout hosts, the sheet's
+                             ScrollViewer and this ItemsControl: both are Controls, whose Focusable
                              default is TRUE — the journey's axe scan caught
                              the ItemsControl as a focusable unnamed List (the
                              W4-5 class), and the red team caught the
@@ -4332,8 +4330,6 @@
                              W7-7 PR 3 (#1246, R-4): so are the item containers,
                              which NVDA read as "SlateWindows.Templates.
                              TemplatePromptFieldViewModel, data item". -->
-                        <ScrollViewer VerticalScrollBarVisibility="Auto"
-                                      Focusable="False">
                             <local:LayoutItemsControl x:Name="TemplateFlowPromptsList" local:SiblingNames.NamePath="Label" local:SiblingNames.Noun="field"
                                                       Focusable="False"
                                                       ItemsSource="{Binding PromptFields}">
@@ -4354,7 +4350,6 @@
                                     </DataTemplate>
                                 </local:LayoutItemsControl.ItemTemplate>
                             </local:LayoutItemsControl>
-                        </ScrollViewer>
                     </DockPanel>
                     <DockPanel Visibility="{Binding IsNameStep, Converter={StaticResource BooleanToVisibilityConverter}}">
                         <StackPanel DockPanel.Dock="Top">

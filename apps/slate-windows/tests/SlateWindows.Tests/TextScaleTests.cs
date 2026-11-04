@@ -492,6 +492,53 @@ public sealed partial class TextScaleTests
         Assert.True(list.ActualHeight >= 120, $"the list has {list.ActualHeight:F0} of height in a {sheet.ActualHeight:F0} sheet.");
     });
 
+    /// <summary>A scroller inside a scroller grows to fit with nothing left to scroll, and
+    /// still takes the wheel, so the sheet stops scrolling under the pointer. One inside a
+    /// sheet's scroller has to hold a height of its own, and so does a list.</summary>
+    [Fact]
+    public void AScrollerInsideASheetsScrollerHoldsItsHeight()
+    {
+        XDocument shell = XDocument.Load(Path.Combine(SourceText.ShellSourceRoot(), "MainWindow.xaml"), LoadOptions.SetLineInfo);
+        string[] unheld = shell.Descendants()
+            .Where(element => (string?)element.Attribute("AutomationProperties.IsDialog") == "True")
+            .SelectMany(sheet => sheet.Descendants())
+            .Where(element => element.Name.LocalName == "ScrollViewer"
+                || element.Name.LocalName.EndsWith("ListBox", StringComparison.Ordinal)
+                || element.Name.LocalName == "AccessibleDataGrid")
+            .Where(element => element.Ancestors().Any(ancestor => ancestor.Name.LocalName == "ScrollViewer"))
+            .Where(element => element.Attribute("MaxHeight") is null)
+            .Select(element => $"{element.Name.LocalName} at line {((System.Xml.IXmlLineInfo)element).LineNumber}")
+            .ToArray();
+
+        Assert.True(unheld.Length == 0, "Scrollers that grow to fit inside a scroller:\n" + string.Join('\n', unheld));
+    }
+
+    /// <summary>The wheel over a field in an overflowing sheet moves the sheet.</summary>
+    [Theory]
+    [InlineData("TemplateFlowOverlay", "TemplateFlowPromptsList")]
+    [InlineData("BaseQueryBuilderOverlay", "BuilderCombinatorBox")]
+    public void TheWheelOverASheetsFieldsScrollsTheSheet(string sheetName, string fieldName) => OnOwnThread(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        host.Shell.Width = 1120;
+        host.Shell.Height = 480;
+        TypeRamp.Apply(RampOf(host.Shell), 2.25);
+        host.Settle();
+        var sheet = (FrameworkElement)host.Shell.FindName(sheetName);
+        _ = Open(sheet);
+        host.Settle();
+        host.Settle();
+        ScrollViewer body = ShownShell.Descendants(sheet).OfType<ScrollViewer>().First();
+        Assert.True(body.ScrollableHeight > 0, "premise: the sheet doesn't overflow here.");
+
+        ((UIElement)host.Shell.FindName(fieldName)).RaiseEvent(
+            new System.Windows.Input.MouseWheelEventArgs(System.Windows.Input.Mouse.PrimaryDevice, 0, -120) { RoutedEvent = UIElement.MouseWheelEvent });
+        host.Settle();
+        host.Settle();
+
+        Assert.True(body.VerticalOffset > 0, "the wheel didn't move the sheet.");
+    });
+
     /// <summary>A long subtitle took all of the step's room, so its field had no height,
     /// and a scroller round the field alone couldn't help. The whole step scrolls, so keys
     /// reach the field wherever a long subtitle pushes it.</summary>
