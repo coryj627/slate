@@ -85,6 +85,8 @@ Read `Canvas/CanvasTextScaleService.cs`, `Canvas/CanvasRendererView.cs:30-40`, `
 
 ## Notes from the build
 
+The owner's check passed on 2026-11-04, so the source stays the registry.
+
 A launched pass at the seam's 2.25, in the 1120 × 720 the app opens at, found what this spec didn't list:
 
 - **The right pane.** A rail that fits its labels took two thirds of a 320 pane, and the leaf wrapped a letter at a time. `RightPaneRail` puts the rail under the leaf when the leaf would have under eight ems. Item 6 stands: the pane's width stays what it was.
