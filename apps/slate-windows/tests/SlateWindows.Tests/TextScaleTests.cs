@@ -1405,7 +1405,7 @@ public sealed partial class TextScaleTests
             calendar.UpdateLayout();
 
             TextBlock[] texts = ShownShell.Descendants(calendar).OfType<TextBlock>().Where(text => !string.IsNullOrEmpty(text.Text)).ToArray();
-            TextBlock[] glyphs = texts.Where(text => text.Text is "" or "").ToArray();
+            TextBlock[] glyphs = texts.Where(text => text.Text is "\uEDDB" or "\uEDDC").ToArray();
             TextBlock[] labels = texts.Except(glyphs).Where(text => InShownView(text, calendar)).ToArray();
 
             Assert.Equal(2, glyphs.Length);
