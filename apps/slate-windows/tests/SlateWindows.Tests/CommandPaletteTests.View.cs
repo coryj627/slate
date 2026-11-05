@@ -41,25 +41,56 @@ public sealed partial class CommandPaletteTests
     [Fact]
     public void TheRowsAreLaidOutInTheOperationThatPublishesThem() => RunSta(() =>
     {
-        using var host = new ShippedResultsList(StandardCommands());
+        Command[] commands = Enumerable.Range(0, 190)
+            .Select(index => Cmd($"slate.view.row{index:D3}", $"Row {index:D3}", CommandSection.View))
+            .ToArray();
+        using var host = new ShippedResultsList(commands);
         host.Palette.Open();
         host.Settle();
-        var measuredWhenTheRowsLanded = new List<bool>();
-        host.Palette.PropertyChanged += (_, change) =>
-        {
-            if (change.PropertyName == nameof(CommandPaletteViewModel.SelectedRow))
-            {
-                measuredWhenTheRowsLanded.Add(host.List.IsMeasureValid && host.List.IsArrangeValid);
-            }
-        };
+        Assert.Empty(PendingLayout(host.List));
 
-        host.Palette.Query = "q";
+        // A selection far below the fold, which its query keeps: its scroll comes after the
+        // rows, and is the last thing the publication changes.
+        host.Palette.SelectLast();
+        Assert.Empty(PendingLayout(host.List));
+        host.Palette.Query = "Row";
 
         // With the inline lane the publication has run, and nothing has been pumped.
-        Assert.Equal(new[] { "slate.nav.quickOpen" }, host.Harness.RowIds);
-        Assert.True(host.List.IsMeasureValid && host.List.IsArrangeValid, "the rows' layout waited for the render pass.");
-        Assert.NotEmpty(measuredWhenTheRowsLanded);
+        Assert.Equal("slate.view.row189", host.Palette.SelectedId);
+        Assert.Empty(PendingLayout(host.List));
+
+        // Nor is anything left queued to dirty it again, as a deferred scroll would.
+        PumpedDispatcher.Drain();
+        Assert.Empty(PendingLayout(host.List));
     });
+
+    /// <summary>Everything in the list still waiting on a layout pass: a viewer's arrangement
+    /// can be pending while the list's own flags read valid.</summary>
+    private static string[] PendingLayout(DependencyObject root)
+    {
+        var pending = new List<string>();
+        void Walk(DependencyObject parent)
+        {
+            // Nothing lays out what's collapsed, so it never reads valid.
+            if (parent is UIElement { Visibility: not Visibility.Visible })
+            {
+                return;
+            }
+
+            if (parent is UIElement element && !(element.IsMeasureValid && element.IsArrangeValid))
+            {
+                pending.Add(element.GetType().Name);
+            }
+
+            for (int index = 0; index < System.Windows.Media.VisualTreeHelper.GetChildrenCount(parent); index++)
+            {
+                Walk(System.Windows.Media.VisualTreeHelper.GetChild(parent, index));
+            }
+        }
+
+        Walk(root);
+        return pending.ToArray();
+    }
 
     [Fact]
     public void TheShippedListAnnouncesOnlyTheViewModelsSelection() => RunSta(() =>

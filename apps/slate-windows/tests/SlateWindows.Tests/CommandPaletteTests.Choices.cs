@@ -277,6 +277,73 @@ public sealed partial class CommandPaletteTests
         host.Palette.SetModalLoop(false);
     }
 
+    /// <summary>Choices wait for their command to succeed. One that fails afterward leaves
+    /// the commands as they were, and nothing behind for the next command to trip on.</summary>
+    [Fact]
+    public void ACommandThatFailsAfterOpeningChoicesLeavesTheCommands()
+    {
+        var host = new ChoicesHarness();
+        host.Harness.Source.InvokeFailures[SwitchThemeId] = new CommandException.ActionFailed("no");
+
+        host.InvokeSwitchTheme();
+
+        Assert.True(host.Palette.IsOpen);
+        Assert.False(host.Palette.IsChoosing);
+        Assert.Contains(host.Palette.Rows, row => row.Id == SwitchThemeId);
+        Assert.IsType<A11yEvent.PaletteCommandFailed>(Assert.Single(host.Harness.Announcements));
+        Assert.Empty(host.Harness.Source.Recorded);
+
+        host.Harness.Source.InvokeFailures.Clear();
+        host.Harness.Source.OnInvoke = null;
+        host.Palette.Select(Assert.Single(host.Palette.Rows, row => row.Id == "slate.tasks.review"));
+        host.Palette.InvokeSelected();
+
+        Assert.False(host.Palette.IsOpen);
+        Assert.False(host.Palette.IsChoosing);
+    }
+
+    /// <summary>Esc acts under the seal (T9). It's the reader's word over the command's.</summary>
+    [Fact]
+    public void EscDuringTheCommandLeavesNoChoicesBehind()
+    {
+        var host = new ChoicesHarness();
+        host.Harness.Source.OnInvoke = _ =>
+        {
+            host.Palette.OpenChoices(host.Choices);
+            host.Palette.BackOrDismiss();
+        };
+
+        host.InvokeSwitchTheme();
+
+        Assert.False(host.Palette.IsOpen);
+        Assert.False(host.Palette.IsChoosing);
+        host.Harness.Source.OnInvoke = null;
+        host.Palette.Open();
+        Assert.False(host.Palette.IsChoosing);
+        host.Palette.Select(Assert.Single(host.Palette.Rows, row => row.Id == "slate.tasks.review"));
+        host.Palette.InvokeSelected();
+        Assert.False(host.Palette.IsOpen);
+    }
+
+    /// <summary>The seal would drop the rows, so a loop still up when the command returns
+    /// keeps to P9's dismissal.</summary>
+    [Fact]
+    public void AModalLoopStillUpAfterTheCommandClosesThePalette()
+    {
+        var host = new ChoicesHarness();
+        host.Harness.Source.OnInvoke = _ =>
+        {
+            host.Palette.OpenChoices(host.Choices);
+            host.Palette.SetModalLoop(true);
+        };
+
+        host.InvokeSwitchTheme();
+
+        Assert.False(host.Palette.IsOpen);
+        Assert.False(host.Palette.IsChoosing);
+        host.Palette.SetModalLoop(false);
+    }
+
     /// <summary>The shipped shell: Settings… retires the palette, and focus comes back to
     /// what had it before the palette opened.</summary>
     [Fact]

@@ -346,8 +346,7 @@ internal sealed class CommandPaletteViewModel : BindableBase
     private int _queryChangesSinceOpen;
     private PaletteChoices? _choices;
     private CommandsLevel? _commandsLevel;
-    private CommandPaletteRowViewModel? _invokingRow;
-    private bool _choicesOpenedByInvoke;
+    private PaletteChoices? _stagedChoices;
 
     /// <param name="source">The command layer (registry, availability, recents).</param>
     /// <param name="announce">The shell's one announcement funnel.</param>
@@ -684,6 +683,7 @@ internal sealed class CommandPaletteViewModel : BindableBase
         {
             _choices = null;
             _commandsLevel = null;
+            CancelSnapshotLoad();
             _snapshotCancellation = new CancellationTokenSource();
             _snapshotLoaded = false;
             IPaletteCommandSource source = _source;
@@ -718,7 +718,9 @@ internal sealed class CommandPaletteViewModel : BindableBase
     /// The rows go through core's ranking and the lane like any others, so what the list
     /// shows, what the keys navigate and what Enter runs stay one query's (P18). Input order
     /// is what an empty query keeps, and the selection is seeded on the current choice, which
-    /// the P7 rule then keeps.
+    /// the P7 rule then keeps. From a running command they wait for it to succeed: nothing here
+    /// changes under the seal, and a command that goes on to fail leaves the commands as they
+    /// were, as an Esc during it does.
     /// </remarks>
     internal void OpenChoices(PaletteChoices choices)
     {
@@ -728,9 +730,21 @@ internal sealed class CommandPaletteViewModel : BindableBase
             return;
         }
 
-        _commandsLevel = _isInvoking && _invokingRow is { } row
-            ? new CommandsLevel(_snapshotLoad, _query, row.Id, row.Label)
-            : null;
+        if (_isInvoking)
+        {
+            _stagedChoices = choices;
+        }
+        else
+        {
+            EnterChoices(choices, null);
+        }
+    }
+
+    private void EnterChoices(PaletteChoices choices, CommandPaletteRowViewModel? fromRow)
+    {
+        _commandsLevel = fromRow is null
+            ? null
+            : new CommandsLevel(_snapshotLoad, _query, fromRow.Id, fromRow.Label);
         _choices = choices;
         _snapshotLoad = Task.FromResult(new PaletteSnapshot(
             choices.Choices
@@ -751,19 +765,7 @@ internal sealed class CommandPaletteViewModel : BindableBase
         OnPropertyChanged(nameof(IsOpen));
         RaiseLevelChanged();
         RaiseDerivedState();
-        if (_isInvoking)
-        {
-            // The seal drops a publication, so the rows wait for the command to return.
-            _choicesOpenedByInvoke = true;
-        }
-        else
-        {
-            ShowChoices(choices);
-        }
-    }
-
-    private void ShowChoices(PaletteChoices choices)
-    {
+        _resumeRanking = false;
         _announce(new A11yEvent.PaletteChoicesOpened(
             choices.Prompt,
             choices.Choices.First(choice => choice.Id == choices.CurrentId).Label));
@@ -824,6 +826,7 @@ internal sealed class CommandPaletteViewModel : BindableBase
         _selectedRow = null;
         _choices = null;
         _commandsLevel = null;
+        _stagedChoices = null;
         LastRecomputeTiming = null;
         // Whatever is still loading or ranking belongs to a palette that is
         // gone: stop what has not started, and let a newer generation make
@@ -1029,7 +1032,6 @@ internal sealed class CommandPaletteViewModel : BindableBase
         }
 
         A11yEvent? failure = null;
-        _invokingRow = row;
         BeginInvocation();
         try
         {
@@ -1061,12 +1063,15 @@ internal sealed class CommandPaletteViewModel : BindableBase
             // The seal lasts exactly as long as the command: however it
             // returns — or throws something unexpected — it ends here.
             _isInvoking = false;
-            _invokingRow = null;
             if (!IsSealed)
             {
                 SealReleased?.Invoke(this, EventArgs.Empty);
             }
         }
+
+        // DS-10: choices wait for this to succeed, and only then replace the rows.
+        PaletteChoices? staged = _stagedChoices;
+        _stagedChoices = null;
 
         // The command's own action tore the shell down — a window close
         // runs Shutdown synchronously, and so can a prompt's nested loop.
@@ -1091,13 +1096,12 @@ internal sealed class CommandPaletteViewModel : BindableBase
             return;
         }
 
-        // DS-10: the command put choices in the rows, so it succeeded and the palette stays.
-        if (_choicesOpenedByInvoke)
+        // DS-10: the command succeeded with choices to show, so the palette stays. A modal loop
+        // still over the shell keeps to step 4: the seal would drop the rows.
+        if (staged is not null && _isOpen && !_inModalLoop)
         {
-            _choicesOpenedByInvoke = false;
-            _resumeRanking = false;
             RecordCompletion = RecordOnLane(row.Id);
-            ShowChoices(_choices!);
+            EnterChoices(staged, row);
             return;
         }
 
