@@ -100,6 +100,16 @@
     "text": "Right pane hidden."
   },
   {
+    "event": "FilesSidebarShown",
+    "priority": "medium",
+    "text": "Files sidebar shown."
+  },
+  {
+    "event": "FilesSidebarHidden",
+    "priority": "medium",
+    "text": "Files sidebar hidden."
+  },
+  {
     "event": "HistoryPanelShown",
     "priority": "medium",
     "text": "History panel."

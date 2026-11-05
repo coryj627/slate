@@ -69,6 +69,8 @@ final class A11yCorpusCensusTests: XCTestCase {
             .graphOpensSinglePane,
             .rightPaneShown,
             .rightPaneHidden,
+            .filesSidebarShown,
+            .filesSidebarHidden,
             .historyPanelShown,
             .reopenTargetMissing(filename: "gone.md"),
             .fileReopenFailed(filename: "notes.md", detail: "invalid UTF-8"),

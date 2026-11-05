@@ -668,6 +668,8 @@ pub enum A11yEvent {
     GraphOpensSinglePane,
     RightPaneShown,
     RightPaneHidden,
+    FilesSidebarShown,
+    FilesSidebarHidden,
     HistoryPanelShown,
 
     // --- Reopen (⌘⇧T) ---
@@ -2024,6 +2026,8 @@ impl A11yEvent {
             }
             RightPaneShown => "Right pane shown.".to_owned(),
             RightPaneHidden => "Right pane hidden.".to_owned(),
+            FilesSidebarShown => "Files sidebar shown.".to_owned(),
+            FilesSidebarHidden => "Files sidebar hidden.".to_owned(),
             HistoryPanelShown => "History panel.".to_owned(),
 
             ReopenTargetMissing { filename } => format!("{filename} no longer exists."),
@@ -4194,6 +4198,8 @@ pub fn corpus() -> Vec<A11yEvent> {
         GraphOpensSinglePane,
         RightPaneShown,
         RightPaneHidden,
+        FilesSidebarShown,
+        FilesSidebarHidden,
         HistoryPanelShown,
         ReopenTargetMissing {
             filename: "gone.md".into(),
@@ -7026,6 +7032,8 @@ mod tests {
             ),
             (Medium, "Right pane shown."),
             (Medium, "Right pane hidden."),
+            (Medium, "Files sidebar shown."),
+            (Medium, "Files sidebar hidden."),
             (Medium, "History panel."),
             (Medium, "gone.md no longer exists."),
             (High, "Could not reopen notes.md: invalid UTF-8"),
@@ -8001,6 +8009,28 @@ mod tests {
         }
     }
 
+    /// DS-7: the Files sidebar's show and hide speak as the right pane's do,
+    /// at the same priority: a reader who hid it wants to hear it went.
+    #[test]
+    fn files_sidebar_shown_and_hidden_speak() {
+        assert_eq!(
+            A11yEvent::FilesSidebarShown.render(),
+            "Files sidebar shown."
+        );
+        assert_eq!(
+            A11yEvent::FilesSidebarHidden.render(),
+            "Files sidebar hidden."
+        );
+        assert_eq!(
+            A11yEvent::FilesSidebarShown.priority(),
+            A11yEvent::RightPaneShown.priority()
+        );
+        assert_eq!(
+            A11yEvent::FilesSidebarHidden.priority(),
+            A11yEvent::RightPaneHidden.priority()
+        );
+    }
+
     /// The committed §W-D corpus artifact (`tests/fixtures/a11y/corpus.json`)
     /// is generated FROM [`corpus()`] and pinned here: every entry is
     /// `{ "event": <Debug>, "priority": "medium"|"high", "text": <render> }`
@@ -8591,8 +8621,9 @@ mod tests {
             // PR 21a (#1293) the change feed's uncounted rescan sentence,
             // VaultRescanFinishedUncounted, 222; plan 45 XB-9 (#1591) the
             // reading view's on-request math source, MathSourceSpoken, 223;
-            // plan 44 WB-29a (#1525) the seven hot-exit events, 230.
-            230,
+            // plan 44 WB-29a (#1525) the seven hot-exit events, 230;
+            // plan 46 DS-7 the Files sidebar's show and hide, 232.
+            232,
             "A11yEvent's top-level variant count moved; uniffi caps an enum at 256"
         );
     }
