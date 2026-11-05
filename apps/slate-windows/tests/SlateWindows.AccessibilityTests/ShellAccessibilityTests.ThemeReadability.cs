@@ -36,6 +36,45 @@ public sealed partial class ShellAccessibilityTests
             AssertAxeClean(process, "theme-readability");
         });
 
+    /// <summary>DS-5: launched at the seam's largest size, the chrome's minimums give way
+    /// to its text, and the shell stays clean. Spike 5 measured a status bar of 39.9 and a
+    /// tab strip of 45.9 at this size.</summary>
+    [Fact]
+    public void ThemedShell_AtTheLargestTextTheShellGrows()
+    {
+        (double Status, double Tab)? normal = ChromeHeights("largest-text-base", "1");
+        (double Status, double Tab)? larger = ChromeHeights("largest-text", "2.25");
+
+        // With no interactive desktop the journey stops at its startup smoke.
+        if (normal is not { } small || larger is not { } large)
+        {
+            return;
+        }
+
+        Assert.True(small.Status > 0 && small.Tab > 0, $"the launch drew a {small.Status} status bar and a {small.Tab} tab.");
+        Assert.True(large.Status > small.Status, $"the status bar stayed {small.Status} at 225%, and reads {large.Status}.");
+        Assert.True(large.Tab > small.Tab, $"the open tab stayed {small.Tab} at 225%, and reads {large.Tab}.");
+    }
+
+    private static (double Status, double Tab)? ChromeHeights(string name, string textScale)
+    {
+        (double, double)? heights = null;
+        RunFindInNoteJourney(
+            name,
+            (process, window, automation, editor) =>
+            {
+                AutomationElement tabs = WaitForElement(window, "WorkspaceTabs", TimeSpan.FromSeconds(10));
+                AutomationElement tab = tabs.FindFirstChild(cf => cf.ByControlType(ControlType.TabItem))
+                    ?? throw new Xunit.Sdk.XunitException("no open tab in the window.");
+                AutomationElement status = window.FindFirstDescendant(cf => cf.ByControlType(ControlType.StatusBar))
+                    ?? throw new Xunit.Sdk.XunitException("no status bar in the window.");
+                heights = (status.BoundingRectangle.Height, tab.BoundingRectangle.Height);
+                AssertAxeClean(process, name);
+            },
+            textScale);
+        return heights;
+    }
+
     /// <summary>#1763: the editor's selection in the launched app. It's the solid
     /// pair, drawn under the text, so the words stay readable on it.</summary>
     [Fact]

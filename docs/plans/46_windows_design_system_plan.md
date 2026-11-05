@@ -137,7 +137,7 @@ DS-0 settles these in the documents, so no later chunk has to.
 | A menu row's focus ring | `readme.md:176`, `review-2026-11.md:54`: full row width | WinUI rings the inset highlight | The inset highlight (DSD10) |
 | A tab's corner radius | `readme.md:101`, `winui-review.md:31`: 6 | `TabView.prompt.md`: 8 | 8, the component's own spec |
 | How far the focus ring sits out | `wpf-feasibility.md:89`: Fluent draws 3 out, the design says 1, so set `Margin="-1"` | `tokens/base.css:7`: a 2px outline offset 1. A `Rectangle` strokes inside its bounds, so Fluent's `-3` already has its inner edge 1 out | Fluent is right, and DS-0 corrects `wpf-feasibility.md:89`. `-1` would straddle the control's border |
-| Text size source | `xaml/README.md:164`: `UISettings` | `CanvasTextScaleService.cs:23-24`: the registry | The registry, pending the owner's check (DSD3) |
+| Text size source | `xaml/README.md:164`: `UISettings` | `CanvasTextScaleService.cs:23-24`: the registry | The registry (DSD3), confirmed by the owner's check on 2026-11-04 |
 | A note's Back and Forward | `NoteHeader.prompt.md:27`: `BrowseBack`, so a note history | `Commands/ChordTable.cs:1509`: the only history is the sidebar's | Left out for now (DSD15) |
 | An accent's contrast bar | `xaml/README.md:35-42`: WCAG, 4.5:1 for text | `ThemeTokenContrastTests.cs:18`: \|Lc\| > 75 for every text pair | The README's, for an accent. Gold stays at the floor (DSD14) |
 | Window title | Static "Slate" (`MainWindow.xaml:11`) | `ui_kits/slate-windows/index.html:61`: note, vault, Slate | The kit's (DSD9) |
@@ -161,7 +161,7 @@ plan first recommended, and their specs follow the owner's call.
 |---|---|---|---|
 | DSD1 | all | Everything here, or only what #1756 waits on? | Wave 1 first (DS-0 to DS-5), when the owner says: on 2026-11-03 they asked that it not start yet. It closes #1756's checks and makes every later template scale for free. Later waves one at a time, each when the owner says, because they change how the app works rather than how it looks |
 | DSD2 | DS-1 | Ship the fonts by linking `design/windows/fonts` or by copying them into the app? | Link. One copy in history instead of 3.6 MB twice. Costs one line in `windows.yml`'s path list |
-| DSD3 | DS-5 | Read Windows Text size from the registry or from `UISettings`? | The registry, with `SystemEvents.UserPreferenceChanged`, as `CanvasTextScaleService` already does. `UISettings` is a WinRT API with no projection under plain `net10.0-windows`, and the standard route, a versioned target framework, ships the projection of the whole Windows SDK (`Microsoft.Windows.SDK.NET.dll`, 24.9 MB, and `WinRT.Runtime.dll`) for one number. The owner's two-minute live check (§8) confirms it. If that shows the registry path misses a change, `UISettings` it is |
+| DSD3 | DS-5 | Read Windows Text size from the registry or from `UISettings`? | The registry, with `SystemEvents.UserPreferenceChanged`, as `CanvasTextScaleService` already does. `UISettings` is a WinRT API with no projection under plain `net10.0-windows`, and the standard route, a versioned target framework, ships the projection of the whole Windows SDK (`Microsoft.Windows.SDK.NET.dll`, 24.9 MB, and `WinRT.Runtime.dll`) for one number. The owner's two-minute live check (§8) confirms it. If that shows the registry path misses a change, `UISettings` it is. The check passed on 2026-11-04 |
 | DSD4 | DS-2 | Unset text goes from 12 to 14. Accept the whole shell growing? | Yes. It is the design's body size, and the reason to do it first is that everything after it is judged at the real size |
 | DSD5 | DS-4 | Menu rows at the recorded 40 pitch leave Workspace 1015 tall, past a 1080p screen's room once the taskbar and title bar are counted, so it scrolls | Keep 40, as decided on 2 November, and look at it in the launched app. If scrolling a menu feels wrong, 36 keeps the inset highlight and brings Workspace to about 915 |
 | DSD6 | DS-9 | Subtle icon buttons: 40 × 40 (`winui-review.md`) or 32 (the pattern prompts)? | 32 in panel toolbars and the note header, where the prompts are specific and the rows are 40. 40 × 40 with the 30 fill in the title bar |
@@ -371,9 +371,9 @@ document.
   the editor then takes Cascadia's natural line height.
 - **Ligatures may cost keystroke time.** There is no editor benchmark yet (W8-5).
   DS-1 records a stopwatch number in its PR, on a 1 MB note, against Consolas.
-- **The live Text size path is unproved.** The canvas has trusted it since W6-1, but
-  its facts call `RefreshForTests`. If the owner's check fails, DS-5 takes `UISettings`
-  and its 25 MB, per DSD3.
+- **The live Text size path was unproved.** The canvas had trusted it since W6-1, but
+  its facts called `RefreshForTests`. The owner's check passed on 2026-11-04, so DS-5
+  keeps the registry and doesn't take `UISettings` and its 25 MB.
 - **The design was built against a Web kit.** Some prompts describe behaviour the app
   already does differently and tests for (rail selection, tab close keys). A spec says
   which one stands; where it says nothing, today's tested behaviour does.

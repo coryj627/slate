@@ -844,9 +844,10 @@
                     <ColumnDefinition Width="520" />
                     <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
-                <StackPanel Grid.Column="1" Margin="0,56,0,32">
-                    <TextBlock Text="Welcome to Slate" Style="{DynamicResource Slate.TitleTextBlockStyle}" AutomationProperties.HeadingLevel="Level1" />
-                    <TextBlock Margin="0,8,0,24" Style="{DynamicResource Slate.BodyTextBlockStyle}" Foreground="{DynamicResource Slate.SecondaryTextBrush}" Text="Open a folder of Markdown files to start." />
+                <ScrollViewer Grid.Column="1" Focusable="False" VerticalScrollBarVisibility="Auto">
+                <StackPanel Margin="0,56,0,32">
+                    <TextBlock Text="Welcome to Slate" TextWrapping="Wrap" Style="{DynamicResource Slate.TitleTextBlockStyle}" AutomationProperties.HeadingLevel="Level1" />
+                    <TextBlock Margin="0,8,0,24" TextWrapping="Wrap" Style="{DynamicResource Slate.BodyTextBlockStyle}" Foreground="{DynamicResource Slate.SecondaryTextBrush}" Text="Open a folder of Markdown files to start." />
                     <!-- WB-9 (#1319, WD4): the welcome view holds the keys while a
                          vault opens; its status says what the open is doing. Pull,
                          not push (LiveSetting Off, as every readback here): a
@@ -893,7 +894,7 @@
                                             </MultiBinding>
                                         </AutomationProperties.Name>
                                         <StackPanel>
-                                            <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" />
+                                            <TextBlock Text="{Binding DisplayName}" TextWrapping="Wrap" FontWeight="SemiBold" />
                                             <TextBlock Text="{Binding Path}" Style="{DynamicResource Slate.CaptionTextBlockStyle}" Foreground="{DynamicResource Slate.SecondaryTextBrush}" TextTrimming="CharacterEllipsis" />
                                         </StackPanel>
                                     </Button>
@@ -902,6 +903,7 @@
                         </local:LayoutItemsControl>
                     </StackPanel>
                 </StackPanel>
+                </ScrollViewer>
             </local:AutomationLandmarkGrid>
 
             <local:AutomationLandmarkGrid x:Name="WorkspaceRoot"
@@ -955,6 +957,7 @@
                             Background="{DynamicResource Slate.SurfaceBrush}"
                             DataContext="{Binding FileSidebar}">
                         <local:FilesPanePanel Margin="10">
+                            <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                             <StackPanel>
                                 <DockPanel Margin="0,0,0,8" LastChildFill="False">
                                     <TextBlock Text="Files"
@@ -998,6 +1001,7 @@
                                     </Grid.ColumnDefinitions>
                                     <TextBox x:Name="SidebarFilterTextBox" local:FieldPrompt.IsEnabled="True"
                                              Grid.Column="0"
+                                             MinWidth="0"
                                              AutomationProperties.AutomationId="SidebarFilter"
                                              AutomationProperties.Name="Filter files"
                                              AutomationProperties.HelpText="{x:Static cmd:NavigationHelp.SidebarFilter}"
@@ -1045,17 +1049,19 @@
                                               AutomationProperties.AutomationId="SidebarGroupDates"
                                               IsChecked="{Binding GroupByDate}" />
                                 </WrapPanel>
-                                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-                                    <ToggleButton Content="Tags"
+                                <WrapPanel Margin="0,0,0,2">
+                                    <ToggleButton Margin="0,0,6,4"
+                                                  Content="Tags"
                                                   IsChecked="{Binding ShowTags}"
                                                   AutomationProperties.AutomationId="SidebarShowTags"
                                                   AutomationProperties.Name="Show tag tree" />
-                                    <ToggleButton Margin="6,0,0,0"
-                                                  Content="Dual pane"
+                                    <ToggleButton Margin="0,0,0,4"
                                                   IsChecked="{Binding IsDualPaneEnabled}"
                                                   AutomationProperties.AutomationId="SidebarDualPaneToggle"
-                                                  AutomationProperties.Name="Enable dual-pane files sidebar" />
-                                </StackPanel>
+                                                  AutomationProperties.Name="Enable dual-pane files sidebar">
+                                        <TextBlock Text="Dual pane" TextWrapping="Wrap" />
+                                    </ToggleButton>
+                                </WrapPanel>
                                 <!-- W7-7 PR 4 (#1247, R-5 as the owner amended it): a
                                      landing tree — keys that reach it go on to its
                                      selected tag, else its first tag UNSELECTED, whose
@@ -1082,6 +1088,7 @@
                                     </local:LandingTreeView.ItemContainerStyle>
                                 </local:LandingTreeView>
                             </StackPanel>
+                            </ScrollViewer>
                             <ScrollViewer Focusable="False"
                                           HorizontalScrollBarVisibility="Disabled"
                                           VerticalScrollBarVisibility="Auto">
@@ -1394,6 +1401,12 @@
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
+                            <!-- DS-5: the second row is the rail's when large text
+                                 leaves the leaf too little room beside it. -->
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="*" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
                             <!-- W4-2 (#734): the four link/structure leaves. The
                                  inactive bodies collapse (out of the UIA tree - the
                                  mac accessibilityHidden gating); collections live on
@@ -2597,6 +2610,7 @@
                                      DisplayMemberPath="Title"
                                      VirtualizingStackPanel.IsVirtualizing="False"
                                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                     local:RightPaneRail.IsEnabled="True"
                                      AutomationProperties.AutomationId="RightPaneLeaves"
                                      AutomationProperties.Name="Right pane panels">
                                 <!-- Explicit names: content-derived ListItem names
@@ -2681,6 +2695,7 @@
                              SelectedItem="{Binding SelectedRow, Mode=TwoWay}"
                              Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}"
                              MouseDoubleClick="QuickSwitcherResults_MouseDoubleClick"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                              AutomationProperties.AutomationId="QuickSwitcherResults" local:SiblingNames.NamePath="DisplayName" local:SiblingNames.DistinguisherPath="Path" local:SiblingNames.Noun="result"
                              AutomationProperties.Name="Quick Open results"
                              AutomationProperties.ItemStatus="{Binding ResultSummary}">
@@ -2694,10 +2709,16 @@
                             <DataTemplate>
                                 <Grid Margin="4">
                                     <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="180" />
+                                        <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
+                                    <!-- DS-5: the 180 this column always was, times the text
+                                         size. Two notes with one name differ by their paths,
+                                         so a long name has to leave them room. -->
                                     <local:AutomationPresentationTextBlock Text="{Binding DisplayName}"
+                                                                           Width="{Binding FontSize, RelativeSource={RelativeSource Self}, Converter={StaticResource QuickOpenNameWidthConverter}}"
+                                                                           Padding="0,0,8,0"
+                                                                           TextTrimming="CharacterEllipsis"
                                                                            FontWeight="SemiBold" />
                                     <local:AutomationPresentationTextBlock Grid.Column="1"
                                                                            Text="{Binding Path}"
@@ -2707,16 +2728,16 @@
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </local:AutomationVisibilityListBox>
-                    <DockPanel Grid.Row="2">
-                        <local:AutomationPresentationTextBlock Text="{Binding ResultSummary}"
+                    <WrapPanel Grid.Row="2">
+                        <local:AutomationPresentationTextBlock Text="{Binding ResultSummary}" TextWrapping="Wrap"
                                                                Margin="0,0,12,0"
                                                                Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}"
                                                                Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
-                        <local:AutomationPresentationTextBlock DockPanel.Dock="Right"
-                                                               Text="Enter open · Ctrl+Enter tab · Ctrl+Alt+Enter split · Esc close"
+                        <local:AutomationPresentationTextBlock Text="Enter open · Ctrl+Enter tab · Ctrl+Alt+Enter split · Esc close"
+                                                               TextWrapping="Wrap"
                                                                Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}"
                                                                Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
-                    </DockPanel>
+                    </WrapPanel>
                 </Grid>
             </local:AutomationLandmarkBorder>
             <!-- ==========================================================
@@ -2829,7 +2850,7 @@
                                     AutomationProperties.HelpText="Removes the tag filter and searches the whole vault." />
                             <local:AutomationPresentationTextBlock
                                     VerticalAlignment="Center"
-                                    Text="{Binding TagScopeName, StringFormat='Tag: {0}'}" />
+                                    Text="{Binding TagScopeName, StringFormat='Tag: {0}'}" TextWrapping="Wrap" />
                         </DockPanel>
                     </local:AutomationNamedRowBorder>
                     <Grid Grid.Row="2" Margin="0,8,0,0">
@@ -2845,6 +2866,7 @@
                                  Visibility="{Binding ShowsResultRows, Converter={StaticResource BooleanToVisibilityConverter}}"
                                  SelectionChanged="SearchOverlayResults_SelectionChanged"
                                  MouseDoubleClick="SearchOverlayResults_MouseDoubleClick"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                  AutomationProperties.AutomationId="SearchOverlayResults" local:SiblingNames.NamePath="AccessibleName" local:SiblingNames.DistinguisherPath="Path" local:SiblingNames.Noun="result"
                                  AutomationProperties.Name="Search results"
                                  AutomationProperties.ItemStatus="{Binding Summary}">
@@ -2859,6 +2881,7 @@
                                     <StackPanel Margin="4,2">
                                         <local:AutomationPresentationTextBlock
                                                 Text="{Binding Basename}"
+                                                TextWrapping="Wrap"
                                                 FontWeight="SemiBold" />
                                         <!-- Match emphasis. A WrapPanel, not the
                                              palette's horizontal StackPanel: the
@@ -2882,6 +2905,7 @@
                                                 <DataTemplate>
                                                     <local:AutomationPresentationTextBlock
                                                             Text="{Binding Text}"
+                                                            TextWrapping="Wrap"
                                                             FontSize="{DynamicResource Slate.FontSizeCaption}" FontFamily="{DynamicResource Slate.FontFamilySmall}" LineHeight="{DynamicResource Slate.LineHeightCaption}" LineStackingStrategy="BlockLineHeight"
                                                             Foreground="{DynamicResource Slate.SecondaryTextBrush}">
                                                         <local:AutomationPresentationTextBlock.Style>
@@ -2956,11 +2980,12 @@
                                                     Padding="8,4"
                                                     HorizontalAlignment="Stretch"
                                                     HorizontalContentAlignment="Left"
-                                                    Content="{Binding}"
                                                     Click="SearchOverlayRecentRow_Click"
                                                     GotKeyboardFocus="SearchOverlayRecentRow_GotKeyboardFocus"
                                                     AutomationProperties.Name="{Binding (AutomationProperties.Name), RelativeSource={RelativeSource AncestorType=ContentPresenter}}"
-                                                    AutomationProperties.HelpText="Runs this search again." />
+                                                    AutomationProperties.HelpText="Runs this search again.">
+                                                <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+                                            </Button>
                                         </DataTemplate>
                                     </local:LayoutItemsControl.ItemTemplate>
                                 </local:LayoutItemsControl>
@@ -3008,7 +3033,7 @@
                          source of truth; ItemStatus carries the UIA copy). -->
                     <local:AutomationPresentationTextBlock Grid.Row="3"
                             Margin="4,8,4,0"
-                            Text="{Binding Summary}"
+                            Text="{Binding Summary}" TextWrapping="Wrap"
                             Visibility="{Binding ShowsResultRows, Converter={StaticResource BooleanToVisibilityConverter}}"
                             Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                 </Grid>
@@ -3106,6 +3131,7 @@
                              VirtualizingPanel.IsVirtualizingWhenGrouping="True"
                              VirtualizingPanel.VirtualizationMode="Standard"
                              VirtualizingPanel.ScrollUnit="Pixel"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                              MouseDoubleClick="CommandPaletteResults_MouseDoubleClick"
                              AutomationProperties.AutomationId="CommandPaletteResults"
                              AutomationProperties.Name="Command results">
@@ -3135,7 +3161,7 @@
                             <GroupStyle>
                                 <GroupStyle.HeaderTemplate>
                                     <DataTemplate>
-                                        <TextBlock Text="{Binding Name}"
+                                        <TextBlock Text="{Binding Name}" TextWrapping="Wrap"
                                                    Margin="4,8,4,2"
                                                    FontWeight="SemiBold"
                                                    Foreground="{DynamicResource Slate.SecondaryTextBrush}"
@@ -3166,12 +3192,12 @@
                                                                                   Focusable="False">
                                             <local:AutomationPresentationItemsControl.ItemsPanel>
                                                 <ItemsPanelTemplate>
-                                                    <StackPanel Orientation="Horizontal" />
+                                                    <WrapPanel />
                                                 </ItemsPanelTemplate>
                                             </local:AutomationPresentationItemsControl.ItemsPanel>
                                             <local:AutomationPresentationItemsControl.ItemTemplate>
                                                 <DataTemplate>
-                                                    <local:AutomationPresentationTextBlock Text="{Binding Text}">
+                                                    <local:AutomationPresentationTextBlock Text="{Binding Text}" TextWrapping="Wrap">
                                                         <local:AutomationPresentationTextBlock.Style>
                                                             <Style TargetType="local:AutomationPresentationTextBlock">
                                                                 <Style.Triggers>
@@ -3189,8 +3215,7 @@
                                                 Text="{Binding DisabledReason}"
                                                 Visibility="{Binding IsUnavailable, Converter={StaticResource BooleanToVisibilityConverter}}"
                                                 Foreground="{DynamicResource Slate.SecondaryTextBrush}"
-                                                TextWrapping="Wrap"
-                                                MaxHeight="34" />
+                                                TextWrapping="Wrap" />
                                     </StackPanel>
                                     <local:AutomationPresentationTextBlock Grid.Column="1"
                                             Margin="12,0,0,0"
@@ -3214,7 +3239,7 @@
                                 Visibility="{Binding ShowsEmptyState, Converter={StaticResource BooleanToVisibilityConverter}}"
                                 AutomationProperties.Name="{Binding EmptyStateAccessibleName}">
                         <StackPanel>
-                        <local:AutomationPresentationTextBlock Text="{Binding EmptyStateTitle}"
+                        <local:AutomationPresentationTextBlock Text="{Binding EmptyStateTitle}" TextWrapping="Wrap"
                                                                FontWeight="SemiBold" />
                         <local:AutomationPresentationTextBlock Text="{Binding EmptyStateDetail}"
                                                                Foreground="{DynamicResource Slate.SecondaryTextBrush}"
@@ -3256,6 +3281,7 @@
                 <local:AutomationLandmarkBorder.Effect>
                     <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
                 </local:AutomationLandmarkBorder.Effect>
+                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <StackPanel>
                     <TextBlock Text="Add property"
                                Style="{DynamicResource Slate.SubtitleTextBlockStyle}"
@@ -3306,6 +3332,7 @@
                                 AutomationProperties.AutomationId="AddPropertyCancel" />
                     </StackPanel>
                 </StackPanel>
+                </ScrollViewer>
             </local:AutomationLandmarkBorder>
             <!-- ==========================================================
                  W4-4 (#736): the bulk-rename sheet. Default action is
@@ -3338,6 +3365,7 @@
                 <local:AutomationLandmarkBorder.Effect>
                     <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
                 </local:AutomationLandmarkBorder.Effect>
+                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -3389,7 +3417,7 @@
                         </StackPanel>
                     </Grid>
                     <StackPanel Grid.Row="2" Margin="0,8,0,0">
-                        <TextBlock Text="{Binding ProgressText}"
+                        <TextBlock Text="{Binding ProgressText}" TextWrapping="Wrap"
                                    Foreground="{DynamicResource Slate.SecondaryTextBrush}"
                                    Visibility="{Binding ProgressText, Converter={StaticResource NullToVisibilityConverter}}" />
                         <TextBlock Text="{Binding ErrorText}"
@@ -3399,7 +3427,7 @@
                     </StackPanel>
                     <TextBlock Grid.Row="3"
                                Margin="0,12"
-                               Text="{Binding EmptyStateText}"
+                               Text="{Binding EmptyStateText}" TextWrapping="Wrap"
                                Foreground="{DynamicResource Slate.SecondaryTextBrush}"
                                Visibility="{Binding ShowEmptyState, Converter={StaticResource BooleanToVisibilityConverter}}"
                                AutomationProperties.Name="{Binding EmptyStateText}" />
@@ -3407,9 +3435,10 @@
                                               Grid.Row="3"
                                               Margin="0,8"
                                               MinHeight="120"
+                                              MaxHeight="280"
                                               Visibility="{Binding ShowEmptyState, Converter={StaticResource InverseBooleanToVisibilityConverter}}" />
                     <TextBlock Grid.Row="4"
-                               Text="{Binding FooterText}"
+                               Text="{Binding FooterText}" TextWrapping="Wrap"
                                Foreground="{DynamicResource Slate.SecondaryTextBrush}"
                                AutomationProperties.AutomationId="BulkRenameFooter" />
                     <StackPanel Grid.Row="5"
@@ -3435,6 +3464,7 @@
                                 AutomationProperties.AutomationId="BulkRenameClose" />
                     </StackPanel>
                 </Grid>
+                </ScrollViewer>
             </local:AutomationLandmarkBorder>
 
             <!-- ==========================================================
@@ -3470,12 +3500,13 @@
                 <local:AutomationLandmarkBorder.Effect>
                     <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
                 </local:AutomationLandmarkBorder.Effect>
+                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <StackPanel>
                     <!-- An unresolved key is a real state, not an error
                          (contract 7): the sheet says so plainly rather
                          than showing empty fields. -->
                     <StackPanel Visibility="{Binding IsUnresolved, Converter={StaticResource BooleanToVisibilityConverter}}">
-                        <TextBlock Text="{Binding UnresolvedHeading}"
+                        <TextBlock Text="{Binding UnresolvedHeading}" TextWrapping="Wrap"
                                    FontWeight="SemiBold"
                                    AutomationProperties.HeadingLevel="Level2" />
                         <TextBlock Margin="0,6,0,0"
@@ -3504,6 +3535,7 @@
                              Background="Transparent"
                              MaxHeight="220"
                              Visibility="{Binding IsUnresolved, Converter={StaticResource InverseBooleanToVisibilityConverter}}"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                              AutomationProperties.AutomationId="CitationDetailsFields"
                              AutomationProperties.Name="{x:Static panels:CitationPhrase.DetailsFieldsLabel}">
                         <ListBox.ItemContainerStyle>
@@ -3515,6 +3547,7 @@
                             <DataTemplate>
                                 <StackPanel Margin="0,0,0,6">
                                     <local:AutomationPresentationTextBlock Text="{Binding Label}"
+                                                                           TextWrapping="Wrap"
                                                                            Style="{DynamicResource Slate.CaptionTextBlockStyle}"
                                                                            Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                                     <local:AutomationPresentationTextBlock x:Name="FieldValueText"
@@ -3526,7 +3559,7 @@
                                          text. Rendering all of them
                                          identically left the DOI
                                          readable but unreachable. -->
-                                    <TextBlock x:Name="FieldValueLink" Visibility="Collapsed">
+                                    <TextBlock x:Name="FieldValueLink" TextWrapping="Wrap" Visibility="Collapsed">
                                         <Hyperlink Command="{Binding DataContext.Workspace.OpenCitationLinkCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                    CommandParameter="{Binding LinkTarget}">
                                             <Run Text="{Binding Value, Mode=OneWay}" />
@@ -3576,6 +3609,7 @@
                                 AutomationProperties.HelpText="{Binding CloseHelp}" />
                     </StackPanel>
                 </StackPanel>
+                </ScrollViewer>
             </local:AutomationLandmarkBorder>
 
             <!-- ==========================================================
@@ -3608,17 +3642,18 @@
                 <local:AutomationLandmarkBorder.Effect>
                     <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
                 </local:AutomationLandmarkBorder.Effect>
+                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <StackPanel>
-                    <TextBlock Text="{Binding Heading}"
+                    <TextBlock Text="{Binding Heading}" TextWrapping="Wrap"
                                FontWeight="SemiBold"
                                AutomationProperties.HeadingLevel="Level2" />
                     <TextBlock Margin="0,6,0,0"
                                Text="{Binding Body}"
                                TextWrapping="Wrap" />
-                    <StackPanel Margin="0,12,0,0"
-                                HorizontalAlignment="Right"
-                                Orientation="Horizontal">
+                    <WrapPanel Margin="0,12,0,0"
+                               HorizontalAlignment="Right">
                         <Button x:Name="CitationSummaryWalkButton"
+                                Margin="0,0,8,4"
                                 Padding="10,4"
                                 Content="{Binding WalkActionText}"
                                 IsEnabled="{Binding CanWalkThrough}"
@@ -3626,14 +3661,15 @@
                                 AutomationProperties.AutomationId="CitationSummaryWalk"
                                 AutomationProperties.HelpText="{Binding WalkActionHelp}" />
                         <Button x:Name="CitationSummaryDismissButton"
-                                Margin="8,0,0,0"
+                                Margin="0,0,0,4"
                                 Padding="10,4"
                                 Content="{Binding DismissText}"
                                 Command="{Binding DataContext.Workspace.CloseCitationSummaryCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                 AutomationProperties.AutomationId="CitationSummaryDismiss"
                                 AutomationProperties.HelpText="{Binding DismissHelp}" />
-                    </StackPanel>
+                    </WrapPanel>
                 </StackPanel>
+                </ScrollViewer>
             </local:AutomationLandmarkBorder>
 
             <!-- ==========================================================
@@ -3664,8 +3700,9 @@
                 <local:AutomationLandmarkBorder.Effect>
                     <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
                 </local:AutomationLandmarkBorder.Effect>
+                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <StackPanel>
-                    <TextBlock Text="{Binding Heading}"
+                    <TextBlock Text="{Binding Heading}" TextWrapping="Wrap"
                                FontWeight="SemiBold"
                                AutomationProperties.HeadingLevel="Level2" />
                     <TextBlock Margin="0,6,0,0"
@@ -3676,6 +3713,7 @@
                              Margin="0,6,0,0"
                              MaxHeight="260"
                              ItemsSource="{Binding Paths}"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                              AutomationProperties.AutomationId="FilesCitingList"
                              AutomationProperties.Name="{Binding Heading}">
                         <ListBox.ItemContainerStyle>
@@ -3683,6 +3721,11 @@
                                 <Setter Property="AutomationProperties.Name" Value="{Binding}" />
                             </Style>
                         </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <local:AutomationPresentationTextBlock Text="{Binding}" TextWrapping="Wrap" />
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
                     </ListBox>
                     <StackPanel Margin="0,12,0,0"
                                 HorizontalAlignment="Right"
@@ -3694,6 +3737,7 @@
                                 AutomationProperties.AutomationId="FilesCitingClose" />
                     </StackPanel>
                 </StackPanel>
+                </ScrollViewer>
             </local:AutomationLandmarkBorder>
             <Border Background="Transparent"
                     Visibility="{Binding Workspace.DashboardEditorSheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
@@ -3717,9 +3761,10 @@
                     AutomationProperties.AutomationId="DashboardEditorSheet"
                     AutomationProperties.Name="{Binding Title}"
                     AutomationProperties.IsDialog="True">
+                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <DockPanel>
                     <TextBlock DockPanel.Dock="Top"
-                               Text="{Binding Title}"
+                               Text="{Binding Title}" TextWrapping="Wrap"
                                Style="{DynamicResource Slate.SubtitleTextBlockStyle}"
                                AutomationProperties.HeadingLevel="Level2" />
                     <!-- #1790: one label column, so the fields start together. -->
@@ -3746,7 +3791,7 @@
                                   Grid.Row="1"
                                   Grid.Column="1"
                                   Margin="6,10,0,0"
-                                  MinWidth="200"
+                                  MinWidth="120"
                                   ItemsSource="{Binding DataContext.Workspace.SavedQueries, RelativeSource={RelativeSource AncestorType=Window}}"
                                   DisplayMemberPath="Name"
                                   AutomationProperties.AutomationId="DashboardEditorQueryPicker" local:SiblingNames.NamePath="Name" local:SiblingNames.Noun="query"
@@ -3778,6 +3823,7 @@
                              Margin="0,10,0,0"
                              MaxHeight="280"
                              HorizontalContentAlignment="Stretch"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                              AutomationProperties.AutomationId="DashboardEditorSections"
                              AutomationProperties.Name="Dashboard sections">
                         <!-- R-4 (#1246): a section row is named by its query and
@@ -3791,14 +3837,14 @@
                         <ListBox.ItemTemplate>
                             <DataTemplate>
                                 <DockPanel Margin="0,2">
-                                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                                        <Button Content="Up" Click="DashboardEditorMoveUp_Click"
+                                    <WrapPanel DockPanel.Dock="Bottom" HorizontalAlignment="Right" Margin="0,4,0,0">
+                                        <Button Content="Up" Margin="0,0,4,0" Click="DashboardEditorMoveUp_Click"
                                                 AutomationProperties.Name="{Binding AutomationName, StringFormat=Move {0} up}" />
-                                        <Button Content="Down" Margin="4,0,0,0" Click="DashboardEditorMoveDown_Click"
+                                        <Button Content="Down" Margin="0,0,4,0" Click="DashboardEditorMoveDown_Click"
                                                 AutomationProperties.Name="{Binding AutomationName, StringFormat=Move {0} down}" />
-                                        <Button Content="Remove" Margin="4,0,0,0" Click="DashboardEditorRemoveSection_Click"
+                                        <Button Content="Remove" Click="DashboardEditorRemoveSection_Click"
                                                 AutomationProperties.Name="{Binding AutomationName, StringFormat=Remove {0}}" />
-                                    </StackPanel>
+                                    </WrapPanel>
                                     <!-- #1790: one label column, so the fields start together. -->
                                     <Grid>
                                         <Grid.ColumnDefinitions>
@@ -3810,7 +3856,7 @@
                                             <RowDefinition Height="Auto" />
                                             <RowDefinition Height="Auto" />
                                         </Grid.RowDefinitions>
-                                        <TextBlock Grid.ColumnSpan="2" Text="{Binding SavedQueryName}" FontWeight="SemiBold" />
+                                        <TextBlock Grid.ColumnSpan="2" Text="{Binding SavedQueryName}" TextWrapping="Wrap" FontWeight="SemiBold" />
                                         <TextBlock Grid.Row="1" Margin="0,2,0,0" Text="Heading:" VerticalAlignment="Center" />
                                         <TextBox Grid.Row="1"
                                                  Grid.Column="1"
@@ -3835,6 +3881,7 @@
                         </ListBox.ItemTemplate>
                     </ListBox>
                 </DockPanel>
+                </ScrollViewer>
             </local:AutomationLandmarkBorder>
             <Border Background="Transparent"
                     Visibility="{Binding Workspace.BaseQueryBuilderSheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
@@ -3858,13 +3905,15 @@
                     AutomationProperties.AutomationId="BaseQueryBuilderSheet"
                     AutomationProperties.Name="{Binding Title}"
                     AutomationProperties.IsDialog="True">
+                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <DockPanel>
                     <TextBlock DockPanel.Dock="Top"
-                               Text="{Binding Title}"
+                               Text="{Binding Title}" TextWrapping="Wrap"
                                Style="{DynamicResource Slate.SubtitleTextBlockStyle}"
                                AutomationProperties.HeadingLevel="Level2" />
-                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+                    <WrapPanel DockPanel.Dock="Bottom" HorizontalAlignment="Right" Margin="0,6,0,0">
                         <Button Content="Save to View"
+                                Margin="0,4,8,0"
                                 AutomationProperties.AutomationId="BuilderSaveToView"
                                 Click="BuilderSaveToView_Click">
                             <Button.Style>
@@ -3881,7 +3930,7 @@
                             </Button.Style>
                         </Button>
                         <Button Content="Update Saved Query"
-                                Margin="8,0,0,0"
+                                Margin="0,4,8,0"
                                 AutomationProperties.AutomationId="BuilderUpdateSavedQuery"
                                 Click="BuilderUpdateSavedQuery_Click">
                             <Button.Style>
@@ -3895,19 +3944,18 @@
                             </Button.Style>
                         </Button>
                         <Button Content="Save as Saved Query"
-                                Margin="8,0,0,0"
+                                Margin="0,4,8,0"
                                 AutomationProperties.AutomationId="BuilderSaveAsSavedQuery"
                                 Click="BuilderSaveAsSavedQuery_Click" />
                         <Button Content="Save as .base"
-                                Margin="8,0,0,0"
+                                Margin="0,4,8,0"
                                 AutomationProperties.AutomationId="BuilderSaveAsBase"
                                 Click="BuilderSaveAsBase_Click" />
                         <Button Content="Done"
-                                Margin="8,0,0,0"
+                                Margin="0,4,0,0"
                                 AutomationProperties.AutomationId="BuilderDone"
                                 Click="BuilderDone_Click" />
-                    </StackPanel>
-                    <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto">
+                    </WrapPanel>
                         <StackPanel>
                             <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                                 <TextBlock Text="Match:" VerticalAlignment="Center" />
@@ -3956,7 +4004,7 @@
                                     <DataTemplate>
                                         <StackPanel Margin="0,2">
                                             <DockPanel>
-                                                <TextBlock Text="{Binding Label}" MinWidth="70" VerticalAlignment="Center" />
+                                                <TextBlock Text="{Binding Label}" MinWidth="70" VerticalAlignment="Center" TextWrapping="Wrap" />
                                                 <Button DockPanel.Dock="Right"
                                                         Content="Remove"
                                                         Click="BuilderRemoveCondition_Click"
@@ -4063,8 +4111,8 @@
                                          AutomationProperties.Name="Saved query name" />
                             </StackPanel>
                         </StackPanel>
-                    </ScrollViewer>
                 </DockPanel>
+                </ScrollViewer>
             </local:AutomationLandmarkBorder>
             <!-- ==========================================================
                  W5-3 (#743): the template picker sheet. Focus lands per
@@ -4098,6 +4146,7 @@
                 <local:AutomationLandmarkBorder.Effect>
                     <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
                 </local:AutomationLandmarkBorder.Effect>
+                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <DockPanel>
                     <StackPanel DockPanel.Dock="Top">
                         <TextBlock Text="Choose a template"
@@ -4168,11 +4217,13 @@
                                     AutomationProperties.HelpText="Reloads templates for the same destination." />
                         </StackPanel>
                         <ListBox x:Name="TemplatePickerList"
+                                 MaxHeight="260"
                                  Visibility="{Binding IsAvailable, Converter={StaticResource BooleanToVisibilityConverter}}"
                                  ItemsSource="{Binding Rows}"
                                  BorderThickness="0"
                                  Background="Transparent"
                                  MouseDoubleClick="TemplatePickerList_MouseDoubleClick"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                  AutomationProperties.AutomationId="TemplatePickerList" local:SiblingNames.NamePath="AccessibleName" local:SiblingNames.Noun="template"
                                  AutomationProperties.Name="Templates">
                             <ListBox.ItemContainerStyle>
@@ -4193,7 +4244,7 @@
                                          every other row template does this). -->
                                     <StackPanel>
                                         <local:AutomationPresentationTextBlock
-                                                Text="{Binding Name}" FontWeight="SemiBold" />
+                                                Text="{Binding Name}" TextWrapping="Wrap" FontWeight="SemiBold" />
                                         <local:AutomationPresentationTextBlock
                                                 Text="{Binding Description}"
                                                 TextWrapping="Wrap"
@@ -4205,6 +4256,7 @@
                         </ListBox>
                     </Grid>
                 </DockPanel>
+                </ScrollViewer>
             </local:AutomationLandmarkBorder>
             <!-- ==========================================================
                  W5-3 (#743): the prompt/name flow sheet — one sheet, two
@@ -4237,6 +4289,7 @@
                 <local:AutomationLandmarkBorder.Effect>
                     <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
                 </local:AutomationLandmarkBorder.Effect>
+                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <Grid>
                     <DockPanel Visibility="{Binding IsPromptStep, Converter={StaticResource BooleanToVisibilityConverter}}">
                         <StackPanel DockPanel.Dock="Top">
@@ -4268,8 +4321,8 @@
                                     AutomationProperties.AutomationId="TemplatePromptsNext"
                                     AutomationProperties.HelpText="Continue to choose the new note's name. Enter." />
                         </StackPanel>
-                        <!-- Focusable=False on BOTH layout hosts: ScrollViewer
-                             and ItemsControl are Controls, whose Focusable
+                        <!-- Focusable=False on BOTH layout hosts, the sheet's
+                             ScrollViewer and this ItemsControl: both are Controls, whose Focusable
                              default is TRUE — the journey's axe scan caught
                              the ItemsControl as a focusable unnamed List (the
                              W4-5 class), and the red team caught the
@@ -4279,8 +4332,6 @@
                              W7-7 PR 3 (#1246, R-4): so are the item containers,
                              which NVDA read as "SlateWindows.Templates.
                              TemplatePromptFieldViewModel, data item". -->
-                        <ScrollViewer VerticalScrollBarVisibility="Auto"
-                                      Focusable="False">
                             <local:LayoutItemsControl x:Name="TemplateFlowPromptsList" local:SiblingNames.NamePath="Label" local:SiblingNames.Noun="field"
                                                       Focusable="False"
                                                       ItemsSource="{Binding PromptFields}">
@@ -4293,7 +4344,8 @@
                                     <DataTemplate>
                                         <StackPanel Margin="0,0,0,10">
                                             <local:AutomationPresentationTextBlock Margin="0,0,0,2"
-                                                    Text="{Binding Label}" />
+                                                    Text="{Binding Label}"
+                                                    TextWrapping="Wrap" />
                                             <TextBox Padding="6,4"
                                                      Text="{Binding Value, UpdateSourceTrigger=PropertyChanged}"
                                                      AutomationProperties.Name="{Binding (AutomationProperties.Name), RelativeSource={RelativeSource AncestorType=ContentPresenter}}" />
@@ -4301,7 +4353,6 @@
                                     </DataTemplate>
                                 </local:LayoutItemsControl.ItemTemplate>
                             </local:LayoutItemsControl>
-                        </ScrollViewer>
                     </DockPanel>
                     <DockPanel Visibility="{Binding IsNameStep, Converter={StaticResource BooleanToVisibilityConverter}}">
                         <StackPanel DockPanel.Dock="Top">
@@ -4337,6 +4388,7 @@
                             <local:AutomationPresentationTextBlock Margin="0,0,0,2" Text="New note name" />
                             <local:AutomationPresentationTextBlock Margin="0,0,0,4"
                                     Text="{Binding NameHint}"
+                                    TextWrapping="Wrap"
                                     Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                             <TextBox x:Name="TemplateFlowNameTextBox"
                                      Padding="6,4"
@@ -4354,6 +4406,7 @@
                         </StackPanel>
                     </DockPanel>
                 </Grid>
+                </ScrollViewer>
             </local:AutomationLandmarkBorder>
             <!-- ==========================================================
                  W5-4 (#744) F4: the Move-To folder picker — the keyboard-
@@ -4385,9 +4438,10 @@
                 <local:AutomationLandmarkBorder.Effect>
                     <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
                 </local:AutomationLandmarkBorder.Effect>
+                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <DockPanel>
                     <StackPanel DockPanel.Dock="Top">
-                        <TextBlock Text="{Binding Title}"
+                        <TextBlock Text="{Binding Title}" TextWrapping="Wrap"
                                    Style="{DynamicResource Slate.SubtitleTextBlockStyle}"
                                    AutomationProperties.HeadingLevel="Level2" />
                         <TextBlock Margin="0,4,0,8"
@@ -4431,12 +4485,14 @@
                          journey finding). -->
                     <ListBox x:Name="MoveToList"
                              MinHeight="48"
+                             MaxHeight="260"
                              Margin="0,8,0,0"
                              ItemsSource="{Binding Rows}"
                              SelectedItem="{Binding SelectedRow}"
                              BorderThickness="0"
                              Background="Transparent"
                              MouseDoubleClick="MoveToList_MouseDoubleClick"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                              AutomationProperties.AutomationId="MoveToList" local:SiblingNames.NamePath="AccessibleName" local:SiblingNames.DistinguisherPath="Place" local:SiblingNames.Noun="destination"
                              AutomationProperties.Name="Destination folders">
                         <ListBox.ItemContainerStyle>
@@ -4450,7 +4506,7 @@
                             <DataTemplate>
                                 <StackPanel>
                                     <local:AutomationPresentationTextBlock
-                                            Text="{Binding Label}" FontWeight="SemiBold" />
+                                            Text="{Binding Label}" TextWrapping="Wrap" FontWeight="SemiBold" />
                                     <local:AutomationPresentationTextBlock
                                             Text="{Binding Detail}"
                                             TextWrapping="Wrap"
@@ -4461,6 +4517,7 @@
                         </ListBox.ItemTemplate>
                     </ListBox>
                 </DockPanel>
+                </ScrollViewer>
             </local:AutomationLandmarkBorder>
 
             <local:AutomationLandmarkBorder x:Name="CanvasCardEditorOverlay"
@@ -4481,8 +4538,9 @@
                     AutomationProperties.AutomationId="CanvasCardEditorSheet"
                     AutomationProperties.Name="{Binding SheetName}"
                     AutomationProperties.IsDialog="True">
+                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <StackPanel>
-                    <TextBlock Text="{Binding Title}"
+                    <TextBlock Text="{Binding Title}" TextWrapping="Wrap"
                                FontWeight="SemiBold"
                                Margin="0,0,0,8" />
                     <TextBox local:FieldPrompt.IsEnabled="True" Text="{Binding Draft, UpdateSourceTrigger=PropertyChanged}"
@@ -4508,6 +4566,7 @@
                             AutomationProperties.AutomationId="CanvasInspectionClose"
                             AutomationProperties.Name="Close card text" />
                 </StackPanel>
+                </ScrollViewer>
             </local:AutomationLandmarkBorder>
             <local:AutomationLandmarkBorder x:Name="CanvasCardPickerOverlay"
                     KeyboardNavigation.DirectionalNavigation="Contained"
@@ -4527,8 +4586,9 @@
                     AutomationProperties.AutomationId="CanvasCardPickerSheet"
                     AutomationProperties.Name="{Binding SheetName}"
                     AutomationProperties.IsDialog="True">
+                <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <StackPanel>
-                    <TextBlock Text="{Binding Title}"
+                    <TextBlock Text="{Binding Title}" TextWrapping="Wrap"
                                FontWeight="SemiBold"
                                Margin="0,0,0,8" />
                     <TextBox x:Name="CanvasCardPickerFilterBox"
@@ -4538,8 +4598,8 @@
                              Margin="0,0,0,8" />
                     <ListBox ItemsSource="{Binding Rows}"
                              SelectedItem="{Binding SelectedRow}"
-                             DisplayMemberPath="Label"
                              MaxHeight="240"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                              AutomationProperties.AutomationId="CanvasCardPickerRows" local:SiblingNames.NamePath="Label" local:SiblingNames.Noun="card"
                              AutomationProperties.Name="{Binding RowsName}">
                         <!-- §G2 TG2-3 (IG2-48): a row's Status (the vault path for a
@@ -4551,8 +4611,14 @@
                                 <Setter Property="AutomationProperties.ItemStatus" Value="{Binding Status}" />
                             </Style>
                         </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <local:AutomationPresentationTextBlock Text="{Binding Label}" TextWrapping="Wrap" />
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
                     </ListBox>
                 </StackPanel>
+                </ScrollViewer>
             </local:AutomationLandmarkBorder>
 
             <local:AutomationLandmarkBorder x:Name="CanvasPromptOverlay"
@@ -4573,21 +4639,32 @@
                     AutomationProperties.AutomationId="CanvasPromptSheet"
                     AutomationProperties.Name="Canvas prompt"
                     AutomationProperties.IsDialog="True">
-                <StackPanel>
+                <!-- DS-5: the choices take what the title and Clear All Marks leave of the
+                     window, and scroll in it, so wrapped rows can't push the button off. -->
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
                     <TextBlock Text="{Binding Title}"
+                               TextWrapping="Wrap"
                                FontWeight="SemiBold"
                                Margin="0,0,0,8" />
                     <TextBox x:Name="CanvasPromptDraftBox"
+                             Grid.Row="1"
                              Text="{Binding Draft, UpdateSourceTrigger=PropertyChanged}"
                              Visibility="{Binding HasTextField, Converter={StaticResource BooleanToVisibilityConverter}}"
                              AutomationProperties.AutomationId="CanvasPromptDraft"
                              AutomationProperties.Name="Answer. Enter submits, Escape cancels." />
                     <ListBox x:Name="CanvasPromptChoicesList"
+                             Grid.Row="2"
                              ItemsSource="{Binding Choices}"
                              SelectedItem="{Binding SelectedChoice}"
-                             DisplayMemberPath="Name"
                              Focusable="{Binding HasRows}"
                              Visibility="{Binding HasTextField, Converter={StaticResource InverseBooleanToVisibilityConverter}}"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                              AutomationProperties.AutomationId="CanvasPromptChoices" local:SiblingNames.NamePath="Name" local:SiblingNames.Noun="choice"
                              AutomationProperties.Name="Choices. Enter submits; on the marks list Enter jumps and Delete unmarks.">
                         <!-- §G2 TG2-1 (IG2-47): a choice's Status rides the item's UIA
@@ -4602,8 +4679,14 @@
                                 <Setter Property="AutomationProperties.ItemStatus" Value="{Binding Status}" />
                             </Style>
                         </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <local:AutomationPresentationTextBlock Text="{Binding Name}" TextWrapping="Wrap" />
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
                     </ListBox>
                     <Button x:Name="CanvasPromptClearMarksButton"
+                            Grid.Row="3"
                             Content="Clear All Marks"
                             Command="{Binding DataContext.Workspace.CanvasPromptClearMarksCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                             Visibility="{Binding ShowsClearMarks, Converter={StaticResource BooleanToVisibilityConverter}}"
@@ -4611,7 +4694,7 @@
                             HorizontalAlignment="Left"
                             AutomationProperties.AutomationId="CanvasPromptClearMarks"
                             AutomationProperties.Name="Clear all marks" />
-                </StackPanel>
+                </Grid>
             </local:AutomationLandmarkBorder>
         </Grid>
     </DockPanel>

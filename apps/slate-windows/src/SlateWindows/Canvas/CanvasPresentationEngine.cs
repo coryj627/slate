@@ -134,6 +134,8 @@ internal sealed class CanvasPresentationEngine
 
     /// <summary>The owned services' revisions (D11, D13): a bump is a
     /// new state.</summary>
+    internal int TextScaleRevisionForTests => _textScaleRevision;
+
     internal void CommitTextScaleRevision(int revision)
     {
         AssertCommitThread();

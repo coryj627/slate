@@ -12,6 +12,7 @@ namespace SlateWindows;
 public partial class App : Application
 {
     private ThemeManager? _themeManager;
+    private TextScaleService? _textScale;
     private SingleInstanceCoordinator? _singleInstanceCoordinator;
     private MainWindow? _mainWindow;
 
@@ -54,6 +55,8 @@ public partial class App : Application
         // Explicit dictionaries instead of the still-experimental ThemeMode
         // API. ThemeManager also swaps both Fluent and Slate token layers on
         // live Windows Contrast transitions.
+        _textScale = new TextScaleService();
+        TextScaleService.Current = _textScale;
         _themeManager = new ThemeManager(this, ThemeManager.ReadSystemTheme());
 
         if (e.Args.Contains("--census-dpi-probe"))
@@ -157,6 +160,7 @@ public partial class App : Application
         _ = SidebarWriteJournal.Shared.WhenIdle().Wait(TimeSpan.FromSeconds(2));
         _singleInstanceCoordinator?.Dispose();
         _themeManager?.Dispose();
+        _textScale?.Dispose();
         base.OnExit(e);
     }
 

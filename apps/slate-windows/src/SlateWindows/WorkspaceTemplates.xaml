@@ -210,6 +210,8 @@
     <local:PixelGridLengthConverter x:Key="PixelGridLengthConverter" />
     <!-- What the rows leave: the tab strip, the rows' own header, the editor's margins, four of its 22px lines and the line under it, which is 280 here. CI measured 11 more, so it holds 40 in hand. -->
     <local:CappedShareConverter x:Key="PropertyRowsMaxHeightConverter" Reserve="320" Floor="80" Cap="280" />
+    <local:CappedShareConverter x:Key="PropertiesCardMaxHeightConverter" Reserve="150" Floor="120" Cap="100000" />
+    <local:CappedShareConverter x:Key="QuickOpenNameWidthConverter" Share="12.8572" />
     <local:CappedShareConverter x:Key="DualPaneListMaxHeightConverter" Share="0.5" Cap="150" />
     <local:IsNotNullConverter x:Key="IsNotNullConverter" />
     <local:SidebarSortModeLabelConverter x:Key="SidebarSortModeLabelConverter" />
@@ -488,13 +490,13 @@
                     </Style>
                 </ContentControl.Style>
             </ContentControl>
-            <StackPanel Grid.Column="2"
-                        Margin="8,0,0,0"
-                        Orientation="Horizontal"
-                        VerticalAlignment="Center">
+            <WrapPanel Grid.Column="2"
+                       Margin="8,0,0,0"
+                       VerticalAlignment="Center">
                 <!-- Row traversal: editor → Save → Revert (dirty
                      only) → Delete → validation error (§2.3). -->
-                <Button Padding="8,2"
+                <Button Margin="0,0,6,2"
+                        Padding="8,2"
                         Content="Save"
                         Command="{Binding CommitCommand}"
                         AutomationProperties.Name="{Binding SaveLabel}">
@@ -512,14 +514,14 @@
                         </Style>
                     </Button.Style>
                 </Button>
-                <Button Margin="6,0,0,0"
+                <Button Margin="0,0,6,2"
                         Padding="8,2"
                         Content="Revert"
                         Command="{Binding RevertCommand}"
                         Visibility="{Binding IsDirty, Converter={StaticResource BooleanToVisibilityConverter}}"
                         AutomationProperties.Name="{Binding RevertLabel}"
                         AutomationProperties.HelpText="{Binding RevertHint}" />
-                <Button Margin="6,0,0,0"
+                <Button Margin="0,0,0,2"
                         Padding="8,2"
                         Content="Delete"
                         Command="{Binding DeleteCommand}"
@@ -539,7 +541,7 @@
                         </Style>
                     </Button.Style>
                 </Button>
-            </StackPanel>
+            </WrapPanel>
             <TextBlock Grid.Row="1"
                        Grid.Column="1"
                        Grid.ColumnSpan="2"
@@ -572,8 +574,20 @@
                  the file). Shown in editing and reading modes;
                  collapsed until the per-tab VM attaches (markdown tabs
                  only). -->
-            <Expander Grid.Row="0"
-                      Margin="12,8,12,0"
+            <!-- DS-5: the card scrolls past what leaves the note a few lines of its own.
+                 Those lines and the tab strip are text, so the room follows the text's size. -->
+            <ScrollViewer Grid.Row="0"
+                          Focusable="False"
+                          VerticalScrollBarVisibility="Auto"
+                          local:WheelChain.IsEnabled="True"
+                          Visibility="{Binding Properties, Converter={StaticResource NullToVisibilityConverter}}">
+                <ScrollViewer.MaxHeight>
+                    <MultiBinding Converter="{StaticResource PropertiesCardMaxHeightConverter}" FallbackValue="395">
+                        <Binding Path="ActualHeight" RelativeSource="{RelativeSource AncestorType=TabControl}" />
+                        <Binding Path="FontSize" RelativeSource="{RelativeSource AncestorType=TabControl}" />
+                    </MultiBinding>
+                </ScrollViewer.MaxHeight>
+            <Expander Margin="12,8,12,0"
                       IsExpanded="{Binding Properties.IsExpanded, Mode=TwoWay}"
                       Visibility="{Binding Properties, Converter={StaticResource NullToVisibilityConverter}}"
                       AutomationProperties.AutomationId="PropertiesHeader"
@@ -585,14 +599,17 @@
                         <TextBlock VerticalAlignment="Center"
                                    Margin="0,0,16,0"
                                    FontWeight="SemiBold"
+                                   TextWrapping="Wrap"
                                    Text="{Binding Properties.HeaderText}"
                                    AutomationProperties.HeadingLevel="Level2" />
                         <Button Margin="0,2,8,2"
                                 MinHeight="28"
                                 Padding="8,2"
-                                Content="Rename property across the vault"
+                                AutomationProperties.Name="Rename property across the vault"
                                 AutomationProperties.AutomationId="PropertiesBulkRenameButton"
-                                Command="{Binding DataContext.Workspace.OpenBulkRenameSheetCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
+                                Command="{Binding DataContext.Workspace.OpenBulkRenameSheetCommand, RelativeSource={RelativeSource AncestorType=Window}}">
+                            <TextBlock Text="Rename property across the vault" TextWrapping="Wrap" />
+                        </Button>
                         <Button Margin="0,2,8,2"
                                 MinHeight="28"
                                 Padding="8,2"
@@ -611,17 +628,24 @@
                                TextWrapping="Wrap"
                                Visibility="{Binding Properties.LoadError, Converter={StaticResource NullToVisibilityConverter}}" />
                     <TextBlock Text="{Binding Properties.EmptyStateText}"
+                               TextWrapping="Wrap"
                                Foreground="{DynamicResource Slate.SecondaryTextBrush}"
                                Visibility="{Binding Properties.ShowEmptyState, Converter={StaticResource BooleanToVisibilityConverter}}"
                                AutomationProperties.Name="{Binding Properties.EmptyStateText}" />
                     <!-- Hugs small sets, scrolls internally past
-                         ~280px (mac parity), or past a third of a short
-                         pane, so the note keeps room for its text (#1795). -->
+                         ~280px (mac parity), or past what a short pane
+                         leaves once the note has room for its text (#1795).
+                         The room is text, so it follows the text's size. -->
                     <ScrollViewer Focusable="False"
-                                  MaxHeight="{Binding ActualHeight, RelativeSource={RelativeSource AncestorType=TabControl}, Converter={StaticResource PropertyRowsMaxHeightConverter}, FallbackValue=280}"
                                   VerticalScrollBarVisibility="Auto"
                                   HorizontalScrollBarVisibility="Disabled"
                                   Visibility="{Binding Properties.HasRows, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <ScrollViewer.MaxHeight>
+                            <MultiBinding Converter="{StaticResource PropertyRowsMaxHeightConverter}" FallbackValue="280">
+                                <Binding Path="ActualHeight" RelativeSource="{RelativeSource AncestorType=TabControl}" />
+                                <Binding Path="FontSize" RelativeSource="{RelativeSource AncestorType=TabControl}" />
+                            </MultiBinding>
+                        </ScrollViewer.MaxHeight>
                         <!-- W7-7 PR 3 (#1246, R-4's one-stop rule): a row's
                              container is layout. As a plain ItemsControl
                              container NVDA read "SlateWindows.Panels.
@@ -642,6 +666,7 @@
                     </ScrollViewer>
                 </StackPanel>
             </Expander>
+            </ScrollViewer>
             <local:SlateTextEditor x:Name="MarkdownEditor"
                                    Grid.Row="1"
                                    Margin="12"
@@ -654,7 +679,7 @@
                                    ShowLineNumbers="False"
                                    VerticalScrollBarVisibility="Auto"
                                    HorizontalScrollBarVisibility="Auto"
-                                   FontSize="{Binding EditorPreferences.FontSize}"
+                                   FontSize="{Binding EditorPreferences.EffectiveFontSize}"
                                    SpellingPreferences="{Binding EditorPreferences}"
                                    Background="{DynamicResource Slate.WindowBackgroundBrush}"
                                    Foreground="{DynamicResource Slate.TextBrush}"
@@ -688,7 +713,7 @@
                                     Margin="12"
                                     Padding="12"
                                     Model="{Binding Reading}"
-                                    FontSize="{Binding EditorPreferences.FontSize}"
+                                    FontSize="{Binding EditorPreferences.EffectiveFontSize}"
                                     Visibility="{Binding IsReadingVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
             <!-- W4-6 (#738): the .base tab body — same shared cell,
                  collapsed unless this tab IS a base, so UIA only ever
@@ -783,20 +808,20 @@
                                          AutomationProperties.Name="Preview content" />
                             </StackPanel>
                         </StackPanel>
-                        <StackPanel Grid.Row="2"
-                                    HorizontalAlignment="Right"
-                                    Orientation="Horizontal">
-                            <Button Margin="0,0,8,0"
+                        <WrapPanel Grid.Row="2"
+                                   HorizontalAlignment="Right">
+                            <Button Margin="0,0,8,4"
                                     Content="Open source"
                                     KeyboardNavigation.TabIndex="1"
                                     AutomationProperties.AutomationId="EditorPopoverOpenSource"
                                     Command="{Binding EditorInteractions.OpenPopoverSourceCommand}"
                                     Visibility="{Binding EditorInteractions.CanOpenPopoverSource, Converter={StaticResource BooleanToVisibilityConverter}}" />
-                            <Button Content="Close"
+                            <Button Margin="0,0,0,4"
+                                    Content="Close"
                                     KeyboardNavigation.TabIndex="0"
                                     AutomationProperties.AutomationId="EditorPopoverClose"
                                     Command="{Binding EditorInteractions.ClosePopoverCommand}" />
-                        </StackPanel>
+                        </WrapPanel>
                     </Grid>
                     </Border>
                 </local:EditorInteractionPopoverHost>

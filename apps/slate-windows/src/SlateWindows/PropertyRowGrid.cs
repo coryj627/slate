@@ -3,6 +3,7 @@
 
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 
 namespace SlateWindows;
 
@@ -11,7 +12,8 @@ namespace SlateWindows;
 /// buttons leave the value no width at all. Tab order stays the same either way.</summary>
 internal sealed class PropertyRowGrid : Grid
 {
-    /// <summary>Under this, side by side leaves the value too narrow to read.</summary>
+    /// <summary>Under this at the ramp's body size, side by side leaves the value too
+    /// narrow to read. It grows with the text (DS-5).</summary>
     internal const double StackBelow = 340;
 
     private bool _stacked;
@@ -19,7 +21,21 @@ internal sealed class PropertyRowGrid : Grid
     protected override void OnRenderSizeChanged(SizeChangedInfo sizeInfo)
     {
         base.OnRenderSizeChanged(sizeInfo);
-        bool stacked = sizeInfo.NewSize.Width < StackBelow;
+        Place(sizeInfo.NewSize.Width);
+    }
+
+    protected override void OnPropertyChanged(DependencyPropertyChangedEventArgs e)
+    {
+        base.OnPropertyChanged(e);
+        if (e.Property == TextElement.FontSizeProperty && IsLoaded)
+        {
+            Place(ActualWidth);
+        }
+    }
+
+    private void Place(double width)
+    {
+        bool stacked = width < StackBelow * (TextElement.GetFontSize(this) / TypeRamp.Body.Size);
         if (stacked == _stacked || Children.Count != 4)
         {
             return;

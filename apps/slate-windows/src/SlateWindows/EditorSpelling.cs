@@ -398,7 +398,8 @@ internal sealed class AvalonSpellingCoordinator : DocumentColorizingTransformer,
         PropertyChangedEventArgs e)
     {
         if (e.PropertyName is nameof(EditorPreferencesViewModel.IsSpellCheckEnabled)
-            or nameof(EditorPreferencesViewModel.FontSize))
+            or nameof(EditorPreferencesViewModel.FontSize)
+            or nameof(EditorPreferencesViewModel.EffectiveFontSize))
         {
             Schedule();
         }

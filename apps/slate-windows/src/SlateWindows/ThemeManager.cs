@@ -5,6 +5,7 @@ using System.IO;
 using System.Security;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Media;
 using Microsoft.Win32;
 
@@ -29,9 +30,7 @@ internal sealed class ThemeManager : IDisposable
         "pack://application:,,,/SlateWindows;component/Themes/";
 
     private readonly Application _application;
-    // DS-2: making unset text explicit stops it following Windows Text size through
-    // SystemFonts, so a reader at 225% keeps their size from here, read at startup.
-    private readonly double _textScale = Canvas.CanvasTextScaleService.ReadFactor();
+    private readonly TextScaleService? _textScale;
     private ResourceDictionary[] _resources = [];
     private SlateTheme _theme;
 
@@ -75,7 +74,13 @@ internal sealed class ThemeManager : IDisposable
     {
         _application = application;
         _theme = theme;
+        _textScale = TextScaleService.Current;
         ApplyResources();
+        if (_textScale is not null)
+        {
+            _textScale.Changed += OnTextScaleChanged;
+        }
+
         SystemParameters.StaticPropertyChanged += SystemParameters_StaticPropertyChanged;
         SystemEvents.UserPreferenceChanged += SystemEvents_UserPreferenceChanged;
     }
@@ -125,6 +130,7 @@ internal sealed class ThemeManager : IDisposable
 
         _ = LoadDictionary(SlateRoot + "Slate.Text.xaml");
         _ = LoadDictionary(SlateRoot + "Slate.Menus.xaml");
+        _ = LoadDictionary(SlateRoot + "Slate.Calendar.xaml");
         _ = LoadDictionary(SlateRoot + "Slate.SystemColors.xaml");
     }
 
@@ -141,9 +147,18 @@ internal sealed class ThemeManager : IDisposable
 
     public void Dispose()
     {
+        if (_textScale is not null)
+        {
+            _textScale.Changed -= OnTextScaleChanged;
+        }
+
         SystemParameters.StaticPropertyChanged -= SystemParameters_StaticPropertyChanged;
         SystemEvents.UserPreferenceChanged -= SystemEvents_UserPreferenceChanged;
     }
+
+    /// <summary>The ramp is always the first layer. Writing to it is what makes a change
+    /// live, and it isn't a theme change, so <see cref="ResourcesChanged"/> stays quiet.</summary>
+    private void OnTextScaleChanged() => TypeRamp.Apply(_resources[0], _textScale!.Factor);
 
     private void SystemEvents_UserPreferenceChanged(
         object sender,
@@ -229,6 +244,23 @@ internal sealed class ThemeManager : IDisposable
             slate[typeof(ToolTip)] = TypeRamp.StyleOn(toolTip, TypeRamp.Caption);
         }
 
+        // DS-5: Fluent fixes a calendar's labels at 14, and a date picker asks for its
+        // calendar's style by this key.
+        if (fluent["DatePickerCalendarStyle"] is Style calendar)
+        {
+            var scaled = new Style(typeof(Calendar), calendar);
+            scaled.Setters.Add(new Setter(
+                Calendar.CalendarItemStyleProperty,
+                LoadDictionary(SlateRoot + "Slate.Calendar.xaml")["Slate.CalendarItemStyle"]));
+            scaled.Setters.Add(new Setter(
+                Calendar.CalendarButtonStyleProperty,
+                CalendarButtonOn((Style)fluent["DefaultCalendarButtonStyle"], 70)));
+            scaled.Setters.Add(new Setter(
+                Calendar.CalendarDayButtonStyleProperty,
+                CalendarButtonOn((Style)fluent["DefaultCalendarDayButtonStyle"], 60)));
+            slate["DatePickerCalendarStyle"] = scaled;
+        }
+
         return highContrast
             ?
             [
@@ -249,9 +281,24 @@ internal sealed class ThemeManager : IDisposable
             ];
     }
 
+    /// <summary>Fluent's date button with the ramp's size, and its largest size, which it
+    /// gives at 14, following the text: a month's short name can be longer than three
+    /// letters.</summary>
+    private static Style CalendarButtonOn(Style fluent, double largestAtBody)
+    {
+        Style style = TypeRamp.StyleOn(fluent, TypeRamp.Body);
+        var largest = new CappedShareConverter { Share = largestAtBody / TypeRamp.Body.Size };
+        foreach (DependencyProperty cap in new[] { FrameworkElement.MaxWidthProperty, FrameworkElement.MaxHeightProperty })
+        {
+            style.Setters.Add(new Setter(cap, new Binding(nameof(Control.FontSize)) { RelativeSource = RelativeSource.Self, Converter = largest }));
+        }
+
+        return style;
+    }
+
     private void ApplyResources()
     {
-        ResourceDictionary[] layers = DictionariesFor(_theme, SystemParameters.HighContrast, _textScale);
+        ResourceDictionary[] layers = DictionariesFor(_theme, SystemParameters.HighContrast, TextScaleService.CurrentFactor);
 
         var dictionaries = _application.Resources.MergedDictionaries;
         foreach (ResourceDictionary previous in _resources)

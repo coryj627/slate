@@ -109,6 +109,15 @@ internal static class TypeRamp
             [SmallFamilyKey] = SmallFamily,
             [DisplayFamilyKey] = DisplayFamily,
         };
+        Apply(ramp, factor);
+        return ramp;
+    }
+
+    /// <summary>DS-5: writes the sizes into a ramp in place, so every dynamic resource
+    /// follows with no re-merge, and nothing that listens for a theme change rebuilds.
+    /// Straight multiplication, as the design says.</summary>
+    internal static void Apply(ResourceDictionary ramp, double factor)
+    {
         foreach (TypeRampStep step in Steps)
         {
             ramp[step.SizeKey] = step.Size * factor;
@@ -120,7 +129,5 @@ internal static class TypeRamp
             ramp[step.SizeKey] = step.Size * factor;
             ramp[step.LineHeightKey] = step.LineHeight * factor;
         }
-
-        return ramp;
     }
 }

@@ -1304,13 +1304,38 @@ public sealed class ContractsCitationCensus
         return text[start..end];
     }
 
+    /// <summary>Names the frozen contract records keep after the code moved on, because a
+    /// frozen record is append-only, with what each is called now. Plan 46's DS-5 made the
+    /// canvas's text scale service the app's.</summary>
+    internal static readonly IReadOnlyDictionary<string, string> RetiredNames = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["CanvasTextScaleService"] = "TextScaleService",
+    };
+
+    /// <summary>A retired name can't hide a typo: what replaced it has to exist, and it
+    /// has to be gone from the shell.</summary>
+    [Fact]
+    public void ARetiredNameHasGoneAndWhatReplacedItExists()
+    {
+        HashSet<string> declared = DeclaredNames();
+        string[] shell = Directory
+            .EnumerateFiles(SourceText.ShellSourceRoot(), "*.cs", SearchOption.AllDirectories)
+            .Where(file => !file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Select(File.ReadAllText).ToArray();
+        foreach ((string retired, string now) in RetiredNames)
+        {
+            Assert.Contains(now, declared);
+            Assert.DoesNotContain(shell, text => text.Contains(retired, StringComparison.Ordinal));
+        }
+    }
+
     /// <summary>Every name DECLARED in the shell and its test projects —
     /// types, members, locals-that-matter. Syntax only: resolving
     /// symbols would need a compilation, and what a citation needs is
     /// that the name is written down somewhere real.</summary>
     internal static HashSet<string> DeclaredNames()
     {
-        var names = new HashSet<string>(StringComparer.Ordinal);
+        var names = new HashSet<string>(RetiredNames.Keys, StringComparer.Ordinal);
         string[] roots =
         [
             Path.Combine(SourceText.RepoRoot(), "apps", "slate-windows", "src", "SlateWindows"),

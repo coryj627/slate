@@ -82,3 +82,33 @@ AT: NVDA at the seam's 2.25, a menu and a sheet. Sizes aren't spoken, so the exp
 ## Brief
 
 Read `Canvas/CanvasTextScaleService.cs`, `Canvas/CanvasRendererView.cs:30-40`, `Canvas/CanvasRendererView.cs:581-591`, `Graph/GraphDiagramView.cs:221-241`, `ThemeManager.cs:204-259`, `TypeRamp.cs` from DS-2, `EditorInteractions.cs:296-320`, `design/windows/xaml/README.md:162-166`. Move the service, add `TypeRamp.Apply` and wire it, add the editor's effective size and the launched seam. Facts first. Work through the fixed widths at 2.25 in the launched app. Hand the owner the two-minute check before asking to merge. Commit: `feat(windows): windows text size scales the whole shell, live, up to 225 percent`.
+
+## Notes from the build
+
+The owner's check passed on 2026-11-04, so the source stays the registry.
+
+A launched pass at the seam's 2.25, in the 1120 × 720 the app opens at, found what this spec didn't list:
+
+- **The right pane.** A rail that fits its labels took two thirds of a 320 pane, and the leaf wrapped a letter at a time. `RightPaneRail` puts the rail under the leaf when the leaf would have under eight ems. Item 6 stands: the pane's width stays what it was.
+- **Reserves and stacking widths.** The property rows' reserve, the properties card's reserve and `PropertyRowGrid.StackBelow` are figures at the body size, multiplied by the text size. The card scrolls past what leaves the note about three lines, which it didn't have at all.
+- **A drawn formula.** It's geometry at WPF-Math's fixed size, so it takes a `LayoutTransform` from the reader body's size. The document isn't rebuilt.
+- **The Files toolbar** scrolls in 60% of its pane. At 225% in a short window it was taller than all of it.
+- **Lists in sheets** don't scroll sideways. One that did measured its rows at any width, so nothing wrapped or trimmed, and text ended at the sheet's edge.
+- **The canvas filter's 160 stays.** A text box scrolls its own text and its prompt trims, as the other fields' do. The status bar's 180 holds a progress bar, not text.
+
+Codex's rounds went on to the window's 480 minimum at 225%, which the launched pass at 720 hadn't reached:
+
+- **Sheets scroll whole, and so does the welcome view.** A long subtitle can take all of a step's room, so a scroller round the field alone doesn't help, and a recent vault below the fold had nothing to reach it. Item 7's `MaxHeight` wasn't enough on its own.
+- **A list inside that scroller has a `MaxHeight`,** except Canvas Prompt's, whose star row already holds it. With an infinite height a star row realizes every row and pushes the sheet's buttons off the end.
+- **`WheelChain`** sits on the outer scroller, because an inner scroller takes the wheel even with nowhere to go. It leaves the wheel to an inner scroller that can move that way and otherwise takes it. What's in a popup keeps its own. A closed combo box under the pointer no longer steps its value, which it only did with focus inside it.
+- **Quick Open's name column** is 180 at the body size, multiplied by the text size, because an `Auto` column doesn't bound and a long name left its path no room.
+- **The calendar's buttons** take their `MaxWidth` and `MaxHeight` from their own text size, because Russian's month names clipped at Fluent's fixed caps. The calendar's frame is a copy of Fluent's `CalendarItem` template, `Themes/Slate.Calendar.xaml`, since the heading's size is inside it.
+- **Text a sheet binds wraps.** A hosted sheet has none of it to measure, so `ASheetsBoundTextWrapsOrTrims` reads it from the XAML. Titles, the tag scope chip and Bulk Rename's footer wrap now, and so does a recent search, in a button of its own. The launched pass found "Walk through citations" cut at its start beside Done, so that footer wraps, and `ASheetsButtonsHaveRoomForTheirBoundText` gives each such button text that long.
+- **Quick Open's footer is a `WrapPanel`.** Its error summary is a sentence, and it left the keys beside it 108 wide and 461 tall.
+- **Buttons side by side in a pane wrap.** A narrow split leaves a property row little more than a button's width. `APanesButtonsCanWrap` holds this for every pane.
+
+Left as they are, because they're the same at 100% with a long enough value: the Files filter's results scroll sideways, a closed combo box cuts a selection longer than itself, and a field's prompt trims.
+
+`CanvasTextScaleService` stays in the frozen canvas and graph contract records, which are append-only. `ContractsCitationCensus.RetiredNames` says what it's called now, and a fact holds that the new name exists and the old one is gone.
+
+A fact whose thread ends with a focused text box's text services still up can end the test host, because `msctf` tears them down by calling managed code after the runtime has let the thread go. The facts here shut their dispatchers down first. The hazard is wider than this file's: see #1826.
