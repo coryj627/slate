@@ -113,7 +113,7 @@ An overlay tints the text as well as the background, so no overlay that shows at
 
 Settings › Appearance › **Theme**: `Light` · `Dark` · `Use Windows setting` (default). The command palette has **Switch Theme…**, which opens a list of the same three choices with the current one checked. The title bar has no theme button.
 
-`ThemeManager` follows the Windows setting today. Only do that when the preference is `Use Windows setting`. For `Light` or `Dark`, ignore `AppsUseLightTheme` changes.
+`ThemeManager` follows the Windows setting only when the preference is `Use Windows setting`. For `Light` or `Dark`, it ignores `AppsUseLightTheme` changes. High Contrast still wins over all three. The preference lives in `preferences.json` on this device, under `theme`, and it's read before the first paint.
 
 ## Type ramp
 

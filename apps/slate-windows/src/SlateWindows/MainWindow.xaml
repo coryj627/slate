@@ -57,6 +57,7 @@
         <KeyBinding Key="F" Modifiers="Control" Command="{Binding FindInNoteChordCommand}" />
         <KeyBinding Key="G" Modifiers="Control" Command="{x:Static local:FindInNoteKeyRoute.FindNext}" />
         <KeyBinding Key="G" Modifiers="Control+Shift" Command="{x:Static local:FindInNoteKeyRoute.FindPrevious}" />
+        <KeyBinding Key="OemComma" Modifiers="Control" Command="{Binding OpenSettingsCommand}" />
         <KeyBinding Key="W" Modifiers="Control" Command="{Binding Workspace.CloseActiveTabCommand}" />
         <KeyBinding Key="F4" Modifiers="Control" Command="{Binding Workspace.CloseActiveTabCommand}" />
         <KeyBinding Key="T" Modifiers="Control" Command="{Binding Workspace.DuplicateTabCommand}" />
@@ -185,6 +186,9 @@
                         <DataTrigger Binding="{Binding Workspace.CanvasPromptSheet, Converter={StaticResource IsNotNullConverter}}" Value="True">
                             <Setter Property="IsEnabled" Value="False" />
                         </DataTrigger>
+                        <DataTrigger Binding="{Binding SettingsSheet, Converter={StaticResource IsNotNullConverter}}" Value="True">
+                            <Setter Property="IsEnabled" Value="False" />
+                        </DataTrigger>
                     </Style.Triggers>
                 </Style>
             </Menu.Style>
@@ -302,6 +306,11 @@
                               Command="{Binding FileSidebar.ClearRecentsCommand}" />
                 </MenuItem>
                 <Separator />
+                <MenuItem Header="S_ettings…"
+                          AutomationProperties.AutomationId="SettingsMenuItem"
+                          InputGestureText="{cmd:ChordText slate.settings.open}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
+                          Command="{Binding OpenSettingsCommand}" />
+                <Separator />
                 <MenuItem Header="E_xit" Command="{x:Static ApplicationCommands.Close}" />
             </MenuItem>
             <MenuItem Header="_Workspace"
@@ -348,6 +357,9 @@
                           AutomationProperties.AutomationId="WorkspaceToggleFilesSidebarMenuItem"
                           Command="{Binding Workspace.ToggleFilesSidebarCommand}" />
                 <MenuItem Header="Toggle Right _Pane" InputGestureText="{cmd:ChordText slate.view.toggleRightPane}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.ToggleRightPaneCommand}" />
+                <MenuItem Header="Switch T_heme…"
+                          AutomationProperties.AutomationId="SwitchThemeMenuItem"
+                          Command="{Binding SwitchThemeCommand}" />
                 <!-- W5-2 close-out (#742): slate.view.toggleSearch. mac
                      homes "Search Vault…" in Edit; Windows has no Edit
                      menu, and its view-section verbs live here beside
@@ -3169,9 +3181,9 @@
                              local:FieldPrompt.IsEnabled="True"
                              local:SearchGlyph.IsEnabled="True"
                                  AutomationProperties.AutomationId="CommandPaletteSearch"
-                             AutomationProperties.Name="Search commands"
+                             AutomationProperties.Name="{Binding SearchFieldName}"
                              Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}"
-                             AutomationProperties.HelpText="Up and Down move selection. Home, End, Page Up and Page Down jump. Enter runs the selected command. Escape closes the palette." />
+                             AutomationProperties.HelpText="{Binding SearchFieldHelp}" />
                     <!-- The two Visibility bindings on this list and on the
                          search box above are PRECAUTIONARY, matching the Quick
                          Open precedent. A round-2 mutation removed both and the
@@ -3219,6 +3231,7 @@
                                      become separate stops. -->
                                 <Setter Property="AutomationProperties.Name" Value="{Binding AccessibleName}" />
                                 <Setter Property="AutomationProperties.HelpText" Value="{Binding AccessibilityHint}" />
+                                <Setter Property="AutomationProperties.ItemStatus" Value="{Binding ItemStatus}" />
                                 <Style.Triggers>
                                     <!-- Unavailable rows stay visible, selectable and
                                          in the arrow cycle — only activation is
@@ -3251,10 +3264,20 @@
                             <DataTemplate>
                                 <Grid Margin="4,2">
                                     <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
-                                    <StackPanel Grid.Column="0">
+                                    <!-- DS-10: a choice's check. Every choice keeps its place,
+                                         so the labels line up; a command has no such column. -->
+                                    <local:AutomationPresentationTextBlock Width="16"
+                                            Margin="0,0,8,0"
+                                            VerticalAlignment="Center"
+                                            Text="{Binding ChoiceMark}"
+                                            FontFamily="{DynamicResource SymbolThemeFontFamily}"
+                                            FontSize="16"
+                                            Visibility="{Binding IsChoice, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                    <StackPanel Grid.Column="1">
                                         <!-- Match bolding. Segments always concatenate
                                              back to the whole label, so a hint-only
                                              match renders as one unbolded segment
@@ -3293,7 +3316,7 @@
                                                 Foreground="{DynamicResource Slate.SecondaryTextBrush}"
                                                 TextWrapping="Wrap" />
                                     </StackPanel>
-                                    <local:AutomationPresentationTextBlock Grid.Column="1"
+                                    <local:AutomationPresentationTextBlock Grid.Column="2"
                                             Margin="12,0,0,0"
                                             Text="{Binding HotkeyHint}"
                                             Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
@@ -3324,8 +3347,9 @@
                     </local:AutomationLandmarkGrid>
                     <local:AutomationPresentationTextBlock Grid.Row="3"
                             Margin="4,8,4,0"
-                            Text="Enter run · Esc close"
-                            Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
+                            Text="{Binding KeysHint}"
+                            Foreground="{DynamicResource Slate.SecondaryTextBrush}"
+                            TextWrapping="Wrap" />
                 </Grid>
             </local:AutomationLandmarkBorder>
             </Grid>
@@ -4785,6 +4809,128 @@
                             HorizontalAlignment="Left"
                             AutomationProperties.AutomationId="CanvasPromptClearMarks"
                             AutomationProperties.Name="Clear all marks" />
+                </Grid>
+            </local:AutomationLandmarkBorder>
+            </Grid>
+
+            <!-- DS-10 (#1811): Settings. The design's layout: its category list, and the open
+                 category's title, description and rows on the window's surface. No Save or
+                 Cancel: a change applies at once. -->
+            <Border Background="{DynamicResource Slate.ScrimBrush}"
+                    Visibility="{Binding SettingsSheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
+            <Grid MaxWidth="760" MaxHeight="600" Margin="24">
+            <Border Style="{DynamicResource Slate.OverlayShadow64}"
+                    Visibility="{Binding Visibility, ElementName=SettingsOverlay}" />
+            <local:AutomationLandmarkBorder x:Name="SettingsOverlay"
+                    KeyboardNavigation.DirectionalNavigation="Contained"
+                    Background="{DynamicResource Slate.WindowBackgroundBrush}"
+                    BorderBrush="{DynamicResource Slate.BorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    RenderOptions.ClearTypeHint="Enabled"
+                    Visibility="{Binding DataContext.SettingsSheet, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}"
+                    DataContext="{Binding SettingsSheet}"
+                    FocusManager.IsFocusScope="True"
+                    local:SheetKeyboardFence.IsEnabled="True"
+                    KeyboardNavigation.TabNavigation="Cycle"
+                    KeyboardNavigation.ControlTabNavigation="Cycle"
+                    KeyDown="SettingsOverlay_KeyDown"
+                    AutomationProperties.AutomationId="SettingsSheet"
+                    AutomationProperties.Name="Settings"
+                    AutomationProperties.IsDialog="True">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="240" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <DockPanel Grid.ColumnSpan="2">
+                        <Button x:Name="SettingsCloseButton"
+                                DockPanel.Dock="Right"
+                                Style="{DynamicResource Slate.SubtleIconButtonStyle}"
+                                Content="&#xE711;"
+                                Click="SettingsClose_Click"
+                                AutomationProperties.AutomationId="SettingsClose"
+                                AutomationProperties.Name="Close settings" />
+                        <TextBlock Margin="12,0"
+                                   VerticalAlignment="Center"
+                                   Text="Settings"
+                                   Style="{DynamicResource Slate.CaptionTextBlockStyle}" />
+                    </DockPanel>
+                    <ListBox x:Name="SettingsCategoriesList"
+                             Grid.Row="1"
+                             Margin="8,4,8,12"
+                             Background="Transparent"
+                             BorderThickness="0"
+                             ItemsSource="{Binding Categories}"
+                             SelectedItem="{Binding SelectedCategory}"
+                             KeyboardNavigation.TabNavigation="Once"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             AutomationProperties.AutomationId="SettingsCategories"
+                             AutomationProperties.Name="Settings categories">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem" BasedOn="{StaticResource Slate.PanelRowBase}">
+                                <Setter Property="AutomationProperties.Name" Value="{Binding Label}" />
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <local:AutomationPresentationTextBlock Margin="0,0,12,0"
+                                                                           VerticalAlignment="Center"
+                                                                           Text="{Binding Glyph}"
+                                                                           FontFamily="{DynamicResource SymbolThemeFontFamily}"
+                                                                           FontSize="20" />
+                                    <local:AutomationPresentationTextBlock Grid.Column="1"
+                                                                           VerticalAlignment="Center"
+                                                                           Text="{Binding Label}"
+                                                                           TextWrapping="Wrap" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <ScrollViewer x:Name="SettingsPage"
+                                  Grid.Row="1"
+                                  Grid.Column="1"
+                                  Focusable="False"
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  VerticalScrollBarVisibility="Auto">
+                        <StackPanel Margin="24,4,32,32">
+                            <TextBlock Text="{Binding SelectedCategory.Label}"
+                                       TextWrapping="Wrap"
+                                       Style="{DynamicResource Slate.SubtitleTextBlockStyle}"
+                                       AutomationProperties.HeadingLevel="Level2" />
+                            <TextBlock Margin="0,4,0,16"
+                                       MaxWidth="560"
+                                       HorizontalAlignment="Left"
+                                       Text="How Slate looks on this computer."
+                                       TextWrapping="Wrap"
+                                       Foreground="{DynamicResource Slate.SecondaryTextBrush}"
+                                       Style="{DynamicResource Slate.BodyTextBlockStyle}" />
+                            <local:SettingRow Label="Theme"
+                                              Description="Light, Dark, or what Windows uses.">
+                                <ComboBox x:Name="SettingsThemeComboBox"
+                                          MinWidth="180"
+                                          ItemsSource="{Binding ThemeOptions}"
+                                          SelectedItem="{Binding SelectedTheme}"
+                                          DisplayMemberPath="Label"
+                                          AutomationProperties.AutomationId="SettingsTheme">
+                                    <ComboBox.ItemContainerStyle>
+                                        <Style TargetType="ComboBoxItem" BasedOn="{StaticResource Slate.ComboRowBase}">
+                                            <Setter Property="AutomationProperties.Name" Value="{Binding Label}" />
+                                        </Style>
+                                    </ComboBox.ItemContainerStyle>
+                                </ComboBox>
+                            </local:SettingRow>
+                        </StackPanel>
+                    </ScrollViewer>
                 </Grid>
             </local:AutomationLandmarkBorder>
             </Grid>

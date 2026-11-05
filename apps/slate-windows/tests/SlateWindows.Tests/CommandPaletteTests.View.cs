@@ -35,6 +35,70 @@ public sealed partial class CommandPaletteTests
     /// restored its survivor and announced that too — two sentences for a
     /// change that owes none, the first naming a row the user never chose.
     /// </remarks>
+    /// <summary>DS-10: the rows' layout and automation events run in the operation that
+    /// publishes them, with no gap for TSF's lock to land in and run them itself, where a UIA
+    /// event and a client reading the field wait on each other (contract 28).</summary>
+    [Fact]
+    public void TheRowsAreLaidOutInTheOperationThatPublishesThem() => RunSta(() =>
+    {
+        Command[] commands = Enumerable.Range(0, 190)
+            .Select(index => Cmd($"slate.view.row{index:D3}", $"Row {index:D3}", CommandSection.View))
+            .ToArray();
+        using var host = new ShippedResultsList(commands);
+        host.Palette.Open();
+        host.Settle();
+        Assert.Empty(PendingLayout(host.List));
+
+        // A selection far below the fold, which its query keeps: its scroll comes after the
+        // rows, and is the last thing the publication changes.
+        host.Palette.SelectLast();
+        Assert.Empty(PendingLayout(host.List));
+        host.Palette.Query = "Row";
+
+        // With the inline lane the publication has run, and nothing has been pumped.
+        Assert.Equal("slate.view.row189", host.Palette.SelectedId);
+        Assert.Empty(PendingLayout(host.List));
+
+        // The scroll has happened: one the list had to defer leaves the row unrealized, and
+        // would dirty all this again later.
+        Assert.NotNull(host.List.ItemContainerGenerator.ContainerFromItem(host.Palette.SelectedRow));
+        PumpedDispatcher.Drain();
+        Assert.Empty(PendingLayout(host.List));
+
+        // A query nothing matches ends with no selection, so its rows are all it changes.
+        host.Palette.Query = "no such row";
+        Assert.Null(host.Palette.SelectedRow);
+        Assert.Empty(PendingLayout(host.List));
+    });
+
+    /// <summary>Everything in the list still waiting on a layout pass: a viewer's arrangement
+    /// can be pending while the list's own flags read valid.</summary>
+    private static string[] PendingLayout(DependencyObject root)
+    {
+        var pending = new List<string>();
+        void Walk(DependencyObject parent)
+        {
+            // Nothing lays out what's collapsed, so it never reads valid.
+            if (parent is UIElement { Visibility: not Visibility.Visible })
+            {
+                return;
+            }
+
+            if (parent is UIElement element && !(element.IsMeasureValid && element.IsArrangeValid))
+            {
+                pending.Add(element.GetType().Name);
+            }
+
+            for (int index = 0; index < System.Windows.Media.VisualTreeHelper.GetChildrenCount(parent); index++)
+            {
+                Walk(System.Windows.Media.VisualTreeHelper.GetChild(parent, index));
+            }
+        }
+
+        Walk(root);
+        return pending.ToArray();
+    }
+
     [Fact]
     public void TheShippedListAnnouncesOnlyTheViewModelsSelection() => RunSta(() =>
     {

@@ -32,9 +32,13 @@ internal sealed class ThemeManager : IDisposable
     private readonly Application _application;
     private readonly TextScaleService? _textScale;
     private ResourceDictionary[] _resources = [];
+    private string _preference;
     private SlateTheme _theme;
 
     internal static event EventHandler? ResourcesChanged;
+
+    /// <summary>The app's manager. <see langword="null"/> under test, which can't build one.</summary>
+    internal static ThemeManager? Current { get; private set; }
 
     private static readonly string[] RequiredSlateBrushKeys =
     [
@@ -70,10 +74,14 @@ internal sealed class ThemeManager : IDisposable
         "Slate.CodeFunctionBrush",
     ];
 
-    public ThemeManager(Application application, SlateTheme theme)
+    /// <param name="application">The application whose resources this owns.</param>
+    /// <param name="preference">DS-10: what the user chose, read before the first paint.</param>
+    public ThemeManager(Application application, string preference)
     {
         _application = application;
-        _theme = theme;
+        _preference = ThemeChoice.Normalize(preference);
+        _theme = ResolvePreference();
+        Current = this;
         _textScale = TextScaleService.Current;
         ApplyResources();
         if (_textScale is not null)
@@ -134,19 +142,20 @@ internal sealed class ThemeManager : IDisposable
         _ = LoadDictionary(SlateRoot + "Slate.SystemColors.xaml");
     }
 
-    public void SetTheme(SlateTheme theme)
+    /// <summary>DS-10: a new choice, applied at once.</summary>
+    public void SetPreference(string preference)
     {
-        if (_theme == theme)
-        {
-            return;
-        }
-
-        _theme = theme;
-        ApplyResources();
+        _preference = ThemeChoice.Normalize(preference);
+        ApplyPreference();
     }
 
     public void Dispose()
     {
+        if (ReferenceEquals(Current, this))
+        {
+            Current = null;
+        }
+
         if (_textScale is not null)
         {
             _textScale.Changed -= OnTextScaleChanged;
@@ -172,23 +181,26 @@ internal sealed class ThemeManager : IDisposable
             return;
         }
 
-        void RefreshSystemTheme()
-        {
-            SlateTheme next = ReadSystemTheme();
-            if (_theme != next)
-            {
-                _theme = next;
-                ApplyResources();
-            }
-        }
-
         if (_application.Dispatcher.CheckAccess())
         {
-            RefreshSystemTheme();
+            ApplyPreference();
         }
         else
         {
-            _ = _application.Dispatcher.InvokeAsync(RefreshSystemTheme);
+            _ = _application.Dispatcher.InvokeAsync(ApplyPreference);
+        }
+    }
+
+    private SlateTheme ResolvePreference() =>
+        ThemeChoice.Resolve(_preference, ReadSystemTheme() == SlateTheme.Dark);
+
+    private void ApplyPreference()
+    {
+        SlateTheme next = ResolvePreference();
+        if (_theme != next)
+        {
+            _theme = next;
+            ApplyResources();
         }
     }
 

@@ -98,5 +98,9 @@ public sealed partial class CommandPaletteTests
         public System.Windows.Input.ICommand ToggleSearchCommand { get; } = new RelayCommand(_ => { }, _ => true);
 
         public System.Windows.Input.ICommand FindInNoteCommand { get; } = new RelayCommand(_ => { }, _ => true);
+
+        public System.Windows.Input.ICommand OpenSettingsCommand { get; } = new RelayCommand(_ => { }, _ => true);
+
+        public System.Windows.Input.ICommand SwitchThemeCommand { get; } = new RelayCommand(_ => { }, _ => true);
     }
 }

@@ -131,6 +131,10 @@ public sealed class GraphNavigatorTests
 
         ICommand ISlateCommandHost.FindInNoteCommand => Inert;
 
+        ICommand ISlateCommandHost.OpenSettingsCommand => Inert;
+
+        ICommand ISlateCommandHost.SwitchThemeCommand => Inert;
+
         public void Dispose()
         {
             Workspace.Dispose();

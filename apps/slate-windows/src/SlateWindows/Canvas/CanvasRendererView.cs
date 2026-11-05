@@ -19,6 +19,8 @@ internal sealed class CanvasRendererView : FrameworkElement
 {
     private readonly CanvasPresentationEngine _engine;
     private TextScaleService? _textScale;
+    private bool _themeAttached;
+    private int _themeRevision;
     private readonly VisualCollection _visuals;
     private readonly DrawingVisual _cards;
     private readonly DrawingVisual _edges;
@@ -34,8 +36,16 @@ internal sealed class CanvasRendererView : FrameworkElement
         System.Windows.Automation.AutomationProperties.SetAutomationId(
             this, "CanvasVisualBoard");
         _engine = new CanvasPresentationEngine();
-        Loaded += (_, _) => AttachTextScale();
-        Unloaded += (_, _) => DetachTextScale();
+        Loaded += (_, _) =>
+        {
+            AttachTextScale();
+            AttachTheme();
+        };
+        Unloaded += (_, _) =>
+        {
+            DetachTextScale();
+            DetachTheme();
+        };
         _engine.StateInstalled += OnStateInstalled;
         _visuals = new VisualCollection(this);
         _edges = new DrawingVisual();
@@ -603,6 +613,36 @@ internal sealed class CanvasRendererView : FrameworkElement
         }
     }
 
+    /// <summary>DS-10: the visuals are painted from the theme's tokens at each install, so a
+    /// theme change installs a new state. The manager's event is static, so the subscription
+    /// lasts only while this is in the tree, as <c>GraphDiagramView</c>'s does.</summary>
+    private void AttachTheme()
+    {
+        if (!_themeAttached)
+        {
+            ThemeManager.ResourcesChanged += OnThemeChanged;
+            _themeAttached = true;
+        }
+    }
+
+    private void DetachTheme()
+    {
+        if (_themeAttached)
+        {
+            ThemeManager.ResourcesChanged -= OnThemeChanged;
+            _themeAttached = false;
+        }
+    }
+
+    private void OnThemeChanged(object? sender, EventArgs e)
+    {
+        // A board on another dispatcher, a test host's finished thread, isn't the audience.
+        if (Dispatcher.CheckAccess())
+        {
+            _engine.CommitThemeRevision(++_themeRevision);
+        }
+    }
+
     private void OnTextScaleChanged()
     {
         if (_textScale is { } service)
@@ -624,6 +664,7 @@ internal sealed class CanvasRendererView : FrameworkElement
         // draw into a detached view.
         _engine.Shutdown();
         DetachTextScale();
+        DetachTheme();
     }
 
     // --- The peer surface (§D D3): identity-stable, state-read -----------

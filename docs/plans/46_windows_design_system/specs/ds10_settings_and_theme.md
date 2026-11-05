@@ -62,6 +62,22 @@ AT: NVDA and Narrator pass on the new surface: open by chord and palette; hear t
 - [ ] The Windows preference is followed only under Use Windows setting.
 - [ ] The gate fact and the AT pass are recorded.
 
+## Notes from the build
+
+- **The palette's level runs through its one ranking path.** A command calls `CommandPaletteViewModel.OpenChoices`, and the choices become the snapshot core ranks. Input order is what an empty query keeps, so the design's order holds, and core's fuzzy match serves typing. The section core puts them in isn't shown: `CommandPaletteResultsPresenter` doesn't group a list of choices.
+- **A reader can't hear an item status from the search field.** Focus stays in the field, so the check mark and `ItemStatus` alone would say nothing. Core gained `PaletteChoicesOpened`, `PaletteChoiceSelected` and `PaletteChoiceFilterCount`, which is why this chunk touches `slate-core` and both hosts' corpus censuses.
+- **What NVDA doesn't read, the app says.** It doesn't read an in-window pane's name, so the sheet posts `SettingsSheetShown`, as Add Property posts its own. It's mostly silent on a closed combo box's change, heard in the spot and not fixed by anything in the combo, so a theme change posts `ThemeChosen`, wherever it's made. A reader who does hear the combo hears both.
+- **The menu's Switch Theme… opens the palette on the list,** with or without a vault, and Esc closes it. From a palette row, Esc goes back to the commands, on that row, with what was typed.
+- **Settings holds Control-chords itself.** The sheet's route sits ahead of the shell's, so nothing with Control held acts beneath it, and Alt stays out of it, because Alt+Down opens a combo's list. It holds no text yet; `TextEditingChords.Allows` is there for the search field a second category brings.
+- **A close button the spec doesn't list.** The design's sheet has one, and a pointer has no other way out: the app's scrims don't dismiss, which is the one difference from the design's `onMouseDown`.
+- **`MaxHeight` 600,** from `SettingsWindow.jsx:44`, beside the spec's "height to the window less margins", so the card doesn't fill a tall window.
+- **Theme's description is mine:** "Light, Dark, or what Windows uses." The design has none, and a row wants one line. So is the page's, "How Slate looks on this computer.", which also says the choice isn't a vault's.
+- **A non-editable `ComboBox` has no Value pattern.** A reader gets its value from the Selection pattern, and the gate facts read it there.
+- **A vault transition closes the sheet,** as it dismisses the palette. A second launch can open a vault with the sheet up, and the welcome view takes the keys on the way. A theme applies at once, so nothing's lost.
+- **The canvas now follows a live theme.** Its drawings held the brushes they were painted with until the next state installed, which Windows' own theme change had the same gap in. This is the first time it's a thing a user does on purpose.
+- **Opening the palette could freeze the app and NVDA for 68 seconds.** The record is in contract 28, with the fix and what wasn't found. A command that opens choices now hands them over only once it has succeeded: staged any earlier, a failure or an Esc left a level behind for the next command to trip on.
+- **What the pass in light found:** #1835 (a checked Dual pane button's text), and #1834 (a typed command name can run another command), which isn't a light finding but showed up there, and #1838 (a canvas group can paint over its members). #1836 and #1837 came from the AT pass. The title bar stays the system's until DS-12.
+
 ## Brief
 
 Read `ModalSurfaces.cs`, `ModalSurfaceTests.cs:1660-1745`, `MainWindow.xaml:3202-3284` (a sheet to copy), `SheetKeyboardFence.cs`, `AppPreferencesStore.cs`, `ThemeManager.cs:127-174`, `CommandPaletteViewModel.cs`, `SettingsLayout.prompt.md`, `SettingRow.prompt.md`, `SettingsWindow.jsx`. Build the preference, then the surface, then the commands, then the palette's level. Facts first. Commit: `feat(windows): settings has a surface, and appearance sets the theme`.

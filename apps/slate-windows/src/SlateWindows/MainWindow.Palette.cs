@@ -119,7 +119,8 @@ public partial class MainWindow
                 MoveTo: _viewModel.FileSidebar?.MoveToSheet is not null,
                 CanvasCardEditor: workspace?.CanvasCardEditorSheet is not null,
                 CanvasCardPicker: workspace?.CanvasCardPickerSheet is not null,
-                CanvasPrompt: workspace?.CanvasPromptSheet is not null);
+                CanvasPrompt: workspace?.CanvasPromptSheet is not null,
+                Settings: _viewModel.SettingsSheet is not null);
         }
     }
 
@@ -242,7 +243,7 @@ public partial class MainWindow
             switch (e.Key)
             {
                 case Key.Escape:
-                    palette.Dismiss();
+                    palette.BackOrDismiss();
                     e.Handled = true;
                     return;
                 case Key.Enter:

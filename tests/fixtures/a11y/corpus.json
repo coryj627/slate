@@ -930,6 +930,46 @@
     "text": "A structural operation is in progress."
   },
   {
+    "event": "PaletteChoicesOpened { prompt: \"Select a theme\", current: \"Dark\" }",
+    "priority": "medium",
+    "text": "Select a theme. Selected: Dark, current."
+  },
+  {
+    "event": "PaletteChoiceSelected { label: \"Dark\", is_current: true }",
+    "priority": "medium",
+    "text": "Selected: Dark, current"
+  },
+  {
+    "event": "PaletteChoiceSelected { label: \"Light\", is_current: false }",
+    "priority": "medium",
+    "text": "Selected: Light"
+  },
+  {
+    "event": "PaletteChoiceFilterCount { count: 0, query: \"zzz\" }",
+    "priority": "medium",
+    "text": "No choices match \"zzz\""
+  },
+  {
+    "event": "PaletteChoiceFilterCount { count: 1, query: \"li\" }",
+    "priority": "medium",
+    "text": "1 choice matching \"li\""
+  },
+  {
+    "event": "PaletteChoiceFilterCount { count: 2, query: \"t\" }",
+    "priority": "medium",
+    "text": "2 choices matching \"t\""
+  },
+  {
+    "event": "ThemeChosen { label: \"Light\" }",
+    "priority": "medium",
+    "text": "Theme: Light."
+  },
+  {
+    "event": "SettingsSheetShown",
+    "priority": "medium",
+    "text": "Settings"
+  },
+  {
     "event": "RecentSearchFocused { query: \"fox\" }",
     "priority": "medium",
     "text": "Recent search: fox"

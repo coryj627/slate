@@ -569,6 +569,9 @@ internal sealed partial class VaultLifecycleViewModel
         // the user cancels, an import in flight — left the vault open with
         // the palette already gone.
         _palette?.Dismiss();
+        // DS-10: Settings doesn't hold the keys through a transition either. A theme applies
+        // at once, so closing it loses nothing, and the welcome view is about to take focus.
+        CloseSettings();
         // The W5-1 vault-transition precedent, extended to search: a
         // direct A→B open bypasses CloseVault, and mac routes exactly
         // this path through closeSearchOverlay too (AppState.swift:9761,
@@ -803,6 +806,7 @@ internal sealed partial class VaultLifecycleViewModel
         // next vault open auto-presents it. Dismissed BEFORE the session
         // goes away, so the overlay cannot survive the gap.
         _palette?.Dismiss();
+        CloseSettings();
         // Search joins the same teardown (mac closeVault,
         // AppState.swift:11016-11017): overlay closed, retained query
         // cleared, while the session still exists.

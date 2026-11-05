@@ -255,6 +255,10 @@ internal static class ChordTable
         /// <summary>DS-7 (#1808): Windows only: the Mac's sidebar has no such state.</summary>
         public const string ToggleFilesSidebar = "slate.view.toggleFilesSidebar";
         public const string ToggleSearch = "slate.view.toggleSearch";
+
+        /// <summary>DS-10 (#1811): Windows only: the Mac has no theme setting.</summary>
+        public const string SwitchTheme = "slate.view.switchTheme";
+        public const string OpenSettings = "slate.settings.open";
         public const string ShowHistoryPanel = "slate.history.showPanel";
         public const string RefreshSyncDiagnostics = "slate.diagnostics.refreshSync";
 
@@ -803,6 +807,13 @@ internal static class ChordTable
             "⌥⌘I", "Ctrl+Alt+I"),
         Reg(Ids.ToggleFilesSidebar, "Toggle Files Sidebar", CommandSection.View,
             "Hide or show the Files sidebar."),
+        // DS-10 (#1811): the Settings sheet, with the Mac's label and chord, and the theme
+        // list. Neither needs a vault.
+        Reg(Ids.OpenSettings, "Settings…", CommandSection.Settings,
+            "Open Settings.",
+            "⌘,", "Ctrl+,"),
+        Reg(Ids.SwitchTheme, "Switch Theme…", CommandSection.View,
+            "Choose Light, Dark or the Windows setting."),
         // W5-2 close-out (#742): the vault-search overlay's toggle,
         // registered with mac's exact label and hint. The resolved
         // ICommand is UNGUARDED — mac's palette action calls

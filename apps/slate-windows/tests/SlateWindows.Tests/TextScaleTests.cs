@@ -473,6 +473,7 @@ public sealed partial class TextScaleTests
                 .Where(element => element.Name.LocalName is "TextBlock" or "AutomationPresentationTextBlock")
                 .Where(text => ((string?)text.Attribute("Text"))?.StartsWith("{Binding", StringComparison.Ordinal) == true)
                 .Where(text => (string?)text.Attribute("Text") != "{Binding HotkeyHint}")
+                .Where(text => !IsSymbolGlyph(text))
                 .Where(text => text.Attribute("TextWrapping") is null && text.Attribute("TextTrimming") is null)
                 .Select(text => $"{where}: {(string?)text.Attribute("Text")} at line {((System.Xml.IXmlLineInfo)text).LineNumber}"));
             offenders.AddRange(template.Descendants()
@@ -542,6 +543,10 @@ public sealed partial class TextScaleTests
         Assert.True(cut.Length == 0, $"{cut.Length} cut:\n" + string.Join('\n', cut));
     });
 
+    /// <summary>A bound glyph is one character of the symbol font, which keeps its size.</summary>
+    private static bool IsSymbolGlyph(XElement text) =>
+        ((string?)text.Attribute("FontFamily"))?.Contains("SymbolThemeFontFamily", StringComparison.Ordinal) == true;
+
     /// <summary>Text a sheet binds is as long as what it names: a tag's whole path, or a
     /// file's name in a title. A hosted sheet has none of it to measure, so each one says
     /// what it does with too little room. A key hint keeps a column of its own.</summary>
@@ -555,6 +560,7 @@ public sealed partial class TextScaleTests
             .Where(element => element.Name.LocalName is "TextBlock" or "AutomationPresentationTextBlock")
             .Where(text => ((string?)text.Attribute("Text"))?.StartsWith("{Binding", StringComparison.Ordinal) == true)
             .Where(text => (string?)text.Attribute("Text") != "{Binding HotkeyHint}")
+            .Where(text => !IsSymbolGlyph(text))
             .Where(text => text.Attribute("TextWrapping") is null && text.Attribute("TextTrimming") is null)
             .Select(text => $"{(string?)text.Attribute("Text")} at line {((System.Xml.IXmlLineInfo)text).LineNumber}")
             .ToArray();

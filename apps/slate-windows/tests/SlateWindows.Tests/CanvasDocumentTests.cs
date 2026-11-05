@@ -2889,6 +2889,12 @@ public sealed class CanvasDocumentTests : IDisposable
 
         public System.Windows.Input.ICommand FindInNoteCommand =>
             throw new NotSupportedException();
+
+        public System.Windows.Input.ICommand OpenSettingsCommand =>
+            throw new NotSupportedException();
+
+        public System.Windows.Input.ICommand SwitchThemeCommand =>
+            throw new NotSupportedException();
     }
 
     // --- B2: a disk change the shell made must reach the surface -----------
@@ -5633,6 +5639,55 @@ public sealed class CanvasDocumentTests : IDisposable
             ReferenceEquals(renderer.Engine.Current, parked),
             "a shut-down renderer's engine installed a late publication.");
         document.Shutdown();
+    });
+
+    /// <summary>DS-10: a theme can change with a board on screen, and its retained drawings
+    /// hold the brushes they were painted with until a new state installs.</summary>
+    [Fact]
+    public void AThemeChangeGivesTheBoardANewStateWhileItsLoaded() => RunSta(() =>
+    {
+        var renderer = new CanvasRendererView();
+
+        // The event is the whole process's, and other facts' editors listen on threads of
+        // their own, so this calls what this board has subscribed and nothing else.
+        void RaiseThemeChange()
+        {
+            var raise = (EventHandler?)typeof(ThemeManager)
+                .GetField(nameof(ThemeManager.ResourcesChanged), System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
+                .GetValue(null);
+            foreach (Delegate handler in raise?.GetInvocationList() ?? Array.Empty<Delegate>())
+            {
+                if (ReferenceEquals(handler.Target, renderer))
+                {
+                    ((EventHandler)handler)(null, EventArgs.Empty);
+                }
+            }
+        }
+
+        RaiseThemeChange();
+        Assert.Equal(0, renderer.Engine.ThemeRevisionForTests);
+
+        var window = new System.Windows.Window
+        {
+            Content = renderer,
+            ShowActivated = false,
+            ShowInTaskbar = false,
+            Width = 200,
+            Height = 200,
+            WindowStartupLocation = System.Windows.WindowStartupLocation.Manual,
+            Left = -20_000,
+            Top = -20_000,
+        };
+        window.Show();
+        PumpedDispatcher.Drain();
+        RaiseThemeChange();
+        Assert.Equal(1, renderer.Engine.ThemeRevisionForTests);
+
+        window.Close();
+        PumpedDispatcher.Drain();
+        RaiseThemeChange();
+        Assert.Equal(1, renderer.Engine.ThemeRevisionForTests);
+        renderer.Shutdown();
     });
 
     /// <summary>The board peer speaks its RATIFIED name (§D D3,

@@ -1121,6 +1121,33 @@ pub enum A11yEvent {
     PaletteCommandUnavailable {
         reason: String,
     },
+    /// DS-10: a command replaced the palette's rows with a list of choices.
+    /// The caret stays in the search field, so nothing else says the list
+    /// changed, and it opens on the current choice.
+    PaletteChoicesOpened {
+        prompt: String,
+        current: String,
+    },
+    /// DS-10: the selection moved in a list of choices. `is_current` is the
+    /// one the setting holds now, the check mark a reader can't see.
+    PaletteChoiceSelected {
+        label: String,
+        is_current: bool,
+    },
+    /// DS-10: `PaletteFilterCount` for a list of choices, which aren't
+    /// commands. `count == 0` is the no-match phrasing.
+    PaletteChoiceFilterCount {
+        count: u32,
+        query: String,
+    },
+    /// DS-10: a theme chosen. NVDA doesn't reliably speak a closed combo box's
+    /// change, so Settings posts this as well as the palette's list.
+    ThemeChosen {
+        label: String,
+    },
+    /// DS-10: the Settings sheet opened. NVDA doesn't read an in-window pane's
+    /// name, so the sheet says it, as `AddPropertySheetShown` does.
+    SettingsSheetShown,
     RecentSearchFocused {
         query: String,
     },
@@ -2393,6 +2420,28 @@ impl A11yEvent {
             },
             PaletteCommandNotFound { id } => format!("Command not found: {id}"),
             PaletteCommandUnavailable { reason } => reason.clone(),
+            PaletteChoicesOpened { prompt, current } => {
+                format!("{prompt}. Selected: {current}, current.")
+            }
+            PaletteChoiceSelected { label, is_current } => {
+                if *is_current {
+                    format!("Selected: {label}, current")
+                } else {
+                    format!("Selected: {label}")
+                }
+            }
+            PaletteChoiceFilterCount { count, query } => {
+                if *count == 0 {
+                    format!("No choices match \"{query}\"")
+                } else {
+                    format!(
+                        "{count} {} matching \"{query}\"",
+                        plural(*count, "choice", "choices")
+                    )
+                }
+            }
+            ThemeChosen { label } => format!("Theme: {label}."),
+            SettingsSheetShown => "Settings".to_owned(),
             RecentSearchFocused { query } => format!("Recent search: {query}"),
             QuickSwitcherCount { count, query } => match query {
                 None => format!("{count} recent {}", plural(*count, "file", "files")),
@@ -4687,6 +4736,34 @@ pub fn corpus() -> Vec<A11yEvent> {
         PaletteCommandUnavailable {
             reason: "A structural operation is in progress.".into(),
         },
+        PaletteChoicesOpened {
+            prompt: "Select a theme".into(),
+            current: "Dark".into(),
+        },
+        PaletteChoiceSelected {
+            label: "Dark".into(),
+            is_current: true,
+        },
+        PaletteChoiceSelected {
+            label: "Light".into(),
+            is_current: false,
+        },
+        PaletteChoiceFilterCount {
+            count: 0,
+            query: "zzz".into(),
+        },
+        PaletteChoiceFilterCount {
+            count: 1,
+            query: "li".into(),
+        },
+        PaletteChoiceFilterCount {
+            count: 2,
+            query: "t".into(),
+        },
+        ThemeChosen {
+            label: "Light".into(),
+        },
+        SettingsSheetShown,
         RecentSearchFocused {
             query: "fox".into(),
         },
@@ -7334,6 +7411,14 @@ mod tests {
             (High, "Save failed."),
             (High, "Command not found: slate.nope"),
             (High, "A structural operation is in progress."),
+            (Medium, "Select a theme. Selected: Dark, current."),
+            (Medium, "Selected: Dark, current"),
+            (Medium, "Selected: Light"),
+            (Medium, "No choices match \"zzz\""),
+            (Medium, "1 choice matching \"li\""),
+            (Medium, "2 choices matching \"t\""),
+            (Medium, "Theme: Light."),
+            (Medium, "Settings"),
             (Medium, "Recent search: fox"),
             (Medium, "2 recent files"),
             (Medium, "1 recent file"),
@@ -8031,6 +8116,60 @@ mod tests {
         );
     }
 
+    /// DS-10: a reader can't see the check mark, so the current choice says
+    /// so; and a list of themes isn't a list of commands.
+    #[test]
+    fn palette_choices_say_which_is_current_and_count_choices() {
+        assert_eq!(
+            A11yEvent::PaletteChoicesOpened {
+                prompt: "Select a theme".into(),
+                current: "Use Windows setting".into(),
+            }
+            .render(),
+            "Select a theme. Selected: Use Windows setting, current."
+        );
+        assert_eq!(
+            A11yEvent::PaletteChoiceSelected {
+                label: "Light".into(),
+                is_current: true,
+            }
+            .render(),
+            "Selected: Light, current"
+        );
+        assert_eq!(
+            A11yEvent::PaletteChoiceSelected {
+                label: "Light".into(),
+                is_current: false,
+            }
+            .render(),
+            "Selected: Light"
+        );
+        assert_eq!(
+            A11yEvent::PaletteChoiceFilterCount {
+                count: 1,
+                query: "da".into(),
+            }
+            .render(),
+            "1 choice matching \"da\""
+        );
+        assert_eq!(
+            A11yEvent::PaletteChoiceFilterCount {
+                count: 0,
+                query: "da".into(),
+            }
+            .render(),
+            "No choices match \"da\""
+        );
+        assert_eq!(
+            A11yEvent::ThemeChosen {
+                label: "Dark".into(),
+            }
+            .render(),
+            "Theme: Dark."
+        );
+        assert_eq!(A11yEvent::SettingsSheetShown.render(), "Settings");
+    }
+
     /// The committed §W-D corpus artifact (`tests/fixtures/a11y/corpus.json`)
     /// is generated FROM [`corpus()`] and pinned here: every entry is
     /// `{ "event": <Debug>, "priority": "medium"|"high", "text": <render> }`
@@ -8622,8 +8761,10 @@ mod tests {
             // VaultRescanFinishedUncounted, 222; plan 45 XB-9 (#1591) the
             // reading view's on-request math source, MathSourceSpoken, 223;
             // plan 44 WB-29a (#1525) the seven hot-exit events, 230;
-            // plan 46 DS-7 the Files sidebar's show and hide, 232.
-            232,
+            // plan 46 DS-7 the Files sidebar's show and hide, 232;
+            // plan 46 DS-10 the palette's choices, the chosen theme and the
+            // Settings sheet, 237.
+            237,
             "A11yEvent's top-level variant count moved; uniffi caps an enum at 256"
         );
     }

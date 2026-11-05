@@ -136,6 +136,7 @@ public partial class MainWindow : Window
         _viewModel.QuickSwitcherDismissed += ViewModel_QuickSwitcherDismissed;
         _viewModel.WorkspaceFocusBoundaryRequested += ViewModel_WorkspaceFocusBoundaryRequested;
         _viewModel.PropertyChanged += ViewModel_PropertyChanged;
+        _viewModel.SettingsOpenAdmission = TryClearTheWayForSettings;
         // WB-9 (#1296, the owner's call): a handoff parked behind a close
         // runs once the close has decided.
         _viewModel.WorkspaceCloseDecided += ExternalActivationHold_Ended;
@@ -507,6 +508,10 @@ public partial class MainWindow : Window
         else if (eventArgs.PropertyName == nameof(VaultLifecycleViewModel.FileSidebar))
         {
             ObserveFileSidebar(_viewModel.FileSidebar);
+        }
+        else if (eventArgs.PropertyName == nameof(VaultLifecycleViewModel.SettingsSheet))
+        {
+            SettingsSheet_Changed();
         }
         else
         {
@@ -1090,6 +1095,18 @@ public partial class MainWindow : Window
             return;
         }
 
+        // DS-10 (#1811): nothing with Control held acts beneath Settings, which holds no
+        // text a chord could edit yet, and the sheet's own Esc comes on the way back up.
+        // Alt stays out of it: Alt+Down opens a combo box's list.
+        if (_viewModel.SettingsSheet is not null)
+        {
+            e.Handled = IsUnderlyingShellShortcut(e.Key, modifiers)
+                || (modifiers.HasFlag(ModifierKeys.Control)
+                    && e.Key != Key.Tab
+                    && !TextEditingChords.Allows(e.Key, modifiers));
+            return;
+        }
+
         // §E TE-11e: the card editor sheet's ONE key. M8 carves the
         // editor OUT of the mode stack - Escape COMMITS here (the
         // sheet's own seam decides commit, no-change, or in-sheet
@@ -1619,6 +1636,8 @@ public partial class MainWindow : Window
             // spec §4 makes them a no-op under any modal surface — so the
             // sheet layer suppresses them on the way down.
             (Key.F6, ModifierKeys.None or ModifierKeys.Shift) => true,
+            // DS-10 (#1811): Settings is a KeyBinding, and opens over nothing but the shell.
+            (Key.OemComma, ModifierKeys.Control) => true,
             _ => false,
         };
     }
