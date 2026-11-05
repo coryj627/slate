@@ -466,7 +466,7 @@ public sealed class StatusBarAndPaneTogglesTests
         {
             (typeof(MainWindow).GetMethod("FocusFilter_Click", BindingFlags.NonPublic | BindingFlags.Instance)
                 ?? throw new InvalidOperationException("FocusFilter_Click is gone"))
-                .Invoke(host.Shell, [host.Shell, new RoutedEventArgs()]);
+                .Invoke(host.Shell, new object[] { host.Shell, new RoutedEventArgs() });
         }
 
         PumpedDispatcher.Drain();
@@ -485,7 +485,7 @@ public sealed class StatusBarAndPaneTogglesTests
 
         Assert.True(host.Workspace.RevealConnectionsRowFromSurface("a.md"));
 
-        Assert.Equal([("a.md", true)], revealed);
+        Assert.Equal(new[] { ("a.md", true) }, revealed);
     });
 
     [Fact]
@@ -500,7 +500,7 @@ public sealed class StatusBarAndPaneTogglesTests
 
         Assert.True(host.Workspace.RevealGraphRowFromSurface("a.md"));
 
-        Assert.Equal([("a.md", true)], revealed);
+        Assert.Equal(new[] { ("a.md", true) }, revealed);
     });
 
     /// <summary>A new note hands off to the tree's rename field, which a hidden pane

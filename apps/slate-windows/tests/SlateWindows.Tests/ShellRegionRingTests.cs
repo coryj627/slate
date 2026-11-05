@@ -39,25 +39,27 @@ public sealed class ShellRegionRingTests
     [Fact]
     public void AHiddenFilesSidebarDropsItsStop() =>
         Assert.Equal(
-            [
+            new[]
+            {
                 ShellRegionKind.MenuBar,
                 ShellRegionKind.TabBar,
                 ShellRegionKind.Editor,
                 ShellRegionKind.RightPaneContent,
                 ShellRegionKind.RightPaneRail,
                 ShellRegionKind.StatusBar,
-            ],
+            },
             ShellRegionRing.Ring(Full with { FilesVisible = false }));
 
     [Fact]
     public void BothPanesHiddenLeaveTheMenuTheEditorAndTheBar() =>
         Assert.Equal(
-            [
+            new[]
+            {
                 ShellRegionKind.MenuBar,
                 ShellRegionKind.TabBar,
                 ShellRegionKind.Editor,
                 ShellRegionKind.StatusBar,
-            ],
+            },
             ShellRegionRing.Ring(Full with { FilesVisible = false, RightPaneVisible = false }));
 
     /// <summary>F6 from the menu bar steps past it, and a press from a Files pane that
