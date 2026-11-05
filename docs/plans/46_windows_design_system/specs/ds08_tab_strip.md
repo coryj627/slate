@@ -58,3 +58,23 @@ AT: NVDA and Narrator, arrow across tabs (names and "Unsaved changes" unchanged)
 ## Brief
 
 Read `WorkspaceTemplates.xaml:260-275`, `:842-926`, `MainWindow.ShellRegions.cs:95`, `TabView.prompt.md`, `Commands/ChordTable.cs:737`. Replace the template and header, keep every `AutomationProperties` line. Add the two keys. Facts first. Commit: `feat(windows): the tab strip is the design's tab view, and a focused tab closes on delete or ctrl+f4`.
+
+## Notes from the build
+
+**The strip's offset is the panel's.** The panel's margin is `8,4,8,-1`, and each row is 32: the first row is 36 from the top with the rule, and a second adds 32.
+
+**The panel packs its rows.** The spec keeps `TabPanel`'s wrapping, but `TabPanel` stretches a wrapped row's cells, so a tab's 240 limit left gaps, and the open tab's flares and its neighbours' dividers stopped meeting. `TabStripPanel` derives from it, so the F6 ring still reads it as the tab bar, packs each row from the left, and keeps the open tab's row next to the note.
+
+**A tab's floor gives way to a narrower strip.** A split can share out as little as 15%, which is narrower than a tab, and a tab past the strip's edge would hide its close button. So the panel holds the floor of 100, lowered to the strip's width, and the header docks the close button first, so a narrow tab loses its title and icon before it loses that. A reader walks visual order, which follows `ZIndex`, so `ZIndex` keeps the order it's always heard: the title, the dirty marker, then the close button.
+
+**An empty pane has no strip.** A `MinHeight` would have left a blank band above the hint, so the panel collapses with no tabs. DS-19 draws that pane.
+
+**The border is beside the header, not around it,** because its top edge would make the tab 33 with the close button's 32.
+
+**The divider is on a tab's left edge, overlapping its neighbour by one.** The open tab is drawn above its neighbours, so it covers the ones beside it without any tab knowing which is open, and the panel marks a row's first tab, which has nothing to divide itself from.
+
+**Ctrl+W and Ctrl+F4 stop at every modal surface,** ahead of the surfaces' own key routes. Ctrl+W had this gap before DS-8: both are bare `KeyBinding`s, and closing a canvas tab retires the document its card editor holds a draft for.
+
+**The canvas icon is ours.** The design has none, so it's `ECA5` (Tiles). A graph is `E9E9` and a Base `E8A9`, as the design's right pane has them. A saved query is `E71C`, and a dashboard is `E9D2`, by the same list.
+
+**Delete has a scope of its own,** `ChordScope.TabStrip`, because two surface rows on one chord need different scopes, and its route is `TabStrip_PreviewKeyDown`. Ctrl+F4 is a row of its own, because a command row carries one chord.

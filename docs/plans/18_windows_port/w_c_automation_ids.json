@@ -2671,6 +2671,16 @@
   },
   {
     "Source": "WorkspaceTemplates.xaml",
+    "Expression": "Chrome",
+    "Surface": "Workspace tabs"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "Divider",
+    "Surface": "Workspace tabs"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
     "Expression": "EditorActivateAtCursor",
     "Surface": "Editor semantic menu and popover"
   },
@@ -2701,6 +2711,26 @@
   },
   {
     "Source": "WorkspaceTemplates.xaml",
+    "Expression": "FlareLeft",
+    "Surface": "Workspace tabs"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "FlareRight",
+    "Surface": "Workspace tabs"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "HeaderPanel",
+    "Surface": "Workspace tabs"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "Indicator",
+    "Surface": "Workspace tabs"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
     "Expression": "PART_Header",
     "Surface": "Files tree"
   },
@@ -2708,6 +2738,11 @@
     "Source": "WorkspaceTemplates.xaml",
     "Expression": "MarkdownEditor",
     "Surface": "Editor document"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "PART_SelectedContentHost",
+    "Surface": "Workspace tabs"
   },
   {
     "Source": "WorkspaceTemplates.xaml",

@@ -1029,6 +1029,16 @@ public partial class MainWindow : Window
 
         ModifierKeys modifiers = Keyboard.Modifiers;
 
+        // DS-8 (#1809): a tab's close chords are bare KeyBindings, which no surface stops by
+        // itself, so a clean tab would close, or a dirty tab prompt, behind it. Ahead of the
+        // surfaces' own routes, some of which return without looking at a modified key, and
+        // closing the tab would retire the document a canvas card editor holds a draft for.
+        if (OpenModalSurface is not null && modifiers == ModifierKeys.Control && e.Key is Key.W or Key.F4)
+        {
+            e.Handled = true;
+            return;
+        }
+
         // The palette is modal: while it is open it owns the keyboard, so
         // no shell chord fires underneath it. Placed ahead of Quick Open
         // because the two overlays are mutually exclusive and the palette
@@ -1390,6 +1400,12 @@ public partial class MainWindow : Window
             return;
         }
 
+        TabStrip_PreviewKeyDown(e);
+        if (e.Handled)
+        {
+            return;
+        }
+
         // W5-4 (F6, FD-4): tree-scoped Delete — the selection verb with
         // Finder-parity confirmation staging. Imperative like F2-rename:
         // a KeyBinding would eat Delete inside the editor and every
@@ -1578,7 +1594,7 @@ public partial class MainWindow : Window
         return (key, modifiers) switch
         {
             (Key.O, ModifierKeys.Control or ModifierKeys.Control | ModifierKeys.Shift) => true,
-            (Key.S or Key.W or Key.T, ModifierKeys.Control) => true,
+            (Key.S or Key.W or Key.T or Key.F4, ModifierKeys.Control) => true,
             (Key.T, ModifierKeys.Control | ModifierKeys.Shift) => true,
             (Key.Oem5, ModifierKeys.Control or ModifierKeys.Control | ModifierKeys.Alt) => true,
             (Key.OemOpenBrackets or Key.OemCloseBrackets,
@@ -1711,6 +1727,22 @@ public partial class MainWindow : Window
     /// Escape. The <c>windows.sidebarFilter.clear</c> chord row
     /// (<c>ChordScope.SidebarFilter</c>); the field's HelpText speaks it
     /// (contract 39 N-1).</summary>
+    private void TabStrip_PreviewKeyDown(KeyEventArgs e)
+    {
+        // DS-8 (#1809): Delete on a focused tab closes it, through the close button's
+        // command, so an unsaved tab's prompt runs the same way. Imperative for the same
+        // reason as the Files tree's: a KeyBinding would eat Delete in the editor.
+        ModifierKeys modifiers = Keyboard.Modifiers;
+        if (e.Key == Key.Delete && modifiers == ModifierKeys.None
+            && OpenModalSurface is null
+            && Keyboard.FocusedElement is TabItem { DataContext: WorkspaceTabViewModel focused }
+            && _viewModel.Workspace is WorkspaceViewModel workspace)
+        {
+            workspace.CloseTabCommand.Execute(focused);
+            e.Handled = true;
+        }
+    }
+
     private void SidebarFilterTextBox_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         ModifierKeys modifiers = Keyboard.Modifiers;
