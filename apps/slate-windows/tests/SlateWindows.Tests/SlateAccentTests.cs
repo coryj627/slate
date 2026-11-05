@@ -124,6 +124,7 @@ public sealed class SlateAccentTests
     [InlineData(false, nameof(AccentPalette.Dark1), "#C8C8C8", "Slate.AccentColor on Slate.SurfaceColor")]
     [InlineData(false, nameof(AccentPalette.Dark1), "#C8C8C8", "Slate.AccentIndicatorColor on Slate.SurfaceColor")]
     [InlineData(false, nameof(AccentPalette.Dark1), "#C8C8C8", "Slate.AccentIndicatorColor on Slate.SelectedSurfaceColor")]
+    [InlineData(false, nameof(AccentPalette.Dark1), "#8C8C8C", "Slate.AccentIndicatorColor on Slate.SelectedSurfaceColor")]
     [InlineData(false, nameof(AccentPalette.Accent), "#FFFFA0", "Slate.ReadingSelectionColor off Slate.SurfaceColor")]
     [InlineData(false, nameof(AccentPalette.Accent), "#FFFFFF", "Slate.ReadingSelectionColor off Slate.RaisedSurfaceColor")]
     [InlineData(true, nameof(AccentPalette.Light2), "#003E92", "Slate.TextOnAccentColor on Slate.AccentColor")]
@@ -263,9 +264,10 @@ public sealed class SlateAccentTests
             SelectedIndex = 0,
         };
         var dropdown = new ComboBoxItem { Style = (Style)Style("Slate.ComboRowBase"), Content = "A choice", IsSelected = true };
-        var tree = new TreeViewItem { Style = (Style)Style("Slate.TreeRowBase"), Header = "A file", IsSelected = true };
+        var highlighted = new HighlightedComboBoxItem { Style = (Style)Style("Slate.ComboRowBase"), Content = "Another choice" };
+        var tree =new TreeViewItem { Style = (Style)Style("Slate.TreeRowBase"), Header = "A file", IsSelected = true };
         var toggle = new ToggleButton { Style = (Style)Style("Slate.SubtleIconToggleButtonStyle"), Content = "A", IsChecked = true };
-        host.Shell.Content = new StackPanel { Children = { cell, list, dropdown, new TreeView { Items = { tree } }, toggle } };
+        host.Shell.Content = new StackPanel { Children = { cell, list, dropdown, highlighted, new TreeView { Items = { tree } }, toggle } };
         host.Settle();
 
         Color selected = Assert.IsType<SolidColorBrush>(host.Shell.FindResource("Slate.SelectedSurfaceBrush")).Color;
@@ -275,6 +277,7 @@ public sealed class SlateAccentTests
             ("a grid cell", cell),
             ("a panel row", Assert.IsType<ListBoxItem>(list.ItemContainerGenerator.ContainerFromIndex(0))),
             ("a dropdown row", dropdown),
+            ("a highlighted dropdown row", highlighted),
             ("a tree row", tree),
             ("a checked icon toggle", toggle),
         })
@@ -421,6 +424,12 @@ public sealed class SlateAccentTests
         Assert.DoesNotContain("#", line, StringComparison.Ordinal);
         return 0;
     }, TimeSpan.FromSeconds(30), "the theme file never loaded.");
+
+    /// <summary>A row the keys or the pointer are on, which only the list can say otherwise.</summary>
+    private sealed class HighlightedComboBoxItem : ComboBoxItem
+    {
+        public HighlightedComboBoxItem() => IsHighlighted = true;
+    }
 
     /// <summary>What the manager merges, into the shell's own resources.</summary>
     private static void Use(ShownShell host, bool dark, bool highContrast, AccentSource accent, AccentPalette? palette)
