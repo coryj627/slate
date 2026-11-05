@@ -76,7 +76,7 @@ AT: NVDA and Narrator pass on the new surface: open by chord and palette; hear t
 - **A vault transition closes the sheet,** as it dismisses the palette. A second launch can open a vault with the sheet up, and the welcome view takes the keys on the way. A theme applies at once, so nothing's lost.
 - **The canvas now follows a live theme.** Its drawings held the brushes they were painted with until the next state installed, which Windows' own theme change had the same gap in. This is the first time it's a thing a user does on purpose.
 - **Opening the palette could freeze the app and NVDA for 68 seconds.** The record is in contract 28, with the fix and what wasn't found.
-- **What the pass in light found:** #1835 (a checked Dual pane button's text), and #1834 (a typed command name can run another command), which isn't a light finding but showed up there. The title bar stays the system's until DS-12.
+- **What the pass in light found:** #1835 (a checked Dual pane button's text), and #1834 (a typed command name can run another command), which isn't a light finding but showed up there, and #1838 (a canvas group can paint over its members). #1836 and #1837 came from the AT pass. The title bar stays the system's until DS-12.
 
 ## Brief
 
