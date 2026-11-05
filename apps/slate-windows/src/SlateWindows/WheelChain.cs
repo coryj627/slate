@@ -27,7 +27,13 @@ internal static class WheelChain
 
     private static void OnIsEnabledChanged(DependencyObject element, DependencyPropertyChangedEventArgs e)
     {
-        if (element is ScrollViewer scroller && (bool)e.NewValue)
+        if (element is not ScrollViewer scroller)
+        {
+            return;
+        }
+
+        scroller.PreviewMouseWheel -= OnPreviewMouseWheel;
+        if ((bool)e.NewValue)
         {
             scroller.PreviewMouseWheel += OnPreviewMouseWheel;
         }

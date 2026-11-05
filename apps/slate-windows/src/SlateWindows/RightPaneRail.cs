@@ -24,16 +24,37 @@ internal static class RightPaneRail
         typeof(RightPaneRail),
         new PropertyMetadata(false, OnIsEnabledChanged));
 
+    private static readonly DependencyProperty PlacingProperty = DependencyProperty.RegisterAttached(
+        "Placing",
+        typeof(EventHandler),
+        typeof(RightPaneRail));
+
     public static bool GetIsEnabled(DependencyObject element) => (bool)element.GetValue(IsEnabledProperty);
 
     public static void SetIsEnabled(DependencyObject element, bool value) => element.SetValue(IsEnabledProperty, value);
 
     private static void OnIsEnabledChanged(DependencyObject element, DependencyPropertyChangedEventArgs e)
     {
-        if (element is FrameworkElement rail && (bool)e.NewValue)
+        if (element is not FrameworkElement rail)
         {
-            // A size change reaches this through either the pane or the rail's text.
-            rail.LayoutUpdated += (_, _) => Place(rail);
+            return;
+        }
+
+        if (rail.GetValue(PlacingProperty) is EventHandler placing)
+        {
+            rail.LayoutUpdated -= placing;
+            rail.ClearValue(PlacingProperty);
+        }
+
+        if ((bool)e.NewValue)
+        {
+            // A size change reaches this through either the pane or the rail's text, and
+            // neither has to change the rail's own size: beside the leaf it doesn't follow
+            // the pane, and capped under the leaf it doesn't follow its text.
+            EventHandler place = (_, _) => Place(rail);
+            rail.SetValue(PlacingProperty, place);
+            rail.LayoutUpdated += place;
+            Place(rail);
         }
     }
 

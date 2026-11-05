@@ -880,6 +880,31 @@ public sealed partial class TextScaleTests
         }
     });
 
+    /// <summary>Off, a scroller leaves the wheel alone. On again, it raises one wheel, not
+    /// one for each time it was switched on.</summary>
+    [Fact]
+    public void TheWheelChainFollowsItsSwitch() => OnOwnThread(() =>
+    {
+        var scroller = new ScrollViewer();
+        int raised = 0;
+        scroller.AddHandler(UIElement.MouseWheelEvent, new System.Windows.Input.MouseWheelEventHandler((_, _) => raised++), handledEventsToo: true);
+        bool Preview()
+        {
+            var preview = new System.Windows.Input.MouseWheelEventArgs(System.Windows.Input.Mouse.PrimaryDevice, 0, -120) { RoutedEvent = UIElement.PreviewMouseWheelEvent };
+            scroller.RaiseEvent(preview);
+            return preview.Handled;
+        }
+
+        WheelChain.SetIsEnabled(scroller, true);
+        WheelChain.SetIsEnabled(scroller, false);
+        Assert.False(Preview(), "the chain still took the wheel when it was off.");
+        Assert.Equal(0, raised);
+
+        WheelChain.SetIsEnabled(scroller, true);
+        Assert.True(Preview(), "the chain didn't take the wheel when it was on again.");
+        Assert.Equal(1, raised);
+    });
+
     /// <summary>A wheel notch, as input delivers it: the preview, then the event.</summary>
     private static void Wheel(UIElement element, int delta = -120)
     {
@@ -1110,6 +1135,30 @@ public sealed partial class TextScaleTests
         host.Settle();
         host.Settle();
         Assert.True(rail.TranslatePoint(default, leaves).X > 0, "the rail didn't come back beside the leaf.");
+    });
+
+    /// <summary>Off, the rail stays where it is. On again, it places itself.</summary>
+    [Fact]
+    public void TheRailFollowsItsSwitch() => OnOwnThread(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        host.Shell.Width = 1120;
+        host.Shell.Height = 720;
+        host.Settle();
+        host.Settle();
+        var rail = (ListBox)host.Shell.FindName("RightPaneLeavesList");
+        var leaves = (Grid)host.Shell.FindName("RightPaneLeafHost");
+
+        RightPaneRail.SetIsEnabled(rail, false);
+        TypeRamp.Apply(RampOf(host.Shell), 2.25);
+        host.Settle();
+        host.Settle();
+        Assert.True(rail.TranslatePoint(default, leaves).X > 0, "the rail moved with its switch off.");
+
+        RightPaneRail.SetIsEnabled(rail, true);
+        host.Settle();
+        host.Settle();
+        Assert.Equal(0, rail.TranslatePoint(default, leaves).X, 1);
     });
 
     [Fact]
