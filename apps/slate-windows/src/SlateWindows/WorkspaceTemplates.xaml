@@ -265,36 +265,30 @@
     <DataTemplate x:Key="WorkspaceTabHeaderTemplate"
                   DataType="{x:Type local:WorkspaceTabViewModel}">
         <!-- DS-8: icon at 8, label at 32, and a title that takes what's left, so a long one
-             is cut rather than the close button pushed out. -->
-        <Grid>
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-            <local:AutomationPresentationTextBlock Grid.Column="0"
-                                                   Margin="8,0"
-                                                   VerticalAlignment="Center"
-                                                   FontFamily="{DynamicResource SymbolThemeFontFamily}"
-                                                   FontSize="16"
-                                                   Text="{Binding KindGlyph}" />
-            <TextBlock Grid.Column="1"
-                       Text="{Binding Title}"
-                       VerticalAlignment="Center"
-                       TextTrimming="CharacterEllipsis" />
-            <TextBlock Grid.Column="2"
-                       Text="{Binding DirtyMarker}"
-                       VerticalAlignment="Center"
-                       Visibility="{Binding IsDirty, Converter={StaticResource BooleanToVisibilityConverter}}"
-                       AutomationProperties.Name="Unsaved changes" />
-            <Button Grid.Column="3"
+             is cut. A dock gives its children room in order, so the close button comes first,
+             and a narrow split takes from the title and the icon before it takes from that. -->
+        <DockPanel>
+            <Button DockPanel.Dock="Right"
                     Style="{DynamicResource Slate.TabCloseButtonStyle}"
                     Content="&#xE711;"
                     AutomationProperties.Name="{Binding Title, StringFormat=Close {0}}"
                     Command="{Binding DataContext.Workspace.CloseTabCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                     CommandParameter="{Binding}" />
-        </Grid>
+            <TextBlock DockPanel.Dock="Right"
+                       Text="{Binding DirtyMarker}"
+                       VerticalAlignment="Center"
+                       Visibility="{Binding IsDirty, Converter={StaticResource BooleanToVisibilityConverter}}"
+                       AutomationProperties.Name="Unsaved changes" />
+            <local:AutomationPresentationTextBlock DockPanel.Dock="Left"
+                                                   Margin="8,0"
+                                                   VerticalAlignment="Center"
+                                                   FontFamily="{DynamicResource SymbolThemeFontFamily}"
+                                                   FontSize="16"
+                                                   Text="{Binding KindGlyph}" />
+            <TextBlock Text="{Binding Title}"
+                       VerticalAlignment="Center"
+                       TextTrimming="CharacterEllipsis" />
+        </DockPanel>
     </DataTemplate>
 
 <!-- ============================================================
@@ -975,9 +969,9 @@
                         <Setter Property="Background" Value="Transparent" />
                         <Setter Property="BorderBrush" Value="Transparent" />
                         <Setter Property="FocusVisualStyle" Value="{DynamicResource DefaultControlFocusVisualStyle}" />
-                        <!-- DS-8: 32 high and 100 to 240 wide. -->
+                        <!-- DS-8: 32 high and up to 240 wide. The floor of 100 is the strip's
+                             panel's, because a narrow split has to be able to lower it. -->
                         <Setter Property="MinHeight" Value="32" />
-                        <Setter Property="MinWidth" Value="100" />
                         <Setter Property="MaxWidth" Value="240" />
                         <Setter Property="Template">
                             <Setter.Value>

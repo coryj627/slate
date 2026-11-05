@@ -16,6 +16,10 @@ namespace SlateWindows;
 /// </summary>
 internal sealed class TabStripPanel : TabPanel
 {
+    /// <summary>The narrowest a tab goes, unless the strip is narrower: a split can be, and
+    /// a tab past the strip's edge would take its close button out of reach.</summary>
+    private const double TabFloor = 100;
+
     /// <summary>Whether a tab starts its row, so has nothing to divide itself from.</summary>
     public static readonly DependencyProperty IsRowStartProperty = DependencyProperty.RegisterAttached(
         "IsRowStart", typeof(bool), typeof(TabStripPanel), new PropertyMetadata(false));
@@ -32,9 +36,11 @@ internal sealed class TabStripPanel : TabPanel
 
     protected override Size MeasureOverride(Size constraint)
     {
+        double floor = Math.Min(TabFloor, constraint.Width);
         double height = 0;
         foreach (UIElement child in InternalChildren)
         {
+            child.SetCurrentValue(MinWidthProperty, floor);
             child.Measure(new Size(constraint.Width, double.PositiveInfinity));
             height = Math.Max(height, child.DesiredSize.Height);
         }

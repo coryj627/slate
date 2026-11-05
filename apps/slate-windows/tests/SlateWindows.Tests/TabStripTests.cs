@@ -271,6 +271,42 @@ public sealed class TabStripTests
         }
     }
 
+    /// <summary>A split can be narrower than a tab's floor. The tab fits the strip then, and
+    /// the close button keeps its place ahead of the title, so a pointer can still reach it
+    /// at the narrowest share a split allows.</summary>
+    [Fact]
+    public void ANarrowSplitKeepsTheCloseButtonInReach() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "# A\n"), ("b.md", "# B\n"));
+        host.Workspace.OpenPath("a.md");
+        host.Workspace.OpenPath("b.md", WorkspaceOpenTarget.SplitRight);
+        host.Settle();
+        for (int step = 0; step < 20; step++)
+        {
+            host.Workspace.ShrinkPaneCommand.Execute(null);
+        }
+
+        host.Settle();
+
+        TabPanel strip = ShownShell.Descendants(host.Shell.ContentPaneBorder).OfType<TabPanel>()
+            .Where(panel => panel.IsVisible)
+            .OrderBy(panel => panel.ActualWidth)
+            .First();
+        TabItem tab = ShownShell.Descendants(strip).OfType<TabItem>().First();
+        Assert.True(strip.ActualWidth < 100, $"premise: the narrower strip is {strip.ActualWidth}, wide enough for a tab");
+        Assert.True(tab.ActualWidth <= strip.ActualWidth + 0.5, $"the tab is {tab.ActualWidth} in a strip of {strip.ActualWidth}");
+
+        Button close = CloseButton(tab);
+        Point left = close.TranslatePoint(default, strip);
+        Assert.True(left.X >= -0.5 && left.X + close.ActualWidth <= strip.ActualWidth + 0.5, $"the button runs {left.X} to {left.X + close.ActualWidth} in a strip of {strip.ActualWidth}");
+        var middle = new Point(left.X + (close.ActualWidth / 2), left.Y + (close.ActualHeight / 2));
+        DependencyObject? hit = strip.InputHitTest(middle) as DependencyObject;
+        Assert.NotNull(hit);
+        Assert.True(
+            ReferenceEquals(hit, close) || ShownShell.Descendants(close).Contains(hit),
+            $"a pointer at the button's middle hits {hit}");
+    });
+
     /// <summary>A tab's only as wide as it needs, however few share its row.</summary>
     [Fact]
     public void ALoneTabIsItsOwnWidth() => RunSta(() =>
