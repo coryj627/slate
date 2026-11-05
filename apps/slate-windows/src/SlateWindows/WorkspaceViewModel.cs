@@ -338,6 +338,18 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
 
     public bool IsMarkdown => Item.Kind == WorkspaceItemKind.Markdown;
 
+    /// <summary>DS-8: the tab strip's icon for what the tab holds. The design has no canvas
+    /// icon, so that one's ours; it names nothing, because the title does.</summary>
+    public string KindGlyph => Item.Kind switch
+    {
+        WorkspaceItemKind.Canvas => "\uECA5",
+        WorkspaceItemKind.Base => "\uE8A9",
+        WorkspaceItemKind.SavedQuery => "\uE71C",
+        WorkspaceItemKind.Dashboard => "\uE9D2",
+        WorkspaceItemKind.Graph => "\uE9E9",
+        _ => "\uE8A5",
+    };
+
     /// <summary>The persisted `"reading"` token (schema v1, G17).</summary>
     public bool IsReadingMode => string.Equals(Mode, "reading", StringComparison.Ordinal);
     public bool IsEditorVisible => IsMarkdown && !IsReadingMode;

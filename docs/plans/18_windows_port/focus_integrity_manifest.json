@@ -339,6 +339,7 @@
     "xaml-trigger WorkspaceTemplates.xaml Button in PropertyRowTemplate#0 IsEnabled": "guard: ContentPaneBorder",
     "xaml-trigger WorkspaceTemplates.xaml Button in PropertyRowTemplate#2 IsEnabled": "guard: ContentPaneBorder",
     "xaml-trigger WorkspaceTemplates.xaml WorkspaceSplitHandle Visibility": "guard: ContentPaneBorder",
-    "xaml-trigger WorkspaceTemplates.xaml WorkspaceSplitHandleVertical Visibility": "guard: ContentPaneBorder"
+    "xaml-trigger WorkspaceTemplates.xaml WorkspaceSplitHandleVertical Visibility": "guard: ContentPaneBorder",
+    "xaml-trigger WorkspaceTemplates.xaml WorkspaceTabs Visibility": "guard: ContentPaneBorder"
   }
 }

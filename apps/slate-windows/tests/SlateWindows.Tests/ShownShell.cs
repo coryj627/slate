@@ -27,6 +27,15 @@ internal sealed class ShownShell : IDisposable
         ?? throw new InvalidOperationException("IsVaultOpen is gone");
 
     public ShownShell(params (string Path, string Text)[] notes)
+        : this(null, notes)
+    {
+    }
+
+    /// <summary>With the answer an unsaved tab's close prompt gets, for a fact that
+    /// closes one.</summary>
+    public ShownShell(
+        Func<WorkspaceTabViewModel, WorkspaceDirtyNavigationDecision>? dirtyCloseDecision,
+        params (string Path, string Text)[] notes)
     {
         Assert.Null(Application.Current);
         foreach ((string path, string text) in notes)
@@ -41,7 +50,7 @@ internal sealed class ShownShell : IDisposable
         }
 
         Workspace = new WorkspaceViewModel(
-            _session, _fixture.Root, () => [], Announced.Add, startInteractionBackgroundWork: true);
+            _session, _fixture.Root, () => [], Announced.Add, dirtyCloseDecision: dirtyCloseDecision, startInteractionBackgroundWork: true);
         // Registers the pack: scheme and its application authority without
         // constructing an Application (TextBoxAccessibilityTests explains).
         System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(typeof(Application).TypeHandle);

@@ -113,6 +113,40 @@
         <Setter Property="Height" Value="40" />
         <Setter Property="Padding" Value="5" />
     </Style>
+    <!-- DS-8: a tab's close button: a 12 glyph in the tab's full height, with an inset fill. -->
+    <Style x:Key="Slate.TabCloseButtonStyle" TargetType="ButtonBase" BasedOn="{StaticResource Slate.SubtleIconButtonStyle}">
+        <Setter Property="Width" Value="40" />
+        <Setter Property="Height" Value="32" />
+        <Setter Property="Padding" Value="5,1" />
+        <Setter Property="Foreground" Value="{DynamicResource Slate.SecondaryTextBrush}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ButtonBase">
+                    <Grid Background="Transparent">
+                        <Border Margin="{TemplateBinding Padding}"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4"
+                                SnapsToDevicePixels="True">
+                            <local:AutomationPresentationTextBlock Text="{Binding Content, RelativeSource={RelativeSource TemplatedParent}}" FontFamily="{DynamicResource SymbolThemeFontFamily}" FontSize="12" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter Property="Background" Value="{DynamicResource Slate.HoverOverlayBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter Property="Background" Value="{DynamicResource Slate.PressedOverlayBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Foreground" Value="{DynamicResource Slate.DisabledTextBrush}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
     <!-- On is a shape too, not colour alone, as a selected row's pill is. -->
     <Style x:Key="Slate.SubtleIconToggleButtonStyle" TargetType="ToggleButton" BasedOn="{StaticResource Slate.SubtleIconButtonStyle}">
         <Style.Triggers>

@@ -1519,7 +1519,10 @@ public sealed class ThemeDesignSystemTests
 
         Assert.True(tab.IsSelected);
         Assert.Equal(Theme("Slate.SurfaceBrush"), Assert.IsType<SolidColorBrush>(chrome.Background).Color);
-        Assert.Equal(Theme("Slate.AccentBrush"), Assert.IsType<SolidColorBrush>(chrome.BorderBrush).Color);
+        Assert.Equal(Theme("Slate.SubtleBorderBrush"), Assert.IsType<SolidColorBrush>(chrome.BorderBrush).Color);
+        Assert.Equal(
+            Theme("Slate.AccentIndicatorBrush"),
+            Assert.IsType<SolidColorBrush>(((Border)tab.Template.FindName("Indicator", tab)).Background).Color);
         Assert.Equal(Theme("Slate.TextBrush"), Assert.IsType<SolidColorBrush>(tab.Foreground).Color);
         Assert.NotNull(tab.FocusVisualStyle);
         // The classic tab control's panel is fixed white. A disabled grid goes

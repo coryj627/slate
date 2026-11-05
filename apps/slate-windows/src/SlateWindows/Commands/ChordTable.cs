@@ -101,6 +101,10 @@ internal enum ChordScope
     /// bar's own tunnelling handler (<c>FindInNoteBar.Bind</c>). Ctrl+F,
     /// Ctrl+G and Ctrl+Shift+G are <see cref="Global"/>.</summary>
     FindInNote,
+
+    /// <summary>A focused tab (DS-8, #1809): Delete closes it, delivered by
+    /// <c>MainWindow.TabStrip_PreviewKeyDown</c> while a tab has the keys.</summary>
+    TabStrip,
 }
 
 /// <summary>
@@ -1849,6 +1853,18 @@ internal static class ChordTable
                 + "platform redo convention (Notepad, Office, Explorer's "
                 + "rename field). Recorded as the deliberate Windows "
                 + "binding — W5-4 decision 12."),
+            // DS-8 (#1809): the Windows tab view's two closes, beside Ctrl+W.
+            Chord("windows.workspace.closeTabCtrlF4",
+                "Close the active tab",
+                "Ctrl+F4", ChordScope.Global,
+                "DS-8: the Windows convention, a second chord for slate.workspace.closeTab. "
+                + "A row of its own, because a command row carries one chord."),
+            Chord("windows.workspace.closeFocusedTab",
+                "Tab strip: close the focused tab",
+                "Delete", ChordScope.TabStrip,
+                "DS-8: imperative, like the Files tree's Delete, and live only while a tab has "
+                + "the keys, so a KeyBinding can't eat Delete in the editor or a field. It runs "
+                + "the close button's command."),
             Chord("windows.sidebar.deleteSelected",
                 "Files tree: move the selection to the Recycle Bin",
                 "Delete", ChordScope.Global,

@@ -264,19 +264,37 @@
 
     <DataTemplate x:Key="WorkspaceTabHeaderTemplate"
                   DataType="{x:Type local:WorkspaceTabViewModel}">
-        <StackPanel Orientation="Horizontal">
-            <TextBlock Text="{Binding Title}" VerticalAlignment="Center" />
-            <TextBlock Text="{Binding DirtyMarker}"
+        <!-- DS-8: icon at 8, label at 32, and a title that takes what's left, so a long one
+             is cut rather than the close button pushed out. -->
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <local:AutomationPresentationTextBlock Grid.Column="0"
+                                                   Margin="8,0"
+                                                   VerticalAlignment="Center"
+                                                   FontFamily="{DynamicResource SymbolThemeFontFamily}"
+                                                   FontSize="16"
+                                                   Text="{Binding KindGlyph}" />
+            <TextBlock Grid.Column="1"
+                       Text="{Binding Title}"
+                       VerticalAlignment="Center"
+                       TextTrimming="CharacterEllipsis" />
+            <TextBlock Grid.Column="2"
+                       Text="{Binding DirtyMarker}"
                        VerticalAlignment="Center"
                        Visibility="{Binding IsDirty, Converter={StaticResource BooleanToVisibilityConverter}}"
                        AutomationProperties.Name="Unsaved changes" />
-            <Button Margin="8,0,0,0"
-                    Padding="3,0"
-                    Content="×"
+            <Button Grid.Column="3"
+                    Style="{DynamicResource Slate.TabCloseButtonStyle}"
+                    Content="&#xE711;"
                     AutomationProperties.Name="{Binding Title, StringFormat=Close {0}}"
                     Command="{Binding DataContext.Workspace.CloseTabCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                     CommandParameter="{Binding}" />
-        </StackPanel>
+        </Grid>
     </DataTemplate>
 
 <!-- ============================================================
@@ -882,7 +900,8 @@
             <Grid>
             <TabControl ItemsSource="{Binding Tabs}"
                         Background="{DynamicResource Slate.SurfaceBrush}"
-                        BorderBrush="{DynamicResource Slate.BorderBrush}"
+                        BorderBrush="{DynamicResource Slate.SubtleBorderBrush}"
+                        AlternationCount="{Binding Items.Count, RelativeSource={RelativeSource Self}}"
                         SelectedItem="{Binding ActiveTab, Mode=TwoWay}"
                         Focusable="{Binding HasItems, RelativeSource={RelativeSource Self}}"
                         IsTabStop="{Binding HasItems, RelativeSource={RelativeSource Self}}"
@@ -900,6 +919,49 @@
                         <MenuItem Header="Close Pane" Command="{Binding Owner.ClosePaneCommand}" />
                     </ContextMenu>
                 </TabControl.ContextMenu>
+                <!-- DS-8: the strip is 36: 4 above the tabs, 32 of tab, and a foot that overlaps
+                     the rule under it by one, so the open tab, drawn over the rule, joins the
+                     note. The offset is the panel's, because TabPanel lays out rows without
+                     their tabs' margins. The strip shows the window behind it, and an empty
+                     pane has none. It has to stay a TabPanel: the ring reads one as the tab bar
+                     (MainWindow.ShellRegions). -->
+                <TabControl.Template>
+                    <ControlTemplate TargetType="TabControl">
+                        <Grid KeyboardNavigation.TabNavigation="Local" SnapsToDevicePixels="True">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <TabPanel x:Name="HeaderPanel"
+                                      Grid.Row="0"
+                                      MinHeight="32"
+                                      Margin="8,4,8,-1"
+                                      Panel.ZIndex="1"
+                                      Background="Transparent"
+                                      IsItemsHost="True"
+                                      KeyboardNavigation.TabIndex="1" />
+                            <Border Grid.Row="1"
+                                    Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="0,1,0,0"
+                                    KeyboardNavigation.TabIndex="2"
+                                    KeyboardNavigation.TabNavigation="Local"
+                                    KeyboardNavigation.DirectionalNavigation="Contained">
+                                <ContentPresenter x:Name="PART_SelectedContentHost"
+                                                  ContentSource="SelectedContent"
+                                                  Margin="{TemplateBinding Padding}"
+                                                  HorizontalAlignment="Stretch"
+                                                  VerticalAlignment="Stretch"
+                                                  TextElement.Foreground="{TemplateBinding Foreground}" />
+                            </Border>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="HasItems" Value="False">
+                                <Setter TargetName="HeaderPanel" Property="Visibility" Value="Collapsed" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </TabControl.Template>
                 <TabControl.ItemContainerStyle>
                     <Style TargetType="TabItem">
                         <!-- W7-7 PR 3 (#1246, R-4; codex PR 3 round 5): the name
@@ -917,28 +979,80 @@
                         <Setter Property="Background" Value="Transparent" />
                         <Setter Property="BorderBrush" Value="Transparent" />
                         <Setter Property="FocusVisualStyle" Value="{DynamicResource DefaultControlFocusVisualStyle}" />
+                        <!-- DS-8: 32 high and 100 to 240 wide. -->
+                        <Setter Property="MinHeight" Value="32" />
+                        <Setter Property="MinWidth" Value="100" />
+                        <Setter Property="MaxWidth" Value="240" />
                         <Setter Property="Template">
                             <Setter.Value>
                                 <ControlTemplate TargetType="TabItem">
-                                    <Border Margin="0,0,2,0"
-                                            Padding="8,4"
-                                            CornerRadius="6,6,0,0"
-                                            Background="{TemplateBinding Background}"
-                                            BorderBrush="{TemplateBinding BorderBrush}"
-                                            BorderThickness="0,0,0,3">
+                                    <Grid>
+                                        <Border x:Name="Chrome"
+                                                CornerRadius="8,8,0,0"
+                                                Background="{TemplateBinding Background}"
+                                                BorderBrush="{TemplateBinding BorderBrush}"
+                                                BorderThickness="1,1,1,0" />
+                                        <!-- Beside the border, not in it, so its top edge doesn't
+                                             add to the close button's 32. -->
                                         <ContentPresenter ContentSource="Header"
                                                           RecognizesAccessKey="True"
+                                                          HorizontalAlignment="Stretch"
                                                           VerticalAlignment="Center" />
-                                    </Border>
+                                        <!-- On the left edge, overlapping the neighbour by one: the open
+                                             tab is drawn above its neighbours, so it covers the ones
+                                             beside it, and the first tab has nothing to its left. -->
+                                        <Border x:Name="Divider"
+                                                Width="1"
+                                                Height="16"
+                                                Margin="-1,0,0,0"
+                                                HorizontalAlignment="Left"
+                                                VerticalAlignment="Center"
+                                                Background="{DynamicResource Slate.SubtleBorderBrush}" />
+                                        <!-- Selection is a shape too, not colour and tone alone. -->
+                                        <Border x:Name="Indicator"
+                                                Height="2"
+                                                Margin="8,0"
+                                                VerticalAlignment="Top"
+                                                Background="{DynamicResource Slate.AccentIndicatorBrush}"
+                                                Visibility="Collapsed" />
+                                        <Path x:Name="FlareLeft"
+                                              Width="4"
+                                              Height="4"
+                                              Margin="-4,0,0,0"
+                                              HorizontalAlignment="Left"
+                                              VerticalAlignment="Bottom"
+                                              Data="M4,0 L4,4 L0,4 A4,4 0 0 0 4,0 Z"
+                                              Fill="{DynamicResource Slate.SurfaceBrush}"
+                                              IsHitTestVisible="False"
+                                              Visibility="Collapsed" />
+                                        <Path x:Name="FlareRight"
+                                              Width="4"
+                                              Height="4"
+                                              Margin="0,0,-4,0"
+                                              HorizontalAlignment="Right"
+                                              VerticalAlignment="Bottom"
+                                              Data="M0,0 L0,4 L4,4 A4,4 0 0 1 0,0 Z"
+                                              Fill="{DynamicResource Slate.SurfaceBrush}"
+                                              IsHitTestVisible="False"
+                                              Visibility="Collapsed" />
+                                    </Grid>
                                     <ControlTemplate.Triggers>
+                                        <Trigger Property="ItemsControl.AlternationIndex" Value="0">
+                                            <Setter TargetName="Divider" Property="Visibility" Value="Collapsed" />
+                                        </Trigger>
                                         <Trigger Property="IsMouseOver" Value="True">
-                                            <Setter Property="Background" Value="{DynamicResource Slate.RaisedSurfaceBrush}" />
-                                            <Setter Property="Foreground" Value="{DynamicResource Slate.TextBrush}" />
+                                            <Setter Property="Background" Value="{DynamicResource Slate.HoverOverlayBrush}" />
+                                            <Setter TargetName="Divider" Property="Visibility" Value="Collapsed" />
                                         </Trigger>
                                         <Trigger Property="IsSelected" Value="True">
+                                            <Setter Property="Panel.ZIndex" Value="1" />
                                             <Setter Property="Background" Value="{DynamicResource Slate.SurfaceBrush}" />
                                             <Setter Property="Foreground" Value="{DynamicResource Slate.TextBrush}" />
-                                            <Setter Property="BorderBrush" Value="{DynamicResource Slate.AccentBrush}" />
+                                            <Setter Property="BorderBrush" Value="{DynamicResource Slate.SubtleBorderBrush}" />
+                                            <Setter TargetName="Divider" Property="Visibility" Value="Collapsed" />
+                                            <Setter TargetName="Indicator" Property="Visibility" Value="Visible" />
+                                            <Setter TargetName="FlareLeft" Property="Visibility" Value="Visible" />
+                                            <Setter TargetName="FlareRight" Property="Visibility" Value="Visible" />
                                         </Trigger>
                                     </ControlTemplate.Triggers>
                                 </ControlTemplate>

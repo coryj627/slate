@@ -1390,6 +1390,12 @@ public partial class MainWindow : Window
             return;
         }
 
+        TabStrip_PreviewKeyDown(e);
+        if (e.Handled)
+        {
+            return;
+        }
+
         // W5-4 (F6, FD-4): tree-scoped Delete — the selection verb with
         // Finder-parity confirmation staging. Imperative like F2-rename:
         // a KeyBinding would eat Delete inside the editor and every
@@ -1578,7 +1584,7 @@ public partial class MainWindow : Window
         return (key, modifiers) switch
         {
             (Key.O, ModifierKeys.Control or ModifierKeys.Control | ModifierKeys.Shift) => true,
-            (Key.S or Key.W or Key.T, ModifierKeys.Control) => true,
+            (Key.S or Key.W or Key.T or Key.F4, ModifierKeys.Control) => true,
             (Key.T, ModifierKeys.Control | ModifierKeys.Shift) => true,
             (Key.Oem5, ModifierKeys.Control or ModifierKeys.Control | ModifierKeys.Alt) => true,
             (Key.OemOpenBrackets or Key.OemCloseBrackets,
@@ -1711,6 +1717,22 @@ public partial class MainWindow : Window
     /// Escape. The <c>windows.sidebarFilter.clear</c> chord row
     /// (<c>ChordScope.SidebarFilter</c>); the field's HelpText speaks it
     /// (contract 39 N-1).</summary>
+    private void TabStrip_PreviewKeyDown(KeyEventArgs e)
+    {
+        // DS-8 (#1809): Delete on a focused tab closes it, through the close button's
+        // command, so an unsaved tab's prompt runs the same way. Imperative for the same
+        // reason as the Files tree's: a KeyBinding would eat Delete in the editor.
+        ModifierKeys modifiers = Keyboard.Modifiers;
+        if (e.Key == Key.Delete && modifiers == ModifierKeys.None
+            && OpenModalSurface is null
+            && Keyboard.FocusedElement is TabItem { DataContext: WorkspaceTabViewModel focused }
+            && _viewModel.Workspace is WorkspaceViewModel workspace)
+        {
+            workspace.CloseTabCommand.Execute(focused);
+            e.Handled = true;
+        }
+    }
+
     private void SidebarFilterTextBox_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         ModifierKeys modifiers = Keyboard.Modifiers;
