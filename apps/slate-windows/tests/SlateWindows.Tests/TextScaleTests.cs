@@ -219,12 +219,13 @@ public sealed partial class TextScaleTests
     /// window the app opens at and at its minimum height. Past that a sheet scrolls, and
     /// keys reach what's scrolled off. The launched pass reads their contents.</summary>
     [Theory]
-    [InlineData(720)]
-    [InlineData(480)]
-    public void NoSheetTextIsCutAtTheLargestSize(double height) => OnOwnThread(() =>
+    [InlineData(1120, 720)]
+    [InlineData(1120, 480)]
+    [InlineData(780, 720)]
+    public void NoSheetTextIsCutAtTheLargestSize(double width, double height) => OnOwnThread(() =>
     {
         using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
-        host.Shell.Width = 1120;
+        host.Shell.Width = width;
         host.Shell.Height = height;
         TypeRamp.Apply(RampOf(host.Shell), 2.25);
         host.Settle();
@@ -252,11 +253,13 @@ public sealed partial class TextScaleTests
     /// <summary>A sheet's buttons can take their text from what it shows, so a hosted sheet
     /// has none to measure. "Walk through citations" ran off the start of its sheet, beside
     /// Done. Each button with no text here gets text that long.</summary>
-    [Fact]
-    public void ASheetsButtonsHaveRoomForTheirBoundText() => OnOwnThread(() =>
+    [Theory]
+    [InlineData(1120)]
+    [InlineData(780)]
+    public void ASheetsButtonsHaveRoomForTheirBoundText(double width) => OnOwnThread(() =>
     {
         using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
-        host.Shell.Width = 1120;
+        host.Shell.Width = width;
         host.Shell.Height = 720;
         TypeRamp.Apply(RampOf(host.Shell), 2.25);
         host.Settle();

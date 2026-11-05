@@ -508,6 +508,14 @@ public partial class MainWindow : Window
         {
             ObserveFileSidebar(_viewModel.FileSidebar);
         }
+        else
+        {
+            return;
+        }
+
+        // DS-6: what held a surface's flag can go without a word from it, when a vault
+        // closes with a surface open, so a replaced source is a change to what's open too.
+        ModalSource_PropertyChanged(sender, eventArgs);
     }
 
     private void ObserveFileSidebar(FilesSidebarViewModel? sidebar)

@@ -301,13 +301,21 @@ public sealed partial class ShellAccessibilityTests
             Thread.Sleep(500);
             Assert.False(grid.IsEnabled, "premise: the overlay didn't disable the grid.");
 
+            // DS-6: the overlay's scrim is over it now, a flat 30% black in both themes.
             Color disabled = MostCommonColor(grid);
+            Color expected = UnderTheScrim(enabled);
             Assert.True(
-                enabled == disabled,
-                $"the grid's surface was {enabled} and is {disabled} while disabled. Most common colours {MostCommonColors(grid)}.");
+                Math.Abs(expected.R - disabled.R) <= 2 && Math.Abs(expected.G - disabled.G) <= 2 && Math.Abs(expected.B - disabled.B) <= 2,
+                $"the grid's surface was {enabled}, {expected} under the scrim, and is {disabled} while disabled. Most common colours {MostCommonColors(grid)}.");
 
             AssertAxeClean(process, "disabled-grid");
         });
+
+    private static Color UnderTheScrim(Color surface)
+    {
+        const double Through = 1 - (0x4D / 255.0);
+        return Color.FromArgb((int)Math.Round(surface.R * Through), (int)Math.Round(surface.G * Through), (int)Math.Round(surface.B * Through));
+    }
 
     /// <summary>#1774: the launched app's empty field has readable ink inside its
     /// border: a blank box has none at all.</summary>

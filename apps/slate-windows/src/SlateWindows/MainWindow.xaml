@@ -3376,7 +3376,7 @@
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
-                    <TextBlock Text="Rename property across the vault"
+                    <TextBlock Text="Rename property across the vault" TextWrapping="Wrap"
                                Style="{DynamicResource Slate.SubtitleTextBlockStyle}"
                                AutomationProperties.HeadingLevel="Level2" />
                     <Grid Grid.Row="1" Margin="0,10,0,0">

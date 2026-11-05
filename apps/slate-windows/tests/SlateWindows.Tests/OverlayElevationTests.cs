@@ -229,6 +229,29 @@ public sealed class OverlayElevationTests
         Assert.Equal(Visibility.Collapsed, overStatus.Visibility);
     });
 
+    /// <summary>A vault can close with a surface open, and what held its flag goes without
+    /// a word from it. The rows beside the sheets mustn't stay dim on the welcome view.</summary>
+    [Fact]
+    public void TheRowsStopDimmingWhenWhatHeldTheSurfaceGoesAway() => TextScaleTests.OnOwnThread(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        host.Workspace.OpenPath("Lecture.md");
+        host.Settle();
+        host.Workspace.OpenAddPropertySheet(synchronousForTests: true);
+        host.Settle();
+        host.Settle();
+        var overMenu = (FrameworkElement)host.Shell.FindName("ModalScrimOverMenu");
+        Assert.Equal(Visibility.Visible, overMenu.Visibility);
+
+        host.ShowWelcomeWithoutAWorkspace();
+        host.Settle();
+        host.Settle();
+
+        Assert.Null(host.Shell.OpenModalSurface);
+        Assert.Equal(Visibility.Collapsed, overMenu.Visibility);
+        Assert.Equal(Visibility.Collapsed, ((FrameworkElement)host.Shell.FindName("ModalScrimOverStatus")).Visibility);
+    });
+
     /// <summary>A contrast theme has its own mapping, as the theme's README asks of a new
     /// brush Slate draws with, and it lets what's under it show.</summary>
     [Fact]
