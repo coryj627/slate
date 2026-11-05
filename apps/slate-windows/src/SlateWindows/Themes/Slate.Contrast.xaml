@@ -32,6 +32,8 @@
     <!-- Text keeps window text over it, so this can't be the highlight. -->
     <SolidColorBrush x:Key="Slate.HoverOverlayBrush"
                      Color="{DynamicResource {x:Static SystemColors.ControlColorKey}}" />
+    <SolidColorBrush x:Key="Slate.PressedOverlayBrush"
+                     Color="{DynamicResource {x:Static SystemColors.ControlColorKey}}" />
     <SolidColorBrush x:Key="Slate.AccentBrush"
                      Color="{DynamicResource {x:Static SystemColors.HighlightColorKey}}" />
     <SolidColorBrush x:Key="Slate.AccentTextBrush"

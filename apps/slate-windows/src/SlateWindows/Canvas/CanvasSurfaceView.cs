@@ -167,6 +167,7 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         };
         AutomationProperties.SetAutomationId(_filterField, "CanvasFilterField");
         FieldPrompt.SetIsEnabled(_filterField, true);
+        SearchGlyph.SetIsEnabled(_filterField, true);
         AutomationProperties.SetName(_filterField, CanvasPhrase.FilterFieldName);
         AutomationProperties.SetHelpText(_filterField, CanvasPhrase.FilterFieldHint);
         _filterField.TextChanged += OnFilterTextChanged;

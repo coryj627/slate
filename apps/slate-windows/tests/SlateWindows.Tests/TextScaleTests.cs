@@ -1402,7 +1402,7 @@ public sealed partial class TextScaleTests
             calendar.UpdateLayout();
 
             TextBlock[] texts = ShownShell.Descendants(calendar).OfType<TextBlock>().Where(text => !string.IsNullOrEmpty(text.Text)).ToArray();
-            TextBlock[] glyphs = texts.Where(text => text.Text is "" or "").ToArray();
+            TextBlock[] glyphs = texts.Where(text => text.Text is "\uEDDB" or "\uEDDC").ToArray();
             TextBlock[] labels = texts.Except(glyphs).Where(text => InShownView(text, calendar)).ToArray();
 
             Assert.Equal(2, glyphs.Length);
@@ -1526,7 +1526,7 @@ public sealed partial class TextScaleTests
     /// code, after the runtime has let the thread go, and that ends the test host; a dispatcher's
     /// shutdown takes them down first. These facts have closed their windows by then, so
     /// it hands away no foreground, which is what <see cref="StaThread"/> warns of.</summary>
-    private static void OnOwnThread(Action body) => StaThread.Run(() =>
+    internal static void OnOwnThread(Action body) => StaThread.Run(() =>
     {
         try
         {

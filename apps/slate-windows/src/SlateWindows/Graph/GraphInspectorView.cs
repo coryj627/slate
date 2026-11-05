@@ -489,7 +489,8 @@ internal sealed class GraphInspectorView : UserControl
     {
         int index = row.Index - 1;
         var panel = new DockPanel { Margin = new Thickness(0, 2, 0, 2), LastChildFill = true };
-        var remove = new Button { Content = "\u2715", Padding = new Thickness(6, 0, 6, 0), Margin = new Thickness(4, 0, 0, 0) };
+        var remove = new Button { Content = "\uE711", Margin = new Thickness(4, 0, 0, 0) };
+        remove.SetResourceReference(StyleProperty, "Slate.SubtleIconButtonStyle");
         // The ids are literal prefixes + the 1-based index (the evidence
         // census reads the prefixes as the shell's literals).
         AutomationProperties.SetAutomationId(remove, "GraphInspectorRemoveGroup:" + row.Index.ToString(System.Globalization.CultureInfo.InvariantCulture));

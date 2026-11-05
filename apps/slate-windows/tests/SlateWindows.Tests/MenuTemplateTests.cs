@@ -104,7 +104,7 @@ public sealed class MenuTemplateTests
         Assert.Null(box);
         Assert.NotEqual(Visibility.Visible, unchecked_);
         Assert.Equal(Visibility.Visible, checked_);
-        Assert.Equal("", glyph);
+        Assert.Equal("\uE73E", glyph);
         Assert.Equal(12, size);
     }
 
