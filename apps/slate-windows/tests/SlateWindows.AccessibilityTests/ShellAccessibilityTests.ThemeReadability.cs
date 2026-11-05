@@ -36,6 +36,93 @@ public sealed partial class ShellAccessibilityTests
             AssertAxeClean(process, "theme-readability");
         });
 
+    /// <summary>DS-6: an effect turns ClearType off for what's inside it, and each overlay
+    /// had one on itself. With the shadow on a sibling, the palette's text has colour
+    /// fringes, the method of spike 4. A stem's middle is solid at a high display scale, so
+    /// plain window text is 34 to 53% fringes at 200%, the palette 38%, and with the effect
+    /// 0%: a quarter tells them apart. A display with ClearType off can't show any, so the
+    /// fact says so, and a missing fringe isn't mistaken for a pass.</summary>
+    [Fact]
+    public void ThemedShell_APalettesTextKeepsItsClearType() =>
+        RunFindInNoteJourney("palette-cleartype", (process, window, automation, editor) =>
+        {
+            if (!SystemUsesClearType())
+            {
+                Assert.Skip("this desktop has ClearType off, so a palette can't show colour fringes on it");
+            }
+
+            Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_P);
+            AutomationElement palette = WaitForElement(window, "CommandPalette", TimeSpan.FromSeconds(10));
+            Thread.Sleep(800);
+
+            int ink;
+            int fringed;
+            using (FlaUI.Core.Capturing.CaptureImage capture = CapturePhysicalPixels(palette))
+            {
+                (ink, fringed) = FringedInk(capture.Bitmap);
+            }
+
+            Assert.True(ink > 200, $"the palette has only {ink} pixels of text to read.");
+            Assert.True(fringed * 4 >= ink, $"{fringed} of the palette's {ink} text pixels have colour fringes.");
+            AssertAxeClean(process, "palette-cleartype");
+        });
+
+    /// <summary>The lower part of a surface, below its field and first row's highlight:
+    /// what stands off its most common colour, and how much of that isn't grey.</summary>
+    private static (int Ink, int Fringed) FringedInk(Bitmap bitmap)
+    {
+        var counts = new Dictionary<int, int>();
+        int top = bitmap.Height * 2 / 5;
+        for (var y = top; y < bitmap.Height; y++)
+        {
+            for (var x = 0; x < bitmap.Width; x++)
+            {
+                int color = bitmap.GetPixel(x, y).ToArgb();
+                counts[color] = counts.GetValueOrDefault(color) + 1;
+            }
+        }
+
+        Color surface = Color.FromArgb(counts.MaxBy(count => count.Value).Key);
+        int ink = 0;
+        int fringed = 0;
+        for (var y = top; y < bitmap.Height; y++)
+        {
+            for (var x = 0; x < bitmap.Width; x++)
+            {
+                Color pixel = bitmap.GetPixel(x, y);
+                if (Math.Abs(pixel.G - surface.G) <= 48)
+                {
+                    continue;
+                }
+
+                ink++;
+                int most = Math.Max(Math.Max(pixel.R, pixel.G), pixel.B);
+                int least = Math.Min(Math.Min(pixel.R, pixel.G), pixel.B);
+                if (most - least > 24)
+                {
+                    fringed++;
+                }
+            }
+        }
+
+        return (ink, fringed);
+    }
+
+    private static bool SystemUsesClearType()
+    {
+        const uint GetFontSmoothing = 0x004A;
+        const uint GetFontSmoothingType = 0x200A;
+        const uint ClearType = 2;
+        uint on = 0;
+        uint kind = 0;
+        return SystemParametersInfo(GetFontSmoothing, 0, ref on, 0) && on != 0
+            && SystemParametersInfo(GetFontSmoothingType, 0, ref kind, 0) && kind == ClearType;
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "SystemParametersInfoW", SetLastError = true)]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool SystemParametersInfo(uint action, uint parameter, ref uint value, uint flags);
+
     /// <summary>DS-5: launched at the seam's largest size, the chrome's minimums give way
     /// to its text, and the shell stays clean. Spike 5 measured a status bar of 39.9 and a
     /// tab strip of 45.9 at this size.</summary>
@@ -214,13 +301,21 @@ public sealed partial class ShellAccessibilityTests
             Thread.Sleep(500);
             Assert.False(grid.IsEnabled, "premise: the overlay didn't disable the grid.");
 
+            // DS-6: the overlay's scrim is over it now, a flat 30% black in both themes.
             Color disabled = MostCommonColor(grid);
+            Color expected = UnderTheScrim(enabled);
             Assert.True(
-                enabled == disabled,
-                $"the grid's surface was {enabled} and is {disabled} while disabled. Most common colours {MostCommonColors(grid)}.");
+                Math.Abs(expected.R - disabled.R) <= 2 && Math.Abs(expected.G - disabled.G) <= 2 && Math.Abs(expected.B - disabled.B) <= 2,
+                $"the grid's surface was {enabled}, {expected} under the scrim, and is {disabled} while disabled. Most common colours {MostCommonColors(grid)}.");
 
             AssertAxeClean(process, "disabled-grid");
         });
+
+    private static Color UnderTheScrim(Color surface)
+    {
+        const double Through = 1 - (0x4D / 255.0);
+        return Color.FromArgb((int)Math.Round(surface.R * Through), (int)Math.Round(surface.G * Through), (int)Math.Round(surface.B * Through));
+    }
 
     /// <summary>#1774: the launched app's empty field has readable ink inside its
     /// border: a blank box has none at all.</summary>

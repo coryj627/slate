@@ -123,6 +123,44 @@
             </Trigger>
         </Style.Triggers>
     </Style>
+    <!-- DS-6: an effect turns ClearType off for what's inside it, so an overlay's shadow
+         is on a background-only sibling behind it. It takes no pointer, and in a contrast
+         theme, which has no shadow keys, it has no effect. -->
+    <Style x:Key="Slate.OverlayShadow28" TargetType="Border">
+        <Setter Property="Background" Value="{DynamicResource Slate.SurfaceBrush}" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="IsHitTestVisible" Value="False" />
+        <Setter Property="Effect" Value="{DynamicResource Slate.Shadow28}" />
+    </Style>
+    <Style x:Key="Slate.OverlayShadow64" TargetType="Border" BasedOn="{StaticResource Slate.OverlayShadow28}">
+        <Setter Property="Effect" Value="{DynamicResource Slate.Shadow64}" />
+    </Style>
+    <!-- A tooltip's the same, in a margin that's the shadow's room in its popup: Fluent's
+         is on the border round its text. -->
+    <ControlTemplate x:Key="Slate.ToolTipTemplate" TargetType="ToolTip">
+        <Grid Margin="12,8,12,16">
+            <Border CornerRadius="4"
+                    Background="{DynamicResource Slate.SurfaceBrush}"
+                    Effect="{DynamicResource Slate.Shadow8}" />
+            <Border CornerRadius="4"
+                    Background="{DynamicResource Slate.SurfaceBrush}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}"
+                    RenderOptions.ClearTypeHint="Enabled"
+                    SnapsToDevicePixels="True">
+                <ContentPresenter Margin="{TemplateBinding Padding}"
+                                  HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                  VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                  SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}">
+                    <ContentPresenter.Resources>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="TextWrapping" Value="WrapWithOverflow" />
+                        </Style>
+                    </ContentPresenter.Resources>
+                </ContentPresenter>
+            </Border>
+        </Grid>
+    </ControlTemplate>
     <!-- The editor's selection border, here for the same reason: it isn't generated. -->
     <Pen x:Key="Slate.EditorSelectionBorderPen"
          Brush="{DynamicResource Slate.AccentTextBrush}"

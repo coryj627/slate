@@ -109,8 +109,8 @@
              Graph and Right File (NVDA pass F4). None refuses entry from
              outside; Left/Right between the headers, wrap included, is the
              items panel's (below). MenuBarCensus pins all of it. -->
+        <Grid DockPanel.Dock="Top">
         <Menu x:Name="MainMenu"
-              DockPanel.Dock="Top"
               Focusable="False"
               KeyboardNavigation.TabNavigation="None"
               KeyboardNavigation.DirectionalNavigation="None"
@@ -744,6 +744,11 @@
                           AutomationProperties.AutomationId="GraphVerbosityMenu" />
             </MenuItem>
         </Menu>
+            <Border x:Name="ModalScrimOverMenu"
+                    Background="{DynamicResource Slate.ScrimBrush}"
+                    IsHitTestVisible="False"
+                    Visibility="{Binding IsModalSurfaceOpen, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BooleanToVisibilityConverter}}" />
+        </Grid>
 
         <!-- W7-6 (#1240): the status bar is the ring's last region — a
              named, focusable stop whose landing speaks the status text;
@@ -754,7 +759,8 @@
              to directional navigation, out of the region. Arrows from an
              element are judged in its PARENT's group, so the bar sits in a
              Contained border: they stay on it (ShellContainerLandingTests). -->
-        <Border x:Name="ShellStatusBarBorder" DockPanel.Dock="Bottom"
+        <Grid DockPanel.Dock="Bottom">
+        <Border x:Name="ShellStatusBarBorder"
                 KeyboardNavigation.DirectionalNavigation="Contained">
             <StatusBar x:Name="ShellStatusBar"
                        FontFamily="{DynamicResource Slate.FontFamilyText}"
@@ -814,6 +820,11 @@
                 </StatusBarItem>
             </StatusBar>
         </Border>
+            <Border x:Name="ModalScrimOverStatus"
+                    Background="{DynamicResource Slate.ScrimBrush}"
+                    IsHitTestVisible="False"
+                    Visibility="{Binding IsModalSurfaceOpen, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BooleanToVisibilityConverter}}" />
+        </Grid>
 
         <Grid>
             <local:AutomationLandmarkGrid x:Name="WelcomeRoot"
@@ -2630,19 +2641,19 @@
             <!-- A full-window hit-test layer makes Quick Open modal for pointer
                  input. The underlying shell is disabled above, so UIA clients
                  cannot invoke commands behind the visible overlay either. -->
-            <Border Background="Transparent"
+            <Border Background="{DynamicResource Slate.ScrimBrush}"
                     Visibility="{Binding QuickSwitcher.IsOpen, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}" />
+            <Grid MaxWidth="600" MaxHeight="430" Margin="24,72,24,0" HorizontalAlignment="Stretch" VerticalAlignment="Top">
+            <Border Style="{DynamicResource Slate.OverlayShadow28}"
+                    Visibility="{Binding Visibility, ElementName=QuickSwitcherOverlay}" />
             <local:AutomationLandmarkBorder x:Name="QuickSwitcherOverlay"
                     KeyboardNavigation.DirectionalNavigation="Contained"
-                    Width="600"
-                    MaxHeight="430"
                     Padding="16"
-                    HorizontalAlignment="Center"
-                    VerticalAlignment="Top"
-                    Margin="0,72,0,0"
                     Background="{DynamicResource Slate.SurfaceBrush}"
                     BorderBrush="{DynamicResource Slate.BorderBrush}"
                     BorderThickness="1"
+                    CornerRadius="8"
+                    RenderOptions.ClearTypeHint="Enabled"
                     Visibility="{Binding DataContext.QuickSwitcher.IsOpen, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}"
                     DataContext="{Binding QuickSwitcher}"
                     FocusManager.IsFocusScope="True"
@@ -2652,9 +2663,6 @@
                     AutomationProperties.AutomationId="QuickSwitcher"
                     AutomationProperties.Name="Quick Open"
                     AutomationProperties.IsDialog="True">
-                <local:AutomationLandmarkBorder.Effect>
-                    <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
-                </local:AutomationLandmarkBorder.Effect>
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -2739,6 +2747,7 @@
                     </WrapPanel>
                 </Grid>
             </local:AutomationLandmarkBorder>
+            </Grid>
             <!-- ==========================================================
                  W5-2 (#742): the vault-search overlay. Declared BETWEEN
                  Quick Open and the palette (contract S11). Since SD-5
@@ -2754,19 +2763,19 @@
                  stick at FallbackValue=Collapsed forever — shipped
                  broken twice before, in W4-5 and W4-6.
                  ========================================================== -->
-            <Border Background="Transparent"
+            <Border Background="{DynamicResource Slate.ScrimBrush}"
                     Visibility="{Binding Search.IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}" />
+            <Grid MaxWidth="640" MaxHeight="470" Margin="24,72,24,0" HorizontalAlignment="Stretch" VerticalAlignment="Top">
+            <Border Style="{DynamicResource Slate.OverlayShadow28}"
+                    Visibility="{Binding Visibility, ElementName=SearchOverlay}" />
             <local:AutomationLandmarkBorder x:Name="SearchOverlay"
                     KeyboardNavigation.DirectionalNavigation="Contained"
-                    Width="640"
-                    MaxHeight="470"
                     Padding="16"
-                    HorizontalAlignment="Center"
-                    VerticalAlignment="Top"
-                    Margin="0,72,0,0"
                     Background="{DynamicResource Slate.SurfaceBrush}"
                     BorderBrush="{DynamicResource Slate.BorderBrush}"
                     BorderThickness="1"
+                    CornerRadius="8"
+                    RenderOptions.ClearTypeHint="Enabled"
                     Visibility="{Binding DataContext.Search.IsOpen, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}"
                     DataContext="{Binding Search}"
                     FocusManager.IsFocusScope="True"
@@ -2776,9 +2785,6 @@
                     AutomationProperties.AutomationId="SearchOverlay"
                     AutomationProperties.Name="Search Vault"
                     AutomationProperties.IsDialog="True">
-                <local:AutomationLandmarkBorder.Effect>
-                    <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
-                </local:AutomationLandmarkBorder.Effect>
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -3035,6 +3041,7 @@
                             Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                 </Grid>
             </local:AutomationLandmarkBorder>
+            </Grid>
             <!-- ==========================================================
                  W5-1 (#741): the command palette. Built on the Quick Open
                  shape above — an in-window overlay, never a WPF Popup,
@@ -3050,19 +3057,19 @@
                  because the rows are grouped by the section core PLACED
                  them in; see CommandPaletteResultsPresenter.
                  ========================================================== -->
-            <Border Background="Transparent"
+            <Border Background="{DynamicResource Slate.ScrimBrush}"
                     Visibility="{Binding Palette.IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}" />
+            <Grid MaxWidth="640" MaxHeight="470" Margin="24,72,24,0" HorizontalAlignment="Stretch" VerticalAlignment="Top">
+            <Border Style="{DynamicResource Slate.OverlayShadow28}"
+                    Visibility="{Binding Visibility, ElementName=CommandPaletteOverlay}" />
             <local:AutomationLandmarkBorder x:Name="CommandPaletteOverlay"
                     KeyboardNavigation.DirectionalNavigation="Contained"
-                    Width="640"
-                    MaxHeight="470"
                     Padding="16"
-                    HorizontalAlignment="Center"
-                    VerticalAlignment="Top"
-                    Margin="0,72,0,0"
                     Background="{DynamicResource Slate.SurfaceBrush}"
                     BorderBrush="{DynamicResource Slate.BorderBrush}"
                     BorderThickness="1"
+                    CornerRadius="8"
+                    RenderOptions.ClearTypeHint="Enabled"
                     Visibility="{Binding DataContext.Palette.IsOpen, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}"
                     DataContext="{Binding Palette}"
                     FocusManager.IsFocusScope="True"
@@ -3072,9 +3079,6 @@
                     AutomationProperties.AutomationId="CommandPalette"
                     AutomationProperties.Name="Command Palette"
                     AutomationProperties.IsDialog="True">
-                <local:AutomationLandmarkBorder.Effect>
-                    <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
-                </local:AutomationLandmarkBorder.Effect>
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -3250,22 +3254,25 @@
                             Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                 </Grid>
             </local:AutomationLandmarkBorder>
+            </Grid>
             <!-- ==========================================================
                  W4-4 (#736): the add-property sheet. Focus lands on the
                  Key field at open; Enter = Add, Esc = Cancel (code-behind
                  PreviewKeyDown — no window-global default button).
                  ========================================================== -->
-            <Border Background="Transparent"
+            <Border Background="{DynamicResource Slate.ScrimBrush}"
                     Visibility="{Binding Workspace.AddPropertySheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
+            <Grid MaxWidth="448" MinWidth="320" Margin="24" HorizontalAlignment="Stretch" VerticalAlignment="Center">
+            <Border Style="{DynamicResource Slate.OverlayShadow64}"
+                    Visibility="{Binding Visibility, ElementName=AddPropertyOverlay}" />
             <local:AutomationLandmarkBorder x:Name="AddPropertyOverlay"
                     KeyboardNavigation.DirectionalNavigation="Contained"
-                    Width="460"
                     Padding="16"
-                    HorizontalAlignment="Center"
-                    VerticalAlignment="Center"
                     Background="{DynamicResource Slate.SurfaceBrush}"
                     BorderBrush="{DynamicResource Slate.BorderBrush}"
                     BorderThickness="1"
+                    CornerRadius="8"
+                    RenderOptions.ClearTypeHint="Enabled"
                     Visibility="{Binding DataContext.Workspace.AddPropertySheet, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}"
                     DataContext="{Binding Workspace.AddPropertySheet}"
                     FocusManager.IsFocusScope="True"
@@ -3276,9 +3283,6 @@
                     AutomationProperties.AutomationId="AddPropertySheet"
                     AutomationProperties.Name="Add property"
                     AutomationProperties.IsDialog="True">
-                <local:AutomationLandmarkBorder.Effect>
-                    <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
-                </local:AutomationLandmarkBorder.Effect>
                 <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <StackPanel>
                     <TextBlock Text="Add property"
@@ -3332,24 +3336,26 @@
                 </StackPanel>
                 </ScrollViewer>
             </local:AutomationLandmarkBorder>
+            </Grid>
             <!-- ==========================================================
                  W4-4 (#736): the bulk-rename sheet. Default action is
                  PREVIEW, never Apply; Apply arms only after a preview on
                  the exact key pair (any key edit disarms it); Esc cancels
                  in-flight core work through the CancelToken and closes.
                  ========================================================== -->
-            <Border Background="Transparent"
+            <Border Background="{DynamicResource Slate.ScrimBrush}"
                     Visibility="{Binding Workspace.BulkRenameSheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
+            <Grid MaxWidth="760" MaxHeight="560" Margin="24" HorizontalAlignment="Stretch" VerticalAlignment="Center">
+            <Border Style="{DynamicResource Slate.OverlayShadow64}"
+                    Visibility="{Binding Visibility, ElementName=BulkRenameOverlay}" />
             <local:AutomationLandmarkBorder x:Name="BulkRenameOverlay"
                     KeyboardNavigation.DirectionalNavigation="Contained"
-                    Width="760"
-                    MaxHeight="560"
                     Padding="16"
-                    HorizontalAlignment="Center"
-                    VerticalAlignment="Center"
                     Background="{DynamicResource Slate.SurfaceBrush}"
                     BorderBrush="{DynamicResource Slate.BorderBrush}"
                     BorderThickness="1"
+                    CornerRadius="8"
+                    RenderOptions.ClearTypeHint="Enabled"
                     Visibility="{Binding DataContext.Workspace.BulkRenameSheet, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}"
                     DataContext="{Binding Workspace.BulkRenameSheet}"
                     FocusManager.IsFocusScope="True"
@@ -3360,9 +3366,6 @@
                     AutomationProperties.AutomationId="BulkRenameSheet"
                     AutomationProperties.Name="Rename property across the vault"
                     AutomationProperties.IsDialog="True">
-                <local:AutomationLandmarkBorder.Effect>
-                    <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
-                </local:AutomationLandmarkBorder.Effect>
                 <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <Grid>
                     <Grid.RowDefinitions>
@@ -3373,7 +3376,7 @@
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
-                    <TextBlock Text="Rename property across the vault"
+                    <TextBlock Text="Rename property across the vault" TextWrapping="Wrap"
                                Style="{DynamicResource Slate.SubtitleTextBlockStyle}"
                                AutomationProperties.HeadingLevel="Level2" />
                     <Grid Grid.Row="1" Margin="0,10,0,0">
@@ -3464,6 +3467,7 @@
                 </Grid>
                 </ScrollViewer>
             </local:AutomationLandmarkBorder>
+            </Grid>
 
             <!-- ==========================================================
                  W4-5 (#737): the citation details overlay. D-1 — mac
@@ -3474,17 +3478,19 @@
                  Escape returns focus to the row that opened it
                  (contract 11).
                  ========================================================== -->
-            <Border Background="Transparent"
+            <Border Background="{DynamicResource Slate.ScrimBrush}"
                     Visibility="{Binding Workspace.CitationDetails, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
+            <Grid MaxWidth="448" MinWidth="320" Margin="24" HorizontalAlignment="Stretch" VerticalAlignment="Center">
+            <Border Style="{DynamicResource Slate.OverlayShadow64}"
+                    Visibility="{Binding Visibility, ElementName=CitationDetailsOverlay}" />
             <local:AutomationLandmarkBorder x:Name="CitationDetailsOverlay"
                     KeyboardNavigation.DirectionalNavigation="Contained"
-                    Width="460"
                     Padding="16"
-                    HorizontalAlignment="Center"
-                    VerticalAlignment="Center"
                     Background="{DynamicResource Slate.SurfaceBrush}"
                     BorderBrush="{DynamicResource Slate.BorderBrush}"
                     BorderThickness="1"
+                    CornerRadius="8"
+                    RenderOptions.ClearTypeHint="Enabled"
                     Visibility="{Binding DataContext.Workspace.CitationDetails, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}"
                     DataContext="{Binding Workspace.CitationDetails}"
                     FocusManager.IsFocusScope="True"
@@ -3495,9 +3501,6 @@
                     AutomationProperties.AutomationId="CitationDetailsSheet"
                     AutomationProperties.Name="{Binding AutomationName}"
                     AutomationProperties.IsDialog="True">
-                <local:AutomationLandmarkBorder.Effect>
-                    <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
-                </local:AutomationLandmarkBorder.Effect>
                 <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <StackPanel>
                     <!-- An unresolved key is a real state, not an error
@@ -3609,6 +3612,7 @@
                 </StackPanel>
                 </ScrollViewer>
             </local:AutomationLandmarkBorder>
+            </Grid>
 
             <!-- ==========================================================
                  W4-5 (#737): the citation summary sheet (Ctrl+Shift+J).
@@ -3616,17 +3620,19 @@
                  the sheet can never disagree with the panel behind it
                  (contract 12).
                  ========================================================== -->
-            <Border Background="Transparent"
+            <Border Background="{DynamicResource Slate.ScrimBrush}"
                     Visibility="{Binding Workspace.CitationSummary, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
+            <Grid MaxWidth="448" MinWidth="320" Margin="24" HorizontalAlignment="Stretch" VerticalAlignment="Center">
+            <Border Style="{DynamicResource Slate.OverlayShadow64}"
+                    Visibility="{Binding Visibility, ElementName=CitationSummaryOverlay}" />
             <local:AutomationLandmarkBorder x:Name="CitationSummaryOverlay"
                     KeyboardNavigation.DirectionalNavigation="Contained"
-                    Width="420"
                     Padding="16"
-                    HorizontalAlignment="Center"
-                    VerticalAlignment="Center"
                     Background="{DynamicResource Slate.SurfaceBrush}"
                     BorderBrush="{DynamicResource Slate.BorderBrush}"
                     BorderThickness="1"
+                    CornerRadius="8"
+                    RenderOptions.ClearTypeHint="Enabled"
                     Visibility="{Binding DataContext.Workspace.CitationSummary, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}"
                     DataContext="{Binding Workspace.CitationSummary}"
                     FocusManager.IsFocusScope="True"
@@ -3637,9 +3643,6 @@
                     AutomationProperties.AutomationId="CitationSummarySheet"
                     AutomationProperties.Name="{Binding AutomationName}"
                     AutomationProperties.IsDialog="True">
-                <local:AutomationLandmarkBorder.Effect>
-                    <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
-                </local:AutomationLandmarkBorder.Effect>
                 <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <StackPanel>
                     <TextBlock Text="{Binding Heading}" TextWrapping="Wrap"
@@ -3669,22 +3672,25 @@
                 </StackPanel>
                 </ScrollViewer>
             </local:AutomationLandmarkBorder>
+            </Grid>
 
             <!-- ==========================================================
                  W4-5 (#737): files citing this entry, opened from a
                  bibliography row action.
                  ========================================================== -->
-            <Border Background="Transparent"
+            <Border Background="{DynamicResource Slate.ScrimBrush}"
                     Visibility="{Binding Workspace.FilesCiting, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
+            <Grid MaxWidth="448" MinWidth="320" Margin="24" HorizontalAlignment="Stretch" VerticalAlignment="Center">
+            <Border Style="{DynamicResource Slate.OverlayShadow64}"
+                    Visibility="{Binding Visibility, ElementName=FilesCitingOverlay}" />
             <local:AutomationLandmarkBorder x:Name="FilesCitingOverlay"
                     KeyboardNavigation.DirectionalNavigation="Contained"
-                    Width="460"
                     Padding="16"
-                    HorizontalAlignment="Center"
-                    VerticalAlignment="Center"
                     Background="{DynamicResource Slate.SurfaceBrush}"
                     BorderBrush="{DynamicResource Slate.BorderBrush}"
                     BorderThickness="1"
+                    CornerRadius="8"
+                    RenderOptions.ClearTypeHint="Enabled"
                     Visibility="{Binding DataContext.Workspace.FilesCiting, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}"
                     DataContext="{Binding Workspace.FilesCiting}"
                     FocusManager.IsFocusScope="True"
@@ -3695,9 +3701,6 @@
                     AutomationProperties.AutomationId="FilesCitingSheet"
                     AutomationProperties.Name="{Binding AutomationName}"
                     AutomationProperties.IsDialog="True">
-                <local:AutomationLandmarkBorder.Effect>
-                    <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
-                </local:AutomationLandmarkBorder.Effect>
                 <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <StackPanel>
                     <TextBlock Text="{Binding Heading}" TextWrapping="Wrap"
@@ -3737,18 +3740,20 @@
                 </StackPanel>
                 </ScrollViewer>
             </local:AutomationLandmarkBorder>
-            <Border Background="Transparent"
+            </Grid>
+            <Border Background="{DynamicResource Slate.ScrimBrush}"
                     Visibility="{Binding Workspace.DashboardEditorSheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
+            <Grid MaxWidth="560" MaxHeight="520" Margin="24" HorizontalAlignment="Stretch" VerticalAlignment="Center">
+            <Border Style="{DynamicResource Slate.OverlayShadow64}"
+                    Visibility="{Binding Visibility, ElementName=DashboardEditorOverlay}" />
             <local:AutomationLandmarkBorder x:Name="DashboardEditorOverlay"
                     KeyboardNavigation.DirectionalNavigation="Contained"
-                    Width="560"
-                    MaxHeight="520"
                     Padding="16"
-                    HorizontalAlignment="Center"
-                    VerticalAlignment="Center"
                     Background="{DynamicResource Slate.RaisedSurfaceBrush}"
                     BorderBrush="{DynamicResource Slate.BorderBrush}"
                     BorderThickness="1"
+                    CornerRadius="8"
+                    RenderOptions.ClearTypeHint="Enabled"
                     Visibility="{Binding DataContext.Workspace.DashboardEditorSheet, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}"
                     DataContext="{Binding Workspace.DashboardEditorSheet}"
                     FocusManager.IsFocusScope="True"
@@ -3881,18 +3886,20 @@
                 </DockPanel>
                 </ScrollViewer>
             </local:AutomationLandmarkBorder>
-            <Border Background="Transparent"
+            </Grid>
+            <Border Background="{DynamicResource Slate.ScrimBrush}"
                     Visibility="{Binding Workspace.BaseQueryBuilderSheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
+            <Grid MaxWidth="640" MaxHeight="560" Margin="24" HorizontalAlignment="Stretch" VerticalAlignment="Center">
+            <Border Style="{DynamicResource Slate.OverlayShadow64}"
+                    Visibility="{Binding Visibility, ElementName=BaseQueryBuilderOverlay}" />
             <local:AutomationLandmarkBorder x:Name="BaseQueryBuilderOverlay"
                     KeyboardNavigation.DirectionalNavigation="Contained"
-                    Width="640"
-                    MaxHeight="560"
                     Padding="16"
-                    HorizontalAlignment="Center"
-                    VerticalAlignment="Center"
                     Background="{DynamicResource Slate.RaisedSurfaceBrush}"
                     BorderBrush="{DynamicResource Slate.BorderBrush}"
                     BorderThickness="1"
+                    CornerRadius="8"
+                    RenderOptions.ClearTypeHint="Enabled"
                     Visibility="{Binding DataContext.Workspace.BaseQueryBuilderSheet, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}"
                     DataContext="{Binding Workspace.BaseQueryBuilderSheet}"
                     FocusManager.IsFocusScope="True"
@@ -4112,6 +4119,7 @@
                 </DockPanel>
                 </ScrollViewer>
             </local:AutomationLandmarkBorder>
+            </Grid>
             <!-- ==========================================================
                  W5-3 (#743): the template picker sheet. Focus lands per
                  state (first row / Try Again / Cancel); Enter activates
@@ -4119,18 +4127,19 @@
                  PreviewKeyDown). Declared after every earlier sheet —
                  ModalSurface paint order is XAML declaration order.
                  ========================================================== -->
-            <Border Background="Transparent"
+            <Border Background="{DynamicResource Slate.ScrimBrush}"
                     Visibility="{Binding Workspace.TemplatePickerSheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
+            <Grid MaxWidth="448" MinWidth="320" MaxHeight="440" Margin="24" HorizontalAlignment="Stretch" VerticalAlignment="Center">
+            <Border Style="{DynamicResource Slate.OverlayShadow64}"
+                    Visibility="{Binding Visibility, ElementName=TemplatePickerOverlay}" />
             <local:AutomationLandmarkBorder x:Name="TemplatePickerOverlay"
                     KeyboardNavigation.DirectionalNavigation="Contained"
-                    Width="520"
-                    MaxHeight="440"
                     Padding="16"
-                    HorizontalAlignment="Center"
-                    VerticalAlignment="Center"
                     Background="{DynamicResource Slate.SurfaceBrush}"
                     BorderBrush="{DynamicResource Slate.BorderBrush}"
                     BorderThickness="1"
+                    CornerRadius="8"
+                    RenderOptions.ClearTypeHint="Enabled"
                     Visibility="{Binding DataContext.Workspace.TemplatePickerSheet, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}"
                     DataContext="{Binding Workspace.TemplatePickerSheet}"
                     FocusManager.IsFocusScope="True"
@@ -4141,13 +4150,10 @@
                     AutomationProperties.AutomationId="TemplatePickerSheet"
                     AutomationProperties.Name="Choose a template"
                     AutomationProperties.IsDialog="True">
-                <local:AutomationLandmarkBorder.Effect>
-                    <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
-                </local:AutomationLandmarkBorder.Effect>
                 <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <DockPanel>
                     <StackPanel DockPanel.Dock="Top">
-                        <TextBlock Text="Choose a template"
+                        <TextBlock Text="Choose a template" TextWrapping="Wrap"
                                    Style="{DynamicResource Slate.SubtitleTextBlockStyle}"
                                    AutomationProperties.HeadingLevel="Level2" />
                         <!-- A plain TextBlock, deliberately: the subtitle
@@ -4256,24 +4262,26 @@
                 </DockPanel>
                 </ScrollViewer>
             </local:AutomationLandmarkBorder>
+            </Grid>
             <!-- ==========================================================
                  W5-3 (#743): the prompt/name flow sheet — one sheet, two
                  steps (contracts TD-5). Enter is Next on the prompt step
                  and Create on the name step; Esc cancels the whole flow
                  and nothing is written (T7).
                  ========================================================== -->
-            <Border Background="Transparent"
+            <Border Background="{DynamicResource Slate.ScrimBrush}"
                     Visibility="{Binding Workspace.TemplateFlowSheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
+            <Grid MaxWidth="448" MinWidth="320" MaxHeight="480" Margin="24" HorizontalAlignment="Stretch" VerticalAlignment="Center">
+            <Border Style="{DynamicResource Slate.OverlayShadow64}"
+                    Visibility="{Binding Visibility, ElementName=TemplateFlowOverlay}" />
             <local:AutomationLandmarkBorder x:Name="TemplateFlowOverlay"
                     KeyboardNavigation.DirectionalNavigation="Contained"
-                    Width="520"
-                    MaxHeight="480"
                     Padding="16"
-                    HorizontalAlignment="Center"
-                    VerticalAlignment="Center"
                     Background="{DynamicResource Slate.SurfaceBrush}"
                     BorderBrush="{DynamicResource Slate.BorderBrush}"
                     BorderThickness="1"
+                    CornerRadius="8"
+                    RenderOptions.ClearTypeHint="Enabled"
                     Visibility="{Binding DataContext.Workspace.TemplateFlowSheet, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}"
                     DataContext="{Binding Workspace.TemplateFlowSheet}"
                     FocusManager.IsFocusScope="True"
@@ -4284,14 +4292,11 @@
                     AutomationProperties.AutomationId="TemplateFlowSheet"
                     AutomationProperties.Name="Create from template"
                     AutomationProperties.IsDialog="True">
-                <local:AutomationLandmarkBorder.Effect>
-                    <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
-                </local:AutomationLandmarkBorder.Effect>
                 <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <Grid>
                     <DockPanel Visibility="{Binding IsPromptStep, Converter={StaticResource BooleanToVisibilityConverter}}">
                         <StackPanel DockPanel.Dock="Top">
-                            <TextBlock Text="Fill in template details"
+                            <TextBlock Text="Fill in template details" TextWrapping="Wrap"
                                        Style="{DynamicResource Slate.SubtitleTextBlockStyle}"
                                        AutomationProperties.HeadingLevel="Level2" />
                             <!-- Plain TextBlock: carries the template name
@@ -4354,7 +4359,7 @@
                     </DockPanel>
                     <DockPanel Visibility="{Binding IsNameStep, Converter={StaticResource BooleanToVisibilityConverter}}">
                         <StackPanel DockPanel.Dock="Top">
-                            <TextBlock Text="Name the new note"
+                            <TextBlock Text="Name the new note" TextWrapping="Wrap"
                                        Style="{DynamicResource Slate.SubtitleTextBlockStyle}"
                                        AutomationProperties.HeadingLevel="Level2" />
                             <!-- Plain TextBlock: the template name lives
@@ -4406,23 +4411,25 @@
                 </Grid>
                 </ScrollViewer>
             </local:AutomationLandmarkBorder>
+            </Grid>
             <!-- ==========================================================
                  W5-4 (#744) F4: the Move-To folder picker — the keyboard-
                  first, drag-free move path. Filter-as-you-type; Enter
                  moves to the selected row; Esc cancels and nothing moves.
                  ========================================================== -->
-            <Border Background="Transparent"
+            <Border Background="{DynamicResource Slate.ScrimBrush}"
                     Visibility="{Binding FileSidebar.MoveToSheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
+            <Grid MaxWidth="448" MinWidth="320" MaxHeight="440" Margin="24" HorizontalAlignment="Stretch" VerticalAlignment="Center">
+            <Border Style="{DynamicResource Slate.OverlayShadow64}"
+                    Visibility="{Binding Visibility, ElementName=MoveToOverlay}" />
             <local:AutomationLandmarkBorder x:Name="MoveToOverlay"
                     KeyboardNavigation.DirectionalNavigation="Contained"
-                    Width="520"
-                    MaxHeight="440"
                     Padding="16"
-                    HorizontalAlignment="Center"
-                    VerticalAlignment="Center"
                     Background="{DynamicResource Slate.SurfaceBrush}"
                     BorderBrush="{DynamicResource Slate.BorderBrush}"
                     BorderThickness="1"
+                    CornerRadius="8"
+                    RenderOptions.ClearTypeHint="Enabled"
                     Visibility="{Binding DataContext.FileSidebar.MoveToSheet, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}"
                     DataContext="{Binding FileSidebar.MoveToSheet}"
                     FocusManager.IsFocusScope="True"
@@ -4433,9 +4440,6 @@
                     AutomationProperties.AutomationId="MoveToSheet"
                     AutomationProperties.Name="Move to folder"
                     AutomationProperties.IsDialog="True">
-                <local:AutomationLandmarkBorder.Effect>
-                    <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
-                </local:AutomationLandmarkBorder.Effect>
                 <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                 <DockPanel>
                     <StackPanel DockPanel.Dock="Top">
@@ -4517,16 +4521,21 @@
                 </DockPanel>
                 </ScrollViewer>
             </local:AutomationLandmarkBorder>
+            </Grid>
 
+            <Border Background="{DynamicResource Slate.ScrimBrush}"
+                    Visibility="{Binding Workspace.CanvasCardEditorSheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
+            <Grid MinWidth="420" Margin="24" HorizontalAlignment="Center" VerticalAlignment="Center">
+            <Border Style="{DynamicResource Slate.OverlayShadow64}"
+                    Visibility="{Binding Visibility, ElementName=CanvasCardEditorOverlay}" />
             <local:AutomationLandmarkBorder x:Name="CanvasCardEditorOverlay"
                     KeyboardNavigation.DirectionalNavigation="Contained"
                     Padding="16"
-                    MinWidth="420"
-                    HorizontalAlignment="Center"
-                    VerticalAlignment="Center"
                     Background="{DynamicResource Slate.SurfaceBrush}"
                     BorderBrush="{DynamicResource Slate.BorderBrush}"
                     BorderThickness="1"
+                    CornerRadius="8"
+                    RenderOptions.ClearTypeHint="Enabled"
                     Visibility="{Binding DataContext.Workspace.CanvasCardEditorSheet, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}"
                     DataContext="{Binding Workspace.CanvasCardEditorSheet}"
                     FocusManager.IsFocusScope="True"
@@ -4566,15 +4575,20 @@
                 </StackPanel>
                 </ScrollViewer>
             </local:AutomationLandmarkBorder>
+            </Grid>
+            <Border Background="{DynamicResource Slate.ScrimBrush}"
+                    Visibility="{Binding Workspace.CanvasCardPickerSheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
+            <Grid MinWidth="420" Margin="24" HorizontalAlignment="Center" VerticalAlignment="Center">
+            <Border Style="{DynamicResource Slate.OverlayShadow64}"
+                    Visibility="{Binding Visibility, ElementName=CanvasCardPickerOverlay}" />
             <local:AutomationLandmarkBorder x:Name="CanvasCardPickerOverlay"
                     KeyboardNavigation.DirectionalNavigation="Contained"
                     Padding="16"
-                    MinWidth="420"
-                    HorizontalAlignment="Center"
-                    VerticalAlignment="Center"
                     Background="{DynamicResource Slate.SurfaceBrush}"
                     BorderBrush="{DynamicResource Slate.BorderBrush}"
                     BorderThickness="1"
+                    CornerRadius="8"
+                    RenderOptions.ClearTypeHint="Enabled"
                     Visibility="{Binding DataContext.Workspace.CanvasCardPickerSheet, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}"
                     DataContext="{Binding Workspace.CanvasCardPickerSheet}"
                     FocusManager.IsFocusScope="True"
@@ -4618,16 +4632,21 @@
                 </StackPanel>
                 </ScrollViewer>
             </local:AutomationLandmarkBorder>
+            </Grid>
 
+            <Border Background="{DynamicResource Slate.ScrimBrush}"
+                    Visibility="{Binding Workspace.CanvasPromptSheet, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}" />
+            <Grid MinWidth="420" Margin="24" HorizontalAlignment="Center" VerticalAlignment="Center">
+            <Border Style="{DynamicResource Slate.OverlayShadow64}"
+                    Visibility="{Binding Visibility, ElementName=CanvasPromptOverlay}" />
             <local:AutomationLandmarkBorder x:Name="CanvasPromptOverlay"
                     KeyboardNavigation.DirectionalNavigation="Contained"
                     Padding="16"
-                    MinWidth="420"
-                    HorizontalAlignment="Center"
-                    VerticalAlignment="Center"
                     Background="{DynamicResource Slate.SurfaceBrush}"
                     BorderBrush="{DynamicResource Slate.BorderBrush}"
                     BorderThickness="1"
+                    CornerRadius="8"
+                    RenderOptions.ClearTypeHint="Enabled"
                     Visibility="{Binding DataContext.Workspace.CanvasPromptSheet, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource NullToVisibilityConverter}, FallbackValue=Collapsed}"
                     DataContext="{Binding Workspace.CanvasPromptSheet}"
                     FocusManager.IsFocusScope="True"
@@ -4694,6 +4713,7 @@
                             AutomationProperties.Name="Clear all marks" />
                 </Grid>
             </local:AutomationLandmarkBorder>
+            </Grid>
         </Grid>
     </DockPanel>
 </Window>

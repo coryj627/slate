@@ -32,6 +32,10 @@
     <!-- Text keeps window text over it, so this can't be the highlight. -->
     <SolidColorBrush x:Key="Slate.HoverOverlayBrush"
                      Color="{DynamicResource {x:Static SystemColors.ControlColorKey}}" />
+    <!-- A contrast theme's scrim lets the window show: dimming isn't this theme's cue. -->
+    <SolidColorBrush x:Key="Slate.ScrimBrush"
+                     Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"
+                     Opacity="0.3" />
     <SolidColorBrush x:Key="Slate.PressedOverlayBrush"
                      Color="{DynamicResource {x:Static SystemColors.ControlColorKey}}" />
     <SolidColorBrush x:Key="Slate.AccentBrush"

@@ -79,10 +79,10 @@ Every icon-only button needs `AutomationProperties.Name`. Otherwise Narrator rea
 
 **Change the design.** The shadow tokens are two layers each (a soft ambient layer plus a key layer). A WPF element takes one `DropShadowEffect`. Stacking two effects needs two elements and costs rendering time.
 
-- `DropShadowEffect.Direction` defaults to 315°, which puts the shadow down and to the right. Fluent shadows fall straight down: set `Direction="270"`. All 11 shadows in Slate's `MainWindow.xaml` (`BlurRadius 18`, `ShadowDepth 4`, `Opacity 0.28`) use the default direction.
+- `DropShadowEffect.Direction` defaults to 315°, which puts the shadow down and to the right. Fluent shadows fall straight down: set `Direction="270"`.
 - CSS blur and WPF `BlurRadius` aren't the same unit. Tune by eye against the HTML elevation card.
 - Effects turn off ClearType for the text inside them, and so do popups with `AllowsTransparency="True"`, which is every Fluent popup (menus, tooltips, ComboBox, DatePicker). Text there renders in greyscale. Put the effect on a background-only `Border` behind the content rather than on the content's parent, and set `RenderOptions.ClearTypeHint="Enabled"` on the opaque popup surface, and again below any `ScrollViewer` in it (see Menus). The hint has no effect on `TextBox`.
-- **Done:** one shadow per level (2, 4, 8, 16, 28, 64), black at 18% (36% in dark). The CSS tokens and the Fluent components use the single layer, and `xaml/` has a `DropShadowEffect` per level (`Slate.Shadow2` … `Slate.Shadow64`, `Direction="270"`, `BlurRadius` = 1.5 × the CSS blur). Values are in `xaml/README.md` and on the Elevation card.
+- **Done:** one shadow per level (2, 4, 8, 16, 28, 64), black at 18% (36% in dark). The CSS tokens and the Fluent components use the single layer, and `xaml/` has a `DropShadowEffect` per level (`Slate.Shadow2` … `Slate.Shadow64`, `Direction="270"`, `BlurRadius` = 1.5 × the CSS blur). Values are in `xaml/README.md` and on the Elevation card. The app's overlays use them on a sibling behind their content: `Slate.OverlayShadow28` for Quick Open, Search and the palette, `Slate.OverlayShadow64` for every other sheet, over the 30% scrim, and `Slate.Shadow8` the same way for a tooltip. Colour fringes on the palette's text went from 0% to 38%, which is what plain window text measures at 200% display scale.
 
 ## Focus and selection
 

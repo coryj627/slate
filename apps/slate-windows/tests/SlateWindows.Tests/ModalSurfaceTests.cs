@@ -22,6 +22,27 @@ namespace SlateWindows.Tests;
 /// </remarks>
 public sealed class ModalSurfaceTests
 {
+    /// <summary>Each surface and its overlay's id, in the order they paint.</summary>
+    internal static readonly (ModalSurface Surface, string AutomationId)[] SurfaceAutomationIds =
+    [
+        (ModalSurface.QuickOpen, "QuickSwitcher"),
+        (ModalSurface.SearchOverlay, "SearchOverlay"),
+        (ModalSurface.CommandPalette, "CommandPalette"),
+        (ModalSurface.AddProperty, "AddPropertySheet"),
+        (ModalSurface.BulkRename, "BulkRenameSheet"),
+        (ModalSurface.CitationDetails, "CitationDetailsSheet"),
+        (ModalSurface.CitationSummary, "CitationSummarySheet"),
+        (ModalSurface.FilesCiting, "FilesCitingSheet"),
+        (ModalSurface.DashboardEditor, "DashboardEditorSheet"),
+        (ModalSurface.BaseQueryBuilder, "BaseQueryBuilderSheet"),
+        (ModalSurface.TemplatePicker, "TemplatePickerSheet"),
+        (ModalSurface.TemplateFlow, "TemplateFlowSheet"),
+        (ModalSurface.MoveTo, "MoveToSheet"),
+        (ModalSurface.CanvasCardEditor, "CanvasCardEditorSheet"),
+        (ModalSurface.CanvasCardPicker, "CanvasCardPickerSheet"),
+        (ModalSurface.CanvasPrompt, "CanvasPromptSheet"),
+    ];
+
     /// <summary>The shell gate's welcome scan: with no vault there is no Quick
     /// Open view model, and a binding whose path fails leaves Visibility at its
     /// default, Visible, unless it names a fallback. The overlay drew an empty
@@ -40,13 +61,17 @@ public sealed class ModalSurfaceTests
                     MainWindow shell = host.Shell;
                     Assert.Null(Assert.IsType<VaultLifecycleViewModel>(shell.DataContext).QuickSwitcher);
 
-                    // Every layer after the workspace is an overlay or its hit-test layer.
+                    // Every layer after the workspace is an overlay's wrapper or its
+                    // hit-test layer. A wrapper is never collapsed, and with nothing shown
+                    // in it, it paints nothing and takes no hits (DS-6).
                     var root = (System.Windows.Controls.Panel)shell.WorkspaceRoot.Parent;
                     string[] shown = root.Children
                         .OfType<System.Windows.FrameworkElement>()
                         .SkipWhile(child => !ReferenceEquals(child, shell.WorkspaceRoot))
                         .Skip(1)
                         .Where(child => child.IsVisible)
+                        .Where(child => child is not System.Windows.Controls.Grid { Background: null } wrapper
+                            || wrapper.Children.OfType<System.Windows.UIElement>().Any(inner => inner.IsVisible))
                         .Select(child => System.Windows.Automation.AutomationProperties.GetAutomationId(child) is { Length: > 0 } id
                             ? id
                             : $"{child.GetType().Name} at index {root.Children.IndexOf(child)}")
@@ -611,25 +636,7 @@ public sealed class ModalSurfaceTests
             xaml,
             StringComparison.Ordinal);
 
-        (ModalSurface Surface, string AutomationId)[] expected =
-        [
-            (ModalSurface.QuickOpen, "QuickSwitcher"),
-            (ModalSurface.SearchOverlay, "SearchOverlay"),
-            (ModalSurface.CommandPalette, "CommandPalette"),
-            (ModalSurface.AddProperty, "AddPropertySheet"),
-            (ModalSurface.BulkRename, "BulkRenameSheet"),
-            (ModalSurface.CitationDetails, "CitationDetailsSheet"),
-            (ModalSurface.CitationSummary, "CitationSummarySheet"),
-            (ModalSurface.FilesCiting, "FilesCitingSheet"),
-            (ModalSurface.DashboardEditor, "DashboardEditorSheet"),
-            (ModalSurface.BaseQueryBuilder, "BaseQueryBuilderSheet"),
-            (ModalSurface.TemplatePicker, "TemplatePickerSheet"),
-            (ModalSurface.TemplateFlow, "TemplateFlowSheet"),
-            (ModalSurface.MoveTo, "MoveToSheet"),
-            (ModalSurface.CanvasCardEditor, "CanvasCardEditorSheet"),
-            (ModalSurface.CanvasCardPicker, "CanvasCardPickerSheet"),
-            (ModalSurface.CanvasPrompt, "CanvasPromptSheet"),
-        ];
+        (ModalSurface Surface, string AutomationId)[] expected = SurfaceAutomationIds;
 
         // Exhaustiveness (red team W5-3, tests finding 3): the two
         // template surfaces shipped ABSENT from this list, so swapping

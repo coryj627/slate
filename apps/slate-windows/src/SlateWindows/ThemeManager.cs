@@ -241,7 +241,10 @@ internal sealed class ThemeManager : IDisposable
         // A context menu is the same, and Slate.Menus.xaml sets its size.
         if (fluent[typeof(ToolTip)] is Style toolTip)
         {
-            slate[typeof(ToolTip)] = TypeRamp.StyleOn(toolTip, TypeRamp.Caption);
+            // DS-6: and its shadow goes beside its text, so the text keeps ClearType.
+            Style scaled = TypeRamp.StyleOn(toolTip, TypeRamp.Caption);
+            scaled.Setters.Add(new Setter(Control.TemplateProperty, LoadDictionary(SlateRoot + "Slate.Text.xaml")["Slate.ToolTipTemplate"]));
+            slate[typeof(ToolTip)] = scaled;
         }
 
         // DS-5: Fluent fixes a calendar's labels at 14, and a date picker asks for its
