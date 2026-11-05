@@ -630,6 +630,12 @@ internal sealed class CommandPaletteViewModel : BindableBase
             ? CommandsFieldHelp
             : _commandsLevel is null ? ChoicesFieldHelp : ChoicesFromCommandsFieldHelp;
 
+    /// <summary>DS-10: the line under the rows: what Enter and Esc do at this level.</summary>
+    public string KeysHint =>
+        _choices is null
+            ? "Enter run · Esc close"
+            : _commandsLevel is null ? "Enter choose · Esc close" : "Enter choose · Esc back";
+
     /// <summary>
     /// Open the palette. Refuses without a vault: announces
     /// <c>CommandPaletteNeedsVault</c> and leaves <see cref="IsOpen"/>
@@ -797,6 +803,7 @@ internal sealed class CommandPaletteViewModel : BindableBase
         OnPropertyChanged(nameof(IsChoosing));
         OnPropertyChanged(nameof(SearchFieldName));
         OnPropertyChanged(nameof(SearchFieldHelp));
+        OnPropertyChanged(nameof(KeysHint));
     }
 
     /// <summary>

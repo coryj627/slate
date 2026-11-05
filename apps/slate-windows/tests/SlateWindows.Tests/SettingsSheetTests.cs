@@ -8,6 +8,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using SlateWindows.Commands;
+using uniffi.slate_uniffi;
 
 namespace SlateWindows.Tests;
 
@@ -33,6 +34,34 @@ public sealed class SettingsSheetTests
         Assert.Equal(
             new[] { "Light", "Dark", "Use Windows setting" },
             ThemeChoice.Options.Select(option => option.Label));
+
+    /// <summary>NVDA is mostly silent on a closed combo box's change, so the sheet says it,
+    /// once, and only when something changed.</summary>
+    [Fact]
+    public void AThemeChangeSaysItself()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"slate-ds10-{Guid.NewGuid():N}");
+        var spoken = new List<A11yEvent>();
+        var preference = new ThemePreference(new AppPreferencesStore(Path.Combine(directory, "preferences.json")), _ => { });
+        var sheet = new SettingsSheetViewModel(preference, spoken.Add);
+        try
+        {
+            sheet.SelectedTheme = ThemeChoice.Options[2];
+            Assert.Empty(spoken);
+
+            sheet.SelectedTheme = ThemeChoice.Options[1];
+
+            Assert.Equal("Dark", Assert.IsType<A11yEvent.ThemeChosen>(Assert.Single(spoken)).Label);
+            Assert.Equal(ThemeChoice.Dark, preference.Current);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
 
     [Fact]
     public void CtrlCommaOpensTheSheetAndEscGivesFocusBack() => RunSta(() =>

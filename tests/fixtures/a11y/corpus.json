@@ -965,6 +965,11 @@
     "text": "Theme: Light."
   },
   {
+    "event": "SettingsSheetShown",
+    "priority": "medium",
+    "text": "Settings"
+  },
+  {
     "event": "RecentSearchFocused { query: \"fox\" }",
     "priority": "medium",
     "text": "Recent search: fox"

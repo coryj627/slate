@@ -71,6 +71,7 @@ public sealed partial class CommandPaletteTests
         Assert.All(palette.Rows, row => Assert.True(row.IsChoice));
         Assert.Equal("Select a theme", palette.SearchFieldName);
         Assert.Contains("goes back", palette.SearchFieldHelp, StringComparison.Ordinal);
+        Assert.Equal("Enter choose · Esc back", palette.KeysHint);
         Assert.Equal(string.Empty, palette.Query);
         A11yEvent.PaletteChoicesOpened opened = Assert.IsType<A11yEvent.PaletteChoicesOpened>(Assert.Single(host.Harness.Announcements));
         Assert.Equal("Select a theme", opened.Prompt);
@@ -89,6 +90,7 @@ public sealed partial class CommandPaletteTests
 
         Assert.False(host.Palette.IsChoosing);
         Assert.Equal(CommandPaletteViewModel.CommandsFieldName, host.Palette.SearchFieldName);
+        Assert.Equal("Enter run · Esc close", host.Palette.KeysHint);
         Assert.All(host.Palette.Rows, row =>
         {
             Assert.False(row.IsChoice);
@@ -184,6 +186,7 @@ public sealed partial class CommandPaletteTests
         Assert.True(host.Palette.IsOpen);
         Assert.Equal(3, host.Palette.Rows.Count);
         Assert.Contains("closes", host.Palette.SearchFieldHelp, StringComparison.Ordinal);
+        Assert.Equal("Enter choose · Esc close", host.Palette.KeysHint);
 
         host.Palette.BackOrDismiss();
 
@@ -281,6 +284,10 @@ public sealed partial class CommandPaletteTests
     {
         using var host = new PaletteShellHost();
         host.Lifecycle.ThemePreference = new ThemePreference(new AppPreferencesStore(host.FileInFixture("preferences.json")), _ => { });
+        var spoken = new List<A11yEvent>();
+        (typeof(VaultLifecycleViewModel).GetField("_announce", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+            ?? throw new InvalidOperationException("VaultLifecycleViewModel._announce is gone"))
+            .SetValue(host.Lifecycle, (Action<A11yEvent>)spoken.Add);
         host.OpenThePalette();
         host.Palette.Select(Assert.Single(host.Palette.Rows, row => row.Id == ChordTable.Ids.OpenSettings));
 
@@ -288,6 +295,7 @@ public sealed partial class CommandPaletteTests
 
         Assert.False(host.Palette.IsOpen);
         Assert.NotNull(host.Lifecycle.SettingsSheet);
+        Assert.IsType<A11yEvent.SettingsSheetShown>(Assert.Single(spoken));
         Assert.Equal(ModalSurface.Settings, host.Shell.OpenModalSurface);
         host.Settle();
         Assert.Same(

@@ -199,6 +199,20 @@ public sealed partial class ShellAccessibilityTests
             Assert.Equal("Light, Dark, or what Windows uses.", combo.HelpText);
             Assert.Equal("Use Windows setting", ComboValue(combo));
 
+            // The real chord, which reaches WPF as Key.System: the sheet's route lets Alt by.
+            PressChord(VirtualKeyShort.ALT, VirtualKeyShort.DOWN);
+            Retry.WhileFalse(
+                () => combo.Patterns.ExpandCollapse.Pattern.ExpandCollapseState.Value == ExpandCollapseState.Expanded,
+                TimeSpan.FromSeconds(5));
+            Assert.Equal(ExpandCollapseState.Expanded, combo.Patterns.ExpandCollapse.Pattern.ExpandCollapseState.Value);
+            PressKey(VirtualKeyShort.ESCAPE);
+            Retry.WhileFalse(
+                () => combo.Patterns.ExpandCollapse.Pattern.ExpandCollapseState.Value == ExpandCollapseState.Collapsed,
+                TimeSpan.FromSeconds(5));
+            Assert.Equal(ExpandCollapseState.Collapsed, combo.Patterns.ExpandCollapse.Pattern.ExpandCollapseState.Value);
+            Assert.NotNull(window.FindFirstDescendant(condition => condition.ByAutomationId("SettingsSheet")));
+            AssertEventuallyFocused(combo, "closing the list took the keys from the combo.");
+
             PressKey(VirtualKeyShort.TAB);
             AutomationElement close = WaitForElement(window, "SettingsClose", TimeSpan.FromSeconds(5));
             AssertEventuallyFocused(close, "Tab didn't reach Close.");

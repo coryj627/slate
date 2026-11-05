@@ -51,7 +51,8 @@ internal sealed partial class VaultLifecycleViewModel
     {
         if (SettingsOpenAdmission?.Invoke() != false)
         {
-            SettingsSheet = new SettingsSheetViewModel(ThemePreference, categories);
+            SettingsSheet = new SettingsSheetViewModel(ThemePreference, _announce, categories);
+            _announce(new A11yEvent.SettingsSheetShown());
         }
     }
 

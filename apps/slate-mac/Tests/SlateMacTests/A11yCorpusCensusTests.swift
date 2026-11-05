@@ -245,6 +245,7 @@ final class A11yCorpusCensusTests: XCTestCase {
             .paletteChoiceFilterCount(count: 1, query: "li"),
             .paletteChoiceFilterCount(count: 2, query: "t"),
             .themeChosen(label: "Light"),
+            .settingsSheetShown,
             .recentSearchFocused(query: "fox"),
             .quickSwitcherCount(count: 2, query: nil),
             .quickSwitcherCount(count: 1, query: nil),

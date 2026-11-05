@@ -1140,11 +1140,14 @@ pub enum A11yEvent {
         count: u32,
         query: String,
     },
-    /// DS-10: a theme chosen where nothing else says so. A combo box speaks
-    /// its own value, so Settings doesn't post this.
+    /// DS-10: a theme chosen. NVDA doesn't reliably speak a closed combo box's
+    /// change, so Settings posts this as well as the palette's list.
     ThemeChosen {
         label: String,
     },
+    /// DS-10: the Settings sheet opened. NVDA doesn't read an in-window pane's
+    /// name, so the sheet says it, as `AddPropertySheetShown` does.
+    SettingsSheetShown,
     RecentSearchFocused {
         query: String,
     },
@@ -2438,6 +2441,7 @@ impl A11yEvent {
                 }
             }
             ThemeChosen { label } => format!("Theme: {label}."),
+            SettingsSheetShown => "Settings".to_owned(),
             RecentSearchFocused { query } => format!("Recent search: {query}"),
             QuickSwitcherCount { count, query } => match query {
                 None => format!("{count} recent {}", plural(*count, "file", "files")),
@@ -4759,6 +4763,7 @@ pub fn corpus() -> Vec<A11yEvent> {
         ThemeChosen {
             label: "Light".into(),
         },
+        SettingsSheetShown,
         RecentSearchFocused {
             query: "fox".into(),
         },
@@ -7413,6 +7418,7 @@ mod tests {
             (Medium, "1 choice matching \"li\""),
             (Medium, "2 choices matching \"t\""),
             (Medium, "Theme: Light."),
+            (Medium, "Settings"),
             (Medium, "Recent search: fox"),
             (Medium, "2 recent files"),
             (Medium, "1 recent file"),
@@ -8161,6 +8167,7 @@ mod tests {
             .render(),
             "Theme: Dark."
         );
+        assert_eq!(A11yEvent::SettingsSheetShown.render(), "Settings");
     }
 
     /// The committed §W-D corpus artifact (`tests/fixtures/a11y/corpus.json`)
@@ -8755,8 +8762,9 @@ mod tests {
             // reading view's on-request math source, MathSourceSpoken, 223;
             // plan 44 WB-29a (#1525) the seven hot-exit events, 230;
             // plan 46 DS-7 the Files sidebar's show and hide, 232;
-            // plan 46 DS-10 the palette's choices and the chosen theme, 236.
-            236,
+            // plan 46 DS-10 the palette's choices, the chosen theme and the
+            // Settings sheet, 237.
+            237,
             "A11yEvent's top-level variant count moved; uniffi caps an enum at 256"
         );
     }

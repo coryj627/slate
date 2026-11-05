@@ -1,6 +1,8 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using uniffi.slate_uniffi;
+
 namespace SlateWindows;
 
 /// <summary>A category in the Settings sheet's list.</summary>
@@ -16,11 +18,16 @@ internal sealed class SettingsSheetViewModel : BindableBase
     internal static readonly SettingsCategory Appearance = new("Appearance", "\uE790");
 
     private readonly ThemePreference _theme;
+    private readonly Action<A11yEvent> _announce;
     private SettingsCategory _selectedCategory;
 
-    internal SettingsSheetViewModel(ThemePreference theme, IReadOnlyList<SettingsCategory>? categories = null)
+    internal SettingsSheetViewModel(
+        ThemePreference theme,
+        Action<A11yEvent> announce,
+        IReadOnlyList<SettingsCategory>? categories = null)
     {
         _theme = theme;
+        _announce = announce;
         Categories = categories ?? new[] { Appearance };
         _selectedCategory = Categories[0];
     }
@@ -46,10 +53,12 @@ internal sealed class SettingsSheetViewModel : BindableBase
         get => ThemeChoice.Options.First(option => option.Value == _theme.Current);
         set
         {
-            if (value is not null)
+            if (value is not null && value.Value != _theme.Current)
             {
                 _theme.Choose(value.Value);
                 OnPropertyChanged();
+                // A closed combo box's change is mostly silent under NVDA.
+                _announce(new A11yEvent.ThemeChosen(value.Label));
             }
         }
     }

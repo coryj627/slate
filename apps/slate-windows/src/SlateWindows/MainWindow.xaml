@@ -3347,7 +3347,7 @@
                     </local:AutomationLandmarkGrid>
                     <local:AutomationPresentationTextBlock Grid.Row="3"
                             Margin="4,8,4,0"
-                            Text="Enter run · Esc close"
+                            Text="{Binding KeysHint}"
                             Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                 </Grid>
             </local:AutomationLandmarkBorder>

@@ -9941,6 +9941,7 @@ pub enum A11yEvent {
     ThemeChosen {
         label: String,
     },
+    SettingsSheetShown,
     RecentSearchFocused {
         query: String,
     },
@@ -11785,6 +11786,7 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
                 C::PaletteChoiceFilterCount { count, query }
             }
             F::ThemeChosen { label } => C::ThemeChosen { label },
+            F::SettingsSheetShown => C::SettingsSheetShown,
             F::RecentSearchFocused { query } => C::RecentSearchFocused { query },
             F::QuickSwitcherCount { count, query } => C::QuickSwitcherCount { count, query },
             F::BaseViewMode { mode } => C::BaseViewMode { mode },
