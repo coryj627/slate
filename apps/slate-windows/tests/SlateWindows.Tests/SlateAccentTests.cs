@@ -130,10 +130,19 @@ public sealed class SlateAccentTests
 
     private static SlateTheme ThemeOf(bool dark) => dark ? SlateTheme.Dark : SlateTheme.Light;
 
-    private static ResourceDictionary GoldThemeFile(bool dark) => new()
+    /// <summary>A pack URI needs WPF's application scheme, which this registers without making
+    /// an application.</summary>
+    private static void RegisterPackScheme() =>
+        System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(typeof(Application).TypeHandle);
+
+    private static ResourceDictionary GoldThemeFile(bool dark)
     {
-        Source = new Uri($"pack://application:,,,/SlateWindows;component/Themes/Slate.{(dark ? "Dark" : "Light")}.xaml", UriKind.Absolute),
-    };
+        RegisterPackScheme();
+        return new()
+        {
+            Source = new Uri($"pack://application:,,,/SlateWindows;component/Themes/Slate.{(dark ? "Dark" : "Light")}.xaml", UriKind.Absolute),
+        };
+    }
 
     private static void AssertStillGold(ResourceDictionary slate, bool dark)
     {
@@ -206,6 +215,7 @@ public sealed class SlateAccentTests
     [InlineData(true)]
     public void AHostedDictionaryIsGoldUnlessItAsks(bool dark) => StaThread.Run(() =>
     {
+        RegisterPackScheme();
         ResourceDictionary slate = ThemeManager.DictionariesFor(ThemeOf(dark), highContrast: false, palette: Chosen)
             .Single(layer => layer.Contains("Slate.AccentColor"));
 
