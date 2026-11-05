@@ -26,7 +26,7 @@ internal static class SearchGlyph
     private const double Room = 24;
 
     /// <summary>Segoe Fluent Icons' Search.</summary>
-    private const string Glyph = "";
+    private const string Glyph = "\uE721";
 
     public static readonly DependencyProperty IsEnabledProperty = DependencyProperty.RegisterAttached(
         "IsEnabled", typeof(bool), typeof(SearchGlyph), new PropertyMetadata(false, OnIsEnabledChanged));

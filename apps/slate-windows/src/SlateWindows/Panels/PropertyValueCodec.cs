@@ -21,7 +21,7 @@ internal static class PropertyValueCodec
 {
     /// <summary>The core's tagged list-element discriminator key —
     /// legacy untagged arrays of plain strings are also accepted.</summary>
-    private const string KindTag = "slate.property-kind";
+    private const string KindTag = "\uF8FFslate.property-kind";
 
     public static PropertyDraft Decode(string kind, string valueJson)
     {

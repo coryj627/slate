@@ -18,10 +18,10 @@ public class PropertyValueCodecTests
     /// <summary>A tagged date element with the invisible U+F8FF
     /// discriminator prefix spelled as an escape.</summary>
     private const string TaggedWikilinkElement =
-        "{\"slate.property-kind\":\"wikilink\",\"value\":\"basic\"}";
+        "{\"\uF8FFslate.property-kind\":\"wikilink\",\"value\":\"basic\"}";
 
     private const string TaggedDateElement =
-        "{\"slate.property-kind\":\"date\",\"value\":\"2026-04-01\"}";
+        "{\"\uF8FFslate.property-kind\":\"date\",\"value\":\"2026-04-01\"}";
 
     [Fact]
     public void NumberKindNeverFlipsIntegerAndFloat()
@@ -99,7 +99,7 @@ public class PropertyValueCodecTests
         var tagged = Assert.IsType<PropertyDraft.ListDraft>(
             PropertyValueCodec.Decode(
                 "list",
-                "[{\"slate.property-kind\":\"date\",\"value\":\"2026-04-01\"},\"plain\"]"));
+                "[{\"\uF8FFslate.property-kind\":\"date\",\"value\":\"2026-04-01\"},\"plain\"]"));
         Assert.Equal(new[] { "2026-04-01", "plain" }, tagged.Items.Select(item => item.Text));
 
         var tags = Assert.IsType<PropertyDraft.TagListDraft>(

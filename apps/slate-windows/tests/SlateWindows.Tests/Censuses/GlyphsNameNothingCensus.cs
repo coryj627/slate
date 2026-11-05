@@ -118,6 +118,26 @@ public sealed partial class GlyphsNameNothingCensus
         Assert.True(offenders.Count == 0, $"{offenders.Count} glyphs that name something:\n" + string.Join('\n', offenders));
     }
 
+    /// <summary>A private-use character written out is invisible in an editor, and a change
+    /// of encoding loses it. In C# it's an escape, which says which one it is.</summary>
+    [Fact]
+    public void AGlyphInCodeIsAnEscape()
+    {
+        string shell = SourceText.ShellSourceRoot();
+        string[] roots = [shell, Path.GetFullPath(Path.Combine(shell, "..", "..", "tests"))];
+        string[] literal = roots
+            .SelectMany(root => Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories))
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                && !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .SelectMany(path => File.ReadLines(path)
+                .Select((line, index) => (Line: line, Where: $"{Path.GetFileName(path)}:{index + 1}")))
+            .Where(found => HasGlyph(found.Line))
+            .Select(found => found.Where)
+            .ToArray();
+
+        Assert.True(literal.Length == 0, "A glyph written out: " + string.Join(", ", literal));
+    }
+
     /// <summary>What's realized from styles and bindings, which the source can't show.</summary>
     [Fact]
     public void AShownShellsGlyphsNameNothing() => TextScaleTests.OnOwnThread(() =>
