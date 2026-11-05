@@ -66,7 +66,7 @@ The six spikes ran on 2 November 2026 and none failed (see Spikes to run first).
 
 **Native.** The Fluent theme's `SymbolThemeFontFamily` is `Segoe Fluent Icons, Segoe MDL2 Assets`. Windows 11 has Segoe Fluent Icons; Windows 10 doesn't ship it and falls back to MDL2, which uses the same code points for shared glyphs. Reference the resource, not the font name, and don't redistribute the font file. For Fluent System Icons (the SVG set), convert the single-path SVGs to `Path` geometry.
 
-Every icon-only button needs `AutomationProperties.Name`. Otherwise Narrator reads the private-use glyph as the name. This is the same problem Slate already fixed for the TextBox clear button (#1106).
+Every icon-only button needs `AutomationProperties.Name`. Otherwise Narrator reads the private-use glyph as the name. This is the same problem Slate already fixed for the TextBox clear button (#1106). The app has `Slate.SubtleIconButtonStyle`, with a 40 twin and a toggle: the glyph is presentation-only, so nothing is named by it, and `GlyphsNameNothingCensus` holds a name to every button that draws one.
 
 ## Shape, state and motion
 
@@ -133,7 +133,7 @@ A popup is larger than its surface by the shadow's room, and WPF's placement mod
 - Switch: template a `CheckBox`. WPF's Fluent theme has no toggle switch. A `CheckBox` keeps the Toggle pattern and the Space key.
 - Buttons: CompoundButton (`Button`). SplitButton and MenuSplitItem: a `Button` plus a `ContextMenu`, since WPF has no split button.
 - Tabs and navigation: HorizontalTab and VerticalTab lists (`TabControl` or `ListBox`). Nav and AppItem (`ListBox` / `TreeView` with the gold pill).
-- Inputs: SearchBox (`TextBox` with icon and placeholder; WPF's `TextBox` has no placeholder property). SpinButton (`TextBox` plus `RepeatButton`s). Swatch, SwatchPicker and Rating (`ListBox` or radio buttons).
+- Inputs: SearchBox (`TextBox` with icon and placeholder; WPF's `TextBox` has no placeholder property. The app draws both as behaviours on a plain `TextBox`, `SearchGlyph` and `FieldPrompt`, not a template, so the field keeps Fluent's). SpinButton (`TextBox` plus `RepeatButton`s). Swatch, SwatchPicker and Rating (`ListBox` or radio buttons).
 - Display: Card parts (`Border`). Badge, PresenceBadge, StatusIndicator, Tag and InteractionTag (`Border` + `TextBlock` / `Button`). Avatar (`Ellipse`).
 - Composition: Field, InfoLabel, InfoButton, MessageBar, Breadcrumb (`ItemsControl`), SectionHeader, ContentHeader, CellActionHeader, ListContent, Toolbar (a panel of buttons is simpler than WPF's `ToolBar`).
 

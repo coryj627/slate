@@ -533,7 +533,7 @@ public sealed class ThemeDesignSystemTests
     {
         foreach (ButtonKind kind in Enum.GetValues<ButtonKind>())
         {
-            (double width, double height, double fillWidth, double fillHeight, double glyphSize, FontFamily family, int peers) = InRealWindow(dark: false, highContrast: false, window =>
+            (double width, double height, double fillWidth, double fillHeight, double glyphSize, FontFamily family, bool presentation) = InRealWindow(dark: false, highContrast: false, window =>
             {
                 System.Windows.Controls.Primitives.ButtonBase button = kind switch
                 {
@@ -554,9 +554,7 @@ public sealed class ThemeDesignSystemTests
                 Pump();
                 Border drawn = ShownShell.Descendants(button).OfType<Border>().First();
                 TextBlock glyph = ShownShell.Descendants(button).OfType<TextBlock>().Single();
-                var peer = System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(button);
-                int named = peer.GetChildren()?.Count(child => child.IsControlElement() || child.IsContentElement()) ?? 0;
-                return (button.ActualWidth, button.ActualHeight, drawn.ActualWidth, drawn.ActualHeight, glyph.FontSize, glyph.FontFamily, named);
+                return (button.ActualWidth, button.ActualHeight, drawn.ActualWidth, drawn.ActualHeight, glyph.FontSize, glyph.FontFamily, glyph is AutomationPresentationTextBlock);
             });
 
             Assert.Equal(size, width);
@@ -565,7 +563,7 @@ public sealed class ThemeDesignSystemTests
             Assert.Equal(fill, fillHeight);
             Assert.Equal(16, glyphSize);
             Assert.Contains("Segoe", family.Source, StringComparison.Ordinal);
-            Assert.Equal(0, peers);
+            Assert.True(presentation, "the glyph can have a peer of its own.");
         }
     }
 
@@ -662,8 +660,10 @@ public sealed class ThemeDesignSystemTests
             TextBlock prompt = ShownShell.Descendants(search).OfType<TextBlock>().Single(block => block.Text == "Filter files");
             TextBlock glyph = ShownShell.Descendants(search).OfType<TextBlock>().Single(block => block.Text == "\uE721");
             bool shownEmpty = prompt.IsVisible;
+            double glyphLeft = glyph.TranslatePoint(default, search).X;
             double glyphRight = glyph.TranslatePoint(new Point(glyph.ActualWidth, 0), search).X;
             double promptLeft = prompt.TranslatePoint(default, search).X;
+            plain.Text = "a";
             search.Text = "a";
             window.UpdateLayout();
             Pump();
@@ -679,8 +679,10 @@ public sealed class ThemeDesignSystemTests
                 GlyphIsPresentation: glyph is AutomationPresentationTextBlock,
                 GlyphHits: glyph.IsHitTestVisible,
                 GlyphSize: glyph.FontSize,
+                GlyphLeft: glyphLeft,
                 GlyphRight: glyphRight,
                 PromptLeft: promptLeft,
+                PlainTextLeft: plain.GetRectFromCharacterIndex(0).Left,
                 TextLeft: search.GetRectFromCharacterIndex(0).Left,
                 PlainWidth: plain.ActualWidth,
                 SearchWidth: search.ActualWidth,
@@ -700,6 +702,8 @@ public sealed class ThemeDesignSystemTests
         Assert.True(result.PromptLeft >= result.GlyphRight, $"the prompt starts at {result.PromptLeft:F1}, under a glyph ending at {result.GlyphRight:F1}.");
         Assert.True(result.TextLeft >= result.GlyphRight, $"typed text starts at {result.TextLeft:F1}, under a glyph ending at {result.GlyphRight:F1}.");
         Assert.Equal(result.PromptLeft, result.TextLeft, 1);
+        Assert.Equal(result.PlainTextLeft, result.GlyphLeft, 1);
+        Assert.Equal(result.PlainTextLeft + 24, result.TextLeft, 1);
         Assert.Equal(result.PlainWidth, result.SearchWidth);
         Assert.Equal(result.PlainHeight, result.SearchHeight);
         Assert.Equal("a", result.Value);
