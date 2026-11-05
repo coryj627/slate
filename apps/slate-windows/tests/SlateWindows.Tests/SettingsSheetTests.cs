@@ -264,6 +264,26 @@ public sealed class SettingsSheetTests
         host.Settle();
     });
 
+    /// <summary>The name is there before anything walks the tree. This row is in no window,
+    /// so no client on this desktop can have made the label's peer for it: a runner with no
+    /// client at all read the combo's name as empty.</summary>
+    [Fact]
+    public void ARowsControlHasItsNameBeforeAnyoneWalksTheTree() => RunSta(() =>
+    {
+        using var host = new ShownShell();
+        var combo = new ComboBox();
+        var row = new SettingRow
+        {
+            Label = "Theme",
+            Content = combo,
+            Template = (ControlTemplate)host.Shell.FindResource("Slate.SettingRowTemplate"),
+        };
+
+        Assert.True(row.ApplyTemplate(), "premise: the row took no template");
+
+        Assert.Equal("Theme", UIElementAutomationPeer.CreatePeerForElement(combo).GetName());
+    });
+
     /// <summary>A row's size is the design's, and a glyph doesn't name the category.</summary>
     [Fact]
     public void TheSheetHasTheDesignsLayout() => RunSta(() =>
