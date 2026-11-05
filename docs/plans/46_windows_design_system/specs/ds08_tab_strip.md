@@ -65,7 +65,7 @@ Read `WorkspaceTemplates.xaml:260-275`, `:842-926`, `MainWindow.ShellRegions.cs:
 
 **The panel packs its rows.** The spec keeps `TabPanel`'s wrapping, but `TabPanel` stretches a wrapped row's cells, so a tab's 240 limit left gaps, and the open tab's flares and its neighbours' dividers stopped meeting. `TabStripPanel` derives from it, so the F6 ring still reads it as the tab bar, packs each row from the left, and keeps the open tab's row next to the note.
 
-**A tab's floor gives way to a narrower strip.** A split can share out as little as 15%, which is narrower than a tab, and a tab past the strip's edge would hide its close button. So the panel holds the floor of 100, lowered to the strip's width, and the header docks the close button first, so a narrow tab loses its title and icon before it loses that.
+**A tab's floor gives way to a narrower strip.** A split can share out as little as 15%, which is narrower than a tab, and a tab past the strip's edge would hide its close button. So the panel holds the floor of 100, lowered to the strip's width, and the header docks the close button first, so a narrow tab loses its title and icon before it loses that. A reader walks visual order, which follows `ZIndex`, so `ZIndex` keeps the order it's always heard: the title, the dirty marker, then the close button.
 
 **An empty pane has no strip.** A `MinHeight` would have left a blank band above the hint, so the panel collapses with no tabs. DS-19 draws that pane.
 

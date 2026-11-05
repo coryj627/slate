@@ -115,6 +115,7 @@ public sealed class TabStripTests
         var model = (WorkspaceTabViewModel)tab.DataContext;
         Assert.Equal("Saved", AutomationProperties.GetItemStatus(tab));
         Assert.StartsWith(model.Title, AutomationProperties.GetName(tab), StringComparison.Ordinal);
+        Assert.Equal(new[] { model.Title, $"Close {model.Title}" }, ReaderOrder(tab));
 
         model.Text = "# Changed\n";
         host.Settle();
@@ -122,7 +123,19 @@ public sealed class TabStripTests
         Assert.Equal("Unsaved changes", AutomationProperties.GetItemStatus(tab));
         TextBlock marker = ShownShell.Descendants(tab).OfType<TextBlock>().Single(text => AutomationProperties.GetName(text) == "Unsaved changes");
         Assert.True(marker.IsVisible, "the dirty marker isn't showing");
+        Assert.Equal(new[] { model.Title, "Unsaved changes", $"Close {model.Title}" }, ReaderOrder(tab));
     });
+
+    /// <summary>What a reader walks inside a tab, in the order it walks it.</summary>
+    private static string[] ReaderOrder(TabItem tab)
+    {
+        AutomationPeer peer = UIElementAutomationPeer.CreatePeerForElement(tab);
+        peer.InvalidatePeer();
+        return PeersUnder(peer)
+            .Where(child => child.IsControlElement() || child.IsContentElement())
+            .Select(child => child.GetName())
+            .ToArray();
+    }
 
     [Theory]
     [InlineData("a.md", 0xE8A5)]

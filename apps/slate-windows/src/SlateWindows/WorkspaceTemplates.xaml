@@ -266,15 +266,19 @@
                   DataType="{x:Type local:WorkspaceTabViewModel}">
         <!-- DS-8: icon at 8, label at 32, and a title that takes what's left, so a long one
              is cut. A dock gives its children room in order, so the close button comes first,
-             and a narrow split takes from the title and the icon before it takes from that. -->
+             and a narrow split takes from the title and the icon before it takes from that.
+             A reader walks visual order, which follows ZIndex, so that keeps what it's always
+             heard: the title, the dirty marker, then the close button. -->
         <DockPanel>
             <Button DockPanel.Dock="Right"
+                    Panel.ZIndex="3"
                     Style="{DynamicResource Slate.TabCloseButtonStyle}"
                     Content="&#xE711;"
                     AutomationProperties.Name="{Binding Title, StringFormat=Close {0}}"
                     Command="{Binding DataContext.Workspace.CloseTabCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                     CommandParameter="{Binding}" />
             <TextBlock DockPanel.Dock="Right"
+                       Panel.ZIndex="2"
                        Text="{Binding DirtyMarker}"
                        VerticalAlignment="Center"
                        Visibility="{Binding IsDirty, Converter={StaticResource BooleanToVisibilityConverter}}"
@@ -285,7 +289,8 @@
                                                    FontFamily="{DynamicResource SymbolThemeFontFamily}"
                                                    FontSize="16"
                                                    Text="{Binding KindGlyph}" />
-            <TextBlock Text="{Binding Title}"
+            <TextBlock Panel.ZIndex="1"
+                       Text="{Binding Title}"
                        VerticalAlignment="Center"
                        TextTrimming="CharacterEllipsis" />
         </DockPanel>
