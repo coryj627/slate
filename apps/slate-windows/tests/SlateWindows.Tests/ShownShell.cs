@@ -50,7 +50,7 @@ internal sealed class ShownShell : IDisposable
         }
 
         Workspace = new WorkspaceViewModel(
-            _session, _fixture.Root, () => [], Announced.Add, dirtyCloseDecision: dirtyCloseDecision, startInteractionBackgroundWork: true);
+            _session, _fixture.Root, Array.Empty<string>, Announced.Add, dirtyCloseDecision: dirtyCloseDecision, startInteractionBackgroundWork: true);
         // Registers the pack: scheme and its application authority without
         // constructing an Application (TextBoxAccessibilityTests explains).
         System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(typeof(Application).TypeHandle);

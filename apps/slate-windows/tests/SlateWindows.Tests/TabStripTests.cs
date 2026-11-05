@@ -126,14 +126,18 @@ public sealed class TabStripTests
         Assert.Equal(new[] { model.Title, "Unsaved changes", $"Close {model.Title}" }, ReaderOrder(tab));
     });
 
-    /// <summary>What a reader walks inside a tab, in the order it walks it.</summary>
+    /// <summary>What a reader walks in a tab's header, in the order it walks it: visual
+    /// order, which is what UIA's tree follows. Only the header, because a selected tab's own
+    /// peer also holds its content once that's been realized.</summary>
     private static string[] ReaderOrder(TabItem tab)
     {
-        AutomationPeer peer = UIElementAutomationPeer.CreatePeerForElement(tab);
-        peer.InvalidatePeer();
-        return PeersUnder(peer)
-            .Where(child => child.IsControlElement() || child.IsContentElement())
-            .Select(child => child.GetName())
+        DockPanel header = ShownShell.Descendants(tab).OfType<DockPanel>().First();
+        return Enumerable.Range(0, VisualTreeHelper.GetChildrenCount(header))
+            .Select(index => (UIElement)VisualTreeHelper.GetChild(header, index))
+            .Where(child => child.IsVisible)
+            .Select(UIElementAutomationPeer.CreatePeerForElement)
+            .Where(peer => peer is not null && (peer.IsControlElement() || peer.IsContentElement()))
+            .Select(peer => peer.GetName())
             .ToArray();
     }
 

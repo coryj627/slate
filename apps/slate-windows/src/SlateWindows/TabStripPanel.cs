@@ -24,12 +24,6 @@ internal sealed class TabStripPanel : TabPanel
     public static readonly DependencyProperty IsRowStartProperty = DependencyProperty.RegisterAttached(
         "IsRowStart", typeof(bool), typeof(TabStripPanel), new PropertyMetadata(false));
 
-    public TabStripPanel()
-    {
-        // Choosing a tab can move its row. TabPanel doesn't ask for that itself.
-        AddHandler(Selector.SelectedEvent, new RoutedEventHandler((_, _) => InvalidateArrange()));
-    }
-
     public static bool GetIsRowStart(DependencyObject element) => (bool)element.GetValue(IsRowStartProperty);
 
     public static void SetIsRowStart(DependencyObject element, bool value) => element.SetValue(IsRowStartProperty, value);
