@@ -63,6 +63,35 @@
         <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
         <Setter Property="FontWeight" Value="SemiBold" />
     </Style>
+    <!-- DS-10: one setting as a card. SettingRow names its control from PART_Label. -->
+    <ControlTemplate x:Key="Slate.SettingRowTemplate" TargetType="local:SettingRow">
+        <Border MinHeight="68"
+                Padding="16,12"
+                CornerRadius="4"
+                Background="{DynamicResource Slate.SurfaceBrush}"
+                BorderBrush="{DynamicResource Slate.SubtleBorderBrush}"
+                BorderThickness="1"
+                SnapsToDevicePixels="True">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Margin="0,0,16,0" VerticalAlignment="Center">
+                    <TextBlock x:Name="PART_Label"
+                               Text="{TemplateBinding Label}"
+                               TextWrapping="Wrap"
+                               Style="{DynamicResource Slate.BodyTextBlockStyle}" />
+                    <TextBlock Margin="0,2,0,0"
+                               Text="{TemplateBinding Description}"
+                               TextWrapping="Wrap"
+                               Foreground="{DynamicResource Slate.SecondaryTextBrush}"
+                               Style="{DynamicResource Slate.CaptionTextBlockStyle}" />
+                </StackPanel>
+                <ContentPresenter Grid.Column="1" VerticalAlignment="Center" />
+            </Grid>
+        </Border>
+    </ControlTemplate>
     <!-- DS-9: an icon-only button is its glyph until it's used. Whole, because a style
          on nothing falls back to classic (#1767). The glyph is a presentation text block,
          so nothing is named by it, and the button's name is its tooltip too: a site with

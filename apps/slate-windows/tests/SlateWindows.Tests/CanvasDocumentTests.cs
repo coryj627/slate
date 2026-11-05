@@ -2889,6 +2889,12 @@ public sealed class CanvasDocumentTests : IDisposable
 
         public System.Windows.Input.ICommand FindInNoteCommand =>
             throw new NotSupportedException();
+
+        public System.Windows.Input.ICommand OpenSettingsCommand =>
+            throw new NotSupportedException();
+
+        public System.Windows.Input.ICommand SwitchThemeCommand =>
+            throw new NotSupportedException();
     }
 
     // --- B2: a disk change the shell made must reach the surface -----------

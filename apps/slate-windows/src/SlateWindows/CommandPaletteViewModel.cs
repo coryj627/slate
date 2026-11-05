@@ -25,6 +25,25 @@ internal sealed record CommandPaletteMatchRun(int Start, int Length);
 /// </summary>
 internal sealed record CommandPaletteLabelSegment(string Text, bool IsMatch);
 
+/// <summary>One row of a list of choices.</summary>
+internal sealed record PaletteChoice(string Id, string Label);
+
+/// <summary>
+/// DS-10 (#1811): the palette's second level: the rows a command puts in place of the
+/// commands, for a setting with a few values. The list opens on the current one.
+/// </summary>
+/// <param name="Prompt">The search field's name and prompt.</param>
+/// <param name="CurrentStatus">What the current row's item status says.</param>
+/// <param name="Choices">The rows, in the order an empty query lists them.</param>
+/// <param name="CurrentId">The one the setting holds now.</param>
+/// <param name="Choose">Applies a choice. The palette then closes.</param>
+internal sealed record PaletteChoices(
+    string Prompt,
+    string CurrentStatus,
+    IReadOnlyList<PaletteChoice> Choices,
+    string CurrentId,
+    Action<PaletteChoice> Choose);
+
 /// <summary>
 /// One palette row. Purely data: the view binds it, the view model
 /// navigates it. Match runs are pre-converted to UTF-16; no WPF object
@@ -38,8 +57,11 @@ internal sealed class CommandPaletteRowViewModel
         IReadOnlyList<CommandPaletteMatchRun> labelMatchRuns,
         IReadOnlyList<CommandPaletteLabelSegment> labelSegments,
         int score,
-        string? disabledReason)
+        string? disabledReason,
+        PaletteChoices? choices = null)
     {
+        IsChoice = choices is not null;
+        ItemStatus = choices?.CurrentId == command.Id ? choices.CurrentStatus : null;
         Id = command.Id;
         Label = command.Label;
         AccessibilityHint = command.AccessibilityHint;
@@ -57,6 +79,16 @@ internal sealed class CommandPaletteRowViewModel
     public string Label { get; }
 
     public string? AccessibilityHint { get; }
+
+    /// <summary>DS-10: whether this row is one of a list of choices, which keeps a place
+    /// for the check.</summary>
+    public bool IsChoice { get; }
+
+    /// <summary>DS-10: says this is the current choice, on the current row only.</summary>
+    public string? ItemStatus { get; }
+
+    /// <summary>DS-10: the check on the current choice.</summary>
+    public string ChoiceMark => ItemStatus is null ? string.Empty : "\uE73E";
 
     /// <summary>
     /// The registration-supplied chord hint. Presentation-only here;
@@ -253,6 +285,20 @@ internal sealed class CommandPaletteViewModel : BindableBase
     internal const string EmptyRegistryDetail = "Open a vault to access the palette.";
     internal const string NoMatchesTitle = "No matches";
 
+    /// <summary>DS-10: a list of choices' empty state, which quotes nothing, so its name
+    /// and its line can't differ.</summary>
+    internal const string NoChoiceMatchesDetail = "Try fewer letters or a different word.";
+
+    internal const string CommandsFieldName = "Search commands";
+
+    private const string CommandsFieldHelp =
+        "Up and Down move selection. Home, End, Page Up and Page Down jump. Enter runs the selected command. Escape closes the palette.";
+
+    private const string ChoicesFieldHelp =
+        "Up and Down move selection. Enter chooses. Escape closes the palette.";
+
+    private const string ChoicesFromCommandsFieldHelp =
+        "Up and Down move selection. Enter chooses. Escape goes back to the commands.";
 
     /// <summary>The filter count's trailing window (P10, amended): the search
     /// overlay's 150 ms, so a typed query speaks once for its latest state.</summary>
@@ -298,6 +344,10 @@ internal sealed class CommandPaletteViewModel : BindableBase
     private bool _suppressSelectionAnnouncement;
     private int _pageSize = 10;
     private int _queryChangesSinceOpen;
+    private PaletteChoices? _choices;
+    private CommandsLevel? _commandsLevel;
+    private CommandPaletteRowViewModel? _invokingRow;
+    private bool _choicesOpenedByInvoke;
 
     /// <param name="source">The command layer (registry, availability, recents).</param>
     /// <param name="announce">The shell's one announcement funnel.</param>
@@ -341,6 +391,10 @@ internal sealed class CommandPaletteViewModel : BindableBase
     /// counts speak only after queued input has been dispatched. Null without
     /// a dispatcher context (the facts' synchronous or custom contexts).</summary>
     private readonly System.Windows.Threading.Dispatcher? _ownerDispatcher;
+
+    /// <summary>DS-10: what Esc goes back to from a list of choices a command opened: its
+    /// snapshot, the query and the command's row.</summary>
+    private sealed record CommandsLevel(Task<PaletteSnapshot> SnapshotLoad, string Query, string RowId, string RowLabel);
 
     /// <summary>The open-time snapshot (contract P4): the command list and the
     /// recents, loaded together off the UI thread.</summary>
@@ -551,7 +605,9 @@ internal sealed class CommandPaletteViewModel : BindableBase
 
     /// <summary>The showing empty state's visible detail line.</summary>
     public string EmptyStateDetail =>
-        ShowsEmptyRegistry ? EmptyRegistryDetail : NoMatchesDetail;
+        ShowsEmptyRegistry
+            ? EmptyRegistryDetail
+            : _choices is null ? NoMatchesDetail : NoChoiceMatchesDetail;
 
     /// <summary>
     /// The showing empty state's accessible name — the whole block reads
@@ -561,7 +617,18 @@ internal sealed class CommandPaletteViewModel : BindableBase
     public string EmptyStateAccessibleName =>
         ShowsEmptyRegistry
             ? $"{EmptyRegistryTitle}. {EmptyRegistryDetail}"
-            : NoMatchesAccessibleName;
+            : _choices is null ? NoMatchesAccessibleName : $"{NoMatchesTitle}. {NoChoiceMatchesDetail}";
+
+    /// <summary>DS-10: whether the rows are a list of choices rather than the commands.</summary>
+    public bool IsChoosing => _choices is not null;
+
+    /// <summary>DS-10: the search field's name, which its visible prompt follows.</summary>
+    public string SearchFieldName => _choices?.Prompt ?? CommandsFieldName;
+
+    public string SearchFieldHelp =>
+        _choices is null
+            ? CommandsFieldHelp
+            : _commandsLevel is null ? ChoicesFieldHelp : ChoicesFromCommandsFieldHelp;
 
     /// <summary>
     /// Open the palette. Refuses without a vault: announces
@@ -605,8 +672,12 @@ internal sealed class CommandPaletteViewModel : BindableBase
         // comment above claimed a whole-lifetime snapshot; this is what
         // makes it true. Re-opening still clears the query and the
         // selection, which is the visible half of PD-2.
-        if (!_isOpen)
+        //
+        // DS-10: a re-open from a list of choices is the commands again, so it loads them.
+        if (!_isOpen || _choices is not null)
         {
+            _choices = null;
+            _commandsLevel = null;
             _snapshotCancellation = new CancellationTokenSource();
             _snapshotLoaded = false;
             IPaletteCommandSource source = _source;
@@ -628,7 +699,104 @@ internal sealed class CommandPaletteViewModel : BindableBase
         OnPropertyChanged(nameof(SelectedId));
         OnPropertyChanged(nameof(SelectedRow));
         OnPropertyChanged(nameof(IsOpen));
+        RaiseLevelChanged();
         RequestRank();
+    }
+
+    /// <summary>
+    /// DS-10 (#1811): replaces the rows with <paramref name="choices"/>, opening the palette
+    /// if it's closed. A vault doesn't come into it: these aren't its commands. From a
+    /// palette row Esc goes back to the commands; opened any other way, it closes.
+    /// </summary>
+    /// <remarks>
+    /// The rows go through core's ranking and the lane like any others, so what the list
+    /// shows, what the keys navigate and what Enter runs stay one query's (P18). Input order
+    /// is what an empty query keeps, and the selection is seeded on the current choice, which
+    /// the P7 rule then keeps.
+    /// </remarks>
+    internal void OpenChoices(PaletteChoices choices)
+    {
+        ArgumentNullException.ThrowIfNull(choices);
+        if (_isShutDown || _inModalLoop)
+        {
+            return;
+        }
+
+        _commandsLevel = _isInvoking && _invokingRow is { } row
+            ? new CommandsLevel(_snapshotLoad, _query, row.Id, row.Label)
+            : null;
+        _choices = choices;
+        _snapshotLoad = Task.FromResult(new PaletteSnapshot(
+            choices.Choices
+                .Select(choice => new Command(choice.Id, choice.Label, null, null, CommandSection.View))
+                .ToArray(),
+            []));
+        _snapshotLoaded = false;
+        _sections = [];
+        _rows = [];
+        _query = string.Empty;
+        _selectedId = choices.CurrentId;
+        _selectedRow = null;
+        _suppressSelectionAnnouncement = true;
+        _isOpen = true;
+        OnPropertyChanged(nameof(Query));
+        OnPropertyChanged(nameof(SelectedId));
+        OnPropertyChanged(nameof(SelectedRow));
+        OnPropertyChanged(nameof(IsOpen));
+        RaiseLevelChanged();
+        RaiseDerivedState();
+        if (_isInvoking)
+        {
+            // The seal drops a publication, so the rows wait for the command to return.
+            _choicesOpenedByInvoke = true;
+        }
+        else
+        {
+            ShowChoices(choices);
+        }
+    }
+
+    private void ShowChoices(PaletteChoices choices)
+    {
+        _announce(new A11yEvent.PaletteChoicesOpened(
+            choices.Prompt,
+            choices.Choices.First(choice => choice.Id == choices.CurrentId).Label));
+        RequestRank();
+    }
+
+    /// <summary>Esc: from choices a command opened, back to the commands, on that command's
+    /// row; otherwise the palette closes.</summary>
+    public void BackOrDismiss()
+    {
+        if (_choices is null || _commandsLevel is not { } level)
+        {
+            Dismiss();
+            return;
+        }
+
+        _choices = null;
+        _commandsLevel = null;
+        _snapshotLoad = level.SnapshotLoad;
+        _sections = [];
+        _rows = [];
+        _query = level.Query;
+        _selectedId = level.RowId;
+        _selectedRow = null;
+        _suppressSelectionAnnouncement = true;
+        OnPropertyChanged(nameof(Query));
+        OnPropertyChanged(nameof(SelectedId));
+        OnPropertyChanged(nameof(SelectedRow));
+        RaiseLevelChanged();
+        RaiseDerivedState();
+        _announce(new A11yEvent.PaletteCommandSelected(level.RowLabel, _source.DisabledReason(level.RowId)));
+        RequestRank();
+    }
+
+    private void RaiseLevelChanged()
+    {
+        OnPropertyChanged(nameof(IsChoosing));
+        OnPropertyChanged(nameof(SearchFieldName));
+        OnPropertyChanged(nameof(SearchFieldHelp));
     }
 
     /// <summary>
@@ -647,6 +815,8 @@ internal sealed class CommandPaletteViewModel : BindableBase
         _rows = [];
         _selectedId = null;
         _selectedRow = null;
+        _choices = null;
+        _commandsLevel = null;
         LastRecomputeTiming = null;
         // Whatever is still loading or ranking belongs to a palette that is
         // gone: stop what has not started, and let a newer generation make
@@ -660,6 +830,7 @@ internal sealed class CommandPaletteViewModel : BindableBase
         OnPropertyChanged(nameof(SelectedId));
         OnPropertyChanged(nameof(SelectedRow));
         OnPropertyChanged(nameof(IsOpen));
+        RaiseLevelChanged();
         RaiseDerivedState();
         Dismissed?.Invoke(this, EventArgs.Empty);
     }
@@ -827,6 +998,18 @@ internal sealed class CommandPaletteViewModel : BindableBase
 
         SearchFocusRequested?.Invoke(this, EventArgs.Empty);
 
+        // DS-10: a choice isn't a command: no availability, no registry, no recents.
+        if (_choices is { } choices)
+        {
+            if (choices.Choices.FirstOrDefault(choice => choice.Id == row.Id) is { } chosen)
+            {
+                choices.Choose(chosen);
+                Dismiss();
+            }
+
+            return;
+        }
+
         // Contract P8: re-evaluated here rather than trusted from the
         // render-time value carried on the row.
         if (_source.DisabledReason(row.Id) is string reason)
@@ -839,6 +1022,7 @@ internal sealed class CommandPaletteViewModel : BindableBase
         }
 
         A11yEvent? failure = null;
+        _invokingRow = row;
         BeginInvocation();
         try
         {
@@ -870,6 +1054,7 @@ internal sealed class CommandPaletteViewModel : BindableBase
             // The seal lasts exactly as long as the command: however it
             // returns — or throws something unexpected — it ends here.
             _isInvoking = false;
+            _invokingRow = null;
             if (!IsSealed)
             {
                 SealReleased?.Invoke(this, EventArgs.Empty);
@@ -896,6 +1081,16 @@ internal sealed class CommandPaletteViewModel : BindableBase
                 ResumeIfOwed();
             }
 
+            return;
+        }
+
+        // DS-10: the command put choices in the rows, so it succeeded and the palette stays.
+        if (_choicesOpenedByInvoke)
+        {
+            _choicesOpenedByInvoke = false;
+            _resumeRanking = false;
+            RecordCompletion = RecordOnLane(row.Id);
+            ShowChoices(_choices!);
             return;
         }
 
@@ -1365,7 +1560,7 @@ internal sealed class CommandPaletteViewModel : BindableBase
                 // Dispatcher-affine (the resolver reads live ICommand
                 // state), so it is asked here, on the owning thread.
                 long asked = timed is null ? 0 : Stopwatch.GetTimestamp();
-                string? disabledReason = _source.DisabledReason(row.Command.Id);
+                string? disabledReason = _choices is null ? _source.DisabledReason(row.Command.Id) : null;
                 if (timed is not null)
                 {
                     availabilityTicks += Stopwatch.GetTimestamp() - asked;
@@ -1377,7 +1572,8 @@ internal sealed class CommandPaletteViewModel : BindableBase
                     matchRuns,
                     ToLabelSegments(row.Command.Label, matchRuns),
                     row.Score,
-                    disabledReason);
+                    disabledReason,
+                    _choices);
                 sectionRows.Add(built);
                 rows.Add(built);
             }
@@ -1420,7 +1616,9 @@ internal sealed class CommandPaletteViewModel : BindableBase
         if (query.Length > 0 && _countWindow is CountWindow window && window.Generation == generation)
         {
             _filterCountCompletion = SpeakAfterWindowAsync(
-                new A11yEvent.PaletteFilterCount((uint)_rows.Length, query),
+                _choices is null
+                    ? new A11yEvent.PaletteFilterCount((uint)_rows.Length, query)
+                    : new A11yEvent.PaletteChoiceFilterCount((uint)_rows.Length, query),
                 window);
         }
     }
@@ -1614,7 +1812,9 @@ internal sealed class CommandPaletteViewModel : BindableBase
         // The same availability resolver that built the row, re-asked
         // so the announcement cannot disagree with the Enter gate
         // (contract P8).
-        _announce(new A11yEvent.PaletteCommandSelected(row.Label, _source.DisabledReason(row.Id)));
+        _announce(_choices is { } choices
+            ? new A11yEvent.PaletteChoiceSelected(row.Label, row.Id == choices.CurrentId)
+            : new A11yEvent.PaletteCommandSelected(row.Label, _source.DisabledReason(row.Id)));
     }
 
     private int IndexOfSelection() =>

@@ -575,6 +575,10 @@ public sealed class CommandRegistrationTests
             new StubCommand(() => FindInNoteInvocations++, () => true);
 
         public int FindInNoteInvocations { get; private set; }
+
+        public ICommand OpenSettingsCommand => new StubCommand(() => { }, () => true);
+
+        public ICommand SwitchThemeCommand => new StubCommand(() => { }, () => true);
     }
 
     private sealed class StubCommand : ICommand

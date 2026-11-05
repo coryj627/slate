@@ -229,6 +229,16 @@ public sealed class ItemContainerNameCensus
             // --- authored XAML: MainWindow.xaml ---
             ["Recent vaults"] = new ContainerNaming.Layout(
                 "each button's name carries the shortest folder that tells its vault apart when another recent vault shares its display name (RecentVault.SpokenName, #1311)"),
+            ["SettingsCategories"] = new ContainerNaming.Bound(
+                typeof(SettingsCategory), nameof(SettingsCategory.Label), null)
+            {
+                Distinct = "one row per category, each with its own label",
+            },
+            ["SettingsTheme"] = new ContainerNaming.Bound(
+                typeof(ThemeOption), nameof(ThemeOption.Label), null)
+            {
+                Distinct = "the three labels in ThemeChoice.Options",
+            },
             ["SidebarSortOrder"] = new ContainerNaming.Bound(
                 typeof(SidebarSortMode), string.Empty, "SidebarSortModeLabelConverter")
             {

@@ -196,6 +196,9 @@ public sealed partial class CommandPaletteTests
 
         public VaultLifecycleViewModel Lifecycle => _lifecycle;
 
+        /// <summary>A path in the fixture, for a fact's device state.</summary>
+        public string FileInFixture(string name) => Path.Combine(_fixture.Root, name);
+
         /// <summary>The window the shell's content lives in — the owner a
         /// real dialog over the shell takes.</summary>
         public Window Window => _window;

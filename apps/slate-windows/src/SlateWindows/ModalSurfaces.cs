@@ -78,6 +78,10 @@ internal enum ModalSurface
     /// FOLLOWS the picker in the connect flow, so between the two it
     /// must win the tie.</summary>
     CanvasPrompt,
+
+    /// <summary>DS-10 (#1811): the Settings sheet. Newest paint, and on the lifecycle
+    /// rather than the workspace: it opens with no vault.</summary>
+    Settings,
 }
 
 /// <summary>
@@ -153,7 +157,8 @@ internal readonly record struct ModalSurfaceState(
     bool MoveTo,
     bool CanvasCardEditor,
     bool CanvasCardPicker = false,
-    bool CanvasPrompt = false);
+    bool CanvasPrompt = false,
+    bool Settings = false);
 
 /// <summary>
 /// The modal-surface precedence rules, as pure functions.
@@ -262,6 +267,7 @@ internal static class ModalSurfaces
             ModalSurface.CanvasCardEditor => state.CanvasCardEditor,
             ModalSurface.CanvasCardPicker => state.CanvasCardPicker,
             ModalSurface.CanvasPrompt => state.CanvasPrompt,
+            ModalSurface.Settings => state.Settings,
         };
 
     /// <summary>
@@ -401,6 +407,26 @@ internal static class ModalSurfaces
     /// which holds typed keys worth more than a restart.
     /// </summary>
     internal static PaletteOpenDecision DecideBulkRenameOpen(ModalSurface? topmost) =>
+        topmost switch
+        {
+            null => PaletteOpenDecision.Open,
+
+            ModalSurface.QuickOpen => PaletteOpenDecision.DismissQuickOpenThenOpen,
+
+            ModalSurface.SearchOverlay => PaletteOpenDecision.DismissSearchThenOpen,
+
+            ModalSurface.CommandPalette => PaletteOpenDecision.DismissPaletteThenOpen,
+
+            _ => PaletteOpenDecision.Refuse,
+        };
+
+    /// <summary>
+    /// Whether the Settings sheet may open, given what is already up (DS-10,
+    /// #1811). The template flow's arms: the overlays are superseded, the
+    /// palette is RETIRED so its Settings… row works during P9's sanctioned
+    /// transient, and every sheet refuses, the Settings sheet itself included.
+    /// </summary>
+    internal static PaletteOpenDecision DecideSettingsOpen(ModalSurface? topmost) =>
         topmost switch
         {
             null => PaletteOpenDecision.Open,

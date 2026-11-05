@@ -57,7 +57,8 @@ public partial class App : Application
         // live Windows Contrast transitions.
         _textScale = new TextScaleService();
         TextScaleService.Current = _textScale;
-        _themeManager = new ThemeManager(this, ThemeManager.ReadSystemTheme());
+        // DS-10: the store first, so the first paint is the chosen theme.
+        _themeManager = new ThemeManager(this, new AppPreferencesStore().Load().Theme);
 
         if (e.Args.Contains("--census-dpi-probe"))
         {

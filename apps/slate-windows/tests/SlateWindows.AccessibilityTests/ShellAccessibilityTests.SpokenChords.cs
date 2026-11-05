@@ -133,7 +133,11 @@ public sealed partial class ShellAccessibilityTests
             WaitForElement(window, "MarkdownEditor", TimeSpan.FromSeconds(10)).Focus();
             PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_P);
             AutomationElement palette = WaitForElement(window, "CommandPaletteSearch", TimeSpan.FromSeconds(10));
-            Assert.Equal(LiteralHelp("CommandPaletteSearch"), palette.Properties.HelpText.Value);
+            // DS-10: the palette's field says what its current level does, so its help is
+            // bound, and the commands' words are the view model's.
+            Assert.Equal(
+                "Up and Down move selection. Home, End, Page Up and Page Down jump. Enter runs the selected command. Escape closes the palette.",
+                palette.Properties.HelpText.Value);
             AutomationElement results = WaitForElement(window, "CommandPaletteResults", TimeSpan.FromSeconds(10));
             JsonElement[] registered = rows.Values.Where(row => row.GetProperty("registered").GetBoolean()).ToArray();
             Assert.NotEmpty(registered);

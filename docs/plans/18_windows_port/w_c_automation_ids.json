@@ -1971,6 +1971,46 @@
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "SettingsCategories",
+    "Surface": "Settings (DS-10)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SettingsClose",
+    "Surface": "Settings (DS-10)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SettingsMenuItem",
+    "Surface": "Settings (DS-10)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SettingsPage",
+    "Surface": "Settings (DS-10)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SettingsSheet",
+    "Surface": "Settings (DS-10)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SettingsTheme",
+    "Surface": "Settings (DS-10)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SwitchThemeMenuItem",
+    "Surface": "Settings (DS-10)"
+  },
+  {
+    "Source": "Themes/Slate.Text.xaml",
+    "Expression": "PART_Label",
+    "Surface": "Settings (DS-10)"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "SearchVaultMenuItem",
     "Surface": "Search overlay (W5-2)"
   },

@@ -48,6 +48,77 @@ public sealed class AppPreferencesStoreTests : IDisposable
         Assert.True(store.Load().ReadingLinksOpenInNewTab);
     }
 
+    /// <summary>DS-10 (#1811): a choice comes back from a new store, as the next launch
+    /// reads it, and goes on disk under the key the Mac ignores.</summary>
+    [Fact]
+    public void AThemeChoiceSurvivesARestart()
+    {
+        var applied = new List<string>();
+        new ThemePreference(CreateStore(), applied.Add).Choose(ThemeChoice.Light);
+
+        Assert.Equal(ThemeChoice.Light, CreateStore().Load().Theme);
+        Assert.Equal(ThemeChoice.Light, new ThemePreference(CreateStore(), applied.Add).Current);
+        Assert.Contains("\"theme\": \"light\"", File.ReadAllText(StorePath), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("{\"theme\":null}")]
+    [InlineData("{\"theme\":\"sepia\"}")]
+    [InlineData("{\"theme\":\"LIGHT\"}")]
+    [InlineData("not json")]
+    public void AnUnknownThemeIsTheDefault(string file)
+    {
+        File.WriteAllText(StorePath, file);
+
+        Assert.Equal(ThemeChoice.UseWindowsSetting, CreateStore().Load().Theme);
+    }
+
+    /// <summary>Every preference shares this file, so saving another must not lose it.</summary>
+    [Fact]
+    public void AnotherPreferenceKeepsTheTheme()
+    {
+        AppPreferencesStore store = CreateStore();
+        new ThemePreference(store, _ => { }).Choose(ThemeChoice.Dark);
+        using var preferences = new EditorPreferencesViewModel(
+            _ => { },
+            new FakeEditorSpellingService(),
+            preferencesStore: store);
+
+        preferences.ToggleReadingLinkTargetCommand.Execute(null);
+
+        Assert.False(CreateStore().Load().ReadingLinksOpenInNewTab);
+        Assert.Equal(ThemeChoice.Dark, CreateStore().Load().Theme);
+    }
+
+    /// <summary>A choice that can't be written still shows, as every other preference's
+    /// does, and this launch keeps it.</summary>
+    [Fact]
+    public void AThemeThatCannotBeSavedStillApplies()
+    {
+        string blocked = Path.Combine(_directory, "a-file");
+        File.WriteAllText(blocked, string.Empty);
+        var applied = new List<string>();
+        var preference = new ThemePreference(new AppPreferencesStore(Path.Combine(blocked, "preferences.json")), applied.Add);
+
+        preference.Choose(ThemeChoice.Dark);
+
+        Assert.Equal(new[] { ThemeChoice.Dark }, applied);
+        Assert.Equal(ThemeChoice.Dark, preference.Current);
+    }
+
+    [Fact]
+    public void ChoosingTheCurrentThemeDoesNothing()
+    {
+        var applied = new List<string>();
+        var preference = new ThemePreference(CreateStore(), applied.Add);
+
+        preference.Choose(ThemeChoice.UseWindowsSetting);
+
+        Assert.Empty(applied);
+        Assert.False(File.Exists(StorePath));
+    }
+
     [Fact]
     public void SaveAndLoadRoundTripsBothValues()
     {

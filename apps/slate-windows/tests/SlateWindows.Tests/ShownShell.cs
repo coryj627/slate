@@ -76,6 +76,9 @@ internal sealed class ShownShell : IDisposable
         }
 
         _lifecycle = Assert.IsType<VaultLifecycleViewModel>(Shell.DataContext);
+        _lifecycle.ThemePreference = new ThemePreference(
+            new AppPreferencesStore(Path.Combine(_fixture.Root, "preferences.json")),
+            preference => ThemesApplied.Add(preference));
         _slot.SetValue(_lifecycle, Workspace);
         _open.SetValue(_lifecycle, true);
         Shell.Show();
@@ -98,6 +101,13 @@ internal sealed class ShownShell : IDisposable
 
     /// <summary>What the workspace has announced, in order.</summary>
     public List<A11yEvent> Announced { get; } = [];
+
+    /// <summary>The window's lifecycle, for a fact on what lives there rather than on the
+    /// workspace.</summary>
+    public VaultLifecycleViewModel Lifecycle => _lifecycle;
+
+    /// <summary>Each theme preference applied: there's no <see cref="ThemeManager"/> here.</summary>
+    public List<string> ThemesApplied { get; } = [];
 
     public void Settle()
     {

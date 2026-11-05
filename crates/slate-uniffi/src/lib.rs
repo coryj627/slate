@@ -9926,6 +9926,21 @@ pub enum A11yEvent {
     PaletteCommandUnavailable {
         reason: String,
     },
+    PaletteChoicesOpened {
+        prompt: String,
+        current: String,
+    },
+    PaletteChoiceSelected {
+        label: String,
+        is_current: bool,
+    },
+    PaletteChoiceFilterCount {
+        count: u32,
+        query: String,
+    },
+    ThemeChosen {
+        label: String,
+    },
     RecentSearchFocused {
         query: String,
     },
@@ -11760,6 +11775,16 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::PaletteCommandFailed { label, detail } => C::PaletteCommandFailed { label, detail },
             F::PaletteCommandNotFound { id } => C::PaletteCommandNotFound { id },
             F::PaletteCommandUnavailable { reason } => C::PaletteCommandUnavailable { reason },
+            F::PaletteChoicesOpened { prompt, current } => {
+                C::PaletteChoicesOpened { prompt, current }
+            }
+            F::PaletteChoiceSelected { label, is_current } => {
+                C::PaletteChoiceSelected { label, is_current }
+            }
+            F::PaletteChoiceFilterCount { count, query } => {
+                C::PaletteChoiceFilterCount { count, query }
+            }
+            F::ThemeChosen { label } => C::ThemeChosen { label },
             F::RecentSearchFocused { query } => C::RecentSearchFocused { query },
             F::QuickSwitcherCount { count, query } => C::QuickSwitcherCount { count, query },
             F::BaseViewMode { mode } => C::BaseViewMode { mode },

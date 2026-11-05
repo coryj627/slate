@@ -90,8 +90,13 @@ internal sealed class CommandPaletteResultsPresenter : IDisposable
         CommandPaletteRecomputeTiming? timing = _palette.LastRecomputeTiming;
         long swapStarted = timing is null ? 0 : Stopwatch.GetTimestamp();
         var grouped = new CollectionViewSource { Source = _palette.Rows };
-        grouped.GroupDescriptions.Add(
-            new PropertyGroupDescription(nameof(CommandPaletteRowViewModel.SectionTitle)));
+        // DS-10: choices are one list, with no section to head it.
+        if (!_palette.IsChoosing)
+        {
+            grouped.GroupDescriptions.Add(
+                new PropertyGroupDescription(nameof(CommandPaletteRowViewModel.SectionTitle)));
+        }
+
         _syncingSelection = true;
         try
         {
