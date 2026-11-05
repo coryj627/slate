@@ -2040,6 +2040,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         OnPropertyChanged(nameof(IsMarkdown));
         OnPropertyChanged(nameof(IsPlaceholder));
         OnPropertyChanged(nameof(KindLabel));
+        OnPropertyChanged(nameof(KindGlyph));
         OnPropertyChanged(nameof(PlaceholderText));
         // The item's KIND can change on an in-place replacement
         // (note → base, base → dashboard, …); the surface-visibility

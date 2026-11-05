@@ -1352,6 +1352,14 @@ public partial class MainWindow : Window
                 or ModalSurface.SearchOverlay
                 or ModalSurface.CommandPalette);
 
+        // DS-8 (#1809): a tab's close chords are bare KeyBindings, which a sheet doesn't stop
+        // by itself, so a clean tab would close, or a dirty tab prompt, behind it.
+        if (sheetOwnsKeys && modifiers == ModifierKeys.Control && e.Key is Key.W or Key.F4)
+        {
+            e.Handled = true;
+            return;
+        }
+
         if (e.Key == Key.F && modifiers == (ModifierKeys.Control | ModifierKeys.Alt))
         {
             if (sheetOwnsKeys)

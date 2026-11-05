@@ -137,6 +137,21 @@ public sealed class TabStripTests
         AssertTabIcon(Tabs(host).Single(), glyph);
     });
 
+    /// <summary>Opening another kind of item in the current tab reuses the tab.</summary>
+    [Fact]
+    public void AReusedTabChangesItsIcon() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "# A\n"), ("c.base", "# A\n"));
+        host.Workspace.OpenPath("a.md");
+        host.Settle();
+        AssertTabIcon(Tabs(host).Single(), 0xE8A5);
+
+        host.Workspace.OpenPath("c.base", WorkspaceOpenTarget.CurrentTab);
+        host.Settle();
+
+        AssertTabIcon(Tabs(host).Single(), 0xE8A9);
+    });
+
     [Fact]
     public void AGraphTabHasItsOwnIcon() => RunSta(() =>
     {
@@ -320,9 +335,50 @@ public sealed class TabStripTests
     });
 
     [Fact]
-    public void CtrlF4IsSwallowedUnderASheet() => Assert.True(
+    public void CtrlF4IsAShellChordThePickersSwallow() => Assert.True(
         MainWindow.IsUnderlyingShellShortcutForTests(Key.F4, ModifierKeys.Control),
-        "Ctrl+F4 isn't on the list of shell chords a sheet fences, so it would close a tab behind one.");
+        "Ctrl+F4 isn't on the list of shell chords the pickers swallow, so it would close a tab behind one.");
+
+    /// <summary>A close chord is a bare KeyBinding, which a sheet doesn't stop by itself:
+    /// neither a clean tab's close nor a dirty tab's prompt may run behind one.</summary>
+    [Theory]
+    [InlineData(Key.F4, false)]
+    [InlineData(Key.W, false)]
+    [InlineData(Key.F4, true)]
+    [InlineData(Key.W, true)]
+    public void ACloseChordDoesNothingBehindASheet(Key key, bool dirty) => RunSta(() =>
+    {
+        int asked = 0;
+        using var host = new ShownShell(
+            _ =>
+            {
+                asked++;
+                return WorkspaceDirtyNavigationDecision.Cancel;
+            },
+            ("a.md", "Just a line of text.\n"));
+        host.Workspace.OpenPath("a.md");
+        host.Settle();
+        if (dirty)
+        {
+            ((WorkspaceTabViewModel)Tabs(host).Single().DataContext).Text = "changed\n";
+            host.Settle();
+        }
+
+        host.Workspace.OpenAddPropertySheet(synchronousForTests: true);
+        host.Settle();
+        host.Settle();
+        Assert.NotNull(host.Shell.OpenModalSurface);
+        Assert.True(host.Shell.IsKeyboardFocusWithin, "premise: the sheet took no keys");
+
+        CommandPaletteTests.ThreadModifiers.Hold(ModifierKeys.Control, () => RaiseKey(host, key));
+        PumpedDispatcher.Drain();
+
+        Assert.Single(host.Workspace.ActiveGroup.Tabs);
+        Assert.Equal(0, asked);
+        Assert.NotNull(host.Shell.OpenModalSurface);
+        host.Workspace.CloseAddPropertySheetCommand.Execute(null);
+        host.Settle();
+    });
 
     [Fact]
     public void TheTableKnowsBothChords()
