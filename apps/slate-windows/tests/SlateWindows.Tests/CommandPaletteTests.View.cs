@@ -64,6 +64,11 @@ public sealed partial class CommandPaletteTests
         Assert.NotNull(host.List.ItemContainerGenerator.ContainerFromItem(host.Palette.SelectedRow));
         PumpedDispatcher.Drain();
         Assert.Empty(PendingLayout(host.List));
+
+        // A query nothing matches ends with no selection, so its rows are all it changes.
+        host.Palette.Query = "no such row";
+        Assert.Null(host.Palette.SelectedRow);
+        Assert.Empty(PendingLayout(host.List));
     });
 
     /// <summary>Everything in the list still waiting on a layout pass: a viewer's arrangement
