@@ -82,14 +82,17 @@
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ButtonBase">
-                    <Border Margin="{TemplateBinding Padding}"
-                            Background="{TemplateBinding Background}"
-                            BorderBrush="{TemplateBinding BorderBrush}"
-                            BorderThickness="{TemplateBinding BorderThickness}"
-                            CornerRadius="4"
-                            SnapsToDevicePixels="True">
-                        <local:AutomationPresentationTextBlock Text="{Binding Content, RelativeSource={RelativeSource TemplatedParent}}" FontFamily="{DynamicResource SymbolThemeFontFamily}" FontSize="16" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                    </Border>
+                    <!-- Transparent, so the whole target takes a pointer around an inset fill. -->
+                    <Grid Background="Transparent">
+                        <Border Margin="{TemplateBinding Padding}"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4"
+                                SnapsToDevicePixels="True">
+                            <local:AutomationPresentationTextBlock Text="{Binding Content, RelativeSource={RelativeSource TemplatedParent}}" FontFamily="{DynamicResource SymbolThemeFontFamily}" FontSize="16" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                    </Grid>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter Property="Background" Value="{DynamicResource Slate.HoverOverlayBrush}" />

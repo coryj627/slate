@@ -567,6 +567,27 @@ public sealed class ThemeDesignSystemTests
         }
     }
 
+    /// <summary>DSD6's 40 is a target, not only a measure: its 5 around the fill takes a
+    /// pointer too.</summary>
+    [Theory]
+    [InlineData("Slate.SubtleIconButtonStyle", 32)]
+    [InlineData("Slate.SubtleIconButton40Style", 40)]
+    public void TheWholeOfASubtleIconButtonTakesAPointer(string key, double size)
+    {
+        string[] missed = InRealWindow(dark: false, highContrast: false, window =>
+        {
+            var button = new Button { Content = "\uE711", HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top };
+            button.SetResourceReference(FrameworkElement.StyleProperty, key);
+            window.Content = button;
+            window.UpdateLayout();
+            Pump();
+            Point[] edges = [new(1, size / 2), new(size - 1, size / 2), new(size / 2, 1), new(size / 2, size - 1), new(1, 1), new(size - 1, size - 1)];
+            return edges.Where(edge => button.InputHitTest(edge) is null).Select(edge => edge.ToString(System.Globalization.CultureInfo.InvariantCulture)).ToArray();
+        });
+
+        Assert.True(missed.Length == 0, "No pointer target at: " + string.Join("; ", missed));
+    }
+
     private enum ButtonKind
     {
         Button,
