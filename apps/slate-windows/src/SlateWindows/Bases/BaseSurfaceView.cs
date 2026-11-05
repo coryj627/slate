@@ -127,6 +127,7 @@ internal sealed class BaseSurfaceView : UserControl
         };
         AutomationProperties.SetAutomationId(_quickFilter, "BaseQuickFilter");
         FieldPrompt.SetIsEnabled(_quickFilter, true);
+        SearchGlyph.SetIsEnabled(_quickFilter, true);
         // The transiency is IN the accessible name (mac verbatim,
         // contract C5).
         AutomationProperties.SetName(

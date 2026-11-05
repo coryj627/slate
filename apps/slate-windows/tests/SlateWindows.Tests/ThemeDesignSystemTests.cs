@@ -524,6 +524,248 @@ public sealed class ThemeDesignSystemTests
         Assert.False(inTheTree, "the prompt is in the field's control or content view.");
     }
 
+    /// <summary>DS-9, DSD6: 32 in panel toolbars and the note header, 40 with a 30 fill in
+    /// the title bar. The glyph is 16 at any text size, and draws no peer of its own.</summary>
+    [Theory]
+    [InlineData("Slate.SubtleIconButtonStyle", 32, 32)]
+    [InlineData("Slate.SubtleIconButton40Style", 40, 30)]
+    public void TheSubtleIconButtonIsThirtyTwoAndItsLargeTwinFortyWithAThirtyFill(string key, double size, double fill)
+    {
+        foreach (ButtonKind kind in Enum.GetValues<ButtonKind>())
+        {
+            (double width, double height, double fillWidth, double fillHeight, double glyphSize, FontFamily family, int peers) = InRealWindow(dark: false, highContrast: false, window =>
+            {
+                System.Windows.Controls.Primitives.ButtonBase button = kind switch
+                {
+                    ButtonKind.Button => new Button(),
+                    ButtonKind.Repeat => new System.Windows.Controls.Primitives.RepeatButton(),
+                    _ => new System.Windows.Controls.Primitives.ToggleButton(),
+                };
+                button.Content = "\uE711";
+                button.HorizontalAlignment = HorizontalAlignment.Left;
+                button.VerticalAlignment = VerticalAlignment.Top;
+                System.Windows.Automation.AutomationProperties.SetName(button, "Close");
+                button.SetResourceReference(FrameworkElement.StyleProperty, key);
+                window.Content = button;
+                window.UpdateLayout();
+                Pump();
+                TypeRamp.Apply(window.Resources.MergedDictionaries[0], 2.25);
+                window.UpdateLayout();
+                Pump();
+                Border drawn = ShownShell.Descendants(button).OfType<Border>().First();
+                TextBlock glyph = ShownShell.Descendants(button).OfType<TextBlock>().Single();
+                var peer = System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(button);
+                int named = peer.GetChildren()?.Count(child => child.IsControlElement() || child.IsContentElement()) ?? 0;
+                return (button.ActualWidth, button.ActualHeight, drawn.ActualWidth, drawn.ActualHeight, glyph.FontSize, glyph.FontFamily, named);
+            });
+
+            Assert.Equal(size, width);
+            Assert.Equal(size, height);
+            Assert.Equal(fill, fillWidth);
+            Assert.Equal(fill, fillHeight);
+            Assert.Equal(16, glyphSize);
+            Assert.Contains("Segoe", family.Source, StringComparison.Ordinal);
+            Assert.Equal(0, peers);
+        }
+    }
+
+    private enum ButtonKind
+    {
+        Button,
+        Repeat,
+        Toggle,
+    }
+
+    /// <summary>DS-9: nothing at rest but the glyph; greyed when it can't be used; and a
+    /// toggle that's on shows it by more than colour, as a selected row does.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ASubtleIconButtonShowsItsStates(bool dark)
+    {
+        (Color rest, Color restBorder, Brush? disabled, Brush? disabledKey, Color onBorder, Color onFill) = InRealWindow(dark, highContrast: false, window =>
+        {
+            var plain = new Button { Content = "\uE711" };
+            plain.SetResourceReference(FrameworkElement.StyleProperty, "Slate.SubtleIconButtonStyle");
+            var off = new Button { Content = "\uE711", IsEnabled = false };
+            off.SetResourceReference(FrameworkElement.StyleProperty, "Slate.SubtleIconButtonStyle");
+            var on = new System.Windows.Controls.Primitives.ToggleButton { Content = "\uE711", IsChecked = true };
+            on.SetResourceReference(FrameworkElement.StyleProperty, "Slate.SubtleIconToggleButtonStyle");
+            window.Content = new StackPanel { Children = { plain, off, on } };
+            window.UpdateLayout();
+            Pump();
+            Border resting = ShownShell.Descendants(plain).OfType<Border>().First();
+            Border checkedFill = ShownShell.Descendants(on).OfType<Border>().First();
+            return (
+                ((SolidColorBrush)resting.Background).Color,
+                ((SolidColorBrush)resting.BorderBrush).Color,
+                ShownShell.Descendants(off).OfType<TextBlock>().Single().Foreground,
+                (Brush?)window.TryFindResource("Slate.DisabledTextBrush"),
+                ((SolidColorBrush)checkedFill.BorderBrush).Color,
+                ((SolidColorBrush)checkedFill.Background).Color);
+        });
+
+        Assert.Equal(0, rest.A);
+        Assert.Equal(0, restBorder.A);
+        Assert.Same(disabledKey, disabled);
+        Assert.Equal(255, onBorder.A);
+        Assert.NotEqual(0, onFill.A);
+    }
+
+    /// <summary>DS-9: the buttons' tooltip is the name they already have, so a pointer
+    /// gets what a screen reader does.</summary>
+    [Fact]
+    public void ASubtleIconButtonsTooltipIsItsName()
+    {
+        object? tip = InRealWindow(dark: false, highContrast: false, window =>
+        {
+            var button = new Button { Content = "\uE711" };
+            System.Windows.Automation.AutomationProperties.SetName(button, "Clear tag filter");
+            button.SetResourceReference(FrameworkElement.StyleProperty, "Slate.SubtleIconButtonStyle");
+            window.Content = button;
+            window.UpdateLayout();
+            Pump();
+            return button.ToolTip;
+        });
+
+        Assert.Equal("Clear tag filter", tip);
+    }
+
+    /// <summary>DS-9: the glyph is a drawing inside the field. The field's peer, name,
+    /// prompt and value are what they'd be without it.</summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void ASearchBoxKeepsItsPeerAndItsPrompt(bool dark, bool highContrast)
+    {
+        var result = InRealWindow(dark, highContrast, window =>
+        {
+            TextBox Field(bool glyph)
+            {
+                var box = new TextBox { MinWidth = 300, HorizontalAlignment = HorizontalAlignment.Left };
+                System.Windows.Automation.AutomationProperties.SetName(box, "Filter files");
+                FieldPrompt.SetIsEnabled(box, true);
+                SearchGlyph.SetIsEnabled(box, glyph);
+                return box;
+            }
+
+            TextBox plain = Field(false);
+            TextBox search = Field(true);
+            window.Content = new StackPanel { Children = { plain, search } };
+            window.UpdateLayout();
+            Pump();
+            window.UpdateLayout();
+
+            var plainPeer = System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(plain);
+            var searchPeer = System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(search);
+            TextBlock prompt = ShownShell.Descendants(search).OfType<TextBlock>().Single(block => block.Text == "Filter files");
+            TextBlock glyph = ShownShell.Descendants(search).OfType<TextBlock>().Single(block => block.Text == "\uE721");
+            bool shownEmpty = prompt.IsVisible;
+            double glyphRight = glyph.TranslatePoint(new Point(glyph.ActualWidth, 0), search).X;
+            double promptLeft = prompt.TranslatePoint(default, search).X;
+            search.Text = "a";
+            window.UpdateLayout();
+            Pump();
+            window.UpdateLayout();
+            return (
+                PlainType: plainPeer.GetType(),
+                SearchType: searchPeer.GetType(),
+                PlainName: plainPeer.GetName(),
+                SearchName: searchPeer.GetName(),
+                ShownEmpty: shownEmpty,
+                ShownWithText: prompt.IsVisible,
+                GlyphShownWithText: glyph.IsVisible,
+                GlyphIsPresentation: glyph is AutomationPresentationTextBlock,
+                GlyphHits: glyph.IsHitTestVisible,
+                GlyphSize: glyph.FontSize,
+                GlyphRight: glyphRight,
+                PromptLeft: promptLeft,
+                TextLeft: search.GetRectFromCharacterIndex(0).Left,
+                PlainWidth: plain.ActualWidth,
+                SearchWidth: search.ActualWidth,
+                PlainHeight: plain.ActualHeight,
+                SearchHeight: search.ActualHeight,
+                Value: search.Text);
+        });
+
+        Assert.Equal(result.PlainType, result.SearchType);
+        Assert.Equal(result.PlainName, result.SearchName);
+        Assert.True(result.ShownEmpty, "the prompt isn't shown in an empty field.");
+        Assert.False(result.ShownWithText, "the prompt stayed over typed text.");
+        Assert.True(result.GlyphShownWithText, "the glyph went with the prompt.");
+        Assert.True(result.GlyphIsPresentation, "the glyph has a peer of its own.");
+        Assert.False(result.GlyphHits, "a click on the glyph doesn't reach the field.");
+        Assert.Equal(16, result.GlyphSize);
+        Assert.True(result.PromptLeft >= result.GlyphRight, $"the prompt starts at {result.PromptLeft:F1}, under a glyph ending at {result.GlyphRight:F1}.");
+        Assert.True(result.TextLeft >= result.GlyphRight, $"typed text starts at {result.TextLeft:F1}, under a glyph ending at {result.GlyphRight:F1}.");
+        Assert.Equal(result.PromptLeft, result.TextLeft, 1);
+        Assert.Equal(result.PlainWidth, result.SearchWidth);
+        Assert.Equal(result.PlainHeight, result.SearchHeight);
+        Assert.Equal("a", result.Value);
+    }
+
+    /// <summary>DS-9: a theme change can swap a field's template, which takes what's in it,
+    /// and the padding has to be taken once, not once per swap.</summary>
+    [Fact]
+    public void ASearchBoxKeepsItsGlyphAcrossATemplateSwap()
+    {
+        var result = InRealWindow(dark: false, highContrast: false, window =>
+        {
+            var box = new TextBox { MinWidth = 300, HorizontalAlignment = HorizontalAlignment.Left };
+            System.Windows.Automation.AutomationProperties.SetName(box, "Filter files");
+            FieldPrompt.SetIsEnabled(box, true);
+            SearchGlyph.SetIsEnabled(box, true);
+            window.Content = box;
+            window.UpdateLayout();
+            Pump();
+            double before = box.Padding.Left;
+            ControlTemplate fluent = box.Template;
+            box.Template = null;
+            window.UpdateLayout();
+            box.Template = fluent;
+            window.UpdateLayout();
+            SearchGlyph.Reinstall(box);
+            window.UpdateLayout();
+            Pump();
+            return (
+                Glyphs: ShownShell.Descendants(box).OfType<TextBlock>().Count(block => block.Text == "\uE721"),
+                Before: before,
+                After: box.Padding.Left);
+        });
+
+        Assert.Equal(1, result.Glyphs);
+        Assert.Equal(result.Before, result.After);
+    }
+
+    /// <summary>DS-9: Tab goes from the field to whatever's next. The glyph is no stop.</summary>
+    [Fact]
+    public void TheSearchGlyphIsNotAStop() => TextScaleTests.OnOwnThread(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        PumpedDispatcher.PumpUntilDrained(host.Workspace.SeedWorkForTests);
+        host.Settle();
+        var field = (TextBox)host.Shell.FindName("SidebarFilterTextBox");
+        field.Focus();
+        host.Settle();
+        Assert.Same(field, System.Windows.Input.FocusManager.GetFocusedElement(host.Shell));
+        TextBlock glyph = ShownShell.Descendants(field).OfType<TextBlock>().Single(block => block.Text == "\uE721");
+        Assert.False(glyph.Focusable, "the glyph can take focus.");
+
+        field.MoveFocus(new System.Windows.Input.TraversalRequest(System.Windows.Input.FocusNavigationDirection.Next));
+        host.Settle();
+
+        object? next = System.Windows.Input.FocusManager.GetFocusedElement(host.Shell);
+        Assert.NotSame(field, next);
+        DependencyObject? up = next as DependencyObject;
+        while (up is not null && !ReferenceEquals(up, field))
+        {
+            up = VisualTreeHelper.GetParent(up);
+        }
+
+        Assert.Null(up);
+    });
+
     /// <summary>#1774: a long prompt made its field wider, which pushed the Base
     /// filter into the Refresh button. A prompt trims to the field; it never sizes it.</summary>
     [Fact]

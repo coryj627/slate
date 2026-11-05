@@ -105,6 +105,7 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         };
         AutomationProperties.SetAutomationId(_filterField, "GraphFilterField");
         FieldPrompt.SetIsEnabled(_filterField, true);
+        SearchGlyph.SetIsEnabled(_filterField, true);
         AutomationProperties.SetName(_filterField, FilterFieldName);
         AutomationProperties.SetHelpText(_filterField, FilterFieldHint);
         _filterField.TextChanged += OnFilterTextChanged;

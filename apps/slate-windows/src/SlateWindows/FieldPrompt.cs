@@ -68,9 +68,6 @@ internal static class FieldPrompt
                 // A multi-line field's text starts at its top.
                 VerticalAlignment = box.AcceptsReturn ? VerticalAlignment.Top : VerticalAlignment.Center,
                 TextTrimming = TextTrimming.CharacterEllipsis,
-                // The 2px is the text view's own inset, so the prompt starts where
-                // typed text will.
-                Margin = new Thickness(host.Margin.Left + box.Padding.Left + 2, 0, host.Margin.Right + box.Padding.Right, 0),
             };
             text.SetResourceReference(TextBlock.ForegroundProperty, "Slate.SecondaryTextBrush");
             // A bound name can arrive after the field loads.
@@ -88,12 +85,17 @@ internal static class FieldPrompt
         Update(box);
     }
 
-    private static void Update(TextBox box)
+    /// <summary>Internal because <see cref="SearchGlyph"/> moves the padding this follows.</summary>
+    internal static void Update(TextBox box)
     {
-        if (Prompt(box) is { } prompt)
+        if (Prompt(box) is { } prompt && box.Template?.FindName("PART_ContentHost", box) is FrameworkElement host)
         {
             prompt.Visibility = box.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
             prompt.Opacity = box.IsEnabled ? 1 : 0.6;
+
+            // The 2px is the text view's own inset, so the prompt starts where typed
+            // text will.
+            ((FrameworkElement)prompt.Child).Margin = new Thickness(host.Margin.Left + box.Padding.Left + 2, 0, host.Margin.Right + box.Padding.Right, 0);
         }
     }
 
