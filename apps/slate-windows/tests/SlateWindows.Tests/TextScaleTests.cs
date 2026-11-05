@@ -222,6 +222,7 @@ public sealed partial class TextScaleTests
     [InlineData(1120, 720)]
     [InlineData(1120, 480)]
     [InlineData(780, 720)]
+    [InlineData(780, 480)]
     public void NoSheetTextIsCutAtTheLargestSize(double width, double height) => OnOwnThread(() =>
     {
         using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
