@@ -124,7 +124,7 @@ public sealed partial class GlyphsNameNothingCensus
     public void AGlyphInCodeIsAnEscape()
     {
         string shell = SourceText.ShellSourceRoot();
-        string[] roots = [shell, Path.GetFullPath(Path.Combine(shell, "..", "..", "tests"))];
+        string[] roots = new[] { shell, Path.GetFullPath(Path.Combine(shell, "..", "..", "tests")) };
         string[] literal = roots
             .SelectMany(root => Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories))
             .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
