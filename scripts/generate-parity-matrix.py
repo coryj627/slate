@@ -424,6 +424,8 @@ WINDOWS_ONLY_COMMANDS: dict[str, tuple[str, str, str]] = {
     # and has no SlateCommandID, so these rows carry no mac chord.
     "slate.editor.findNext": ("#1112 (WB-22)", "", ""),
     "slate.editor.findPrevious": ("#1112 (WB-22)", "", ""),
+    # Plan 46 DS-7 (#1808): the Mac's sidebar has no hidden state to toggle.
+    "slate.view.toggleFilesSidebar": ("#1808 (DS-7)", "", ""),
 }
 
 

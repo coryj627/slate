@@ -60,6 +60,7 @@ internal sealed partial class WorkspaceViewModel
         {
             HoldWidth(ref _filesSidebarWidth, value, ShellSidebar.Files);
             _filesSidebarChosenWidth = _filesSidebarWidth;
+            OnPropertyChanged(nameof(FilesColumnWidth));
         }
     }
 
@@ -99,6 +100,68 @@ internal sealed partial class WorkspaceViewModel
     /// <summary>The splitter's column, which goes with the pane.</summary>
     public double RightPaneSplitterWidth => IsRightPaneVisible ? SplitterWidth : 0;
 
+    /// <summary>DS-7: whether the Files sidebar shows. Not persisted, like the right
+    /// pane. Core says which, and the keys in it, when it goes, land in the editor through
+    /// the focus guard (MainWindow's WorkspaceColumns landing).</summary>
+    public bool IsFilesSidebarVisible
+    {
+        get => _isFilesSidebarVisible;
+        set
+        {
+            if (SetField(ref _isFilesSidebarVisible, value))
+            {
+                _announce(value ? new A11yEvent.FilesSidebarShown() : new A11yEvent.FilesSidebarHidden());
+                OnPropertyChanged(nameof(FilesSidebarToggle));
+                RaiseFilesSidebarResizeStates();
+                RaiseFilesColumnStates();
+            }
+        }
+    }
+
+    private bool _isFilesSidebarVisible = true;
+
+    /// <summary>DS-7: the status bar's button, bound both ways, because UIA's Toggle
+    /// doesn't run a button's command. The setter is the route, as the command's is.</summary>
+    public bool FilesSidebarToggle
+    {
+        get => IsFilesSidebarVisible;
+        set
+        {
+            if (value != IsFilesSidebarVisible)
+            {
+                ToggleFilesSidebar();
+            }
+        }
+    }
+
+    public ICommand ToggleFilesSidebarCommand => _toggleFilesSidebarCommand ??=
+        new RelayCommand(_ => ToggleFilesSidebar(), _ => true);
+
+    private ICommand? _toggleFilesSidebarCommand;
+
+    private void ToggleFilesSidebar() => IsFilesSidebarVisible = !IsFilesSidebarVisible;
+
+    /// <summary>DS-7: the Files sidebar's column, as <see cref="RightPaneColumnWidth"/>
+    /// is the right pane's.</summary>
+    public double FilesColumnWidth
+    {
+        get => IsFilesSidebarVisible ? _filesSidebarWidth : 0;
+        set
+        {
+            if (IsFilesSidebarVisible)
+            {
+                FilesSidebarWidth = value;
+            }
+        }
+    }
+
+    /// <summary>The column's floor. A fixed floor would hold a hidden sidebar's column
+    /// open.</summary>
+    public double FilesColumnMinimumWidth => IsFilesSidebarVisible ? MinimumSidebarWidth : 0;
+
+    /// <summary>The splitter's column, which goes with the sidebar.</summary>
+    public double FilesSplitterWidth => IsFilesSidebarVisible ? SplitterWidth : 0;
+
     /// <summary>The width of the row the two sidebars and the editor share,
     /// as the window lays it out; zero until it has been laid out, when
     /// only <see cref="MaximumSidebarWidth"/> bounds a width. A narrower row
@@ -120,7 +183,21 @@ internal sealed partial class WorkspaceViewModel
     /// holds what the reader chose, so more room gives a narrowed width back.</summary>
     private void HoldBothWidths()
     {
-        HoldWidth(ref _filesSidebarWidth, _filesSidebarChosenWidth, ShellSidebar.Files, nameof(FilesSidebarWidth));
+        HoldFilesSidebarWidth();
+        HoldRightPaneWidth();
+    }
+
+    private void HoldFilesSidebarWidth()
+    {
+        if (IsFilesSidebarVisible)
+        {
+            HoldWidth(ref _filesSidebarWidth, _filesSidebarChosenWidth, ShellSidebar.Files, nameof(FilesSidebarWidth));
+            OnPropertyChanged(nameof(FilesColumnWidth));
+        }
+    }
+
+    private void HoldRightPaneWidth()
+    {
         if (IsRightPaneVisible)
         {
             HoldWidth(ref _rightPaneWidth, _rightPaneChosenWidth, ShellSidebar.RightPane, nameof(RightPaneWidth));
@@ -138,6 +215,17 @@ internal sealed partial class WorkspaceViewModel
         HoldBothWidths();
     }
 
+    /// <summary>DS-7: the twin, so the right pane goes first: it's the one that spread
+    /// into the room the sidebar is coming back to.</summary>
+    private void RaiseFilesColumnStates()
+    {
+        OnPropertyChanged(nameof(FilesColumnWidth));
+        OnPropertyChanged(nameof(FilesColumnMinimumWidth));
+        OnPropertyChanged(nameof(FilesSplitterWidth));
+        HoldRightPaneWidth();
+        HoldFilesSidebarWidth();
+    }
+
     private double _workspaceRowWidth;
 
     /// <summary>Stores <paramref name="value"/> bounded to
@@ -153,10 +241,10 @@ internal sealed partial class WorkspaceViewModel
         sidebar == ShellSidebar.Files ? MinimumSidebarWidth : MinimumRightPaneWidth;
 
     public ICommand WidenFilesSidebarCommand => _widenFilesSidebarCommand ??=
-        new RelayCommand(_ => StepSidebar(ShellSidebar.Files, +1), _ => true);
+        new RelayCommand(_ => StepSidebar(ShellSidebar.Files, +1), _ => IsFilesSidebarVisible);
 
     public ICommand NarrowFilesSidebarCommand => _narrowFilesSidebarCommand ??=
-        new RelayCommand(_ => StepSidebar(ShellSidebar.Files, -1), _ => true);
+        new RelayCommand(_ => StepSidebar(ShellSidebar.Files, -1), _ => IsFilesSidebarVisible);
 
     public ICommand WidenRightPaneCommand => _widenRightPaneCommand ??=
         new RelayCommand(_ => StepSidebar(ShellSidebar.RightPane, +1), _ => IsRightPaneVisible);
@@ -180,6 +268,14 @@ internal sealed partial class WorkspaceViewModel
         RegisteredCommandStatesChanged?.Invoke();
     }
 
+    /// <summary>DS-7: the same for the Files sidebar's two steps.</summary>
+    private void RaiseFilesSidebarResizeStates()
+    {
+        ((RelayCommand)WidenFilesSidebarCommand).RaiseCanExecuteChanged();
+        ((RelayCommand)NarrowFilesSidebarCommand).RaiseCanExecuteChanged();
+        RegisteredCommandStatesChanged?.Invoke();
+    }
+
     /// <summary>The widest <paramref name="sidebar"/> may be now: the fixed
     /// ceiling, and the room left beside the other sidebar, the editor's
     /// minimum and the splitters — never below the floor.</summary>
@@ -190,8 +286,8 @@ internal sealed partial class WorkspaceViewModel
             return MaximumSidebarWidth;
         }
 
-        double other = sidebar == ShellSidebar.Files ? RightPaneColumnWidth : FilesSidebarWidth;
-        double room = WorkspaceRowWidth - other - MinimumEditorWidth - SplitterWidth - RightPaneSplitterWidth;
+        double other = sidebar == ShellSidebar.Files ? RightPaneColumnWidth : FilesColumnWidth;
+        double room = WorkspaceRowWidth - other - MinimumEditorWidth - FilesSplitterWidth - RightPaneSplitterWidth;
         return Math.Max(NarrowestWidth(sidebar), Math.Min(MaximumSidebarWidth, room));
     }
 

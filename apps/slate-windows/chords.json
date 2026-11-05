@@ -328,6 +328,18 @@
       "registered": true
     },
     {
+      "id": "slate.view.toggleFilesSidebar",
+      "label": "Toggle Files Sidebar",
+      "section": "View",
+      "hint": "Hide or show the Files sidebar.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
       "id": "slate.view.toggleSearch",
       "label": "Search Vault",
       "section": "View",

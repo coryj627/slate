@@ -343,6 +343,9 @@
                 <MenuItem Header="_Grow Pane" InputGestureText="{cmd:ChordText slate.workspace.growPane}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.GrowPaneCommand}" />
                 <MenuItem Header="_Shrink Pane" InputGestureText="{cmd:ChordText slate.workspace.shrinkPane}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.ShrinkPaneCommand}" />
                 <Separator />
+                <MenuItem Header="_Toggle Files Sidebar"
+                          AutomationProperties.AutomationId="WorkspaceToggleFilesSidebarMenuItem"
+                          Command="{Binding Workspace.ToggleFilesSidebarCommand}" />
                 <MenuItem Header="Toggle Right _Pane" InputGestureText="{cmd:ChordText slate.view.toggleRightPane}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.ToggleRightPaneCommand}" />
                 <!-- W5-2 close-out (#742): slate.view.toggleSearch. mac
                      homes "Search Vault…" in Edit; Windows has no Edit
@@ -763,21 +766,65 @@
         <Border x:Name="ShellStatusBarBorder"
                 KeyboardNavigation.DirectionalNavigation="Contained">
             <StatusBar x:Name="ShellStatusBar"
-                       FontFamily="{DynamicResource Slate.FontFamilyText}"
-                       FontSize="{DynamicResource Slate.FontSizeBody}"
+                       FontFamily="{DynamicResource Slate.FontFamilySmall}"
+                       FontSize="{DynamicResource Slate.FontSizeCaption}"
+                       MinHeight="24"
+                       Padding="0"
+                       BorderThickness="0"
                        Focusable="True"
                        KeyboardNavigation.IsTabStop="False"
                        AutomationProperties.AutomationId="StatusBar"
                        AutomationProperties.Name="Status bar"
                        AutomationProperties.HelpText="{x:Static cmd:NavigationHelp.Shell}">
+                <!-- DS-7: the status text takes what the toggles and the progress leave,
+                     and the progress bar gives way to it in a narrow bar. -->
+                <StatusBar.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" MinWidth="60" MaxWidth="180" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                        </Grid>
+                    </ItemsPanelTemplate>
+                </StatusBar.ItemsPanel>
+                <StatusBar.ItemContainerStyle>
+                    <Style TargetType="StatusBarItem">
+                        <Setter Property="Padding" Value="8,0" />
+                    </Style>
+                </StatusBar.ItemContainerStyle>
+                <!-- DS-7: pointer and UIA paths. The keyboard's is the command, so the bar
+                     stays one stop. They bind to the toggles, not the visibilities, because
+                     a reveal has to finish, and UIA's Toggle runs no command. They disable
+                     under a modal surface, as the menu does: the scrim takes no pointer. -->
+                <StatusBarItem Grid.Column="0"
+                               Padding="0"
+                               Visibility="{Binding IsWorkspaceVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <ToggleButton Style="{DynamicResource Slate.SubtleIconToggleButtonStyle}"
+                                  Width="24"
+                                  Height="24"
+                                  Content="&#xE90C;"
+                                  Focusable="False"
+                                  IsEnabled="{Binding IsModalSurfaceOpen, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource InverseBooleanConverter}}"
+                                  IsChecked="{Binding Workspace.FilesSidebarToggle}"
+                                  AutomationProperties.AutomationId="FilesSidebarToggle"
+                                  AutomationProperties.Name="Files sidebar" />
+                </StatusBarItem>
                 <!-- No vault means no sidebar: an unresolved binding must keep
                      operation controls out of both layout and automation. -->
-                <StatusBarItem Visibility="{Binding FileSidebar.ShowTrashProgress, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}">
+                <StatusBarItem Grid.Column="1"
+                               Visibility="{Binding FileSidebar.ShowTrashProgress, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="{Binding FileSidebar.TrashStatus}" VerticalAlignment="Center"
                                    TextWrapping="Wrap" MaxWidth="360"
                                    AutomationProperties.AutomationId="TrashProgressStatus" />
                         <Button Content="Cancel" Margin="8,0,8,0"
+                                MinHeight="24"
+                                Padding="8,0"
                                 Command="{Binding FileSidebar.CancelTrashCommand}"
                                 GotKeyboardFocus="TrashCancel_GotKeyboardFocus"
                                 LostKeyboardFocus="TrashCancel_LostKeyboardFocus"
@@ -787,15 +834,15 @@
                                 AutomationProperties.Name="Cancel moving items to the Recycle Bin" />
                     </StackPanel>
                 </StatusBarItem>
-                <StatusBarItem>
+                <StatusBarItem Grid.Column="2">
                     <TextBlock x:Name="StatusTextBlock"
                                AutomationProperties.AutomationId="VaultStatus"
                                Text="{Binding StatusText}"
                                TextTrimming="CharacterEllipsis"
                                AutomationProperties.Name="Vault status" />
                 </StatusBarItem>
-                <Separator />
-                <StatusBarItem HorizontalContentAlignment="Stretch" Width="180">
+                <Separator Grid.Column="3" />
+                <StatusBarItem Grid.Column="4" HorizontalContentAlignment="Stretch">
                     <!-- #1773: a reader can still ask how the last scan ended, so the
                          bar stays in the tree. It only draws fully while work runs. -->
                     <Border>
@@ -818,8 +865,30 @@
                                      AutomationProperties.Name="Vault scan progress" />
                     </Border>
                 </StatusBarItem>
+                <StatusBarItem Grid.Column="5"
+                               Padding="0"
+                               Visibility="{Binding IsWorkspaceVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <ToggleButton Style="{DynamicResource Slate.SubtleIconToggleButtonStyle}"
+                                  Width="24"
+                                  Height="24"
+                                  Content="&#xE90D;"
+                                  Focusable="False"
+                                  IsEnabled="{Binding IsModalSurfaceOpen, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource InverseBooleanConverter}}"
+                                  IsChecked="{Binding Workspace.RightPaneToggle}"
+                                  AutomationProperties.AutomationId="RightPaneToggle"
+                                  AutomationProperties.Name="Right pane">
+                        <ToggleButton.ToolTip>
+                            <TextBlock>Right pane (<Run Text="{cmd:ChordText slate.view.toggleRightPane}" />)</TextBlock>
+                        </ToggleButton.ToolTip>
+                    </ToggleButton>
+                </StatusBarItem>
             </StatusBar>
         </Border>
+            <!-- The design's hairline, inside the row's 24: what it covers is transparent at rest. -->
+            <Border Height="1"
+                    VerticalAlignment="Top"
+                    Background="{DynamicResource Slate.SubtleBorderBrush}"
+                    IsHitTestVisible="False" />
             <Border x:Name="ModalScrimOverStatus"
                     Background="{DynamicResource Slate.ScrimBrush}"
                     IsHitTestVisible="False"
@@ -954,14 +1023,17 @@
                 <local:WorkspaceRowHost Grid.Row="1" SizeChanged="WorkspaceRow_SizeChanged">
                 <Grid x:Name="WorkspaceColumns">
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="{Binding Workspace.FilesSidebarWidth, Mode=TwoWay, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=270}" MinWidth="200" MaxWidth="640" />
-                        <ColumnDefinition Width="5" />
+                        <ColumnDefinition Width="{Binding Workspace.FilesColumnWidth, Mode=TwoWay, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=270}" MinWidth="{Binding Workspace.FilesColumnMinimumWidth, FallbackValue=200}" MaxWidth="640" />
+                        <ColumnDefinition Width="{Binding Workspace.FilesSplitterWidth, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=5}" />
                         <ColumnDefinition Width="*" MinWidth="270" />
                         <ColumnDefinition Width="{Binding Workspace.RightPaneSplitterWidth, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=5}" />
                         <ColumnDefinition Width="{Binding Workspace.RightPaneColumnWidth, Mode=TwoWay, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=320}" MinWidth="{Binding Workspace.RightPaneColumnMinimumWidth, FallbackValue=280}" MaxWidth="640" />
                     </Grid.ColumnDefinitions>
+                    <!-- DS-7: collapsed, not only narrowed: a zero-width pane still takes Tab. Its
+                         DataContext is the sidebar, so the workspace comes from the window. -->
                     <local:AutomationLandmarkBorder x:Name="FilesPaneBorder"
                             KeyboardNavigation.DirectionalNavigation="Contained"
+                            Visibility="{Binding DataContext.Workspace.IsFilesSidebarVisible, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Visible}"
                             Grid.Column="0"
                             AutomationProperties.AutomationId="FilesPane"
                             AutomationProperties.Name="Files"
@@ -1303,6 +1375,7 @@
                         </local:FilesPanePanel>
                     </local:AutomationLandmarkBorder>
                     <GridSplitter Grid.Column="1"
+                                  Visibility="{Binding Workspace.IsFilesSidebarVisible, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Visible}"
                                   KeyboardNavigation.IsTabStop="False"
                                   Style="{DynamicResource Slate.ShellSplitterStyle}"
                                   ResizeDirection="Columns"

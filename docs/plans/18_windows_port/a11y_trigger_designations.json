@@ -225,12 +225,12 @@
     "Mac": {
       "FilesSidebarHidden": {
         "reason": "DS-7: the Files sidebar's toggle is Windows only; the Mac's sidebar has no such state, and AppState.toggleRightPane is only its right pane.",
-        "decision": "docs/plans/46_windows_design_system/specs/ds07_status_bar_and_pane_toggles.md",
+        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "recorded"
       },
       "FilesSidebarShown": {
         "reason": "DS-7: the Files sidebar's toggle is Windows only; the Mac's sidebar has no such state, and AppState.toggleRightPane is only its right pane.",
-        "decision": "docs/plans/46_windows_design_system/specs/ds07_status_bar_and_pane_toggles.md",
+        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "recorded"
       },
       "QuickSwitcherCount": {

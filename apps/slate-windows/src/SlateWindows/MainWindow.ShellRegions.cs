@@ -151,6 +151,11 @@ public partial class MainWindow : IShellRegionHost
                 first.Focus();
                 break;
             case ShellRegionKind.Files:
+                if (!workspace.IsFilesSidebarVisible)
+                {
+                    return ShellRegionLanding.Refused;
+                }
+
                 // R-5 (#1247): the filter's results land on a result row,
                 // or on the list itself when it is empty (AR-6); a row that
                 // cannot be landed yet leaves the keys to the tree's own
