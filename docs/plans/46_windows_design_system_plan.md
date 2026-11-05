@@ -32,7 +32,7 @@ real cost, §3 records the owner's call.
 | Tab strip | TabView: 36 strip, 32 tabs, close glyph, flared corners | A plain underlined tab with a "×" text button | DS-8 |
 | Small controls | Subtle icon button, SearchBox | Text glyphs on buttons, plain fields | DS-9 |
 | Settings | A Settings surface; Appearance › Theme; Switch Theme… | None; the theme always follows Windows | DS-10 |
-| Accent | Automatic, Slate gold, Windows accent, with a contrast gate | Gold only | DS-11 |
+| Accent | Automatic, Slate gold, Windows accent, with no contrast gate (DSD16) | Gold only | DS-11 |
 | Title bar | One 48 row: title, palette, settings, caption buttons, Snap Layouts | The Windows title bar plus a separate menu bar, about 74 together | DS-12 |
 | App menu | The menus cascade from the logo; Alt+letter opens them | A menu bar | DS-13 |
 | Narrow windows | 500 wide or less, panes collapse | `MinWidth` 780 | DS-14 |
@@ -152,10 +152,11 @@ DS-0 settles these in the documents, so no later chunk has to.
 - **The design cycle** (`claude/design-pass`) has its own discovery passes. A
   defect they find is fixed there, not here.
 
-## 3. The owner's decisions (DSD1 to DSD15)
+## 3. The owner's decisions (DSD1 to DSD16)
 
-Settled with the owner on 2026-11-03. DSD8, DSD10 and DSD14 differ from what this
-plan first recommended, and their specs follow the owner's call.
+Settled with the owner on 2026-11-03, and DSD16 on 2026-11-05 after their look at real
+accents (§8). DSD8, DSD10 and DSD14 differ from what this plan first recommended, and
+their specs follow the owner's call.
 
 | # | Chunk | Question | Decided |
 |---|---|---|---|
@@ -172,8 +173,9 @@ plan first recommended, and their specs follow the owner's call.
 | DSD11 | DS-15 | The note header adds Tab stops before a note's Properties and text: one per folder, the mode switch and ⋯. Keep them all? | Keep them. A folder segment has no other route, and F6 and Ctrl+Tab already skip the bar. The AT pass can change this |
 | DSD12 | DS-17 | Sort moves from a combo box to a menu. A combo says its value on focus ("File sort order, Name A to Z"); a menu button says only its name until it's opened | Take the menu and name the button with its value through core ("Sort and group, Name A to Z"), so a reader doesn't lose the value. If that reads badly in the pass, the combo stays beside the toolbar |
 | DSD13 | DS-12 | With the native caption gone, UIA may still expose native minimize, maximize and close alongside Slate's. Two Close buttons is a defect, and WPF can't hide a peer from the raw view | Measure first. If they double, keep Slate's visible ones as `AutomationPresentation`-style peers out of the control view and leave the native ones to carry the pattern. If native ones are gone, keep Slate's. The PR shows the tree |
-| DSD14 | DS-11 | The README gates an accent by WCAG and takes its dark fills from Fluent. The project's floor for text is \|Lc\| > 75, and black on Fluent's dark fill measures Lc 65.4 on the default blue. What must a Windows accent pass? | The README's gate: text at 4.5:1, fills and marks at 3:1. Gold stays at the floor. A chosen accent may sit below it, so on the default blue in dark, black on the primary fill is 10.47:1 and Lc 65.4. In exchange the dark fills stay Fluent's, and fewer hues fall back to gold. Selected rows get their own text brush regardless, because white on the tint fails any bar |
+| DSD14 | DS-11 | The README gates an accent by WCAG and takes its dark fills from Fluent. The project's floor for text is \|Lc\| > 75, and black on Fluent's dark fill measures Lc 65.4 on the default blue. What must a Windows accent pass? | The README's gate: text at 4.5:1, fills and marks at 3:1. Gold stays at the floor. A chosen accent may sit below it, so on the default blue in dark, black on the primary fill is 10.47:1 and Lc 65.4. In exchange the dark fills stay Fluent's, and fewer hues fall back to gold. Selected rows get their own text brush regardless, because white on the tint fails any bar. Superseded by DSD16 |
 | DSD15 | DS-15 | The design's Back and Forward assume a note history. The only history here is "Back in Sidebar History", on both platforms, which Quick Open and links don't feed. Bound to it, Back sits disabled after Quick Open or walks sidebar selections | Leave both buttons out of DS-15, by the same rule as DS-18's toolbars: a button that misleads is worse than none. A per-tab note history is new behaviour the Mac doesn't have, with its own chords, and DS-15 lists what it takes. It can be its own chunk later |
+| DSD16 | DS-11 | The owner's look (§8) on 2026-11-05: under DSD14's gate every hue they tried fell back to gold in dark, so Windows accent looked like it did nothing. Their `#EA005E` passes every check in light, and in dark fails a pressed link (4.39:1) and the reading overlay's stand-off | Drop the requirement. Windows accent, and Automatic once the user has chosen an accent in Windows, follow whatever Windows has, in both themes. High Contrast never takes it, Automatic keeps gold on the default blue, and selected rows keep their own text brush. Choosing an accent from colours that clear contrast is a follow-up, #1842 |
 
 ## 4. Rules (every chunk)
 
@@ -238,7 +240,7 @@ work the chunk carries.
 | DS-8 | The tab strip as the design's TabView | — | M | windows | NVDA and Narrator spot | — |
 | DS-9 | Subtle icon button and SearchBox styles; every text glyph on a button becomes an icon with a name | — | S–M | windows | NVDA spot | DSD6 |
 | DS-10 | A Settings sheet (SettingsLayout, SettingRow), Appearance › Theme, the theme preference, Settings… and Switch Theme… | Refs #751 | L | windows | NVDA and Narrator pass | — |
-| DS-11 | Appearance › Accent color, with the rules and contrast gate in `xaml/README.md`, and selected rows' own text brush | — | M | windows | — | DSD14 |
+| DS-11 | Appearance › Accent color, with the rules in `xaml/README.md`, and selected rows' own text brush | — | M | windows | — | DSD14 |
 | DS-12 | `WindowChrome`: one row with title, palette, settings and caption buttons; Snap Layouts | — | L | windows, rust, swift | NVDA and Narrator pass | DSD9, DSD13 |
 | DS-13 | The menus cascade from the logo; Alt+letter; F10 | — | L | windows | Full NVDA and Narrator menu pass | DSD7 |
 | DS-14 | `MinWidth` 500; panes collapse by width without losing the reader's place | — | M | windows | NVDA spot | — |
@@ -310,7 +312,7 @@ needs rebuilding.
 | `/design-sync`, with the map in `design/windows/github.md` | After DS-0 merges, and again whenever you like | The project has none of the repo's hand fixes until it runs, and only you start it |
 | The live Text size check: run the app, set Settings › Accessibility › Text size to 150%, Apply, then back to 100% | When DS-5's PR is up | It changes a system setting, which an agent doesn't do. Two minutes. Expected: the shell's text changes within about a second, with no restart |
 | Review of the right-pane icons (`Kit.jsx:54-56`) | Before DS-16 | `assessment.md:113`: "my picks and need your review" |
-| A look at a few Windows accents under `Windows accent` | When DS-11's PR is up | It changes a system setting, which an agent doesn't do. It shows how many hues fall back to gold under DSD14's bar |
+| A look at a few Windows accents under `Windows accent` | When DS-11's PR is up (done 2026-11-05; it led to DSD16) | It changes a system setting, which an agent doesn't do. It shows how many hues fall back to gold under DSD14's bar |
 | The go-ahead for each later wave | Before its first chunk | DSD1: they change how the app works, one wave at a time |
 
 ## 9. How an implementing agent works a chunk
@@ -337,7 +339,7 @@ document.
 | DS-8 | `specs/ds08_tab_strip.md` | The tab strip is the design's |
 | DS-9 | `specs/ds09_icon_button_and_search_box.md` | Icon-only buttons draw an icon and have a name, and search fields look like search fields |
 | DS-10 | `specs/ds10_settings_and_theme.md` | There is a Settings surface, and the theme can be chosen |
-| DS-11 | `specs/ds11_accent_setting.md` | The accent can follow Windows, and never fails contrast |
+| DS-11 | `specs/ds11_accent_setting.md` | The accent can follow Windows |
 | DS-12 | `specs/ds12_title_bar.md` | The title bar is one 48 row with Snap Layouts |
 | DS-13 | `specs/ds13_app_menu.md` | The menus open from the logo, with every key they had |
 | DS-14 | `specs/ds14_narrow_window.md` | The window can be 500 wide, and panes make room |
@@ -362,9 +364,9 @@ document.
 - **DS-16 puts 12 panels behind a menu.** That's the owner's call (DSD8), against
   today's single list. Its pass records what reaching them costs, so the owner can
   judge it on the real thing before it merges.
-- **An accent's text can sit below gold's floor.** That's the owner's call too
-  (DSD14). Their look at a few real accents (§8) shows how it reads, and how many hues
-  fall back.
+- **A Windows accent isn't checked for contrast.** That's the owner's call (DSD16),
+  after DSD14's gate sent every hue they tried back to gold. A hue can draw text below
+  4.5:1 until #1842 offers choices that clear it.
 - **A composite font is unusual.** `Typeface.TryGetGlyphTypeface` returns false for
   one, which nothing in the app calls today (searched). DS-1's census keeps it that
   way, and `SlateEditor.CompositeFont` is one small file to drop if a problem appears:

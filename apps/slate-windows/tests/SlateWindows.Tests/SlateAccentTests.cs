@@ -15,13 +15,39 @@ using System.Windows.Threading;
 namespace SlateWindows.Tests;
 
 /// <summary>
-/// DS-11 (#1812): the accent can follow Windows, and every text it draws clears 4.5:1 and every
-/// fill and mark 3:1 (DSD14). Colours go in through the palette: a fact can't change the
-/// Windows accent, because that's a system setting.
+/// DS-11 (#1812): the accent can follow Windows, as Windows gives it (DSD16). Colours go in
+/// through the palette: a fact can't change the Windows accent, because that's a system
+/// setting.
 /// </summary>
 public sealed class SlateAccentTests
 {
     private const int WmDwmColorizationColorChanged = 0x0320;
+
+    /// <summary>Every text the accent can draw on. A link, hovered and pressed, draws in the
+    /// fill roles, and tertiary text on a selected row is for DS-18's counts.</summary>
+    private static readonly (string Text, string Background)[] AccentTextPairs =
+    {
+        ("Slate.TextOnAccentColor", "Slate.AccentColor"),
+        ("Slate.TextOnAccentColor", "Slate.AccentHoverColor"),
+        ("Slate.TextOnAccentColor", "Slate.AccentPressedColor"),
+        ("Slate.AccentTextColor", "Slate.SurfaceColor"),
+        ("Slate.AccentTextColor", "Slate.WindowBackgroundColor"),
+        ("Slate.AccentTextColor", "Slate.RaisedSurfaceColor"),
+        ("Slate.AccentTextColor", "Slate.SelectedSurfaceColor"),
+        ("Slate.AccentHoverColor", "Slate.SurfaceColor"),
+        ("Slate.AccentPressedColor", "Slate.SurfaceColor"),
+        ("Slate.SelectionTextColor", "Slate.SelectionBackgroundColor"),
+        ("Slate.TextColor", "Slate.SelectedSurfaceColor"),
+        ("Slate.SecondaryTextColor", "Slate.SelectedSurfaceColor"),
+        ("Slate.TertiaryTextColor", "Slate.SelectedSurfaceColor"),
+    };
+
+    private static readonly (string Mark, string Background)[] AccentMarkPairs =
+    {
+        ("Slate.AccentColor", "Slate.SurfaceColor"),
+        ("Slate.AccentIndicatorColor", "Slate.SurfaceColor"),
+        ("Slate.AccentIndicatorColor", "Slate.SelectedSurfaceColor"),
+    };
 
     /// <summary>What <c>SystemColors</c> read on a default Windows 11 on 2026-11-03.</summary>
     private static readonly AccentPalette DefaultBlue = new(
@@ -126,6 +152,18 @@ public sealed class SlateAccentTests
     /// <summary>A choice, close enough to the default to pass.</summary>
     private static readonly AccentPalette Chosen = DefaultBlue with { Accent = Hex("#0070C8") };
 
+    /// <summary>What <c>SystemColors</c> read on the owner's desktop on 2026-11-05, during
+    /// their look at real accents. DSD14's bar sent it back to gold in dark, which led to
+    /// DSD16.</summary>
+    private static readonly AccentPalette OwnersPink = new(
+        Hex("#EA005E"),
+        Hex("#FF0A6F"),
+        Hex("#FF529F"),
+        Hex("#FF95CA"),
+        Hex("#D30050"),
+        Hex("#9E002F"),
+        Hex("#6D0011"));
+
     private static Color Hex(string hex) => (Color)ColorConverter.ConvertFromString(hex);
 
     private static SlateTheme ThemeOf(bool dark) => dark ? SlateTheme.Dark : SlateTheme.Light;
@@ -223,84 +261,37 @@ public sealed class SlateAccentTests
         return 0;
     }, TimeSpan.FromSeconds(30), "the theme file never loaded.");
 
+    /// <summary>DSD16: Windows' accent is followed whatever its contrast. In dark this palette
+    /// draws a pressed link at 4.39:1, and its reading overlay doesn't stand off the surface.
+    /// Choosing a colour that clears contrast is #1842.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AnAccentBelowTheBarIsStillFollowed(bool dark) => StaThread.Run(() =>
+    {
+        ResourceDictionary slate = GoldThemeFile(dark);
+        byte goldAlpha = ((Color)slate["Slate.ReadingSelectionColor"]).A;
+
+        Assert.True(SlateAccent.TryApplyWindowsAccent(slate, AccentSource.WindowsAccent, OwnersPink, dark, highContrast: false));
+
+        Assert.Equal(OwnersPink.Accent, (Color)slate["Slate.SelectionBackgroundColor"]);
+        Assert.Equal(dark ? OwnersPink.Light1 : OwnersPink.Dark3, (Color)slate["Slate.AccentPressedColor"]);
+        Assert.Equal(Color.FromArgb(goldAlpha, 0xEA, 0x00, 0x5E), (Color)slate["Slate.ReadingSelectionColor"]);
+        return 0;
+    }, TimeSpan.FromSeconds(30), "the theme file never loaded.");
+
     /// <summary>The user's own palette is the theme there. The dictionary has no accent roles.</summary>
     [Fact]
     public void HighContrastIsNeverTheAccent() =>
         Assert.False(SlateAccent.TryApplyWindowsAccent(new ResourceDictionary(), AccentSource.WindowsAccent, Chosen, dark: false, highContrast: true));
 
-    /// <summary>One palette per rule that a colour from Windows can fail. It falls back whole,
-    /// to gold, and the log says which check.</summary>
-    [Theory]
-    [InlineData(false, nameof(AccentPalette.Dark1), "#7FB8E8", "Slate.TextOnAccentColor on Slate.AccentColor")]
-    [InlineData(false, nameof(AccentPalette.Dark2), "#7FB8E8", "Slate.TextOnAccentColor on Slate.AccentHoverColor")]
-    [InlineData(false, nameof(AccentPalette.Dark3), "#7FB8E8", "Slate.TextOnAccentColor on Slate.AccentPressedColor")]
-    [InlineData(false, nameof(AccentPalette.Dark2), "#7FB8E8", "Slate.AccentTextColor on Slate.SurfaceColor")]
-    [InlineData(false, nameof(AccentPalette.Dark2), "#767676", "Slate.AccentTextColor on Slate.WindowBackgroundColor")]
-    [InlineData(false, nameof(AccentPalette.Dark2), "#6E6E6E", "Slate.AccentTextColor on Slate.RaisedSurfaceColor")]
-    [InlineData(false, nameof(AccentPalette.Dark2), "#6E6E6E", "Slate.AccentTextColor on Slate.SelectedSurfaceColor")]
-    [InlineData(false, nameof(AccentPalette.Dark2), "#7FB8E8", "Slate.AccentHoverColor on Slate.SurfaceColor")]
-    [InlineData(false, nameof(AccentPalette.Dark3), "#7FB8E8", "Slate.AccentPressedColor on Slate.SurfaceColor")]
-    [InlineData(false, nameof(AccentPalette.Accent), "#7FB8E8", "Slate.SelectionTextColor on Slate.SelectionBackgroundColor")]
-    [InlineData(false, nameof(AccentPalette.Dark1), "#C8C8C8", "Slate.AccentColor on Slate.SurfaceColor")]
-    [InlineData(false, nameof(AccentPalette.Dark1), "#C8C8C8", "Slate.AccentIndicatorColor on Slate.SurfaceColor")]
-    [InlineData(false, nameof(AccentPalette.Dark1), "#C8C8C8", "Slate.AccentIndicatorColor on Slate.SelectedSurfaceColor")]
-    [InlineData(false, nameof(AccentPalette.Dark1), "#8C8C8C", "Slate.AccentIndicatorColor on Slate.SelectedSurfaceColor")]
-    [InlineData(false, nameof(AccentPalette.Accent), "#FFFFA0", "Slate.ReadingSelectionColor off Slate.SurfaceColor")]
-    [InlineData(false, nameof(AccentPalette.Accent), "#FFFFFF", "Slate.ReadingSelectionColor off Slate.RaisedSurfaceColor")]
-    [InlineData(true, nameof(AccentPalette.Light2), "#003E92", "Slate.TextOnAccentColor on Slate.AccentColor")]
-    [InlineData(true, nameof(AccentPalette.Light3), "#003E92", "Slate.TextOnAccentColor on Slate.AccentHoverColor")]
-    [InlineData(true, nameof(AccentPalette.Light1), "#003E92", "Slate.TextOnAccentColor on Slate.AccentPressedColor")]
-    [InlineData(true, nameof(AccentPalette.Light3), "#003E92", "Slate.AccentTextColor on Slate.SurfaceColor")]
-    [InlineData(true, nameof(AccentPalette.Light1), "#003E92", "Slate.AccentPressedColor on Slate.SurfaceColor")]
-    [InlineData(true, nameof(AccentPalette.Light2), "#003E92", "Slate.AccentColor on Slate.SurfaceColor")]
-    [InlineData(true, nameof(AccentPalette.Light2), "#003E92", "Slate.AccentIndicatorColor on Slate.SelectedSurfaceColor")]
-    [InlineData(true, nameof(AccentPalette.Accent), "#F0F0F0", "Slate.SelectionTextColor on Slate.SelectionBackgroundColor")]
-    [InlineData(true, nameof(AccentPalette.Accent), "#0A0A50", "Slate.ReadingSelectionColor off Slate.SurfaceColor")]
-    public void AnAccentThatFailsAnyCheckFallsBackToGold(bool dark, string member, string hex, string check) => StaThread.Run(() =>
-    {
-        AccentPalette palette = member switch
-        {
-            nameof(AccentPalette.Accent) => DefaultBlue with { Accent = Hex(hex) },
-            nameof(AccentPalette.Light1) => DefaultBlue with { Light1 = Hex(hex) },
-            nameof(AccentPalette.Light2) => DefaultBlue with { Light2 = Hex(hex) },
-            nameof(AccentPalette.Light3) => DefaultBlue with { Light3 = Hex(hex) },
-            nameof(AccentPalette.Dark1) => DefaultBlue with { Dark1 = Hex(hex) },
-            nameof(AccentPalette.Dark2) => DefaultBlue with { Dark2 = Hex(hex) },
-            nameof(AccentPalette.Dark3) => DefaultBlue with { Dark3 = Hex(hex) },
-            _ => throw new ArgumentOutOfRangeException(nameof(member)),
-        };
-        ResourceDictionary slate = GoldThemeFile(dark);
-        IReadOnlyDictionary<string, Color> roles = SlateAccent.RolesFor(
-            palette, (Color)slate["Slate.SurfaceColor"], ((Color)slate["Slate.ReadingSelectionColor"]).A, dark);
-
-        Assert.Contains(check, SlateAccent.FailedChecks(key => roles.TryGetValue(key, out Color role) ? role : (Color)slate[key]));
-        Assert.False(SlateAccent.TryApplyWindowsAccent(slate, AccentSource.WindowsAccent, palette, dark, highContrast: false));
-        AssertStillGold(slate, dark);
-        return 0;
-    }, TimeSpan.FromSeconds(30), "the theme file never loaded.");
-
-    /// <summary>A real Windows colour can't fail every rule, because some of these have the
-    /// room to spare, so this one proves each of them is checked.</summary>
-    [Fact]
-    public void EveryCheckCanFail()
-    {
-        IReadOnlyList<string> failed = SlateAccent.FailedChecks(_ => Colors.Gray);
-
-        Assert.Equal(SlateAccent.TextPairs.Count + SlateAccent.MarkPairs.Count + 4, failed.Count);
-        Assert.Contains("Slate.TextColor on Slate.SelectedSurfaceColor", failed);
-        Assert.Contains("Slate.SecondaryTextColor on Slate.SelectedSurfaceColor", failed);
-        Assert.Contains("Slate.TertiaryTextColor on Slate.SelectedSurfaceColor", failed);
-        Assert.Contains("Slate.TextColor under Slate.ReadingSelectionColor on Slate.SurfaceColor", failed);
-        Assert.Contains("Slate.TextColor under Slate.ReadingSelectionColor on Slate.RaisedSurfaceColor", failed);
-    }
-
     /// <summary>The spec's table: the palette read on this Windows, every pair, the overlay
-    /// included. Text selection clears by a hair, so a hue a little lighter falls back on
-    /// that pair alone.</summary>
+    /// included. Nothing gates on it since DSD16, so it's the record of what the commonest
+    /// accent draws, and it fails if the role table moves.</summary>
     [Theory]
     [InlineData(false, 4.53, new[] { 15.28, 9.69, 6.35, 8.51 }, new[] { 5.67, 9.98, 15.58 }, new[] { 9.98, 9.98, 15.58 }, new[] { 5.67, 5.67, 4.84 }, new[] { 11.23, 9.92, 1.31, 1.29 })]
     [InlineData(true, 4.53, new[] { 13.80, 10.15, 10.15, 11.23 }, new[] { 10.47, 15.68, 6.41 }, new[] { 12.45, 12.45, 5.09 }, new[] { 8.31, 8.31, 7.50 }, new[] { 8.63, 7.68, 1.29, 1.27 })]
-    public void TheDefaultBluePassesEveryCheckInBothThemes(
+    public void TheDefaultBlueMeasuresWhatTheSpecRecords(
         bool dark,
         double selection,
         double[] selectedRow,
@@ -314,8 +305,6 @@ public sealed class SlateAccentTests
             DefaultBlue, (Color)slate["Slate.SurfaceColor"], ((Color)slate["Slate.ReadingSelectionColor"]).A, dark);
         Color Of(string key) => roles.TryGetValue(key, out Color role) ? role : (Color)slate[key];
         double Ratio(string first, string second) => SlateContrast.WcagRatio(Of($"Slate.{first}Color"), Of($"Slate.{second}Color"));
-
-        Assert.Empty(SlateAccent.FailedChecks(Of));
 
         Assert.Equal(selection, Ratio("SelectionText", "SelectionBackground"), 2);
         Assert.Equal(selectedRow, new[] { "Text", "SecondaryText", "TertiaryText", "AccentText" }.Select(text => Math.Round(Ratio(text, "SelectedSurface"), 2)));
@@ -334,16 +323,28 @@ public sealed class SlateAccentTests
         return 0;
     }, TimeSpan.FromSeconds(30), "the theme file never loaded.");
 
-    /// <summary>The gate and gold run the one list, so a pair added for one reaches the other.
+    /// <summary>Every text the accent draws, at 4.5:1, and every fill and mark, at 3:1, on gold.
     /// Gold is also held to its higher floor, in <see cref="ThemeTokenContrastTests"/>.</summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void GoldClearsEveryPairTheGateChecks(bool dark) => StaThread.Run(() =>
+    public void GoldClearsEveryPairTheAccentDraws(bool dark) => StaThread.Run(() =>
     {
         ResourceDictionary slate = GoldThemeFile(dark);
+        Color Of(string key) => (Color)slate[key];
 
-        Assert.Empty(SlateAccent.FailedChecks(key => (Color)slate[key]));
+        foreach ((string text, string background) in AccentTextPairs)
+        {
+            double ratio = SlateContrast.WcagRatio(Of(text), Of(background));
+            Assert.True(ratio >= 4.5, $"{text} on {background} is {ratio:F2}:1.");
+        }
+
+        foreach ((string mark, string background) in AccentMarkPairs)
+        {
+            double ratio = SlateContrast.WcagRatio(Of(mark), Of(background));
+            Assert.True(ratio >= 3, $"{mark} on {background} is {ratio:F2}:1.");
+        }
+
         return 0;
     }, TimeSpan.FromSeconds(30), "the theme file never loaded.");
 
@@ -367,14 +368,16 @@ public sealed class SlateAccentTests
 
     /// <summary>The regression this brush exists for: white on the 12% tint, 1.17:1 in light.
     /// It reads the controls and not the keys, so a template that goes back to the selection's
-    /// text fails here.</summary>
+    /// text fails here. Both palettes Windows has given on these desktops.</summary>
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void ASelectedRowIsReadableUnderAnAcceptedAccent(bool dark) => StaThread.Run(() =>
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void ASelectedRowIsReadableUnderAWindowsAccent(bool dark, bool pink) => StaThread.Run(() =>
     {
         using var host = new ShownShell();
-        Use(host, dark, highContrast: false, AccentSource.WindowsAccent, DefaultBlue);
+        Use(host, dark, highContrast: false, AccentSource.WindowsAccent, pink ? OwnersPink : DefaultBlue);
         object Style(string key) => host.Shell.FindResource(key);
         var cell = new DataGridCell { Style = (Style)Style("Slate.GridCellStyle"), Content = "A cell", IsSelected = true };
         var list = new ListBox
@@ -520,30 +523,6 @@ public sealed class SlateAccentTests
         Assert.False(SlateAccent.ChangeNeedsReapply(AccentSource.Automatic, Chosen, Chosen with { }));
         Assert.True(SlateAccent.ChangeNeedsReapply(AccentSource.WindowsAccent, DefaultBlue, DefaultBlue with { Dark3 = Hex("#000000") }));
     }
-
-    /// <summary>The log can say why, and no colour goes in it.</summary>
-    [Fact]
-    public void AFallbackTellsTheLogWhichCheckAndNoColour() => StaThread.Run(() =>
-    {
-        var heard = new List<string>();
-        Action<string>? previous = HostLog.ObserverForTests;
-        HostLog.ObserverForTests = message => heard.Add(message);
-        try
-        {
-            ResourceDictionary slate = GoldThemeFile(dark: false);
-            Assert.False(SlateAccent.TryApplyWindowsAccent(slate, AccentSource.WindowsAccent, DefaultBlue with { Accent = Hex("#7FB8E8") }, dark: false, highContrast: false));
-            Assert.False(SlateAccent.TryApplyWindowsAccent(slate, AccentSource.SlateGold, DefaultBlue, dark: false, highContrast: false));
-        }
-        finally
-        {
-            HostLog.ObserverForTests = previous;
-        }
-
-        string line = Assert.Single(heard, message => message.Contains(nameof(HostDiagnosticEvent.AccentFellBackToGold), StringComparison.Ordinal));
-        Assert.Contains("Slate.SelectionTextColor", line, StringComparison.Ordinal);
-        Assert.DoesNotContain("#", line, StringComparison.Ordinal);
-        return 0;
-    }, TimeSpan.FromSeconds(30), "the theme file never loaded.");
 
     /// <summary>A row the keys or the pointer are on, which only the list can say otherwise.</summary>
     private sealed class HighlightedComboBoxItem : ComboBoxItem

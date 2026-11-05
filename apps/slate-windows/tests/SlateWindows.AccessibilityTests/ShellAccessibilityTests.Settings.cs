@@ -44,9 +44,8 @@ public sealed partial class ShellAccessibilityTests
     /// <summary>DS-11 (#1812): the manager's half, which no hosted fact can build. Windows accent
     /// is a choice in the app, so this needs no system setting changed. The sheet's open category
     /// shows the selected surface, and gold's is exact, so its pixels say which accent drew.
-    /// This reads Windows' accent as it is. An accent that fails the gate stays gold and says so
-    /// in the log, and the fact holds on that too. A fact builds both over a palette in
-    /// SlateAccentTests.</summary>
+    /// This reads Windows' accent as it is, and it holds on any accent, since none falls back
+    /// to gold (DSD16).</summary>
     [Fact]
     public void AccentColor_WindowsAccentDrawsAtOnceAndAcrossARestart()
     {
@@ -57,7 +56,6 @@ public sealed partial class ShellAccessibilityTests
         string preferences = Path.Combine(device, "preferences.json");
         Directory.CreateDirectory(device);
         File.WriteAllText(preferences, "{\"theme\":\"light\",\"accentColor\":\"gold\"}");
-        string log = Path.Combine(logs, "slate-windows.log");
         Process? process = null;
 
         Window? OpenSheet(UIA3Automation automation)
@@ -85,28 +83,6 @@ public sealed partial class ShellAccessibilityTests
             Assert.Equal(expected, HasPixel(window, GoldSelectedSurface));
         }
 
-        bool FellBack(Window window)
-        {
-            DateTime deadline = DateTime.UtcNow.AddSeconds(10);
-            while (DateTime.UtcNow < deadline)
-            {
-                if (ReadSharedLog(log).Contains("SlateWindows.AccentFellBackToGold", StringComparison.Ordinal))
-                {
-                    return true;
-                }
-
-                if (!HasPixel(window, GoldSelectedSurface))
-                {
-                    return false;
-                }
-
-                Thread.Sleep(100);
-            }
-
-            Assert.Fail("Gold still shows, and the log names no fallback.");
-            return true;
-        }
-
         try
         {
             using var automation = new UIA3Automation();
@@ -121,8 +97,7 @@ public sealed partial class ShellAccessibilityTests
             PressKey(VirtualKeyShort.END);
             Retry.WhileFalse(() => ComboValue(combo) == "Windows accent", TimeSpan.FromSeconds(5));
             Assert.Equal("Windows accent", ComboValue(combo));
-            bool fellBack = FellBack(window);
-            WaitForGold(window, expected: fellBack);
+            WaitForGold(window, expected: false);
             AssertEventuallyFocused(combo, "the accent's change took focus off the combo.");
             AssertAxeClean(process!, "settings-sheet-accent");
             Assert.Contains("\"accentColor\": \"windows\"", File.ReadAllText(preferences), StringComparison.Ordinal);
@@ -130,7 +105,7 @@ public sealed partial class ShellAccessibilityTests
             process.WaitForExit(10_000);
 
             window = OpenSheet(automation)!;
-            WaitForGold(window, expected: fellBack);
+            WaitForGold(window, expected: false);
 
             PressKey(VirtualKeyShort.TAB);
             PressKey(VirtualKeyShort.TAB);

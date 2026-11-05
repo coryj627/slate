@@ -38,9 +38,9 @@ internal sealed record AccentPalette(
 }
 
 /// <summary>
-/// DS-11 (#1812): the accent can follow Windows, and every text it draws still clears 4.5:1
-/// and every fill and mark 3:1 (DSD14). A Windows accent that can't falls back to gold
-/// without a message, as the design says. The rules are <c>design/windows/xaml/README.md</c>'s.
+/// DS-11 (#1812): the accent can follow Windows, as Windows gives it, whatever its contrast
+/// (DSD16). Choosing an accent from colours that clear contrast is #1842. The rules are
+/// <c>design/windows/xaml/README.md</c>'s.
 /// </summary>
 internal static class SlateAccent
 {
@@ -49,15 +49,8 @@ internal static class SlateAccent
     internal const string WindowsAccent = "windows";
 
     private const string Surface = "Slate.SurfaceColor";
-    private const string Raised = "Slate.RaisedSurfaceColor";
     private const string Selected = "Slate.SelectedSurfaceColor";
     private const string ReadingSelection = "Slate.ReadingSelectionColor";
-    private const double TextMinimum = 4.5;
-    private const double MarkMinimum = 3;
-
-    /// <summary>What the overlay's highlight keeps off the surface: as far as the text box's
-    /// solid gold selection stands off white.</summary>
-    private const double OverlayStandOff = 1.2;
 
     /// <summary>What Automatic treats as no choice at all. Windows' wallpaper-derived accents
     /// count as chosen.</summary>
@@ -69,38 +62,6 @@ internal static class SlateAccent
         new AccentOption(Automatic, "Automatic"),
         new AccentOption(SlateGold, "Slate gold"),
         new AccentOption(WindowsAccent, "Windows accent"),
-    };
-
-    /// <summary>Every text the accent can draw on, at 4.5:1. One list: the gate runs it on a
-    /// computed accent, and a fact runs it over the gold themes, so a pair added for one
-    /// reaches the other.</summary>
-    internal static readonly IReadOnlyList<(string Text, string Background)> TextPairs = new[]
-    {
-        ("Slate.TextOnAccentColor", "Slate.AccentColor"),
-        ("Slate.TextOnAccentColor", "Slate.AccentHoverColor"),
-        ("Slate.TextOnAccentColor", "Slate.AccentPressedColor"),
-        ("Slate.AccentTextColor", Surface),
-        ("Slate.AccentTextColor", "Slate.WindowBackgroundColor"),
-        ("Slate.AccentTextColor", Raised),
-        ("Slate.AccentTextColor", Selected),
-
-        // A link, hovered and pressed, draws in the fill roles.
-        ("Slate.AccentHoverColor", Surface),
-        ("Slate.AccentPressedColor", Surface),
-        ("Slate.SelectionTextColor", "Slate.SelectionBackgroundColor"),
-
-        // A selected row. Tertiary is for DS-18's counts.
-        ("Slate.TextColor", Selected),
-        ("Slate.SecondaryTextColor", Selected),
-        ("Slate.TertiaryTextColor", Selected),
-    };
-
-    /// <summary>Fills and marks, at 3:1.</summary>
-    internal static readonly IReadOnlyList<(string Mark, string Background)> MarkPairs = new[]
-    {
-        ("Slate.AccentColor", Surface),
-        ("Slate.AccentIndicatorColor", Surface),
-        ("Slate.AccentIndicatorColor", Selected),
     };
 
     /// <summary>A stored value this build knows, else the default.</summary>
@@ -135,51 +96,9 @@ internal static class SlateAccent
             [ReadingSelection] = Color.FromArgb(overlayAlpha, palette.Accent.R, palette.Accent.G, palette.Accent.B),
         };
 
-    /// <summary>The gate: the name of each check these colours fail, in order. A name is
-    /// role keys and no colour values, so it can go in the log.</summary>
-    internal static IReadOnlyList<string> FailedChecks(Func<string, Color> color)
-    {
-        var failed = new List<string>();
-        foreach ((string text, string background) in TextPairs)
-        {
-            if (SlateContrast.WcagRatio(color(text), color(background)) < TextMinimum)
-            {
-                failed.Add($"{text} on {background}");
-            }
-        }
-
-        foreach ((string mark, string background) in MarkPairs)
-        {
-            if (SlateContrast.WcagRatio(color(mark), color(background)) < MarkMinimum)
-            {
-                failed.Add($"{mark} on {background}");
-            }
-        }
-
-        // The reading view's selection is an overlay on top of the text, so it tints both.
-        // There's no search for an alpha that fits: a hue that fails falls back.
-        Color overlay = color(ReadingSelection);
-        foreach (string surfaceKey in new[] { Surface, Raised })
-        {
-            Color highlight = SlateContrast.Over(overlay, color(surfaceKey));
-            if (SlateContrast.WcagRatio(SlateContrast.Over(overlay, color("Slate.TextColor")), highlight) < TextMinimum)
-            {
-                failed.Add($"Slate.TextColor under {ReadingSelection} on {surfaceKey}");
-            }
-
-            if (SlateContrast.WcagRatio(highlight, color(surfaceKey)) < OverlayStandOff)
-            {
-                failed.Add($"{ReadingSelection} off {surfaceKey}");
-            }
-        }
-
-        return failed;
-    }
-
     /// <summary>Writes the Windows accent into a freshly loaded Slate dictionary's roles.</summary>
     /// <returns><see langword="false"/>, with the dictionary left gold, when gold applies: High
-    /// Contrast, the Slate gold setting, Automatic with Windows' default accent, or a failed
-    /// check. A failed check tells the log and not the reader, by design.</returns>
+    /// Contrast, the Slate gold setting, or Automatic with Windows' default accent.</returns>
     internal static bool TryApplyWindowsAccent(
         ResourceDictionary slate,
         AccentSource source,
@@ -194,19 +113,7 @@ internal static class SlateAccent
             return false;
         }
 
-        IReadOnlyDictionary<string, Color> roles = RolesFor(
-            palette,
-            (Color)slate[Surface],
-            ((Color)slate[ReadingSelection]).A,
-            dark);
-        IReadOnlyList<string> failed = FailedChecks(key => roles.TryGetValue(key, out Color role) ? role : (Color)slate[key]);
-        if (failed.Count > 0)
-        {
-            HostLog.WriteDetail(HostDiagnosticEvent.AccentFellBackToGold, failed[0]);
-            return false;
-        }
-
-        foreach ((string key, Color color) in roles)
+        foreach ((string key, Color color) in RolesFor(palette, (Color)slate[Surface], ((Color)slate[ReadingSelection]).A, dark))
         {
             slate[key] = color;
         }
