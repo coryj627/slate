@@ -40,7 +40,7 @@ public sealed partial class CommandPaletteTests
 
         public PaletteChoices Choices { get; }
 
-        public List<PaletteChoice> Chosen { get; } = [];
+        public List<PaletteChoice> Chosen { get; } = new();
 
         public CommandPaletteViewModel Palette => Harness.Palette;
 

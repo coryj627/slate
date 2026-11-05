@@ -107,7 +107,7 @@ internal sealed class ShownShell : IDisposable
     public VaultLifecycleViewModel Lifecycle => _lifecycle;
 
     /// <summary>Each theme preference applied: there's no <see cref="ThemeManager"/> here.</summary>
-    public List<string> ThemesApplied { get; } = [];
+    public List<string> ThemesApplied { get; } = new();
 
     public void Settle()
     {
