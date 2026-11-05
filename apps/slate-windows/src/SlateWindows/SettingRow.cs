@@ -46,6 +46,14 @@ internal sealed class SettingRow : ContentControl
     {
         base.OnApplyTemplate();
         _label = GetTemplateChild("PART_Label") as FrameworkElement;
+
+        // A LabeledBy name reads the label's peer, and WPF only finds one that already exists.
+        // A client walking the tree makes it, which can be after a client asks for the name.
+        if (_label is not null)
+        {
+            _ = UIElementAutomationPeer.CreatePeerForElement(_label);
+        }
+
         LabelTheControl();
     }
 
