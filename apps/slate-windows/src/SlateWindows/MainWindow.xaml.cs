@@ -1029,6 +1029,16 @@ public partial class MainWindow : Window
 
         ModifierKeys modifiers = Keyboard.Modifiers;
 
+        // DS-8 (#1809): a tab's close chords are bare KeyBindings, which no surface stops by
+        // itself, so a clean tab would close, or a dirty tab prompt, behind it. Ahead of the
+        // surfaces' own routes, some of which return without looking at a modified key, and
+        // closing the tab would retire the document a canvas card editor holds a draft for.
+        if (OpenModalSurface is not null && modifiers == ModifierKeys.Control && e.Key is Key.W or Key.F4)
+        {
+            e.Handled = true;
+            return;
+        }
+
         // The palette is modal: while it is open it owns the keyboard, so
         // no shell chord fires underneath it. Placed ahead of Quick Open
         // because the two overlays are mutually exclusive and the palette
@@ -1351,14 +1361,6 @@ public partial class MainWindow : Window
                 or ModalSurface.QuickOpen
                 or ModalSurface.SearchOverlay
                 or ModalSurface.CommandPalette);
-
-        // DS-8 (#1809): a tab's close chords are bare KeyBindings, which a sheet doesn't stop
-        // by itself, so a clean tab would close, or a dirty tab prompt, behind it.
-        if (sheetOwnsKeys && modifiers == ModifierKeys.Control && e.Key is Key.W or Key.F4)
-        {
-            e.Handled = true;
-            return;
-        }
 
         if (e.Key == Key.F && modifiers == (ModifierKeys.Control | ModifierKeys.Alt))
         {

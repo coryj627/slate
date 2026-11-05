@@ -901,7 +901,6 @@
             <TabControl ItemsSource="{Binding Tabs}"
                         Background="{DynamicResource Slate.SurfaceBrush}"
                         BorderBrush="{DynamicResource Slate.SubtleBorderBrush}"
-                        AlternationCount="{Binding Items.Count, RelativeSource={RelativeSource Self}}"
                         SelectedItem="{Binding ActiveTab, Mode=TwoWay}"
                         Focusable="{Binding HasItems, RelativeSource={RelativeSource Self}}"
                         IsTabStop="{Binding HasItems, RelativeSource={RelativeSource Self}}"
@@ -921,10 +920,7 @@
                 </TabControl.ContextMenu>
                 <!-- DS-8: the strip is 36: 4 above the tabs, 32 of tab, and a foot that overlaps
                      the rule under it by one, so the open tab, drawn over the rule, joins the
-                     note. The offset is the panel's, because TabPanel lays out rows without
-                     their tabs' margins. The strip shows the window behind it, and an empty
-                     pane has none. It has to stay a TabPanel: the ring reads one as the tab bar
-                     (MainWindow.ShellRegions). -->
+                     note. The strip shows the window behind it, and an empty pane has none. -->
                 <TabControl.Template>
                     <ControlTemplate TargetType="TabControl">
                         <Grid KeyboardNavigation.TabNavigation="Local" SnapsToDevicePixels="True">
@@ -932,7 +928,7 @@
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="*" />
                             </Grid.RowDefinitions>
-                            <TabPanel x:Name="HeaderPanel"
+                            <local:TabStripPanel x:Name="HeaderPanel"
                                       Grid.Row="0"
                                       MinHeight="32"
                                       Margin="8,4,8,-1"
@@ -979,12 +975,10 @@
                         <Setter Property="Background" Value="Transparent" />
                         <Setter Property="BorderBrush" Value="Transparent" />
                         <Setter Property="FocusVisualStyle" Value="{DynamicResource DefaultControlFocusVisualStyle}" />
-                        <!-- DS-8: 32 high and 100 to 240 wide. TabPanel stretches a wrapped row's
-                             cells to fill it, and a limit would centre a tab in a wider cell. -->
+                        <!-- DS-8: 32 high and 100 to 240 wide. -->
                         <Setter Property="MinHeight" Value="32" />
                         <Setter Property="MinWidth" Value="100" />
                         <Setter Property="MaxWidth" Value="240" />
-                        <Setter Property="HorizontalAlignment" Value="Left" />
                         <Setter Property="Template">
                             <Setter.Value>
                                 <ControlTemplate TargetType="TabItem">
@@ -1002,7 +996,7 @@
                                                           VerticalAlignment="Center" />
                                         <!-- On the left edge, overlapping the neighbour by one: the open
                                              tab is drawn above its neighbours, so it covers the ones
-                                             beside it, and the first tab has nothing to its left. -->
+                                             beside it, and a row's first tab has nothing to its left. -->
                                         <Border x:Name="Divider"
                                                 Width="1"
                                                 Height="16"
@@ -1039,7 +1033,7 @@
                                               Visibility="Collapsed" />
                                     </Grid>
                                     <ControlTemplate.Triggers>
-                                        <Trigger Property="ItemsControl.AlternationIndex" Value="0">
+                                        <Trigger Property="local:TabStripPanel.IsRowStart" Value="True">
                                             <Setter TargetName="Divider" Property="Visibility" Value="Collapsed" />
                                         </Trigger>
                                         <Trigger Property="IsMouseOver" Value="True">

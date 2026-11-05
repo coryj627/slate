@@ -215,9 +215,12 @@ public sealed class TabStripTests
         Assert.Same(host.Shell.TryFindResource("Slate.SubtleBorderBrush"), Divider(tabs[1]).Background);
     });
 
-    /// <summary>Tabs that don't fit wrap to a second row, which is WPF's TabPanel.</summary>
+    /// <summary>Tabs that don't fit wrap to another row. WPF's TabPanel stretches a wrapped
+    /// row's cells, so a tab's limit left gaps, and the open tab's flares and its neighbours'
+    /// dividers stopped meeting: the rows are packed instead, with the open one next to the
+    /// note, and a row's first tab has nothing to divide itself from.</summary>
     [Fact]
-    public void TabsThatDoNotFitWrapToASecondRow() => RunSta(() =>
+    public void WrappedTabsArePackedWithTheOpenRowNextToTheNote() => RunSta(() =>
     {
         (string, string)[] notes = Enumerable.Range(0, 12).Select(index => ($"note-{index}-with-a-longer-name.md", "# N\n")).ToArray();
         using var host = new ShownShell(notes);
@@ -229,19 +232,48 @@ public sealed class TabStripTests
         host.Settle();
 
         TabPanel strip = Strip(host);
+        Assert.IsType<TabStripPanel>(strip);
         Assert.True(strip.ActualHeight >= 32 * 2, $"the strip is {strip.ActualHeight}");
-        // A row's first tab starts the row, even alone in a row that's wider than a tab.
-        foreach (IGrouping<double, double> row in Tabs(host)
-            .Select(tab => tab.TranslatePoint(default, strip))
-            .GroupBy(point => point.Y, point => point.X))
-        {
-            Assert.Equal(0, row.Min(), 1);
-        }
+        AssertRowsArePacked(host);
+
+        // Choosing a tab in another row brings that row down to the note.
+        WorkspaceTabViewModel first = host.Workspace.ActiveGroup.Tabs[0];
+        host.Workspace.ActiveGroup.ActiveTab = first;
+        host.Settle();
+
+        TabItem open = Tabs(host).Single(tab => tab.IsSelected);
+        Assert.Same(first, open.DataContext);
+        AssertRowsArePacked(host);
     });
 
-    /// <summary>A lone tab in a wrapped row stays at the row's start, at its own width.</summary>
+    private static void AssertRowsArePacked(ShownShell host)
+    {
+        TabPanel strip = Strip(host);
+        TabItem[] tabs = Tabs(host);
+        double lastRow = tabs.Max(tab => tab.TranslatePoint(default, strip).Y);
+        Assert.Equal(lastRow, tabs.Single(tab => tab.IsSelected).TranslatePoint(default, strip).Y, 1);
+        foreach (IGrouping<double, TabItem> row in tabs.GroupBy(tab => tab.TranslatePoint(default, strip).Y))
+        {
+            double edge = 0;
+            foreach (TabItem tab in row.OrderBy(tab => tab.TranslatePoint(default, strip).X))
+            {
+                double left = tab.TranslatePoint(default, strip).X;
+                Assert.Equal(edge, left, 1);
+                bool starts = edge == 0;
+                Assert.Equal(starts, TabStripPanel.GetIsRowStart(tab));
+                Assert.Equal(
+                    starts || tab.IsSelected ? Visibility.Collapsed : Visibility.Visible,
+                    Divider(tab).Visibility);
+                edge = left + tab.ActualWidth;
+            }
+
+            Assert.True(edge <= strip.ActualWidth + 0.5, $"a row runs to {edge} in a strip of {strip.ActualWidth}");
+        }
+    }
+
+    /// <summary>A tab's only as wide as it needs, however few share its row.</summary>
     [Fact]
-    public void ALoneTabInARowKeepsToTheLeft() => RunSta(() =>
+    public void ALoneTabIsItsOwnWidth() => RunSta(() =>
     {
         using var host = new ShownShell(("a.md", "# A\n"));
         host.Workspace.OpenPath("a.md");
@@ -249,8 +281,8 @@ public sealed class TabStripTests
 
         TabItem tab = Tabs(host).Single();
 
-        Assert.Equal(HorizontalAlignment.Left, tab.HorizontalAlignment);
         Assert.Equal(0, tab.TranslatePoint(default, Strip(host)).X, 1);
+        Assert.True(tab.ActualWidth < 240, $"the tab is {tab.ActualWidth}");
     });
 
     [Theory]
@@ -316,6 +348,60 @@ public sealed class TabStripTests
 
         Assert.Equal(1, asked);
         Assert.Single(host.Workspace.ActiveGroup.Tabs);
+    });
+
+    /// <summary>The canvas sheets return from the window's key route early, so a guard after
+    /// them would miss them, and closing the tab retires the document a card editor is
+    /// holding a draft for.</summary>
+    [Theory]
+    [InlineData(Key.F4, "prompt")]
+    [InlineData(Key.W, "prompt")]
+    [InlineData(Key.F4, "picker")]
+    [InlineData(Key.W, "picker")]
+    [InlineData(Key.F4, "card editor")]
+    [InlineData(Key.W, "card editor")]
+    public void ACloseChordDoesNothingBehindACanvasSheet(Key key, string sheet) => RunSta(() =>
+    {
+        const string Board = """{"nodes":[{"id":"question","type":"text","text":"Core question","x":0,"y":0,"width":200,"height":100}],"edges":[]}""";
+        using var host = new ShownShell(("board.canvas", Board), ("note1.md", "# N\n"));
+        WithSidebar(host, sidebar =>
+        {
+            WorkspaceViewModel workspace = host.Workspace;
+            workspace.CanvasNoteCreator = sidebar;
+            workspace.OpenPath("board.canvas");
+            CanvasDocumentViewModel document = Assert.IsType<CanvasDocumentViewModel>(workspace.ActiveGroup.ActiveTab!.Canvas);
+            Assert.True(
+                PumpedDispatcher.PumpUntil(() => document.AppliedPublication?.Loaded is not null, TimeSpan.FromSeconds(30)),
+                "premise: the canvas never loaded");
+            host.Settle();
+            document.SeatSelectionSilently("question");
+            (sheet switch
+            {
+                "prompt" => workspace.CanvasConvertToNoteCommand,
+                "picker" => workspace.CanvasAddNoteCommand,
+                _ => workspace.CanvasNewCardCommand,
+            }).Execute(null);
+            object? Current() => sheet switch
+            {
+                "prompt" => workspace.CanvasPromptSheet,
+                "picker" => workspace.CanvasCardPickerSheet,
+                _ => workspace.CanvasCardEditorSheet,
+            };
+            Assert.True(PumpedDispatcher.PumpUntil(() => Current() is not null, TimeSpan.FromSeconds(30)), $"premise: the {sheet} never opened");
+            host.Settle();
+            object open = Current()!;
+            Assert.NotNull(host.Shell.OpenModalSurface);
+
+            CommandPaletteTests.ThreadModifiers.Hold(ModifierKeys.Control, () => RaiseKey(host, key));
+            PumpedDispatcher.Drain();
+
+            Assert.Single(workspace.ActiveGroup.Tabs);
+            Assert.Same(open, Current());
+            workspace.CloseCanvasCardEditor();
+            workspace.CloseCanvasCardPicker();
+            workspace.CloseCanvasPrompt();
+            host.Settle();
+        });
     });
 
     /// <summary>Delete is the tab's only while the tab has the keys: in the editor it's
@@ -405,12 +491,39 @@ public sealed class TabStripTests
     private static void RaiseKey(ShownShell host, Key key)
     {
         PresentationSource source = PresentationSource.FromVisual(host.Shell)!;
-        var target = (UIElement)Keyboard.FocusedElement;
+        UIElement target = Keyboard.FocusedElement as UIElement ?? host.Shell;
         var preview = new KeyEventArgs(Keyboard.PrimaryDevice, source, Environment.TickCount, key) { RoutedEvent = Keyboard.PreviewKeyDownEvent };
         target.RaiseEvent(preview);
         if (!preview.Handled)
         {
             target.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, source, Environment.TickCount, key) { RoutedEvent = Keyboard.KeyDownEvent });
+        }
+    }
+
+    /// <summary>A real sidebar over the shown shell, as the lifecycle attaches one.</summary>
+    private static void WithSidebar(ShownShell host, Action<FilesSidebarViewModel> body)
+    {
+        string appData = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"slate-ds8-{Guid.NewGuid():N}");
+        System.Reflection.PropertyInfo slot = typeof(VaultLifecycleViewModel).GetProperty(nameof(VaultLifecycleViewModel.FileSidebar))
+            ?? throw new InvalidOperationException("FileSidebar is gone");
+        var sidebar = new FilesSidebarViewModel(host.Session, _ => { }, localAppDataRoot: appData);
+        try
+        {
+            PumpedDispatcher.PumpUntilDrained(sidebar.TreeRefreshCompletion);
+            slot.SetValue(host.Shell.DataContext, sidebar);
+            host.Settle();
+            body(sidebar);
+        }
+        finally
+        {
+            slot.SetValue(host.Shell.DataContext, null);
+            try
+            {
+                Directory.Delete(appData, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
         }
     }
 
