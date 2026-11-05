@@ -63,7 +63,7 @@ The Windows columns are `SystemColors` properties (.NET 9 and later) and follow 
 
 ### Applying it
 
-`SlateAccent.TryApplyWindowsAccent` runs on the freshly loaded Slate dictionary in `ThemeManager.DictionariesFor`, and writes these roles. It returns false, with the dictionary left gold, when gold applies: High Contrast, the Slate gold setting, Automatic with the default accent, or a failed check. A failed check puts one line in the log, naming the check and no colour. `ThemeManager` applies again when the accent changes (`SystemEvents.UserPreferenceChanged`), and reads the colours a second time a moment later, because WPF holds them until a message of its own clears them, and that message can come after this event. A fact in `SlateAccentTests` reads this table.
+`SlateAccent.TryApplyWindowsAccent` runs on the freshly loaded Slate dictionary in `ThemeManager.DictionariesFor`, and writes these roles. It returns false, with the dictionary left gold, when gold applies: High Contrast, the Slate gold setting, Automatic with the default accent, or a failed check. A failed check puts one line in the log, naming the check and no colour. `ThemeManager` applies again when the accent changes: WPF holds the colours until a message of its own clears them, and that message can come after `SystemEvents.UserPreferenceChanged`, so `SystemAccentWatch` keeps a resource reference to `SystemColors.AccentColorKey` on the main window, which WPF reads again right after the clearing. A fact in `SlateAccentTests` reads this table.
 
 ### Selection in the reading view
 

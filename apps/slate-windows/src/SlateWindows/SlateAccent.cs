@@ -219,3 +219,32 @@ internal static class SlateAccent
     internal static bool ChangeNeedsReapply(AccentSource source, AccentPalette previous, AccentPalette current) =>
         source != AccentSource.SlateGold && previous != current;
 }
+
+/// <summary>
+/// WPF holds the accent's colours until a message of its own clears them, and that message can
+/// come after any event of Windows' that reaches the app, so no read at a chosen moment is sure
+/// of the new colour. A resource reference on a live window is read again right after the
+/// clearing, so a change in it is the moment the new colours can be read.
+/// </summary>
+internal static class SystemAccentWatch
+{
+    private static readonly DependencyProperty AccentProperty = DependencyProperty.RegisterAttached(
+        "Accent",
+        typeof(Color),
+        typeof(SystemAccentWatch),
+        new PropertyMetadata(default(Color), (root, _) => ((Action?)root.GetValue(ChangedProperty))?.Invoke()));
+
+    private static readonly DependencyProperty ChangedProperty = DependencyProperty.RegisterAttached(
+        "Changed",
+        typeof(Action),
+        typeof(SystemAccentWatch));
+
+    /// <summary>Calls <paramref name="changed"/> once now, with the first read, and again each
+    /// time the colour is a different one. <paramref name="root"/> has to be a window that
+    /// outlives the watching: WPF only walks what's shown.</summary>
+    internal static void Attach(FrameworkElement root, Action changed)
+    {
+        root.SetValue(ChangedProperty, changed);
+        root.SetResourceReference(AccentProperty, SystemColors.AccentColorKey);
+    }
+}

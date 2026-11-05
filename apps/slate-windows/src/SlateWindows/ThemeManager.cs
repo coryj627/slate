@@ -7,7 +7,6 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Media;
-using System.Windows.Threading;
 using Microsoft.Win32;
 
 namespace SlateWindows;
@@ -32,7 +31,6 @@ internal sealed class ThemeManager : IDisposable
 
     private readonly Application _application;
     private readonly TextScaleService? _textScale;
-    private readonly DispatcherTimer _accentRead;
     private ResourceDictionary[] _resources = [];
     private string _preference;
     private SlateTheme _theme;
@@ -89,11 +87,6 @@ internal sealed class ThemeManager : IDisposable
         _theme = ResolvePreference();
         _accent = SlateAccent.SourceOf(accent);
         _palette = AccentPalette.ReadSystem();
-        _accentRead = new DispatcherTimer(DispatcherPriority.Background, application.Dispatcher)
-        {
-            Interval = TimeSpan.FromSeconds(1),
-        };
-        _accentRead.Tick += AccentRead_Tick;
         Current = this;
         _textScale = TextScaleService.Current;
         ApplyResources();
@@ -169,10 +162,14 @@ internal sealed class ThemeManager : IDisposable
         ApplyResources();
     }
 
+    /// <summary>DS-11: applies again when Windows' accent changes, which only a window of the
+    /// app's can see. WPF is still walking that window when it says so, so this goes after.
+    /// See <see cref="SystemAccentWatch"/>.</summary>
+    public void WatchSystemAccent(FrameworkElement root) =>
+        SystemAccentWatch.Attach(root, () => _ = _application.Dispatcher.InvokeAsync(ApplyPreference));
+
     public void Dispose()
     {
-        _accentRead.Stop();
-        _accentRead.Tick -= AccentRead_Tick;
         if (ReferenceEquals(Current, this))
         {
             Current = null;
@@ -205,31 +202,12 @@ internal sealed class ThemeManager : IDisposable
 
         if (_application.Dispatcher.CheckAccess())
         {
-            PreferenceChanged();
+            ApplyPreference();
         }
         else
         {
-            _ = _application.Dispatcher.InvokeAsync(PreferenceChanged);
+            _ = _application.Dispatcher.InvokeAsync(ApplyPreference);
         }
-    }
-
-    /// <summary>DS-11: WPF holds the accent's colours until a message of its own clears them,
-    /// and that message can come after this event, so the first read here can be the old
-    /// colour. The second one is what catches it.</summary>
-    private void PreferenceChanged()
-    {
-        ApplyPreference();
-        if (_accent != AccentSource.SlateGold)
-        {
-            _accentRead.Stop();
-            _accentRead.Start();
-        }
-    }
-
-    private void AccentRead_Tick(object? sender, EventArgs eventArgs)
-    {
-        _accentRead.Stop();
-        ApplyPreference();
     }
 
     private SlateTheme ResolvePreference() =>

@@ -144,6 +144,7 @@ public partial class App : Application
         SidebarWriteJournal.InstallProductionLocation();
         base.OnStartup(e);
         _mainWindow = new MainWindow();
+        _themeManager?.WatchSystemAccent(_mainWindow);
         _singleInstanceCoordinator.StartListening(QueueActivation);
         _mainWindow.Show();
 

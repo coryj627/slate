@@ -2,11 +2,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Collections.ObjectModel;
+using System.Diagnostics;
+using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Media;
+using System.Windows.Threading;
 
 namespace SlateWindows.Tests;
 
@@ -17,6 +21,8 @@ namespace SlateWindows.Tests;
 /// </summary>
 public sealed class SlateAccentTests
 {
+    private const int WmDwmColorizationColorChanged = 0x0320;
+
     /// <summary>What <c>SystemColors</c> read on a default Windows 11 on 2026-11-03.</summary>
     private static readonly AccentPalette DefaultBlue = new(
         Hex("#0078D4"),
@@ -26,6 +32,96 @@ public sealed class SlateAccentTests
         Hex("#0067C0"),
         Hex("#003E92"),
         Hex("#001A68"));
+
+    /// <summary>A live change's way in, through WPF's own code. A fact can't change the accent,
+    /// so this puts a colour in the cache WPF keeps and sends this thread's windows the message
+    /// Windows would. All of that is private to WPF, so the premises say if it moves.</summary>
+    [Fact]
+    public void WpfClearingItsColoursReachesTheWatch() => RunSta(() =>
+    {
+        using var host = new ShownShell();
+        Color windows = SystemColors.AccentColor;
+        PlantAccent(windows == Colors.Red ? Colors.Lime : Colors.Red);
+        try
+        {
+            int changes = 0;
+            SystemAccentWatch.Attach(host.Shell, () => changes++);
+            Assert.True(changes == 1, "premise: the watch didn't take its first read.");
+            changes = 0;
+
+            SendToThisThreadsWindows(WmDwmColorizationColorChanged);
+
+            Assert.True(PumpUntil(() => changes > 0, TimeSpan.FromSeconds(10)), "the watch never heard WPF clear its colours.");
+            Assert.Equal(windows, SystemColors.AccentColor);
+            Assert.Equal(1, changes);
+
+            SendToThisThreadsWindows(WmDwmColorizationColorChanged);
+            _ = PumpUntil(() => false, TimeSpan.FromMilliseconds(200));
+            Assert.Equal(1, changes);
+        }
+        finally
+        {
+            PlantAccent(windows);
+        }
+    });
+
+    /// <summary>The watch needs a window that lives as long as the app.</summary>
+    [Fact]
+    public void StartupWatchesTheAccentOnTheMainWindow()
+    {
+        string startup = File.ReadAllText(Path.Combine(SourceText.ShellSourceRoot(), "App.xaml.cs"));
+
+        Assert.Contains("_themeManager?.WatchSystemAccent(_mainWindow);", startup, StringComparison.Ordinal);
+    }
+
+    private static void PlantAccent(Color color)
+    {
+        _ = SystemColors.AccentColor;
+        var cache = (Color[]?)typeof(SystemColors)
+            .GetField("_colorCache", BindingFlags.NonPublic | BindingFlags.Static)?
+            .GetValue(null);
+        Type? slots = typeof(SystemColors).GetNestedType("CacheSlot", BindingFlags.NonPublic);
+        Assert.True(cache is not null && slots is not null, "premise: WPF's colour cache has moved.");
+        cache![(int)Enum.Parse(slots!, "AccentColor")] = color;
+        Assert.Equal(color, SystemColors.AccentColor);
+    }
+
+    private static void SendToThisThreadsWindows(int message) =>
+        _ = EnumThreadWindows(
+            GetCurrentThreadId(),
+            (window, _) =>
+            {
+                _ = SendMessage(window, message, IntPtr.Zero, IntPtr.Zero);
+                return true;
+            },
+            IntPtr.Zero);
+
+    private delegate bool EnumThreadWindowsProc(IntPtr window, IntPtr state);
+
+    [DllImport("user32.dll")]
+    private static extern bool EnumThreadWindows(uint thread, EnumThreadWindowsProc callback, IntPtr state);
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SendMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam);
+
+    /// <summary>WPF walks the window at Normal, so a Background turn comes after it.</summary>
+    private static bool PumpUntil(Func<bool> condition, TimeSpan budget)
+    {
+        var clock = Stopwatch.StartNew();
+        while (!condition() && clock.Elapsed < budget)
+        {
+            Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.Background);
+            Thread.Sleep(5);
+        }
+
+        return condition();
+    }
+
+    private static void RunSta(Action body) =>
+        StaThread.Run(body, TimeSpan.FromSeconds(120), "STA test body timed out.");
 
     /// <summary>A choice, close enough to the default to pass.</summary>
     private static readonly AccentPalette Chosen = DefaultBlue with { Accent = Hex("#0070C8") };
@@ -265,7 +361,7 @@ public sealed class SlateAccentTests
         };
         var dropdown = new ComboBoxItem { Style = (Style)Style("Slate.ComboRowBase"), Content = "A choice", IsSelected = true };
         var highlighted = new HighlightedComboBoxItem { Style = (Style)Style("Slate.ComboRowBase"), Content = "Another choice" };
-        var tree =new TreeViewItem { Style = (Style)Style("Slate.TreeRowBase"), Header = "A file", IsSelected = true };
+        var tree = new TreeViewItem { Style = (Style)Style("Slate.TreeRowBase"), Header = "A file", IsSelected = true };
         var toggle = new ToggleButton { Style = (Style)Style("Slate.SubtleIconToggleButtonStyle"), Content = "A", IsChecked = true };
         host.Shell.Content = new StackPanel { Children = { cell, list, dropdown, highlighted, new TreeView { Items = { tree } }, toggle } };
         host.Settle();
