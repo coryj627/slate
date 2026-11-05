@@ -570,7 +570,7 @@ public sealed class StatusBarAndPaneTogglesTests
         ["RemoveTagCommand"] = "spoken, and its field is in the pane",
         ["CreateFolderCommand"] = "hands off to the name field, which shows the pane",
         ["CreateNoteCommand"] = "hands off to the name field, which shows the pane",
-        ["CreateCanvasCommand"] = "hands off to the name field, which shows the pane",
+        ["CreateCanvasCommand"] = "spoken, and it opens in a new tab",
         ["RenameCommand"] = "spoken, and the tab's title changes",
         ["DeleteCommand"] = "its prompt names the file",
         ["CreateFolderNoteCommand"] = "spoken",
@@ -587,8 +587,8 @@ public sealed class StatusBarAndPaneTogglesTests
         ["HistoryForwardCommand"] = "the editor",
         ["BatchMoveCommand"] = "spoken, and its field is in the pane",
         ["BatchTrashCommand"] = "the status bar's progress",
-        ["ImportCommand"] = "a file picker",
-        ["CancelImportCommand"] = "spoken",
+        ["ImportCommand"] = "a file picker, then spoken when it finishes",
+        ["CancelImportCommand"] = "no surface shows an import, pane or not: #1830",
         ["CancelTrashCommand"] = "the status bar's progress",
     };
 

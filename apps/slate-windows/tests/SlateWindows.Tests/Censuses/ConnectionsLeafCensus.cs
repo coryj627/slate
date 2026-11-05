@@ -590,6 +590,9 @@ public sealed class ConnectionsLeafCensus
         Assert.Single(WritingPaneBindings(XElement.Parse("""<T Tag="{Binding Path=IsFilesSidebarVisible, Mode=OneWayToSource}" />""")));
         Assert.Single(WritingPaneBindings(XElement.Parse("""<S><Setter Property="IsChecked" Value="{Binding Workspace.IsRightPaneVisible}" /></S>""")));
         Assert.Single(WritingPaneBindings(XElement.Parse("""<T><T.IsChecked><Binding Path="Workspace.IsFilesSidebarVisible" /></T.IsChecked></T>""")));
+        Assert.Single(WritingPaneBindings(XElement.Parse("""<T IsChecked="{Binding Workspace.IsRightPaneVisible, Mode=Default}" />""")));
+        Assert.Single(WritingPaneBindings(XElement.Parse("""<T><T.IsChecked><Binding Path="Workspace.IsRightPaneVisible" Mode="Default" /></T.IsChecked></T>""")));
+        Assert.Empty(WritingPaneBindings(XElement.Parse("""<T Tag="{Binding Workspace.IsRightPaneVisible, Mode=Default}" />""")));
         Assert.Empty(WritingPaneBindings(XElement.Parse("""<T IsChecked="{Binding Workspace.IsRightPaneVisible, Mode=OneWay}" />""")));
         Assert.Empty(WritingPaneBindings(XElement.Parse("""<T Visibility="{Binding Workspace.IsFilesSidebarVisible, Converter={StaticResource C}}" />""")));
         Assert.Empty(WritingPaneBindings(XElement.Parse("""<T IsChecked="{Binding Workspace.RightPaneToggle}" />""")));
@@ -642,7 +645,8 @@ public sealed class ConnectionsLeafCensus
     private static bool BindingWrites(string target, string binding) =>
         binding.Contains("Mode=TwoWay", StringComparison.Ordinal)
         || binding.Contains("Mode=OneWayToSource", StringComparison.Ordinal)
-        || (TwoWayByDefault.Contains(target) && !binding.Contains("Mode=", StringComparison.Ordinal));
+        || (TwoWayByDefault.Contains(target)
+            && (!binding.Contains("Mode=", StringComparison.Ordinal) || binding.Contains("Mode=Default", StringComparison.Ordinal)));
 
     /// <summary>Term 10 / B-19 (iii): the graph document enqueues its filter
     /// count through the relay's GATED entry, with the effective predicate,
