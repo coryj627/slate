@@ -213,7 +213,29 @@ public sealed class TabStripTests
 
         host.Settle();
 
-        Assert.True(Strip(host).ActualHeight >= 32 * 2, $"the strip is {Strip(host).ActualHeight}");
+        TabPanel strip = Strip(host);
+        Assert.True(strip.ActualHeight >= 32 * 2, $"the strip is {strip.ActualHeight}");
+        // A row's first tab starts the row, even alone in a row that's wider than a tab.
+        foreach (IGrouping<double, double> row in Tabs(host)
+            .Select(tab => tab.TranslatePoint(default, strip))
+            .GroupBy(point => point.Y, point => point.X))
+        {
+            Assert.Equal(0, row.Min(), 1);
+        }
+    });
+
+    /// <summary>A lone tab in a wrapped row stays at the row's start, at its own width.</summary>
+    [Fact]
+    public void ALoneTabInARowKeepsToTheLeft() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "# A\n"));
+        host.Workspace.OpenPath("a.md");
+        host.Settle();
+
+        TabItem tab = Tabs(host).Single();
+
+        Assert.Equal(HorizontalAlignment.Left, tab.HorizontalAlignment);
+        Assert.Equal(0, tab.TranslatePoint(default, Strip(host)).X, 1);
     });
 
     [Theory]

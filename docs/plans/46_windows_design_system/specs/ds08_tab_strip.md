@@ -58,3 +58,17 @@ AT: NVDA and Narrator, arrow across tabs (names and "Unsaved changes" unchanged)
 ## Brief
 
 Read `WorkspaceTemplates.xaml:260-275`, `:842-926`, `MainWindow.ShellRegions.cs:95`, `TabView.prompt.md`, `Commands/ChordTable.cs:737`. Replace the template and header, keep every `AutomationProperties` line. Add the two keys. Facts first. Commit: `feat(windows): the tab strip is the design's tab view, and a focused tab closes on delete or ctrl+f4`.
+
+## Notes from the build
+
+**The strip's offset is the panel's.** `TabPanel` lays out rows without their tabs' margins, so a top margin on a tab overflowed its row. The panel's margin is `8,4,8,-1`, and each row is 32: the first row is 36 from the top with the rule, and a second adds 32.
+
+**An empty pane has no strip.** A `MinHeight` would have left a blank band above the hint, so the panel collapses with no tabs. DS-19 draws that pane.
+
+**The border is beside the header, not around it,** because its top edge would make the tab 33 with the close button's 32.
+
+**The divider is on a tab's left edge, overlapping its neighbour by one.** The open tab is drawn above its neighbours, so it covers the ones beside it without any tab knowing which is open, and `AlternationIndex` 0 hides the first. In a wrapped row, the first tab still shows its divider: `TabPanel` doesn't say where a row starts.
+
+**The canvas icon is ours.** The design has none, so it's `ECA5` (Tiles). A graph is `E9E9` and a Base `E8A9`, as the design's right pane has them. A saved query is `E71C`, and a dashboard is `E9D2`, by the same list.
+
+**Delete has a scope of its own,** `ChordScope.TabStrip`, because two surface rows on one chord need different scopes, and its route is `TabStrip_PreviewKeyDown`. Ctrl+F4 is a row of its own, because a command row carries one chord.

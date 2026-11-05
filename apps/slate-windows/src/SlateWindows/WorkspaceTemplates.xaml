@@ -979,10 +979,12 @@
                         <Setter Property="Background" Value="Transparent" />
                         <Setter Property="BorderBrush" Value="Transparent" />
                         <Setter Property="FocusVisualStyle" Value="{DynamicResource DefaultControlFocusVisualStyle}" />
-                        <!-- DS-8: 32 high and 100 to 240 wide. -->
+                        <!-- DS-8: 32 high and 100 to 240 wide. TabPanel stretches a wrapped row's
+                             cells to fill it, and a limit would centre a tab in a wider cell. -->
                         <Setter Property="MinHeight" Value="32" />
                         <Setter Property="MinWidth" Value="100" />
                         <Setter Property="MaxWidth" Value="240" />
+                        <Setter Property="HorizontalAlignment" Value="Left" />
                         <Setter Property="Template">
                             <Setter.Value>
                                 <ControlTemplate TargetType="TabItem">
