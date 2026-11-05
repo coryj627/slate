@@ -197,6 +197,80 @@ public sealed partial class ShellAccessibilityTests
         }
     }
 
+    /// <summary>DS-8 (#1809): the tab strip's real keys. Delete closes the focused tab and
+    /// Ctrl+F4 the active one, and the strip stays clean with a kind icon and a close glyph
+    /// in every tab.</summary>
+    [Fact]
+    public void TabStrip_DeleteAndCtrlF4CloseAndTheStripIsClean()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "slate-tab-strip-" + Guid.NewGuid().ToString("N"));
+        string vault = Path.Combine(root, "Vault");
+        string logs = Path.Combine(root, "logs");
+        Directory.CreateDirectory(vault);
+        foreach (string name in new[] { "alpha", "beta", "gamma" })
+        {
+            File.WriteAllText(Path.Combine(vault, name + ".md"), $"# {name}\n\nBody.\n");
+        }
+
+        Process? process = null;
+        try
+        {
+            var start = new ProcessStartInfo(SlateWindowsExe()) { UseShellExecute = false };
+            ShellLaunch.ApplyDeviceState(start);
+            start.ArgumentList.Add(vault);
+            start.Environment["SLATE_CENSUS_INSTANCE_ID"] = "tab-strip-" + Guid.NewGuid().ToString("N");
+            start.Environment["SLATE_LOG_DIR"] = logs;
+            process = Process.Start(start) ?? throw new Xunit.Sdk.XunitException("Slate did not start.");
+            if (!HasInteractiveDesktop(process, "tab-strip")) { return; }
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(process, automation, Path.Combine(logs, "slate-windows.log"), TimeSpan.FromSeconds(30));
+            window.SetForeground();
+            AutomationElement tree = WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(30));
+            foreach (string name in new[] { "alpha.md", "beta.md", "gamma.md" })
+            {
+                ReassertForegroundForAChord(window);
+                tree.Focus();
+                WaitForTreeItemStartingWith(tree, automation, name).Patterns.SelectionItem.Pattern.Select();
+                PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.ENTER);
+                Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(500));
+            }
+
+            AutomationElement tabs = WaitForElement(window, "WorkspaceTabs", TimeSpan.FromSeconds(10));
+            int TabCount() => tabs.FindAllChildren(automation.ConditionFactory.ByControlType(ControlType.TabItem)).Length;
+            void AwaitTabs(int expected, string what)
+            {
+                DateTime deadline = DateTime.UtcNow.AddSeconds(15);
+                while (TabCount() != expected && DateTime.UtcNow < deadline)
+                {
+                    Thread.Sleep(100);
+                }
+
+                Assert.True(TabCount() == expected, $"{what}: {TabCount()} tabs, wanting {expected}.");
+            }
+
+            AwaitTabs(3, "opening three notes");
+            AssertAxeClean(process, "tab-strip");
+
+            ReassertForegroundForAChord(window);
+            tree.Focus();
+            PressKey(VirtualKeyShort.F6);
+            AssertEventuallyFocused(
+                tabs.FindAllChildren(automation.ConditionFactory.ByControlType(ControlType.TabItem)).Single(tab => tab.Patterns.SelectionItem.Pattern.IsSelected.Value),
+                "F6 from Files did not land on the open tab.");
+            PressKey(VirtualKeyShort.DELETE);
+            AwaitTabs(2, "Delete on the focused tab");
+
+            ReassertForegroundForAChord(window);
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.F4);
+            AwaitTabs(1, "Ctrl+F4");
+        }
+        finally
+        {
+            try { process?.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
     /// <summary>WB-5 (#1281; W7-6 §4): F6 and Shift+F6 from inside the
     /// editor's Ctrl+E popover are a no-op. Focus stays on the popover's
     /// Close button, and the desktop listener hears nothing from Slate. With
