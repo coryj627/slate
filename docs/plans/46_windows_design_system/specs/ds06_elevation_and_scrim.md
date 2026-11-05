@@ -65,3 +65,13 @@ AT: Narrator, open Add Property and the palette: still announced as dialogs, foc
 ## Brief
 
 Read `MainWindow.xaml:2584-2612` as the pattern, then each overlay in the lists above, `AutomationLandmark.cs:39` and `:302-318`, `Themes/Slate.Dark.xaml:205-219`, `design/windows/xaml/README.md:143-160`. Take the UIA dumps first. Add the shadow styles and the tooltip template to `Themes/Slate.Text.xaml`. Wrap each overlay, leaving `Visibility` on the landmark. Facts first. Commit: `feat(windows): overlays keep their cleartype, with the design's shadow, scrim and corners`.
+
+## Notes from the build
+
+**ClearType's bar is a quarter, not half.** With the effect, the palette's text had 0 of 21139 pixels fringed. Without it, 38% are, by the gate's measure, and plain window text on the same capture is 34 to 53%, at 200% display scale, where a stem's middle is solid. Half would fail ordinary text.
+
+**The canvas sheets keep their size.** The width list leaves them, so their wrappers are `Center` with the `MinWidth` of 420 they had: they size to their content.
+
+**Three headings wrap,** in the template sheets, because 448 is narrower than the 520 they had: `NoSheetTextIsCutAtTheLargestSize` caught "Fill in template details" at 225%.
+
+**A wrapper is never collapsed,** so `WithNoVaultNoOverlayShowsAndThePointerReachesTheWelcomeView` counts a wrapper with nothing shown in it as not shown, which is what it is: no paint and no hits.

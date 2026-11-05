@@ -38,7 +38,9 @@ public sealed partial class ShellAccessibilityTests
 
     /// <summary>DS-6: an effect turns ClearType off for what's inside it, and each overlay
     /// had one on itself. With the shadow on a sibling, the palette's text has colour
-    /// fringes, the method of spike 4. A display with ClearType off can't show any, so the
+    /// fringes, the method of spike 4. A stem's middle is solid at a high display scale, so
+    /// plain window text is 34 to 53% fringes at 200%, the palette 38%, and with the effect
+    /// 0%: a quarter tells them apart. A display with ClearType off can't show any, so the
     /// fact says so, and a missing fringe isn't mistaken for a pass.</summary>
     [Fact]
     public void ThemedShell_APalettesTextKeepsItsClearType() =>
@@ -61,7 +63,7 @@ public sealed partial class ShellAccessibilityTests
             }
 
             Assert.True(ink > 200, $"the palette has only {ink} pixels of text to read.");
-            Assert.True(fringed * 2 >= ink, $"{fringed} of the palette's {ink} text pixels have colour fringes.");
+            Assert.True(fringed * 4 >= ink, $"{fringed} of the palette's {ink} text pixels have colour fringes.");
             AssertAxeClean(process, "palette-cleartype");
         });
 
