@@ -115,6 +115,41 @@ public sealed class SettingsSheetTests
         Assert.Same(before, Keyboard.FocusedElement);
     });
 
+    /// <summary>Back where it was, which needn't be the editor.</summary>
+    [Fact]
+    public void EscGivesFocusBackToTheTree() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "# A\n"));
+        host.Workspace.OpenPath("a.md");
+        host.Settle();
+        Assert.True(host.Land(ShellRegionKind.Files), "premise: the tree took no keys");
+        IInputElement before = Keyboard.FocusedElement;
+
+        Press(host, Key.OemComma, ModifierKeys.Control);
+        Press(host, Key.Escape);
+
+        Assert.Same(before, Keyboard.FocusedElement);
+    });
+
+    /// <summary>The menu and the chord are fenced off under a sheet, so this is the command
+    /// itself: it doesn't open over one.</summary>
+    [Fact]
+    public void TheSheetDefersToAnOpenSheet() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "---\nkey: value\n---\n# A\n"));
+        host.Workspace.OpenPath("a.md");
+        host.Settle();
+        host.Workspace.OpenAddPropertySheet(synchronousForTests: true);
+        host.Settle();
+        Assert.Equal(ModalSurface.AddProperty, host.Shell.OpenModalSurface);
+
+        host.Lifecycle.OpenSettingsCommand.Execute(null);
+        host.Settle();
+
+        Assert.Null(host.Lifecycle.SettingsSheet);
+        Assert.Equal(ModalSurface.AddProperty, host.Shell.OpenModalSurface);
+    });
+
     /// <summary>A theme isn't a vault's, so its setting doesn't need one.</summary>
     [Fact]
     public void TheSheetOpensWithNoVault() => RunSta(() =>

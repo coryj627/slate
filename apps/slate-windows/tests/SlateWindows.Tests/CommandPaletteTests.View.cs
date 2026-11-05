@@ -59,7 +59,9 @@ public sealed partial class CommandPaletteTests
         Assert.Equal("slate.view.row189", host.Palette.SelectedId);
         Assert.Empty(PendingLayout(host.List));
 
-        // Nor is anything left queued to dirty it again, as a deferred scroll would.
+        // The scroll has happened: one the list had to defer leaves the row unrealized, and
+        // would dirty all this again later.
+        Assert.NotNull(host.List.ItemContainerGenerator.ContainerFromItem(host.Palette.SelectedRow));
         PumpedDispatcher.Drain();
         Assert.Empty(PendingLayout(host.List));
     });

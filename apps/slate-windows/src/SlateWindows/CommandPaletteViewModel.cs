@@ -826,7 +826,6 @@ internal sealed class CommandPaletteViewModel : BindableBase
         _selectedRow = null;
         _choices = null;
         _commandsLevel = null;
-        _stagedChoices = null;
         LastRecomputeTiming = null;
         // Whatever is still loading or ranking belongs to a palette that is
         // gone: stop what has not started, and let a newer generation make
@@ -1032,6 +1031,7 @@ internal sealed class CommandPaletteViewModel : BindableBase
         }
 
         A11yEvent? failure = null;
+        PaletteChoices? staged = null;
         BeginInvocation();
         try
         {
@@ -1063,15 +1063,13 @@ internal sealed class CommandPaletteViewModel : BindableBase
             // The seal lasts exactly as long as the command: however it
             // returns — or throws something unexpected — it ends here.
             _isInvoking = false;
+            staged = _stagedChoices;
+            _stagedChoices = null;
             if (!IsSealed)
             {
                 SealReleased?.Invoke(this, EventArgs.Empty);
             }
         }
-
-        // DS-10: choices wait for this to succeed, and only then replace the rows.
-        PaletteChoices? staged = _stagedChoices;
-        _stagedChoices = null;
 
         // The command's own action tore the shell down — a window close
         // runs Shutdown synchronously, and so can a prompt's nested loop.
@@ -1096,8 +1094,9 @@ internal sealed class CommandPaletteViewModel : BindableBase
             return;
         }
 
-        // DS-10: the command succeeded with choices to show, so the palette stays. A modal loop
-        // still over the shell keeps to step 4: the seal would drop the rows.
+        // DS-10: choices wait for the command to succeed, and only then replace the rows. A
+        // palette an Esc closed meanwhile stays closed, and a modal loop still over the shell
+        // keeps to step 4: the seal would drop the rows.
         if (staged is not null && _isOpen && !_inModalLoop)
         {
             RecordCompletion = RecordOnLane(row.Id);

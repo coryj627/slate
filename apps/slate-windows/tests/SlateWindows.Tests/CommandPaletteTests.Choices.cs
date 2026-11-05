@@ -175,6 +175,19 @@ public sealed partial class CommandPaletteTests
         Assert.False(host.Palette.IsOpen);
     }
 
+    /// <summary>On the command's own row, which needn't be the first.</summary>
+    [Fact]
+    public void EscFromTheChoicesComesBackOnTheCommandsRow()
+    {
+        var host = new ChoicesHarness();
+        host.InvokeSwitchTheme();
+
+        host.Palette.BackOrDismiss();
+
+        Assert.NotEqual(SwitchThemeId, host.Palette.Rows[0].Id);
+        Assert.Equal(SwitchThemeId, host.Palette.SelectedId);
+    }
+
     /// <summary>The menu's route has no commands to go back to.</summary>
     [Fact]
     public void EscFromChoicesOpenedElsewhereCloses()
@@ -325,6 +338,28 @@ public sealed partial class CommandPaletteTests
         Assert.False(host.Palette.IsOpen);
     }
 
+    /// <summary>The seal ends however the command does, and its choices with it.</summary>
+    [Fact]
+    public void ACommandThatThrowsLeavesNoChoicesBehind()
+    {
+        var host = new ChoicesHarness();
+        host.Harness.Source.OnInvoke = _ =>
+        {
+            host.Palette.OpenChoices(host.Choices);
+            throw new InvalidOperationException("Not one of the command layer's errors.");
+        };
+
+        Assert.Throws<InvalidOperationException>(host.InvokeSwitchTheme);
+
+        Assert.True(host.Palette.IsOpen);
+        Assert.False(host.Palette.IsChoosing);
+        host.Harness.Source.OnInvoke = null;
+        host.Palette.Select(Assert.Single(host.Palette.Rows, row => row.Id == "slate.tasks.review"));
+        host.Palette.InvokeSelected();
+        Assert.False(host.Palette.IsOpen);
+        Assert.False(host.Palette.IsChoosing);
+    }
+
     /// <summary>The seal would drop the rows, so a loop still up when the command returns
     /// keeps to P9's dismissal.</summary>
     [Fact]
@@ -365,6 +400,46 @@ public sealed partial class CommandPaletteTests
         Assert.IsType<A11yEvent.SettingsSheetShown>(Assert.Single(spoken));
         Assert.Equal(ModalSurface.Settings, host.Shell.OpenModalSurface);
         host.Settle();
+        Assert.Same(
+            host.Shell.SettingsCategoriesList.ItemContainerGenerator.ContainerFromIndex(0),
+            System.Windows.Input.Keyboard.FocusedElement);
+
+        host.Lifecycle.CloseSettings();
+        host.Settle();
+
+        Assert.Same(host.Sentinel, System.Windows.Input.Keyboard.FocusedElement);
+    });
+
+    /// <summary>The overlays give way, as they do for any sheet, and focus comes back to what
+    /// had it before them, not to the editor a lost token would land on.</summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void TheSettingsSheetSupersedesAnOverlay(bool search) => RunSta(() =>
+    {
+        using var host = new PaletteShellHost();
+        host.Lifecycle.ThemePreference = new ThemePreference(new AppPreferencesStore(host.FileInFixture("preferences.json")), _ => { });
+        _ = host.AttachDirtyWorkspace();
+        host.Settle();
+        Assert.True(host.Sentinel.Focus(), "premise: the sentinel took no keys");
+        if (search)
+        {
+            host.Lifecycle.Search.Open();
+        }
+        else
+        {
+            host.Lifecycle.QuickSwitcher!.Open();
+        }
+
+        host.Settle();
+        host.AssertTheOneOpenModalIs(search ? ModalSurface.SearchOverlay : ModalSurface.QuickOpen);
+
+        host.Lifecycle.OpenSettingsCommand.Execute(null);
+        host.Settle();
+
+        Assert.False(host.Lifecycle.Search.IsOpen);
+        Assert.False(host.Lifecycle.QuickSwitcher!.IsOpen);
+        Assert.Equal(ModalSurface.Settings, host.Shell.OpenModalSurface);
         Assert.Same(
             host.Shell.SettingsCategoriesList.ItemContainerGenerator.ContainerFromIndex(0),
             System.Windows.Input.Keyboard.FocusedElement);
