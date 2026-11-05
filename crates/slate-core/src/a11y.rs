@@ -1145,8 +1145,8 @@ pub enum A11yEvent {
     ThemeChosen {
         label: String,
     },
-    /// DS-11: an accent chosen, for the same reason. It says what was chosen, so a
-    /// Windows accent that falls back to gold, which is silent by design, says this too.
+    /// DS-11: an accent chosen, for the same reason. It names the choice, which is what
+    /// shows: a Windows accent is drawn as Windows gives it.
     AccentChosen {
         label: String,
     },

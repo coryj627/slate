@@ -77,8 +77,7 @@ internal sealed class SettingsSheetViewModel : BindableBase
             {
                 _accent.Choose(value.Value);
                 OnPropertyChanged();
-                // As for the theme. It says what was chosen: a Windows accent that falls back
-                // to gold is silent by design.
+                // As for the theme: NVDA is mostly silent on a closed combo's change.
                 _announce(new A11yEvent.AccentChosen(value.Label));
             }
         }

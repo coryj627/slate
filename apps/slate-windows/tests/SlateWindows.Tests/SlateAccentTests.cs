@@ -236,7 +236,7 @@ public sealed class SlateAccentTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void WindowsAccentFollowsWhenItPasses(bool dark) => StaThread.Run(() =>
+    public void WindowsAccentIsFollowed(bool dark) => StaThread.Run(() =>
     {
         ResourceDictionary slate = GoldThemeFile(dark);
 

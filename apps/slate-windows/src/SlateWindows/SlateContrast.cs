@@ -6,9 +6,9 @@ using System.Windows.Media;
 namespace SlateWindows;
 
 /// <summary>
-/// DS-11 (#1812): WCAG 2's contrast ratio and the blends a contrast check needs. In the app
-/// because a chosen accent is checked as it's applied. The project's floor for gold, APCA,
-/// stays with gold's facts.
+/// DS-11 (#1812): WCAG 2's contrast ratio and the blends the accent's roles need. The tint
+/// a selected row draws is a blend, so the app uses these; the facts measure with them. The
+/// project's floor for gold, APCA, stays with gold's facts.
 /// </summary>
 internal static class SlateContrast
 {

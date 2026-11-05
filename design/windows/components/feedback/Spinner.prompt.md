@@ -20,7 +20,7 @@ Notes: generated from the Fluent 2 Web Figma kit; each variant renders the exact
 - **Build as:** `ProgressBar` (`IsIndeterminate`) with an arc template.
 - **Rating:** Build: needs code or a custom control.
 - WPF has no ProgressRing. Templating `ProgressBar` keeps the UIA ProgressBar role. Animate a rotating `Path` arc.
-- The arc uses the accent brushes. Accent brushes are gold by default and switch to the user's Windows accent when they have set a custom one (falling back to gold if it fails contrast).
+- The arc uses the accent brushes. Accent brushes are gold by default and switch to the user's Windows accent when they have set a custom one (as Windows gives it, whatever its contrast: plan 46, DSD16).
 - Stop the rotation when `SystemParameters.ClientAreaAnimation` is false.
 
 Ratings and theme setup: `wpf-feasibility.md`.

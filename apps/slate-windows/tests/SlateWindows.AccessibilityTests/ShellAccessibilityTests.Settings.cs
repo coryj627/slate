@@ -43,13 +43,15 @@ public sealed partial class ShellAccessibilityTests
 
     /// <summary>DS-11 (#1812): the manager's half, which no hosted fact can build. Windows accent
     /// is a choice in the app, so this needs no system setting changed. The sheet's open category
-    /// shows the selected surface, and gold's is exact, so its pixels say which accent drew.
-    /// This reads Windows' accent as it is, and it holds on any accent, since none falls back
-    /// to gold (DSD16).</summary>
+    /// shows the selected surface and the pill, and gold's are exact, so their pixels say which
+    /// accent drew. It takes both: a Windows accent can blend to gold's surface exactly
+    /// (#EEAC05 at 12% over white is #FDF5E1), and its pill is a different step of Windows'
+    /// palette. This reads Windows' accent as it is (DSD16).</summary>
     [Fact]
     public void AccentColor_WindowsAccentDrawsAtOnceAndAcrossARestart()
     {
         const int GoldSelectedSurface = 0xFDF5E1;
+        const int GoldPill = 0xA57A00;
         string root = Path.Combine(Path.GetTempPath(), "slate-accent-" + Guid.NewGuid().ToString("N"));
         string device = Path.Combine(root, "device");
         string logs = Path.Combine(root, "logs");
@@ -72,15 +74,17 @@ public sealed partial class ShellAccessibilityTests
             return window;
         }
 
+        static bool GoldShows(Window window) => HasPixel(window, GoldSelectedSurface) && HasPixel(window, GoldPill);
+
         static void WaitForGold(Window window, bool expected)
         {
             DateTime deadline = DateTime.UtcNow.AddSeconds(10);
-            while (HasPixel(window, GoldSelectedSurface) != expected && DateTime.UtcNow < deadline)
+            while (GoldShows(window) != expected && DateTime.UtcNow < deadline)
             {
                 Thread.Sleep(100);
             }
 
-            Assert.Equal(expected, HasPixel(window, GoldSelectedSurface));
+            Assert.Equal(expected, GoldShows(window));
         }
 
         try
