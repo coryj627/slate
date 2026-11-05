@@ -262,8 +262,21 @@ public partial class MainWindow : IShellRegionHost
 
         if (changed)
         {
+            IsModalSurfaceOpen = open;
             Canvas.CanvasSurfaceView.RaiseShellOverlayChanged();
         }
+    }
+
+    public static readonly DependencyProperty IsModalSurfaceOpenProperty = DependencyProperty.Register(
+        nameof(IsModalSurfaceOpen), typeof(bool), typeof(MainWindow), new PropertyMetadata(false));
+
+    /// <summary>DS-6: what the scrim over the menu and status rows follows. The sheets'
+    /// own layers are in the Grid between those rows, and a flat 30% black blends across
+    /// the three, so it reads as one scrim.</summary>
+    public bool IsModalSurfaceOpen
+    {
+        get => (bool)GetValue(IsModalSurfaceOpenProperty);
+        private set => SetValue(IsModalSurfaceOpenProperty, value);
     }
 
     /// <summary>Whether a modal surface was open at the last report (the
