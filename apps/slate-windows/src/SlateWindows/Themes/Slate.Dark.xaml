@@ -181,6 +181,8 @@
     <SolidColorBrush x:Key="Slate.AccentIndicatorBrush" Color="{DynamicResource Slate.AccentIndicatorColor}" />
     <SolidColorBrush x:Key="Slate.TextOnAccentBrush" Color="{DynamicResource Slate.TextOnAccentColor}" />
     <SolidColorBrush x:Key="Slate.SelectedSurfaceBrush" Color="{DynamicResource Slate.SelectedSurfaceColor}" />
+    <!-- A selected row's text: primary text, which doesn't follow the accent. SelectionText is text selection's alone. -->
+    <SolidColorBrush x:Key="Slate.SelectedTextBrush" Color="{StaticResource Slate.TextColor}" />
     <Color x:Key="Slate.SubtleBorderColor">#FF3D3D3D</Color>
     <Color x:Key="Slate.ControlStrokeHoverColor">#FFC2C2C2</Color>
     <Color x:Key="Slate.ControlStrokePressedColor">#FFD4D4D4</Color>

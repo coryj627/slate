@@ -92,6 +92,30 @@ public sealed class AppPreferencesStoreTests : IDisposable
     }
 
     [Fact]
+    public void AnAccentChoiceSurvivesARestartAndKeepsTheTheme()
+    {
+        AppPreferencesStore store = CreateStore();
+        var applied = new List<string>();
+        new ThemePreference(store, _ => { }).Choose(ThemeChoice.Dark);
+
+        new AccentPreference(store, applied.Add).Choose(SlateAccent.SlateGold);
+
+        Assert.Equal(new[] { SlateAccent.SlateGold }, applied);
+        Assert.Equal(SlateAccent.SlateGold, new AccentPreference(CreateStore(), applied.Add).Current);
+        Assert.Equal(ThemeChoice.Dark, CreateStore().Load().Theme);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("teal")]
+    [InlineData("")]
+    public void AnUnknownAccentIsTheDefault(string? stored)
+    {
+        Assert.Equal(SlateAccent.Automatic, SlateAccent.Normalize(stored));
+        Assert.Equal(AccentSource.Automatic, SlateAccent.SourceOf(stored));
+    }
+
+    [Fact]
     public void AThemeChoiceKeepsTheOtherPreferences()
     {
         AppPreferencesStore store = CreateStore();

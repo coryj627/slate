@@ -186,7 +186,7 @@
                         </Trigger>
                         <Trigger Property="IsSelected" Value="True">
                             <Setter Property="Background" Value="{DynamicResource Slate.SelectedSurfaceBrush}" />
-                            <Setter Property="Foreground" Value="{DynamicResource Slate.SelectionTextBrush}" />
+                            <Setter Property="Foreground" Value="{DynamicResource Slate.SelectedTextBrush}" />
                             <Setter Property="BorderBrush" Value="{DynamicResource Slate.AccentIndicatorBrush}" />
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">

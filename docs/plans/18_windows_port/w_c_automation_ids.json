@@ -2001,6 +2001,11 @@
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "SettingsAccent",
+    "Surface": "Settings (DS-10)"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "SwitchThemeMenuItem",
     "Surface": "Settings (DS-10)"
   },

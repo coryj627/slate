@@ -49,7 +49,7 @@ internal static class Program
         };
         SlateWindows.ThemeManager.ValidateResourceDictionaries();
         using var theme = new SlateWindows.ThemeManager(
-            app, SlateWindows.ThemeChoice.UseWindowsSetting);
+            app, SlateWindows.ThemeChoice.UseWindowsSetting, SlateWindows.SlateAccent.Automatic);
 
         int rowCount = args.Length > 0
             && int.TryParse(args[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsed)

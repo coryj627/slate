@@ -4929,6 +4929,22 @@
                                     </ComboBox.ItemContainerStyle>
                                 </ComboBox>
                             </local:SettingRow>
+                            <local:SettingRow Margin="0,4,0,0"
+                                              Label="Accent color"
+                                              Description="Automatic uses Slate gold unless you’ve chosen an accent color in Windows.">
+                                <ComboBox x:Name="SettingsAccentComboBox"
+                                          MinWidth="180"
+                                          ItemsSource="{Binding AccentOptions}"
+                                          SelectedItem="{Binding SelectedAccent}"
+                                          DisplayMemberPath="Label"
+                                          AutomationProperties.AutomationId="SettingsAccent">
+                                    <ComboBox.ItemContainerStyle>
+                                        <Style TargetType="ComboBoxItem" BasedOn="{StaticResource Slate.ComboRowBase}">
+                                            <Setter Property="AutomationProperties.Name" Value="{Binding Label}" />
+                                        </Style>
+                                    </ComboBox.ItemContainerStyle>
+                                </ComboBox>
+                            </local:SettingRow>
                         </StackPanel>
                     </ScrollViewer>
                 </Grid>

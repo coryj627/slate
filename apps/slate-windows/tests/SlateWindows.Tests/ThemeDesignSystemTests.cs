@@ -1292,7 +1292,7 @@ public sealed class ThemeDesignSystemTests
         Assert.Equal(Theme("Slate.AccentIndicatorBrush"), Assert.IsType<SolidColorBrush>(
             ShownShell.Descendants(row).OfType<System.Windows.Shapes.Rectangle>().First().Fill).Color);
         Assert.Equal(Theme("Slate.SelectedSurfaceBrush"), Fill(cell));
-        Assert.Equal(Theme(TextBoxSelection.TextBrushKey), Assert.IsType<SolidColorBrush>(cell.Foreground).Color);
+        Assert.Equal(Theme("Slate.SelectedTextBrush"), Assert.IsType<SolidColorBrush>(cell.Foreground).Color);
         return 0;
     }, TimeSpan.FromSeconds(60), "the base control test timed out.");
 
@@ -1347,7 +1347,7 @@ public sealed class ThemeDesignSystemTests
 
         System.Windows.Shapes.Rectangle pill = ShownShell.Descendants(row).OfType<System.Windows.Shapes.Rectangle>().Single();
         Assert.Equal(Theme("Slate.SelectedSurfaceBrush"), fill);
-        Assert.Equal(Theme(TextBoxSelection.TextBrushKey), ink);
+        Assert.Equal(Theme("Slate.SelectedTextBrush"), ink);
         Assert.Equal(Theme("Slate.AccentIndicatorBrush"), Assert.IsType<SolidColorBrush>(pill.Fill).Color);
         return 0;
     }, TimeSpan.FromSeconds(60), "the row test timed out.");

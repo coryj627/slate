@@ -96,6 +96,15 @@ Plan 46 §7's loop with `--filter "FullyQualifiedName~SlateAccent|FullyQualified
 - [ ] The overlay's rule is written down with measurements.
 - [ ] Gold stays the default on a default Windows, and a selected row under gold draws the colours it drew before.
 
+## Notes from the build
+
+- **A closed combo box's change is mostly silent under NVDA,** as DS-10 found, so the row posts `AccentChosen`, as the theme's posts `ThemeChosen`. This is a spoken line the spec didn't plan for, and it's why this chunk touches `slate-core` and both hosts' corpus censuses. It says what was chosen, so a Windows accent that falls back to gold says "Accent color: Windows accent." and the fallback stays silent, as the design says.
+- **The launched app can show this without changing a system setting.** Windows accent is a choice in the app, and it draws whatever Windows has. `AccentColor_WindowsAccentDrawsAtOnceAndAcrossARestart` is the only fact that reaches `ThemeManager.SetAccent`, since the manager can't be built under test. What still needs a person is another hue, and a live change in Windows (plan 46 §8).
+- **WPF holds the accent's colours.** `SystemColors` caches them until `WM_DWMCOLORIZATIONCOLORCHANGED`, `WM_SYSCOLORCHANGE` or `WM_THEMECHANGED` reaches its own window (`SystemResources.cs`, `SystemColors.cs` in dotnet/wpf), which can be after `UserPreferenceChanged` reaches ours. So the manager reads again a second later. That order wasn't observed, because it takes a system setting to see it.
+- **A sixth setter.** DS-9's checked icon toggle drew `SelectionText` on `SelectedSurface` too, so it moved with the spec's five.
+- **`DevicePreference`** is `ThemePreference` with its one line of difference taken out, because the accent's preference is otherwise the same class.
+- **Some checks have the room never to fail on a colour from Windows:** primary, secondary and tertiary text on `SelectedSurface`, and primary text under the overlay. `EveryCheckCanFail` proves they're checked, by feeding one grey for every role, and the rest have a real palette each.
+
 ## Brief
 
 Read `design/windows/xaml/README.md:21-108`, `ThemeManager.cs:204-259`, `ThemeTokenContrastTests.cs`, `Slate.Text.xaml:51-157`, `AppPreferencesStore.cs`, DS-10's row. The target is the README's table, with this spec's gate and brush. Facts first, through the palette, starting with the selected row. Then `Slate.SelectedTextBrush`, `SlateContrast`, `SlateAccent`, the overlay, the preference, the row and the reapply. Commit: `feat(windows): the accent can follow windows, and an accent that fails contrast falls back to gold`.

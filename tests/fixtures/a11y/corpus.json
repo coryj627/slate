@@ -965,6 +965,11 @@
     "text": "Theme: Light."
   },
   {
+    "event": "AccentChosen { label: \"Slate gold\" }",
+    "priority": "medium",
+    "text": "Accent color: Slate gold."
+  },
+  {
     "event": "SettingsSheetShown",
     "priority": "medium",
     "text": "Settings"

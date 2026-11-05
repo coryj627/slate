@@ -249,6 +249,7 @@ public sealed class A11yCorpusCensus
         new A11yEvent.PaletteChoiceFilterCount(Count: 1, Query: "li"),
         new A11yEvent.PaletteChoiceFilterCount(Count: 2, Query: "t"),
         new A11yEvent.ThemeChosen(Label: "Light"),
+        new A11yEvent.AccentChosen(Label: "Slate gold"),
         new A11yEvent.SettingsSheetShown(),
         new A11yEvent.RecentSearchFocused(Query: "fox"),
         new A11yEvent.QuickSwitcherCount(Count: 2, Query: null),

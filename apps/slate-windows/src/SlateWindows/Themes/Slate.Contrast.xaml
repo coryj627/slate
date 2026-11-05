@@ -44,6 +44,8 @@
                      Color="{DynamicResource {x:Static SystemColors.HighlightColorKey}}" />
     <SolidColorBrush x:Key="Slate.SelectedSurfaceBrush"
                      Color="{DynamicResource {x:Static SystemColors.HighlightColorKey}}" />
+    <SolidColorBrush x:Key="Slate.SelectedTextBrush"
+                     Color="{DynamicResource {x:Static SystemColors.HighlightTextColorKey}}" />
     <SolidColorBrush x:Key="Slate.AccentIndicatorBrush"
                      Color="{DynamicResource {x:Static SystemColors.HighlightTextColorKey}}" />
     <SolidColorBrush x:Key="Slate.SelectionBackgroundBrush"

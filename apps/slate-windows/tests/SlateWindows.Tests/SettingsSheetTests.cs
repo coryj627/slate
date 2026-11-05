@@ -70,7 +70,8 @@ public sealed class SettingsSheetTests
         string directory = Path.Combine(Path.GetTempPath(), $"slate-ds10-{Guid.NewGuid():N}");
         var spoken = new List<A11yEvent>();
         var preference = new ThemePreference(new AppPreferencesStore(Path.Combine(directory, "preferences.json")), _ => { });
-        var sheet = new SettingsSheetViewModel(preference, spoken.Add);
+        var accent = new AccentPreference(new AppPreferencesStore(Path.Combine(directory, "preferences.json")), _ => { });
+        var sheet = new SettingsSheetViewModel(preference, accent, spoken.Add);
         try
         {
             sheet.SelectedTheme = ThemeChoice.Options[2];
@@ -80,6 +81,15 @@ public sealed class SettingsSheetTests
 
             Assert.Equal("Dark", Assert.IsType<A11yEvent.ThemeChosen>(Assert.Single(spoken)).Label);
             Assert.Equal(ThemeChoice.Dark, preference.Current);
+
+            spoken.Clear();
+            sheet.SelectedAccent = SlateAccent.Options[0];
+            Assert.Empty(spoken);
+
+            sheet.SelectedAccent = SlateAccent.Options[1];
+
+            Assert.Equal("Slate gold", Assert.IsType<A11yEvent.AccentChosen>(Assert.Single(spoken)).Label);
+            Assert.Equal(SlateAccent.SlateGold, accent.Current);
         }
         finally
         {
@@ -228,13 +238,13 @@ public sealed class SettingsSheetTests
         host.Lifecycle.OpenSettingsCommand.Execute(null);
         host.Settle();
         var stops = new List<IInputElement>();
-        for (int index = 0; index < 3; index++)
+        for (int index = 0; index < 4; index++)
         {
             stops.Add(Keyboard.FocusedElement);
             MoveFocus(FocusNavigationDirection.Next);
         }
 
-        Assert.Equal<IInputElement>(new IInputElement[] { CategoryRow(host, 0), ThemeCombo(host), host.Shell.SettingsCloseButton }, stops);
+        Assert.Equal<IInputElement>(new IInputElement[] { CategoryRow(host, 0), ThemeCombo(host), host.Shell.SettingsAccentComboBox, host.Shell.SettingsCloseButton }, stops);
         Assert.Same(CategoryRow(host, 0), Keyboard.FocusedElement);
         host.Lifecycle.CloseSettings();
         host.Settle();
@@ -253,9 +263,12 @@ public sealed class SettingsSheetTests
         Assert.Equal("Theme", UIElementAutomationPeer.CreatePeerForElement(combo).GetName());
         Assert.Equal("Light, Dark, or what Windows uses.", AutomationProperties.GetHelpText(combo));
         Assert.True(label.IsVisible);
+        ComboBox accent = host.Shell.SettingsAccentComboBox;
+        Assert.Equal("Accent color", UIElementAutomationPeer.CreatePeerForElement(accent).GetName());
+        Assert.Equal("Automatic uses Slate gold unless you’ve chosen an accent color in Windows.", AutomationProperties.GetHelpText(accent));
 
-        // The row itself isn't one more thing to hear.
-        SettingRow row = ShownShell.Descendants(host.Shell.SettingsOverlay).OfType<SettingRow>().Single();
+        // A row itself isn't one more thing to hear.
+        SettingRow row = ShownShell.Descendants(host.Shell.SettingsOverlay).OfType<SettingRow>().First();
         AutomationPeer rowPeer = UIElementAutomationPeer.CreatePeerForElement(row);
         Assert.False(rowPeer.IsControlElement());
         Assert.False(rowPeer.IsContentElement());
@@ -276,7 +289,9 @@ public sealed class SettingsSheetTests
         Assert.Equal(600, host.Shell.SettingsOverlay.ActualHeight);
         Assert.Equal(new CornerRadius(8), host.Shell.SettingsOverlay.CornerRadius);
         Assert.Equal(240, ((Grid)host.Shell.SettingsOverlay.Child).ColumnDefinitions[0].ActualWidth);
-        SettingRow row = ShownShell.Descendants(host.Shell.SettingsOverlay).OfType<SettingRow>().Single();
+        SettingRow row = ShownShell.Descendants(host.Shell.SettingsOverlay).OfType<SettingRow>().First();
+        SettingRow next = ShownShell.Descendants(host.Shell.SettingsOverlay).OfType<SettingRow>().Last();
+        Assert.Equal(row.ActualHeight + 4, next.TranslatePoint(default, row).Y);
         Border card = ShownShell.Descendants(row).OfType<Border>().First();
         Assert.Equal(68, row.ActualHeight);
         Assert.Equal(new Thickness(16, 12, 16, 12), card.Padding);
@@ -337,6 +352,35 @@ public sealed class SettingsSheetTests
         Assert.Same(combo, Keyboard.FocusedElement);
         Assert.Equal("Light", combo.Text);
         Assert.NotNull(host.Lifecycle.SettingsSheet);
+        host.Lifecycle.CloseSettings();
+        host.Settle();
+    });
+
+    /// <summary>The accent's row does what the theme's does, and the default is Automatic.</summary>
+    [Fact]
+    public void ChoosingAnAccentAppliesItAtOnceAndKeepsFocusOnTheCombo() => RunSta(() =>
+    {
+        using var host = new ShownShell();
+        host.Lifecycle.OpenSettingsCommand.Execute(null);
+        host.Settle();
+        ComboBox combo = host.Shell.SettingsAccentComboBox;
+        Assert.Equal(new[] { "Automatic", "Slate gold", "Windows accent" }, SlateAccent.Options.Select(option => option.Label));
+        Assert.Equal("Automatic", combo.Text);
+        Assert.True(combo.Focus(), "premise: the combo took no keys");
+
+        combo.SelectedItem = SlateAccent.Options[2];
+        host.Settle();
+
+        Assert.Equal(new[] { SlateAccent.WindowsAccent }, host.AccentsApplied);
+        Assert.Equal(SlateAccent.WindowsAccent, host.Lifecycle.AccentPreference.Current);
+        Assert.Same(combo, Keyboard.FocusedElement);
+        host.Lifecycle.CloseSettings();
+        host.Settle();
+
+        host.Lifecycle.OpenSettingsCommand.Execute(null);
+        host.Settle();
+
+        Assert.Equal("Windows accent", host.Shell.SettingsAccentComboBox.Text);
         host.Lifecycle.CloseSettings();
         host.Settle();
     });

@@ -90,6 +90,7 @@ internal enum HostDiagnosticEvent
     WindowPositionFailed,
     WindowStatePersistFailed,
     AppPreferencesPersistFailed,
+    AccentFellBackToGold,
     MathMlUiaPropertyUnavailable,
     WorkspacePersistFailed,
 }
