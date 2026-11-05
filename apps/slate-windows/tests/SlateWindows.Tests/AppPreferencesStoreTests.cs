@@ -105,13 +105,21 @@ public sealed class AppPreferencesStoreTests : IDisposable
         Assert.Equal(ThemeChoice.Dark, CreateStore().Load().Theme);
     }
 
+    /// <summary>The store hands every reader a known value: the sheet looks the stored one up
+    /// among its options.</summary>
     [Theory]
-    [InlineData(null)]
-    [InlineData("teal")]
-    [InlineData("")]
-    public void AnUnknownAccentIsTheDefault(string? stored)
+    [InlineData("{}")]
+    [InlineData("{\"accentColor\":null}")]
+    [InlineData("{\"accentColor\":\"teal\"}")]
+    [InlineData("{\"accentColor\":\"\"}")]
+    [InlineData("{\"accentColor\":\"GOLD\"}")]
+    public void AnUnknownAccentIsTheDefault(string file)
     {
-        Assert.Equal(SlateAccent.Automatic, SlateAccent.Normalize(stored));
+        File.WriteAllText(StorePath, file);
+
+        string stored = CreateStore().Load().AccentColor;
+
+        Assert.Equal(SlateAccent.Automatic, stored);
         Assert.Equal(AccentSource.Automatic, SlateAccent.SourceOf(stored));
     }
 

@@ -199,6 +199,20 @@ public sealed class SlateAccentTests
         return 0;
     }, TimeSpan.FromSeconds(30), "the theme file never loaded.");
 
+    /// <summary>Only the app asks for an accent, so a hosted fact draws gold whatever the
+    /// desktop's accent is, even one that would pass.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AHostedDictionaryIsGoldUnlessItAsks(bool dark) => StaThread.Run(() =>
+    {
+        ResourceDictionary slate = ThemeManager.DictionariesFor(ThemeOf(dark), highContrast: false, palette: Chosen)
+            .Single(layer => layer.Contains("Slate.AccentColor"));
+
+        AssertStillGold(slate, dark);
+        return 0;
+    }, TimeSpan.FromSeconds(30), "the theme file never loaded.");
+
     /// <summary>The user's own palette is the theme there. The dictionary has no accent roles.</summary>
     [Fact]
     public void HighContrastIsNeverTheAccent() =>
