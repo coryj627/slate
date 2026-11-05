@@ -73,6 +73,9 @@ AT: NVDA and Narrator pass on the new surface: open by chord and palette; hear t
 - **`MaxHeight` 600,** from `SettingsWindow.jsx:44`, beside the spec's "height to the window less margins", so the card doesn't fill a tall window.
 - **Theme's description is mine:** "Light, Dark, or what Windows uses." The design has none, and a row wants one line. So is the page's, "How Slate looks on this computer.", which also says the choice isn't a vault's.
 - **A non-editable `ComboBox` has no Value pattern.** A reader gets its value from the Selection pattern, and the gate facts read it there.
+- **A vault transition closes the sheet,** as it dismisses the palette. A second launch can open a vault with the sheet up, and the welcome view takes the keys on the way. A theme applies at once, so nothing's lost.
+- **The canvas now follows a live theme.** Its drawings held the brushes they were painted with until the next state installed, which Windows' own theme change had the same gap in. This is the first time it's a thing a user does on purpose.
+- **Opening the palette could freeze the app and NVDA for 68 seconds.** The record is in contract 28, with the fix and what wasn't found.
 - **What the pass in light found:** #1835 (a checked Dual pane button's text), and #1834 (a typed command name can run another command), which isn't a light finding but showed up there. The title bar stays the system's until DS-12.
 
 ## Brief

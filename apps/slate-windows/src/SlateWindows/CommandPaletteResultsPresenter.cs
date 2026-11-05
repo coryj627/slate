@@ -108,6 +108,12 @@ internal sealed class CommandPaletteResultsPresenter : IDisposable
         }
 
         SyncSelection();
+        // DS-10: not left to the render pass. TSF can be granted its lock between dispatcher
+        // operations, and its GetTextExt then runs the layout and automation events it finds
+        // pending. Inside that lock a UIA event can't be raised while a client reads the field:
+        // the two wait on each other until UIA gives up, 20 seconds a time, with the app and
+        // NVDA frozen. Measured under NVDA; the record is in contract 28.
+        _list.UpdateLayout();
         if (timing is not null)
         {
             ReportQueryChangeTiming(timing, Stopwatch.GetTimestamp() - swapStarted);

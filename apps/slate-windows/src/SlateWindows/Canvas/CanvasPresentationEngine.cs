@@ -136,6 +136,8 @@ internal sealed class CanvasPresentationEngine
     /// new state.</summary>
     internal int TextScaleRevisionForTests => _textScaleRevision;
 
+    internal int ThemeRevisionForTests => _themeRevision;
+
     internal void CommitTextScaleRevision(int revision)
     {
         AssertCommitThread();

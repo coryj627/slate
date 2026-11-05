@@ -35,6 +35,33 @@ public sealed class SettingsSheetTests
             new[] { "Light", "Dark", "Use Windows setting" },
             ThemeChoice.Options.Select(option => option.Label));
 
+    /// <summary>A second launch can open a vault with the sheet up. The welcome view takes
+    /// the keys on the way, beneath a sheet that would then hold no focus and take no Esc.</summary>
+    [Fact]
+    public async Task AVaultOpeningOrClosingClosesTheSheet()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "settings-vault");
+        using var lifecycle = new VaultLifecycleViewModel(
+            pickVault: () => Task.FromResult<string?>(null),
+            enqueueUi: action => action(),
+            recentVaultsStore: new RecentVaultsStore(Path.Combine(fixture.Root, "device-state", "recent-vaults.json")));
+        lifecycle.ThemePreference = new ThemePreference(
+            new AppPreferencesStore(Path.Combine(fixture.Root, "device-state", "preferences.json")),
+            _ => { });
+
+        lifecycle.OpenSettings(null);
+        Assert.NotNull(lifecycle.SettingsSheet);
+        await lifecycle.OpenVaultAsync(fixture.Root);
+        Assert.True(lifecycle.IsVaultOpen);
+        Assert.Null(lifecycle.SettingsSheet);
+
+        lifecycle.OpenSettings(null);
+        Assert.NotNull(lifecycle.SettingsSheet);
+        lifecycle.CloseVault();
+        Assert.False(lifecycle.IsVaultOpen);
+        Assert.Null(lifecycle.SettingsSheet);
+    }
+
     /// <summary>NVDA is mostly silent on a closed combo box's change, so the sheet says it,
     /// once, and only when something changed.</summary>
     [Fact]

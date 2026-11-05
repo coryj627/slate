@@ -5641,6 +5641,33 @@ public sealed class CanvasDocumentTests : IDisposable
         document.Shutdown();
     });
 
+    /// <summary>DS-10: a theme can change with a board on screen, and its retained drawings
+    /// hold the brushes they were painted with until a new state installs.</summary>
+    [Fact]
+    public void ATheEventFromTheThemeManagerGivesTheBoardANewState() => RunSta(() =>
+    {
+        var renderer = new CanvasRendererView();
+        static void RaiseThemeChange()
+        {
+            var raise = (EventHandler?)typeof(ThemeManager)
+                .GetField(nameof(ThemeManager.ResourcesChanged), System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
+                .GetValue(null);
+            raise?.Invoke(null, EventArgs.Empty);
+        }
+
+        RaiseThemeChange();
+        Assert.Equal(0, renderer.Engine.ThemeRevisionForTests);
+
+        renderer.AttachTheme();
+        renderer.AttachTheme();
+        RaiseThemeChange();
+        Assert.Equal(1, renderer.Engine.ThemeRevisionForTests);
+
+        renderer.Shutdown();
+        RaiseThemeChange();
+        Assert.Equal(1, renderer.Engine.ThemeRevisionForTests);
+    });
+
     /// <summary>The board peer speaks its RATIFIED name (§D D3,
     /// "Canvas visual view") — not the switcher arm's label. The peer
     /// shipped saying "Visual" and only the FlaUI journey noticed;

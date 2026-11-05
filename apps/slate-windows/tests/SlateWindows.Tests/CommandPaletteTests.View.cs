@@ -35,6 +35,32 @@ public sealed partial class CommandPaletteTests
     /// restored its survivor and announced that too — two sentences for a
     /// change that owes none, the first naming a row the user never chose.
     /// </remarks>
+    /// <summary>DS-10: the rows' layout and automation events run in the operation that
+    /// publishes them, with no gap for TSF's lock to land in and run them itself, where a UIA
+    /// event and a client reading the field wait on each other (contract 28).</summary>
+    [Fact]
+    public void TheRowsAreLaidOutInTheOperationThatPublishesThem() => RunSta(() =>
+    {
+        using var host = new ShippedResultsList(StandardCommands());
+        host.Palette.Open();
+        host.Settle();
+        var measuredWhenTheRowsLanded = new List<bool>();
+        host.Palette.PropertyChanged += (_, change) =>
+        {
+            if (change.PropertyName == nameof(CommandPaletteViewModel.SelectedRow))
+            {
+                measuredWhenTheRowsLanded.Add(host.List.IsMeasureValid && host.List.IsArrangeValid);
+            }
+        };
+
+        host.Palette.Query = "q";
+
+        // With the inline lane the publication has run, and nothing has been pumped.
+        Assert.Equal(new[] { "slate.nav.quickOpen" }, host.Harness.RowIds);
+        Assert.True(host.List.IsMeasureValid && host.List.IsArrangeValid, "the rows' layout waited for the render pass.");
+        Assert.NotEmpty(measuredWhenTheRowsLanded);
+    });
+
     [Fact]
     public void TheShippedListAnnouncesOnlyTheViewModelsSelection() => RunSta(() =>
     {
