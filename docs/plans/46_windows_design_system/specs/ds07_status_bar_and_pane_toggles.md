@@ -89,3 +89,5 @@ Read `MainWindow.xaml:744-810` and `:935-945`, `WorkspaceViewModel.cs:2558-2565`
 **The Mac designations cite plan 38,** which holds their rows and is on `windows.yml`'s path list, rather than this spec.
 
 **New Note reveals at the rename hand-off** (`ArmSidebarRename`), so every create that hands off to the name field gets it from one place.
+
+**A sidebar command whose result is only in the pane shows it,** which Codex's first round asked for beyond the spec's list. Toggle Tag Column does nothing anyone can tell with the pane hidden, and Clear Recents writes only to the pane's status line. `EverySidebarCommandSaysWhetherItsResultIsInThePane` holds each command to one side or the other, with where the rest report.

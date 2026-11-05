@@ -527,6 +527,7 @@ public partial class MainWindow : Window
 
         if (_observedFileSidebar is not null)
         {
+            _observedFileSidebar.FilesPaneNeeded = null;
             _observedFileSidebar.InlineRenameRequested -= ArmSidebarRename;
             _observedFileSidebar.TreeSelectionRestored -=
                 FileSidebar_TreeSelectionRestored;
@@ -542,6 +543,7 @@ public partial class MainWindow : Window
             // W5-4 F1/F2: a create's hand-off re-arms the F2 rename
             // flow programmatically once the new node is selected.
             sidebar.InlineRenameRequested += ArmSidebarRename;
+            sidebar.FilesPaneNeeded = RevealFilesSidebar;
             // W5-4 (red team, a11y 2): a mutation's publication
             // re-seats selection and asks the window to restore
             // keyboard focus to the tree.

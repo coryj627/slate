@@ -509,15 +509,8 @@ public sealed class StatusBarAndPaneTogglesTests
     public void NewNoteFromTheTreeShowsFiles() => RunSta(() =>
     {
         using var host = new ShownShell(("a.md", "Just a line of text.\n"));
-        string appData = Path.Combine(Path.GetTempPath(), $"slate-ds7-{Guid.NewGuid():N}");
-        PropertyInfo slot = typeof(VaultLifecycleViewModel).GetProperty(nameof(VaultLifecycleViewModel.FileSidebar))
-            ?? throw new InvalidOperationException("FileSidebar is gone");
-        var sidebar = new FilesSidebarViewModel(host.Session, _ => { }, localAppDataRoot: appData);
-        try
+        WithSidebar(host, sidebar =>
         {
-            PumpedDispatcher.PumpUntilDrained(sidebar.TreeRefreshCompletion);
-            slot.SetValue(host.Shell.DataContext, sidebar);
-            host.Settle();
             host.Workspace.IsFilesSidebarVisible = false;
             host.Settle();
 
@@ -527,19 +520,91 @@ public sealed class StatusBarAndPaneTogglesTests
 
             Assert.True(host.Workspace.IsFilesSidebarVisible);
             Assert.True(host.Shell.SidebarMutationNameTextBox.IsKeyboardFocused, $"the keys are on {Keyboard.FocusedElement}");
-        }
-        finally
-        {
-            slot.SetValue(host.Shell.DataContext, null);
-            try
-            {
-                Directory.Delete(appData, recursive: true);
-            }
-            catch (IOException)
-            {
-            }
-        }
+        });
     });
+
+    /// <summary>What these do is only to be seen in the pane, and some of it isn't spoken,
+    /// so with the pane hidden, from the palette or a menu, they'd do nothing anyone could
+    /// tell.</summary>
+    public static TheoryData<string> CommandsWhoseResultIsInThePane() => new()
+    {
+        "ClearFilterCommand",
+        "ToggleTagsCommand",
+        "ToggleDualPaneCommand",
+        "PinCommand",
+        "UnpinCommand",
+        "UnpinAllCommand",
+        "AddShortcutCommand",
+        "RemoveShortcutCommand",
+        "UseVaultDefaultSortCommand",
+        "ClearRecentsCommand",
+        "CollapseAllCommand",
+        "ExpandLoadedCommand",
+    };
+
+    [Theory]
+    [MemberData(nameof(CommandsWhoseResultIsInThePane))]
+    public void ACommandWhoseResultIsInThePaneShowsIt(string name) => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "Just a line of text.\n"));
+        WithSidebar(host, sidebar =>
+        {
+            host.Workspace.IsFilesSidebarVisible = false;
+            host.Settle();
+
+            CommandOf(sidebar, name).Execute(null);
+            PumpedDispatcher.PumpUntilDrained(sidebar.TreeRefreshCompletion);
+            PumpedDispatcher.Drain();
+
+            Assert.True(host.Workspace.IsFilesSidebarVisible, $"{name} left the pane hidden");
+        });
+    });
+
+    /// <summary>Where the rest show their results, so a hidden pane costs them nothing, and
+    /// so a new sidebar command has to say which it is.</summary>
+    private static readonly Dictionary<string, string> CommandsWhoseResultIsElsewhere = new()
+    {
+        ["RefreshCommand"] = "a rescan, reported on the status bar",
+        ["RetrySettingsCommand"] = "its button is beside the pane's notice",
+        ["AddTagCommand"] = "spoken, and its field is in the pane",
+        ["RemoveTagCommand"] = "spoken, and its field is in the pane",
+        ["CreateFolderCommand"] = "hands off to the name field, which shows the pane",
+        ["CreateNoteCommand"] = "hands off to the name field, which shows the pane",
+        ["CreateCanvasCommand"] = "hands off to the name field, which shows the pane",
+        ["RenameCommand"] = "spoken, and the tab's title changes",
+        ["DeleteCommand"] = "its prompt names the file",
+        ["CreateFolderNoteCommand"] = "spoken",
+        ["DeleteFolderNoteCommand"] = "spoken",
+        ["CopyWikilinkCommand"] = "the clipboard",
+        ["CopyPathCommand"] = "the clipboard",
+        ["RevealCommand"] = "Explorer",
+        ["DuplicateCommand"] = "spoken",
+        ["MoveToCommand"] = "a sheet",
+        ["OpenCurrentCommand"] = "the editor",
+        ["OpenNewTabCommand"] = "the editor",
+        ["OpenSplitCommand"] = "the editor",
+        ["HistoryBackCommand"] = "the editor",
+        ["HistoryForwardCommand"] = "the editor",
+        ["BatchMoveCommand"] = "spoken, and its field is in the pane",
+        ["BatchTrashCommand"] = "the status bar's progress",
+        ["ImportCommand"] = "a file picker",
+        ["CancelImportCommand"] = "spoken",
+        ["CancelTrashCommand"] = "the status bar's progress",
+    };
+
+    [Fact]
+    public void EverySidebarCommandSaysWhetherItsResultIsInThePane()
+    {
+        string[] named = typeof(FilesSidebarViewModel)
+            .GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+            .Where(property => typeof(ICommand).IsAssignableFrom(property.PropertyType))
+            .Select(property => property.Name)
+            .ToArray();
+        string[] inThePane = CommandsWhoseResultIsInThePane().Select(row => row.Data).ToArray();
+
+        Assert.Empty(named.Except(inThePane).Except(CommandsWhoseResultIsElsewhere.Keys));
+        Assert.Empty(inThePane.Concat(CommandsWhoseResultIsElsewhere.Keys).Except(named));
+    }
 
     /// <summary>The ring refuses it, and a fallback from the editor doesn't open it: a
     /// fallback isn't a route the reader asked for.</summary>
@@ -558,6 +623,37 @@ public sealed class StatusBarAndPaneTogglesTests
         Assert.False(host.Shell.LandOnFilesTree());
         Assert.False(host.Workspace.IsFilesSidebarVisible);
     });
+
+    /// <summary>A real sidebar over the shown shell, as the lifecycle attaches one.</summary>
+    private static void WithSidebar(ShownShell host, Action<FilesSidebarViewModel> body)
+    {
+        string appData = Path.Combine(Path.GetTempPath(), $"slate-ds7-{Guid.NewGuid():N}");
+        PropertyInfo slot = typeof(VaultLifecycleViewModel).GetProperty(nameof(VaultLifecycleViewModel.FileSidebar))
+            ?? throw new InvalidOperationException("FileSidebar is gone");
+        var sidebar = new FilesSidebarViewModel(host.Session, _ => { }, localAppDataRoot: appData);
+        try
+        {
+            PumpedDispatcher.PumpUntilDrained(sidebar.TreeRefreshCompletion);
+            slot.SetValue(host.Shell.DataContext, sidebar);
+            host.Settle();
+            body(sidebar);
+        }
+        finally
+        {
+            slot.SetValue(host.Shell.DataContext, null);
+            try
+            {
+                Directory.Delete(appData, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+        }
+    }
+
+    private static ICommand CommandOf(FilesSidebarViewModel sidebar, string name) =>
+        (ICommand)(typeof(FilesSidebarViewModel).GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+            ?? throw new InvalidOperationException($"{name} is gone")).GetValue(sidebar)!;
 
     private static void Settle(ShownShell host, ConnectionsLeafViewModel leaf)
     {
