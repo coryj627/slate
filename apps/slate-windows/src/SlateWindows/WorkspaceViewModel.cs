@@ -2560,14 +2560,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         GrowPaneCommand = new RelayCommand(_ => ResizeActivePane(0.05), _ => Groups.Count > 1);
         ShrinkPaneCommand = new RelayCommand(_ => ResizeActivePane(-0.05), _ => Groups.Count > 1);
         SaveActiveCommand = new RelayCommand(_ => SaveActive(), _ => ActiveGroup.ActiveTab?.IsMarkdown == true);
-        ToggleRightPaneCommand = new RelayCommand(
-            _ =>
-            {
-                IsRightPaneVisible = !IsRightPaneVisible;
-                // W6-2 PR B (rule C, Term 3(a)): the reveal route's end.
-                ConsumePendingMount();
-            },
-            _ => true);
+        ToggleRightPaneCommand = new RelayCommand(_ => ToggleRightPane(), _ => true);
         OpenTasksReviewCommand = new RelayCommand(_ => OpenTasksReview(), _ => true);
     }
 
@@ -2838,8 +2831,31 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 // W7-7 PR 4b (AR-38): the right pane's two steps follow.
                 RaiseRightPaneResizeStates();
                 RaiseRightPaneColumnStates();
+                OnPropertyChanged(nameof(RightPaneToggle));
             }
         }
+    }
+
+    /// <summary>DS-7: the status bar's button, bound both ways, because UIA's Toggle
+    /// doesn't run a button's command. The setter is the route, so a reveal finishes on
+    /// either input path.</summary>
+    public bool RightPaneToggle
+    {
+        get => IsRightPaneVisible;
+        set
+        {
+            if (value != IsRightPaneVisible)
+            {
+                ToggleRightPane();
+            }
+        }
+    }
+
+    private void ToggleRightPane()
+    {
+        IsRightPaneVisible = !IsRightPaneVisible;
+        // W6-2 PR B (rule C, Term 3(a)): the reveal route's end.
+        ConsumePendingMount();
     }
 
     public ICommand CloseTabCommand { get; }

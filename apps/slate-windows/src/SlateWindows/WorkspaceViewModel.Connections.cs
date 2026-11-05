@@ -425,6 +425,7 @@ internal sealed partial class WorkspaceViewModel
         {
             return false;
         }
+        IsFilesSidebarVisible = true;
         reveal(path);
         return true;
     }

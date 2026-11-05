@@ -9610,6 +9610,8 @@ pub enum A11yEvent {
     GraphOpensSinglePane,
     RightPaneShown,
     RightPaneHidden,
+    FilesSidebarShown,
+    FilesSidebarHidden,
     HistoryPanelShown,
     ReopenTargetMissing {
         filename: String,
@@ -11563,6 +11565,8 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::GraphOpensSinglePane => C::GraphOpensSinglePane,
             F::RightPaneShown => C::RightPaneShown,
             F::RightPaneHidden => C::RightPaneHidden,
+            F::FilesSidebarShown => C::FilesSidebarShown,
+            F::FilesSidebarHidden => C::FilesSidebarHidden,
             F::HistoryPanelShown => C::HistoryPanelShown,
             F::ReopenTargetMissing { filename } => C::ReopenTargetMissing { filename },
             F::FileReopenFailed { filename, detail } => C::FileReopenFailed { filename, detail },

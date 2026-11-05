@@ -455,6 +455,7 @@ internal static class SlateCommandRegistrar
             [ChordTable.Ids.OpenInNewTab] = host => host.FileSidebar?.OpenNewTabCommand,
             [ChordTable.Ids.OpenInSplit] = host => host.FileSidebar?.OpenSplitCommand,
             [ChordTable.Ids.ToggleRightPane] = host => host.Workspace?.ToggleRightPaneCommand,
+            [ChordTable.Ids.ToggleFilesSidebar] = host => host.Workspace?.ToggleFilesSidebarCommand,
             // W5-2 close-out (#742): lives on the HOST, not the
             // workspace — the overlay survives vault open/close (P17)
             // and mac's action is likewise vault-lifetime-free.

@@ -1037,7 +1037,8 @@ internal sealed partial class WorkspaceViewModel
         var layout = new ShellRegionLayout(
             HasTabs: ActiveGroup.Tabs.Count > 0,
             RightPaneVisible: IsRightPaneVisible,
-            RightPaneHasContentStop: host.RightPaneHasContentStop);
+            RightPaneHasContentStop: host.RightPaneHasContentStop,
+            FilesVisible: IsFilesSidebarVisible);
         int attempts = ShellRegionRing.Ring(layout).Count;
         for (int attempt = attemptsTaken; attempt < attempts; attempt++)
         {
@@ -1190,6 +1191,10 @@ internal sealed partial class WorkspaceViewModel
             if (boundary == WorkspaceFocusBoundary.RightPaneEdge && !IsRightPaneVisible)
             {
                 IsRightPaneVisible = true;
+            }
+            else if (boundary == WorkspaceFocusBoundary.Files)
+            {
+                IsFilesSidebarVisible = true;
             }
 
             _announce(boundary == WorkspaceFocusBoundary.Files

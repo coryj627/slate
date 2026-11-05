@@ -76,6 +76,8 @@ public sealed class A11yCorpusCensus
         new A11yEvent.GraphOpensSinglePane(),
         new A11yEvent.RightPaneShown(),
         new A11yEvent.RightPaneHidden(),
+        new A11yEvent.FilesSidebarShown(),
+        new A11yEvent.FilesSidebarHidden(),
         new A11yEvent.HistoryPanelShown(),
         new A11yEvent.ReopenTargetMissing(Filename: "gone.md"),
         new A11yEvent.FileReopenFailed(Filename: "notes.md", Detail: "invalid UTF-8"),

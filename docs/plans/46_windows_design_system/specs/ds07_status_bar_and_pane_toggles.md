@@ -73,3 +73,21 @@ AT: NVDA, F6 round the ring with Files hidden; the palette's Toggle Files Sideba
 ## Brief
 
 Read `MainWindow.xaml:744-810` and `:935-945`, `WorkspaceViewModel.cs:2558-2565`, `WorkspaceViewModel.cs:2819-2837`, `WorkspaceViewModel.Connections.cs:111-170`, `WorkspaceViewModel.SidebarWidths.cs`, `ShellRegionRing.cs`, `WorkspaceViewModel.Layout.cs:1037`, `crates/slate-core/src/a11y.rs:669`, `:2025`. Add the core events first with all their company and regenerate bindings. Then the state, columns (the binding stays local), ring, routes, command, bar and toggles. Facts first. Commit: `feat(windows): the status bar is 24 high with a toggle for each pane, and a hidden pane gives the editor its room`.
+
+## Notes from the build
+
+**The bar's border is the design's hairline, inside the 24.** Fluent's status bar carries a 1 border all round, which made the bar 26 and took the toggles out of the corners. It's zero now, with a 1-high line over the row's top edge, which covers only what's transparent at rest and takes no pointer.
+
+**The toggles disable under a modal surface,** which the spec doesn't list. The menu disables under every one because its commands would run behind a sheet, and the bar's scrim takes no pointer, so a toggle would too.
+
+**Cancel keeps the row at 24 while a trash runs.** Fluent's button is taller, so it has a 24 floor and no vertical padding.
+
+**The progress item's limits are on its column,** at 60 to 180 with a star width, because an `Auto` column would hold it at its floor, and a star column without a limit would centre it in half the bar.
+
+**Showing the Files sidebar holds the right pane's width first.** It's the one that spread into the room the sidebar comes back to, so the sidebar returns at the width it left at. The right pane's own reveal holds Files first, for the same reason.
+
+**The Mac designations cite plan 38,** which holds their rows and is on `windows.yml`'s path list, rather than this spec.
+
+**New Note reveals at the rename hand-off** (`ArmSidebarRename`), so every create that hands off to the name field gets it from one place.
+
+**A sidebar command whose result is only in the pane shows it,** which Codex's first round asked for beyond the spec's list. Toggle Tag Column does nothing anyone can tell with the pane hidden, and Clear Recents writes only to the pane's status line. `EverySidebarCommandSaysWhetherItsResultIsInThePane` holds each command to one side or the other, with where the rest report.

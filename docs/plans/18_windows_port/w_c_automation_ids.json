@@ -1421,6 +1421,11 @@
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "FilesSidebarToggle",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "FilesSidebarUnpinAllInFolderMenuItem",
     "Surface": "Main window and menu bar"
   },
@@ -1896,6 +1901,11 @@
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "RightPaneToggle",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "TasksLeafBody",
     "Surface": "Right-pane leaf registry"
   },
@@ -2247,6 +2257,11 @@
   {
     "Source": "MainWindow.xaml",
     "Expression": "WorkspaceNarrowRightPaneMenuItem",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "WorkspaceToggleFilesSidebarMenuItem",
     "Surface": "Main window and menu bar"
   },
   {

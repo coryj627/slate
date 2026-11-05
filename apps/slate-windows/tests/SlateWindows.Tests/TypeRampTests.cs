@@ -105,12 +105,15 @@ public sealed class TypeRampTests
             ("an unset Button", button.FontSize, button.FontFamily),
             ("the menu bar", menu.FontSize, menu.FontFamily),
             ("a top-level menu item", topLevel.FontSize, topLevel.FontFamily),
-            ("the status bar", (double)status.GetValue(Control.FontSizeProperty), (FontFamily)status.GetValue(Control.FontFamilyProperty)),
         })
         {
             Assert.True(size == 14, $"{what} is {size}.");
             Assert.StartsWith("Segoe UI Variable Text", family.Source, StringComparison.Ordinal);
         }
+
+        // DS-7: the status bar is the design's 12/16 row, so its step is Caption.
+        Assert.Equal(TypeRamp.Caption.Size, (double)status.GetValue(Control.FontSizeProperty));
+        Assert.StartsWith("Segoe UI Variable Small", ((FontFamily)status.GetValue(Control.FontFamilyProperty)).Source, StringComparison.Ordinal);
     });
 
     /// <summary>A default style's setter beats inheritance, as the status bar's and

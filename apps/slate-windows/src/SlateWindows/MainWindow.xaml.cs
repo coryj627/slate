@@ -527,6 +527,7 @@ public partial class MainWindow : Window
 
         if (_observedFileSidebar is not null)
         {
+            _observedFileSidebar.FilesPaneNeeded = null;
             _observedFileSidebar.InlineRenameRequested -= ArmSidebarRename;
             _observedFileSidebar.TreeSelectionRestored -=
                 FileSidebar_TreeSelectionRestored;
@@ -542,6 +543,7 @@ public partial class MainWindow : Window
             // W5-4 F1/F2: a create's hand-off re-arms the F2 rename
             // flow programmatically once the new node is selected.
             sidebar.InlineRenameRequested += ArmSidebarRename;
+            sidebar.FilesPaneNeeded = RevealFilesSidebar;
             // W5-4 (red team, a11y 2): a mutation's publication
             // re-seats selection and asks the window to restore
             // keyboard focus to the tree.
@@ -619,6 +621,7 @@ public partial class MainWindow : Window
             return;
         }
 
+        RevealFilesSidebar();
         SidebarFileActionsExpander.IsExpanded = true;
         _ = Dispatcher.InvokeAsync(() =>
         {
@@ -954,6 +957,7 @@ public partial class MainWindow : Window
         {
             if (boundary == WorkspaceFocusBoundary.Files)
             {
+                WorkspaceColumns.UpdateLayout();
                 _ = LandOnFilesTree();
             }
             else if (_viewModel.Workspace is WorkspaceViewModel workspace
@@ -1356,6 +1360,7 @@ public partial class MainWindow : Window
                 return;
             }
 
+            RevealFilesSidebar();
             SidebarFilterTextBox.Focus();
             SidebarFilterTextBox.SelectAll();
             e.Handled = true;
@@ -2122,8 +2127,20 @@ public partial class MainWindow : Window
 
     private void FocusFilter_Click(object sender, RoutedEventArgs e)
     {
+        RevealFilesSidebar();
         SidebarFilterTextBox.Focus();
         SidebarFilterTextBox.SelectAll();
+    }
+
+    /// <summary>DS-7: a route that needs the Files pane shows it first, laid out so that
+    /// it can take the keys. A fallback doesn't: it isn't what the reader asked for.</summary>
+    private void RevealFilesSidebar()
+    {
+        if (_viewModel.Workspace is { IsFilesSidebarVisible: false } workspace)
+        {
+            workspace.IsFilesSidebarVisible = true;
+            WorkspaceColumns.UpdateLayout();
+        }
     }
 
     private void QuickOpen_Click(object sender, RoutedEventArgs e)

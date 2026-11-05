@@ -749,7 +749,7 @@ public sealed class ItemContainerNameCensus
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["StatusBar"] =
-                "three fixed regions of different kinds — the vault state, the status message and the progress bar",
+                "fixed regions of different kinds — the vault state, the status message, the progress bar and the two pane toggles",
         };
 
     /// <summary>The spec review, rounds 21-23: a XAML items host with INLINE

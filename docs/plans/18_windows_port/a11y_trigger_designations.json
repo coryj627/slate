@@ -223,6 +223,16 @@
       }
     },
     "Mac": {
+      "FilesSidebarHidden": {
+        "reason": "DS-7: the Files sidebar's toggle is Windows only; the Mac's sidebar has no such state, and AppState.toggleRightPane is only its right pane.",
+        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
+        "status": "recorded"
+      },
+      "FilesSidebarShown": {
+        "reason": "DS-7: the Files sidebar's toggle is Windows only; the Mac's sidebar has no such state, and AppState.toggleRightPane is only its right pane.",
+        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
+        "status": "recorded"
+      },
       "QuickSwitcherCount": {
         "reason": "Mac constructs SwitcherRecentCount, SwitcherNoMatches and SwitcherMatchCount in QuickSwitcherModel.publishAnnouncement; Windows QuickSwitcherCount renders the same three state templates.",
         "decision": "docs/plans/18_windows_port/specs/w1_spec.md",

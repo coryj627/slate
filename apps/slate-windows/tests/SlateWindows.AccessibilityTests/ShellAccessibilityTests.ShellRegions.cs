@@ -130,6 +130,73 @@ public sealed partial class ShellAccessibilityTests
         }
     }
 
+    /// <summary>DS-7 (#1808): the status bar's toggles through UIA's Toggle, the path that
+    /// runs no command. A hidden Files sidebar leaves the ring and takes its stops with it,
+    /// the toggle follows a route that brings it back, and with both panes hidden the
+    /// window is still clean.</summary>
+    [Fact]
+    public void PaneToggles_HideThePanesFromTheRingAndARouteBringsThemBack()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "slate-pane-toggles-" + Guid.NewGuid().ToString("N"));
+        string vault = Path.Combine(root, "Vault");
+        string logs = Path.Combine(root, "logs");
+        Directory.CreateDirectory(vault);
+        File.WriteAllText(Path.Combine(vault, "alpha.md"), "# Alpha\n\nBody.\n");
+
+        Process? process = null;
+        try
+        {
+            var start = new ProcessStartInfo(SlateWindowsExe()) { UseShellExecute = false };
+            ShellLaunch.ApplyDeviceState(start);
+            start.ArgumentList.Add(vault);
+            start.Environment["SLATE_CENSUS_INSTANCE_ID"] = "pane-toggles-" + Guid.NewGuid().ToString("N");
+            start.Environment["SLATE_LOG_DIR"] = logs;
+            process = Process.Start(start) ?? throw new Xunit.Sdk.XunitException("Slate did not start.");
+            if (!HasInteractiveDesktop(process, "pane-toggles")) { return; }
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(process, automation, Path.Combine(logs, "slate-windows.log"), TimeSpan.FromSeconds(30));
+            window.SetForeground();
+            WaitForElement(window, "RightPaneLeaves", TimeSpan.FromSeconds(30));
+            AutomationElement files = WaitForElement(window, "FilesSidebarToggle", TimeSpan.FromSeconds(10));
+            AutomationElement right = WaitForElement(window, "RightPaneToggle", TimeSpan.FromSeconds(10));
+            Assert.Equal(ToggleState.On, files.Patterns.Toggle.Pattern.ToggleState.Value);
+            Assert.Equal(ToggleState.On, right.Patterns.Toggle.Pattern.ToggleState.Value);
+            Assert.Equal("Files sidebar", files.Name);
+            Assert.Equal("Right pane", right.Name);
+
+            files.Patterns.Toggle.Pattern.Toggle();
+            AssertElementDisappears(window, automation, "FilesPane");
+            Assert.Equal(ToggleState.Off, files.Patterns.Toggle.Pattern.ToggleState.Value);
+
+            // The ring steps from the menu bar straight to the empty pane.
+            AutomationElement statusBar = WaitForElement(window, "StatusBar", TimeSpan.FromSeconds(10));
+            ReassertForegroundForAChord(window);
+            statusBar.Focus();
+            AssertEventuallyFocused(statusBar, "The status bar did not take focus.");
+            PressKey(VirtualKeyShort.F6);
+            AssertEventuallyFocused(WaitForElement(window, "FileMenu", TimeSpan.FromSeconds(10)), "F6 from the status bar did not land on the menu bar.");
+            PressKey(VirtualKeyShort.F6);
+            AssertEventuallyFocused(WaitForElement(window, "ContentPane", TimeSpan.FromSeconds(10)), "With Files hidden, F6 from the menu bar did not skip to the empty pane.");
+
+            // A route that needs the pane shows it, and the toggle follows.
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_F);
+            WaitForElement(window, "FilesPane", TimeSpan.FromSeconds(10));
+            Assert.Equal(ToggleState.On, files.Patterns.Toggle.Pattern.ToggleState.Value);
+
+            files.Patterns.Toggle.Pattern.Toggle();
+            AssertElementDisappears(window, automation, "FilesPane");
+            right.Patterns.Toggle.Pattern.Toggle();
+            AssertElementDisappears(window, automation, "RightPaneLeaves");
+            Assert.Equal(ToggleState.Off, right.Patterns.Toggle.Pattern.ToggleState.Value);
+            AssertAxeClean(process, "pane-toggles");
+        }
+        finally
+        {
+            try { process?.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
     /// <summary>WB-5 (#1281; W7-6 §4): F6 and Shift+F6 from inside the
     /// editor's Ctrl+E popover are a no-op. Focus stays on the popover's
     /// Close button, and the desktop listener hears nothing from Slate. With
