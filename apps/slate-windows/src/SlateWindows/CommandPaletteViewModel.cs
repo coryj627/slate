@@ -750,10 +750,10 @@ internal sealed class CommandPaletteViewModel : BindableBase
             choices.Choices
                 .Select(choice => new Command(choice.Id, choice.Label, null, null, CommandSection.View))
                 .ToArray(),
-            []));
+            Array.Empty<string>()));
         _snapshotLoaded = false;
-        _sections = [];
-        _rows = [];
+        _sections = Array.Empty<CommandPaletteSectionViewModel>();
+        _rows = Array.Empty<CommandPaletteRowViewModel>();
         _query = string.Empty;
         _selectedId = choices.CurrentId;
         _selectedRow = null;
@@ -785,8 +785,8 @@ internal sealed class CommandPaletteViewModel : BindableBase
         _choices = null;
         _commandsLevel = null;
         _snapshotLoad = level.SnapshotLoad;
-        _sections = [];
-        _rows = [];
+        _sections = Array.Empty<CommandPaletteSectionViewModel>();
+        _rows = Array.Empty<CommandPaletteRowViewModel>();
         _query = level.Query;
         _selectedId = level.RowId;
         _selectedRow = null;

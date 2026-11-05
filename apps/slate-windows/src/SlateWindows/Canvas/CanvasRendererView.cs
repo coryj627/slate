@@ -616,7 +616,7 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// <summary>DS-10: the visuals are painted from the theme's tokens at each install, so a
     /// theme change installs a new state. The manager's event is static, so the subscription
     /// lasts only while this is in the tree, as <c>GraphDiagramView</c>'s does.</summary>
-    internal void AttachTheme()
+    private void AttachTheme()
     {
         if (!_themeAttached)
         {

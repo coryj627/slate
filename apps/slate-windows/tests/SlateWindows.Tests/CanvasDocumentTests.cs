@@ -5644,7 +5644,7 @@ public sealed class CanvasDocumentTests : IDisposable
     /// <summary>DS-10: a theme can change with a board on screen, and its retained drawings
     /// hold the brushes they were painted with until a new state installs.</summary>
     [Fact]
-    public void ATheEventFromTheThemeManagerGivesTheBoardANewState() => RunSta(() =>
+    public void AThemeChangeGivesTheBoardANewStateWhileItsLoaded() => RunSta(() =>
     {
         var renderer = new CanvasRendererView();
         static void RaiseThemeChange()
@@ -5658,14 +5658,27 @@ public sealed class CanvasDocumentTests : IDisposable
         RaiseThemeChange();
         Assert.Equal(0, renderer.Engine.ThemeRevisionForTests);
 
-        renderer.AttachTheme();
-        renderer.AttachTheme();
+        var window = new System.Windows.Window
+        {
+            Content = renderer,
+            ShowActivated = false,
+            ShowInTaskbar = false,
+            Width = 200,
+            Height = 200,
+            WindowStartupLocation = System.Windows.WindowStartupLocation.Manual,
+            Left = -20_000,
+            Top = -20_000,
+        };
+        window.Show();
+        PumpedDispatcher.Drain();
         RaiseThemeChange();
         Assert.Equal(1, renderer.Engine.ThemeRevisionForTests);
 
-        renderer.Shutdown();
+        window.Close();
+        PumpedDispatcher.Drain();
         RaiseThemeChange();
         Assert.Equal(1, renderer.Engine.ThemeRevisionForTests);
+        renderer.Shutdown();
     });
 
     /// <summary>The board peer speaks its RATIFIED name (§D D3,

@@ -91,6 +91,20 @@ public sealed class AppPreferencesStoreTests : IDisposable
         Assert.Equal(ThemeChoice.Dark, CreateStore().Load().Theme);
     }
 
+    [Fact]
+    public void AThemeChoiceKeepsTheOtherPreferences()
+    {
+        AppPreferencesStore store = CreateStore();
+        store.Save(new AppPreferencesState(ReadingLinksOpenInNewTab: false, MathVerbosity: "terse"));
+
+        new ThemePreference(store, _ => { }).Choose(ThemeChoice.Light);
+
+        AppPreferencesState loaded = CreateStore().Load();
+        Assert.Equal(ThemeChoice.Light, loaded.Theme);
+        Assert.False(loaded.ReadingLinksOpenInNewTab);
+        Assert.Equal("terse", loaded.MathVerbosity);
+    }
+
     /// <summary>A choice that can't be written still shows, as every other preference's
     /// does, and this launch keeps it.</summary>
     [Fact]
