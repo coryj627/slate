@@ -5647,12 +5647,21 @@ public sealed class CanvasDocumentTests : IDisposable
     public void AThemeChangeGivesTheBoardANewStateWhileItsLoaded() => RunSta(() =>
     {
         var renderer = new CanvasRendererView();
-        static void RaiseThemeChange()
+
+        // The event is the whole process's, and other facts' editors listen on threads of
+        // their own, so this calls what this board has subscribed and nothing else.
+        void RaiseThemeChange()
         {
             var raise = (EventHandler?)typeof(ThemeManager)
                 .GetField(nameof(ThemeManager.ResourcesChanged), System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
                 .GetValue(null);
-            raise?.Invoke(null, EventArgs.Empty);
+            foreach (Delegate handler in raise?.GetInvocationList() ?? Array.Empty<Delegate>())
+            {
+                if (ReferenceEquals(handler.Target, renderer))
+                {
+                    ((EventHandler)handler)(null, EventArgs.Empty);
+                }
+            }
         }
 
         RaiseThemeChange();

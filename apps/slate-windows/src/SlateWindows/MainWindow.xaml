@@ -3348,7 +3348,8 @@
                     <local:AutomationPresentationTextBlock Grid.Row="3"
                             Margin="4,8,4,0"
                             Text="{Binding KeysHint}"
-                            Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
+                            Foreground="{DynamicResource Slate.SecondaryTextBrush}"
+                            TextWrapping="Wrap" />
                 </Grid>
             </local:AutomationLandmarkBorder>
             </Grid>
