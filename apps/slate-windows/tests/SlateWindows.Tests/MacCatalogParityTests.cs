@@ -249,6 +249,8 @@ public sealed class MacCatalogParityTests
     private static readonly Dictionary<string, string> WindowsOnlyIds =
         new(StringComparer.Ordinal)
         {
+            ["slate.view.toggleFilesSidebar"] =
+                "Plan 46 DS-7 (#1808): the Mac's sidebar has no hidden state to toggle.",
             // slate.canvas.colorMarked left this list with #1165 (plan 43
             // PR 2): mac registers the id with the same label, so it is a
             // shared id and P3 checks its label like any other (§G GD-5's
