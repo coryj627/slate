@@ -87,6 +87,10 @@ public sealed class NoteHeaderTests
         Button[] segments = [.. ShownShell.Descendants(header).OfType<Button>().Where(button => AutomationProperties.GetAutomationId(button) == "NoteHeaderFolder")];
         Assert.Equal(["notes, notes", "notes, notes/notes", "topics"], segments.Select(AutomationProperties.GetName));
         Assert.Equal(["notes", "notes", "topics"], segments.Select(button => ((TextBlock)button.Content).Text));
+
+        // The told-apart name shows on hover, from the label, so it isn't heard twice.
+        Assert.Equal("notes, notes/notes", ((TextBlock)segments[1].Content).ToolTip);
+        Assert.All(segments, segment => Assert.Equal(string.Empty, HelpTextOf(segment)));
         Invoke(segments[1]);
         host.Settle();
         Assert.Equal(["notes/notes"], revealed);
@@ -681,10 +685,19 @@ public sealed class NoteHeaderTests
         Assert.True(header.IsCompact);
         Assert.DoesNotContain("Reading", ShownText(reading));
         Assert.Equal("Reading", AutomationProperties.GetName(reading));
-        Assert.NotNull(reading.ToolTip);
+
+        // The tooltips are on the glyphs, which have no peer, so a choice's help text isn't its
+        // name again: Narrator read the radio's tooltip as "Source, radio button, selected,
+        // Source view".
+        RadioButton source = Choice(header, "NoteHeaderSource");
+        Assert.Equal("Source view", GlyphOf(source).ToolTip);
+        Assert.Equal("Switch to reading view (Ctrl+Shift+E)", GlyphOf(reading).ToolTip);
+        Assert.Equal(string.Empty, HelpTextOf(source));
+        Assert.Equal(string.Empty, HelpTextOf(reading));
         Assert.DoesNotContain(ShownShell.Descendants(header).OfType<Button>(), button => button.IsVisible && AutomationProperties.GetName(button) == "maths");
         Button folders = ShownShell.Descendants(header).OfType<Button>().Single(button => button.IsVisible && AutomationProperties.GetAutomationId(button) == "NoteHeaderFolders");
         Assert.Equal("Folders", AutomationProperties.GetName(folders));
+        Assert.Equal("learning › maths", HelpTextOf(folders));
         Assert.Equal(["learning", "maths"], folders.ContextMenu!.Items.OfType<MenuItem>().Select(item => AutomationProperties.GetName(item)));
     });
 
@@ -849,6 +862,12 @@ public sealed class NoteHeaderTests
 
     private static MenuItem MenuRow(Button more, string id) =>
         more.ContextMenu!.Items.OfType<MenuItem>().Single(item => AutomationProperties.GetAutomationId(item) == id);
+
+    private static string HelpTextOf(UIElement element) =>
+        UIElementAutomationPeer.CreatePeerForElement(element).GetHelpText();
+
+    private static FrameworkElement GlyphOf(RadioButton choice) =>
+        ShownShell.Descendants(choice).OfType<AutomationPresentationTextBlock>().First();
 
     private static void Invoke(UIElement element) =>
         ((IInvokeProvider)UIElementAutomationPeer.CreatePeerForElement(element).GetPattern(PatternInterface.Invoke)).Invoke();

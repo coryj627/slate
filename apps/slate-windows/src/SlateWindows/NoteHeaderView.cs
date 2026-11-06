@@ -57,6 +57,8 @@ internal sealed class NoteHeaderView : Grid
     private readonly RadioButton _reading;
     private readonly TextBlock _sourceLabel;
     private readonly TextBlock _readingLabel;
+    private readonly FrameworkElement _sourceGlyph;
+    private readonly FrameworkElement _readingGlyph;
     private readonly Border _switcher;
     private readonly Button _more;
     private readonly MenuItem _splitRight;
@@ -99,8 +101,8 @@ internal sealed class NoteHeaderView : Grid
 
         // The switch: one Tab stop, arrows move the choice (RadioGroupArrows), as the canvas's.
         string group = "NoteHeaderMode" + Guid.NewGuid().ToString("N");
-        (_source, _sourceLabel) = Choice("NoteHeaderSource", "Source", SourceGlyph, group);
-        (_reading, _readingLabel) = Choice("NoteHeaderReading", "Reading", ReadingGlyph, group);
+        (_source, _sourceLabel, _sourceGlyph) = Choice("NoteHeaderSource", "Source", SourceGlyph, group);
+        (_reading, _readingLabel, _readingGlyph) = Choice("NoteHeaderReading", "Reading", ReadingGlyph, group);
         var choices = new StackPanel { Orientation = Orientation.Horizontal };
         choices.Children.Add(_source);
         choices.Children.Add(_reading);
@@ -385,7 +387,9 @@ internal sealed class NoteHeaderView : Grid
                 menu.Items.Add(row);
             }
 
-            var collapsed = Segment("…", string.Join(" › ", folders.Select(folder => folder.Name)));
+            // Its tooltip says which folders it holds, which is help a reader hears too.
+            Button collapsed = Segment("…", null);
+            collapsed.ToolTip = string.Join(" › ", folders.Select(folder => folder.Name));
             AutomationProperties.SetAutomationId(collapsed, "NoteHeaderFolders");
             AutomationProperties.SetName(collapsed, "Folders");
             collapsed.ContextMenu = menu;
@@ -420,7 +424,9 @@ internal sealed class NoteHeaderView : Grid
     }
 
     /// <summary>The checked choice follows the tab's mode, under a guard so following it
-    /// isn't taken for a choice. Compact, the labels go and tooltips say them.</summary>
+    /// isn't taken for a choice. Compact, the labels go and tooltips say them. The tooltips sit
+    /// on the glyphs, which have no peer: on the radio, a tooltip is its help text too, and
+    /// Narrator read "Source, radio button, selected, Source view".</summary>
     private void ShowChoices()
     {
         bool reading = _tab?.IsReadingMode == true;
@@ -438,8 +444,8 @@ internal sealed class NoteHeaderView : Grid
         _sourceLabel.Visibility = IsCompact ? Visibility.Collapsed : Visibility.Visible;
         _readingLabel.Visibility = _sourceLabel.Visibility;
         string? chord = ChordTable.WindowsChordFor(ChordTable.Ids.ToggleViewMode);
-        _source.ToolTip = IsCompact ? (reading ? Switch("source", chord) : "Source view") : null;
-        _reading.ToolTip = IsCompact ? (reading ? "Reading view" : Switch("reading", chord)) : null;
+        _sourceGlyph.ToolTip = IsCompact ? (reading ? Switch("source", chord) : "Source view") : null;
+        _readingGlyph.ToolTip = IsCompact ? (reading ? "Reading view" : Switch("reading", chord)) : null;
     }
 
     private static string Switch(string view, string? chord) =>
@@ -546,12 +552,13 @@ internal sealed class NoteHeaderView : Grid
         };
     }
 
-    private (RadioButton Choice, TextBlock Label) Choice(string automationId, string label, string glyph, string group)
+    private (RadioButton Choice, TextBlock Label, FrameworkElement Glyph) Choice(string automationId, string label, string glyph, string group)
     {
         var text = new TextBlock { Text = label, Margin = new Thickness(6, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
         text.SetResourceReference(StyleProperty, "Slate.BodyTextBlockStyle");
+        AutomationPresentationTextBlock icon = Glyph(glyph, GlyphSize);
         var content = new StackPanel { Orientation = Orientation.Horizontal };
-        content.Children.Add(Glyph(glyph, GlyphSize));
+        content.Children.Add(icon);
         content.Children.Add(text);
         var choice = new RadioButton
         {
@@ -563,7 +570,7 @@ internal sealed class NoteHeaderView : Grid
         AutomationProperties.SetAutomationId(choice, automationId);
         AutomationProperties.SetName(choice, label);
         choice.Checked += Choice_Checked;
-        return (choice, text);
+        return (choice, text, icon);
     }
 
     private static MenuItem Row(string automationId, string label, string chordId)
@@ -576,12 +583,14 @@ internal sealed class NoteHeaderView : Grid
         return row;
     }
 
-    private static Button Segment(string text, string tip)
+    /// <summary>A folder's button. A told-apart name shows on hover from the label, so the
+    /// button's help text isn't its name again.</summary>
+    private static Button Segment(string text, string? tip)
     {
-        var label = new TextBlock { Text = text, TextTrimming = TextTrimming.CharacterEllipsis };
+        var label = new TextBlock { Text = text, TextTrimming = TextTrimming.CharacterEllipsis, ToolTip = tip == text ? null : tip };
         label.SetResourceReference(StyleProperty, "Slate.BodyTextBlockStyle");
         label.SetResourceReference(TextBlock.ForegroundProperty, "Slate.SecondaryTextBrush");
-        var button = new Button { Content = label, ToolTip = tip == text ? null : tip };
+        var button = new Button { Content = label };
         button.SetResourceReference(StyleProperty, "Slate.CrumbButtonStyle");
         return button;
     }
