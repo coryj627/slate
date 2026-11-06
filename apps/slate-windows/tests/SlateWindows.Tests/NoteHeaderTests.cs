@@ -364,6 +364,45 @@ public sealed class NoteHeaderTests
         Assert.True(IsInside(Keyboard.FocusedElement as DependencyObject, header));
     });
 
+    /// <summary>A header out of the tree lets go of its tab, so a tab that lives on (moved to
+    /// another pane, say) doesn't keep it, and it follows the tab again when it's back.</summary>
+    [Fact]
+    public void AnUnloadedHeaderLetsGoOfItsTab() => StaThread.RunPumped(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        host.Workspace.OpenPath("Lecture.md");
+        host.Settle();
+        NoteHeaderView header = HeaderOf(host, "Lecture.md");
+        var tab = (WorkspaceTabViewModel)header.DataContext;
+        var content = (Panel)header.Parent;
+        Assert.Contains(Listeners(tab), target => ReferenceEquals(target, header));
+
+        content.Children.Remove(header);
+        host.Settle();
+        Assert.DoesNotContain(Listeners(tab), target => ReferenceEquals(target, header));
+
+        content.Children.Insert(0, header);
+        host.Settle();
+        Assert.Contains(Listeners(tab), target => ReferenceEquals(target, header));
+        host.Workspace.ToggleReadingModeCommand.Execute(null);
+        host.Settle();
+        Assert.True(Choice(header, "NoteHeaderReading").IsChecked);
+    });
+
+    private static object?[] Listeners(System.ComponentModel.INotifyPropertyChanged source)
+    {
+        for (Type? type = source.GetType(); type is not null; type = type.BaseType)
+        {
+            if (type.GetField("PropertyChanged", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                    ?.GetValue(source) is Delegate handlers)
+            {
+                return [.. handlers.GetInvocationList().Select(handler => handler.Target)];
+            }
+        }
+
+        return [];
+    }
+
     [Fact]
     public void F6StillLandsInTheEditor() => StaThread.RunPumped(() =>
     {

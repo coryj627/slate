@@ -130,11 +130,7 @@ internal sealed class NoteHeaderView : Grid
         _more.SetResourceReference(StyleProperty, "Slate.SubtleIconButtonStyle");
         AutomationProperties.SetAutomationId(_more, "NoteHeaderMore");
         AutomationProperties.SetName(_more, "More note actions");
-        _more.Click += (_, _) =>
-        {
-            ActivateOwnPane();
-            Open(_more);
-        };
+        _more.Click += (_, _) => Open(_more);
         SetColumn(_more, 2);
         Children.Add(_more);
 
