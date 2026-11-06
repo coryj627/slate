@@ -213,18 +213,45 @@ public sealed class TitleBarTests
         Assert.Equal(HtCaption, HitTest(window, title));
     });
 
-    /// <summary>Windows' own frame is its sizing border and the padding around it. WPF's
-    /// WindowResizeBorderThickness is the first alone, a third of a native edge here, so both
-    /// the resize zone and a maximized window's padding take the whole frame.</summary>
+    /// <summary>Windows' own frame is its sizing border and the padding around it, which is
+    /// what Windows adds to a standard window's sides and bottom. WPF's
+    /// WindowResizeBorderThickness is the first alone, so both the resize zone and a maximized
+    /// window's padding take the whole frame. Some machines pad nothing (a CI VM's frame is
+    /// WPF's 4), so the frame is checked against Windows, not against WPF's.</summary>
     [Fact]
     public void TheResizeZoneIsWindowsWholeFrame() => RunSta(() =>
     {
         using var host = new ShownShell();
         Thickness frame = TitleBarChrome.FrameThickness(host.Shell);
+        IntPtr window = new System.Windows.Interop.WindowInteropHelper(host.Shell).Handle;
+        uint dpi = GetDpiForWindow(window);
+        double scale = dpi / 96.0;
+        var standard = default(NativeRect);
+        Assert.True(AdjustWindowRectExForDpi(ref standard, WsOverlappedWindow, false, 0, dpi));
 
-        Assert.True(frame.Left > SystemParameters.WindowResizeBorderThickness.Left, $"the frame is {frame}.");
+        Assert.Equal(-standard.Left / scale, frame.Left, 3);
+        Assert.Equal(standard.Right / scale, frame.Right, 3);
+        Assert.Equal(standard.Bottom / scale, frame.Bottom, 3);
         Assert.Equal(frame, WindowChrome.GetWindowChrome(host.Shell).ResizeBorderThickness);
     });
+
+    private const uint WsOverlappedWindow = 0x00CF0000;
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct NativeRect
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern uint GetDpiForWindow(IntPtr window);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool AdjustWindowRectExForDpi(ref NativeRect rect, uint style, [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)] bool menu, uint extendedStyle, uint dpi);
 
     /// <summary>Over maximize Windows owns the mouse, so the hook draws the hover and the
     /// press, and a press released on the button is a click. A release that no press began,
