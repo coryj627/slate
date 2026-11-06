@@ -43,6 +43,7 @@ internal sealed class NoteHeaderView : Grid
     /// <summary>The bar's own stops' names, which a folder's segment mustn't sound like.</summary>
     private static readonly string[] ControlNames = ["Source", "Reading", "More note actions", "Folders"];
 
+    private readonly DockPanel _path;
     private readonly StackPanel _folders = new() { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock _name = new()
     {
@@ -61,7 +62,12 @@ internal sealed class NoteHeaderView : Grid
     private readonly MenuItem _bulkRename;
     private WorkspaceTabViewModel? _tab;
     private (string Name, string Path)[] _shownFolders = [];
-    private bool _shownCompact;
+    private bool _shownCollapsed;
+
+    // Folders that don't fit the bar collapse into "…" as when compact, until their room is
+    // as wide as they needed.
+    private bool _overflowing;
+    private double _foldersNeed;
     private bool _synchronizing;
 
     public NoteHeaderView()
@@ -74,7 +80,7 @@ internal sealed class NoteHeaderView : Grid
 
         // The path: the folders take what the name leaves, so they're cut first, then the name.
         _name.SetResourceReference(StyleProperty, "Slate.BodyStrongTextBlockStyle");
-        var path = new DockPanel
+        _path = new DockPanel
         {
             Margin = new Thickness(8, 0, 4, 0),
             HorizontalAlignment = HorizontalAlignment.Left,
@@ -83,9 +89,9 @@ internal sealed class NoteHeaderView : Grid
             ClipToBounds = true,
         };
         DockPanel.SetDock(_name, Dock.Right);
-        path.Children.Add(_name);
-        path.Children.Add(_folders);
-        Children.Add(path);
+        _path.Children.Add(_name);
+        _path.Children.Add(_folders);
+        Children.Add(_path);
 
         // The switch: one Tab stop, arrows move the choice (RadioGroupArrows), as the canvas's.
         string group = "NoteHeaderMode" + Guid.NewGuid().ToString("N");
@@ -145,6 +151,8 @@ internal sealed class NoteHeaderView : Grid
 
     internal bool IsCompact { get; private set; }
 
+    private bool PathCollapsed => IsCompact || _overflowing;
+
     private WorkspaceViewModel? Workspace => (Window.GetWindow(this)?.DataContext as VaultLifecycleViewModel)?.Workspace;
 
     private WorkspaceGroupViewModel? OwnGroup
@@ -173,6 +181,41 @@ internal sealed class NoteHeaderView : Grid
             ShowPath();
             ShowChoices();
         }
+    }
+
+    /// <summary>A segment the bar can't show is a stop a reader can Tab to and nobody can see,
+    /// so folders that don't fit collapse into "…", as a breadcrumb does when space runs out,
+    /// and come back when their room is as wide as they needed (a wider bar, a shorter name).
+    /// A panel's desired size is clipped to what it's offered, so the room they need is their
+    /// segments' own; the path hugs what it shows, so the room they have is its cell, less
+    /// the name. A bar arranged compact isn't overflowing, though it learns it's compact
+    /// only after.</summary>
+    protected override Size ArrangeOverride(Size arrangeSize)
+    {
+        Size arranged = base.ArrangeOverride(arrangeSize);
+        if (arrangeSize.Width < CompactBelow)
+        {
+            return arranged;
+        }
+
+        double room = LayoutInformation.GetLayoutSlot(_path).Width - _path.Margin.Left - _path.Margin.Right - _name.DesiredSize.Width;
+        if (!PathCollapsed && _folders.Children.Count > 0)
+        {
+            double needed = _folders.Children.OfType<UIElement>().Sum(child => child.DesiredSize.Width);
+            if (needed - room > 0.5)
+            {
+                _overflowing = true;
+                _foldersNeed = needed;
+                Dispatcher.BeginInvoke(ShowPath);
+            }
+        }
+        else if (_overflowing && !IsCompact && room >= _foldersNeed)
+        {
+            _overflowing = false;
+            Dispatcher.BeginInvoke(ShowPath);
+        }
+
+        return arranged;
     }
 
     private void Follow(WorkspaceTabViewModel? tab)
@@ -215,7 +258,13 @@ internal sealed class NoteHeaderView : Grid
     {
         (string Name, string Path)[] folders = FoldersOf(_tab?.Path, out string name);
         _name.Text = name;
-        if (folders.SequenceEqual(_shownFolders) && IsCompact == _shownCompact)
+        if (!folders.SequenceEqual(_shownFolders))
+        {
+            // Another path gets the bar's whole width to try.
+            _overflowing = false;
+        }
+
+        if (folders.SequenceEqual(_shownFolders) && PathCollapsed == _shownCollapsed)
         {
             return;
         }
@@ -229,7 +278,7 @@ internal sealed class NoteHeaderView : Grid
         finally
         {
             _shownFolders = folders;
-            _shownCompact = IsCompact;
+            _shownCollapsed = PathCollapsed;
             Button[] after = [.. _folders.Children.OfType<Button>()];
             if (focused >= 0 && (after.ElementAtOrDefault(focused) ?? after.FirstOrDefault()) is { } target)
             {
@@ -253,7 +302,7 @@ internal sealed class NoteHeaderView : Grid
             return;
         }
 
-        if (IsCompact)
+        if (PathCollapsed)
         {
             var menu = new ContextMenu();
             string?[] rowNames = SiblingNames.Compose(

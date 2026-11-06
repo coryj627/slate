@@ -133,6 +133,63 @@ public sealed class NoteHeaderTests
         Assert.Equal(2, names.Select(name => SpeechKey.Of(name)).Distinct().Count());
     });
 
+    /// <summary>Folders that don't fit collapse into "…", as when compact, so no stop is clipped
+    /// out of sight; once the bar is wide enough they come back.</summary>
+    [Fact]
+    public void FoldersThatDontFitCollapseRatherThanHideStops() => StaThread.RunPumped(() =>
+    {
+        string longFolder = string.Concat(Enumerable.Repeat("long-folder-name-", 12));
+        string path = $"{longFolder}/middle/last/Note.md";
+        using var host = new ShownShell((path, "# Note\n"));
+        host.Workspace.OpenPath(path);
+        host.Settle();
+        host.Settle();
+        NoteHeaderView header = HeaderOf(host, path);
+        Assert.False(header.IsCompact);
+
+        Assert.Empty(VisibleSegments(header));
+        Assert.Single(ShownShell.Descendants(header).OfType<Button>(), button => button.IsVisible && AutomationProperties.GetAutomationId(button) == "NoteHeaderFolders");
+        AssertEveryStopIsOnScreen(header);
+
+        host.Shell.Width = 3200;
+        host.Settle();
+        host.Settle();
+        Assert.Equal(3, VisibleSegments(header).Length);
+        AssertEveryStopIsOnScreen(header);
+    });
+
+    /// <summary>A path that fits gets its segments back at once: the collapse belongs to the
+    /// folders that didn't fit, not to the bar.</summary>
+    [Fact]
+    public void AShorterPathGetsItsSegmentsBack() => StaThread.RunPumped(() =>
+    {
+        string path = $"{string.Concat(Enumerable.Repeat("long-folder-name-", 12))}/last/Note.md";
+        using var host = new ShownShell((path, "# Note\n"));
+        host.Workspace.OpenPath(path);
+        host.Settle();
+        host.Settle();
+        NoteHeaderView header = HeaderOf(host, path);
+        Assert.Empty(VisibleSegments(header));
+
+        ((WorkspaceTabViewModel)header.DataContext).RetargetPath("learning/maths/Note.md");
+        host.Settle();
+        host.Settle();
+        Assert.Equal(["learning", "maths"], VisibleSegments(header).Select(AutomationProperties.GetName));
+        AssertEveryStopIsOnScreen(header);
+    });
+
+    private static Button[] VisibleSegments(NoteHeaderView header) =>
+        [.. ShownShell.Descendants(header).OfType<Button>().Where(button => button.IsVisible && AutomationProperties.GetAutomationId(button) == "NoteHeaderFolder")];
+
+    private static void AssertEveryStopIsOnScreen(NoteHeaderView header)
+    {
+        foreach (ButtonBase stop in ShownShell.Descendants(header).OfType<ButtonBase>().Where(button => button.IsVisible))
+        {
+            Rect box = stop.TransformToAncestor(header).TransformBounds(new Rect(stop.RenderSize));
+            Assert.True(box.Right <= header.ActualWidth + 0.5 && box.Left >= -0.5, $"{AutomationProperties.GetName(stop)} is at {box} in a {header.ActualWidth:F0} bar.");
+        }
+    }
+
     /// <summary>A rename the watcher brings keeps what didn't change: the note's own rename
     /// leaves the folders, and the keys, where they were; a folder's rename rebuilds them and
     /// keeps the keys on the segment in the same place.</summary>
