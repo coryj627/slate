@@ -253,6 +253,29 @@ public sealed partial class TextScaleTests
         Assert.True(cut.Count == 0, $"{cut.Count} cut:\n" + string.Join('\n', cut));
     });
 
+    /// <summary>DS-14 (#1815): Settings as the app opens it, its rows filled, at the
+    /// window's narrowest and the largest text. A hand-opened sheet has empty combos, so
+    /// this is the one that sees a stacked row's selected text, such as the default theme's
+    /// "Use Windows setting".</summary>
+    [Fact]
+    public void NoSettingsTextIsCutAtTheNarrowestWindowAndTheLargestSize() => OnOwnThread(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        host.Shell.Width = 500;
+        host.Shell.Height = 720;
+        TypeRamp.Apply(RampOf(host.Shell), 2.25);
+        host.Lifecycle.OpenSettingsCommand.Execute(null);
+        host.Settle();
+        host.Settle();
+
+        FrameworkElement sheet = host.Body("SettingsSheet");
+        Assert.Contains(
+            ShownShell.Descendants(sheet).OfType<ComboBox>(),
+            combo => combo.SelectedItem is not null);
+        string[] cut = CutText(sheet);
+        Assert.True(cut.Length == 0, $"{cut.Length} cut:\n" + string.Join('\n', cut));
+    });
+
     /// <summary>A sheet's buttons can take their text from what it shows, so a hosted sheet
     /// has none to measure. "Walk through citations" ran off the start of its sheet, beside
     /// Done. Each button with no text here gets text that long.</summary>

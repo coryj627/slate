@@ -264,9 +264,9 @@ public sealed class NarrowPaneTests : IDisposable
 
     /// <summary>In a narrow window Settings' categories show their glyphs alone, as WinUI's
     /// compact navigation does, each still named and with its name as a tooltip; at the
-    /// window's usual size they show their names. The tooltip is the mouse's: the sheet
-    /// opens with the keys on the list, where a tooltip would cover the page's description,
-    /// and the page's heading already names the category.</summary>
+    /// window's usual size they show their names. The tooltip is on the glyph, the mouse's
+    /// alone: on the item it would be the item's UIA help text too, the name twice, and it
+    /// would cover the page as the sheet opens with the keys on the list.</summary>
     [Fact]
     public void TheSettingsCategoriesShowTheirGlyphsAloneInANarrowWindow() => RunSta(() =>
     {
@@ -284,9 +284,13 @@ public sealed class NarrowPaneTests : IDisposable
         host.Settle();
 
         Assert.True(SettingsLayoutGrid.GetIsCompact(first));
-        Assert.Equal(name, System.Windows.Automation.AutomationProperties.GetName(first));
-        Assert.Equal(name, first.ToolTip);
-        Assert.False(System.Windows.Controls.ToolTipService.GetShowsToolTipOnKeyboardFocus(first));
+        var peer = System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(first);
+        Assert.Equal(name, peer.GetName());
+        Assert.NotEqual(name, peer.GetHelpText());
+        Assert.Null(first.ToolTip);
+        FrameworkElement glyph = Assert.Single(ShownShell.Descendants(first).OfType<FrameworkElement>(), element => element.ToolTip is not null);
+        Assert.Equal(name, glyph.ToolTip);
+        Assert.False(glyph.Focusable);
         Assert.DoesNotContain(ShownText(first), text => text == name);
         Assert.True(host.Shell.SettingsCategoriesList.ActualWidth <= SettingsLayoutGrid.CompactListWidth);
     });

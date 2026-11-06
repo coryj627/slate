@@ -4953,14 +4953,6 @@
                         <ListBox.ItemContainerStyle>
                             <Style TargetType="ListBoxItem" BasedOn="{StaticResource Slate.PanelRowBase}">
                                 <Setter Property="AutomationProperties.Name" Value="{Binding Label}" />
-                                <Style.Triggers>
-                                    <!-- The sheet opens with the keys here, and the page's heading names
-                                         the category, so the tooltip is the mouse's alone. -->
-                                    <Trigger Property="local:SettingsLayoutGrid.IsCompact" Value="True">
-                                        <Setter Property="ToolTip" Value="{Binding Label}" />
-                                        <Setter Property="ToolTipService.ShowsToolTipOnKeyboardFocus" Value="False" />
-                                    </Trigger>
-                                </Style.Triggers>
                             </Style>
                         </ListBox.ItemContainerStyle>
                         <ListBox.ItemTemplate>
@@ -4978,8 +4970,13 @@
                                             <Style TargetType="local:AutomationPresentationTextBlock">
                                                 <Setter Property="Margin" Value="0,0,12,0" />
                                                 <Style.Triggers>
+                                                    <!-- The name as the mouse's tooltip, on the glyph: on the
+                                                         item it would be the item's help text too, the name
+                                                         twice, and it would cover the page as the sheet opens
+                                                         with the keys here. -->
                                                     <Trigger Property="local:SettingsLayoutGrid.IsCompact" Value="True">
                                                         <Setter Property="Margin" Value="0" />
+                                                        <Setter Property="ToolTip" Value="{Binding Label}" />
                                                     </Trigger>
                                                 </Style.Triggers>
                                             </Style>
@@ -5023,12 +5020,19 @@
                                        Style="{DynamicResource Slate.BodyTextBlockStyle}" />
                             <local:SettingRow Label="Theme"
                                               Description="Light, Dark, or what Windows uses.">
+                                <!-- DS-14: the label wraps, so a row stacked in a narrow window keeps
+                                     the choice whole at the largest text. -->
                                 <ComboBox x:Name="SettingsThemeComboBox"
                                           MinWidth="180"
                                           ItemsSource="{Binding ThemeOptions}"
                                           SelectedItem="{Binding SelectedTheme}"
-                                          DisplayMemberPath="Label"
+                                          TextSearch.TextPath="Label"
                                           AutomationProperties.AutomationId="SettingsTheme">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding Label}" TextWrapping="Wrap" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
                                     <ComboBox.ItemContainerStyle>
                                         <Style TargetType="ComboBoxItem" BasedOn="{StaticResource Slate.ComboRowBase}">
                                             <Setter Property="AutomationProperties.Name" Value="{Binding Label}" />
@@ -5039,12 +5043,19 @@
                             <local:SettingRow Margin="0,4,0,0"
                                               Label="Accent color"
                                               Description="Automatic uses Slate gold unless you’ve chosen an accent color in Windows.">
+                                <!-- DS-14: the label wraps, so a row stacked in a narrow window keeps
+                                     the choice whole at the largest text. -->
                                 <ComboBox x:Name="SettingsAccentComboBox"
                                           MinWidth="180"
                                           ItemsSource="{Binding AccentOptions}"
                                           SelectedItem="{Binding SelectedAccent}"
-                                          DisplayMemberPath="Label"
+                                          TextSearch.TextPath="Label"
                                           AutomationProperties.AutomationId="SettingsAccent">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding Label}" TextWrapping="Wrap" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
                                     <ComboBox.ItemContainerStyle>
                                         <Style TargetType="ComboBoxItem" BasedOn="{StaticResource Slate.ComboRowBase}">
                                             <Setter Property="AutomationProperties.Name" Value="{Binding Label}" />
