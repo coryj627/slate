@@ -483,8 +483,12 @@ public sealed class ShellSealAdmissionCensus
     }
 
     /// <summary>WB-15 (#1313): a raw HWND hook sees every window message
-    /// ahead of WPF's input routes. The shell has one — the modal-loop
-    /// monitor's, which reads WM_ENABLE and nothing else.</summary>
+    /// ahead of WPF's input routes. The shell has two: the modal-loop
+    /// monitor's, which reads WM_ENABLE and nothing else, and since DS-12
+    /// (#1813) the title bar's, which reads non-client mouse messages and
+    /// nothing else, for Snap Layouts over maximize. A native caption's
+    /// clicks never reached the seal either. The name is older than the
+    /// second hook; WB-15's verification recipe lists it.</summary>
     [Fact]
     public void TheOnlyHwndHookIsTheModalLoopMonitorsAndItReadsWmEnableOnly()
     {
@@ -1158,6 +1162,10 @@ public sealed class ShellSealAdmissionCensus
     /// to learn that a native modal loop disabled the shell.</summary>
     private const string MonitorFile = "ShellModalLoopMonitor.cs";
 
+    /// <summary>DS-12: the title bar, whose HWND hook answers Snap Layouts' hit test over
+    /// maximize and draws that button's hover and press.</summary>
+    private const string TitleBarFile = "MainWindow.TitleBar.cs";
+
     private const string MonitorHookBody = "{if(message==WmEnable){Recompute();}returnIntPtr.Zero;}";
 
     /// <summary>Every <c>AddHook</c> in the shell — exactly the monitor's
@@ -1178,9 +1186,11 @@ public sealed class ShellSealAdmissionCensus
                 }))
             {
                 hooks++;
-                if (unit.Name != MonitorFile
-                    || hook.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault()?.Identifier.ValueText != "Attach"
-                    || CSharpSource.Normalize(hook.ArgumentList) != "(Hook)")
+                string? method = hook.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault()?.Identifier.ValueText;
+                string arguments = CSharpSource.Normalize(hook.ArgumentList);
+                bool monitors = unit.Name == MonitorFile && method == "Attach" && arguments == "(Hook)";
+                bool titleBars = unit.Name == TitleBarFile && method == "AttachTitleBarHook" && arguments == "(TitleBarHook)";
+                if (!monitors && !titleBars)
                 {
                     offenders.Add($"{unit.Name}:{Line(hook)} adds an HWND hook — it sees every message ahead of the window's routes");
                 }
@@ -1197,11 +1207,44 @@ public sealed class ShellSealAdmissionCensus
                     offenders.Add($"{unit.Name}: the modal-loop monitor's Hook is not exactly its WM_ENABLE read");
                 }
             }
+
+            if (unit.Name == TitleBarFile)
+            {
+                MethodDeclarationSyntax[] declared = unit.Root.DescendantNodes()
+                    .OfType<MethodDeclarationSyntax>()
+                    .Where(method => method.Identifier.ValueText == "TitleBarHook")
+                    .ToArray();
+                if (declared is not [{ Body: { } body }])
+                {
+                    offenders.Add($"{unit.Name}: the title bar's hook is not one TitleBarHook");
+                }
+                else
+                {
+                    foreach (SwitchLabelSyntax label in body.DescendantNodes().OfType<SwitchLabelSyntax>())
+                    {
+                        string[] messages = label.DescendantNodes()
+                            .OfType<MemberAccessExpressionSyntax>()
+                            .Where(access => access.Expression is IdentifierNameSyntax { Identifier.ValueText: "TitleBarChrome" })
+                            .Select(access => access.Name.Identifier.ValueText)
+                            .Where(name => name.StartsWith("Wm", StringComparison.Ordinal))
+                            .ToArray();
+                        if (messages is not [string message] || !message.StartsWith("WmNc", StringComparison.Ordinal))
+                        {
+                            offenders.Add($"{unit.Name}:{Line(label)} the title bar's hook reads more than a non-client mouse message");
+                        }
+                    }
+
+                    if (body.DescendantNodes().OfType<IfStatementSyntax>().Any(statement => statement.Condition.ToString().Contains("message", StringComparison.Ordinal)))
+                    {
+                        offenders.Add($"{unit.Name}: the title bar's hook reads a message outside its switch");
+                    }
+                }
+            }
         }
 
-        if (hooks != 1)
+        if (hooks != 2)
         {
-            offenders.Add($"the shell adds {hooks} HWND hook(s); it adds exactly the modal-loop monitor's one");
+            offenders.Add($"the shell adds {hooks} HWND hook(s); it adds exactly the modal-loop monitor's and the title bar's");
         }
 
         return offenders;

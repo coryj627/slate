@@ -96,6 +96,7 @@ pub mod text_buffer;
 pub mod trash_confirmation;
 pub mod vault;
 mod vault_config;
+mod window_title;
 
 pub use search_db::{
     QueryHit, QueryResultSet, SNIPPET_HIT_END, SNIPPET_HIT_START, SearchScope, full_text_search,
@@ -197,6 +198,7 @@ pub use vault::{
     WatchEnd, WatchHandle, content_hash, route_trash_to_scratch_bin_for_tests,
     scratch_trash_bin_for_tests,
 };
+pub use window_title::window_title;
 
 use std::path::Path;
 use thiserror::Error;

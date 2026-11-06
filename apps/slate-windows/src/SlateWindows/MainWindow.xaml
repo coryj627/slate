@@ -8,7 +8,7 @@
         xmlns:grids="clr-namespace:SlateWindows.Grids"
         xmlns:templates="clr-namespace:SlateWindows.Templates"
         xmlns:graph="clr-namespace:SlateWindows.Graph"
-        Title="Slate"
+        Title="{Binding WindowTitle, FallbackValue=Slate}"
         Height="720" Width="1120"
         MinHeight="480" MinWidth="780"
         UseLayoutRounding="True"
@@ -26,6 +26,16 @@
         SourceInitialized="Window_SourceInitialized"
         Closing="Window_Closing"
         Closed="Window_Closed">
+    <!-- DS-12 (#1813): one 48 row for the title bar and the menus. WindowChrome keeps resize,
+         Snap, Win+arrow and Alt+Space native; the caption height follows the row, which grows
+         with text size (TitleBar_SizeChanged). Any glass frame, WindowChrome's default
+         included, takes ClearType from the whole window, so there is none. -->
+    <WindowChrome.WindowChrome>
+        <WindowChrome CaptionHeight="48"
+                      ResizeBorderThickness="{x:Static SystemParameters.WindowResizeBorderThickness}"
+                      UseAeroCaptionButtons="False"
+                      GlassFrameThickness="0" />
+    </WindowChrome.WindowChrome>
     <Window.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
@@ -111,8 +121,24 @@
              Graph and Right File (NVDA pass F4). None refuses entry from
              outside; Left/Right between the headers, wrap included, is the
              items panel's (below). MenuBarCensus pins all of it. -->
-        <Grid DockPanel.Dock="Top">
+        <Grid x:Name="TitleBar"
+              DockPanel.Dock="Top"
+              MinHeight="48"
+              Background="{DynamicResource Slate.WindowBackgroundBrush}"
+              SizeChanged="TitleBar_SizeChanged">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <!-- The menus take what the quick commands and captions leave, so at a narrow
+                 window and a large text size their headers wrap rather than push Close off
+                 the window. The title takes what the menus leave. -->
+            <DockPanel>
         <Menu x:Name="MainMenu"
+              DockPanel.Dock="Left"
+              VerticalAlignment="Center"
+              WindowChrome.IsHitTestVisibleInChrome="True"
               Focusable="False"
               KeyboardNavigation.TabNavigation="None"
               KeyboardNavigation.DirectionalNavigation="None"
@@ -760,7 +786,54 @@
                           AutomationProperties.AutomationId="GraphVerbosityMenu" />
             </MenuItem>
         </Menu>
+            <!-- DS-12: the window's own title, which is what a reader hears on the window, so this
+                 copy is presentation only. It and the empty row around it are the drag region. -->
+            <local:AutomationPresentationTextBlock Margin="8,0,12,0"
+                                                   VerticalAlignment="Center"
+                                                   Style="{DynamicResource Slate.CaptionTextBlockStyle}"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   Text="{Binding Title, RelativeSource={RelativeSource AncestorType=Window}}" />
+            </DockPanel>
+            <!-- The quick commands, out of the Tab order as the menus are: Ctrl+Shift+P and Ctrl+,
+                 are their keys. They disable under every modal surface, as the menu does. -->
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                <Button Style="{DynamicResource Slate.TitleBarButtonStyle}" Focusable="False"
+                        Content="&#xE721;"
+                        Click="TitleBarPalette_Click"
+                        AutomationProperties.Name="Command palette (Ctrl+Shift+P)"
+                        AutomationProperties.AutomationId="TitleBarPalette" />
+                <Button Style="{DynamicResource Slate.TitleBarButtonStyle}" Focusable="False"
+                        Content="&#xE713;"
+                        Command="{Binding OpenSettingsCommand}"
+                        AutomationProperties.Name="Settings (Ctrl+,)"
+                        AutomationProperties.AutomationId="TitleBarSettings" />
+            </StackPanel>
+            <!-- The captions never disable: a sheet doesn't stop a window from moving or closing. -->
+            <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="8,0,0,0" VerticalAlignment="Top">
+                <Button Style="{DynamicResource Slate.CaptionButtonStyle}" Focusable="False"
+                        Content="&#xE921;"
+                        Command="{x:Static SystemCommands.MinimizeWindowCommand}"
+                        AutomationProperties.Name="Minimize"
+                        AutomationProperties.AutomationId="CaptionMinimize" />
+                <Button x:Name="CaptionMaximize"
+                        Style="{DynamicResource Slate.CaptionButtonStyle}" Focusable="False"
+                        Content="&#xE922;"
+                        Command="{x:Static SystemCommands.MaximizeWindowCommand}"
+                        AutomationProperties.Name="Maximize"
+                        AutomationProperties.AutomationId="CaptionMaximize" />
+                <Button Style="{DynamicResource Slate.CaptionCloseButtonStyle}" Focusable="False"
+                        Content="&#xE8BB;"
+                        Command="{x:Static SystemCommands.CloseWindowCommand}"
+                        AutomationProperties.Name="Close"
+                        AutomationProperties.AutomationId="CaptionClose" />
+            </StackPanel>
+            <Border Grid.ColumnSpan="3"
+                    Height="1"
+                    VerticalAlignment="Bottom"
+                    Background="{DynamicResource Slate.SubtleBorderBrush}"
+                    IsHitTestVisible="False" />
             <Border x:Name="ModalScrimOverMenu"
+                    Grid.ColumnSpan="3"
                     Background="{DynamicResource Slate.ScrimBrush}"
                     IsHitTestVisible="False"
                     Visibility="{Binding IsModalSurfaceOpen, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BooleanToVisibilityConverter}}" />

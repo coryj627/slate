@@ -6,6 +6,7 @@
     "xaml-binding FindInNoteBar.xaml ReplaceBox Visibility": "FindInNoteBarTests.AModeSwitchFromAReplaceControlKeepsTheKeysInTheBar",
     "xaml-trigger FindInNoteBar.xaml CountReadout Visibility": "FindInNoteBarTests.AnEmptiedQueryHidesTheCountAtOnce",
     "xaml-trigger FindInNoteBar.xaml UserControl(FindBarBooleanToVisibility) Visibility": "FindInNoteBarTests.EscapeClosesClearsHighlightsAndReturnsFocusToTheEditor",
+    "xaml-trigger Slate.Text.xaml Style:Slate.TitleBarButtonStyle IsEnabled": "exempt: the title bar's quick commands are never focusable (Focusable=\"False\" on each, DS-12), so turning them off under a modal surface can't take the keys; TitleBarTests.ThePaletteAndSettingsButtonsDisableUnderEveryModalSurface",
     "collection SlateWindows.Bases.BaseQueryBuilderViewModel.RemoveCondition ConditionRows": "BuilderConditionLandingTests.RemovingAConditionFromItsButtonLandsOnARemainingCondition",
     "collection SlateWindows.Bases.DashboardSurfaceView.Render _sections.Children": "guard: DashboardSurfaceView",
     "collection SlateWindows.Bases.DashboardViewModel.LoadBody Sections": "exempt: the dashboard's sections are rendered in code by DashboardSurfaceView, whose own landing lands a rebuild under the reader (BaseSurfaceViewTests.ADashboardRebuiltUnderTheReaderKeepsTheirRow); the census attributes a collection by member name alone, and pointed this one at the dashboard editor's list, which binds another view model's Sections (contract 40 AR-67)",

@@ -51,6 +51,41 @@ internal sealed partial class WorkspaceViewModel
     }
 
     public IReadOnlyList<WorkspaceGroupViewModel> Groups => EnumerateGroups(Root).ToArray();
+
+    /// <summary>DS-12: the active tab's title, which the window's title names, or null with no
+    /// tab open. It changes on an activation or a close, which <see cref="SyncPanels"/> sees,
+    /// and on a rename of the tab's item, which only the tab sees.</summary>
+    public string? ActiveTitle => ActiveGroup.ActiveTab?.Title;
+
+    private WorkspaceTabViewModel? _titledTab;
+
+    private void FollowActiveTitle()
+    {
+        WorkspaceTabViewModel? tab = ActiveGroup.ActiveTab;
+        if (!ReferenceEquals(_titledTab, tab))
+        {
+            if (_titledTab is not null)
+            {
+                _titledTab.PropertyChanged -= ActiveTab_TitleChanged;
+            }
+
+            _titledTab = tab;
+            if (tab is not null)
+            {
+                tab.PropertyChanged += ActiveTab_TitleChanged;
+            }
+        }
+
+        OnPropertyChanged(nameof(ActiveTitle));
+    }
+
+    private void ActiveTab_TitleChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs eventArgs)
+    {
+        if (eventArgs.PropertyName == nameof(WorkspaceTabViewModel.Title))
+        {
+            OnPropertyChanged(nameof(ActiveTitle));
+        }
+    }
     public bool HasDirtyTabs => Groups.SelectMany(group => group.Tabs).Any(tab => tab.IsDirty);
 
     public void SelectGroupFromKeyboardFocus(WorkspaceGroupViewModel group)

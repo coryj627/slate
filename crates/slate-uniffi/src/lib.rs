@@ -336,6 +336,12 @@ pub fn property_key_label(identity: String) -> String {
     core::property_key_label(&identity)
 }
 
+/// DS-12: the main window's title, `Note — Vault — Slate`, `Vault — Slate` or `Slate`.
+#[uniffi::export]
+pub fn window_title(note: Option<String>, vault: Option<String>) -> String {
+    core::window_title(note.as_deref(), vault.as_deref())
+}
+
 /// YAML source-key type (separate from the property's value kind).
 #[derive(Debug, Clone, Copy, uniffi::Enum)]
 pub enum PropertyKeyType {

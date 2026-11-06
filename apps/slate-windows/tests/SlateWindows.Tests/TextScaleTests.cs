@@ -486,7 +486,9 @@ public sealed partial class TextScaleTests
     }
 
     /// <summary>A pane can be as narrow as a split leaves it, so buttons side by side have
-    /// to be able to wrap. A sheet's width is fixed, and the sheet facts read its text.</summary>
+    /// to be able to wrap. A sheet's width is fixed, and the sheet facts read its text. A row of
+    /// glyph buttons, as in the title bar, doesn't grow with text size, so it has nothing to
+    /// wrap.</summary>
     [Theory]
     [InlineData("MainWindow.xaml")]
     [InlineData("WorkspaceTemplates.xaml")]
@@ -497,6 +499,7 @@ public sealed partial class TextScaleTests
             .Where(element => element.Name.LocalName == "StackPanel" && (string?)element.Attribute("Orientation") == "Horizontal")
             .Where(row => row.Elements().Count(child => child.Name.LocalName == "Button") >= 2)
             .Where(row => !row.Ancestors().Any(ancestor => (string?)ancestor.Attribute("AutomationProperties.IsDialog") == "True"))
+            .Where(row => !row.Elements().Where(child => child.Name.LocalName == "Button").All(IsGlyphButton))
             .Select(row => $"line {((System.Xml.IXmlLineInfo)row).LineNumber}")
             .ToArray();
 
@@ -544,6 +547,11 @@ public sealed partial class TextScaleTests
     });
 
     /// <summary>A bound glyph is one character of the symbol font, which keeps its size.</summary>
+    /// <summary>A button whose content is one private-use character, a Segoe Fluent Icons
+    /// glyph, which keeps its size at any text size.</summary>
+    private static bool IsGlyphButton(XElement button) =>
+        (string?)button.Attribute("Content") is { Length: 1 } content && content[0] is >= '\uE000' and <= '\uF8FF';
+
     private static bool IsSymbolGlyph(XElement text) =>
         ((string?)text.Attribute("FontFamily"))?.Contains("SymbolThemeFontFamily", StringComparison.Ordinal) == true;
 

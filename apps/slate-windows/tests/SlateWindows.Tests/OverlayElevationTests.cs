@@ -216,7 +216,9 @@ public sealed class OverlayElevationTests
         Assert.Equal(Visibility.Visible, overStatus.Visibility);
         Assert.False(overMenu.IsHitTestVisible, "the scrim over the menu takes a pointer.");
         Assert.False(overStatus.IsHitTestVisible, "the scrim over the status bar takes a pointer.");
-        Assert.Equal(host.Shell.MainMenu.ActualHeight, overMenu.ActualHeight, 1);
+        // DS-12: the menus' row is the title bar, and its scrim spans the whole row.
+        Assert.Equal(host.Shell.TitleBar.ActualHeight, overMenu.ActualHeight, 1);
+        Assert.Equal(host.Shell.TitleBar.ActualWidth, overMenu.ActualWidth, 1);
         Assert.Equal(host.Shell.ShellStatusBarBorder.ActualHeight, overStatus.ActualHeight, 1);
         Assert.Same(host.Shell.TryFindResource("Slate.ScrimBrush"), ((Border)overMenu).Background);
         Assert.Same(host.Shell.TryFindResource("Slate.ScrimBrush"), ((Border)overStatus).Background);

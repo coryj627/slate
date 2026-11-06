@@ -400,7 +400,13 @@ internal sealed partial class VaultLifecycleViewModel
     public string VaultDisplayName
     {
         get => _vaultDisplayName;
-        private set => SetField(ref _vaultDisplayName, value);
+        private set
+        {
+            if (SetField(ref _vaultDisplayName, value))
+            {
+                OnPropertyChanged(nameof(WindowTitle));
+            }
+        }
     }
 
     public string VaultPath
@@ -459,7 +465,14 @@ internal sealed partial class VaultLifecycleViewModel
     public WorkspaceViewModel? Workspace
     {
         get => _workspace;
-        private set => SetField(ref _workspace, value);
+        private set
+        {
+            WorkspaceViewModel? previous = _workspace;
+            if (SetField(ref _workspace, value))
+            {
+                ObserveWorkspaceTitle(previous, value);
+            }
+        }
     }
 
     public QuickSwitcherViewModel? QuickSwitcher

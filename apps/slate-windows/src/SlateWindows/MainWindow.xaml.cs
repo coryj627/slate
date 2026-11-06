@@ -53,6 +53,7 @@ public partial class MainWindow : Window
         VaultOpenSeams? openSeams = null)
     {
         InitializeComponent();
+        InitializeTitleBar();
         // R-5 (#1247, as the owner amended it): a landing in the Files tree —
         // a restore's, Tab's, a click's — lands as the region does: its
         // selected row, else its first row unselected, whose focus opens
