@@ -4138,10 +4138,10 @@
                     </WrapPanel>
                         <StackPanel>
                             <!-- DS-14: a WrapPanel, so a narrow sheet keeps "Add group" whole. -->
-                            <WrapPanel Margin="0,8,0,0">
-                                <TextBlock Text="Match:" VerticalAlignment="Center" />
+                            <WrapPanel Margin="0,4,0,0">
+                                <TextBlock Text="Match:" Margin="0,4,6,0" VerticalAlignment="Center" />
                                 <ComboBox x:Name="BuilderCombinatorBox"
-                                          Margin="6,0,0,0"
+                                          Margin="0,4,12,0"
                                           MinWidth="90"
                                           SelectedValuePath="Tag"
                                           SelectedValue="{Binding Combinator}"
@@ -4151,11 +4151,11 @@
                                     <ComboBoxItem Content="Any" Tag="or" />
                                 </ComboBox>
                                 <Button Content="Add condition"
-                                        Margin="12,0,0,0"
+                                        Margin="0,4,6,0"
                                         AutomationProperties.AutomationId="BuilderAddCondition"
                                         Click="BuilderAddCondition_Click" />
                                 <Button Content="Add group"
-                                        Margin="6,0,0,0"
+                                        Margin="0,4,0,0"
                                         AutomationProperties.AutomationId="BuilderAddGroup"
                                         Click="BuilderAddGroup_Click" />
                             </WrapPanel>
