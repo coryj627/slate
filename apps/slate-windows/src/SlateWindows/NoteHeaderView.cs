@@ -34,11 +34,11 @@ internal sealed class NoteHeaderView : Grid
 
     private const double GlyphSize = 16;
     private const double ChevronSize = 12;
-    private const string SourceGlyph = "";
-    private const string ReadingGlyph = "";
-    private const string ChevronGlyph = "";
-    private const string MoreGlyph = "";
-    private const string FolderGlyph = "";
+    private const string SourceGlyph = "\uE943";
+    private const string ReadingGlyph = "\uE736";
+    private const string ChevronGlyph = "\uE76C";
+    private const string MoreGlyph = "\uE712";
+    private const string FolderGlyph = "\uE8B7";
 
     private readonly StackPanel _folders = new() { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock _name = new()
@@ -205,8 +205,25 @@ internal sealed class NoteHeaderView : Grid
     }
 
     /// <summary>The folders as segments, or behind "…" when compact, and the note's name,
-    /// which is text, not a stop: the tab's name already says it.</summary>
+    /// which is text, not a stop: the tab's name already says it. A rebuild under the keys
+    /// leaves them on the rebuilt path's first button, not on nothing.</summary>
     private void ShowPath()
+    {
+        bool keysOnThePath = _folders.IsKeyboardFocusWithin;
+        try
+        {
+            BuildPath();
+        }
+        finally
+        {
+            if (keysOnThePath && _folders.Children.OfType<Button>().FirstOrDefault() is { } first)
+            {
+                first.Focus();
+            }
+        }
+    }
+
+    private void BuildPath()
     {
         _folders.Children.Clear();
         string notePath = _tab?.Path ?? string.Empty;
@@ -223,8 +240,9 @@ internal sealed class NoteHeaderView : Grid
             var menu = new ContextMenu();
             foreach ((string name, string folder) in folders)
             {
+                // Named by its path: a note's folders can repeat a name (notes/notes/x.md).
                 var row = new MenuItem { Header = name, Icon = Glyph(FolderGlyph, GlyphSize) };
-                AutomationProperties.SetName(row, name);
+                AutomationProperties.SetName(row, folder);
                 row.Click += (_, _) => Workspace?.RevealFolderFromHeader(folder);
                 menu.Items.Add(row);
             }

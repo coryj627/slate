@@ -314,7 +314,31 @@ public sealed class NoteHeaderTests
         Assert.DoesNotContain(ShownShell.Descendants(header).OfType<Button>(), button => button.IsVisible && AutomationProperties.GetName(button) == "maths");
         Button folders = ShownShell.Descendants(header).OfType<Button>().Single(button => button.IsVisible && AutomationProperties.GetAutomationId(button) == "NoteHeaderFolders");
         Assert.Equal("Folders", AutomationProperties.GetName(folders));
-        Assert.Equal(["learning", "maths"], folders.ContextMenu!.Items.OfType<MenuItem>().Select(item => AutomationProperties.GetName(item)));
+        Assert.Equal(["learning", "learning/maths"], folders.ContextMenu!.Items.OfType<MenuItem>().Select(item => AutomationProperties.GetName(item)));
+    });
+
+    /// <summary>The path rebuilds when the bar goes compact or comes back, and when the note
+    /// moves. With the keys on a segment, they stay on the rebuilt path, not on nothing
+    /// (<c>NoteHeaderView.ShowPath</c>, the focus manifest's witness).</summary>
+    [Fact]
+    public void ARebuiltPathKeepsTheKeysOnIt() => StaThread.RunPumped(() =>
+    {
+        using var host = new ShownShell((Nested, "# Lecture\n"));
+        host.Workspace.OpenPath(Nested);
+        host.Settle();
+        NoteHeaderView header = HeaderOf(host, Nested);
+        Assert.True(Segment(header, "maths").Focus());
+
+        host.Shell.Width = 500;
+        host.Settle();
+        Assert.True(header.IsCompact);
+        Assert.Equal("NoteHeaderFolders", AutomationProperties.GetAutomationId((DependencyObject)Keyboard.FocusedElement));
+
+        host.Shell.Width = 1200;
+        host.Settle();
+        Assert.False(header.IsCompact);
+        Assert.Equal("NoteHeaderFolder", AutomationProperties.GetAutomationId((DependencyObject)Keyboard.FocusedElement));
+        Assert.True(IsInside(Keyboard.FocusedElement as DependencyObject, header));
     });
 
     [Fact]

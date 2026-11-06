@@ -2858,5 +2858,60 @@
     "Source": "WorkspaceTemplates.xaml",
     "Expression": "WorkspaceTabs",
     "Surface": "Workspace tabs"
+  },
+  {
+    "Source": "NoteHeaderView.cs",
+    "Expression": "\"NoteHeaderAddProperty\"",
+    "Surface": "Note header (DS-15)"
+  },
+  {
+    "Source": "NoteHeaderView.cs",
+    "Expression": "\"NoteHeaderBulkRename\"",
+    "Surface": "Note header (DS-15)"
+  },
+  {
+    "Source": "NoteHeaderView.cs",
+    "Expression": "\"NoteHeaderFolder\"",
+    "Surface": "Note header (DS-15)"
+  },
+  {
+    "Source": "NoteHeaderView.cs",
+    "Expression": "\"NoteHeaderFolders\"",
+    "Surface": "Note header (DS-15)"
+  },
+  {
+    "Source": "NoteHeaderView.cs",
+    "Expression": "\"NoteHeaderMore\"",
+    "Surface": "Note header (DS-15)"
+  },
+  {
+    "Source": "NoteHeaderView.cs",
+    "Expression": "\"NoteHeaderReading\"",
+    "Surface": "Note header (DS-15)"
+  },
+  {
+    "Source": "NoteHeaderView.cs",
+    "Expression": "\"NoteHeaderSource\"",
+    "Surface": "Note header (DS-15)"
+  },
+  {
+    "Source": "NoteHeaderView.cs",
+    "Expression": "\"NoteHeaderSplitRight\"",
+    "Surface": "Note header (DS-15)"
+  },
+  {
+    "Source": "NoteHeaderView.cs",
+    "Expression": "automationId",
+    "Surface": "Note header (DS-15)"
+  },
+  {
+    "Source": "Themes/Slate.Text.xaml",
+    "Expression": "Chrome",
+    "Surface": "Note header (DS-15)"
+  },
+  {
+    "Source": "Themes/Slate.Text.xaml",
+    "Expression": "Shadow",
+    "Surface": "Note header (DS-15)"
   }
 ]
