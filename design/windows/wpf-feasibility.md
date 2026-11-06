@@ -150,7 +150,7 @@ A popup is larger than its surface by the shadow's room, and WPF's placement mod
 **Slate patterns** (all buildable):
 - PaneSwitcher: `ListBox` with single selection and a vertical or horizontal panel, plus a `Button` for "More panels". The overflow is the fixed `maxVisible` of six, with nothing computed on `SizeChanged`, so a reader hears the same count at any window size (plan 46, DSD8).
 - PanelToolbar: icon buttons plus a sort `ContextMenu` with checkable items.
-- NoteHeader: switch visual states from `SizeChanged` for the icon-only switch below 520px, since WPF has no `AdaptiveTrigger`.
+- NoteHeader: switch visual states from `SizeChanged` for the icon-only switch below 520px, since WPF has no `AdaptiveTrigger`. **Built in DS-15 (#1816):** the bar reads its own width in `OnRenderSizeChanged`, as `PropertyRowGrid` does, and rebuilds the path and the switch's labels when it crosses 520; there's no visual state. With Files and the right pane at their defaults, the app's 1120 window leaves the editor about 520 wide, so the bar starts compact there. A rebuild under the keys puts them on the rebuilt path's first button. ⋯'s menu is the active pane's, so the bar makes its own pane active on the button's click, as the menu opens and on each row's click (a row's Click comes before its command); the switch and the folders act on their own note and activate nothing. Back and Forward stay out until a note history exists (DSD15).
 - EmptyStateLauncher: a `StackPanel` of buttons.
 - CountListRow: `TreeViewItem` template. Backlink rows expand as tree nodes.
 - SettingsLayout: `ListBox` navigation plus a `ScrollViewer`. WPF has no NavigationView.
