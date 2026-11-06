@@ -619,6 +619,34 @@ public sealed class NoteHeaderTests
         more.ContextMenu.IsOpen = false;
         host.Settle();
 
+        // After the mouse: the most recent input device stays the mouse through an Invoke, and
+        // a pointer's mouse-up on ⋯ itself is forgotten once that input is done.
+        // Only raw input moves the most recent device, so the fact sets it as a pointer would.
+        (typeof(InputManager).GetProperty(nameof(InputManager.MostRecentInputDevice))?.GetSetMethod(nonPublic: true)
+            ?? throw new InvalidOperationException("InputManager.MostRecentInputDevice has no setter"))
+            .Invoke(InputManager.Current, [Mouse.PrimaryDevice]);
+        more.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left) { RoutedEvent = UIElement.PreviewMouseLeftButtonUpEvent });
+        host.Settle();
+        Assert.IsAssignableFrom<MouseDevice>(InputManager.Current.MostRecentInputDevice);
+        Assert.True(more.Focus());
+        Invoke(more);
+        host.Settle();
+        host.Settle();
+        Assert.Same(MenuRow(more, "NoteHeaderSplitRight"), Keyboard.FocusedElement);
+        more.ContextMenu.IsOpen = false;
+        host.Settle();
+
+        // A pointer's click, its mouse-up and Click in one input, opens the menu as WPF does.
+        Assert.True(more.Focus());
+        more.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left) { RoutedEvent = UIElement.PreviewMouseLeftButtonUpEvent });
+        more.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+        host.Settle();
+        host.Settle();
+        Assert.True(more.ContextMenu.IsOpen);
+        Assert.IsNotType<MenuItem>(Keyboard.FocusedElement);
+        more.ContextMenu.IsOpen = false;
+        host.Settle();
+
         // The other pane's ⋯, with the keys in this one: its pane goes active, and the keys
         // land on its first row all the same.
         host.Dispose();

@@ -145,7 +145,7 @@ internal sealed class NoteHeaderView : Grid
         _more.SetResourceReference(StyleProperty, "Slate.SubtleIconButtonStyle");
         AutomationProperties.SetAutomationId(_more, "NoteHeaderMore");
         AutomationProperties.SetName(_more, "More note actions");
-        _more.Click += (_, _) => Open(_more);
+        OpensItsMenu(_more);
         SetColumn(_more, 2);
         Children.Add(_more);
 
@@ -389,7 +389,7 @@ internal sealed class NoteHeaderView : Grid
             AutomationProperties.SetAutomationId(collapsed, "NoteHeaderFolders");
             AutomationProperties.SetName(collapsed, "Folders");
             collapsed.ContextMenu = menu;
-            collapsed.Click += (_, _) => Open(collapsed);
+            OpensItsMenu(collapsed);
             _folders.Children.Add(collapsed);
             _folders.Children.Add(Chevron());
             return;
@@ -515,21 +515,35 @@ internal sealed class NoteHeaderView : Grid
         _bulkRename.Command = workspace.OpenBulkRenameSheetCommand;
     }
 
-    /// <summary>Opens a button's menu under it. Opened without the mouse (the keyboard, or the
-    /// button's Invoke pattern) it lands on its first row, as a Windows menu does: WPF leaves
-    /// the keys on the menu itself, and a reader hears only "menu".</summary>
-    private static void Open(Button owner)
+    /// <summary>Makes a button open its menu under it. Opened without a pointer (the keyboard,
+    /// or the button's Invoke pattern, as a screen reader's object navigation does) the menu
+    /// lands on its first row, as a Windows menu does: WPF leaves the keys on the menu itself,
+    /// and a reader hears only "menu". A pointer's click is told by the button's own mouse-up,
+    /// which comes just before its Click, and forgotten once that input is done: the most
+    /// recent input device stays the mouse through a later Invoke.</summary>
+    private static void OpensItsMenu(Button owner)
     {
-        if (owner.ContextMenu is { } menu)
+        bool byPointer = false;
+        owner.PreviewMouseLeftButtonUp += (_, _) =>
         {
+            byPointer = true;
+            owner.Dispatcher.BeginInvoke(DispatcherPriority.Input, () => byPointer = false);
+        };
+        owner.Click += (_, _) =>
+        {
+            if (owner.ContextMenu is not { } menu)
+            {
+                return;
+            }
+
             menu.PlacementTarget = owner;
             menu.Placement = PlacementMode.Bottom;
             menu.IsOpen = true;
-            if (InputManager.Current.MostRecentInputDevice is not MouseDevice)
+            if (!byPointer)
             {
                 menu.Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () => menu.Items.OfType<MenuItem>().FirstOrDefault(row => row.IsEnabled)?.Focus());
             }
-        }
+        };
     }
 
     private (RadioButton Choice, TextBlock Label) Choice(string automationId, string label, string glyph, string group)
