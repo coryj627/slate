@@ -13,7 +13,7 @@ Accent rules:
 - Gold everywhere by default: selected-row pill + tab underline, text selection, links, primary buttons, AND check boxes, radios, switches, sliders, progress bars.
 - If the user has a custom Windows accent (not the default), Slate follows it — EVERYTHING that's gold switches to their accent.
 - Detection: Both — automatic, with a setting to override.
-- If the custom accent fails contrast: fall back to gold, silently (no note).
+- If the custom accent fails contrast: fall back to gold, silently (no note). Superseded on 2026-11-05 by plan 46's DSD16: the accent is used whatever its contrast.
 - Mockup stand-in for Windows accent: Windows default blue (#005FB8 light, #60CDFF dark) — now only relevant for showing the "Windows accent" option; default is gold.
 - No accent preview tweak in mockups.
 

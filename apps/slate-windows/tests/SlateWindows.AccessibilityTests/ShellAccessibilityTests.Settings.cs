@@ -41,6 +41,110 @@ public sealed partial class ShellAccessibilityTests
         }
     }
 
+    /// <summary>DS-11 (#1812): the manager's half, which no hosted fact can build. Windows accent
+    /// is a choice in the app, so this needs no system setting changed. The sheet's open category
+    /// shows the selected surface and the pill, and gold's are exact, so their pixels say which
+    /// accent drew. It takes both: a Windows accent can blend to gold's surface exactly
+    /// (#EEAC05 at 12% over white is #FDF5E1), and its pill is a different step of Windows'
+    /// palette. This reads Windows' accent as it is (DSD16).</summary>
+    [Fact]
+    public void AccentColor_WindowsAccentDrawsAtOnceAndAcrossARestart()
+    {
+        const int GoldSelectedSurface = 0xFDF5E1;
+        const int GoldPill = 0xA57A00;
+        string root = Path.Combine(Path.GetTempPath(), "slate-accent-" + Guid.NewGuid().ToString("N"));
+        string device = Path.Combine(root, "device");
+        string logs = Path.Combine(root, "logs");
+        string preferences = Path.Combine(device, "preferences.json");
+        Directory.CreateDirectory(device);
+        File.WriteAllText(preferences, "{\"theme\":\"light\",\"accentColor\":\"gold\"}");
+        Process? process = null;
+
+        Window? OpenSheet(UIA3Automation automation)
+        {
+            process = LaunchWith(device, logs);
+            if (!HasInteractiveDesktop(process, "accent-preference")) { return null; }
+            Window window = WaitForMainWindow(process, automation, Path.Combine(logs, "slate-windows.log"), TimeSpan.FromSeconds(30));
+            window.SetForeground();
+            ReassertForegroundForAChord(window);
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.OEM_COMMA);
+            AssertEventuallyFocused(
+                WaitForElement(window, "SettingsCategories", TimeSpan.FromSeconds(10)).FindFirstChild()!,
+                "the sheet didn't land on its open category.");
+            return window;
+        }
+
+        static bool GoldShows(Window window) => HasPixel(window, GoldSelectedSurface) && HasPixel(window, GoldPill);
+
+        static void WaitForGold(Window window, bool expected)
+        {
+            DateTime deadline = DateTime.UtcNow.AddSeconds(10);
+            while (GoldShows(window) != expected && DateTime.UtcNow < deadline)
+            {
+                Thread.Sleep(100);
+            }
+
+            Assert.Equal(expected, GoldShows(window));
+        }
+
+        try
+        {
+            using var automation = new UIA3Automation();
+            if (OpenSheet(automation) is not Window window) { return; }
+            WaitForGold(window, expected: true);
+
+            PressKey(VirtualKeyShort.TAB);
+            PressKey(VirtualKeyShort.TAB);
+            AutomationElement combo = WaitForElement(window, "SettingsAccent", TimeSpan.FromSeconds(5));
+            AssertEventuallyFocused(combo, "Tab didn't reach the accent.");
+            Assert.Equal("Slate gold", ComboValue(combo));
+            PressKey(VirtualKeyShort.END);
+            Retry.WhileFalse(() => ComboValue(combo) == "Windows accent", TimeSpan.FromSeconds(5));
+            Assert.Equal("Windows accent", ComboValue(combo));
+            WaitForGold(window, expected: false);
+            AssertEventuallyFocused(combo, "the accent's change took focus off the combo.");
+            AssertAxeClean(process!, "settings-sheet-accent");
+            Assert.Contains("\"accentColor\": \"windows\"", File.ReadAllText(preferences), StringComparison.Ordinal);
+            process!.Kill(entireProcessTree: true);
+            process.WaitForExit(10_000);
+
+            window = OpenSheet(automation)!;
+            WaitForGold(window, expected: false);
+
+            PressKey(VirtualKeyShort.TAB);
+            PressKey(VirtualKeyShort.TAB);
+            combo = WaitForElement(window, "SettingsAccent", TimeSpan.FromSeconds(5));
+            AssertEventuallyFocused(combo, "Tab didn't reach the accent.");
+            PressKey(VirtualKeyShort.UP);
+            Retry.WhileFalse(() => ComboValue(combo) == "Slate gold", TimeSpan.FromSeconds(5));
+            WaitForGold(window, expected: true);
+        }
+        finally
+        {
+            try { process?.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+            process?.WaitForExit(10_000);
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    private static bool HasPixel(AutomationElement window, int rgb)
+    {
+        using CaptureImage capture = CapturePhysicalPixels(window);
+        Bitmap bitmap = capture.Bitmap;
+        for (var y = 0; y < bitmap.Height; y += 2)
+        {
+            for (var x = 0; x < bitmap.Width; x += 2)
+            {
+                if ((bitmap.GetPixel(x, y).ToArgb() & 0xFFFFFF) == rgb)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     private static void Choose(string root, string device, string logs, string label, VirtualKeyShort key, bool expectLight)
     {
         Process? process = null;
@@ -212,6 +316,13 @@ public sealed partial class ShellAccessibilityTests
             Assert.Equal(ExpandCollapseState.Collapsed, combo.Patterns.ExpandCollapse.Pattern.ExpandCollapseState.Value);
             Assert.NotNull(window.FindFirstDescendant(condition => condition.ByAutomationId("SettingsSheet")));
             AssertEventuallyFocused(combo, "closing the list took the keys from the combo.");
+
+            PressKey(VirtualKeyShort.TAB);
+            AutomationElement accent = WaitForElement(window, "SettingsAccent", TimeSpan.FromSeconds(5));
+            AssertEventuallyFocused(accent, "Tab didn't reach the accent.");
+            Assert.Equal("Accent color", accent.Name);
+            Assert.Equal("Automatic uses Slate gold unless you’ve chosen an accent color in Windows.", accent.HelpText);
+            Assert.Equal("Automatic", ComboValue(accent));
 
             PressKey(VirtualKeyShort.TAB);
             AutomationElement close = WaitForElement(window, "SettingsClose", TimeSpan.FromSeconds(5));

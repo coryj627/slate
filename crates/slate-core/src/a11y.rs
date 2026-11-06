@@ -1145,6 +1145,11 @@ pub enum A11yEvent {
     ThemeChosen {
         label: String,
     },
+    /// DS-11: an accent chosen, for the same reason. It names the choice, which is what
+    /// shows: a Windows accent is drawn as Windows gives it.
+    AccentChosen {
+        label: String,
+    },
     /// DS-10: the Settings sheet opened. NVDA doesn't read an in-window pane's
     /// name, so the sheet says it, as `AddPropertySheetShown` does.
     SettingsSheetShown,
@@ -2441,6 +2446,7 @@ impl A11yEvent {
                 }
             }
             ThemeChosen { label } => format!("Theme: {label}."),
+            AccentChosen { label } => format!("Accent color: {label}."),
             SettingsSheetShown => "Settings".to_owned(),
             RecentSearchFocused { query } => format!("Recent search: {query}"),
             QuickSwitcherCount { count, query } => match query {
@@ -4762,6 +4768,9 @@ pub fn corpus() -> Vec<A11yEvent> {
         },
         ThemeChosen {
             label: "Light".into(),
+        },
+        AccentChosen {
+            label: "Slate gold".into(),
         },
         SettingsSheetShown,
         RecentSearchFocused {
@@ -7418,6 +7427,7 @@ mod tests {
             (Medium, "1 choice matching \"li\""),
             (Medium, "2 choices matching \"t\""),
             (Medium, "Theme: Light."),
+            (Medium, "Accent color: Slate gold."),
             (Medium, "Settings"),
             (Medium, "Recent search: fox"),
             (Medium, "2 recent files"),
@@ -8167,6 +8177,13 @@ mod tests {
             .render(),
             "Theme: Dark."
         );
+        assert_eq!(
+            A11yEvent::AccentChosen {
+                label: "Windows accent".into(),
+            }
+            .render(),
+            "Accent color: Windows accent."
+        );
         assert_eq!(A11yEvent::SettingsSheetShown.render(), "Settings");
     }
 
@@ -8763,8 +8780,8 @@ mod tests {
             // plan 44 WB-29a (#1525) the seven hot-exit events, 230;
             // plan 46 DS-7 the Files sidebar's show and hide, 232;
             // plan 46 DS-10 the palette's choices, the chosen theme and the
-            // Settings sheet, 237.
-            237,
+            // Settings sheet, 237; DS-11's accent, 238.
+            238,
             "A11yEvent's top-level variant count moved; uniffi caps an enum at 256"
         );
     }

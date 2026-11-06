@@ -14,6 +14,7 @@ internal sealed partial class VaultLifecycleViewModel
 {
     private SettingsSheetViewModel? _settingsSheet;
     private ThemePreference? _themePreference;
+    private AccentPreference? _accentPreference;
     private RelayCommand? _openSettingsCommand;
     private RelayCommand? _switchThemeCommand;
 
@@ -31,6 +32,15 @@ internal sealed partial class VaultLifecycleViewModel
             new AppPreferencesStore(),
             preference => ThemeManager.Current?.SetPreference(preference));
         set => _themePreference = value;
+    }
+
+    /// <summary>A fact sets its own, as for the theme.</summary>
+    internal AccentPreference AccentPreference
+    {
+        get => _accentPreference ??= new AccentPreference(
+            new AppPreferencesStore(),
+            accent => ThemeManager.Current?.SetAccent(accent));
+        set => _accentPreference = value;
     }
 
     /// <summary>The window's say on whether the sheet may open, and its clearing of what it
@@ -51,7 +61,7 @@ internal sealed partial class VaultLifecycleViewModel
     {
         if (SettingsOpenAdmission?.Invoke() != false)
         {
-            SettingsSheet = new SettingsSheetViewModel(ThemePreference, _announce, categories);
+            SettingsSheet = new SettingsSheetViewModel(ThemePreference, AccentPreference, _announce, categories);
             _announce(new A11yEvent.SettingsSheetShown());
         }
     }

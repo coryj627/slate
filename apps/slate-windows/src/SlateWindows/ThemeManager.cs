@@ -34,6 +34,8 @@ internal sealed class ThemeManager : IDisposable
     private ResourceDictionary[] _resources = [];
     private string _preference;
     private SlateTheme _theme;
+    private AccentSource _accent;
+    private AccentPalette _palette;
 
     internal static event EventHandler? ResourcesChanged;
 
@@ -51,6 +53,7 @@ internal sealed class ThemeManager : IDisposable
         "Slate.AccentBrush",
         "Slate.AccentTextBrush",
         "Slate.SelectedSurfaceBrush",
+        "Slate.SelectedTextBrush",
         "Slate.AccentIndicatorBrush",
         "Slate.SelectionBackgroundBrush",
         "Slate.SelectionTextBrush",
@@ -76,11 +79,14 @@ internal sealed class ThemeManager : IDisposable
 
     /// <param name="application">The application whose resources this owns.</param>
     /// <param name="preference">DS-10: what the user chose, read before the first paint.</param>
-    public ThemeManager(Application application, string preference)
+    /// <param name="accent">DS-11: the same for the accent.</param>
+    public ThemeManager(Application application, string preference, string accent)
     {
         _application = application;
         _preference = ThemeChoice.Normalize(preference);
         _theme = ResolvePreference();
+        _accent = SlateAccent.SourceOf(accent);
+        _palette = AccentPalette.ReadSystem();
         Current = this;
         _textScale = TextScaleService.Current;
         ApplyResources();
@@ -149,6 +155,19 @@ internal sealed class ThemeManager : IDisposable
         ApplyPreference();
     }
 
+    /// <summary>DS-11: a new accent choice, applied at once.</summary>
+    public void SetAccent(string accent)
+    {
+        _accent = SlateAccent.SourceOf(accent);
+        ApplyResources();
+    }
+
+    /// <summary>DS-11: applies again when Windows' accent changes, which only a window of the
+    /// app's can see. WPF is still walking that window when it says so, so this goes after.
+    /// See <see cref="SystemAccentWatch"/>.</summary>
+    public void WatchSystemAccent(FrameworkElement root) =>
+        SystemAccentWatch.Attach(root, () => _ = _application.Dispatcher.InvokeAsync(ApplyPreference));
+
     public void Dispose()
     {
         if (ReferenceEquals(Current, this))
@@ -197,7 +216,8 @@ internal sealed class ThemeManager : IDisposable
     private void ApplyPreference()
     {
         SlateTheme next = ResolvePreference();
-        if (_theme != next)
+        if (_theme != next
+            || SlateAccent.ChangeNeedsReapply(_accent, _palette, AccentPalette.ReadSystem()))
         {
             _theme = next;
             ApplyResources();
@@ -228,13 +248,20 @@ internal sealed class ThemeManager : IDisposable
     /// order: the type ramp at <paramref name="textScale"/>, Fluent, then Slate's
     /// tokens, then outside High Contrast the system colours those tokens answer
     /// for, then Slate's text styles and menus. Only the app passes a scale, so a hosted test
-    /// doesn't depend on the desktop's Text size.
+    /// doesn't depend on the desktop's Text size, and only the app and a fact that asks pass
+    /// an accent, so a hosted test stays gold. A fact passes its own
+    /// <paramref name="palette"/>.
     /// <see cref="ApplyResources"/> merges exactly
     /// these; a hosted test merges the same layers into its own window to
     /// realize a surface under the app's real resources without touching the
     /// process-wide <see cref="Application.Resources"/>.
     /// </summary>
-    internal static ResourceDictionary[] DictionariesFor(SlateTheme theme, bool highContrast, double textScale = 1)
+    internal static ResourceDictionary[] DictionariesFor(
+        SlateTheme theme,
+        bool highContrast,
+        double textScale = 1,
+        AccentSource accent = AccentSource.SlateGold,
+        AccentPalette? palette = null)
     {
         string fluentName = highContrast
             ? "Fluent.HC.xaml"
@@ -243,6 +270,12 @@ internal sealed class ThemeManager : IDisposable
             ? "Slate.Contrast.xaml"
             : theme == SlateTheme.Dark ? "Slate.Dark.xaml" : "Slate.Light.xaml";
         ResourceDictionary slate = LoadDictionary(SlateRoot + slateName);
+        if (accent != AccentSource.SlateGold)
+        {
+            _ = SlateAccent.TryApplyWindowsAccent(
+                slate, accent, palette ?? AccentPalette.ReadSystem(), theme == SlateTheme.Dark, highContrast);
+        }
+
         // #1769: Fluent's DataGrid animates its Disabled state to these keys, and
         // every Fluent theme gives them fixed colours, so a table behind an open
         // overlay turned white under the theme's pale text.
@@ -313,7 +346,9 @@ internal sealed class ThemeManager : IDisposable
 
     private void ApplyResources()
     {
-        ResourceDictionary[] layers = DictionariesFor(_theme, SystemParameters.HighContrast, TextScaleService.CurrentFactor);
+        _palette = AccentPalette.ReadSystem();
+        ResourceDictionary[] layers = DictionariesFor(
+            _theme, SystemParameters.HighContrast, TextScaleService.CurrentFactor, _accent, _palette);
 
         var dictionaries = _application.Resources.MergedDictionaries;
         foreach (ResourceDictionary previous in _resources)

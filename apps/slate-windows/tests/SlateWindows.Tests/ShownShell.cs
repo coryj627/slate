@@ -79,6 +79,9 @@ internal sealed class ShownShell : IDisposable
         _lifecycle.ThemePreference = new ThemePreference(
             new AppPreferencesStore(Path.Combine(_fixture.Root, "preferences.json")),
             preference => ThemesApplied.Add(preference));
+        _lifecycle.AccentPreference = new AccentPreference(
+            new AppPreferencesStore(Path.Combine(_fixture.Root, "preferences.json")),
+            accent => AccentsApplied.Add(accent));
         _slot.SetValue(_lifecycle, Workspace);
         _open.SetValue(_lifecycle, true);
         Shell.Show();
@@ -108,6 +111,9 @@ internal sealed class ShownShell : IDisposable
 
     /// <summary>Each theme preference applied: there's no <see cref="ThemeManager"/> here.</summary>
     public List<string> ThemesApplied { get; } = new();
+
+    /// <summary>The same for the accent.</summary>
+    public List<string> AccentsApplied { get; } = new();
 
     public void Settle()
     {

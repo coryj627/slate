@@ -181,7 +181,7 @@
         <Style.Triggers>
             <Trigger Property="IsChecked" Value="True">
                 <Setter Property="Background" Value="{DynamicResource Slate.SelectedSurfaceBrush}" />
-                <Setter Property="Foreground" Value="{DynamicResource Slate.SelectionTextBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource Slate.SelectedTextBrush}" />
                 <Setter Property="BorderBrush" Value="{DynamicResource Slate.AccentIndicatorBrush}" />
             </Trigger>
         </Style.Triggers>
@@ -278,7 +278,7 @@
         <Style.Triggers>
             <Trigger Property="IsSelected" Value="True">
                 <Setter Property="Background" Value="{DynamicResource Slate.SelectedSurfaceBrush}" />
-                <Setter Property="Foreground" Value="{DynamicResource Slate.SelectionTextBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource Slate.SelectedTextBrush}" />
                 <Setter Property="BorderBrush" Value="{DynamicResource Slate.AccentIndicatorBrush}" />
             </Trigger>
         </Style.Triggers>
@@ -320,7 +320,7 @@
             </Trigger>
             <Trigger Property="IsSelected" Value="True">
                 <Setter Property="Background" Value="{DynamicResource Slate.SelectedSurfaceBrush}" />
-                <Setter Property="Foreground" Value="{DynamicResource Slate.SelectionTextBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource Slate.SelectedTextBrush}" />
                 <Setter Property="BorderBrush" Value="{DynamicResource Slate.AccentIndicatorBrush}" />
             </Trigger>
             <Trigger Property="IsEnabled" Value="False">
@@ -351,11 +351,11 @@
                  keys are on takes the selected surface; the pill marks the chosen one. -->
             <Trigger Property="IsHighlighted" Value="True">
                 <Setter Property="Background" Value="{DynamicResource Slate.SelectedSurfaceBrush}" />
-                <Setter Property="Foreground" Value="{DynamicResource Slate.SelectionTextBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource Slate.SelectedTextBrush}" />
             </Trigger>
             <Trigger Property="IsSelected" Value="True">
                 <Setter Property="Background" Value="{DynamicResource Slate.SelectedSurfaceBrush}" />
-                <Setter Property="Foreground" Value="{DynamicResource Slate.SelectionTextBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource Slate.SelectedTextBrush}" />
                 <Setter Property="BorderBrush" Value="{DynamicResource Slate.AccentIndicatorBrush}" />
             </Trigger>
             <Trigger Property="IsEnabled" Value="False">

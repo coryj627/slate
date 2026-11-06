@@ -239,6 +239,11 @@ public sealed class ItemContainerNameCensus
             {
                 Distinct = "the three labels in ThemeChoice.Options",
             },
+            ["SettingsAccent"] = new ContainerNaming.Bound(
+                typeof(AccentOption), nameof(AccentOption.Label), null)
+            {
+                Distinct = "the three labels in SlateAccent.Options",
+            },
             ["SidebarSortOrder"] = new ContainerNaming.Bound(
                 typeof(SidebarSortMode), string.Empty, "SidebarSortModeLabelConverter")
             {

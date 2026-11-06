@@ -133,7 +133,7 @@ public sealed class ThemeTokenContrastTests
             Rgb highlight = Over(overlay, alpha, surface);
             double text = Math.Abs(ApcaLc(Over(overlay, alpha, colors["Slate.TextColor"]), highlight));
             Assert.True(text > 75, $"{fileName} selected text on {surfaceKey} measured |Lc| {text:F2}; expected > 75.");
-            double standOff = WcagRatio(highlight, surface);
+            double standOff = SlateContrast.WcagRatio(ToColor(highlight), ToColor(surface));
             Assert.True(standOff >= 1.2, $"{fileName} highlight on {surfaceKey} stands off {standOff:F2}:1; expected >= 1.2.");
         }
     }
@@ -143,16 +143,10 @@ public sealed class ThemeTokenContrastTests
         (alpha * top.Green) + ((1 - alpha) * under.Green),
         (alpha * top.Blue) + ((1 - alpha) * under.Blue));
 
-    private static double WcagRatio(Rgb first, Rgb second)
-    {
-        static double Channel(double c) => c <= 0.03928 ? c / 12.92 : Math.Pow((c + 0.055) / 1.055, 2.4);
-        static double Luminance(Rgb c) =>
-            (0.2126 * Channel(c.Red)) + (0.7152 * Channel(c.Green)) + (0.0722 * Channel(c.Blue));
-
-        double a = Luminance(first);
-        double b = Luminance(second);
-        return (Math.Max(a, b) + 0.05) / (Math.Min(a, b) + 0.05);
-    }
+    private static System.Windows.Media.Color ToColor(Rgb color) => System.Windows.Media.Color.FromRgb(
+        (byte)Math.Round(color.Red * 255),
+        (byte)Math.Round(color.Green * 255),
+        (byte)Math.Round(color.Blue * 255));
 
     private static (Rgb Color, double Alpha) ReadAlphaColor(string fileName, string key)
     {

@@ -288,6 +288,7 @@
     "xaml-items MainWindow.xaml SearchOverlayResults": "guard: SearchOverlay",
     "xaml-items MainWindow.xaml SettingsCategoriesList": "guard: SettingsOverlay",
     "xaml-items MainWindow.xaml SettingsThemeComboBox": "guard: SettingsOverlay",
+    "xaml-items MainWindow.xaml SettingsAccentComboBox": "guard: SettingsOverlay",
     "xaml-items MainWindow.xaml SidebarDualPane": "guard: FilesPaneBorder",
     "xaml-items MainWindow.xaml SidebarShortcuts": "guard: FilesPaneBorder",
     "xaml-items MainWindow.xaml SidebarSortOrder": "guard: FilesPaneBorder",

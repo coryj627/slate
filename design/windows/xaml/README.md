@@ -32,16 +32,9 @@ Text draws in `AccentText`, never in `Accent`: the fill measures Lc 71.61 on the
 
 Everything that is gold follows the setting. That is the nine roles below, which drive primary buttons, checked boxes, radios, switches and sliders, progress, focused-field underlines, links, editor headings, wikilinks and tags, the selected-row pill, the tab underline, selected rows and text selection.
 
-**Contrast gate.** Before using a Windows accent, check every pair below in the current theme. If any pair fails, use gold without telling the user. Check again whenever the accent or the theme changes.
+**No contrast gate.** A Windows accent is used as Windows gives it, in both themes, whatever its contrast (plan 46, DSD16). The gate DS-11 first shipped, text at 4.5:1 and fills and marks at 3:1, sent every hue the owner tried back to gold in dark. Choosing an accent from colours that clear contrast is #1842.
 
-- `TextOnAccent` on `Accent`, `AccentHover` and `AccentPressed`: at least 4.5:1.
-- `AccentText` on `Slate.SurfaceColor` and `Slate.WindowBackgroundColor`: at least 4.5:1.
-- `Accent` and `AccentIndicator` on `Slate.SurfaceColor`, and `AccentIndicator` on `SelectedSurface`: at least 3:1.
-- `SelectionText` on `SelectionBackground`: at least 4.5:1.
-
-Slate gold and the Windows default blue pass every check in both themes.
-
-These ratios are the bar for a chosen accent (plan 46, DSD14). Gold stays at the project's floor for text, |Lc| above 75 (`ThemeTokenContrastTests`), and a chosen accent may sit below that floor. The gate doesn't check a selected row's text, so a selected row needs its own text brush when an accent applies.
+Slate gold and the Windows default blue clear 4.5:1 for every text the accent draws and 3:1 for its fills and marks, in both themes (`SlateAccentTests`): `TextOnAccent` on the three fills, `AccentText` on the surfaces and `SelectedSurface`, links hovered and pressed on the surface, `SelectionText` on `SelectionBackground`, and primary, secondary and tertiary text on `SelectedSurface`. Gold stays at the project's floor for text, |Lc| above 75 (`ThemeTokenContrastTests`), and a Windows accent may sit well below it. A selected row's text draws in `Slate.SelectedTextBrush`, which is primary text and doesn't follow the accent. `SelectionText` is text selection's alone: white on the 12% tint would be 1.17:1.
 
 | Role (`Slate.<Role>Color`) | Gold, light | Gold, dark | Windows accent, light | Windows accent, dark |
 | --- | --- | --- | --- | --- |
@@ -54,47 +47,13 @@ These ratios are the bar for a chosen accent (plan 46, DSD14). Gold stays at the
 | `SelectedSurface` | `#FDF5E1` | `#33291A` | `AccentColor` 12% over the surface | `AccentColor` 11% over the surface |
 | `SelectionBackground` | `#F9E7B8` | `#6B4D00` | `AccentColor` | `AccentColor` |
 | `SelectionText` | `#171717` | `#F5F5F5` | `#FFFFFF` | `#FFFFFF` |
+| `ReadingSelection` | `#A57A00` at 20% | `#E2AD24` at 24% | `AccentColor` at 20% | `AccentColor` at 24% |
 
 The Windows columns are `SystemColors` properties (.NET 9 and later) and follow Fluent's own mapping. On the default blue, `AccentColor` is `#0078D4`, Light 1 to 3 are `#0091F8`, `#4CC2FF` and `#99EBFF`, and Dark 1 to 3 are `#0067C0`, `#003E92` and `#001A68` (measured 3 November 2026, Windows 11 build 26300). So `Accent` draws as `#0067C0` in light and `#4CC2FF` in dark. WinUI's brush constants for the same blue are `#005FB8` and `#60CDFF`, and those are the values the design system uses whenever it needs to show a Windows accent.
 
-### Applying it (sketch, not compiled)
+### Applying it
 
-Run this on the freshly loaded Slate dictionary in `ThemeManager.ApplyResources`, and call `ApplyResources` again when the accent changes (`SystemEvents.UserPreferenceChanged`, today it only reapplies when the light/dark theme changes).
-
-```csharp
-internal enum AccentSource { Automatic, SlateGold, WindowsAccent }
-
-internal static class SlateAccent
-{
-    private static readonly Color WindowsDefault = Color.FromRgb(0x00, 0x78, 0xD4);
-
-    /// Writes the Windows accent into the nine role keys. Returns false (dictionary stays gold) when
-    /// gold applies: High Contrast, the Slate gold setting, Automatic with the default accent, or a failed check.
-    public static bool TryApplyWindowsAccent(ResourceDictionary slate, AccentSource source, bool dark)
-    {
-        if (SystemParameters.HighContrast || source == AccentSource.SlateGold) return false;
-        Color accent = SystemColors.AccentColor;
-        if (source == AccentSource.Automatic && accent == WindowsDefault) return false;
-
-        Color surface = (Color)slate["Slate.SurfaceColor"];
-        var roles = new Dictionary<string, Color>
-        {
-            ["Slate.AccentColor"] = dark ? SystemColors.AccentColorLight2 : SystemColors.AccentColorDark1,
-            ["Slate.AccentHoverColor"] = dark ? SystemColors.AccentColorLight3 : SystemColors.AccentColorDark2,
-            ["Slate.AccentPressedColor"] = dark ? SystemColors.AccentColorLight1 : SystemColors.AccentColorDark3,
-            ["Slate.AccentTextColor"] = dark ? SystemColors.AccentColorLight3 : SystemColors.AccentColorDark2,
-            ["Slate.AccentIndicatorColor"] = dark ? SystemColors.AccentColorLight2 : SystemColors.AccentColorDark1,
-            ["Slate.TextOnAccentColor"] = dark ? Colors.Black : Colors.White,
-            ["Slate.SelectedSurfaceColor"] = Mix(accent, surface, dark ? 0.11 : 0.12),
-            ["Slate.SelectionBackgroundColor"] = accent,
-            ["Slate.SelectionTextColor"] = Colors.White,
-        };
-        if (!PassesContrastGate(roles, slate)) return false; // silent fallback to gold
-        foreach (var (key, color) in roles) slate[key] = color;
-        return true;
-    }
-}
-```
+`SlateAccent.TryApplyWindowsAccent` runs on the freshly loaded Slate dictionary in `ThemeManager.DictionariesFor`, and writes these roles. It returns false, with the dictionary left gold, when gold applies: High Contrast, the Slate gold setting, or Automatic with the default accent. `ThemeManager` applies again when the accent changes: WPF holds the colours until a message of its own clears them, and that message can come after `SystemEvents.UserPreferenceChanged`, so `SystemAccentWatch` keeps a resource reference to `SystemColors.AccentColorKey` on the main window, which WPF reads again right after the clearing. A fact in `SlateAccentTests` reads this table.
 
 ### Selection in the reading view
 
@@ -105,9 +64,15 @@ A `RichTextBox`, which the reading view is, always draws its selection as an ove
 | Light | `#A57A00` at 20% | `#EDE4CC` | 1.27:1 | Lc 85.0 / 77.9 |
 | Dark | `#E2AD24` at 24% | `#4D401F` | 1.64:1 | Lc 80.4 / 77.5 |
 
-An overlay tints the text as well as the background, so no overlay that shows at all keeps every colour above Lc 75. Selected secondary text measures Lc 75.6 in light and 65.1 in dark. Selected links use `AccentText`, and they measure below the floor too. Primary text under the blue overlay this replaced measured Lc 57-61. In High Contrast the brush is `SystemColors.Highlight` at 40%, the opacity Fluent's default gives. If the Windows accent setting is added, this overlay needs its own rule in the contrast gate.
+An overlay tints the text as well as the background, so no overlay that shows at all keeps every colour above Lc 75. Selected secondary text measures Lc 75.6 in light and 65.1 in dark. Selected links use `AccentText`, and they measure below the floor too. Primary text under the blue overlay this replaced measured Lc 57-61. In High Contrast the brush is `SystemColors.Highlight` at 40%, the opacity Fluent's default gives. 
+Under a Windows accent the overlay is `AccentColor` at gold's alpha, and nothing checks it against the hue. On the owner's `#EA005E` in dark the highlight doesn't stand off the surface by the 1.2:1 gold is held to. Measured on the default blue:
 
-`PassesContrastGate` is the list above, using the WCAG 2 contrast ratio. `Mix` blends two opaque colours channel by channel.
+| Theme | Overlay | Selected primary text, surface / raised | Stands off, surface / raised |
+| --- | --- | --- | --- |
+| Light | `#0078D4` at 20% | 11.23:1 / 9.92:1 | 1.31:1 / 1.29:1 |
+| Dark | `#0078D4` at 24% | 8.63:1 / 7.68:1 | 1.29:1 / 1.27:1 |
+
+These ratios are WCAG 2's (`SlateContrast.WcagRatio`).
 
 ## Theme setting
 

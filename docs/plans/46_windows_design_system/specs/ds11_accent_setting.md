@@ -1,10 +1,10 @@
-# DS-11 — The accent can follow Windows, and never fails contrast
+# DS-11 — The accent can follow Windows
 
 Issues: filed by DS-0. Size M. Lanes: windows. AT: — (no spoken change; the fallback is silent by design). Wave 3. Depends on: DS-10. Decision: DSD14. Interlock: none.
 
 ## Goal
 
-Appearance gets its second row: Accent color: Automatic, Slate gold or Windows accent. Everything gold follows it. Every text an accepted accent draws clears 4.5:1, and every fill and mark 3:1, selected rows included (DSD14). A Windows accent that can't falls back to gold without a message, as the design says.
+Appearance gets its second row: Accent color: Automatic, Slate gold or Windows accent. Everything gold follows it, and a Windows accent is drawn as Windows gives it, whatever its contrast (DSD16, which replaced DSD14's gate after the owner's look). Selected rows draw their text in their own brush, so it never turns white on the tint.
 
 ## Current state on main
 
@@ -35,6 +35,8 @@ Read from `SystemColors` on this desktop on 2026-11-03 (Windows 11 build 26300, 
 Compiled as written, the sketch makes selected rows unreadable in light, so they get their own brush and the gate gains their pairs. The other three rows pass the owner's bar (DSD14), and they sit below the floor gold clears. That's accepted for an accent the reader chose, so the table stays.
 
 ## Design
+
+Steps 4 and 9, the gate and its silent fallback, were built and then taken out on the owner's call (DSD16): see the notes.
 
 1. **`SlateAccent.cs`,** from the README's sketch, with the colours passed in so facts can feed them: `AccentSource { Automatic, SlateGold, WindowsAccent }`, an `AccentPalette` record of the seven `SystemColors` values, and `TryApplyWindowsAccent(ResourceDictionary, AccentSource, AccentPalette, bool dark, bool highContrast)`, returning false when gold applies: High Contrast, the Slate gold setting, Automatic with `#0078D4`, or a failed check.
 2. **A selected row's text gets its own brush.** `Slate.SelectedTextBrush`, beside `Slate.SelectedSurfaceBrush`: `Slate.TextColor` in light and dark, and `SystemColors.HighlightTextColorKey` in `Slate.Contrast.xaml`, so High Contrast keeps today's pair. The five setters above move to it, and it joins `RequiredSlateBrushKeys` (`ThemeManager.cs:37-69`). The accent doesn't write it, since primary text doesn't follow the accent. `SelectionText` is then only what its name says: `SelectionBackground`'s partner in a text box (`TextBoxSelection.cs:60`), in the editor (`SlateTextEditor.cs:73`) and in the classic `Highlight` pair (`Slate.SystemColors.xaml:18-19`). The classic inactive pair already draws primary text (`Slate.SystemColors.xaml:20-21`). Nothing changes under gold, because the two values are equal. For that reason `ThemeDesignSystemTests.cs:946` and `ThemeDesignSystemTests.cs:1001`, which compare a selected cell's and row's ink with the selection brush, would pass either way, so they move to the new key.
@@ -69,7 +71,7 @@ Compiled as written, the sketch makes selected rows unreadable in light, so they
 Failing first, feeding colours through the palette, since a fact can't change the Windows accent:
 
 - `ASelectedRowIsReadableUnderAnAcceptedAccent`: the regression for the white-on-tint pair. In a real window, in light and dark, under the default blue's computed dictionary, a selected grid cell, panel row, dropdown row and tree row: what each resolves for its foreground on what it resolves for its background, at 4.5:1. It reads the controls and not the keys, so a template that goes back to `SelectionText` fails it, at 1.17:1 in light.
-- `TheDefaultBlueIsGoldUnderAutomatic`, `AChosenAccentIsFollowedUnderAutomatic`, `SlateGoldIgnoresWindows`, `WindowsAccentFollowsWhenItPasses`.
+- `TheDefaultBlueIsGoldUnderAutomatic`, `AChosenAccentIsFollowedUnderAutomatic`, `SlateGoldIgnoresWindows`, `WindowsAccentIsFollowed`.
 - `AnAccentThatFailsAnyCheckFallsBackToGold`: a theory with one palette per rule, including pale yellow in light and dark navy in dark.
 - `TheDefaultBluePassesEveryCheckInBothThemes`: the palette measured above, every pair, the overlay included.
 - `GoldClearsEveryPairTheGateChecks`: `SlateAccent.TextPairs` over both gold files.
@@ -92,9 +94,19 @@ Plan 46 §7's loop with `--filter "FullyQualifiedName~SlateAccent|FullyQualified
 
 - [ ] The README's every claim has a fact.
 - [ ] A selected row's text clears 4.5:1 under every accepted accent, in every template, by a fact that reads the controls.
-- [ ] The gate and gold's fact run one list of text pairs.
+- [ ] ~~The gate and gold's fact run one list of text pairs.~~ No gate since DSD16; gold's fact keeps the pairs.
 - [ ] The overlay's rule is written down with measurements.
 - [ ] Gold stays the default on a default Windows, and a selected row under gold draws the colours it drew before.
+
+## Notes from the build
+
+- **The gate is gone (DSD16).** The owner's look at real accents on 2026-11-05 (plan 46 §8) found every hue they tried falling back to gold in dark, so Windows accent looked like it did nothing. Their `#EA005E` passes every check in light; in dark a pressed link (`AccentColorLight1` `#FF0A6F` on the surface) measures 4.39:1, and the reading overlay doesn't stand off the surface or the raised surface by 1.2:1. Their call: drop the requirement, and let the user choose from colours that clear contrast later, which is #1842. The facts for the gate and the fallback went with it; `AnAccentBelowTheBarIsStillFollowed` holds their palette, and `TheDefaultBlueMeasuresWhatTheSpecRecords` keeps the table above as a record.
+- **A closed combo box's change is mostly silent under NVDA,** as DS-10 found, so the row posts `AccentChosen`, as the theme's posts `ThemeChosen`. This is a spoken line the spec didn't plan for, and it's why this chunk touches `slate-core` and both hosts' corpus censuses. It names the choice, which since DSD16 is what shows.
+- **The launched app can show this without changing a system setting.** Windows accent is a choice in the app, and it draws whatever Windows has. `AccentColor_WindowsAccentDrawsAtOnceAndAcrossARestart` is the only fact that reaches `ThemeManager.SetAccent`, since the manager can't be built under test. What still needs a person is another hue, and a live change in Windows (plan 46 §8).
+- **WPF holds the accent's colours.** `SystemColors` caches them until `WM_DWMCOLORIZATIONCOLORCHANGED`, `WM_SYSCOLORCHANGE` or `WM_THEMECHANGED` reaches its own window (`SystemResources.cs`, `SystemColors.cs` in dotnet/wpf), which can be after `UserPreferenceChanged` reaches ours, so no read at a chosen moment is sure of the new colour. The manager watches instead: `SystemAccentWatch` holds a resource reference to `SystemColors.AccentColorKey` on the main window, and WPF reads that again right after it clears its cache. `WpfClearingItsColoursReachesTheWatch` runs WPF's own path with a colour planted in that cache, and Windows' real change is the owner's look.
+- **A sixth setter.** DS-9's checked icon toggle drew `SelectionText` on `SelectedSurface` too, so it moved with the spec's five.
+- **`DevicePreference`** is `ThemePreference` with its one line of difference taken out, because the accent's preference is otherwise the same class.
+- **Some checks have the room never to fail on a colour from Windows:** primary, secondary and tertiary text on `SelectedSurface`, and primary text under the overlay. `EveryCheckCanFail` proves they're checked, by feeding one grey for every role, and the rest have a real palette each.
 
 ## Brief
 

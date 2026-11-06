@@ -39,8 +39,9 @@ internal static class ShellLaunch
     /// use and removed when the run ends.</summary>
     internal static string Root => RunRoot.Value;
 
-    /// <summary>Points a shell launch's device state at <see cref="Root"/>, and its text
-    /// scale at 1, so the gate doesn't depend on the machine's setting.</summary>
+    /// <summary>Points a shell launch's device state at <see cref="Root"/>, whose accent is
+    /// gold, and its text scale at 1, so the gate doesn't depend on the machine's settings. A
+    /// journey that needs another accent launches with a device folder of its own.</summary>
     internal static void ApplyDeviceState(ProcessStartInfo startInfo)
     {
         startInfo.Environment[Variable] = Root;
@@ -54,6 +55,7 @@ internal static class ShellLaunch
         {
             string resolved = Path.GetFullPath(preset);
             Environment.SetEnvironmentVariable(Variable, resolved);
+            StartGold(resolved);
             return resolved;
         }
         string root = Path.Combine(
@@ -61,6 +63,7 @@ internal static class ShellLaunch
             $"slate-gate-{Environment.ProcessId}-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
         Environment.SetEnvironmentVariable(Variable, root);
+        StartGold(root);
         AppDomain.CurrentDomain.ProcessExit += (_, _) =>
         {
             try
@@ -77,5 +80,18 @@ internal static class ShellLaunch
             }
         };
         return root;
+    }
+
+    /// <summary>DS-11: Automatic follows an accent the user chose in Windows (DSD16), so on a
+    /// desktop with one, a journey that measures gold would see that colour instead. Only a
+    /// folder with no preferences yet is seeded, so nothing a launch wrote is lost.</summary>
+    private static void StartGold(string root)
+    {
+        Directory.CreateDirectory(root);
+        string preferences = Path.Combine(root, "preferences.json");
+        if (!File.Exists(preferences))
+        {
+            File.WriteAllText(preferences, "{\"accentColor\":\"gold\"}");
+        }
     }
 }

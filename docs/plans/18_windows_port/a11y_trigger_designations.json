@@ -248,6 +248,11 @@
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",
         "status": "recorded"
       },
+      "AccentChosen": {
+        "reason": "DS-11: the accent setting is Windows only; the Mac has no accent setting.",
+        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
+        "status": "recorded"
+      },
       "FilesSidebarHidden": {
         "reason": "DS-7: the Files sidebar's toggle is Windows only; the Mac's sidebar has no such state, and AppState.toggleRightPane is only its right pane.",
         "decision": "docs/plans/38_notification_dispatcher_contracts.md",

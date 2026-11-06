@@ -58,7 +58,8 @@ public partial class App : Application
         _textScale = new TextScaleService();
         TextScaleService.Current = _textScale;
         // DS-10: the store first, so the first paint is the chosen theme.
-        _themeManager = new ThemeManager(this, new AppPreferencesStore().Load().Theme);
+        AppPreferencesState preferences = new AppPreferencesStore().Load();
+        _themeManager = new ThemeManager(this, preferences.Theme, preferences.AccentColor);
 
         if (e.Args.Contains("--census-dpi-probe"))
         {
@@ -143,6 +144,7 @@ public partial class App : Application
         SidebarWriteJournal.InstallProductionLocation();
         base.OnStartup(e);
         _mainWindow = new MainWindow();
+        _themeManager?.WatchSystemAccent(_mainWindow);
         _singleInstanceCoordinator.StartListening(QueueActivation);
         _mainWindow.Show();
 

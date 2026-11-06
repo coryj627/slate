@@ -92,6 +92,38 @@ public sealed class AppPreferencesStoreTests : IDisposable
     }
 
     [Fact]
+    public void AnAccentChoiceSurvivesARestartAndKeepsTheTheme()
+    {
+        AppPreferencesStore store = CreateStore();
+        var applied = new List<string>();
+        new ThemePreference(store, _ => { }).Choose(ThemeChoice.Dark);
+
+        new AccentPreference(store, applied.Add).Choose(SlateAccent.SlateGold);
+
+        Assert.Equal(new[] { SlateAccent.SlateGold }, applied);
+        Assert.Equal(SlateAccent.SlateGold, new AccentPreference(CreateStore(), applied.Add).Current);
+        Assert.Equal(ThemeChoice.Dark, CreateStore().Load().Theme);
+    }
+
+    /// <summary>The store hands every reader a known value: the sheet looks the stored one up
+    /// among its options.</summary>
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("{\"accentColor\":null}")]
+    [InlineData("{\"accentColor\":\"teal\"}")]
+    [InlineData("{\"accentColor\":\"\"}")]
+    [InlineData("{\"accentColor\":\"GOLD\"}")]
+    public void AnUnknownAccentIsTheDefault(string file)
+    {
+        File.WriteAllText(StorePath, file);
+
+        string stored = CreateStore().Load().AccentColor;
+
+        Assert.Equal(SlateAccent.Automatic, stored);
+        Assert.Equal(AccentSource.Automatic, SlateAccent.SourceOf(stored));
+    }
+
+    [Fact]
     public void AThemeChoiceKeepsTheOtherPreferences()
     {
         AppPreferencesStore store = CreateStore();

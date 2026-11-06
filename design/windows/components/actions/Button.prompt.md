@@ -32,7 +32,7 @@ Notes: generated from the Fluent 2 Web Figma kit; each variant renders the exact
 - **Build as:** `Button`.
 - **Rating:** Native: the Fluent style ships, so override resource keys only.
 - Primary is `AccentButtonStyle`. Subtle and transparent are Slate styles `BasedOn` the Fluent button.
-- Accent brushes are gold by default and switch to the user's Windows accent when they have set a custom one (falling back to gold if it fails contrast).
+- Accent brushes are gold by default and switch to the user's Windows accent when they have set a custom one (as Windows gives it, whatever its contrast: plan 46, DSD16).
 - Icon-only versions need `AutomationProperties.Name`; otherwise Narrator reads the icon glyph.
 
 Ratings and theme setup: `wpf-feasibility.md`.
