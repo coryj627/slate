@@ -40,6 +40,9 @@ internal sealed class NoteHeaderView : Grid
     private const string MoreGlyph = "\uE712";
     private const string FolderGlyph = "\uE8B7";
 
+    /// <summary>The bar's own stops' names, which a folder's segment mustn't sound like.</summary>
+    private static readonly string[] ControlNames = ["Source", "Reading", "More note actions", "Folders"];
+
     private readonly StackPanel _folders = new() { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock _name = new()
     {
@@ -57,6 +60,8 @@ internal sealed class NoteHeaderView : Grid
     private readonly MenuItem _addProperty;
     private readonly MenuItem _bulkRename;
     private WorkspaceTabViewModel? _tab;
+    private (string Name, string Path)[] _shownFolders = [];
+    private bool _shownCompact;
     private bool _synchronizing;
 
     public NoteHeaderView()
@@ -201,31 +206,48 @@ internal sealed class NoteHeaderView : Grid
     }
 
     /// <summary>The folders as segments, or behind "…" when compact, and the note's name,
-    /// which is text, not a stop: the tab's name already says it. A rebuild under the keys
-    /// leaves them on the rebuilt path's first button, not on nothing.</summary>
+    /// which is text, not a stop: the tab's name already says it. A rename that leaves the
+    /// folders as they were leaves their segments, and the keys, alone. A rebuild under the
+    /// keys puts them on the segment in the same place, else the first: never on nothing.
+    /// (A folder's path changes whenever one above it does, so its place is as good a
+    /// match as its path.)</summary>
     private void ShowPath()
     {
-        bool keysOnThePath = _folders.IsKeyboardFocusWithin;
+        (string Name, string Path)[] folders = FoldersOf(_tab?.Path, out string name);
+        _name.Text = name;
+        if (folders.SequenceEqual(_shownFolders) && IsCompact == _shownCompact)
+        {
+            return;
+        }
+
+        Button[] before = [.. _folders.Children.OfType<Button>()];
+        int focused = Array.FindIndex(before, button => button.IsKeyboardFocusWithin);
         try
         {
-            BuildPath();
+            BuildPath(folders);
         }
         finally
         {
-            if (keysOnThePath && _folders.Children.OfType<Button>().FirstOrDefault() is { } first)
+            _shownFolders = folders;
+            _shownCompact = IsCompact;
+            Button[] after = [.. _folders.Children.OfType<Button>()];
+            if (focused >= 0 && (after.ElementAtOrDefault(focused) ?? after.FirstOrDefault()) is { } target)
             {
-                first.Focus();
+                target.Focus();
             }
         }
     }
 
-    private void BuildPath()
+    private static (string Name, string Path)[] FoldersOf(string? notePath, out string name)
+    {
+        string[] parts = (notePath ?? string.Empty).Split('/', StringSplitOptions.RemoveEmptyEntries);
+        name = parts.Length == 0 ? string.Empty : System.IO.Path.GetFileNameWithoutExtension(parts[^1]);
+        return [.. parts.SkipLast(1).Select((folder, index) => (folder, string.Join('/', parts.Take(index + 1))))];
+    }
+
+    private void BuildPath((string Name, string Path)[] folders)
     {
         _folders.Children.Clear();
-        string notePath = _tab?.Path ?? string.Empty;
-        string[] parts = notePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        _name.Text = parts.Length == 0 ? string.Empty : System.IO.Path.GetFileNameWithoutExtension(parts[^1]);
-        (string Name, string Path)[] folders = [.. parts.SkipLast(1).Select((name, index) => (name, string.Join('/', parts.Take(index + 1))))];
         if (folders.Length == 0)
         {
             return;
@@ -253,18 +275,28 @@ internal sealed class NoteHeaderView : Grid
             return;
         }
 
-        foreach ((string name, string folder) in folders)
+        string[] spokenNames = SegmentNames(folders);
+        foreach (((string name, string folder), string spoken) in folders.Zip(spokenNames))
         {
-            // A name the path repeats (notes/notes) is named by its path, so no two sibling
-            // segments share a name and each says where it goes.
-            bool repeated = folders.Count(other => other.Name == name) > 1;
-            Button segment = Segment(name, repeated ? folder : name);
+            Button segment = Segment(name, spoken);
             AutomationProperties.SetAutomationId(segment, "NoteHeaderFolder");
-            AutomationProperties.SetName(segment, repeated ? folder : name);
+            AutomationProperties.SetName(segment, spoken);
             segment.Click += (_, _) => Workspace?.RevealFolderFromHeader(folder);
             _folders.Children.Add(segment);
             _folders.Children.Add(Chevron());
         }
+    }
+
+    /// <summary>The segments' names by the shell's one sibling rule (SiblingNames.Compose,
+    /// R-4): a folder's name as it is, unless it reads like another stop in the bar (a folder
+    /// of the same name but for case, or one of the bar's own controls); then its path tells
+    /// it apart, "notes, notes/notes". The controls go in beside the folders and keep their
+    /// own names.</summary>
+    private static string[] SegmentNames((string Name, string Path)[] folders)
+    {
+        string?[] names = [.. folders.Select(folder => (string?)folder.Name), .. ControlNames];
+        string?[] distinguishers = [.. folders.Select(folder => (string?)folder.Path), .. ControlNames.Select(_ => (string?)null)];
+        return [.. SiblingNames.Compose(names, distinguishers, "folder").Take(folders.Length)];
     }
 
     /// <summary>The checked choice follows the tab's mode, under a guard so following it

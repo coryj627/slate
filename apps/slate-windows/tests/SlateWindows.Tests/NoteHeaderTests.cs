@@ -70,9 +70,9 @@ public sealed class NoteHeaderTests
         Assert.False(name.Focusable);
     });
 
-    /// <summary>A folder name a path repeats (notes/notes) names its segments by their paths,
-    /// so a reader can tell where each goes and no two sibling buttons share a name; a
-    /// name the path holds once stays the folder's name.</summary>
+    /// <summary>A folder name a path repeats (notes/notes) tells its segments apart by their
+    /// paths, the shell's sibling rule (R-4), so a reader can tell where each goes and no two
+    /// sibling buttons share a name; a name the path holds once stays the folder's name.</summary>
     [Fact]
     public void RepeatedFolderNamesAreToldApart() => StaThread.RunPumped(() =>
     {
@@ -84,11 +84,56 @@ public sealed class NoteHeaderTests
         NoteHeaderView header = HeaderOf(host, "notes/notes/topics/Note.md");
 
         Button[] segments = [.. ShownShell.Descendants(header).OfType<Button>().Where(button => AutomationProperties.GetAutomationId(button) == "NoteHeaderFolder")];
-        Assert.Equal(["notes", "notes/notes", "topics"], segments.Select(AutomationProperties.GetName));
+        Assert.Equal(["notes, notes", "notes, notes/notes", "topics"], segments.Select(AutomationProperties.GetName));
         Assert.Equal(["notes", "notes", "topics"], segments.Select(button => ((TextBlock)button.Content).Text));
         Invoke(segments[1]);
         host.Settle();
         Assert.Equal(["notes/notes"], revealed);
+    });
+
+    /// <summary>No two stops in the bar sound alike: a folder named like one of the bar's own
+    /// controls, or like another folder but for its case, is told apart by the shell's
+    /// sibling rule, and the controls keep their own names.</summary>
+    [Theory]
+    [InlineData("More note actions/Note.md")]
+    [InlineData("Source/Reading/Note.md")]
+    [InlineData("notes/Notes/Note.md")]
+    public void NoTwoStopsInTheBarSoundAlike(string path) => StaThread.RunPumped(() =>
+    {
+        using var host = new ShownShell((path, "# Note\n"));
+        host.Workspace.OpenPath(path);
+        host.Settle();
+        NoteHeaderView header = HeaderOf(host, path);
+
+        string[] names = [.. ShownShell.Descendants(header).OfType<ButtonBase>().Where(button => button.IsVisible).Select(AutomationProperties.GetName)];
+        Assert.Equal(names.Length, names.Select(name => SpeechKey.Of(name)).Distinct().Count());
+        Assert.Contains("More note actions", names);
+        Assert.Contains("Source", names);
+        Assert.Contains("Reading", names);
+    });
+
+    /// <summary>A rename the watcher brings keeps what didn't change: the note's own rename
+    /// leaves the folders, and the keys, where they were; a folder's rename rebuilds them and
+    /// keeps the keys on the segment in the same place.</summary>
+    [Fact]
+    public void ARenameKeepsTheKeysOnTheirFolder() => StaThread.RunPumped(() =>
+    {
+        using var host = new ShownShell((Nested, "# Lecture\n"));
+        host.Workspace.OpenPath(Nested);
+        host.Settle();
+        NoteHeaderView header = HeaderOf(host, Nested);
+        var tab = (WorkspaceTabViewModel)header.DataContext;
+        Button maths = Segment(header, "maths");
+        Assert.True(maths.Focus());
+
+        tab.RetargetPath("learning/maths/Lecture two.md");
+        host.Settle();
+        Assert.Same(maths, Keyboard.FocusedElement);
+        Assert.Contains(ShownShell.Descendants(header).OfType<TextBlock>(), text => text.Text == "Lecture two");
+
+        tab.RetargetPath("learning/algebra/Lecture two.md");
+        host.Settle();
+        Assert.Equal("algebra", AutomationProperties.GetName((DependencyObject)Keyboard.FocusedElement));
     });
 
     [Fact]
