@@ -4954,8 +4954,11 @@
                             <Style TargetType="ListBoxItem" BasedOn="{StaticResource Slate.PanelRowBase}">
                                 <Setter Property="AutomationProperties.Name" Value="{Binding Label}" />
                                 <Style.Triggers>
+                                    <!-- The sheet opens with the keys here, and the page's heading names
+                                         the category, so the tooltip is the mouse's alone. -->
                                     <Trigger Property="local:SettingsLayoutGrid.IsCompact" Value="True">
                                         <Setter Property="ToolTip" Value="{Binding Label}" />
+                                        <Setter Property="ToolTipService.ShowsToolTipOnKeyboardFocus" Value="False" />
                                     </Trigger>
                                 </Style.Triggers>
                             </Style>

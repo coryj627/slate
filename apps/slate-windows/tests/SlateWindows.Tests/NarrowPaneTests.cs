@@ -250,7 +250,9 @@ public sealed class NarrowPaneTests : IDisposable
 
     /// <summary>In a narrow window Settings' categories show their glyphs alone, as WinUI's
     /// compact navigation does, each still named and with its name as a tooltip; at the
-    /// window's usual size they show their names.</summary>
+    /// window's usual size they show their names. The tooltip is the mouse's: the sheet
+    /// opens with the keys on the list, where a tooltip would cover the page's description,
+    /// and the page's heading already names the category.</summary>
     [Fact]
     public void TheSettingsCategoriesShowTheirGlyphsAloneInANarrowWindow() => RunSta(() =>
     {
@@ -270,6 +272,7 @@ public sealed class NarrowPaneTests : IDisposable
         Assert.True(SettingsLayoutGrid.GetIsCompact(first));
         Assert.Equal(name, System.Windows.Automation.AutomationProperties.GetName(first));
         Assert.Equal(name, first.ToolTip);
+        Assert.False(System.Windows.Controls.ToolTipService.GetShowsToolTipOnKeyboardFocus(first));
         Assert.DoesNotContain(ShownText(first), text => text == name);
         Assert.True(host.Shell.SettingsCategoriesList.ActualWidth <= SettingsLayoutGrid.CompactListWidth);
     });
