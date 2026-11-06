@@ -8,6 +8,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using SlateWindows.Commands;
 
 namespace SlateWindows;
@@ -514,6 +515,9 @@ internal sealed class NoteHeaderView : Grid
         _bulkRename.Command = workspace.OpenBulkRenameSheetCommand;
     }
 
+    /// <summary>Opens a button's menu under it. Opened without the mouse (the keyboard, or the
+    /// button's Invoke pattern) it lands on its first row, as a Windows menu does: WPF leaves
+    /// the keys on the menu itself, and a reader hears only "menu".</summary>
     private static void Open(Button owner)
     {
         if (owner.ContextMenu is { } menu)
@@ -521,6 +525,10 @@ internal sealed class NoteHeaderView : Grid
             menu.PlacementTarget = owner;
             menu.Placement = PlacementMode.Bottom;
             menu.IsOpen = true;
+            if (InputManager.Current.MostRecentInputDevice is not MouseDevice)
+            {
+                menu.Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () => menu.Items.OfType<MenuItem>().FirstOrDefault(row => row.IsEnabled)?.Focus());
+            }
         }
     }
 
@@ -549,6 +557,8 @@ internal sealed class NoteHeaderView : Grid
         var row = new MenuItem { Header = label, InputGestureText = ChordTable.WindowsChordFor(chordId) ?? string.Empty };
         AutomationProperties.SetAutomationId(row, automationId);
         AutomationProperties.SetName(row, label);
+        // NVDA reads a row's AcceleratorKey, not the gesture text it shows, as the menus' rows.
+        AutomationProperties.SetAcceleratorKey(row, row.InputGestureText);
         return row;
     }
 

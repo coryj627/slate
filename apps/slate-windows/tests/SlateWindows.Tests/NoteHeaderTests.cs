@@ -581,6 +581,58 @@ public sealed class NoteHeaderTests
         Assert.False(string.IsNullOrEmpty(MenuRow(more, "NoteHeaderBulkRename").InputGestureText));
     });
 
+    /// <summary>A row says its chord as the menus' rows do: NVDA reads a menu item's
+    /// AcceleratorKey, not the gesture text it shows (the NVDA pass heard "Split Right, 1 of 3").</summary>
+    [Fact]
+    public void TheMoreMenusRowsSayTheirChords() => StaThread.RunPumped(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        host.Workspace.OpenPath("Lecture.md");
+        host.Settle();
+        Button more = More(HeaderOf(host, "Lecture.md"));
+
+        foreach (MenuItem row in more.ContextMenu!.Items.OfType<MenuItem>().Where(row => row.InputGestureText.Length > 0))
+        {
+            Assert.Equal(row.InputGestureText, AutomationProperties.GetAcceleratorKey(row));
+        }
+
+        Assert.Contains(more.ContextMenu.Items.OfType<MenuItem>(), row => row.InputGestureText.Length > 0);
+    });
+
+    /// <summary>⋯ opened by the keyboard or through its Invoke pattern lands on its first row,
+    /// as a Windows menu does, so a reader hears a row rather than "menu".</summary>
+    [Fact]
+    public void MoreOpenedWithoutTheMouseLandsOnItsFirstRow() => StaThread.RunPumped(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        host.Workspace.OpenPath("Lecture.md");
+        host.Settle();
+        Button more = More(HeaderOf(host, "Lecture.md"));
+        Assert.True(more.Focus());
+
+        Invoke(more);
+        host.Settle();
+        host.Settle();
+
+        Assert.True(more.ContextMenu!.IsOpen);
+        Assert.Same(MenuRow(more, "NoteHeaderSplitRight"), Keyboard.FocusedElement);
+        more.ContextMenu.IsOpen = false;
+        host.Settle();
+
+        // The other pane's ⋯, with the keys in this one: its pane goes active, and the keys
+        // land on its first row all the same.
+        host.Dispose();
+        using ShownShell split = Split(out _, out WorkspaceGroupViewModel second);
+        Button other = More(HeaderOf(split, "b.md"));
+        Invoke(other);
+        split.Settle();
+        split.Settle();
+        Assert.Same(second, split.Workspace.ActiveGroup);
+        Assert.Same(MenuRow(other, "NoteHeaderSplitRight"), Keyboard.FocusedElement);
+        other.ContextMenu!.IsOpen = false;
+        split.Settle();
+    });
+
     /// <summary>Below 520 the switch drops its labels for tooltips, and the folders collapse
     /// into a "…" button with a Folders menu.</summary>
     [Fact]
