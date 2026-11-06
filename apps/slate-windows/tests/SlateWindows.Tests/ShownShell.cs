@@ -40,7 +40,9 @@ internal sealed class ShownShell : IDisposable
         Assert.Null(Application.Current);
         foreach ((string path, string text) in notes)
         {
-            File.WriteAllText(Path.Combine(_fixture.Root, path), text);
+            string full = Path.Combine(_fixture.Root, path);
+            Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+            File.WriteAllText(full, text);
         }
 
         _session = VaultSession.OpenFilesystem(_fixture.Root);

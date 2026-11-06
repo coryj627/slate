@@ -261,6 +261,77 @@
     <!-- DS-6: an effect turns ClearType off for what's inside it, so an overlay's shadow
          is on a background-only sibling behind it. It takes no pointer, and in a contrast
          theme, which has no shadow keys, it has no effect. -->
+    <!-- DS-15 (#1816): a note header's folder segment: text in secondary, a subtle hover and
+         press, whole, because a style on nothing falls back to classic (#1767). -->
+    <Style x:Key="Slate.CrumbButtonStyle" TargetType="Button">
+        <Setter Property="MinHeight" Value="28" />
+        <Setter Property="Padding" Value="6,0" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource Slate.SecondaryTextBrush}" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource DefaultControlFocusVisualStyle}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Chrome"
+                            Background="{TemplateBinding Background}"
+                            CornerRadius="4"
+                            Padding="{TemplateBinding Padding}"
+                            SnapsToDevicePixels="True">
+                        <ContentPresenter VerticalAlignment="Center" RecognizesAccessKey="False" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource Slate.HoverOverlayBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource Slate.PressedOverlayBrush}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <!-- DS-15: one option of a segmented switch. The checked one sits on the card surface,
+         raised by a shadow on a border behind it, so its text keeps ClearType. -->
+    <Style x:Key="Slate.SegmentRadioStyle" TargetType="RadioButton">
+        <Setter Property="MinHeight" Value="28" />
+        <Setter Property="Padding" Value="10,0" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource Slate.SecondaryTextBrush}" />
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource DefaultControlFocusVisualStyle}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RadioButton">
+                    <Grid SnapsToDevicePixels="True">
+                        <Border x:Name="Shadow"
+                                CornerRadius="4"
+                                Background="{DynamicResource Slate.SurfaceBrush}"
+                                Effect="{DynamicResource Slate.Shadow2}"
+                                IsHitTestVisible="False"
+                                Visibility="Collapsed" />
+                        <Border x:Name="Chrome"
+                                CornerRadius="4"
+                                Background="{TemplateBinding Background}"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter VerticalAlignment="Center" RecognizesAccessKey="False" />
+                        </Border>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource Slate.HoverOverlayBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Shadow" Property="Visibility" Value="Visible" />
+                            <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource Slate.SurfaceBrush}" />
+                            <Setter Property="Foreground" Value="{DynamicResource Slate.TextBrush}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
     <Style x:Key="Slate.OverlayShadow28" TargetType="Border">
         <Setter Property="Background" Value="{DynamicResource Slate.SurfaceBrush}" />
         <Setter Property="CornerRadius" Value="8" />

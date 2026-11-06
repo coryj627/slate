@@ -432,6 +432,10 @@ internal sealed partial class WorkspaceViewModel
         return true;
     }
 
+    /// <summary>DS-15 (#1816): a note header's folder segment reveals its folder in Files,
+    /// showing the sidebar first (DS-7), through the same seam as a row's reveal.</summary>
+    internal bool RevealFolderFromHeader(string folder) => RevealConnectionsRowFromSurface(folder);
+
     /// <summary>B-9: open a row's note in the ACTIVE pane; on success the
     /// shell's <c>OpenedFile</c> posts through the workspace's announcer.</summary>
     internal bool OpenConnectionsRowFromSurface(string path, WorkspaceOpenTarget target)
