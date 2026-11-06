@@ -217,7 +217,11 @@ public sealed class TitleBarTests
     /// what Windows adds to a standard window's sides and bottom. WPF's
     /// WindowResizeBorderThickness is the first alone, so both the resize zone and a maximized
     /// window's padding take the whole frame. Some machines pad nothing (a CI VM's frame is
-    /// WPF's 4), so the frame is checked against Windows, not against WPF's.</summary>
+    /// WPF's 4), so the frame is checked against Windows, not against WPF's. GetDpiForWindow
+    /// and AdjustWindowRectExForDpi are Windows 10 1607's, as are the DPI functions the app
+    /// itself calls, so every machine the app supports has them; no fallback stands in for
+    /// them, since a fallback to WPF's value is what passed on one machine and failed on
+    /// another.</summary>
     [Fact]
     public void TheResizeZoneIsWindowsWholeFrame() => RunSta(() =>
     {
