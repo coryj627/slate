@@ -18788,5 +18788,14 @@ residual with the owner's sign-off" and left unticked — because the
 acceptance clause is the ISSUE's closing condition and F does not close
 the issue (FD-6).
 
+## A narrow window suspends the right pane (plan 46 DS-14, the owner's call)
+
+Recorded 2026-11-06 for #1815. Plan 46 (`46_windows_design_system_plan.md`, DS-14; `46_windows_design_system/specs/ds14_narrow_window.md`, design item 4), which the owner approved for delivery in #1789, makes this call. This record is frozen, so the call is added here and the terms above stand as written. This entry says how they read for a right pane that a narrow window takes away.
+
+- **SUSPENDED, beside rule C's Term 2.** Below the room both panes need, the window takes the right pane away with no ask from the reader: the pane is SUSPENDED. A suspended pane isn't MOUNTED (`IsRightPaneVisible` reads false), so a note change during the spell only leaves the presentation stale, and the probe still runs at every level (Term 3(f)). It isn't a MOUNTED true → false transition either: the view's selection, expansion and pending focus survive it, and no pending mount is armed. One private path writes it, `WorkspaceViewModel.StepRightPane`. `ConnectionsLeafCensus.EachPanesFieldIsWrittenByItsSetterAndTheNarrowWindowsStepAlone` holds the field to that path and the setter.
+- **Coming back.** When the room comes back, the pane shows again with nothing spoken. With the leaf ACTIVE the path ends in `ProbeConnections`, Term 3(f)'s silent probe, so the presentation is current: no `RightPaneShown` and no summary. A root change during the spell still clears the selection, as any root change does.
+- **An ask is unchanged.** A reader's own hide or show, by any route, still goes through the setter, narrow window or not. A hide clears the view's state (Term 2), and a show arms the mount its route consumes (Term 3(a)).
+- **Evidence:** `ConnectionsLeafTests.ANarrowSpellKeepsTheConnectionsSelectionAndExpansion`, `ComingBackFromANarrowSpellSpeaksNothing`, `APublicationDuringANarrowSpellIsReconciledSilently`, `ANoteChangedDuringANarrowSpellLoadsSilently` and `AnExplicitHideStillClearsAndAnExplicitShowStillSpeaks`.
+
 <!-- end of the graph contracts document -->
 

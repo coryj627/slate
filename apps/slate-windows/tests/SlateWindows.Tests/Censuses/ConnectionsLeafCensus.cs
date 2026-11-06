@@ -570,6 +570,54 @@ public sealed class ConnectionsLeafCensus
         Assert.True(seeded, "the constructor does not seed the initial mount (Term 3(a), IGH-7)");
     }
 
+    /// <summary>DS-14 (#1815): a narrow window suspends a pane through one private path,
+    /// which skips Term 2's collapse and Term 3(a)'s arm. Each pane's field is written by its
+    /// setter, the reader's ask, and by that path alone, so a second writer, which would skip
+    /// the ask and the lifecycle both, fails here.</summary>
+    [Fact]
+    public void EachPanesFieldIsWrittenByItsSetterAndTheNarrowWindowsStepAlone()
+    {
+        var writers = new Dictionary<string, List<string>>(StringComparer.Ordinal)
+        {
+            ["_isRightPaneVisible"] = [],
+            ["_isFilesSidebarVisible"] = [],
+        };
+        foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
+        {
+            SemanticModel model = ShellCompilation.ModelFor(source);
+            foreach (IdentifierNameSyntax name in source.Root.DescendantNodes().OfType<IdentifierNameSyntax>())
+            {
+                if (writers.TryGetValue(name.Identifier.ValueText, out List<string>? found)
+                    && IsAWrite(name)
+                    && model.GetSymbolInfo(name).Symbol is IFieldSymbol field
+                    && field.ContainingType.ToDisplayString() == "SlateWindows.WorkspaceViewModel")
+                {
+                    found.Add($"{relative}:{OwnerOf(name)}");
+                }
+            }
+        }
+
+        Assert.Equal(
+            ["WorkspaceViewModel.cs:IsRightPaneVisible", "WorkspaceViewModel.cs:StepRightPane"],
+            writers["_isRightPaneVisible"].Order(StringComparer.Ordinal).ToArray());
+        Assert.Equal(
+            ["WorkspaceViewModel.SidebarWidths.cs:IsFilesSidebarVisible", "WorkspaceViewModel.SidebarWidths.cs:StepFilesSidebar"],
+            writers["_isFilesSidebarVisible"].Order(StringComparer.Ordinal).ToArray());
+    }
+
+    /// <summary>An assignment's target, or a <c>ref</c> or <c>out</c> argument such as
+    /// <c>SetField</c>'s, bare or through <c>this.</c>.</summary>
+    private static bool IsAWrite(IdentifierNameSyntax name)
+    {
+        ExpressionSyntax target = name.Parent is MemberAccessExpressionSyntax access && access.Name == name ? access : name;
+        return target.Parent switch
+        {
+            AssignmentExpressionSyntax assignment => assignment.Left == target,
+            ArgumentSyntax argument => argument.RefKindKeyword.ValueText is "ref" or "out",
+            _ => false,
+        };
+    }
+
     /// <summary>DS-7: the census above reads C#, and a XAML binding can write a pane's
     /// visibility too, skipping the route that finishes a reveal. A toggle binds to
     /// <c>RightPaneToggle</c> or <c>FilesSidebarToggle</c>, whose setters are the route.</summary>

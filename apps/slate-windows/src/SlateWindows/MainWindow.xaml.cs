@@ -665,6 +665,9 @@ public partial class MainWindow : Window
         _observedWorkspace = workspace;
         if (workspace is not null)
         {
+            // DS-14: a pane that steps aside with the keys in it says so.
+            workspace.KeysAreInPane = pane =>
+                (pane == ShellSidebar.Files ? (UIElement)FilesPaneBorder : RightPaneBorder).IsKeyboardFocusWithin;
             workspace.WorkspaceRowWidth = ((FrameworkElement)WorkspaceColumns.Parent).ActualWidth;
             workspace.IsChoosingLeafByArrow = () => _railArrow;
             workspace.EditorPaneFocusRequested += Workspace_EditorPaneFocusRequested;

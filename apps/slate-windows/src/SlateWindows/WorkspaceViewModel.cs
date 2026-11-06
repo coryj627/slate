@@ -2828,11 +2828,14 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         ConsumePendingMount();
     }
 
+    /// <summary>Whether the right pane shows. DS-14 (#1815): every write here is the reader's
+    /// ask; a narrow window suspends the pane through <see cref="StepRightPane"/> instead.</summary>
     public bool IsRightPaneVisible
     {
         get => _isRightPaneVisible;
         set
         {
+            AskForPane(ShellSidebar.RightPane, value);
             if (SetField(ref _isRightPaneVisible, value))
             {
                 _announce(value ? new A11yEvent.RightPaneShown() : new A11yEvent.RightPaneHidden());
@@ -2847,6 +2850,35 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 RaiseRightPaneColumnStates();
                 OnPropertyChanged(nameof(RightPaneToggle));
             }
+
+            MakeRoomForPanes();
+        }
+    }
+
+    /// <summary>DS-14 (#1815): the one write of the field outside the setter, for a pane
+    /// that steps aside or comes back for the room alone (<c>ConnectionsLeafCensus</c> holds
+    /// it to one). A narrow spell suspends the pane and doesn't hide it, so it skips
+    /// <see cref="OnRightPaneVisibilityChanged"/>: the reader's Connections selection,
+    /// expansion and pending focus survive, and no mount is armed. While suspended the leaf
+    /// counts as unmounted. Coming back ends in the leaf's silent probe when it's active, so
+    /// it's current and nothing is spoken. Going with the keys inside says so.</summary>
+    private void StepRightPane(bool shown)
+    {
+        bool keysInside = !shown && KeysAreInPane?.Invoke(ShellSidebar.RightPane) == true;
+        _isRightPaneVisible = shown;
+        OnPropertyChanged(nameof(IsRightPaneVisible));
+        NotifyGraphInspectorShownChanged();
+        RaiseRightPaneResizeStates();
+        RaiseRightPaneColumnStates();
+        OnPropertyChanged(nameof(RightPaneToggle));
+        if (keysInside)
+        {
+            _announce(new A11yEvent.RightPaneHidden());
+        }
+
+        if (shown && ConnectionsLeafIsActive())
+        {
+            ProbeConnections();
         }
     }
 
