@@ -2967,8 +2967,9 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         SetViewMode(tab, !tab.IsReadingMode, landFocus: true);
     }
 
-    /// <summary>DS-15 (#1816): the one path that sets a tab's view mode, inside a workspace
-    /// mutation so the mode persists. Ctrl+Shift+E's route lands focus in the note (R-10);
+    /// <summary>DS-15 (#1816): the one path that sets a tab's view mode, persisted at the
+    /// mutation's boundary: before it, nothing saved a flip until some later change did.
+    /// Ctrl+Shift+E's route lands focus in the note (R-10);
     /// the note header's switch names its own tab, and lands focus only when the keys were
     /// in the surface going away, so they're never left inside a hidden one. It speaks no
     /// sentence of its own: the landing, or the radio's focus, says what happened.</summary>
@@ -2983,6 +2984,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         RunWorkspaceMutation(() =>
         {
             tab.ToggleViewMode();
+            Persist();
             if (landFocus)
             {
                 RequestActiveEditorFocus();

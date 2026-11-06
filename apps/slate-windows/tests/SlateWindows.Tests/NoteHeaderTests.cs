@@ -122,6 +122,8 @@ public sealed class NoteHeaderTests
     {
         using var host = Split(out WorkspaceGroupViewModel first, out WorkspaceGroupViewModel second);
         IInputElement keys = Keyboard.FocusedElement;
+        var persisted = new List<WorkspaceSnapshot>();
+        host.Workspace.PersistedForTests = persisted.Add;
 
         Select(Choice(HeaderOf(host, "b.md"), "NoteHeaderReading"));
         host.Settle();
@@ -130,6 +132,23 @@ public sealed class NoteHeaderTests
         Assert.False(first.ActiveTab!.IsReadingMode);
         Assert.Same(first, host.Workspace.ActiveGroup);
         Assert.Same(keys, Keyboard.FocusedElement);
+        WorkspaceTabState saved = TabsIn(Assert.Single(persisted).Root).Single(tab => tab.Item.Path == "b.md");
+        Assert.Equal("reading", saved.Mode);
+    });
+
+    /// <summary>DSD11: the bar's stops come before Properties and the editor, so ⋯ hands Tab
+    /// on to the Properties header.</summary>
+    [Fact]
+    public void TheBarsStopsComeBeforeProperties() => StaThread.RunPumped(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "---\nkey: value\n---\n# Lecture\n"));
+        host.Workspace.OpenPath("Lecture.md");
+        host.Settle();
+        NoteHeaderView header = HeaderOf(host, "Lecture.md");
+
+        IInputElement? next = MoveFrom(More(header), FocusNavigationDirection.Next);
+
+        Assert.True(IsInside(next as DependencyObject, Named(ContentOf(header), "PropertiesHeader")), $"Tab went from ⋯ to {next}.");
     });
 
     [Fact]
@@ -188,11 +207,15 @@ public sealed class NoteHeaderTests
         int landings = 0;
         host.Workspace.EditorPaneFocusRequested += (_, _) => landings++;
 
+        var persisted = new List<WorkspaceSnapshot>();
+        host.Workspace.PersistedForTests = persisted.Add;
+
         host.Workspace.ToggleReadingModeCommand.Execute(null);
         host.Settle();
         Assert.True(host.Workspace.ActiveGroup.ActiveTab!.IsReadingMode);
         Assert.True(Choice(header, "NoteHeaderReading").IsChecked);
         Assert.Equal(1, landings);
+        Assert.Equal("reading", TabsIn(Assert.Single(persisted).Root).Single().Mode);
 
         host.Workspace.ToggleReadingModeCommand.Execute(null);
         host.Settle();
@@ -354,6 +377,13 @@ public sealed class NoteHeaderTests
     });
 
     // --- Helpers ------------------------------------------------------------------------
+
+    private static IEnumerable<WorkspaceTabState> TabsIn(WorkspaceNodeState node) => node switch
+    {
+        WorkspaceGroupState group => group.Tabs,
+        WorkspaceSplitState split => split.Children.SelectMany(TabsIn),
+        _ => [],
+    };
 
     private static ShownShell Split(out WorkspaceGroupViewModel first, out WorkspaceGroupViewModel second)
     {
