@@ -2639,7 +2639,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     /// VM, so over-calling is safe and refetch-free.</summary>
     internal void SyncPanels()
     {
-        OnPropertyChanged(nameof(ActiveTitle));
+        FollowActiveTitle();
         // W4-6: the dock follows the active note (contract C12).
         BasesDockFollowActiveNote();
         Panels.NoteChanged(
@@ -3395,6 +3395,12 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
 
     public void Dispose()
     {
+        if (_titledTab is not null)
+        {
+            _titledTab.PropertyChanged -= ActiveTab_TitleChanged;
+            _titledTab = null;
+        }
+
         // WB-16 (#1305): a pending rail settle is cancelled, never run — the
         // one write below carries the leaf an arrow chose.
         RailSettle.Dispose();

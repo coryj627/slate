@@ -47,15 +47,28 @@ internal static class TitleBarChrome
         && point.Y < origin.Y + (size.Height * scale);
 
     /// <summary>Windows' own frame around <paramref name="visual"/>'s window, in DIPs: the
-    /// sizing border and the padded border outside it. A native window's edge takes the
-    /// pointer over all of it, and a maximized window overhangs the screen by all of it. WPF's
-    /// <see cref="SystemParameters.WindowResizeBorderThickness"/> is the sizing border alone.</summary>
+    /// sizing border and the padded border outside it, both at the window's DPI. A native
+    /// window's edge takes the pointer over all of it, and a maximized window overhangs the
+    /// screen by all of it. WPF's <see cref="SystemParameters.WindowResizeBorderThickness"/> is
+    /// the sizing border alone, at the system's DPI.</summary>
     internal static Thickness FrameThickness(Visual visual)
     {
         DpiScale dpi = VisualTreeHelper.GetDpi(visual);
-        double padded = GetSystemMetricsForDpi(SmCxPaddedBorder, (uint)Math.Round(96 * dpi.DpiScaleX)) / dpi.DpiScaleX;
-        Thickness sizing = SystemParameters.WindowResizeBorderThickness;
-        return new Thickness(sizing.Left + padded, sizing.Top + padded, sizing.Right + padded, sizing.Bottom + padded);
+        uint dots = (uint)Math.Round(96 * dpi.DpiScaleX);
+        return FrameThickness(
+            GetSystemMetricsForDpi(SmCxSizeFrame, dots),
+            GetSystemMetricsForDpi(SmCySizeFrame, dots),
+            GetSystemMetricsForDpi(SmCxPaddedBorder, dots),
+            dpi.DpiScaleX,
+            dpi.DpiScaleY);
+    }
+
+    /// <summary>The frame from one DPI's metrics, in pixels, as DIPs.</summary>
+    internal static Thickness FrameThickness(int sizingX, int sizingY, int padded, double scaleX, double scaleY)
+    {
+        double side = (sizingX + padded) / scaleX;
+        double edge = (sizingY + padded) / scaleY;
+        return new Thickness(side, edge, side, edge);
     }
 
     /// <summary>The screen point a <c>WM_NCHITTEST</c>'s lParam carries: two signed 16-bit
@@ -66,6 +79,8 @@ internal static class TitleBarChrome
         return new Point(unchecked((short)(value & 0xFFFF)), unchecked((short)((value >> 16) & 0xFFFF)));
     }
 
+    private const int SmCxSizeFrame = 32;
+    private const int SmCySizeFrame = 33;
     private const int SmCxPaddedBorder = 92;
 
     [DllImport("user32.dll")]

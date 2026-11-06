@@ -152,10 +152,10 @@ DS-0 settles these in the documents, so no later chunk has to.
 - **The design cycle** (`claude/design-pass`) has its own discovery passes. A
   defect they find is fixed there, not here.
 
-## 3. The owner's decisions (DSD1 to DSD16)
+## 3. The owner's decisions (DSD1 to DSD17)
 
-Settled with the owner on 2026-11-03, and DSD16 on 2026-11-05 after their look at real
-accents (§8). DSD8, DSD10 and DSD14 differ from what this plan first recommended, and
+Settled with the owner on 2026-11-03, DSD16 on 2026-11-05 after their look at real
+accents (§8), and DSD17 on 2026-11-06. DSD8, DSD10 and DSD14 differ from what this plan first recommended, and
 their specs follow the owner's call.
 
 | # | Chunk | Question | Decided |
@@ -176,6 +176,7 @@ their specs follow the owner's call.
 | DSD14 | DS-11 | The README gates an accent by WCAG and takes its dark fills from Fluent. The project's floor for text is \|Lc\| > 75, and black on Fluent's dark fill measures Lc 65.4 on the default blue. What must a Windows accent pass? | The README's gate: text at 4.5:1, fills and marks at 3:1. Gold stays at the floor. A chosen accent may sit below it, so on the default blue in dark, black on the primary fill is 10.47:1 and Lc 65.4. In exchange the dark fills stay Fluent's, and fewer hues fall back to gold. Selected rows get their own text brush regardless, because white on the tint fails any bar. Superseded by DSD16 |
 | DSD15 | DS-15 | The design's Back and Forward assume a note history. The only history here is "Back in Sidebar History", on both platforms, which Quick Open and links don't feed. Bound to it, Back sits disabled after Quick Open or walks sidebar selections | Leave both buttons out of DS-15, by the same rule as DS-18's toolbars: a button that misleads is worse than none. A per-tab note history is new behaviour the Mac doesn't have, with its own chords, and DS-15 lists what it takes. It can be its own chunk later |
 | DSD16 | DS-11 | The owner's look (§8) on 2026-11-05: under DSD14's gate every hue they tried fell back to gold in dark, so Windows accent looked like it did nothing. Their `#EA005E` passes every check in light, and in dark fails a pressed link (4.39:1) and the reading overlay's stand-off | Drop the requirement. Windows accent, and Automatic once the user has chosen an accent in Windows, follow whatever Windows has, in both themes. High Contrast never takes it, Automatic keeps gold on the default blue, and selected rows keep their own text brush. Choosing an accent from colours that clear contrast is a follow-up, #1842 |
+| DSD17 | DS-12 | Windows places the Snap Layouts flyout for a standard caption, about 26 below the window's top, so once it's open it covers the lower half of the design's 48-tall maximize button: a click there lands on the flyout. A click before it opens, or on the upper half, maximizes | Keep it as it is, with the design's caption buttons, over the spec's fallback to native ones |
 
 ## 4. Rules (every chunk)
 

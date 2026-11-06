@@ -4,6 +4,7 @@
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Media;
 using System.Windows.Shell;
 
 namespace SlateWindows.Tests;
@@ -38,7 +39,71 @@ public sealed class TitleBarTests
         host.Workspace.CloseActiveTabCommand.Execute(null);
         host.Settle();
         Assert.Equal("Why Slate — demo-vault — Slate", host.Shell.Title);
+
+        // A saved query's or a dashboard's rename goes through the tab alone.
+        host.Workspace.OpenDashboard("plan", "Plan");
+        host.Settle();
+        Assert.Equal("Plan — demo-vault — Slate", host.Shell.Title);
+        host.Workspace.ActiveGroup.ActiveTab!.RetargetName("Roadmap");
+        host.Settle();
+        Assert.Equal("Roadmap — demo-vault — Slate", host.Shell.Title);
     });
+
+    /// <summary>At the narrowest window and the largest text, the menus wrap in what the quick
+    /// commands and captions leave, and Close stays on the window.</summary>
+    [Fact]
+    public void AtTheNarrowestWindowAndLargestTextTheCaptionsStayOn() => RunSta(() =>
+    {
+        using var host = new ShownShell();
+        host.Shell.Width = host.Shell.MinWidth;
+        int count = ThemeManager.DictionariesFor(SlateTheme.Light, highContrast: false).Length;
+        for (int index = 0; index < count; index++)
+        {
+            host.Shell.Resources.MergedDictionaries.RemoveAt(0);
+        }
+
+        ResourceDictionary[] scaled = ThemeManager.DictionariesFor(SlateTheme.Light, highContrast: false, textScale: 2.25);
+        for (int index = 0; index < scaled.Length; index++)
+        {
+            host.Shell.Resources.MergedDictionaries.Insert(index, scaled[index]);
+        }
+
+        host.Settle();
+
+        Button close = Named(host, "CaptionClose");
+        double right = close.TranslatePoint(new Point(close.ActualWidth, 0), host.Shell.TitleBar).X;
+        Assert.True(right <= host.Shell.TitleBar.ActualWidth + 0.5, $"Close ends at {right} in a {host.Shell.TitleBar.ActualWidth} row.");
+        Assert.True(host.Shell.TitleBar.ActualHeight > 48, $"the menus didn't wrap: the row is {host.Shell.TitleBar.ActualHeight}.");
+        Assert.Equal(host.Shell.TitleBar.ActualHeight, WindowChrome.GetWindowChrome(host.Shell).CaptionHeight);
+    });
+
+    /// <summary>The window extends no glass frame: any, WindowChrome's default of the caption's
+    /// height included, takes ClearType from all of its text (the gate's
+    /// <c>ThemedShell_APalettesTextKeepsItsClearType</c> measures it). Windows 11 still rounds
+    /// the corners.</summary>
+    [Fact]
+    public void TheWindowExtendsNoGlassSoTextKeepsClearType() => RunSta(() =>
+    {
+        using var host = new ShownShell();
+
+        Assert.Equal(new Thickness(0), WindowChrome.GetWindowChrome(host.Shell).GlassFrameThickness);
+    });
+
+    /// <summary>The frame comes from one DPI's metrics: Windows' sizing and padded borders,
+    /// in pixels at that DPI, as DIPs.</summary>
+    [Theory]
+    [InlineData(4, 4, 4, 1.0, 8.0, 8.0)]
+    [InlineData(5, 5, 8, 2.0, 6.5, 6.5)]
+    [InlineData(5, 6, 6, 1.5, 7.333, 8.0)]
+    public void TheFrameIsOneDpisMetrics(int sizingX, int sizingY, int padded, double scale, double side, double edge)
+    {
+        Thickness frame = TitleBarChrome.FrameThickness(sizingX, sizingY, padded, scale, scale);
+
+        Assert.Equal(side, frame.Left, 3);
+        Assert.Equal(side, frame.Right, 3);
+        Assert.Equal(edge, frame.Top, 3);
+        Assert.Equal(edge, frame.Bottom, 3);
+    }
 
     /// <summary>One row, 48 at body text, with the caption area the same height.</summary>
     [Fact]
@@ -49,7 +114,7 @@ public sealed class TitleBarTests
         Assert.Equal(48, host.Shell.TitleBar.ActualHeight);
         Assert.Equal(48, WindowChrome.GetWindowChrome(host.Shell).CaptionHeight);
         Assert.Equal(Dock.Top, DockPanel.GetDock(host.Shell.TitleBar));
-        Assert.Same(host.Shell.TitleBar, host.Shell.MainMenu.Parent);
+        Assert.Same(host.Shell.TitleBar, VisualTreeHelper.GetParent(host.Shell.MainMenu.Parent));
     });
 
     /// <summary>At 225% Text size everything in the row still fits it: DS-4's top-level menu
@@ -106,7 +171,7 @@ public sealed class TitleBarTests
 
         AutomationPresentationTextBlock title = Assert.Single(
             ShownShell.Descendants(host.Shell.TitleBar).OfType<AutomationPresentationTextBlock>(),
-            block => ReferenceEquals(System.Windows.Media.VisualTreeHelper.GetParent(block), host.Shell.TitleBar));
+            block => ReferenceEquals(VisualTreeHelper.GetParent(block), host.Shell.MainMenu.Parent));
         Assert.False(WindowChrome.GetIsHitTestVisibleInChrome(title));
         Assert.False(WindowChrome.GetIsHitTestVisibleInChrome(host.Shell.TitleBar));
         Assert.Equal(host.Shell.Title, title.Text);
