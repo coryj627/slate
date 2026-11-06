@@ -523,6 +523,26 @@ public sealed class NoteHeaderTests
         Assert.Equal(["learning", "maths"], folders.ContextMenu!.Items.OfType<MenuItem>().Select(item => AutomationProperties.GetName(item)));
     });
 
+    /// <summary>A compact bar collapses its folders because it's compact, not because they
+    /// don't fit: a short path that arrives while it's compact goes behind "…" too.</summary>
+    [Fact]
+    public void ACompactBarCollapsesFoldersThatWouldFit() => StaThread.RunPumped(() =>
+    {
+        using var host = new ShownShell((Nested, "# Lecture\n"));
+        host.Workspace.OpenPath(Nested);
+        host.Shell.Width = 500;
+        host.Settle();
+        NoteHeaderView header = HeaderOf(host, Nested);
+        Assert.True(header.IsCompact);
+
+        ((WorkspaceTabViewModel)header.DataContext).RetargetPath("a/Lecture.md");
+        host.Settle();
+        host.Settle();
+        Assert.Empty(VisibleSegments(header));
+        Button folders = ShownShell.Descendants(header).OfType<Button>().Single(button => button.IsVisible && AutomationProperties.GetAutomationId(button) == "NoteHeaderFolders");
+        Assert.Equal(["a"], folders.ContextMenu!.Items.OfType<MenuItem>().Select(item => AutomationProperties.GetName(item)));
+    });
+
     /// <summary>The path rebuilds when the bar goes compact or comes back, and when the note
     /// moves. With the keys on a segment, they stay on the rebuilt path, not on nothing
     /// (<c>NoteHeaderView.ShowPath</c>, the focus manifest's witness).</summary>
