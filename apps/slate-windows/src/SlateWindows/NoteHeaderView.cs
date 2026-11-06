@@ -43,7 +43,7 @@ internal sealed class NoteHeaderView : Grid
     /// <summary>The bar's own stops' names, which a folder's segment mustn't sound like.</summary>
     private static readonly string[] ControlNames = ["Source", "Reading", "More note actions", "Folders"];
 
-    private readonly DockPanel _path;
+    private readonly PathPanel _path;
     private readonly StackPanel _folders = new() { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock _name = new()
     {
@@ -78,19 +78,15 @@ internal sealed class NoteHeaderView : Grid
         ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-        // The path: the folders take what the name leaves, so they're cut first, then the name.
+        // The path: the folders give way first, into "…", then the name is cut.
         _name.SetResourceReference(StyleProperty, "Slate.BodyStrongTextBlockStyle");
-        _path = new DockPanel
+        _path = new PathPanel(_folders, _name)
         {
             Margin = new Thickness(8, 0, 4, 0),
             HorizontalAlignment = HorizontalAlignment.Left,
             VerticalAlignment = VerticalAlignment.Center,
-            LastChildFill = true,
             ClipToBounds = true,
         };
-        DockPanel.SetDock(_name, Dock.Right);
-        _path.Children.Add(_name);
-        _path.Children.Add(_folders);
         Children.Add(_path);
 
         // The switch: one Tab stop, arrows move the choice (RadioGroupArrows), as the canvas's.
@@ -184,18 +180,17 @@ internal sealed class NoteHeaderView : Grid
     }
 
     /// <summary>A segment the bar can't show is a stop a reader can Tab to and nobody can see,
-    /// so folders that don't fit collapse into "…", as a breadcrumb does when space runs out,
-    /// and come back when their room is as wide as they needed (a wider bar, a shorter name).
-    /// A panel's desired size is clipped to what it's offered, so the room they need is their
-    /// segments' own; the path hugs what it shows, so the room they have is its cell, less
-    /// the name.</summary>
+    /// so folders that don't fit beside the whole name collapse into "…", as a breadcrumb does
+    /// when space runs out, and come back when their room is as wide as they needed (a wider
+    /// bar, a shorter name). Both are read from the path's last measure, which offers the
+    /// folders and the name all the room they want.</summary>
     protected override Size ArrangeOverride(Size arrangeSize)
     {
         Size arranged = base.ArrangeOverride(arrangeSize);
-        double room = LayoutInformation.GetLayoutSlot(_path).Width - _path.Margin.Left - _path.Margin.Right - _name.DesiredSize.Width;
+        double room = _path.Offered - _path.NameNeeds;
         if (!PathCollapsed && _folders.Children.Count > 0)
         {
-            double needed = _folders.Children.OfType<UIElement>().Sum(child => child.DesiredSize.Width);
+            double needed = _folders.DesiredSize.Width;
             if (needed - room > 0.5)
             {
                 _overflowing = true;
@@ -509,5 +504,48 @@ internal sealed class NoteHeaderView : Grid
         };
         text.SetResourceReference(TextBlock.FontFamilyProperty, "SymbolThemeFontFamily");
         return text;
+    }
+
+    /// <summary>The path's layout: the folders first, at their whole width, then the note's
+    /// name in what's left, cut with an ellipsis. So "…" is never what's cut, and the bar
+    /// can tell whether the folders' segments would fit beside the whole name.</summary>
+    private sealed class PathPanel : Panel
+    {
+        private readonly UIElement _folders;
+        private readonly UIElement _name;
+
+        internal PathPanel(UIElement folders, UIElement name)
+        {
+            _folders = folders;
+            _name = name;
+            Children.Add(folders);
+            Children.Add(name);
+        }
+
+        /// <summary>The width the last measure offered the path.</summary>
+        internal double Offered { get; private set; }
+
+        /// <summary>The whole name's width, uncut.</summary>
+        internal double NameNeeds { get; private set; }
+
+        protected override Size MeasureOverride(Size availableSize)
+        {
+            var unbounded = new Size(double.PositiveInfinity, availableSize.Height);
+            _folders.Measure(unbounded);
+            _name.Measure(unbounded);
+            Offered = availableSize.Width;
+            NameNeeds = _name.DesiredSize.Width;
+            double folders = Math.Min(_folders.DesiredSize.Width, availableSize.Width);
+            _name.Measure(new Size(Math.Max(0, availableSize.Width - folders), availableSize.Height));
+            return new Size(folders + _name.DesiredSize.Width, Math.Max(_folders.DesiredSize.Height, _name.DesiredSize.Height));
+        }
+
+        protected override Size ArrangeOverride(Size finalSize)
+        {
+            double folders = Math.Min(_folders.DesiredSize.Width, finalSize.Width);
+            _folders.Arrange(new Rect(0, 0, folders, finalSize.Height));
+            _name.Arrange(new Rect(folders, 0, Math.Max(0, finalSize.Width - folders), finalSize.Height));
+            return finalSize;
+        }
     }
 }

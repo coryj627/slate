@@ -8,6 +8,7 @@ using System.Windows.Automation.Provider;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using System.Windows.Media;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows.Tests;
@@ -178,15 +179,53 @@ public sealed class NoteHeaderTests
         AssertEveryStopIsOnScreen(header);
     });
 
+    /// <summary>The folders give way before the name does (the design's order): a long name
+    /// collapses them into "…", which keeps its whole width, and the name is what's cut.</summary>
+    [Theory]
+    [InlineData(1200)]
+    [InlineData(500)]
+    public void ALongNameNeverSqueezesTheFolders(double shellWidth) => StaThread.RunPumped(() =>
+    {
+        string path = $"folder/{string.Concat(Enumerable.Repeat("long-note-name-", 12))}.md";
+        using var host = new ShownShell((path, "# Note\n"));
+        host.Workspace.OpenPath(path);
+        host.Shell.Width = shellWidth;
+        host.Settle();
+        host.Settle();
+        NoteHeaderView header = HeaderOf(host, path);
+
+        Assert.Empty(VisibleSegments(header));
+        Assert.Single(ShownShell.Descendants(header).OfType<Button>(), button => button.IsVisible && AutomationProperties.GetAutomationId(button) == "NoteHeaderFolders");
+        AssertEveryStopIsOnScreen(header);
+    });
+
     private static Button[] VisibleSegments(NoteHeaderView header) =>
         [.. ShownShell.Descendants(header).OfType<Button>().Where(button => button.IsVisible && AutomationProperties.GetAutomationId(button) == "NoteHeaderFolder")];
 
+    /// <summary>Every stop in the bar is whole inside the bar and inside each clip on its way
+    /// up, its own included: an element's bounds when it clips to them, and the layout clip an
+    /// element gets when it's arranged smaller than it wants. So none is a stop a reader can
+    /// Tab to and nobody can see.</summary>
     private static void AssertEveryStopIsOnScreen(NoteHeaderView header)
     {
         foreach (ButtonBase stop in ShownShell.Descendants(header).OfType<ButtonBase>().Where(button => button.IsVisible))
         {
             Rect box = stop.TransformToAncestor(header).TransformBounds(new Rect(stop.RenderSize));
             Assert.True(box.Right <= header.ActualWidth + 0.5 && box.Left >= -0.5, $"{AutomationProperties.GetName(stop)} is at {box} in a {header.ActualWidth:F0} bar.");
+            for (DependencyObject? at = stop; at is not null && at != header; at = VisualTreeHelper.GetParent(at))
+            {
+                if (at is not FrameworkElement element)
+                {
+                    continue;
+                }
+
+                Rect? clip = LayoutInformation.GetLayoutClip(element)?.Bounds ?? (element.ClipToBounds ? new Rect(element.RenderSize) : null);
+                if (clip is { } bounds)
+                {
+                    Rect shown = element.TransformToAncestor(header).TransformBounds(bounds);
+                    Assert.True(box.Left >= shown.Left - 0.5 && box.Right <= shown.Right + 0.5, $"{AutomationProperties.GetName(stop)} is at {box}, clipped to {shown} by a {element.GetType().Name}.");
+                }
+            }
         }
     }
 
