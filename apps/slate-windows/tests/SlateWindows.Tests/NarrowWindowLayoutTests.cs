@@ -25,8 +25,9 @@ public sealed class NarrowWindowLayoutTests
         Assert.True(right <= host.Shell.ActualWidth, $"the rail ends at {right:F0}px in a {host.Shell.ActualWidth:F0}px window.");
     });
 
-    /// <summary>The window's borders take 16px at 100% display scale and 13px at 200%,
-    /// so a minimum that only just fits at one scale can miss at another.</summary>
+    /// <summary>A minimum that only just fits at one display scale can miss at another.
+    /// DS-14 (#1815): at the minimum the right pane steps aside, and what still shows,
+    /// Files and the editor, keeps its floor.</summary>
     [Fact]
     public void TheWindowsMinimumHasRoomForEveryColumnsFloor() => StaThread.Run(() =>
     {
@@ -37,17 +38,18 @@ public sealed class NarrowWindowLayoutTests
 
         double row = host.Workspace.WorkspaceRowWidth;
         Assert.True(row > 0 && row <= host.Shell.MinWidth, $"the row reports {row:F0}px in a {host.Shell.MinWidth:F0}px window.");
+        Assert.True(host.Workspace.IsFilesSidebarVisible);
+        Assert.False(host.Workspace.IsRightPaneVisible);
         Assert.True(
             row >= WorkspaceViewModel.MinimumSidebarWidth
                 + WorkspaceViewModel.MinimumEditorWidth
-                + WorkspaceViewModel.MinimumRightPaneWidth
-                + (2 * WorkspaceViewModel.SplitterWidth),
+                + WorkspaceViewModel.SplitterWidth,
             $"the row has only {row:F0}px.");
     });
 
     /// <summary>Half of a 1920x1080 screen at 125% is 768 wide, and about 782 with the
     /// window's invisible borders. A larger minimum would stop that Snap from fitting.
-    /// Plan 46's DS-14 takes the minimum down further.</summary>
+    /// DS-14 took the minimum down to 500 (<c>NarrowPaneTests</c>).</summary>
     [Fact]
     public void TheWindowsMinimumStillFitsHalfOfACommonScreen() => StaThread.Run(() =>
     {

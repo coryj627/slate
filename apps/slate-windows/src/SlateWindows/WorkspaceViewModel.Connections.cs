@@ -408,7 +408,9 @@ internal sealed partial class WorkspaceViewModel
 
     /// <summary>Term 3(f): the lifecycle's file-change and scan-finished
     /// arms — the probe at EVERY level. Called from
-    /// <see cref="NotifyGraphOfVaultChange"/>.</summary>
+    /// <see cref="NotifyGraphOfVaultChange"/>, and from
+    /// <see cref="StepRightPane"/> as a suspended pane comes back (DS-14), so
+    /// the leaf is current and nothing is spoken.</summary>
     private void ProbeConnections(CancellationToken cancellation = default) => Connections.Probe(cancellation);
 
     // --- The seams ----------------------------------------------------------------------

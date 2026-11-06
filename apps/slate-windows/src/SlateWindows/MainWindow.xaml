@@ -10,7 +10,7 @@
         xmlns:graph="clr-namespace:SlateWindows.Graph"
         Title="{Binding WindowTitle, FallbackValue=Slate}"
         Height="720" Width="1120"
-        MinHeight="480" MinWidth="780"
+        MinHeight="480" MinWidth="500"
         UseLayoutRounding="True"
         FontFamily="{DynamicResource Slate.FontFamilyText}"
         FontSize="{DynamicResource Slate.FontSizeBody}"
@@ -1007,8 +1007,9 @@
                 </local:AutomationLandmarkGrid.Style>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="36" />
-                    <ColumnDefinition Width="520" />
-                    <ColumnDefinition Width="*" />
+                    <!-- DS-14: 520 at most, and less in a narrow window. -->
+                    <ColumnDefinition Width="*" MaxWidth="520" />
+                    <ColumnDefinition Width="36" />
                 </Grid.ColumnDefinitions>
                 <ScrollViewer Grid.Column="1" Focusable="False" VerticalScrollBarVisibility="Auto">
                 <StackPanel Margin="0,56,0,32">
@@ -1111,7 +1112,7 @@
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="{Binding Workspace.FilesColumnWidth, Mode=TwoWay, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=270}" MinWidth="{Binding Workspace.FilesColumnMinimumWidth, FallbackValue=200}" MaxWidth="640" />
                         <ColumnDefinition Width="{Binding Workspace.FilesSplitterWidth, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=5}" />
-                        <ColumnDefinition Width="*" MinWidth="270" />
+                        <ColumnDefinition Width="*" MinWidth="{Binding Workspace.EditorColumnMinimumWidth, FallbackValue=270}" />
                         <ColumnDefinition Width="{Binding Workspace.RightPaneSplitterWidth, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=5}" />
                         <ColumnDefinition Width="{Binding Workspace.RightPaneColumnWidth, Mode=TwoWay, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=320}" MinWidth="{Binding Workspace.RightPaneColumnMinimumWidth, FallbackValue=280}" MaxWidth="640" />
                     </Grid.ColumnDefinitions>
@@ -3557,13 +3558,13 @@
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0">
-                            <local:AutomationPresentationTextBlock Margin="0,0,0,2" Text="Old property key" />
+                            <local:AutomationPresentationTextBlock Margin="0,0,0,2" Text="Old property key" TextWrapping="Wrap" />
                             <TextBox x:Name="BulkRenameOldKeyTextBox"
                                      Padding="6,4"
                                      Text="{Binding OldKey, UpdateSourceTrigger=PropertyChanged}"
                                      AutomationProperties.AutomationId="BulkRenameOldKey"
                                      AutomationProperties.Name="Old property key" />
-                            <local:AutomationPresentationTextBlock Margin="0,6,0,2" Text="Old key type" />
+                            <local:AutomationPresentationTextBlock Margin="0,6,0,2" Text="Old key type" TextWrapping="Wrap" />
                             <ComboBox ItemsSource="{Binding KeyTypes}"
                                       SelectedItem="{Binding OldKeyType}"
                                       DisplayMemberPath="Label"
@@ -3581,7 +3582,7 @@
                             </ComboBox>
                         </StackPanel>
                         <StackPanel Grid.Column="2">
-                            <local:AutomationPresentationTextBlock Margin="0,0,0,2" Text="New property key" />
+                            <local:AutomationPresentationTextBlock Margin="0,0,0,2" Text="New property key" TextWrapping="Wrap" />
                             <TextBox Padding="6,4"
                                      Text="{Binding NewKey, UpdateSourceTrigger=PropertyChanged}"
                                      AutomationProperties.AutomationId="BulkRenameNewKey"
@@ -3951,6 +3952,7 @@
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
                         <TextBlock Text="Name:" VerticalAlignment="Center" />
                         <TextBox x:Name="DashboardEditorNameBox"
@@ -3977,10 +3979,12 @@
                                 </Style>
                             </ComboBox.ItemContainerStyle>
                         </ComboBox>
+                        <!-- DS-14: under the picker, so a narrow sheet keeps the picker whole. -->
                         <Button Content="Add section"
-                                Grid.Row="1"
-                                Grid.Column="2"
-                                Margin="8,10,0,0"
+                                Grid.Row="2"
+                                Grid.Column="1"
+                                HorizontalAlignment="Left"
+                                Margin="6,8,0,0"
                                 AutomationProperties.AutomationId="DashboardEditorAddSection"
                                 Click="DashboardEditorAddSection_Click" />
                     </Grid>
@@ -4133,7 +4137,8 @@
                                 Click="BuilderDone_Click" />
                     </WrapPanel>
                         <StackPanel>
-                            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <!-- DS-14: a WrapPanel, so a narrow sheet keeps "Add group" whole. -->
+                            <WrapPanel Margin="0,8,0,0">
                                 <TextBlock Text="Match:" VerticalAlignment="Center" />
                                 <ComboBox x:Name="BuilderCombinatorBox"
                                           Margin="6,0,0,0"
@@ -4153,7 +4158,7 @@
                                         Margin="6,0,0,0"
                                         AutomationProperties.AutomationId="BuilderAddGroup"
                                         Click="BuilderAddGroup_Click" />
-                            </StackPanel>
+                            </WrapPanel>
                             <!-- R-4 (#1246), the one-stop rule: a row's container
                                  wraps its own controls, so it is layout. As a
                                  plain ItemsControl container it read its view
@@ -4911,7 +4916,8 @@
                     AutomationProperties.AutomationId="SettingsSheet"
                     AutomationProperties.Name="Settings"
                     AutomationProperties.IsDialog="True">
-                <Grid>
+                <!-- DS-14: below 600 the categories show their glyphs alone (SettingsLayoutGrid). -->
+                <local:SettingsLayoutGrid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
@@ -4947,6 +4953,11 @@
                         <ListBox.ItemContainerStyle>
                             <Style TargetType="ListBoxItem" BasedOn="{StaticResource Slate.PanelRowBase}">
                                 <Setter Property="AutomationProperties.Name" Value="{Binding Label}" />
+                                <Style.Triggers>
+                                    <Trigger Property="local:SettingsLayoutGrid.IsCompact" Value="True">
+                                        <Setter Property="ToolTip" Value="{Binding Label}" />
+                                    </Trigger>
+                                </Style.Triggers>
                             </Style>
                         </ListBox.ItemContainerStyle>
                         <ListBox.ItemTemplate>
@@ -4956,15 +4967,35 @@
                                         <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
-                                    <local:AutomationPresentationTextBlock Margin="0,0,12,0"
-                                                                           VerticalAlignment="Center"
+                                    <local:AutomationPresentationTextBlock VerticalAlignment="Center"
                                                                            Text="{Binding Glyph}"
                                                                            FontFamily="{DynamicResource SymbolThemeFontFamily}"
-                                                                           FontSize="20" />
+                                                                           FontSize="20">
+                                        <local:AutomationPresentationTextBlock.Style>
+                                            <Style TargetType="local:AutomationPresentationTextBlock">
+                                                <Setter Property="Margin" Value="0,0,12,0" />
+                                                <Style.Triggers>
+                                                    <Trigger Property="local:SettingsLayoutGrid.IsCompact" Value="True">
+                                                        <Setter Property="Margin" Value="0" />
+                                                    </Trigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </local:AutomationPresentationTextBlock.Style>
+                                    </local:AutomationPresentationTextBlock>
                                     <local:AutomationPresentationTextBlock Grid.Column="1"
                                                                            VerticalAlignment="Center"
                                                                            Text="{Binding Label}"
-                                                                           TextWrapping="Wrap" />
+                                                                           TextWrapping="Wrap">
+                                        <local:AutomationPresentationTextBlock.Style>
+                                            <Style TargetType="local:AutomationPresentationTextBlock">
+                                                <Style.Triggers>
+                                                    <Trigger Property="local:SettingsLayoutGrid.IsCompact" Value="True">
+                                                        <Setter Property="Visibility" Value="Collapsed" />
+                                                    </Trigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </local:AutomationPresentationTextBlock.Style>
+                                    </local:AutomationPresentationTextBlock>
                                 </Grid>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
@@ -5020,7 +5051,7 @@
                             </local:SettingRow>
                         </StackPanel>
                     </ScrollViewer>
-                </Grid>
+                </local:SettingsLayoutGrid>
             </local:AutomationLandmarkBorder>
             </Grid>
         </Grid>

@@ -63,7 +63,8 @@
         <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
         <Setter Property="FontWeight" Value="SemiBold" />
     </Style>
-    <!-- DS-10: one setting as a card. SettingRow names its control from PART_Label. -->
+    <!-- DS-10: one setting as a card. SettingRow names its control from PART_Label. DS-14:
+         SettingRowGrid puts the control under the label once the row is narrow. -->
     <ControlTemplate x:Key="Slate.SettingRowTemplate" TargetType="local:SettingRow">
         <Border MinHeight="68"
                 Padding="16,12"
@@ -72,7 +73,11 @@
                 BorderBrush="{DynamicResource Slate.SubtleBorderBrush}"
                 BorderThickness="1"
                 SnapsToDevicePixels="True">
-            <Grid>
+            <local:SettingRowGrid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
@@ -89,7 +94,7 @@
                                Style="{DynamicResource Slate.CaptionTextBlockStyle}" />
                 </StackPanel>
                 <ContentPresenter Grid.Column="1" VerticalAlignment="Center" />
-            </Grid>
+            </local:SettingRowGrid>
         </Border>
     </ControlTemplate>
     <!-- DS-9: an icon-only button is its glyph until it's used. Whole, because a style

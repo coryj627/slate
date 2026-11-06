@@ -61,6 +61,7 @@ internal sealed partial class WorkspaceViewModel
             HoldWidth(ref _filesSidebarWidth, value, ShellSidebar.Files);
             _filesSidebarChosenWidth = _filesSidebarWidth;
             OnPropertyChanged(nameof(FilesColumnWidth));
+            OnPropertyChanged(nameof(EditorColumnMinimumWidth));
         }
     }
 
@@ -74,6 +75,7 @@ internal sealed partial class WorkspaceViewModel
             HoldWidth(ref _rightPaneWidth, value, ShellSidebar.RightPane);
             _rightPaneChosenWidth = _rightPaneWidth;
             OnPropertyChanged(nameof(RightPaneColumnWidth));
+            OnPropertyChanged(nameof(EditorColumnMinimumWidth));
         }
     }
 
@@ -102,12 +104,14 @@ internal sealed partial class WorkspaceViewModel
 
     /// <summary>DS-7: whether the Files sidebar shows. Not persisted, like the right
     /// pane. Core says which, and the keys in it, when it goes, land in the editor through
-    /// the focus guard (MainWindow's WorkspaceColumns landing).</summary>
+    /// the focus guard (MainWindow's WorkspaceColumns landing). DS-14: every write here is
+    /// the reader's ask, which a narrow window can suspend but never undo.</summary>
     public bool IsFilesSidebarVisible
     {
         get => _isFilesSidebarVisible;
         set
         {
+            AskForPane(ShellSidebar.Files, value);
             if (SetField(ref _isFilesSidebarVisible, value))
             {
                 _announce(value ? new A11yEvent.FilesSidebarShown() : new A11yEvent.FilesSidebarHidden());
@@ -115,10 +119,79 @@ internal sealed partial class WorkspaceViewModel
                 RaiseFilesSidebarResizeStates();
                 RaiseFilesColumnStates();
             }
+
+            MakeRoomForPanes();
         }
     }
 
     private bool _isFilesSidebarVisible = true;
+
+    // DS-14 (#1815): what the reader asked for, which is what shows whenever there's room,
+    // and the pane they asked for last, which wins when there's room for only one.
+    private bool _filesSidebarWanted = true;
+    private bool _rightPaneWanted = true;
+    private ShellSidebar? _lastAskedPane;
+
+    private void AskForPane(ShellSidebar pane, bool shown)
+    {
+        if (pane == ShellSidebar.Files)
+        {
+            _filesSidebarWanted = shown;
+        }
+        else
+        {
+            _rightPaneWanted = shown;
+        }
+
+        _lastAskedPane = pane;
+    }
+
+    /// <summary>DS-14: the row's room decides which wanted panes show (<see cref="PaneRoom"/>),
+    /// and a pane that steps aside or comes back goes through <see cref="StepFilesSidebar"/>
+    /// or <see cref="StepRightPane"/>, never the setters, so what the reader asked for stays.
+    /// A pane goes before one comes, so the room it leaves is there.</summary>
+    private void MakeRoomForPanes()
+    {
+        PaneRoom.Showing showing = PaneRoom.Decide(
+            WorkspaceRowWidth, MinimumSidebarWidth, MinimumRightPaneWidth, _filesSidebarWanted, _rightPaneWanted, _lastAskedPane);
+        if (!showing.Right && _isRightPaneVisible)
+        {
+            StepRightPane(false);
+        }
+
+        if (!showing.Files && _isFilesSidebarVisible)
+        {
+            StepFilesSidebar(false);
+        }
+
+        if (showing.Files && !_isFilesSidebarVisible)
+        {
+            StepFilesSidebar(true);
+        }
+
+        if (showing.Right && !_isRightPaneVisible)
+        {
+            StepRightPane(true);
+        }
+    }
+
+    /// <summary>DS-14: the Files sidebar steps aside or comes back for the room alone. It
+    /// raises what depends on the property and says nothing, unless the keys were in it as
+    /// it went: a reader whose pane just vanished hears it, and the focus guard puts the keys
+    /// in the editor, as a hide's.</summary>
+    private void StepFilesSidebar(bool shown)
+    {
+        bool keysInside = !shown && KeysAreInPane?.Invoke(ShellSidebar.Files) == true;
+        _isFilesSidebarVisible = shown;
+        OnPropertyChanged(nameof(IsFilesSidebarVisible));
+        OnPropertyChanged(nameof(FilesSidebarToggle));
+        RaiseFilesSidebarResizeStates();
+        RaiseFilesColumnStates();
+        if (keysInside)
+        {
+            _announce(new A11yEvent.FilesSidebarHidden());
+        }
+    }
 
     /// <summary>DS-7: the status bar's button, bound both ways, because UIA's Toggle
     /// doesn't run a button's command. The setter is the route, as the command's is.</summary>
@@ -167,14 +240,16 @@ internal sealed partial class WorkspaceViewModel
     /// only <see cref="MaximumSidebarWidth"/> bounds a width. A narrower row
     /// brings both widths back into its room (a window shrunk or snapped
     /// under a wide sidebar), so every step is one step and says the
-    /// truth.</summary>
+    /// truth. DS-14: below the room both panes need, one steps aside first.</summary>
     internal double WorkspaceRowWidth
     {
         get => _workspaceRowWidth;
         set
         {
             _workspaceRowWidth = value;
+            MakeRoomForPanes();
             HoldBothWidths();
+            OnPropertyChanged(nameof(EditorColumnMinimumWidth));
         }
     }
 
@@ -185,6 +260,7 @@ internal sealed partial class WorkspaceViewModel
     {
         HoldFilesSidebarWidth();
         HoldRightPaneWidth();
+        OnPropertyChanged(nameof(EditorColumnMinimumWidth));
     }
 
     private void HoldFilesSidebarWidth()
@@ -224,9 +300,24 @@ internal sealed partial class WorkspaceViewModel
         OnPropertyChanged(nameof(FilesSplitterWidth));
         HoldRightPaneWidth();
         HoldFilesSidebarWidth();
+        OnPropertyChanged(nameof(EditorColumnMinimumWidth));
     }
 
     private double _workspaceRowWidth;
+
+    /// <summary>DS-14: whether the keys are in a pane, which the window answers, so a pane
+    /// that steps aside with the keys in it can say so.</summary>
+    internal Func<ShellSidebar, bool>? KeysAreInPane { get; set; }
+
+    /// <summary>DS-14: the editor column's floor: its 270, unless a pane the reader asked
+    /// for doesn't fit beside it, when it takes what the pane leaves, so the command does what
+    /// it says.</summary>
+    public double EditorColumnMinimumWidth => WorkspaceRowWidth <= 0
+        ? MinimumEditorWidth
+        : Math.Clamp(
+            WorkspaceRowWidth - FilesColumnWidth - RightPaneColumnWidth - FilesSplitterWidth - RightPaneSplitterWidth,
+            0,
+            MinimumEditorWidth);
 
     /// <summary>Stores <paramref name="value"/> bounded to
     /// <paramref name="sidebar"/>'s range — at least the columns' minimum, at

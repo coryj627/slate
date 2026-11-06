@@ -223,6 +223,8 @@ public sealed partial class TextScaleTests
     [InlineData(1120, 480)]
     [InlineData(780, 720)]
     [InlineData(780, 480)]
+    [InlineData(500, 720)]
+    [InlineData(500, 480)]
     public void NoSheetTextIsCutAtTheLargestSize(double width, double height) => OnOwnThread(() =>
     {
         using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
@@ -257,6 +259,7 @@ public sealed partial class TextScaleTests
     [Theory]
     [InlineData(1120)]
     [InlineData(780)]
+    [InlineData(500)]
     public void ASheetsButtonsHaveRoomForTheirBoundText(double width) => OnOwnThread(() =>
     {
         using var host = new ShownShell(("Lecture.md", "# Lecture\n"));

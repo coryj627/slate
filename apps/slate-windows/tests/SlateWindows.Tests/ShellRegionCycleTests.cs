@@ -182,6 +182,52 @@ public sealed class ShellRegionCycleTests
         }
     }
 
+    /// <summary>DS-14 (#1815): a pane a narrow window suspended is skipped as a hidden one
+    /// is, and the ring doesn't bring it back.</summary>
+    [Fact]
+    public void ASuspendedRightPaneIsSkippedNotRevealed()
+    {
+        (WorkspaceViewModel workspace, FakeHost host, List<A11yEvent> announced, FixtureVault fixture, VaultSession session) = Open();
+        using (fixture)
+        using (session)
+        using (workspace)
+        {
+            workspace.OpenPath("note0.md");
+            workspace.WorkspaceRowWidth = 1200;
+            workspace.WorkspaceRowWidth = 500;
+            announced.Clear();
+            host.Focused = ShellRegionKind.Editor;
+
+            workspace.FocusNextPaneCommand.Execute(null);
+
+            Assert.Equal([ShellRegionKind.StatusBar], host.Landed);
+            Assert.False(workspace.IsRightPaneVisible);
+        }
+    }
+
+    [Fact]
+    public void ASuspendedFilesSidebarIsSkippedNotRevealed()
+    {
+        (WorkspaceViewModel workspace, FakeHost host, List<A11yEvent> announced, FixtureVault fixture, VaultSession session) = Open();
+        using (fixture)
+        using (session)
+        using (workspace)
+        {
+            workspace.OpenPath("note0.md");
+            workspace.WorkspaceRowWidth = 1200;
+            workspace.WorkspaceRowWidth = 500;
+            workspace.RightPaneToggle = true;
+            Assert.False(workspace.IsFilesSidebarVisible);
+            announced.Clear();
+            host.Focused = ShellRegionKind.MenuBar;
+
+            workspace.FocusNextPaneCommand.Execute(null);
+
+            Assert.NotEqual(ShellRegionKind.Files, host.Landed[0]);
+            Assert.False(workspace.IsFilesSidebarVisible);
+        }
+    }
+
     [Fact]
     public void ARefusedLandingFallsThroughToTheNextRegion()
     {
