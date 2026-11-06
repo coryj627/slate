@@ -70,6 +70,27 @@ public sealed class NoteHeaderTests
         Assert.False(name.Focusable);
     });
 
+    /// <summary>A folder name a path repeats (notes/notes) names its segments by their paths,
+    /// so a reader can tell where each goes and no two sibling buttons share a name; a
+    /// name the path holds once stays the folder's name.</summary>
+    [Fact]
+    public void RepeatedFolderNamesAreToldApart() => StaThread.RunPumped(() =>
+    {
+        using var host = new ShownShell(("notes/notes/topics/Note.md", "# Note\n"));
+        var revealed = new List<string>();
+        host.Workspace.GraphRevealInSidebar = revealed.Add;
+        host.Workspace.OpenPath("notes/notes/topics/Note.md");
+        host.Settle();
+        NoteHeaderView header = HeaderOf(host, "notes/notes/topics/Note.md");
+
+        Button[] segments = [.. ShownShell.Descendants(header).OfType<Button>().Where(button => AutomationProperties.GetAutomationId(button) == "NoteHeaderFolder")];
+        Assert.Equal(["notes", "notes/notes", "topics"], segments.Select(AutomationProperties.GetName));
+        Assert.Equal(["notes", "notes", "topics"], segments.Select(button => ((TextBlock)button.Content).Text));
+        Invoke(segments[1]);
+        host.Settle();
+        Assert.Equal(["notes/notes"], revealed);
+    });
+
     [Fact]
     public void ARevealShowsAHiddenSidebar() => StaThread.RunPumped(() =>
     {

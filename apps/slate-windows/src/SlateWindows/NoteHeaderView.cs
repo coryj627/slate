@@ -255,9 +255,12 @@ internal sealed class NoteHeaderView : Grid
 
         foreach ((string name, string folder) in folders)
         {
-            Button segment = Segment(name, name);
+            // A name the path repeats (notes/notes) is named by its path, so no two sibling
+            // segments share a name and each says where it goes.
+            bool repeated = folders.Count(other => other.Name == name) > 1;
+            Button segment = Segment(name, repeated ? folder : name);
             AutomationProperties.SetAutomationId(segment, "NoteHeaderFolder");
-            AutomationProperties.SetName(segment, name);
+            AutomationProperties.SetName(segment, repeated ? folder : name);
             segment.Click += (_, _) => Workspace?.RevealFolderFromHeader(folder);
             _folders.Children.Add(segment);
             _folders.Children.Add(Chevron());
