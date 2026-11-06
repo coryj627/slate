@@ -199,6 +199,91 @@ public sealed class NoteHeaderTests
         AssertEveryStopIsOnScreen(header);
     });
 
+    /// <summary>A pane can be narrower than the bar's stops (a split has no floor), so they give
+    /// way when one can't be whole: the folders first, then ⋯, then the switch. Each comes back
+    /// when there's room.</summary>
+    [Fact]
+    public void ANarrowPaneShowsOnlyWholeStops() => StaThread.RunPumped(() =>
+    {
+        using var host = new ShownShell(("a/a.md", "# A\n"), ("a/b.md", "# B\n"));
+        host.Workspace.OpenPath("a/a.md");
+        host.Workspace.OpenPath("a/b.md", WorkspaceOpenTarget.SplitRight);
+        host.Shell.Width = 500;
+        host.Settle();
+        host.Settle();
+        foreach (string path in new[] { "a/a.md", "a/b.md" })
+        {
+            AssertStops(HeaderOf(host, path), folders: false, more: true, switcher: true);
+        }
+
+        host.Shell.Width = 3200;
+        host.Settle();
+        host.Settle();
+        foreach (string path in new[] { "a/a.md", "a/b.md" })
+        {
+            AssertStops(HeaderOf(host, path), folders: true, more: true, switcher: true);
+        }
+    });
+
+    /// <summary>Narrower still, ⋯ goes, then the switch, and they come back in turn. Keys on a
+    /// stop that gives way go to the bar's first stop that stays, the switch's checked option,
+    /// else into the note: never onto nothing.</summary>
+    [Fact]
+    public void AStopThatGivesWayHandsOnTheKeys() => StaThread.RunPumped(() =>
+    {
+        using var host = new ShownShell((Nested, "# Lecture\n"));
+        host.Workspace.OpenPath(Nested);
+        host.Settle();
+        NoteHeaderView header = HeaderOf(host, Nested);
+        header.Width = 500;
+        host.Settle();
+        host.Settle();
+        RadioButton source = Choice(header, "NoteHeaderSource");
+        double switcher = ((FrameworkElement)VisualTreeHelper.GetParent(VisualTreeHelper.GetParent(source))).DesiredSize.Width;
+        Button more = ShownShell.Descendants(header).OfType<Button>().Single(button => AutomationProperties.GetAutomationId(button) == "NoteHeaderMore");
+        double moreWidth = more.DesiredSize.Width;
+
+        Button folders = ShownShell.Descendants(header).OfType<Button>().Single(button => button.IsVisible && AutomationProperties.GetAutomationId(button) == "NoteHeaderFolders");
+        Assert.True(folders.Focus());
+        header.Width = switcher + moreWidth + 4;
+        host.Settle();
+        host.Settle();
+        AssertStops(header, folders: false, more: true, switcher: true);
+        Assert.Same(source, Keyboard.FocusedElement);
+
+        Assert.True(more.Focus());
+        header.Width = switcher + 4;
+        host.Settle();
+        host.Settle();
+        AssertStops(header, folders: false, more: false, switcher: true);
+        Assert.Same(source, Keyboard.FocusedElement);
+
+        header.Width = switcher / 2;
+        host.Settle();
+        host.Settle();
+        AssertStops(header, folders: false, more: false, switcher: false);
+        Assert.True(IsInside(Keyboard.FocusedElement as DependencyObject, EditorHostOf(ContentOf(header))), $"The keys are on {Keyboard.FocusedElement}.");
+
+        header.Width = switcher + 4;
+        host.Settle();
+        host.Settle();
+        AssertStops(header, folders: false, more: false, switcher: true);
+        header.Width = double.NaN;
+        host.Settle();
+        host.Settle();
+        AssertStops(header, folders: true, more: true, switcher: true);
+    });
+
+    private static void AssertStops(NoteHeaderView header, bool folders, bool more, bool switcher)
+    {
+        ButtonBase[] shown = [.. ShownShell.Descendants(header).OfType<ButtonBase>().Where(button => button.IsVisible)];
+        string said = $"A {header.ActualWidth:F0} bar shows {string.Join(", ", shown.Select(AutomationProperties.GetAutomationId))}.";
+        Assert.True(folders == shown.Any(button => AutomationProperties.GetAutomationId(button) is "NoteHeaderFolder" or "NoteHeaderFolders"), said);
+        Assert.True(more == shown.Any(button => AutomationProperties.GetAutomationId(button) == "NoteHeaderMore"), said);
+        Assert.True(switcher == shown.Any(button => AutomationProperties.GetAutomationId(button) is "NoteHeaderSource" or "NoteHeaderReading"), said);
+        AssertEveryStopIsOnScreen(header);
+    }
+
     private static Button[] VisibleSegments(NoteHeaderView header) =>
         [.. ShownShell.Descendants(header).OfType<Button>().Where(button => button.IsVisible && AutomationProperties.GetAutomationId(button) == "NoteHeaderFolder")];
 

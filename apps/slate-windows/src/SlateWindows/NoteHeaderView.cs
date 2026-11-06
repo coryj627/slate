@@ -56,6 +56,7 @@ internal sealed class NoteHeaderView : Grid
     private readonly RadioButton _reading;
     private readonly TextBlock _sourceLabel;
     private readonly TextBlock _readingLabel;
+    private readonly Border _switcher;
     private readonly Button _more;
     private readonly MenuItem _splitRight;
     private readonly MenuItem _addProperty;
@@ -68,6 +69,12 @@ internal sealed class NoteHeaderView : Grid
     // as wide as they needed.
     private bool _overflowing;
     private double _foldersNeed;
+
+    // The widths the switch, ⋯ and the collapsed folders need to be whole, kept while each is
+    // hidden, since a hidden element measures nothing.
+    private double _switcherNeeds;
+    private double _moreNeeds;
+    private double _foldersNeeds;
     private bool _synchronizing;
 
     public NoteHeaderView()
@@ -99,7 +106,7 @@ internal sealed class NoteHeaderView : Grid
         KeyboardNavigation.SetTabNavigation(choices, KeyboardNavigationMode.Once);
         KeyboardNavigation.SetDirectionalNavigation(choices, KeyboardNavigationMode.Cycle);
         RadioGroupArrows.SetIsEnabled(choices, true);
-        var switcher = new Border
+        _switcher = new Border
         {
             Margin = new Thickness(4, 0, 2, 0),
             Padding = new Thickness(2),
@@ -107,9 +114,9 @@ internal sealed class NoteHeaderView : Grid
             VerticalAlignment = VerticalAlignment.Center,
             Child = choices,
         };
-        switcher.SetResourceReference(Border.BackgroundProperty, "Slate.RaisedSurfaceBrush");
-        SetColumn(switcher, 1);
-        Children.Add(switcher);
+        _switcher.SetResourceReference(Border.BackgroundProperty, "Slate.RaisedSurfaceBrush");
+        SetColumn(_switcher, 1);
+        Children.Add(_switcher);
 
         // ⋯: the note's actions, the same commands as the menus.
         _splitRight = Row("NoteHeaderSplitRight", "Split Right", ChordTable.Ids.SplitRight);
@@ -179,6 +186,15 @@ internal sealed class NoteHeaderView : Grid
         }
     }
 
+    /// <summary>The bar asks for no more width than it's offered. A grid asks for its Auto
+    /// columns whatever it's offered, and an element that asks for more is arranged at that
+    /// and clipped, so the stops would be judged at a width the bar isn't shown at.</summary>
+    protected override Size MeasureOverride(Size constraint)
+    {
+        Size desired = base.MeasureOverride(constraint);
+        return new Size(Math.Min(desired.Width, constraint.Width), desired.Height);
+    }
+
     /// <summary>A segment the bar can't show is a stop a reader can Tab to and nobody can see,
     /// so folders that don't fit beside the whole name collapse into "…", as a breadcrumb does
     /// when space runs out, and come back when their room is as wide as they needed (a wider
@@ -204,7 +220,67 @@ internal sealed class NoteHeaderView : Grid
             Dispatcher.BeginInvoke(ShowPath);
         }
 
+        if (Fits(arrangeSize.Width) != Shown)
+        {
+            Dispatcher.BeginInvoke(FitStops);
+        }
+
         return arranged;
+    }
+
+    private (bool Folders, bool More, bool Switcher) Shown =>
+        (_folders.Visibility == Visibility.Visible, _more.Visibility == Visibility.Visible, _switcher.Visibility == Visibility.Visible);
+
+    /// <summary>Which of the bar's stops are whole at this width. A pane can be narrower than
+    /// they are (a split has no floor), so they give way in order when one can't be: the
+    /// folders first, then ⋯, then the switch. A stop's width is taken while it shows (the
+    /// folders' once they're built collapsed, since segments that don't fit collapse first)
+    /// and kept while it's hidden. The bar's width doesn't depend on its stops, so one comes
+    /// back at the width it left.</summary>
+    private (bool Folders, bool More, bool Switcher) Fits(double width)
+    {
+        if (_switcher.Visibility == Visibility.Visible)
+        {
+            _switcherNeeds = _switcher.DesiredSize.Width;
+        }
+
+        if (_more.Visibility == Visibility.Visible)
+        {
+            _moreNeeds = _more.DesiredSize.Width;
+        }
+
+        if (_folders.Visibility == Visibility.Visible && _shownCollapsed && _folders.Children.Count > 0)
+        {
+            _foldersNeeds = _folders.DesiredSize.Width + _path.Margin.Left + _path.Margin.Right;
+        }
+
+        bool switcher = width >= _switcherNeeds - 0.5;
+        bool more = switcher && width >= _switcherNeeds + _moreNeeds - 0.5;
+        bool folders = more && width >= _switcherNeeds + _moreNeeds + _foldersNeeds - 0.5;
+        return (folders, more, switcher);
+    }
+
+    /// <summary>Shows the stops that are whole and hides the rest. Keys on a stop that goes
+    /// move first to the bar's first stop that stays, which can only be the switch, else into
+    /// the note, so they're never left on nothing.</summary>
+    private void FitStops()
+    {
+        (bool folders, bool more, bool switcher) = Fits(ActualWidth);
+        bool keysGo = (!folders && _folders.IsKeyboardFocusWithin)
+            || (!more && _more.IsKeyboardFocusWithin)
+            || (!switcher && _switcher.IsKeyboardFocusWithin);
+        if (keysGo)
+        {
+            RadioButton checkedChoice = _reading.IsChecked == true ? _reading : _source;
+            if (!switcher || !checkedChoice.Focus())
+            {
+                Workspace?.RequestActiveEditorFocus();
+            }
+        }
+
+        _folders.Visibility = folders ? Visibility.Visible : Visibility.Collapsed;
+        _more.Visibility = more ? Visibility.Visible : Visibility.Collapsed;
+        _switcher.Visibility = switcher ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void Follow(WorkspaceTabViewModel? tab)

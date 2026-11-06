@@ -347,6 +347,9 @@
     "xaml-trigger WorkspaceTemplates.xaml WorkspaceSplitHandleVertical Visibility": "guard: ContentPaneBorder",
     "xaml-trigger WorkspaceTemplates.xaml WorkspaceTabs Visibility": "guard: ContentPaneBorder",
     "collection SlateWindows.NoteHeaderView.BuildPath _folders.Children": "NoteHeaderTests.ARebuiltPathKeepsTheKeysOnIt",
+    "ui-state SlateWindows.NoteHeaderView.FitStops _folders Visibility": "NoteHeaderTests.AStopThatGivesWayHandsOnTheKeys",
+    "ui-state SlateWindows.NoteHeaderView.FitStops _more Visibility": "NoteHeaderTests.AStopThatGivesWayHandsOnTheKeys",
+    "ui-state SlateWindows.NoteHeaderView.FitStops _switcher Visibility": "NoteHeaderTests.AStopThatGivesWayHandsOnTheKeys",
     "ui-state SlateWindows.NoteHeaderView.ShowChoices _sourceLabel Visibility": "exempt: a radio's label text, never focusable; collapsing it in a compact header leaves the radio, which holds the keys, in place",
     "ui-state SlateWindows.NoteHeaderView.ShowChoices _readingLabel Visibility": "exempt: a radio's label text, never focusable; collapsing it in a compact header leaves the radio, which holds the keys, in place"
   }
