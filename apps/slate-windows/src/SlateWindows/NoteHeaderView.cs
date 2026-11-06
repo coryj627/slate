@@ -188,16 +188,10 @@ internal sealed class NoteHeaderView : Grid
     /// and come back when their room is as wide as they needed (a wider bar, a shorter name).
     /// A panel's desired size is clipped to what it's offered, so the room they need is their
     /// segments' own; the path hugs what it shows, so the room they have is its cell, less
-    /// the name. A bar arranged compact isn't overflowing, though it learns it's compact
-    /// only after.</summary>
+    /// the name.</summary>
     protected override Size ArrangeOverride(Size arrangeSize)
     {
         Size arranged = base.ArrangeOverride(arrangeSize);
-        if (arrangeSize.Width < CompactBelow)
-        {
-            return arranged;
-        }
-
         double room = LayoutInformation.GetLayoutSlot(_path).Width - _path.Margin.Left - _path.Margin.Right - _name.DesiredSize.Width;
         if (!PathCollapsed && _folders.Children.Count > 0)
         {
