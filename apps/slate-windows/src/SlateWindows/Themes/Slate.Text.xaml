@@ -142,6 +142,73 @@
         <Setter Property="Height" Value="40" />
         <Setter Property="Padding" Value="5" />
     </Style>
+    <!-- DS-12: the title bar's quick commands, 40 with the 30 fill (DSD6). Out of the Tab order,
+         and off under every modal surface, as the menus are. -->
+    <Style x:Key="Slate.TitleBarButtonStyle" TargetType="ButtonBase" BasedOn="{StaticResource Slate.SubtleIconButton40Style}">
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="WindowChrome.IsHitTestVisibleInChrome" Value="True" />
+        <Style.Triggers>
+            <DataTrigger Binding="{Binding IsModalSurfaceOpen, RelativeSource={RelativeSource AncestorType=Window}}" Value="True">
+                <Setter Property="IsEnabled" Value="False" />
+            </DataTrigger>
+        </Style.Triggers>
+    </Style>
+    <!-- DS-12: a caption button, 46 × 48 with a 10 glyph (CaptionButton.prompt.md), whole
+         template. It stays 48 when the row grows with text size, as Windows' do. The glyph dims
+         while the window is inactive. Over maximize Windows owns the mouse, for Snap Layouts,
+         so the title bar's hook says hover and press there through TitleBarChrome. -->
+    <Style x:Key="Slate.CaptionButtonStyle" TargetType="ButtonBase">
+        <Setter Property="Width" Value="46" />
+        <Setter Property="Height" Value="48" />
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource Slate.TextBrush}" />
+        <Setter Property="WindowChrome.IsHitTestVisibleInChrome" Value="True" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ButtonBase">
+                    <Border Background="{TemplateBinding Background}" SnapsToDevicePixels="True">
+                        <local:AutomationPresentationTextBlock Text="{Binding Content, RelativeSource={RelativeSource TemplatedParent}}"
+                                                               Foreground="{TemplateBinding Foreground}"
+                                                               FontFamily="{DynamicResource SymbolThemeFontFamily}"
+                                                               FontSize="10"
+                                                               HorizontalAlignment="Center"
+                                                               VerticalAlignment="Center" />
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+        <Style.Triggers>
+            <DataTrigger Binding="{Binding IsActive, RelativeSource={RelativeSource AncestorType=Window}}" Value="False">
+                <Setter Property="Foreground" Value="{DynamicResource Slate.TertiaryTextBrush}" />
+            </DataTrigger>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Background" Value="{DynamicResource Slate.HoverOverlayBrush}" />
+            </Trigger>
+            <Trigger Property="local:TitleBarChrome.IsHovered" Value="True">
+                <Setter Property="Background" Value="{DynamicResource Slate.HoverOverlayBrush}" />
+            </Trigger>
+            <Trigger Property="IsPressed" Value="True">
+                <Setter Property="Background" Value="{DynamicResource Slate.PressedOverlayBrush}" />
+            </Trigger>
+            <Trigger Property="local:TitleBarChrome.IsPressed" Value="True">
+                <Setter Property="Background" Value="{DynamicResource Slate.PressedOverlayBrush}" />
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+    <!-- Close's hover and press are Windows' red, #C42B1C, with a white glyph, in every theme. -->
+    <Style x:Key="Slate.CaptionCloseButtonStyle" TargetType="ButtonBase" BasedOn="{StaticResource Slate.CaptionButtonStyle}">
+        <Style.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Background" Value="#C42B1C" />
+                <Setter Property="Foreground" Value="White" />
+            </Trigger>
+            <Trigger Property="IsPressed" Value="True">
+                <Setter Property="Background" Value="#C42B1C" />
+                <Setter Property="Foreground" Value="White" />
+            </Trigger>
+        </Style.Triggers>
+    </Style>
     <!-- DS-8: a tab's close button: a 12 glyph in the tab's full height, with an inset fill. -->
     <Style x:Key="Slate.TabCloseButtonStyle" TargetType="ButtonBase" BasedOn="{StaticResource Slate.SubtleIconButtonStyle}">
         <Setter Property="Width" Value="40" />

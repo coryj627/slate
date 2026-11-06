@@ -2639,6 +2639,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     /// VM, so over-calling is safe and refetch-free.</summary>
     internal void SyncPanels()
     {
+        OnPropertyChanged(nameof(ActiveTitle));
         // W4-6: the dock follows the active note (contract C12).
         BasesDockFollowActiveNote();
         Panels.NoteChanged(

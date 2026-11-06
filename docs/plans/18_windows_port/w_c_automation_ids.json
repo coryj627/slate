@@ -1536,6 +1536,36 @@
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "TitleBar",
+    "Surface": "Title bar (DS-12)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "TitleBarPalette",
+    "Surface": "Title bar (DS-12)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "TitleBarSettings",
+    "Surface": "Title bar (DS-12)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CaptionMinimize",
+    "Surface": "Title bar (DS-12)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CaptionMaximize",
+    "Surface": "Title bar (DS-12)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CaptionClose",
+    "Surface": "Title bar (DS-12)"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "MoveToCancel",
     "Surface": "File management (W5-4)"
   },

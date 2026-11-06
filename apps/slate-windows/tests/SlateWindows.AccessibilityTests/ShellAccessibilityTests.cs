@@ -194,7 +194,8 @@ public sealed partial class ShellAccessibilityTests
                 window,
                 "WorkspaceView",
                 TimeSpan.FromSeconds(30));
-            Assert.Equal("Slate", window.Title);
+            // DS-12 (DSD9): the title is core's, and no note is open yet.
+            Assert.Equal("Accessible Vault — Slate", window.Title);
             AssertTrashProgressAbsent(window, automation);
             Assert.NotNull(workspace.FindFirstDescendant(
                 automation.ConditionFactory.ByAutomationId("FilesPane")));
