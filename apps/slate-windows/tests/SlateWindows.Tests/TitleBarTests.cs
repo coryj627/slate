@@ -132,6 +132,47 @@ public sealed class TitleBarTests
         Assert.False(TitleBarChrome.Contains(new Point(origin.X - 1, origin.Y), origin, size, scale));
     }
 
+    /// <summary>The window itself answers HTMAXBUTTON over maximize, so Snap Layouts opens.
+    /// WindowChrome answers every hit test it's shown, so the title bar's hook has to be
+    /// asked first. The hosted window is far off screen, so the point is negative too.</summary>
+    [Fact]
+    public void TheWindowAnswersMaxButtonOverMaximize() => RunSta(() =>
+    {
+        using var host = new ShownShell();
+        Button maximize = Named(host, "CaptionMaximize");
+        Point centre = maximize.PointToScreen(new Point(maximize.ActualWidth / 2, maximize.ActualHeight / 2));
+        IntPtr window = new System.Windows.Interop.WindowInteropHelper(host.Shell).Handle;
+
+        Assert.Equal(TitleBarChrome.HtMaxButton, HitTest(window, centre));
+        Point title = host.Shell.TitleBar.PointToScreen(new Point(host.Shell.TitleBar.ActualWidth / 2, 24));
+        Assert.Equal(HtCaption, HitTest(window, title));
+    });
+
+    /// <summary>Windows' own frame is its sizing border and the padding around it. WPF's
+    /// WindowResizeBorderThickness is the first alone, a third of a native edge here, so both
+    /// the resize zone and a maximized window's padding take the whole frame.</summary>
+    [Fact]
+    public void TheResizeZoneIsWindowsWholeFrame() => RunSta(() =>
+    {
+        using var host = new ShownShell();
+        Thickness frame = TitleBarChrome.FrameThickness(host.Shell);
+
+        Assert.True(frame.Left > SystemParameters.WindowResizeBorderThickness.Left, $"the frame is {frame}.");
+        Assert.Equal(frame, WindowChrome.GetWindowChrome(host.Shell).ResizeBorderThickness);
+    });
+
+    private const int HtCaption = 2;
+
+    private static int HitTest(IntPtr window, Point screen)
+    {
+        int x = (int)Math.Round(screen.X);
+        int y = (int)Math.Round(screen.Y);
+        return SendMessage(window, TitleBarChrome.WmNcHitTest, IntPtr.Zero, new IntPtr(((y & 0xFFFF) << 16) | (x & 0xFFFF))).ToInt32();
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "SendMessageW")]
+    private static extern IntPtr SendMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam);
+
     /// <summary>A point left of or above the first monitor is negative in each half.</summary>
     [Fact]
     public void AHitTestPointCanBeNegative()
@@ -184,7 +225,7 @@ public sealed class TitleBarTests
         host.Settle();
         try
         {
-            Assert.Equal(SystemParameters.WindowResizeBorderThickness, root.Margin);
+            Assert.Equal(TitleBarChrome.FrameThickness(host.Shell), root.Margin);
             Assert.Equal("Restore", AutomationProperties.GetName(middle));
             Assert.Equal("\uE923", middle.Content);
             Assert.Same(SystemCommands.RestoreWindowCommand, middle.Command);

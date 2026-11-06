@@ -25,6 +25,29 @@ public partial class MainWindow
         CommandBindings.Add(new CommandBinding(SystemCommands.RestoreWindowCommand, (_, _) => SystemCommands.RestoreWindow(this)));
         CommandBindings.Add(new CommandBinding(SystemCommands.CloseWindowCommand, (_, _) => SystemCommands.CloseWindow(this)));
         StateChanged += (_, _) => FollowWindowState();
+        DpiChanged += (_, _) => FollowFrame();
+        FollowWindowState();
+    }
+
+    /// <summary>WindowChrome adds its own hook as the window's source appears, and WPF asks the
+    /// newest hook first, so the title bar's goes in once the event has run: it has to answer
+    /// <c>WM_NCHITTEST</c> over maximize before WindowChrome answers it as client.</summary>
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        AttachTitleBarHook();
+        FollowFrame();
+    }
+
+    /// <summary>The edge takes the pointer over Windows' whole frame, as a native window's does,
+    /// and the frame changes with the monitor's DPI.</summary>
+    private void FollowFrame()
+    {
+        if (WindowChrome.GetWindowChrome(this) is { } chrome)
+        {
+            chrome.ResizeBorderThickness = TitleBarChrome.FrameThickness(this);
+        }
+
         FollowWindowState();
     }
 
@@ -40,7 +63,7 @@ public partial class MainWindow
     private void TitleBarPalette_Click(object sender, RoutedEventArgs eventArgs) => _viewModel.Palette.Open();
 
     /// <summary>The middle caption says what it does, and a maximized window is padded by the
-    /// border Windows lets it overhang the screen with.</summary>
+    /// frame Windows lets it overhang the screen with.</summary>
     private void FollowWindowState()
     {
         bool maximized = WindowState == WindowState.Maximized;
@@ -49,7 +72,7 @@ public partial class MainWindow
         AutomationProperties.SetName(CaptionMaximize, maximized ? "Restore" : "Maximize");
         if (Content is FrameworkElement root)
         {
-            root.Margin = maximized ? SystemParameters.WindowResizeBorderThickness : new Thickness(0);
+            root.Margin = maximized ? TitleBarChrome.FrameThickness(this) : new Thickness(0);
         }
     }
 

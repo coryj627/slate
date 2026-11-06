@@ -2210,7 +2210,6 @@ public partial class MainWindow : Window
     private void Window_SourceInitialized(object? sender, EventArgs e)
     {
         _windowPlacement.Restore();
-        AttachTitleBarHook();
     }
 
     /// <summary>Every <c>Closing</c> handler, <see cref="Window_Closing"/>

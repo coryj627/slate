@@ -1,7 +1,9 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Media;
 
 namespace SlateWindows;
 
@@ -44,6 +46,18 @@ internal static class TitleBarChrome
         && point.Y >= origin.Y
         && point.Y < origin.Y + (size.Height * scale);
 
+    /// <summary>Windows' own frame around <paramref name="visual"/>'s window, in DIPs: the
+    /// sizing border and the padded border outside it. A native window's edge takes the
+    /// pointer over all of it, and a maximized window overhangs the screen by all of it. WPF's
+    /// <see cref="SystemParameters.WindowResizeBorderThickness"/> is the sizing border alone.</summary>
+    internal static Thickness FrameThickness(Visual visual)
+    {
+        DpiScale dpi = VisualTreeHelper.GetDpi(visual);
+        double padded = GetSystemMetricsForDpi(SmCxPaddedBorder, (uint)Math.Round(96 * dpi.DpiScaleX)) / dpi.DpiScaleX;
+        Thickness sizing = SystemParameters.WindowResizeBorderThickness;
+        return new Thickness(sizing.Left + padded, sizing.Top + padded, sizing.Right + padded, sizing.Bottom + padded);
+    }
+
     /// <summary>The screen point a <c>WM_NCHITTEST</c>'s lParam carries: two signed 16-bit
     /// halves, since a second monitor can sit left of or above the first.</summary>
     internal static Point PointOf(IntPtr lParam)
@@ -51,4 +65,9 @@ internal static class TitleBarChrome
         long value = lParam.ToInt64();
         return new Point(unchecked((short)(value & 0xFFFF)), unchecked((short)((value >> 16) & 0xFFFF)));
     }
+
+    private const int SmCxPaddedBorder = 92;
+
+    [DllImport("user32.dll")]
+    private static extern int GetSystemMetricsForDpi(int index, uint dpi);
 }
