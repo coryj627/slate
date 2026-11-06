@@ -119,7 +119,8 @@ public sealed class NarrowPaneTests : IDisposable
     });
 
     /// <summary>The toggles read what shows: a suspended pane's button isn't pressed, and
-    /// it hears the change.</summary>
+    /// it hears the change. Its two resize steps requery too, since a menu item caches its
+    /// command's state and asks again only when told.</summary>
     [Fact]
     public void TheToggleReadsWhatIsShowing() => RunSta(() =>
     {
@@ -127,6 +128,10 @@ public sealed class NarrowPaneTests : IDisposable
         workspace.WorkspaceRowWidth = 1200;
         var changed = new List<string?>();
         ((INotifyPropertyChanged)workspace).PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+        int rightRequeried = 0;
+        int filesRequeried = 0;
+        workspace.WidenRightPaneCommand.CanExecuteChanged += (_, _) => rightRequeried++;
+        workspace.WidenFilesSidebarCommand.CanExecuteChanged += (_, _) => filesRequeried++;
 
         workspace.WorkspaceRowWidth = 500;
 
@@ -136,6 +141,15 @@ public sealed class NarrowPaneTests : IDisposable
         Assert.Contains(nameof(WorkspaceViewModel.IsRightPaneVisible), changed);
         Assert.Contains(nameof(WorkspaceViewModel.RightPaneColumnWidth), changed);
         Assert.False(workspace.WidenRightPaneCommand.CanExecute(null));
+        Assert.True(rightRequeried > 0, "the right pane's steps weren't requeried");
+
+        changed.Clear();
+        workspace.WorkspaceRowWidth = 440;
+
+        Assert.False(workspace.FilesSidebarToggle);
+        Assert.Contains(nameof(WorkspaceViewModel.FilesSidebarToggle), changed);
+        Assert.Contains(nameof(WorkspaceViewModel.FilesColumnWidth), changed);
+        Assert.True(filesRequeried > 0, "the Files sidebar's steps weren't requeried");
     });
 
     [Fact]
