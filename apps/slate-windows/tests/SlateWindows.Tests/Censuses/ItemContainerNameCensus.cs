@@ -590,7 +590,7 @@ public sealed class ItemContainerNameCensus
             ["NoteHeaderView.Row.row"] = new CodeItemsHost.Menu(
                 "one of the ctor menu's three fixed rows, which fills nothing of its own"),
             ["NoteHeaderView.BuildPath.menu"] = new CodeItemsHost.Menu(
-                "one row per folder above the note, named by its path, which a note's path holds once"),
+                "one row per folder above the note, named by SiblingNames.Compose with each folder's path as its distinguisher"),
         };
 
     /// <summary>The spec review, round 23: the inventory covers the C# the

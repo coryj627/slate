@@ -256,11 +256,16 @@ internal sealed class NoteHeaderView : Grid
         if (IsCompact)
         {
             var menu = new ContextMenu();
-            foreach ((string name, string folder) in folders)
+            string?[] rowNames = SiblingNames.Compose(
+                [.. folders.Select(folder => (string?)folder.Name)],
+                [.. folders.Select(folder => (string?)folder.Path)],
+                "folder");
+            foreach (((string name, string folder), string? spoken) in folders.Zip(rowNames))
             {
-                // Named by its path: a note's folders can repeat a name (notes/notes/x.md).
+                // The sibling rule, as the segments': a note's folders can repeat a name
+                // (notes/notes/x.md) or have none a reader hears (notes/_/x.md).
                 var row = new MenuItem { Header = name, Icon = Glyph(FolderGlyph, GlyphSize) };
-                AutomationProperties.SetName(row, folder);
+                AutomationProperties.SetName(row, spoken);
                 row.Click += (_, _) => Workspace?.RevealFolderFromHeader(folder);
                 menu.Items.Add(row);
             }

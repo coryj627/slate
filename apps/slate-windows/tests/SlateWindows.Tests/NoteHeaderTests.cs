@@ -112,6 +112,27 @@ public sealed class NoteHeaderTests
         Assert.Contains("Reading", names);
     });
 
+    /// <summary>The compact Folders menu's rows follow the same sibling rule: no two sound
+    /// alike, a path whose words are another's (notes/_) included.</summary>
+    [Theory]
+    [InlineData("notes/_/Note.md")]
+    [InlineData("notes/notes/Note.md")]
+    [InlineData("notes/Notes/Note.md")]
+    public void CompactFolderRowsDontSoundAlike(string path) => StaThread.RunPumped(() =>
+    {
+        using var host = new ShownShell((path, "# Note\n"));
+        host.Workspace.OpenPath(path);
+        host.Shell.Width = 500;
+        host.Settle();
+        NoteHeaderView header = HeaderOf(host, path);
+        Assert.True(header.IsCompact);
+
+        Button folders = ShownShell.Descendants(header).OfType<Button>().Single(button => AutomationProperties.GetAutomationId(button) == "NoteHeaderFolders");
+        string[] names = [.. folders.ContextMenu!.Items.OfType<MenuItem>().Select(item => AutomationProperties.GetName(item))];
+        Assert.Equal(2, names.Length);
+        Assert.Equal(2, names.Select(name => SpeechKey.Of(name)).Distinct().Count());
+    });
+
     /// <summary>A rename the watcher brings keeps what didn't change: the note's own rename
     /// leaves the folders, and the keys, where they were; a folder's rename rebuilds them and
     /// keeps the keys on the segment in the same place.</summary>
@@ -403,7 +424,7 @@ public sealed class NoteHeaderTests
         Assert.DoesNotContain(ShownShell.Descendants(header).OfType<Button>(), button => button.IsVisible && AutomationProperties.GetName(button) == "maths");
         Button folders = ShownShell.Descendants(header).OfType<Button>().Single(button => button.IsVisible && AutomationProperties.GetAutomationId(button) == "NoteHeaderFolders");
         Assert.Equal("Folders", AutomationProperties.GetName(folders));
-        Assert.Equal(["learning", "learning/maths"], folders.ContextMenu!.Items.OfType<MenuItem>().Select(item => AutomationProperties.GetName(item)));
+        Assert.Equal(["learning", "maths"], folders.ContextMenu!.Items.OfType<MenuItem>().Select(item => AutomationProperties.GetName(item)));
     });
 
     /// <summary>The path rebuilds when the bar goes compact or comes back, and when the note
