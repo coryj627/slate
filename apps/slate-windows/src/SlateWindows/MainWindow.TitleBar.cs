@@ -119,9 +119,13 @@ public partial class MainWindow
                 bool pressed = TitleBarChrome.GetIsPressed(CaptionMaximize);
                 TitleBarChrome.SetIsPressed(CaptionMaximize, false);
                 handled = true;
-                if (pressed && CaptionMaximize.Command.CanExecute(null))
+                // The button is the command's target, not the keys' element, which can be
+                // anywhere, or nowhere when another window has focus.
+                if (pressed
+                    && CaptionMaximize.Command is RoutedCommand command
+                    && command.CanExecute(null, CaptionMaximize))
                 {
-                    CaptionMaximize.Command.Execute(null);
+                    command.Execute(null, CaptionMaximize);
                 }
 
                 break;

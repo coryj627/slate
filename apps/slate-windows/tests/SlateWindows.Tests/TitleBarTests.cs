@@ -161,6 +161,59 @@ public sealed class TitleBarTests
         Assert.Equal(frame, WindowChrome.GetWindowChrome(host.Shell).ResizeBorderThickness);
     });
 
+    /// <summary>Over maximize Windows owns the mouse, so the hook draws the hover and the
+    /// press, and a press released on the button is a click. A release that no press began,
+    /// as when one started elsewhere, does nothing.</summary>
+    [Fact]
+    public void TheHookDrawsHoverAndPressAndClicksMaximize() => RunSta(() =>
+    {
+        using var host = new ShownShell();
+        Button maximize = Named(host, "CaptionMaximize");
+        IntPtr window = new System.Windows.Interop.WindowInteropHelper(host.Shell).Handle;
+        var overMaximize = new IntPtr(TitleBarChrome.HtMaxButton);
+
+        _ = SendMessage(window, TitleBarChrome.WmNcLButtonUp, overMaximize, IntPtr.Zero);
+        host.Settle();
+        Assert.Equal(WindowState.Normal, host.Shell.WindowState);
+
+        _ = SendMessage(window, TitleBarChrome.WmNcMouseMove, overMaximize, IntPtr.Zero);
+        Assert.True(TitleBarChrome.GetIsHovered(maximize));
+        _ = SendMessage(window, TitleBarChrome.WmNcLButtonDown, overMaximize, IntPtr.Zero);
+        Assert.True(TitleBarChrome.GetIsPressed(maximize));
+        _ = SendMessage(window, TitleBarChrome.WmNcLButtonUp, overMaximize, IntPtr.Zero);
+        host.Settle();
+        try
+        {
+            Assert.False(TitleBarChrome.GetIsPressed(maximize));
+            Assert.Equal(WindowState.Maximized, host.Shell.WindowState);
+            _ = SendMessage(window, TitleBarChrome.WmNcMouseLeave, IntPtr.Zero, IntPtr.Zero);
+            Assert.False(TitleBarChrome.GetIsHovered(maximize));
+        }
+        finally
+        {
+            host.Shell.WindowState = WindowState.Normal;
+            host.Settle();
+        }
+    });
+
+    /// <summary>The quick commands do what their names say.</summary>
+    [Fact]
+    public void TheQuickCommandsOpenThePaletteAndSettings() => RunSta(() =>
+    {
+        using var host = new ShownShell();
+
+        Named(host, "TitleBarPalette").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+        host.Settle();
+        Assert.True(host.Lifecycle.Palette.IsOpen);
+        host.Lifecycle.Palette.Dismiss();
+        host.Settle();
+
+        Button settings = Named(host, "TitleBarSettings");
+        settings.Command.Execute(settings.CommandParameter);
+        host.Settle();
+        Assert.Equal(ModalSurface.Settings, host.Shell.OpenModalSurface);
+    });
+
     private const int HtCaption = 2;
 
     private static int HitTest(IntPtr window, Point screen)
