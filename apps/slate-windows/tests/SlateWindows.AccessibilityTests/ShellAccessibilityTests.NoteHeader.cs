@@ -13,6 +13,9 @@ namespace SlateWindows.AccessibilityTests;
 /// <summary>DS-15 (#1816): a note has a header with its place and its mode.</summary>
 public sealed partial class ShellAccessibilityTests
 {
+    [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "GetDpiForWindow")]
+    private static extern uint NoteHeaderDpiForWindow(IntPtr window);
+
     /// <summary>Every stop in the bar has a name that isn't a glyph; Tab meets each folder,
     /// the switch's checked option once, and ⋯, in that order; an arrow moves the choice and
     /// keeps the keys on the switch; Ctrl+Shift+E still lands in the note.</summary>
@@ -41,8 +44,10 @@ public sealed partial class ShellAccessibilityTests
             Window window = WaitForMainWindow(process, automation, Path.Combine(logs, "slate-windows.log"), TimeSpan.FromSeconds(30));
             window.SetForeground();
             // At the app's default size with both panes the editor is about 520 wide, where the
-            // bar goes compact; this pass is the full bar's.
-            window.Patterns.Transform.Pattern.Resize(1500, 820);
+            // bar goes compact; this pass is the full bar's. The pattern sizes in pixels, so
+            // 1500 by 820 effective pixels is scaled by the window's DPI.
+            double scale = NoteHeaderDpiForWindow(window.Properties.NativeWindowHandle.Value) / 96.0;
+            window.Patterns.Transform.Pattern.Resize(1500 * scale, 820 * scale);
             AutomationElement tree = WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(30));
             AutomationElement folder = WaitForTreeItemStartingWith(tree, automation, "learning");
             folder.Patterns.ExpandCollapse.Pattern.Expand();
@@ -54,9 +59,15 @@ public sealed partial class ShellAccessibilityTests
             AutomationElement source = WaitForElement(window, "NoteHeaderSource", TimeSpan.FromSeconds(15));
             AutomationElement reading = WaitForElement(window, "NoteHeaderReading", TimeSpan.FromSeconds(5));
             AutomationElement more = WaitForElement(window, "NoteHeaderMore", TimeSpan.FromSeconds(5));
-            AutomationElement[] segments = window
-                .FindAllDescendants(automation.ConditionFactory.ByAutomationId("NoteHeaderFolder"))
-                .ToArray();
+            AutomationElement[] segments = [];
+            Retry.WhileFalse(
+                () => (segments = window.FindAllDescendants(automation.ConditionFactory.ByAutomationId("NoteHeaderFolder"))).Length == 2,
+                TimeSpan.FromSeconds(10));
+            Assert.True(
+                segments.Length == 2,
+                $"the bar shows {segments.Length} folders in a window at {window.BoundingRectangle}; "
+                + $"compact (\"Folders\" shown): {window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("NoteHeaderFolders")) is not null}; "
+                + $"the foreground window: {automation.FocusedElement()?.Properties.ProcessId.ValueOrDefault} (ours {process.Id}).");
             Assert.Equal(["learning", "maths"], segments.Select(segment => segment.Name));
             foreach (AutomationElement stop in segments.Append(source).Append(reading).Append(more))
             {
