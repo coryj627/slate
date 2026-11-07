@@ -52,6 +52,9 @@ internal sealed class AddPropertyViewModel : BindableBase
         _announce = announce;
     }
 
+    /// <summary>The note the sheet was opened for, for the facts that check which one.</summary>
+    internal PropertyAddIntent? IntentForTests => _intent;
+
     /// <summary>Posted once, on sheet open (canonical, the §W-D
     /// anchor for this family).</summary>
     public void SheetShown() => _announce(new A11yEvent.AddPropertySheetShown());

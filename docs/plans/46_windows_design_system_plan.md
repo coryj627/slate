@@ -152,10 +152,10 @@ DS-0 settles these in the documents, so no later chunk has to.
 - **The design cycle** (`claude/design-pass`) has its own discovery passes. A
   defect they find is fixed there, not here.
 
-## 3. The owner's decisions (DSD1 to DSD17)
+## 3. The owner's decisions (DSD1 to DSD18)
 
 Settled with the owner on 2026-11-03, DSD16 on 2026-11-05 after their look at real
-accents (§8), and DSD17 on 2026-11-06. DSD8, DSD10 and DSD14 differ from what this plan first recommended, and
+accents (§8), and DSD17 and DSD18 on 2026-11-06. DSD8, DSD10 and DSD14 differ from what this plan first recommended, and
 their specs follow the owner's call.
 
 | # | Chunk | Question | Decided |
@@ -177,6 +177,7 @@ their specs follow the owner's call.
 | DSD15 | DS-15 | The design's Back and Forward assume a note history. The only history here is "Back in Sidebar History", on both platforms, which Quick Open and links don't feed. Bound to it, Back sits disabled after Quick Open or walks sidebar selections | Leave both buttons out of DS-15, by the same rule as DS-18's toolbars: a button that misleads is worse than none. A per-tab note history is new behaviour the Mac doesn't have, with its own chords, and DS-15 lists what it takes. It can be its own chunk later |
 | DSD16 | DS-11 | The owner's look (§8) on 2026-11-05: under DSD14's gate every hue they tried fell back to gold in dark, so Windows accent looked like it did nothing. Their `#EA005E` passes every check in light, and in dark fails a pressed link (4.39:1) and the reading overlay's stand-off | Drop the requirement. Windows accent, and Automatic once the user has chosen an accent in Windows, follow whatever Windows has, in both themes. High Contrast never takes it, Automatic keeps gold on the default blue, and selected rows keep their own text brush. Choosing an accent from colours that clear contrast is a follow-up, #1842 |
 | DSD17 | DS-12 | Windows places the Snap Layouts flyout for a standard caption, about 29 below the window's top, so once it's open it covers the lower 19 of the design's 48-tall maximize button: a click there lands on the flyout. A click before it opens, or anywhere above, maximizes | Keep it as it is, with the design's caption buttons, over the spec's fallback to native ones |
+| DSD18 | DS-15 | DSD11's read once the bar was built: it adds one stop per folder, the switch's checked option and ⋯ before Properties. And the bar goes compact below 520 of its own width, as the design says, which at the app's default 1120 window with both panes leaves the editor about 520 wide, so it opens compact there | Keep the stops. Keep the compact bar for now, and revisit its width rule as a refinement later, #1848 |
 
 ## 4. Rules (every chunk)
 

@@ -584,6 +584,13 @@ public sealed class ItemContainerNameCensus
                 "one row per row action its host declares (AccessibleGridRowAction), each named once"),
             ["GraphVerbosityMenu.Populate.submenu"] = new CodeItemsHost.Menu(
                 "one check item per verbosity choice in core's vector, each titled once"),
+            // DS-15 (#1816): the note header's two menus.
+            ["NoteHeaderView.ctor.menu"] = new CodeItemsHost.Menu(
+                "three fixed rows, Split Right, Add Property… and Bulk Rename Properties…, each named once"),
+            ["NoteHeaderView.Row.row"] = new CodeItemsHost.Menu(
+                "one of the ctor menu's three fixed rows, which fills nothing of its own"),
+            ["NoteHeaderView.BuildPath.menu"] = new CodeItemsHost.Menu(
+                "one row per folder above the note, named by SiblingNames.Compose with each folder's path as its distinguisher"),
         };
 
     /// <summary>The spec review, round 23: the inventory covers the C# the

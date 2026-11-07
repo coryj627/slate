@@ -209,8 +209,9 @@
     <local:NullToVisibilityConverter x:Key="NullToVisibilityConverter" />
     <local:PixelGridLengthConverter x:Key="PixelGridLengthConverter" />
     <!-- What the rows leave: the tab strip, the rows' own header, the editor's margins, four of its 22px lines and the line under it, which is 280 here. CI measured 11 more, so it holds 40 in hand. -->
-    <local:CappedShareConverter x:Key="PropertyRowsMaxHeightConverter" Reserve="320" Floor="80" Cap="280" />
-    <local:CappedShareConverter x:Key="PropertiesCardMaxHeightConverter" Reserve="150" Floor="120" Cap="100000" />
+    <local:CappedShareConverter x:Key="PropertyRowsMaxHeightConverter" Reserve="360" Floor="80" Cap="280" />
+    <!-- DS-15: both reserves hold the note header's 40 too. -->
+    <local:CappedShareConverter x:Key="PropertiesCardMaxHeightConverter" Reserve="190" Floor="120" Cap="100000" />
     <local:CappedShareConverter x:Key="QuickOpenNameWidthConverter" Share="12.8572" />
     <local:CappedShareConverter x:Key="DualPaneListMaxHeightConverter" Share="0.5" Cap="150" />
     <local:IsNotNullConverter x:Key="IsNotNullConverter" />
@@ -581,10 +582,15 @@
               KeyboardNavigation.DirectionalNavigation="Contained">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
+            <!-- DS-15 (#1816): the note's header, for Markdown tabs: its folders and name, the
+                 Source and Reading switch, and the note's actions. -->
+            <local:NoteHeaderView Grid.Row="0"
+                                  Visibility="{Binding IsMarkdown, Converter={StaticResource BooleanToVisibilityConverter}}" />
             <!-- W4-4 (#736): the in-note properties header — above the
                  editor host, OUTSIDE its scroll viewer (UIA reads
                  Properties before content, where frontmatter lives in
@@ -593,7 +599,7 @@
                  only). -->
             <!-- DS-5: the card scrolls past what leaves the note a few lines of its own.
                  Those lines and the tab strip are text, so the room follows the text's size. -->
-            <ScrollViewer Grid.Row="0"
+            <ScrollViewer Grid.Row="1"
                           Focusable="False"
                           VerticalScrollBarVisibility="Auto"
                           local:WheelChain.IsEnabled="True"
@@ -685,7 +691,7 @@
             </Expander>
             </ScrollViewer>
             <local:SlateTextEditor x:Name="MarkdownEditor"
-                                   Grid.Row="1"
+                                   Grid.Row="2"
                                    Margin="12"
                                    Padding="12"
                                    Document="{Binding EditorDocument}"
@@ -726,7 +732,7 @@
                  on the persisted per-tab mode. Same grid cell — one of
                  the two is always collapsed, so UIA never sees both. -->
             <reading:ReadingSurface x:Name="ReadingSurface"
-                                    Grid.Row="1"
+                                    Grid.Row="2"
                                     Margin="12"
                                     Padding="12"
                                     Model="{Binding Reading}"
@@ -735,30 +741,30 @@
             <!-- W4-6 (#738): the .base tab body — same shared cell,
                  collapsed unless this tab IS a base, so UIA only ever
                  sees the one live document surface. -->
-            <bases:BaseSurfaceView Grid.Row="1"
+            <bases:BaseSurfaceView Grid.Row="2"
                                    Tab="{Binding}"
                                    Model="{Binding Base}"
                                    Visibility="{Binding IsBaseVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
-            <bases:DashboardSurfaceView Grid.Row="1"
+            <bases:DashboardSurfaceView Grid.Row="2"
                                         Model="{Binding Dashboard}"
                                         Visibility="{Binding IsDashboardVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
             <!-- W6-1 PR A (#745): the .canvas tab body — same shared
                  cell and the same visibility discipline, so UIA only
                  ever sees the one live document surface. -->
-            <canvas:CanvasSurfaceView Grid.Row="1"
+            <canvas:CanvasSurfaceView Grid.Row="2"
                                       Model="{Binding Canvas}"
                                       Visibility="{Binding IsCanvasVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
             <!-- W6-2 PR A (#746): the graph tab body — the placeholder
                  retired for Graph; the same shared cell and visibility
                  discipline as the canvas. -->
-            <graph:GraphSurfaceView Grid.Row="1"
+            <graph:GraphSurfaceView Grid.Row="2"
                                     Model="{Binding Graph}"
                                     Visibility="{Binding IsGraphVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
             <!-- Keep the modal interaction surface in the tab's presentation
                  source so UIA ownership is stable across providers. The
                  transparent layer intentionally makes Close/Escape the only
                  dismissal paths and prevents pointer input reaching the editor. -->
-            <local:AutomationLandmarkGrid Grid.RowSpan="4"
+            <local:AutomationLandmarkGrid Grid.RowSpan="5"
                                           Panel.ZIndex="100"
                                           Background="Transparent"
                                           Visibility="{Binding EditorInteractions.IsPopoverOpen, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}"
@@ -843,7 +849,7 @@
                     </Border>
                 </local:EditorInteractionPopoverHost>
             </local:AutomationLandmarkGrid>
-            <StackPanel Grid.Row="1"
+            <StackPanel Grid.Row="2"
                         Margin="32"
                         HorizontalAlignment="Center"
                         VerticalAlignment="Center"
@@ -863,11 +869,11 @@
                  never their child (the editor's Document peer keeps its atomic
                  text, w_c_matrix row 17); its Escape never reaches the text and
                  the text's never reaches it. -->
-            <local:FindInNoteBar Grid.Row="2"
+            <local:FindInNoteBar Grid.Row="3"
                                  DataContext="{Binding FindInNote}"
                                  Editor="{Binding ElementName=MarkdownEditor}"
                                  ReadingSurface="{Binding ElementName=ReadingSurface}" />
-            <TextBlock Grid.Row="3"
+            <TextBlock Grid.Row="4"
                        Margin="12,0,12,8"
                        Text="{Binding Status}"
                        Foreground="{DynamicResource Slate.SecondaryTextBrush}"

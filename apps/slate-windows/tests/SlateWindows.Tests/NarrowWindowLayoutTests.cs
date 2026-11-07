@@ -206,12 +206,12 @@ public sealed class NarrowWindowLayoutTests
     });
 
     /// <summary>A short window takes its room back from the rows, and only there: a
-    /// pane of ordinary height keeps all of it, and the shortest keeps some. This asks
+    /// pane of ordinary height keeps all of it, and the shortest keeps some; DS-15's note header takes 40 of what's ordinary. This asks
     /// the shipped converter, because a host's display can't always make a tall window.</summary>
     [Theory]
     [InlineData(900, 280)]
-    [InlineData(600, 280)]
-    [InlineData(416, 96)]
+    [InlineData(640, 280)]
+    [InlineData(456, 96)]
     [InlineData(200, 80)]
     public void ThePropertyRowsKeepTheirRoomUntilTheWindowIsShort(double pane, double rows) => StaThread.Run(() =>
     {
