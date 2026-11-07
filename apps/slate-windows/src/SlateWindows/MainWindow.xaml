@@ -2831,7 +2831,7 @@
                                     </ListBox>
                                     <!-- The menu is built as it opens (RightPaneMorePanels_Click). While
                                          one of its panels is open, the button looks selected, with the
-                                         pill, and its item status is that panel's title. -->
+                                         pill, and its name, from core, says that panel is open. -->
                                     <Button x:Name="RightPaneMorePanelsButton"
                                             Content="&#xE712;"
                                             Width="40"
@@ -2842,8 +2842,7 @@
                                             ToolTipService.ShowsToolTipOnKeyboardFocus="False"
                                             Click="RightPaneMorePanels_Click"
                                             AutomationProperties.AutomationId="RightPaneMorePanels"
-                                            AutomationProperties.Name="More panels"
-                                            AutomationProperties.ItemStatus="{Binding MoreLeafTitle}">
+                                            AutomationProperties.Name="{Binding MorePanelsName, FallbackValue=More panels}">
                                         <Button.Style>
                                             <!-- Slate.SubtleIconButtonStyle's look (the theme's styles load
                                                  after this window's), at the strip's 40 with its pill. -->

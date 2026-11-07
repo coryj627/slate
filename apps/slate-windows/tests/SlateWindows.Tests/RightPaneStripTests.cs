@@ -17,7 +17,7 @@ namespace SlateWindows.Tests;
 /// DS-16 (DSD8, DSD19): the right-pane rail is a strip of five icons and a More
 /// panels button whose menu holds the other twelve. Every panel is reachable by
 /// keyboard, and a reader can tell which is open: from the strip's selection, or
-/// from the button's selected look and item status and the menu's check.
+/// from the button's selected look and its name, and from the menu's check.
 /// </summary>
 public sealed class RightPaneStripTests
 {
@@ -114,7 +114,7 @@ public sealed class RightPaneStripTests
         host.Workspace.ActiveLeaf = Leaf("tasks");
         host.Settle();
 
-        Assert.Equal("Tasks", AutomationProperties.GetItemStatus(more));
+        Assert.Equal(SlateUniffiMethods.MorePanelsName("Tasks"), AutomationProperties.GetName(more));
         Assert.Equal(Visibility.Visible, PillOf(more).Visibility);
         ContextMenu menu = OpenMore(host);
         Assert.Equal(["tasks"], menu.Items.OfType<MenuItem>().Where(item => item.IsChecked).Select(Id));
@@ -123,7 +123,7 @@ public sealed class RightPaneStripTests
 
         host.Workspace.ActiveLeaf = Leaf("outline");
         host.Settle();
-        Assert.True(string.IsNullOrEmpty(AutomationProperties.GetItemStatus(more)));
+        Assert.Equal(SlateUniffiMethods.MorePanelsName(null), AutomationProperties.GetName(more));
         Assert.Equal(Visibility.Collapsed, PillOf(more).Visibility);
     });
 
@@ -136,7 +136,7 @@ public sealed class RightPaneStripTests
         host.Workspace.OpenTasksReview();
         host.Settle();
 
-        Assert.Equal("Tasks Review", AutomationProperties.GetItemStatus(host.Shell.RightPaneMorePanelsButton));
+        Assert.Equal(SlateUniffiMethods.MorePanelsName("Tasks Review"), AutomationProperties.GetName(host.Shell.RightPaneMorePanelsButton));
         Assert.Null(host.Shell.RightPaneLeavesList.SelectedItem);
     });
 

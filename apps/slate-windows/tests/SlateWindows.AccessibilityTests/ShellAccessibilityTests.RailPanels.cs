@@ -12,7 +12,7 @@ public sealed partial class ShellAccessibilityTests
     /// <summary>DS-16: opens a right-pane panel the way a reader does. A panel in the
     /// strip by its row; one of the other twelve through More panels and its menu's
     /// row, which a toggle picks as a click does. Returns once the panel is open: the
-    /// strip's row selected, or the button's item status naming it.</summary>
+    /// strip's row selected, or the button's name naming it.</summary>
     private static void OpenRailPanel(Window window, UIA3Automation automation, string title)
     {
         AutomationElement rail = WaitForElement(window, "RightPaneLeaves", TimeSpan.FromSeconds(30));
@@ -81,7 +81,7 @@ public sealed partial class ShellAccessibilityTests
                 {
                     try
                     {
-                        return more.Properties.ItemStatus.ValueOrDefault == title;
+                        return more.Properties.Name.ValueOrDefault == uniffi.slate_uniffi.SlateUniffiMethods.MorePanelsName(title);
                     }
                     catch (Exception exception) when (IsTransientUiaFault(exception))
                     {
@@ -93,7 +93,7 @@ public sealed partial class ShellAccessibilityTests
     }
 
     /// <summary>DS-16: the rail's landing for the open panel <paramref name="title"/>:
-    /// its row when the strip holds it, else More panels, whose item status names it.</summary>
+    /// its row when the strip holds it, else More panels, whose name names it.</summary>
     private static void AssertLandedOnRail(Window window, UIA3Automation automation, string title, string message)
     {
         AutomationElement rail = WaitForElement(window, "RightPaneLeaves", TimeSpan.FromSeconds(10));
@@ -113,7 +113,7 @@ public sealed partial class ShellAccessibilityTests
                     {
                         return automation.FocusedElement() is { } focused
                             && focused.Properties.AutomationId.ValueOrDefault == "RightPaneMorePanels"
-                            && focused.Properties.ItemStatus.ValueOrDefault == title;
+                            && focused.Properties.Name.ValueOrDefault == uniffi.slate_uniffi.SlateUniffiMethods.MorePanelsName(title);
                     }
                     catch (Exception exception) when (IsTransientUiaFault(exception))
                     {

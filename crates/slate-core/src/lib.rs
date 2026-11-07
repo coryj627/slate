@@ -73,6 +73,7 @@ pub mod link_rewrite;
 pub mod links;
 pub mod links_db;
 pub mod math;
+mod more_panels;
 pub mod oplog;
 pub mod oplog_compaction;
 pub(crate) mod oplog_events;
@@ -165,6 +166,7 @@ pub use templates::{
 };
 pub use text_buffer::TextBuffer;
 
+pub use more_panels::more_panels_name;
 pub use session::{
     BaseFileSummary, BaseViewStatus, BaseViewSummary, BasesColumn, BasesGroup, BasesResultSet,
     BasesRow, BasesSummaryCell, BasesValue, CancelToken, CanvasApplyResult, CanvasEditorSeed,

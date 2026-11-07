@@ -2643,6 +2643,11 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     /// <summary>DS-16: the open leaf's title when it lives in More panels, else null.
     /// The button's item status, so a reader can tell from it what's open.</summary>
     public string? MoreLeafTitle => StripLeaves.Contains(_activeLeaf) ? null : _activeLeaf.Title;
+
+    /// <summary>DS-16: More panels' name, from core: "More panels", or "More panels,
+    /// Tasks open" while the menu's Tasks is open. NVDA doesn't read a button's item
+    /// status, so the open panel is in the name (the DS-16 pass).</summary>
+    public string MorePanelsName => SlateUniffiMethods.MorePanelsName(MoreLeafTitle);
     public EditorPreferencesViewModel EditorPreferences { get; }
 
     /// <summary>W6-1 PR C (#745): the canvas announcement verbosity
@@ -2790,6 +2795,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             {
                 OnPropertyChanged(nameof(StripLeaf));
                 OnPropertyChanged(nameof(MoreLeafTitle));
+                OnPropertyChanged(nameof(MorePanelsName));
                 bool byArrow = IsChoosingLeafByArrow?.Invoke() == true;
                 // Silent on the rail's arrow route only (G21, AR-59).
                 if (!byArrow)
