@@ -114,7 +114,13 @@ public partial class MainWindow
     /// panel changes nothing and keeps its check.</summary>
     private static void PickMorePanel(WorkspaceViewModel workspace, WorkspaceLeafOption leaf, ContextMenu menu)
     {
-        workspace.ChooseFromMorePanels(leaf);
+        // Usually the row's Checked has already switched it (above); then this only
+        // re-asserts the checks and closes. A pick of the open panel switches nothing.
+        if (!ReferenceEquals(workspace.ActiveLeaf, leaf))
+        {
+            workspace.ChooseFromMorePanels(leaf);
+        }
+
         foreach (MenuItem row in menu.Items.OfType<MenuItem>())
         {
             BindingOperations.GetBindingExpression(row, MenuItem.IsCheckedProperty)?.UpdateTarget();
