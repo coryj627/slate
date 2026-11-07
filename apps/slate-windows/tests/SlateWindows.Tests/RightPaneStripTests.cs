@@ -172,8 +172,8 @@ public sealed class RightPaneStripTests
 
         MenuItem tasks = menu.Items.OfType<MenuItem>().Single(item => Id(item) == "tasks");
         Toggle(tasks);
-        menu.IsOpen = false;
         host.Settle();
+        Assert.False(menu.IsOpen, "a pick didn't close More panels");
 
         Assert.Equal("tasks", host.Workspace.ActiveLeaf.Id);
         Assert.Equal(shown + 1, host.Announced.OfType<A11yEvent.LeafPanelShown>().Count());
@@ -185,8 +185,9 @@ public sealed class RightPaneStripTests
         Assert.Same(tasks, Keyboard.FocusedElement);
         Toggle(tasks);
         Assert.True(tasks.IsChecked);
+        Assert.False(menu.IsOpen);
+        Assert.Equal("tasks", host.Workspace.ActiveLeaf.Id);
         Assert.Equal(shown + 1, host.Announced.OfType<A11yEvent.LeafPanelShown>().Count());
-        menu.IsOpen = false;
     });
 
     [Fact]

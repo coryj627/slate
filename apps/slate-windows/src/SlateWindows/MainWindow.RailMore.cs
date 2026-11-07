@@ -67,13 +67,10 @@ public partial class MainWindow
                 ?? menu.Items.OfType<MenuItem>().FirstOrDefault();
             _ = open?.Focus();
         };
+        // Built fresh at each open and dropped at close; its rows' bindings watch the
+        // workspace weakly, so nothing outlives it.
         menu.Closed += (_, _) =>
         {
-            foreach (MenuItem row in menu.Items.OfType<MenuItem>())
-            {
-                BindingOperations.ClearBinding(row, MenuItem.IsCheckedProperty);
-            }
-
             if (ReferenceEquals(MorePanelsMenu, menu))
             {
                 MorePanelsMenu = null;
@@ -87,7 +84,8 @@ public partial class MainWindow
     }
 
     /// <summary>The same leaf switch as an arrow on the strip, without the hold to
-    /// settle. A pick of the open panel changes nothing and keeps its check.</summary>
+    /// settle, and the menu closes, by a toggle as by a click. A pick of the open
+    /// panel changes nothing and keeps its check.</summary>
     private static void PickMorePanel(WorkspaceViewModel workspace, WorkspaceLeafOption leaf, ContextMenu menu)
     {
         workspace.ActiveLeaf = leaf;
@@ -95,6 +93,8 @@ public partial class MainWindow
         {
             BindingOperations.GetBindingExpression(row, MenuItem.IsCheckedProperty)?.UpdateTarget();
         }
+
+        menu.IsOpen = false;
     }
 
     /// <summary>The rail's one landing (F6, the boundary routes, the guards): the open
