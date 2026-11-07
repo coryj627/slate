@@ -49,6 +49,17 @@ public sealed partial class ShellAccessibilityTests
             double scale = NoteHeaderDpiForWindow(window.Properties.NativeWindowHandle.Value) / 96.0;
             window.Patterns.Transform.Pattern.Resize(1500 * scale, 820 * scale);
             AutomationElement tree = WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(30));
+            // A window can't be wider than its screen, and a CI VM's is about 1044: there the
+            // right pane goes aside (Ctrl+Alt+I, with the keys in Files) so the bar is full.
+            if (window.BoundingRectangle.Width < 1400 * scale)
+            {
+                tree.Focus();
+                PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.KEY_I);
+                Retry.WhileTrue(
+                    () => window.FindFirstDescendant(automation.ConditionFactory.ByAutomationId("RightPaneLeaves")) is { IsOffscreen: false },
+                    TimeSpan.FromSeconds(5));
+            }
+
             AutomationElement folder = WaitForTreeItemStartingWith(tree, automation, "learning");
             folder.Patterns.ExpandCollapse.Pattern.Expand();
             AutomationElement maths = WaitForTreeItemStartingWith(tree, automation, "maths");
