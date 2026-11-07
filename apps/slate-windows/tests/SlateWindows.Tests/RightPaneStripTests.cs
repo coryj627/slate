@@ -133,8 +133,12 @@ public sealed class RightPaneStripTests
         using var host = new ShownShell(("note.md", "# Note\n"));
         host.Settle();
 
+        int shown = host.Announced.OfType<A11yEvent.LeafPanelShown>().Count();
         host.Workspace.OpenTasksReview();
         host.Settle();
+
+        // A command keeps its line: the keys aren't on More panels to hear its name.
+        Assert.Equal(shown + 1, host.Announced.OfType<A11yEvent.LeafPanelShown>().Count());
 
         Assert.Equal(SlateUniffiMethods.MorePanelsName("Tasks Review"), AutomationProperties.GetName(host.Shell.RightPaneMorePanelsButton));
         Assert.Null(host.Shell.RightPaneLeavesList.SelectedItem);
@@ -171,12 +175,20 @@ public sealed class RightPaneStripTests
         int shown = host.Announced.OfType<A11yEvent.LeafPanelShown>().Count();
 
         MenuItem tasks = menu.Items.OfType<MenuItem>().Single(item => Id(item) == "tasks");
+        // What the button is called as the keys come back: a reader hears it then, so it
+        // must already name the panel, or the name changes under them and is read twice.
+        var namesOnReturn = new List<string>();
+        host.Shell.RightPaneMorePanelsButton.GotKeyboardFocus += (_, _) => namesOnReturn.Add(AutomationProperties.GetName(host.Shell.RightPaneMorePanelsButton));
         Toggle(tasks);
         host.Settle();
+        Assert.Equal([SlateUniffiMethods.MorePanelsName("Tasks")], namesOnReturn);
         Assert.False(menu.IsOpen, "a pick didn't close More panels");
 
         Assert.Equal("tasks", host.Workspace.ActiveLeaf.Id);
-        Assert.Equal(shown + 1, host.Announced.OfType<A11yEvent.LeafPanelShown>().Count());
+        // One outcome (Codex round 4): the button takes the keys back and its name says
+        // the panel is open, so the pick posts no "… panel." line of its own.
+        Assert.Equal(shown, host.Announced.OfType<A11yEvent.LeafPanelShown>().Count());
+        Assert.Equal(SlateUniffiMethods.MorePanelsName("Tasks"), AutomationProperties.GetName(host.Shell.RightPaneMorePanelsButton));
         Assert.Same(host.Shell.RightPaneMorePanelsButton, Keyboard.FocusedElement);
 
         // Picking the open panel again changes nothing, and it keeps its check.
@@ -187,7 +199,7 @@ public sealed class RightPaneStripTests
         Assert.True(tasks.IsChecked);
         Assert.False(menu.IsOpen);
         Assert.Equal("tasks", host.Workspace.ActiveLeaf.Id);
-        Assert.Equal(shown + 1, host.Announced.OfType<A11yEvent.LeafPanelShown>().Count());
+        Assert.Equal(shown, host.Announced.OfType<A11yEvent.LeafPanelShown>().Count());
     });
 
     [Fact]

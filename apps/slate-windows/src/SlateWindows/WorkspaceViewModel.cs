@@ -2742,6 +2742,24 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     /// window answers; null (no window) answers no.</summary>
     internal Func<bool>? IsChoosingLeafByArrow { get; set; }
 
+    private bool _choosingFromMorePanels;
+
+    /// <summary>DS-16: a pick from More panels. The same switch as any route but
+    /// silent: the menu gives the keys back to the button, whose name says the
+    /// panel is open, so the "… panel." line would repeat it (Codex round 4).</summary>
+    internal void ChooseFromMorePanels(WorkspaceLeafOption leaf)
+    {
+        _choosingFromMorePanels = true;
+        try
+        {
+            ActiveLeaf = leaf;
+        }
+        finally
+        {
+            _choosingFromMorePanels = false;
+        }
+    }
+
     /// <summary>WB-16 (#1305): the rail arrows' settle. An arrow commits the
     /// leaf at once and defers its reload, the queries refresh and the
     /// workspace write to the settle (<see cref="OnLeafSettled"/>); the window
@@ -2797,8 +2815,10 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 OnPropertyChanged(nameof(MoreLeafTitle));
                 OnPropertyChanged(nameof(MorePanelsName));
                 bool byArrow = IsChoosingLeafByArrow?.Invoke() == true;
-                // Silent on the rail's arrow route only (G21, AR-59).
-                if (!byArrow)
+                // Silent on the rail's arrow route (G21, AR-59), and on a pick from
+                // More panels (DS-16), whose button takes the keys back and names
+                // the panel: either way, the line would say it twice.
+                if (!byArrow && !_choosingFromMorePanels)
                 {
                     _announce(new A11yEvent.LeafPanelShown(value.Title));
                 }

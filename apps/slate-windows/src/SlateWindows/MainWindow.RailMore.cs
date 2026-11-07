@@ -62,6 +62,19 @@ public partial class MainWindow
                     ConverterParameter = leaf,
                 });
             AutomationProperties.SetAutomationId(item, MorePanelsItemIdPrefix + leaf.Id);
+            // The pick lands as the row checks, inside the click and before the menu
+            // closes, so More panels is already named for the open panel when the keys
+            // come back to it: a reader hears its name once. Taken from Click, WPF runs
+            // after the keys are back and the name changes under them, read twice.
+            item.Checked += (_, _) =>
+            {
+                if (menu.IsOpen
+                    && ReferenceEquals(_viewModel.Workspace, workspace)
+                    && !ReferenceEquals(workspace.ActiveLeaf, leaf))
+                {
+                    workspace.ChooseFromMorePanels(leaf);
+                }
+            };
             // WPF runs a menu's Click after it closes: a workspace replaced meanwhile
             // (a vault opened or closed) takes no pick meant for the old one.
             item.Click += (_, _) =>
@@ -101,7 +114,7 @@ public partial class MainWindow
     /// panel changes nothing and keeps its check.</summary>
     private static void PickMorePanel(WorkspaceViewModel workspace, WorkspaceLeafOption leaf, ContextMenu menu)
     {
-        workspace.ActiveLeaf = leaf;
+        workspace.ChooseFromMorePanels(leaf);
         foreach (MenuItem row in menu.Items.OfType<MenuItem>())
         {
             BindingOperations.GetBindingExpression(row, MenuItem.IsCheckedProperty)?.UpdateTarget();
