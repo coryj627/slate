@@ -19,21 +19,25 @@ public sealed class AppMenuKeysTests
     [InlineData(Key.G, "GraphMenu")]
     public void AppMenuKeysDecide(Key letter, string menu)
     {
-        Assert.Equal(menu, AppMenuKeys.Decide(letter, modalOpen: false, liveAccessKey: false));
+        Assert.Equal(menu, AppMenuKeys.Decide(letter, modalOpen: false, liveAccessKey: () => false));
 
         // Nothing under a modal surface, and nothing when a live control holds the letter
         // (the find bar's Alt+N and Alt+W).
-        Assert.Null(AppMenuKeys.Decide(letter, modalOpen: true, liveAccessKey: false));
-        Assert.Null(AppMenuKeys.Decide(letter, modalOpen: false, liveAccessKey: true));
+        Assert.Null(AppMenuKeys.Decide(letter, modalOpen: true, liveAccessKey: () => false));
+        Assert.Null(AppMenuKeys.Decide(letter, modalOpen: false, liveAccessKey: () => true));
     }
 
     /// <summary>Only the letters the design lists: H waits for Help (#756), and the rest
-    /// stay WPF's.</summary>
+    /// stay WPF's. Nor is any other key asked about as an access key: one is a single
+    /// character, and asking about Alt's own key down ("LeftAlt") threw inside the window's
+    /// key handler, after which the app took no more keys.</summary>
     [Theory]
     [InlineData(Key.H)]
     [InlineData(Key.A)]
     [InlineData(Key.F10)]
+    [InlineData(Key.LeftAlt)]
+    [InlineData(Key.RightAlt)]
     [InlineData(Key.Space)]
     public void OtherKeysAreLeftAlone(Key key) =>
-        Assert.Null(AppMenuKeys.Decide(key, modalOpen: false, liveAccessKey: false));
+        Assert.Null(AppMenuKeys.Decide(key, modalOpen: false, liveAccessKey: () => throw new InvalidOperationException($"{key} was asked about as an access key.")));
 }

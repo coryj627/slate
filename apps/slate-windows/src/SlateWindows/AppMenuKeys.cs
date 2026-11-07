@@ -13,20 +13,22 @@ namespace SlateWindows;
 internal static class AppMenuKeys
 {
     /// <summary>The <c>AutomationId</c> of the menu to open for <paramref name="systemKey"/>,
-    /// or null to leave the key alone: under a modal surface, when a live control holds the
-    /// letter (the find bar's Alt+N and Alt+W), and for any letter but the six. H waits for
-    /// Help (#756).</summary>
-    internal static string? Decide(Key systemKey, bool modalOpen, bool liveAccessKey) =>
-        modalOpen || liveAccessKey
-            ? null
-            : systemKey switch
-            {
-                Key.F => "FileMenu",
-                Key.W => "WorkspaceMenu",
-                Key.B => "BaseMenu",
-                Key.E => "EditorMenu",
-                Key.N => "CanvasMenu",
-                Key.G => "GraphMenu",
-                _ => null,
-            };
+    /// or null to leave the key alone: for any key but the six letters (H waits for Help,
+    /// #756), under a modal surface, and when a live control holds the letter (the find bar's
+    /// Alt+N and Alt+W). <paramref name="liveAccessKey"/> is asked only about the six, since
+    /// an access key is one character and Alt's own key down would be asked as "LeftAlt".</summary>
+    internal static string? Decide(Key systemKey, bool modalOpen, Func<bool> liveAccessKey)
+    {
+        string? menu = systemKey switch
+        {
+            Key.F => "FileMenu",
+            Key.W => "WorkspaceMenu",
+            Key.B => "BaseMenu",
+            Key.E => "EditorMenu",
+            Key.N => "CanvasMenu",
+            Key.G => "GraphMenu",
+            _ => null,
+        };
+        return menu is null || modalOpen || liveAccessKey() ? null : menu;
+    }
 }

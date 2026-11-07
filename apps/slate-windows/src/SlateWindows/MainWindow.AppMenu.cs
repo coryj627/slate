@@ -37,8 +37,11 @@ public partial class MainWindow
             return false;
         }
 
-        bool live = !AppMenuItem.IsSubmenuOpen && AccessKeyManager.IsKeyRegistered(null, systemKey.ToString());
-        return AppMenuKeys.Decide(systemKey, OpenModalSurface is not null, live) is { } menu && OpenAppMenu(menu);
+        return AppMenuKeys.Decide(
+                systemKey,
+                OpenModalSurface is not null,
+                () => !AppMenuItem.IsSubmenuOpen && AccessKeyManager.IsKeyRegistered(null, systemKey.ToString())) is { } menu
+            && OpenAppMenu(menu);
     }
 
     /// <summary>Opens the logo's popup and, when named, that menu in it, with the keys on its
