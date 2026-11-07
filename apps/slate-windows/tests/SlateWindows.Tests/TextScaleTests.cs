@@ -57,6 +57,9 @@ public sealed partial class TextScaleTests
         using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
         PumpedDispatcher.PumpUntilDrained(host.Workspace.SeedWorkForTests);
         host.Settle();
+        // The keys stay on a rail row through the change, and the shell's text reflows
+        // around it: a status bar item. The rail's strip is icons, which Text size
+        // doesn't grow (DS-16), so the row itself keeps its 40.
         ListBoxItem? found = null;
         System.Threading.SpinWait.SpinUntil(
             () =>
@@ -67,22 +70,23 @@ public sealed partial class TextScaleTests
             },
             TimeSpan.FromSeconds(10));
         ListBoxItem row = Assert.IsType<ListBoxItem>(found, exactMatch: false);
+        StatusBarItem text = ShownShell.Descendants(host.Shell).OfType<StatusBarItem>().First(item => item.IsVisible && item.ActualHeight > 0);
         row.Focus();
         host.Settle();
         object? focused = System.Windows.Input.FocusManager.GetFocusedElement(host.Shell);
         Assert.Same(row, focused);
-        double before = row.ActualHeight;
+        double before = text.ActualHeight;
 
         ResourceDictionary ramp = RampOf(host.Shell);
         TypeRamp.Apply(ramp, 2);
         host.Settle();
         Assert.Same(row, System.Windows.Input.FocusManager.GetFocusedElement(host.Shell));
-        Assert.True(row.ActualHeight > before, $"the row stayed {row.ActualHeight:F1} tall at twice the size.");
+        Assert.True(text.ActualHeight > before, $"the status text stayed {text.ActualHeight:F1} tall at twice the size.");
 
         TypeRamp.Apply(ramp, 1);
         host.Settle();
         Assert.Same(row, System.Windows.Input.FocusManager.GetFocusedElement(host.Shell));
-        Assert.Equal(before, row.ActualHeight, 1);
+        Assert.Equal(before, text.ActualHeight, 1);
     });
 
     [Fact]
@@ -1152,57 +1156,29 @@ public sealed partial class TextScaleTests
         Assert.True(tree.ActualHeight >= 40, $"the tree has {tree.ActualHeight:F0} of height.");
     });
 
-    /// <summary>A rail that fits its labels took two thirds of a 320 pane at 225%, and
-    /// the leaf beside it wrapped a letter at a time.</summary>
+    /// <summary>DS-5 moved a rail of labels under the leaf at 225%, where it took two
+    /// thirds of the pane. DS-16's strip is icons, which Text size doesn't grow, so it
+    /// keeps its place and its width beside the leaf at any size.</summary>
     [Fact]
-    public void TheRailGoesUnderTheLeafWhenTheTextNeedsTheRoom() => OnOwnThread(() =>
+    public void TheStripKeepsItsPlaceAndWidthAtAnyTextSize() => OnOwnThread(() =>
     {
         using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
         host.Shell.Width = 1120;
         host.Shell.Height = 720;
         host.Settle();
         host.Settle();
-        var rail = (ListBox)host.Shell.FindName("RightPaneLeavesList");
+        var strip = (FrameworkElement)host.Shell.FindName("RightPaneRailStrip");
         var leaves = (Grid)host.Shell.FindName("RightPaneLeafHost");
-        Assert.True(rail.TranslatePoint(default, leaves).X > 0, "at 100% the rail isn't beside the leaf.");
+        Point beside = strip.TranslatePoint(default, leaves);
+        double width = strip.ActualWidth;
+        Assert.True(beside.X > 0, "at 100% the strip isn't beside the leaf.");
+        Assert.True(width <= 56, $"the strip is {width:F0} wide.");
 
         TypeRamp.Apply(RampOf(host.Shell), 2.25);
         host.Settle();
         host.Settle();
-        Point under = rail.TranslatePoint(default, leaves);
-        Assert.Equal(0, under.X, 1);
-        Assert.True(under.Y > 0, "at 225% the rail isn't under the leaf.");
-        Assert.Equal(leaves.ActualWidth, rail.ActualWidth, 1);
-        Assert.True(rail.ActualHeight <= (leaves.ActualHeight * 0.4) + 1, $"the rail takes {rail.ActualHeight:F0} of {leaves.ActualHeight:F0}.");
-
-        TypeRamp.Apply(RampOf(host.Shell), 1);
-        host.Settle();
-        host.Settle();
-        Assert.True(rail.TranslatePoint(default, leaves).X > 0, "the rail didn't come back beside the leaf.");
-    });
-
-    /// <summary>Off, the rail stays where it is. On again, it places itself.</summary>
-    [Fact]
-    public void TheRailFollowsItsSwitch() => OnOwnThread(() =>
-    {
-        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
-        host.Shell.Width = 1120;
-        host.Shell.Height = 720;
-        host.Settle();
-        host.Settle();
-        var rail = (ListBox)host.Shell.FindName("RightPaneLeavesList");
-        var leaves = (Grid)host.Shell.FindName("RightPaneLeafHost");
-
-        RightPaneRail.SetIsEnabled(rail, false);
-        TypeRamp.Apply(RampOf(host.Shell), 2.25);
-        host.Settle();
-        host.Settle();
-        Assert.True(rail.TranslatePoint(default, leaves).X > 0, "the rail moved with its switch off.");
-
-        RightPaneRail.SetIsEnabled(rail, true);
-        host.Settle();
-        host.Settle();
-        Assert.Equal(0, rail.TranslatePoint(default, leaves).X, 1);
+        Assert.Equal(beside, strip.TranslatePoint(default, leaves));
+        Assert.Equal(width, strip.ActualWidth, 1);
     });
 
     [Fact]

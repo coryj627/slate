@@ -152,10 +152,10 @@ DS-0 settles these in the documents, so no later chunk has to.
 - **The design cycle** (`claude/design-pass`) has its own discovery passes. A
   defect they find is fixed there, not here.
 
-## 3. The owner's decisions (DSD1 to DSD18)
+## 3. The owner's decisions (DSD1 to DSD19)
 
 Settled with the owner on 2026-11-03, DSD16 on 2026-11-05 after their look at real
-accents (§8), and DSD17 and DSD18 on 2026-11-06. DSD8, DSD10 and DSD14 differ from what this plan first recommended, and
+accents (§8), DSD17 and DSD18 on 2026-11-06, and DSD19 on 2026-11-07. DSD8, DSD10 and DSD14 differ from what this plan first recommended, and
 their specs follow the owner's call.
 
 | # | Chunk | Question | Decided |
@@ -178,6 +178,7 @@ their specs follow the owner's call.
 | DSD16 | DS-11 | The owner's look (§8) on 2026-11-05: under DSD14's gate every hue they tried fell back to gold in dark, so Windows accent looked like it did nothing. Their `#EA005E` passes every check in light, and in dark fails a pressed link (4.39:1) and the reading overlay's stand-off | Drop the requirement. Windows accent, and Automatic once the user has chosen an accent in Windows, follow whatever Windows has, in both themes. High Contrast never takes it, Automatic keeps gold on the default blue, and selected rows keep their own text brush. Choosing an accent from colours that clear contrast is a follow-up, #1842 |
 | DSD17 | DS-12 | Windows places the Snap Layouts flyout for a standard caption, about 29 below the window's top, so once it's open it covers the lower 19 of the design's 48-tall maximize button: a click there lands on the flyout. A click before it opens, or anywhere above, maximizes | Keep it as it is, with the design's caption buttons, over the spec's fallback to native ones |
 | DSD18 | DS-15 | DSD11's read once the bar was built: it adds one stop per folder, the switch's checked option and ⋯ before Properties. And the bar goes compact below 520 of its own width, as the design says, which at the app's default 1120 window with both panes leaves the editor about 520 wide, so it opens compact there | Keep the stops. Keep the compact bar for now, and revisit its width rule as a refinement later, #1848 |
+| DSD19 | DS-16 | The owner's review of the rail's icons (DSD8, `assessment.md:113`) on 2026-11-07, from candidates drawn at 60 and at the rail's 20 | Four change, and the other 13 stay as `Kit.jsx:54-56` draws them. Backlinks is two interlocking links with an arrow coming in at the lower left, drawn for Slate, since Segoe Fluent Icons has no chain. Outgoing links is the link glyph `E71B` turned 45° to rise to the right. Graph inspector is `F22C`, a hub with five nodes. Diagrams is a flowchart, a step, a decision and two outcomes, drawn for Slate, which also stops it sharing `E9D2` with the Dashboard tab |
 
 ## 4. Rules (every chunk)
 
@@ -247,7 +248,7 @@ work the chunk carries.
 | DS-13 | The menus cascade from the logo; Alt+letter; F10 | — | L | windows | Full NVDA and Narrator menu pass | DSD7 |
 | DS-14 | `MinWidth` 500; panes collapse by width without losing the reader's place | — | M | windows | NVDA spot | — |
 | DS-15 | NoteHeader above a note, each control acting on its own note | — | L | windows | NVDA and Narrator pass | DSD11, DSD15 |
-| DS-16 | The right-pane rail as an icon strip with a More menu; panes at the design's default widths | — | L | windows | NVDA and Narrator pass | DSD8 |
+| DS-16 | The right-pane rail as an icon strip with a More menu; panes at the design's default widths | — | L | windows | NVDA and Narrator pass | DSD8, DSD19 |
 | DS-17 | The Files pane under a PanelToolbar | — | L | windows, rust, swift | NVDA and Narrator pass | DSD9, DSD12 |
 | DS-18 | PanelToolbar on each right-pane leaf; CountListRow for tags | — | L | windows | NVDA spot | — |
 | DS-19 | EmptyStateLauncher in an empty pane | — | S | windows | NVDA spot | — |

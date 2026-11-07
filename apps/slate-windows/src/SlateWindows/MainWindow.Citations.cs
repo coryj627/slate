@@ -361,7 +361,7 @@ public partial class MainWindow
                 // the keys to the pane's stable stop, the rail's row.
                 if (!SelectorFocus.FocusFirstOrSelectedItem(PanelCitationsList, CitationNotices))
                 {
-                    _ = SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList);
+                    _ = LandOnRail();
                 }
             },
             System.Windows.Threading.DispatcherPriority.Input);
@@ -690,7 +690,7 @@ public partial class MainWindow
                 // row (R-5, #1247).
                 if (!SelectorFocus.FocusFirstOrSelectedItem(PanelCitationsList, CitationNotices))
                 {
-                    _ = SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList);
+                    _ = LandOnRail();
                 }
             },
             System.Windows.Threading.DispatcherPriority.Input);

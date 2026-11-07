@@ -728,11 +728,15 @@ public sealed partial class ShellAccessibilityTests
                 TimeSpan.FromSeconds(10));
             Assert.Equal(ControlType.List, rightPaneLeaves.ControlType);
             Assert.True(rightPaneLeaves.Patterns.Selection.IsSupported);
-            // W6-2 PR E (Term I1): the seventeenth leaf is the graph inspector's.
+            // DS-16 (DSD8): the strip holds five, the graph inspector's last (W6-2 PR E,
+            // Term I1), and More panels the other twelve.
             Assert.Equal(
-                17,
+                5,
                 rightPaneLeaves.FindAllDescendants(
                     automation.ConditionFactory.ByControlType(ControlType.ListItem)).Length);
+            Assert.Equal(
+                "More panels",
+                WaitForElement(window, "RightPaneMorePanels", TimeSpan.FromSeconds(10)).Name);
 
             AutomationElement splitRight = WaitForMenuItem(
                 window,
@@ -2741,29 +2745,7 @@ public sealed partial class ShellAccessibilityTests
 
             AutomationElement leaves = WaitForElement(
                 window, "RightPaneLeaves", TimeSpan.FromSeconds(10));
-            void SelectLeaf(string title)
-            {
-                // Retried: the rail's ListItems materialize lazily on
-                // the gate runner (the W4-1 playbook — one-shot
-                // enumeration races composition).
-                AutomationElement? entry = null;
-                Assert.True(
-                    SpinWait.SpinUntil(
-                        () =>
-                        {
-                            entry = leaves
-                                .FindAllDescendants(
-                                    automation.ConditionFactory.ByControlType(
-                                        ControlType.ListItem))
-                                .FirstOrDefault(item =>
-                                    (item.Properties.Name.ValueOrDefault ?? "")
-                                        == title);
-                            return entry is not null;
-                        },
-                        TimeSpan.FromSeconds(15)),
-                    $"No rail entry named {title}.");
-                entry!.Patterns.SelectionItem.Pattern.Select();
-            }
+            void SelectLeaf(string title) => OpenRailPanel(window, automation, title);
             AutomationElement WaitForRow(
                 AutomationElement list, Func<string, bool> match, string description)
             {
@@ -2941,26 +2923,7 @@ public sealed partial class ShellAccessibilityTests
 
             AutomationElement leaves = WaitForElement(
                 window, "RightPaneLeaves", TimeSpan.FromSeconds(10));
-            void SelectLeaf(string title)
-            {
-                AutomationElement? entry = null;
-                Assert.True(
-                    SpinWait.SpinUntil(
-                        () =>
-                        {
-                            entry = leaves
-                                .FindAllDescendants(
-                                    automation.ConditionFactory.ByControlType(
-                                        ControlType.ListItem))
-                                .FirstOrDefault(item =>
-                                    (item.Properties.Name.ValueOrDefault ?? "")
-                                        == title);
-                            return entry is not null;
-                        },
-                        TimeSpan.FromSeconds(15)),
-                    $"No rail entry named {title}.");
-                entry!.Patterns.SelectionItem.Pattern.Select();
-            }
+            void SelectLeaf(string title) => OpenRailPanel(window, automation, title);
             AutomationElement WaitForRow(
                 string listId, Func<string, bool> match, string description)
             {
@@ -3450,25 +3413,7 @@ public sealed partial class ShellAccessibilityTests
 
             AutomationElement leaves = WaitForElement(
                 window, "RightPaneLeaves", TimeSpan.FromSeconds(10));
-            void SelectLeaf(string title)
-            {
-                AutomationElement? entry = null;
-                Assert.True(
-                    SpinWait.SpinUntil(
-                        () =>
-                        {
-                            entry = leaves
-                                .FindAllDescendants(
-                                    automation.ConditionFactory.ByControlType(
-                                        ControlType.ListItem))
-                                .FirstOrDefault(item =>
-                                    (item.Properties.Name.ValueOrDefault ?? "") == title);
-                            return entry is not null;
-                        },
-                        TimeSpan.FromSeconds(15)),
-                    $"No rail entry named {title}.");
-                entry!.Patterns.SelectionItem.Pattern.Select();
-            }
+            void SelectLeaf(string title) => OpenRailPanel(window, automation, title);
 
             // ---- The citations leaf ------------------------------
             SelectLeaf("Citations");
@@ -4083,21 +4028,7 @@ public sealed partial class ShellAccessibilityTests
 
             AutomationElement leaves = WaitForElement(
                 window, "RightPaneLeaves", TimeSpan.FromSeconds(30));
-            AutomationElement? bibliographyEntry = null;
-            Assert.True(
-                SpinWait.SpinUntil(
-                    () =>
-                    {
-                        bibliographyEntry = leaves
-                            .FindAllDescendants(
-                                automation.ConditionFactory.ByControlType(ControlType.ListItem))
-                            .FirstOrDefault(item =>
-                                (item.Properties.Name.ValueOrDefault ?? "") == "Bibliography");
-                        return bibliographyEntry is not null;
-                    },
-                    TimeSpan.FromSeconds(15)),
-                "no Bibliography rail entry.");
-            bibliographyEntry!.Patterns.SelectionItem.Pattern.Select();
+            OpenRailPanel(window, automation, "Bibliography");
 
             // The reason is on screen, verbatim, naming the source.
             AutomationElement? notice = null;
@@ -4418,21 +4349,7 @@ public sealed partial class ShellAccessibilityTests
             // The Queries leaf renders and scans clean.
             AutomationElement leaves = WaitForElement(
                 window, "RightPaneLeaves", TimeSpan.FromSeconds(10));
-            AutomationElement? queriesLeaf = null;
-            Assert.True(
-                SpinWait.SpinUntil(
-                    () =>
-                    {
-                        queriesLeaf = leaves
-                            .FindAllDescendants(automation.ConditionFactory
-                                .ByControlType(ControlType.ListItem))
-                            .FirstOrDefault(item => string.Equals(
-                                item.Name, "Queries", StringComparison.Ordinal));
-                        return queriesLeaf is not null;
-                    },
-                    TimeSpan.FromSeconds(10)),
-                "the Queries leaf option never appeared");
-            queriesLeaf!.Patterns.SelectionItem.Pattern.Select();
+            OpenRailPanel(window, automation, "Queries");
             // The leaf BODY is a WPF Panel — no automation peer, no id
             // in the tree (the W4-5 lesson); presence is asserted via
             // its peered children.
@@ -4527,7 +4444,7 @@ public sealed partial class ShellAccessibilityTests
             // clean. The list collapses when EMPTY, so its absence is
             // ambiguous — the failure message distinguishes "leaf
             // never revealed" from "save never landed".
-            queriesLeaf!.Patterns.SelectionItem.Pattern.Select();
+            OpenRailPanel(window, automation, "Queries");
             AutomationElement? savedList = null;
             if (!SpinWait.SpinUntil(
                 () =>
@@ -4586,7 +4503,7 @@ public sealed partial class ShellAccessibilityTests
             // The dashboard editor overlay and the dashboard TAB
             // (contract C12): create one section over the saved query,
             // save, open, and scan both surfaces.
-            queriesLeaf!.Patterns.SelectionItem.Pattern.Select();
+            OpenRailPanel(window, automation, "Queries");
             AutomationElement newDashboard = WaitForElement(
                 window, "QueriesNewDashboard", TimeSpan.FromSeconds(10));
             newDashboard.Patterns.Invoke.Pattern.Invoke();
@@ -5138,26 +5055,12 @@ public sealed partial class ShellAccessibilityTests
             window.SetForeground();
             window.Focus();
 
-            // The RAIL is the reveal route: SD7 registers no showPanel
+            // The rail is the reveal route, through More panels (DS-16): SD7 registers no showPanel
             // command for this leaf on either platform, so there is no
             // menu path to the surface — only the refresh below.
             AutomationElement leaves = WaitForElement(
                 window, "RightPaneLeaves", TimeSpan.FromSeconds(30));
-            AutomationElement? syncLeaf = null;
-            Assert.True(
-                SpinWait.SpinUntil(
-                    () =>
-                    {
-                        syncLeaf = leaves
-                            .FindAllDescendants(automation.ConditionFactory
-                                .ByControlType(ControlType.ListItem))
-                            .FirstOrDefault(item => string.Equals(
-                                item.Name, "Sync", StringComparison.Ordinal));
-                        return syncLeaf is not null;
-                    },
-                    TimeSpan.FromSeconds(10)),
-                "the Sync leaf option never appeared");
-            syncLeaf!.Patterns.SelectionItem.Pattern.Select();
+            OpenRailPanel(window, automation, "Sync");
 
             // Every publish CLEARS and rebuilds the surface, so every
             // element handle held across one is dead. Each probe below

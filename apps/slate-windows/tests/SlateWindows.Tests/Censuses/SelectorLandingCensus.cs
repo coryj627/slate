@@ -631,11 +631,13 @@ public sealed class SelectorLandingCensus
         return AnswerFlow.Used;
     }
 
-    /// <summary>The rail's row is the right pane's stable stop: a landing
-    /// there has nothing behind it to fall back to.</summary>
+    /// <summary>The rail is the right pane's stable stop: a landing there, on
+    /// its row or through <c>LandOnRail</c> (DS-16: the row, or More panels),
+    /// has nothing behind it to fall back to.</summary>
     private static bool LandsOnTheRail(SemanticModel model, InvocationExpressionSyntax call) =>
-        call.ArgumentList.Arguments.FirstOrDefault()?.Expression is { } argument
-        && model.GetSymbolInfo(argument).Symbol is IFieldSymbol { Name: "RightPaneLeavesList", ContainingType.Name: "MainWindow" };
+        (call.ArgumentList.Arguments.FirstOrDefault()?.Expression is { } argument
+            && model.GetSymbolInfo(argument).Symbol is IFieldSymbol { Name: "RightPaneLeavesList", ContainingType.Name: "MainWindow" })
+        || model.GetSymbolInfo(call).Symbol is IMethodSymbol { Name: "LandOnRail", ContainingType.Name: "MainWindow" };
 
     /// <summary>A discard inside the region ring's <c>TryLand</c>, in a case
     /// that breaks to its closing statement — checked to return the

@@ -25,5 +25,6 @@ const { PaneSwitcher } = window.SlateDesignSystem_326dc9;
 - Buttons here are 32 px, as in panel toolbars. Only the title bar's are 40 × 40 (`winui-review.md`).
 - If tooltips get in the way while arrowing, set `ToolTipService.ShowsToolTipOnKeyboardFocus="False"`.
 - Icon-only versions need `AutomationProperties.Name`; otherwise Narrator reads the icon glyph.
+- Slate's icons, as the owner reviewed them (plan 46 DSD19): `Kit.jsx`'s, except Backlinks, two interlocking links with an arrow coming in, drawn as a path since Segoe Fluent Icons has no chain; Outgoing links, `E71B` turned 45° to rise to the right; Graph inspector, `F22C`; and Diagrams, a flowchart drawn as a path. In the strip the slots are 40, the More panels button with them, and the icons 20.
 
 Ratings and theme setup: `wpf-feasibility.md`.

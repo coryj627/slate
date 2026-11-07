@@ -77,7 +77,10 @@ public partial class MainWindow : Window
         ListBox dualPane = FindWithAutomationId<ListBox>(FilesPaneBorder, "SidebarDualPane")
             ?? throw new InvalidOperationException("SidebarDualPane is not in the shell's XAML.");
         SelectorFocus.SetOwnLanding(dualPane, () => SelectorFocus.FocusFirstOrSelectedItem(dualPane) || LandOnFilesTree());
-        SelectorFocus.SetOwnLanding(RightPaneLeavesList, () => SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList));
+        // DS-16: a restore onto the strip or More panels lands where the rail does now:
+        // the open panel's row, or More panels when the menu holds it (Codex round 1).
+        SelectorFocus.SetOwnLanding(RightPaneLeavesList, LandOnRail);
+        SelectorFocus.SetOwnLanding(RightPaneMorePanelsButton, LandOnRail);
         KeepLeafKeysThroughPublications();
         GuardRegions();
         WatchRailArrows();
@@ -996,7 +999,7 @@ public partial class MainWindow : Window
                     Graph.GraphInspectorView.LandBoundary(
                         _viewModel.Workspace is WorkspaceViewModel current && current.IsGraphInspectorShown,
                         GraphInspectorSurface.FocusFirstStop,
-                        () => _ = SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList)));
+                        () => _ = LandOnRail()));
             }
             else if (boundary == WorkspaceFocusBoundary.RightPaneEdge)
             {
@@ -1004,7 +1007,7 @@ public partial class MainWindow : Window
                 // (W7-6 §6: Ctrl+Alt+Arrow's semantics unchanged) — on the
                 // shown leaf's row, never the bare rail, from which Down
                 // walked into the menu bar (W7-7 PR 4, #1247, R-5).
-                _ = SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList);
+                _ = LandOnRail();
             }
             else
             {

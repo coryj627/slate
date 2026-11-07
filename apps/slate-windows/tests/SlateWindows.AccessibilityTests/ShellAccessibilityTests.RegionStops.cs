@@ -101,7 +101,7 @@ public sealed partial class ShellAccessibilityTests
             statusBar.Focus();
             AssertEventuallyFocused(statusBar, "The status bar did not take focus.");
             PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.F6);
-            AssertFocusedListItem(automation, rail, "Citations", "Shift+F6 from the status bar did not land on the rail's row.");
+            AssertLandedOnRail(window, automation, "Citations", "Shift+F6 from the status bar did not land on the rail's row.");
             PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.F6);
             AssertEventuallyFocused(noFile, "Shift+F6 into the Citations leaf with no file open did not land on its notice.");
             AutomationElement focusedNotice = automation.FocusedElement();
@@ -154,7 +154,7 @@ public sealed partial class ShellAccessibilityTests
             PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.TAB);
             AssertEventuallyFocused(dueToday, "Shift+Tab did not return to the checked filter.");
             PressKey(VirtualKeyShort.F6);
-            AssertFocusedListItem(automation, rail, "Tasks Review", "F6 from the review's filter did not land on the rail's row.");
+            AssertLandedOnRail(window, automation, "Tasks Review", "F6 from the review's filter did not land on the rail's row.");
 
             //    Codex PR 4 round 7 finding 5: a genuine CLICK on a filter
             //    from outside the group gives the keys to the clicked filter
@@ -177,34 +177,34 @@ public sealed partial class ShellAccessibilityTests
             statusBar.Focus();
             AssertEventuallyFocused(statusBar, "The status bar did not take focus.");
             PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.F6);
-            AssertFocusedListItem(automation, rail, "Citations", "Shift+F6 from the status bar did not land on the rail's row.");
+            AssertLandedOnRail(window, automation, "Citations", "Shift+F6 from the status bar did not land on the rail's row.");
             PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.F6);
             AssertFocusedListItem(automation, citations, null, "Shift+F6 from the rail did not land on a Citations row.");
 
-            // 4. F6 to a rail that has lost its selection lands on a row, not
-            //    on the list. Deselecting through UIA moves the keys onto the
-            //    rail, so they go back to the Citations row before the press.
-            //    The rail's SelectedItem keeps naming the shown leaf (its
-            //    TwoWay binding re-reads ActiveLeaf, which never takes null)
-            //    while nothing is selected, so the row is that leaf's.
-            AutomationElement citationRow = automation.FocusedElement();
+            // 4. F6 to a strip with no selection never lands on the bare list.
+            //    DS-16: Citations lives in More panels, so the strip has
+            //    nothing selected, and F6 from its row lands on More panels.
+            Assert.True(
+                rail.Patterns.Selection.Pattern.Selection.ValueOrDefault is { Length: 0 },
+                "the strip kept a selection with Citations open from More panels");
+            PressKey(VirtualKeyShort.F6);
+            AssertLandedOnRail(window, automation, "Citations", "F6 to a strip with no selection did not land on More panels.");
+
+            //    And a strip leaf's row deselected through UIA: the keys go to
+            //    the status bar before the press, since deselecting moves them
+            //    onto the rail. The strip's SelectedItem keeps naming the shown
+            //    leaf (its TwoWay binding re-reads StripLeaf, which never takes
+            //    null), so Shift+F6 lands on that leaf's row.
+            SelectRailLeaf(window, automation, "Backlinks");
             AutomationElement selectedLeaf = rail
                 .FindAllDescendants(automation.ConditionFactory.ByControlType(ControlType.ListItem))
                 .Single(item => IsChosen(item));
             selectedLeaf.Patterns.SelectionItem.Pattern.RemoveFromSelection();
-            Assert.True(
-                SpinWait.SpinUntil(
-                    () => rail.Patterns.Selection.Pattern.Selection.ValueOrDefault is { Length: 0 },
-                    TimeSpan.FromSeconds(10)),
-                "the rail kept a selection");
             ReassertForegroundForAChord(window);
-            citationRow.Focus();
-            AssertFocusedListItem(automation, citations, null, "The Citations row did not take focus back.");
-            Assert.True(
-                rail.Patterns.Selection.Pattern.Selection.ValueOrDefault is { Length: 0 },
-                "the rail regained a selection before the press");
-            PressKey(VirtualKeyShort.F6);
-            AssertFocusedListItem(automation, rail, "Citations", "F6 to a rail with no selection did not land on the shown leaf's row.");
+            statusBar.Focus();
+            AssertEventuallyFocused(statusBar, "The status bar did not take focus back.");
+            PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.F6);
+            AssertLandedOnRail(window, automation, "Backlinks", "Shift+F6 to a deselected strip did not land on the shown leaf's row.");
 
             // 5. Ctrl+Alt+Right at the editor's edge keeps its landing, the
             //    rail (W7-6 §6) — on the shown leaf's row, never the bare
@@ -217,7 +217,7 @@ public sealed partial class ShellAccessibilityTests
             editor.Focus();
             AssertEventuallyFocused(editor, "The cited.md editor did not take focus.");
             PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, VirtualKeyShort.RIGHT);
-            AssertFocusedListItem(automation, rail, "Tasks Review", "Ctrl+Alt+Right at the edge did not land on the rail's row.");
+            AssertLandedOnRail(window, automation, "Tasks Review", "Ctrl+Alt+Right at the edge did not land on the rail's row.");
 
             // 6. An EMPTY Citations list's stop is its notice (spec §5.2.2):
             //    Shift+F6 into the leaf of a note with no citations lands on
@@ -233,7 +233,7 @@ public sealed partial class ShellAccessibilityTests
             statusBar.Focus();
             AssertEventuallyFocused(statusBar, "The status bar did not take focus.");
             PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.F6);
-            AssertFocusedListItem(automation, rail, "Citations", "Shift+F6 from the status bar did not land on the rail's row.");
+            AssertLandedOnRail(window, automation, "Citations", "Shift+F6 from the status bar did not land on the rail's row.");
             PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.F6);
             AssertEventuallyFocused(empty, "Shift+F6 into an empty Citations leaf did not land on its notice.");
 
@@ -628,24 +628,6 @@ public sealed partial class ShellAccessibilityTests
 
     /// <summary>Shows a right-pane leaf by selecting its rail row through
     /// the SelectionItem pattern — the route that moves no focus.</summary>
-    private static void SelectRailLeaf(Window window, UIA3Automation automation, string title)
-    {
-        AutomationElement rail = WaitForElement(window, "RightPaneLeaves", TimeSpan.FromSeconds(30));
-        AutomationElement? entry = null;
-        Assert.True(
-            SpinWait.SpinUntil(
-                () =>
-                {
-                    entry = rail
-                        .FindAllDescendants(automation.ConditionFactory.ByControlType(ControlType.ListItem))
-                        .FirstOrDefault(item => (item.Properties.Name.ValueOrDefault ?? string.Empty) == title);
-                    return entry is not null;
-                },
-                TimeSpan.FromSeconds(15)),
-            $"No rail entry named {title}.");
-        entry!.Patterns.SelectionItem.Pattern.Select();
-        Assert.True(
-            SpinWait.SpinUntil(() => IsChosen(entry), TimeSpan.FromSeconds(10)),
-            $"The rail entry {title} did not take the selection.");
-    }
+    private static void SelectRailLeaf(Window window, UIA3Automation automation, string title) =>
+        OpenRailPanel(window, automation, title);
 }

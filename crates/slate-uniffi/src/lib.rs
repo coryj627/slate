@@ -342,6 +342,12 @@ pub fn window_title(note: Option<String>, vault: Option<String>) -> String {
     core::window_title(note.as_deref(), vault.as_deref())
 }
 
+/// DS-16: the rail's More panels button, `More panels` or `More panels, Tasks open`.
+#[uniffi::export]
+pub fn more_panels_name(open: Option<String>) -> String {
+    core::more_panels_name(open.as_deref())
+}
+
 /// YAML source-key type (separate from the property's value kind).
 #[derive(Debug, Clone, Copy, uniffi::Enum)]
 pub enum PropertyKeyType {
