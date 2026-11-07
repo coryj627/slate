@@ -15,8 +15,8 @@ public sealed partial class ShellAccessibilityTests
     /// last rows are reached by scrolling. This is launched because a hosted popup can't
     /// take focus. Arrowing to a row that stays off screen would leave a reader lost, and
     /// a menu that slides over its own item hides that item and its neighbours. Since DS-13
-    /// the item is Workspace's row in the logo's popup, and the menu cascades beside it, so
-    /// rows above and below it are fine; no row may cover it.</summary>
+    /// the item is Workspace's row in the logo's popup, opened by Alt+W, and the menu
+    /// cascades beside it, so rows above and below it are fine; no row may cover it.</summary>
     [Fact]
     public void Menus_ALongMenuScrollsToItsLastRow()
     {
@@ -52,18 +52,25 @@ public sealed partial class ShellAccessibilityTests
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(500));
             window.SetForeground();
 
-            AutomationElement opener = WaitForAppMenu(window, "WorkspaceMenu", TimeSpan.FromSeconds(10));
-            opener.Patterns.ExpandCollapse.Pattern.Expand();
-            System.Drawing.Rectangle openerBounds = opener.BoundingRectangle;
+            // Alt+W, as a reader opens it, so the keys are on Workspace's first row before
+            // the first Down. A UIA Expand opened the popup but could leave them on the logo,
+            // where Down never enters Workspace (CI, 96cc6063).
+            PressChord(VirtualKeyShort.ALT, VirtualKeyShort.KEY_W);
+            AssertOpenOnItsFirstRow(window, automation, "WorkspaceMenu");
+            System.Drawing.Rectangle openerBounds = WaitForElement(window, "WorkspaceMenu", TimeSpan.FromSeconds(10)).BoundingRectangle;
 
             // Down skips a disabled row, so the row over the item may never take focus;
-            // each row that does is checked not to cover it.
-            AutomationElement? row = null;
-            for (int press = 0; press < 40; press++)
+            // each row that does is checked not to cover it, the first row included.
+            AutomationElement? row = automation.FocusedElement();
+            for (int press = 0; press <= 40; press++)
             {
-                PressKey(VirtualKeyShort.DOWN);
-                Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(150));
-                row = automation.FocusedElement();
+                if (press > 0)
+                {
+                    PressKey(VirtualKeyShort.DOWN);
+                    Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(150));
+                    row = automation.FocusedElement();
+                }
+
                 System.Drawing.Rectangle shown = row?.BoundingRectangle ?? default;
                 // A cascade overlaps its parent's edge by a few pixels, as any Windows menu
                 // does, so the check is that no row covers the item itself.
