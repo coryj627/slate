@@ -11,10 +11,11 @@ namespace SlateWindows.Tests;
 
 /// <summary>
 /// WB-16 (#1305): arrowing through the right-pane rail commits each leaf at
-/// once (S4) but makes at most one workspace write, and reloads History and
-/// the Queries lists once, when the arrows settle — the last held rail arrow
-/// released, or the keys leaving the rail — never while an arrow is down,
-/// however long the keyboard's first-repeat delay. Keys are raised on the
+/// once (S4) but makes at most one workspace write, when the arrows settle —
+/// the last held rail arrow released, or the keys leaving the rail — never
+/// while an arrow is down, however long the keyboard's first-repeat delay.
+/// DS-16: the arrows stay in the strip's five, so History and Queries, which
+/// reload on a settle, are reached through More panels, one switch each. Keys are raised on the
 /// focused rail row as WPF raises them (the preview, then the bubbling event
 /// only if the preview stayed unhandled) from the shell's own presentation
 /// source; the workspace's key-state seam reads the fact's own held keys.

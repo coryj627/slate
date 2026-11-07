@@ -2594,24 +2594,24 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     public static IReadOnlyList<WorkspaceLeafOption> Leaves { get; } =
     [
         // DS-16: the icons are Kit.jsx:54-56's, with the owner's four changes (DSD19).
-        new("outline", "Outline", ""),
+        new("outline", "Outline", "\uE8FD"),
         new("backlinks", "Backlinks", Drawing: LeafDrawings.Backlinks),
-        new("outgoingLinks", "Outgoing links", "", GlyphTurn: -45),
-        new("connections", "Connections", ""),
+        new("outgoingLinks", "Outgoing links", "\uE71B", GlyphTurn: -45),
+        new("connections", "Connections", "\uF003"),
         // W6-2 PR E (Term I1): the graph inspector's leaf, its title T37.
-        new("inspector", GraphPhrase.InspectorName, ""),
-        new("embeds", "Embeds", ""),
-        new("math", "Math", ""),
-        new("code", "Code", ""),
+        new("inspector", GraphPhrase.InspectorName, "\uF22C"),
+        new("embeds", "Embeds", "\uE8A1"),
+        new("math", "Math", "\uE8EF"),
+        new("code", "Code", "\uE943"),
         new("diagrams", "Diagrams", Drawing: LeafDrawings.Diagrams),
-        new("tasks", "Tasks", ""),
-        new("tasksReview", "Tasks Review", ""),
-        new("history", "History", ""),
-        new("citations", "Citations", ""),
-        new("bibliography", "Bibliography", ""),
-        new("queries", "Queries", ""),
-        new("basesDock", "Base dock", ""),
-        new("syncDiagnostics", "Sync", ""),
+        new("tasks", "Tasks", "\uE9D5"),
+        new("tasksReview", "Tasks Review", "\uE73A"),
+        new("history", "History", "\uE81C"),
+        new("citations", "Citations", "\uE82D"),
+        new("bibliography", "Bibliography", "\uE8F1"),
+        new("queries", "Queries", "\uE71C"),
+        new("basesDock", "Base dock", "\uE8A9"),
+        new("syncDiagnostics", "Sync", "\uE895"),
     ];
     public IReadOnlyList<WorkspaceLeafOption> LeafOptions => Leaves;
 

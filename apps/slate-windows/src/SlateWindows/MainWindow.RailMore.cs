@@ -26,7 +26,12 @@ public partial class MainWindow
 
     internal void OpenMorePanels()
     {
-        if (_viewModel.Workspace is not { } workspace)
+        // The keys go to the button first, so the menu's own restore brings them back
+        // there however it was opened: a click, the keys, or a reader's Invoke from
+        // elsewhere (Codex round 1).
+        if (_viewModel.Workspace is not { } workspace
+            || !RightPaneMorePanelsButton.IsVisible
+            || !RightPaneMorePanelsButton.Focus())
         {
             return;
         }
@@ -57,7 +62,15 @@ public partial class MainWindow
                     ConverterParameter = leaf,
                 });
             AutomationProperties.SetAutomationId(item, MorePanelsItemIdPrefix + leaf.Id);
-            item.Click += (_, _) => PickMorePanel(workspace, leaf, menu);
+            // WPF runs a menu's Click after it closes: a workspace replaced meanwhile
+            // (a vault opened or closed) takes no pick meant for the old one.
+            item.Click += (_, _) =>
+            {
+                if (ReferenceEquals(_viewModel.Workspace, workspace))
+                {
+                    PickMorePanel(workspace, leaf, menu);
+                }
+            };
             _ = menu.Items.Add(item);
         }
 

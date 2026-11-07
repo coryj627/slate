@@ -65,7 +65,7 @@ public sealed class RightPaneStripTests
             Assert.Single(ShownShell.Descendants(row).OfType<LeafIcon>());
             foreach (AutomationPeer under in Walk(peer).Where(under => under.IsControlElement()))
             {
-                Assert.DoesNotContain(under.GetName(), character => character is >= '' and <= '');
+                Assert.DoesNotContain(under.GetName(), character => character is >= '\uE000' and <= '\uF8FF');
             }
         }
 
@@ -205,6 +205,77 @@ public sealed class RightPaneStripTests
         Assert.False(menu.IsOpen);
         Assert.Equal("connections", host.Workspace.ActiveLeaf.Id);
         Assert.Same(host.Shell.RightPaneMorePanelsButton, Keyboard.FocusedElement);
+    });
+
+    /// <summary>Codex round 1: a reader's Invoke opens the menu with the keys somewhere
+    /// else. A pick, and Escape, still bring them back to More panels.</summary>
+    [Fact]
+    public void AMenuOpenedFromElsewhereReturnsTheKeysToMorePanels() => RunSta(() =>
+    {
+        using var host = new ShownShell(("note.md", "# Note\n"));
+        host.Workspace.ActiveLeaf = Leaf("outline");
+        host.Settle();
+        Button more = host.Shell.RightPaneMorePanelsButton;
+
+        Assert.True(host.Shell.FilesTree.Focus(), "premise: the Files tree refused the keys");
+        ContextMenu menu = OpenMore(host);
+        Press(host, Key.Escape);
+        host.Settle();
+        Assert.False(menu.IsOpen);
+        Assert.Same(more, Keyboard.FocusedElement);
+
+        Assert.True(host.Shell.FilesTree.Focus(), "premise: the Files tree refused the keys");
+        menu = OpenMore(host);
+        Toggle(menu.Items.OfType<MenuItem>().Single(item => Id(item) == "history"));
+        host.Settle();
+        Assert.Equal("history", host.Workspace.ActiveLeaf.Id);
+        Assert.Same(more, Keyboard.FocusedElement);
+    });
+
+    /// <summary>Codex round 1: a focus restore whose token is a strip row or More
+    /// panels lands where the rail does now, whichever the token was.</summary>
+    [Fact]
+    public void ARestoreOntoTheRailLandsOnTheOpenPanelsPlace() => RunSta(() =>
+    {
+        using var host = new ShownShell(("note.md", "# Note\n"));
+        host.Workspace.ActiveLeaf = Leaf("history");
+        host.Settle();
+        ListBox strip = host.Shell.RightPaneLeavesList;
+        strip.UpdateLayout();
+        var outline = Assert.IsAssignableFrom<ListBoxItem>(strip.ItemContainerGenerator.ContainerFromItem(Leaf("outline")));
+
+        Assert.True(host.Shell.FilesTree.Focus(), "premise: the Files tree refused the keys");
+        Assert.True(SelectorFocus.LandOnStop(outline));
+        Assert.Same(host.Shell.RightPaneMorePanelsButton, Keyboard.FocusedElement);
+
+        host.Workspace.ActiveLeaf = Leaf("connections");
+        host.Settle();
+        Assert.True(host.Shell.FilesTree.Focus(), "premise: the Files tree refused the keys");
+        Assert.True(SelectorFocus.LandOnStop(host.Shell.RightPaneMorePanelsButton));
+        var row = Assert.IsAssignableFrom<ListBoxItem>(Keyboard.FocusedElement);
+        Assert.Equal("connections", ((WorkspaceLeafOption)row.DataContext).Id);
+    });
+
+    /// <summary>Codex round 1: WPF runs a menu's pick after it closes, so a workspace
+    /// replaced in between (a vault closed) takes nothing meant for the old one.</summary>
+    [Fact]
+    public void APickForAReplacedWorkspaceDoesNothing() => RunSta(() =>
+    {
+        using var host = new ShownShell(("note.md", "# Note\n"));
+        WorkspaceViewModel old = host.Workspace;
+        old.ActiveLeaf = Leaf("outline");
+        host.Settle();
+        ContextMenu menu = OpenMore(host);
+        MenuItem tasks = menu.Items.OfType<MenuItem>().Single(item => Id(item) == "tasks");
+        int shown = host.Announced.OfType<A11yEvent.LeafPanelShown>().Count();
+
+        host.ShowWelcomeWithoutAWorkspace();
+        Toggle(tasks);
+        host.Settle();
+
+        Assert.Equal("outline", old.ActiveLeaf.Id);
+        Assert.Equal(shown, host.Announced.OfType<A11yEvent.LeafPanelShown>().Count());
+        menu.IsOpen = false;
     });
 
     [Fact]

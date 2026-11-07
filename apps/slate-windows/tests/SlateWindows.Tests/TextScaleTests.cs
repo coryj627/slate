@@ -57,6 +57,9 @@ public sealed partial class TextScaleTests
         using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
         PumpedDispatcher.PumpUntilDrained(host.Workspace.SeedWorkForTests);
         host.Settle();
+        // The keys stay on a rail row through the change, and the shell's text reflows
+        // around it: a status bar item. The rail's strip is icons, which Text size
+        // doesn't grow (DS-16), so the row itself keeps its 40.
         ListBoxItem? found = null;
         System.Threading.SpinWait.SpinUntil(
             () =>
@@ -67,22 +70,23 @@ public sealed partial class TextScaleTests
             },
             TimeSpan.FromSeconds(10));
         ListBoxItem row = Assert.IsType<ListBoxItem>(found, exactMatch: false);
+        StatusBarItem text = ShownShell.Descendants(host.Shell).OfType<StatusBarItem>().First(item => item.IsVisible && item.ActualHeight > 0);
         row.Focus();
         host.Settle();
         object? focused = System.Windows.Input.FocusManager.GetFocusedElement(host.Shell);
         Assert.Same(row, focused);
-        double before = row.ActualHeight;
+        double before = text.ActualHeight;
 
         ResourceDictionary ramp = RampOf(host.Shell);
         TypeRamp.Apply(ramp, 2);
         host.Settle();
         Assert.Same(row, System.Windows.Input.FocusManager.GetFocusedElement(host.Shell));
-        Assert.True(row.ActualHeight > before, $"the row stayed {row.ActualHeight:F1} tall at twice the size.");
+        Assert.True(text.ActualHeight > before, $"the status text stayed {text.ActualHeight:F1} tall at twice the size.");
 
         TypeRamp.Apply(ramp, 1);
         host.Settle();
         Assert.Same(row, System.Windows.Input.FocusManager.GetFocusedElement(host.Shell));
-        Assert.Equal(before, row.ActualHeight, 1);
+        Assert.Equal(before, text.ActualHeight, 1);
     });
 
     [Fact]

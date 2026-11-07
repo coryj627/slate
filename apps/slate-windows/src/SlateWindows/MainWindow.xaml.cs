@@ -77,7 +77,10 @@ public partial class MainWindow : Window
         ListBox dualPane = FindWithAutomationId<ListBox>(FilesPaneBorder, "SidebarDualPane")
             ?? throw new InvalidOperationException("SidebarDualPane is not in the shell's XAML.");
         SelectorFocus.SetOwnLanding(dualPane, () => SelectorFocus.FocusFirstOrSelectedItem(dualPane) || LandOnFilesTree());
-        SelectorFocus.SetOwnLanding(RightPaneLeavesList, () => SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList));
+        // DS-16: a restore onto the strip or More panels lands where the rail does now:
+        // the open panel's row, or More panels when the menu holds it (Codex round 1).
+        SelectorFocus.SetOwnLanding(RightPaneLeavesList, LandOnRail);
+        SelectorFocus.SetOwnLanding(RightPaneMorePanelsButton, LandOnRail);
         KeepLeafKeysThroughPublications();
         GuardRegions();
         WatchRailArrows();

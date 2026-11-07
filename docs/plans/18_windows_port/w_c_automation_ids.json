@@ -1955,6 +1955,26 @@
     "Surface": "Right-pane leaf registry"
   },
   {
+    "Source": "MainWindow.RailMore.cs",
+    "Expression": "MorePanelsItemIdPrefix + leaf.Id",
+    "Surface": "Right-pane leaf registry"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "Pill",
+    "Surface": "Right-pane leaf registry"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "RightPaneMorePanels",
+    "Surface": "Right-pane leaf registry"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "RightPaneRailStrip",
+    "Surface": "Right-pane leaf registry"
+  },
+  {
     "Source": "MainWindow.xaml",
     "Expression": "SearchOverlay",
     "Surface": "Search overlay (W5-2)"
