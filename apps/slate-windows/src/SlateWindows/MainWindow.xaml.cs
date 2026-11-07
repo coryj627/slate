@@ -996,7 +996,7 @@ public partial class MainWindow : Window
                     Graph.GraphInspectorView.LandBoundary(
                         _viewModel.Workspace is WorkspaceViewModel current && current.IsGraphInspectorShown,
                         GraphInspectorSurface.FocusFirstStop,
-                        () => _ = SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList)));
+                        () => _ = LandOnRail()));
             }
             else if (boundary == WorkspaceFocusBoundary.RightPaneEdge)
             {
@@ -1004,7 +1004,7 @@ public partial class MainWindow : Window
                 // (W7-6 §6: Ctrl+Alt+Arrow's semantics unchanged) — on the
                 // shown leaf's row, never the bare rail, from which Down
                 // walked into the menu bar (W7-7 PR 4, #1247, R-5).
-                _ = SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList);
+                _ = LandOnRail();
             }
             else
             {

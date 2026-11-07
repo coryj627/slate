@@ -50,7 +50,11 @@ internal enum WorkspaceDirtyNavigationDecision
     Discard,
 }
 
-internal sealed record WorkspaceLeafOption(string Id, string Title);
+/// <summary>A right-pane leaf. DS-16: its icon is <paramref name="Glyph"/>, a Segoe
+/// Fluent Icons character turned by <paramref name="GlyphTurn"/> degrees, or, for one
+/// the font lacks, <paramref name="Drawing"/>, path markup on a 20 grid (DSD19).</summary>
+internal sealed record WorkspaceLeafOption(
+    string Id, string Title, string Glyph = "", double GlyphTurn = 0, string? Drawing = null);
 
 internal abstract class BindableBase : INotifyPropertyChanged
 {
@@ -2589,26 +2593,56 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
 
     public static IReadOnlyList<WorkspaceLeafOption> Leaves { get; } =
     [
-        new("outline", "Outline"),
-        new("backlinks", "Backlinks"),
-        new("outgoingLinks", "Outgoing links"),
-        new("connections", "Connections"),
+        // DS-16: the icons are Kit.jsx:54-56's, with the owner's four changes (DSD19).
+        new("outline", "Outline", ""),
+        new("backlinks", "Backlinks", Drawing: LeafDrawings.Backlinks),
+        new("outgoingLinks", "Outgoing links", "", GlyphTurn: -45),
+        new("connections", "Connections", ""),
         // W6-2 PR E (Term I1): the graph inspector's leaf, its title T37.
-        new("inspector", GraphPhrase.InspectorName),
-        new("embeds", "Embeds"),
-        new("math", "Math"),
-        new("code", "Code"),
-        new("diagrams", "Diagrams"),
-        new("tasks", "Tasks"),
-        new("tasksReview", "Tasks Review"),
-        new("history", "History"),
-        new("citations", "Citations"),
-        new("bibliography", "Bibliography"),
-        new("queries", "Queries"),
-        new("basesDock", "Base dock"),
-        new("syncDiagnostics", "Sync"),
+        new("inspector", GraphPhrase.InspectorName, ""),
+        new("embeds", "Embeds", ""),
+        new("math", "Math", ""),
+        new("code", "Code", ""),
+        new("diagrams", "Diagrams", Drawing: LeafDrawings.Diagrams),
+        new("tasks", "Tasks", ""),
+        new("tasksReview", "Tasks Review", ""),
+        new("history", "History", ""),
+        new("citations", "Citations", ""),
+        new("bibliography", "Bibliography", ""),
+        new("queries", "Queries", ""),
+        new("basesDock", "Base dock", ""),
+        new("syncDiagnostics", "Sync", ""),
     ];
     public IReadOnlyList<WorkspaceLeafOption> LeafOptions => Leaves;
+
+    /// <summary>DS-16 (DSD8): how many leaves the strip holds, the design's six slots
+    /// less More panels. Fixed, so a reader hears the same count at any size.</summary>
+    internal const int StripCount = 5;
+
+    /// <summary>DS-16: the strip's leaves, the first five.</summary>
+    public static IReadOnlyList<WorkspaceLeafOption> StripLeaves { get; } = [.. Leaves.Take(StripCount)];
+
+    /// <summary>DS-16: the More panels menu's leaves, the other twelve.</summary>
+    public static IReadOnlyList<WorkspaceLeafOption> MoreLeaves { get; } = [.. Leaves.Skip(StripCount)];
+
+    /// <summary>DS-16: the strip's selection. The open leaf when the strip holds it,
+    /// else null, so the list is never handed an item it doesn't hold; and null never
+    /// writes back over the open leaf. <see cref="ActiveLeaf"/> stays the one truth.</summary>
+    public WorkspaceLeafOption? StripLeaf
+    {
+        get => StripLeaves.Contains(_activeLeaf) ? _activeLeaf : null;
+        set
+        {
+            if (value is not null)
+            {
+                ActiveLeaf = value;
+            }
+        }
+    }
+
+    /// <summary>DS-16: the open leaf's title when it lives in More panels, else null.
+    /// The button's item status, so a reader can tell from it what's open.</summary>
+    public string? MoreLeafTitle => StripLeaves.Contains(_activeLeaf) ? null : _activeLeaf.Title;
     public EditorPreferencesViewModel EditorPreferences { get; }
 
     /// <summary>W6-1 PR C (#745): the canvas announcement verbosity
@@ -2754,6 +2788,8 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         {
             if (value is not null && SetField(ref _activeLeaf, value))
             {
+                OnPropertyChanged(nameof(StripLeaf));
+                OnPropertyChanged(nameof(MoreLeafTitle));
                 bool byArrow = IsChoosingLeafByArrow?.Invoke() == true;
                 // Silent on the rail's arrow route only (G21, AR-59).
                 if (!byArrow)

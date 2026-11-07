@@ -584,6 +584,9 @@ public sealed class ItemContainerNameCensus
                 "one row per row action its host declares (AccessibleGridRowAction), each named once"),
             ["GraphVerbosityMenu.Populate.submenu"] = new CodeItemsHost.Menu(
                 "one check item per verbosity choice in core's vector, each titled once"),
+            // DS-16: the rail's More panels.
+            ["MainWindow.OpenMorePanels.menu"] = new CodeItemsHost.Menu(
+                "one check item per leaf past the strip (WorkspaceViewModel.MoreLeaves), each titled once"),
             // DS-15 (#1816): the note header's two menus.
             ["NoteHeaderView.ctor.menu"] = new CodeItemsHost.Menu(
                 "three fixed rows, Split Right, Add Property… and Bulk Rename Properties…, each named once"),

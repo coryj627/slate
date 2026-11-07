@@ -1123,11 +1123,11 @@
                 <local:WorkspaceRowHost Grid.Row="1" SizeChanged="WorkspaceRow_SizeChanged">
                 <Grid x:Name="WorkspaceColumns">
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="{Binding Workspace.FilesColumnWidth, Mode=TwoWay, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=270}" MinWidth="{Binding Workspace.FilesColumnMinimumWidth, FallbackValue=200}" MaxWidth="640" />
+                        <ColumnDefinition Width="{Binding Workspace.FilesColumnWidth, Mode=TwoWay, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=260}" MinWidth="{Binding Workspace.FilesColumnMinimumWidth, FallbackValue=200}" MaxWidth="640" />
                         <ColumnDefinition Width="{Binding Workspace.FilesSplitterWidth, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=5}" />
                         <ColumnDefinition Width="*" MinWidth="{Binding Workspace.EditorColumnMinimumWidth, FallbackValue=270}" />
                         <ColumnDefinition Width="{Binding Workspace.RightPaneSplitterWidth, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=5}" />
-                        <ColumnDefinition Width="{Binding Workspace.RightPaneColumnWidth, Mode=TwoWay, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=320}" MinWidth="{Binding Workspace.RightPaneColumnMinimumWidth, FallbackValue=280}" MaxWidth="640" />
+                        <ColumnDefinition Width="{Binding Workspace.RightPaneColumnWidth, Mode=TwoWay, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=300}" MinWidth="{Binding Workspace.RightPaneColumnMinimumWidth, FallbackValue=280}" MaxWidth="640" />
                     </Grid.ColumnDefinitions>
                     <!-- DS-7: collapsed, not only narrowed: a zero-width pane still takes Tab. Its
                          DataContext is the sidebar, so the workspace comes from the window. -->
@@ -2785,27 +2785,123 @@
                                            Foreground="{DynamicResource Slate.SecondaryTextBrush}"
                                            TextWrapping="Wrap" />
                             </StackPanel>
-                            <ListBox x:Name="RightPaneLeavesList"
-                                     KeyboardNavigation.DirectionalNavigation="Contained"
-                                     Grid.Column="1"
-                                     ItemsSource="{Binding LeafOptions}"
-                                     SelectedItem="{Binding ActiveLeaf, Mode=TwoWay}"
-                                     DisplayMemberPath="Title"
-                                     VirtualizingStackPanel.IsVirtualizing="False"
-                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                                     local:RightPaneRail.IsEnabled="True"
-                                     AutomationProperties.AutomationId="RightPaneLeaves"
-                                     AutomationProperties.Name="Right pane panels">
-                                <!-- Explicit names: content-derived ListItem names
-                                     are not composed on all sessions (the Quick
-                                     Open row precedent), and a rail entry an AT
-                                     cannot name is unusable. -->
-                                <ListBox.ItemContainerStyle>
-                                    <Style TargetType="ListBoxItem" BasedOn="{StaticResource Slate.PanelRowBase}">
-                                        <Setter Property="AutomationProperties.Name" Value="{Binding Title}" />
-                                    </Style>
-                                </ListBox.ItemContainerStyle>
-                            </ListBox>
+                            <!-- DS-16 (DSD8): the rail is a strip of five icons and More panels,
+                                 which holds the other twelve. Arrows move in the strip, and More
+                                 panels is the next Tab stop. A short window scrolls them both. -->
+                            <ScrollViewer x:Name="RightPaneRailStrip"
+                                          Grid.Column="1"
+                                          Focusable="False"
+                                          HorizontalScrollBarVisibility="Disabled"
+                                          VerticalScrollBarVisibility="Auto">
+                                <StackPanel Margin="4">
+                                    <ListBox x:Name="RightPaneLeavesList"
+                                             KeyboardNavigation.DirectionalNavigation="Contained"
+                                             ItemsSource="{Binding Source={x:Static local:WorkspaceViewModel.StripLeaves}}"
+                                             SelectedItem="{Binding StripLeaf, Mode=TwoWay}"
+                                             Background="Transparent"
+                                             BorderThickness="0"
+                                             Padding="0"
+                                             VirtualizingStackPanel.IsVirtualizing="False"
+                                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                             ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                                             AutomationProperties.AutomationId="RightPaneLeaves"
+                                             AutomationProperties.Name="Right pane panels">
+                                        <!-- Explicit names: content-derived ListItem names
+                                             are not composed on all sessions (the Quick
+                                             Open row precedent), and a rail entry an AT
+                                             cannot name is unusable. The icon names nothing. -->
+                                        <ListBox.ItemContainerStyle>
+                                            <Style TargetType="ListBoxItem" BasedOn="{StaticResource Slate.PanelRowBase}">
+                                                <Setter Property="AutomationProperties.Name" Value="{Binding Title}" />
+                                                <Setter Property="Width" Value="40" />
+                                                <Setter Property="Height" Value="40" />
+                                                <!-- Room for the pill, which sits 7 out from the content. -->
+                                                <Setter Property="Padding" Value="10,0" />
+                                                <Setter Property="HorizontalContentAlignment" Value="Center" />
+                                                <Setter Property="VerticalContentAlignment" Value="Center" />
+                                                <Setter Property="ToolTip" Value="{Binding Title}" />
+                                                <Setter Property="ToolTipService.ShowsToolTipOnKeyboardFocus" Value="False" />
+                                            </Style>
+                                        </ListBox.ItemContainerStyle>
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <local:LeafIcon Leaf="{Binding}" IconSize="20" />
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                    <!-- The menu is built as it opens (RightPaneMorePanels_Click). While
+                                         one of its panels is open, the button looks selected, with the
+                                         pill, and its item status is that panel's title. -->
+                                    <Button x:Name="RightPaneMorePanelsButton"
+                                            Content="&#xE712;"
+                                            Width="40"
+                                            Height="40"
+                                            HorizontalAlignment="Left"
+                                            KeyboardNavigation.DirectionalNavigation="Contained"
+                                            ToolTip="More panels"
+                                            ToolTipService.ShowsToolTipOnKeyboardFocus="False"
+                                            Click="RightPaneMorePanels_Click"
+                                            AutomationProperties.AutomationId="RightPaneMorePanels"
+                                            AutomationProperties.Name="More panels"
+                                            AutomationProperties.ItemStatus="{Binding MoreLeafTitle}">
+                                        <Button.Style>
+                                            <!-- Slate.SubtleIconButtonStyle's, whole (the theme's styles
+                                                 load after this window's), at the strip's 40 with its pill. -->
+                                            <Style TargetType="Button">
+                                                <Setter Property="Padding" Value="0" />
+                                                <Setter Property="Background" Value="Transparent" />
+                                                <Setter Property="Foreground" Value="{DynamicResource Slate.TextBrush}" />
+                                                <Setter Property="BorderBrush" Value="Transparent" />
+                                                <Setter Property="BorderThickness" Value="1" />
+                                                <Setter Property="FocusVisualStyle" Value="{DynamicResource DefaultControlFocusVisualStyle}" />
+                                                <Setter Property="Template">
+                                                    <Setter.Value>
+                                                        <ControlTemplate TargetType="Button">
+                                                            <Border x:Name="Fill"
+                                                                    Background="{TemplateBinding Background}"
+                                                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                                                    CornerRadius="4"
+                                                                    SnapsToDevicePixels="True">
+                                                                <Grid>
+                                                                    <Rectangle x:Name="Pill"
+                                                                               Width="3"
+                                                                               Height="16"
+                                                                               Margin="3,0,0,0"
+                                                                               RadiusX="1.5"
+                                                                               RadiusY="1.5"
+                                                                               HorizontalAlignment="Left"
+                                                                               VerticalAlignment="Center"
+                                                                               Fill="{DynamicResource Slate.AccentIndicatorBrush}"
+                                                                               Visibility="Collapsed" />
+                                                                    <local:AutomationPresentationTextBlock Text="{TemplateBinding Content}"
+                                                                                                           FontFamily="{DynamicResource SymbolThemeFontFamily}"
+                                                                                                           FontSize="20"
+                                                                                                           HorizontalAlignment="Center"
+                                                                                                           VerticalAlignment="Center" />
+                                                                </Grid>
+                                                            </Border>
+                                                            <ControlTemplate.Triggers>
+                                                                <Trigger Property="IsMouseOver" Value="True">
+                                                                    <Setter Property="Background" Value="{DynamicResource Slate.HoverOverlayBrush}" />
+                                                                </Trigger>
+                                                                <Trigger Property="IsPressed" Value="True">
+                                                                    <Setter Property="Background" Value="{DynamicResource Slate.PressedOverlayBrush}" />
+                                                                </Trigger>
+                                                                <DataTrigger Binding="{Binding MoreLeafTitle, Converter={StaticResource IsNotNullConverter}}" Value="True">
+                                                                    <Setter Property="Background" Value="{DynamicResource Slate.SelectedSurfaceBrush}" />
+                                                                    <Setter Property="Foreground" Value="{DynamicResource Slate.SelectedTextBrush}" />
+                                                                    <Setter TargetName="Pill" Property="Visibility" Value="Visible" />
+                                                                </DataTrigger>
+                                                            </ControlTemplate.Triggers>
+                                                        </ControlTemplate>
+                                                    </Setter.Value>
+                                                </Setter>
+                                            </Style>
+                                        </Button.Style>
+                                    </Button>
+                                </StackPanel>
+                            </ScrollViewer>
                         </Grid>
                     </local:AutomationLandmarkBorder>
                 </Grid>

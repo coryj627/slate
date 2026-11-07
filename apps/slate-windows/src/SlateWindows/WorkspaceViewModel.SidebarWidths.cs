@@ -42,13 +42,13 @@ internal sealed partial class WorkspaceViewModel
     /// <summary>The two splitters' own width.</summary>
     internal const double SplitterWidth = 5;
 
-    private double _filesSidebarWidth = 270;
-    private double _rightPaneWidth = 320;
+    private double _filesSidebarWidth = 260;
+    private double _rightPaneWidth = 300;
 
     // #1795: the widths a reader chose, which a narrow window holds down for as long
     // as it's narrow.
-    private double _filesSidebarChosenWidth = 270;
-    private double _rightPaneChosenWidth = 320;
+    private double _filesSidebarChosenWidth = 260;
+    private double _rightPaneChosenWidth = 300;
 
     /// <summary>The Files sidebar's width, bound both ways to its column,
     /// and held inside its range whoever writes it (codex PR 4b r1 F7): a

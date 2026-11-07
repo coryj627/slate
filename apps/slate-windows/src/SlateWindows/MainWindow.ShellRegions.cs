@@ -99,7 +99,7 @@ public partial class MainWindow : IShellRegionHost
 
         if (IsWithin(focused, RightPaneBorder))
         {
-            return IsWithin(focused, RightPaneLeavesList)
+            return IsWithin(focused, RightPaneRailStrip)
                 ? ShellRegionKind.RightPaneRail
                 : ShellRegionKind.RightPaneContent;
         }
@@ -230,7 +230,7 @@ public partial class MainWindow : IShellRegionHost
                 // R-5 (#1247): the shown leaf's row (the first row if the
                 // rail names none), never the bare list, from which Down
                 // walked into the menu bar.
-                _ = SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList);
+                _ = LandOnRail();
                 break;
             case ShellRegionKind.StatusBar:
                 ShellStatusBar.Focus();
@@ -874,7 +874,8 @@ public partial class MainWindow : IShellRegionHost
         RegionFocusGuard.SetLanding(WorkspaceColumns, EditorRegionLanding);
         RegionFocusGuard.SetLanding(FilesPaneBorder, () => LandRegion(ShellRegionKind.Files));
         RegionFocusGuard.SetLanding(ContentPaneBorder, EditorRegionLanding);
-        RegionFocusGuard.SetLanding(RightPaneLeavesList, () => SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList));
+        RegionFocusGuard.SetLanding(RightPaneLeavesList, LandOnRail);
+        RegionFocusGuard.SetLanding(RightPaneMorePanelsButton, LandOnRail);
         // The leaves' host: a leaf switched under the keys (a command, a
         // reveal, the model) collapses the leaf they were in; they land in
         // the leaf now shown — its first stop, else the rail's row — not out
@@ -1195,14 +1196,14 @@ public partial class MainWindow : IShellRegionHost
         // The leaf has no stop, or its stop took nothing (a list whose row
         // cannot be landed yet among them): the pane's stable stop, the
         // rail's row.
-        _ = SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList);
+        _ = LandOnRail();
     }
 
     /// <summary>A leaf's own landing — the reveal's and the ring's: its
     /// first stop, else the pane's stable stop, the rail's row.</summary>
     private bool LandInLeaf(FrameworkElement body) =>
         (body.IsVisible && FirstFocusable(body) is { } stop && SelectorFocus.LandOnStop(stop))
-        || SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList);
+        || LandOnRail();
 
     /// <summary>
     /// W7-7 PR 4 (#1247, R-5, spec §5.2.2; codex round 5): the leaves'
