@@ -14,12 +14,15 @@
 //! the vault's [`HotExitVaultKey`] (plain data the session hands out) and,
 //! for a writer, its [`HotExitClaim`].
 //!
-//! **Claims (§2).** A tab owns its entry through a claim carrying a random
-//! incarnation. A newer claim, the tab's release, or a vault discard
+//! **Claims (§2, amended by WB-29 §7).** A tab owns its entry through a
+//! claim carrying a random incarnation the host makes first. A claim
+//! replaces only the current claim it names, so a stale claim never
+//! displaces a newer one; a newer claim, a retirement, or a vault discard
 //! (which advances the vault's epoch) invalidates every older writer, in
 //! any thread or process. A write publishes only under its own live
-//! claim; a release retires its own incarnation's claim and payload (and
-//! the payload its claim adopted at restore) and nothing else.
+//! claim; a retirement removes the claims and payloads of the
+//! incarnations it lists and nothing else. A host owns a vault's store
+//! across processes through [`HotExitStore::hold_vault`].
 //!
 //! **Locking (§8).** Every check and publish for a vault runs under an
 //! exclusive lock on the vault directory's `lock` file, held only for the
@@ -72,6 +75,8 @@ const CLAIMS_DIR: &str = "claims";
 const ENTRIES_DIR: &str = "entries";
 const LOCK_FILE: &str = "lock";
 const STORE_LOCK_FILE: &str = "store.lock";
+const HOLDS_DIR: &str = "holds";
+const HOLD_EXT: &str = ".lock";
 const ENTRY_EXT: &str = ".json";
 const TEMP_MARK: &str = ".tmp-";
 const SCHEMA: u32 = 1;
@@ -89,9 +94,19 @@ pub struct HotExitClaim {
     pub entry_id: String,
     pub incarnation: String,
     pub epoch: u64,
-    /// The incarnation of the restored entry this claim took over, so its
-    /// release retires that text too (§6).
-    pub adopted: Option<String>,
+    /// Every incarnation this claim displaced — the claim it expected and
+    /// the stored payload's, when an older claim wrote it — so its release
+    /// retires that text too (§6; WB-29 §7).
+    pub adopted: Vec<String>,
+}
+
+/// A claim current at a snapshot's epoch, with or without a payload
+/// (WB-29 §7): an adopter that has not written yet, or a claim whose first
+/// write never became durable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HotExitCurrentClaim {
+    pub entry_id: String,
+    pub incarnation: String,
 }
 
 /// What a write carries besides its claim (§1's entry fields).
@@ -122,6 +137,10 @@ pub struct HotExitEntry {
 pub struct HotExitSnapshot {
     pub epoch: u64,
     pub entries: Vec<HotExitEntry>,
+    /// Every claim at `epoch`. An entry may sit under a claim of another
+    /// incarnation (an adopter that has not written), and a claim may have
+    /// no entry at all; a host needs both to adopt and to retire.
+    pub claims: Vec<HotExitCurrentClaim>,
 }
 
 /// Why a claim, write or release was not applied (§2).
@@ -203,20 +222,46 @@ pub enum HotExitError {
     Io { detail: String },
     #[error("hot-exit entry id is not a tab id")]
     InvalidEntryId,
+    #[error("hot-exit incarnation is not 32 lower-case hex digits")]
+    InvalidIncarnation,
     #[error("hot-exit records for this vault are damaged")]
     Damaged,
+    #[error("another process holds this vault's hot-exit store")]
+    HeldElsewhere,
 }
 
 impl HotExitError {
     /// Core's reason sentence fragment (§4).
     pub fn reason(&self) -> &'static str {
         match self {
-            HotExitError::Io { .. } | HotExitError::InvalidEntryId => {
-                crate::a11y::HOT_EXIT_REASON_STORE_UNWRITABLE
-            }
+            HotExitError::Io { .. }
+            | HotExitError::InvalidEntryId
+            | HotExitError::InvalidIncarnation => crate::a11y::HOT_EXIT_REASON_STORE_UNWRITABLE,
             HotExitError::Damaged => crate::a11y::HOT_EXIT_REASON_DAMAGED,
+            HotExitError::HeldElsewhere => crate::a11y::HOT_EXIT_REASON_HELD_ELSEWHERE,
         }
     }
+}
+
+/// A host's exclusive hold on one vault's store across processes (WB-29
+/// §7): an OS file lock on the vault's hold file, released by `release`,
+/// by drop, or by the OS when the process dies, so a crash never leaves a
+/// vault held.
+#[derive(Debug)]
+pub struct HotExitVaultHold {
+    _file: File,
+}
+
+impl HotExitVaultHold {
+    /// Releases the hold now (drop does the same).
+    pub fn release(self) {}
+}
+
+/// A new claim incarnation: 32 lower-case hex digits from the store's
+/// random source. A host makes one before it claims, so a claim that
+/// errors after reaching the disk is still known (WB-29 §0 O2).
+pub fn new_hot_exit_incarnation() -> Result<String, HotExitError> {
+    fresh_incarnation()
 }
 
 impl From<io::Error> for HotExitError {
@@ -486,15 +531,36 @@ impl HotExitStore {
         self.read_epoch(&dir)
     }
 
-    /// Claims `entry_id` for a new writer (§2).
+    /// Claims `entry_id` for a new writer as `incarnation`, replacing only
+    /// the current claim it names (§2 as amended by WB-29 §7): `expected`
+    /// is the incarnation of the entry's current claim at `epoch`, or
+    /// `None` for an entry with no current claim. Anything else is
+    /// `Superseded { Claim }` and changes nothing. The same call retried
+    /// after it reached the disk answers `Claimed` again.
     pub fn claim_entry(
         &self,
         key: &HotExitVaultKey,
         epoch: u64,
         entry_id: &str,
-        adopts: Option<&str>,
+        expected: Option<&str>,
+        incarnation: &str,
     ) -> Result<HotExitClaimOutcome, HotExitError> {
         validate_entry_id(entry_id)?;
+        validate_incarnation(incarnation)?;
+        // A vault with no directory is at epoch 0 with no current claim: a
+        // claim that could only be refused there is refused before creating
+        // it, so a refusal changes nothing and spends no vault cap. A vault
+        // created meanwhile answers the next call under its lock.
+        if !self.vault_dir(key).exists() {
+            if epoch != 0 {
+                return Ok(HotExitClaimOutcome::Superseded(
+                    HotExitSupersession::Epoch { current: 0 },
+                ));
+            }
+            if expected.is_some() {
+                return Ok(HotExitClaimOutcome::Superseded(HotExitSupersession::Claim));
+            }
+        }
         let dir = match self.ensure_vault(key)? {
             Ok(dir) => dir,
             Err(refusal) => return Ok(HotExitClaimOutcome::Refused(refusal)),
@@ -506,22 +572,87 @@ impl HotExitStore {
                 HotExitSupersession::Epoch { current },
             ));
         }
-        let incarnation = fresh_incarnation()?;
+        let name = stem(entry_id);
+        let claims_dir = dir.join(CLAIMS_DIR);
+        // An older epoch's claim is no claim; a later epoch's is damage, as
+        // in `read_buffers`, never treated as absent.
+        let held = match self.read_claim(&dir, &name)? {
+            Some(record) if record.epoch > current => return Err(HotExitError::Damaged),
+            Some(record) if record.epoch == current => Some(record.incarnation),
+            _ => None,
+        };
+        let entries_dir = dir.join(ENTRIES_DIR);
+        let target = entries_dir.join(format!("{name}{ENTRY_EXT}"));
+        let stored = self.read_entry(&target)?.map(|entry| entry.incarnation);
+        let adopted = |stored: Option<String>| -> Vec<String> {
+            let mut adopted: Vec<String> = expected.map(str::to_string).into_iter().collect();
+            if let Some(stored) = stored
+                && stored != incarnation
+                && Some(stored.as_str()) != expected
+            {
+                adopted.push(stored);
+            }
+            adopted
+        };
+        let claimed = |adopted: Vec<String>| {
+            HotExitClaimOutcome::Claimed(HotExitClaim {
+                entry_id: entry_id.to_string(),
+                incarnation: incarnation.to_string(),
+                epoch,
+                adopted,
+            })
+        };
+        if held.as_deref() == Some(incarnation) {
+            // A retry of a claim that reached the disk: vouch for it only
+            // once it is durable, as `Newer` does for a payload (§2).
+            self.fs.sync_file(&claims_dir.join(&name))?;
+            self.fs.sync_dir(&claims_dir)?;
+            return Ok(claimed(adopted(stored)));
+        }
+        if held.as_deref() != expected {
+            return Ok(HotExitClaimOutcome::Superseded(HotExitSupersession::Claim));
+        }
+        if held.is_none() {
+            // Only an older epoch's or a released claim can have left a
+            // payload with no current claim: `read_buffers` would delete it,
+            // and under this claim a crash before its first write would
+            // restore it. Synced either way (the release's retry rule).
+            if stored.is_some() {
+                self.fs.remove(&target)?;
+            }
+            self.fs.sync_dir(&entries_dir)?;
+        }
         let record = ClaimRecord {
-            incarnation: incarnation.clone(),
+            incarnation: incarnation.to_string(),
             epoch,
         };
         self.publish(
-            &dir.join(CLAIMS_DIR),
-            &stem(entry_id),
+            &claims_dir,
+            &name,
             &serde_json::to_vec(&record).map_err(json_error)?,
         )?;
-        Ok(HotExitClaimOutcome::Claimed(HotExitClaim {
-            entry_id: entry_id.to_string(),
-            incarnation,
-            epoch,
-            adopted: adopts.map(str::to_string),
+        Ok(claimed(if held.is_some() {
+            adopted(stored)
+        } else {
+            Vec::new()
         }))
+    }
+
+    /// Holds `key`'s store for this host across processes (WB-29 §7): an
+    /// exclusive, non-blocking lock on its hold file. Another holder is
+    /// `HeldElsewhere`. The store's other calls do not check it.
+    pub fn hold_vault(&self, key: &HotExitVaultKey) -> Result<HotExitVaultHold, HotExitError> {
+        let holds = self.root.join(HOLDS_DIR);
+        std::fs::create_dir_all(&holds)?;
+        let file = self.open_lock(&holds.join(format!(
+            "{}{HOLD_EXT}",
+            blake3::hash(key.text.as_bytes()).to_hex()
+        )))?;
+        match file.try_lock() {
+            Ok(()) => Ok(HotExitVaultHold { _file: file }),
+            Err(std::fs::TryLockError::WouldBlock) => Err(HotExitError::HeldElsewhere),
+            Err(std::fs::TryLockError::Error(error)) => Err(error.into()),
+        }
     }
 
     /// Publishes `entry` under `claim` at `generation` (§2).
@@ -623,35 +754,52 @@ impl HotExitStore {
         Ok(HotExitWriteOutcome::Durable { generation })
     }
 
-    /// Retires `claim`'s own claim and payload, and the payload it adopted,
-    /// whatever has happened since; touches no other incarnation (§6).
+    /// Retires `claim`'s own claim and payload, and every incarnation it
+    /// adopted, whatever has happened since; touches no other incarnation
+    /// (§6).
     pub fn release_entry(
         &self,
         key: &HotExitVaultKey,
         claim: &HotExitClaim,
     ) -> Result<(), HotExitError> {
-        validate_entry_id(&claim.entry_id)?;
+        let mut incarnations = vec![claim.incarnation.clone()];
+        incarnations.extend(claim.adopted.iter().cloned());
+        self.retire_entry(key, &claim.entry_id, &incarnations)
+    }
+
+    /// Removes `entry_id`'s claim and its payload where their incarnation
+    /// is listed (WB-29 §7). It needs no claim and checks no epoch, so a
+    /// host can retire a restored tab's inherited text whether or not its
+    /// own claim ever landed; nothing of an unlisted incarnation is
+    /// touched.
+    pub fn retire_entry(
+        &self,
+        key: &HotExitVaultKey,
+        entry_id: &str,
+        incarnations: &[String],
+    ) -> Result<(), HotExitError> {
+        validate_entry_id(entry_id)?;
         let dir = self.vault_dir(key);
         if !dir.exists() {
             return Ok(());
         }
         let _guard = self.lock_vault(key)?;
+        let listed = |incarnation: &str| incarnations.iter().any(|i| i == incarnation);
         let claims_dir = dir.join(CLAIMS_DIR);
-        let name = stem(&claim.entry_id);
+        let name = stem(entry_id);
         if let Some(record) = self.read_claim(&dir, &name)?
-            && record.incarnation == claim.incarnation
+            && listed(&record.incarnation)
         {
             self.fs.remove(&claims_dir.join(&name))?;
         }
         // Synced whether or not this call removed anything: a retry after a
         // failed sync finds the records already gone, and must still make
-        // that removal durable before it reports the release done (§6).
+        // that removal durable before it reports the retirement done (§6).
         self.fs.sync_dir(&claims_dir)?;
         let entries_dir = dir.join(ENTRIES_DIR);
         let target = entries_dir.join(format!("{name}{ENTRY_EXT}"));
         if let Some(stored) = self.read_entry(&target)?
-            && (stored.incarnation == claim.incarnation
-                || claim.adopted.as_deref() == Some(stored.incarnation.as_str()))
+            && listed(&stored.incarnation)
         {
             self.fs.remove(&target)?;
         }
@@ -722,6 +870,7 @@ impl HotExitStore {
             return Ok(HotExitSnapshot {
                 epoch: 0,
                 entries: Vec::new(),
+                claims: Vec::new(),
             });
         }
         let _guard = self.lock_vault(key)?;
@@ -802,23 +951,39 @@ impl HotExitStore {
             self.fs.sync_dir(&entries_dir)?;
         }
         let mut stale_claims = false;
+        let mut claims = Vec::new();
         for name in claim_names {
-            if let Some(record) = self.read_claim(&dir, &name)?
-                && record.epoch < epoch
-            {
-                self.fs.remove(&claims_dir.join(&name))?;
-                stale_claims = true;
+            match self.read_claim(&dir, &name)? {
+                Some(record) if record.epoch < epoch => {
+                    self.fs.remove(&claims_dir.join(&name))?;
+                    stale_claims = true;
+                }
+                Some(record) => {
+                    // A name this store never wrote names no entry id.
+                    if let Some(entry_id) = unstem(&name) {
+                        claims.push(HotExitCurrentClaim {
+                            entry_id,
+                            incarnation: record.incarnation,
+                        });
+                    }
+                }
+                None => {}
             }
         }
         if stale_claims {
             self.fs.sync_dir(&claims_dir)?;
         }
+        claims.sort_by(|a, b| a.entry_id.cmp(&b.entry_id));
         entries.sort_by(|a, b| {
             a.written_at
                 .cmp(&b.written_at)
                 .then_with(|| a.entry_id.cmp(&b.entry_id))
         });
-        Ok(HotExitSnapshot { epoch, entries })
+        Ok(HotExitSnapshot {
+            epoch,
+            entries,
+            claims,
+        })
     }
 
     // ---- internals ------------------------------------------------------
@@ -1040,6 +1205,32 @@ fn validate_entry_id(entry_id: &str) -> Result<(), HotExitError> {
 /// name would let one tab's write replace another's unread text.
 fn stem(entry_id: &str) -> String {
     entry_id.bytes().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The entry id a [`stem`] names, or `None` for a name no valid id makes.
+fn unstem(name: &str) -> Option<String> {
+    if !name.len().is_multiple_of(2) {
+        return None;
+    }
+    let bytes: Option<Vec<u8>> = (0..name.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(name.get(i..i + 2)?, 16).ok())
+        .collect();
+    let id = String::from_utf8(bytes?).ok()?;
+    validate_entry_id(&id).ok()?;
+    (stem(&id) == name).then_some(id)
+}
+
+fn validate_incarnation(incarnation: &str) -> Result<(), HotExitError> {
+    if incarnation.len() == 32
+        && incarnation
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        Ok(())
+    } else {
+        Err(HotExitError::InvalidIncarnation)
+    }
 }
 
 fn fresh_incarnation() -> Result<String, HotExitError> {

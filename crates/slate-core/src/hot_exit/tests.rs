@@ -232,12 +232,45 @@ fn entry(text: &str) -> HotExitEntryWrite {
     }
 }
 
-fn claim(store: &HotExitStore, key: &HotExitVaultKey, id: &str) -> HotExitClaim {
+/// A claim at the vault's current epoch with a new incarnation.
+fn try_claim(
+    store: &HotExitStore,
+    key: &HotExitVaultKey,
+    id: &str,
+    expected: Option<&str>,
+) -> HotExitClaimOutcome {
     let epoch = store.current_epoch(key).unwrap();
-    match store.claim_entry(key, epoch, id, None).unwrap() {
+    store
+        .claim_entry(
+            key,
+            epoch,
+            id,
+            expected,
+            &new_hot_exit_incarnation().unwrap(),
+        )
+        .unwrap()
+}
+
+fn claimed(outcome: HotExitClaimOutcome) -> HotExitClaim {
+    match outcome {
         HotExitClaimOutcome::Claimed(claim) => claim,
         other => panic!("claim refused: {other:?}"),
     }
+}
+
+/// A first claim: the entry has no current claim.
+fn claim(store: &HotExitStore, key: &HotExitVaultKey, id: &str) -> HotExitClaim {
+    claimed(try_claim(store, key, id, None))
+}
+
+/// A claim taking over the current claim `expected`.
+fn claim_over(
+    store: &HotExitStore,
+    key: &HotExitVaultKey,
+    id: &str,
+    expected: &str,
+) -> HotExitClaim {
+    claimed(try_claim(store, key, id, Some(expected)))
 }
 
 fn durable(outcome: Result<HotExitWriteOutcome, HotExitError>) -> u64 {
@@ -278,7 +311,8 @@ fn durable_means_synced_then_renamed_then_synced() {
         ]
     );
     // A claim and the epoch use the same sequence, after the claim has made
-    // the vault's own name durable (its creator may not have, §2).
+    // the vault's own name durable (its creator may not have, §2) and, with
+    // no current claim, `entries/` durable (WB-29 §7: no orphaned payload).
     f.fs.clear();
     let _ = claim(&f.store, &k, "tab2");
     let recorded = f.fs.steps();
@@ -287,6 +321,7 @@ fn durable_means_synced_then_renamed_then_synced() {
         steps,
         [
             HotExitStep::SyncDir,
+            HotExitStep::SyncDir,
             HotExitStep::WriteFile,
             HotExitStep::SyncFile,
             HotExitStep::Rename,
@@ -294,6 +329,7 @@ fn durable_means_synced_then_renamed_then_synced() {
         ]
     );
     assert_eq!(recorded[0].1, VAULTS_DIR);
+    assert_eq!(recorded[1].1, ENTRIES_DIR);
     f.fs.clear();
     f.store.discard_vault(&k).unwrap();
     let steps: Vec<HotExitStep> = f.fs.steps().into_iter().map(|(step, _)| step).collect();
@@ -598,7 +634,7 @@ fn a_superseded_write_says_why() {
         HotExitWriteOutcome::Superseded(HotExitSupersession::Newer { .. })
     ));
     // Claim.
-    let b = claim(&f.store, &k, "tab1");
+    let b = claim_over(&f.store, &k, "tab1", &a.incarnation);
     assert_eq!(
         f.store.write_buffer(&k, &a, 9, &entry("a9")).unwrap(),
         HotExitWriteOutcome::Superseded(HotExitSupersession::Claim)
@@ -616,7 +652,7 @@ fn a_newer_claim_invalidates_every_older_writer() {
     let f = Fixture::new();
     let k = key("vault-a");
     let a = claim(&f.store, &k, "tab1");
-    let b = claim(&f.store, &k, "tab1");
+    let b = claim_over(&f.store, &k, "tab1", &a.incarnation);
     assert_eq!(
         f.store.write_buffer(&k, &a, 1, &entry("A")).unwrap(),
         HotExitWriteOutcome::Superseded(HotExitSupersession::Claim)
@@ -651,7 +687,7 @@ fn a_release_retires_its_payload_after_the_next_claim() {
     let c = claim(&f.store, &k, "tab1");
     durable(f.store.write_buffer(&k, &c, 1, &entry("discarded")));
     // The tab's next dirty lifetime claims before the release lands.
-    let _c2 = claim(&f.store, &k, "tab1");
+    let _c2 = claim_over(&f.store, &k, "tab1", &c.incarnation);
     f.store.release_entry(&k, &c).unwrap();
     assert!(
         f.on_disk(&k, "tab1").is_none(),
@@ -667,7 +703,7 @@ fn a_stale_release_never_deletes_a_newer_entry() {
     let k = key("vault-a");
     let a = claim(&f.store, &k, "tab1");
     durable(f.store.write_buffer(&k, &a, 1, &entry("A")));
-    let b = claim(&f.store, &k, "tab1");
+    let b = claim_over(&f.store, &k, "tab1", &a.incarnation);
     durable(f.store.write_buffer(&k, &b, 1, &entry("B")));
     f.store.release_entry(&k, &a).unwrap();
     assert_eq!(f.on_disk(&k, "tab1").unwrap().text, "B");
@@ -687,16 +723,10 @@ fn a_release_retires_the_text_its_claim_adopted() {
         let a = claim(&f.store, &k, "tab1");
         durable(f.store.write_buffer(&k, &a, 1, &entry("restored")));
         // Restore: the tab claims B adopting A's incarnation.
-        let epoch = f.store.current_epoch(&k).unwrap();
-        let HotExitClaimOutcome::Claimed(b) = f
-            .store
-            .claim_entry(&k, epoch, "tab1", Some(&a.incarnation))
-            .unwrap()
-        else {
-            panic!("claim refused");
-        };
+        let b = claim_over(&f.store, &k, "tab1", &a.incarnation);
+        assert_eq!(b.adopted, std::slice::from_ref(&a.incarnation));
         if release_after_next_claim {
-            let _c = claim(&f.store, &k, "tab1");
+            let _c = claim_over(&f.store, &k, "tab1", &b.incarnation);
             f.store.release_entry(&k, &b).unwrap();
         } else {
             f.store.release_entry(&k, &b).unwrap();
@@ -717,11 +747,7 @@ fn claiming_without_releasing_keeps_the_adopted_text() {
     let k = key("vault-a");
     let a = claim(&f.store, &k, "tab1");
     durable(f.store.write_buffer(&k, &a, 1, &entry("restored")));
-    let epoch = f.store.current_epoch(&k).unwrap();
-    let _b = f
-        .store
-        .claim_entry(&k, epoch, "tab1", Some(&a.incarnation))
-        .unwrap();
+    let _b = claim_over(&f.store, &k, "tab1", &a.incarnation);
     let snapshot = f.reopen().read_buffers(&k).unwrap();
     assert_eq!(snapshot.entries.len(), 1);
     assert_eq!(snapshot.entries[0].text, "restored");
@@ -733,15 +759,8 @@ fn a_stale_adopters_release_keeps_a_successors_payload() {
     let k = key("vault-a");
     let a = claim(&f.store, &k, "tab1");
     durable(f.store.write_buffer(&k, &a, 1, &entry("A")));
-    let epoch = f.store.current_epoch(&k).unwrap();
-    let HotExitClaimOutcome::Claimed(b) = f
-        .store
-        .claim_entry(&k, epoch, "tab1", Some(&a.incarnation))
-        .unwrap()
-    else {
-        panic!("claim refused");
-    };
-    let c = claim(&f.store, &k, "tab1");
+    let b = claim_over(&f.store, &k, "tab1", &a.incarnation);
+    let c = claim_over(&f.store, &k, "tab1", &b.incarnation);
     durable(f.store.write_buffer(&k, &c, 1, &entry("C")));
     f.store.release_entry(&k, &b).unwrap();
     assert_eq!(f.on_disk(&k, "tab1").unwrap().text, "C");
@@ -758,7 +777,15 @@ fn a_vault_discard_supersedes_every_earlier_claim_write_and_release() {
     assert!(next > old_epoch);
     // A claim issued with the old epoch.
     assert_eq!(
-        f.store.claim_entry(&k, old_epoch, "tab2", None).unwrap(),
+        f.store
+            .claim_entry(
+                &k,
+                old_epoch,
+                "tab2",
+                None,
+                &new_hot_exit_incarnation().unwrap()
+            )
+            .unwrap(),
         HotExitClaimOutcome::Superseded(HotExitSupersession::Epoch { current: next })
     );
     // A write issued before, landing after.
@@ -841,7 +868,8 @@ fn a_lost_epoch_fails_closed() {
         Err(HotExitError::Damaged)
     ));
     assert!(matches!(
-        f.store.claim_entry(&k, 0, "tab2", None),
+        f.store
+            .claim_entry(&k, 0, "tab2", None, &new_hot_exit_incarnation().unwrap()),
         Err(HotExitError::Damaged)
     ));
     assert!(matches!(
@@ -917,7 +945,13 @@ fn the_vault_cap_holds_under_racing_first_claims() {
             let f = Arc::clone(&f);
             std::thread::spawn(move || {
                 f.store
-                    .claim_entry(&key(&format!("racer{i}")), 0, "t", None)
+                    .claim_entry(
+                        &key(&format!("racer{i}")),
+                        0,
+                        "t",
+                        None,
+                        &new_hot_exit_incarnation().unwrap(),
+                    )
                     .unwrap()
             })
         })
@@ -1005,7 +1039,8 @@ fn an_invalid_entry_id_is_refused() {
     ] {
         assert!(
             matches!(
-                f.store.claim_entry(&k, 0, bad, None),
+                f.store
+                    .claim_entry(&k, 0, bad, None, &new_hot_exit_incarnation().unwrap()),
                 Err(HotExitError::InvalidEntryId)
             ),
             "{bad:?}"
@@ -1068,9 +1103,13 @@ fn the_vault_lock_excludes_another_process() {
         let root = dir.path().to_path_buf();
         let k = k.clone();
         move || {
-            HotExitStore::open(&root)
-                .unwrap()
-                .claim_entry(&k, 0, "tab2", None)
+            HotExitStore::open(&root).unwrap().claim_entry(
+                &k,
+                0,
+                "tab2",
+                None,
+                &new_hot_exit_incarnation().unwrap(),
+            )
         }
     });
     std::thread::sleep(Duration::from_millis(500));
@@ -1100,7 +1139,7 @@ fn a_first_claim_waits_for_the_store_lock_held_elsewhere() {
     let store = f.reopen();
     let first = std::thread::spawn(move || {
         let k = key("vault-new");
-        store.claim_entry(&k, 0, "tab1", None)
+        store.claim_entry(&k, 0, "tab1", None, &new_hot_exit_incarnation().unwrap())
     });
     std::thread::sleep(Duration::from_millis(500));
     assert!(
@@ -1124,7 +1163,9 @@ fn a_discard_before_the_vault_exists_still_fences_the_first_claim() {
     let next = f.store.discard_vault(&k).unwrap();
     assert!(next >= 1);
     assert!(matches!(
-        f.store.claim_entry(&k, 0, "tab1", None).unwrap(),
+        f.store
+            .claim_entry(&k, 0, "tab1", None, &new_hot_exit_incarnation().unwrap())
+            .unwrap(),
         HotExitClaimOutcome::Superseded(HotExitSupersession::Epoch { current }) if current == next
     ));
 }
@@ -1210,25 +1251,568 @@ fn a_store_under_a_long_path_still_writes() {
 #[test]
 fn two_processes_restoring_one_tab_never_both_count_as_kept() {
     // Two stores on one root stand for two processes; the claim files and
-    // the file lock are what they share.
+    // the file lock are what they share. Both restore the same entry, each
+    // expecting the claim it read: only the first takes it over.
+    for mine_first in [true, false] {
+        let f = Fixture::new();
+        let other = f.reopen();
+        let k = key("vault-a");
+        let a = claim(&f.store, &k, "tab1");
+        durable(f.store.write_buffer(&k, &a, 1, &entry("restored")));
+        let (first, second) = if mine_first {
+            (&f.store, &other)
+        } else {
+            (&other, &f.store)
+        };
+        let winner = claim_over(first, &k, "tab1", &a.incarnation);
+        assert_eq!(
+            try_claim(second, &k, "tab1", Some(&a.incarnation)),
+            HotExitClaimOutcome::Superseded(HotExitSupersession::Claim),
+            "mine first = {mine_first}"
+        );
+        durable(first.write_buffer(&k, &winner, 1, &entry("winner")));
+        assert_eq!(f.on_disk(&k, "tab1").unwrap().text, "winner");
+    }
+}
+
+// ---- WB-29 §7: the compare-and-swap claim, retire_entry, the snapshot's
+// ---- current claims and the vault hold.
+
+/// A claim replaces only the current claim it names: one expecting none,
+/// or the wrong one, over a live claim changes nothing on disk.
+#[test]
+fn a_claim_replaces_only_the_claim_it_expects() {
+    let f = Fixture::new();
+    let k = key("vault-a");
+    let a = claim(&f.store, &k, "tab1");
+    durable(f.store.write_buffer(&k, &a, 1, &entry("A")));
+    let claim_file = f.vault_dir(&k).join(CLAIMS_DIR).join(stem("tab1"));
+    let before = std::fs::read(&claim_file).unwrap();
+    let wrong = new_hot_exit_incarnation().unwrap();
+    for expected in [None, Some(wrong.as_str())] {
+        assert_eq!(
+            try_claim(&f.store, &k, "tab1", expected),
+            HotExitClaimOutcome::Superseded(HotExitSupersession::Claim),
+            "expected {expected:?}"
+        );
+        assert_eq!(std::fs::read(&claim_file).unwrap(), before);
+        assert_eq!(f.on_disk(&k, "tab1").unwrap().text, "A");
+    }
+    // A's own write still lands: nothing displaced it.
+    durable(f.store.write_buffer(&k, &a, 2, &entry("A2")));
+    let b = claim_over(&f.store, &k, "tab1", &a.incarnation);
+    assert_eq!(b.adopted, std::slice::from_ref(&a.incarnation));
+    assert_eq!(
+        f.store.write_buffer(&k, &a, 3, &entry("A3")).unwrap(),
+        HotExitWriteOutcome::Superseded(HotExitSupersession::Claim)
+    );
+}
+
+/// With no current claim, an expected one is refused before anything is
+/// removed or created: a cut-short discard's orphan stays for the read to
+/// judge, and a vault with no directory gets none.
+#[test]
+fn an_expected_claim_over_no_current_claim_changes_nothing() {
+    let f = Fixture::new();
+    let k = key("vault-a");
+    let a = claim(&f.store, &k, "tab1");
+    durable(f.store.write_buffer(&k, &a, 1, &entry("A")));
+    INJECTED_STOP.with(|cell| *cell.borrow_mut() = Some(HotExitStep::Remove));
+    assert!(f.store.discard_vault(&k).is_err());
+    INJECTED_STOP.with(|cell| *cell.borrow_mut() = None);
+    assert_eq!(
+        try_claim(&f.store, &k, "tab1", Some(&a.incarnation)),
+        HotExitClaimOutcome::Superseded(HotExitSupersession::Claim)
+    );
+    assert_eq!(
+        f.on_disk(&k, "tab1").unwrap().text,
+        "A",
+        "the orphan was removed by a refused claim"
+    );
+    let fresh = key("vault-never-claimed");
+    assert_eq!(
+        try_claim(&f.store, &fresh, "tab1", Some(&a.incarnation)),
+        HotExitClaimOutcome::Superseded(HotExitSupersession::Claim)
+    );
+    assert!(!f.vault_dir(&fresh).exists());
+}
+
+/// Codex (PR 1): a claim with a stale epoch on a vault with no directory is
+/// refused before creating it: no directory, no vault cap spent.
+#[test]
+fn a_stale_epoch_claim_on_a_fresh_vault_creates_nothing() {
+    let f = Fixture::new();
+    for i in 0..(MAX_VAULTS + 1) {
+        let fresh = key(&format!("never-claimed-{i}"));
+        assert_eq!(
+            f.store
+                .claim_entry(
+                    &fresh,
+                    1,
+                    "tab1",
+                    None,
+                    &new_hot_exit_incarnation().unwrap()
+                )
+                .unwrap(),
+            HotExitClaimOutcome::Superseded(HotExitSupersession::Epoch { current: 0 })
+        );
+        assert!(!f.vault_dir(&fresh).exists());
+    }
+    // Every vault cap slot is still free: a real first claim lands.
+    let _ = claim(&f.store, &key("really-claimed"), "tab1");
+}
+
+/// Codex (PR 1): contenders that overlap, each expecting the same claim: the
+/// comparison runs under the vault lock, so exactly one takes it over. Each
+/// has its own store and lock handle, as a process does.
+#[test]
+fn overlapping_claims_expecting_one_claim_have_one_winner() {
+    let f = Fixture::new();
+    let k = key("vault-a");
+    let a = claim(&f.store, &k, "tab1");
+    durable(f.store.write_buffer(&k, &a, 1, &entry("restored")));
+    // The test holds the vault lock until both contenders have read whatever
+    // they read before taking it.
+    let held = f.store.lock_vault(&k).unwrap();
+    let contenders: Vec<_> = (0..2)
+        .map(|_| {
+            let store = f.reopen();
+            let k = k.clone();
+            let expected = a.incarnation.clone();
+            std::thread::spawn(move || {
+                store.claim_entry(
+                    &k,
+                    0,
+                    "tab1",
+                    Some(&expected),
+                    &new_hot_exit_incarnation().unwrap(),
+                )
+            })
+        })
+        .collect();
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(
+        contenders.iter().all(|c| !c.is_finished()),
+        "a contender finished while the vault lock was held"
+    );
+    drop(held);
+    let outcomes: Vec<_> = contenders
+        .into_iter()
+        .map(|c| c.join().unwrap().unwrap())
+        .collect();
+    let winners = outcomes
+        .iter()
+        .filter(|o| matches!(o, HotExitClaimOutcome::Claimed(_)))
+        .count();
+    assert_eq!(winners, 1, "{outcomes:?}");
+    assert!(
+        outcomes.contains(&HotExitClaimOutcome::Superseded(HotExitSupersession::Claim)),
+        "{outcomes:?}"
+    );
+}
+
+/// Codex (PR 1): every sync of a claim's retry and of a retirement is an
+/// error when it fails, never `Claimed` or done, and the healed retry lands.
+#[test]
+fn a_failed_sync_is_never_answered_claimed_or_retired() {
+    let f = Fixture::new();
+    let k = key("vault-a");
+    let a = claim(&f.store, &k, "tab1");
+    durable(f.store.write_buffer(&k, &a, 1, &entry("A")));
+    let incarnation = new_hot_exit_incarnation().unwrap();
+    let retry =
+        |store: &HotExitStore| store.claim_entry(&k, 0, "tab1", Some(&a.incarnation), &incarnation);
+    assert!(matches!(
+        retry(&f.store).unwrap(),
+        HotExitClaimOutcome::Claimed(_)
+    ));
+    // The retry re-syncs the claim file, then `claims/` (`vaults/` is 0).
+    f.fs.fail_nth(HotExitStep::SyncFile, 0);
+    assert!(retry(&f.store).is_err(), "a failed file sync said Claimed");
+    f.fs.fail_nth(HotExitStep::SyncDir, 1);
+    assert!(
+        retry(&f.store).is_err(),
+        "a failed claims sync said Claimed"
+    );
+    f.fs.heal();
+    assert!(matches!(
+        retry(&f.store).unwrap(),
+        HotExitClaimOutcome::Claimed(_)
+    ));
+    // A retirement's two directory syncs, with the records removed or not.
+    let listed = [incarnation.clone(), a.incarnation.clone()];
+    for failing in [0, 1] {
+        f.fs.fail_nth(HotExitStep::SyncDir, failing);
+        assert!(
+            f.store.retire_entry(&k, "tab1", &listed).is_err(),
+            "sync {failing} failed but the retirement said done"
+        );
+        f.fs.heal();
+    }
+    f.store.retire_entry(&k, "tab1", &listed).unwrap();
+    assert!(f.files_in(&k, CLAIMS_DIR).is_empty());
+    assert!(f.on_disk(&k, "tab1").is_none());
+}
+
+/// The red team's round-4 schedule: an adopter that never wrote leaves a
+/// payload under a claim of another incarnation. The next adopter expects
+/// the observed claim, and its `adopted` lists both, so its release
+/// retires the restored text.
+#[test]
+fn adopted_lists_the_payload_an_earlier_adopter_never_wrote_over() {
+    let f = Fixture::new();
+    let k = key("vault-a");
+    let a = claim(&f.store, &k, "tab1");
+    durable(f.store.write_buffer(&k, &a, 1, &entry("restored")));
+    let b = claim_over(&f.store, &k, "tab1", &a.incarnation);
+    // Crashed before B wrote: a new process reads A's payload under B.
+    let snapshot = f.reopen().read_buffers(&k).unwrap();
+    assert_eq!(snapshot.entries.len(), 1);
+    assert_eq!(snapshot.entries[0].incarnation, a.incarnation);
+    assert_eq!(
+        snapshot.claims,
+        [HotExitCurrentClaim {
+            entry_id: "tab1".into(),
+            incarnation: b.incarnation.clone()
+        }]
+    );
+    // Expecting the payload's incarnation is refused; the observed claim's
+    // is taken over.
+    assert_eq!(
+        try_claim(&f.store, &k, "tab1", Some(&a.incarnation)),
+        HotExitClaimOutcome::Superseded(HotExitSupersession::Claim)
+    );
+    let c = claim_over(&f.store, &k, "tab1", &b.incarnation);
+    assert_eq!(c.adopted, [b.incarnation.clone(), a.incarnation.clone()]);
+    f.store.release_entry(&k, &c).unwrap();
+    let after = f.reopen().read_buffers(&k).unwrap();
+    assert!(after.entries.is_empty());
+    assert!(after.claims.is_empty());
+}
+
+/// The snapshot lists every current claim: one with no payload, and one
+/// over another incarnation's payload; a released claim is gone.
+#[test]
+fn the_snapshot_lists_every_current_claim() {
+    let f = Fixture::new();
+    let k = key("vault-a");
+    let orphan = claim(&f.store, &k, "tab1");
+    let y = claim(&f.store, &k, "tab2");
+    durable(f.store.write_buffer(&k, &y, 1, &entry("Y")));
+    let z = claim_over(&f.store, &k, "tab2", &y.incarnation);
+    let gone = claim(&f.store, &k, "tab3");
+    f.store.release_entry(&k, &gone).unwrap();
+    let snapshot = f.reopen().read_buffers(&k).unwrap();
+    assert_eq!(
+        snapshot.claims,
+        [
+            HotExitCurrentClaim {
+                entry_id: "tab1".into(),
+                incarnation: orphan.incarnation.clone()
+            },
+            HotExitCurrentClaim {
+                entry_id: "tab2".into(),
+                incarnation: z.incarnation.clone()
+            },
+        ]
+    );
+    assert_eq!(snapshot.entries.len(), 1);
+    assert_eq!(snapshot.entries[0].incarnation, y.incarnation);
+    // The orphan is adoptable by its tab and retirable with no claim.
+    let t = claim_over(&f.store, &k, "tab1", &orphan.incarnation);
+    assert_eq!(t.adopted, std::slice::from_ref(&orphan.incarnation));
+}
+
+/// A claim retried with its own incarnation after it reached the disk
+/// answers `Claimed` again, and only once its claim is durable: with the
+/// directory sync after its rename failing, the retry re-syncs first.
+#[test]
+fn a_retried_claim_is_idempotent_and_durable_first() {
+    let f = Fixture::new();
+    let k = key("vault-a");
+    let a = claim(&f.store, &k, "tab1");
+    durable(f.store.write_buffer(&k, &a, 1, &entry("restored")));
+    let epoch = f.store.current_epoch(&k).unwrap();
+    let incarnation = new_hot_exit_incarnation().unwrap();
+    // The claim renames into place, then its directory sync fails.
+    let rename_then_sync_fails = {
+        f.fs.clear();
+        f.fs.fail_nth(HotExitStep::SyncDir, 1);
+        f.store
+            .claim_entry(&k, epoch, "tab1", Some(&a.incarnation), &incarnation)
+    };
+    assert!(rename_then_sync_fails.is_err());
+    f.fs.heal();
+    assert!(
+        f.fs.steps()
+            .iter()
+            .any(|(step, name)| *step == HotExitStep::Rename && *name == stem("tab1")),
+        "premise: the claim reached the disk"
+    );
+    f.fs.clear();
+    let retried = f
+        .store
+        .claim_entry(&k, epoch, "tab1", Some(&a.incarnation), &incarnation)
+        .unwrap();
+    let HotExitClaimOutcome::Claimed(b) = retried else {
+        panic!("the retry was {retried:?}");
+    };
+    assert_eq!(b.incarnation, incarnation);
+    assert_eq!(b.adopted, std::slice::from_ref(&a.incarnation));
+    let steps = f.fs.steps();
+    assert!(
+        steps.contains(&(HotExitStep::SyncFile, stem("tab1")))
+            && steps.contains(&(HotExitStep::SyncDir, CLAIMS_DIR.to_string())),
+        "the retry vouched for an unsynced claim: {steps:?}"
+    );
+    // With the re-sync still failing (vaults/ is synced first), the retry
+    // is an error, never Claimed.
+    f.fs.fail_nth(HotExitStep::SyncDir, 1);
+    assert!(
+        f.store
+            .claim_entry(&k, epoch, "tab1", Some(&a.incarnation), &incarnation)
+            .is_err()
+    );
+    f.fs.heal();
+}
+
+/// Codex round 4: a discard cut short after its epoch leaves an older
+/// epoch's claim and payload; a new claim there removes that payload
+/// (durably) before it publishes, so a crash before its first write
+/// restores nothing the discard retired.
+#[test]
+fn a_claim_with_no_current_claim_removes_an_orphaned_payload_first() {
+    let f = Fixture::new();
+    let k = key("vault-a");
+    let c = claim(&f.store, &k, "tab1");
+    durable(f.store.write_buffer(&k, &c, 1, &entry("discarded")));
+    INJECTED_STOP.with(|cell| *cell.borrow_mut() = Some(HotExitStep::Remove));
+    assert!(f.store.discard_vault(&k).is_err());
+    INJECTED_STOP.with(|cell| *cell.borrow_mut() = None);
+    assert!(
+        f.on_disk(&k, "tab1").is_some(),
+        "premise: the delete never ran"
+    );
+    f.fs.clear();
+    let fresh = claim(&f.store, &k, "tab1");
+    assert!(fresh.adopted.is_empty());
+    assert!(f.on_disk(&k, "tab1").is_none());
+    let steps = f.fs.steps();
+    let removed = steps
+        .iter()
+        .position(|s| *s == (HotExitStep::Remove, format!("{}{ENTRY_EXT}", stem("tab1"))))
+        .expect("the orphaned payload was removed");
+    let synced = steps
+        .iter()
+        .position(|s| *s == (HotExitStep::SyncDir, ENTRIES_DIR.to_string()))
+        .expect("entries/ was synced");
+    let published = steps
+        .iter()
+        .position(|s| *s == (HotExitStep::Rename, stem("tab1")))
+        .expect("the claim was published");
+    assert!(removed < synced && synced < published, "{steps:?}");
+    // Crashed before its first write: nothing restores.
+    assert!(f.reopen().read_buffers(&k).unwrap().entries.is_empty());
+}
+
+/// Even with nothing to remove, a claim over no current claim syncs
+/// `entries/`: a retry after a failed sync must still make an earlier
+/// removal durable.
+#[test]
+fn a_claim_with_no_current_claim_syncs_entries_even_with_nothing_to_remove() {
+    let f = Fixture::new();
+    let k = key("vault-a");
+    let _ = claim(&f.store, &k, "tab0");
+    f.fs.clear();
+    let _ = claim(&f.store, &k, "tab1");
+    assert!(
+        f.fs.steps()
+            .contains(&(HotExitStep::SyncDir, ENTRIES_DIR.to_string())),
+        "{:?}",
+        f.fs.steps()
+    );
+}
+
+/// A current claim naming a later epoch than the vault's is damage to a
+/// claim, as to a read: never treated as absent, nothing removed.
+#[test]
+fn a_later_epoch_claim_is_damage_to_a_claim() {
+    let f = Fixture::new();
+    let k = key("vault-a");
+    f.store.discard_vault(&k).unwrap();
+    let c = claim(&f.store, &k, "tab1");
+    durable(f.store.write_buffer(&k, &c, 1, &entry("unread")));
+    std::fs::write(f.vault_dir(&k).join(EPOCH_FILE), b"0").unwrap();
+    assert!(matches!(
+        f.store
+            .claim_entry(&k, 0, "tab1", None, &new_hot_exit_incarnation().unwrap()),
+        Err(HotExitError::Damaged)
+    ));
+    assert_eq!(f.on_disk(&k, "tab1").unwrap().text, "unread");
+}
+
+#[test]
+fn an_invalid_incarnation_is_refused() {
+    let f = Fixture::new();
+    let k = key("vault-a");
+    for bad in [
+        "",
+        "ABCDEF0123456789ABCDEF0123456789",
+        "short",
+        &"g".repeat(32),
+    ] {
+        assert!(
+            matches!(
+                f.store.claim_entry(&k, 0, "tab1", None, bad),
+                Err(HotExitError::InvalidIncarnation)
+            ),
+            "{bad:?}"
+        );
+    }
+    let made = new_hot_exit_incarnation().unwrap();
+    assert_eq!(made.len(), 32);
+    assert!(validate_incarnation(&made).is_ok());
+}
+
+/// A retirement removes only the incarnations it lists, needs no claim,
+/// checks no epoch, and syncs both directories every time.
+#[test]
+fn retire_entry_touches_only_listed_incarnations() {
+    let f = Fixture::new();
+    let k = key("vault-a");
+    let a = claim(&f.store, &k, "tab1");
+    durable(f.store.write_buffer(&k, &a, 1, &entry("A")));
+    let b = claim_over(&f.store, &k, "tab1", &a.incarnation);
+    // An unlisted incarnation: nothing goes.
+    let stranger = new_hot_exit_incarnation().unwrap();
+    f.store.retire_entry(&k, "tab1", &[stranger]).unwrap();
+    assert_eq!(f.on_disk(&k, "tab1").unwrap().text, "A");
+    assert!(f.files_in(&k, CLAIMS_DIR).contains(&stem("tab1")));
+    // The payload's incarnation only: the payload goes, B's claim stays.
+    f.store
+        .retire_entry(&k, "tab1", std::slice::from_ref(&a.incarnation))
+        .unwrap();
+    assert!(f.on_disk(&k, "tab1").is_none());
+    assert!(f.files_in(&k, CLAIMS_DIR).contains(&stem("tab1")));
+    // Across an epoch: a discard cut short after its epoch leaves B's
+    // older-epoch claim, and the retirement removes it all the same.
+    INJECTED_STOP.with(|cell| *cell.borrow_mut() = Some(HotExitStep::Remove));
+    assert!(f.store.discard_vault(&k).is_err());
+    INJECTED_STOP.with(|cell| *cell.borrow_mut() = None);
+    assert!(
+        f.files_in(&k, CLAIMS_DIR).contains(&stem("tab1")),
+        "premise: the discard left B's claim"
+    );
+    f.store
+        .retire_entry(&k, "tab1", std::slice::from_ref(&b.incarnation))
+        .unwrap();
+    assert!(f.files_in(&k, CLAIMS_DIR).is_empty());
+    // Twice more: each call syncs both directories, removing nothing.
+    for _ in 0..2 {
+        f.fs.clear();
+        f.store
+            .retire_entry(&k, "tab1", std::slice::from_ref(&b.incarnation))
+            .unwrap();
+        let synced: Vec<String> =
+            f.fs.steps()
+                .into_iter()
+                .filter(|(step, _)| *step == HotExitStep::SyncDir)
+                .map(|(_, name)| name)
+                .collect();
+        assert_eq!(synced, [CLAIMS_DIR, ENTRIES_DIR]);
+    }
+    assert!(f.files_in(&k, CLAIMS_DIR).is_empty());
+}
+
+/// A stale adopting claim after a successor wrote never displaces it.
+#[test]
+fn a_stale_adopting_claim_never_displaces_a_successor() {
+    let f = Fixture::new();
+    let k = key("vault-a");
+    let a = claim(&f.store, &k, "tab1");
+    durable(f.store.write_buffer(&k, &a, 1, &entry("restored")));
+    let b = claim_over(&f.store, &k, "tab1", &a.incarnation);
+    durable(f.store.write_buffer(&k, &b, 1, &entry("successor")));
+    assert_eq!(
+        try_claim(&f.store, &k, "tab1", Some(&a.incarnation)),
+        HotExitClaimOutcome::Superseded(HotExitSupersession::Claim)
+    );
+    let snapshot = f.reopen().read_buffers(&k).unwrap();
+    assert_eq!(snapshot.entries[0].text, "successor");
+}
+
+/// The hold excludes a second store on the same root, and is freed when
+/// its holder lets go.
+#[test]
+fn the_vault_hold_excludes_another_store_and_frees_on_release() {
     let f = Fixture::new();
     let other = f.reopen();
     let k = key("vault-a");
-    let mine = claim(&f.store, &k, "tab1");
-    let theirs = claim(&other, &k, "tab1");
-    durable(other.write_buffer(&k, &theirs, 1, &entry("theirs")));
-    assert_eq!(
-        f.store.write_buffer(&k, &mine, 1, &entry("mine")).unwrap(),
-        HotExitWriteOutcome::Superseded(HotExitSupersession::Claim)
-    );
-    // And the reverse order.
-    let mine = claim(&f.store, &k, "tab1");
-    durable(f.store.write_buffer(&k, &mine, 1, &entry("mine")));
-    assert_eq!(
-        other
-            .write_buffer(&k, &theirs, 2, &entry("theirs 2"))
-            .unwrap(),
-        HotExitWriteOutcome::Superseded(HotExitSupersession::Claim)
-    );
-    assert_eq!(f.on_disk(&k, "tab1").unwrap().text, "mine");
+    let hold = f.store.hold_vault(&k).unwrap();
+    assert!(matches!(
+        other.hold_vault(&k),
+        Err(HotExitError::HeldElsewhere)
+    ));
+    // Another vault is not held.
+    let _b = other.hold_vault(&key("vault-b")).unwrap();
+    hold.release();
+    let again = other.hold_vault(&k).unwrap();
+    drop(again);
+    let _third = f.store.hold_vault(&k).unwrap();
+}
+
+/// The child half of `a_vault_hold_dies_with_its_process`: run only when
+/// that fact re-invokes this test binary. It takes the hold and exits
+/// without releasing it.
+#[test]
+fn hot_exit_child_takes_the_vault_hold_and_dies() {
+    let Some(root) = std::env::var_os("SLATE_HOT_EXIT_HOLD_CHILD_ROOT") else {
+        return;
+    };
+    let root = PathBuf::from(root);
+    let store = HotExitStore::open(&root).unwrap();
+    let hold = store.hold_vault(&key("vault-shared")).unwrap();
+    std::fs::write(root.join("child-holding"), b"").unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    while !root.join("parent-saw-held").exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the parent never answered"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // Exit with the hold still taken: only the OS lets it go.
+    std::mem::forget(hold);
+    std::process::exit(0);
+}
+
+#[test]
+fn a_vault_hold_dies_with_its_process() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = HotExitStore::open(dir.path()).unwrap();
+    let k = key("vault-shared");
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "hot_exit::tests::hot_exit_child_takes_the_vault_hold_and_dies",
+            "--nocapture",
+        ])
+        .env("SLATE_HOT_EXIT_HOLD_CHILD_ROOT", dir.path())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while !dir.path().join("child-holding").exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the child never took the hold"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(matches!(
+        store.hold_vault(&k),
+        Err(HotExitError::HeldElsewhere)
+    ));
+    std::fs::write(dir.path().join("parent-saw-held"), b"").unwrap();
+    assert!(child.wait().unwrap().success());
+    let _hold = store.hold_vault(&k).unwrap();
 }
