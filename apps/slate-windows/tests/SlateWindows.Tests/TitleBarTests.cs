@@ -49,6 +49,19 @@ public sealed class TitleBarTests
         Assert.Equal("Roadmap — demo-vault — Slate", host.Shell.Title);
     });
 
+    /// <summary>DS-13: the logo draws from the app's own resources wherever the window is
+    /// loaded. A relative "/Assets/…" resolves against the entry assembly, which in a host
+    /// other than the app (these tests) has no logo, so nothing drew.</summary>
+    [Fact]
+    public void TheLogoLoadsFromTheAppsOwnResources() => RunSta(() =>
+    {
+        using var host = new ShownShell();
+        host.Settle();
+        Image logo = Assert.Single(ShownShell.Descendants(host.Shell.AppMenuItem).OfType<Image>());
+        var source = Assert.IsAssignableFrom<System.Windows.Media.Imaging.BitmapSource>(logo.Source);
+        Assert.Equal(64, source.PixelWidth);
+    });
+
     /// <summary>At the narrowest window and the largest text, the logo the menus open from
     /// (DS-13) and Close both stay on the window.</summary>
     [Fact]

@@ -238,7 +238,7 @@
                                Height="20"
                                RenderOptions.BitmapScalingMode="HighQuality">
                             <Image.Source>
-                                <BitmapImage UriSource="/Assets/slate-gold.png" DecodePixelWidth="64" />
+                                <BitmapImage UriSource="pack://application:,,,/SlateWindows;component/Assets/slate-gold.png" DecodePixelWidth="64" />
                             </Image.Source>
                         </Image>
                     </DataTemplate>
