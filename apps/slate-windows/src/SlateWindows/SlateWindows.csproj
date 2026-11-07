@@ -69,4 +69,11 @@
     <Content Include="$(DesignFonts)OpenSans-OFL.txt" Link="Licenses\OpenSans-OFL.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- DS-13: the logo the menus open from, linked as the fonts are. The window decodes it
+       at the size it draws, so the 99 KB original serves without a downscaled copy. A
+       change under design/windows/assets runs the lane (windows.yml's path list). -->
+  <ItemGroup>
+    <Resource Include="..\..\..\..\design\windows\assets\logo\slate-gold.png" Link="Assets\slate-gold.png" />
+  </ItemGroup>
+
 </Project>

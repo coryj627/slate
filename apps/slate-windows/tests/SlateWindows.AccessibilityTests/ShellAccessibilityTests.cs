@@ -3737,11 +3737,7 @@ public sealed partial class ShellAccessibilityTests
                     () => mainMenu.Properties.IsEnabled.ValueOrDefault,
                     TimeSpan.FromSeconds(10)),
                 "the menu did not re-enable after the sheet closed");
-            AutomationElement editMenu = mainMenu
-                .FindAllChildren(
-                    automation.ConditionFactory.ByControlType(ControlType.MenuItem))
-                .First(item => (item.Properties.Name.ValueOrDefault ?? "")
-                    .Contains("Edit", StringComparison.OrdinalIgnoreCase));
+            AutomationElement editMenu = WaitForAppMenu(window, "EditorMenu", TimeSpan.FromSeconds(10));
             editMenu.Patterns.ExpandCollapse.Pattern.Expand();
             AutomationElement jumpItem = WaitForElement(
                 window, "JumpToBibliographyMenuItem", TimeSpan.FromSeconds(10));
@@ -3751,7 +3747,7 @@ public sealed partial class ShellAccessibilityTests
                 + "expanded — the command has no key to jump to, and "
                 + "invoking it here would be the W4-5 disabled-state "
                 + "defect reborn.");
-            editMenu.Patterns.ExpandCollapse.Pattern.Collapse();
+            WaitForElement(window, "AppMenu", TimeSpan.FromSeconds(10)).Patterns.ExpandCollapse.Pattern.Collapse();
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(300));
 
             // ---- Ctrl+J: the landing, not just the announcement -----
@@ -7363,7 +7359,7 @@ public sealed partial class ShellAccessibilityTests
             AutomationElement newCardMenuItem = WaitForMenuItem(
                 window, "CanvasMenu", "CanvasNewCardMenuItem", TimeSpan.FromSeconds(10));
             Assert.Equal("Ctrl+Alt+T", newCardMenuItem.Properties.AcceleratorKey.Value);
-            WaitForElement(window, "CanvasMenu", TimeSpan.FromSeconds(10))
+            WaitForElement(window, "AppMenu", TimeSpan.FromSeconds(10))
                 .Patterns.ExpandCollapse.Pattern.Collapse();
 
             // ---- The first card, by chord (E19) ---------------------
@@ -11351,7 +11347,7 @@ public sealed partial class ShellAccessibilityTests
     /// CheckMenuItem peer).</summary>
     private static void SelectGraphVerbosity(Window window, UIA3Automation automation, string tag)
     {
-        AutomationElement menu = WaitForElement(window, "GraphMenu", TimeSpan.FromSeconds(10));
+        AutomationElement menu = WaitForAppMenu(window, "GraphMenu", TimeSpan.FromSeconds(10));
         menu.Patterns.ExpandCollapse.Pattern.Expand();
         AutomationElement submenu = WaitForElement(window, "GraphVerbosityMenu", TimeSpan.FromSeconds(10));
         submenu.Patterns.ExpandCollapse.Pattern.Expand();
@@ -12311,13 +12307,26 @@ public sealed partial class ShellAccessibilityTests
         return tree!;
     }
 
+    /// <summary>DS-13 (#1814): a menu, File to Graph, under the logo. Its element exists once
+    /// the logo's popup has opened, so the logo is expanded first.</summary>
+    private static AutomationElement WaitForAppMenu(Window window, string menuAutomationId, TimeSpan timeout)
+    {
+        AutomationElement logo = WaitForElement(window, "AppMenu", timeout);
+        if (logo.Patterns.ExpandCollapse.Pattern.ExpandCollapseState.Value != ExpandCollapseState.Expanded)
+        {
+            logo.Patterns.ExpandCollapse.Pattern.Expand();
+        }
+
+        return WaitForElement(window, menuAutomationId, timeout);
+    }
+
     private static AutomationElement WaitForMenuItem(
         Window window,
         string menuAutomationId,
         string itemAutomationId,
         TimeSpan timeout)
     {
-        AutomationElement menu = WaitForElement(window, menuAutomationId, timeout);
+        AutomationElement menu = WaitForAppMenu(window, menuAutomationId, timeout);
         Assert.True(
             menu.Patterns.ExpandCollapse.IsSupported,
             $"Menu {menuAutomationId} does not expose ExpandCollapse.");

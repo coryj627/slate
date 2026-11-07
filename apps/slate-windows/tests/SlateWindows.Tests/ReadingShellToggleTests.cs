@@ -91,9 +91,16 @@ public sealed class ReadingShellToggleTests
                 "the note's editor never showed");
             WalkAutomationTree(shell);
 
-            // The Editor menu, expanded, and its Toggle Reading Mode item invoked.
-            MenuItem editorMenu = Assert.Single(
+            // The Editor menu, expanded, and its Toggle Reading Mode item invoked. It sits under
+            // the logo (DS-13), so the logo opens first.
+            MenuItem logo = Assert.Single(
                 Descendants<MenuItem>(shell),
+                item => AutomationProperties.GetAutomationId(item) == "AppMenu");
+            ((IExpandCollapseProvider)UIElementAutomationPeer.CreatePeerForElement(logo)
+                .GetPattern(PatternInterface.ExpandCollapse)).Expand();
+            PumpedDispatcher.Drain();
+            MenuItem editorMenu = Assert.Single(
+                logo.Items.OfType<MenuItem>(),
                 item => AutomationProperties.GetAutomationId(item) == "EditorMenu");
             ((IExpandCollapseProvider)UIElementAutomationPeer.CreatePeerForElement(editorMenu)
                 .GetPattern(PatternInterface.ExpandCollapse)).Expand();

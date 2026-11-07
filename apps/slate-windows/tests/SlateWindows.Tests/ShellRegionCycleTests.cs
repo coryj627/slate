@@ -496,6 +496,38 @@ public sealed class ShellRegionCycleTests
         }
     }
 
+    /// <summary>DS-13 (#1814): the menu bar's landing is the logo, the bar's one item, and it
+    /// lands at once, so the ring announces the menu bar as before. #1680: a desktop whose
+    /// session has no foreground window (the hosted runners) doesn't let a menu item keep the
+    /// keys. There the fact proves the refusal is the desktop's, since the logo refuses a
+    /// direct Focus() too and no popup opened, and has nothing further to claim.</summary>
+    [Fact]
+    public void F6LandsOnTheLogoAndAnnouncesTheMenuBar() => StaThread.RunPumped(() =>
+    {
+        using var host = new ShownShell(("a.md", "# A\n"));
+        host.Workspace.OpenPath("a.md");
+        host.Settle();
+        ShellRegionLanding landing = ((IShellRegionHost)host.Shell).TryLand(ShellRegionKind.MenuBar, () => { }, () => { });
+        host.Settle();
+
+        if (landing == ShellRegionLanding.Refused)
+        {
+            host.Shell.AppMenuItem.Focus();
+            host.Settle();
+            Assert.NotSame(host.Shell.AppMenuItem, Keyboard.FocusedElement);
+            Assert.False(host.Shell.AppMenuItem.IsSubmenuOpen);
+            _output.WriteLine(
+                "DESKTOP REFUSED THE MENU: the logo refused the keys, by the ring and by Focus(), and they "
+                + $"stayed on {Keyboard.FocusedElement?.GetType().Name ?? "null"}. The landing cannot be exercised "
+                + "on this desktop (#1680).");
+            return;
+        }
+
+        Assert.Equal(ShellRegionLanding.Landed, landing);
+        Assert.Same(host.Shell.AppMenuItem, Keyboard.FocusedElement);
+        Assert.False(host.Shell.AppMenuItem.IsSubmenuOpen);
+    });
+
     /// <summary>W7-7 PR 8 (R-10): a region that holds the landing for
     /// content still arriving (a reading surface) is neither announced nor
     /// passed over — the W7-6 contract speaks a region only once focus is in

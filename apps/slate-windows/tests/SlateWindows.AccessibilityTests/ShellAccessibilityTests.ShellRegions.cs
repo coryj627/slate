@@ -55,7 +55,7 @@ public sealed partial class ShellAccessibilityTests
             AdvancePastTheRailIfItTookFocus(window, automation);
             AssertEventuallyFocused(WaitForElement(window, "StatusBar", TimeSpan.FromSeconds(10)), "F6 did not reach the status bar.");
             PressKey(VirtualKeyShort.F6);
-            AssertEventuallyFocused(WaitForElement(window, "FileMenu", TimeSpan.FromSeconds(10)), "F6 from the status bar did not wrap to the menu bar.");
+            AssertEventuallyFocused(WaitForElement(window, "AppMenu", TimeSpan.FromSeconds(10)), "F6 from the status bar did not wrap to the menu bar.");
             PressKey(VirtualKeyShort.F6);
             AssertFilesTreeRegionFocused(window, automation, tree, "F6 from the menu bar did not land on Files.");
 
@@ -103,7 +103,7 @@ public sealed partial class ShellAccessibilityTests
             PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.F6);
             AssertFilesTreeRegionFocused(window, automation, tree, "Shift+F6 from the tab bar did not return to Files.");
             PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.F6);
-            AssertEventuallyFocused(WaitForElement(window, "FileMenu", TimeSpan.FromSeconds(10)), "Shift+F6 from Files did not land on the menu bar.");
+            AssertEventuallyFocused(WaitForElement(window, "AppMenu", TimeSpan.FromSeconds(10)), "Shift+F6 from Files did not land on the menu bar.");
             PressKey(VirtualKeyShort.ESCAPE);
             // Spec §4: Escape leaves menu mode and WPF restores focus to
             // where the menu took it from — the Files region, the origin of
@@ -174,7 +174,7 @@ public sealed partial class ShellAccessibilityTests
             statusBar.Focus();
             AssertEventuallyFocused(statusBar, "The status bar did not take focus.");
             PressKey(VirtualKeyShort.F6);
-            AssertEventuallyFocused(WaitForElement(window, "FileMenu", TimeSpan.FromSeconds(10)), "F6 from the status bar did not land on the menu bar.");
+            AssertEventuallyFocused(WaitForElement(window, "AppMenu", TimeSpan.FromSeconds(10)), "F6 from the status bar did not land on the menu bar.");
             PressKey(VirtualKeyShort.F6);
             AssertEventuallyFocused(WaitForElement(window, "ContentPane", TimeSpan.FromSeconds(10)), "With Files hidden, F6 from the menu bar did not skip to the empty pane.");
 

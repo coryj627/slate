@@ -545,6 +545,7 @@ public sealed class SettingsSheetTests
     private static MenuItem MenuItem(ShownShell host, string id) =>
         ShownShell.Descendants(host.Shell).OfType<Menu>().Single().Items.OfType<MenuItem>()
             .SelectMany(top => top.Items.OfType<MenuItem>())
+            .SelectMany(menu => menu.Items.OfType<MenuItem>().Prepend(menu))
             .Single(item => AutomationProperties.GetAutomationId(item) == id);
 
     private static void MoveFocus(FocusNavigationDirection direction)

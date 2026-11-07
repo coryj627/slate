@@ -1048,6 +1048,14 @@ public partial class MainWindow : Window
             return;
         }
 
+        // DS-13 (#1814): Alt and a menu's letter, or F10, opens the logo's menu, whose rows'
+        // letters aren't live while it's closed (MainWindow.AppMenu.cs).
+        if (e.Key == Key.System && TryOpenAppMenu(e.SystemKey, modifiers))
+        {
+            e.Handled = true;
+            return;
+        }
+
         // The palette is modal: while it is open it owns the keyboard, so
         // no shell chord fires underneath it. Placed ahead of Quick Open
         // because the two overlays are mutually exclusive and the palette

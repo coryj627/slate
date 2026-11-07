@@ -23,14 +23,20 @@ public sealed partial class ShellAccessibilityTests
     public void ThemedShell_TheMenuBarAndTheOpenTabAreReadable() =>
         RunFindInNoteJourney("theme-readability", (process, window, automation, editor) =>
         {
-            AutomationElement menu = window.FindFirstDescendant(cf => cf.ByName("Application commands"))
+            _ = window.FindFirstDescendant(cf => cf.ByName("Application commands"))
                 ?? throw new Xunit.Sdk.XunitException("no menu bar in the window.");
             AutomationElement tabs = WaitForElement(window, "WorkspaceTabs", TimeSpan.FromSeconds(10));
             AutomationElement tab = tabs.FindFirstChild(cf => cf.ByControlType(ControlType.TabItem))
                 ?? throw new Xunit.Sdk.XunitException("no open tab in the window.");
             Thread.Sleep(500);
 
-            AssertReadable(menu, "the menu bar");
+            // DS-13: the bar holds the logo, an image its name speaks for, and the menus'
+            // names are rows of its popup, so a row's text is what's measured.
+            AutomationElement file = WaitForAppMenu(window, "FileMenu", TimeSpan.FromSeconds(10));
+            Thread.Sleep(500);
+            AssertReadable(file, "the File row");
+            WaitForElement(window, "AppMenu", TimeSpan.FromSeconds(10)).Patterns.ExpandCollapse.Pattern.Collapse();
+            Thread.Sleep(300);
             AssertReadable(tab, "the open tab");
 
             AssertAxeClean(process, "theme-readability");

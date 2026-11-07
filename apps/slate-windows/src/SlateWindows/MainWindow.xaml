@@ -119,8 +119,13 @@
              directional GROUP any arrow search in the window can choose:
              from the empty editor stop Down and Up reached Canvas, Left
              Graph and Right File (NVDA pass F4). None refuses entry from
-             outside; Left/Right between the headers, wrap included, is the
-             items panel's (below). MenuBarCensus pins all of it. -->
+             outside. (4) DS-13 (#1814, plan 46 DSD7): the bar holds one item,
+             the logo, with File to Graph inside its popup, so Left and Right
+             between headers became Up and Down between rows, and the row's
+             wrapping panel went. The menus' letters aren't live inside a
+             closed popup, so Alt+F, W, B, E, N and G open it at their menu in
+             the window's key handler (AppMenuKeys), and F10 opens it.
+             MenuBarCensus pins all of it. -->
         <Grid x:Name="TitleBar"
               DockPanel.Dock="Top"
               MinHeight="48"
@@ -131,9 +136,8 @@
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
-            <!-- The menus take what the quick commands and captions leave, so at a narrow
-                 window and a large text size their headers wrap rather than push Close off
-                 the window. The title takes what the menus leave. -->
+            <!-- The menus' logo takes what the quick commands and captions leave (DS-13: one
+                 item where six headers wrapped). The title takes what the logo leaves. -->
             <DockPanel>
         <Menu x:Name="MainMenu"
               DockPanel.Dock="Left"
@@ -218,572 +222,581 @@
                     </Style.Triggers>
                 </Style>
             </Menu.Style>
-            <!-- W7-7 PR 4 (#1247, R-5): the bar's own Left/Right still wrap.
-                 A header's arrow is found by directional navigation inside
-                 its nearest directional group, which was the Menu (Cycle by
-                 default); with the Menu None, Right on the last header and
-                 Left on File went nowhere. This panel — Menu's default
-                 WrapPanel — is now that group, and cycles; the Menu's None
-                 still refuses every arrow from outside. MenuBarCensus pins
-                 it. -->
-            <Menu.ItemsPanel>
-                <ItemsPanelTemplate>
-                    <WrapPanel KeyboardNavigation.DirectionalNavigation="Cycle" />
-                </ItemsPanelTemplate>
-            </Menu.ItemsPanel>
-            <MenuItem Header="_File"
-                      AutomationProperties.AutomationId="FileMenu">
-                <MenuItem Header="_Open Vault…"
-                          AutomationProperties.AutomationId="OpenVaultMenuItem"
-                          InputGestureText="{cmd:ChordText slate.vault.open}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
-                          Command="{Binding OpenVaultCommand}" />
-                <MenuItem Header="_Quick Open…"
-                          AutomationProperties.AutomationId="QuickOpenMenuItem"
-                          InputGestureText="{cmd:ChordText slate.workspace.quickOpen}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
-                          Click="QuickOpen_Click" />
-                <Separator />
-                <!-- W5-3 (#743): create-from-template. mac homes this in
-                     the sidebar action catalog + ⇧⌘N; the Windows menu
-                     home is File per the W4 convention. Invokes the
-                     workspace command; the modal admission runs inside
-                     the open (T9), so a menu invocation under a sheet
-                     refuses instead of presenting beneath it (#1118's
-                     class). -->
-                <MenuItem Header="New Note from _Template…"
-                          AutomationProperties.AutomationId="NewFromTemplateMenuItem"
-                          InputGestureText="{cmd:ChordText slate.file.newFromTemplate}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
-                          Command="{Binding Workspace.NewFromTemplateCommand}" />
-                <!-- §E TE-10 (IE-21): the vault-scoped create — mac's
-                     File-menu New Canvas, chordless on both hosts. -->
-                <MenuItem Header="New _Canvas"
-                          AutomationProperties.AutomationId="NewCanvasMenuItem"
-                          Command="{Binding FileSidebar.CreateCanvasCommand}" />
-                <Separator />
-                <MenuItem Header="_Close Vault"
-                          AutomationProperties.AutomationId="CloseVaultMenuItem"
-                          Command="{Binding CloseVaultCommand}" />
-                <Separator />
-                <Separator />
-                <!-- W7-5 (#1239): the file-sidebar verbs. They shipped as a
-                     SEVENTH top-level menu named "Files" beside "File", both on
-                     Alt+F: WPF answers a shared mnemonic by focusing the first
-                     match and waiting, so Alt+F opened nothing, and a reader
-                     heard two menus a trailing "s" apart. One File menu, the
-                     sidebar verbs a submenu of it; MenuBarCensus keeps the
-                     top level unique. -->
-                <MenuItem Header="Files _Sidebar"
-                          AutomationProperties.AutomationId="FilesSidebarMenu">
-                    <MenuItem Header="_Open"
-                              AutomationProperties.AutomationId="FilesSidebarOpenMenuItem"
-                              Command="{Binding FileSidebar.OpenCurrentCommand}" />
-                    <MenuItem Header="Open in New _Tab"
-                              AutomationProperties.AutomationId="FilesSidebarOpenInNewTabMenuItem"
-                              Command="{Binding FileSidebar.OpenNewTabCommand}" />
-                    <MenuItem Header="Open in _Split"
-                              AutomationProperties.AutomationId="FilesSidebarOpenInSplitMenuItem"
-                              Command="{Binding FileSidebar.OpenSplitCommand}" />
+            <!-- DS-13: the logo, named "Slate menu", with Alt+F as its key
+                 (design/windows/readme.md:127). The header stays text and the
+                 template draws the image: with an image as the header itself,
+                 NVDA said nothing for any row of the popup (the field pass).
+                 MenuBarCensus pins the shape. -->
+            <MenuItem x:Name="AppMenuItem"
+                      Header="Slate"
+                      AutomationProperties.AutomationId="AppMenu"
+                      AutomationProperties.Name="Slate menu"
+                      AutomationProperties.AcceleratorKey="Alt+F">
+                <MenuItem.HeaderTemplate>
+                    <DataTemplate>
+                        <Image Width="20"
+                               Height="20"
+                               RenderOptions.BitmapScalingMode="HighQuality">
+                            <Image.Source>
+                                <BitmapImage UriSource="pack://application:,,,/SlateWindows;component/Assets/slate-gold.png" DecodePixelWidth="64" />
+                            </Image.Source>
+                        </Image>
+                    </DataTemplate>
+                </MenuItem.HeaderTemplate>
+                <MenuItem Header="_File"
+                          AutomationProperties.AutomationId="FileMenu">
+                    <MenuItem Header="_Open Vault…"
+                              AutomationProperties.AutomationId="OpenVaultMenuItem"
+                              InputGestureText="{cmd:ChordText slate.vault.open}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
+                              Command="{Binding OpenVaultCommand}" />
+                    <MenuItem Header="_Quick Open…"
+                              AutomationProperties.AutomationId="QuickOpenMenuItem"
+                              InputGestureText="{cmd:ChordText slate.workspace.quickOpen}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
+                              Click="QuickOpen_Click" />
                     <Separator />
-                    <MenuItem Header="_Import Files and Folders…"
-                              AutomationProperties.AutomationId="FilesSidebarImportFilesAndFoldersMenuItem"
-                              Command="{Binding FileSidebar.ImportCommand}" />
-                    <MenuItem Header="_Cancel Import"
-                              AutomationProperties.AutomationId="FilesSidebarCancelImportMenuItem"
-                              Command="{Binding FileSidebar.CancelImportCommand}" />
+                    <!-- W5-3 (#743): create-from-template. mac homes this in
+                         the sidebar action catalog + ⇧⌘N; the Windows menu
+                         home is File per the W4 convention. Invokes the
+                         workspace command; the modal admission runs inside
+                         the open (T9), so a menu invocation under a sheet
+                         refuses instead of presenting beneath it (#1118's
+                         class). -->
+                    <MenuItem Header="New Note from _Template…"
+                              AutomationProperties.AutomationId="NewFromTemplateMenuItem"
+                              InputGestureText="{cmd:ChordText slate.file.newFromTemplate}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
+                              Command="{Binding Workspace.NewFromTemplateCommand}" />
+                    <!-- §E TE-10 (IE-21): the vault-scoped create — mac's
+                         File-menu New Canvas, chordless on both hosts. -->
+                    <MenuItem Header="New _Canvas"
+                              AutomationProperties.AutomationId="NewCanvasMenuItem"
+                              Command="{Binding FileSidebar.CreateCanvasCommand}" />
                     <Separator />
+                    <MenuItem Header="_Close Vault"
+                              AutomationProperties.AutomationId="CloseVaultMenuItem"
+                              Command="{Binding CloseVaultCommand}" />
+                    <Separator />
+                    <Separator />
+                    <!-- W7-5 (#1239): the file-sidebar verbs. They shipped as a
+                         SEVENTH top-level menu named "Files" beside "File", both on
+                         Alt+F: WPF answers a shared mnemonic by focusing the first
+                         match and waiting, so Alt+F opened nothing, and a reader
+                         heard two menus a trailing "s" apart. One File menu, the
+                         sidebar verbs a submenu of it; MenuBarCensus keeps the
+                         top level unique. -->
+                    <MenuItem Header="Files _Sidebar"
+                              AutomationProperties.AutomationId="FilesSidebarMenu">
+                        <MenuItem Header="_Open"
+                                  AutomationProperties.AutomationId="FilesSidebarOpenMenuItem"
+                                  Command="{Binding FileSidebar.OpenCurrentCommand}" />
+                        <MenuItem Header="Open in New _Tab"
+                                  AutomationProperties.AutomationId="FilesSidebarOpenInNewTabMenuItem"
+                                  Command="{Binding FileSidebar.OpenNewTabCommand}" />
+                        <MenuItem Header="Open in _Split"
+                                  AutomationProperties.AutomationId="FilesSidebarOpenInSplitMenuItem"
+                                  Command="{Binding FileSidebar.OpenSplitCommand}" />
+                        <Separator />
+                        <MenuItem Header="_Import Files and Folders…"
+                                  AutomationProperties.AutomationId="FilesSidebarImportFilesAndFoldersMenuItem"
+                                  Command="{Binding FileSidebar.ImportCommand}" />
+                        <MenuItem Header="_Cancel Import"
+                                  AutomationProperties.AutomationId="FilesSidebarCancelImportMenuItem"
+                                  Command="{Binding FileSidebar.CancelImportCommand}" />
+                        <Separator />
+                        <MenuItem Header="_Refresh"
+                                  AutomationProperties.AutomationId="FilesSidebarRefreshMenuItem"
+                                  Command="{Binding FileSidebar.RefreshCommand}" />
+                        <MenuItem Header="_Collapse All"
+                                  AutomationProperties.AutomationId="FilesSidebarCollapseAllMenuItem"
+                                  Command="{Binding FileSidebar.CollapseAllCommand}" />
+                        <MenuItem Header="_Expand Loaded"
+                                  AutomationProperties.AutomationId="FilesSidebarExpandLoadedMenuItem"
+                                  Command="{Binding FileSidebar.ExpandLoadedCommand}" />
+                        <MenuItem Header="Focus _Filter"
+                                  AutomationProperties.AutomationId="FilesSidebarFocusFilterMenuItem"
+                                  InputGestureText="{cmd:ChordText slate.sidebar.focusFilter}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Click="FocusFilter_Click" />
+                        <MenuItem Header="_Back"
+                                  AutomationProperties.AutomationId="FilesSidebarBackMenuItem"
+                                  InputGestureText="{cmd:ChordText slate.sidebar.historyBack}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding FileSidebar.HistoryBackCommand}" />
+                        <MenuItem Header="_Forward"
+                                  AutomationProperties.AutomationId="FilesSidebarForwardMenuItem"
+                                  InputGestureText="{cmd:ChordText slate.sidebar.historyForward}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding FileSidebar.HistoryForwardCommand}" />
+                        <Separator />
+                        <MenuItem Header="_Pin Note"
+                                  AutomationProperties.AutomationId="FilesSidebarPinNoteMenuItem"
+                                  Command="{Binding FileSidebar.PinCommand}" />
+                        <MenuItem Header="_Unpin Note"
+                                  AutomationProperties.AutomationId="FilesSidebarUnpinNoteMenuItem"
+                                  Command="{Binding FileSidebar.UnpinCommand}" />
+                        <MenuItem Header="Unpin _All in Folder"
+                                  AutomationProperties.AutomationId="FilesSidebarUnpinAllInFolderMenuItem"
+                                  Command="{Binding FileSidebar.UnpinAllCommand}" />
+                        <MenuItem Header="Add to _Shortcuts"
+                                  AutomationProperties.AutomationId="FilesSidebarAddToShortcutsMenuItem"
+                                  Command="{Binding FileSidebar.AddShortcutCommand}" />
+                        <MenuItem Header="_Remove Shortcut"
+                                  AutomationProperties.AutomationId="FilesSidebarRemoveShortcutMenuItem"
+                                  Command="{Binding FileSidebar.RemoveShortcutCommand}" />
+                        <MenuItem Header="Use Vault Default _Sort"
+                                  AutomationProperties.AutomationId="FilesSidebarUseVaultDefaultSortMenuItem"
+                                  Command="{Binding FileSidebar.UseVaultDefaultSortCommand}" />
+                        <MenuItem Header="Clear _Recents"
+                                  AutomationProperties.AutomationId="FilesSidebarClearRecentsMenuItem"
+                                  Command="{Binding FileSidebar.ClearRecentsCommand}" />
+                    </MenuItem>
+                    <Separator />
+                    <MenuItem Header="S_ettings…"
+                              AutomationProperties.AutomationId="SettingsMenuItem"
+                              InputGestureText="{cmd:ChordText slate.settings.open}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
+                              Command="{Binding OpenSettingsCommand}" />
+                    <Separator />
+                    <MenuItem Header="E_xit" Command="{x:Static ApplicationCommands.Close}" />
+                </MenuItem>
+                <MenuItem Header="_Workspace"
+                          AutomationProperties.AutomationId="WorkspaceMenu">
+                    <MenuItem Header="_Duplicate Tab" InputGestureText="{cmd:ChordText slate.workspace.newTab}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.DuplicateTabCommand}" />
+                    <MenuItem Header="_Close Tab" InputGestureText="{cmd:ChordText slate.workspace.closeTab}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.CloseActiveTabCommand}" />
+                    <MenuItem Header="_Reopen Closed Tab" InputGestureText="{cmd:ChordText slate.workspace.reopenClosedTab}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.ReopenClosedTabCommand}" />
+                    <Separator />
+                    <MenuItem Header="Split _Right" AutomationProperties.AutomationId="SplitRightMenuItem" InputGestureText="{cmd:ChordText slate.workspace.splitRight}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.SplitRightCommand}" />
+                    <MenuItem Header="Split _Down" AutomationProperties.AutomationId="SplitDownMenuItem" InputGestureText="{cmd:ChordText slate.workspace.splitDown}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.SplitDownCommand}" />
+                    <MenuItem Header="Close _Pane" AutomationProperties.AutomationId="ClosePaneMenuItem" Command="{Binding Workspace.ClosePaneCommand}" />
+                    <Separator />
+                    <MenuItem Header="Focus Pane _Left" InputGestureText="{cmd:ChordText slate.workspace.focusPaneLeft}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.FocusPaneLeftCommand}" />
+                    <MenuItem Header="Focus Pane _Right" InputGestureText="{cmd:ChordText slate.workspace.focusPaneRight}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.FocusPaneRightCommand}" />
+                    <MenuItem Header="Focus Pane _Above" InputGestureText="{cmd:ChordText slate.workspace.focusPaneAbove}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.FocusPaneAboveCommand}" />
+                    <MenuItem Header="Focus Pane _Below" InputGestureText="{cmd:ChordText slate.workspace.focusPaneBelow}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.FocusPaneBelowCommand}" />
+                    <MenuItem Header="Focus Next _Region"
+                              AutomationProperties.AutomationId="WorkspaceFocusNextRegionMenuItem"
+                              InputGestureText="{cmd:ChordText slate.workspace.focusNextPane}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
+                              Command="{Binding Workspace.FocusNextPaneCommand}" />
+                    <MenuItem Header="Focus Previous Re_gion"
+                              AutomationProperties.AutomationId="WorkspaceFocusPreviousRegionMenuItem"
+                              InputGestureText="{cmd:ChordText slate.workspace.focusPreviousPane}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
+                              Command="{Binding Workspace.FocusPreviousPaneCommand}" />
+                    <MenuItem Header="Move Tab Left" InputGestureText="{cmd:ChordText slate.workspace.moveTabLeft}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.MoveTabLeftCommand}" />
+                    <MenuItem Header="Move Tab Right" InputGestureText="{cmd:ChordText slate.workspace.moveTabRight}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.MoveTabRightCommand}" />
+                    <!-- W7-7 PR 4b (#1247, AR-38): the keyboard's sidebar resize. -->
+                    <MenuItem Header="Widen _Files Sidebar"
+                              AutomationProperties.AutomationId="WorkspaceWidenFilesSidebarMenuItem"
+                              Command="{Binding Workspace.WidenFilesSidebarCommand}" />
+                    <MenuItem Header="Narrow F_iles Sidebar"
+                              AutomationProperties.AutomationId="WorkspaceNarrowFilesSidebarMenuItem"
+                              Command="{Binding Workspace.NarrowFilesSidebarCommand}" />
+                    <MenuItem Header="Widen Right Pa_ne"
+                              AutomationProperties.AutomationId="WorkspaceWidenRightPaneMenuItem"
+                              Command="{Binding Workspace.WidenRightPaneCommand}" />
+                    <MenuItem Header="Narrow Right Pan_e"
+                              AutomationProperties.AutomationId="WorkspaceNarrowRightPaneMenuItem"
+                              Command="{Binding Workspace.NarrowRightPaneCommand}" />
+                    <MenuItem Header="_Grow Pane" InputGestureText="{cmd:ChordText slate.workspace.growPane}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.GrowPaneCommand}" />
+                    <MenuItem Header="_Shrink Pane" InputGestureText="{cmd:ChordText slate.workspace.shrinkPane}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.ShrinkPaneCommand}" />
+                    <Separator />
+                    <MenuItem Header="_Toggle Files Sidebar"
+                              AutomationProperties.AutomationId="WorkspaceToggleFilesSidebarMenuItem"
+                              Command="{Binding Workspace.ToggleFilesSidebarCommand}" />
+                    <MenuItem Header="Toggle Right _Pane" InputGestureText="{cmd:ChordText slate.view.toggleRightPane}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.ToggleRightPaneCommand}" />
+                    <MenuItem Header="Switch T_heme…"
+                              AutomationProperties.AutomationId="SwitchThemeMenuItem"
+                              Command="{Binding SwitchThemeCommand}" />
+                    <!-- W5-2 close-out (#742): slate.view.toggleSearch. mac
+                         homes "Search Vault…" in Edit; Windows has no Edit
+                         menu, and its view-section verbs live here beside
+                         Toggle Right Pane. Invokes the same unguarded
+                         ToggleSearchCommand the palette runs; the
+                         Ctrl+Shift+F chord stays imperative in
+                         Window_PreviewKeyDown, where the modal gate lives. -->
+                    <MenuItem Header="Search _Vault…"
+                              AutomationProperties.AutomationId="SearchVaultMenuItem"
+                              InputGestureText="{cmd:ChordText slate.view.toggleSearch}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
+                              Command="{Binding ToggleSearchCommand}" />
+                    <MenuItem Header="Show Tasks _Review"
+                              AutomationProperties.AutomationId="ShowTasksReviewMenuItem"
+                              InputGestureText="{cmd:ChordText slate.tasks.review}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
+                              Command="{Binding Workspace.OpenTasksReviewCommand}" />
+                    <!-- W4-7 (#739): slate.history.showPanel — no chord on
+                         mac (matrix row); the menu is the chordless
+                         surface (contract H11). -->
+                    <MenuItem Header="Show _History Panel"
+                              AutomationProperties.AutomationId="ShowHistoryPanelMenuItem"
+                              Command="{Binding Workspace.ShowHistoryPanelCommand}" />
+                    <!-- Contract H8: the since-open opt-in (mac Settings ▸
+                         History), a HOST preference, default off. -->
+                    <local:CheckMenuItem Header="Show _Changes Since Last Open"
+                              AutomationProperties.AutomationId="HistoryChangesSinceOpenMenuItem"
+                              IsCheckable="True"
+                              IsChecked="{Binding Workspace.EditorPreferences.HistoryShowChangesSinceOpen, Mode=OneWay}"
+                              Command="{Binding Workspace.EditorPreferences.ToggleHistoryChangesSinceOpenCommand}" />
+                    <!-- W4-8 (#740): slate.diagnostics.refreshSync —
+                         CHORDLESS on both platforms (mac: "refresh is a
+                         rare, deliberate action"); the menu is the
+                         Windows-native chordless surface. It refreshes
+                         ONLY — it never reveals the leaf (contract SD7). -->
+                    <MenuItem Header="Refresh _Sync Diagnostics"
+                              AutomationProperties.AutomationId="RefreshSyncDiagnosticsMenuItem"
+                              Command="{Binding Workspace.RefreshSyncDiagnosticsCommand}" />
+                </MenuItem>
+                <!-- W4-6 (#738): every slate.bases.* command reachable and
+                     AT-discoverable. Mac ships these palette-only with no
+                     chords; a menu is the Windows-native chordless surface
+                     (grid-scoped gestures — Ctrl+F, Ctrl+Alt+S — stay on
+                     the substrate). Items disable through ActiveBaseDocument. -->
+                <MenuItem Header="_Base"
+                          AutomationProperties.AutomationId="BaseMenu">
                     <MenuItem Header="_Refresh"
-                              AutomationProperties.AutomationId="FilesSidebarRefreshMenuItem"
-                              Command="{Binding FileSidebar.RefreshCommand}" />
-                    <MenuItem Header="_Collapse All"
-                              AutomationProperties.AutomationId="FilesSidebarCollapseAllMenuItem"
-                              Command="{Binding FileSidebar.CollapseAllCommand}" />
-                    <MenuItem Header="_Expand Loaded"
-                              AutomationProperties.AutomationId="FilesSidebarExpandLoadedMenuItem"
-                              Command="{Binding FileSidebar.ExpandLoadedCommand}" />
-                    <MenuItem Header="Focus _Filter"
-                              AutomationProperties.AutomationId="FilesSidebarFocusFilterMenuItem"
-                              InputGestureText="{cmd:ChordText slate.sidebar.focusFilter}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Click="FocusFilter_Click" />
-                    <MenuItem Header="_Back"
-                              AutomationProperties.AutomationId="FilesSidebarBackMenuItem"
-                              InputGestureText="{cmd:ChordText slate.sidebar.historyBack}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding FileSidebar.HistoryBackCommand}" />
-                    <MenuItem Header="_Forward"
-                              AutomationProperties.AutomationId="FilesSidebarForwardMenuItem"
-                              InputGestureText="{cmd:ChordText slate.sidebar.historyForward}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding FileSidebar.HistoryForwardCommand}" />
+                              AutomationProperties.AutomationId="BasesRefreshMenuItem"
+                              Command="{Binding Workspace.BasesRefreshCommand}" />
+                    <MenuItem Header="_Where Am I?"
+                              AutomationProperties.AutomationId="BasesWhereAmIMenuItem"
+                              Command="{Binding Workspace.BasesWhereAmICommand}" />
+                    <MenuItem Header="Res_ults"
+                              AutomationProperties.AutomationId="BasesResultsMenuItem"
+                              Command="{Binding Workspace.BasesResultsCommand}" />
                     <Separator />
-                    <MenuItem Header="_Pin Note"
-                              AutomationProperties.AutomationId="FilesSidebarPinNoteMenuItem"
-                              Command="{Binding FileSidebar.PinCommand}" />
-                    <MenuItem Header="_Unpin Note"
-                              AutomationProperties.AutomationId="FilesSidebarUnpinNoteMenuItem"
-                              Command="{Binding FileSidebar.UnpinCommand}" />
-                    <MenuItem Header="Unpin _All in Folder"
-                              AutomationProperties.AutomationId="FilesSidebarUnpinAllInFolderMenuItem"
-                              Command="{Binding FileSidebar.UnpinAllCommand}" />
-                    <MenuItem Header="Add to _Shortcuts"
-                              AutomationProperties.AutomationId="FilesSidebarAddToShortcutsMenuItem"
-                              Command="{Binding FileSidebar.AddShortcutCommand}" />
-                    <MenuItem Header="_Remove Shortcut"
-                              AutomationProperties.AutomationId="FilesSidebarRemoveShortcutMenuItem"
-                              Command="{Binding FileSidebar.RemoveShortcutCommand}" />
-                    <MenuItem Header="Use Vault Default _Sort"
-                              AutomationProperties.AutomationId="FilesSidebarUseVaultDefaultSortMenuItem"
-                              Command="{Binding FileSidebar.UseVaultDefaultSortCommand}" />
-                    <MenuItem Header="Clear _Recents"
-                              AutomationProperties.AutomationId="FilesSidebarClearRecentsMenuItem"
-                              Command="{Binding FileSidebar.ClearRecentsCommand}" />
-                </MenuItem>
-                <Separator />
-                <MenuItem Header="S_ettings…"
-                          AutomationProperties.AutomationId="SettingsMenuItem"
-                          InputGestureText="{cmd:ChordText slate.settings.open}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
-                          Command="{Binding OpenSettingsCommand}" />
-                <Separator />
-                <MenuItem Header="E_xit" Command="{x:Static ApplicationCommands.Close}" />
-            </MenuItem>
-            <MenuItem Header="_Workspace"
-                      AutomationProperties.AutomationId="WorkspaceMenu">
-                <MenuItem Header="_Duplicate Tab" InputGestureText="{cmd:ChordText slate.workspace.newTab}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.DuplicateTabCommand}" />
-                <MenuItem Header="_Close Tab" InputGestureText="{cmd:ChordText slate.workspace.closeTab}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.CloseActiveTabCommand}" />
-                <MenuItem Header="_Reopen Closed Tab" InputGestureText="{cmd:ChordText slate.workspace.reopenClosedTab}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.ReopenClosedTabCommand}" />
-                <Separator />
-                <MenuItem Header="Split _Right" AutomationProperties.AutomationId="SplitRightMenuItem" InputGestureText="{cmd:ChordText slate.workspace.splitRight}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.SplitRightCommand}" />
-                <MenuItem Header="Split _Down" AutomationProperties.AutomationId="SplitDownMenuItem" InputGestureText="{cmd:ChordText slate.workspace.splitDown}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.SplitDownCommand}" />
-                <MenuItem Header="Close _Pane" AutomationProperties.AutomationId="ClosePaneMenuItem" Command="{Binding Workspace.ClosePaneCommand}" />
-                <Separator />
-                <MenuItem Header="Focus Pane _Left" InputGestureText="{cmd:ChordText slate.workspace.focusPaneLeft}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.FocusPaneLeftCommand}" />
-                <MenuItem Header="Focus Pane _Right" InputGestureText="{cmd:ChordText slate.workspace.focusPaneRight}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.FocusPaneRightCommand}" />
-                <MenuItem Header="Focus Pane _Above" InputGestureText="{cmd:ChordText slate.workspace.focusPaneAbove}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.FocusPaneAboveCommand}" />
-                <MenuItem Header="Focus Pane _Below" InputGestureText="{cmd:ChordText slate.workspace.focusPaneBelow}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.FocusPaneBelowCommand}" />
-                <MenuItem Header="Focus Next _Region"
-                          AutomationProperties.AutomationId="WorkspaceFocusNextRegionMenuItem"
-                          InputGestureText="{cmd:ChordText slate.workspace.focusNextPane}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
-                          Command="{Binding Workspace.FocusNextPaneCommand}" />
-                <MenuItem Header="Focus Previous Re_gion"
-                          AutomationProperties.AutomationId="WorkspaceFocusPreviousRegionMenuItem"
-                          InputGestureText="{cmd:ChordText slate.workspace.focusPreviousPane}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
-                          Command="{Binding Workspace.FocusPreviousPaneCommand}" />
-                <MenuItem Header="Move Tab Left" InputGestureText="{cmd:ChordText slate.workspace.moveTabLeft}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.MoveTabLeftCommand}" />
-                <MenuItem Header="Move Tab Right" InputGestureText="{cmd:ChordText slate.workspace.moveTabRight}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.MoveTabRightCommand}" />
-                <!-- W7-7 PR 4b (#1247, AR-38): the keyboard's sidebar resize. -->
-                <MenuItem Header="Widen _Files Sidebar"
-                          AutomationProperties.AutomationId="WorkspaceWidenFilesSidebarMenuItem"
-                          Command="{Binding Workspace.WidenFilesSidebarCommand}" />
-                <MenuItem Header="Narrow F_iles Sidebar"
-                          AutomationProperties.AutomationId="WorkspaceNarrowFilesSidebarMenuItem"
-                          Command="{Binding Workspace.NarrowFilesSidebarCommand}" />
-                <MenuItem Header="Widen Right Pa_ne"
-                          AutomationProperties.AutomationId="WorkspaceWidenRightPaneMenuItem"
-                          Command="{Binding Workspace.WidenRightPaneCommand}" />
-                <MenuItem Header="Narrow Right Pan_e"
-                          AutomationProperties.AutomationId="WorkspaceNarrowRightPaneMenuItem"
-                          Command="{Binding Workspace.NarrowRightPaneCommand}" />
-                <MenuItem Header="_Grow Pane" InputGestureText="{cmd:ChordText slate.workspace.growPane}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.GrowPaneCommand}" />
-                <MenuItem Header="_Shrink Pane" InputGestureText="{cmd:ChordText slate.workspace.shrinkPane}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.ShrinkPaneCommand}" />
-                <Separator />
-                <MenuItem Header="_Toggle Files Sidebar"
-                          AutomationProperties.AutomationId="WorkspaceToggleFilesSidebarMenuItem"
-                          Command="{Binding Workspace.ToggleFilesSidebarCommand}" />
-                <MenuItem Header="Toggle Right _Pane" InputGestureText="{cmd:ChordText slate.view.toggleRightPane}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}" Command="{Binding Workspace.ToggleRightPaneCommand}" />
-                <MenuItem Header="Switch T_heme…"
-                          AutomationProperties.AutomationId="SwitchThemeMenuItem"
-                          Command="{Binding SwitchThemeCommand}" />
-                <!-- W5-2 close-out (#742): slate.view.toggleSearch. mac
-                     homes "Search Vault…" in Edit; Windows has no Edit
-                     menu, and its view-section verbs live here beside
-                     Toggle Right Pane. Invokes the same unguarded
-                     ToggleSearchCommand the palette runs; the
-                     Ctrl+Shift+F chord stays imperative in
-                     Window_PreviewKeyDown, where the modal gate lives. -->
-                <MenuItem Header="Search _Vault…"
-                          AutomationProperties.AutomationId="SearchVaultMenuItem"
-                          InputGestureText="{cmd:ChordText slate.view.toggleSearch}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
-                          Command="{Binding ToggleSearchCommand}" />
-                <MenuItem Header="Show Tasks _Review"
-                          AutomationProperties.AutomationId="ShowTasksReviewMenuItem"
-                          InputGestureText="{cmd:ChordText slate.tasks.review}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
-                          Command="{Binding Workspace.OpenTasksReviewCommand}" />
-                <!-- W4-7 (#739): slate.history.showPanel — no chord on
-                     mac (matrix row); the menu is the chordless
-                     surface (contract H11). -->
-                <MenuItem Header="Show _History Panel"
-                          AutomationProperties.AutomationId="ShowHistoryPanelMenuItem"
-                          Command="{Binding Workspace.ShowHistoryPanelCommand}" />
-                <!-- Contract H8: the since-open opt-in (mac Settings ▸
-                     History), a HOST preference, default off. -->
-                <local:CheckMenuItem Header="Show _Changes Since Last Open"
-                          AutomationProperties.AutomationId="HistoryChangesSinceOpenMenuItem"
-                          IsCheckable="True"
-                          IsChecked="{Binding Workspace.EditorPreferences.HistoryShowChangesSinceOpen, Mode=OneWay}"
-                          Command="{Binding Workspace.EditorPreferences.ToggleHistoryChangesSinceOpenCommand}" />
-                <!-- W4-8 (#740): slate.diagnostics.refreshSync —
-                     CHORDLESS on both platforms (mac: "refresh is a
-                     rare, deliberate action"); the menu is the
-                     Windows-native chordless surface. It refreshes
-                     ONLY — it never reveals the leaf (contract SD7). -->
-                <MenuItem Header="Refresh _Sync Diagnostics"
-                          AutomationProperties.AutomationId="RefreshSyncDiagnosticsMenuItem"
-                          Command="{Binding Workspace.RefreshSyncDiagnosticsCommand}" />
-            </MenuItem>
-            <!-- W4-6 (#738): every slate.bases.* command reachable and
-                 AT-discoverable. Mac ships these palette-only with no
-                 chords; a menu is the Windows-native chordless surface
-                 (grid-scoped gestures — Ctrl+F, Ctrl+Alt+S — stay on
-                 the substrate). Items disable through ActiveBaseDocument. -->
-            <MenuItem Header="_Base"
-                      AutomationProperties.AutomationId="BaseMenu">
-                <MenuItem Header="_Refresh"
-                          AutomationProperties.AutomationId="BasesRefreshMenuItem"
-                          Command="{Binding Workspace.BasesRefreshCommand}" />
-                <MenuItem Header="_Where Am I?"
-                          AutomationProperties.AutomationId="BasesWhereAmIMenuItem"
-                          Command="{Binding Workspace.BasesWhereAmICommand}" />
-                <MenuItem Header="Res_ults"
-                          AutomationProperties.AutomationId="BasesResultsMenuItem"
-                          Command="{Binding Workspace.BasesResultsCommand}" />
-                <Separator />
-                <MenuItem Header="_Next View"
-                          AutomationProperties.AutomationId="BasesNextViewMenuItem"
-                          Command="{Binding Workspace.BasesNextViewCommand}" />
-                <MenuItem Header="_Previous View"
-                          AutomationProperties.AutomationId="BasesPreviousViewMenuItem"
-                          Command="{Binding Workspace.BasesPreviousViewCommand}" />
-                <MenuItem Header="Open View _Switcher"
-                          AutomationProperties.AutomationId="BasesViewSwitcherMenuItem"
-                          Command="{Binding Workspace.BasesViewSwitcherCommand}" />
-                <MenuItem Header="View as _Table"
-                          AutomationProperties.AutomationId="BasesViewAsTableMenuItem"
-                          Command="{Binding Workspace.BasesViewAsTableCommand}" />
-                <MenuItem Header="View as _List"
-                          AutomationProperties.AutomationId="BasesViewAsListMenuItem"
-                          Command="{Binding Workspace.BasesViewAsListCommand}" />
-                <Separator />
-                <MenuItem Header="Quick _Filter"
-                          AutomationProperties.AutomationId="BasesQuickFilterMenuItem"
-                          InputGestureText="{cmd:ChordText slate.bases.quickFilter}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
-                          Command="{Binding Workspace.BasesQuickFilterCommand}" />
-                <MenuItem Header="Sort by _Column"
-                          AutomationProperties.AutomationId="BasesSortByColumnMenuItem"
-                          InputGestureText="{cmd:ChordText slate.bases.sortByColumn}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
-                          Command="{Binding Workspace.BasesSortByColumnCommand}" />
-                <MenuItem Header="Save Sort to _View"
-                          AutomationProperties.AutomationId="BasesSaveSortMenuItem"
-                          Command="{Binding Workspace.BasesSaveSortToViewCommand}" />
-                <Separator />
-                <MenuItem Header="_Open Row"
-                          AutomationProperties.AutomationId="BasesOpenRowMenuItem"
-                          Command="{Binding Workspace.BasesOpenRowCommand}" />
-                <MenuItem Header="Copy Lin_k"
-                          AutomationProperties.AutomationId="BasesCopyLinkMenuItem"
-                          Command="{Binding Workspace.BasesCopyLinkCommand}" />
-                <MenuItem Header="Show _Backlinks"
-                          AutomationProperties.AutomationId="BasesShowBacklinksMenuItem"
-                          Command="{Binding Workspace.BasesShowBacklinksCommand}" />
-                <MenuItem Header="_Edit Property"
-                          AutomationProperties.AutomationId="BasesEditPropertyMenuItem"
-                          Command="{Binding Workspace.BasesEditPropertyCommand}" />
-                <Separator />
-                <MenuItem Header="Export View as _CSV…"
-                          AutomationProperties.AutomationId="BasesExportCsvMenuItem"
-                          Command="{Binding Workspace.BasesExportCsvCommand}" />
-                <MenuItem Header="Export View as _Markdown Table…"
-                          AutomationProperties.AutomationId="BasesExportMarkdownMenuItem"
-                          Command="{Binding Workspace.BasesExportMarkdownCommand}" />
-                <MenuItem Header="Copy View as Mar_kdown"
-                          AutomationProperties.AutomationId="BasesCopyMarkdownMenuItem"
-                          Command="{Binding Workspace.BasesCopyMarkdownCommand}" />
-                <Separator />
-                <MenuItem Header="New _Query…"
-                          AutomationProperties.AutomationId="BasesNewQueryMenuItem"
-                          Command="{Binding Workspace.BasesNewQueryCommand}" />
-                <MenuItem Header="Edit View F_ilters…"
-                          AutomationProperties.AutomationId="BasesEditViewFiltersMenuItem"
-                          Command="{Binding Workspace.BasesEditViewFiltersCommand}" />
-            </MenuItem>
-            <MenuItem Header="_Editor"
-                      AutomationProperties.AutomationId="EditorMenu">
-                <MenuItem Header="_Find…"
-                          AutomationProperties.AutomationId="EditorFindInNoteMenuItem"
-                          InputGestureText="{cmd:ChordText slate.editor.findInNote}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
-                          Command="{Binding FindInNoteCommand}" />
-                <MenuItem Header="_Activate at Cursor"
-                          AutomationProperties.AutomationId="EditorActivateMenuItem"
-                          InputGestureText="{cmd:ChordText slate.editor.activateAtCaret}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
-                          Command="{Binding Workspace.ActiveGroup.ActiveTab.EditorInteractions.ActivateAtCaretCommand, FallbackValue={x:Static cmd:DisabledCommand.Instance}}" />
-                <MenuItem Header="Preview _Embed"
-                          AutomationProperties.AutomationId="EditorPreviewEmbedMenuItem"
-                          InputGestureText="{cmd:ChordText slate.editor.previewEmbed}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
-                          Command="{Binding Workspace.ActiveGroup.ActiveTab.EditorInteractions.PreviewEmbedCommand, FallbackValue={x:Static cmd:DisabledCommand.Instance}}" />
-                <MenuItem Header="Toggle _Reading Mode"
-                          AutomationProperties.AutomationId="EditorToggleReadingModeMenuItem"
-                          InputGestureText="{cmd:ChordText slate.editor.toggleViewMode}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
-                          Command="{Binding Workspace.ToggleReadingModeCommand}" />
-                <Separator />
-                <!-- W4-4 (#736): menu-homed so bulk rename works when
-                     the properties header isn't mounted; both disable
-                     without a session (null Workspace). -->
-                <MenuItem Header="Add _Property…"
-                          AutomationProperties.AutomationId="AddPropertyMenuItem"
-                          Command="{Binding Workspace.OpenAddPropertySheetCommand}" />
-                <MenuItem Header="Bulk Rename Pr_operties…"
-                          AutomationProperties.AutomationId="BulkRenamePropertiesMenuItem"
-                          InputGestureText="{cmd:ChordText slate.editor.bulkRenameProperties}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
-                          Command="{Binding Workspace.OpenBulkRenameSheetCommand}" />
-                <!-- W4-5 (#737). Both citation commands were bound only
-                     in Window.InputBindings, so they had no menu home,
-                     no InputGestureText and therefore no UIA
-                     AcceleratorKey — a user who did not already know
-                     the chord could not reach either one. Reload is
-                     menu-only: it is the recovery path after fixing a
-                     bad bibliography path, and it has no mac chord. -->
-                <MenuItem Header="Citation S_ummary"
-                          AutomationProperties.AutomationId="CitationSummaryMenuItem"
-                          InputGestureText="{cmd:ChordText slate.editor.citationSummary}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
-                          Command="{Binding Workspace.OpenCitationSummaryCommand}" />
-                <MenuItem Header="_Jump to Bibliography"
-                          AutomationProperties.AutomationId="JumpToBibliographyMenuItem"
-                          InputGestureText="{cmd:ChordText slate.navigation.jumpToBibliography}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
-                          Command="{Binding Workspace.JumpToBibliographyCommand}" />
-                <MenuItem Header="Reloa_d Bibliography"
-                          AutomationProperties.AutomationId="ReloadBibliographyMenuItem"
-                          AutomationProperties.HelpText="Re-read the vault's bibliography sources after fixing them."
-                          Command="{Binding Workspace.ReloadBibliographyCommand}" />
-                <Separator />
-                <local:CheckMenuItem Header="Check _Spelling While Typing"
-                          AutomationProperties.AutomationId="EditorToggleSpellCheckMenuItem"
-                          IsCheckable="True"
-                          IsChecked="{Binding Workspace.EditorPreferences.IsSpellCheckEnabled, Mode=OneWay}"
-                          Command="{Binding Workspace.EditorPreferences.ToggleSpellCheckCommand}" />
-                <local:CheckMenuItem Header="Open Reading Lin_ks in New Tab"
-                          AutomationProperties.AutomationId="EditorToggleReadingLinkTargetMenuItem"
-                          IsCheckable="True"
-                          IsChecked="{Binding Workspace.EditorPreferences.OpenReadingLinksInNewTab, Mode=OneWay}"
-                          Command="{Binding Workspace.EditorPreferences.ToggleReadingLinkTargetCommand}" />
-                <MenuItem Header="_Math"
-                          AutomationProperties.AutomationId="EditorMathPrefsMenu">
-                    <local:CheckMenuItem Header="Speech Style: _ClearSpeak"
-                              AutomationProperties.AutomationId="EditorMathClearSpeakMenuItem"
-                              IsCheckable="True"
-                              IsChecked="{Binding Workspace.EditorPreferences.IsMathSpeechClearSpeak, Mode=OneWay}"
-                              Command="{Binding Workspace.EditorPreferences.SetMathSpeechStyleCommand}"
-                              CommandParameter="clearSpeak" />
-                    <local:CheckMenuItem Header="Speech Style: _SimpleSpeak"
-                              AutomationProperties.AutomationId="EditorMathSimpleSpeakMenuItem"
-                              IsCheckable="True"
-                              IsChecked="{Binding Workspace.EditorPreferences.IsMathSpeechSimpleSpeak, Mode=OneWay}"
-                              Command="{Binding Workspace.EditorPreferences.SetMathSpeechStyleCommand}"
-                              CommandParameter="simpleSpeak" />
+                    <MenuItem Header="_Next View"
+                              AutomationProperties.AutomationId="BasesNextViewMenuItem"
+                              Command="{Binding Workspace.BasesNextViewCommand}" />
+                    <MenuItem Header="_Previous View"
+                              AutomationProperties.AutomationId="BasesPreviousViewMenuItem"
+                              Command="{Binding Workspace.BasesPreviousViewCommand}" />
+                    <MenuItem Header="Open View _Switcher"
+                              AutomationProperties.AutomationId="BasesViewSwitcherMenuItem"
+                              Command="{Binding Workspace.BasesViewSwitcherCommand}" />
+                    <MenuItem Header="View as _Table"
+                              AutomationProperties.AutomationId="BasesViewAsTableMenuItem"
+                              Command="{Binding Workspace.BasesViewAsTableCommand}" />
+                    <MenuItem Header="View as _List"
+                              AutomationProperties.AutomationId="BasesViewAsListMenuItem"
+                              Command="{Binding Workspace.BasesViewAsListCommand}" />
                     <Separator />
-                    <local:CheckMenuItem Header="Verbosity: _Terse"
-                              AutomationProperties.AutomationId="EditorMathTerseMenuItem"
-                              IsCheckable="True"
-                              IsChecked="{Binding Workspace.EditorPreferences.IsMathVerbosityTerse, Mode=OneWay}"
-                              Command="{Binding Workspace.EditorPreferences.SetMathVerbosityCommand}"
-                              CommandParameter="terse" />
-                    <local:CheckMenuItem Header="Verbosity: M_edium"
-                              AutomationProperties.AutomationId="EditorMathMediumMenuItem"
-                              IsCheckable="True"
-                              IsChecked="{Binding Workspace.EditorPreferences.IsMathVerbosityMedium, Mode=OneWay}"
-                              Command="{Binding Workspace.EditorPreferences.SetMathVerbosityCommand}"
-                              CommandParameter="medium" />
-                    <local:CheckMenuItem Header="Verbosity: _Verbose"
-                              AutomationProperties.AutomationId="EditorMathVerboseMenuItem"
-                              IsCheckable="True"
-                              IsChecked="{Binding Workspace.EditorPreferences.IsMathVerbosityVerbose, Mode=OneWay}"
-                              Command="{Binding Workspace.EditorPreferences.SetMathVerbosityCommand}"
-                              CommandParameter="verbose" />
+                    <MenuItem Header="Quick _Filter"
+                              AutomationProperties.AutomationId="BasesQuickFilterMenuItem"
+                              InputGestureText="{cmd:ChordText slate.bases.quickFilter}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
+                              Command="{Binding Workspace.BasesQuickFilterCommand}" />
+                    <MenuItem Header="Sort by _Column"
+                              AutomationProperties.AutomationId="BasesSortByColumnMenuItem"
+                              InputGestureText="{cmd:ChordText slate.bases.sortByColumn}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
+                              Command="{Binding Workspace.BasesSortByColumnCommand}" />
+                    <MenuItem Header="Save Sort to _View"
+                              AutomationProperties.AutomationId="BasesSaveSortMenuItem"
+                              Command="{Binding Workspace.BasesSaveSortToViewCommand}" />
                     <Separator />
-                    <local:CheckMenuItem Header="Braille: _Nemeth"
-                              AutomationProperties.AutomationId="EditorMathNemethMenuItem"
-                              IsCheckable="True"
-                              IsChecked="{Binding Workspace.EditorPreferences.IsMathBrailleNemeth, Mode=OneWay}"
-                              Command="{Binding Workspace.EditorPreferences.SetMathBrailleCodeCommand}"
-                              CommandParameter="nemeth" />
-                    <local:CheckMenuItem Header="Braille: _UEB"
-                              AutomationProperties.AutomationId="EditorMathUebMenuItem"
-                              IsCheckable="True"
-                              IsChecked="{Binding Workspace.EditorPreferences.IsMathBrailleUeb, Mode=OneWay}"
-                              Command="{Binding Workspace.EditorPreferences.SetMathBrailleCodeCommand}"
-                              CommandParameter="ueb" />
+                    <MenuItem Header="_Open Row"
+                              AutomationProperties.AutomationId="BasesOpenRowMenuItem"
+                              Command="{Binding Workspace.BasesOpenRowCommand}" />
+                    <MenuItem Header="Copy Lin_k"
+                              AutomationProperties.AutomationId="BasesCopyLinkMenuItem"
+                              Command="{Binding Workspace.BasesCopyLinkCommand}" />
+                    <MenuItem Header="Show _Backlinks"
+                              AutomationProperties.AutomationId="BasesShowBacklinksMenuItem"
+                              Command="{Binding Workspace.BasesShowBacklinksCommand}" />
+                    <MenuItem Header="_Edit Property"
+                              AutomationProperties.AutomationId="BasesEditPropertyMenuItem"
+                              Command="{Binding Workspace.BasesEditPropertyCommand}" />
+                    <Separator />
+                    <MenuItem Header="Export View as _CSV…"
+                              AutomationProperties.AutomationId="BasesExportCsvMenuItem"
+                              Command="{Binding Workspace.BasesExportCsvCommand}" />
+                    <MenuItem Header="Export View as _Markdown Table…"
+                              AutomationProperties.AutomationId="BasesExportMarkdownMenuItem"
+                              Command="{Binding Workspace.BasesExportMarkdownCommand}" />
+                    <MenuItem Header="Copy View as Mar_kdown"
+                              AutomationProperties.AutomationId="BasesCopyMarkdownMenuItem"
+                              Command="{Binding Workspace.BasesCopyMarkdownCommand}" />
+                    <Separator />
+                    <MenuItem Header="New _Query…"
+                              AutomationProperties.AutomationId="BasesNewQueryMenuItem"
+                              Command="{Binding Workspace.BasesNewQueryCommand}" />
+                    <MenuItem Header="Edit View F_ilters…"
+                              AutomationProperties.AutomationId="BasesEditViewFiltersMenuItem"
+                              Command="{Binding Workspace.BasesEditViewFiltersCommand}" />
                 </MenuItem>
-                <MenuItem Header="Code Preamble _Verbosity"
-                          AutomationProperties.AutomationId="EditorCodeVerbosityMenu">
-                    <local:CheckMenuItem Header="Preamble _Only"
-                              AutomationProperties.AutomationId="EditorCodeVerbosityPreambleOnlyMenuItem"
+                <MenuItem Header="_Editor"
+                          AutomationProperties.AutomationId="EditorMenu">
+                    <MenuItem Header="_Find…"
+                              AutomationProperties.AutomationId="EditorFindInNoteMenuItem"
+                              InputGestureText="{cmd:ChordText slate.editor.findInNote}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
+                              Command="{Binding FindInNoteCommand}" />
+                    <MenuItem Header="_Activate at Cursor"
+                              AutomationProperties.AutomationId="EditorActivateMenuItem"
+                              InputGestureText="{cmd:ChordText slate.editor.activateAtCaret}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
+                              Command="{Binding Workspace.ActiveGroup.ActiveTab.EditorInteractions.ActivateAtCaretCommand, FallbackValue={x:Static cmd:DisabledCommand.Instance}}" />
+                    <MenuItem Header="Preview _Embed"
+                              AutomationProperties.AutomationId="EditorPreviewEmbedMenuItem"
+                              InputGestureText="{cmd:ChordText slate.editor.previewEmbed}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
+                              Command="{Binding Workspace.ActiveGroup.ActiveTab.EditorInteractions.PreviewEmbedCommand, FallbackValue={x:Static cmd:DisabledCommand.Instance}}" />
+                    <MenuItem Header="Toggle _Reading Mode"
+                              AutomationProperties.AutomationId="EditorToggleReadingModeMenuItem"
+                              InputGestureText="{cmd:ChordText slate.editor.toggleViewMode}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
+                              Command="{Binding Workspace.ToggleReadingModeCommand}" />
+                    <Separator />
+                    <!-- W4-4 (#736): menu-homed so bulk rename works when
+                         the properties header isn't mounted; both disable
+                         without a session (null Workspace). -->
+                    <MenuItem Header="Add _Property…"
+                              AutomationProperties.AutomationId="AddPropertyMenuItem"
+                              Command="{Binding Workspace.OpenAddPropertySheetCommand}" />
+                    <MenuItem Header="Bulk Rename Pr_operties…"
+                              AutomationProperties.AutomationId="BulkRenamePropertiesMenuItem"
+                              InputGestureText="{cmd:ChordText slate.editor.bulkRenameProperties}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
+                              Command="{Binding Workspace.OpenBulkRenameSheetCommand}" />
+                    <!-- W4-5 (#737). Both citation commands were bound only
+                         in Window.InputBindings, so they had no menu home,
+                         no InputGestureText and therefore no UIA
+                         AcceleratorKey — a user who did not already know
+                         the chord could not reach either one. Reload is
+                         menu-only: it is the recovery path after fixing a
+                         bad bibliography path, and it has no mac chord. -->
+                    <MenuItem Header="Citation S_ummary"
+                              AutomationProperties.AutomationId="CitationSummaryMenuItem"
+                              InputGestureText="{cmd:ChordText slate.editor.citationSummary}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
+                              Command="{Binding Workspace.OpenCitationSummaryCommand}" />
+                    <MenuItem Header="_Jump to Bibliography"
+                              AutomationProperties.AutomationId="JumpToBibliographyMenuItem"
+                              InputGestureText="{cmd:ChordText slate.navigation.jumpToBibliography}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
+                              Command="{Binding Workspace.JumpToBibliographyCommand}" />
+                    <MenuItem Header="Reloa_d Bibliography"
+                              AutomationProperties.AutomationId="ReloadBibliographyMenuItem"
+                              AutomationProperties.HelpText="Re-read the vault's bibliography sources after fixing them."
+                              Command="{Binding Workspace.ReloadBibliographyCommand}" />
+                    <Separator />
+                    <local:CheckMenuItem Header="Check _Spelling While Typing"
+                              AutomationProperties.AutomationId="EditorToggleSpellCheckMenuItem"
                               IsCheckable="True"
-                              IsChecked="{Binding Workspace.EditorPreferences.IsCodeVerbosityPreambleOnly, Mode=OneWay}"
-                              Command="{Binding Workspace.EditorPreferences.SetCodePreambleVerbosityCommand}"
-                              CommandParameter="preambleOnly" />
-                    <local:CheckMenuItem Header="Preamble + _First Line"
-                              AutomationProperties.AutomationId="EditorCodeVerbosityFirstLineMenuItem"
+                              IsChecked="{Binding Workspace.EditorPreferences.IsSpellCheckEnabled, Mode=OneWay}"
+                              Command="{Binding Workspace.EditorPreferences.ToggleSpellCheckCommand}" />
+                    <local:CheckMenuItem Header="Open Reading Lin_ks in New Tab"
+                              AutomationProperties.AutomationId="EditorToggleReadingLinkTargetMenuItem"
                               IsCheckable="True"
-                              IsChecked="{Binding Workspace.EditorPreferences.IsCodeVerbosityFirstLine, Mode=OneWay}"
-                              Command="{Binding Workspace.EditorPreferences.SetCodePreambleVerbosityCommand}"
-                              CommandParameter="preambleFirstLine" />
-                    <local:CheckMenuItem Header="Preamble + _All Tokens"
-                              AutomationProperties.AutomationId="EditorCodeVerbosityAllTokensMenuItem"
-                              IsCheckable="True"
-                              IsChecked="{Binding Workspace.EditorPreferences.IsCodeVerbosityAllTokens, Mode=OneWay}"
-                              Command="{Binding Workspace.EditorPreferences.SetCodePreambleVerbosityCommand}"
-                              CommandParameter="preambleAllTokens" />
+                              IsChecked="{Binding Workspace.EditorPreferences.OpenReadingLinksInNewTab, Mode=OneWay}"
+                              Command="{Binding Workspace.EditorPreferences.ToggleReadingLinkTargetCommand}" />
+                    <MenuItem Header="_Math"
+                              AutomationProperties.AutomationId="EditorMathPrefsMenu">
+                        <local:CheckMenuItem Header="Speech Style: _ClearSpeak"
+                                  AutomationProperties.AutomationId="EditorMathClearSpeakMenuItem"
+                                  IsCheckable="True"
+                                  IsChecked="{Binding Workspace.EditorPreferences.IsMathSpeechClearSpeak, Mode=OneWay}"
+                                  Command="{Binding Workspace.EditorPreferences.SetMathSpeechStyleCommand}"
+                                  CommandParameter="clearSpeak" />
+                        <local:CheckMenuItem Header="Speech Style: _SimpleSpeak"
+                                  AutomationProperties.AutomationId="EditorMathSimpleSpeakMenuItem"
+                                  IsCheckable="True"
+                                  IsChecked="{Binding Workspace.EditorPreferences.IsMathSpeechSimpleSpeak, Mode=OneWay}"
+                                  Command="{Binding Workspace.EditorPreferences.SetMathSpeechStyleCommand}"
+                                  CommandParameter="simpleSpeak" />
+                        <Separator />
+                        <local:CheckMenuItem Header="Verbosity: _Terse"
+                                  AutomationProperties.AutomationId="EditorMathTerseMenuItem"
+                                  IsCheckable="True"
+                                  IsChecked="{Binding Workspace.EditorPreferences.IsMathVerbosityTerse, Mode=OneWay}"
+                                  Command="{Binding Workspace.EditorPreferences.SetMathVerbosityCommand}"
+                                  CommandParameter="terse" />
+                        <local:CheckMenuItem Header="Verbosity: M_edium"
+                                  AutomationProperties.AutomationId="EditorMathMediumMenuItem"
+                                  IsCheckable="True"
+                                  IsChecked="{Binding Workspace.EditorPreferences.IsMathVerbosityMedium, Mode=OneWay}"
+                                  Command="{Binding Workspace.EditorPreferences.SetMathVerbosityCommand}"
+                                  CommandParameter="medium" />
+                        <local:CheckMenuItem Header="Verbosity: _Verbose"
+                                  AutomationProperties.AutomationId="EditorMathVerboseMenuItem"
+                                  IsCheckable="True"
+                                  IsChecked="{Binding Workspace.EditorPreferences.IsMathVerbosityVerbose, Mode=OneWay}"
+                                  Command="{Binding Workspace.EditorPreferences.SetMathVerbosityCommand}"
+                                  CommandParameter="verbose" />
+                        <Separator />
+                        <local:CheckMenuItem Header="Braille: _Nemeth"
+                                  AutomationProperties.AutomationId="EditorMathNemethMenuItem"
+                                  IsCheckable="True"
+                                  IsChecked="{Binding Workspace.EditorPreferences.IsMathBrailleNemeth, Mode=OneWay}"
+                                  Command="{Binding Workspace.EditorPreferences.SetMathBrailleCodeCommand}"
+                                  CommandParameter="nemeth" />
+                        <local:CheckMenuItem Header="Braille: _UEB"
+                                  AutomationProperties.AutomationId="EditorMathUebMenuItem"
+                                  IsCheckable="True"
+                                  IsChecked="{Binding Workspace.EditorPreferences.IsMathBrailleUeb, Mode=OneWay}"
+                                  Command="{Binding Workspace.EditorPreferences.SetMathBrailleCodeCommand}"
+                                  CommandParameter="ueb" />
+                    </MenuItem>
+                    <MenuItem Header="Code Preamble _Verbosity"
+                              AutomationProperties.AutomationId="EditorCodeVerbosityMenu">
+                        <local:CheckMenuItem Header="Preamble _Only"
+                                  AutomationProperties.AutomationId="EditorCodeVerbosityPreambleOnlyMenuItem"
+                                  IsCheckable="True"
+                                  IsChecked="{Binding Workspace.EditorPreferences.IsCodeVerbosityPreambleOnly, Mode=OneWay}"
+                                  Command="{Binding Workspace.EditorPreferences.SetCodePreambleVerbosityCommand}"
+                                  CommandParameter="preambleOnly" />
+                        <local:CheckMenuItem Header="Preamble + _First Line"
+                                  AutomationProperties.AutomationId="EditorCodeVerbosityFirstLineMenuItem"
+                                  IsCheckable="True"
+                                  IsChecked="{Binding Workspace.EditorPreferences.IsCodeVerbosityFirstLine, Mode=OneWay}"
+                                  Command="{Binding Workspace.EditorPreferences.SetCodePreambleVerbosityCommand}"
+                                  CommandParameter="preambleFirstLine" />
+                        <local:CheckMenuItem Header="Preamble + _All Tokens"
+                                  AutomationProperties.AutomationId="EditorCodeVerbosityAllTokensMenuItem"
+                                  IsCheckable="True"
+                                  IsChecked="{Binding Workspace.EditorPreferences.IsCodeVerbosityAllTokens, Mode=OneWay}"
+                                  Command="{Binding Workspace.EditorPreferences.SetCodePreambleVerbosityCommand}"
+                                  CommandParameter="preambleAllTokens" />
+                    </MenuItem>
+                    <Separator />
+                    <MenuItem Header="Zoom _In"
+                              AutomationProperties.AutomationId="EditorZoomInMenuItem"
+                              Command="{Binding Workspace.EditorPreferences.ZoomInCommand}" />
+                    <MenuItem Header="Zoom _Out"
+                              AutomationProperties.AutomationId="EditorZoomOutMenuItem"
+                              Command="{Binding Workspace.EditorPreferences.ZoomOutCommand}" />
+                    <MenuItem Header="_Actual Size"
+                              AutomationProperties.AutomationId="EditorActualSizeMenuItem"
+                              Command="{Binding Workspace.EditorPreferences.ActualSizeCommand}" />
                 </MenuItem>
-                <Separator />
-                <MenuItem Header="Zoom _In"
-                          AutomationProperties.AutomationId="EditorZoomInMenuItem"
-                          Command="{Binding Workspace.EditorPreferences.ZoomInCommand}" />
-                <MenuItem Header="Zoom _Out"
-                          AutomationProperties.AutomationId="EditorZoomOutMenuItem"
-                          Command="{Binding Workspace.EditorPreferences.ZoomOutCommand}" />
-                <MenuItem Header="_Actual Size"
-                          AutomationProperties.AutomationId="EditorActualSizeMenuItem"
-                          Command="{Binding Workspace.EditorPreferences.ActualSizeCommand}" />
-            </MenuItem>
-            <!-- W6-1 PR C (#745): every slate.canvas.* command PR C ships,
-                 reachable and AT-discoverable without a chord — the Base
-                 menu's precedent. Mac ships these palette-only; a menu is
-                 the Windows-native chordless surface. Items disable
-                 through ActiveCanvasDocument (the mode rows additionally
-                 through the mode stack, contract C9). -->
-            <MenuItem Header="Ca_nvas"
-                      AutomationProperties.AutomationId="CanvasMenu">
-                <MenuItem Header="_Where Am I?"
-                          AutomationProperties.AutomationId="CanvasWhereAmIMenuItem"
-                          InputGestureText="{cmd:ChordText slate.canvas.whereAmI}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
-                          Command="{Binding Workspace.CanvasWhereAmICommand}" />
-                <Separator />
-                <!-- §E TE-11 (E19): mac's Canvas menu ownership - the one
-                     verb with a chord. -->
-                <MenuItem Header="New Car_d"
-                          AutomationProperties.AutomationId="CanvasNewCardMenuItem"
-                          InputGestureText="{cmd:ChordText slate.canvas.newCard}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
-                          Command="{Binding Workspace.CanvasNewCardCommand}" />
-                <!-- §G2 TG2-4 (G2-1): mac's Canvas menu owns Create Connected
-                     Card — the one residue verb it owns; the ownership census
-                     demands this item. -->
-                <MenuItem Header="Create Connec_ted Card"
-                          AutomationProperties.AutomationId="CanvasCreateConnectedCardMenuItem"
-                          InputGestureText="{cmd:ChordText slate.canvas.createConnectedCard}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
-                          Command="{Binding Workspace.CanvasCreateConnectedCardCommand}" />
-                <Separator />
-                <MenuItem Header="_Next Card"
-                          AutomationProperties.AutomationId="CanvasNextCardMenuItem"
-                          InputGestureText="{cmd:ChordText slate.canvas.nextCard}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
-                          Command="{Binding Workspace.CanvasNextCardCommand}" />
-                <MenuItem Header="_Previous Card"
-                          AutomationProperties.AutomationId="CanvasPreviousCardMenuItem"
-                          InputGestureText="{cmd:ChordText slate.canvas.previousCard}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
-                          Command="{Binding Workspace.CanvasPreviousCardCommand}" />
-                <MenuItem Header="_Enter Group"
-                          AutomationProperties.AutomationId="CanvasEnterGroupMenuItem"
-                          Command="{Binding Workspace.CanvasEnterGroupCommand}" />
-                <MenuItem Header="E_xit Group"
-                          AutomationProperties.AutomationId="CanvasExitGroupMenuItem"
-                          Command="{Binding Workspace.CanvasExitGroupCommand}" />
-                <MenuItem Header="_Follow Connection Forward"
-                          AutomationProperties.AutomationId="CanvasFollowForwardMenuItem"
-                          InputGestureText="{cmd:ChordText slate.canvas.followConnectionForward}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
-                          Command="{Binding Workspace.CanvasFollowConnectionForwardCommand}" />
-                <MenuItem Header="Follow Connection _Back"
-                          AutomationProperties.AutomationId="CanvasFollowBackMenuItem"
-                          InputGestureText="{cmd:ChordText slate.canvas.followConnectionBack}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
-                          Command="{Binding Workspace.CanvasFollowConnectionBackCommand}" />
-                <MenuItem Header="_Trace Path from Selected Card"
-                          AutomationProperties.AutomationId="CanvasTracePathMenuItem"
-                          Command="{Binding Workspace.CanvasTracePathCommand}" />
-                <Separator />
-                <MenuItem Header="F_ilter Cards…"
-                          AutomationProperties.AutomationId="CanvasFilterCardsMenuItem"
-                          InputGestureText="{cmd:ChordText slate.canvas.filterCards}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
-                          Command="{Binding Workspace.CanvasFilterCardsCommand}" />
-                <MenuItem Header="_Clear Filter"
-                          AutomationProperties.AutomationId="CanvasClearFilterMenuItem"
-                          Command="{Binding Workspace.CanvasClearFilterCommand}" />
-                <Separator />
-                <MenuItem Header="Co_mmit Mode"
-                          AutomationProperties.AutomationId="CanvasCommitModeMenuItem"
-                          InputGestureText="{cmd:ChordText slate.canvas.commitMode}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
-                          Command="{Binding Workspace.CanvasCommitModeCommand}" />
-                <MenuItem Header="Cance_l Mode"
-                          AutomationProperties.AutomationId="CanvasCancelModeMenuItem"
-                          InputGestureText="{cmd:ChordText slate.canvas.cancelMode}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
-                          Command="{Binding Workspace.CanvasCancelModeCommand}" />
-                <Separator />
-                <MenuItem Header="Toggle Viewport Follows _Selection"
-                          AutomationProperties.AutomationId="CanvasToggleFollowSelectionMenuItem"
-                          Command="{Binding Workspace.CanvasToggleFollowSelectionCommand}" />
-                <Separator />
-                <!-- t0 §1.2, contract C13. CHECK items bound OneWay to
-                     the level (WPF has no radio menu item): the screen
-                     reader speaks the selected level from the element
-                     itself, which is why the setting needs no
-                     announcement of its own. -->
-                <MenuItem Header="_Verbosity"
-                          AutomationProperties.AutomationId="CanvasVerbosityMenu">
-                    <local:CheckMenuItem Header="_Terse"
-                              AutomationProperties.AutomationId="CanvasVerbosityTerseMenuItem"
-                              IsCheckable="True"
-                              IsChecked="{Binding Workspace.CanvasPreferences.IsVerbosityTerse, Mode=OneWay}"
-                              Command="{Binding Workspace.CanvasPreferences.SetVerbosityCommand}"
-                              CommandParameter="terse" />
-                    <local:CheckMenuItem Header="_Standard"
-                              AutomationProperties.AutomationId="CanvasVerbosityStandardMenuItem"
-                              IsCheckable="True"
-                              IsChecked="{Binding Workspace.CanvasPreferences.IsVerbosityStandard, Mode=OneWay}"
-                              Command="{Binding Workspace.CanvasPreferences.SetVerbosityCommand}"
-                              CommandParameter="standard" />
-                    <local:CheckMenuItem Header="_Verbose"
-                              AutomationProperties.AutomationId="CanvasVerbosityVerboseMenuItem"
-                              IsCheckable="True"
-                              IsChecked="{Binding Workspace.CanvasPreferences.IsVerbosityVerbose, Mode=OneWay}"
-                              Command="{Binding Workspace.CanvasPreferences.SetVerbosityCommand}"
-                              CommandParameter="verbose" />
+                <!-- W6-1 PR C (#745): every slate.canvas.* command PR C ships,
+                     reachable and AT-discoverable without a chord — the Base
+                     menu's precedent. Mac ships these palette-only; a menu is
+                     the Windows-native chordless surface. Items disable
+                     through ActiveCanvasDocument (the mode rows additionally
+                     through the mode stack, contract C9). -->
+                <MenuItem Header="Ca_nvas"
+                          AutomationProperties.AutomationId="CanvasMenu">
+                    <MenuItem Header="_Where Am I?"
+                              AutomationProperties.AutomationId="CanvasWhereAmIMenuItem"
+                              InputGestureText="{cmd:ChordText slate.canvas.whereAmI}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
+                              Command="{Binding Workspace.CanvasWhereAmICommand}" />
+                    <Separator />
+                    <!-- §E TE-11 (E19): mac's Canvas menu ownership - the one
+                         verb with a chord. -->
+                    <MenuItem Header="New Car_d"
+                              AutomationProperties.AutomationId="CanvasNewCardMenuItem"
+                              InputGestureText="{cmd:ChordText slate.canvas.newCard}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
+                              Command="{Binding Workspace.CanvasNewCardCommand}" />
+                    <!-- §G2 TG2-4 (G2-1): mac's Canvas menu owns Create Connected
+                         Card — the one residue verb it owns; the ownership census
+                         demands this item. -->
+                    <MenuItem Header="Create Connec_ted Card"
+                              AutomationProperties.AutomationId="CanvasCreateConnectedCardMenuItem"
+                              InputGestureText="{cmd:ChordText slate.canvas.createConnectedCard}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
+                              Command="{Binding Workspace.CanvasCreateConnectedCardCommand}" />
+                    <Separator />
+                    <MenuItem Header="_Next Card"
+                              AutomationProperties.AutomationId="CanvasNextCardMenuItem"
+                              InputGestureText="{cmd:ChordText slate.canvas.nextCard}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
+                              Command="{Binding Workspace.CanvasNextCardCommand}" />
+                    <MenuItem Header="_Previous Card"
+                              AutomationProperties.AutomationId="CanvasPreviousCardMenuItem"
+                              InputGestureText="{cmd:ChordText slate.canvas.previousCard}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
+                              Command="{Binding Workspace.CanvasPreviousCardCommand}" />
+                    <MenuItem Header="_Enter Group"
+                              AutomationProperties.AutomationId="CanvasEnterGroupMenuItem"
+                              Command="{Binding Workspace.CanvasEnterGroupCommand}" />
+                    <MenuItem Header="E_xit Group"
+                              AutomationProperties.AutomationId="CanvasExitGroupMenuItem"
+                              Command="{Binding Workspace.CanvasExitGroupCommand}" />
+                    <MenuItem Header="_Follow Connection Forward"
+                              AutomationProperties.AutomationId="CanvasFollowForwardMenuItem"
+                              InputGestureText="{cmd:ChordText slate.canvas.followConnectionForward}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
+                              Command="{Binding Workspace.CanvasFollowConnectionForwardCommand}" />
+                    <MenuItem Header="Follow Connection _Back"
+                              AutomationProperties.AutomationId="CanvasFollowBackMenuItem"
+                              InputGestureText="{cmd:ChordText slate.canvas.followConnectionBack}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
+                              Command="{Binding Workspace.CanvasFollowConnectionBackCommand}" />
+                    <MenuItem Header="_Trace Path from Selected Card"
+                              AutomationProperties.AutomationId="CanvasTracePathMenuItem"
+                              Command="{Binding Workspace.CanvasTracePathCommand}" />
+                    <Separator />
+                    <MenuItem Header="F_ilter Cards…"
+                              AutomationProperties.AutomationId="CanvasFilterCardsMenuItem"
+                              InputGestureText="{cmd:ChordText slate.canvas.filterCards}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
+                              Command="{Binding Workspace.CanvasFilterCardsCommand}" />
+                    <MenuItem Header="_Clear Filter"
+                              AutomationProperties.AutomationId="CanvasClearFilterMenuItem"
+                              Command="{Binding Workspace.CanvasClearFilterCommand}" />
+                    <Separator />
+                    <MenuItem Header="Co_mmit Mode"
+                              AutomationProperties.AutomationId="CanvasCommitModeMenuItem"
+                              InputGestureText="{cmd:ChordText slate.canvas.commitMode}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
+                              Command="{Binding Workspace.CanvasCommitModeCommand}" />
+                    <MenuItem Header="Cance_l Mode"
+                              AutomationProperties.AutomationId="CanvasCancelModeMenuItem"
+                              InputGestureText="{cmd:ChordText slate.canvas.cancelMode}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
+                              Command="{Binding Workspace.CanvasCancelModeCommand}" />
+                    <Separator />
+                    <MenuItem Header="Toggle Viewport Follows _Selection"
+                              AutomationProperties.AutomationId="CanvasToggleFollowSelectionMenuItem"
+                              Command="{Binding Workspace.CanvasToggleFollowSelectionCommand}" />
+                    <Separator />
+                    <!-- t0 §1.2, contract C13. CHECK items bound OneWay to
+                         the level (WPF has no radio menu item): the screen
+                         reader speaks the selected level from the element
+                         itself, which is why the setting needs no
+                         announcement of its own. -->
+                    <MenuItem Header="_Verbosity"
+                              AutomationProperties.AutomationId="CanvasVerbosityMenu">
+                        <local:CheckMenuItem Header="_Terse"
+                                  AutomationProperties.AutomationId="CanvasVerbosityTerseMenuItem"
+                                  IsCheckable="True"
+                                  IsChecked="{Binding Workspace.CanvasPreferences.IsVerbosityTerse, Mode=OneWay}"
+                                  Command="{Binding Workspace.CanvasPreferences.SetVerbosityCommand}"
+                                  CommandParameter="terse" />
+                        <local:CheckMenuItem Header="_Standard"
+                                  AutomationProperties.AutomationId="CanvasVerbosityStandardMenuItem"
+                                  IsCheckable="True"
+                                  IsChecked="{Binding Workspace.CanvasPreferences.IsVerbosityStandard, Mode=OneWay}"
+                                  Command="{Binding Workspace.CanvasPreferences.SetVerbosityCommand}"
+                                  CommandParameter="standard" />
+                        <local:CheckMenuItem Header="_Verbose"
+                                  AutomationProperties.AutomationId="CanvasVerbosityVerboseMenuItem"
+                                  IsCheckable="True"
+                                  IsChecked="{Binding Workspace.CanvasPreferences.IsVerbosityVerbose, Mode=OneWay}"
+                                  Command="{Binding Workspace.CanvasPreferences.SetVerbosityCommand}"
+                                  CommandParameter="verbose" />
+                    </MenuItem>
                 </MenuItem>
-            </MenuItem>
-            <!-- W6-2 PR C (#746, contract C-12): the Graph menu — Open Graph,
-                 the three presets (chordless; the palette rows' twins), Where
-                 Am I? (the shared chord, advertised from the table) and the
-                 Verbosity submenu BUILT FROM CORE'S VECTOR in code-behind
-                 (MainWindow.Graph.cs): the XAML declares the empty submenu and
-                 no literal level (0b-1, 0b-12). Mac's twin is its View ▸ Graph
-                 submenu (plan 43 PR 4, owner decision D8; C-D9 retired). -->
-            <MenuItem Header="_Graph"
-                      AutomationProperties.AutomationId="GraphMenu">
-                <MenuItem Header="_Open Graph"
-                          AutomationProperties.AutomationId="GraphOpenTabMenuItem"
-                          Command="{Binding Workspace.OpenGraphCommand}" />
-                <Separator />
-                <MenuItem Header="Orphaned _Notes"
-                          AutomationProperties.AutomationId="GraphOrphansMenuItem"
-                          Command="{Binding Workspace.GraphOrphansCommand}" />
-                <MenuItem Header="_Unresolved Links"
-                          AutomationProperties.AutomationId="GraphUnresolvedMenuItem"
-                          Command="{Binding Workspace.GraphUnresolvedCommand}" />
-                <MenuItem Header="_Most Linked Notes"
-                          AutomationProperties.AutomationId="GraphMostLinkedMenuItem"
-                          Command="{Binding Workspace.GraphMostLinkedCommand}" />
-                <MenuItem Header="_Where Am I?"
-                          AutomationProperties.AutomationId="GraphWhereAmIMenuItem"
-                          InputGestureText="{cmd:ChordText slate.graph.whereAmI}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
-                          Command="{Binding Workspace.GraphWhereAmICommand}" />
-                <Separator />
-                <MenuItem Header="Zoom _In"
-                          AutomationProperties.AutomationId="GraphZoomInMenuItem"
-                          InputGestureText="{cmd:ChordText slate.graph.zoomIn}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
-                          Command="{Binding Workspace.GraphZoomInCommand}" />
-                <MenuItem Header="Zoom _Out"
-                          AutomationProperties.AutomationId="GraphZoomOutMenuItem"
-                          InputGestureText="{cmd:ChordText slate.graph.zoomOut}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
-                          Command="{Binding Workspace.GraphZoomOutCommand}" />
-                <MenuItem Header="_Actual Size"
-                          AutomationProperties.AutomationId="GraphActualSizeMenuItem"
-                          InputGestureText="{cmd:ChordText slate.graph.actualSize}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
-                          Command="{Binding Workspace.GraphActualSizeCommand}" />
-                <MenuItem Header="_Fit Graph"
-                          AutomationProperties.AutomationId="GraphFitGraphMenuItem"
-                          InputGestureText="{cmd:ChordText slate.graph.fitGraph}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
-                          Command="{Binding Workspace.GraphFitGraphCommand}" />
-                <Separator />
-                <MenuItem x:Name="GraphVerbosityMenuItem"
-                          Header="_Verbosity"
-                          AutomationProperties.AutomationId="GraphVerbosityMenu" />
+                <!-- W6-2 PR C (#746, contract C-12): the Graph menu — Open Graph,
+                     the three presets (chordless; the palette rows' twins), Where
+                     Am I? (the shared chord, advertised from the table) and the
+                     Verbosity submenu BUILT FROM CORE'S VECTOR in code-behind
+                     (MainWindow.Graph.cs): the XAML declares the empty submenu and
+                     no literal level (0b-1, 0b-12). Mac's twin is its View ▸ Graph
+                     submenu (plan 43 PR 4, owner decision D8; C-D9 retired). -->
+                <MenuItem Header="_Graph"
+                          AutomationProperties.AutomationId="GraphMenu">
+                    <MenuItem Header="_Open Graph"
+                              AutomationProperties.AutomationId="GraphOpenTabMenuItem"
+                              Command="{Binding Workspace.OpenGraphCommand}" />
+                    <Separator />
+                    <MenuItem Header="Orphaned _Notes"
+                              AutomationProperties.AutomationId="GraphOrphansMenuItem"
+                              Command="{Binding Workspace.GraphOrphansCommand}" />
+                    <MenuItem Header="_Unresolved Links"
+                              AutomationProperties.AutomationId="GraphUnresolvedMenuItem"
+                              Command="{Binding Workspace.GraphUnresolvedCommand}" />
+                    <MenuItem Header="_Most Linked Notes"
+                              AutomationProperties.AutomationId="GraphMostLinkedMenuItem"
+                              Command="{Binding Workspace.GraphMostLinkedCommand}" />
+                    <MenuItem Header="_Where Am I?"
+                              AutomationProperties.AutomationId="GraphWhereAmIMenuItem"
+                              InputGestureText="{cmd:ChordText slate.graph.whereAmI}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
+                              Command="{Binding Workspace.GraphWhereAmICommand}" />
+                    <Separator />
+                    <MenuItem Header="Zoom _In"
+                              AutomationProperties.AutomationId="GraphZoomInMenuItem"
+                              InputGestureText="{cmd:ChordText slate.graph.zoomIn}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
+                              Command="{Binding Workspace.GraphZoomInCommand}" />
+                    <MenuItem Header="Zoom _Out"
+                              AutomationProperties.AutomationId="GraphZoomOutMenuItem"
+                              InputGestureText="{cmd:ChordText slate.graph.zoomOut}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
+                              Command="{Binding Workspace.GraphZoomOutCommand}" />
+                    <MenuItem Header="_Actual Size"
+                              AutomationProperties.AutomationId="GraphActualSizeMenuItem"
+                              InputGestureText="{cmd:ChordText slate.graph.actualSize}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
+                              Command="{Binding Workspace.GraphActualSizeCommand}" />
+                    <MenuItem Header="_Fit Graph"
+                              AutomationProperties.AutomationId="GraphFitGraphMenuItem"
+                              InputGestureText="{cmd:ChordText slate.graph.fitGraph}" AutomationProperties.AcceleratorKey="{Binding InputGestureText, RelativeSource={RelativeSource Self}}"
+                              Command="{Binding Workspace.GraphFitGraphCommand}" />
+                    <Separator />
+                    <MenuItem x:Name="GraphVerbosityMenuItem"
+                              Header="_Verbosity"
+                              AutomationProperties.AutomationId="GraphVerbosityMenu" />
+                </MenuItem>
             </MenuItem>
         </Menu>
             <!-- DS-12: the window's own title, which is what a reader hears on the window, so this
