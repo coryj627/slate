@@ -57,12 +57,14 @@ public sealed partial class ShellAccessibilityTests
                 {
                     try
                     {
-                        // A ContextMenu is its own HWND: from the desktop, in this process.
+                        // A ContextMenu is its own HWND: from the desktop, in this process,
+                        // whatever its popup's own control type.
                         item = automation.GetDesktop()
-                            .FindAllChildren(automation.ConditionFactory.ByControlType(ControlType.Menu)
-                                .And(automation.ConditionFactory.ByProcessId(processId)))
-                            .SelectMany(menu => menu.FindAllDescendants(automation.ConditionFactory.ByControlType(ControlType.MenuItem)))
-                            .FirstOrDefault(entry => (entry.Properties.Name.ValueOrDefault ?? string.Empty) == title);
+                            .FindAllChildren(automation.ConditionFactory.ByProcessId(processId))
+                            .Select(top => top.FindFirstDescendant(automation.ConditionFactory.ByControlType(ControlType.MenuItem)
+                                .And(automation.ConditionFactory.ByName(title))
+                                .And(automation.ConditionFactory.ByAutomationId("RightPaneMorePanels.", PropertyConditionFlags.MatchSubstring))))
+                            .FirstOrDefault(entry => entry is not null);
                         return item is not null;
                     }
                     catch (Exception exception) when (IsTransientUiaFault(exception))
