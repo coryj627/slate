@@ -1,5 +1,55 @@
 [
   {
+    "Source": "MainWindow.FilesToolbar.cs",
+    "Expression": "\"SidebarDualPaneToggle\"",
+    "Surface": "Sidebar organization and actions"
+  },
+  {
+    "Source": "MainWindow.FilesToolbar.cs",
+    "Expression": "\"SidebarGroupDates\"",
+    "Surface": "Sidebar organization and actions"
+  },
+  {
+    "Source": "MainWindow.FilesToolbar.cs",
+    "Expression": "\"SidebarShowTags\"",
+    "Surface": "Sidebar organization and actions"
+  },
+  {
+    "Source": "MainWindow.FilesToolbar.cs",
+    "Expression": "SidebarSortItemIdPrefix + mode",
+    "Surface": "Sidebar organization and actions"
+  },
+  {
+    "Source": "MainWindow.FilesToolbar.cs",
+    "Expression": "automationId",
+    "Surface": "Sidebar organization and actions"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "FilesToolbar",
+    "Surface": "Sidebar organization and actions"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SidebarCollapseAll",
+    "Surface": "Sidebar organization and actions"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SidebarExpandLoaded",
+    "Surface": "Sidebar organization and actions"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SidebarNewNote",
+    "Surface": "Sidebar organization and actions"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SidebarSortAndGroup",
+    "Surface": "Sidebar organization and actions"
+  },
+  {
     "Source": "Bases/BaseSurfaceView.cs",
     "Expression": "\"BaseCountReadout\"",
     "Surface": "Bases surfaces (W4-6)"
@@ -2096,11 +2146,6 @@
   },
   {
     "Source": "MainWindow.xaml",
-    "Expression": "SidebarDualPaneToggle",
-    "Surface": "Sidebar organization and actions"
-  },
-  {
-    "Source": "MainWindow.xaml",
     "Expression": "SidebarFileActions",
     "Surface": "Sidebar organization and actions"
   },
@@ -2118,11 +2163,6 @@
     "Source": "MainWindow.xaml",
     "Expression": "SidebarFilterResults",
     "Surface": "File filter/results"
-  },
-  {
-    "Source": "MainWindow.xaml",
-    "Expression": "SidebarGroupDates",
-    "Surface": "Sidebar organization and actions"
   },
   {
     "Source": "MainWindow.xaml",
@@ -2152,16 +2192,6 @@
   {
     "Source": "MainWindow.xaml",
     "Expression": "SidebarShortcutsActions",
-    "Surface": "Sidebar organization and actions"
-  },
-  {
-    "Source": "MainWindow.xaml",
-    "Expression": "SidebarShowTags",
-    "Surface": "Tag tree"
-  },
-  {
-    "Source": "MainWindow.xaml",
-    "Expression": "SidebarSortOrder",
     "Surface": "Sidebar organization and actions"
   },
   {

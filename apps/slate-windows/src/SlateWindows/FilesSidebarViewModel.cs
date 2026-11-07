@@ -539,6 +539,16 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         SidebarWriteJournal? writeJournal = null,
         Func<Action, CancellationToken, Task>? pinPruneWorker = null)
     {
+        // DS-17: the Sort and group button's name says the order; every write
+        // of either raises its own change.
+        PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName is nameof(SortMode) or nameof(GroupByDate))
+            {
+                OnPropertyChanged(nameof(SortButtonName));
+            }
+        };
+
         _session = session;
         _announce = announce;
         _copyText = copyText ?? (_ => { });
@@ -695,6 +705,21 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     public ObservableCollection<SidebarTagViewModel> Tags { get; } = [];
     public ObservableCollection<SidebarShortcutViewModel> Shortcuts { get; } = [];
     public IReadOnlyList<SidebarSortMode> SortModes { get; } = Enum.GetValues<SidebarSortMode>();
+
+    /// <summary>DS-17 (DSD12): the Sort and group button's name, from core, with the
+    /// value the combo box said on focus: "Sort and group, Name (A to Z)".</summary>
+    public string SortButtonName => SlateUniffiMethods.SidebarSortButtonName(ToCore(SortMode), GroupByDate);
+
+    /// <summary>The order as core knows it.</summary>
+    internal static SidebarSortOrder ToCore(SidebarSortMode mode) => mode switch
+    {
+        SidebarSortMode.NameDescending => SidebarSortOrder.NameDescending,
+        SidebarSortMode.ModifiedNewest => SidebarSortOrder.ModifiedNewest,
+        SidebarSortMode.ModifiedOldest => SidebarSortOrder.ModifiedOldest,
+        SidebarSortMode.CreatedNewest => SidebarSortOrder.CreatedNewest,
+        SidebarSortMode.CreatedOldest => SidebarSortOrder.CreatedOldest,
+        _ => SidebarSortOrder.NameAscending,
+    };
 
     public SidebarSortMode SortMode
     {

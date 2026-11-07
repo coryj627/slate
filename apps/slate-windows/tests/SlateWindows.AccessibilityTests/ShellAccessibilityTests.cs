@@ -230,41 +230,38 @@ public sealed partial class ShellAccessibilityTests
             Assert.Equal(ControlType.Button, sidebarRefresh.ControlType);
             Assert.True(sidebarRefresh.Patterns.Invoke.IsSupported);
 
-            AutomationElement sortOrder = WaitForElement(
+            // DS-17 (DSD12): the sort is Sort and group's menu now, and the button's
+            // name says the order the combo box said on focus, from core.
+            AutomationElement sortAndGroup = WaitForElement(
                 window,
-                "SidebarSortOrder",
+                "SidebarSortAndGroup",
                 TimeSpan.FromSeconds(10));
-            Assert.Equal(ControlType.ComboBox, sortOrder.ControlType);
-            Assert.True(sortOrder.Patterns.Selection.IsSupported);
-            // W7-7 PR 3 (#1246, R-4): NVDA reads a combo's value from its
-            // selected item's name — the label, never the enum member
-            // ("NameAscending"), which no type/record census pattern sees.
+            Assert.Equal(ControlType.Button, sortAndGroup.ControlType);
             Assert.Equal(
-                "Name (A to Z)",
-                Assert.Single(sortOrder.Patterns.Selection.Pattern.Selection.Value).Name);
-
-            AutomationElement groupDates = WaitForElement(
-                window,
-                "SidebarGroupDates",
-                TimeSpan.FromSeconds(10));
-            Assert.Equal(ControlType.CheckBox, groupDates.ControlType);
-            Assert.True(groupDates.Patterns.Toggle.IsSupported);
-
+                uniffi.slate_uniffi.SlateUniffiMethods.SidebarSortButtonName(uniffi.slate_uniffi.SidebarSortOrder.NameAscending, false),
+                sortAndGroup.Name);
+            AutomationElement nameOrder = OpenSortAndGroupRow(window, automation, "SidebarSort.NameAscending");
+            Assert.Equal(ControlType.MenuItem, nameOrder.ControlType);
+            Assert.Equal("Name (A to Z)", nameOrder.Name);
+            Assert.Equal(ToggleState.On, nameOrder.Patterns.Toggle.Pattern.ToggleState.Value);
             foreach (string automationId in new[]
             {
+                "SidebarGroupDates",
                 "SidebarShowTags",
                 "SidebarDualPaneToggle",
             })
             {
-                AutomationElement toggle = WaitForElement(
-                    window,
-                    automationId,
-                    TimeSpan.FromSeconds(10));
-                Assert.Equal(ControlType.Button, toggle.ControlType);
+                AutomationElement toggle = WaitForSortRowInOpenMenu(automation, window, automationId);
+                Assert.Equal(ControlType.MenuItem, toggle.ControlType);
                 Assert.True(
                     toggle.Patterns.Toggle.IsSupported,
                     $"{automationId} does not expose Toggle.");
             }
+
+            PressKey(VirtualKeyShort.ESCAPE);
+            Assert.True(
+                SpinWait.SpinUntil(() => !SortAndGroupIsOpen(window, automation), TimeSpan.FromSeconds(5)),
+                "Escape didn't close Sort and group.");
 
             // W7-5 (#1239): a vault that restores no tabs lands its launch
             // focus on the Files tree, never on the empty TabControl (which

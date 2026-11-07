@@ -348,6 +348,43 @@ pub fn more_panels_name(open: Option<String>) -> String {
     core::more_panels_name(open.as_deref())
 }
 
+/// DS-17: an order the Files sidebar can sort by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum SidebarSortOrder {
+    NameAscending,
+    NameDescending,
+    ModifiedNewest,
+    ModifiedOldest,
+    CreatedNewest,
+    CreatedOldest,
+}
+
+impl From<SidebarSortOrder> for core::SidebarSortOrder {
+    fn from(order: SidebarSortOrder) -> Self {
+        match order {
+            SidebarSortOrder::NameAscending => Self::NameAscending,
+            SidebarSortOrder::NameDescending => Self::NameDescending,
+            SidebarSortOrder::ModifiedNewest => Self::ModifiedNewest,
+            SidebarSortOrder::ModifiedOldest => Self::ModifiedOldest,
+            SidebarSortOrder::CreatedNewest => Self::CreatedNewest,
+            SidebarSortOrder::CreatedOldest => Self::CreatedOldest,
+        }
+    }
+}
+
+/// DS-17: an order's label, `Name (A to Z)`.
+#[uniffi::export]
+pub fn sidebar_sort_order_label(order: SidebarSortOrder) -> String {
+    core::sidebar_sort_order_label(order.into()).to_owned()
+}
+
+/// DS-17: the Sort and group button's name, `Sort and group, Name (A to Z)`, with
+/// `, grouped by date` when the dates group.
+#[uniffi::export]
+pub fn sidebar_sort_button_name(order: SidebarSortOrder, grouped_by_date: bool) -> String {
+    core::sidebar_sort_button_name(order.into(), grouped_by_date)
+}
+
 /// YAML source-key type (separate from the property's value kind).
 #[derive(Debug, Clone, Copy, uniffi::Enum)]
 pub enum PropertyKeyType {

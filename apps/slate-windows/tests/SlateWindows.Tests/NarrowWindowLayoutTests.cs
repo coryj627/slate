@@ -78,53 +78,26 @@ public sealed class NarrowWindowLayoutTests
         Assert.True(width >= whole - 1, $"{button} is {width:F0}px wide and its label needs {whole:F0}px.");
     });
 
+    /// <summary>#1795 had Group dates and the sort box cut off in a narrow Files sidebar.
+    /// DS-17 moved both into the toolbar's Sort and group menu; at the sidebar's narrowest,
+    /// every toolbar button still shows whole, inside the pane.</summary>
     [Fact]
-    public void GroupDatesKeepsItsLabelInANarrowFilesSidebar() => StaThread.Run(() =>
+    public void TheToolbarKeepsItsButtonsInANarrowFilesSidebar() => StaThread.Run(() =>
     {
         using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
 
         host.Workspace.FilesSidebarWidth = WorkspaceViewModel.MinimumSidebarWidth;
         host.Settle();
 
-        FrameworkElement group = host.Body("SidebarGroupDates");
         FrameworkElement files = host.Body("FilesPane");
-        double right = group.TranslatePoint(new Point(group.ActualWidth, 0), files).X;
-        Assert.True(right <= files.ActualWidth, $"Group dates ends at {right:F0}px in a {files.ActualWidth:F0}px sidebar.");
-    });
-
-    /// <summary>A ComboBox sizes to its selected row, so a fixed width cut the longer
-    /// labels off at 14 point. Choosing one doesn't move what's beside it either.</summary>
-    [Theory]
-    [InlineData("NameAscending")]
-    [InlineData("NameDescending")]
-    [InlineData("ModifiedNewest")]
-    [InlineData("ModifiedOldest")]
-    [InlineData("CreatedNewest")]
-    [InlineData("CreatedOldest")]
-    public void TheSortBoxHoldsEachLabelWithoutMoving(string name) => StaThread.Run(() =>
-    {
-        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
-        var sort = (ComboBox)host.Body("SidebarSortOrder");
-        // The hosted shell has no sidebar model to bind them from.
-        sort.ItemsSource = Enum.GetValues<SidebarSortMode>();
-        sort.SelectedItem = SidebarSortMode.NameAscending;
-        host.Settle();
-        double before = sort.ActualWidth;
-
-        SidebarSortMode mode = Enum.Parse<SidebarSortMode>(name);
-        sort.SelectedItem = mode;
-        host.Settle();
-
-        var label = new TextBlock
+        var toolbar = (PanelToolbarView)host.Shell.FindName("FilesToolbar");
+        foreach (FrameworkElement button in toolbar.Buttons.OfType<FrameworkElement>())
         {
-            Text = (string)new SidebarSortModeLabelConverter().Convert(mode, typeof(string), null!, System.Globalization.CultureInfo.InvariantCulture),
-            FontFamily = sort.FontFamily,
-            FontSize = sort.FontSize,
-        };
-        label.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-        ContentPresenter shown = ShownShell.Descendants(sort).OfType<ContentPresenter>().First(presenter => presenter.ActualWidth > 0);
-        Assert.True(shown.ActualWidth >= label.DesiredSize.Width, $"{label.Text} needs {label.DesiredSize.Width:F0}px and has {shown.ActualWidth:F0}px.");
-        Assert.Equal(before, sort.ActualWidth);
+            Point left = button.TranslatePoint(default, files);
+            Assert.True(
+                left.X >= 0 && left.X + button.ActualWidth <= files.ActualWidth + 0.5,
+                $"{System.Windows.Automation.AutomationProperties.GetAutomationId(button)} runs {left.X:F0} to {left.X + button.ActualWidth:F0} in a {files.ActualWidth:F0}px sidebar.");
+        }
     });
 
     /// <summary>DS-2: at 14 point an embed's title ran under its chevron, cut off

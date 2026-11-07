@@ -83,6 +83,7 @@ pub mod reading;
 pub mod search_db;
 pub mod session;
 pub mod sidebar_filter;
+mod sidebar_sort;
 pub mod structural;
 pub mod structural_batch;
 pub mod structured_diff;
@@ -193,6 +194,9 @@ pub use sidebar_filter::{
     SidebarFilterTerm, SidebarTagFilterActivation, parse_sidebar_filter,
     sidebar_filter_audio_summary, sidebar_filter_date_requirements, sidebar_tag_filter_activation,
     validate_date_windows,
+};
+pub use sidebar_sort::{
+    SIDEBAR_SORT_ORDERS, SidebarSortOrder, sidebar_sort_button_name, sidebar_sort_order_label,
 };
 pub use tag_tree::{TagTree, TagTreeNode, TagTreePage, TagTreePageEntry};
 pub use vault::{
