@@ -223,21 +223,26 @@
                 </Style>
             </Menu.Style>
             <!-- DS-13: the logo, named "Slate menu", with Alt+F as its key
-                 (design/windows/readme.md:127). Its image is presentation: the
-                 item's name is what a reader hears. -->
+                 (design/windows/readme.md:127). The header stays text and the
+                 template draws the image: with an image as the header itself,
+                 NVDA said nothing for any row of the popup (the field pass).
+                 MenuBarCensus pins the shape. -->
             <MenuItem x:Name="AppMenuItem"
+                      Header="Slate"
                       AutomationProperties.AutomationId="AppMenu"
                       AutomationProperties.Name="Slate menu"
                       AutomationProperties.AcceleratorKey="Alt+F">
-                <MenuItem.Header>
-                    <local:AutomationPresentationImage Width="20"
-                                                       Height="20"
-                                                       RenderOptions.BitmapScalingMode="HighQuality">
-                        <local:AutomationPresentationImage.Source>
-                            <BitmapImage UriSource="/Assets/slate-gold.png" DecodePixelWidth="64" />
-                        </local:AutomationPresentationImage.Source>
-                    </local:AutomationPresentationImage>
-                </MenuItem.Header>
+                <MenuItem.HeaderTemplate>
+                    <DataTemplate>
+                        <Image Width="20"
+                               Height="20"
+                               RenderOptions.BitmapScalingMode="HighQuality">
+                            <Image.Source>
+                                <BitmapImage UriSource="/Assets/slate-gold.png" DecodePixelWidth="64" />
+                            </Image.Source>
+                        </Image>
+                    </DataTemplate>
+                </MenuItem.HeaderTemplate>
                 <MenuItem Header="_File"
                           AutomationProperties.AutomationId="FileMenu">
                     <MenuItem Header="_Open Vault…"

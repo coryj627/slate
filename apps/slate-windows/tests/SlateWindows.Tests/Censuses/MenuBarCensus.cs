@@ -73,6 +73,12 @@ public sealed class MenuBarCensus
         Assert.Equal("AppMenu", (string?)logo.Attribute("AutomationProperties.AutomationId"));
         Assert.Equal("Slate menu", (string?)logo.Attribute("AutomationProperties.Name"));
         Assert.Equal("Alt+F", (string?)logo.Attribute("AutomationProperties.AcceleratorKey"));
+
+        // The header is text and a template draws the logo: an image as the header itself left
+        // NVDA silent on every row of the popup in DS-13's field pass.
+        Assert.False(string.IsNullOrEmpty((string?)logo.Attribute("Header")), "the logo item's header isn't text.");
+        Assert.Contains(logo.Elements(), element => element.Name.LocalName == "MenuItem.HeaderTemplate");
+        Assert.DoesNotContain(logo.Elements(), element => element.Name.LocalName == "MenuItem.Header");
         Assert.Equal(
             ["FileMenu", "WorkspaceMenu", "BaseMenu", "EditorMenu", "CanvasMenu", "GraphMenu"],
             TopLevelItems().Select(item => (string?)item.Attribute("AutomationProperties.AutomationId")));
