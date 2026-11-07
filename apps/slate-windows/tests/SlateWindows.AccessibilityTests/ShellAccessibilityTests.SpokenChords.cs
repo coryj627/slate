@@ -71,10 +71,10 @@ public sealed partial class ShellAccessibilityTests
                 && element.Attribute("InputGestureText") is not null).ToArray();
             Assert.NotEmpty(menuItems);
             int checkedMenus = 0;
-            // DS-13 (#1814): the menus sit under the logo, whose header is an image, not a
-            // Header attribute; the chain starts at the menu under it.
+            // DS-13 (#1814): the menus sit under the logo, which the walk opens first, so
+            // the chain starts at the menu under it.
             foreach (IGrouping<string, XElement> group in menuItems.GroupBy(element => string.Join(" > ",
-                element.Ancestors().Where(ancestor => ancestor.Name.LocalName == "MenuItem" && ancestor.Attribute("Header") is not null).Reverse()
+                element.Ancestors().Where(ancestor => ancestor.Name.LocalName == "MenuItem" && (string?)ancestor.Attribute("AutomationProperties.AutomationId") != "AppMenu").Reverse()
                     .Select(ancestor => ancestor.Attribute("Header")!.Value.Replace("_", "")))))
             {
                 AutomationElement logo = WaitForElement(window, "AppMenu", TimeSpan.FromSeconds(10));
