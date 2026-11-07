@@ -185,6 +185,10 @@ public sealed class NarrowWindowLayoutTests
         string keys = string.Concat(Enumerable.Range(1, 12).Select(index => $"key{index}: value\n"));
         using var host = new ShownShell(("Lecture.md", $"---\n{keys}---\n# Lecture\n"));
         host.Workspace.OpenPath("Lecture.md");
+        // The right pane put aside, so the editor's width, and with it how the rows wrap,
+        // doesn't hang on the host's screen: a hosted runner's is about 1044 wide, where
+        // DS-16's slimmer rail no longer sends the pane aside by itself.
+        host.Workspace.IsRightPaneVisible = false;
         host.Settle();
 
         host.Shell.Height = 620;
