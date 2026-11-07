@@ -83,10 +83,10 @@ public partial class MainWindow
         }
 
         _ = menu.Items.Add(new Separator());
-        _ = menu.Items.Add(Toggle(sidebar, nameof(FilesSidebarViewModel.GroupByDate), "Group by date", "SidebarGroupDates"));
+        _ = menu.Items.Add(Toggle(menu, sidebar, nameof(FilesSidebarViewModel.GroupByDate), "Group by date", "SidebarGroupDates", value => sidebar.GroupByDate = value));
         _ = menu.Items.Add(new Separator());
-        _ = menu.Items.Add(Toggle(sidebar, nameof(FilesSidebarViewModel.ShowTags), "Show tag tree", "SidebarShowTags"));
-        _ = menu.Items.Add(Toggle(sidebar, nameof(FilesSidebarViewModel.IsDualPaneEnabled), "Enable dual-pane files sidebar", "SidebarDualPaneToggle"));
+        _ = menu.Items.Add(Toggle(menu, sidebar, nameof(FilesSidebarViewModel.ShowTags), "Show tag tree", "SidebarShowTags", value => sidebar.ShowTags = value));
+        _ = menu.Items.Add(Toggle(menu, sidebar, nameof(FilesSidebarViewModel.IsDualPaneEnabled), "Enable dual-pane files sidebar", "SidebarDualPaneToggle", value => sidebar.IsDualPaneEnabled = value));
 
         menu.Opened += (_, _) =>
         {
@@ -110,12 +110,24 @@ public partial class MainWindow
     }
 
     /// <summary>A setting the stack held as a check box or a toggle button, as a checkable
-    /// row bound both ways, by the same name and id.</summary>
-    private static CheckMenuItem Toggle(FilesSidebarViewModel sidebar, string property, string name, string automationId)
+    /// row by the same name and id. The model drives the check one way; the row writes
+    /// back only while its menu is open and its sidebar is the live one, so a toggle that
+    /// arrives after the menu closed or the vault changed writes nothing (Codex round 1).</summary>
+    private CheckMenuItem Toggle(ContextMenu menu, FilesSidebarViewModel sidebar, string property, string name, string automationId, Action<bool> write)
     {
         var row = new CheckMenuItem { Header = name, IsCheckable = true };
-        _ = row.SetBinding(MenuItem.IsCheckedProperty, new Binding(property) { Source = sidebar, Mode = BindingMode.TwoWay });
+        _ = row.SetBinding(MenuItem.IsCheckedProperty, new Binding(property) { Source = sidebar, Mode = BindingMode.OneWay });
         AutomationProperties.SetAutomationId(row, automationId);
+        void Commit(bool value)
+        {
+            if (menu.IsOpen && ReferenceEquals(SidebarSortButton.DataContext, sidebar))
+            {
+                write(value);
+            }
+        }
+
+        row.Checked += (_, _) => Commit(true);
+        row.Unchecked += (_, _) => Commit(false);
         return row;
     }
 

@@ -68,13 +68,14 @@ public sealed class FilesToolbarTests
 
         string expected = SlateUniffiMethods.SidebarSortButtonName(SidebarSortOrder.NameDescending, false);
         Assert.Equal(expected, AutomationProperties.GetName(button));
-        string[] returned = keys ? [expected] : [];
-        Assert.Equal(returned, names);
         Assert.Same(button, Keyboard.FocusedElement);
 
         sidebar.GroupByDate = true;
         host.Settle();
         Assert.Equal(SlateUniffiMethods.SidebarSortButtonName(FilesSidebarViewModel.ToCore(sidebar.SortMode), true), AutomationProperties.GetName(button));
+
+        SkipWithoutTheKeys(keys);
+        Assert.Equal([expected], names);
     });
 
     [Fact]
@@ -112,6 +113,34 @@ public sealed class FilesToolbarTests
         Toggle(Row("SidebarShowTags"));
         host.Settle();
         Assert.False(sidebar.ShowTags);
+    });
+
+    /// <summary>Codex round 1: a toggle that arrives after the menu closed, or after the
+    /// sidebar was replaced (a vault opened or closed), writes nothing to the old one.</summary>
+    [Fact]
+    public void AToggleAfterTheMenuOrItsSidebarIsGoneWritesNothing() => RunSta(() =>
+    {
+        using var host = new ShownShell(("note.md", "# Note\n"));
+        using Attached attached = Attach(host);
+        FilesSidebarViewModel sidebar = attached.Sidebar;
+        sidebar.GroupByDate = false;
+        sidebar.ShowTags = false;
+        host.Settle();
+
+        ContextMenu menu = OpenSort(host);
+        MenuItem group = menu.Items.OfType<MenuItem>().Single(row => AutomationProperties.GetAutomationId(row) == "SidebarGroupDates");
+        menu.IsOpen = false;
+        host.Settle();
+        Toggle(group);
+        Assert.False(sidebar.GroupByDate, "a toggle on a closed menu wrote to the sidebar");
+
+        menu = OpenSort(host);
+        MenuItem tags = menu.Items.OfType<MenuItem>().Single(row => AutomationProperties.GetAutomationId(row) == "SidebarShowTags");
+        SetProperty(host, nameof(VaultLifecycleViewModel.FileSidebar), null);
+        host.Settle();
+        Toggle(tags);
+        Assert.False(sidebar.ShowTags, "a toggle for a replaced sidebar wrote to it");
+        menu.IsOpen = false;
     });
 
     [Fact]
@@ -207,16 +236,10 @@ public sealed class FilesToolbarTests
         Assert.True(toolbar.Buttons[0].Focus(), "premise: New note refused the keys");
         ContextMenu menu = OpenSort(host);
 
-        if (MenuHasTheKeys(menu))
-        {
-            Press(host, Key.Escape);
-        }
-        else
-        {
-            menu.IsOpen = false;
-        }
-
+        SkipWithoutTheKeys(MenuHasTheKeys(menu));
+        Press(host, Key.Escape);
         host.Settle();
+
         Assert.False(menu.IsOpen);
         Assert.Equal(before, sidebar.SortMode);
         Assert.Same(host.Shell.SidebarSortButton, Keyboard.FocusedElement);
@@ -279,6 +302,16 @@ public sealed class FilesToolbarTests
         _output.WriteLine("DESKTOP REFUSED THE MENU THE KEYS: the keys stayed on Sort and group (#1680).");
         Assert.Same(menu.PlacementTarget, Keyboard.FocusedElement);
         return false;
+    }
+
+    /// <summary>Where the desktop refused the menu the keys, what the keys do in it
+    /// wasn't measured: the fact says so rather than passing (Codex round 1).</summary>
+    private static void SkipWithoutTheKeys(bool keys)
+    {
+        if (!keys)
+        {
+            Assert.Skip("this desktop refused the menu the keys (#1680), so the keys in the menu and their return weren't measured on it");
+        }
     }
 
     /// <summary>A checkable row, as a reader's toggle reaches it.</summary>

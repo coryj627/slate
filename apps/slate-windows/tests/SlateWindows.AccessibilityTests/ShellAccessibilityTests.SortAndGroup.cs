@@ -44,18 +44,15 @@ public sealed partial class ShellAccessibilityTests
         return row!;
     }
 
-    /// <summary>DS-17: flips a Sort and group row, as a reader's toggle does; the menu
-    /// closes with it, as it does for a click.</summary>
+    /// <summary>DS-17: flips a Sort and group row, as a reader's toggle does, and the menu
+    /// must close with it, as it does for a click: nothing presses Escape for it.</summary>
     private static void ToggleSortAndGroupRow(Window window, UIA3Automation automation, string rowId)
     {
         AutomationElement row = OpenSortAndGroupRow(window, automation, rowId);
         row.Patterns.Toggle.Pattern.Toggle();
-        Thread.Sleep(300);
-        if (SortAndGroupIsOpen(window, automation))
-        {
-            PressKey(VirtualKeyShort.ESCAPE);
-            Thread.Sleep(300);
-        }
+        Assert.True(
+            SpinWait.SpinUntil(() => !SortAndGroupIsOpen(window, automation), TimeSpan.FromSeconds(5)),
+            $"Toggling {rowId} didn't close Sort and group.");
     }
 
     private static bool SortAndGroupIsOpen(Window window, UIA3Automation automation)

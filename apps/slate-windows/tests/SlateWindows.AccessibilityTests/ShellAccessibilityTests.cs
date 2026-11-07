@@ -240,6 +240,28 @@ public sealed partial class ShellAccessibilityTests
             Assert.Equal(
                 uniffi.slate_uniffi.SlateUniffiMethods.SidebarSortButtonName(uniffi.slate_uniffi.SidebarSortOrder.NameAscending, false),
                 sortAndGroup.Name);
+
+
+            // W7-5 (#1239): a vault that restores no tabs lands its launch
+            // focus on the Files tree, never on the empty TabControl (which
+            // is not focusable until it has items) — on a row of it, never
+            // the bare tree: with no file selected, the first row, unselected
+            // (W7-7 PR 4, R-5 as the owner amended it).
+            AutomationElement tabs = WaitForElement(
+                window,
+                "WorkspaceTabs",
+                TimeSpan.FromSeconds(10));
+            Assert.False(
+                tabs.Properties.IsKeyboardFocusable.Value,
+                "An empty TabControl must not be keyboard focusable.");
+            AssertFilesTreeRegionFocused(
+                window,
+                automation,
+                WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(10)),
+                "Opening a vault with no restored tabs did not focus the Files tree.");
+
+            // DS-17: after launch focus is checked, Sort and group's menu: its current
+            // order checked, every setting a checkable row, and Escape back to the button.
             AutomationElement nameOrder = OpenSortAndGroupRow(window, automation, "SidebarSort.NameAscending");
             Assert.Equal(ControlType.MenuItem, nameOrder.ControlType);
             Assert.Equal("Name (A to Z)", nameOrder.Name);
@@ -262,24 +284,7 @@ public sealed partial class ShellAccessibilityTests
             Assert.True(
                 SpinWait.SpinUntil(() => !SortAndGroupIsOpen(window, automation), TimeSpan.FromSeconds(5)),
                 "Escape didn't close Sort and group.");
-
-            // W7-5 (#1239): a vault that restores no tabs lands its launch
-            // focus on the Files tree, never on the empty TabControl (which
-            // is not focusable until it has items) — on a row of it, never
-            // the bare tree: with no file selected, the first row, unselected
-            // (W7-7 PR 4, R-5 as the owner amended it).
-            AutomationElement tabs = WaitForElement(
-                window,
-                "WorkspaceTabs",
-                TimeSpan.FromSeconds(10));
-            Assert.False(
-                tabs.Properties.IsKeyboardFocusable.Value,
-                "An empty TabControl must not be keyboard focusable.");
-            AssertFilesTreeRegionFocused(
-                window,
-                automation,
-                WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(10)),
-                "Opening a vault with no restored tabs did not focus the Files tree.");
+            AssertEventuallyFocused(sortAndGroup, "Escape from Sort and group did not return to its button.");
 
             AssertActionButtonCensus(
                 WaitForElement(window, "SidebarBatchActions", TimeSpan.FromSeconds(10)),
