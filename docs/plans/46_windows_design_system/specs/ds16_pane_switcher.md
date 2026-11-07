@@ -1,6 +1,6 @@
 # DS-16 — The right-pane rail is an icon strip with a More menu
 
-Issues: filed by DS-0. Size L. Lanes: windows. AT: NVDA and Narrator pass. Wave 5. Depends on: DS-4 (the menu), DS-9. Decision: DSD8. Owner step: the icons' review. Interlock: `MainWindow.ShellRegions.cs:977-1005` holds the rail's settled selection (#1698).
+Issues: filed by DS-0. Size L. Lanes: windows. AT: NVDA and Narrator pass. Wave 5. Depends on: DS-4 (the menu), DS-9. Decision: DSD8, DSD19. Owner step: the icons' review, done 2026-11-07 (DSD19). Interlock: `MainWindow.ShellRegions.cs:977-1005` holds the rail's settled selection (#1698).
 
 ## Goal
 
@@ -17,7 +17,7 @@ The rail is a strip of icons with a gold pill and tooltips, which gives the pane
 
 ## Reference
 
-`design/windows/components/patterns/PaneSwitcher.prompt.md`: `PaneSwitcher.prompt.md:13-15` for the strip, the More slot and the keys. `components/patterns/PaneSwitcher.jsx:6-9`: six slots by default, the last becoming More. `design/windows/wpf-feasibility.md:144`. `ui_kits/slate-windows/Kit.jsx:54-56`, the icons: Outline `E8FD`, Backlinks `E71B`, Outgoing links `E8A7`, Connections `F003`, Graph inspector `E9E9`, Embeds `E8A1`, Math `E8EF`, Code `E943`, Diagrams `E9D2`, Tasks `E9D5`, Tasks Review `E73A`, History `E81C`, Citations `E82D`, Bibliography `E8F1`, Queries `E71C`, Base dock `E8A9`, Sync `E895`. `assessment.md:113`: these are "my picks and need your review".
+`design/windows/components/patterns/PaneSwitcher.prompt.md`: `PaneSwitcher.prompt.md:13-15` for the strip, the More slot and the keys. `components/patterns/PaneSwitcher.jsx:6-9`: six slots by default, the last becoming More. `design/windows/wpf-feasibility.md:144`. `ui_kits/slate-windows/Kit.jsx:54-56`, the icons: Outline `E8FD`, Backlinks `E71B`, Outgoing links `E8A7`, Connections `F003`, Graph inspector `E9E9`, Embeds `E8A1`, Math `E8EF`, Code `E943`, Diagrams `E9D2`, Tasks `E9D5`, Tasks Review `E73A`, History `E81C`, Citations `E82D`, Bibliography `E8F1`, Queries `E71C`, Base dock `E8A9`, Sync `E895`. `assessment.md:113`: these are "my picks and need your review". The owner's review (DSD19) changed four: Backlinks is a drawn chain with an arrow coming in, Outgoing links is `E71B` turned 45° to rise to the right, Graph inspector is `F22C`, and Diagrams is a drawn flowchart.
 
 ## Design
 
@@ -26,7 +26,7 @@ The rail is a strip of icons with a gold pill and tooltips, which gives the pane
 3. **More panels.** A `Button` in the sixth slot, below the list, in DS-9's subtle icon style at 32 (DSD6): `E712` in an `AutomationPresentationTextBlock`, `AutomationId="RightPaneMorePanels"`, named "More panels", opening a `ContextMenu` in DS-4's template with the other 12, each with its icon and title. The open one shows a check in place of its icon. While one of them is open, the button takes the selected look and the pill, and its `AutomationProperties.ItemStatus` is that panel's title, so a reader can tell from the button what's open. The pass decides whether that's heard. If it isn't, the name gains the panel through core, since anything composed is core's.
 4. **Keys.** Tab enters the strip, arrows and Home/End move within it, and More panels is the next Tab stop, as `PaneSwitcher.prompt.md:15` says. A pick from the menu is the same leaf switch as an arrow on the strip, without the hold-to-settle, and focus returns to the button, as any menu does.
 5. **The rail's landing.** A new `LandOnRail()` replaces the four landing sites and the guard's body: the open panel's row, or More panels when the open panel is in its menu, or the first row. `MainWindow.ShellRegions.cs:102` counts the button as the rail. `RegionBoundaryCensus` and `FocusIntegrityManifestCensus` gain it.
-6. **The icon.** `WorkspaceLeafOption` gains `Glyph`. `DisplayMemberPath` goes. An `ItemTemplate` draws the glyph at 20 in `SymbolThemeFontFamily`, in an `AutomationPresentationTextBlock` (a plain `TextBlock` here would be a Text peer named by a private-use character, which axe fails, whatever the row's own name says), in a 40 × 40 row. Selected uses the pill from `Slate.PanelRowTemplate` on the leading edge. The item's name stays `Title` (`MainWindow.xaml:2576`), which is what stops Narrator reading the glyph.
+6. **The icon.** `WorkspaceLeafOption` gains `Glyph`, a turn for it, and a drawn path for the two icons the font lacks (DSD19). `DisplayMemberPath` goes. A `LeafIcon` element draws either one, used by the strip at 20 and by the menu at 16: the glyph in `SymbolThemeFontFamily`, in an `AutomationPresentationTextBlock` (a plain `TextBlock` here would be a Text peer named by a private-use character, which axe fails, whatever the row's own name says), or the path filled with the row's foreground, which has no peer at all, in a 40 × 40 row. The paths are filled outlines on a 20 grid at the font's stroke of 1.1, cut where the links cross, so no gap colour is painted over a hover or selection fill. Selected uses the pill from `Slate.PanelRowTemplate` on the leading edge. The item's name stays `Title` (`MainWindow.xaml:2576`), which is what stops Narrator reading the glyph.
 7. **Tooltips.** Title and chord (Tasks Review: Ctrl+R) on each row and on More panels, with `ToolTipService.ShowsToolTipOnKeyboardFocus="False"`, as the prompt allows, so arrowing isn't noisy.
 8. **Height.** Vertical strip. Six slots at 40 is 240, so only a very short window scrolls it, through `VerticalScrollBarVisibility="Auto"`, with More panels inside the scroll area.
 9. **Widths.** `_rightPaneWidth` becomes 300 and `_filesSidebarWidth` 260. `MainWindow.xaml:937`, `MainWindow.xaml:941` fallbacks follow. Check the leaves at 300 minus the strip: the WrapPanels from #1776 are why this can move.
@@ -63,7 +63,7 @@ AT: NVDA and Narrator pass: F6 to the rail and arrow through it ("Backlinks, 2 o
 
 ## Acceptance
 
-- [ ] The owner has reviewed the icons.
+- [x] The owner has reviewed the icons (DSD19, 2026-11-07).
 - [ ] All 17 panels are reachable by keyboard, and a reader can tell which is open.
 - [ ] The pass is recorded, with the owner's read.
 - [ ] The leaves fit at 300 in the discovery pass.
