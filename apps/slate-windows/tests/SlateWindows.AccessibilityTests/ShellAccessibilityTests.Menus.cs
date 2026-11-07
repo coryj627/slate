@@ -50,7 +50,7 @@ public sealed partial class ShellAccessibilityTests
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(500));
             window.SetForeground();
 
-            AutomationElement opener = WaitForElement(window, "WorkspaceMenu", TimeSpan.FromSeconds(10));
+            AutomationElement opener = WaitForAppMenu(window, "WorkspaceMenu", TimeSpan.FromSeconds(10));
             opener.Patterns.ExpandCollapse.Pattern.Expand();
             System.Drawing.Rectangle openerBounds = opener.BoundingRectangle;
 

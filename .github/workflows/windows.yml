@@ -130,6 +130,8 @@ on:
       # DS-1: the app links its fonts and their licences from the design's
       # folder, so a change there changes what ships.
       - 'design/windows/fonts/**'
+      # DS-13: the app links the logo the menus open from.
+      - 'design/windows/assets/logo/**'
       # DS-2: EveryRampStepIsItsToken reads the type tokens.
       - 'design/windows/tokens/**'
       - '.github/workflows/windows.yml'

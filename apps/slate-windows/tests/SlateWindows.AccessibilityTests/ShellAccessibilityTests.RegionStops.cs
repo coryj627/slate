@@ -85,15 +85,10 @@ public sealed partial class ShellAccessibilityTests
             statusBar.Focus();
             AssertEventuallyFocused(statusBar, "The status bar did not take focus.");
             PressKey(VirtualKeyShort.F6);
-            AutomationElement fileMenu = WaitForElement(window, "FileMenu", TimeSpan.FromSeconds(10));
-            AssertEventuallyFocused(fileMenu, "F6 from the status bar did not land on the menu bar.");
-            AutomationElement lastMenu = fileMenu.Parent
-                .FindAllChildren(automation.ConditionFactory.ByControlType(ControlType.MenuItem))
-                .Last();
-            PressKey(VirtualKeyShort.LEFT);
-            AssertEventuallyFocused(lastMenu, "Left on File did not wrap to the last menu.");
-            PressKey(VirtualKeyShort.RIGHT);
-            AssertEventuallyFocused(fileMenu, "Right on the last menu did not wrap to File.");
+            // DS-13 (#1814): the bar holds the logo alone, so there is no row of headers
+            // for Left and Right to wrap through; the menus are the logo's rows.
+            AutomationElement logo = WaitForElement(window, "AppMenu", TimeSpan.FromSeconds(10));
+            AssertEventuallyFocused(logo, "F6 from the status bar did not land on the menu bar.");
             PressKey(VirtualKeyShort.ESCAPE);
             AssertEventuallyFocused(statusBar, "Escape from the menu bar did not return to the status bar.");
 

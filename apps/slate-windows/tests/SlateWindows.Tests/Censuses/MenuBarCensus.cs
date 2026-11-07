@@ -28,7 +28,13 @@
 //    own Left/Right between headers is directional navigation inside the
 //    header's nearest group, which that same Cycle used to be: with the
 //    Menu None the ends stopped wrapping (measured: Left on File and Right
-//    on Graph went nowhere), so the items panel carries the Cycle now.
+//    on Graph went nowhere), so the items panel carried the Cycle.
+//
+// 4. DS-13 (#1814, plan 46 DSD7): the bar holds one item, the logo, and the
+//    six menus sit under it. Their mnemonics and ids are pinned a level down;
+//    the bar's own wrap went with the row of headers, since one header has
+//    nothing to wrap to (inside the popup the menus are rows, and Up and Down
+//    move between them).
 
 using System.Xml.Linq;
 
@@ -46,10 +52,31 @@ public sealed class MenuBarCensus
                 && (string?)element.Attribute(XName.Get("Name", "http://schemas.microsoft.com/winfx/2006/xaml")) == "MainMenu");
     }
 
+    private static XElement AppMenuItem() =>
+        Assert.Single(MainMenu().Elements(), element => element.Name.LocalName == "MenuItem");
+
+    /// <summary>The six menus, File to Graph: the logo item's rows (DS-13).</summary>
     private static IReadOnlyList<XElement> TopLevelItems() =>
-        MainMenu().Elements()
+        AppMenuItem().Elements()
             .Where(element => element.Name.LocalName == "MenuItem")
             .ToList();
+
+    /// <summary>DS-13 (#1814): the bar holds one item, the logo, named "Slate menu" with
+    /// Alt+F as its key, and File, Workspace, Base, Editor, Canvas and Graph sit under it in
+    /// that order.</summary>
+    [Fact]
+    public void TheBarHoldsOneItemAndTheMenusSitUnderIt()
+    {
+        XElement logo = AppMenuItem();
+        XName name = XName.Get("Name", "http://schemas.microsoft.com/winfx/2006/xaml");
+        Assert.Equal("AppMenuItem", (string?)logo.Attribute(name));
+        Assert.Equal("AppMenu", (string?)logo.Attribute("AutomationProperties.AutomationId"));
+        Assert.Equal("Slate menu", (string?)logo.Attribute("AutomationProperties.Name"));
+        Assert.Equal("Alt+F", (string?)logo.Attribute("AutomationProperties.AcceleratorKey"));
+        Assert.Equal(
+            ["FileMenu", "WorkspaceMenu", "BaseMenu", "EditorMenu", "CanvasMenu", "GraphMenu"],
+            TopLevelItems().Select(item => (string?)item.Attribute("AutomationProperties.AutomationId")));
+    }
 
     [Fact]
     public void EveryTopLevelMenuHasAUniqueMnemonicAndAnAutomationId()
@@ -101,17 +128,6 @@ public sealed class MenuBarCensus
         Assert.Equal("False", (string?)menu.Attribute("Focusable"));
         Assert.Equal("None", (string?)menu.Attribute("KeyboardNavigation.TabNavigation"));
         Assert.Equal("None", (string?)menu.Attribute("KeyboardNavigation.DirectionalNavigation"));
-    }
-
-    /// <summary>W7-7 PR 4 (#1247): the headers' own panel cycles, so Left
-    /// on File still reaches the last menu and Right on the last reaches
-    /// File with the Menu itself closed to arrows.</summary>
-    [Fact]
-    public void TheMenuBarsOwnArrowsStillWrap()
-    {
-        XElement panels = Assert.Single(MainMenu().Elements(), element => element.Name.LocalName == "Menu.ItemsPanel");
-        XElement panel = Assert.Single(panels.Descendants(), element => element.Name.LocalName == "WrapPanel");
-        Assert.Equal("Cycle", (string?)panel.Attribute("KeyboardNavigation.DirectionalNavigation"));
     }
 
     /// <summary>W7-7 PR 4 (#1247, R-5): the editor region keeps its arrows

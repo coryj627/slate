@@ -315,7 +315,7 @@ public sealed partial class CommandPaletteTests
                         file.IsSubmenuOpen = false;
                     }
 
-                    return (handled, opened > 0 ? "the File menu opened" : null);
+                    return (handled, opened > 0 ? "the app menu opened" : null);
                 }
 
             case ClosedSealRoute.FileMenuPointer:
@@ -336,7 +336,7 @@ public sealed partial class CommandPaletteTests
                         bool opened = file.IsSubmenuOpen;
                         file.IsSubmenuOpen = false;
                         return (handled, reached > 0 || opened
-                            ? $"the File menu took {reached} pointer event(s), and opened={opened}"
+                            ? $"the app menu took {reached} pointer event(s), and opened={opened}"
                             : null);
                     }
                     finally
@@ -794,12 +794,14 @@ public sealed partial class CommandPaletteTests
         }
     }
 
+    /// <summary>The bar's one item, the logo, which File and the other menus sit under
+    /// (DS-13): what Alt+F and a pointer on the bar reach.</summary>
     private static MenuItem FileMenu(ShippedShellHost host)
     {
-        MenuItem file = Assert.IsType<MenuItem>(host.Shell.MainMenu.Items[0]);
-        Assert.Equal("_File", file.Header);
-        Assert.True(file.IsVisible, "the File menu is not visible, so no input could reach it");
-        return file;
+        MenuItem logo = Assert.IsType<MenuItem>(Assert.Single(host.Shell.MainMenu.Items));
+        Assert.Equal("AppMenu", System.Windows.Automation.AutomationProperties.GetAutomationId(logo));
+        Assert.True(logo.IsVisible, "the app menu is not visible, so no input could reach it");
+        return logo;
     }
 
     /// <summary>

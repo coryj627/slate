@@ -1027,7 +1027,7 @@ public sealed partial class ShellAccessibilityTests
     /// <summary>File ▸ Files Sidebar ▸ Refresh — the menu route.</summary>
     private static void InvokeFilesSidebarRefreshFromTheMenu(Window window)
     {
-        AutomationElement fileMenu = WaitForElement(window, "FileMenu", TimeSpan.FromSeconds(10));
+        AutomationElement fileMenu = WaitForAppMenu(window, "FileMenu", TimeSpan.FromSeconds(10));
         fileMenu.Patterns.ExpandCollapse.Pattern.Expand();
         AutomationElement sidebarMenu = WaitForElement(window, "FilesSidebarMenu", TimeSpan.FromSeconds(10));
         sidebarMenu.Patterns.ExpandCollapse.Pattern.Expand();

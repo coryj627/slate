@@ -49,8 +49,8 @@ public sealed class TitleBarTests
         Assert.Equal("Roadmap — demo-vault — Slate", host.Shell.Title);
     });
 
-    /// <summary>At the narrowest window and the largest text, the menus wrap in what the quick
-    /// commands and captions leave, and Close stays on the window.</summary>
+    /// <summary>At the narrowest window and the largest text, the logo the menus open from
+    /// (DS-13) and Close both stay on the window.</summary>
     [Fact]
     public void AtTheNarrowestWindowAndLargestTextTheCaptionsStayOn() => RunSta(() =>
     {
@@ -73,7 +73,10 @@ public sealed class TitleBarTests
         Button close = Named(host, "CaptionClose");
         double right = close.TranslatePoint(new Point(close.ActualWidth, 0), host.Shell.TitleBar).X;
         Assert.True(right <= host.Shell.TitleBar.ActualWidth + 0.5, $"Close ends at {right} in a {host.Shell.TitleBar.ActualWidth} row.");
-        Assert.True(host.Shell.TitleBar.ActualHeight > 48, $"the menus didn't wrap: the row is {host.Shell.TitleBar.ActualHeight}.");
+        // DS-13: the row holds one logo where six headers were, so nothing wraps; the logo
+        // stays whole beside the captions.
+        Rect logo = host.Shell.AppMenuItem.TransformToAncestor(host.Shell.TitleBar).TransformBounds(new Rect(host.Shell.AppMenuItem.RenderSize));
+        Assert.True(logo.Width > 0 && logo.Right <= close.TranslatePoint(new Point(0, 0), host.Shell.TitleBar).X, $"the logo is at {logo}.");
         Assert.Equal(host.Shell.TitleBar.ActualHeight, WindowChrome.GetWindowChrome(host.Shell).CaptionHeight);
     });
 

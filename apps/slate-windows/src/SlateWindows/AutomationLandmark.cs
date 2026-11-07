@@ -171,6 +171,28 @@ internal sealed class AutomationPresentationTextBlock : TextBlock
         new AutomationPresentationTextBlockPeer(this);
 }
 
+/// <summary>
+/// An image whose meaning its parent control already names (DS-13's logo, inside the
+/// "Slate menu" item), kept out of the UI Automation tree as presentation.
+/// </summary>
+internal sealed class AutomationPresentationImage : System.Windows.Controls.Image
+{
+    protected override AutomationPeer OnCreateAutomationPeer() =>
+        new AutomationPresentationImagePeer(this);
+}
+
+internal sealed class AutomationPresentationImagePeer : ImageAutomationPeer
+{
+    internal AutomationPresentationImagePeer(AutomationPresentationImage owner)
+        : base(owner)
+    {
+    }
+
+    protected override bool IsControlElementCore() => false;
+
+    protected override bool IsContentElementCore() => false;
+}
+
 internal sealed class AutomationPresentationTextBlockPeer : TextBlockAutomationPeer
 {
     internal AutomationPresentationTextBlockPeer(AutomationPresentationTextBlock owner)
