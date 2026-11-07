@@ -39,7 +39,7 @@ public sealed class NoteHeaderTests
     [Fact]
     public void TheHeaderHasNoHistoryButtons() => StaThread.RunPumped(() =>
     {
-        using var host = new ShownShell((Nested, "# Lecture\n"));
+        using var host = Roomy((Nested, "# Lecture\n"));
         host.Workspace.OpenPath(Nested);
         host.Settle();
 
@@ -55,7 +55,7 @@ public sealed class NoteHeaderTests
     [Fact]
     public void AFolderSegmentRevealsItsFolder() => StaThread.RunPumped(() =>
     {
-        using var host = new ShownShell((Nested, "# Lecture\n"));
+        using var host = Roomy((Nested, "# Lecture\n"));
         var revealed = new List<string>();
         host.Workspace.GraphRevealInSidebar = revealed.Add;
         host.Workspace.OpenPath(Nested);
@@ -77,7 +77,7 @@ public sealed class NoteHeaderTests
     [Fact]
     public void RepeatedFolderNamesAreToldApart() => StaThread.RunPumped(() =>
     {
-        using var host = new ShownShell(("notes/notes/topics/Note.md", "# Note\n"));
+        using var host = Roomy(("notes/notes/topics/Note.md", "# Note\n"));
         var revealed = new List<string>();
         host.Workspace.GraphRevealInSidebar = revealed.Add;
         host.Workspace.OpenPath("notes/notes/topics/Note.md");
@@ -143,23 +143,25 @@ public sealed class NoteHeaderTests
     [Fact]
     public void FoldersThatDontFitCollapseRatherThanHideStops() => StaThread.RunPumped(() =>
     {
-        // Too long beside both panes at the default size, short enough for the shell's whole
-        // width without them: a window can't be widened past its screen, which a CI VM's is.
-        string longFolder = string.Concat(Enumerable.Repeat("long-folder-name-", 4));
+        // Too long for a 560 bar, short enough for the shell's whole width: a window can't be
+        // wider than its screen, and a CI VM's is small, so the bar is sized, not the window.
+        string longFolder = string.Concat(Enumerable.Repeat("long-folder-name-", 3));
         string path = $"{longFolder}/middle/last/Note.md";
-        using var host = new ShownShell((path, "# Note\n"));
+        using var host = Roomy((path, "# Note\n"));
         host.Workspace.OpenPath(path);
         host.Settle();
-        host.Settle();
         NoteHeaderView header = HeaderOf(host, path);
+        header.Width = 560;
+        host.Settle();
+        host.Settle();
         Assert.False(header.IsCompact);
 
         Assert.Empty(VisibleSegments(header));
         Assert.Single(ShownShell.Descendants(header).OfType<Button>(), button => button.IsVisible && AutomationProperties.GetAutomationId(button) == "NoteHeaderFolders");
         AssertEveryStopIsOnScreen(header);
 
+        header.Width = double.NaN;
         host.Workspace.IsFilesSidebarVisible = false;
-        host.Workspace.IsRightPaneVisible = false;
         host.Settle();
         host.Settle();
         Assert.Equal(3, VisibleSegments(header).Length);
@@ -172,7 +174,7 @@ public sealed class NoteHeaderTests
     public void AShorterPathGetsItsSegmentsBack() => StaThread.RunPumped(() =>
     {
         string path = $"{string.Concat(Enumerable.Repeat("long-folder-name-", 12))}/last/Note.md";
-        using var host = new ShownShell((path, "# Note\n"));
+        using var host = Roomy((path, "# Note\n"));
         host.Workspace.OpenPath(path);
         host.Settle();
         host.Settle();
@@ -291,6 +293,35 @@ public sealed class NoteHeaderTests
         AssertEveryStopIsOnScreen(header);
     }
 
+    /// <summary>A shell whose bar isn't compact on any screen. A window can't be wider than its
+    /// screen, and on a CI VM's, Files and the right pane leave the editor under 520 (the bar's
+    /// compact width), so the right pane is put aside.</summary>
+    private static ShownShell Roomy(params (string Path, string Text)[] notes)
+    {
+        var host = new ShownShell(notes);
+        host.Workspace.IsRightPaneVisible = false;
+        return host;
+    }
+
+    /// <summary>Whether a menu ⋯ opened without the mouse landed on its first row. A desktop
+    /// whose session has no foreground window (the Namespace runners, #1680) doesn't let a
+    /// menu's popup keep the keys, and WPF hands them back to ⋯: there the fact asserts that
+    /// refusal and has nothing further to claim, as CanvasNavigatorTests' TryPutTheKeysInTheMenu
+    /// does. A desktop that lets a row take the keys must have landed them there.</summary>
+    private static bool LandedOnTheFirstRow(Button more)
+    {
+        MenuItem first = MenuRow(more, "NoteHeaderSplitRight");
+        if (ReferenceEquals(first, Keyboard.FocusedElement))
+        {
+            return true;
+        }
+
+        Assert.False(first.Focus(), "the menu didn't land on its first row, though this desktop lets a row take the keys");
+        Assert.Same(more, Keyboard.FocusedElement);
+        more.ContextMenu!.IsOpen = false;
+        return false;
+    }
+
     private static Button[] VisibleSegments(NoteHeaderView header) =>
         [.. ShownShell.Descendants(header).OfType<Button>().Where(button => button.IsVisible && AutomationProperties.GetAutomationId(button) == "NoteHeaderFolder")];
 
@@ -327,7 +358,7 @@ public sealed class NoteHeaderTests
     [Fact]
     public void ARenameKeepsTheKeysOnTheirFolder() => StaThread.RunPumped(() =>
     {
-        using var host = new ShownShell((Nested, "# Lecture\n"));
+        using var host = Roomy((Nested, "# Lecture\n"));
         host.Workspace.OpenPath(Nested);
         host.Settle();
         NoteHeaderView header = HeaderOf(host, Nested);
@@ -503,7 +534,7 @@ public sealed class NoteHeaderTests
     [Fact]
     public void TheSwitchHasOneStop() => StaThread.RunPumped(() =>
     {
-        using var host = new ShownShell((Nested, "# Lecture\n"));
+        using var host = Roomy((Nested, "# Lecture\n"));
         host.Workspace.OpenPath(Nested);
         host.Settle();
         NoteHeaderView header = HeaderOf(host, Nested);
@@ -622,7 +653,11 @@ public sealed class NoteHeaderTests
         host.Settle();
 
         Assert.True(more.ContextMenu!.IsOpen);
-        Assert.Same(MenuRow(more, "NoteHeaderSplitRight"), Keyboard.FocusedElement);
+        if (!LandedOnTheFirstRow(more))
+        {
+            return;
+        }
+
         more.ContextMenu.IsOpen = false;
         host.Settle();
 
@@ -639,7 +674,7 @@ public sealed class NoteHeaderTests
         Invoke(more);
         host.Settle();
         host.Settle();
-        Assert.Same(MenuRow(more, "NoteHeaderSplitRight"), Keyboard.FocusedElement);
+        Assert.True(LandedOnTheFirstRow(more));
         more.ContextMenu.IsOpen = false;
         host.Settle();
 
@@ -663,13 +698,14 @@ public sealed class NoteHeaderTests
         split.Settle();
         split.Settle();
         Assert.Same(second, split.Workspace.ActiveGroup);
-        Assert.Same(MenuRow(other, "NoteHeaderSplitRight"), Keyboard.FocusedElement);
+        Assert.True(LandedOnTheFirstRow(other));
         other.ContextMenu!.IsOpen = false;
         split.Settle();
     });
 
     /// <summary>Below 520 the switch drops its labels for tooltips, and the folders collapse
-    /// into a "…" button with a Folders menu.</summary>
+    /// into a "…" button with a Folders menu. The bar is sized, not the window, so the fact
+    /// holds on a screen too small for the window's default width.</summary>
     [Fact]
     public void BelowFiveHundredTwentyTheHeaderCompacts() => StaThread.RunPumped(() =>
     {
@@ -677,11 +713,13 @@ public sealed class NoteHeaderTests
         host.Workspace.OpenPath(Nested);
         host.Settle();
         NoteHeaderView header = HeaderOf(host, Nested);
+        header.Width = 600;
+        host.Settle();
         Assert.False(header.IsCompact);
         RadioButton reading = Choice(header, "NoteHeaderReading");
         Assert.Contains("Reading", ShownText(reading));
 
-        host.Shell.Width = 500;
+        header.Width = 500;
         host.Settle();
 
         Assert.True(header.ActualWidth < NoteHeaderView.CompactBelow);
@@ -734,14 +772,16 @@ public sealed class NoteHeaderTests
         host.Workspace.OpenPath(Nested);
         host.Settle();
         NoteHeaderView header = HeaderOf(host, Nested);
+        header.Width = 600;
+        host.Settle();
         Assert.True(Segment(header, "maths").Focus());
 
-        host.Shell.Width = 500;
+        header.Width = 500;
         host.Settle();
         Assert.True(header.IsCompact);
         Assert.Equal("NoteHeaderFolders", AutomationProperties.GetAutomationId((DependencyObject)Keyboard.FocusedElement));
 
-        host.Shell.Width = 1200;
+        header.Width = 600;
         host.Settle();
         Assert.False(header.IsCompact);
         Assert.Equal("NoteHeaderFolder", AutomationProperties.GetAutomationId((DependencyObject)Keyboard.FocusedElement));
