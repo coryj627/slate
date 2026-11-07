@@ -2796,7 +2796,7 @@
                                 <StackPanel Margin="4">
                                     <ListBox x:Name="RightPaneLeavesList"
                                              KeyboardNavigation.DirectionalNavigation="Contained"
-                                             ItemsSource="{Binding Source={x:Static local:WorkspaceViewModel.StripLeaves}}"
+                                             ItemsSource="{Binding StripLeafOptions}"
                                              SelectedItem="{Binding StripLeaf, Mode=TwoWay}"
                                              Background="Transparent"
                                              BorderThickness="0"

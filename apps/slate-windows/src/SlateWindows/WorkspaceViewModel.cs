@@ -2622,6 +2622,10 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     /// <summary>DS-16: the strip's leaves, the first five.</summary>
     public static IReadOnlyList<WorkspaceLeafOption> StripLeaves { get; } = [.. Leaves.Take(StripCount)];
 
+    /// <summary>The strip's rows, through the workspace as <see cref="LeafOptions"/> is,
+    /// so a window with no workspace has none.</summary>
+    public IReadOnlyList<WorkspaceLeafOption> StripLeafOptions => StripLeaves;
+
     /// <summary>DS-16: the More panels menu's leaves, the other twelve.</summary>
     public static IReadOnlyList<WorkspaceLeafOption> MoreLeaves { get; } = [.. Leaves.Skip(StripCount)];
 

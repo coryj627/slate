@@ -343,6 +343,20 @@ public sealed class RightPaneStripTests
         Assert.True(at.Y >= -0.5 && at.Y + more.ActualHeight <= strip.ViewportHeight + 0.5, $"More panels is at {at.Y:F0} in a viewport of {strip.ViewportHeight:F0}.");
     });
 
+    /// <summary>The shell's accent fact (CI): with no workspace, the strip had five rows
+    /// laid out nowhere, which axe failed for their missing set info. They come through
+    /// the workspace, as the text rail's did, so there are none.</summary>
+    [Fact]
+    public void TheStripHasNoRowsWithNoWorkspace() => RunSta(() =>
+    {
+        using var host = new ShownShell(("note.md", "# Note\n"));
+        host.Settle();
+        Assert.Equal(5, host.Shell.RightPaneLeavesList.Items.Count);
+
+        host.ShowWelcomeWithoutAWorkspace();
+        Assert.Empty(host.Shell.RightPaneLeavesList.Items);
+    });
+
     [Fact]
     public void TheDefaultWidthsAreTheDesigns() => RunSta(() =>
     {
