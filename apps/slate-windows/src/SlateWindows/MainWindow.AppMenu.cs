@@ -45,8 +45,8 @@ public partial class MainWindow
     }
 
     /// <summary>Opens the logo's popup and, when named, that menu in it, with the keys on its
-    /// first enabled row; with none named, on the popup's first row. Another open menu closes,
-    /// so a letter while open switches menus.</summary>
+    /// first enabled row; with none named, on the popup's first row. A letter while open switches
+    /// menus: WPF closes a menu's submenu when a sibling row takes the keys.</summary>
     private bool OpenAppMenu(string? automationId)
     {
         MenuItem[] menus = [.. AppMenuItem.Items.OfType<MenuItem>()];
@@ -56,11 +56,6 @@ public partial class MainWindow
         if (automationId is not null && target is null)
         {
             return false;
-        }
-
-        foreach (MenuItem other in menus.Where(menu => !ReferenceEquals(menu, target)))
-        {
-            other.IsSubmenuOpen = false;
         }
 
         AppMenuItem.Focus();
