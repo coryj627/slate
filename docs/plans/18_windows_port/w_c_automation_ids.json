@@ -1316,6 +1316,11 @@
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "AppMenu",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "FileMenu",
     "Surface": "Main window and menu bar"
   },

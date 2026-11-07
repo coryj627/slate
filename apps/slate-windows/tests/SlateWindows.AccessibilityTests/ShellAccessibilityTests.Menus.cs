@@ -14,7 +14,9 @@ public sealed partial class ShellAccessibilityTests
     /// <summary>DS-4: a row's 40 pitch makes Workspace taller than a small display, so its
     /// last rows are reached by scrolling. This is launched because a hosted popup can't
     /// take focus. Arrowing to a row that stays off screen would leave a reader lost, and
-    /// a menu that slides over its own bar item hides that item and its neighbours.</summary>
+    /// a menu that slides over its own item hides that item and its neighbours. Since DS-13
+    /// the item is Workspace's row in the logo's popup, and the menu cascades beside it, so
+    /// rows above and below it are fine; no row may cover it.</summary>
     [Fact]
     public void Menus_ALongMenuScrollsToItsLastRow()
     {
@@ -54,10 +56,8 @@ public sealed partial class ShellAccessibilityTests
             opener.Patterns.ExpandCollapse.Pattern.Expand();
             System.Drawing.Rectangle openerBounds = opener.BoundingRectangle;
 
-            // Down skips a disabled row, so the row over the item may never take focus.
-            // A menu over its item shows up as rows on both sides of it.
-            bool rowsAbove = false;
-            bool rowsBelow = false;
+            // Down skips a disabled row, so the row over the item may never take focus;
+            // each row that does is checked not to cover it.
             AutomationElement? row = null;
             for (int press = 0; press < 40; press++)
             {
@@ -65,18 +65,16 @@ public sealed partial class ShellAccessibilityTests
                 Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(150));
                 row = automation.FocusedElement();
                 System.Drawing.Rectangle shown = row?.BoundingRectangle ?? default;
+                // A cascade overlaps its parent's edge by a few pixels, as any Windows menu
+                // does, so the check is that no row covers the item itself.
                 Assert.False(
-                    shown.IntersectsWith(openerBounds),
+                    shown.IntersectsWith(System.Drawing.Rectangle.Inflate(openerBounds, -8, -8)),
                     $"{row?.Properties.Name.ValueOrDefault} at {shown} covers its menu's item at {openerBounds}.");
-                rowsAbove |= shown.Bottom <= openerBounds.Top;
-                rowsBelow |= shown.Top >= openerBounds.Bottom;
                 if (row?.Properties.Name.ValueOrDefault == lastRow)
                 {
                     break;
                 }
             }
-
-            Assert.False(rowsAbove && rowsBelow, $"The menu has rows on both sides of its item at {openerBounds}, so it covers it.");
 
             Assert.True(
                 row?.Properties.Name.ValueOrDefault == lastRow,

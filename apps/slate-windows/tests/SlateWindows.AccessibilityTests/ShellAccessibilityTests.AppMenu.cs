@@ -37,6 +37,12 @@ public sealed partial class ShellAccessibilityTests
                 AssertEventuallyFocused(editor, "the note didn't take the keys.");
                 PressChord(VirtualKeyShort.ALT, letter);
                 AssertOpenOnItsFirstRow(window, automation, menu);
+                if (menu == "FileMenu")
+                {
+                    // The census sees the open popup's rows, the menus and File's own.
+                    AssertItemNamesAreSpeakable(process, "app-menu-file");
+                }
+
                 CloseTheAppMenu(window, automation, editor);
             }
         });
@@ -56,6 +62,7 @@ public sealed partial class ShellAccessibilityTests
             Assert.True(
                 Retry.WhileTrue(() => StateOf(window, "FileMenu") == ExpandCollapseState.Expanded, TimeSpan.FromSeconds(5)).Success,
                 "File stayed open beside Workspace.");
+            AssertItemNamesAreSpeakable(process, "app-menu-workspace");
             CloseTheAppMenu(window, automation, editor);
         });
 
@@ -106,6 +113,7 @@ public sealed partial class ShellAccessibilityTests
                 Retry.WhileTrue(() => wholeWord.Patterns.Toggle.Pattern.ToggleState.Value == was, TimeSpan.FromSeconds(5)).Success,
                 "Alt+W in the find bar didn't toggle whole word");
             Assert.NotEqual(ExpandCollapseState.Expanded, StateOf(window, "AppMenu"));
+            AssertItemNamesAreSpeakable(process, "app-menu-find-bar");
         });
 
     private static ExpandCollapseState StateOf(Window window, string automationId) =>
