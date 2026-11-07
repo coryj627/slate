@@ -2838,7 +2838,7 @@
                                             Height="40"
                                             HorizontalAlignment="Left"
                                             KeyboardNavigation.DirectionalNavigation="Contained"
-                                            ToolTip="More panels"
+                                            ToolTip="{Binding MorePanelsName, FallbackValue=More panels}"
                                             ToolTipService.ShowsToolTipOnKeyboardFocus="False"
                                             Click="RightPaneMorePanels_Click"
                                             AutomationProperties.AutomationId="RightPaneMorePanels"
