@@ -143,7 +143,9 @@ public sealed class NoteHeaderTests
     [Fact]
     public void FoldersThatDontFitCollapseRatherThanHideStops() => StaThread.RunPumped(() =>
     {
-        string longFolder = string.Concat(Enumerable.Repeat("long-folder-name-", 12));
+        // Too long beside both panes at the default size, short enough for the shell's whole
+        // width without them: a window can't be widened past its screen, which a CI VM's is.
+        string longFolder = string.Concat(Enumerable.Repeat("long-folder-name-", 4));
         string path = $"{longFolder}/middle/last/Note.md";
         using var host = new ShownShell((path, "# Note\n"));
         host.Workspace.OpenPath(path);
@@ -156,7 +158,8 @@ public sealed class NoteHeaderTests
         Assert.Single(ShownShell.Descendants(header).OfType<Button>(), button => button.IsVisible && AutomationProperties.GetAutomationId(button) == "NoteHeaderFolders");
         AssertEveryStopIsOnScreen(header);
 
-        host.Shell.Width = 3200;
+        host.Workspace.IsFilesSidebarVisible = false;
+        host.Workspace.IsRightPaneVisible = false;
         host.Settle();
         host.Settle();
         Assert.Equal(3, VisibleSegments(header).Length);
