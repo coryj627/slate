@@ -202,6 +202,55 @@
         <Setter Property="FocusVisualStyle" Value="{x:Null}" />
         <Setter Property="Template" Value="{StaticResource Slate.TreeRowTemplate}" />
     </Style>
+    <!-- DS-19: a launcher action, EmptyStateLauncher.prompt.md: a 32 row 320 wide, its label
+         on the left and its chord (Tag) on the right in secondary text. Whole, on Slate.ButtonBase. -->
+    <Style x:Key="Slate.LauncherRowStyle" TargetType="Button" BasedOn="{StaticResource Slate.ButtonBase}">
+        <Setter Property="Width" Value="320" />
+        <Setter Property="Height" Value="32" />
+        <Setter Property="Margin" Value="0,2" />
+        <Setter Property="Padding" Value="12,0" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource Slate.TextBrush}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="4"
+                            Padding="{TemplateBinding Padding}"
+                            SnapsToDevicePixels="True">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <local:AutomationPresentationTextBlock Text="{TemplateBinding Content}"
+                                                                   VerticalAlignment="Center"
+                                                                   TextTrimming="CharacterEllipsis" />
+                            <local:AutomationPresentationTextBlock Grid.Column="1"
+                                                                   Margin="16,0,0,0"
+                                                                   Text="{TemplateBinding Tag}"
+                                                                   VerticalAlignment="Center"
+                                                                   Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
+                        </Grid>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter Property="Background" Value="{DynamicResource Slate.HoverOverlayBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter Property="Background" Value="{DynamicResource Slate.PressedOverlayBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Foreground" Value="{DynamicResource Slate.DisabledTextBrush}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
     <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
     <local:InverseBooleanConverter x:Key="InverseBooleanConverter" />
     <local:InverseBooleanToVisibilityConverter x:Key="InverseBooleanToVisibilityConverter" />
@@ -1080,18 +1129,17 @@
                     </Style>
                 </TabControl.ItemContainerStyle>
             </TabControl>
-            <!-- #1774: with no tabs the pane was blank. A screen reader hears the empty
-                 pane's line when it lands here, so this stays out of the tree. -->
-            <local:AutomationPresentationTextBlock Text="Open a note from the Files list, or press Ctrl+O to find one."
-                                                   Margin="24"
-                                                   HorizontalAlignment="Center"
-                                                   VerticalAlignment="Center"
-                                                   TextAlignment="Center"
-                                                   TextWrapping="Wrap"
-                                                   IsHitTestVisible="False"
-                                                   Foreground="{DynamicResource Slate.SecondaryTextBrush}">
-                <local:AutomationPresentationTextBlock.Style>
-                    <Style TargetType="local:AutomationPresentationTextBlock">
+            <!-- DS-19 (EmptyStateLauncher.prompt.md): with no tabs, the logo, "No note open" and
+                 the next actions, each with its chord from the table, as the menus show it. The
+                 logo and the title stay out of the tree: a reader hears the empty pane's own line
+                 when they land on it (#1774). The actions are Tab stops after the pane's stop,
+                 and count as the empty pane for F6 (MainWindow.ShellRegions.cs). -->
+            <StackPanel x:Name="EmptyPaneLauncher"
+                        Margin="24"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center">
+                <StackPanel.Style>
+                    <Style TargetType="StackPanel">
                         <Setter Property="Visibility" Value="Collapsed" />
                         <Style.Triggers>
                             <DataTrigger Binding="{Binding Tabs.Count}" Value="0">
@@ -1099,8 +1147,39 @@
                             </DataTrigger>
                         </Style.Triggers>
                     </Style>
-                </local:AutomationPresentationTextBlock.Style>
-            </local:AutomationPresentationTextBlock>
+                </StackPanel.Style>
+                <!-- An image brush, not an Image: a brush has no peer. -->
+                <Border Width="48" Height="48" Margin="0,0,0,16" HorizontalAlignment="Center">
+                    <Border.Background>
+                        <ImageBrush ImageSource="pack://application:,,,/SlateWindows;component/Assets/slate-gold.png" Stretch="Uniform" />
+                    </Border.Background>
+                </Border>
+                <local:AutomationPresentationTextBlock Text="No note open"
+                                                       Margin="0,0,0,16"
+                                                       HorizontalAlignment="Center"
+                                                       Style="{DynamicResource Slate.SubtitleTextBlockStyle}" />
+                <Button Style="{StaticResource Slate.LauncherRowStyle}"
+                        Content="Quick Open…"
+                        Tag="{cmd:ChordText slate.workspace.quickOpen}"
+                        AutomationProperties.AutomationId="EmptyPaneQuickOpen"
+                        AutomationProperties.Name="Quick Open…"
+                        AutomationProperties.AcceleratorKey="{Binding Tag, RelativeSource={RelativeSource Self}}"
+                        Command="{Binding DataContext.QuickSwitcher.OpenCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
+                <Button Style="{StaticResource Slate.LauncherRowStyle}"
+                        Content="New Note from Template…"
+                        Tag="{cmd:ChordText slate.file.newFromTemplate}"
+                        AutomationProperties.AutomationId="EmptyPaneNewFromTemplate"
+                        AutomationProperties.Name="New Note from Template…"
+                        AutomationProperties.AcceleratorKey="{Binding Tag, RelativeSource={RelativeSource Self}}"
+                        Command="{Binding DataContext.Workspace.NewFromTemplateCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
+                <Button Style="{StaticResource Slate.LauncherRowStyle}"
+                        Content="Search Vault…"
+                        Tag="{cmd:ChordText slate.view.toggleSearch}"
+                        AutomationProperties.AutomationId="EmptyPaneSearchVault"
+                        AutomationProperties.Name="Search Vault…"
+                        AutomationProperties.AcceleratorKey="{Binding Tag, RelativeSource={RelativeSource Self}}"
+                        Command="{Binding DataContext.ToggleSearchCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
+            </StackPanel>
             </Grid>
         </local:AutomationLandmarkBorder>
     </DataTemplate>

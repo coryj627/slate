@@ -85,7 +85,9 @@ public partial class MainWindow : IShellRegionHost
             // (final review, #1240): with tabs open it is just the content
             // pane's own chrome, and calling that EmptyEditor made the ring
             // believe the tabless shape while a note was open.
-            if (ReferenceEquals(focused, ContentPaneBorder)
+            // DS-19: the launcher's actions are the empty pane too, so F6 from one
+            // moves on rather than re-landing on the pane.
+            if ((ReferenceEquals(focused, ContentPaneBorder) || IsInEmptyPaneLauncher(focused))
                 && _viewModel.Workspace is WorkspaceViewModel { } w
                 && w.ActiveGroup.Tabs.Count == 0)
             {
@@ -1315,6 +1317,21 @@ public partial class MainWindow : IShellRegionHost
         for (DependencyObject? current = element; current is not null; current = ParentOf(current))
         {
             if (ReferenceEquals(current, scope))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>DS-19: whether <paramref name="element"/> is the empty pane's launcher or
+    /// inside it (WorkspaceTemplates.xaml, <c>EmptyPaneLauncher</c>).</summary>
+    private static bool IsInEmptyPaneLauncher(DependencyObject element)
+    {
+        for (DependencyObject? current = element; current is not null; current = ParentOf(current))
+        {
+            if (current is FrameworkElement { Name: "EmptyPaneLauncher" })
             {
                 return true;
             }

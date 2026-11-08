@@ -1,5 +1,25 @@
 [
   {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "EmptyPaneLauncher",
+    "Surface": "Split workspace"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "EmptyPaneNewFromTemplate",
+    "Surface": "Split workspace"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "EmptyPaneQuickOpen",
+    "Surface": "Split workspace"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "EmptyPaneSearchVault",
+    "Surface": "Split workspace"
+  },
+  {
     "Source": "MainWindow.FilesToolbar.cs",
     "Expression": "\"SidebarDualPaneToggle\"",
     "Surface": "Sidebar organization and actions"

@@ -1468,7 +1468,9 @@
                             AutomationProperties.Name="Editor workspace"
                             Background="{DynamicResource Slate.WindowBackgroundBrush}"
                             DataContext="{Binding Workspace}">
+                        <!-- DS-19: a layout host, not a stop; Tab from the empty pane reaches its first action. -->
                         <ContentControl Content="{Binding Root}"
+                                        KeyboardNavigation.IsTabStop="False"
                                         ContentTemplate="{StaticResource WorkspaceNodeTemplate}"
                                         GotKeyboardFocus="WorkspaceContent_GotKeyboardFocus"
                                         AutomationProperties.Name="Workspace editor panes" />
