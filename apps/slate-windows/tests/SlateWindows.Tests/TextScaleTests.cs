@@ -219,6 +219,102 @@ public sealed partial class TextScaleTests
         Assert.True(cut.Length == 0, $"{cut.Length} cut:\n" + string.Join('\n', cut));
     });
 
+    /// <summary>DS-19: the empty pane's launcher at the largest size, in the window the app
+    /// opens at and its narrowest, with the size changed live after the launcher is up: its
+    /// rows grow with their text, so no label or chord is cut (a label trims on purpose).</summary>
+    [Theory]
+    [InlineData(1120, 720, 2.0)]
+    [InlineData(1120, 720, 2.25)]
+    [InlineData(780, 720, 2.25)]
+    [InlineData(1120, 480, 2.25)]
+    [InlineData(780, 480, 2.25)]
+    public void NoLauncherTextIsCutAtTheLargestSize(double width, double height, double scale) => OnOwnThread(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        host.Shell.Width = width;
+        host.Shell.Height = height;
+        host.Settle();
+        StackPanel launcher = ShownShell.Descendants(host.Shell).OfType<StackPanel>()
+            .Single(panel => panel.Name == "EmptyPaneLauncher");
+        Assert.True(launcher.IsVisible, "premise: the empty pane shows no launcher");
+
+        TypeRamp.Apply(RampOf(host.Shell), scale);
+        host.Settle();
+        host.Settle();
+
+        string[] cut = CutText(launcher);
+        Assert.True(cut.Length == 0, $"{cut.Length} cut in a {launcher.ActualWidth:F0} launcher, a {host.Shell.ContentPaneBorder.ActualWidth:F0} pane:\n" + string.Join('\n', cut));
+        Assert.All(launcher.Children.OfType<Button>(), button => Assert.True(button.ActualHeight > 32, $"a row stayed {button.ActualHeight} at {scale:P0}"));
+
+        // Overflowing or not, the reader meets only the named actions under it. At the
+        // minimum height the launcher does overflow, so that case covers its scroll bar.
+        ScrollViewer scroll = (ScrollViewer)launcher.Parent;
+        Assert.True(height > 480 || scroll.ScrollableHeight > 0, $"premise: the launcher fits a {height} window at {scale:P0}");
+        EmptyPaneLauncherTests.AssertOnlyTheActionsAreControls(host);
+
+        // Where the launcher is taller than the pane it scrolls: Tab from the pane reaches
+        // each action in turn, and each is inside the pane when it holds the keys.
+        FrameworkElement pane = host.Shell.ContentPaneBorder;
+        Assert.True(host.Land(ShellRegionKind.EmptyEditor));
+        foreach (Button button in launcher.Children.OfType<Button>())
+        {
+            Assert.True(((UIElement)System.Windows.Input.Keyboard.FocusedElement).MoveFocus(
+                new System.Windows.Input.TraversalRequest(System.Windows.Input.FocusNavigationDirection.Next)));
+            host.Settle();
+            Assert.Same(button, System.Windows.Input.Keyboard.FocusedElement);
+            Rect row = button.TransformToAncestor(pane).TransformBounds(new Rect(button.RenderSize));
+            Assert.True(
+                row.Top >= -0.5 && row.Bottom <= pane.ActualHeight + 0.5,
+                $"{System.Windows.Automation.AutomationProperties.GetName(button)} holds the keys at {row}, outside a {pane.ActualHeight:F0} pane.");
+        }
+    });
+
+    /// <summary>DS-19: an action that holds the keys stays in view when the layout changes
+    /// under it: the window shortened at the largest size, or the size raised in a short
+    /// window. Its focus is untouched.</summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AFocusedLauncherActionStaysInViewThroughALayoutChange(bool shorten) => OnOwnThread(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        host.Shell.Width = 780;
+        host.Shell.Height = shorten ? 720 : 480;
+        if (shorten)
+        {
+            TypeRamp.Apply(RampOf(host.Shell), 2.25);
+        }
+
+        host.Settle();
+        host.Settle();
+        StackPanel launcher = ShownShell.Descendants(host.Shell).OfType<StackPanel>()
+            .Single(panel => panel.Name == "EmptyPaneLauncher");
+        Button search = launcher.Children.OfType<Button>().Last();
+        Assert.True(search.Focus(), "premise: Search Vault refused the keys");
+        host.Settle();
+
+        if (shorten)
+        {
+            host.Shell.Height = 480;
+        }
+        else
+        {
+            TypeRamp.Apply(RampOf(host.Shell), 2.25);
+        }
+
+        host.Settle();
+        host.Settle();
+
+        var scroll = (ScrollViewer)launcher.Parent;
+        Assert.True(scroll.ScrollableHeight > 0, "premise: the launcher fits after the change");
+        Assert.Same(search, System.Windows.Input.Keyboard.FocusedElement);
+        FrameworkElement pane = host.Shell.ContentPaneBorder;
+        Rect row = search.TransformToAncestor(pane).TransformBounds(new Rect(search.RenderSize));
+        Assert.True(
+            row.Top >= -0.5 && row.Bottom <= pane.ActualHeight + 0.5,
+            $"Search Vault holds the keys at {row}, outside a {pane.ActualHeight:F0} pane.");
+    });
+
     /// <summary>Every sheet, opened by hand, so what it shows is what it declares, in the
     /// window the app opens at and at its minimum height. Past that a sheet scrolls, and
     /// keys reach what's scrolled off. The launched pass reads their contents.</summary>

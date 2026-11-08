@@ -956,7 +956,7 @@ public sealed class ThemeDesignSystemTests
         host.Settle();
         TextBlock Message() => ShownShell.Descendants(host.Shell)
             .OfType<TextBlock>()
-            .Single(block => block.Text.StartsWith("Open a note", StringComparison.Ordinal));
+            .Single(block => block.Text == "No note open");
 
         Assert.True(Message().IsVisible, "an empty workspace is blank.");
         Assert.IsType<AutomationPresentationTextBlock>(Message());

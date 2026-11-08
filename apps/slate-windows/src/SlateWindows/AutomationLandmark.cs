@@ -184,6 +184,49 @@ internal sealed class AutomationPresentationTextBlockPeer : TextBlockAutomationP
 }
 
 /// <summary>
+/// DS-19: a scroll viewer that is only layout around named stops (the empty pane's
+/// launcher). WPF publishes a plain one as an unnamed Pane and, once it overflows, its
+/// scroll bar as an unnamed ScrollBar with an unnamed Thumb and RepeatButtons: blank
+/// elements in a reader's object navigation. Here the viewer is neither a control nor a
+/// content element, and its scroll bars aren't published; the reader reaches what it
+/// holds by Tab, and a stop that takes the keys scrolls itself into view. A stop keeps
+/// that: when the viewport or what it holds changes size (the window shortened, the text
+/// size raised), the stop holding the keys is brought back into view, its focus untouched.
+/// </summary>
+internal sealed class AutomationPresentationScrollViewer : ScrollViewer
+{
+    protected override AutomationPeer OnCreateAutomationPeer() =>
+        new AutomationPresentationScrollViewerPeer(this);
+
+    protected override void OnScrollChanged(ScrollChangedEventArgs e)
+    {
+        base.OnScrollChanged(e);
+        if ((e.ViewportHeightChange != 0 || e.ExtentHeightChange != 0)
+            && IsKeyboardFocusWithin
+            && System.Windows.Input.Keyboard.FocusedElement is FrameworkElement focused
+            && !ReferenceEquals(focused, this))
+        {
+            focused.BringIntoView();
+        }
+    }
+}
+
+internal sealed class AutomationPresentationScrollViewerPeer : ScrollViewerAutomationPeer
+{
+    internal AutomationPresentationScrollViewerPeer(AutomationPresentationScrollViewer owner)
+        : base(owner)
+    {
+    }
+
+    protected override bool IsControlElementCore() => false;
+
+    protected override bool IsContentElementCore() => false;
+
+    protected override List<AutomationPeer>? GetChildrenCore() =>
+        base.GetChildrenCore()?.Where(child => child is not ScrollBarAutomationPeer).ToList();
+}
+
+/// <summary>
 /// An items host whose children are presentation-only (the search
 /// result row's emphasis runs). WPF gives a plain <see cref="ItemsControl"/>
 /// an automation peer that publishes an unnamed List element, which put

@@ -1471,10 +1471,22 @@
                             AutomationProperties.Name="Editor workspace"
                             Background="{DynamicResource Slate.WindowBackgroundBrush}"
                             DataContext="{Binding Workspace}">
+                        <!-- DS-19: with no tabs, a layout host, not a stop, so Tab from the empty
+                             pane reaches its first action. With tabs, its stop is as it was. -->
                         <ContentControl Content="{Binding Root}"
                                         ContentTemplate="{StaticResource WorkspaceNodeTemplate}"
                                         GotKeyboardFocus="WorkspaceContent_GotKeyboardFocus"
-                                        AutomationProperties.Name="Workspace editor panes" />
+                                        AutomationProperties.Name="Workspace editor panes">
+                            <ContentControl.Style>
+                                <Style TargetType="ContentControl">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding ActiveGroup.Tabs.Count}" Value="0">
+                                            <Setter Property="KeyboardNavigation.IsTabStop" Value="False" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </ContentControl.Style>
+                        </ContentControl>
                     </local:AutomationLandmarkBorder>
                     <GridSplitter Grid.Column="3"
                                   Visibility="{Binding Workspace.IsRightPaneVisible, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}"
