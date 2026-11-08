@@ -41,6 +41,8 @@ public sealed class WelcomeTabRingTests
         Assert.True(shell.Lifecycle.IsVaultOpen, "premise: the fixture vault didn't open");
         shell.Lifecycle.CloseVault();
         shell.Settle();
+        Assert.False(shell.Lifecycle.IsVaultOpen, "premise: the vault didn't close");
+        Assert.True(shell.Lifecycle.IsWelcomeVisible, "premise: the welcome view isn't back");
     }
 
     /// <summary>What a UIA client sees, walking down from the window: every recent button's
@@ -63,6 +65,8 @@ public sealed class WelcomeTabRingTests
 
         Button open = Assert.Single(ShownShell.Descendants(shell.Shell).OfType<Button>(), button => button.Name == "OpenVaultButton");
         Assert.True(open.Focus(), $"{when}: premise: Open Vault refused the keys");
+        shell.Settle();
+        Assert.Same(open, Keyboard.FocusedElement);
         var visited = new List<IInputElement>();
         for (int press = 0; press < recents.Length + 1; press++)
         {
