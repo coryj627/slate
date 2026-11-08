@@ -191,6 +191,73 @@ public sealed class LayoutItemsControlTests
         }
     });
 
+    /// <summary>#1677 (Codex PR #1861 round 2): an equal item rebuilt keeps its item peer
+    /// and gets a new container at once, before layout applies the container's template. A
+    /// client reading the item then reads no children. After layout, the live button is in
+    /// the tree: an early read isn't kept just because the container is the same.</summary>
+    [Fact]
+    public void AnItemReadBeforeLayoutShowsItsButtonAfterLayout() => RunSta(() =>
+    {
+        var button = new FrameworkElementFactory(typeof(Button));
+        button.SetBinding(AutomationProperties.NameProperty, new Binding(nameof(Row.Label)));
+        var rows = new System.Collections.ObjectModel.ObservableCollection<Row> { new("Alpha") };
+        var host = new LayoutItemsControl
+        {
+            ItemsSource = rows,
+            ItemTemplate = new DataTemplate { VisualTree = button },
+        };
+        var window = new Window
+        {
+            Content = host,
+            Width = 300,
+            Height = 200,
+            ShowInTaskbar = false,
+            WindowStyle = WindowStyle.None,
+        };
+        window.Show();
+        try
+        {
+            Drain();
+            AutomationPeer hostPeer = UIElementAutomationPeer.CreatePeerForElement(host);
+            AutomationPeer item = Assert.Single(hostPeer.GetChildren());
+            Assert.Single(item.GetChildren());
+
+            rows.Clear();
+            rows.Add(new Row("Alpha"));
+            DependencyObject container = host.ItemContainerGenerator.ContainerFromItem(rows[0]);
+            Assert.False(
+                container is null || ((UIElement)container).IsArrangeValid,
+                "premise: the new container isn't waiting for layout");
+            hostPeer.ResetChildrenCache();
+            AutomationPeer early = Assert.Single(hostPeer.GetChildren());
+            Assert.Same(item, early);
+            early.ResetChildrenCache();
+            Assert.Empty(early.GetChildren() ?? []);
+
+            Drain();
+            Button live = Assert.IsType<Button>(
+                System.Windows.Media.VisualTreeHelper.GetChild(container, 0));
+            AutomationPeer livePeer = UIElementAutomationPeer.CreatePeerForElement(live);
+            Assert.Contains(
+                livePeer,
+                (hostPeer.GetChildren() ?? []).SelectMany(child => child.GetChildren() ?? []));
+        }
+        finally
+        {
+            window.Close();
+        }
+    });
+
+    /// <summary>Runs layout and the Loaded-priority work queued behind it.</summary>
+    private static void Drain()
+    {
+        var frame = new System.Windows.Threading.DispatcherFrame();
+        _ = System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.ContextIdle,
+            () => frame.Continue = false);
+        System.Windows.Threading.Dispatcher.PushFrame(frame);
+    }
+
     private static void RunSta(Action body) =>
         StaThread.Run(body, TimeSpan.FromSeconds(60), "STA test body timed out.");
 }
