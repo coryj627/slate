@@ -356,7 +356,10 @@ public sealed partial class ShellAccessibilityTests
     public void ThemedShell_TheSelectedDropdownRowIsNotBlue() =>
         RunFindInNoteJourney("dropdown-row", (process, window, automation, editor) =>
         {
-            AutomationElement combo = WaitForElement(window, "SidebarSortOrder", TimeSpan.FromSeconds(10));
+            // DS-17 moved the Files sort into a menu; the Settings sheet's accent is a combo box.
+            ReassertForegroundForAChord(window);
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.OEM_COMMA);
+            AutomationElement combo = WaitForElement(window, "SettingsAccent", TimeSpan.FromSeconds(10));
             combo.Patterns.ExpandCollapse.Pattern.Expand();
             Thread.Sleep(500);
             AutomationElement row = combo.FindAllDescendants(cf => cf.ByControlType(ControlType.ListItem))

@@ -1106,21 +1106,14 @@
                         </Style.Triggers>
                     </Style>
                 </local:AutomationLandmarkGrid.Style>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="*" />
-                </Grid.RowDefinitions>
-                <Border Grid.Row="0" Padding="12,8" Background="{DynamicResource Slate.RaisedSurfaceBrush}" BorderBrush="{DynamicResource Slate.BorderBrush}" BorderThickness="0,0,0,1">
-                    <StackPanel>
-                        <TextBlock Text="{Binding VaultDisplayName}" Style="{DynamicResource Slate.BodyLargeStrongTextBlockStyle}" AutomationProperties.HeadingLevel="Level1" />
-                        <TextBlock Text="{Binding VaultPath}" Style="{DynamicResource Slate.CaptionTextBlockStyle}" Foreground="{DynamicResource Slate.SecondaryTextBrush}" TextTrimming="CharacterEllipsis" />
-                    </StackPanel>
-                </Border>
+                <!-- DS-17 (DSD9): no band above the panes. The vault's name is the Files
+                     toolbar's level 1 heading, with its path as the tooltip, and in the
+                     window's title (DS-12). -->
                 <!-- W7-7 PR 4b (#1247, AR-38): the sidebar widths are the
                      workspace's, so Widen/Narrow Files Sidebar and Widen/Narrow
                      Right Pane step them from the keyboard and a splitter drag
                      writes them back. -->
-                <local:WorkspaceRowHost Grid.Row="1" SizeChanged="WorkspaceRow_SizeChanged">
+                <local:WorkspaceRowHost SizeChanged="WorkspaceRow_SizeChanged">
                 <Grid x:Name="WorkspaceColumns">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="{Binding Workspace.FilesColumnWidth, Mode=TwoWay, Converter={StaticResource PixelGridLengthConverter}, FallbackValue=260}" MinWidth="{Binding Workspace.FilesColumnMinimumWidth, FallbackValue=200}" MaxWidth="640" />
@@ -1142,17 +1135,44 @@
                         <local:FilesPanePanel Margin="10">
                             <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto" local:WheelChain.IsEnabled="True">
                             <StackPanel>
-                                <DockPanel Margin="0,0,0,8" LastChildFill="False">
-                                    <TextBlock Text="Files"
-                                               Style="{DynamicResource Slate.BodyStrongTextBlockStyle}"
-                                               AutomationProperties.HeadingLevel="Level2" />
-                                    <Button DockPanel.Dock="Right"
+                                <!-- DS-17: one toolbar, Sidebar.jsx's PanelToolbar: the vault's
+                                     name as the level 1 heading (DSD9), New note, Sort and group,
+                                     Collapse all, Expand loaded and Refresh. Sort and group's menu
+                                     holds the sort, Group by date, Show tag tree and dual pane
+                                     (MainWindow.FilesToolbar.cs); its name says the order (DSD12). -->
+                                <local:PanelToolbarView x:Name="FilesToolbar"
+                                                        Margin="0,0,0,8"
+                                                        TitleHeadingLevel="Level1"
+                                                        Title="{Binding DataContext.VaultDisplayName, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                        TitleToolTip="{Binding DataContext.VaultPath, RelativeSource={RelativeSource AncestorType=Window}}">
+                                    <Button Style="{DynamicResource Slate.SubtleIconButtonStyle}"
+                                            Content="&#xE710;"
+                                            AutomationProperties.AutomationId="SidebarNewNote"
+                                            AutomationProperties.Name="New note"
+                                            Command="{Binding CreateNoteCommand}" />
+                                    <Button x:Name="SidebarSortButton"
                                             Style="{DynamicResource Slate.SubtleIconButtonStyle}"
+                                            Content="&#xE8CB;"
+                                            ToolTip="{Binding SortButtonName}"
+                                            AutomationProperties.AutomationId="SidebarSortAndGroup"
+                                            AutomationProperties.Name="{Binding SortButtonName, FallbackValue=Sort and group}"
+                                            Click="SidebarSortButton_Click" />
+                                    <Button Style="{DynamicResource Slate.SubtleIconButtonStyle}"
+                                            Content="&#xF166;"
+                                            AutomationProperties.AutomationId="SidebarCollapseAll"
+                                            AutomationProperties.Name="Collapse all"
+                                            Command="{Binding CollapseAllCommand}" />
+                                    <Button Style="{DynamicResource Slate.SubtleIconButtonStyle}"
+                                            Content="&#xF164;"
+                                            AutomationProperties.AutomationId="SidebarExpandLoaded"
+                                            AutomationProperties.Name="Expand loaded folders"
+                                            Command="{Binding ExpandLoadedCommand}" />
+                                    <Button Style="{DynamicResource Slate.SubtleIconButtonStyle}"
                                             Content="&#xE72C;"
                                             AutomationProperties.AutomationId="SidebarRefresh"
                                             AutomationProperties.Name="Refresh files"
                                             Command="{Binding RefreshCommand}" />
-                                </DockPanel>
+                                </local:PanelToolbarView>
                                 <!-- #1230: a read-only .slate/sidebar.json stands as a
                                      notice with its Retry beside it (mac's
                                      sidebarPreferencesNotice); the row leaves the tree
@@ -1200,50 +1220,6 @@
                                             Click="SidebarFilterClear_Click"
                                             Command="{Binding ClearFilterCommand}" />
                                 </Grid>
-                                <!-- #1795: wraps, so a narrow sidebar moves Group dates to a
-                                     line of its own instead of cutting off its label. A
-                                     ComboBox sizes to its selected row, so the minimum holds
-                                     the longest label and choosing one doesn't move the row. -->
-                                <WrapPanel Margin="0,6,0,2">
-                                    <ComboBox MinWidth="170"
-                                              Margin="0,0,8,4"
-                                              ItemsSource="{Binding SortModes}"
-                                              SelectedItem="{Binding SortMode}"
-                                              AutomationProperties.AutomationId="SidebarSortOrder"
-                                              AutomationProperties.Name="File sort order">
-                                        <!-- R-4 (#1246): the item is the enum, so an
-                                             unnamed ComboBoxItem read "NameAscending". -->
-                                        <ComboBox.ItemContainerStyle>
-                                            <Style TargetType="ComboBoxItem" BasedOn="{StaticResource Slate.ComboRowBase}">
-                                                <Setter Property="AutomationProperties.Name" Value="{Binding Converter={StaticResource SidebarSortModeLabelConverter}}" />
-                                            </Style>
-                                        </ComboBox.ItemContainerStyle>
-                                        <ComboBox.ItemTemplate>
-                                            <DataTemplate>
-                                                <TextBlock Text="{Binding Converter={StaticResource SidebarSortModeLabelConverter}}" />
-                                            </DataTemplate>
-                                        </ComboBox.ItemTemplate>
-                                    </ComboBox>
-                                    <CheckBox Margin="0,0,0,4"
-                                              MinWidth="0"
-                                              VerticalAlignment="Center"
-                                              Content="Group dates"
-                                              AutomationProperties.AutomationId="SidebarGroupDates"
-                                              IsChecked="{Binding GroupByDate}" />
-                                </WrapPanel>
-                                <WrapPanel Margin="0,0,0,2">
-                                    <ToggleButton Margin="0,0,6,4"
-                                                  Content="Tags"
-                                                  IsChecked="{Binding ShowTags}"
-                                                  AutomationProperties.AutomationId="SidebarShowTags"
-                                                  AutomationProperties.Name="Show tag tree" />
-                                    <ToggleButton Margin="0,0,0,4"
-                                                  IsChecked="{Binding IsDualPaneEnabled}"
-                                                  AutomationProperties.AutomationId="SidebarDualPaneToggle"
-                                                  AutomationProperties.Name="Enable dual-pane files sidebar">
-                                        <TextBlock Text="Dual pane" TextWrapping="Wrap" />
-                                    </ToggleButton>
-                                </WrapPanel>
                                 <!-- W7-7 PR 4 (#1247, R-5 as the owner amended it): a
                                      landing tree — keys that reach it go on to its
                                      selected tag, else its first tag UNSELECTED, whose

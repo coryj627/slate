@@ -125,17 +125,12 @@ internal sealed class CappedShareConverter : IValueConverter, IMultiValueConvert
 
 internal sealed class SidebarSortModeLabelConverter : IValueConverter
 {
+    /// <summary>DS-17: the labels are core's, the ones the Sort and group button's name
+    /// is built from.</summary>
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture) =>
-        value switch
-        {
-            SidebarSortMode.NameAscending => "Name (A to Z)",
-            SidebarSortMode.NameDescending => "Name (Z to A)",
-            SidebarSortMode.ModifiedNewest => "Modified (newest)",
-            SidebarSortMode.ModifiedOldest => "Modified (oldest)",
-            SidebarSortMode.CreatedNewest => "Created (newest)",
-            SidebarSortMode.CreatedOldest => "Created (oldest)",
-            _ => value?.ToString() ?? string.Empty,
-        };
+        value is SidebarSortMode mode
+            ? uniffi.slate_uniffi.SlateUniffiMethods.SidebarSortOrderLabel(FilesSidebarViewModel.ToCore(mode))
+            : value?.ToString() ?? string.Empty;
 
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
         Binding.DoNothing;

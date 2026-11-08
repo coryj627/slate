@@ -224,7 +224,7 @@ public sealed partial class ShellAccessibilityTests
             // The dual pane, showing the selected folder's files:
             // Ctrl+Enter opens child.md in a new tab; Enter on the same row
             // re-activates it and moves focus.
-            WaitForElement(window, "SidebarDualPaneToggle", TimeSpan.FromSeconds(10)).Patterns.Toggle.Pattern.Toggle();
+            ToggleSortAndGroupRow(window, automation, "SidebarDualPaneToggle");
             AutomationElement dualPane = WaitForElement(window, "SidebarDualPane", TimeSpan.FromSeconds(10));
             WaitForTreeItemStartingWith(tree, automation, "Folder").Focus();
             AssertFocusStaysOnRow(automation, tree, "Folder", "The Folder row did not take focus back.");
@@ -243,7 +243,7 @@ public sealed partial class ShellAccessibilityTests
 
             // R-3: a tag row filters by core's grammar, and a whitespace
             // tag by the out-of-band scope, whose summary names it.
-            WaitForElement(window, "SidebarShowTags", TimeSpan.FromSeconds(10)).Patterns.Toggle.Pattern.Toggle();
+            ToggleSortAndGroupRow(window, automation, "SidebarShowTags");
             AutomationElement tags = WaitForElement(window, "SidebarTagTree", TimeSpan.FromSeconds(10));
             WaitForNamedElement(tags, automation, "accessibility, 1 file", TimeSpan.FromSeconds(10))
                 .Patterns.SelectionItem.Pattern.Select();

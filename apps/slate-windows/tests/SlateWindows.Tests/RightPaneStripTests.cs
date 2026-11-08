@@ -189,9 +189,7 @@ public sealed class RightPaneStripTests
         host.Shell.RightPaneMorePanelsButton.GotKeyboardFocus += (_, _) => namesOnReturn.Add(AutomationProperties.GetName(host.Shell.RightPaneMorePanelsButton));
         Toggle(tasks);
         host.Settle();
-        // With no foreground the keys never left the button, so there was no return.
-        string[] returned = keys ? [SlateUniffiMethods.MorePanelsName("Tasks")] : [];
-        Assert.Equal(returned, namesOnReturn);
+        string[] firstReturn = [.. namesOnReturn];
         Assert.False(menu.IsOpen, "a pick didn't close More panels");
 
         Assert.Equal("tasks", host.Workspace.ActiveLeaf.Id);
@@ -213,6 +211,11 @@ public sealed class RightPaneStripTests
         Assert.False(menu.IsOpen);
         Assert.Equal("tasks", host.Workspace.ActiveLeaf.Id);
         Assert.Equal(shown, host.Announced.OfType<A11yEvent.LeafPanelShown>().Count());
+
+        // The keys' return, which only a desktop that gave the menu the keys can show
+        // (#1854: on a hosted runner the button took focus twice, unmeasured).
+        SkipWithoutTheKeys(keys);
+        Assert.Equal([SlateUniffiMethods.MorePanelsName("Tasks")], firstReturn);
     });
 
     [Fact]
@@ -242,18 +245,19 @@ public sealed class RightPaneStripTests
         host.Settle();
         Button more = host.Shell.RightPaneMorePanelsButton;
 
+        // A pick first: it holds on any desktop. Then Escape, which needs the menu to have
+        // the keys and skips where the desktop refused them (#1854).
         Assert.True(host.Shell.FilesTree.Focus(), "premise: the Files tree refused the keys");
         ContextMenu menu = OpenMore(host);
-        Dismiss(host, menu);
+        Toggle(menu.Items.OfType<MenuItem>().Single(item => Id(item) == "history"));
         host.Settle();
-        Assert.False(menu.IsOpen);
+        Assert.Equal("history", host.Workspace.ActiveLeaf.Id);
         Assert.Same(more, Keyboard.FocusedElement);
 
         Assert.True(host.Shell.FilesTree.Focus(), "premise: the Files tree refused the keys");
         menu = OpenMore(host);
-        Toggle(menu.Items.OfType<MenuItem>().Single(item => Id(item) == "history"));
-        host.Settle();
-        Assert.Equal("history", host.Workspace.ActiveLeaf.Id);
+        Dismiss(host, menu);
+        Assert.False(menu.IsOpen);
         Assert.Same(more, Keyboard.FocusedElement);
     });
 
@@ -381,19 +385,22 @@ public sealed class RightPaneStripTests
     }
 
     /// <summary>Escape on the menu, as a reader closes it; where the desktop refused the
-    /// menu the keys, there's nothing for Escape to reach, so the menu is closed directly.</summary>
+    /// menu the keys, there's nothing for Escape to reach, so the fact skips.</summary>
     private void Dismiss(ShownShell host, ContextMenu menu)
     {
-        if (MenuHasTheKeys(menu))
-        {
-            Press(host, Key.Escape);
-        }
-        else
-        {
-            menu.IsOpen = false;
-        }
-
+        SkipWithoutTheKeys(MenuHasTheKeys(menu));
+        Press(host, Key.Escape);
         host.Settle();
+    }
+
+    /// <summary>Where the desktop refused the menu the keys, what the keys do in it
+    /// wasn't measured: the fact says so rather than passing (#1854).</summary>
+    private static void SkipWithoutTheKeys(bool keys)
+    {
+        if (!keys)
+        {
+            Assert.Skip("this desktop refused the menu the keys (#1680), so the keys in the menu and their return weren't measured on it");
+        }
     }
 
     private static WorkspaceLeafOption Leaf(string id) =>

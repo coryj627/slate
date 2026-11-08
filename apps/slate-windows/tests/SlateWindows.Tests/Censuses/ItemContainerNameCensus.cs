@@ -244,11 +244,6 @@ public sealed class ItemContainerNameCensus
             {
                 Distinct = "the three labels in SlateAccent.Options",
             },
-            ["SidebarSortOrder"] = new ContainerNaming.Bound(
-                typeof(SidebarSortMode), string.Empty, "SidebarSortModeLabelConverter")
-            {
-                Distinct = "each sort mode has its own label (SidebarSortModeLabelConverter)",
-            },
             ["SidebarTagTree"] = Distinct(
                 typeof(SidebarTagViewModel), nameof(SidebarTagViewModel.AutomationName),
                 "a tag tree's siblings are distinct tag segments, each with its file count"),
@@ -584,6 +579,11 @@ public sealed class ItemContainerNameCensus
                 "one row per row action its host declares (AccessibleGridRowAction), each named once"),
             ["GraphVerbosityMenu.Populate.submenu"] = new CodeItemsHost.Menu(
                 "one check item per verbosity choice in core's vector, each titled once"),
+            // DS-17: the Files toolbar's Sort and group.
+            ["MainWindow.OpenSidebarSortMenu.menu"] = new CodeItemsHost.Menu(
+                "one check item per sort order, each by its own label from core, then Group by date, Show tag tree and the dual pane, each named once"),
+            ["MainWindow.Toggle.row"] = new CodeItemsHost.Menu(
+                "one of Sort and group's checkable rows, which fills nothing of its own"),
             // DS-16: the rail's More panels.
             ["MainWindow.OpenMorePanels.menu"] = new CodeItemsHost.Menu(
                 "one check item per leaf past the strip (WorkspaceViewModel.MoreLeaves), each titled once"),
