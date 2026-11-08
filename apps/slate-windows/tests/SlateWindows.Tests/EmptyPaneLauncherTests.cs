@@ -66,7 +66,7 @@ public sealed class EmptyPaneLauncherTests
                 .Single(text => text.Text == (string)button.Tag);
             Rect drawn = chord.TransformToAncestor(button).TransformBounds(new Rect(chord.RenderSize));
             Assert.True(drawn.Left >= 0 && drawn.Right <= button.ActualWidth, $"{name}'s chord is outside its row: {drawn}.");
-            Assert.Equal(chord.DesiredSize.Width, chord.ActualWidth, 1);
+            Assert.Equal(chord.DesiredSize.Width - chord.Margin.Left - chord.Margin.Right, chord.ActualWidth, 1);
         });
     });
 
@@ -90,6 +90,27 @@ public sealed class EmptyPaneLauncherTests
         host.Settle();
         Assert.Equal(ModalSurface.TemplatePicker, host.Shell.OpenModalSurface);
         Assert.All(actions, button => Assert.False(button.IsEnabled, $"{AutomationProperties.GetName(button)} is on under the template picker."));
+    });
+
+    /// <summary>An action that holds the keys when a modal surface opens goes off, and the
+    /// keys go to the surface, not stay on the disabled action.</summary>
+    [Fact]
+    public void AModalTakesTheKeysFromAnAction() => RunSta(() =>
+    {
+        using var host = new ShownShell(("note.md", "# Note\n"));
+        host.Settle();
+        Button search = Launcher(host).Children.OfType<Button>().Last();
+        Assert.Same(search.FindResource("Slate.LauncherRowStyle"), search.Style);
+        Assert.True(search.Focus(), "premise: Search Vault refused the keys");
+
+        host.Lifecycle.OpenSettingsCommand.Execute(null);
+        host.Settle();
+
+        Assert.Equal(ModalSurface.Settings, host.Shell.OpenModalSurface);
+        Assert.False(search.IsEnabled, "Search Vault is on under Settings.");
+        Assert.False(search.IsKeyboardFocused, "the keys stayed on the disabled action.");
+        var focused = Assert.IsAssignableFrom<UIElement>(Keyboard.FocusedElement);
+        Assert.True(focused.IsVisible && focused.IsEnabled, $"the keys are on an unusable {focused.GetType().Name}.");
     });
 
     /// <summary>Opening a note from an action takes the launcher away and leaves the keys
@@ -138,10 +159,13 @@ public sealed class EmptyPaneLauncherTests
         using var host = new ShownShell(("note.md", "# Note\n"));
         host.Settle();
         var regions = (IShellRegionHost)host.Shell;
+        // The window answers F6 for its workspace, as WorkspaceReady sets it in the app.
+        host.Workspace.ShellRegionHost = host.Shell;
 
         Assert.True(host.Land(ShellRegionKind.EmptyEditor));
         Step(host, forward);
-        ShellRegionKind expected = regions.FocusedRegion();
+        ShellRegionKind? expected = regions.FocusedRegion();
+        Assert.NotNull(expected);
         Assert.NotEqual(ShellRegionKind.EmptyEditor, expected);
 
         Button action = Launcher(host).Children.OfType<Button>().ElementAt(index);
