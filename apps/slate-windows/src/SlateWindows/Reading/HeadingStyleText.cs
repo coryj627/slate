@@ -452,7 +452,48 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
         TextPatternRangeEndpoint targetEndpoint) =>
         _inner.CompareEndpoints(endpoint, Unwrap(targetRange), targetEndpoint);
 
-    public void ExpandToEnclosingUnit(TextUnit unit) => _inner.ExpandToEnclosingUnit(unit);
+    public void ExpandToEnclosingUnit(TextUnit unit)
+    {
+        if (unit != TextUnit.Line)
+        {
+            _inner.ExpandToEnclosingUnit(unit);
+            return;
+        }
+
+        ITextRangeProvider caret = _inner.Clone();
+        _inner.ExpandToEnclosingUnit(TextUnit.Line);
+        KeepTheCaretsParagraph(caret);
+    }
+
+    /// <summary>
+    /// #1687: NVDA reads the caret's line as the caret range expanded to a Line. In this
+    /// read-only surface, with the caret at the end of a line (where Up and Down leave it,
+    /// keeping its column), WPF's Line expansion reaches over the paragraph break into the
+    /// next paragraph's line, so every arrow spoke two lines. A line never crosses a
+    /// paragraph, so an expansion that does is cut back to the paragraph holding the caret:
+    /// the first one when the caret is in it, else the rest.
+    /// </summary>
+    private void KeepTheCaretsParagraph(ITextRangeProvider caret)
+    {
+        ITextRangeProvider first = _inner.Clone();
+        first.MoveEndpointByRange(TextPatternRangeEndpoint.End, first, TextPatternRangeEndpoint.Start);
+        first.ExpandToEnclosingUnit(TextUnit.Paragraph);
+        if (first.CompareEndpoints(TextPatternRangeEndpoint.End, _inner, TextPatternRangeEndpoint.End) >= 0)
+        {
+            return;
+        }
+
+        // A caret at the first paragraph's content end is on that paragraph's last line
+        // (the paragraph break lies between it and the next paragraph's start).
+        if (caret.CompareEndpoints(TextPatternRangeEndpoint.Start, first, TextPatternRangeEndpoint.End) <= 0)
+        {
+            _inner.MoveEndpointByRange(TextPatternRangeEndpoint.End, first, TextPatternRangeEndpoint.End);
+        }
+        else
+        {
+            _inner.MoveEndpointByRange(TextPatternRangeEndpoint.Start, first, TextPatternRangeEndpoint.End);
+        }
+    }
 
     public ITextRangeProvider? FindAttribute(int attribute, object value, bool backward)
     {
