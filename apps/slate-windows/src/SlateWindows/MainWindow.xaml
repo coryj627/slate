@@ -1235,6 +1235,8 @@
                                     <local:LandingTreeView.ItemContainerStyle>
                                         <Style TargetType="TreeViewItem" BasedOn="{StaticResource Slate.TreeRowBase}">
                                             <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
+                                            <!-- DS-18: a count row is 32 tall as drawn, its 32 content with no vertical padding. -->
+                                            <Setter Property="Padding" Value="8,0" />
                                             <!-- W7-7 (R-3): two-way, so a filter clear releases the
                                                  selection and the same tag can be applied again. -->
                                             <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}" />
@@ -2045,7 +2047,7 @@
                                         </Style.Triggers>
                                     </Style>
                                 </DockPanel.Style>
-                                <local:PanelToolbarView DockPanel.Dock="Top" Title="{x:Static panels:CitationPhrase.CitationsHeading}" />
+                                <local:PanelToolbarView DockPanel.Dock="Top" Title="{x:Static panels:CitationPhrase.CitationsHeading}" Count="{Binding Citations.Rows.Count}" />
                                 <!-- W7-7 PR 4 (#1247, R-5; spec §5.2.2): an EMPTY list's
                                      stop is its notice — the no-file and no-citations
                                      sentences take the keys and read their reason

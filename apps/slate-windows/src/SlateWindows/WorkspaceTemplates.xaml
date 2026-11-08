@@ -181,8 +181,9 @@
                                         Visibility="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}, Converter={StaticResource Slate.TreeBoolToVisibility}}" />
                     </Grid>
                     <ControlTemplate.Triggers>
+                        <!-- DS-18: the design's surface hover, as panel rows have. -->
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter Property="Background" Value="{DynamicResource Slate.RaisedSurfaceBrush}" />
+                            <Setter Property="Background" Value="{DynamicResource Slate.HoverOverlayBrush}" />
                         </Trigger>
                         <Trigger Property="IsSelected" Value="True">
                             <Setter Property="Background" Value="{DynamicResource Slate.SelectedSurfaceBrush}" />

@@ -285,6 +285,12 @@ public sealed class ThemeTokenContrastTests
                 element => Rgb.Parse(element.Value));
     }
 
+    /// <summary>|Lc| of drawn colours, for facts that measure a realized element.</summary>
+    internal static double Lc(System.Windows.Media.Color text, System.Windows.Media.Color background) =>
+        Math.Abs(ApcaLc(
+            Rgb.Parse($"#{text.R:X2}{text.G:X2}{text.B:X2}"),
+            Rgb.Parse($"#{background.R:X2}{background.G:X2}{background.B:X2}")));
+
     private static double ApcaLc(Rgb text, Rgb background)
     {
         const double blackThreshold = 0.022;
