@@ -1189,10 +1189,12 @@ public sealed class ThemeDesignSystemTests
 
         Button button = ShownShell.Descendants(host.Shell).OfType<Button>()
             .Single(item => System.Windows.Automation.AutomationProperties.GetAutomationId(item) == "QueriesNewDashboard");
-        var panel = (Panel)VisualTreeHelper.GetParent(button);
-        TextBlock heading = panel.Children.OfType<TextBlock>().Single();
-        Point headingEnd = heading.TranslatePoint(new Point(heading.ActualWidth, 0), panel);
-        Point buttonStart = button.TranslatePoint(default, panel);
+        // DS-18: the heading and its buttons share the leaf's toolbar.
+        PanelToolbarView toolbar = ShownShell.Descendants(host.Shell).OfType<PanelToolbarView>()
+            .Single(item => item.Buttons.Contains(button));
+        TextBlock heading = toolbar.TitleBlock;
+        Point headingEnd = heading.TranslatePoint(new Point(heading.ActualWidth, 0), toolbar);
+        Point buttonStart = button.TranslatePoint(default, toolbar);
 
         Assert.True(
             buttonStart.Y >= headingEnd.Y + heading.ActualHeight || buttonStart.X - headingEnd.X >= 8,

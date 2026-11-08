@@ -268,7 +268,10 @@ internal sealed class ConnectionsLeafView : UserControl
 
     private readonly ConnectionsTree _tree;
     private readonly ContextMenu _rowMenu = new();
-    private readonly TextBlock _heading;
+    /// <summary>DS-18: the leaf's toolbar, its title the heading.</summary>
+    private readonly PanelToolbarView _toolbar = new();
+
+    private TextBlock _heading => _toolbar.TitleBlock;
     private readonly TextBlock _summary;
     private readonly ComboBox _depth;
     private readonly TextBlock _state;
@@ -295,12 +298,6 @@ internal sealed class ConnectionsLeafView : UserControl
 
     public ConnectionsLeafView()
     {
-        _heading = new TextBlock
-        {
-            TextWrapping = TextWrapping.Wrap,
-        };
-        _heading.SetResourceReference(StyleProperty, TypeRamp.BodyStrong.StyleKey);
-        AutomationProperties.SetHeadingLevel(_heading, AutomationHeadingLevel.Level2);
         AutomationProperties.SetAutomationId(_heading, "ConnectionsHeading");
 
         _summary = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) };
@@ -371,11 +368,11 @@ internal sealed class ConnectionsLeafView : UserControl
         SelectorFocus.SetOwnLanding(_tree, LandOnRow);
 
         var panel = new DockPanel();
-        DockPanel.SetDock(_heading, Dock.Top);
+        DockPanel.SetDock(_toolbar, Dock.Top);
         DockPanel.SetDock(_summary, Dock.Top);
         DockPanel.SetDock(_depth, Dock.Top);
         DockPanel.SetDock(_anchor, Dock.Top);
-        panel.Children.Add(_heading);
+        panel.Children.Add(_toolbar);
         panel.Children.Add(_summary);
         panel.Children.Add(_depth);
         panel.Children.Add(_anchor);
@@ -698,7 +695,7 @@ internal sealed class ConnectionsLeafView : UserControl
         ConnectionsLeafViewModel? model = Model;
         if (model is null)
         {
-            _heading.Text = ConnectionsPhrase.Title;
+            _toolbar.Title = ConnectionsPhrase.Title;
             _summary.Visibility = Visibility.Collapsed;
             _depth.IsEnabled = false;
             ShowState(ConnectionsPhrase.NoNote, ConnectionsPhrase.NoNote);
@@ -706,7 +703,7 @@ internal sealed class ConnectionsLeafView : UserControl
         }
         SyncDepthControl(model);
         ConnectionsPublication publication = model.Publication;
-        _heading.Text = model.Root is { } root ? System.IO.Path.GetFileName(root) : ConnectionsPhrase.Title;
+        _toolbar.Title = model.Root is { } root ? System.IO.Path.GetFileName(root) : ConnectionsPhrase.Title;
         _depth.IsEnabled = model.Root is not null;
         if (model.Root is null || publication.State == ConnectionsLoadState.NoNote)
         {

@@ -54,6 +54,7 @@ internal sealed class ThemeManager : IDisposable
         "Slate.AccentTextBrush",
         "Slate.SelectedSurfaceBrush",
         "Slate.SelectedTextBrush",
+        "Slate.SelectedCaptionBrush",
         "Slate.AccentIndicatorBrush",
         "Slate.SelectionBackgroundBrush",
         "Slate.SelectionTextBrush",

@@ -54,6 +54,8 @@ public sealed class ThemeTokenContrastTests
             ("selected-row/text", "Slate.SelectionTextColor", "Slate.SelectedSurfaceColor"),
             ("selected-row/secondary", "Slate.SecondaryTextColor", "Slate.SelectedSurfaceColor"),
             ("selected-row/accent-text", "Slate.AccentTextColor", "Slate.SelectedSurfaceColor"),
+            // DS-18: a selected count row's count (Slate.SelectedCaptionBrush is tertiary).
+            ("selected-row/count", "Slate.TertiaryTextColor", "Slate.SelectedSurfaceColor"),
             ("error/surface", "Slate.ErrorColor", "Slate.SurfaceColor"),
             // W3-4 code-token palette: token text renders on the code
             // block's raised background inside the reading surface, so

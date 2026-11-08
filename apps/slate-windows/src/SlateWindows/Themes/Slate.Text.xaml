@@ -458,8 +458,9 @@
             </Grid>
         </Border>
         <ControlTemplate.Triggers>
+            <!-- DS-18: the design's surface hover. -->
             <Trigger Property="IsMouseOver" Value="True">
-                <Setter Property="Background" Value="{DynamicResource Slate.RaisedSurfaceBrush}" />
+                <Setter Property="Background" Value="{DynamicResource Slate.HoverOverlayBrush}" />
             </Trigger>
             <Trigger Property="IsSelected" Value="True">
                 <Setter Property="Background" Value="{DynamicResource Slate.SelectedSurfaceBrush}" />
