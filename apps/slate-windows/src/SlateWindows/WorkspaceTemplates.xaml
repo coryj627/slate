@@ -1212,7 +1212,13 @@
                 <!-- An image brush, not an Image: a brush has no peer. -->
                 <Border Width="48" Height="48" Margin="0,0,0,16" HorizontalAlignment="Center">
                     <Border.Background>
-                        <ImageBrush ImageSource="pack://application:,,,/SlateWindows;component/Assets/slate-gold.png" Stretch="Uniform" />
+                        <!-- #1862: decoded at 144 (48 at 300%), as the app menu's logo is at
+                             64: the PNG is 1800 square, about 13 MB a pane decoded whole. -->
+                        <ImageBrush Stretch="Uniform">
+                            <ImageBrush.ImageSource>
+                                <BitmapImage UriSource="pack://application:,,,/SlateWindows;component/Assets/slate-gold.png" DecodePixelWidth="144" />
+                            </ImageBrush.ImageSource>
+                        </ImageBrush>
                     </Border.Background>
                 </Border>
                 <local:AutomationPresentationTextBlock Text="No note open"
