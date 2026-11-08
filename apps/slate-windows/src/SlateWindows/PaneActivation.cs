@@ -39,8 +39,8 @@ internal static class PaneActivation
 
     private static void OnClick(object sender, RoutedEventArgs e)
     {
-        var button = (ButtonBase)sender;
-        if ((Window.GetWindow(button)?.DataContext as VaultLifecycleViewModel)?.Workspace is { } workspace
+        if (sender is ButtonBase button
+            && (Window.GetWindow(button)?.DataContext as VaultLifecycleViewModel)?.Workspace is { } workspace
             && MainWindow.FindAncestorDataContext<WorkspaceGroupViewModel>(button) is { } group)
         {
             workspace.SelectGroupFromKeyboardFocus(group);
