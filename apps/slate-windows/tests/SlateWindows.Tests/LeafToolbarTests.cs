@@ -94,6 +94,27 @@ public sealed class LeafToolbarTests
         Assert.Equal(Color(host, "Slate.TertiaryTextBrush"), Assert.IsType<SolidColorBrush>(count.Foreground).Color);
     });
 
+    /// <summary>Codex round 2: a long tag trims its label rather than push every count
+    /// in the tree past the sidebar's edge.</summary>
+    [Fact]
+    public void ALongTagKeepsEveryCountInsideTheSidebar() => RunSta(() =>
+    {
+        using var host = new ShownShell(("note.md", "# Note\n\n#alpha and #project_documentation_references_for_the_whole_team\n"));
+        using FilesToolbarTests.Attached attached = FilesToolbarTests.Attach(host);
+        Assert.Equal(260, host.Workspace.FilesSidebarWidth);
+        TreeViewItem alpha = TagRow(host, attached.Sidebar, "alpha");
+        TreeViewItem longTag = TagRow(host, attached.Sidebar, "project_documentation_references_for_the_whole_team");
+        host.Settle();
+        var tree = (FrameworkElement)host.Shell.FindName("FilesPaneBorder");
+
+        foreach (TreeViewItem row in new[] { alpha, longTag })
+        {
+            TextBlock count = Part(row, "Count");
+            double right = count.TranslatePoint(new Point(count.ActualWidth, 0), tree).X;
+            Assert.True(right <= tree.ActualWidth + 0.5, $"{((SidebarTagViewModel)row.DataContext).Segment}'s count ends at {right:F0} in a {tree.ActualWidth:F0} pane.");
+        }
+    });
+
     [Fact]
     public void ASelectedCountRowHasThePillASemiboldLabelAndItsCaptionBrush() => RunSta(() =>
     {

@@ -1230,6 +1230,7 @@
                                           ItemTemplate="{StaticResource SidebarTagTemplate}"
                                           SelectedItemChanged="Tags_SelectedItemChanged"
                                           Visibility="{Binding ShowTags, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                           AutomationProperties.AutomationId="SidebarTagTree"
                                           AutomationProperties.Name="Tags">
                                     <local:LandingTreeView.ItemContainerStyle>
