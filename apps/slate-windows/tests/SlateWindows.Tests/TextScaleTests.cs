@@ -226,6 +226,8 @@ public sealed partial class TextScaleTests
     [InlineData(1120, 720, 2.0)]
     [InlineData(1120, 720, 2.25)]
     [InlineData(780, 720, 2.25)]
+    [InlineData(1120, 480, 2.25)]
+    [InlineData(780, 480, 2.25)]
     public void NoLauncherTextIsCutAtTheLargestSize(double width, double height, double scale) => OnOwnThread(() =>
     {
         using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
@@ -243,6 +245,22 @@ public sealed partial class TextScaleTests
         string[] cut = CutText(launcher);
         Assert.True(cut.Length == 0, $"{cut.Length} cut in a {launcher.ActualWidth:F0} launcher, a {host.Shell.ContentPaneBorder.ActualWidth:F0} pane:\n" + string.Join('\n', cut));
         Assert.All(launcher.Children.OfType<Button>(), button => Assert.True(button.ActualHeight > 32, $"a row stayed {button.ActualHeight} at {scale:P0}"));
+
+        // Where the launcher is taller than the pane it scrolls: Tab from the pane reaches
+        // each action in turn, and each is inside the pane when it holds the keys.
+        FrameworkElement pane = host.Shell.ContentPaneBorder;
+        Assert.True(host.Land(ShellRegionKind.EmptyEditor));
+        foreach (Button button in launcher.Children.OfType<Button>())
+        {
+            Assert.True(((UIElement)System.Windows.Input.Keyboard.FocusedElement).MoveFocus(
+                new System.Windows.Input.TraversalRequest(System.Windows.Input.FocusNavigationDirection.Next)));
+            host.Settle();
+            Assert.Same(button, System.Windows.Input.Keyboard.FocusedElement);
+            Rect row = button.TransformToAncestor(pane).TransformBounds(new Rect(button.RenderSize));
+            Assert.True(
+                row.Top >= -0.5 && row.Bottom <= pane.ActualHeight + 0.5,
+                $"{System.Windows.Automation.AutomationProperties.GetName(button)} holds the keys at {row}, outside a {pane.ActualHeight:F0} pane.");
+        }
     });
 
     /// <summary>Every sheet, opened by hand, so what it shows is what it declares, in the

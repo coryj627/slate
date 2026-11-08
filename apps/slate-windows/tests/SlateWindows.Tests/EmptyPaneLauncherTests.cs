@@ -159,6 +159,9 @@ public sealed class EmptyPaneLauncherTests
         Assert.DoesNotContain(
             ShownShell.Descendants(host.Shell).OfType<StackPanel>(),
             panel => panel.Name == "EmptyPaneLauncher" && panel.IsVisible);
+        Assert.DoesNotContain(
+            ShownShell.Descendants(host.Shell).OfType<ScrollViewer>(),
+            scroll => scroll.Name == "EmptyPaneLauncherScroll" && scroll.Visibility == Visibility.Visible);
         var focused = Assert.IsAssignableFrom<UIElement>(Keyboard.FocusedElement);
         Assert.True(focused.IsVisible, $"the keys are on a hidden {focused.GetType().Name}.");
         Assert.False(quickOpen.IsKeyboardFocused, "the keys stayed on the collapsed action.");

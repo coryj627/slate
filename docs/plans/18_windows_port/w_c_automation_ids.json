@@ -6,6 +6,11 @@
   },
   {
     "Source": "WorkspaceTemplates.xaml",
+    "Expression": "EmptyPaneLauncherScroll",
+    "Surface": "Split workspace"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
     "Expression": "EmptyPaneNewFromTemplate",
     "Surface": "Split workspace"
   },
