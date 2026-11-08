@@ -421,6 +421,29 @@ public sealed class NoteHeaderTests
         }
     });
 
+    /// <summary>#1793: in a split, the Properties header's buttons in the inactive pane act on
+    /// that pane's note when invoked through their peers, so focus never entered the pane.</summary>
+    [Theory]
+    [InlineData("PropertiesAddButton")]
+    [InlineData("PropertiesBulkRenameButton")]
+    public void APropertiesHeaderButtonActsOnItsOwnNote(string id) => StaThread.RunPumped(() =>
+    {
+        using var host = Split(out _, out WorkspaceGroupViewModel second);
+
+        Invoke(Named(ContentOf(HeaderOf(host, "b.md")), id));
+        host.Settle();
+
+        Assert.Same(second, host.Workspace.ActiveGroup);
+        if (id == "PropertiesAddButton")
+        {
+            Assert.Equal("b.md", host.Workspace.AddPropertySheet?.IntentForTests?.Path);
+        }
+        else
+        {
+            Assert.NotNull(host.Workspace.BulkRenameSheet);
+        }
+    });
+
     /// <summary>The switch names its own tab, so it flips that one and leaves the active
     /// pane and the keys where they were.</summary>
     [Fact]
