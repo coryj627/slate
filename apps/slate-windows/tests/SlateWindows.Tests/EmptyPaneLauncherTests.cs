@@ -66,7 +66,11 @@ public sealed class EmptyPaneLauncherTests
                 .Single(text => text.Text == (string)button.Tag);
             Rect drawn = chord.TransformToAncestor(button).TransformBounds(new Rect(chord.RenderSize));
             Assert.True(drawn.Left >= 0 && drawn.Right <= button.ActualWidth, $"{name}'s chord is outside its row: {drawn}.");
-            Assert.Equal(chord.DesiredSize.Width - chord.Margin.Left - chord.Margin.Right, chord.ActualWidth, 1);
+            Assert.Equal(chord.DesiredSize.Width, chord.ActualWidth, 1);
+            TextBlock label = ShownShell.Descendants(button).OfType<TextBlock>().Single(text => text.Text == name);
+            Rect labelDrawn = label.TransformToAncestor(button).TransformBounds(new Rect(label.RenderSize));
+            Rect overlap = Rect.Intersect(labelDrawn, drawn);
+            Assert.True(overlap.IsEmpty || overlap.Width * overlap.Height < 1, $"{name}'s label runs into its chord: {labelDrawn} and {drawn}.");
         });
     });
 
@@ -110,7 +114,33 @@ public sealed class EmptyPaneLauncherTests
         Assert.False(search.IsEnabled, "Search Vault is on under Settings.");
         Assert.False(search.IsKeyboardFocused, "the keys stayed on the disabled action.");
         var focused = Assert.IsAssignableFrom<UIElement>(Keyboard.FocusedElement);
+        Assert.True(host.Shell.SettingsOverlay.IsKeyboardFocusWithin, $"the keys are on a {focused.GetType().Name} outside Settings.");
         Assert.True(focused.IsVisible && focused.IsEnabled, $"the keys are on an unusable {focused.GetType().Name}.");
+    });
+
+    /// <summary>The workspace host leaves the Tab order only while the pane is empty: with
+    /// a note open, Tab from the pane and Shift+Tab back pass through it as they did.</summary>
+    [Fact]
+    public void WithANoteOpenTheEditorsTabOrderIsUnchanged() => RunSta(() =>
+    {
+        using var host = new ShownShell(("note.md", "# Note\n"));
+        host.Settle();
+        ContentControl panes = ShownShell.Descendants(host.Shell.ContentPaneBorder).OfType<ContentControl>()
+            .First(control => AutomationProperties.GetName(control) == "Workspace editor panes");
+        Assert.False(KeyboardNavigation.GetIsTabStop(panes), "premise: the empty pane's host is a stop");
+
+        host.Workspace.OpenPath("note.md");
+        host.Settle();
+        Assert.True(KeyboardNavigation.GetIsTabStop(panes), "with a note open the host left the Tab order");
+        Assert.True(host.Shell.ContentPaneBorder.Focus(), "premise: the pane refused the keys");
+
+        Assert.True(host.Shell.ContentPaneBorder.MoveFocus(new TraversalRequest(FocusNavigationDirection.Next)));
+        Assert.Same(panes, Keyboard.FocusedElement);
+        Assert.True(panes.MoveFocus(new TraversalRequest(FocusNavigationDirection.Next)));
+        var after = (UIElement)Keyboard.FocusedElement;
+        Assert.NotSame(panes, after);
+        Assert.True(after.MoveFocus(new TraversalRequest(FocusNavigationDirection.Previous)));
+        Assert.Same(panes, Keyboard.FocusedElement);
     });
 
     /// <summary>Opening a note from an action takes the launcher away and leaves the keys

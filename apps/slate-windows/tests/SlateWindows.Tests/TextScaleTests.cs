@@ -219,6 +219,32 @@ public sealed partial class TextScaleTests
         Assert.True(cut.Length == 0, $"{cut.Length} cut:\n" + string.Join('\n', cut));
     });
 
+    /// <summary>DS-19: the empty pane's launcher at the largest size, in the window the app
+    /// opens at and its narrowest, with the size changed live after the launcher is up: its
+    /// rows grow with their text, so no label or chord is cut (a label trims on purpose).</summary>
+    [Theory]
+    [InlineData(1120, 720, 2.0)]
+    [InlineData(1120, 720, 2.25)]
+    [InlineData(780, 720, 2.25)]
+    public void NoLauncherTextIsCutAtTheLargestSize(double width, double height, double scale) => OnOwnThread(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        host.Shell.Width = width;
+        host.Shell.Height = height;
+        host.Settle();
+        StackPanel launcher = ShownShell.Descendants(host.Shell).OfType<StackPanel>()
+            .Single(panel => panel.Name == "EmptyPaneLauncher");
+        Assert.True(launcher.IsVisible, "premise: the empty pane shows no launcher");
+
+        TypeRamp.Apply(RampOf(host.Shell), scale);
+        host.Settle();
+        host.Settle();
+
+        string[] cut = CutText(launcher);
+        Assert.True(cut.Length == 0, $"{cut.Length} cut in a {launcher.ActualWidth:F0} launcher, a {host.Shell.ContentPaneBorder.ActualWidth:F0} pane:\n" + string.Join('\n', cut));
+        Assert.All(launcher.Children.OfType<Button>(), button => Assert.True(button.ActualHeight > 32, $"a row stayed {button.ActualHeight} at {scale:P0}"));
+    });
+
     /// <summary>Every sheet, opened by hand, so what it shows is what it declares, in the
     /// window the app opens at and at its minimum height. Past that a sheet scrolls, and
     /// keys reach what's scrolled off. The launched pass reads their contents.</summary>

@@ -205,12 +205,13 @@
     </Style>
     <!-- DS-19: a launcher action, EmptyStateLauncher.prompt.md: a 32 row 320 wide, its label
          on the left and its chord (Tag) on the right in secondary text. Whole, on Slate.ButtonBase.
-         The launcher caps the width, so in a narrow pane a row narrows and its label gives way
-         before its chord does. Off under every modal surface, as the menus are. -->
+         The launcher caps the width, so in a narrow pane a row narrows, and where its label and
+         chord don't fit on one line the chord goes under the label (LauncherRowPanel) and the
+         row grows. Off under every modal surface, as the menus are. -->
     <Style x:Key="Slate.LauncherRowStyle" TargetType="Button" BasedOn="{StaticResource Slate.ButtonBase}">
         <Setter Property="HorizontalAlignment" Value="Stretch" />
         <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-        <Setter Property="Height" Value="32" />
+        <Setter Property="MinHeight" Value="32" />
         <Setter Property="Margin" Value="0,2" />
         <Setter Property="Padding" Value="12,0" />
         <Setter Property="Background" Value="Transparent" />
@@ -225,20 +226,13 @@
                             CornerRadius="4"
                             Padding="{TemplateBinding Padding}"
                             SnapsToDevicePixels="True">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
+                        <local:LauncherRowPanel VerticalAlignment="Center">
                             <local:AutomationPresentationTextBlock Text="{TemplateBinding Content}"
-                                                                   VerticalAlignment="Center"
-                                                                   TextTrimming="CharacterEllipsis" />
-                            <local:AutomationPresentationTextBlock Grid.Column="1"
-                                                                   Margin="16,0,0,0"
-                                                                   Text="{TemplateBinding Tag}"
-                                                                   VerticalAlignment="Center"
+                                                                   TextWrapping="Wrap" />
+                            <local:AutomationPresentationTextBlock Text="{TemplateBinding Tag}"
+                                                                   TextWrapping="Wrap"
                                                                    Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
-                        </Grid>
+                        </local:LauncherRowPanel>
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
@@ -1208,6 +1202,8 @@
                 <local:AutomationPresentationTextBlock Text="No note open"
                                                        Margin="0,0,0,16"
                                                        HorizontalAlignment="Center"
+                                                       TextAlignment="Center"
+                                                       TextWrapping="Wrap"
                                                        Style="{DynamicResource Slate.SubtitleTextBlockStyle}" />
                 <Button Style="{StaticResource Slate.LauncherRowStyle}"
                         Content="Quick Open…"
