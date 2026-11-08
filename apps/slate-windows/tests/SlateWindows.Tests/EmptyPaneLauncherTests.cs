@@ -3,6 +3,7 @@
 
 using System.Windows;
 using System.Windows.Automation;
+using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
@@ -226,6 +227,51 @@ public sealed class EmptyPaneLauncherTests
         Assert.True(host.Shell.ContentPaneBorder.MoveFocus(new TraversalRequest(FocusNavigationDirection.Next)));
         Assert.Same(Launcher(host).Children.OfType<Button>().First(), Keyboard.FocusedElement);
     });
+
+    /// <summary>A reader's object navigation under the launcher meets only its three named
+    /// actions: the scroll viewer around them, and its scroll bar once it overflows, publish
+    /// no element of their own.</summary>
+    [Fact]
+    public void TheLauncherPublishesOnlyItsActions() => RunSta(() =>
+    {
+        using var host = new ShownShell(("note.md", "# Note\n"));
+        host.Settle();
+
+        AssertOnlyTheActionsAreControls(host);
+    });
+
+    /// <summary>The control-view elements under the launcher's scroll viewer: each a named
+    /// action, and no scroll bar part. Shared with the text-size facts, which overflow it.</summary>
+    internal static void AssertOnlyTheActionsAreControls(ShownShell host)
+    {
+        ScrollViewer scroll = Assert.Single(
+            ShownShell.Descendants(host.Shell).OfType<ScrollViewer>(),
+            viewer => viewer.Name == "EmptyPaneLauncherScroll");
+        AutomationPeer peer = UIElementAutomationPeer.CreatePeerForElement(scroll);
+        Assert.False(peer.IsControlElement(), "the launcher's scroll viewer is a control element");
+        Assert.False(peer.IsContentElement(), "the launcher's scroll viewer is a content element");
+
+        var controls = new List<AutomationPeer>();
+        var pending = new Stack<AutomationPeer>(peer.GetChildren() ?? []);
+        while (pending.Count > 0)
+        {
+            AutomationPeer child = pending.Pop();
+            if (child.IsControlElement())
+            {
+                controls.Add(child);
+            }
+
+            foreach (AutomationPeer grandchild in child.GetChildren() ?? [])
+            {
+                pending.Push(grandchild);
+            }
+        }
+
+        Assert.DoesNotContain(controls, control => control.GetAutomationControlType() is AutomationControlType.ScrollBar or AutomationControlType.Thumb);
+        Assert.Equal(
+            ["New Note from Template…", "Quick Open…", "Search Vault…"],
+            controls.Select(control => control.GetName()).Order());
+    }
 
     private static StackPanel Launcher(ShownShell host) =>
         Assert.Single(ShownShell.Descendants(host.Shell).OfType<StackPanel>(), panel => panel.Name == "EmptyPaneLauncher");

@@ -246,6 +246,12 @@ public sealed partial class TextScaleTests
         Assert.True(cut.Length == 0, $"{cut.Length} cut in a {launcher.ActualWidth:F0} launcher, a {host.Shell.ContentPaneBorder.ActualWidth:F0} pane:\n" + string.Join('\n', cut));
         Assert.All(launcher.Children.OfType<Button>(), button => Assert.True(button.ActualHeight > 32, $"a row stayed {button.ActualHeight} at {scale:P0}"));
 
+        // Overflowing or not, the reader meets only the named actions under it. At the
+        // minimum height the launcher does overflow, so that case covers its scroll bar.
+        ScrollViewer scroll = (ScrollViewer)launcher.Parent;
+        Assert.True(height > 480 || scroll.ScrollableHeight > 0, $"premise: the launcher fits a {height} window at {scale:P0}");
+        EmptyPaneLauncherTests.AssertOnlyTheActionsAreControls(host);
+
         // Where the launcher is taller than the pane it scrolls: Tab from the pane reaches
         // each action in turn, and each is inside the pane when it holds the keys.
         FrameworkElement pane = host.Shell.ContentPaneBorder;

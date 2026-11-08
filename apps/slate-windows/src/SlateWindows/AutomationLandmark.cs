@@ -184,6 +184,35 @@ internal sealed class AutomationPresentationTextBlockPeer : TextBlockAutomationP
 }
 
 /// <summary>
+/// DS-19: a scroll viewer that is only layout around named stops (the empty pane's
+/// launcher). WPF publishes a plain one as an unnamed Pane and, once it overflows, its
+/// scroll bar as an unnamed ScrollBar with an unnamed Thumb and RepeatButtons: blank
+/// elements in a reader's object navigation. Here the viewer is neither a control nor a
+/// content element, and its scroll bars aren't published; the reader reaches what it
+/// holds by Tab, and a stop that takes the keys scrolls itself into view.
+/// </summary>
+internal sealed class AutomationPresentationScrollViewer : ScrollViewer
+{
+    protected override AutomationPeer OnCreateAutomationPeer() =>
+        new AutomationPresentationScrollViewerPeer(this);
+}
+
+internal sealed class AutomationPresentationScrollViewerPeer : ScrollViewerAutomationPeer
+{
+    internal AutomationPresentationScrollViewerPeer(AutomationPresentationScrollViewer owner)
+        : base(owner)
+    {
+    }
+
+    protected override bool IsControlElementCore() => false;
+
+    protected override bool IsContentElementCore() => false;
+
+    protected override List<AutomationPeer>? GetChildrenCore() =>
+        base.GetChildrenCore()?.Where(child => child is not ScrollBarAutomationPeer).ToList();
+}
+
+/// <summary>
 /// An items host whose children are presentation-only (the search
 /// result row's emphasis runs). WPF gives a plain <see cref="ItemsControl"/>
 /// an automation peer that publishes an unnamed List element, which put

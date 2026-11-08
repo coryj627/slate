@@ -1180,7 +1180,7 @@
                  and count as the empty pane for F6 (MainWindow.ShellRegions.cs). -->
             <!-- In a short pane at a large text size the launcher is taller than the pane, so it
                  scrolls, and an action brought the keys scrolls into view. Not a stop itself. -->
-            <ScrollViewer x:Name="EmptyPaneLauncherScroll"
+            <local:AutomationPresentationScrollViewer x:Name="EmptyPaneLauncherScroll"
                           Focusable="False"
                           VerticalScrollBarVisibility="Auto"
                           HorizontalScrollBarVisibility="Disabled"
@@ -1235,7 +1235,7 @@
                         AutomationProperties.AcceleratorKey="{Binding Tag, RelativeSource={RelativeSource Self}}"
                         Command="{Binding DataContext.ToggleSearchCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
             </StackPanel>
-            </ScrollViewer>
+            </local:AutomationPresentationScrollViewer>
             </Grid>
         </local:AutomationLandmarkBorder>
     </DataTemplate>
