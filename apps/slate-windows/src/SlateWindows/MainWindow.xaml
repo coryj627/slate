@@ -1230,11 +1230,14 @@
                                           ItemTemplate="{StaticResource SidebarTagTemplate}"
                                           SelectedItemChanged="Tags_SelectedItemChanged"
                                           Visibility="{Binding ShowTags, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                           AutomationProperties.AutomationId="SidebarTagTree"
                                           AutomationProperties.Name="Tags">
                                     <local:LandingTreeView.ItemContainerStyle>
                                         <Style TargetType="TreeViewItem" BasedOn="{StaticResource Slate.TreeRowBase}">
                                             <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
+                                            <!-- DS-18: a count row is 32 tall as drawn, its 32 content with no vertical padding. -->
+                                            <Setter Property="Padding" Value="8,0" />
                                             <!-- W7-7 (R-3): two-way, so a filter clear releases the
                                                  selection and the same tag can be applied again. -->
                                             <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}" />
@@ -1585,9 +1588,7 @@
                                         </Style.Triggers>
                                     </Style>
                                 </DockPanel.Style>
-                                <TextBlock DockPanel.Dock="Top"
-                                           Style="{StaticResource PanelHeading}"
-                                           Text="{Binding Panels.BacklinksHeader}" />
+                                <local:PanelToolbarView DockPanel.Dock="Top" Title="{Binding Panels.BacklinksHeader}" />
                                 <TextBlock DockPanel.Dock="Top"
                                            Style="{StaticResource PanelEmptyMessage}"
                                            Text="{Binding Panels.BacklinksEmptyMessage}"
@@ -1640,9 +1641,7 @@
                                         </Style.Triggers>
                                     </Style>
                                 </DockPanel.Style>
-                                <TextBlock DockPanel.Dock="Top"
-                                           Style="{StaticResource PanelHeading}"
-                                           Text="{Binding Panels.OutgoingLinksHeader}" />
+                                <local:PanelToolbarView DockPanel.Dock="Top" Title="{Binding Panels.OutgoingLinksHeader}" />
                                 <TextBlock DockPanel.Dock="Top"
                                            Style="{StaticResource PanelEmptyMessage}"
                                            Text="{Binding Panels.OutgoingLinksEmptyMessage}"
@@ -1728,9 +1727,7 @@
                                         </Style.Triggers>
                                     </Style>
                                 </DockPanel.Style>
-                                <TextBlock DockPanel.Dock="Top"
-                                           Style="{StaticResource PanelHeading}"
-                                           Text="Outline" />
+                                <local:PanelToolbarView DockPanel.Dock="Top" Title="Outline" />
                                 <TextBlock DockPanel.Dock="Top"
                                            Style="{StaticResource PanelEmptyMessage}"
                                            Text="{Binding Panels.OutlineEmptyMessage}"
@@ -1776,9 +1773,7 @@
                                         </Style.Triggers>
                                     </Style>
                                 </DockPanel.Style>
-                                <TextBlock DockPanel.Dock="Top"
-                                           Style="{StaticResource PanelHeading}"
-                                           Text="{Binding Panels.EmbedsHeader}" />
+                                <local:PanelToolbarView DockPanel.Dock="Top" Title="{Binding Panels.EmbedsHeader}" />
                                 <TextBlock DockPanel.Dock="Top"
                                            Style="{StaticResource PanelEmptyMessage}"
                                            Text="{Binding Panels.EmbedsEmptyMessage}"
@@ -1854,9 +1849,7 @@
                                         </Style.Triggers>
                                     </Style>
                                 </DockPanel.Style>
-                                <TextBlock DockPanel.Dock="Top"
-                                           Style="{StaticResource PanelHeading}"
-                                           Text="{Binding Panels.TasksHeader}" />
+                                <local:PanelToolbarView DockPanel.Dock="Top" Title="{Binding Panels.TasksHeader}" />
                                 <TextBlock DockPanel.Dock="Top"
                                            Style="{StaticResource PanelEmptyMessage}"
                                            Text="{Binding Panels.TasksEmptyMessage}"
@@ -1913,9 +1906,7 @@
                                         </Style.Triggers>
                                     </Style>
                                 </DockPanel.Style>
-                                <TextBlock DockPanel.Dock="Top"
-                                           Style="{StaticResource PanelHeading}"
-                                           Text="{Binding TasksReview.Header}" />
+                                <local:PanelToolbarView DockPanel.Dock="Top" Title="{Binding TasksReview.Header}" />
                                 <!-- Radio buttons, not plain buttons (adversarial
                                      round 3): the active filter is a real UIA
                                      selection state with a non-color visual.
@@ -2057,9 +2048,7 @@
                                         </Style.Triggers>
                                     </Style>
                                 </DockPanel.Style>
-                                <TextBlock DockPanel.Dock="Top"
-                                           Style="{StaticResource PanelHeading}"
-                                           Text="{x:Static panels:CitationPhrase.CitationsHeading}" />
+                                <local:PanelToolbarView DockPanel.Dock="Top" Title="{x:Static panels:CitationPhrase.CitationsHeading}" Count="{Binding Citations.Rows.Count}" />
                                 <!-- W7-7 PR 4 (#1247, R-5; spec §5.2.2): an EMPTY list's
                                      stop is its notice — the no-file and no-citations
                                      sentences take the keys and read their reason
@@ -2150,9 +2139,7 @@
                                         </Style.Triggers>
                                     </Style>
                                 </DockPanel.Style>
-                                <TextBlock DockPanel.Dock="Top"
-                                           Style="{StaticResource PanelHeading}"
-                                           Text="{x:Static panels:CitationPhrase.BibliographyHeading}" />
+                                <local:PanelToolbarView DockPanel.Dock="Top" Title="{x:Static panels:CitationPhrase.BibliographyHeading}" />
                                 <!-- The group name lives on a
                                      landmark border, not on the
                                      StackPanel: a Panel gets no
@@ -2314,21 +2301,18 @@
                                         </Style.Triggers>
                                     </Style>
                                 </DockPanel.Style>
-                                <WrapPanel DockPanel.Dock="Top" Orientation="Horizontal">
-                                    <TextBlock Margin="0,0,12,4"
-                                               VerticalAlignment="Center"
-                                               Text="Queries"
-                                               Style="{DynamicResource Slate.BodyStrongTextBlockStyle}"
-                                               AutomationProperties.HeadingLevel="Level2" />
-                                    <Button Margin="0,0,12,4"
-                                            Content="New dashboard"
+                                <local:PanelToolbarView DockPanel.Dock="Top" Title="Queries">
+                                    <Button Style="{DynamicResource Slate.SubtleIconButtonStyle}"
+                                            Content="&#xE710;"
                                             AutomationProperties.AutomationId="QueriesNewDashboard"
+                                            AutomationProperties.Name="New dashboard"
                                             Click="QueriesNewDashboard_Click" />
-                                    <Button Margin="0,0,8,4"
-                                            Content="Refresh queries"
+                                    <Button Style="{DynamicResource Slate.SubtleIconButtonStyle}"
+                                            Content="&#xE72C;"
                                             AutomationProperties.AutomationId="QueriesRefresh"
+                                            AutomationProperties.Name="Refresh queries"
                                             Click="QueriesRefresh_Click" />
-                                </WrapPanel>
+                                </local:PanelToolbarView>
                                 <ScrollViewer Focusable="False" VerticalScrollBarVisibility="Auto">
                                     <!-- #1790: the scroll bar draws over its content, so nothing sits under it. -->
                                     <StackPanel Margin="0,0,12,0">
@@ -2544,10 +2528,7 @@
                                         </Style.Triggers>
                                     </Style>
                                 </DockPanel.Style>
-                                <TextBlock DockPanel.Dock="Top"
-                                           Text="Base dock"
-                                           Style="{DynamicResource Slate.BodyStrongTextBlockStyle}"
-                                           AutomationProperties.HeadingLevel="Level2" />
+                                <local:PanelToolbarView DockPanel.Dock="Top" Title="Base dock" />
                                 <TextBlock x:Name="BasesDockEmptyState"
                                            DockPanel.Dock="Top"
                                            Text="Dock a base, saved query, or dashboard to follow the active note."
@@ -2646,6 +2627,8 @@
                                         </Style.Triggers>
                                     </Style>
                                 </DockPanel.Style>
+                                <!-- DS-18: the leaf's toolbar, titled as the rail names it (T37). -->
+                                <local:PanelToolbarView DockPanel.Dock="Top" Title="{Binding ActiveLeaf.Title}" />
                                 <graph:GraphInspectorView x:Name="GraphInspectorSurface"
                                                           Model="{Binding Inspector}" />
                             </DockPanel>
@@ -2667,10 +2650,7 @@
                                         </Style.Triggers>
                                     </Style>
                                 </DockPanel.Style>
-                                <TextBlock DockPanel.Dock="Top"
-                                           Text="History"
-                                           Style="{DynamicResource Slate.BodyStrongTextBlockStyle}"
-                                           AutomationProperties.HeadingLevel="Level2" />
+                                <local:PanelToolbarView DockPanel.Dock="Top" Title="History" />
                                 <panels:HistorySurfaceView Model="{Binding History}" />
                             </DockPanel>
 
@@ -2691,10 +2671,7 @@
                                         </Style.Triggers>
                                     </Style>
                                 </DockPanel.Style>
-                                <TextBlock DockPanel.Dock="Top"
-                                           Text="Sync"
-                                           Style="{DynamicResource Slate.BodyStrongTextBlockStyle}"
-                                           AutomationProperties.HeadingLevel="Level2" />
+                                <local:PanelToolbarView DockPanel.Dock="Top" Title="Sync" />
                                 <panels:SyncDiagnosticsSurfaceView Model="{Binding SyncDiagnostics}" />
                             </DockPanel>
 
@@ -2753,9 +2730,7 @@
                                         </Style.Triggers>
                                     </Style>
                                 </StackPanel.Style>
-                                <TextBlock Text="{Binding ActiveLeaf.Title}"
-                                           Style="{DynamicResource Slate.BodyStrongTextBlockStyle}"
-                                           AutomationProperties.HeadingLevel="Level2" />
+                                <local:PanelToolbarView Title="{Binding ActiveLeaf.Title}" />
                                 <TextBlock Margin="0,8,0,0"
                                            Text="This panel is docked and ready for its feature surface."
                                            Foreground="{DynamicResource Slate.SecondaryTextBrush}"

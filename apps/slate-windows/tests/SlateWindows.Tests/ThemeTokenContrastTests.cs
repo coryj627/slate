@@ -54,6 +54,8 @@ public sealed class ThemeTokenContrastTests
             ("selected-row/text", "Slate.SelectionTextColor", "Slate.SelectedSurfaceColor"),
             ("selected-row/secondary", "Slate.SecondaryTextColor", "Slate.SelectedSurfaceColor"),
             ("selected-row/accent-text", "Slate.AccentTextColor", "Slate.SelectedSurfaceColor"),
+            // DS-18: a selected count row's count (Slate.SelectedCaptionBrush is tertiary).
+            ("selected-row/count", "Slate.TertiaryTextColor", "Slate.SelectedSurfaceColor"),
             ("error/surface", "Slate.ErrorColor", "Slate.SurfaceColor"),
             // W3-4 code-token palette: token text renders on the code
             // block's raised background inside the reading surface, so
@@ -282,6 +284,12 @@ public sealed class ThemeTokenContrastTests
                 element => element.Attribute(x + "Key")!.Value,
                 element => Rgb.Parse(element.Value));
     }
+
+    /// <summary>|Lc| of drawn colours, for facts that measure a realized element.</summary>
+    internal static double Lc(System.Windows.Media.Color text, System.Windows.Media.Color background) =>
+        Math.Abs(ApcaLc(
+            Rgb.Parse($"#{text.R:X2}{text.G:X2}{text.B:X2}"),
+            Rgb.Parse($"#{background.R:X2}{background.G:X2}{background.B:X2}")));
 
     private static double ApcaLc(Rgb text, Rgb background)
     {

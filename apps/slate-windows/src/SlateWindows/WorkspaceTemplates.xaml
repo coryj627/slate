@@ -181,8 +181,9 @@
                                         Visibility="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}, Converter={StaticResource Slate.TreeBoolToVisibility}}" />
                     </Grid>
                     <ControlTemplate.Triggers>
+                        <!-- DS-18: the design's surface hover, as panel rows have. -->
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter Property="Background" Value="{DynamicResource Slate.RaisedSurfaceBrush}" />
+                            <Setter Property="Background" Value="{DynamicResource Slate.HoverOverlayBrush}" />
                         </Trigger>
                         <Trigger Property="IsSelected" Value="True">
                             <Setter Property="Background" Value="{DynamicResource Slate.SelectedSurfaceBrush}" />
@@ -218,10 +219,51 @@
     <local:SidebarSortModeLabelConverter x:Key="SidebarSortModeLabelConverter" />
     <local:RecentVaultNameConverter x:Key="RecentVaultNameConverter" />
 
+    <!-- DS-18: a tag is a count row (CountListRow.prompt.md): its icon, its label, and its
+         count on the right in tabular figures. Selected, the label is semibold and the count
+         takes Slate.SelectedCaptionBrush. Everything here is presentation: the row's container
+         names it "{Segment}, {n} files", as before. -->
     <HierarchicalDataTemplate x:Key="SidebarTagTemplate"
                               DataType="{x:Type local:SidebarTagViewModel}"
                               ItemsSource="{Binding Children}">
-        <TextBlock Text="{Binding DisplayLabel}" />
+        <Grid MinHeight="32">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <local:AutomationPresentationTextBlock Text="&#xE8EC;"
+                                                   FontFamily="{DynamicResource SymbolThemeFontFamily}"
+                                                   FontSize="16"
+                                                   Margin="0,0,8,0"
+                                                   VerticalAlignment="Center" />
+            <local:AutomationPresentationTextBlock x:Name="Label"
+                                                   Grid.Column="1"
+                                                   Text="{Binding Segment}"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   VerticalAlignment="Center" />
+            <local:AutomationPresentationTextBlock x:Name="Count"
+                                                   Grid.Column="2"
+                                                   Margin="12,0,0,0"
+                                                   Text="{Binding FileCount, StringFormat={}{0:N0}}"
+                                                   FontSize="{DynamicResource Slate.FontSizeCaption}"
+                                                   LineHeight="{DynamicResource Slate.LineHeightCaption}"
+                                                   Typography.NumeralAlignment="Tabular"
+                                                   HorizontalAlignment="Right"
+                                                   VerticalAlignment="Center">
+                <local:AutomationPresentationTextBlock.Style>
+                    <Style TargetType="TextBlock">
+                        <Setter Property="Foreground" Value="{DynamicResource Slate.TertiaryTextBrush}" />
+                    </Style>
+                </local:AutomationPresentationTextBlock.Style>
+            </local:AutomationPresentationTextBlock>
+        </Grid>
+        <HierarchicalDataTemplate.Triggers>
+            <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=TreeViewItem}}" Value="True">
+                <Setter TargetName="Label" Property="FontWeight" Value="SemiBold" />
+                <Setter TargetName="Count" Property="Foreground" Value="{DynamicResource Slate.SelectedCaptionBrush}" />
+            </DataTrigger>
+        </HierarchicalDataTemplate.Triggers>
     </HierarchicalDataTemplate>
 
     <HierarchicalDataTemplate x:Key="FileTreeNodeTemplate"

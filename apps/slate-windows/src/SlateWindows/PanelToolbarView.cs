@@ -59,7 +59,8 @@ internal sealed class PanelToolbarView : Border
             VisibilityProperty,
             new System.Windows.Data.Binding(nameof(Count)) { Source = this, Converter = HasText.Instance });
 
-        var heading = new DockPanel { VerticalAlignment = VerticalAlignment.Center, LastChildFill = true };
+        // The title stands 8 off the buttons beside it (#1790).
+        var heading = new DockPanel { VerticalAlignment = VerticalAlignment.Center, LastChildFill = true, Margin = new Thickness(0, 0, 8, 0) };
         DockPanel.SetDock(count, Dock.Right);
         _ = heading.Children.Add(count);
         _ = heading.Children.Add(title);
