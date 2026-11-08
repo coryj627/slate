@@ -679,13 +679,14 @@ public sealed partial class ShellAccessibilityTests
             AssertItemNamesAreSpeakable(process, "sidebar-filter-results");
             sidebarFilter.Patterns.Value.Pattern.SetValue(string.Empty);
 
-            AutomationElement tagToggle = WaitForNamedElement(
-                window,
-                automation,
-                "Show tag tree",
-                TimeSpan.FromSeconds(10));
+            // DS-17: Show tag tree is a checkable row of Sort and group now.
+            AutomationElement tagToggle = OpenSortAndGroupRow(window, automation, "SidebarShowTags");
+            Assert.Equal("Show tag tree", tagToggle.Name);
             Assert.True(tagToggle.Patterns.Toggle.IsSupported);
             tagToggle.Patterns.Toggle.Pattern.Toggle();
+            Assert.True(
+                SpinWait.SpinUntil(() => !SortAndGroupIsOpen(window, automation), TimeSpan.FromSeconds(5)),
+                "Toggling Show tag tree didn't close Sort and group.");
             AutomationElement tagTree = WaitForElement(
                 window,
                 "SidebarTagTree",
