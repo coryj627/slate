@@ -285,6 +285,22 @@ internal sealed class LayoutItemsControl : ItemsControl
         FocusableProperty.OverrideMetadata(
             typeof(LayoutItemsControl), new FrameworkPropertyMetadata(false));
 
+    /// <summary>#1677, #1678: the host's peer (once a client made one) reads its items
+    /// again each time its containers are generated, so a list rebuilt while the host was
+    /// collapsed (the recent vaults, republished while a vault opens) publishes its new
+    /// buttons, not the old ones' stops. After layout: a container is generated before its
+    /// template makes the stop it wraps, and an item peer read then has no children.</summary>
+    public LayoutItemsControl() =>
+        ItemContainerGenerator.StatusChanged += (_, _) =>
+        {
+            if (ItemContainerGenerator.Status == System.Windows.Controls.Primitives.GeneratorStatus.ContainersGenerated)
+            {
+                _ = Dispatcher.InvokeAsync(
+                    () => UIElementAutomationPeer.FromElement(this)?.ResetChildrenCache(),
+                    System.Windows.Threading.DispatcherPriority.Loaded);
+            }
+        };
+
     public bool IsStructural
     {
         get => (bool)GetValue(IsStructuralProperty);
@@ -315,6 +331,28 @@ internal sealed class LayoutItemsControlAutomationPeer : ItemsControlAutomationP
 
     protected override ItemAutomationPeer CreateItemAutomationPeer(object item) =>
         new LayoutItemAutomationPeer(item, this);
+
+    /// <summary>#1677, #1678: WPF reuses an item peer for an item EQUAL to one it had, and
+    /// a record is equal by value, so a list rebuilt with equal records (the recent vaults,
+    /// cleared and refilled on every publication) keeps its old item peers. Each still
+    /// caches the children it read from its old container: the stops of buttons no longer
+    /// shown. Nothing invalidates them, since an item peer is no visual ancestor of its
+    /// container, so a reader's tree showed the old stops and the live buttons had no element
+    /// there (focus on one read as the bare window). Each rebuild of the host's children
+    /// reads every item peer's children again, from the container it has now.</summary>
+    protected override List<AutomationPeer>? GetChildrenCore()
+    {
+        List<AutomationPeer>? children = base.GetChildrenCore();
+        foreach (AutomationPeer child in children ?? [])
+        {
+            if (child is LayoutItemAutomationPeer item)
+            {
+                item.ResetChildrenCache();
+            }
+        }
+
+        return children;
+    }
 }
 
 /// <summary>
