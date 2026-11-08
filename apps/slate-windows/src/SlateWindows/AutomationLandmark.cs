@@ -376,20 +376,46 @@ internal sealed class LayoutItemAutomationPeer : ItemAutomationPeer
     private DependencyObject? Container =>
         (ItemsControlAutomationPeer?.Owner as ItemsControl)?.ItemContainerGenerator.ContainerFromItem(Item);
 
+    private bool _readAgainQueued;
+
     /// <summary>#1677: drop the cached children when they were read from another container
-    /// than the item's now (a reused peer for an equal, rebuilt item).</summary>
+    /// than the item's now (a reused peer for an equal, rebuilt item). Queued, never done in
+    /// the host's read: that read can run inside this peer's own (layout instantiating a
+    /// template while a client reads the item), and WPF rejects a reset there as a recursive
+    /// peer call. Thrown during a split's layout, it ended the app (PR #1861's shell gate).
+    /// Checked again when it runs, since the container can change once more.</summary>
     internal void ReadAgainIfRewrapped()
     {
-        DependencyObject? readFrom = null;
-        if (_readFrom?.TryGetTarget(out readFrom) != true || !ReferenceEquals(readFrom, Container))
+        if (IsCurrent() || _readAgainQueued)
         {
-            ResetChildrenCache();
+            return;
         }
+
+        _readAgainQueued = true;
+        _ = Dispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.Send,
+            () =>
+            {
+                _readAgainQueued = false;
+                if (!IsCurrent())
+                {
+                    ResetChildrenCache();
+                }
+            });
     }
 
+    private bool IsCurrent() =>
+        _readFrom?.TryGetTarget(out DependencyObject? readFrom) == true
+        && ReferenceEquals(readFrom, Container);
+
+    /// <summary>Remembers the container only when it was laid out: a container generated
+    /// moments ago has no template yet, so a read then finds no children, and the next
+    /// rebuild of the host's children (the Loaded-priority reset queues one) reads again.</summary>
     protected override List<AutomationPeer>? GetChildrenCore()
     {
-        _readFrom = Container is { } container ? new WeakReference<DependencyObject>(container) : null;
+        _readFrom = Container is UIElement { IsArrangeValid: true } container
+            ? new WeakReference<DependencyObject>(container)
+            : null;
         return base.GetChildrenCore();
     }
 
