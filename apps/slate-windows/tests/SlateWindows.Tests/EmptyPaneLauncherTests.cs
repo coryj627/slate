@@ -32,6 +32,11 @@ public sealed class EmptyPaneLauncherTests
         Assert.Equal(
             [Chord("slate.workspace.quickOpen"), Chord("slate.file.newFromTemplate"), Chord("slate.view.toggleSearch")],
             actions.Select(button => (string)button.Tag));
+        // The design's icons (EmptyStateLauncher.prompt.md), drawn before each label.
+        Assert.Equal(["\uE8E5", "\uE710", "\uE721"], actions.Select(LauncherRowPanel.GetGlyph));
+        Assert.All(actions, button => Assert.Contains(
+            ShownShell.Descendants(button).OfType<TextBlock>(),
+            text => text.Text == LauncherRowPanel.GetGlyph(button) && text.IsVisible));
         // Each bound to the command its menu item and chord run (the hosted shell has no
         // Quick Open switcher, so that one is read as its binding).
         Assert.Equal(

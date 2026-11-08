@@ -226,13 +226,21 @@
                             CornerRadius="4"
                             Padding="{TemplateBinding Padding}"
                             SnapsToDevicePixels="True">
-                        <local:LauncherRowPanel VerticalAlignment="Center">
-                            <local:AutomationPresentationTextBlock Text="{TemplateBinding Content}"
-                                                                   TextWrapping="Wrap" />
-                            <local:AutomationPresentationTextBlock Text="{TemplateBinding Tag}"
-                                                                   TextWrapping="Wrap"
-                                                                   Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
-                        </local:LauncherRowPanel>
+                        <DockPanel VerticalAlignment="Center">
+                            <local:AutomationPresentationTextBlock DockPanel.Dock="Left"
+                                                                   Text="{Binding (local:LauncherRowPanel.Glyph), RelativeSource={RelativeSource TemplatedParent}}"
+                                                                   FontFamily="{DynamicResource SymbolThemeFontFamily}"
+                                                                   FontSize="16"
+                                                                   Margin="0,0,12,0"
+                                                                   VerticalAlignment="Center" />
+                            <local:LauncherRowPanel>
+                                <local:AutomationPresentationTextBlock Text="{TemplateBinding Content}"
+                                                                       TextWrapping="Wrap" />
+                                <local:AutomationPresentationTextBlock Text="{TemplateBinding Tag}"
+                                                                       TextWrapping="Wrap"
+                                                                       Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
+                            </local:LauncherRowPanel>
+                        </DockPanel>
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
@@ -1215,6 +1223,7 @@
                                                        Style="{DynamicResource Slate.SubtitleTextBlockStyle}" />
                 <Button Style="{StaticResource Slate.LauncherRowStyle}"
                         Content="Quick Open…"
+                        local:LauncherRowPanel.Glyph="&#xE8E5;"
                         Tag="{cmd:ChordText slate.workspace.quickOpen}"
                         AutomationProperties.AutomationId="EmptyPaneQuickOpen"
                         AutomationProperties.Name="Quick Open…"
@@ -1222,6 +1231,7 @@
                         Command="{Binding DataContext.QuickSwitcher.OpenCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
                 <Button Style="{StaticResource Slate.LauncherRowStyle}"
                         Content="New Note from Template…"
+                        local:LauncherRowPanel.Glyph="&#xE710;"
                         Tag="{cmd:ChordText slate.file.newFromTemplate}"
                         AutomationProperties.AutomationId="EmptyPaneNewFromTemplate"
                         AutomationProperties.Name="New Note from Template…"
@@ -1229,6 +1239,7 @@
                         Command="{Binding DataContext.Workspace.NewFromTemplateCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
                 <Button Style="{StaticResource Slate.LauncherRowStyle}"
                         Content="Search Vault…"
+                        local:LauncherRowPanel.Glyph="&#xE721;"
                         Tag="{cmd:ChordText slate.view.toggleSearch}"
                         AutomationProperties.AutomationId="EmptyPaneSearchVault"
                         AutomationProperties.Name="Search Vault…"

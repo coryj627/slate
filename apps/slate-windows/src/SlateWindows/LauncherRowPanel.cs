@@ -23,6 +23,15 @@ internal sealed class LauncherRowPanel : Panel
         set => SetValue(GapProperty, value);
     }
 
+    /// <summary>A launcher action's icon (a Segoe Fluent Icons code point), set on its
+    /// button and drawn before its label as presentation: the button's name is its label.</summary>
+    public static readonly DependencyProperty GlyphProperty = DependencyProperty.RegisterAttached(
+        "Glyph", typeof(string), typeof(LauncherRowPanel), new FrameworkPropertyMetadata(string.Empty));
+
+    public static string GetGlyph(DependencyObject element) => (string)element.GetValue(GlyphProperty);
+
+    public static void SetGlyph(DependencyObject element, string value) => element.SetValue(GlyphProperty, value);
+
     /// <summary>Whether the last measure put the chord under the label.</summary>
     internal bool IsStacked { get; private set; }
 
