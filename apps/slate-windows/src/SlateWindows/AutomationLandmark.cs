@@ -338,8 +338,10 @@ internal sealed class LayoutItemsControlAutomationPeer : ItemsControlAutomationP
     /// caches the children it read from its old container: the stops of buttons no longer
     /// shown. Nothing invalidates them, since an item peer is no visual ancestor of its
     /// container, so a reader's tree showed the old stops and the live buttons had no element
-    /// there (focus on one read as the bare window). Each rebuild of the host's children
-    /// reads every item peer's children again, from the container it has now.</summary>
+    /// there (focus on one read as the bare window). Each rebuild of the host's children has
+    /// an item peer read its children again when its item's container is no longer the one
+    /// it read them from. Only then: a subtree a client is walking (a split adding a pane)
+    /// stays as it is.</summary>
     protected override List<AutomationPeer>? GetChildrenCore()
     {
         List<AutomationPeer>? children = base.GetChildrenCore();
@@ -347,7 +349,7 @@ internal sealed class LayoutItemsControlAutomationPeer : ItemsControlAutomationP
         {
             if (child is LayoutItemAutomationPeer item)
             {
-                item.ResetChildrenCache();
+                item.ReadAgainIfRewrapped();
             }
         }
 
@@ -363,9 +365,32 @@ internal sealed class LayoutItemsControlAutomationPeer : ItemsControlAutomationP
 /// </summary>
 internal sealed class LayoutItemAutomationPeer : ItemAutomationPeer
 {
+    /// <summary>The container this peer last read its children from.</summary>
+    private WeakReference<DependencyObject>? _readFrom;
+
     internal LayoutItemAutomationPeer(object item, LayoutItemsControlAutomationPeer host)
         : base(item, host)
     {
+    }
+
+    private DependencyObject? Container =>
+        (ItemsControlAutomationPeer?.Owner as ItemsControl)?.ItemContainerGenerator.ContainerFromItem(Item);
+
+    /// <summary>#1677: drop the cached children when they were read from another container
+    /// than the item's now (a reused peer for an equal, rebuilt item).</summary>
+    internal void ReadAgainIfRewrapped()
+    {
+        DependencyObject? readFrom = null;
+        if (_readFrom?.TryGetTarget(out readFrom) != true || !ReferenceEquals(readFrom, Container))
+        {
+            ResetChildrenCache();
+        }
+    }
+
+    protected override List<AutomationPeer>? GetChildrenCore()
+    {
+        _readFrom = Container is { } container ? new WeakReference<DependencyObject>(container) : null;
+        return base.GetChildrenCore();
     }
 
     protected override AutomationControlType GetAutomationControlTypeCore() =>
