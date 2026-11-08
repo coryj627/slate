@@ -7,6 +7,7 @@ using System.Windows.Automation.Peers;
 using System.Windows.Automation.Provider;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows.Tests;
@@ -211,6 +212,27 @@ public sealed class FilesToolbarTests
             Point left = button.TranslatePoint(default, pane);
             Assert.True(left.X >= 0 && left.X + button.ActualWidth <= pane.ActualWidth + 0.5, $"{AutomationProperties.GetName(button)} is at {left.X:F0} in a {pane.ActualWidth:F0} pane.");
         }
+    });
+
+    /// <summary>Codoki asked whether a longer vault name, at the same width, still moves
+    /// the buttons under the title. It does: the title wraps, the toolbar grows taller,
+    /// and that size change is what places them.</summary>
+    [Fact]
+    public void ALongerTitleAtTheSameWidthPutsTheButtonsUnderIt() => RunSta(() =>
+    {
+        using var host = new ShownShell(("note.md", "# Note\n"));
+        using Attached attached = Attach(host);
+        var toolbar = (PanelToolbarView)host.Shell.FindName("FilesToolbar");
+        var row = (FrameworkElement)VisualTreeHelper.GetParent(toolbar.Buttons[0]);
+        Assert.Equal(0, Grid.GetRow(row));
+        double width = toolbar.ActualWidth;
+
+        SetProperty(host, nameof(VaultLifecycleViewModel.VaultDisplayName), "A vault with a much longer name than the pane can hold");
+        host.Settle();
+        host.Settle();
+
+        Assert.Equal(width, toolbar.ActualWidth, 1);
+        Assert.Equal(1, Grid.GetRow(row));
     });
 
     [Fact]
