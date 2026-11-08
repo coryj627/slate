@@ -203,9 +203,12 @@
         <Setter Property="Template" Value="{StaticResource Slate.TreeRowTemplate}" />
     </Style>
     <!-- DS-19: a launcher action, EmptyStateLauncher.prompt.md: a 32 row 320 wide, its label
-         on the left and its chord (Tag) on the right in secondary text. Whole, on Slate.ButtonBase. -->
+         on the left and its chord (Tag) on the right in secondary text. Whole, on Slate.ButtonBase.
+         The launcher caps the width, so in a narrow pane a row narrows and its label gives way
+         before its chord does. Off under every modal surface, as the menus are. -->
     <Style x:Key="Slate.LauncherRowStyle" TargetType="Button" BasedOn="{StaticResource Slate.ButtonBase}">
-        <Setter Property="Width" Value="320" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
         <Setter Property="Height" Value="32" />
         <Setter Property="Margin" Value="0,2" />
         <Setter Property="Padding" Value="12,0" />
@@ -250,6 +253,11 @@
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
+        <Style.Triggers>
+            <DataTrigger Binding="{Binding IsModalSurfaceOpen, RelativeSource={RelativeSource AncestorType=Window}}" Value="True">
+                <Setter Property="IsEnabled" Value="False" />
+            </DataTrigger>
+        </Style.Triggers>
     </Style>
     <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
     <local:InverseBooleanConverter x:Key="InverseBooleanConverter" />
@@ -1136,7 +1144,8 @@
                  and count as the empty pane for F6 (MainWindow.ShellRegions.cs). -->
             <StackPanel x:Name="EmptyPaneLauncher"
                         Margin="24"
-                        HorizontalAlignment="Center"
+                        MaxWidth="320"
+                        HorizontalAlignment="Stretch"
                         VerticalAlignment="Center">
                 <StackPanel.Style>
                     <Style TargetType="StackPanel">

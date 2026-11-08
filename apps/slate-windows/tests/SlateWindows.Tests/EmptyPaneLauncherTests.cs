@@ -41,15 +41,66 @@ public sealed class EmptyPaneLauncherTests
             Assert.False(string.IsNullOrEmpty((string)button.Tag), $"{AutomationProperties.GetName(button)} has no chord.");
             Assert.Equal((string)button.Tag, AutomationProperties.GetAcceleratorKey(button));
             Assert.Equal(32, button.ActualHeight, 1);
+            Assert.Equal(320, button.ActualWidth, 1);
         });
     });
 
+    /// <summary>The launcher caps its rows at 320, so in a narrow pane a row narrows with
+    /// it, and each chord stays whole and inside its row.</summary>
+    [Fact]
+    public void ANarrowPaneKeepsEveryChordInsideItsRow() => RunSta(() =>
+    {
+        using var host = new ShownShell(("note.md", "# Note\n"));
+        host.Settle();
+        host.Shell.ContentPaneBorder.Width = 270;
+        host.Settle();
+        StackPanel launcher = Launcher(host);
+
+        Assert.All(launcher.Children.OfType<Button>(), button =>
+        {
+            string name = AutomationProperties.GetName(button);
+            Rect row = button.TransformToAncestor(host.Shell.ContentPaneBorder)
+                .TransformBounds(new Rect(button.RenderSize));
+            Assert.True(row.Left >= 0 && row.Right <= 270, $"{name} spills out of the pane: {row}.");
+            TextBlock chord = ShownShell.Descendants(button).OfType<TextBlock>()
+                .Single(text => text.Text == (string)button.Tag);
+            Rect drawn = chord.TransformToAncestor(button).TransformBounds(new Rect(chord.RenderSize));
+            Assert.True(drawn.Left >= 0 && drawn.Right <= button.ActualWidth, $"{name}'s chord is outside its row: {drawn}.");
+            Assert.Equal(chord.DesiredSize.Width, chord.ActualWidth, 1);
+        });
+    });
+
+    /// <summary>A modal surface owns the keys, so the launcher's actions are off under each
+    /// kind: an overlay the workspace doesn't cover, and a sheet.</summary>
+    [Fact]
+    public void TheActionsAreOffUnderEveryModalSurface() => RunSta(() =>
+    {
+        using var host = new ShownShell(("note.md", "# Note\n"));
+        host.Settle();
+        Button[] actions = [.. Launcher(host).Children.OfType<Button>()];
+
+        host.Lifecycle.OpenSettingsCommand.Execute(null);
+        host.Settle();
+        Assert.Equal(ModalSurface.Settings, host.Shell.OpenModalSurface);
+        Assert.All(actions, button => Assert.False(button.IsEnabled, $"{AutomationProperties.GetName(button)} is on under Settings."));
+
+        host.Lifecycle.CloseSettings();
+        host.Settle();
+        host.Workspace.NewFromTemplateCommand.Execute(null);
+        host.Settle();
+        Assert.Equal(ModalSurface.TemplatePicker, host.Shell.OpenModalSurface);
+        Assert.All(actions, button => Assert.False(button.IsEnabled, $"{AutomationProperties.GetName(button)} is on under the template picker."));
+    });
+
+    /// <summary>Opening a note from an action takes the launcher away and leaves the keys
+    /// on a live element, never on the collapsed action.</summary>
     [Fact]
     public void TheActionsGoAwayWithATab() => RunSta(() =>
     {
         using var host = new ShownShell(("note.md", "# Note\n"));
         host.Settle();
-        Assert.True(Launcher(host).IsVisible, "premise: the empty pane shows no launcher");
+        Button quickOpen = Launcher(host).Children.OfType<Button>().First();
+        Assert.True(quickOpen.Focus(), "premise: Quick Open refused the keys");
 
         host.Workspace.OpenPath("note.md");
         host.Settle();
@@ -57,6 +108,9 @@ public sealed class EmptyPaneLauncherTests
         Assert.DoesNotContain(
             ShownShell.Descendants(host.Shell).OfType<StackPanel>(),
             panel => panel.Name == "EmptyPaneLauncher" && panel.IsVisible);
+        var focused = Assert.IsAssignableFrom<UIElement>(Keyboard.FocusedElement);
+        Assert.True(focused.IsVisible, $"the keys are on a hidden {focused.GetType().Name}.");
+        Assert.False(quickOpen.IsKeyboardFocused, "the keys stayed on the collapsed action.");
     });
 
     [Fact]
@@ -70,18 +124,40 @@ public sealed class EmptyPaneLauncherTests
         Assert.Equal(ShellRegionKind.EmptyEditor, ((IShellRegionHost)host.Shell).FocusedRegion());
     });
 
-    /// <summary>An action is the empty pane too, so F6 from it moves on to the next
-    /// region rather than re-landing on the pane it's in.</summary>
-    [Fact]
-    public void F6FromALauncherActionMovesOn() => RunSta(() =>
+    /// <summary>An action is the empty pane too, so F6 and Shift+F6 from it move on to the
+    /// next and previous regions, as they do from the pane's own stop, rather than
+    /// re-landing on the pane it's in.</summary>
+    [Theory]
+    [InlineData(0, true)]
+    [InlineData(1, true)]
+    [InlineData(2, true)]
+    [InlineData(0, false)]
+    [InlineData(2, false)]
+    public void F6FromALauncherActionMovesOn(int index, bool forward) => RunSta(() =>
     {
         using var host = new ShownShell(("note.md", "# Note\n"));
         host.Settle();
-        Button quickOpen = Launcher(host).Children.OfType<Button>().First();
+        var regions = (IShellRegionHost)host.Shell;
 
-        Assert.True(quickOpen.Focus(), "premise: Quick Open refused the keys");
-        Assert.Equal(ShellRegionKind.EmptyEditor, ((IShellRegionHost)host.Shell).FocusedRegion());
+        Assert.True(host.Land(ShellRegionKind.EmptyEditor));
+        Step(host, forward);
+        ShellRegionKind expected = regions.FocusedRegion();
+        Assert.NotEqual(ShellRegionKind.EmptyEditor, expected);
+
+        Button action = Launcher(host).Children.OfType<Button>().ElementAt(index);
+        Assert.True(action.Focus(), $"premise: {AutomationProperties.GetName(action)} refused the keys");
+        Assert.Equal(ShellRegionKind.EmptyEditor, regions.FocusedRegion());
+        Step(host, forward);
+
+        Assert.Equal(expected, regions.FocusedRegion());
+        Assert.False(Launcher(host).IsKeyboardFocusWithin, "the keys stayed in the launcher.");
     });
+
+    private static void Step(ShownShell host, bool forward)
+    {
+        (forward ? host.Workspace.FocusNextPaneCommand : host.Workspace.FocusPreviousPaneCommand).Execute(null);
+        host.Settle();
+    }
 
     [Fact]
     public void TabFromTheEmptyPaneReachesTheFirstAction() => RunSta(() =>
