@@ -20,6 +20,16 @@
     "Surface": "Split workspace"
   },
   {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "Count",
+    "Surface": "Sidebar organization and actions"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "Label",
+    "Surface": "Sidebar organization and actions"
+  },
+  {
     "Source": "MainWindow.FilesToolbar.cs",
     "Expression": "\"SidebarDualPaneToggle\"",
     "Surface": "Sidebar organization and actions"

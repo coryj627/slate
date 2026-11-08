@@ -269,7 +269,7 @@ public sealed class FilesToolbarTests
 
     /// <summary>A Files sidebar on the shown shell, and a vault name and path for the
     /// toolbar to show; the hosted shell has neither of its own.</summary>
-    private static Attached Attach(ShownShell host)
+    internal static Attached Attach(ShownShell host)
     {
         string local = Path.Combine(Path.GetTempPath(), "slate-ds17-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(local);
@@ -285,7 +285,7 @@ public sealed class FilesToolbarTests
 
     /// <summary>The attached sidebar, taken off the shell and shut down as the palette
     /// harness does, so none of its work outlives the fact's thread.</summary>
-    private sealed class Attached(ShownShell host, FilesSidebarViewModel sidebar) : IDisposable
+    internal sealed class Attached(ShownShell host, FilesSidebarViewModel sidebar) : IDisposable
     {
         public FilesSidebarViewModel Sidebar => sidebar;
 
@@ -296,7 +296,7 @@ public sealed class FilesToolbarTests
         }
     }
 
-    private static void SetProperty(ShownShell host, string name, object? value) =>
+    internal static void SetProperty(ShownShell host, string name, object? value) =>
         (typeof(VaultLifecycleViewModel).GetProperty(name, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
             ?? throw new InvalidOperationException($"VaultLifecycleViewModel.{name} is gone"))
         .SetValue(host.Lifecycle, value);

@@ -22,3 +22,5 @@ const { CountListRow } = window.SlateDesignSystem_326dc9;
 - Icon, label and right-aligned count. Fold the count into the name ("Linear algebra, 12"). Backlink rows expand as tree nodes.
 
 Ratings and theme setup: `wpf-feasibility.md`.
+
+- In Slate (plan 46 DS-18): tags are count rows (`SidebarTagTemplate`), the count in `Slate.TertiaryTextBrush` and, selected, `Slate.SelectedCaptionBrush`. Backlinks stay occurrence rows, each one link with its file and snippet, until a grouped query can count mentions past the loaded page.
