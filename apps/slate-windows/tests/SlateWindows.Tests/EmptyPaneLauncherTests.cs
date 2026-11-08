@@ -51,6 +51,22 @@ public sealed class EmptyPaneLauncherTests
         });
     });
 
+    /// <summary>#1862: the logo is drawn at 48, so it's decoded at a size that covers 48 at
+    /// 300% and no more. The source PNG is 1800 square: decoded whole it's about 13 MB a
+    /// pane, which ran the CI test host out of memory.</summary>
+    [Fact]
+    public void TheLogoIsDecodedAtTheSizeItIsDrawn() => RunSta(() =>
+    {
+        using var host = new ShownShell(("note.md", "# Note\n"));
+        host.Settle();
+        Border logo = Launcher(host).Children.OfType<Border>().First();
+        var brush = Assert.IsType<System.Windows.Media.ImageBrush>(logo.Background);
+        var image = Assert.IsAssignableFrom<System.Windows.Media.Imaging.BitmapSource>(brush.ImageSource);
+
+        Assert.Equal(48, logo.ActualWidth, 1);
+        Assert.InRange(image.PixelWidth, 48, 144);
+    });
+
     /// <summary>The launcher caps its rows at 320, so in a narrow pane a row narrows with
     /// it, and each chord stays whole and inside its row.</summary>
     [Fact]
