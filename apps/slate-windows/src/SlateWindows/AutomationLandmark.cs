@@ -189,12 +189,26 @@ internal sealed class AutomationPresentationTextBlockPeer : TextBlockAutomationP
 /// scroll bar as an unnamed ScrollBar with an unnamed Thumb and RepeatButtons: blank
 /// elements in a reader's object navigation. Here the viewer is neither a control nor a
 /// content element, and its scroll bars aren't published; the reader reaches what it
-/// holds by Tab, and a stop that takes the keys scrolls itself into view.
+/// holds by Tab, and a stop that takes the keys scrolls itself into view. A stop keeps
+/// that: when the viewport or what it holds changes size (the window shortened, the text
+/// size raised), the stop holding the keys is brought back into view, its focus untouched.
 /// </summary>
 internal sealed class AutomationPresentationScrollViewer : ScrollViewer
 {
     protected override AutomationPeer OnCreateAutomationPeer() =>
         new AutomationPresentationScrollViewerPeer(this);
+
+    protected override void OnScrollChanged(ScrollChangedEventArgs e)
+    {
+        base.OnScrollChanged(e);
+        if ((e.ViewportHeightChange != 0 || e.ExtentHeightChange != 0)
+            && IsKeyboardFocusWithin
+            && System.Windows.Input.Keyboard.FocusedElement is FrameworkElement focused
+            && !ReferenceEquals(focused, this))
+        {
+            focused.BringIntoView();
+        }
+    }
 }
 
 internal sealed class AutomationPresentationScrollViewerPeer : ScrollViewerAutomationPeer

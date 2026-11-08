@@ -269,6 +269,52 @@ public sealed partial class TextScaleTests
         }
     });
 
+    /// <summary>DS-19: an action that holds the keys stays in view when the layout changes
+    /// under it: the window shortened at the largest size, or the size raised in a short
+    /// window. Its focus is untouched.</summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AFocusedLauncherActionStaysInViewThroughALayoutChange(bool shorten) => OnOwnThread(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n"));
+        host.Shell.Width = 780;
+        host.Shell.Height = shorten ? 720 : 480;
+        if (shorten)
+        {
+            TypeRamp.Apply(RampOf(host.Shell), 2.25);
+        }
+
+        host.Settle();
+        host.Settle();
+        StackPanel launcher = ShownShell.Descendants(host.Shell).OfType<StackPanel>()
+            .Single(panel => panel.Name == "EmptyPaneLauncher");
+        Button search = launcher.Children.OfType<Button>().Last();
+        Assert.True(search.Focus(), "premise: Search Vault refused the keys");
+        host.Settle();
+
+        if (shorten)
+        {
+            host.Shell.Height = 480;
+        }
+        else
+        {
+            TypeRamp.Apply(RampOf(host.Shell), 2.25);
+        }
+
+        host.Settle();
+        host.Settle();
+
+        var scroll = (ScrollViewer)launcher.Parent;
+        Assert.True(scroll.ScrollableHeight > 0, "premise: the launcher fits after the change");
+        Assert.Same(search, System.Windows.Input.Keyboard.FocusedElement);
+        FrameworkElement pane = host.Shell.ContentPaneBorder;
+        Rect row = search.TransformToAncestor(pane).TransformBounds(new Rect(search.RenderSize));
+        Assert.True(
+            row.Top >= -0.5 && row.Bottom <= pane.ActualHeight + 0.5,
+            $"Search Vault holds the keys at {row}, outside a {pane.ActualHeight:F0} pane.");
+    });
+
     /// <summary>Every sheet, opened by hand, so what it shows is what it declares, in the
     /// window the app opens at and at its minimum height. Past that a sheet scrolls, and
     /// keys reach what's scrolled off. The launched pass reads their contents.</summary>
