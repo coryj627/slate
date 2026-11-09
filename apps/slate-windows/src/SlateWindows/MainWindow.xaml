@@ -1006,15 +1006,27 @@
                     <Style TargetType="{x:Type local:AutomationLandmarkGrid}">
                         <Setter Property="IsEnabled" Value="True" />
                         <Style.Triggers>
-                            <DataTrigger Binding="{Binding QuickSwitcher.IsOpen}" Value="True">
+                            <MultiDataTrigger>
+                                <MultiDataTrigger.Conditions>
+                                    <Condition Binding="{Binding QuickSwitcher.IsOpen}" Value="True" />
+                                    <Condition Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource Self}}" Value="False" />
+                                </MultiDataTrigger.Conditions>
                                 <Setter Property="IsEnabled" Value="False" />
-                            </DataTrigger>
-                            <DataTrigger Binding="{Binding Search.IsOpen}" Value="True">
+                            </MultiDataTrigger>
+                            <MultiDataTrigger>
+                                <MultiDataTrigger.Conditions>
+                                    <Condition Binding="{Binding Search.IsOpen}" Value="True" />
+                                    <Condition Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource Self}}" Value="False" />
+                                </MultiDataTrigger.Conditions>
                                 <Setter Property="IsEnabled" Value="False" />
-                            </DataTrigger>
-                            <DataTrigger Binding="{Binding Palette.IsOpen}" Value="True">
+                            </MultiDataTrigger>
+                            <MultiDataTrigger>
+                                <MultiDataTrigger.Conditions>
+                                    <Condition Binding="{Binding Palette.IsOpen}" Value="True" />
+                                    <Condition Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource Self}}" Value="False" />
+                                </MultiDataTrigger.Conditions>
                                 <Setter Property="IsEnabled" Value="False" />
-                            </DataTrigger>
+                            </MultiDataTrigger>
                         </Style.Triggers>
                     </Style>
                 </local:AutomationLandmarkGrid.Style>
@@ -1090,19 +1102,35 @@
                   AutomationProperties.AutomationId="WorkspaceView"
                   AutomationProperties.Name="Workspace"
                   Visibility="{Binding IsWorkspaceVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
+                <!-- #1690: an overlay disables the workspace under it once the keys have left
+                     for its field (a queued landing), not as it opens. Disabled with the keys
+                     still inside, the focused control went unavailable, and NVDA said so
+                     before the field. The welcome view's style does the same. -->
                 <local:AutomationLandmarkGrid.Style>
                     <Style TargetType="{x:Type local:AutomationLandmarkGrid}">
                         <Setter Property="IsEnabled" Value="True" />
                         <Style.Triggers>
-                            <DataTrigger Binding="{Binding QuickSwitcher.IsOpen}" Value="True">
+                            <MultiDataTrigger>
+                                <MultiDataTrigger.Conditions>
+                                    <Condition Binding="{Binding QuickSwitcher.IsOpen}" Value="True" />
+                                    <Condition Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource Self}}" Value="False" />
+                                </MultiDataTrigger.Conditions>
                                 <Setter Property="IsEnabled" Value="False" />
-                            </DataTrigger>
-                            <DataTrigger Binding="{Binding Search.IsOpen}" Value="True">
+                            </MultiDataTrigger>
+                            <MultiDataTrigger>
+                                <MultiDataTrigger.Conditions>
+                                    <Condition Binding="{Binding Search.IsOpen}" Value="True" />
+                                    <Condition Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource Self}}" Value="False" />
+                                </MultiDataTrigger.Conditions>
                                 <Setter Property="IsEnabled" Value="False" />
-                            </DataTrigger>
-                            <DataTrigger Binding="{Binding Palette.IsOpen}" Value="True">
+                            </MultiDataTrigger>
+                            <MultiDataTrigger>
+                                <MultiDataTrigger.Conditions>
+                                    <Condition Binding="{Binding Palette.IsOpen}" Value="True" />
+                                    <Condition Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource Self}}" Value="False" />
+                                </MultiDataTrigger.Conditions>
                                 <Setter Property="IsEnabled" Value="False" />
-                            </DataTrigger>
+                            </MultiDataTrigger>
                         </Style.Triggers>
                     </Style>
                 </local:AutomationLandmarkGrid.Style>
