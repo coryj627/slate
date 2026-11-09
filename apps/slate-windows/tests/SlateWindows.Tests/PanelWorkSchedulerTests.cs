@@ -537,9 +537,12 @@ public sealed class PanelWorkSchedulerTests
             probe.Shutdown();
             shutdownReturned.Set();
         });
+        // On its own task: a compute that ends before the scheduler's await
+        // checks it continues on this caller, so Post would park the very
+        // thread that must reach the `finally` and release it (#1851).
+        Task started = Task.Run(() => probe.Run());
         try
         {
-            probe.Run();
             Assert.True(context.Posting.Wait(patience), "the post never started");
             shutdown.Start();
             Assert.True(entered.Wait(patience), "the shutdown thread never started");
@@ -552,6 +555,7 @@ public sealed class PanelWorkSchedulerTests
             {
                 Assert.True(shutdown.Join(patience), "the shutdown thread never ended");
             }
+            Assert.True(started.Wait(patience), "starting the work never returned");
         }
         Task drain = probe.DrainAll();
         Assert.True(await Task.WhenAny(drain, Task.Delay(patience)) == drain, "the drain never completed");
