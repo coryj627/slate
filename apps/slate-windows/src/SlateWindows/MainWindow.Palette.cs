@@ -98,6 +98,11 @@ public partial class MainWindow
             SetHoldsTheKeys(overlay, true, LetGo);
             if (!overlay.IsVisible || !SelectorFocus.LandOnStop(overlay))
             {
+                // Neither the field nor the overlay can take the keys: an overlay that isn't
+                // on screen. Nothing holds them, so nothing under it gets a key, text or a
+                // click; Escape is lost too, until the queued landing below gives the field
+                // the keys. It's the least bad state: the alternative is a focused, enabled
+                // view taking input under an open overlay.
                 SetHoldsTheKeys(overlay, false, LetGo);
                 Keyboard.ClearFocus();
             }
