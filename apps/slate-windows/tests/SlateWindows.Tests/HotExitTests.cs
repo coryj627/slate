@@ -1581,6 +1581,349 @@ public sealed class HotExitTests
         Assert.Contains(host.Announced, item => item is A11yEvent.UnsavedNotesNotKept);
     }
 
+    [Theory]
+    [InlineData("peer save mirrored clean")]
+    [InlineData("peer edit mirrored dirty")]
+    public void TheWriterReadsATabAfterItsMutation(string mutation)
+    {
+        using var host = new HotExitHost();
+        host.Open();
+        WorkspaceTabViewModel left = host.OpenNote("a.md");
+        host.Workspace.OpenPath("a.md", WorkspaceOpenTarget.SplitRight);
+        PumpedDispatcher.Drain();
+        WorkspaceTabViewModel right = host.Workspace.ActiveGroup.ActiveTab!;
+        Assert.NotSame(left, right);
+        left.Text += "typed";
+        host.PumpUntil(() => host.StoredText(right) == right.Text, "the mirrored peer was never kept");
+        if (mutation == "peer save mirrored clean")
+        {
+            Assert.True(left.Save());
+            host.PumpUntil(() => !left.HasPendingSaves && !right.IsDirty, "the peer never turned clean");
+            host.PumpUntil(() => host.Snapshot().Entries.Length == 0, "a clean peer kept its entry");
+        }
+        else
+        {
+            left.Text += "more";
+            string final = right.Text;
+            host.PumpUntil(() => host.StoredText(right) == final, "the peer's mirrored edit was never kept");
+        }
+    }
+
+    [Fact]
+    public void AKeptCloseReSettlesWhenASaveSlipsIn()
+    {
+        using var host = new HotExitHost();
+        host.Open();
+        WorkspaceTabViewModel tab = host.OpenNote("a.md");
+        tab.Text += "typed";
+        // Queued before the close, so it runs in the settle's frame.
+        host.Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() => _ = tab.Save()));
+
+        WorkspaceTeardown outcome = host.Close(TeardownRoute.ApplicationClose);
+
+        Assert.Equal(WorkspaceTeardown.Closed, outcome);
+        Assert.Equal(tab.Text, host.Disk("a.md"));
+        Assert.Equal(0, host.ClosePrompts);
+    }
+
+    [Theory]
+    [InlineData("ApplicationClose", "nothing")]
+    [InlineData("ApplicationClose", "edit")]
+    [InlineData("Switch", "nothing")]
+    [InlineData("Close", "nothing")]
+    [InlineData("Close", "edit")]
+    public void ACleanCloseSettlesItsRetirements(string routeName, string inFrame)
+    {
+        var route = Enum.Parse<TeardownRoute>(routeName);
+        using var host = new HotExitHost { ClosePrompt = () => VaultCloseDecision.Cancel };
+        host.Open();
+        WorkspaceTabViewModel tab = host.OpenNote("a.md");
+        tab.Text += "typed";
+        host.PumpUntil(() => host.StoredText(tab) == tab.Text, "never kept");
+        using var gate = new ManualResetEventSlim();
+        host.Store.BeforeCallForTests = call =>
+        {
+            if (call.Kind == HotExitCallKind.Retire)
+            {
+                Assert.True(gate.Wait(Patience), "the retirement was never released");
+            }
+            return null;
+        };
+        Assert.True(tab.Save());
+        host.PumpUntil(() => !tab.HasPendingSaves && !tab.IsDirty, "the save never landed");
+        host.Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+        {
+            if (inFrame == "edit")
+            {
+                tab.Text += "in the frame";
+            }
+            gate.Set();
+        }));
+
+        WorkspaceTeardown outcome = host.Close(route);
+
+        if (inFrame == "nothing")
+        {
+            Assert.Equal(WorkspaceTeardown.Closed, outcome);
+            host.Crash();
+            host.Open();
+            host.AssertRead();
+            Assert.False(host.TabOn("a.md").IsDirty);
+        }
+        else if (route == TeardownRoute.Close)
+        {
+            // Close Vault asks about the edit made in the frame.
+            Assert.Equal(WorkspaceTeardown.Refused, outcome);
+            Assert.Equal(1, host.ClosePrompts);
+        }
+        else
+        {
+            // Application close keeps the edit made in the frame.
+            Assert.Equal(WorkspaceTeardown.ClosedKept, outcome);
+            Assert.Equal(tab.Text, host.StoredText(tab));
+        }
+    }
+
+    [Fact]
+    public void ACommittedDiscardRechecksAfterItsRetireOnlySettle()
+    {
+        using var host = new HotExitHost { ClosePrompt = () => VaultCloseDecision.Discard };
+        host.Open();
+        WorkspaceTabViewModel covered = host.OpenNote("a.md");
+        covered.Text += "covered";
+        host.Workspace.OpenPath("b.md", WorkspaceOpenTarget.NewTab);
+        PumpedDispatcher.Drain();
+        WorkspaceTabViewModel clean = host.TabOn("b.md");
+        int discards = 0;
+        host.Store.AfterCallForTests = call =>
+        {
+            if (call.Kind == HotExitCallKind.Discard && Interlocked.Increment(ref discards) == 1)
+            {
+                // The edit lands in the RetireOnly settle's guaranteed frame.
+                host.Dispatcher.BeginInvoke(
+                    DispatcherPriority.Background,
+                    new Action(() => clean.Text += "after the discard"));
+            }
+            return null;
+        };
+        host.ClosePrompt = () => host.ClosePrompts == 1 ? VaultCloseDecision.Discard : VaultCloseDecision.Cancel;
+
+        WorkspaceTeardown outcome = host.Close(TeardownRoute.Close);
+
+        Assert.Contains("after the discard", clean.Text, StringComparison.Ordinal);
+        Assert.NotEqual(WorkspaceTeardown.ClosedChangesDiscarded, outcome);
+        Assert.Equal(2, host.ClosePrompts);
+    }
+
+    [Theory]
+    [InlineData("close the tab")]
+    [InlineData("open another note into it")]
+    public void ADiscardedTabsEntryIsNotRestored(string how)
+    {
+        using var host = new HotExitHost { TabPrompt = _ => WorkspaceDirtyNavigationDecision.Discard };
+        host.Open();
+        WorkspaceTabViewModel tab = host.OpenNote("a.md");
+        tab.Text += "typed";
+        host.PumpUntil(() => host.StoredText(tab) == tab.Text, "never kept");
+        if (how == "close the tab")
+        {
+            host.Workspace.OpenPath("b.md", WorkspaceOpenTarget.NewTab);
+            PumpedDispatcher.Drain();
+            host.CloseTab(tab);
+        }
+        else
+        {
+            host.Workspace.OpenPath("b.md");
+            PumpedDispatcher.Drain();
+            Assert.Equal("b.md", tab.Path);
+        }
+        host.PumpUntil(() => !host.Store.HasUnresolved(host.Key), "never resolved");
+        host.Crash();
+        host.Open();
+        host.AssertRead();
+        Assert.DoesNotContain(host.Announced, item => item is A11yEvent.UnsavedNotesRestored);
+    }
+
+    [Fact]
+    public void ATeardownNeverWaitsOnARecoveryWrite()
+    {
+        using var host = new HotExitHost { ClosePrompt = () => VaultCloseDecision.SaveAll };
+        host.ShortenBudgets();
+        host.Open();
+        WorkspaceTabViewModel tab = host.OpenNote("a.md");
+        using var gate = new ManualResetEventSlim();
+        int writes = 0;
+        host.Store.BeforeCallForTests = call =>
+        {
+            if (call.Kind == HotExitCallKind.Write && Interlocked.Increment(ref writes) == 1)
+            {
+                Assert.True(gate.Wait(Patience), "the write was never released");
+            }
+            return null;
+        };
+        tab.Text += "typed";
+        host.PumpUntil(() => Volatile.Read(ref writes) == 1, "the write never started");
+
+        WorkspaceTeardown outcome = host.Close(TeardownRoute.ApplicationClose);
+
+        Assert.Equal(WorkspaceTeardown.ClosedAllSaved, outcome);
+        Assert.Equal(1, host.ClosePrompts);
+        Assert.Equal(tab.Text, host.Disk("a.md"));
+        host.Crash();
+        Assert.False(gate.IsSet, "premise: the write was held through the teardown");
+        gate.Set();
+    }
+
+    [Fact]
+    public void DisposalJoinsASaveWorkerButNotARecoveryWrite()
+    {
+        using var host = new HotExitHost();
+        host.Open();
+        WorkspaceTabViewModel tab = host.OpenNote("a.md");
+        using var gate = new ManualResetEventSlim();
+        int writes = 0;
+        host.Store.BeforeCallForTests = call =>
+        {
+            if (call.Kind == HotExitCallKind.Write && Interlocked.Increment(ref writes) == 1)
+            {
+                Assert.True(gate.Wait(Patience), "the write was never released");
+            }
+            return null;
+        };
+        tab.Text += "typed";
+        string typed = tab.Text;
+        host.PumpUntil(() => Volatile.Read(ref writes) == 1, "the write never started");
+
+        host.Crash();
+
+        Assert.False(gate.IsSet);
+        gate.Set();
+        host.PumpUntil(() => !host.Store.HasUnresolved(host.Key), "the write never finished");
+        host.NewProcess();
+        host.Open();
+        host.AssertRead();
+        Assert.Equal(typed, host.TabOn("a.md").Text);
+    }
+
+    [Fact]
+    public void AStalledWriteInOneVaultNeverHoldsAnother()
+    {
+        using var host = new HotExitHost { ClosePrompt = () => VaultCloseDecision.SaveAll };
+        host.ShortenBudgets();
+        host.Open();
+        WorkspaceTabViewModel tab = host.OpenNote("a.md");
+        using var gate = new ManualResetEventSlim();
+        HotExitVaultKey first = host.Key;
+        host.Store.BeforeCallForTests = call =>
+        {
+            if (call.Kind == HotExitCallKind.Write && call.KeyText == first.Text)
+            {
+                Assert.True(gate.Wait(Patience), "A's write was never released");
+            }
+            return null;
+        };
+        tab.Text += "typed in A";
+        host.PumpFor(TimeSpan.FromMilliseconds(100));
+
+        string other = host.SecondVault();
+        Assert.True(host.SwitchTo(other), "the switch did not complete");
+        Assert.NotEqual(first.Text, host.Key.Text);
+        WorkspaceTabViewModel b = host.OpenNote("a.md");
+        b.Text += "typed in B";
+        Assert.Equal(WorkspaceTeardown.ClosedKept, host.Close(TeardownRoute.ApplicationClose));
+        gate.Set();
+    }
+
+    [Fact]
+    public void AHoldOutlivesTheVaultUntilItsObligationsResolve()
+    {
+        using var host = new HotExitHost { DiscardPrompt = () => DiscardPendingDecision.CloseKeepingCopies };
+        host.ShortenBudgets();
+        host.Open();
+        WorkspaceTabViewModel tab = host.OpenNote("a.md");
+        tab.Text += "typed";
+        host.PumpUntil(() => host.StoredText(tab) == tab.Text, "never kept");
+        using var gate = new ManualResetEventSlim();
+        host.Store.BeforeCallForTests = call =>
+        {
+            if (call.Kind == HotExitCallKind.Retire)
+            {
+                Assert.True(gate.Wait(Patience), "the retirement was never released");
+            }
+            return null;
+        };
+        Assert.True(tab.Save());
+        host.PumpUntil(() => !tab.HasPendingSaves, "the save never settled");
+        Assert.Equal(WorkspaceTeardown.ClosedCopiesKept, host.Close(TeardownRoute.ApplicationClose));
+        host.Crash();
+
+        using (HotExitStore other = HotExitStore.Open(host.DeviceRoot))
+        {
+            Assert.Throws<HotExitException.HeldElsewhere>(() => other.HoldVault(host.Key));
+        }
+        gate.Set();
+        host.PumpUntil(() => !host.Store.HoldsVaultForTests(host.Key), "the hold was never freed");
+        using (HotExitStore other = HotExitStore.Open(host.DeviceRoot))
+        {
+            using HotExitVaultHold hold = other.HoldVault(host.Key);
+        }
+    }
+
+    [Fact]
+    public void AFailedOpenReleasesItsHold()
+    {
+        using var host = new HotExitHost();
+        host.Open();
+        host.Crash();
+        Assert.False(host.Store.HoldsVaultForTests(host.Key), "a closed session kept the hold");
+        using HotExitStore other = HotExitStore.Open(host.DeviceRoot);
+        using HotExitVaultHold hold = other.HoldVault(host.Key);
+    }
+
+    [Fact]
+    public void ADamagedRetirementResolvesWithItsReason()
+    {
+        using var host = new HotExitHost();
+        host.Store.RetirementRetryDelay = TimeSpan.FromMilliseconds(20);
+        host.Open();
+        WorkspaceTabViewModel tab = host.OpenNote("a.md");
+        tab.Text += "typed";
+        host.PumpUntil(() => host.StoredText(tab) == tab.Text, "never kept");
+        host.DamageClaims();
+        int retirements = 0;
+        host.Store.AfterCallForTests = call =>
+        {
+            if (call.Kind == HotExitCallKind.Retire)
+            {
+                Interlocked.Increment(ref retirements);
+            }
+            return null;
+        };
+        Assert.True(tab.Save());
+        host.PumpUntil(() => !tab.HasPendingSaves, "the save never settled");
+        host.PumpUntil(() => !host.Store.HasUnresolved(host.Key), "the damaged retirement pinned the vault");
+        host.PumpFor(TimeSpan.FromMilliseconds(200));
+        Assert.Equal(0, Volatile.Read(ref retirements));
+        host.Crash();
+        Assert.False(host.Store.HoldsVaultForTests(host.Key));
+    }
+
+    [Fact]
+    public void ARecoveredEntryOpensUnderAFreeName()
+    {
+        using var host = new HotExitHost();
+        host.Open();
+        host.Crash();
+        host.Keep(Guid.NewGuid().ToString("D"), "../outside.md", "# kept", null, null);
+        host.Open();
+        host.AssertRead();
+        WorkspaceTabViewModel recovered = host.Workspace.Groups.SelectMany(group => group.Tabs)
+            .Single(tab => tab.Text == "# kept");
+        Assert.StartsWith("Recovered note", recovered.Path, StringComparison.Ordinal);
+        Assert.Null(recovered.LoadFailure);
+        Assert.Contains(host.Announced, item => item is A11yEvent.RestoredNoteRecovered);
+    }
+
     /// <summary>A real vault and lifecycle over a private store host.</summary>
     private sealed class HotExitHost : IDisposable
     {
@@ -1712,6 +2055,33 @@ public sealed class HotExitTests
                 new HotExitEntryWrite(path, text, baselineHash, baselineFileId));
         }
 
+        /// <summary>A second vault beside the first, for a switch.</summary>
+        internal string SecondVault()
+        {
+            string other = Root + "-second";
+            Directory.CreateDirectory(other);
+            File.WriteAllText(Path.Combine(other, "a.md"), "# a\n");
+            _extraRoots.Add(other);
+            return other;
+        }
+
+        private readonly List<string> _extraRoots = [];
+
+        /// <summary>The lifecycle switches to <paramref name="root"/>.</summary>
+        internal bool SwitchTo(string root)
+        {
+            Task open = Lifecycle.OpenVaultAsync(root);
+            Assert.True(PumpedDispatcher.PumpUntil(() => open.IsCompleted, TimeSpan.FromSeconds(60)), "never switched");
+            open.GetAwaiter().GetResult();
+            if (Lifecycle.SessionForTests?.HotExitKey() is HotExitKeyResult.Key { KeyValue: { } key })
+            {
+                Key = key;
+            }
+            PumpedDispatcher.Drain();
+            return Lifecycle.Workspace is not null
+                && string.Equals(Lifecycle.VaultPath, root, StringComparison.OrdinalIgnoreCase);
+        }
+
         /// <summary>Makes the vault's claim records unparsable.</summary>
         internal void DamageClaims()
         {
@@ -1838,7 +2208,7 @@ public sealed class HotExitTests
             }
             Lifecycle?.Dispose();
             PumpedDispatcher.Drain();
-            foreach (string directory in new[] { Root, DeviceRoot, _stateDir })
+            foreach (string directory in new[] { Root, DeviceRoot, _stateDir }.Concat(_extraRoots))
             {
                 try
                 {
