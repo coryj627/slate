@@ -179,6 +179,7 @@ internal sealed class GraphConfigWriter
                     // newer save of this root carries the whole config, so a
                     // superseded write stops here rather than spend its own
                     // budget ahead of it on the shared queue.
+                    HeldAttemptForTests?.Invoke(attempt);
                     lock (_lock)
                     {
                         if (state.Admitted > generation)
@@ -277,6 +278,12 @@ internal sealed class GraphConfigWriter
     /// Win32 code inside; any other <see cref="IOException"/> is not a hold.</summary>
     private static bool IsHeld(IOException exception) =>
         exception.InnerException is System.ComponentModel.Win32Exception { NativeErrorCode: ErrorAccessDenied or ErrorSharingViolation };
+
+    /// <summary>Test seam: runs on the queue's worker after an attempt found
+    /// the file held, with the attempt's index, before the supersession
+    /// check and the wait. A fact admits a newer save or lets the file go
+    /// there instead of racing the retries' timing.</summary>
+    internal Action<int>? HeldAttemptForTests { get; set; }
 
     internal int SupersededForTests { get; private set; }
 

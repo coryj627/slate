@@ -212,15 +212,23 @@ public sealed partial class GraphConfigWriterTests : IDisposable
     {
         var writer = new GraphConfigWriter();
         Assert.True(writer.Enqueue(_root, WithDepth(2), writer.Reserve(_root)).Wait(TimeSpan.FromSeconds(10)));
-        Task write;
-        using (new FileStream(new GraphConfigStore(_root).FilePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+        var reader = new FileStream(new GraphConfigStore(_root).FilePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        var held = new List<int>();
+        writer.HeldAttemptForTests = attempt =>
         {
-            write = writer.Enqueue(_root, WithDepth(3), writer.Reserve(_root));
-            Thread.Sleep(300);
-            Assert.False(write.IsCompleted, "the write ended while another reader held the file");
+            held.Add(attempt);
+            reader.Dispose();
+        };
+        try
+        {
+            Assert.True(writer.Enqueue(_root, WithDepth(3), writer.Reserve(_root)).Wait(TimeSpan.FromSeconds(10)));
+        }
+        finally
+        {
+            reader.Dispose();
         }
 
-        Assert.True(write.Wait(TimeSpan.FromSeconds(10)));
+        Assert.Equal([0], held);
         Assert.Equal(0, writer.FailedForTests);
         Assert.Equal(3u, OnDisk().ConnectionsDepth);
     }
@@ -232,34 +240,46 @@ public sealed partial class GraphConfigWriterTests : IDisposable
     {
         var writer = new GraphConfigWriter();
         Assert.True(writer.Enqueue(_root, WithDepth(2), writer.Reserve(_root)).Wait(TimeSpan.FromSeconds(10)));
-        Task write;
-        using (new FileStream(new GraphConfigStore(_root).FilePath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        var holder = new FileStream(new GraphConfigStore(_root).FilePath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        var held = new List<int>();
+        writer.HeldAttemptForTests = attempt =>
         {
-            write = writer.Enqueue(_root, WithDepth(3), writer.Reserve(_root));
-            Thread.Sleep(300);
-            Assert.False(write.IsCompleted, "the write ended while another process held the file");
+            held.Add(attempt);
+            holder.Dispose();
+        };
+        try
+        {
+            Assert.True(writer.Enqueue(_root, WithDepth(3), writer.Reserve(_root)).Wait(TimeSpan.FromSeconds(10)));
+        }
+        finally
+        {
+            holder.Dispose();
         }
 
-        Assert.True(write.Wait(TimeSpan.FromSeconds(10)));
+        Assert.Equal([0], held);
         Assert.Equal(0, writer.FailedForTests);
         Assert.Equal(3u, OnDisk().ConnectionsDepth);
     }
 
     /// <summary>#1865: the wait is bounded. A file that is never let go
-    /// fails the write as any other I/O failure does, and the queue moves
-    /// on.</summary>
+    /// fails the write after the last wait, as any other I/O failure does,
+    /// and the queue moves on.</summary>
     [Fact]
     public void AFileThatIsNeverLetGoFailsTheWriteAfterTheWait()
     {
         var writer = new GraphConfigWriter();
         Assert.True(writer.Enqueue(_root, WithDepth(2), writer.Reserve(_root)).Wait(TimeSpan.FromSeconds(10)));
+        var held = new List<int>();
+        writer.HeldAttemptForTests = held.Add;
         using (new FileStream(new GraphConfigStore(_root).FilePath, FileMode.Open, FileAccess.Read, FileShare.Read))
         {
             var clock = System.Diagnostics.Stopwatch.StartNew();
             Assert.True(writer.Enqueue(_root, WithDepth(3), writer.Reserve(_root)).Wait(TimeSpan.FromSeconds(10)));
-            Assert.InRange(clock.Elapsed, GraphConfigWriter.HeldFileWait, TimeSpan.FromSeconds(5));
+            // The waits are sleeps, so this is a floor, never a race.
+            Assert.True(clock.Elapsed >= GraphConfigWriter.HeldFileWait, $"the write gave up after {clock.Elapsed}");
         }
 
+        Assert.Equal([0, 1, 2, 3, 4, 5], held);
         Assert.Equal(1, writer.FailedForTests);
         Assert.Null(writer.Newest(_root));
         Assert.Equal(2u, OnDisk().ConnectionsDepth);
@@ -277,18 +297,29 @@ public sealed partial class GraphConfigWriterTests : IDisposable
         Directory.CreateDirectory(other);
         var writer = new GraphConfigWriter();
         Assert.True(writer.Enqueue(_root, WithDepth(2), writer.Reserve(_root)).Wait(TimeSpan.FromSeconds(10)));
-        var clock = System.Diagnostics.Stopwatch.StartNew();
-        Task healthy;
+        var held = new List<int>();
+        Task? second = null;
+        Task? healthy = null;
+        writer.HeldAttemptForTests = attempt =>
+        {
+            held.Add(attempt);
+            // At the first save's first held attempt: the newer save of
+            // this vault, then a healthy vault's save, both behind it.
+            if (second is null)
+            {
+                second = writer.Enqueue(_root, WithDepth(1), writer.Reserve(_root));
+                healthy = writer.Enqueue(other, WithDepth(3), writer.Reserve(other));
+            }
+        };
         using (new FileStream(new GraphConfigStore(_root).FilePath, FileMode.Open, FileAccess.Read, FileShare.Read))
         {
-            Task first = writer.Enqueue(_root, WithDepth(3), writer.Reserve(_root));
-            Thread.Sleep(100);
-            Task second = writer.Enqueue(_root, WithDepth(1), writer.Reserve(_root));
-            healthy = writer.Enqueue(other, WithDepth(3), writer.Reserve(other));
-            Assert.True(Task.WaitAll([first, second, healthy], TimeSpan.FromSeconds(10)));
+            Assert.True(writer.Enqueue(_root, WithDepth(3), writer.Reserve(_root)).Wait(TimeSpan.FromSeconds(10)));
+            Assert.True(Task.WaitAll([second!, healthy!], TimeSpan.FromSeconds(10)));
         }
 
-        Assert.True(clock.Elapsed < GraphConfigWriter.HeldFileWait * 2, $"the queue waited {clock.Elapsed}, a budget per held write");
+        // The first save stopped at its first held attempt; only the
+        // second spent the budget.
+        Assert.Equal([0, 0, 1, 2, 3, 4, 5], held);
         Assert.Equal(1, writer.SupersededForTests);
         Assert.Equal(1, writer.FailedForTests);
         Assert.Null(writer.Newest(_root));
@@ -306,9 +337,10 @@ public sealed partial class GraphConfigWriterTests : IDisposable
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllBytes(path, new byte[GraphConfigStore.MaxReadBytes + 1]);
         var writer = new GraphConfigWriter();
-        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var held = new List<int>();
+        writer.HeldAttemptForTests = held.Add;
         Assert.True(writer.Enqueue(_root, WithDepth(3), writer.Reserve(_root)).Wait(TimeSpan.FromSeconds(10)));
-        Assert.True(clock.Elapsed < GraphConfigWriter.HeldFileWait, $"the write waited {clock.Elapsed} before it failed");
+        Assert.Empty(held);
         Assert.Equal(1, writer.FailedForTests);
         Assert.Equal(GraphConfigStore.MaxReadBytes + 1, new FileInfo(path).Length);
     }
