@@ -48,17 +48,9 @@ public partial class MainWindow
             // focus with an element inside the overlay itself (the
             // palette's PD-2 guard, kept for the same reason).
             _focusBeforeSearch ??= Keyboard.FocusedElement;
-            // #1690: in the same turn (LandInOpeningOverlay). The queued
-            // landing stays as the fallback for a field not yet able to
-            // take the keys.
-            _ = LandInOpeningOverlay(SearchOverlay, SearchOverlaySearchTextBox);
-            _ = Dispatcher.InvokeAsync(
-                () =>
-                {
-                    SearchOverlaySearchTextBox.Focus();
-                    SearchOverlaySearchTextBox.SelectAll();
-                },
-                DispatcherPriority.Input);
+            // #1690: in the same turn, with a queued fallback only for a
+            // field not yet able to take the keys (LandInOpeningOverlay).
+            LandInOpeningOverlay(SearchOverlay, SearchOverlaySearchTextBox, () => _viewModel.Search.IsOpen);
         }
     }
 

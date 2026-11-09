@@ -49,6 +49,33 @@ public sealed partial class CommandPaletteTests
         Assert.False(root.IsEnabled, "the workspace stayed enabled under the open overlay");
     });
 
+    /// <summary>Text the reader types once the field has the keys, before the dispatcher
+    /// drains, stays as typed: no second, queued landing selects it for the next key to
+    /// replace.</summary>
+    [Theory]
+    [InlineData("QuickOpen")]
+    [InlineData("Search")]
+    [InlineData("Palette")]
+    public void TextTypedAfterTheLandingIsNotSelectedByASecondOne(string overlay) => RunSta(() =>
+    {
+        using var host = new PaletteShellHost();
+        _ = host.AttachDirtyWorkspace();
+        host.Settle();
+        UIElement editor = ShownShell.Descendants(host.Shell.WorkspaceRoot).OfType<ICSharpCode.AvalonEdit.Editing.TextArea>().First(area => area.IsVisible);
+        TakeTheKeys(editor);
+        host.Settle();
+
+        TextBox field = OpenTheOverlay(host, overlay);
+        Assert.Same(field, Keyboard.FocusedElement);
+        field.Text = "q";
+        field.CaretIndex = 1;
+        host.Settle();
+
+        Assert.Equal("q", field.Text);
+        Assert.Equal(0, field.SelectionLength);
+        Assert.Equal(1, field.CaretIndex);
+    });
+
     /// <summary>#1690 as the field pass heard it: the keys on a canvas outline row, then
     /// Ctrl+Shift+P. The row's canvas goes off only once the palette's field has the keys,
     /// in the turn the palette opens.</summary>

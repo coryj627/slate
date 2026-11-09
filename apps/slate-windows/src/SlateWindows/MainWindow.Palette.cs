@@ -53,11 +53,16 @@ public partial class MainWindow
     /// first. The view under the overlay (the workspace, the welcome view, the menu, an empty
     /// pane's action) goes off only once the keys have left it, so NVDA never hears it go
     /// unavailable; landing here, in the same turn, leaves no time in which a key, text or a
-    /// click already queued reaches it under the overlay. The queued landing each caller
-    /// keeps is the fallback for a field that can't take the keys yet; meanwhile the keys
-    /// are taken out of the view under the overlay, so nothing reaches it there either.
+    /// click already queued reaches it under the overlay.
+    /// <para>
+    /// Only a field that can't take the keys yet gets a queued landing, the fallback, and it
+    /// runs only while the overlay is still open (<paramref name="stillOpen"/>) and its field
+    /// doesn't have the keys: a second landing after the first would select what the reader
+    /// has typed since, and the next key would replace it. Meanwhile the keys are taken out
+    /// of the view under the overlay, so nothing reaches it there either.
+    /// </para>
     /// </summary>
-    private bool LandInOpeningOverlay(FrameworkElement overlay, TextBox field)
+    private void LandInOpeningOverlay(FrameworkElement overlay, TextBox field, Func<bool> stillOpen)
     {
         for (DependencyObject? up = field; up is not null; up = VisualTreeHelper.GetParent(up))
         {
@@ -65,18 +70,26 @@ public partial class MainWindow
         }
 
         overlay.UpdateLayout();
-        if (!field.IsVisible || !field.Focus())
+        if (field.IsVisible && field.Focus())
         {
-            if (WorkspaceRoot.IsKeyboardFocusWithin || WelcomeRoot.IsKeyboardFocusWithin || MainMenu.IsKeyboardFocusWithin)
-            {
-                Keyboard.ClearFocus();
-            }
-
-            return false;
+            field.SelectAll();
+            return;
         }
 
-        field.SelectAll();
-        return true;
+        if (WorkspaceRoot.IsKeyboardFocusWithin || WelcomeRoot.IsKeyboardFocusWithin || MainMenu.IsKeyboardFocusWithin)
+        {
+            Keyboard.ClearFocus();
+        }
+
+        _ = Dispatcher.InvokeAsync(
+            () =>
+            {
+                if (stillOpen() && !field.IsKeyboardFocused && field.Focus())
+                {
+                    field.SelectAll();
+                }
+            },
+            DispatcherPriority.Input);
     }
 
     /// <summary>The palette whose seal release the window listens to.</summary>
@@ -94,14 +107,7 @@ public partial class MainWindow
                     // toggle) cannot overwrite the pre-palette focus with an
                     // element inside the palette itself.
                     _focusBeforePalette ??= Keyboard.FocusedElement;
-                    _ = LandInOpeningOverlay(CommandPaletteOverlay, CommandPaletteSearchTextBox);
-                    _ = Dispatcher.InvokeAsync(
-                        () =>
-                        {
-                            CommandPaletteSearchTextBox.Focus();
-                            CommandPaletteSearchTextBox.SelectAll();
-                        },
-                        DispatcherPriority.Input);
+                    LandInOpeningOverlay(CommandPaletteOverlay, CommandPaletteSearchTextBox, () => _viewModel.Palette.IsOpen);
                 }
                 else
                 {
