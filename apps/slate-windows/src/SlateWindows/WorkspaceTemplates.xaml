@@ -207,7 +207,11 @@
          on the left and its chord (Tag) on the right in secondary text. Whole, on Slate.ButtonBase.
          The launcher caps the width, so in a narrow pane a row narrows, and where its label and
          chord don't fit on one line the chord goes under the label (LauncherRowPanel) and the
-         row grows. Off under every modal surface, as the menus are. -->
+         row grows. Off under every modal surface, as the menus are: at once under a sheet,
+         and under Quick Open, search or the palette once the keys have left the row for the
+         overlay's field, which takes them in the turn it opens (#1690). IsModalSurfaceOpen
+         can change just before that, and off while it held the keys, the row said
+         "unavailable" in NVDA. -->
     <Style x:Key="Slate.LauncherRowStyle" TargetType="Button" BasedOn="{StaticResource Slate.ButtonBase}">
         <Setter Property="HorizontalAlignment" Value="Stretch" />
         <Setter Property="HorizontalContentAlignment" Value="Stretch" />
@@ -257,7 +261,14 @@
             </Setter.Value>
         </Setter>
         <Style.Triggers>
-            <DataTrigger Binding="{Binding IsModalSurfaceOpen, RelativeSource={RelativeSource AncestorType=Window}}" Value="True">
+            <MultiDataTrigger>
+                <MultiDataTrigger.Conditions>
+                    <Condition Binding="{Binding IsModalSurfaceOpen, RelativeSource={RelativeSource AncestorType=Window}}" Value="True" />
+                    <Condition Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource Self}}" Value="False" />
+                </MultiDataTrigger.Conditions>
+                <Setter Property="IsEnabled" Value="False" />
+            </MultiDataTrigger>
+            <DataTrigger Binding="{Binding IsModalSheetOpen, RelativeSource={RelativeSource AncestorType=Window}}" Value="True">
                 <Setter Property="IsEnabled" Value="False" />
             </DataTrigger>
         </Style.Triggers>

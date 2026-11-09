@@ -48,16 +48,9 @@ public partial class MainWindow
             // focus with an element inside the overlay itself (the
             // palette's PD-2 guard, kept for the same reason).
             _focusBeforeSearch ??= Keyboard.FocusedElement;
-            // Queued, not synchronous: the overlay is not realized at
-            // the moment IsOpen flips, so a synchronous Focus() finds
-            // nothing to focus (MainWindow.Palette.cs:43-57).
-            _ = Dispatcher.InvokeAsync(
-                () =>
-                {
-                    SearchOverlaySearchTextBox.Focus();
-                    SearchOverlaySearchTextBox.SelectAll();
-                },
-                DispatcherPriority.Input);
+            // #1690: in the same turn, with a queued fallback only for a
+            // field not yet able to take the keys (LandInOpeningOverlay).
+            LandInOpeningOverlay(SearchOverlay, SearchOverlaySearchTextBox, () => _viewModel.Search.IsOpen);
         }
     }
 

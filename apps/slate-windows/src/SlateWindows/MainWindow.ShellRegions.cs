@@ -272,6 +272,27 @@ public partial class MainWindow : IShellRegionHost
             IsModalSurfaceOpen = open;
             Canvas.CanvasSurfaceView.RaiseShellOverlayChanged();
         }
+
+        bool sheet = open
+            && OpenModalSurface is not (ModalSurface.QuickOpen or ModalSurface.SearchOverlay or ModalSurface.CommandPalette);
+        if (sheet != IsModalSheetOpen)
+        {
+            IsModalSheetOpen = sheet;
+        }
+    }
+
+    public static readonly DependencyProperty IsModalSheetOpenProperty = DependencyProperty.Register(
+        nameof(IsModalSheetOpen), typeof(bool), typeof(MainWindow), new PropertyMetadata(false));
+
+    /// <summary>#1690: whether the open modal surface is a sheet rather than Quick Open,
+    /// search or the palette. Those three take the keys in the turn they open
+    /// (<see cref="LandInOpeningOverlay"/>), so what holds the keys under them can stay on
+    /// until then; a sheet's field takes them in a queued landing, and what's under it goes
+    /// off at once.</summary>
+    public bool IsModalSheetOpen
+    {
+        get => (bool)GetValue(IsModalSheetOpenProperty);
+        private set => SetValue(IsModalSheetOpenProperty, value);
     }
 
     public static readonly DependencyProperty IsModalSurfaceOpenProperty = DependencyProperty.Register(
