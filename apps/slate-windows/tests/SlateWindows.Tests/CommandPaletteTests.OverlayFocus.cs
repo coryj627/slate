@@ -116,6 +116,83 @@ public sealed partial class CommandPaletteTests
         Assert.False(top.IsSubmenuOpen, "the menu stayed open under the overlay");
     });
 
+    /// <summary>The view under the palette stays on until the palette's queued landing takes
+    /// the keys, so a key pressed before then would reach it under the palette: Delete would
+    /// edit the note, Down would open the menu. The window takes it. This host is the real
+    /// window, whose key route the palette host leaves out.</summary>
+    [Theory]
+    [InlineData("editor")]
+    [InlineData("menu")]
+    public void AKeyPressedBeforeThePaletteLandsDoesNotReachTheViewUnderIt(string under) => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "# A\n"));
+        host.Workspace.OpenPath("a.md");
+        host.Settle();
+        var editor = ShownShell.Descendants(host.Shell.WorkspaceRoot).OfType<ICSharpCode.AvalonEdit.Editing.TextArea>().First(area => area.IsVisible);
+        MenuItem top = host.Shell.MainMenu.Items.OfType<MenuItem>().First();
+        UIElement holder = under == "editor" ? editor : top;
+        host.Shell.Activate();
+        host.Settle();
+        TakeTheKeys(holder);
+        host.Settle();
+        string before = editor.Document.Text;
+
+        host.Lifecycle.Palette.Open();
+        Assert.Same(holder, Keyboard.FocusedElement);
+        bool taken = Press(holder, under == "editor" ? Key.Delete : Key.Down);
+        host.Settle();
+
+        Assert.True(taken, $"the key reached the {under} under the palette");
+        Assert.Equal(before, editor.Document.Text);
+        Assert.False(top.IsSubmenuOpen, "the menu opened under the palette");
+        Assert.True(host.Lifecycle.Palette.IsOpen);
+        Assert.Same(host.Shell.CommandPaletteSearchTextBox, Keyboard.FocusedElement);
+    });
+
+    /// <summary>Escape isn't taken: it goes on to the palette's own route, so a landing that
+    /// never came would still leave a way out.</summary>
+    [Fact]
+    public void EscapeBeforeThePaletteLandsStillClosesIt() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "# A\n"));
+        host.Workspace.OpenPath("a.md");
+        host.Settle();
+        var editor = ShownShell.Descendants(host.Shell.WorkspaceRoot).OfType<ICSharpCode.AvalonEdit.Editing.TextArea>().First(area => area.IsVisible);
+        host.Shell.Activate();
+        host.Settle();
+        TakeTheKeys(editor);
+        host.Settle();
+
+        host.Lifecycle.Palette.Open();
+        _ = Press(editor, Key.Escape);
+        host.Settle();
+
+        Assert.False(host.Lifecycle.Palette.IsOpen, "Escape before the landing left the palette open");
+    });
+
+    /// <summary>A key as WPF delivers it to the element holding the keys: the preview through
+    /// the window's route, then, if nothing took it, the key itself. Whether the preview was
+    /// taken.</summary>
+    internal static bool Press(UIElement holder, Key key)
+    {
+        PresentationSource source = PresentationSource.FromVisual(holder)
+            ?? throw new InvalidOperationException("the element holding the keys has no presentation source");
+        var preview = new KeyEventArgs(Keyboard.PrimaryDevice, source, Environment.TickCount, key)
+        {
+            RoutedEvent = Keyboard.PreviewKeyDownEvent,
+        };
+        holder.RaiseEvent(preview);
+        if (!preview.Handled)
+        {
+            holder.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, source, Environment.TickCount, key)
+            {
+                RoutedEvent = Keyboard.KeyDownEvent,
+            });
+        }
+
+        return preview.Handled;
+    }
+
     private static Button LauncherAction(PaletteShellHost host, string id) => Assert.Single(
         ShownShell.Descendants(host.Shell.WorkspaceRoot).OfType<Button>(),
         button => System.Windows.Automation.AutomationProperties.GetAutomationId(button) == id && button.IsVisible);

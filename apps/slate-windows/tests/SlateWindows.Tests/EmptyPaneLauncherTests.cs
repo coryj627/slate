@@ -191,6 +191,32 @@ public sealed class EmptyPaneLauncherTests
         Assert.False(search.IsEnabled, "Search Vault stayed on under the surface.");
     });
 
+    /// <summary>The action stays on until the surface takes the keys, so a key pressed
+    /// before then would reach it under the surface, and Space would press it. The window
+    /// takes it. (Enter is the palette's own key: its route runs the selected row.)</summary>
+    [Fact]
+    public void AKeyPressedBeforeASurfaceLandsDoesNotReachTheActionUnderIt() => RunSta(() =>
+    {
+        using var host = new ShownShell(("note.md", "# Note\n"));
+        host.Settle();
+        Button template = Launcher(host).Children.OfType<Button>().ElementAt(1);
+        host.Shell.Activate();
+        host.Settle();
+        Assert.True(
+            template.Focus() && ReferenceEquals(template, Keyboard.FocusedElement),
+            $"keyboard premise: New Note from Template could not take the keys (they are on {Keyboard.FocusedElement})");
+
+        host.Lifecycle.Palette.Open();
+        Assert.Same(template, Keyboard.FocusedElement);
+        bool taken = CommandPaletteTests.Press(template, Key.Space);
+        host.Settle();
+
+        Assert.True(taken, "Space reached New Note from Template under the palette.");
+        Assert.False(template.IsPressed, "New Note from Template was pressed under the palette.");
+        Assert.Null(host.Workspace.TemplatePickerSheet);
+        Assert.True(host.Lifecycle.Palette.IsOpen);
+    });
+
     /// <summary>The workspace host leaves the Tab order only while the pane is empty: with
     /// a note open, Tab from the pane and Shift+Tab back pass through it as they did.</summary>
     [Fact]

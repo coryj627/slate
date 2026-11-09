@@ -1019,6 +1019,28 @@ public partial class MainWindow : Window
         });
     }
 
+    /// <summary>#1690: whether a modal surface is open and the keys are still where they
+    /// were when it opened, waiting for its landing: in the menu, on an empty pane's
+    /// action, or, under Quick Open, search or the palette, in the workspace or the welcome
+    /// view. Each stays enabled while it holds the keys.</summary>
+    private bool KeysAreStillUnderAnOpenSurface()
+    {
+        if (OpenModalSurface is not { } surface)
+        {
+            return false;
+        }
+
+        if (MainMenu.IsKeyboardFocusWithin
+            || (Keyboard.FocusedElement is Button action
+                && ReferenceEquals(action.Style, TryFindResource("Slate.LauncherRowStyle"))))
+        {
+            return true;
+        }
+
+        return surface is ModalSurface.QuickOpen or ModalSurface.SearchOverlay or ModalSurface.CommandPalette
+            && (WorkspaceRoot.IsKeyboardFocusWithin || WelcomeRoot.IsKeyboardFocusWithin);
+    }
+
     /// <summary>The window's tunnelling key route, ahead of every focused
     /// control's own handlers. An unmodified Escape during an import
     /// cancels it unless an owner of the key is in play — an open modal
@@ -1040,6 +1062,19 @@ public partial class MainWindow : Window
         }
 
         ModifierKeys modifiers = Keyboard.Modifiers;
+
+        // #1690: a surface opened over the element that still holds the keys, which stays
+        // enabled until the surface's queued landing takes them (MainWindow.xaml's triggers),
+        // so NVDA never hears it go unavailable. Until then a key would reach it under the
+        // surface: typing or Delete would edit the note, Enter would run an action. They're
+        // taken here, and with them the characters they would type. A plain Escape goes on
+        // to the surface's own route, so a landing that never comes leaves a way out.
+        if (KeysAreStillUnderAnOpenSurface()
+            && !(e.Key == Key.Escape && modifiers == ModifierKeys.None))
+        {
+            e.Handled = true;
+            return;
+        }
 
         // DS-8 (#1809): a tab's close chords are bare KeyBindings, which no surface stops by
         // itself, so a clean tab would close, or a dirty tab prompt, behind it. Ahead of the
