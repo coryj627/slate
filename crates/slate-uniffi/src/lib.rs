@@ -593,6 +593,7 @@ mod census_live {
     pub static REGISTRIES: AtomicI64 = AtomicI64::new(0);
     pub static LAYOUT_SESSIONS: AtomicI64 = AtomicI64::new(0);
     pub static HOT_EXIT_STORES: AtomicI64 = AtomicI64::new(0);
+    pub static HOT_EXIT_HOLDS: AtomicI64 = AtomicI64::new(0);
 
     /// RAII marker: one live native object of its kind.
     pub struct Marker(&'static AtomicI64);
@@ -620,6 +621,7 @@ pub struct LiveObjectCounts {
     pub registries: i64,
     pub layout_sessions: i64,
     pub hot_exit_stores: i64,
+    pub hot_exit_holds: i64,
 }
 
 /// Snapshot the census live-object counters (see [`census_live`]).
@@ -633,6 +635,7 @@ pub fn census_live_object_counts() -> LiveObjectCounts {
         registries: census_live::REGISTRIES.load(Ordering::Acquire),
         layout_sessions: census_live::LAYOUT_SESSIONS.load(Ordering::Acquire),
         hot_exit_stores: census_live::HOT_EXIT_STORES.load(Ordering::Acquire),
+        hot_exit_holds: census_live::HOT_EXIT_HOLDS.load(Ordering::Acquire),
     }
 }
 
@@ -1391,6 +1394,17 @@ impl VaultSession {
     /// silently substituting replacement characters.
     pub fn read_text(&self, path: String) -> Result<String, VaultError> {
         Ok(self.inner.read_text(&path)?)
+    }
+
+    /// Plan 44 WB-29 §7: `read_text` with the text's hash and the identity
+    /// of the one file version it was read from (same handle).
+    pub fn read_text_identified(&self, path: String) -> Result<IdentifiedText, VaultError> {
+        let read = self.inner.read_text_identified(&path)?;
+        Ok(IdentifiedText {
+            text: read.text,
+            content_hash: read.content_hash,
+            file_identity: read.file_identity,
+        })
     }
 
     /// #1077: the spelling the filesystem stores for an EXISTING
@@ -3780,6 +3794,17 @@ pub struct NotePartsBundle {
     pub body_byte_offset: u64,
     /// Newlines before the body start (file line → body line delta).
     pub body_line_offset: u32,
+    /// Plan 44 WB-29 §7: the identity of the file read, same handle.
+    pub file_identity: Option<String>,
+}
+
+/// Plan 44 WB-29 §7: a note's text, its hash and the identity of the file
+/// version it came from. Mirrors `slate_core::IdentifiedText`.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct IdentifiedText {
+    pub text: String,
+    pub content_hash: String,
+    pub file_identity: Option<String>,
 }
 
 impl From<core::NotePartsBundle> for NotePartsBundle {
@@ -3791,6 +3816,7 @@ impl From<core::NotePartsBundle> for NotePartsBundle {
             mtime_ms: b.mtime_ms,
             body_byte_offset: b.body_byte_offset,
             body_line_offset: b.body_line_offset,
+            file_identity: b.file_identity,
         }
     }
 }
@@ -5765,6 +5791,8 @@ pub struct SaveReport {
     pub new_content_hash: String,
     pub new_size_bytes: u64,
     pub new_mtime_ms: i64,
+    /// Plan 44 WB-29 §7: the identity of the file the save published.
+    pub file_identity: Option<String>,
 }
 
 /// The typed outcome of `create_exclusive_reporting` (#1123). `Committed`
@@ -5780,6 +5808,8 @@ pub enum CreateExclusiveOutcome {
     PublishedUnindexed {
         path: String,
         content_hash: String,
+        /// Plan 44 WB-29 §7: the created file's identity.
+        file_identity: Option<String>,
         error_message: String,
     },
 }
@@ -5793,10 +5823,12 @@ impl From<core::CreateExclusiveOutcome> for CreateExclusiveOutcome {
             core::CreateExclusiveOutcome::PublishedUnindexed {
                 path,
                 content_hash,
+                file_identity,
                 error,
             } => Self::PublishedUnindexed {
                 path,
                 content_hash,
+                file_identity,
                 error_message: error.to_string(),
             },
         }
@@ -5809,6 +5841,7 @@ impl From<core::SaveReport> for SaveReport {
             new_content_hash: r.new_content_hash,
             new_size_bytes: r.new_size_bytes,
             new_mtime_ms: r.new_mtime_ms,
+            file_identity: r.file_identity,
         }
     }
 }
@@ -8921,7 +8954,8 @@ pub struct HotExitClaim {
     pub entry_id: String,
     pub incarnation: String,
     pub epoch: u64,
-    pub adopted: Option<String>,
+    /// Every incarnation this claim displaced (WB-29 §7).
+    pub adopted: Vec<String>,
 }
 
 impl From<HotExitClaim> for core::hot_exit::HotExitClaim {
@@ -9089,10 +9123,19 @@ impl From<HotExitEntry> for core::hot_exit::HotExitEntry {
     }
 }
 
+/// A claim current at a snapshot's epoch, with or without a payload
+/// (WB-29 §7).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct HotExitCurrentClaim {
+    pub entry_id: String,
+    pub incarnation: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct HotExitSnapshot {
     pub epoch: u64,
     pub entries: Vec<HotExitEntry>,
+    pub claims: Vec<HotExitCurrentClaim>,
 }
 
 /// How one kept entry comes back (WB-29a §3).
@@ -9126,8 +9169,12 @@ pub enum HotExitError {
     Io { detail: String, reason: String },
     #[error("hot-exit entry id is not a tab id")]
     InvalidEntryId { reason: String },
+    #[error("hot-exit incarnation is not 32 lower-case hex digits")]
+    InvalidIncarnation { reason: String },
     #[error("hot-exit records for this vault are damaged")]
     Damaged { reason: String },
+    #[error("another process holds this vault's hot-exit store")]
+    HeldElsewhere { reason: String },
 }
 
 impl From<core::hot_exit::HotExitError> for HotExitError {
@@ -9136,7 +9183,9 @@ impl From<core::hot_exit::HotExitError> for HotExitError {
         match error {
             core::hot_exit::HotExitError::Io { detail } => Self::Io { detail, reason },
             core::hot_exit::HotExitError::InvalidEntryId => Self::InvalidEntryId { reason },
+            core::hot_exit::HotExitError::InvalidIncarnation => Self::InvalidIncarnation { reason },
             core::hot_exit::HotExitError::Damaged => Self::Damaged { reason },
+            core::hot_exit::HotExitError::HeldElsewhere => Self::HeldElsewhere { reason },
         }
     }
 }
@@ -9165,19 +9214,50 @@ impl HotExitStore {
         Ok(self.inner.current_epoch(&key.into())?)
     }
 
-    /// A restored tab's first claim passes the entry's incarnation as
-    /// `adopts`; every other claim passes nil.
+    /// Claims `entry_id` as `incarnation` (from
+    /// `new_hot_exit_incarnation`), replacing only the current claim
+    /// `expected` names (nil: the entry has none). Retrying the same call
+    /// after an error is safe (WB-29 §7).
     pub fn claim_entry(
         &self,
         key: HotExitVaultKey,
         epoch: u64,
         entry_id: String,
-        adopts: Option<String>,
+        expected: Option<String>,
+        incarnation: String,
     ) -> Result<HotExitClaimOutcome, HotExitError> {
         Ok(self
             .inner
-            .claim_entry(&key.into(), epoch, &entry_id, adopts.as_deref())?
+            .claim_entry(
+                &key.into(),
+                epoch,
+                &entry_id,
+                expected.as_deref(),
+                &incarnation,
+            )?
             .into())
+    }
+
+    /// Removes `entry_id`'s claim and payload where their incarnation is
+    /// listed; needs no claim, checks no epoch (WB-29 §7).
+    pub fn retire_entry(
+        &self,
+        key: HotExitVaultKey,
+        entry_id: String,
+        incarnations: Vec<String>,
+    ) -> Result<(), HotExitError> {
+        Ok(self
+            .inner
+            .retire_entry(&key.into(), &entry_id, &incarnations)?)
+    }
+
+    /// This host's exclusive hold on the vault's store across processes
+    /// (WB-29 §7); another holder is `HeldElsewhere`.
+    pub fn hold_vault(&self, key: HotExitVaultKey) -> Result<Arc<HotExitVaultHold>, HotExitError> {
+        Ok(Arc::new(HotExitVaultHold {
+            inner: std::sync::Mutex::new(Some(self.inner.hold_vault(&key.into())?)),
+            _census: census_live::Marker::count(&census_live::HOT_EXIT_HOLDS),
+        }))
     }
 
     pub fn write_buffer(
@@ -9217,8 +9297,40 @@ impl HotExitStore {
         Ok(HotExitSnapshot {
             epoch: snapshot.epoch,
             entries: snapshot.entries.into_iter().map(Into::into).collect(),
+            claims: snapshot
+                .claims
+                .into_iter()
+                .map(|claim| HotExitCurrentClaim {
+                    entry_id: claim.entry_id,
+                    incarnation: claim.incarnation,
+                })
+                .collect(),
         })
     }
+}
+
+/// A vault's store held by this process (WB-29 §7): released by
+/// `release`, when the last reference goes, or by the OS at process exit.
+#[derive(uniffi::Object)]
+pub struct HotExitVaultHold {
+    inner: std::sync::Mutex<Option<core::hot_exit::HotExitVaultHold>>,
+    _census: census_live::Marker,
+}
+
+#[uniffi::export]
+impl HotExitVaultHold {
+    /// Releases the hold now; a second call does nothing.
+    pub fn release(&self) {
+        if let Some(hold) = self.inner.lock().expect("hot-exit hold mutex").take() {
+            hold.release();
+        }
+    }
+}
+
+/// A new claim incarnation (WB-29 §7): a host makes one before each claim.
+#[uniffi::export]
+pub fn new_hot_exit_incarnation() -> Result<String, HotExitError> {
+    Ok(core::hot_exit::new_hot_exit_incarnation()?)
 }
 
 /// The reason a refusal completes core's `UnsavedNotesNotKept` sentence.
@@ -9229,10 +9341,62 @@ pub fn hot_exit_refusal_reason(refusal: HotExitRefusal) -> String {
         .to_string()
 }
 
-/// The reason a flush that ran past its 5 s budget gives.
+/// The reason a flush that ran past its 4 s budget gives.
 #[uniffi::export]
 pub fn hot_exit_reason_timed_out() -> String {
     core::a11y::HOT_EXIT_REASON_TIMED_OUT.to_string()
+}
+
+/// WB-29 §7: the host's own reasons for `UnsavedNotesNotKept`.
+#[uniffi::export]
+pub fn hot_exit_reason_taken_over() -> String {
+    core::a11y::HOT_EXIT_REASON_TAKEN_OVER.to_string()
+}
+
+#[uniffi::export]
+pub fn hot_exit_reason_discard_pending() -> String {
+    core::a11y::HOT_EXIT_REASON_DISCARD_PENDING.to_string()
+}
+
+#[uniffi::export]
+pub fn hot_exit_reason_discarded() -> String {
+    core::a11y::HOT_EXIT_REASON_DISCARDED.to_string()
+}
+
+#[uniffi::export]
+pub fn hot_exit_reason_held_elsewhere() -> String {
+    core::a11y::HOT_EXIT_REASON_HELD_ELSEWHERE.to_string()
+}
+
+#[uniffi::export]
+pub fn hot_exit_reason_earlier_work_pending() -> String {
+    core::a11y::HOT_EXIT_REASON_EARLIER_WORK_PENDING.to_string()
+}
+
+#[uniffi::export]
+pub fn hot_exit_reason_store_unwritable() -> String {
+    core::a11y::HOT_EXIT_REASON_STORE_UNWRITABLE.to_string()
+}
+
+/// The discard-pending prompt's choices (WB-29 §4, §7); its message is the
+/// rendered `UnsavedNotesNotDiscarded` event.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct HotExitDiscardPendingChoices {
+    pub try_again: String,
+    pub close_keeping_copies: String,
+    pub cancel: String,
+    /// For a dialog that cannot relabel its buttons (Yes/No/Cancel).
+    pub yes_no_cancel_instruction: String,
+}
+
+#[uniffi::export]
+pub fn hot_exit_discard_pending_choices() -> HotExitDiscardPendingChoices {
+    HotExitDiscardPendingChoices {
+        try_again: core::a11y::HOT_EXIT_CHOICE_TRY_AGAIN.to_string(),
+        close_keeping_copies: core::a11y::HOT_EXIT_CHOICE_CLOSE_KEEPING_COPIES.to_string(),
+        cancel: core::a11y::HOT_EXIT_CHOICE_CANCEL.to_string(),
+        yes_no_cancel_instruction: core::a11y::HOT_EXIT_CHOICES_YES_NO_CANCEL.to_string(),
+    }
 }
 
 /// FFI-exposed command registry. Wraps `slate_core::CommandRegistry`.
@@ -14506,23 +14670,61 @@ impl VaultSession {
 mod tests {
     use super::*;
 
-    /// Plan 44 WB-29a: the hot-exit store through the exported object —
-    /// open, claim, write, read, release, discard — and its refusal and
-    /// error reasons in core's words.
+    /// Plan 44 WB-29a and WB-29 §7: the hot-exit store through the exported
+    /// object — hold, claim (compare-and-swap, idempotent), write, read
+    /// (with its current claims), retire, release, discard — and its
+    /// refusal and error reasons in core's words.
     #[test]
     fn hot_exit_store_round_trips_through_the_binding() {
         let root = tempfile::tempdir().unwrap();
-        let store = HotExitStore::open(root.path().to_string_lossy().into_owned()).unwrap();
+        let root_text = root.path().to_string_lossy().into_owned();
+        let store = HotExitStore::open(root_text.clone()).unwrap();
         let key = HotExitVaultKey {
             text: "win:test-vault".into(),
         };
+        let hold = store.hold_vault(key.clone()).unwrap();
+        assert!(census_live_object_counts().hot_exit_holds >= 1);
+        let other = HotExitStore::open(root_text).unwrap();
+        match other.hold_vault(key.clone()) {
+            Err(HotExitError::HeldElsewhere { reason }) => {
+                assert_eq!(reason, core::a11y::HOT_EXIT_REASON_HELD_ELSEWHERE)
+            }
+            other => panic!("a second hold was granted: {:?}", other.map(|_| ())),
+        }
+        hold.release();
+        hold.release();
+        let _held_again = other.hold_vault(key.clone()).unwrap();
         let epoch = store.current_epoch(key.clone()).unwrap();
+        let incarnation = new_hot_exit_incarnation().unwrap();
         let HotExitClaimOutcome::Claimed { claim } = store
-            .claim_entry(key.clone(), epoch, "tab1".into(), None)
+            .claim_entry(key.clone(), epoch, "tab1".into(), None, incarnation.clone())
             .unwrap()
         else {
             panic!("claim refused");
         };
+        // The same call again is idempotent; a stale one is refused.
+        assert_eq!(
+            store
+                .claim_entry(key.clone(), epoch, "tab1".into(), None, incarnation)
+                .unwrap(),
+            HotExitClaimOutcome::Claimed {
+                claim: claim.clone()
+            }
+        );
+        assert_eq!(
+            store
+                .claim_entry(
+                    key.clone(),
+                    epoch,
+                    "tab1".into(),
+                    None,
+                    new_hot_exit_incarnation().unwrap()
+                )
+                .unwrap(),
+            HotExitClaimOutcome::Superseded {
+                by: HotExitSupersession::Claim
+            }
+        );
         let entry = HotExitEntryWrite {
             path: "a.md".into(),
             text: "unsaved".into(),
@@ -14538,8 +14740,37 @@ mod tests {
         let snapshot = store.read_buffers(key.clone()).unwrap();
         assert_eq!(snapshot.entries.len(), 1);
         assert_eq!(snapshot.entries[0].text, "unsaved");
+        assert_eq!(
+            snapshot.claims,
+            [HotExitCurrentClaim {
+                entry_id: "tab1".into(),
+                incarnation: claim.incarnation.clone()
+            }]
+        );
+        // An adopter displaces the claim it names; retiring both clears it.
+        let HotExitClaimOutcome::Claimed { claim: adopter } = store
+            .claim_entry(
+                key.clone(),
+                epoch,
+                "tab1".into(),
+                Some(claim.incarnation.clone()),
+                new_hot_exit_incarnation().unwrap(),
+            )
+            .unwrap()
+        else {
+            panic!("adoption refused");
+        };
+        assert_eq!(adopter.adopted, std::slice::from_ref(&claim.incarnation));
+        store
+            .retire_entry(
+                key.clone(),
+                "tab1".into(),
+                vec![adopter.incarnation.clone(), claim.incarnation.clone()],
+            )
+            .unwrap();
+        let after = store.read_buffers(key.clone()).unwrap();
+        assert!(after.entries.is_empty() && after.claims.is_empty());
         store.release_entry(key.clone(), claim).unwrap();
-        assert!(store.read_buffers(key.clone()).unwrap().entries.is_empty());
         assert!(store.discard_vault(key.clone()).unwrap() > epoch);
         assert!(census_live_object_counts().hot_exit_stores >= 1);
         assert_eq!(
@@ -14550,7 +14781,64 @@ mod tests {
             hot_exit_reason_timed_out(),
             core::a11y::HOT_EXIT_REASON_TIMED_OUT
         );
-        match store.claim_entry(key, 0, "bad id".into(), None) {
+        for (accessor, fragment) in [
+            (
+                hot_exit_reason_taken_over(),
+                core::a11y::HOT_EXIT_REASON_TAKEN_OVER,
+            ),
+            (
+                hot_exit_reason_discard_pending(),
+                core::a11y::HOT_EXIT_REASON_DISCARD_PENDING,
+            ),
+            (
+                hot_exit_reason_discarded(),
+                core::a11y::HOT_EXIT_REASON_DISCARDED,
+            ),
+            (
+                hot_exit_reason_held_elsewhere(),
+                core::a11y::HOT_EXIT_REASON_HELD_ELSEWHERE,
+            ),
+            (
+                hot_exit_reason_earlier_work_pending(),
+                core::a11y::HOT_EXIT_REASON_EARLIER_WORK_PENDING,
+            ),
+            (
+                hot_exit_reason_store_unwritable(),
+                core::a11y::HOT_EXIT_REASON_STORE_UNWRITABLE,
+            ),
+        ] {
+            assert_eq!(accessor, fragment);
+        }
+        let choices = hot_exit_discard_pending_choices();
+        assert_eq!(choices.try_again, core::a11y::HOT_EXIT_CHOICE_TRY_AGAIN);
+        assert_eq!(
+            choices.close_keeping_copies,
+            core::a11y::HOT_EXIT_CHOICE_CLOSE_KEEPING_COPIES
+        );
+        assert_eq!(choices.cancel, core::a11y::HOT_EXIT_CHOICE_CANCEL);
+        assert_eq!(
+            choices.yes_no_cancel_instruction,
+            core::a11y::HOT_EXIT_CHOICES_YES_NO_CANCEL
+        );
+        match store.claim_entry(
+            key.clone(),
+            0,
+            "tab2".into(),
+            None,
+            "NOT-AN-INCARNATION".into(),
+        ) {
+            Err(HotExitError::InvalidIncarnation { reason }) => {
+                assert_eq!(reason, core::a11y::HOT_EXIT_REASON_STORE_UNWRITABLE)
+            }
+            other => panic!("an invalid incarnation was accepted: {other:?}"),
+        }
+        match store.claim_entry(
+            key,
+            0,
+            "bad id".into(),
+            None,
+            new_hot_exit_incarnation().unwrap(),
+        ) {
             Err(HotExitError::InvalidEntryId { reason }) => {
                 assert_eq!(reason, core::a11y::HOT_EXIT_REASON_STORE_UNWRITABLE)
             }

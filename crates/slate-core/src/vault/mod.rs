@@ -70,6 +70,9 @@
 
 mod echo_ledger;
 mod fs;
+/// Plan 44 WB-29 §7: the identity facts' seams.
+#[cfg(test)]
+pub(crate) use fs::{AFTER_PUBLISH_BEFORE_REPORT, AFTER_READ_BEFORE_IDENTITY};
 pub(crate) mod fs_root;
 mod provider;
 mod trash_handoff;

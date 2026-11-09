@@ -454,3 +454,184 @@ mod macos {
         }
     }
 }
+
+// ---- WB-29 §7: the identity of the file a read or a save touched.
+
+/// Replaces `path` under `root` with a new file holding the same bytes (a
+/// rename over it, so another file — a new identity — stands there).
+#[cfg(any(windows, unix))]
+fn replace_with_same_bytes(root: &Path, path: &str) {
+    let target = root.join(path);
+    let bytes = std::fs::read(&target).unwrap();
+    let staged = root.join(".replacement.tmp");
+    std::fs::write(&staged, &bytes).unwrap();
+    std::fs::rename(&staged, &target).unwrap();
+}
+
+#[test]
+fn the_identified_read_names_the_file_it_read() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    std::fs::write(root.join("a.md"), "---\nk: v\n---\n# A\n").unwrap();
+    let session = session_at(root);
+    let read = session.read_text_identified("a.md").unwrap();
+    assert_eq!(read.text, "---\nk: v\n---\n# A\n");
+    assert_eq!(read.content_hash, hash_of(root, "a.md"));
+    assert_eq!(
+        read.file_identity,
+        session.note_file_identity("a.md").unwrap()
+    );
+    let parts = session.read_note_parts("a.md").unwrap();
+    assert_eq!(parts.content_hash, read.content_hash);
+    assert_eq!(parts.file_identity, read.file_identity);
+    #[cfg(any(windows, unix))]
+    assert!(read.file_identity.is_some());
+}
+
+/// Codex round 6: a replacement between the bytes and the identity never
+/// lends the read its identity: the handle that read and the entry now at
+/// the path disagree, so the read reports none — never the replacement's.
+#[cfg(any(windows, unix))]
+#[test]
+fn an_identified_read_names_its_own_handle_never_a_replacement() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().to_path_buf();
+    std::fs::write(root.join("a.md"), "# A\n").unwrap();
+    let session = session_at(&root);
+    let original = session.note_file_identity("a.md").unwrap();
+    {
+        let root = root.clone();
+        crate::vault::AFTER_READ_BEFORE_IDENTITY.with(|cell| {
+            *cell.borrow_mut() = Some(Box::new(move || replace_with_same_bytes(&root, "a.md")));
+        });
+    }
+    let read = session.read_text_identified("a.md").unwrap();
+    let replacement = session.note_file_identity("a.md").unwrap();
+    assert_ne!(
+        original, replacement,
+        "premise: the replacement is another file"
+    );
+    assert_eq!(read.file_identity, None);
+}
+
+#[test]
+fn a_save_reports_the_file_it_published() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    std::fs::write(root.join("a.md"), "# A\n").unwrap();
+    let session = session_at(root);
+    let report = session
+        .save_text("a.md", "# A, edited\n", Some(&hash_of(root, "a.md")))
+        .unwrap();
+    assert_eq!(
+        report.file_identity,
+        session.note_file_identity("a.md").unwrap()
+    );
+    #[cfg(any(windows, unix))]
+    assert!(report.file_identity.is_some());
+    // A checked save, and a create, report theirs the same way.
+    let checked = session
+        .save_text_checked(
+            "a.md",
+            "# A, again\n",
+            Some(&report.new_content_hash),
+            report.file_identity.as_deref(),
+        )
+        .unwrap();
+    assert_eq!(
+        checked.file_identity,
+        session.note_file_identity("a.md").unwrap()
+    );
+    let created = session.create_exclusive("b.md", "# B\n").unwrap();
+    assert_eq!(
+        created.file_identity,
+        session.note_file_identity("b.md").unwrap()
+    );
+}
+
+/// Codex round 6: a file put at the path after the publish never lends
+/// the report its identity: the staged file the save renamed into place
+/// and the entry now at the path disagree, so the report names none.
+#[cfg(any(windows, unix))]
+#[test]
+fn a_save_report_names_the_published_file_never_a_replacement() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().to_path_buf();
+    std::fs::write(root.join("a.md"), "# A\n").unwrap();
+    let session = session_at(&root);
+    let published = std::rc::Rc::new(std::cell::RefCell::new(None));
+    {
+        let root = root.clone();
+        let published = std::rc::Rc::clone(&published);
+        crate::vault::AFTER_PUBLISH_BEFORE_REPORT.with(|cell| {
+            *cell.borrow_mut() = Some(Box::new(move || {
+                let target = root.join("a.md");
+                *published.borrow_mut() = Some(std::fs::read(&target).unwrap());
+                replace_with_same_bytes(&root, "a.md");
+            }));
+        });
+    }
+    let before = session.note_file_identity("a.md").unwrap();
+    let report = session
+        .save_text("a.md", "# A, edited\n", Some(&hash_of(&root, "a.md")))
+        .unwrap();
+    assert_eq!(
+        published.borrow().as_deref(),
+        Some("# A, edited\n".as_bytes()),
+        "premise: the seam ran after the publish"
+    );
+    let replacement = session.note_file_identity("a.md").unwrap();
+    assert!(replacement.is_some() && replacement != before);
+    assert_eq!(report.file_identity, None);
+}
+
+/// A property delete that changes nothing reports the identity its own
+/// read saw.
+#[test]
+fn an_unchanged_property_delete_reports_the_file_it_read() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    std::fs::write(root.join("a.md"), "---\nk: v\n---\n# A\n").unwrap();
+    let session = session_at(root);
+    let report = session
+        .delete_property("a.md", "absent", Some(&hash_of(root, "a.md")))
+        .unwrap();
+    assert_eq!(report.new_content_hash, hash_of(root, "a.md"));
+    assert_eq!(
+        report.file_identity,
+        session.note_file_identity("a.md").unwrap()
+    );
+}
+
+/// Red team and Codex (PR 1): a note that is itself a link reads through
+/// the link, so its bytes are the target's while `note_file_identity` names
+/// the entry (the link on Unix, none on Windows). The identified read names
+/// neither: it reports none, and a checked save from that baseline lands.
+#[cfg(any(windows, unix))]
+#[test]
+fn an_identified_read_of_a_link_names_no_identity_and_its_save_lands() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    std::fs::write(root.join("target.md"), "# Target\n").unwrap();
+    #[cfg(windows)]
+    let linked = std::os::windows::fs::symlink_file(root.join("target.md"), root.join("link.md"));
+    #[cfg(unix)]
+    let linked = std::os::unix::fs::symlink(root.join("target.md"), root.join("link.md"));
+    if linked.is_err() {
+        // Windows without the symbolic-link privilege or developer mode:
+        // nothing to compare.
+        return;
+    }
+    let session = session_at(root);
+    let read = session.read_text_identified("link.md").unwrap();
+    assert_eq!(read.text, "# Target\n");
+    assert_eq!(read.file_identity, None);
+    session
+        .save_text_checked(
+            "link.md",
+            "# Saved\n",
+            Some(&read.content_hash),
+            read.file_identity.as_deref(),
+        )
+        .unwrap();
+}

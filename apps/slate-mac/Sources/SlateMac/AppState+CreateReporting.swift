@@ -45,7 +45,7 @@ extension AppState {
         switch try session.createExclusiveReporting(path: path, content: content) {
         case .committed(let report):
             return CreateLanding(contentHash: report.newContentHash, caveat: nil)
-        case .publishedUnindexed(_, let contentHash, let errorMessage):
+        case .publishedUnindexed(_, let contentHash, _, let errorMessage):
             return CreateLanding(
                 contentHash: contentHash,
                 caveat: .createPublishedUnindexed(name: displayName, reason: errorMessage))

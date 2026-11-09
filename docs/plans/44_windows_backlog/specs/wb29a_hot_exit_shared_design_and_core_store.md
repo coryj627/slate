@@ -587,6 +587,76 @@ Where it differs from the design above, it wins.
   that refuses that call but reports a persistent `FileIdInfo` would get a
   key. Neither can be shown failing on the development machine.
 
+## Amendment, WB-29 PR 1 (2026-11-02)
+
+The owner's calls of 2026-11-02 (WB-29's spec,
+`wb29_hot_exit_windows_half.md`, "Owner calls" and §7) amend this design
+for both hosts. Where this section and the text above differ, this
+section wins.
+
+- **§1, a vault hold.** `HotExitStore::hold_vault(key)` takes an
+  exclusive, non-blocking OS file lock on
+  `<device root>/hot-exit/v1/holds/<key hash>.lock`, released by
+  `release`, by drop, or by the OS at process exit; another holder is the
+  new `HotExitError::HeldElsewhere`. A host reads, adopts in, writes to
+  and discards a vault's store only while it owns the hold. The store's
+  other calls do not check it: holding it is the host's contract, as the
+  device root's durability is.
+- **§2, a claim names the claim it replaces.** "A newer claim replaces an
+  older one" becomes "a claim naming the current one replaces it":
+  `claim_entry(key, epoch, entry_id, expected, incarnation)` applies only
+  when the entry's current claim at `epoch` is `expected` (`None`: no
+  current claim; an older epoch's claim counts as none, a later epoch's
+  is `Damaged`), else `Superseded { Claim }` with nothing changed. The
+  host makes `incarnation` first (`new_hot_exit_incarnation()`), so the
+  same call retried after an error answers `Claimed` again, once the
+  claim is re-synced. A claim with no current claim first removes any
+  payload of that entry, durably, since only an older epoch's or a
+  released claim can have left one. `HotExitClaim.adopted` is a list:
+  `expected` and the stored payload's incarnation when an older claim
+  wrote it.
+- **§3, the snapshot and the identity.** `HotExitSnapshot.claims` lists
+  every claim at the read's epoch, with or without a payload: an entry
+  may sit under a claim of another incarnation (an adopter that never
+  wrote), and a host adopts by expecting the observed claim. A note's
+  identity comes from the read or the save that touched it:
+  `read_text_identified`, `NotePartsBundle.file_identity`,
+  `SaveReport.file_identity` and `PublishedUnindexed.file_identity`, each
+  from one handle (the staged file's for a save, since the rename keeps
+  it), and kept only when it agrees with `note_file_identity` for the
+  entry at the path, which a checked save compares against: on Windows
+  that gives none for a link or any other reparse point (OneDrive
+  placeholders, compressed or deduplicated files), on Unix a link's own
+  inode. So a baseline never carries an identity the check cannot
+  produce, a link's read (the target's bytes) reports none, and a file
+  put at the path between the handle and that check reports none.
+  `None` where none can be had, never a failed read or save.
+- **Refusals change nothing.** A claim with a stale epoch or an expected
+  claim, on a vault that has no directory, is refused before the
+  directory is created, so it spends no vault cap. Hold files (`holds/<key hash>.lock`, empty) are not removed:
+  one per vault this device has held, an accepted, bounded leftover.
+- **§5, the discard-pending prompt (owner call D-1).** A close the store
+  cannot finish — a discard or a retirement not confirmed — opens a
+  prompt whose message is `UnsavedNotesNotDiscarded` (now: closing anyway
+  keeps any copies not yet discarded, and they come back unsaved at the
+  next open) with Try again, Close and keep the copies, and Cancel
+  (`hot_exit_discard_pending_choices()`). A Discard All that commits late
+  never re-keeps the buffers it covered; the next close asks.
+- **§6, `retire_entry`.** `retire_entry(key, entry_id, incarnations)`
+  removes the entry's claim and payload where their incarnation is
+  listed, needs no claim and checks no epoch; `release_entry(claim)` is
+  `retire_entry` of the claim's incarnation and every one it adopted.
+- **Deviation 5 is withdrawn.** Windows runs one instance per Windows
+  session (`SingleInstanceCoordinator.cs:30-39`), not per account, so two
+  sign-ins of one account share a store; the vault hold, not the
+  single-instance mutex, keeps two processes apart, and a later claim
+  never wins over a live one.
+- **Copy.** New fragments `HOT_EXIT_REASON_TAKEN_OVER`,
+  `HOT_EXIT_REASON_DISCARD_PENDING`, `HOT_EXIT_REASON_DISCARDED`,
+  `HOT_EXIT_REASON_HELD_ELSEWHERE`, `HOT_EXIT_REASON_EARLIER_WORK_PENDING`
+  with FFI accessors (and `hot_exit_reason_store_unwritable()`);
+  `HOT_EXIT_REASON_TIMED_OUT` says 4 seconds, the host's settle budget.
+
 ## The core store PR (after this design merges)
 
 New module `crates/slate-core/src/hot_exit.rs` (the store, its claims,

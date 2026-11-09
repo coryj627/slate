@@ -207,6 +207,22 @@ impl FsVaultProvider {
     /// `relative` opened for reading, links followed as a pathname read
     /// follows them: beneath the held root on Windows (WB-28), by path
     /// otherwise.
+    /// The identity a handle gave, kept only when the vault entry at
+    /// `relative` names that same file under `file_identity`'s own rule
+    /// (plan 44 WB-29 §7). A handle's identity alone names the file the
+    /// bytes came from, but a checked save compares against
+    /// `file_identity`, which names the entry: on Windows none for a link
+    /// or any other reparse point (OneDrive's placeholders, compressed or
+    /// deduplicated files), on Unix a link's own inode. Agreeing with it
+    /// keeps those saves from refusing on an identity the later check can
+    /// never produce, a link's read (the target's bytes) reports none, and
+    /// a file put at the path in between (they then differ) reports none,
+    /// which the restore treats as an unknown identity, never a wrong one.
+    fn agreed_identity(&self, relative: &str, handle: Option<String>) -> Option<String> {
+        let entry = self.file_identity(relative).ok().flatten()?;
+        handle.filter(|identity| *identity == entry)
+    }
+
     fn open_for_read(&self, relative: &str) -> Result<fs::File, VaultError> {
         let path = self.resolve(relative)?;
         #[cfg(windows)]
@@ -296,11 +312,11 @@ impl FsVaultProvider {
     /// mutators that call this — saves, link rewrites, creates (imports and
     /// attachments too), folders, moves, undo and redo, Trash — so the ledger
     /// is complete by construction; a failed mutation records nothing.
-    fn recorded(
+    fn recorded<T>(
         &self,
         relatives: &[&str],
-        result: Result<(), VaultError>,
-    ) -> Result<(), VaultError> {
+        result: Result<T, VaultError>,
+    ) -> Result<T, VaultError> {
         if result.is_ok() {
             self.record_echoes(relatives);
         }
@@ -775,6 +791,7 @@ impl FsVaultProvider {
         Ok(())
     }
 
+    #[cfg(test)]
     fn write_file_if_absent_with_staging<WriteContents, SyncContents, Publish>(
         &self,
         relative: &str,
@@ -783,6 +800,31 @@ impl FsVaultProvider {
         sync_contents: SyncContents,
         publish: Publish,
     ) -> Result<(), VaultError>
+    where
+        WriteContents: FnOnce(&mut fs::File, &[u8]) -> io::Result<()>,
+        SyncContents: FnOnce(&fs::File) -> io::Result<()>,
+        Publish: FnOnce(&Staged, &PinnedMutationTarget) -> io::Result<()>,
+    {
+        self.write_file_if_absent_with_staging_identified(
+            relative,
+            contents,
+            write_contents,
+            sync_contents,
+            publish,
+        )
+        .map(drop)
+    }
+
+    /// [`Self::write_file_if_absent_with_staging`], reporting the created
+    /// file's identity from the staged handle (plan 44 WB-29 §7).
+    fn write_file_if_absent_with_staging_identified<WriteContents, SyncContents, Publish>(
+        &self,
+        relative: &str,
+        contents: &[u8],
+        write_contents: WriteContents,
+        sync_contents: SyncContents,
+        publish: Publish,
+    ) -> Result<Option<String>, VaultError>
     where
         WriteContents: FnOnce(&mut fs::File, &[u8]) -> io::Result<()>,
         SyncContents: FnOnce(&fs::File) -> io::Result<()>,
@@ -816,10 +858,11 @@ impl FsVaultProvider {
         // Disarm `TempPath` cleanup explicitly: after the move, a new external
         // file could race into the old random name and must not be deleted by
         // the guard's destructor.
+        let identity = handle_identity(temp.file());
         match publish(&temp, &destination) {
             Ok(()) => {
                 temp.published();
-                Ok(())
+                Ok(identity)
             }
             Err(publish_error) => {
                 let cleanup = normalize_create_temp_cleanup(temp.close());
@@ -865,10 +908,26 @@ impl FsVaultProvider {
         contents: &[u8],
         before_publish: impl FnOnce() -> io::Result<()>,
     ) -> Result<(), VaultError> {
+        self.write_file_beneath_root_identified(relative, contents, before_publish)
+            .map(drop)
+    }
+
+    /// [`Self::write_file_beneath_root`], reporting the identity of the file
+    /// it published (plan 44 WB-29 §7): taken from the staged file's own
+    /// handle before the publish, since the rename keeps it, so a file put
+    /// at the path after the publish never lends the save its identity.
+    #[cfg(unix)]
+    fn write_file_beneath_root_identified(
+        &self,
+        relative: &str,
+        contents: &[u8],
+        before_publish: impl FnOnce() -> io::Result<()>,
+    ) -> Result<Option<String>, VaultError> {
         let target = self.pin_mutation_target(relative, true, Mutation::Save)?;
         let staged = self
             .staging()?
             .stage(contents, target.existing_permissions())?;
+        let identity = handle_identity(staged.file());
         before_publish()?;
         // A failed publish drops `staged`, which removes the staged file.
         target.publish_staged_replacing(&staged)?;
@@ -877,7 +936,7 @@ impl FsVaultProvider {
         staged.published();
         // Best effort, as before: the published bytes stand either way.
         let _ = target.sync_parent();
-        Ok(())
+        Ok(identity)
     }
 
     /// #1452: a new folder beneath the pinned vault root, `create_folder`'s
@@ -919,11 +978,27 @@ impl FsVaultProvider {
         contents: &[u8],
         before_publish: impl FnOnce() -> io::Result<()>,
     ) -> Result<(), VaultError> {
+        self.write_file_beneath_root_identified(relative, contents, before_publish)
+            .map(drop)
+    }
+
+    /// [`Self::write_file_beneath_root`], reporting the identity of the file
+    /// it published (plan 44 WB-29 §7): taken from the staged file's own
+    /// handle before the publish, since the rename keeps it, so a file put
+    /// at the path after the publish never lends the save its identity.
+    #[cfg(windows)]
+    fn write_file_beneath_root_identified(
+        &self,
+        relative: &str,
+        contents: &[u8],
+        before_publish: impl FnOnce() -> io::Result<()>,
+    ) -> Result<Option<String>, VaultError> {
         let target = self.pin_mutation_target(relative, true, Mutation::Save)?;
         // No permissions are carried over: `persist` reset the attributes of
         // every Windows save to FILE_ATTRIBUTE_NORMAL, so the replaced file's
         // read-only bit never survived, and the publish does the same.
         let staged = self.staging()?.stage(contents, None)?;
+        let identity = handle_identity(staged.file());
         before_publish()?;
         // A failed publish drops `staged`, which removes the staged file.
         target
@@ -935,7 +1010,7 @@ impl FsVaultProvider {
         // Windows has no directory handle sync through std; NTFS metadata
         // journaling orders the rename with the synced file data, as before
         // (recorded in the protocol's accepted-risk register).
-        Ok(())
+        Ok(identity)
     }
 
     /// #1451: a new folder beneath the pinned vault root, on Windows,
@@ -2036,14 +2111,58 @@ impl VaultProvider for FsVaultProvider {
     }
 
     fn write_file_if_absent(&self, relative: &str, contents: &[u8]) -> Result<(), VaultError> {
-        let created = self.write_file_if_absent_with_staging(
+        self.write_file_if_absent_identified(relative, contents)
+            .map(drop)
+    }
+
+    fn write_file_if_absent_identified(
+        &self,
+        relative: &str,
+        contents: &[u8],
+    ) -> Result<Option<String>, VaultError> {
+        let created = self.write_file_if_absent_with_staging_identified(
             relative,
             contents,
             |file, contents| file.write_all(contents),
             fs::File::sync_data,
             publish_staged_no_replace,
         );
-        self.recorded(&[relative], created)
+        let created = self.recorded(&[relative], created);
+        after_publish_before_report_seam();
+        created.map(|identity| self.agreed_identity(relative, identity))
+    }
+
+    fn write_file_identified(
+        &self,
+        relative: &str,
+        contents: &[u8],
+    ) -> Result<Option<String>, VaultError> {
+        #[cfg(any(unix, windows))]
+        let written = self.write_file_beneath_root_identified(relative, contents, || Ok(()));
+        #[cfg(not(any(unix, windows)))]
+        let written = self.resolve_for_mutation(relative).and_then(|path| {
+            atomic_write(&path, &self.tmp_dir(), contents)
+                .map(|()| None)
+                .map_err(VaultError::from)
+        });
+        let written = self.recorded(&[relative], written);
+        after_publish_before_report_seam();
+        written.map(|identity| self.agreed_identity(relative, identity))
+    }
+
+    fn read_file_identified(
+        &self,
+        relative: &str,
+        max_bytes: u64,
+    ) -> Result<(Vec<u8>, Option<String>), VaultError> {
+        use std::io::Read;
+        let file = self.open_for_read(relative)?;
+        let cap = max_bytes.saturating_add(1);
+        let mut buf: Vec<u8> = Vec::with_capacity(cap.min(64 * 1024) as usize);
+        (&file).take(cap).read_to_end(&mut buf)?;
+        after_read_before_identity_seam();
+        let identity = self.agreed_identity(relative, handle_identity(&file));
+        Ok((buf, identity))
     }
 
     /// Move an entry to the system Trash. The path handed to the Trash is
@@ -2849,6 +2968,52 @@ fn atomic_write(target: &Path, tmp_dir: &Path, contents: &[u8]) -> io::Result<()
     let temp = stage_contents(tmp_dir, contents, existing_perms)?;
     temp.persist(target).map_err(|error| error.error)?;
     Ok(())
+}
+
+/// The identity `file_identity` gives the file behind `file`'s own handle
+/// (plan 44 WB-29 §7): the Windows volume serial and file id, the Unix
+/// inode and birth time. `None` when the query fails: an identity is never
+/// worth failing a read or a save for.
+#[cfg(windows)]
+fn handle_identity(file: &fs::File) -> Option<String> {
+    super::windows_entry::identity(file).ok()
+}
+
+#[cfg(unix)]
+fn handle_identity(file: &fs::File) -> Option<String> {
+    use std::os::unix::fs::MetadataExt as _;
+    file.metadata()
+        .ok()
+        .map(|meta| format!("unix:{:x}-{}", meta.ino(), birthtime_ms_of(&meta)))
+}
+
+#[cfg(not(any(windows, unix)))]
+fn handle_identity(_file: &fs::File) -> Option<String> {
+    None
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Runs once between an identified read's bytes and its identity.
+    pub(crate) static AFTER_READ_BEFORE_IDENTITY: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+    /// Runs once between an identified write's publish and its report.
+    pub(crate) static AFTER_PUBLISH_BEFORE_REPORT: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+fn after_read_before_identity_seam() {
+    #[cfg(test)]
+    if let Some(seam) = AFTER_READ_BEFORE_IDENTITY.with(|cell| cell.borrow_mut().take()) {
+        seam();
+    }
+}
+
+fn after_publish_before_report_seam() {
+    #[cfg(test)]
+    if let Some(seam) = AFTER_PUBLISH_BEFORE_REPORT.with(|cell| cell.borrow_mut().take()) {
+        seam();
+    }
 }
 
 #[cfg(test)]

@@ -1702,7 +1702,7 @@
   {
     "event": "UnsavedNotesNotDiscarded",
     "priority": "high",
-    "text": "Slate could not yet discard the kept copies of your unsaved notes, so the vault stays open. Try again, or cancel."
+    "text": "Slate could not yet discard the kept copies of your unsaved notes. If you close anyway, any copies not yet discarded are kept, and they come back as unsaved notes the next time you open this vault."
   },
   {
     "event": "Canvas { event: CanvasMovedTo { verbosity: Terse, kind_label: \"text\", title: \"Research\", ordinal_n: 2, total_m: 5, container: Some(\"Q3\"), connection_count: 3, color_name: Some(\"red\"), marked: true } }",
