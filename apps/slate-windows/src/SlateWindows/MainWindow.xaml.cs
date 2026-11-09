@@ -839,6 +839,9 @@ public partial class MainWindow : Window
 
             _focusBeforeSwitcher ??= Keyboard.FocusedElement;
             _quickSwitcherCommitted = false;
+            // #1690: in the same turn (LandInOpeningOverlay); the queued
+            // landing stays as the fallback.
+            _ = LandInOpeningOverlay(QuickSwitcherOverlay, QuickSwitcherSearchTextBox);
             _ = Dispatcher.InvokeAsync(() =>
             {
                 QuickSwitcherSearchTextBox.Focus();
@@ -1019,10 +1022,11 @@ public partial class MainWindow : Window
         });
     }
 
-    /// <summary>#1690: whether a modal surface is open and the keys are still where they
-    /// were when it opened, waiting for its landing: in the menu, on an empty pane's
-    /// action, or, under Quick Open, search or the palette, in the workspace or the welcome
-    /// view. Each stays enabled while it holds the keys.</summary>
+    /// <summary>#1690: whether a modal surface is open and the keys are still on what
+    /// stays enabled while it holds them: an empty pane's action, under any surface; or,
+    /// under Quick Open, search or the palette, the workspace, the welcome view or the
+    /// menu. Those overlays' fields take the keys in the turn they open
+    /// (<see cref="LandInOpeningOverlay"/>); a sheet's takes them in a queued landing.</summary>
     private bool KeysAreStillUnderAnOpenSurface()
     {
         if (OpenModalSurface is not { } surface)
@@ -1030,15 +1034,14 @@ public partial class MainWindow : Window
             return false;
         }
 
-        if (MainMenu.IsKeyboardFocusWithin
-            || (Keyboard.FocusedElement is Button action
-                && ReferenceEquals(action.Style, TryFindResource("Slate.LauncherRowStyle"))))
+        if (Keyboard.FocusedElement is Button action
+            && ReferenceEquals(action.Style, TryFindResource("Slate.LauncherRowStyle")))
         {
             return true;
         }
 
         return surface is ModalSurface.QuickOpen or ModalSurface.SearchOverlay or ModalSurface.CommandPalette
-            && (WorkspaceRoot.IsKeyboardFocusWithin || WelcomeRoot.IsKeyboardFocusWithin);
+            && (WorkspaceRoot.IsKeyboardFocusWithin || WelcomeRoot.IsKeyboardFocusWithin || MainMenu.IsKeyboardFocusWithin);
     }
 
     /// <summary>The window's tunnelling key route, ahead of every focused
@@ -1063,12 +1066,14 @@ public partial class MainWindow : Window
 
         ModifierKeys modifiers = Keyboard.Modifiers;
 
-        // #1690: a surface opened over the element that still holds the keys, which stays
-        // enabled until the surface's queued landing takes them (MainWindow.xaml's triggers),
-        // so NVDA never hears it go unavailable. Until then a key would reach it under the
-        // surface: typing or Delete would edit the note, Enter would run an action. They're
-        // taken here, and with them the characters they would type. A plain Escape goes on
-        // to the surface's own route, so a landing that never comes leaves a way out.
+        // #1690: a surface opened over what still holds the keys, because its field
+        // hasn't taken them yet (a sheet's landing is queued, and an overlay's waits on its
+        // queued fallback when its field can't take them in the turn it opened). That stays
+        // enabled until the keys leave it, so NVDA never hears it go unavailable, and a key
+        // would reach it under the surface: typing or Delete would edit the note, Space
+        // would press an empty pane's action. Keys are taken here, and with them the
+        // characters they would type. A plain Escape goes on to the surface's own route,
+        // so a landing that never comes still leaves a way out.
         if (KeysAreStillUnderAnOpenSurface()
             && !(e.Key == Key.Escape && modifiers == ModifierKeys.None))
         {

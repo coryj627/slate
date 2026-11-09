@@ -4,6 +4,7 @@
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -45,6 +46,34 @@ public partial class MainWindow
         _paletteResults = new CommandPaletteResultsPresenter(CommandPaletteResultsList, palette);
     }
 
+    /// <summary>
+    /// #1690: the keys go to an opening overlay's field in the same turn it opens. The
+    /// visibility bindings on IsOpen, the overlay's and the field's own, may not have run yet
+    /// when the window hears it, so each from the field up is brought up to date and laid out
+    /// first. The view under the overlay (the workspace, the welcome view, the menu, an empty
+    /// pane's action) goes off only once the keys have left it, so NVDA never hears it go
+    /// unavailable; landing here, in the same turn, leaves no time in which a key, text or a
+    /// click already queued reaches it under the overlay. The queued landing each caller
+    /// keeps is the fallback for a field that can't take the keys yet, and the window's key
+    /// route holds keys meanwhile.
+    /// </summary>
+    private bool LandInOpeningOverlay(FrameworkElement overlay, TextBox field)
+    {
+        for (DependencyObject? up = field; up is not null; up = VisualTreeHelper.GetParent(up))
+        {
+            BindingOperations.GetBindingExpressionBase(up, VisibilityProperty)?.UpdateTarget();
+        }
+
+        overlay.UpdateLayout();
+        if (!field.IsVisible || !field.Focus())
+        {
+            return false;
+        }
+
+        field.SelectAll();
+        return true;
+    }
+
     /// <summary>The palette whose seal release the window listens to.</summary>
     private CommandPaletteViewModel? _sealReleaseSource;
 
@@ -60,6 +89,7 @@ public partial class MainWindow
                     // toggle) cannot overwrite the pre-palette focus with an
                     // element inside the palette itself.
                     _focusBeforePalette ??= Keyboard.FocusedElement;
+                    _ = LandInOpeningOverlay(CommandPaletteOverlay, CommandPaletteSearchTextBox);
                     _ = Dispatcher.InvokeAsync(
                         () =>
                         {

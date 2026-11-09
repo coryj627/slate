@@ -31,22 +31,28 @@ public sealed partial class CommandPaletteTests
         Assert.True(root.IsEnabled, "premise: the workspace is enabled with no overlay open");
 
         TextBox? field = null;
+        IInputElement? atOnce = null;
+        bool offAtOnce = true;
         List<string> disabledUnder = DisabledWithTheKeysInside(root, () =>
         {
             field = OpenTheOverlay(host, overlay);
+            atOnce = Keyboard.FocusedElement;
+            offAtOnce = !root.IsEnabled;
             host.Settle();
         });
 
         Assert.True(disabledUnder.Count == 0, $"the workspace was disabled with the keys on {string.Join(", ", disabledUnder)}");
+        // In the turn it opens, so no key, text or click already queued reaches the editor.
+        Assert.True(ReferenceEquals(field, atOnce), $"in the turn the overlay opened, the keys were on {atOnce}");
+        Assert.True(offAtOnce, "in the turn the overlay opened, the workspace was still on");
         host.AssertFocusIsOn(field!);
         Assert.False(root.IsEnabled, "the workspace stayed enabled under the open overlay");
     });
 
     /// <summary>The empty pane's action that opens an overlay, activated as a reader's
-    /// activate command does, through its peer, stays on until the keys have left it. Quick
-    /// Open's action ran the switcher's own command, which goes off as Quick Open opens, so
-    /// it went off under its own keys. (This host's window isn't a MainWindow, so the
-    /// launcher style's modal trigger is EmptyPaneLauncherTests' to prove.)</summary>
+    /// activate command does, through its peer, goes off only once the overlay's field has
+    /// taken the keys. Quick Open's action runs the switcher's own command, which goes off as
+    /// Quick Open opens, after its field has the keys.</summary>
     [Theory]
     [InlineData("EmptyPaneQuickOpen")]
     [InlineData("EmptyPaneSearchVault")]
@@ -116,14 +122,44 @@ public sealed partial class CommandPaletteTests
         Assert.False(top.IsSubmenuOpen, "the menu stayed open under the overlay");
     });
 
-    /// <summary>The view under the palette stays on until the palette's queued landing takes
-    /// the keys, so a key pressed before then would reach it under the palette: Delete would
-    /// edit the note, Down would open the menu. The window takes it. This host is the real
-    /// window, whose key route the palette host leaves out.</summary>
+    /// <summary>The palette's field takes the keys in the turn the palette opens, from the
+    /// editor and from the menu, so the view under it is off by the time any key, text or
+    /// click already queued is delivered. This host is the real window.</summary>
     [Theory]
     [InlineData("editor")]
     [InlineData("menu")]
-    public void AKeyPressedBeforeThePaletteLandsDoesNotReachTheViewUnderIt(string under) => RunSta(() =>
+    public void ThePaletteTakesTheKeysInTheTurnItOpens(string under) => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "# A\n"));
+        host.Workspace.OpenPath("a.md");
+        host.Settle();
+        var editor = ShownShell.Descendants(host.Shell.WorkspaceRoot).OfType<ICSharpCode.AvalonEdit.Editing.TextArea>().First(area => area.IsVisible);
+        MenuItem top = host.Shell.MainMenu.Items.OfType<MenuItem>().First();
+        UIElement holder = under == "editor" ? editor : top;
+        host.Shell.Activate();
+        host.Settle();
+        TakeTheKeys(holder);
+        host.Settle();
+
+        host.Lifecycle.Palette.Open();
+
+        TextBox field = host.Shell.CommandPaletteSearchTextBox;
+        Assert.True(
+            ReferenceEquals(field, Keyboard.FocusedElement),
+            $"in the turn the palette opened, the keys were on {Keyboard.FocusedElement}; the field was "
+            + $"visible {field.IsVisible}, enabled {field.IsEnabled}, focusable {field.Focusable}, "
+            + $"overlay {host.Shell.CommandPaletteOverlay.Visibility}");
+        Assert.False(holder.IsEnabled, $"the {under} was still on in the turn the palette opened");
+    });
+
+    /// <summary>When the field can't take the keys in that turn, the view under the palette
+    /// keeps them, and stays on, until the queued landing runs. A key pressed meanwhile would
+    /// reach it: Delete would edit the note, Down would open the menu. The window takes it.
+    /// The field refuses the keys here until the fact lets it.</summary>
+    [Theory]
+    [InlineData("editor")]
+    [InlineData("menu")]
+    public void AKeyPressedBeforeALateLandingDoesNotReachTheViewUnderThePalette(string under) => RunSta(() =>
     {
         using var host = new ShownShell(("a.md", "# A\n"));
         host.Workspace.OpenPath("a.md");
@@ -136,23 +172,28 @@ public sealed partial class CommandPaletteTests
         TakeTheKeys(holder);
         host.Settle();
         string before = editor.Document.Text;
+        TextBox field = host.Shell.CommandPaletteSearchTextBox;
 
+        field.Focusable = false;
         host.Lifecycle.Palette.Open();
         Assert.Same(holder, Keyboard.FocusedElement);
+        Assert.True(holder.IsEnabled, $"premise: the {under} went off with the keys");
         bool taken = Press(holder, under == "editor" ? Key.Delete : Key.Down);
+        field.Focusable = true;
         host.Settle();
 
         Assert.True(taken, $"the key reached the {under} under the palette");
         Assert.Equal(before, editor.Document.Text);
         Assert.False(top.IsSubmenuOpen, "the menu opened under the palette");
         Assert.True(host.Lifecycle.Palette.IsOpen);
-        Assert.Same(host.Shell.CommandPaletteSearchTextBox, Keyboard.FocusedElement);
+        Assert.Same(field, Keyboard.FocusedElement);
+        Assert.False(holder.IsEnabled, $"the {under} stayed on under the palette");
     });
 
     /// <summary>Escape isn't taken: it goes on to the palette's own route, so a landing that
     /// never came would still leave a way out.</summary>
     [Fact]
-    public void EscapeBeforeThePaletteLandsStillClosesIt() => RunSta(() =>
+    public void EscapeBeforeALateLandingStillClosesThePalette() => RunSta(() =>
     {
         using var host = new ShownShell(("a.md", "# A\n"));
         host.Workspace.OpenPath("a.md");
@@ -163,12 +204,22 @@ public sealed partial class CommandPaletteTests
         TakeTheKeys(editor);
         host.Settle();
 
+        host.Shell.CommandPaletteSearchTextBox.Focusable = false;
         host.Lifecycle.Palette.Open();
+        Assert.Same(editor, Keyboard.FocusedElement);
         _ = Press(editor, Key.Escape);
         host.Settle();
 
         Assert.False(host.Lifecycle.Palette.IsOpen, "Escape before the landing left the palette open");
     });
+
+    /// <summary>Whether the keys are on <paramref name="element"/> or inside it, by where
+    /// they are rather than by its IsKeyboardFocusWithin: WPF moves the keys first and
+    /// updates that flag along each chain after, so an ancestor's trigger can run while an
+    /// element the keys just left still reads true.</summary>
+    internal static bool TheKeysAreIn(UIElement element) =>
+        Keyboard.FocusedElement is DependencyObject keys
+        && (ReferenceEquals(keys, element) || (keys is System.Windows.Media.Visual && element.IsAncestorOf(keys)));
 
     /// <summary>A key as WPF delivers it to the element holding the keys: the preview through
     /// the window's route, then, if nothing took it, the key itself. Whether the preview was
@@ -237,7 +288,7 @@ public sealed partial class CommandPaletteTests
         var disabledUnder = new List<string>();
         DependencyPropertyChangedEventHandler record = (_, e) =>
         {
-            if (e.NewValue is false && root.IsKeyboardFocusWithin)
+            if (e.NewValue is false && TheKeysAreIn(root))
             {
                 disabledUnder.Add(Keyboard.FocusedElement?.ToString() ?? "nothing");
             }
