@@ -742,6 +742,7 @@
                                 Padding="8,2"
                                 AutomationProperties.Name="Rename property across the vault"
                                 AutomationProperties.AutomationId="PropertiesBulkRenameButton"
+                                local:PaneActivation.ActivatesOwnPane="True"
                                 Command="{Binding DataContext.Workspace.OpenBulkRenameSheetCommand, RelativeSource={RelativeSource AncestorType=Window}}">
                             <TextBlock Text="Rename property across the vault" TextWrapping="Wrap" />
                         </Button>
@@ -751,6 +752,7 @@
                                 Content="Add property"
                                 AutomationProperties.AutomationId="PropertiesAddButton"
                                 AutomationProperties.HelpText="Add a property to this note."
+                                local:PaneActivation.ActivatesOwnPane="True"
                                 Command="{Binding DataContext.Workspace.OpenAddPropertySheetCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
                     </WrapPanel>
                 </Expander.Header>
