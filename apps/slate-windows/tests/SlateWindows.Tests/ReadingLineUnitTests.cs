@@ -74,28 +74,48 @@ public sealed class ReadingLineUnitTests
         Assert.True(wrong.Count == 0, "Wrapped lines read as more than one line:\n" + string.Join('\n', wrong));
     });
 
-    /// <summary>A markdown hard break, which the reading view keeps as a newline inside the
-    /// paragraph's text: Up from the end reads each line on its own.</summary>
+    /// <summary>Every caret position, with either affinity, in a note of headings, list items,
+    /// hard breaks and a wrapped paragraph: its Line is one visual line, and holds the caret.</summary>
     [Fact]
-    public void AHardBreakEndsALine() => RunSta(() =>
+    public void EveryCaretReadsTheOneLineItIsOn() => RunSta(() =>
     {
-        using var host = new ShownShell(("Breaks.md", "# Breaks\n\nFirst line  \nSecond line  \nThird line\n"));
-        (ReadingSurface surface, ITextProvider provider) = OpenReading(host, "Breaks.md", "Third line");
+        string words = string.Join(' ', Enumerable.Range(1, 40).Select(index => $"word{index}"));
+        using var host = new ShownShell(("Every.md", Note + "\nFirst line  \nSecond line  \nThird line\n\n" + words + "\n"));
+        host.Shell.ContentPaneBorder.Width = 320;
+        (ReadingSurface surface, ITextProvider provider) = OpenReading(host, "Every.md", "word40");
         Assert.True(
             Paragraphs(surface.Document).Any(p => Text(p).Contains('\n')),
             "premise: the hard breaks aren't newlines inside one paragraph");
 
-        EditingCommands.MoveToDocumentEnd.Execute(null, surface);
-        host.Settle();
         var wrong = new List<string>();
-        for (int press = 0; press < 3; press++)
+        int checkedCarets = 0;
+        for (TextPointer? at = surface.Document.ContentStart.GetInsertionPosition(LogicalDirection.Forward);
+             at is not null;
+             at = at.GetNextInsertionPosition(LogicalDirection.Forward))
         {
-            Check(provider, $"Up {press}", wrong);
-            EditingCommands.MoveUpByLine.Execute(null, surface);
-            host.Settle();
+            foreach (LogicalDirection affinity in new[] { LogicalDirection.Backward, LogicalDirection.Forward })
+            {
+                TextPointer caret = at.GetPositionAtOffset(0, affinity);
+                surface.Selection.Select(caret, caret);
+                surface.CaretPosition = caret;
+                host.Settle();
+                string where = $"offset {surface.Document.ContentStart.GetOffsetToPosition(at)} {affinity}";
+                Check(provider, where, wrong);
+                ITextRangeProvider line = provider.GetSelection()[0];
+                ITextRangeProvider point = line.Clone();
+                line.ExpandToEnclosingUnit(TextUnit.Line);
+                if (line.CompareEndpoints(TextPatternRangeEndpoint.Start, point, TextPatternRangeEndpoint.Start) > 0
+                    || line.CompareEndpoints(TextPatternRangeEndpoint.End, point, TextPatternRangeEndpoint.End) < 0)
+                {
+                    wrong.Add($"{where}: \"{line.GetText(-1)}\" doesn't hold the caret");
+                }
+
+                checkedCarets++;
+            }
         }
 
-        Assert.True(wrong.Count == 0, "Broken lines read as more than one line:\n" + string.Join('\n', wrong));
+        Assert.True(checkedCarets > 100, $"premise: only {checkedCarets} carets walked");
+        Assert.True(wrong.Count == 0, $"{wrong.Count} of {checkedCarets} carets read wrong:\n" + string.Join('\n', wrong.Take(30)));
     });
 
     /// <summary>A selection's Line expansion is WPF's own: only a caret's is cut.</summary>

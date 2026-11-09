@@ -454,11 +454,9 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
 
     public void ExpandToEnclosingUnit(TextUnit unit)
     {
-        // A copy, its affinity kept: WPF's expansion moves the adaptor's own pointer in place.
         TextPointer? caret = unit == TextUnit.Line
             && _inner.CompareEndpoints(TextPatternRangeEndpoint.Start, _inner, TextPatternRangeEndpoint.End) == 0
-            && StartPointerOf(_inner) is { } pointer
-            ? pointer.GetPositionAtOffset(0, pointer.LogicalDirection)
+            ? StartPointerOf(_inner)
             : null;
         _inner.ExpandToEnclosingUnit(unit);
         if (caret is not null)
@@ -471,23 +469,16 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
     /// #1687: NVDA reads the caret's line as the caret range expanded to a Line. In this
     /// read-only surface, with the caret at the end of a line (where Up and Down leave it,
     /// keeping its column), WPF's Line expansion reaches into the next line: over a paragraph
-    /// break, a LineBreak or a soft wrap. So every arrow spoke two lines. A caret's expansion
-    /// is cut to the visual line the caret is on, as the caret's own pointer (its affinity
-    /// kept) gives it: from that line's start to its end (<see cref="LineEnd"/>). A
-    /// selection is WPF's, unchanged. If the adaptor's pointer can't be read or placed,
-    /// WPF's stands.
+    /// break, a LineBreak or a soft wrap. So every arrow spoke two lines. WPF's expansion
+    /// starts where the caret's line starts (measured at every caret of a mixed note, either
+    /// affinity), so only its end is cut: to where the caret's visual line ends
+    /// (<see cref="LineEnd"/>). A selection is WPF's, unchanged. If the adaptor's pointer
+    /// can't be read or placed, WPF's stands.
     /// </summary>
     private void KeepTheCaretsLine(TextPointer caret)
     {
         try
         {
-            if (caret.GetLineStartPosition(0) is { } start
-                && At(start) is { } from
-                && _inner.CompareEndpoints(TextPatternRangeEndpoint.Start, from, TextPatternRangeEndpoint.Start) < 0)
-            {
-                _inner.MoveEndpointByRange(TextPatternRangeEndpoint.Start, from, TextPatternRangeEndpoint.Start);
-            }
-
             if (caret.GetLineStartPosition(1) is { } next
                 && At(LineEnd(next)) is { } to
                 && _inner.CompareEndpoints(TextPatternRangeEndpoint.End, to, TextPatternRangeEndpoint.Start) > 0)
