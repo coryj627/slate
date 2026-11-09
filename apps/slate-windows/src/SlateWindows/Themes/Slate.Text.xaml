@@ -1,0 +1,510 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:local="clr-namespace:SlateWindows">
+    <!-- DS-1: the fonts the app ships, the one place outside Fonts\ that names them
+         (FontNameCensus). A family that isn't shipped is only ever a fallback. -->
+    <FontFamily x:Key="Slate.EditorFontFamily">pack://application:,,,/SlateWindows;component/Fonts/SlateEditor.CompositeFont#Slate Editor</FontFamily>
+    <!-- What the editor names to a native IME: a face Windows has, because a shipped
+         family has no name outside the app. The editor doesn't draw with it. -->
+    <FontFamily x:Key="Slate.EditorImeFontFamily">Consolas</FontFamily>
+    <FontFamily x:Key="Slate.ReadingFontFamily">pack://application:,,,/SlateWindows;component/Fonts/#Open Sans, Segoe UI</FontFamily>
+    <FontFamily x:Key="Slate.CodeFontFamily">pack://application:,,,/SlateWindows;component/Fonts/#Cascadia Mono, Consolas</FontFamily>
+    <!-- DS-2: the ramp's text styles (design/windows/xaml/README.md), with every value
+         from TypeRamp, which the app merges first. Fluent's TextBlock styles take their
+         sizes by StaticResource, so they can't follow text size. They stay out of
+         Slate.Light.xaml and Slate.Dark.xaml, which are generated, and every appearance
+         merges them, High Contrast included. -->
+    <Style x:Key="Slate.CaptionTextBlockStyle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{DynamicResource Slate.FontFamilySmall}" />
+        <Setter Property="FontSize" Value="{DynamicResource Slate.FontSizeCaption}" />
+        <Setter Property="LineHeight" Value="{DynamicResource Slate.LineHeightCaption}" />
+        <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
+        <Setter Property="FontWeight" Value="Normal" />
+    </Style>
+    <Style x:Key="Slate.BodyTextBlockStyle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{DynamicResource Slate.FontFamilyText}" />
+        <Setter Property="FontSize" Value="{DynamicResource Slate.FontSizeBody}" />
+        <Setter Property="LineHeight" Value="{DynamicResource Slate.LineHeightBody}" />
+        <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
+        <Setter Property="FontWeight" Value="Normal" />
+    </Style>
+    <Style x:Key="Slate.BodyStrongTextBlockStyle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{DynamicResource Slate.FontFamilyText}" />
+        <Setter Property="FontSize" Value="{DynamicResource Slate.FontSizeBodyStrong}" />
+        <Setter Property="LineHeight" Value="{DynamicResource Slate.LineHeightBodyStrong}" />
+        <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style x:Key="Slate.BodyLargeTextBlockStyle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{DynamicResource Slate.FontFamilyText}" />
+        <Setter Property="FontSize" Value="{DynamicResource Slate.FontSizeBodyLarge}" />
+        <Setter Property="LineHeight" Value="{DynamicResource Slate.LineHeightBodyLarge}" />
+        <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
+        <Setter Property="FontWeight" Value="Normal" />
+    </Style>
+    <Style x:Key="Slate.BodyLargeStrongTextBlockStyle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{DynamicResource Slate.FontFamilyText}" />
+        <Setter Property="FontSize" Value="{DynamicResource Slate.FontSizeBodyLargeStrong}" />
+        <Setter Property="LineHeight" Value="{DynamicResource Slate.LineHeightBodyLargeStrong}" />
+        <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style x:Key="Slate.SubtitleTextBlockStyle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{DynamicResource Slate.FontFamilyDisplay}" />
+        <Setter Property="FontSize" Value="{DynamicResource Slate.FontSizeSubtitle}" />
+        <Setter Property="LineHeight" Value="{DynamicResource Slate.LineHeightSubtitle}" />
+        <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style x:Key="Slate.TitleTextBlockStyle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{DynamicResource Slate.FontFamilyDisplay}" />
+        <Setter Property="FontSize" Value="{DynamicResource Slate.FontSizeTitle}" />
+        <Setter Property="LineHeight" Value="{DynamicResource Slate.LineHeightTitle}" />
+        <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <!-- DS-10: one setting as a card. SettingRow names its control from PART_Label. DS-14:
+         SettingRowGrid puts the control under the label once the row is narrow. -->
+    <ControlTemplate x:Key="Slate.SettingRowTemplate" TargetType="local:SettingRow">
+        <Border MinHeight="68"
+                Padding="16,12"
+                CornerRadius="4"
+                Background="{DynamicResource Slate.SurfaceBrush}"
+                BorderBrush="{DynamicResource Slate.SubtleBorderBrush}"
+                BorderThickness="1"
+                SnapsToDevicePixels="True">
+            <local:SettingRowGrid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Margin="0,0,16,0" VerticalAlignment="Center">
+                    <TextBlock x:Name="PART_Label"
+                               Text="{TemplateBinding Label}"
+                               TextWrapping="Wrap"
+                               Style="{DynamicResource Slate.BodyTextBlockStyle}" />
+                    <TextBlock Margin="0,2,0,0"
+                               Text="{TemplateBinding Description}"
+                               TextWrapping="Wrap"
+                               Foreground="{DynamicResource Slate.SecondaryTextBrush}"
+                               Style="{DynamicResource Slate.CaptionTextBlockStyle}" />
+                </StackPanel>
+                <ContentPresenter Grid.Column="1" VerticalAlignment="Center" />
+            </local:SettingRowGrid>
+        </Border>
+    </ControlTemplate>
+    <!-- DS-9: an icon-only button is its glyph until it's used. Whole, because a style
+         on nothing falls back to classic (#1767). The glyph is a presentation text block,
+         so nothing is named by it, and the button's name is its tooltip too: a site with
+         a chord sets its own. 32 in panel toolbars and the note header, where rows are 40;
+         40 with a 30 fill in the title bar (DSD6). GlyphsNameNothingCensus holds a name
+         to every one of these. -->
+    <Style x:Key="Slate.SubtleIconButtonStyle" TargetType="ButtonBase">
+        <Setter Property="Width" Value="32" />
+        <Setter Property="Height" Value="32" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource Slate.TextBrush}" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource DefaultControlFocusVisualStyle}" />
+        <Setter Property="ToolTip" Value="{Binding (AutomationProperties.Name), RelativeSource={RelativeSource Self}}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ButtonBase">
+                    <!-- Transparent, so the whole target takes a pointer around an inset fill. -->
+                    <Grid Background="Transparent">
+                        <Border Margin="{TemplateBinding Padding}"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4"
+                                SnapsToDevicePixels="True">
+                            <local:AutomationPresentationTextBlock Text="{Binding Content, RelativeSource={RelativeSource TemplatedParent}}" FontFamily="{DynamicResource SymbolThemeFontFamily}" FontSize="16" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter Property="Background" Value="{DynamicResource Slate.HoverOverlayBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter Property="Background" Value="{DynamicResource Slate.PressedOverlayBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Foreground" Value="{DynamicResource Slate.DisabledTextBrush}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <Style x:Key="Slate.SubtleIconButton40Style" TargetType="ButtonBase" BasedOn="{StaticResource Slate.SubtleIconButtonStyle}">
+        <Setter Property="Width" Value="40" />
+        <Setter Property="Height" Value="40" />
+        <Setter Property="Padding" Value="5" />
+    </Style>
+    <!-- DS-12: the title bar's quick commands, 40 with the 30 fill (DSD6). Out of the Tab order,
+         and off under every modal surface, as the menus are. -->
+    <Style x:Key="Slate.TitleBarButtonStyle" TargetType="ButtonBase" BasedOn="{StaticResource Slate.SubtleIconButton40Style}">
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="WindowChrome.IsHitTestVisibleInChrome" Value="True" />
+        <Style.Triggers>
+            <DataTrigger Binding="{Binding IsModalSurfaceOpen, RelativeSource={RelativeSource AncestorType=Window}}" Value="True">
+                <Setter Property="IsEnabled" Value="False" />
+            </DataTrigger>
+        </Style.Triggers>
+    </Style>
+    <!-- DS-12: a caption button, 46 × 48 with a 10 glyph (CaptionButton.prompt.md), whole
+         template. It stays 48 when the row grows with text size, as Windows' do. The glyph dims
+         while the window is inactive. Over maximize Windows owns the mouse, for Snap Layouts,
+         so the title bar's hook says hover and press there through TitleBarChrome. -->
+    <Style x:Key="Slate.CaptionButtonStyle" TargetType="ButtonBase">
+        <Setter Property="Width" Value="46" />
+        <Setter Property="Height" Value="48" />
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource Slate.TextBrush}" />
+        <Setter Property="WindowChrome.IsHitTestVisibleInChrome" Value="True" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ButtonBase">
+                    <Border Background="{TemplateBinding Background}" SnapsToDevicePixels="True">
+                        <local:AutomationPresentationTextBlock Text="{Binding Content, RelativeSource={RelativeSource TemplatedParent}}"
+                                                               Foreground="{TemplateBinding Foreground}"
+                                                               FontFamily="{DynamicResource SymbolThemeFontFamily}"
+                                                               FontSize="10"
+                                                               HorizontalAlignment="Center"
+                                                               VerticalAlignment="Center" />
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+        <Style.Triggers>
+            <DataTrigger Binding="{Binding IsActive, RelativeSource={RelativeSource AncestorType=Window}}" Value="False">
+                <Setter Property="Foreground" Value="{DynamicResource Slate.TertiaryTextBrush}" />
+            </DataTrigger>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Background" Value="{DynamicResource Slate.HoverOverlayBrush}" />
+            </Trigger>
+            <Trigger Property="local:TitleBarChrome.IsHovered" Value="True">
+                <Setter Property="Background" Value="{DynamicResource Slate.HoverOverlayBrush}" />
+            </Trigger>
+            <Trigger Property="IsPressed" Value="True">
+                <Setter Property="Background" Value="{DynamicResource Slate.PressedOverlayBrush}" />
+            </Trigger>
+            <Trigger Property="local:TitleBarChrome.IsPressed" Value="True">
+                <Setter Property="Background" Value="{DynamicResource Slate.PressedOverlayBrush}" />
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+    <!-- Close's hover and press are Windows' red, #C42B1C, with a white glyph, in every theme. -->
+    <Style x:Key="Slate.CaptionCloseButtonStyle" TargetType="ButtonBase" BasedOn="{StaticResource Slate.CaptionButtonStyle}">
+        <Style.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Background" Value="#C42B1C" />
+                <Setter Property="Foreground" Value="White" />
+            </Trigger>
+            <Trigger Property="IsPressed" Value="True">
+                <Setter Property="Background" Value="#C42B1C" />
+                <Setter Property="Foreground" Value="White" />
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+    <!-- DS-8: a tab's close button: a 12 glyph in the tab's full height, with an inset fill. -->
+    <Style x:Key="Slate.TabCloseButtonStyle" TargetType="ButtonBase" BasedOn="{StaticResource Slate.SubtleIconButtonStyle}">
+        <Setter Property="Width" Value="40" />
+        <Setter Property="Height" Value="32" />
+        <Setter Property="Padding" Value="5,1" />
+        <Setter Property="Foreground" Value="{DynamicResource Slate.SecondaryTextBrush}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ButtonBase">
+                    <Grid Background="Transparent">
+                        <Border Margin="{TemplateBinding Padding}"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4"
+                                SnapsToDevicePixels="True">
+                            <local:AutomationPresentationTextBlock Text="{Binding Content, RelativeSource={RelativeSource TemplatedParent}}" FontFamily="{DynamicResource SymbolThemeFontFamily}" FontSize="12" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter Property="Background" Value="{DynamicResource Slate.HoverOverlayBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter Property="Background" Value="{DynamicResource Slate.PressedOverlayBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Foreground" Value="{DynamicResource Slate.DisabledTextBrush}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <!-- On is a shape too, not colour alone, as a selected row's pill is. -->
+    <Style x:Key="Slate.SubtleIconToggleButtonStyle" TargetType="ToggleButton" BasedOn="{StaticResource Slate.SubtleIconButtonStyle}">
+        <Style.Triggers>
+            <Trigger Property="IsChecked" Value="True">
+                <Setter Property="Background" Value="{DynamicResource Slate.SelectedSurfaceBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource Slate.SelectedTextBrush}" />
+                <Setter Property="BorderBrush" Value="{DynamicResource Slate.AccentIndicatorBrush}" />
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+    <!-- DS-6: an effect turns ClearType off for what's inside it, so an overlay's shadow
+         is on a background-only sibling behind it. It takes no pointer, and in a contrast
+         theme, which has no shadow keys, it has no effect. -->
+    <!-- DS-15 (#1816): a note header's folder segment: text in secondary, a subtle hover and
+         press, whole, because a style on nothing falls back to classic (#1767). -->
+    <Style x:Key="Slate.CrumbButtonStyle" TargetType="ButtonBase">
+        <Setter Property="MinHeight" Value="28" />
+        <Setter Property="Padding" Value="6,0" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource Slate.SecondaryTextBrush}" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource DefaultControlFocusVisualStyle}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ButtonBase">
+                    <Border x:Name="Chrome"
+                            Background="{TemplateBinding Background}"
+                            CornerRadius="4"
+                            Padding="{TemplateBinding Padding}"
+                            SnapsToDevicePixels="True">
+                        <ContentPresenter VerticalAlignment="Center" RecognizesAccessKey="False" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource Slate.HoverOverlayBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource Slate.PressedOverlayBrush}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <!-- DS-15: one option of a segmented switch. The checked one sits on the card surface,
+         raised by a shadow on a border behind it, so its text keeps ClearType. -->
+    <Style x:Key="Slate.SegmentRadioStyle" TargetType="RadioButton">
+        <Setter Property="MinHeight" Value="28" />
+        <Setter Property="Padding" Value="10,0" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource Slate.SecondaryTextBrush}" />
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource DefaultControlFocusVisualStyle}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RadioButton">
+                    <Grid SnapsToDevicePixels="True">
+                        <Border x:Name="Shadow"
+                                CornerRadius="4"
+                                Background="{DynamicResource Slate.SurfaceBrush}"
+                                Effect="{DynamicResource Slate.Shadow2}"
+                                IsHitTestVisible="False"
+                                Visibility="Collapsed" />
+                        <Border x:Name="Chrome"
+                                CornerRadius="4"
+                                Background="{TemplateBinding Background}"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter VerticalAlignment="Center" RecognizesAccessKey="False" />
+                        </Border>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource Slate.HoverOverlayBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Shadow" Property="Visibility" Value="Visible" />
+                            <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource Slate.SurfaceBrush}" />
+                            <Setter Property="Foreground" Value="{DynamicResource Slate.TextBrush}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <Style x:Key="Slate.OverlayShadow28" TargetType="Border">
+        <Setter Property="Background" Value="{DynamicResource Slate.SurfaceBrush}" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="IsHitTestVisible" Value="False" />
+        <Setter Property="Effect" Value="{DynamicResource Slate.Shadow28}" />
+    </Style>
+    <Style x:Key="Slate.OverlayShadow64" TargetType="Border" BasedOn="{StaticResource Slate.OverlayShadow28}">
+        <Setter Property="Effect" Value="{DynamicResource Slate.Shadow64}" />
+    </Style>
+    <!-- A tooltip's the same, in a margin that's the shadow's room in its popup: Fluent's
+         is on the border round its text. -->
+    <ControlTemplate x:Key="Slate.ToolTipTemplate" TargetType="ToolTip">
+        <Grid Margin="12,8,12,16">
+            <Border CornerRadius="4"
+                    Background="{DynamicResource Slate.SurfaceBrush}"
+                    Effect="{DynamicResource Slate.Shadow8}" />
+            <Border CornerRadius="4"
+                    Background="{DynamicResource Slate.SurfaceBrush}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}"
+                    RenderOptions.ClearTypeHint="Enabled"
+                    SnapsToDevicePixels="True">
+                <ContentPresenter Margin="{TemplateBinding Padding}"
+                                  HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                  VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                  SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}">
+                    <ContentPresenter.Resources>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="TextWrapping" Value="WrapWithOverflow" />
+                        </Style>
+                    </ContentPresenter.Resources>
+                </ContentPresenter>
+            </Border>
+        </Grid>
+    </ControlTemplate>
+    <!-- The editor's selection border, here for the same reason: it isn't generated. -->
+    <Pen x:Key="Slate.EditorSelectionBorderPen"
+         Brush="{DynamicResource Slate.AccentTextBrush}"
+         Thickness="1" />
+    <!-- #1773, #1778: the shell's splitters keep their width to grab, and draw a line
+         only while in use: the pane group's border is the edge the rest of the time. -->
+    <Style x:Key="Slate.ShellSplitterStyle" TargetType="GridSplitter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="Transparent" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="GridSplitter">
+                    <Border Background="{TemplateBinding Background}">
+                        <Rectangle Width="1"
+                                   HorizontalAlignment="Center"
+                                   Fill="{TemplateBinding Foreground}" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter Property="Foreground" Value="{DynamicResource Slate.AccentIndicatorBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsDragging" Value="True">
+                            <Setter Property="Foreground" Value="{DynamicResource Slate.AccentIndicatorBrush}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <!-- A grid cell's selected state, for the same reason: it isn't generated, and the
+         cell's text inherits this foreground, so it pairs in every appearance. -->
+    <Style x:Key="Slate.GridCellStyle" TargetType="DataGridCell">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource Slate.TextBrush}" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0,0,0,2" />
+        <!-- Fluent's ring is outside the cell, where the column header cuts it off. -->
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource Slate.RowFocusVisual}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="DataGridCell">
+                    <Border Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            SnapsToDevicePixels="True">
+                        <ContentPresenter />
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+        <Style.Triggers>
+            <Trigger Property="IsSelected" Value="True">
+                <Setter Property="Background" Value="{DynamicResource Slate.SelectedSurfaceBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource Slate.SelectedTextBrush}" />
+                <Setter Property="BorderBrush" Value="{DynamicResource Slate.AccentIndicatorBrush}" />
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+    <!-- A row header's peer takes its name from the header's content, not from what
+         the template draws. With no gripper parts, a row can't be resized by pointer. -->
+    <Style x:Key="Slate.GridRowHeaderStyle" TargetType="DataGridRowHeader">
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="DataGridRowHeader">
+                    <Border Background="Transparent" />
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <!-- #1762, #1781: list rows and dropdown rows, here so a style built in code can
+         reach them. Selection is a shape too, not colour alone. -->
+    <ControlTemplate x:Key="Slate.PanelRowTemplate" TargetType="ListBoxItem">
+        <Border Padding="{TemplateBinding Padding}"
+                CornerRadius="4"
+                Background="{TemplateBinding Background}">
+            <Grid>
+                <!-- The pill: selection is a shape too, not colour alone. -->
+                <Rectangle Width="3"
+                           Height="16"
+                           Margin="-7,0,0,0"
+                           RadiusX="1.5"
+                           RadiusY="1.5"
+                           HorizontalAlignment="Left"
+                           VerticalAlignment="Center"
+                           Fill="{TemplateBinding BorderBrush}" />
+                <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                  VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+            </Grid>
+        </Border>
+        <ControlTemplate.Triggers>
+            <!-- DS-18: the design's surface hover. -->
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Background" Value="{DynamicResource Slate.HoverOverlayBrush}" />
+            </Trigger>
+            <Trigger Property="IsSelected" Value="True">
+                <Setter Property="Background" Value="{DynamicResource Slate.SelectedSurfaceBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource Slate.SelectedTextBrush}" />
+                <Setter Property="BorderBrush" Value="{DynamicResource Slate.AccentIndicatorBrush}" />
+            </Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.GrayTextBrushKey}}" />
+            </Trigger>
+        </ControlTemplate.Triggers>
+    </ControlTemplate>
+    <ControlTemplate x:Key="Slate.ComboRowTemplate" TargetType="ComboBoxItem">
+        <Border Margin="4,1"
+                Padding="{TemplateBinding Padding}"
+                CornerRadius="4"
+                Background="{TemplateBinding Background}">
+            <Grid>
+                <Rectangle Width="3"
+                           Height="16"
+                           Margin="-7,0,0,0"
+                           RadiusX="1.5"
+                           RadiusY="1.5"
+                           HorizontalAlignment="Left"
+                           VerticalAlignment="Center"
+                           Fill="{TemplateBinding BorderBrush}" />
+                <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                  VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+            </Grid>
+        </Border>
+        <ControlTemplate.Triggers>
+            <!-- The popup is already the raised surface, so a row the pointer or the
+                 keys are on takes the selected surface; the pill marks the chosen one. -->
+            <Trigger Property="IsHighlighted" Value="True">
+                <Setter Property="Background" Value="{DynamicResource Slate.SelectedSurfaceBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource Slate.SelectedTextBrush}" />
+            </Trigger>
+            <Trigger Property="IsSelected" Value="True">
+                <Setter Property="Background" Value="{DynamicResource Slate.SelectedSurfaceBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource Slate.SelectedTextBrush}" />
+                <Setter Property="BorderBrush" Value="{DynamicResource Slate.AccentIndicatorBrush}" />
+            </Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.GrayTextBrushKey}}" />
+            </Trigger>
+        </ControlTemplate.Triggers>
+    </ControlTemplate>
+</ResourceDictionary>

@@ -21,7 +21,7 @@ internal static class ItemContainerNames
     {
         var style = new Style(containerType);
         style.Setters.Add(new Setter(AutomationProperties.NameProperty, new Binding()));
-        return style;
+        return ClassicRows.Apply(style);
     }
 }
 
@@ -130,6 +130,16 @@ internal sealed class AutomationNamedRowPeer : FrameworkElementAutomationPeer
 /// </summary>
 internal sealed class AutomationVisibilityListBox : ListBox
 {
+    // #1767: an implicit style is keyed on the exact type, so a subclass gets
+    // none and falls back to WPF's classic template, which paints fixed white.
+    // Fluent's template has no border or padding, so an empty list would measure
+    // nothing and read on-screen with no rectangle.
+    public AutomationVisibilityListBox()
+    {
+        SetResourceReference(StyleProperty, typeof(ListBox));
+        MinHeight = 1;
+    }
+
     protected override AutomationPeer OnCreateAutomationPeer() =>
         new AutomationVisibilityListBoxPeer(this);
 }
@@ -171,6 +181,49 @@ internal sealed class AutomationPresentationTextBlockPeer : TextBlockAutomationP
     protected override bool IsControlElementCore() => false;
 
     protected override bool IsContentElementCore() => false;
+}
+
+/// <summary>
+/// DS-19: a scroll viewer that is only layout around named stops (the empty pane's
+/// launcher). WPF publishes a plain one as an unnamed Pane and, once it overflows, its
+/// scroll bar as an unnamed ScrollBar with an unnamed Thumb and RepeatButtons: blank
+/// elements in a reader's object navigation. Here the viewer is neither a control nor a
+/// content element, and its scroll bars aren't published; the reader reaches what it
+/// holds by Tab, and a stop that takes the keys scrolls itself into view. A stop keeps
+/// that: when the viewport or what it holds changes size (the window shortened, the text
+/// size raised), the stop holding the keys is brought back into view, its focus untouched.
+/// </summary>
+internal sealed class AutomationPresentationScrollViewer : ScrollViewer
+{
+    protected override AutomationPeer OnCreateAutomationPeer() =>
+        new AutomationPresentationScrollViewerPeer(this);
+
+    protected override void OnScrollChanged(ScrollChangedEventArgs e)
+    {
+        base.OnScrollChanged(e);
+        if ((e.ViewportHeightChange != 0 || e.ExtentHeightChange != 0)
+            && IsKeyboardFocusWithin
+            && System.Windows.Input.Keyboard.FocusedElement is FrameworkElement focused
+            && !ReferenceEquals(focused, this))
+        {
+            focused.BringIntoView();
+        }
+    }
+}
+
+internal sealed class AutomationPresentationScrollViewerPeer : ScrollViewerAutomationPeer
+{
+    internal AutomationPresentationScrollViewerPeer(AutomationPresentationScrollViewer owner)
+        : base(owner)
+    {
+    }
+
+    protected override bool IsControlElementCore() => false;
+
+    protected override bool IsContentElementCore() => false;
+
+    protected override List<AutomationPeer>? GetChildrenCore() =>
+        base.GetChildrenCore()?.Where(child => child is not ScrollBarAutomationPeer).ToList();
 }
 
 /// <summary>
@@ -232,6 +285,22 @@ internal sealed class LayoutItemsControl : ItemsControl
         FocusableProperty.OverrideMetadata(
             typeof(LayoutItemsControl), new FrameworkPropertyMetadata(false));
 
+    /// <summary>#1677, #1678: the host's peer (once a client made one) reads its items
+    /// again each time its containers are generated, so a list rebuilt while the host was
+    /// collapsed (the recent vaults, republished while a vault opens) publishes its new
+    /// buttons, not the old ones' stops. After layout: a container is generated before its
+    /// template makes the stop it wraps, and an item peer read then has no children.</summary>
+    public LayoutItemsControl() =>
+        ItemContainerGenerator.StatusChanged += (_, _) =>
+        {
+            if (ItemContainerGenerator.Status == System.Windows.Controls.Primitives.GeneratorStatus.ContainersGenerated)
+            {
+                _ = Dispatcher.InvokeAsync(
+                    () => UIElementAutomationPeer.FromElement(this)?.ResetChildrenCache(),
+                    System.Windows.Threading.DispatcherPriority.Loaded);
+            }
+        };
+
     public bool IsStructural
     {
         get => (bool)GetValue(IsStructuralProperty);
@@ -262,6 +331,30 @@ internal sealed class LayoutItemsControlAutomationPeer : ItemsControlAutomationP
 
     protected override ItemAutomationPeer CreateItemAutomationPeer(object item) =>
         new LayoutItemAutomationPeer(item, this);
+
+    /// <summary>#1677, #1678: WPF reuses an item peer for an item EQUAL to one it had, and
+    /// a record is equal by value, so a list rebuilt with equal records (the recent vaults,
+    /// cleared and refilled on every publication) keeps its old item peers. Each still
+    /// caches the children it read from its old container: the stops of buttons no longer
+    /// shown. Nothing invalidates them, since an item peer is no visual ancestor of its
+    /// container, so a reader's tree showed the old stops and the live buttons had no element
+    /// there (focus on one read as the bare window). Each rebuild of the host's children has
+    /// an item peer read its children again when its item's container is no longer the one
+    /// it read them from. Only then: a subtree a client is walking (a split adding a pane)
+    /// stays as it is.</summary>
+    protected override List<AutomationPeer>? GetChildrenCore()
+    {
+        List<AutomationPeer>? children = base.GetChildrenCore();
+        foreach (AutomationPeer child in children ?? [])
+        {
+            if (child is LayoutItemAutomationPeer item)
+            {
+                item.ReadAgainIfRewrapped();
+            }
+        }
+
+        return children;
+    }
 }
 
 /// <summary>
@@ -272,9 +365,58 @@ internal sealed class LayoutItemsControlAutomationPeer : ItemsControlAutomationP
 /// </summary>
 internal sealed class LayoutItemAutomationPeer : ItemAutomationPeer
 {
+    /// <summary>The container this peer last read its children from.</summary>
+    private WeakReference<DependencyObject>? _readFrom;
+
     internal LayoutItemAutomationPeer(object item, LayoutItemsControlAutomationPeer host)
         : base(item, host)
     {
+    }
+
+    private DependencyObject? Container =>
+        (ItemsControlAutomationPeer?.Owner as ItemsControl)?.ItemContainerGenerator.ContainerFromItem(Item);
+
+    private bool _readAgainQueued;
+
+    /// <summary>#1677: drop the cached children when they were read from another container
+    /// than the item's now (a reused peer for an equal, rebuilt item). Queued, never done in
+    /// the host's read: that read can run inside this peer's own (layout instantiating a
+    /// template while a client reads the item), and WPF rejects a reset there as a recursive
+    /// peer call. Thrown during a split's layout, it ended the app (PR #1861's shell gate).
+    /// Checked again when it runs, since the container can change once more.</summary>
+    internal void ReadAgainIfRewrapped()
+    {
+        if (IsCurrent() || _readAgainQueued)
+        {
+            return;
+        }
+
+        _readAgainQueued = true;
+        _ = Dispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.Send,
+            () =>
+            {
+                _readAgainQueued = false;
+                if (!IsCurrent())
+                {
+                    ResetChildrenCache();
+                }
+            });
+    }
+
+    private bool IsCurrent() =>
+        _readFrom?.TryGetTarget(out DependencyObject? readFrom) == true
+        && ReferenceEquals(readFrom, Container);
+
+    /// <summary>Remembers the container only when it was laid out: a container generated
+    /// moments ago has no template yet, so a read then finds no children, and the next
+    /// rebuild of the host's children (the Loaded-priority reset queues one) reads again.</summary>
+    protected override List<AutomationPeer>? GetChildrenCore()
+    {
+        _readFrom = Container is UIElement { IsArrangeValid: true } container
+            ? new WeakReference<DependencyObject>(container)
+            : null;
+        return base.GetChildrenCore();
     }
 
     protected override AutomationControlType GetAutomationControlTypeCore() =>

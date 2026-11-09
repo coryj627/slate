@@ -56,6 +56,15 @@ internal sealed class NullToVisibilityConverter : IValueConverter
 /// <c>IsOpen</c> flags, but the seven sheets are object properties, and
 /// a trigger can only equality-match a value.
 /// </summary>
+internal sealed class InverseBooleanConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture) =>
+        value is not true;
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
+        value is not true;
+}
+
 internal sealed class IsNotNullConverter : IValueConverter
 {
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture) =>
@@ -82,19 +91,46 @@ internal sealed class RecentVaultNameConverter : IMultiValueConverter
         throw new NotSupportedException();
 }
 
+/// <summary>#1795: the most of a height a part may take: a share of it, less what the
+/// parts beside it have to keep, between a floor and a cap, so a short window can't give
+/// the part all of the room it shares.</summary>
+internal sealed class CappedShareConverter : IValueConverter, IMultiValueConverter
+{
+    /// <summary>DS-5: a height and the text size beside it. What the reserve holds room
+    /// for is text, so it grows with the size, and a text size change reaches it.</summary>
+    public object Convert(object[] values, Type targetType, object parameter, CultureInfo culture) =>
+        values is [double height, double fontSize]
+            ? Limit(height, Reserve * (fontSize / TypeRamp.Body.Size))
+            : Cap;
+
+    public object[] ConvertBack(object value, Type[] targetTypes, object parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+
+    public double Share { get; set; } = 1;
+
+    public double Cap { get; set; } = double.PositiveInfinity;
+
+    public double Reserve { get; set; }
+
+    public double Floor { get; set; }
+
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture) =>
+        value is double height ? Limit(height, Reserve) : Cap;
+
+    private double Limit(double height, double reserve) => Math.Max(Floor, Math.Min(Cap, (height * Share) - reserve));
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
+        Binding.DoNothing;
+}
+
 internal sealed class SidebarSortModeLabelConverter : IValueConverter
 {
+    /// <summary>DS-17: the labels are core's, the ones the Sort and group button's name
+    /// is built from.</summary>
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture) =>
-        value switch
-        {
-            SidebarSortMode.NameAscending => "Name (A to Z)",
-            SidebarSortMode.NameDescending => "Name (Z to A)",
-            SidebarSortMode.ModifiedNewest => "Modified (newest)",
-            SidebarSortMode.ModifiedOldest => "Modified (oldest)",
-            SidebarSortMode.CreatedNewest => "Created (newest)",
-            SidebarSortMode.CreatedOldest => "Created (oldest)",
-            _ => value?.ToString() ?? string.Empty,
-        };
+        value is SidebarSortMode mode
+            ? uniffi.slate_uniffi.SlateUniffiMethods.SidebarSortOrderLabel(FilesSidebarViewModel.ToCore(mode))
+            : value?.ToString() ?? string.Empty;
 
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
         Binding.DoNothing;

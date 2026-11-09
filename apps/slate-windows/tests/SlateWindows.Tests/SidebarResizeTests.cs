@@ -57,35 +57,35 @@ public sealed class SidebarResizeTests : IDisposable
     {
         using WorkspaceViewModel workspace = NewWorkspace();
         workspace.WorkspaceRowWidth = 1600;
-        workspace.RightPaneWidth = 230;
+        workspace.RightPaneWidth = 310;
 
         workspace.NarrowRightPaneCommand.Execute(null);
-        Assert.Equal(WorkspaceViewModel.MinimumSidebarWidth, workspace.RightPaneWidth);
-        Assert.Equal("Right pane resized, 200 pixels.", SlateUniffiMethods.A11yRender(_announced[^1]).Text);
+        Assert.Equal(WorkspaceViewModel.MinimumRightPaneWidth, workspace.RightPaneWidth);
+        Assert.Equal("Right pane resized, 280 pixels.", SlateUniffiMethods.A11yRender(_announced[^1]).Text);
 
         workspace.NarrowRightPaneCommand.Execute(null);
-        Assert.Equal(WorkspaceViewModel.MinimumSidebarWidth, workspace.RightPaneWidth);
-        Assert.Equal("Right pane at its narrowest, 200 pixels.", SlateUniffiMethods.A11yRender(_announced[^1]).Text);
+        Assert.Equal(WorkspaceViewModel.MinimumRightPaneWidth, workspace.RightPaneWidth);
+        Assert.Equal("Right pane at its narrowest, 280 pixels.", SlateUniffiMethods.A11yRender(_announced[^1]).Text);
     });
 
     /// <summary>The editor keeps its minimum between the sidebars: in a
     /// 1,000-pixel row with a 280-pixel right pane, the Files sidebar stops
-    /// at 1,000 − 280 − 300 − 10 = 410 pixels.</summary>
+    /// at 1,000 − 280 − 270 − 10 = 440 pixels.</summary>
     [Fact]
     public void WidenStopsWhereTheEditorWouldBeSqueezed() => RunSta(() =>
     {
         using WorkspaceViewModel workspace = NewWorkspace();
         workspace.WorkspaceRowWidth = 1000;
         workspace.RightPaneWidth = 280;
-        workspace.FilesSidebarWidth = 390;
+        workspace.FilesSidebarWidth = 420;
 
         workspace.WidenFilesSidebarCommand.Execute(null);
-        Assert.Equal(410, workspace.FilesSidebarWidth);
-        Assert.Equal("Files sidebar resized, 410 pixels.", SlateUniffiMethods.A11yRender(_announced[^1]).Text);
+        Assert.Equal(440, workspace.FilesSidebarWidth);
+        Assert.Equal("Files sidebar resized, 440 pixels.", SlateUniffiMethods.A11yRender(_announced[^1]).Text);
 
         workspace.WidenFilesSidebarCommand.Execute(null);
-        Assert.Equal(410, workspace.FilesSidebarWidth);
-        Assert.Equal("Files sidebar at its widest, 410 pixels.", SlateUniffiMethods.A11yRender(_announced[^1]).Text);
+        Assert.Equal(440, workspace.FilesSidebarWidth);
+        Assert.Equal("Files sidebar at its widest, 440 pixels.", SlateUniffiMethods.A11yRender(_announced[^1]).Text);
     });
 
     [Fact]
@@ -132,6 +132,190 @@ public sealed class SidebarResizeTests : IDisposable
         Assert.True(workspace.WidenRightPaneCommand.CanExecute(null));
         Assert.True(workspace.NarrowRightPaneCommand.CanExecute(null));
         Assert.Equal((2, 2, 2), (widen, narrow, registered));
+    });
+
+    /// <summary>DS-7: the Files sidebar's two steps need it shown, and say when that
+    /// changes, as the right pane's do.</summary>
+    [Fact]
+    public void TheFilesCommandsNeedTheFilesSidebarShown() => RunSta(() =>
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        int widen = 0;
+        int narrow = 0;
+        int registered = 0;
+        workspace.WidenFilesSidebarCommand.CanExecuteChanged += (_, _) => widen++;
+        workspace.NarrowFilesSidebarCommand.CanExecuteChanged += (_, _) => narrow++;
+        workspace.RegisteredCommandStatesChanged += () => registered++;
+
+        workspace.IsFilesSidebarVisible = false;
+
+        Assert.False(workspace.WidenFilesSidebarCommand.CanExecute(null));
+        Assert.False(workspace.NarrowFilesSidebarCommand.CanExecute(null));
+        Assert.True(workspace.WidenRightPaneCommand.CanExecute(null));
+        Assert.Equal((1, 1, 1), (widen, narrow, registered));
+
+        workspace.IsFilesSidebarVisible = true;
+
+        Assert.True(workspace.WidenFilesSidebarCommand.CanExecute(null));
+        Assert.True(workspace.NarrowFilesSidebarCommand.CanExecute(null));
+        Assert.Equal((2, 2, 2), (widen, narrow, registered));
+    });
+
+    /// <summary>DS-7: a write to a hidden sidebar's column isn't a width the reader
+    /// chose: it's the zero it shows, on its way back.</summary>
+    [Fact]
+    public void AHiddenFilesSidebarsColumnIgnoresWrites() => RunSta(() =>
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.WorkspaceRowWidth = 1600;
+        workspace.FilesSidebarWidth = 300;
+
+        Assert.Equal(300, workspace.FilesColumnWidth);
+        Assert.Equal(WorkspaceViewModel.MinimumSidebarWidth, workspace.FilesColumnMinimumWidth);
+        Assert.Equal(WorkspaceViewModel.SplitterWidth, workspace.FilesSplitterWidth);
+
+        workspace.IsFilesSidebarVisible = false;
+
+        Assert.Equal(0, workspace.FilesColumnWidth);
+        Assert.Equal(0, workspace.FilesColumnMinimumWidth);
+        Assert.Equal(0, workspace.FilesSplitterWidth);
+
+        workspace.FilesColumnWidth = 0;
+
+        Assert.Equal(300, workspace.FilesSidebarWidth);
+        workspace.IsFilesSidebarVisible = true;
+        Assert.Equal(300, workspace.FilesColumnWidth);
+
+        workspace.FilesColumnWidth = 340;
+        Assert.Equal(340, workspace.FilesSidebarWidth);
+    });
+
+    /// <summary>DS-7: while the Files sidebar is hidden, its room is the right pane's to
+    /// use, and it goes back when the sidebar does, at the width it left at.</summary>
+    [Fact]
+    public void TheRightPaneCanUseAHiddenSidebarsRoomUntilItComesBack() => RunSta(() =>
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.WorkspaceRowWidth = 1000;
+        double files = workspace.FilesSidebarWidth;
+
+        workspace.IsFilesSidebarVisible = false;
+
+        Assert.Equal(WorkspaceViewModel.MaximumSidebarWidth, workspace.WidestSidebarWidth(ShellSidebar.RightPane));
+        workspace.RightPaneWidth = WorkspaceViewModel.MaximumSidebarWidth;
+        Assert.Equal(WorkspaceViewModel.MaximumSidebarWidth, workspace.RightPaneWidth);
+
+        workspace.IsFilesSidebarVisible = true;
+
+        Assert.Equal(files, workspace.FilesSidebarWidth);
+        Assert.Equal(
+            1000 - files - WorkspaceViewModel.MinimumEditorWidth - (2 * WorkspaceViewModel.SplitterWidth),
+            workspace.RightPaneWidth);
+    });
+
+    /// <summary>DS-7: the window shrinking isn't a hidden sidebar's concern, and its
+    /// width is still there when it comes back.</summary>
+    [Fact]
+    public void AWindowResizeLeavesAHiddenSidebarsWidthAlone() => RunSta(() =>
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.WorkspaceRowWidth = 1000;
+        workspace.FilesSidebarWidth = 340;
+        workspace.IsFilesSidebarVisible = false;
+
+        workspace.WorkspaceRowWidth = 600;
+
+        Assert.Equal(340, workspace.FilesSidebarWidth);
+    });
+
+    /// <summary>#1790: hiding the right pane collapsed its contents and kept its
+    /// column and splitter, so the editor couldn't take the room.</summary>
+    [Fact]
+    public void HidingTheRightPaneGivesTheEditorItsRoom() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "# A\n"));
+        WorkspaceViewModel workspace = host.Workspace;
+        double shown = host.Shell.ContentPaneBorder.ActualWidth;
+        double room = workspace.RightPaneWidth + WorkspaceViewModel.SplitterWidth;
+
+        workspace.IsRightPaneVisible = false;
+        host.Settle();
+
+        Assert.Equal(shown + room, host.Shell.ContentPaneBorder.ActualWidth, 1);
+        GridSplitter splitter = ShownShell.Descendants(host.Shell).OfType<GridSplitter>().Single(item => Grid.GetColumn(item) == 3);
+        Assert.Equal(Visibility.Collapsed, splitter.Visibility);
+
+        workspace.IsRightPaneVisible = true;
+        host.Settle();
+
+        Assert.Equal(shown, host.Shell.ContentPaneBorder.ActualWidth, 1);
+        Assert.Equal(Visibility.Visible, splitter.Visibility);
+    });
+
+    [Fact]
+    public void AHiddenRightPaneKeepsItsWidth() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "# A\n"));
+        WorkspaceViewModel workspace = host.Workspace;
+        workspace.RightPaneWidth = 280;
+        host.Settle();
+
+        workspace.IsRightPaneVisible = false;
+        host.Settle();
+        ColumnDefinition column = host.Shell.WorkspaceColumns.ColumnDefinitions[4];
+        Assert.Equal(0, column.ActualWidth, 1);
+        Assert.Equal(280, workspace.RightPaneWidth);
+
+        workspace.IsRightPaneVisible = true;
+        host.Settle();
+
+        Assert.Equal(280, workspace.RightPaneWidth);
+        Assert.Equal(280, column.ActualWidth, 1);
+    });
+
+    /// <summary>#1790: while the right pane is hidden, its room is the Files
+    /// sidebar's to use, and it goes back when the pane does.</summary>
+    [Fact]
+    public void TheFilesSidebarCanUseAHiddenPanesRoomUntilThePaneComesBack() => RunSta(() =>
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.WorkspaceRowWidth = 1000;
+        double widestBesideThePane = workspace.WidestSidebarWidth(ShellSidebar.Files);
+
+        workspace.IsRightPaneVisible = false;
+
+        Assert.Equal(WorkspaceViewModel.MaximumSidebarWidth, workspace.WidestSidebarWidth(ShellSidebar.Files));
+        workspace.FilesSidebarWidth = WorkspaceViewModel.MaximumSidebarWidth;
+        Assert.Equal(WorkspaceViewModel.MaximumSidebarWidth, workspace.FilesSidebarWidth);
+
+        double rightPane = workspace.RightPaneWidth;
+        workspace.IsRightPaneVisible = true;
+
+        Assert.Equal(widestBesideThePane, workspace.FilesSidebarWidth);
+        Assert.Equal(rightPane, workspace.RightPaneWidth);
+    });
+
+    /// <summary>#1790: the window shrinking under a wide Files sidebar isn't the
+    /// hidden pane's concern, and its width is still there when it comes back.</summary>
+    [Fact]
+    public void AWindowResizeLeavesAHiddenPanesWidthAlone() => RunSta(() =>
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.WorkspaceRowWidth = 1000;
+        workspace.IsRightPaneVisible = false;
+        workspace.FilesSidebarWidth = WorkspaceViewModel.MaximumSidebarWidth;
+        double rightPane = workspace.RightPaneWidth;
+
+        workspace.WorkspaceRowWidth = 900;
+
+        Assert.Equal(rightPane, workspace.RightPaneWidth);
+
+        workspace.IsRightPaneVisible = true;
+
+        Assert.Equal(rightPane, workspace.RightPaneWidth);
+        Assert.Equal(
+            900 - rightPane - WorkspaceViewModel.MinimumEditorWidth - (2 * WorkspaceViewModel.SplitterWidth),
+            workspace.FilesSidebarWidth);
     });
 
     /// <summary>The window's two sidebar columns follow the widths, and a
@@ -208,13 +392,13 @@ public sealed class SidebarResizeTests : IDisposable
             Assert.Equal(600, workspace.FilesSidebarWidth);
             Assert.Equal("Files sidebar resized, 600 pixels.", SlateUniffiMethods.A11yRender(_announced[^1]).Text);
 
-            // The room row: 1,000 − 280 − 300 − 10 leaves the Files sidebar 410.
+            // The room row: 1,000 − 280 − 270 − 10 leaves the Files sidebar 440.
             workspace.WorkspaceRowWidth = 1000;
             workspace.RightPaneWidth = 280;
-            columns.ColumnDefinitions[0].Width = new GridLength(500);
+            columns.ColumnDefinitions[0].Width = new GridLength(520);
             PumpedDispatcher.Drain();
-            Assert.Equal(410, workspace.FilesSidebarWidth);
-            Assert.Equal(new GridLength(410), columns.ColumnDefinitions[0].Width);
+            Assert.Equal(440, workspace.FilesSidebarWidth);
+            Assert.Equal(new GridLength(440), columns.ColumnDefinitions[0].Width);
         }
         finally
         {
@@ -237,12 +421,38 @@ public sealed class SidebarResizeTests : IDisposable
 
         workspace.WorkspaceRowWidth = 1000;
 
-        Assert.Equal(410, workspace.FilesSidebarWidth);
+        Assert.Equal(440, workspace.FilesSidebarWidth);
         workspace.WidenFilesSidebarCommand.Execute(null);
-        Assert.Equal("Files sidebar at its widest, 410 pixels.", SlateUniffiMethods.A11yRender(_announced[^1]).Text);
+        Assert.Equal("Files sidebar at its widest, 440 pixels.", SlateUniffiMethods.A11yRender(_announced[^1]).Text);
         workspace.NarrowFilesSidebarCommand.Execute(null);
-        Assert.Equal(370, workspace.FilesSidebarWidth);
-        Assert.Equal("Files sidebar resized, 370 pixels.", SlateUniffiMethods.A11yRender(_announced[^1]).Text);
+        Assert.Equal(400, workspace.FilesSidebarWidth);
+        Assert.Equal("Files sidebar resized, 400 pixels.", SlateUniffiMethods.A11yRender(_announced[^1]).Text);
+    });
+
+    /// <summary>#1795: a window that shrank and grew back gives both widths back, and
+    /// the reader's own step sets what comes back.</summary>
+    [Fact]
+    public void AGrownRowGivesTheWidthsBack() => RunSta(() =>
+    {
+        using WorkspaceViewModel workspace = NewWorkspace();
+        workspace.WorkspaceRowWidth = 1600;
+        workspace.FilesSidebarWidth = 300;
+        workspace.RightPaneWidth = 360;
+
+        workspace.WorkspaceRowWidth = 800;
+        Assert.Equal(WorkspaceViewModel.MinimumSidebarWidth, workspace.FilesSidebarWidth);
+        Assert.Equal(320, workspace.RightPaneWidth);
+
+        workspace.WorkspaceRowWidth = 1600;
+        Assert.Equal(300, workspace.FilesSidebarWidth);
+        Assert.Equal(360, workspace.RightPaneWidth);
+
+        workspace.WorkspaceRowWidth = 800;
+        workspace.NarrowRightPaneCommand.Execute(null);
+        Assert.Equal(WorkspaceViewModel.MinimumRightPaneWidth, workspace.RightPaneWidth);
+
+        workspace.WorkspaceRowWidth = 1600;
+        Assert.Equal(WorkspaceViewModel.MinimumRightPaneWidth, workspace.RightPaneWidth);
     });
 
     private WorkspaceViewModel NewWorkspace() =>

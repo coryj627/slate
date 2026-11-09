@@ -329,7 +329,7 @@ public partial class MainWindow
     {
         if (!SelectorFocus.FocusFirstOrSelectedItem(QueriesSavedList))
         {
-            _ = SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList);
+            _ = LandOnRail();
         }
     }
 

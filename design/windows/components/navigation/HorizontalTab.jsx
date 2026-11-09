@@ -77,14 +77,14 @@ export function HorizontalTab(_p = {}) {
         position: "absolute",
         left: 0,
         top: 41,
-        width: 76,
+        right: 0,
         height: 3,
       }}>
         <div style={{
           position: "absolute",
           left: 12,
+          right: 12,
           top: 0,
-          width: 52,
           height: 3,
           borderRadius: 9999,
           backgroundColor: "var(--brand-stroke-compound-rest)",
@@ -161,14 +161,14 @@ export function HorizontalTab(_p = {}) {
         position: "absolute",
         left: 0,
         top: 41,
-        width: 76,
+        right: 0,
         height: 3,
       }}>
         <div style={{
           position: "absolute",
           left: 12,
+          right: 12,
           top: 0,
-          width: 52,
           height: 3,
           borderRadius: 9999,
           backgroundColor: "var(--brand-stroke-compound-hover)",
@@ -245,14 +245,14 @@ export function HorizontalTab(_p = {}) {
         position: "absolute",
         left: 0,
         top: 41,
-        width: 76,
+        right: 0,
         height: 3,
       }}>
         <div style={{
           position: "absolute",
           left: 12,
+          right: 12,
           top: 0,
-          width: 52,
           height: 3,
           borderRadius: 9999,
           backgroundColor: "var(--brand-stroke-compound-pressed)",
@@ -262,7 +262,8 @@ export function HorizontalTab(_p = {}) {
   );
   const __body3 = () => (
     <div className={props.className} style={{
-      width: 76,
+      margin: "-0.5px -1px",
+      width: "fit-content",
       borderRadius: 2,
       backgroundColor: "rgba(255,255,255,0)",
       boxShadow: "0 0 0 3px var(--neutral-stroke-focus-2-rest)",
@@ -354,8 +355,8 @@ export function HorizontalTab(_p = {}) {
           <div style={{
             position: "absolute",
             left: 12,
+            right: 12,
             top: 0,
-            width: 52,
             height: 3,
             borderRadius: 9999,
             backgroundColor: "var(--brand-stroke-compound-rest)",
@@ -432,14 +433,14 @@ export function HorizontalTab(_p = {}) {
         position: "absolute",
         left: 0,
         top: 41,
-        width: 76,
+        right: 0,
         height: 3,
       }}>
         <div style={{
           position: "absolute",
           left: 12,
+          right: 12,
           top: 0,
-          width: 52,
           height: 3,
           borderRadius: 9999,
           backgroundColor: "var(--neutral-foreground-disabled-rest)",
@@ -516,7 +517,7 @@ export function HorizontalTab(_p = {}) {
         position: "absolute",
         left: 0,
         top: 41,
-        width: 75,
+        right: 0,
         height: 3,
       }} />
     </div>
@@ -590,14 +591,14 @@ export function HorizontalTab(_p = {}) {
         position: "absolute",
         left: 0,
         top: 41,
-        width: 75,
+        right: 0,
         height: 3,
       }}>
         <div style={{
           position: "absolute",
           left: 12,
+          right: 12,
           top: 0,
-          width: 51,
           height: 3,
           borderRadius: 9999,
           backgroundColor: "var(--neutral-stroke-1-hover)",
@@ -674,14 +675,14 @@ export function HorizontalTab(_p = {}) {
         position: "absolute",
         left: 0,
         top: 41,
-        width: 75,
+        right: 0,
         height: 3,
       }}>
         <div style={{
           position: "absolute",
           left: 12,
+          right: 12,
           top: 0,
-          width: 51,
           height: 3,
           borderRadius: 9999,
           backgroundColor: "var(--neutral-stroke-1-pressed)",
@@ -691,7 +692,8 @@ export function HorizontalTab(_p = {}) {
   );
   const __body8 = () => (
     <div className={props.className} style={{
-      width: 75,
+      margin: "-0.5px -1px",
+      width: "fit-content",
       borderRadius: 2,
       backgroundColor: "rgba(255,255,255,0)",
       boxShadow: "0 0 0 3px var(--neutral-stroke-focus-2-rest)",
@@ -851,7 +853,7 @@ export function HorizontalTab(_p = {}) {
         position: "absolute",
         left: 0,
         top: 41,
-        width: 75,
+        right: 0,
         height: 3,
       }} />
     </div>
@@ -925,14 +927,14 @@ export function HorizontalTab(_p = {}) {
         position: "absolute",
         left: 0,
         top: 41,
-        width: 76,
+        right: 0,
         height: 3,
       }}>
         <div style={{
           position: "absolute",
           left: 12,
+          right: 12,
           top: 0,
-          width: 52,
           height: 3,
           borderRadius: 9999,
           backgroundColor: "var(--brand-stroke-compound-hover)",
@@ -1009,14 +1011,14 @@ export function HorizontalTab(_p = {}) {
         position: "absolute",
         left: 0,
         top: 41,
-        width: 76,
+        right: 0,
         height: 3,
       }}>
         <div style={{
           position: "absolute",
           left: 12,
+          right: 12,
           top: 0,
-          width: 52,
           height: 3,
           borderRadius: 9999,
           backgroundColor: "var(--brand-stroke-compound-pressed)",
@@ -1026,7 +1028,8 @@ export function HorizontalTab(_p = {}) {
   );
   const __body12 = () => (
     <div className={props.className} style={{
-      width: 76,
+      margin: "-0.5px -1px",
+      width: "fit-content",
       borderRadius: 2,
       boxShadow: "0 0 0 3px var(--neutral-stroke-focus-2-rest)",
       display: "flex",
@@ -1117,8 +1120,8 @@ export function HorizontalTab(_p = {}) {
           <div style={{
             position: "absolute",
             left: 12,
+            right: 12,
             top: 0,
-            width: 52,
             height: 3,
             borderRadius: 9999,
             backgroundColor: "var(--brand-stroke-compound-rest)",
@@ -1196,14 +1199,14 @@ export function HorizontalTab(_p = {}) {
         position: "absolute",
         left: 0,
         top: 41,
-        width: 75,
+        right: 0,
         height: 3,
       }}>
         <div style={{
           position: "absolute",
           left: 12,
+          right: 12,
           top: 0,
-          width: 51,
           height: 3,
           borderRadius: 9999,
           backgroundColor: "var(--neutral-stroke-1-hover)",
@@ -1280,14 +1283,14 @@ export function HorizontalTab(_p = {}) {
         position: "absolute",
         left: 0,
         top: 41,
-        width: 75,
+        right: 0,
         height: 3,
       }}>
         <div style={{
           position: "absolute",
           left: 12,
+          right: 12,
           top: 0,
-          width: 51,
           height: 3,
           borderRadius: 9999,
           backgroundColor: "var(--neutral-stroke-1-pressed)",
@@ -1297,7 +1300,8 @@ export function HorizontalTab(_p = {}) {
   );
   const __body15 = () => (
     <div className={props.className} style={{
-      width: 75,
+      margin: "-0.5px -1px",
+      width: "fit-content",
       borderRadius: 2,
       boxShadow: "0 0 0 3px var(--neutral-stroke-focus-2-rest)",
       display: "flex",
@@ -1457,14 +1461,14 @@ export function HorizontalTab(_p = {}) {
         position: "absolute",
         left: 0,
         top: 30,
-        width: 64,
+        right: 0,
         height: 2,
       }}>
         <div style={{
           position: "absolute",
           left: 8,
+          right: 8,
           top: 0,
-          width: 48,
           height: 2,
           borderRadius: 9999,
           backgroundColor: "var(--brand-stroke-compound-rest)",
@@ -1541,14 +1545,14 @@ export function HorizontalTab(_p = {}) {
         position: "absolute",
         left: 0,
         top: 30,
-        width: 64,
+        right: 0,
         height: 2,
       }}>
         <div style={{
           position: "absolute",
           left: 8,
+          right: 8,
           top: 0,
-          width: 48,
           height: 2,
           borderRadius: 9999,
           backgroundColor: "var(--brand-stroke-compound-hover)",
@@ -1625,14 +1629,14 @@ export function HorizontalTab(_p = {}) {
         position: "absolute",
         left: 0,
         top: 30,
-        width: 64,
+        right: 0,
         height: 2,
       }}>
         <div style={{
           position: "absolute",
           left: 8,
+          right: 8,
           top: 0,
-          width: 48,
           height: 2,
           borderRadius: 9999,
           backgroundColor: "var(--brand-stroke-compound-pressed)",
@@ -1642,7 +1646,8 @@ export function HorizontalTab(_p = {}) {
   );
   const __body19 = () => (
     <div className={props.className} style={{
-      width: 64,
+      margin: "-4px -4px",
+      width: "fit-content",
       borderRadius: 2,
       backgroundColor: "rgba(255,255,255,0)",
       borderTop: "3px solid var(--neutral-stroke-focus-2-rest)",
@@ -1737,8 +1742,8 @@ export function HorizontalTab(_p = {}) {
           <div style={{
             position: "absolute",
             left: 8,
+            right: 8,
             top: 0,
-            width: 48,
             height: 2,
             borderRadius: 9999,
             backgroundColor: "var(--brand-stroke-compound-rest)",
@@ -1815,14 +1820,14 @@ export function HorizontalTab(_p = {}) {
         position: "absolute",
         left: 0,
         top: 30,
-        width: 64,
+        right: 0,
         height: 2,
       }}>
         <div style={{
           position: "absolute",
           left: 8,
+          right: 8,
           top: 0,
-          width: 48,
           height: 2,
           borderRadius: 9999,
           backgroundColor: "var(--neutral-foreground-disabled-rest)",
@@ -1899,7 +1904,7 @@ export function HorizontalTab(_p = {}) {
         position: "absolute",
         left: 0,
         top: 30,
-        width: 63,
+        right: 0,
         height: 2,
       }} />
     </div>
@@ -1973,14 +1978,14 @@ export function HorizontalTab(_p = {}) {
         position: "absolute",
         left: 0,
         top: 30,
-        width: 63,
+        right: 0,
         height: 2,
       }}>
         <div style={{
           position: "absolute",
           left: 8,
+          right: 8,
           top: 0,
-          width: 48,
           height: 2,
           borderRadius: 9999,
           backgroundColor: "var(--neutral-stroke-1-hover)",
@@ -2057,14 +2062,14 @@ export function HorizontalTab(_p = {}) {
         position: "absolute",
         left: 0,
         top: 30,
-        width: 63,
+        right: 0,
         height: 2,
       }}>
         <div style={{
           position: "absolute",
           left: 8,
+          right: 8,
           top: 0,
-          width: 48,
           height: 2,
           borderRadius: 9999,
           backgroundColor: "var(--neutral-stroke-1-pressed)",
@@ -2074,7 +2079,8 @@ export function HorizontalTab(_p = {}) {
   );
   const __body24 = () => (
     <div className={props.className} style={{
-      width: 63,
+      margin: "-4px -4px",
+      width: "fit-content",
       borderRadius: 2,
       backgroundColor: "rgba(255,255,255,0)",
       borderTop: "3px solid var(--neutral-stroke-focus-2-rest)",
@@ -2237,7 +2243,7 @@ export function HorizontalTab(_p = {}) {
         position: "absolute",
         left: 0,
         top: 30,
-        width: 63,
+        right: 0,
         height: 2,
       }} />
     </div>
@@ -2311,14 +2317,14 @@ export function HorizontalTab(_p = {}) {
         position: "absolute",
         left: 0,
         top: 30,
-        width: 64,
+        right: 0,
         height: 2,
       }}>
         <div style={{
           position: "absolute",
           left: 8,
+          right: 8,
           top: 0,
-          width: 48,
           height: 2,
           borderRadius: 9999,
           backgroundColor: "var(--brand-stroke-compound-hover)",
@@ -2395,14 +2401,14 @@ export function HorizontalTab(_p = {}) {
         position: "absolute",
         left: 0,
         top: 30,
-        width: 64,
+        right: 0,
         height: 2,
       }}>
         <div style={{
           position: "absolute",
           left: 8,
+          right: 8,
           top: 0,
-          width: 48,
           height: 2,
           borderRadius: 9999,
           backgroundColor: "var(--brand-stroke-compound-pressed)",
@@ -2412,7 +2418,8 @@ export function HorizontalTab(_p = {}) {
   );
   const __body28 = () => (
     <div className={props.className} style={{
-      width: 64,
+      margin: "-4px -4px",
+      width: "fit-content",
       borderRadius: 2,
       borderTop: "3px solid var(--neutral-stroke-focus-2-rest)",
       borderRight: "3px solid var(--neutral-stroke-focus-2-rest)",
@@ -2506,8 +2513,8 @@ export function HorizontalTab(_p = {}) {
           <div style={{
             position: "absolute",
             left: 8,
+            right: 8,
             top: 0,
-            width: 48,
             height: 2,
             borderRadius: 9999,
             backgroundColor: "var(--brand-stroke-compound-rest)",
@@ -2585,14 +2592,14 @@ export function HorizontalTab(_p = {}) {
         position: "absolute",
         left: 0,
         top: 30,
-        width: 63,
+        right: 0,
         height: 2,
       }}>
         <div style={{
           position: "absolute",
           left: 8,
+          right: 8,
           top: 0,
-          width: 48,
           height: 2,
           borderRadius: 9999,
           backgroundColor: "var(--neutral-stroke-1-hover)",
@@ -2669,14 +2676,14 @@ export function HorizontalTab(_p = {}) {
         position: "absolute",
         left: 0,
         top: 30,
-        width: 63,
+        right: 0,
         height: 2,
       }}>
         <div style={{
           position: "absolute",
           left: 8,
+          right: 8,
           top: 0,
-          width: 48,
           height: 2,
           borderRadius: 9999,
           backgroundColor: "var(--neutral-stroke-1-pressed)",
@@ -2686,7 +2693,8 @@ export function HorizontalTab(_p = {}) {
   );
   const __body31 = () => (
     <div className={props.className} style={{
-      width: 63,
+      margin: "-4px -4px",
+      width: "fit-content",
       borderRadius: 2,
       borderTop: "3px solid var(--neutral-stroke-focus-2-rest)",
       borderRight: "3px solid var(--neutral-stroke-focus-2-rest)",
@@ -3078,6 +3086,7 @@ export function HorizontalTab(_p = {}) {
   );
   const __body36 = () => (
     <div className={props.className} style={{
+      margin: props.style2 === "filled circular" ? "0 -1px" : undefined,
       width: "fit-content",
       height: 32,
       borderRadius: 9999,
@@ -3216,6 +3225,7 @@ export function HorizontalTab(_p = {}) {
   );
   const __body38 = () => (
     <div className={props.className} style={{
+      margin: "0 -1px",
       width: "fit-content",
       height: 32,
       borderRadius: 9999,
@@ -3287,6 +3297,7 @@ export function HorizontalTab(_p = {}) {
   );
   const __body39 = () => (
     <div className={props.className} style={{
+      margin: "0 -1px",
       width: "fit-content",
       height: 32,
       borderRadius: 9999,
@@ -3358,6 +3369,7 @@ export function HorizontalTab(_p = {}) {
   );
   const __body40 = () => (
     <div className={props.className} style={{
+      margin: "0 -1px",
       width: "fit-content",
       height: 32,
       borderRadius: 9999,
@@ -3709,6 +3721,7 @@ export function HorizontalTab(_p = {}) {
   );
   const __body45 = () => (
     <div className={props.className} style={{
+      margin: "0 -1px",
       width: "fit-content",
       height: 32,
       borderRadius: 9999,
@@ -3993,6 +4006,7 @@ export function HorizontalTab(_p = {}) {
   );
   const __body49 = () => (
     <div className={props.className} style={{
+      margin: "0 -1px",
       width: "fit-content",
       height: 32,
       borderRadius: 9999,
@@ -4289,6 +4303,7 @@ export function HorizontalTab(_p = {}) {
   );
   const __body53 = () => (
     <div className={props.className} style={{
+      margin: "0 1px",
       width: "fit-content",
       height: 24,
       borderRadius: 9999,
@@ -4369,6 +4384,7 @@ export function HorizontalTab(_p = {}) {
   );
   const __body54 = () => (
     <div className={props.className} style={{
+      margin: props.style2 === "filled circular" ? "0 -1px" : undefined,
       width: "fit-content",
       height: 24,
       borderRadius: 9999,
@@ -4507,6 +4523,7 @@ export function HorizontalTab(_p = {}) {
   );
   const __body56 = () => (
     <div className={props.className} style={{
+      margin: "0 -1px",
       width: "fit-content",
       height: 24,
       borderRadius: 9999,
@@ -4578,6 +4595,7 @@ export function HorizontalTab(_p = {}) {
   );
   const __body57 = () => (
     <div className={props.className} style={{
+      margin: "0 -1px",
       width: "fit-content",
       height: 24,
       borderRadius: 9999,

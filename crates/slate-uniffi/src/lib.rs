@@ -336,6 +336,55 @@ pub fn property_key_label(identity: String) -> String {
     core::property_key_label(&identity)
 }
 
+/// DS-12: the main window's title, `Note — Vault — Slate`, `Vault — Slate` or `Slate`.
+#[uniffi::export]
+pub fn window_title(note: Option<String>, vault: Option<String>) -> String {
+    core::window_title(note.as_deref(), vault.as_deref())
+}
+
+/// DS-16: the rail's More panels button, `More panels` or `More panels, Tasks open`.
+#[uniffi::export]
+pub fn more_panels_name(open: Option<String>) -> String {
+    core::more_panels_name(open.as_deref())
+}
+
+/// DS-17: an order the Files sidebar can sort by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum SidebarSortOrder {
+    NameAscending,
+    NameDescending,
+    ModifiedNewest,
+    ModifiedOldest,
+    CreatedNewest,
+    CreatedOldest,
+}
+
+impl From<SidebarSortOrder> for core::SidebarSortOrder {
+    fn from(order: SidebarSortOrder) -> Self {
+        match order {
+            SidebarSortOrder::NameAscending => Self::NameAscending,
+            SidebarSortOrder::NameDescending => Self::NameDescending,
+            SidebarSortOrder::ModifiedNewest => Self::ModifiedNewest,
+            SidebarSortOrder::ModifiedOldest => Self::ModifiedOldest,
+            SidebarSortOrder::CreatedNewest => Self::CreatedNewest,
+            SidebarSortOrder::CreatedOldest => Self::CreatedOldest,
+        }
+    }
+}
+
+/// DS-17: an order's label, `Name (A to Z)`.
+#[uniffi::export]
+pub fn sidebar_sort_order_label(order: SidebarSortOrder) -> String {
+    core::sidebar_sort_order_label(order.into()).to_owned()
+}
+
+/// DS-17: the Sort and group button's name, `Sort and group, Name (A to Z)`, with
+/// `, grouped by date` when the dates group.
+#[uniffi::export]
+pub fn sidebar_sort_button_name(order: SidebarSortOrder, grouped_by_date: bool) -> String {
+    core::sidebar_sort_button_name(order.into(), grouped_by_date)
+}
+
 /// YAML source-key type (separate from the property's value kind).
 #[derive(Debug, Clone, Copy, uniffi::Enum)]
 pub enum PropertyKeyType {
@@ -9774,6 +9823,8 @@ pub enum A11yEvent {
     GraphOpensSinglePane,
     RightPaneShown,
     RightPaneHidden,
+    FilesSidebarShown,
+    FilesSidebarHidden,
     HistoryPanelShown,
     ReopenTargetMissing {
         filename: String,
@@ -10088,6 +10139,25 @@ pub enum A11yEvent {
     PaletteCommandUnavailable {
         reason: String,
     },
+    PaletteChoicesOpened {
+        prompt: String,
+        current: String,
+    },
+    PaletteChoiceSelected {
+        label: String,
+        is_current: bool,
+    },
+    PaletteChoiceFilterCount {
+        count: u32,
+        query: String,
+    },
+    ThemeChosen {
+        label: String,
+    },
+    AccentChosen {
+        label: String,
+    },
+    SettingsSheetShown,
     RecentSearchFocused {
         query: String,
     },
@@ -11727,6 +11797,8 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::GraphOpensSinglePane => C::GraphOpensSinglePane,
             F::RightPaneShown => C::RightPaneShown,
             F::RightPaneHidden => C::RightPaneHidden,
+            F::FilesSidebarShown => C::FilesSidebarShown,
+            F::FilesSidebarHidden => C::FilesSidebarHidden,
             F::HistoryPanelShown => C::HistoryPanelShown,
             F::ReopenTargetMissing { filename } => C::ReopenTargetMissing { filename },
             F::FileReopenFailed { filename, detail } => C::FileReopenFailed { filename, detail },
@@ -11920,6 +11992,18 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::PaletteCommandFailed { label, detail } => C::PaletteCommandFailed { label, detail },
             F::PaletteCommandNotFound { id } => C::PaletteCommandNotFound { id },
             F::PaletteCommandUnavailable { reason } => C::PaletteCommandUnavailable { reason },
+            F::PaletteChoicesOpened { prompt, current } => {
+                C::PaletteChoicesOpened { prompt, current }
+            }
+            F::PaletteChoiceSelected { label, is_current } => {
+                C::PaletteChoiceSelected { label, is_current }
+            }
+            F::PaletteChoiceFilterCount { count, query } => {
+                C::PaletteChoiceFilterCount { count, query }
+            }
+            F::ThemeChosen { label } => C::ThemeChosen { label },
+            F::AccentChosen { label } => C::AccentChosen { label },
+            F::SettingsSheetShown => C::SettingsSheetShown,
             F::RecentSearchFocused { query } => C::RecentSearchFocused { query },
             F::QuickSwitcherCount { count, query } => C::QuickSwitcherCount { count, query },
             F::BaseViewMode { mode } => C::BaseViewMode { mode },

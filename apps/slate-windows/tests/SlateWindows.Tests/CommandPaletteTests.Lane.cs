@@ -758,18 +758,24 @@ public sealed partial class CommandPaletteTests
     {
         var lane = new CommandPaletteWorkLane();
         var order = new ConcurrentQueue<string>();
+        // Inline means on the caller's thread while Run is still on its stack.
+        // A thread id alone cannot say that (#1785): once the caller awaits, the
+        // pool may run the work on that same thread.
         int caller = Environment.CurrentManagedThreadId;
+        int handingOver = 1;
         using var first = new ManualResetEventSlim(false);
         using var skipped = new CancellationTokenSource();
 
         Task<int> running = lane.Run(
             () =>
             {
+                int inline = Volatile.Read(ref handingOver) == 1 && Environment.CurrentManagedThreadId == caller ? 1 : 0;
                 Assert.True(first.Wait(TimeSpan.FromSeconds(30)));
                 order.Enqueue("first");
-                return Environment.CurrentManagedThreadId;
+                return inline;
             },
             CancellationToken.None);
+        Volatile.Write(ref handingOver, 0);
         Task<int> cancelled = lane.Run(
             () =>
             {
@@ -788,11 +794,11 @@ public sealed partial class CommandPaletteTests
         skipped.Cancel();
         Assert.False(last.IsCompleted);
         first.Set();
-        int worker = await running.WaitAsync(TimeSpan.FromSeconds(30));
+        int ranInline = await running.WaitAsync(TimeSpan.FromSeconds(30));
         await last.WaitAsync(TimeSpan.FromSeconds(30));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelled);
 
-        Assert.NotEqual(caller, worker);
+        Assert.Equal(0, ranInline);
         Assert.Equal(["first", "last"], order.ToArray());
     }
 

@@ -196,6 +196,9 @@ public sealed partial class CommandPaletteTests
 
         public VaultLifecycleViewModel Lifecycle => _lifecycle;
 
+        /// <summary>A path in the fixture, for a fact's device state.</summary>
+        public string FileInFixture(string name) => Path.Combine(_fixture.Root, name);
+
         /// <summary>The window the shell's content lives in — the owner a
         /// real dialog over the shell takes.</summary>
         public Window Window => _window;
@@ -219,6 +222,21 @@ public sealed partial class CommandPaletteTests
             _workspace.OpenPath("note0.md");
             _workspace.ActiveGroup.ActiveTab!.Text += "\nUnsaved.";
             Assert.True(_workspace.HasDirtyTabs);
+            return _workspace;
+        }
+
+        /// <summary>A workspace with no tab open, attached through the lifecycle's own setter,
+        /// so the shell shows the empty pane's launcher.</summary>
+        public WorkspaceViewModel AttachEmptyWorkspace()
+        {
+            _workspace = new WorkspaceViewModel(
+                _session,
+                _fixture.Root,
+                () => [],
+                _ => { },
+                startInteractionBackgroundWork: false,
+                preferencesStore: new AppPreferencesStore(Path.Combine(_fixture.Root, "preferences.json")));
+            SetProperty(nameof(VaultLifecycleViewModel.Workspace), _workspace);
             return _workspace;
         }
 

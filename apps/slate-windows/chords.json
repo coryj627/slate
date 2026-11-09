@@ -328,6 +328,42 @@
       "registered": true
     },
     {
+      "id": "slate.view.toggleFilesSidebar",
+      "label": "Toggle Files Sidebar",
+      "section": "View",
+      "hint": "Hide or show the Files sidebar.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
+      "id": "slate.settings.open",
+      "label": "Settings…",
+      "section": "Settings",
+      "hint": "Open Settings.",
+      "macChord": "⌘,",
+      "mac": "Command Comma",
+      "windows": "Ctrl+,",
+      "windowsSpoken": "Control Comma",
+      "scope": "Global",
+      "registered": true
+    },
+    {
+      "id": "slate.view.switchTheme",
+      "label": "Switch Theme…",
+      "section": "View",
+      "hint": "Choose Light, Dark or the Windows setting.",
+      "macChord": null,
+      "mac": null,
+      "windows": null,
+      "windowsSpoken": null,
+      "scope": "None",
+      "registered": true
+    },
+    {
       "id": "slate.view.toggleSearch",
       "label": "Search Vault",
       "section": "View",
@@ -2425,6 +2461,18 @@
   ],
   "deliveryEvidence": {
     "groups": {
+      "settingsSheet": {
+        "implementation": [
+          "apps/slate-windows/src/SlateWindows/VaultLifecycleViewModel.Settings.cs#OpenSettings",
+          "apps/slate-windows/src/SlateWindows/MainWindow.Settings.cs#TryClearTheWayForSettings",
+          "apps/slate-windows/src/SlateWindows/CommandPaletteViewModel.cs#OpenChoices"
+        ],
+        "tests": [
+          "apps/slate-windows/tests/SlateWindows.Tests/SettingsSheetTests.cs#CtrlCommaOpensTheSheetAndEscGivesFocusBack",
+          "apps/slate-windows/tests/SlateWindows.Tests/CommandPaletteTests.Choices.cs#SwitchThemeListsTheThreeChoicesWithTheCurrentOneMarked",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.Settings.cs#SettingsSheet_NamesFocusAndAxe_AreClean"
+        ]
+      },
       "vault": {
         "implementation": [
           "apps/slate-windows/src/SlateWindows/VaultLifecycleViewModel.cs#OpenVaultAsync"
@@ -2991,6 +3039,8 @@
       "slate.history.showPanel": "history",
       "slate.diagnostics.refreshSync": "syncDiagnostics",
       "slate.view.toggleSearch": "searchOverlay",
+      "slate.settings.open": "settingsSheet",
+      "slate.view.switchTheme": "settingsSheet",
       "slate.file.newFromTemplate": "templates",
       "slate.canvas.showOutline": "canvasSurfaces",
       "slate.canvas.showTable": "canvasSurfaces",
@@ -3068,6 +3118,7 @@
       "slate.graph.setVerbosityVerbose": "graphNavigator"
     },
     "issues": {
+      "#1811": "settingsSheet",
       "#720": "vault",
       "#721": "sidebar",
       "#722": "workspace",
@@ -4149,6 +4200,32 @@
       "registered": false,
       "divergence": "The rule maps ⇧⌘Z to Ctrl+Shift+Z, but Ctrl+Y is the platform redo convention (Notepad, Office, Explorer's rename field). Recorded as the deliberate Windows binding — W5-4 decision 12.",
       "reason": "W5-4 (F10): tree-scoped structural redo. mac uses ⇧⌘Z; Ctrl+Y is the Windows redo convention (decision 12)."
+    },
+    {
+      "id": "windows.workspace.closeTabCtrlF4",
+      "label": "Close the active tab",
+      "section": "View",
+      "hint": null,
+      "macChord": null,
+      "mac": null,
+      "windows": "Ctrl+F4",
+      "windowsSpoken": "Control F4",
+      "scope": "Global",
+      "registered": false,
+      "reason": "DS-8: the Windows convention, a second chord for slate.workspace.closeTab. A row of its own, because a command row carries one chord."
+    },
+    {
+      "id": "windows.workspace.closeFocusedTab",
+      "label": "Tab strip: close the focused tab",
+      "section": "View",
+      "hint": null,
+      "macChord": null,
+      "mac": null,
+      "windows": "Delete",
+      "windowsSpoken": "Delete",
+      "scope": "TabStrip",
+      "registered": false,
+      "reason": "DS-8: imperative, like the Files tree's Delete, and live only while a tab has the keys, so a KeyBinding can't eat Delete in the editor or a field. It runs the close button's command."
     },
     {
       "id": "windows.sidebar.deleteSelected",

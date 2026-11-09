@@ -31,7 +31,7 @@ Notes: generated from the Fluent 2 Web Figma kit; each variant renders the exact
 
 - **Build as:** `MenuItem`.
 - **Rating:** Template: a new `Style` or `ControlTemplate` on an existing WPF control.
-- One Slate template for all four roles (top-level header and item, submenu header and item) with the same columns (check, icon, label, shortcut, chevron) via `SharedSizeGroup`. This fixes the Fluent template, where submenu rows have no check column.
+- One Slate template for all four roles (top-level header and item, submenu header and item) with the same three columns via `SharedSizeGroup`: one leading column, where a check replaces an icon, then the label, then one end column that the shortcut and the chevron share. This fixes the Fluent template, where submenu rows have no check column.
 - Shortcut text uses secondary text, not `TextFillColorDisabledBrush`. Keep `InputGestureText` and the `AcceleratorKey` binding.
 
 Ratings and theme setup: `wpf-feasibility.md`.

@@ -101,7 +101,7 @@ ID_ISSUE_OVERRIDES = {
     "slate.vault.open": "#720 (W1-1)",
     "slate.vault.close": "#720 (W1-1)",
     "slate.help.open": "#756 (W8-6)",
-    "slate.settings.open": "#751 (W8-1)",
+    "slate.settings.open": "#1811 (DS-10)",
     "slate.navigation.jumpToBibliography": "#737 (W4-5)",
     # Registered under .view (the reveal/refresh lives in the View menu)
     # but owned by their feature surfaces:
@@ -424,6 +424,10 @@ WINDOWS_ONLY_COMMANDS: dict[str, tuple[str, str, str]] = {
     # and has no SlateCommandID, so these rows carry no mac chord.
     "slate.editor.findNext": ("#1112 (WB-22)", "", ""),
     "slate.editor.findPrevious": ("#1112 (WB-22)", "", ""),
+    # Plan 46 DS-7 (#1808): the Mac's sidebar has no hidden state to toggle.
+    "slate.view.toggleFilesSidebar": ("#1808 (DS-7)", "", ""),
+    # Plan 46 DS-10 (#1811): the Mac has no theme setting; it follows the system.
+    "slate.view.switchTheme": ("#1811 (DS-10)", "", ""),
 }
 
 
@@ -778,6 +782,13 @@ WB_22_DELIVERED_COMMANDS = {
     "slate.editor.findPrevious",
 }
 
+DS_10_STATUS = "implemented; CI + human AT pending"
+
+DS_10_DELIVERED_COMMANDS = {
+    "slate.settings.open",
+    "slate.view.switchTheme",
+}
+
 WB_21_DELIVERED_COMMANDS = {
     "slate.graph.setVerbosityTerse",
     "slate.graph.setVerbosityStandard",
@@ -1005,7 +1016,8 @@ def load_delivery_evidence(
         | W6_2_PR_C_DELIVERED_COMMANDS \
         | W6_2_PR_D_DELIVERED_COMMANDS \
         | WB_21_DELIVERED_COMMANDS \
-        | WB_22_DELIVERED_COMMANDS
+        | WB_22_DELIVERED_COMMANDS \
+        | DS_10_DELIVERED_COMMANDS
     mapped_commands = set(command_map)
     if mapped_commands != delivered_commands:
         missing = sorted(delivered_commands - mapped_commands)
@@ -1029,6 +1041,8 @@ def load_delivery_evidence(
         # so validation 14 fails when the issue's evidence stops spanning a
         # surface.
         "#746", "#747", "#748", "#749", "#750",
+        # Plan 46 DS-10: Settings and the theme.
+        "#1811",
     }
     if set(issue_map) != expected_issues:
         fail(
@@ -1091,6 +1105,8 @@ def command_delivery_status(
         return WB_21_STATUS
     if command_id in WB_22_DELIVERED_COMMANDS:
         return WB_22_STATUS
+    if command_id in DS_10_DELIVERED_COMMANDS:
+        return DS_10_STATUS
     return (
         W2_IMPLEMENTED_STATUS
         if issue.startswith(("#381", "#724", "#725"))
@@ -1117,6 +1133,8 @@ def issue_delivery_status(
         return W6_1_STATUS
     if issue_number == "#746":
         return W6_2_CLOSE_OUT_STATUS
+    if issue_number == "#1811":
+        return DS_10_STATUS
     if issue_number in {"#747", "#748", "#749", "#750"}:
         return "instrument authored; CI + human AT pending" if issue_number == "#750" else "implemented; CI + human AT pending"
     return IMPLEMENTED_STATUS
@@ -1289,7 +1307,8 @@ def main() -> int:
     a("|---|---|---|")
     for tab in settings_tabs():
         a(f"| {tab} | #751 (W8-1) | pending |")
-    a("| Windows-only section (theme/contrast behavior, file associations) | #751 (W8-1, additive) | pending |")
+    a(f"| Appearance: theme | #1811 (DS-10) | {issue_delivery_status('#1811 (DS-10)', delivery_evidence)} |")
+    a("| Windows-only section (contrast behavior, file associations) | #751 (W8-1, additive) | pending |")
     a("")
     a("## Help-doc index")
     a("")

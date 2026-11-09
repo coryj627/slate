@@ -101,6 +101,10 @@ internal enum ChordScope
     /// bar's own tunnelling handler (<c>FindInNoteBar.Bind</c>). Ctrl+F,
     /// Ctrl+G and Ctrl+Shift+G are <see cref="Global"/>.</summary>
     FindInNote,
+
+    /// <summary>A focused tab (DS-8, #1809): Delete closes it, delivered by
+    /// <c>MainWindow.TabStrip_PreviewKeyDown</c> while a tab has the keys.</summary>
+    TabStrip,
 }
 
 /// <summary>
@@ -247,7 +251,14 @@ internal static class ChordTable
         public const string OpenInNewTab = "slate.workspace.openInNewTab";
         public const string OpenInSplit = "slate.workspace.openInSplit";
         public const string ToggleRightPane = "slate.view.toggleRightPane";
+
+        /// <summary>DS-7 (#1808): Windows only: the Mac's sidebar has no such state.</summary>
+        public const string ToggleFilesSidebar = "slate.view.toggleFilesSidebar";
         public const string ToggleSearch = "slate.view.toggleSearch";
+
+        /// <summary>DS-10 (#1811): Windows only: the Mac has no theme setting.</summary>
+        public const string SwitchTheme = "slate.view.switchTheme";
+        public const string OpenSettings = "slate.settings.open";
         public const string ShowHistoryPanel = "slate.history.showPanel";
         public const string RefreshSyncDiagnostics = "slate.diagnostics.refreshSync";
 
@@ -794,6 +805,15 @@ internal static class ChordTable
         Reg(Ids.ToggleRightPane, "Toggle Right Pane", CommandSection.View,
             "Hide or show the right pane (the panel rail). Control-Alt-I.",
             "⌥⌘I", "Ctrl+Alt+I"),
+        Reg(Ids.ToggleFilesSidebar, "Toggle Files Sidebar", CommandSection.View,
+            "Hide or show the Files sidebar."),
+        // DS-10 (#1811): the Settings sheet, with the Mac's label and chord, and the theme
+        // list. Neither needs a vault.
+        Reg(Ids.OpenSettings, "Settings…", CommandSection.Settings,
+            "Open Settings.",
+            "⌘,", "Ctrl+,"),
+        Reg(Ids.SwitchTheme, "Switch Theme…", CommandSection.View,
+            "Choose Light, Dark or the Windows setting."),
         // W5-2 close-out (#742): the vault-search overlay's toggle,
         // registered with mac's exact label and hint. The resolved
         // ICommand is UNGUARDED — mac's palette action calls
@@ -1844,6 +1864,18 @@ internal static class ChordTable
                 + "platform redo convention (Notepad, Office, Explorer's "
                 + "rename field). Recorded as the deliberate Windows "
                 + "binding — W5-4 decision 12."),
+            // DS-8 (#1809): the Windows tab view's two closes, beside Ctrl+W.
+            Chord("windows.workspace.closeTabCtrlF4",
+                "Close the active tab",
+                "Ctrl+F4", ChordScope.Global,
+                "DS-8: the Windows convention, a second chord for slate.workspace.closeTab. "
+                + "A row of its own, because a command row carries one chord."),
+            Chord("windows.workspace.closeFocusedTab",
+                "Tab strip: close the focused tab",
+                "Delete", ChordScope.TabStrip,
+                "DS-8: imperative, like the Files tree's Delete, and live only while a tab has "
+                + "the keys, so a KeyBinding can't eat Delete in the editor or a field. It runs "
+                + "the close button's command."),
             Chord("windows.sidebar.deleteSelected",
                 "Files tree: move the selection to the Recycle Bin",
                 "Delete", ChordScope.Global,

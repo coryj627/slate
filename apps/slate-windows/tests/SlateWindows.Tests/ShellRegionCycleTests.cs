@@ -182,6 +182,52 @@ public sealed class ShellRegionCycleTests
         }
     }
 
+    /// <summary>DS-14 (#1815): a pane a narrow window suspended is skipped as a hidden one
+    /// is, and the ring doesn't bring it back.</summary>
+    [Fact]
+    public void ASuspendedRightPaneIsSkippedNotRevealed()
+    {
+        (WorkspaceViewModel workspace, FakeHost host, List<A11yEvent> announced, FixtureVault fixture, VaultSession session) = Open();
+        using (fixture)
+        using (session)
+        using (workspace)
+        {
+            workspace.OpenPath("note0.md");
+            workspace.WorkspaceRowWidth = 1200;
+            workspace.WorkspaceRowWidth = 500;
+            announced.Clear();
+            host.Focused = ShellRegionKind.Editor;
+
+            workspace.FocusNextPaneCommand.Execute(null);
+
+            Assert.Equal([ShellRegionKind.StatusBar], host.Landed);
+            Assert.False(workspace.IsRightPaneVisible);
+        }
+    }
+
+    [Fact]
+    public void ASuspendedFilesSidebarIsSkippedNotRevealed()
+    {
+        (WorkspaceViewModel workspace, FakeHost host, List<A11yEvent> announced, FixtureVault fixture, VaultSession session) = Open();
+        using (fixture)
+        using (session)
+        using (workspace)
+        {
+            workspace.OpenPath("note0.md");
+            workspace.WorkspaceRowWidth = 1200;
+            workspace.WorkspaceRowWidth = 500;
+            workspace.RightPaneToggle = true;
+            Assert.False(workspace.IsFilesSidebarVisible);
+            announced.Clear();
+            host.Focused = ShellRegionKind.MenuBar;
+
+            workspace.FocusNextPaneCommand.Execute(null);
+
+            Assert.NotEqual(ShellRegionKind.Files, host.Landed[0]);
+            Assert.False(workspace.IsFilesSidebarVisible);
+        }
+    }
+
     [Fact]
     public void ARefusedLandingFallsThroughToTheNextRegion()
     {
@@ -449,6 +495,38 @@ public sealed class ShellRegionCycleTests
             Assert.IsType<ShellRegion.MenuBar>(region.Region);
         }
     }
+
+    /// <summary>DS-13 (#1814): the menu bar's landing is the logo, the bar's one item, and it
+    /// lands at once, so the ring announces the menu bar as before. #1680: a desktop whose
+    /// session has no foreground window (the hosted runners) doesn't let a menu item keep the
+    /// keys. There the fact proves the refusal is the desktop's, since the logo refuses a
+    /// direct Focus() too and no popup opened, and has nothing further to claim.</summary>
+    [Fact]
+    public void F6LandsOnTheLogoAndAnnouncesTheMenuBar() => StaThread.RunPumped(() =>
+    {
+        using var host = new ShownShell(("a.md", "# A\n"));
+        host.Workspace.OpenPath("a.md");
+        host.Settle();
+        ShellRegionLanding landing = ((IShellRegionHost)host.Shell).TryLand(ShellRegionKind.MenuBar, () => { }, () => { });
+        host.Settle();
+
+        if (landing == ShellRegionLanding.Refused)
+        {
+            host.Shell.AppMenuItem.Focus();
+            host.Settle();
+            Assert.NotSame(host.Shell.AppMenuItem, Keyboard.FocusedElement);
+            Assert.False(host.Shell.AppMenuItem.IsSubmenuOpen);
+            _output.WriteLine(
+                "DESKTOP REFUSED THE MENU: the logo refused the keys, by the ring and by Focus(), and they "
+                + $"stayed on {Keyboard.FocusedElement?.GetType().Name ?? "null"}. The landing cannot be exercised "
+                + "on this desktop (#1680).");
+            return;
+        }
+
+        Assert.Equal(ShellRegionLanding.Landed, landing);
+        Assert.Same(host.Shell.AppMenuItem, Keyboard.FocusedElement);
+        Assert.False(host.Shell.AppMenuItem.IsSubmenuOpen);
+    });
 
     /// <summary>W7-7 PR 8 (R-10): a region that holds the landing for
     /// content still arriving (a reading surface) is neither announced nor

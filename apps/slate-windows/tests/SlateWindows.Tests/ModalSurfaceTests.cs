@@ -22,6 +22,90 @@ namespace SlateWindows.Tests;
 /// </remarks>
 public sealed class ModalSurfaceTests
 {
+    /// <summary>Each surface and its overlay's id, in the order they paint.</summary>
+    internal static readonly (ModalSurface Surface, string AutomationId)[] SurfaceAutomationIds =
+    [
+        (ModalSurface.QuickOpen, "QuickSwitcher"),
+        (ModalSurface.SearchOverlay, "SearchOverlay"),
+        (ModalSurface.CommandPalette, "CommandPalette"),
+        (ModalSurface.AddProperty, "AddPropertySheet"),
+        (ModalSurface.BulkRename, "BulkRenameSheet"),
+        (ModalSurface.CitationDetails, "CitationDetailsSheet"),
+        (ModalSurface.CitationSummary, "CitationSummarySheet"),
+        (ModalSurface.FilesCiting, "FilesCitingSheet"),
+        (ModalSurface.DashboardEditor, "DashboardEditorSheet"),
+        (ModalSurface.BaseQueryBuilder, "BaseQueryBuilderSheet"),
+        (ModalSurface.TemplatePicker, "TemplatePickerSheet"),
+        (ModalSurface.TemplateFlow, "TemplateFlowSheet"),
+        (ModalSurface.MoveTo, "MoveToSheet"),
+        (ModalSurface.CanvasCardEditor, "CanvasCardEditorSheet"),
+        (ModalSurface.CanvasCardPicker, "CanvasCardPickerSheet"),
+        (ModalSurface.CanvasPrompt, "CanvasPromptSheet"),
+        (ModalSurface.Settings, "SettingsSheet"),
+    ];
+
+    /// <summary>The shell gate's welcome scan: with no vault there is no Quick
+    /// Open view model, and a binding whose path fails leaves Visibility at its
+    /// default, Visible, unless it names a fallback. The overlay drew an empty
+    /// box over the welcome view, and its hit-test layer took the pointer.</summary>
+    [Fact]
+    public void WithNoVaultNoOverlayShowsAndThePointerReachesTheWelcomeView()
+    {
+        Func<bool> priorOverlayProbe = Canvas.CanvasSurfaceView.ShellOverlayIsOpen;
+        try
+        {
+            StaThread.RunPumped(
+                () =>
+                {
+                    using var host = new ShownShell();
+                    host.ShowWelcomeWithoutAWorkspace();
+                    MainWindow shell = host.Shell;
+                    Assert.Null(Assert.IsType<VaultLifecycleViewModel>(shell.DataContext).QuickSwitcher);
+
+                    // Every layer after the workspace is an overlay's wrapper or its
+                    // hit-test layer. A wrapper is never collapsed, and with nothing shown
+                    // in it, it paints nothing and takes no hits (DS-6).
+                    var root = (System.Windows.Controls.Panel)shell.WorkspaceRoot.Parent;
+                    string[] shown = root.Children
+                        .OfType<System.Windows.FrameworkElement>()
+                        .SkipWhile(child => !ReferenceEquals(child, shell.WorkspaceRoot))
+                        .Skip(1)
+                        .Where(child => child.IsVisible)
+                        .Where(child => child is not System.Windows.Controls.Grid { Background: null } wrapper
+                            || wrapper.Children.OfType<System.Windows.UIElement>().Any(inner => inner.IsVisible))
+                        .Select(child => System.Windows.Automation.AutomationProperties.GetAutomationId(child) is { Length: > 0 } id
+                            ? id
+                            : $"{child.GetType().Name} at index {root.Children.IndexOf(child)}")
+                        .ToArray();
+                    Assert.Empty(shown);
+
+                    System.Windows.Controls.Button open = shell.OpenVaultButton;
+                    System.Windows.Point center = open.TranslatePoint(
+                        new System.Windows.Point(open.ActualWidth / 2, open.ActualHeight / 2), shell);
+                    bool reached = false;
+                    for (var node = shell.InputHitTest(center) as System.Windows.DependencyObject;
+                        node is not null && !reached;
+                        node = FocusAncestry.Parent(node))
+                    {
+                        reached = ReferenceEquals(node, open);
+                    }
+
+                    Assert.True(reached, $"the pointer over Open Vault reached {shell.InputHitTest(center)}.");
+
+                    Assert.False(
+                        System.Windows.Automation.Peers.UIElementAutomationPeer
+                            .CreatePeerForElement(shell.QuickSwitcherResultsList).IsControlElement(),
+                        "the hidden Quick Open list is still in the control view.");
+                },
+                TimeSpan.FromSeconds(90),
+                "STA test body timed out.");
+        }
+        finally
+        {
+            Canvas.CanvasSurfaceView.ShellOverlayIsOpen = priorOverlayProbe;
+        }
+    }
+
     [Theory]
     // Clipboard and undo must survive the modal swallow.
     [InlineData(Key.A, ModifierKeys.Control, true)]
@@ -237,6 +321,7 @@ public sealed class ModalSurfaceTests
             ModalSurface.CanvasCardEditor,
             ModalSurface.CanvasCardPicker,
             ModalSurface.CanvasPrompt,
+            ModalSurface.Settings,
         ];
 
         Assert.Equal(
@@ -403,7 +488,8 @@ public sealed class ModalSurfaceTests
             MoveTo: surface == ModalSurface.MoveTo,
             CanvasCardEditor: surface == ModalSurface.CanvasCardEditor,
             CanvasCardPicker: surface == ModalSurface.CanvasCardPicker,
-            CanvasPrompt: surface == ModalSurface.CanvasPrompt);
+            CanvasPrompt: surface == ModalSurface.CanvasPrompt,
+            Settings: surface == ModalSurface.Settings);
 
     /// <summary>
     /// The topmost-open walk returns the LAST open surface in paint order,
@@ -553,25 +639,7 @@ public sealed class ModalSurfaceTests
             xaml,
             StringComparison.Ordinal);
 
-        (ModalSurface Surface, string AutomationId)[] expected =
-        [
-            (ModalSurface.QuickOpen, "QuickSwitcher"),
-            (ModalSurface.SearchOverlay, "SearchOverlay"),
-            (ModalSurface.CommandPalette, "CommandPalette"),
-            (ModalSurface.AddProperty, "AddPropertySheet"),
-            (ModalSurface.BulkRename, "BulkRenameSheet"),
-            (ModalSurface.CitationDetails, "CitationDetailsSheet"),
-            (ModalSurface.CitationSummary, "CitationSummarySheet"),
-            (ModalSurface.FilesCiting, "FilesCitingSheet"),
-            (ModalSurface.DashboardEditor, "DashboardEditorSheet"),
-            (ModalSurface.BaseQueryBuilder, "BaseQueryBuilderSheet"),
-            (ModalSurface.TemplatePicker, "TemplatePickerSheet"),
-            (ModalSurface.TemplateFlow, "TemplateFlowSheet"),
-            (ModalSurface.MoveTo, "MoveToSheet"),
-            (ModalSurface.CanvasCardEditor, "CanvasCardEditorSheet"),
-            (ModalSurface.CanvasCardPicker, "CanvasCardPickerSheet"),
-            (ModalSurface.CanvasPrompt, "CanvasPromptSheet"),
-        ];
+        (ModalSurface Surface, string AutomationId)[] expected = SurfaceAutomationIds;
 
         // Exhaustiveness (red team W5-3, tests finding 3): the two
         // template surfaces shipped ABSENT from this list, so swapping
@@ -623,6 +691,7 @@ public sealed class ModalSurfaceTests
             [ModalSurface.CanvasCardEditor] = "Workspace.CanvasCardEditorSheet",
             [ModalSurface.CanvasCardPicker] = "Workspace.CanvasCardPickerSheet",
             [ModalSurface.CanvasPrompt] = "Workspace.CanvasPromptSheet",
+            [ModalSurface.Settings] = "SettingsSheet",
         };
 
     /// <summary>
@@ -716,6 +785,7 @@ public sealed class ModalSurfaceTests
         ("MainWindow.Palette.cs", "RestoreFocusAfterPalette"),
         ("MainWindow.Templates.cs", "RestoreFocusAfterTemplates"),
         ("MainWindow.MoveTo.cs", "RestoreFocusAfterMoveTo"),
+        ("MainWindow.Settings.cs", "RestoreFocusAfterSettings"),
         // Red team after codex round 11: this restore previously lived
         // anonymous inside the QuickSwitcher Dismissed handler, where
         // this census could not discover it — invariant 4 was true
@@ -1162,6 +1232,13 @@ public sealed class ModalSurfaceTests
                 continue;
             }
 
+            // DS-10: Settings lives on the lifecycle and presents only through its
+            // admission, which clears the pickers itself and never runs late.
+            if (sheet == ModalSurface.Settings)
+            {
+                continue;
+            }
+
             string property = sheet switch
             {
                 ModalSurface.AddProperty => "AddPropertySheet",
@@ -1601,7 +1678,29 @@ public sealed class ModalSurfaceTests
             MoveTo: first is ModalSurface.MoveTo || second is ModalSurface.MoveTo,
             CanvasCardEditor: first is ModalSurface.CanvasCardEditor || second is ModalSurface.CanvasCardEditor,
             CanvasCardPicker: first is ModalSurface.CanvasCardPicker || second is ModalSurface.CanvasCardPicker,
-            CanvasPrompt: first is ModalSurface.CanvasPrompt || second is ModalSurface.CanvasPrompt);
+            CanvasPrompt: first is ModalSurface.CanvasPrompt || second is ModalSurface.CanvasPrompt,
+            Settings: first is ModalSurface.Settings || second is ModalSurface.Settings);
+
+    [Fact]
+    public void TheSettingsSheetIsAModalSurface()
+    {
+        Assert.Equal(
+            ModalSurface.Settings,
+            ModalSurfaces.TopmostOpen(StateWith(ModalSurface.CanvasPrompt, ModalSurface.Settings)));
+        Assert.Equal(PaletteOpenDecision.Open, ModalSurfaces.DecideSettingsOpen(null));
+        Assert.Equal(PaletteOpenDecision.DismissQuickOpenThenOpen, ModalSurfaces.DecideSettingsOpen(ModalSurface.QuickOpen));
+        Assert.Equal(PaletteOpenDecision.DismissSearchThenOpen, ModalSurfaces.DecideSettingsOpen(ModalSurface.SearchOverlay));
+        Assert.Equal(PaletteOpenDecision.DismissPaletteThenOpen, ModalSurfaces.DecideSettingsOpen(ModalSurface.CommandPalette));
+        foreach (ModalSurface sheet in Enum.GetValues<ModalSurface>().Where(surface => surface > ModalSurface.CommandPalette))
+        {
+            Assert.Equal(PaletteOpenDecision.Refuse, ModalSurfaces.DecideSettingsOpen(sheet));
+        }
+
+        // Nothing opens under it: it's above the palette's and Quick Open's own decisions.
+        Assert.Equal(PaletteOpenDecision.Refuse, ModalSurfaces.DecidePaletteOpen(ModalSurface.Settings));
+        Assert.Equal(PaletteOpenDecision.Refuse, ModalSurfaces.DecideQuickOpenOpen(ModalSurface.Settings));
+        Assert.Equal(PaletteOpenDecision.Refuse, ModalSurfaces.DecideSearchOpen(ModalSurface.Settings));
+    }
 
     [Fact]
     public void EveryMenuDisablePathResolvesAgainstTheLiveViewModels()

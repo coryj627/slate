@@ -229,10 +229,20 @@ public sealed class ItemContainerNameCensus
             // --- authored XAML: MainWindow.xaml ---
             ["Recent vaults"] = new ContainerNaming.Layout(
                 "each button's name carries the shortest folder that tells its vault apart when another recent vault shares its display name (RecentVault.SpokenName, #1311)"),
-            ["SidebarSortOrder"] = new ContainerNaming.Bound(
-                typeof(SidebarSortMode), string.Empty, "SidebarSortModeLabelConverter")
+            ["SettingsCategories"] = new ContainerNaming.Bound(
+                typeof(SettingsCategory), nameof(SettingsCategory.Label), null)
             {
-                Distinct = "each sort mode has its own label (SidebarSortModeLabelConverter)",
+                Distinct = "one row per category, each with its own label",
+            },
+            ["SettingsTheme"] = new ContainerNaming.Bound(
+                typeof(ThemeOption), nameof(ThemeOption.Label), null)
+            {
+                Distinct = "the three labels in ThemeChoice.Options",
+            },
+            ["SettingsAccent"] = new ContainerNaming.Bound(
+                typeof(AccentOption), nameof(AccentOption.Label), null)
+            {
+                Distinct = "the three labels in SlateAccent.Options",
             },
             ["SidebarTagTree"] = Distinct(
                 typeof(SidebarTagViewModel), nameof(SidebarTagViewModel.AutomationName),
@@ -569,6 +579,21 @@ public sealed class ItemContainerNameCensus
                 "one row per row action its host declares (AccessibleGridRowAction), each named once"),
             ["GraphVerbosityMenu.Populate.submenu"] = new CodeItemsHost.Menu(
                 "one check item per verbosity choice in core's vector, each titled once"),
+            // DS-17: the Files toolbar's Sort and group.
+            ["MainWindow.OpenSidebarSortMenu.menu"] = new CodeItemsHost.Menu(
+                "one check item per sort order, each by its own label from core, then Group by date, Show tag tree and the dual pane, each named once"),
+            ["MainWindow.Toggle.row"] = new CodeItemsHost.Menu(
+                "one of Sort and group's checkable rows, which fills nothing of its own"),
+            // DS-16: the rail's More panels.
+            ["MainWindow.OpenMorePanels.menu"] = new CodeItemsHost.Menu(
+                "one check item per leaf past the strip (WorkspaceViewModel.MoreLeaves), each titled once"),
+            // DS-15 (#1816): the note header's two menus.
+            ["NoteHeaderView.ctor.menu"] = new CodeItemsHost.Menu(
+                "three fixed rows, Split Right, Add Property… and Bulk Rename Properties…, each named once"),
+            ["NoteHeaderView.Row.row"] = new CodeItemsHost.Menu(
+                "one of the ctor menu's three fixed rows, which fills nothing of its own"),
+            ["NoteHeaderView.BuildPath.menu"] = new CodeItemsHost.Menu(
+                "one row per folder above the note, named by SiblingNames.Compose with each folder's path as its distinguisher"),
         };
 
     /// <summary>The spec review, round 23: the inventory covers the C# the
@@ -749,7 +774,7 @@ public sealed class ItemContainerNameCensus
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["StatusBar"] =
-                "three fixed regions of different kinds — the vault state, the status message and the progress bar",
+                "fixed regions of different kinds — the vault state, the status message, the progress bar and the two pane toggles",
         };
 
     /// <summary>The spec review, rounds 21-23: a XAML items host with INLINE

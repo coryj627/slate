@@ -46,6 +46,8 @@ from collections import Counter
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 DOC = os.path.join(ROOT, "docs", "plans", "34_canvas_contracts.md")
 SHELL = os.path.join(ROOT, "apps", "slate-windows")
+# ContractsCitationCensus.RetiredNames, whose fact holds that each is gone.
+RETIRED_NAMES = {"CanvasTextScaleService"}
 # The pinned totals (review round 1, IH-59): a document that lost a head
 # or a Verified bullet does not regenerate a smaller table and bless it;
 # it fails here until the pin is bumped on purpose. CanvasReconciliationCensus
@@ -164,8 +166,9 @@ def declared_names() -> set[str]:
     shell, the generated bindings, the tests, the tools, the benchmarks —
     read syntactically with comments stripped, a regex approximation of
     the Roslyn declaration scan ContractsCitationCensus runs; that census
-    remains the authority, and a name this set admits wrongly fails there."""
-    names: set[str] = set()
+    remains the authority, and a name this set admits wrongly fails there.
+    The frozen records keep RETIRED_NAMES after the code moved on."""
+    names: set[str] = set(RETIRED_NAMES)
     for base, dirs, files in os.walk(SHELL):
         dirs[:] = [d for d in dirs if d not in ("bin", "obj", ".vs")]
         for name in files:

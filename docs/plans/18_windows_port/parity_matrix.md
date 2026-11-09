@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-10-31 at `712b48ac` (the head the run stood on; the commit carrying this file is its child, and after a squash merge the head is a branch commit outside main — `--check` holds the body, not this line) by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-11-05 at `62df72b8` (the head the run stood on; the commit carrying this file is its child, and after a squash merge the head is a branch commit outside main — `--check` holds the body, not this line) by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 
@@ -26,7 +26,7 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 
 ## Command inventory
 
-188 stable command ids from the `SlateCommandID` catalog (drift-test-enforced) plus 3 Windows-only (W6-2 PR B2, B2-D6: the mac's ⌘[ panel key delivered as the command `slate.graph.connectionsBack`, read from the Windows chord table's projection `chords.json`), 54 carrying chords from the registration blocks and definition-table chord switches (blank chord = palette/menu-only or focus-scoped by design; the generator fails if a `hotkey:` literal goes unattributed). Spoken hotkeys derive from chords via the `HotkeySpoken` glyph walk (mirrored here); Windows chord mapping is by platform convention (⌘→Ctrl, ⌥→Alt; decision 12), declared in one table in W5-1 with spoken strings substituted per-platform through the canonical vocabulary.
+188 stable command ids from the `SlateCommandID` catalog (drift-test-enforced) plus 5 Windows-only (W6-2 PR B2, B2-D6: the mac's ⌘[ panel key delivered as the command `slate.graph.connectionsBack`, read from the Windows chord table's projection `chords.json`), 54 carrying chords from the registration blocks and definition-table chord switches (blank chord = palette/menu-only or focus-scoped by design; the generator fails if a `hotkey:` literal goes unattributed). Spoken hotkeys derive from chords via the `HotkeySpoken` glyph walk (mirrored here); Windows chord mapping is by platform convention (⌘→Ctrl, ⌥→Alt; decision 12), declared in one table in W5-1 with spoken strings substituted per-platform through the canonical vocabulary.
 
 | command id | capability (mac label) | mac chord | spoken hotkey | consuming W issue | status |
 |---|---|---|---|---|---|
@@ -156,7 +156,7 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.help.open` | Help | — | — | #756 (W8-6) | pending |
 | `slate.history.showPanel` | Show History Panel | — | — | #739 (W4-7) | implemented; local gates green 2026-08-09; interactive CI + human AT pending |
 | `slate.navigation.jumpToBibliography` | Jump to Bibliography | ⌘J | Command J | #737 (W4-5) | implemented; local gates green 2026-08-04; interactive CI + human AT pending |
-| `slate.settings.open` | Settings… | ⌘, | Command Comma | #751 (W8-1) | pending |
+| `slate.settings.open` | Settings… | ⌘, | Command Comma | #1811 (DS-10) | implemented; CI + human AT pending |
 | `slate.sidebar.addShortcut` | Add to Shortcuts | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
 | `slate.sidebar.addTag` | Add Tag… | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
 | `slate.sidebar.clearRecents` | Clear Recents | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
@@ -221,6 +221,8 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.editor.findNext` | Find Next | — | — | #1112 (WB-22) | implemented; local gates green 2026-10-30; interactive CI + human AT pending |
 | `slate.editor.findPrevious` | Find Previous | — | — | #1112 (WB-22) | implemented; local gates green 2026-10-30; interactive CI + human AT pending |
 | `slate.graph.connectionsBack` | Connections: Back | ⌘[ | Command Left Bracket | #746 (W6-2) | implemented; local gates green 2026-09-05; interactive CI + human AT pending |
+| `slate.view.switchTheme` | Switch Theme… | — | — | #1811 (DS-10) | implemented; CI + human AT pending |
+| `slate.view.toggleFilesSidebar` | Toggle Files Sidebar | — | — | #1808 (DS-7) | pending |
 
 The palette surface itself (ranking via the W0.5-1 core engine, sections, recents, chord display) is **#741 (W5-1)**; the quick switcher is **#723 (W1-4)**.
 
@@ -302,7 +304,8 @@ What `WorkspaceStore` round-trips — a **separate** inventory from the right-pa
 | Bibliography | #751 (W8-1) | pending |
 | Canvas | #751 (W8-1) | pending |
 | History | #751 (W8-1) | pending |
-| Windows-only section (theme/contrast behavior, file associations) | #751 (W8-1, additive) | pending |
+| Appearance: theme | #1811 (DS-10) | implemented; CI + human AT pending |
+| Windows-only section (contrast behavior, file associations) | #751 (W8-1, additive) | pending |
 
 ## Help-doc index
 

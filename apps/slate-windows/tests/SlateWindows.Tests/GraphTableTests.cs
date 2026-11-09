@@ -716,10 +716,10 @@ public sealed partial class GraphTableTests
             // the grid's Shift+Tab reaches the switcher and the switcher's the
             // field (C's route; Term N2; E-13).
             DockPanel header = Assert.IsType<DockPanel>(toggle.Parent);
-            System.Windows.UIElement switcher = header.Children.OfType<System.Windows.UIElement>().First(child => System.Windows.Automation.AutomationProperties.GetAutomationId(child) == "GraphSurfaceSwitcher");
+            System.Windows.UIElement switcher = surface.SwitcherForTests;
             Assert.True(System.Windows.Input.KeyboardNavigation.GetTabIndex(toggle) > System.Windows.Input.KeyboardNavigation.GetTabIndex(switcher));
             Assert.True(System.Windows.Input.KeyboardNavigation.GetTabIndex(toggle) > System.Windows.Input.KeyboardNavigation.GetTabIndex(surface.FilterFieldForTests));
-            Assert.True(header.Children.IndexOf(toggle) < header.Children.IndexOf(switcher));
+            Assert.Same(toggle, header.Children[0]);
             Assert.Equal(Dock.Right, DockPanel.GetDock(toggle));
             WorkspaceFocusBoundary? boundary = null;
             host.Workspace.FocusBoundaryRequested += (_, requested) => boundary = requested;

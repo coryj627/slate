@@ -12,6 +12,7 @@ namespace SlateWindows;
 public partial class App : Application
 {
     private ThemeManager? _themeManager;
+    private TextScaleService? _textScale;
     private SingleInstanceCoordinator? _singleInstanceCoordinator;
     private MainWindow? _mainWindow;
 
@@ -33,6 +34,7 @@ public partial class App : Application
         // window exists, because it is a class handler for every TextBox
         // the app will ever create.
         TextBoxAccessibility.Install();
+        TextBoxSelection.Install();
         if (!DpiAwarenessProbe.EnsurePerMonitorV2())
         {
             HostLog.Write(HostDiagnosticEvent.DpiAwarenessFailed);
@@ -53,7 +55,11 @@ public partial class App : Application
         // Explicit dictionaries instead of the still-experimental ThemeMode
         // API. ThemeManager also swaps both Fluent and Slate token layers on
         // live Windows Contrast transitions.
-        _themeManager = new ThemeManager(this, ThemeManager.ReadSystemTheme());
+        _textScale = new TextScaleService();
+        TextScaleService.Current = _textScale;
+        // DS-10: the store first, so the first paint is the chosen theme.
+        AppPreferencesState preferences = new AppPreferencesStore().Load();
+        _themeManager = new ThemeManager(this, preferences.Theme, preferences.AccentColor);
 
         if (e.Args.Contains("--census-dpi-probe"))
         {
@@ -138,6 +144,7 @@ public partial class App : Application
         SidebarWriteJournal.InstallProductionLocation();
         base.OnStartup(e);
         _mainWindow = new MainWindow();
+        _themeManager?.WatchSystemAccent(_mainWindow);
         _singleInstanceCoordinator.StartListening(QueueActivation);
         _mainWindow.Show();
 
@@ -156,6 +163,7 @@ public partial class App : Application
         _ = SidebarWriteJournal.Shared.WhenIdle().Wait(TimeSpan.FromSeconds(2));
         _singleInstanceCoordinator?.Dispose();
         _themeManager?.Dispose();
+        _textScale?.Dispose();
         base.OnExit(e);
     }
 

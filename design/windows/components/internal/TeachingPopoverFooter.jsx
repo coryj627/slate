@@ -231,7 +231,7 @@ export function TeachingPopoverFooter(_p = {}) {
         {props.carouselSteps && (
         <div style={{
           position: "relative",
-          width: 40,
+          width: "fit-content",
           display: "flex",
           flexDirection: "row",
           alignItems: "flex-start",
@@ -271,10 +271,10 @@ export function TeachingPopoverFooter(_p = {}) {
               <div style={{
                 position: "relative",
                 width: 16,
+                height: 8,
                 borderRadius: 9999,
                 backgroundColor: "var(--brand-foreground-2-rest-4)",
                 flexShrink: 0,
-                alignSelf: "stretch",
               }} />
             </div>
           </div>
@@ -299,11 +299,11 @@ export function TeachingPopoverFooter(_p = {}) {
             <div style={{
               position: "relative",
               width: 8,
+              height: 8,
               opacity: 0.3,
               borderRadius: 9999,
               backgroundColor: "var(--brand-foreground-2-rest)",
               flexShrink: 0,
-              alignSelf: "stretch",
             }} />
           </div>
           <div style={{
@@ -327,11 +327,11 @@ export function TeachingPopoverFooter(_p = {}) {
             <div style={{
               position: "relative",
               width: 8,
+              height: 8,
               opacity: 0.3,
               borderRadius: 9999,
               backgroundColor: "var(--brand-foreground-2-rest)",
               flexShrink: 0,
-              alignSelf: "stretch",
             }} />
           </div>
           <div style={{
@@ -355,11 +355,11 @@ export function TeachingPopoverFooter(_p = {}) {
             <div style={{
               position: "relative",
               width: 8,
+              height: 8,
               opacity: 0.3,
               borderRadius: 9999,
               backgroundColor: "var(--brand-foreground-2-rest)",
               flexShrink: 0,
-              alignSelf: "stretch",
             }} />
           </div>
           <div style={{
@@ -383,11 +383,11 @@ export function TeachingPopoverFooter(_p = {}) {
             <div style={{
               position: "relative",
               width: 8,
+              height: 8,
               opacity: 0.3,
               borderRadius: 9999,
               backgroundColor: "var(--brand-foreground-2-rest)",
               flexShrink: 0,
-              alignSelf: "stretch",
             }} />
           </div>
         </div>

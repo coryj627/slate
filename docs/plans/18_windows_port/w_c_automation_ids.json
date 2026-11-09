@@ -1,5 +1,90 @@
 [
   {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "EmptyPaneLauncher",
+    "Surface": "Split workspace"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "EmptyPaneLauncherScroll",
+    "Surface": "Split workspace"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "EmptyPaneNewFromTemplate",
+    "Surface": "Split workspace"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "EmptyPaneQuickOpen",
+    "Surface": "Split workspace"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "EmptyPaneSearchVault",
+    "Surface": "Split workspace"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "Count",
+    "Surface": "Sidebar organization and actions"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "Label",
+    "Surface": "Sidebar organization and actions"
+  },
+  {
+    "Source": "MainWindow.FilesToolbar.cs",
+    "Expression": "\"SidebarDualPaneToggle\"",
+    "Surface": "Sidebar organization and actions"
+  },
+  {
+    "Source": "MainWindow.FilesToolbar.cs",
+    "Expression": "\"SidebarGroupDates\"",
+    "Surface": "Sidebar organization and actions"
+  },
+  {
+    "Source": "MainWindow.FilesToolbar.cs",
+    "Expression": "\"SidebarShowTags\"",
+    "Surface": "Sidebar organization and actions"
+  },
+  {
+    "Source": "MainWindow.FilesToolbar.cs",
+    "Expression": "SidebarSortItemIdPrefix + mode",
+    "Surface": "Sidebar organization and actions"
+  },
+  {
+    "Source": "MainWindow.FilesToolbar.cs",
+    "Expression": "automationId",
+    "Surface": "Sidebar organization and actions"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "FilesToolbar",
+    "Surface": "Sidebar organization and actions"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SidebarCollapseAll",
+    "Surface": "Sidebar organization and actions"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SidebarExpandLoaded",
+    "Surface": "Sidebar organization and actions"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SidebarNewNote",
+    "Surface": "Sidebar organization and actions"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SidebarSortAndGroup",
+    "Surface": "Sidebar organization and actions"
+  },
+  {
     "Source": "Bases/BaseSurfaceView.cs",
     "Expression": "\"BaseCountReadout\"",
     "Surface": "Bases surfaces (W4-6)"
@@ -1316,6 +1401,11 @@
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "AppMenu",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "FileMenu",
     "Surface": "Main window and menu bar"
   },
@@ -1417,6 +1507,11 @@
   {
     "Source": "MainWindow.xaml",
     "Expression": "FilesSidebarRemoveShortcutMenuItem",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "FilesSidebarToggle",
     "Surface": "Main window and menu bar"
   },
   {
@@ -1528,6 +1623,36 @@
     "Source": "MainWindow.xaml",
     "Expression": "MainMenu",
     "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "TitleBar",
+    "Surface": "Title bar (DS-12)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "TitleBarPalette",
+    "Surface": "Title bar (DS-12)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "TitleBarSettings",
+    "Surface": "Title bar (DS-12)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CaptionMinimize",
+    "Surface": "Title bar (DS-12)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CaptionMaximize",
+    "Surface": "Title bar (DS-12)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "CaptionClose",
+    "Surface": "Title bar (DS-12)"
   },
   {
     "Source": "MainWindow.xaml",
@@ -1896,6 +2021,11 @@
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "RightPaneToggle",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "TasksLeafBody",
     "Surface": "Right-pane leaf registry"
   },
@@ -1907,6 +2037,26 @@
   {
     "Source": "MainWindow.xaml",
     "Expression": "RightPaneLeaves",
+    "Surface": "Right-pane leaf registry"
+  },
+  {
+    "Source": "MainWindow.RailMore.cs",
+    "Expression": "MorePanelsItemIdPrefix + leaf.Id",
+    "Surface": "Right-pane leaf registry"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "Pill",
+    "Surface": "Right-pane leaf registry"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "RightPaneMorePanels",
+    "Surface": "Right-pane leaf registry"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "RightPaneRailStrip",
     "Surface": "Right-pane leaf registry"
   },
   {
@@ -1961,6 +2111,51 @@
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "SettingsCategories",
+    "Surface": "Settings (DS-10)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SettingsClose",
+    "Surface": "Settings (DS-10)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SettingsMenuItem",
+    "Surface": "Settings (DS-10)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SettingsPage",
+    "Surface": "Settings (DS-10)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SettingsSheet",
+    "Surface": "Settings (DS-10)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SettingsTheme",
+    "Surface": "Settings (DS-10)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SettingsAccent",
+    "Surface": "Settings (DS-10)"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "SwitchThemeMenuItem",
+    "Surface": "Settings (DS-10)"
+  },
+  {
+    "Source": "Themes/Slate.Text.xaml",
+    "Expression": "PART_Label",
+    "Surface": "Settings (DS-10)"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "SearchVaultMenuItem",
     "Surface": "Search overlay (W5-2)"
   },
@@ -1986,11 +2181,6 @@
   },
   {
     "Source": "MainWindow.xaml",
-    "Expression": "SidebarDualPaneToggle",
-    "Surface": "Sidebar organization and actions"
-  },
-  {
-    "Source": "MainWindow.xaml",
     "Expression": "SidebarFileActions",
     "Surface": "Sidebar organization and actions"
   },
@@ -2008,11 +2198,6 @@
     "Source": "MainWindow.xaml",
     "Expression": "SidebarFilterResults",
     "Surface": "File filter/results"
-  },
-  {
-    "Source": "MainWindow.xaml",
-    "Expression": "SidebarGroupDates",
-    "Surface": "Sidebar organization and actions"
   },
   {
     "Source": "MainWindow.xaml",
@@ -2042,16 +2227,6 @@
   {
     "Source": "MainWindow.xaml",
     "Expression": "SidebarShortcutsActions",
-    "Surface": "Sidebar organization and actions"
-  },
-  {
-    "Source": "MainWindow.xaml",
-    "Expression": "SidebarShowTags",
-    "Surface": "Tag tree"
-  },
-  {
-    "Source": "MainWindow.xaml",
-    "Expression": "SidebarSortOrder",
     "Surface": "Sidebar organization and actions"
   },
   {
@@ -2221,6 +2396,16 @@
   },
   {
     "Source": "MainWindow.xaml",
+    "Expression": "ModalScrimOverMenu",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "ModalScrimOverStatus",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
     "Expression": "WorkspaceFocusNextRegionMenuItem",
     "Surface": "Main window and menu bar"
   },
@@ -2237,6 +2422,11 @@
   {
     "Source": "MainWindow.xaml",
     "Expression": "WorkspaceNarrowRightPaneMenuItem",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "MainWindow.xaml",
+    "Expression": "WorkspaceToggleFilesSidebarMenuItem",
     "Surface": "Main window and menu bar"
   },
   {
@@ -2545,6 +2735,116 @@
     "Surface": "Data grids (W4-1 substrate)"
   },
   {
+    "Source": "Themes/Slate.Calendar.xaml",
+    "Expression": "PART_DisabledVisual",
+    "Surface": "Properties header + sheets (W4-4)"
+  },
+  {
+    "Source": "Themes/Slate.Calendar.xaml",
+    "Expression": "PART_HeaderButton",
+    "Surface": "Properties header + sheets (W4-4)"
+  },
+  {
+    "Source": "Themes/Slate.Calendar.xaml",
+    "Expression": "PART_MonthView",
+    "Surface": "Properties header + sheets (W4-4)"
+  },
+  {
+    "Source": "Themes/Slate.Calendar.xaml",
+    "Expression": "PART_NextButton",
+    "Surface": "Properties header + sheets (W4-4)"
+  },
+  {
+    "Source": "Themes/Slate.Calendar.xaml",
+    "Expression": "PART_PreviousButton",
+    "Surface": "Properties header + sheets (W4-4)"
+  },
+  {
+    "Source": "Themes/Slate.Calendar.xaml",
+    "Expression": "PART_Root",
+    "Surface": "Properties header + sheets (W4-4)"
+  },
+  {
+    "Source": "Themes/Slate.Calendar.xaml",
+    "Expression": "PART_YearView",
+    "Surface": "Properties header + sheets (W4-4)"
+  },
+  {
+    "Source": "Themes/Slate.Menus.xaml",
+    "Expression": "Check",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "Themes/Slate.Menus.xaml",
+    "Expression": "Chevron",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "Themes/Slate.Menus.xaml",
+    "Expression": "HeaderHost",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "Themes/Slate.Menus.xaml",
+    "Expression": "Highlight",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "Themes/Slate.Menus.xaml",
+    "Expression": "Icon",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "Themes/Slate.Menus.xaml",
+    "Expression": "InputGestureText",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "Themes/Slate.Menus.xaml",
+    "Expression": "ItemsPresenter",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "Themes/Slate.Menus.xaml",
+    "Expression": "Leading",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "Themes/Slate.Menus.xaml",
+    "Expression": "MenuSurface",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "Themes/Slate.Menus.xaml",
+    "Expression": "PART_Popup",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "Themes/Slate.Menus.xaml",
+    "Expression": "Row",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "Themes/Slate.Menus.xaml",
+    "Expression": "Shadow",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "Themes/Slate.Menus.xaml",
+    "Expression": "Surface",
+    "Surface": "Main window and menu bar"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "Chrome",
+    "Surface": "Workspace tabs"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "Divider",
+    "Surface": "Workspace tabs"
+  },
+  {
     "Source": "WorkspaceTemplates.xaml",
     "Expression": "EditorActivateAtCursor",
     "Surface": "Editor semantic menu and popover"
@@ -2576,8 +2876,38 @@
   },
   {
     "Source": "WorkspaceTemplates.xaml",
+    "Expression": "FlareLeft",
+    "Surface": "Workspace tabs"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "FlareRight",
+    "Surface": "Workspace tabs"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "HeaderPanel",
+    "Surface": "Workspace tabs"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "Indicator",
+    "Surface": "Workspace tabs"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "PART_Header",
+    "Surface": "Files tree"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
     "Expression": "MarkdownEditor",
     "Surface": "Editor document"
+  },
+  {
+    "Source": "WorkspaceTemplates.xaml",
+    "Expression": "PART_SelectedContentHost",
+    "Surface": "Workspace tabs"
   },
   {
     "Source": "WorkspaceTemplates.xaml",
@@ -2618,5 +2948,60 @@
     "Source": "WorkspaceTemplates.xaml",
     "Expression": "WorkspaceTabs",
     "Surface": "Workspace tabs"
+  },
+  {
+    "Source": "NoteHeaderView.cs",
+    "Expression": "\"NoteHeaderAddProperty\"",
+    "Surface": "Note header (DS-15)"
+  },
+  {
+    "Source": "NoteHeaderView.cs",
+    "Expression": "\"NoteHeaderBulkRename\"",
+    "Surface": "Note header (DS-15)"
+  },
+  {
+    "Source": "NoteHeaderView.cs",
+    "Expression": "\"NoteHeaderFolder\"",
+    "Surface": "Note header (DS-15)"
+  },
+  {
+    "Source": "NoteHeaderView.cs",
+    "Expression": "\"NoteHeaderFolders\"",
+    "Surface": "Note header (DS-15)"
+  },
+  {
+    "Source": "NoteHeaderView.cs",
+    "Expression": "\"NoteHeaderMore\"",
+    "Surface": "Note header (DS-15)"
+  },
+  {
+    "Source": "NoteHeaderView.cs",
+    "Expression": "\"NoteHeaderReading\"",
+    "Surface": "Note header (DS-15)"
+  },
+  {
+    "Source": "NoteHeaderView.cs",
+    "Expression": "\"NoteHeaderSource\"",
+    "Surface": "Note header (DS-15)"
+  },
+  {
+    "Source": "NoteHeaderView.cs",
+    "Expression": "\"NoteHeaderSplitRight\"",
+    "Surface": "Note header (DS-15)"
+  },
+  {
+    "Source": "NoteHeaderView.cs",
+    "Expression": "automationId",
+    "Surface": "Note header (DS-15)"
+  },
+  {
+    "Source": "Themes/Slate.Text.xaml",
+    "Expression": "Chrome",
+    "Surface": "Note header (DS-15)"
+  },
+  {
+    "Source": "Themes/Slate.Text.xaml",
+    "Expression": "Shadow",
+    "Surface": "Note header (DS-15)"
   }
 ]

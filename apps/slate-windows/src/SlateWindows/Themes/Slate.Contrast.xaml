@@ -25,12 +25,39 @@
                      Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />
     <SolidColorBrush x:Key="Slate.BorderBrush"
                      Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />
+    <SolidColorBrush x:Key="Slate.SubtleBorderBrush"
+                     Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />
+    <SolidColorBrush x:Key="Slate.DisabledTextBrush"
+                     Color="{DynamicResource {x:Static SystemColors.GrayTextColorKey}}" />
+    <!-- Text keeps window text over it, so this can't be the highlight. -->
+    <SolidColorBrush x:Key="Slate.HoverOverlayBrush"
+                     Color="{DynamicResource {x:Static SystemColors.ControlColorKey}}" />
+    <!-- A contrast theme's scrim lets the window show: dimming isn't this theme's cue. -->
+    <SolidColorBrush x:Key="Slate.ScrimBrush"
+                     Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}"
+                     Opacity="0.3" />
+    <SolidColorBrush x:Key="Slate.PressedOverlayBrush"
+                     Color="{DynamicResource {x:Static SystemColors.ControlColorKey}}" />
     <SolidColorBrush x:Key="Slate.AccentBrush"
                      Color="{DynamicResource {x:Static SystemColors.HighlightColorKey}}" />
+    <SolidColorBrush x:Key="Slate.AccentTextBrush"
+                     Color="{DynamicResource {x:Static SystemColors.HighlightColorKey}}" />
+    <SolidColorBrush x:Key="Slate.SelectedSurfaceBrush"
+                     Color="{DynamicResource {x:Static SystemColors.HighlightColorKey}}" />
+    <SolidColorBrush x:Key="Slate.SelectedTextBrush"
+                     Color="{DynamicResource {x:Static SystemColors.HighlightTextColorKey}}" />
+    <!-- DS-18: a count on a selected row is highlight text on the highlight, never window text. -->
+    <SolidColorBrush x:Key="Slate.SelectedCaptionBrush"
+                     Color="{DynamicResource {x:Static SystemColors.HighlightTextColorKey}}" />
+    <SolidColorBrush x:Key="Slate.AccentIndicatorBrush"
+                     Color="{DynamicResource {x:Static SystemColors.HighlightTextColorKey}}" />
     <SolidColorBrush x:Key="Slate.SelectionBackgroundBrush"
                      Color="{DynamicResource {x:Static SystemColors.HighlightColorKey}}" />
     <SolidColorBrush x:Key="Slate.SelectionTextBrush"
                      Color="{DynamicResource {x:Static SystemColors.HighlightTextColorKey}}" />
+    <SolidColorBrush x:Key="Slate.ReadingSelectionBrush"
+                     Color="{DynamicResource {x:Static SystemColors.HighlightColorKey}}"
+                     Opacity="0.4" />
     <SolidColorBrush x:Key="Slate.FocusBrush"
                      Color="{DynamicResource {x:Static SystemColors.HighlightColorKey}}" />
     <SolidColorBrush x:Key="Slate.ErrorBrush"

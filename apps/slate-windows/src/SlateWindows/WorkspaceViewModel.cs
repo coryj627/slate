@@ -50,7 +50,11 @@ internal enum WorkspaceDirtyNavigationDecision
     Discard,
 }
 
-internal sealed record WorkspaceLeafOption(string Id, string Title);
+/// <summary>A right-pane leaf. DS-16: its icon is <paramref name="Glyph"/>, a Segoe
+/// Fluent Icons character turned by <paramref name="GlyphTurn"/> degrees, or, for one
+/// the font lacks, <paramref name="Drawing"/>, path markup on a 20 grid (DSD19).</summary>
+internal sealed record WorkspaceLeafOption(
+    string Id, string Title, string Glyph = "", double GlyphTurn = 0, string? Drawing = null);
 
 internal abstract class BindableBase : INotifyPropertyChanged
 {
@@ -266,7 +270,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     public Guid Id { get; }
     public WorkspaceItemState Item { get; private set; }
     public string? Mode { get; private set; }
-    public bool? PropsCollapsed { get; }
+    public bool? PropsCollapsed { get; private set; }
     /// <summary>W6-1 PR A (contract A15): the persisted surface token,
     /// `"table" | "visual"` with outline written as ABSENT. The surface
     /// switcher drives it through
@@ -337,6 +341,18 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     public string Path => Item.Path;
 
     public bool IsMarkdown => Item.Kind == WorkspaceItemKind.Markdown;
+
+    /// <summary>DS-8: the tab strip's icon for what the tab holds. The design has no canvas
+    /// icon, so that one's ours; it names nothing, because the title does.</summary>
+    public string KindGlyph => Item.Kind switch
+    {
+        WorkspaceItemKind.Canvas => "\uECA5",
+        WorkspaceItemKind.Base => "\uE8A9",
+        WorkspaceItemKind.SavedQuery => "\uE71C",
+        WorkspaceItemKind.Dashboard => "\uE9D2",
+        WorkspaceItemKind.Graph => "\uE9E9",
+        _ => "\uE8A5",
+    };
 
     /// <summary>The persisted `"reading"` token (schema v1, G17).</summary>
     public bool IsReadingMode => string.Equals(Mode, "reading", StringComparison.Ordinal);
@@ -643,6 +659,11 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         _editorSession?.Dispose();
         _editorSession = null;
         Item = item;
+        if (!IsMarkdown)
+        {
+            RetireProperties();
+        }
+
         _text = string.Empty;
         _contentHash = null;
         // Navigation reuses the tab IN PLACE, so the previous item's
@@ -2023,6 +2044,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         OnPropertyChanged(nameof(IsMarkdown));
         OnPropertyChanged(nameof(IsPlaceholder));
         OnPropertyChanged(nameof(KindLabel));
+        OnPropertyChanged(nameof(KindGlyph));
         OnPropertyChanged(nameof(PlaceholderText));
         // The item's KIND can change on an in-place replacement
         // (note → base, base → dashboard, …); the surface-visibility
@@ -2555,14 +2577,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         GrowPaneCommand = new RelayCommand(_ => ResizeActivePane(0.05), _ => Groups.Count > 1);
         ShrinkPaneCommand = new RelayCommand(_ => ResizeActivePane(-0.05), _ => Groups.Count > 1);
         SaveActiveCommand = new RelayCommand(_ => SaveActive(), _ => ActiveGroup.ActiveTab?.IsMarkdown == true);
-        ToggleRightPaneCommand = new RelayCommand(
-            _ =>
-            {
-                IsRightPaneVisible = !IsRightPaneVisible;
-                // W6-2 PR B (rule C, Term 3(a)): the reveal route's end.
-                ConsumePendingMount();
-            },
-            _ => true);
+        ToggleRightPaneCommand = new RelayCommand(_ => ToggleRightPane(), _ => true);
         OpenTasksReviewCommand = new RelayCommand(_ => OpenTasksReview(), _ => true);
     }
 
@@ -2578,26 +2593,65 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
 
     public static IReadOnlyList<WorkspaceLeafOption> Leaves { get; } =
     [
-        new("outline", "Outline"),
-        new("backlinks", "Backlinks"),
-        new("outgoingLinks", "Outgoing links"),
-        new("connections", "Connections"),
+        // DS-16: the icons are Kit.jsx:54-56's, with the owner's four changes (DSD19).
+        new("outline", "Outline", "\uE8FD"),
+        new("backlinks", "Backlinks", Drawing: LeafDrawings.Backlinks),
+        new("outgoingLinks", "Outgoing links", "\uE71B", GlyphTurn: -45),
+        new("connections", "Connections", "\uF003"),
         // W6-2 PR E (Term I1): the graph inspector's leaf, its title T37.
-        new("inspector", GraphPhrase.InspectorName),
-        new("embeds", "Embeds"),
-        new("math", "Math"),
-        new("code", "Code"),
-        new("diagrams", "Diagrams"),
-        new("tasks", "Tasks"),
-        new("tasksReview", "Tasks Review"),
-        new("history", "History"),
-        new("citations", "Citations"),
-        new("bibliography", "Bibliography"),
-        new("queries", "Queries"),
-        new("basesDock", "Base dock"),
-        new("syncDiagnostics", "Sync"),
+        new("inspector", GraphPhrase.InspectorName, "\uF22C"),
+        new("embeds", "Embeds", "\uE8A1"),
+        new("math", "Math", "\uE8EF"),
+        new("code", "Code", "\uE943"),
+        new("diagrams", "Diagrams", Drawing: LeafDrawings.Diagrams),
+        new("tasks", "Tasks", "\uE9D5"),
+        new("tasksReview", "Tasks Review", "\uE73A"),
+        new("history", "History", "\uE81C"),
+        new("citations", "Citations", "\uE82D"),
+        new("bibliography", "Bibliography", "\uE8F1"),
+        new("queries", "Queries", "\uE71C"),
+        new("basesDock", "Base dock", "\uE8A9"),
+        new("syncDiagnostics", "Sync", "\uE895"),
     ];
     public IReadOnlyList<WorkspaceLeafOption> LeafOptions => Leaves;
+
+    /// <summary>DS-16 (DSD8): how many leaves the strip holds, the design's six slots
+    /// less More panels. Fixed, so a reader hears the same count at any size.</summary>
+    internal const int StripCount = 5;
+
+    /// <summary>DS-16: the strip's leaves, the first five.</summary>
+    public static IReadOnlyList<WorkspaceLeafOption> StripLeaves { get; } = [.. Leaves.Take(StripCount)];
+
+    /// <summary>The strip's rows, through the workspace as <see cref="LeafOptions"/> is,
+    /// so a window with no workspace has none.</summary>
+    public IReadOnlyList<WorkspaceLeafOption> StripLeafOptions => StripLeaves;
+
+    /// <summary>DS-16: the More panels menu's leaves, the other twelve.</summary>
+    public static IReadOnlyList<WorkspaceLeafOption> MoreLeaves { get; } = [.. Leaves.Skip(StripCount)];
+
+    /// <summary>DS-16: the strip's selection. The open leaf when the strip holds it,
+    /// else null, so the list is never handed an item it doesn't hold; and null never
+    /// writes back over the open leaf. <see cref="ActiveLeaf"/> stays the one truth.</summary>
+    public WorkspaceLeafOption? StripLeaf
+    {
+        get => StripLeaves.Contains(_activeLeaf) ? _activeLeaf : null;
+        set
+        {
+            if (value is not null)
+            {
+                ActiveLeaf = value;
+            }
+        }
+    }
+
+    /// <summary>DS-16: the open leaf's title when it lives in More panels, else null.
+    /// The button's item status, so a reader can tell from it what's open.</summary>
+    public string? MoreLeafTitle => StripLeaves.Contains(_activeLeaf) ? null : _activeLeaf.Title;
+
+    /// <summary>DS-16: More panels' name, from core: "More panels", or "More panels,
+    /// Tasks open" while the menu's Tasks is open. NVDA doesn't read a button's item
+    /// status, so the open panel is in the name (the DS-16 pass).</summary>
+    public string MorePanelsName => SlateUniffiMethods.MorePanelsName(MoreLeafTitle);
     public EditorPreferencesViewModel EditorPreferences { get; }
 
     /// <summary>W6-1 PR C (#745): the canvas announcement verbosity
@@ -2628,6 +2682,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     /// VM, so over-calling is safe and refetch-free.</summary>
     internal void SyncPanels()
     {
+        FollowActiveTitle();
         // W4-6: the dock follows the active note (contract C12).
         BasesDockFollowActiveNote();
         Panels.NoteChanged(
@@ -2691,6 +2746,24 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     /// window answers; null (no window) answers no.</summary>
     internal Func<bool>? IsChoosingLeafByArrow { get; set; }
 
+    private bool _choosingFromMorePanels;
+
+    /// <summary>DS-16: a pick from More panels. The same switch as any route but
+    /// silent: the menu gives the keys back to the button, whose name says the
+    /// panel is open, so the "… panel." line would repeat it (Codex round 4).</summary>
+    internal void ChooseFromMorePanels(WorkspaceLeafOption leaf)
+    {
+        _choosingFromMorePanels = true;
+        try
+        {
+            ActiveLeaf = leaf;
+        }
+        finally
+        {
+            _choosingFromMorePanels = false;
+        }
+    }
+
     /// <summary>WB-16 (#1305): the rail arrows' settle. An arrow commits the
     /// leaf at once and defers its reload, the queries refresh and the
     /// workspace write to the settle (<see cref="OnLeafSettled"/>); the window
@@ -2742,9 +2815,14 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         {
             if (value is not null && SetField(ref _activeLeaf, value))
             {
+                OnPropertyChanged(nameof(StripLeaf));
+                OnPropertyChanged(nameof(MoreLeafTitle));
+                OnPropertyChanged(nameof(MorePanelsName));
                 bool byArrow = IsChoosingLeafByArrow?.Invoke() == true;
-                // Silent on the rail's arrow route only (G21, AR-59).
-                if (!byArrow)
+                // Silent on the rail's arrow route (G21, AR-59), and on a pick from
+                // More panels (DS-16), whose button takes the keys back and names
+                // the panel: either way, the line would say it twice.
+                if (!byArrow && !_choosingFromMorePanels)
                 {
                     _announce(new A11yEvent.LeafPanelShown(value.Title));
                 }
@@ -2816,11 +2894,14 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         ConsumePendingMount();
     }
 
+    /// <summary>Whether the right pane shows. DS-14 (#1815): every write here is the reader's
+    /// ask; a narrow window suspends the pane through <see cref="StepRightPane"/> instead.</summary>
     public bool IsRightPaneVisible
     {
         get => _isRightPaneVisible;
         set
         {
+            AskForPane(ShellSidebar.RightPane, value);
             if (SetField(ref _isRightPaneVisible, value))
             {
                 _announce(value ? new A11yEvent.RightPaneShown() : new A11yEvent.RightPaneHidden());
@@ -2832,8 +2913,61 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 NotifyGraphInspectorShownChanged();
                 // W7-7 PR 4b (AR-38): the right pane's two steps follow.
                 RaiseRightPaneResizeStates();
+                RaiseRightPaneColumnStates();
+                OnPropertyChanged(nameof(RightPaneToggle));
+            }
+
+            MakeRoomForPanes();
+        }
+    }
+
+    /// <summary>DS-14 (#1815): the one write of the field outside the setter, for a pane
+    /// that steps aside or comes back for the room alone (<c>ConnectionsLeafCensus</c> holds
+    /// it to one). A narrow spell suspends the pane and doesn't hide it, so it skips
+    /// <see cref="OnRightPaneVisibilityChanged"/>: the reader's Connections selection,
+    /// expansion and pending focus survive, and no mount is armed. While suspended the leaf
+    /// counts as unmounted. Coming back ends in the leaf's silent probe when it's active, so
+    /// it's current and nothing is spoken. Going with the keys inside says so.</summary>
+    private void StepRightPane(bool shown)
+    {
+        bool keysInside = !shown && KeysAreInPane?.Invoke(ShellSidebar.RightPane) == true;
+        _isRightPaneVisible = shown;
+        OnPropertyChanged(nameof(IsRightPaneVisible));
+        NotifyGraphInspectorShownChanged();
+        RaiseRightPaneResizeStates();
+        RaiseRightPaneColumnStates();
+        OnPropertyChanged(nameof(RightPaneToggle));
+        if (keysInside)
+        {
+            _announce(new A11yEvent.RightPaneHidden());
+        }
+
+        if (shown && ConnectionsLeafIsActive())
+        {
+            ProbeConnections();
+        }
+    }
+
+    /// <summary>DS-7: the status bar's button, bound both ways, because UIA's Toggle
+    /// doesn't run a button's command. The setter is the route, so a reveal finishes on
+    /// either input path.</summary>
+    public bool RightPaneToggle
+    {
+        get => IsRightPaneVisible;
+        set
+        {
+            if (value != IsRightPaneVisible)
+            {
+                ToggleRightPane();
             }
         }
+    }
+
+    private void ToggleRightPane()
+    {
+        IsRightPaneVisible = !IsRightPaneVisible;
+        // W6-2 PR B (rule C, Term 3(a)): the reveal route's end.
+        ConsumePendingMount();
     }
 
     public ICommand CloseTabCommand { get; }
@@ -2896,8 +3030,32 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             return;
         }
 
-        tab.ToggleViewMode();
-        RequestActiveEditorFocus();
+        SetViewMode(tab, !tab.IsReadingMode, landFocus: true);
+    }
+
+    /// <summary>DS-15 (#1816): the one path that sets a tab's view mode, persisted at the
+    /// mutation's boundary: before it, nothing saved a flip until some later change did.
+    /// Ctrl+Shift+E's route lands focus in the note (R-10);
+    /// the note header's switch names its own tab, and lands focus only when the keys were
+    /// in the surface going away, so they're never left inside a hidden one. It speaks no
+    /// sentence of its own: the landing, or the radio's focus, says what happened.</summary>
+    internal void SetViewMode(WorkspaceTabViewModel tab, bool reading, bool landFocus)
+    {
+        ArgumentNullException.ThrowIfNull(tab);
+        if (!tab.IsMarkdown || tab.IsReadingMode == reading)
+        {
+            return;
+        }
+
+        RunWorkspaceMutation(() =>
+        {
+            tab.ToggleViewMode();
+            Persist();
+            if (landFocus)
+            {
+                RequestActiveEditorFocus();
+            }
+        });
     }
 
     /// <summary>Opens a path. W7-7 (R-2): <paramref name="fromSelection"/>
@@ -3359,6 +3517,12 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
 
     public void Dispose()
     {
+        if (_titledTab is not null)
+        {
+            _titledTab.PropertyChanged -= ActiveTab_TitleChanged;
+            _titledTab = null;
+        }
+
         // WB-16 (#1305): a pending rail settle is cancelled, never run — the
         // one write below carries the leaf an arrow chose.
         RailSettle.Dispose();

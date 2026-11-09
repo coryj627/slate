@@ -5,6 +5,9 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Automation.Peers;
 using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Shapes;
 
 namespace SlateWindows.Reading;
 
@@ -20,6 +23,19 @@ namespace SlateWindows.Reading;
 /// </summary>
 internal sealed class ReadingMathElement : ContentControl
 {
+    private const string ScrollerName = "FormulaScroller";
+
+    private static readonly ControlTemplate DrawingTemplate = NewDrawingTemplate();
+
+    /// <summary>DS-5: the body's size, watched so a drawing follows it. A drawing is
+    /// geometry at WPF-Math's fixed size, so text size can't reach it any other way, and
+    /// a live change can't rebuild the document.</summary>
+    private static readonly DependencyProperty BodySizeProperty = DependencyProperty.Register(
+        "BodySize",
+        typeof(double),
+        typeof(ReadingMathElement),
+        new PropertyMetadata(0d, (element, _) => ((ReadingMathElement)element).ScaleDrawing()));
+
     public ReadingMathElement(
         string speech, string mathMl, string source, string braille)
     {
@@ -28,6 +44,7 @@ internal sealed class ReadingMathElement : ContentControl
         Source = source;
         Braille = braille;
         Focusable = true;
+        SetResourceReference(BodySizeProperty, TypeRamp.ReaderBody.SizeKey);
         AutomationProperties.SetName(this, speech);
         // #1591: the source is spoken on request, never on focus. It is
         // not HelpText (NVDA reads HelpText on Tab), and the peer answers
@@ -69,7 +86,7 @@ internal sealed class ReadingMathElement : ContentControl
     /// the whole line, so content that fills it (a wrapping source, a wide
     /// drawing) dropped onto a line of its own, where line reading reads
     /// only the role (the plan 45 XB-9 review). The content is measured
-    /// that much narrower, and clipped to it.</summary>
+    /// that much narrower: a source wraps in it, and a drawing scrolls.</summary>
     public double LineReserve { get; init; }
 
     protected override Size MeasureOverride(Size constraint)
@@ -85,6 +102,100 @@ internal sealed class ReadingMathElement : ContentControl
 
     protected override AutomationPeer OnCreateAutomationPeer() =>
         new ReadingMathElementPeer(this);
+
+    /// <summary>What scrolls a drawing; a source has none, because it wraps.</summary>
+    internal ScrollViewer? Scroller => GetTemplateChild(ScrollerName) as ScrollViewer;
+
+    /// <summary>Where this element's predecessor had scrolled to, set by the surface's
+    /// merge. The scroller takes it up once it knows its extent.</summary>
+    internal double ResumeScrollAt { get; set; }
+
+    /// <summary>DS-3: a drawing can't wrap, and shrinking one to fit the measure left a
+    /// long formula too small to read, so it keeps its size and scrolls.</summary>
+    protected override void OnContentChanged(object oldContent, object newContent)
+    {
+        base.OnContentChanged(oldContent, newContent);
+        if (newContent is Path)
+        {
+            Template = DrawingTemplate;
+            ScaleDrawing();
+        }
+    }
+
+    private void ScaleDrawing()
+    {
+        double size = (double)GetValue(BodySizeProperty);
+        if (Content is Path drawing && size > 0)
+        {
+            double scale = size / TypeRamp.ReaderBody.Size;
+            drawing.LayoutTransform = scale == 1 ? null : new ScaleTransform(scale, scale);
+        }
+    }
+
+    /// <summary>The element is the focus, because the scroller takes none, so the keys
+    /// that scroll it are here. A formula that fits leaves them to the reading view.</summary>
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        if (Keyboard.Modifiers == ModifierKeys.None && Scroller is { ScrollableWidth: > 0 } scroller)
+        {
+            if (e.Key == Key.Left)
+            {
+                scroller.LineLeft();
+                e.Handled = true;
+            }
+            else if (e.Key == Key.Right)
+            {
+                scroller.LineRight();
+                e.Handled = true;
+            }
+        }
+
+        base.OnKeyDown(e);
+    }
+
+    private static ControlTemplate NewDrawingTemplate()
+    {
+        var scroller = new FrameworkElementFactory(typeof(FormulaScroller), ScrollerName);
+        scroller.AppendChild(new FrameworkElementFactory(typeof(ContentPresenter)));
+        return new ControlTemplate(typeof(ReadingMathElement)) { VisualTree = scroller };
+    }
+}
+
+/// <summary>Scrolls a drawn formula sideways. The wheel stays the page's, or a formula
+/// under the pointer would stop the reader scrolling the note. An implicit style reaches
+/// only its exact type, so this asks for Fluent's by name.</summary>
+internal sealed class FormulaScroller : ScrollViewer
+{
+    public FormulaScroller()
+    {
+        Focusable = false;
+        IsTabStop = false;
+        HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
+        VerticalScrollBarVisibility = ScrollBarVisibility.Disabled;
+        SetResourceReference(StyleProperty, typeof(ScrollViewer));
+    }
+
+    protected override void OnMouseWheel(MouseWheelEventArgs e)
+    {
+    }
+
+    /// <summary>Fluent's template lets the content span the bar's row, so a formula that
+    /// scrolls keeps room below it, or the bar would run through its ink.</summary>
+    protected override void OnScrollChanged(ScrollChangedEventArgs e)
+    {
+        base.OnScrollChanged(e);
+        double room = ScrollableWidth > 0 && GetTemplateChild("PART_HorizontalScrollBar") is FrameworkElement bar ? bar.ActualHeight : 0;
+        if (Padding.Bottom != room)
+        {
+            Padding = new Thickness(0, 0, 0, room);
+        }
+
+        if (ScrollableWidth > 0 && TemplatedParent is ReadingMathElement { ResumeScrollAt: > 0 } element)
+        {
+            ScrollToHorizontalOffset(element.ResumeScrollAt);
+            element.ResumeScrollAt = 0;
+        }
+    }
 }
 
 /// <summary>

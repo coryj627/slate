@@ -359,6 +359,92 @@ public sealed partial class GraphDiagramTests
         });
     }
 
+    /// <summary>#1786: a popup is its own window, so hiding the diagram under the
+    /// pointer, as a keyboard tab switch does, doesn't hide it.</summary>
+    [Fact]
+    public void AHiddenDiagramClosesItsTooltip()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(3, "diagram-hidden-tooltip");
+            GraphDocumentViewModel document = host.Open();
+            (_, _, GraphDiagramView diagram, _) = LiveDiagram(host, document);
+            diagram.PointerEnteredForTests(diagram.VisibleIds[0]);
+            Assert.True(diagram.TooltipIsOpenForTests, "premise: hover did not open it.");
+
+            diagram.Visibility = System.Windows.Visibility.Collapsed;
+            diagram.UpdateLayout();
+
+            Assert.False(diagram.IsVisible, "premise: the diagram is still visible.");
+            Assert.False(diagram.TooltipIsOpenForTests, "the hidden diagram's popup is still on screen.");
+        });
+    }
+
+    /// <summary>#1790: the same gap as the board's popup. A sheet opened from the
+    /// keyboard leaves the pointer where it was.</summary>
+    [Fact]
+    public void AModalSurfaceClosesTheDiagramsTooltip()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(3, "diagram-sheet-tooltip");
+            GraphDocumentViewModel document = host.Open();
+            (_, _, GraphDiagramView diagram, _) = LiveDiagram(host, document);
+            diagram.PointerEnteredForTests(diagram.VisibleIds[0]);
+            Assert.True(diagram.TooltipIsOpenForTests, "premise: hover did not open it.");
+
+            Func<bool> overlayWas = Canvas.CanvasSurfaceView.ShellOverlayIsOpen;
+            try
+            {
+                Canvas.CanvasSurfaceView.ShellOverlayIsOpen = static () => true;
+                Canvas.CanvasSurfaceView.RaiseShellOverlayChanged();
+                Assert.False(diagram.TooltipIsOpenForTests, "the popup is still over the sheet.");
+            }
+            finally
+            {
+                Canvas.CanvasSurfaceView.ShellOverlayIsOpen = overlayWas;
+            }
+        });
+    }
+
+    /// <summary>#1790: its window is topmost, so an Alt+Tab with the pointer resting
+    /// on a node left it above other applications.</summary>
+    [Fact]
+    public void LeavingTheWindowClosesTheDiagramsTooltip()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(3, "diagram-inactive-tooltip");
+            GraphDocumentViewModel document = host.Open();
+            (_, _, GraphDiagramView diagram, _) = LiveDiagram(host, document);
+            diagram.PointerEnteredForTests(diagram.VisibleIds[0]);
+            Assert.True(diagram.TooltipIsOpenForTests, "premise: hover did not open it.");
+
+            WindowActivation.Deactivate(Window.GetWindow(diagram));
+
+            Assert.False(diagram.TooltipIsOpenForTests, "the popup stayed above other applications.");
+        });
+    }
+
+    /// <summary>#1790: the same for a diagram that arrives with the window already in
+    /// the background.</summary>
+    [Fact]
+    public void ADiagramLoadedIntoAnInactiveWindowHoldsItsTooltipUntilTheWindowComesBack()
+    {
+        RunSta(() =>
+        {
+            using var host = new Host(3, "diagram-loaded-inactive-tooltip");
+            GraphDocumentViewModel document = host.Open();
+            (_, HostedWindow window, GraphDiagramView diagram, _) = LiveDiagram(host, document, active: false);
+
+            diagram.PointerEnteredForTests(diagram.VisibleIds[0]);
+            Assert.False(diagram.TooltipIsOpenForTests, "the popup opened above other applications.");
+
+            WindowActivation.Activate(window.Window);
+            Assert.True(diagram.TooltipIsOpenForTests, "coming back did not open it.");
+        });
+    }
+
     [Fact]
     public void TheTooltipIsTheInventorysComposedLabel()
     {

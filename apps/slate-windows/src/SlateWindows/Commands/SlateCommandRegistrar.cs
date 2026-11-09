@@ -57,6 +57,13 @@ internal interface ISlateCommandHost
     /// included, which is why the host owns it, not the workspace).</summary>
     ICommand FindInNoteCommand { get; }
 
+    /// <summary>DS-10 (#1811): the Settings sheet, on the host because it opens with no
+    /// vault.</summary>
+    ICommand OpenSettingsCommand { get; }
+
+    /// <summary>DS-10 (#1811): the palette's list of themes.</summary>
+    ICommand SwitchThemeCommand { get; }
+
     bool IsVaultOpen { get; }
 }
 
@@ -455,10 +462,13 @@ internal static class SlateCommandRegistrar
             [ChordTable.Ids.OpenInNewTab] = host => host.FileSidebar?.OpenNewTabCommand,
             [ChordTable.Ids.OpenInSplit] = host => host.FileSidebar?.OpenSplitCommand,
             [ChordTable.Ids.ToggleRightPane] = host => host.Workspace?.ToggleRightPaneCommand,
+            [ChordTable.Ids.ToggleFilesSidebar] = host => host.Workspace?.ToggleFilesSidebarCommand,
             // W5-2 close-out (#742): lives on the HOST, not the
             // workspace — the overlay survives vault open/close (P17)
             // and mac's action is likewise vault-lifetime-free.
             [ChordTable.Ids.ToggleSearch] = host => host.ToggleSearchCommand,
+            [ChordTable.Ids.OpenSettings] = host => host.OpenSettingsCommand,
+            [ChordTable.Ids.SwitchTheme] = host => host.SwitchThemeCommand,
             // WB-22 (#1112): Ctrl+F is the HOST's (the welcome view has no
             // workspace and still reaches vault search); the steps act on the
             // active tab's open bar.

@@ -37,15 +37,25 @@ public sealed class ThemeTokenContrastTests
             // accent pairing that was only gated against window must be
             // gated here too.
             ("accent/surface", "Slate.AccentColor", "Slate.SurfaceColor"),
-            // NOT gated: accent/raised measures |Lc| 74.46 in the light
-            // theme — a real near-miss against the >75 floor, found while
-            // adding accent/surface. Deliberately left ungated rather
-            // than silently passing: fixing it means retuning
-            // Slate.AccentColor, which is shared with selection and focus
-            // and whose final values W8-2 owns (the palette is marked
-            // provisional). No surface renders accent text on the raised
-            // background today. Tracked so it is a decision, not a gap.
+            // NOT gated on purpose: the accent FILL on the raised surface measures
+            // |Lc| 71.61 in the light theme. #1051 closed by rule: no text draws
+            // in the fill role (ThemeDesignSystemTests.NoTextDrawsInTheAccentFillRole),
+            // and the accent text role, gated below, clears all three surfaces.
+            // #1755: the accent text role, which links, wikilinks, tags and
+            // editor headings use, and the text on every gold fill.
+            ("accent-text/window", "Slate.AccentTextColor", "Slate.WindowBackgroundColor"),
+            ("accent-text/surface", "Slate.AccentTextColor", "Slate.SurfaceColor"),
+            ("accent-text/raised", "Slate.AccentTextColor", "Slate.RaisedSurfaceColor"),
+            ("on-accent/rest", "Slate.TextOnAccentColor", "Slate.AccentColor"),
+            ("on-accent/hover", "Slate.TextOnAccentColor", "Slate.AccentHoverColor"),
+            ("on-accent/pressed", "Slate.TextOnAccentColor", "Slate.AccentPressedColor"),
             ("selection", "Slate.SelectionTextColor", "Slate.SelectionBackgroundColor"),
+            // #1762: a selected panel row, with its secondary captions and links.
+            ("selected-row/text", "Slate.SelectionTextColor", "Slate.SelectedSurfaceColor"),
+            ("selected-row/secondary", "Slate.SecondaryTextColor", "Slate.SelectedSurfaceColor"),
+            ("selected-row/accent-text", "Slate.AccentTextColor", "Slate.SelectedSurfaceColor"),
+            // DS-18: a selected count row's count (Slate.SelectedCaptionBrush is tertiary).
+            ("selected-row/count", "Slate.TertiaryTextColor", "Slate.SelectedSurfaceColor"),
             ("error/surface", "Slate.ErrorColor", "Slate.SurfaceColor"),
             // W3-4 code-token palette: token text renders on the code
             // block's raised background inside the reading surface, so
@@ -103,6 +113,57 @@ public sealed class ThemeTokenContrastTests
                 contrast > 75,
                 $"{fileName} {name} measured |Lc| {contrast:F2}; expected > 75.");
         }
+    }
+
+    /// <summary>#1755: the reading view's selection is an overlay on top of the
+    /// text, so it tints the text as well as the background. Primary text keeps
+    /// the floor under it on the surface and the raised code block, and the
+    /// highlight stands off both at least as far as the text box's solid light
+    /// gold stands off white (1.22:1). Secondary and accent text sit lower
+    /// under any overlay that shows at all: about |Lc| 65-76, against 55-61 for
+    /// primary text under the blue overlay this replaced.</summary>
+    [Theory]
+    [InlineData("Slate.Light.xaml")]
+    [InlineData("Slate.Dark.xaml")]
+    public void TheReadingSelectionOverlayKeepsTextAboveTheFloorAndStandsOff(string fileName)
+    {
+        IReadOnlyDictionary<string, Rgb> colors = ReadColors(fileName);
+        (Rgb overlay, double alpha) = ReadAlphaColor(fileName, "Slate.ReadingSelectionColor");
+        foreach (string surfaceKey in new[] { "Slate.SurfaceColor", "Slate.RaisedSurfaceColor" })
+        {
+            Rgb surface = colors[surfaceKey];
+            Rgb highlight = Over(overlay, alpha, surface);
+            double text = Math.Abs(ApcaLc(Over(overlay, alpha, colors["Slate.TextColor"]), highlight));
+            Assert.True(text > 75, $"{fileName} selected text on {surfaceKey} measured |Lc| {text:F2}; expected > 75.");
+            double standOff = SlateContrast.WcagRatio(ToColor(highlight), ToColor(surface));
+            Assert.True(standOff >= 1.2, $"{fileName} highlight on {surfaceKey} stands off {standOff:F2}:1; expected >= 1.2.");
+        }
+    }
+
+    private static Rgb Over(Rgb top, double alpha, Rgb under) => new(
+        (alpha * top.Red) + ((1 - alpha) * under.Red),
+        (alpha * top.Green) + ((1 - alpha) * under.Green),
+        (alpha * top.Blue) + ((1 - alpha) * under.Blue));
+
+    private static System.Windows.Media.Color ToColor(Rgb color) => System.Windows.Media.Color.FromRgb(
+        (byte)Math.Round(color.Red * 255),
+        (byte)Math.Round(color.Green * 255),
+        (byte)Math.Round(color.Blue * 255));
+
+    private static (Rgb Color, double Alpha) ReadAlphaColor(string fileName, string key)
+    {
+        string filePath = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "..", "..", "..", "..", "..",
+            "src", "SlateWindows", "Themes", fileName));
+        XNamespace presentation = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
+        XNamespace x = "http://schemas.microsoft.com/winfx/2006/xaml";
+        string hex = XDocument.Load(filePath)
+            .Root!
+            .Elements(presentation + "Color")
+            .Single(element => element.Attribute(x + "Key")!.Value == key)
+            .Value.Trim().TrimStart('#');
+        return (Rgb.Parse(hex), int.Parse(hex[..2], NumberStyles.HexNumber, CultureInfo.InvariantCulture) / 255.0);
     }
 
     /// <summary>D13's hostile hex row: a raw author color takes the
@@ -223,6 +284,12 @@ public sealed class ThemeTokenContrastTests
                 element => element.Attribute(x + "Key")!.Value,
                 element => Rgb.Parse(element.Value));
     }
+
+    /// <summary>|Lc| of drawn colours, for facts that measure a realized element.</summary>
+    internal static double Lc(System.Windows.Media.Color text, System.Windows.Media.Color background) =>
+        Math.Abs(ApcaLc(
+            Rgb.Parse($"#{text.R:X2}{text.G:X2}{text.B:X2}"),
+            Rgb.Parse($"#{background.R:X2}{background.G:X2}{background.B:X2}")));
 
     private static double ApcaLc(Rgb text, Rgb background)
     {

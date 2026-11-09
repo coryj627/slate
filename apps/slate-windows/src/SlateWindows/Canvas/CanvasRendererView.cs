@@ -18,7 +18,9 @@ namespace SlateWindows.Canvas;
 internal sealed class CanvasRendererView : FrameworkElement
 {
     private readonly CanvasPresentationEngine _engine;
-    private readonly CanvasTextScaleService _textScale;
+    private TextScaleService? _textScale;
+    private bool _themeAttached;
+    private int _themeRevision;
     private readonly VisualCollection _visuals;
     private readonly DrawingVisual _cards;
     private readonly DrawingVisual _edges;
@@ -27,12 +29,23 @@ internal sealed class CanvasRendererView : FrameworkElement
 
     public CanvasRendererView()
     {
+        // #1778: this draws in OnRender, so nothing else keeps it inside its pane, for
+        // painting or for the pointer.
+        ClipToBounds = true;
         Focusable = true;
         System.Windows.Automation.AutomationProperties.SetAutomationId(
             this, "CanvasVisualBoard");
         _engine = new CanvasPresentationEngine();
-        _textScale = new CanvasTextScaleService();
-        _textScale.Changed += () => _engine.CommitTextScaleRevision(_textScale.Revision);
+        Loaded += (_, _) =>
+        {
+            AttachTextScale();
+            AttachTheme();
+        };
+        Unloaded += (_, _) =>
+        {
+            DetachTextScale();
+            DetachTheme();
+        };
         _engine.StateInstalled += OnStateInstalled;
         _visuals = new VisualCollection(this);
         _edges = new DrawingVisual();
@@ -44,6 +57,7 @@ internal sealed class CanvasRendererView : FrameworkElement
         SizeChanged += (_, e) => _engine.CommitViewport(
             v => v.WithViewSize(e.NewSize.Width, e.NewSize.Height));
         IsVisibleChanged += OnIsVisibleChanged;
+        _tooltipGate = new ShellPopupGate(this, UpdateTooltip);
         _tooltipText = new System.Windows.Controls.TextBlock
         {
             Padding = new Thickness(6, 4, 6, 4),
@@ -55,6 +69,9 @@ internal sealed class CanvasRendererView : FrameworkElement
             Child = _tooltipText,
             BorderThickness = new Thickness(1),
         };
+        tooltipBorder.SetResourceReference(System.Windows.Controls.Border.BackgroundProperty, "Slate.SurfaceBrush");
+        tooltipBorder.SetResourceReference(System.Windows.Controls.Border.BorderBrushProperty, "Slate.BorderBrush");
+        _tooltipText.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, "Slate.TextBrush");
         _tooltip = new System.Windows.Controls.Primitives.Popup
         {
             Child = tooltipBorder,
@@ -274,7 +291,7 @@ internal sealed class CanvasRendererView : FrameworkElement
         double zoom = state.Viewport.Zoom;
         double panX = state.Viewport.PanX;
         double panY = state.Viewport.PanY;
-        double fontSize = 12.0 * _textScale.Factor * zoom;
+        double fontSize = 12.0 * TextScaleService.CurrentFactor * zoom;
         var matched = MatchedIds(state);
         foreach (System.Collections.Generic.KeyValuePair<CanvasPeerKey, CanvasPeerPlacement>
             entry in state.Topology.Placements)
@@ -408,7 +425,7 @@ internal sealed class CanvasRendererView : FrameworkElement
             node.Title,
             System.Globalization.CultureInfo.CurrentUICulture,
             FlowDirection.LeftToRight,
-            new Typeface("Segoe UI"),
+            new Typeface(TypeRamp.TextFamily, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal),
             fontSize,
             BrushOf("Slate.Canvas.TextBrush"),
             VisualTreeHelper.GetDpi(this).PixelsPerDip)
@@ -424,7 +441,7 @@ internal sealed class CanvasRendererView : FrameworkElement
             node.Title,
             System.Globalization.CultureInfo.CurrentUICulture,
             FlowDirection.LeftToRight,
-            new Typeface("Segoe UI"),
+            new Typeface(TypeRamp.TextFamily, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal),
             fontSize,
             Brushes.Transparent,
             VisualTreeHelper.GetDpi(this).PixelsPerDip);
@@ -569,8 +586,73 @@ internal sealed class CanvasRendererView : FrameworkElement
         return Zoomed(context);
     }
 
-    /// <summary>The view's teardown half: detach the model, dispose
-    /// the owned service — the lifecycle facts pin that handler counts
+    /// <summary>Whether a text size change reaches this view.</summary>
+    internal bool IsAttachedToTextScaleForTests => _textScale is not null;
+
+    internal int TextScaleRevisionForTests => _engine.TextScaleRevisionForTests;
+
+    /// <summary>DS-5: the app's service outlives this view, so its event must not hold
+    /// the view past its life. A change while it was out raised nothing for it, so it
+    /// catches up from the current revision.</summary>
+    internal void AttachTextScale()
+    {
+        if (_textScale is null && TextScaleService.Current is { } service)
+        {
+            _textScale = service;
+            service.Changed += OnTextScaleChanged;
+            _engine.CommitTextScaleRevision(service.Revision);
+        }
+    }
+
+    private void DetachTextScale()
+    {
+        if (_textScale is { } service)
+        {
+            service.Changed -= OnTextScaleChanged;
+            _textScale = null;
+        }
+    }
+
+    /// <summary>DS-10: the visuals are painted from the theme's tokens at each install, so a
+    /// theme change installs a new state. The manager's event is static, so the subscription
+    /// lasts only while this is in the tree, as <c>GraphDiagramView</c>'s does.</summary>
+    private void AttachTheme()
+    {
+        if (!_themeAttached)
+        {
+            ThemeManager.ResourcesChanged += OnThemeChanged;
+            _themeAttached = true;
+        }
+    }
+
+    private void DetachTheme()
+    {
+        if (_themeAttached)
+        {
+            ThemeManager.ResourcesChanged -= OnThemeChanged;
+            _themeAttached = false;
+        }
+    }
+
+    private void OnThemeChanged(object? sender, EventArgs e)
+    {
+        // A board on another dispatcher, a test host's finished thread, isn't the audience.
+        if (Dispatcher.CheckAccess())
+        {
+            _engine.CommitThemeRevision(++_themeRevision);
+        }
+    }
+
+    private void OnTextScaleChanged()
+    {
+        if (_textScale is { } service)
+        {
+            _engine.CommitTextScaleRevision(service.Revision);
+        }
+    }
+
+    /// <summary>The view's teardown half: detach the model and the
+    /// shared service — the lifecycle facts pin that handler counts
     /// return to baseline.</summary>
     internal void Shutdown()
     {
@@ -581,7 +663,8 @@ internal sealed class CanvasRendererView : FrameworkElement
         // becomes true, so an in-flight or queued install can never
         // draw into a detached view.
         _engine.Shutdown();
-        _textScale.Dispose();
+        DetachTextScale();
+        DetachTheme();
     }
 
     // --- The peer surface (§D D3): identity-stable, state-read -----------
@@ -1129,6 +1212,7 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// that gives it its size, since showing it may bring no install.</summary>
     private void OnIsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
+        UpdateTooltip();
         if (e.NewValue is true && _owedReveal is not null)
         {
             _ = Dispatcher.BeginInvoke(
@@ -1314,7 +1398,7 @@ internal sealed class CanvasRendererView : FrameworkElement
     /// truncated).</summary>
     private void UpdateTooltip()
     {
-        string? subject = TooltipSubject();
+        string? subject = _tooltipGate.Allows ? TooltipSubject() : null;
         if (subject is null)
         {
             _tooltip.IsOpen = false;
@@ -1359,6 +1443,7 @@ internal sealed class CanvasRendererView : FrameworkElement
     }
 
     private string? _tooltipTextSubject;
+    private readonly ShellPopupGate _tooltipGate;
 
     /// <summary>Esc's answer, called by the surface rung (DD-3: the
     /// tooltip is the most transient — first inside the rung, after
@@ -1410,6 +1495,8 @@ internal sealed class CanvasRendererView : FrameworkElement
     }
 
     internal bool TooltipIsOpenForTests => _tooltip.IsOpen;
+
+    internal System.Windows.Controls.Border TooltipChromeForTests => (System.Windows.Controls.Border)_tooltip.Child;
 
     internal string TooltipTextForTests => _tooltipText.Text;
 }

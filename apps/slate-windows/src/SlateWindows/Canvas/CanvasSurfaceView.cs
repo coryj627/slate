@@ -57,8 +57,22 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
     /// </remarks>
     internal static Func<bool> ShellOverlayIsOpen { get; set; } = static () => false;
 
+    /// <summary>#1790: a modal surface opened or closed, for what can't sit under one
+    /// (<see cref="ShellPopupGate"/>). Per thread, as a surface is: one whose window
+    /// closed without unloading it can't be reached from another thread's shell.</summary>
+    internal static event Action? ShellOverlayChanged
+    {
+        add => t_shellOverlayChanged += value;
+        remove => t_shellOverlayChanged -= value;
+    }
+
+    [ThreadStatic]
+    private static Action? t_shellOverlayChanged;
+
+    internal static void RaiseShellOverlayChanged() => t_shellOverlayChanged?.Invoke();
+
     private readonly TextBlock _title;
-    private readonly AutomationNamedGroupPanel _switcher;
+    private readonly AutomationNamedWrapPanel _switcher;
     private readonly RadioButton _outlineChoice;
     private readonly RadioButton _tableChoice;
     private readonly RadioButton _visualChoice;
@@ -89,10 +103,10 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
 
         _title = new TextBlock
         {
-            FontSize = 16,
-            FontWeight = FontWeights.SemiBold,
             VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 12, 0),
         };
+        _title.SetResourceReference(StyleProperty, TypeRamp.Subtitle.StyleKey);
         AutomationProperties.SetHeadingLevel(_title, AutomationHeadingLevel.Level2);
 
         _outlineChoice = SurfaceChoice(
@@ -110,10 +124,8 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         // below reached no client at all and the three choices appeared
         // flattened under the surface — inert a11y properties, which is
         // the class this and the Invoke defect share.
-        _switcher = new AutomationNamedGroupPanel
+        _switcher = new AutomationNamedWrapPanel
         {
-            Orientation = Orientation.Horizontal,
-            Margin = new Thickness(12, 0, 0, 0),
             VerticalAlignment = VerticalAlignment.Center,
         };
         _switcher.Children.Add(_outlineChoice);
@@ -149,11 +161,13 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         // announcement-only). An Edit peer with mac's label and hint.
         _filterField = new TextBox
         {
-            Width = 220,
-            Margin = new Thickness(12, 0, 6, 0),
+            Width = 160,
+            Margin = new Thickness(0, 0, 6, 0),
             VerticalAlignment = VerticalAlignment.Center,
         };
         AutomationProperties.SetAutomationId(_filterField, "CanvasFilterField");
+        FieldPrompt.SetIsEnabled(_filterField, true);
+        SearchGlyph.SetIsEnabled(_filterField, true);
         AutomationProperties.SetName(_filterField, CanvasPhrase.FilterFieldName);
         AutomationProperties.SetHelpText(_filterField, CanvasPhrase.FilterFieldHint);
         _filterField.TextChanged += OnFilterTextChanged;
@@ -192,9 +206,10 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         _modeCommit.Click += (_, _) => Model?.Navigator.CommitMode();
         _modeCancel.Click += (_, _) => Model?.Navigator.CancelMode();
 
-        var header = new StackPanel
+        // #1773: wraps, so the filter moves to a line of its own instead of losing
+        // its right edge.
+        var header = new WrapPanel
         {
-            Orientation = Orientation.Horizontal,
             Margin = new Thickness(12, 8, 12, 4),
         };
         header.Children.Add(_title);
@@ -1090,6 +1105,7 @@ internal sealed class CanvasSurfaceView : UserControl, ICanvasSurfacePresenter
         var choice = new RadioButton
         {
             Content = label,
+            MinWidth = 0,
             Margin = new Thickness(0, 0, 8, 0),
             VerticalAlignment = VerticalAlignment.Center,
             GroupName = "CanvasSurface",

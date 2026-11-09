@@ -71,25 +71,24 @@ public sealed partial class ShellAccessibilityTests
                 && element.Attribute("InputGestureText") is not null).ToArray();
             Assert.NotEmpty(menuItems);
             int checkedMenus = 0;
+            // DS-13 (#1814): the menus sit under the logo, which the walk opens first, so
+            // the chain starts at the menu under it.
             foreach (IGrouping<string, XElement> group in menuItems.GroupBy(element => string.Join(" > ",
-                element.Ancestors().Where(ancestor => ancestor.Name.LocalName == "MenuItem").Reverse()
+                element.Ancestors().Where(ancestor => ancestor.Name.LocalName == "MenuItem" && (string?)ancestor.Attribute("AutomationProperties.AutomationId") != "AppMenu").Reverse()
                     .Select(ancestor => ancestor.Attribute("Header")!.Value.Replace("_", "")))))
             {
-                AutomationElement mainMenu = WaitForElement(window, "MainMenu", TimeSpan.FromSeconds(10));
+                AutomationElement logo = WaitForElement(window, "AppMenu", TimeSpan.FromSeconds(10));
+                logo.Patterns.ExpandCollapse.Pattern.Expand();
                 // W7-5 (#1239): the sidebar verbs are a submenu of File, so a
                 // group's key is the header CHAIN, walked and expanded a
                 // level at a time before its leaves are looked for.
                 AutomationElement? menu = null;
-                AutomationElement? topLevel = null;
                 foreach (string header in group.Key.Split(" > "))
                 {
-                    menu = menu is null
-                        ? mainMenu.FindFirstChild(automation.ConditionFactory.ByName(header))
-                        : FindDescendantWithin(menu,
+                    menu = FindDescendantWithin(menu ?? logo,
                             automation.ConditionFactory.ByControlType(ControlType.MenuItem).And(automation.ConditionFactory.ByName(header)),
                             TimeSpan.FromSeconds(10));
                     Assert.True(menu is not null, "Menu did not appear: " + header + " (in " + group.Key + ")");
-                    topLevel ??= menu;
                     menu.Patterns.ExpandCollapse.Pattern.Expand();
                 }
                 Assert.NotNull(menu);
@@ -106,7 +105,7 @@ public sealed partial class ShellAccessibilityTests
                     Assert.Equal(rows[id].GetProperty("windows").GetString(), item.Properties.AcceleratorKey.Value);
                     checkedMenus++;
                 }
-                topLevel!.Patterns.ExpandCollapse.Pattern.Collapse();
+                logo.Patterns.ExpandCollapse.Pattern.Collapse();
             }
             Assert.Equal(menuItems.Length, checkedMenus);
             PressKey(VirtualKeyShort.ESCAPE);
@@ -133,7 +132,11 @@ public sealed partial class ShellAccessibilityTests
             WaitForElement(window, "MarkdownEditor", TimeSpan.FromSeconds(10)).Focus();
             PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_P);
             AutomationElement palette = WaitForElement(window, "CommandPaletteSearch", TimeSpan.FromSeconds(10));
-            Assert.Equal(LiteralHelp("CommandPaletteSearch"), palette.Properties.HelpText.Value);
+            // DS-10: the palette's field says what its current level does, so its help is
+            // bound, and the commands' words are the view model's.
+            Assert.Equal(
+                "Up and Down move selection. Home, End, Page Up and Page Down jump. Enter runs the selected command. Escape closes the palette.",
+                palette.Properties.HelpText.Value);
             AutomationElement results = WaitForElement(window, "CommandPaletteResults", TimeSpan.FromSeconds(10));
             JsonElement[] registered = rows.Values.Where(row => row.GetProperty("registered").GetBoolean()).ToArray();
             Assert.NotEmpty(registered);

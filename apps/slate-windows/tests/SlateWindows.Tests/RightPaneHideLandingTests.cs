@@ -48,6 +48,27 @@ public sealed class RightPaneHideLandingTests
         Assert.Single(changes);
     });
 
+    /// <summary>#1790: the splitter goes with the pane, and a drag leaves the keys on
+    /// it, so they land in the editor rather than going to the window.</summary>
+    [Fact]
+    public void HidingTheRightPaneUnderItsSplitterLandsTheKeysInTheEditorOnce() => RunSta(() =>
+    {
+        using var host = new ShownShell(("a.md", "Just a line of text.\n"));
+        host.Workspace.OpenPath("a.md");
+        host.Settle();
+        GridSplitter splitter = ShownShell.Descendants(host.Shell.WorkspaceColumns).OfType<GridSplitter>().Single(item => Grid.GetColumn(item) == 3);
+        Assert.True(splitter.Focus(), "premise: the splitter took no keys");
+        List<IInputElement> changes = host.RecordFocusChanges();
+
+        host.Workspace.ToggleRightPaneCommand.Execute(null);
+        PumpedDispatcher.Drain();
+
+        Assert.False(splitter.IsVisible);
+        Assert.IsNotType<MainWindow>(Keyboard.FocusedElement);
+        Assert.Equal(ShellRegionKind.Editor, ((IShellRegionHost)host.Shell).FocusedRegion());
+        Assert.Single(changes);
+    });
+
     /// <summary>The review's "Load more" owns a landing of its own — the row
     /// its page appended — which the hidden pane cannot take; the keys still
     /// land in the editor, once.</summary>

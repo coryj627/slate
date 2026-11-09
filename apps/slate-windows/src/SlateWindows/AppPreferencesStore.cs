@@ -39,7 +39,15 @@ internal sealed record AppPreferencesState(
     /// the vault's <c>.slate/prefs.json</c>.
     /// </remarks>
     [property: JsonPropertyName("canvasVerbosity")]
-    string CanvasVerbosity = "standard");
+    string CanvasVerbosity = "standard",
+    /// <summary>DS-10 (#1811): <see cref="ThemeChoice"/>'s stored value. An additive key,
+    /// which the Mac ignores (w8_spec.md).</summary>
+    [property: JsonPropertyName("theme")]
+    string Theme = ThemeChoice.UseWindowsSetting,
+    /// <summary>DS-11 (#1812): <see cref="SlateAccent"/>'s stored value, additive as the
+    /// theme is.</summary>
+    [property: JsonPropertyName("accentColor")]
+    string AccentColor = SlateAccent.Automatic);
 
 /// <summary>Bounded device-local storage for app-level preferences.</summary>
 internal sealed class AppPreferencesStore
@@ -106,6 +114,16 @@ internal sealed class AppPreferencesStore
             if (state.CanvasVerbosity is null)
             {
                 state = state with { CanvasVerbosity = "standard" };
+            }
+            string theme = ThemeChoice.Normalize(state.Theme);
+            if (state.Theme != theme)
+            {
+                state = state with { Theme = theme };
+            }
+            string accent = SlateAccent.Normalize(state.AccentColor);
+            if (state.AccentColor != accent)
+            {
+                state = state with { AccentColor = accent };
             }
             return state;
         }

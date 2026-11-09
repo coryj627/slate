@@ -27,11 +27,22 @@ internal sealed class ShownShell : IDisposable
         ?? throw new InvalidOperationException("IsVaultOpen is gone");
 
     public ShownShell(params (string Path, string Text)[] notes)
+        : this(null, notes)
+    {
+    }
+
+    /// <summary>With the answer an unsaved tab's close prompt gets, for a fact that
+    /// closes one.</summary>
+    public ShownShell(
+        Func<WorkspaceTabViewModel, WorkspaceDirtyNavigationDecision>? dirtyCloseDecision,
+        params (string Path, string Text)[] notes)
     {
         Assert.Null(Application.Current);
         foreach ((string path, string text) in notes)
         {
-            File.WriteAllText(Path.Combine(_fixture.Root, path), text);
+            string full = Path.Combine(_fixture.Root, path);
+            Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+            File.WriteAllText(full, text);
         }
 
         _session = VaultSession.OpenFilesystem(_fixture.Root);
@@ -41,7 +52,7 @@ internal sealed class ShownShell : IDisposable
         }
 
         Workspace = new WorkspaceViewModel(
-            _session, _fixture.Root, () => [], Announced.Add, startInteractionBackgroundWork: true);
+            _session, _fixture.Root, Array.Empty<string>, Announced.Add, dirtyCloseDecision: dirtyCloseDecision, startInteractionBackgroundWork: true);
         // Registers the pack: scheme and its application authority without
         // constructing an Application (TextBoxAccessibilityTests explains).
         System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(typeof(Application).TypeHandle);
@@ -67,6 +78,12 @@ internal sealed class ShownShell : IDisposable
         }
 
         _lifecycle = Assert.IsType<VaultLifecycleViewModel>(Shell.DataContext);
+        _lifecycle.ThemePreference = new ThemePreference(
+            new AppPreferencesStore(Path.Combine(_fixture.Root, "preferences.json")),
+            preference => ThemesApplied.Add(preference));
+        _lifecycle.AccentPreference = new AccentPreference(
+            new AppPreferencesStore(Path.Combine(_fixture.Root, "preferences.json")),
+            accent => AccentsApplied.Add(accent));
         _slot.SetValue(_lifecycle, Workspace);
         _open.SetValue(_lifecycle, true);
         Shell.Show();
@@ -89,6 +106,16 @@ internal sealed class ShownShell : IDisposable
 
     /// <summary>What the workspace has announced, in order.</summary>
     public List<A11yEvent> Announced { get; } = [];
+
+    /// <summary>The window's lifecycle, for a fact on what lives there rather than on the
+    /// workspace.</summary>
+    public VaultLifecycleViewModel Lifecycle => _lifecycle;
+
+    /// <summary>Each theme preference applied: there's no <see cref="ThemeManager"/> here.</summary>
+    public List<string> ThemesApplied { get; } = new();
+
+    /// <summary>The same for the accent.</summary>
+    public List<string> AccentsApplied { get; } = new();
 
     public void Settle()
     {

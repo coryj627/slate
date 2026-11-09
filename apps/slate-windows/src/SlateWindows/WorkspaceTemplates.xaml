@@ -7,19 +7,333 @@
                     xmlns:bases="clr-namespace:SlateWindows.Bases"
                     xmlns:canvas="clr-namespace:SlateWindows.Canvas"
                     xmlns:graph="clr-namespace:SlateWindows.Graph">
+    <!-- #1767: a control with a local style loses Fluent's and falls back to WPF's
+         classic template, whose colours are literals no resource key can change: a
+         list turns fixed white, a button pale. Every local ListBox, Button and
+         TreeViewItem style in the shell is based on one of these, and a test enforces
+         it. They live here, the first dictionary MainWindow merges, so both files
+         can reach them. -->
+    <!-- #1772: Fluent's focus ring is drawn outside its element, and a list clips a
+         row at its edges, so a row's ring is drawn inside the row. -->
+    <Style x:Key="Slate.RowFocusVisual">
+        <Setter Property="Control.Template">
+            <Setter.Value>
+                <ControlTemplate>
+                    <Border BorderBrush="{DynamicResource Slate.FocusBrush}"
+                            BorderThickness="2"
+                            CornerRadius="4"
+                            SnapsToDevicePixels="True" />
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <Style x:Key="Slate.PanelListBase" TargetType="ListBox">
+        <!-- With no border or padding, an empty list would have no rectangle. -->
+        <Setter Property="MinHeight" Value="1" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource Slate.TextBrush}" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ListBox">
+                    <Border Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            SnapsToDevicePixels="True">
+                        <ScrollViewer Focusable="False" Padding="{TemplateBinding Padding}">
+                            <ItemsPresenter />
+                        </ScrollViewer>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsGrouping" Value="True">
+                            <Setter Property="ScrollViewer.CanContentScroll" Value="False" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <!-- #1781: its template is in the theme layer, with the list row's. -->
+    <Style x:Key="Slate.ComboRowBase" TargetType="ComboBoxItem">
+        <Setter Property="Padding" Value="10,4" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource Slate.RowFocusVisual}" />
+        <Setter Property="Template" Value="{DynamicResource Slate.ComboRowTemplate}" />
+    </Style>
+    <Style x:Key="Slate.ButtonBase" TargetType="Button">
+        <Setter Property="Background" Value="{DynamicResource ButtonBackground}" />
+        <Setter Property="Foreground" Value="{DynamicResource ButtonForeground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource ButtonBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Padding" Value="11,5,11,6" />
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource DefaultControlFocusVisualStyle}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="4"
+                            SnapsToDevicePixels="True">
+                        <ContentPresenter Margin="{TemplateBinding Padding}"
+                                          HorizontalAlignment="Center"
+                                          VerticalAlignment="Center"
+                                          RecognizesAccessKey="True" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter Property="Background" Value="{DynamicResource ButtonBackgroundPointerOver}" />
+                            <Setter Property="BorderBrush" Value="{DynamicResource ButtonBorderBrushPointerOver}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter Property="Background" Value="{DynamicResource ButtonBackgroundPressed}" />
+                            <Setter Property="Foreground" Value="{DynamicResource ButtonForegroundPressed}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Background" Value="{DynamicResource ButtonBackgroundDisabled}" />
+                            <Setter Property="Foreground" Value="{DynamicResource ButtonForegroundDisabled}" />
+                            <Setter Property="BorderBrush" Value="{DynamicResource ButtonBorderBrushDisabled}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <!-- #1778: a split handle's local style drops Fluent, and WPF's classic thumb is a
+         pale bar. It's a gutter until it's used, and fills when it has the keys. -->
+    <ControlTemplate x:Key="Slate.SplitHandleTemplate" TargetType="Thumb">
+        <Border Background="{TemplateBinding Background}" />
+        <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Background" Value="{DynamicResource Slate.AccentIndicatorBrush}" />
+            </Trigger>
+            <Trigger Property="IsDragging" Value="True">
+                <Setter Property="Background" Value="{DynamicResource Slate.AccentIndicatorBrush}" />
+            </Trigger>
+            <Trigger Property="IsKeyboardFocused" Value="True">
+                <Setter Property="Background" Value="{DynamicResource Slate.FocusBrush}" />
+            </Trigger>
+        </ControlTemplate.Triggers>
+    </ControlTemplate>
+    <BooleanToVisibilityConverter x:Key="Slate.TreeBoolToVisibility" />
+    <!-- A separate key because the canvas outline's rows take it from code, which
+         can't base a style on one here. A folder's item includes its children, so the
+         focus ring is the row's own, not a focus visual around the whole subtree. -->
+    <ControlTemplate x:Key="Slate.TreeRowTemplate" TargetType="TreeViewItem">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="19" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <ToggleButton Width="19"
+                                      Focusable="False"
+                                      ClickMode="Press"
+                                      VerticalAlignment="Center"
+                                      IsChecked="{Binding IsExpanded, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"
+                                      Visibility="{Binding HasItems, RelativeSource={RelativeSource TemplatedParent}, Converter={StaticResource Slate.TreeBoolToVisibility}}">
+                            <ToggleButton.Template>
+                                <ControlTemplate TargetType="ToggleButton">
+                                    <Border Background="Transparent">
+                                        <Path HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              Data="M 0 0 L 4 4 L 0 8 Z"
+                                              Fill="{DynamicResource Slate.SecondaryTextBrush}"
+                                              RenderTransformOrigin="0.5,0.5">
+                                            <Path.RenderTransform>
+                                                <RotateTransform Angle="{Binding IsChecked, RelativeSource={RelativeSource TemplatedParent}, Converter={x:Static local:TreeChevron.Angle}}" />
+                                            </Path.RenderTransform>
+                                        </Path>
+                                    </Border>
+                                </ControlTemplate>
+                            </ToggleButton.Template>
+                        </ToggleButton>
+                        <Border Grid.Column="1"
+                                Padding="{TemplateBinding Padding}"
+                                CornerRadius="4"
+                                Background="{TemplateBinding Background}">
+                            <Grid>
+                                <!-- The pill: selection is a shape too, not colour alone. -->
+                                <Rectangle Width="3"
+                                           Height="16"
+                                           Margin="-6,0,0,0"
+                                           RadiusX="1.5"
+                                           RadiusY="1.5"
+                                           HorizontalAlignment="Left"
+                                           VerticalAlignment="Center"
+                                           Fill="{TemplateBinding BorderBrush}" />
+                                <ContentPresenter x:Name="PART_Header" ContentSource="Header" />
+                            </Grid>
+                        </Border>
+                        <Border Grid.Column="1"
+                                BorderBrush="{DynamicResource Slate.FocusBrush}"
+                                BorderThickness="2"
+                                CornerRadius="4"
+                                IsHitTestVisible="False"
+                                Visibility="{Binding IsKeyboardFocused, RelativeSource={RelativeSource TemplatedParent}, Converter={StaticResource Slate.TreeBoolToVisibility}}" />
+                        <ItemsPresenter Grid.Row="1"
+                                        Grid.Column="1"
+                                        Visibility="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}, Converter={StaticResource Slate.TreeBoolToVisibility}}" />
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <!-- DS-18: the design's surface hover, as panel rows have. -->
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter Property="Background" Value="{DynamicResource Slate.HoverOverlayBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter Property="Background" Value="{DynamicResource Slate.SelectedSurfaceBrush}" />
+                            <Setter Property="Foreground" Value="{DynamicResource Slate.SelectedTextBrush}" />
+                            <Setter Property="BorderBrush" Value="{DynamicResource Slate.AccentIndicatorBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.GrayTextBrushKey}}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+    </ControlTemplate>
+    <Style x:Key="Slate.TreeRowBase" TargetType="TreeViewItem">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource Slate.TextBrush}" />
+        <Setter Property="Padding" Value="8,2" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="Template" Value="{StaticResource Slate.TreeRowTemplate}" />
+    </Style>
+    <!-- DS-19: a launcher action, EmptyStateLauncher.prompt.md: a 32 row 320 wide, its label
+         on the left and its chord (Tag) on the right in secondary text. Whole, on Slate.ButtonBase.
+         The launcher caps the width, so in a narrow pane a row narrows, and where its label and
+         chord don't fit on one line the chord goes under the label (LauncherRowPanel) and the
+         row grows. Off under every modal surface, as the menus are: at once under a sheet,
+         and under Quick Open, search or the palette once the keys have left the row for the
+         overlay's field, which takes them in the turn it opens (#1690). IsModalSurfaceOpen
+         can change just before that, and off while it held the keys, the row said
+         "unavailable" in NVDA. -->
+    <Style x:Key="Slate.LauncherRowStyle" TargetType="Button" BasedOn="{StaticResource Slate.ButtonBase}">
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="MinHeight" Value="32" />
+        <Setter Property="Margin" Value="0,2" />
+        <Setter Property="Padding" Value="12,0" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource Slate.TextBrush}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="4"
+                            Padding="{TemplateBinding Padding}"
+                            SnapsToDevicePixels="True">
+                        <DockPanel VerticalAlignment="Center">
+                            <local:AutomationPresentationTextBlock DockPanel.Dock="Left"
+                                                                   Text="{Binding (local:LauncherRowPanel.Glyph), RelativeSource={RelativeSource TemplatedParent}}"
+                                                                   FontFamily="{DynamicResource SymbolThemeFontFamily}"
+                                                                   FontSize="16"
+                                                                   Margin="0,0,12,0"
+                                                                   VerticalAlignment="Center" />
+                            <local:LauncherRowPanel>
+                                <local:AutomationPresentationTextBlock Text="{TemplateBinding Content}"
+                                                                       TextWrapping="Wrap" />
+                                <local:AutomationPresentationTextBlock Text="{TemplateBinding Tag}"
+                                                                       TextWrapping="Wrap"
+                                                                       Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
+                            </local:LauncherRowPanel>
+                        </DockPanel>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter Property="Background" Value="{DynamicResource Slate.HoverOverlayBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter Property="Background" Value="{DynamicResource Slate.PressedOverlayBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Foreground" Value="{DynamicResource Slate.DisabledTextBrush}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+        <Style.Triggers>
+            <MultiDataTrigger>
+                <MultiDataTrigger.Conditions>
+                    <Condition Binding="{Binding IsModalSurfaceOpen, RelativeSource={RelativeSource AncestorType=Window}}" Value="True" />
+                    <Condition Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource Self}}" Value="False" />
+                </MultiDataTrigger.Conditions>
+                <Setter Property="IsEnabled" Value="False" />
+            </MultiDataTrigger>
+            <DataTrigger Binding="{Binding IsModalSheetOpen, RelativeSource={RelativeSource AncestorType=Window}}" Value="True">
+                <Setter Property="IsEnabled" Value="False" />
+            </DataTrigger>
+        </Style.Triggers>
+    </Style>
     <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
+    <local:InverseBooleanConverter x:Key="InverseBooleanConverter" />
     <local:InverseBooleanToVisibilityConverter x:Key="InverseBooleanToVisibilityConverter" />
     <local:AxisToOrientationConverter x:Key="AxisToOrientationConverter" />
     <local:NullToVisibilityConverter x:Key="NullToVisibilityConverter" />
     <local:PixelGridLengthConverter x:Key="PixelGridLengthConverter" />
+    <!-- What the rows leave: the tab strip, the rows' own header, the editor's margins, four of its 22px lines and the line under it, which is 280 here. CI measured 11 more, so it holds 40 in hand. -->
+    <local:CappedShareConverter x:Key="PropertyRowsMaxHeightConverter" Reserve="360" Floor="80" Cap="280" />
+    <!-- DS-15: both reserves hold the note header's 40 too. -->
+    <local:CappedShareConverter x:Key="PropertiesCardMaxHeightConverter" Reserve="190" Floor="120" Cap="100000" />
+    <local:CappedShareConverter x:Key="QuickOpenNameWidthConverter" Share="12.8572" />
+    <local:CappedShareConverter x:Key="DualPaneListMaxHeightConverter" Share="0.5" Cap="150" />
     <local:IsNotNullConverter x:Key="IsNotNullConverter" />
     <local:SidebarSortModeLabelConverter x:Key="SidebarSortModeLabelConverter" />
     <local:RecentVaultNameConverter x:Key="RecentVaultNameConverter" />
 
+    <!-- DS-18: a tag is a count row (CountListRow.prompt.md): its icon, its label, and its
+         count on the right in tabular figures. Selected, the label is semibold and the count
+         takes Slate.SelectedCaptionBrush. Everything here is presentation: the row's container
+         names it "{Segment}, {n} files", as before. -->
     <HierarchicalDataTemplate x:Key="SidebarTagTemplate"
                               DataType="{x:Type local:SidebarTagViewModel}"
                               ItemsSource="{Binding Children}">
-        <TextBlock Text="{Binding DisplayLabel}" />
+        <Grid MinHeight="32">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <local:AutomationPresentationTextBlock Text="&#xE8EC;"
+                                                   FontFamily="{DynamicResource SymbolThemeFontFamily}"
+                                                   FontSize="16"
+                                                   Margin="0,0,8,0"
+                                                   VerticalAlignment="Center" />
+            <local:AutomationPresentationTextBlock x:Name="Label"
+                                                   Grid.Column="1"
+                                                   Text="{Binding Segment}"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   VerticalAlignment="Center" />
+            <local:AutomationPresentationTextBlock x:Name="Count"
+                                                   Grid.Column="2"
+                                                   Margin="12,0,0,0"
+                                                   Text="{Binding FileCount, StringFormat={}{0:N0}}"
+                                                   FontSize="{DynamicResource Slate.FontSizeCaption}"
+                                                   LineHeight="{DynamicResource Slate.LineHeightCaption}"
+                                                   Typography.NumeralAlignment="Tabular"
+                                                   HorizontalAlignment="Right"
+                                                   VerticalAlignment="Center">
+                <local:AutomationPresentationTextBlock.Style>
+                    <Style TargetType="TextBlock">
+                        <Setter Property="Foreground" Value="{DynamicResource Slate.TertiaryTextBrush}" />
+                    </Style>
+                </local:AutomationPresentationTextBlock.Style>
+            </local:AutomationPresentationTextBlock>
+        </Grid>
+        <HierarchicalDataTemplate.Triggers>
+            <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=TreeViewItem}}" Value="True">
+                <Setter TargetName="Label" Property="FontWeight" Value="SemiBold" />
+                <Setter TargetName="Count" Property="Foreground" Value="{DynamicResource Slate.SelectedCaptionBrush}" />
+            </DataTrigger>
+        </HierarchicalDataTemplate.Triggers>
     </HierarchicalDataTemplate>
 
     <HierarchicalDataTemplate x:Key="FileTreeNodeTemplate"
@@ -41,31 +355,58 @@
                       IsChecked="{Binding IsBatchSelected}"
                       Visibility="{Binding IsBatchSelectable, Converter={StaticResource BooleanToVisibilityConverter}}"
                       AutomationProperties.Name="{Binding AutomationName, StringFormat=Select {0} for batch actions}" />
-            <StackPanel Grid.Column="1">
+            <StackPanel Grid.Column="1" VerticalAlignment="Center">
                 <TextBlock Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis" />
                 <TextBlock Text="{Binding MetadataText}"
-                           FontSize="11"
+                           FontSize="{DynamicResource Slate.FontSizeCaption}" FontFamily="{DynamicResource Slate.FontFamilySmall}" LineHeight="{DynamicResource Slate.LineHeightCaption}" LineStackingStrategy="BlockLineHeight"
                            Foreground="{DynamicResource Slate.SecondaryTextBrush}"
-                           TextTrimming="CharacterEllipsis" />
+                           TextTrimming="CharacterEllipsis">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Style.Triggers>
+                                <Trigger Property="Text" Value="">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                </Trigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
             </StackPanel>
         </Grid>
     </HierarchicalDataTemplate>
 
     <DataTemplate x:Key="WorkspaceTabHeaderTemplate"
                   DataType="{x:Type local:WorkspaceTabViewModel}">
-        <StackPanel Orientation="Horizontal">
-            <TextBlock Text="{Binding Title}" VerticalAlignment="Center" />
-            <TextBlock Text="{Binding DirtyMarker}"
-                       VerticalAlignment="Center"
-                       Visibility="{Binding IsDirty, Converter={StaticResource BooleanToVisibilityConverter}}"
-                       AutomationProperties.Name="Unsaved changes" />
-            <Button Margin="8,0,0,0"
-                    Padding="3,0"
-                    Content="×"
+        <!-- DS-8: icon at 8, label at 32, and a title that takes what's left, so a long one
+             is cut. A dock gives its children room in order, so the close button comes first,
+             and a narrow split takes from the title and the icon before it takes from that.
+             A reader walks visual order, which follows ZIndex, so that keeps what it's always
+             heard: the title, the dirty marker, then the close button. -->
+        <DockPanel>
+            <Button DockPanel.Dock="Right"
+                    Panel.ZIndex="3"
+                    Style="{DynamicResource Slate.TabCloseButtonStyle}"
+                    Content="&#xE711;"
                     AutomationProperties.Name="{Binding Title, StringFormat=Close {0}}"
                     Command="{Binding DataContext.Workspace.CloseTabCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                     CommandParameter="{Binding}" />
-        </StackPanel>
+            <TextBlock DockPanel.Dock="Right"
+                       Panel.ZIndex="2"
+                       Text="{Binding DirtyMarker}"
+                       VerticalAlignment="Center"
+                       Visibility="{Binding IsDirty, Converter={StaticResource BooleanToVisibilityConverter}}"
+                       AutomationProperties.Name="Unsaved changes" />
+            <local:AutomationPresentationTextBlock DockPanel.Dock="Left"
+                                                   Margin="8,0"
+                                                   VerticalAlignment="Center"
+                                                   FontFamily="{DynamicResource SymbolThemeFontFamily}"
+                                                   FontSize="16"
+                                                   Text="{Binding KindGlyph}" />
+            <TextBlock Panel.ZIndex="1"
+                       Text="{Binding Title}"
+                       VerticalAlignment="Center"
+                       TextTrimming="CharacterEllipsis" />
+        </DockPanel>
     </DataTemplate>
 
 <!-- ============================================================
@@ -78,8 +419,7 @@
      ============================================================ -->
     <DataTemplate x:Key="PropertyTextEditorTemplate"
                   DataType="{x:Type panels:PropertyRowViewModel}">
-        <TextBox MinWidth="160"
-                 Text="{Binding EditorText, UpdateSourceTrigger=PropertyChanged}"
+        <TextBox Text="{Binding EditorText, UpdateSourceTrigger=PropertyChanged}"
                  ToolTip="{Binding EditorTooltip}"
                  AutomationProperties.Name="{Binding AutomationName}">
             <TextBox.InputBindings>
@@ -115,9 +455,13 @@
 
     <DataTemplate x:Key="PropertyNumberEditorTemplate"
                   DataType="{x:Type panels:PropertyRowViewModel}">
-        <StackPanel Orientation="Horizontal">
-            <TextBox MinWidth="100"
-                     Text="{Binding EditorText, UpdateSourceTrigger=PropertyChanged}"
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBox Text="{Binding EditorText, UpdateSourceTrigger=PropertyChanged}"
                      AutomationProperties.Name="{Binding AutomationName}">
                 <TextBox.InputBindings>
                     <KeyBinding Key="Return" Command="{Binding CommitCommand}" />
@@ -127,17 +471,19 @@
                     <KeyBinding Key="Back" Modifiers="Control" Command="{Binding DeleteCommand}" />
                 </TextBox.InputBindings>
             </TextBox>
-            <RepeatButton Margin="4,0,0,0"
-                          Padding="6,0"
-                          Content="▲"
+            <RepeatButton Grid.Column="1"
+                          Margin="4,0,0,0"
+                          Style="{DynamicResource Slate.SubtleIconButtonStyle}"
+                          Content="&#xE70E;"
                           Command="{Binding StepUpCommand}"
                           AutomationProperties.Name="{Binding StepUpLabel}" />
-            <RepeatButton Margin="2,0,0,0"
-                          Padding="6,0"
-                          Content="▼"
+            <RepeatButton Grid.Column="2"
+                          Margin="2,0,0,0"
+                          Style="{DynamicResource Slate.SubtleIconButtonStyle}"
+                          Content="&#xE70D;"
                           Command="{Binding StepDownCommand}"
                           AutomationProperties.Name="{Binding StepDownLabel}" />
-        </StackPanel>
+        </Grid>
     </DataTemplate>
 
     <DataTemplate x:Key="PropertyBooleanEditorTemplate"
@@ -153,9 +499,12 @@
 
     <DataTemplate x:Key="PropertyWikilinkEditorTemplate"
                   DataType="{x:Type panels:PropertyRowViewModel}">
-        <StackPanel Orientation="Horizontal">
-            <TextBox MinWidth="160"
-                     Text="{Binding EditorText, UpdateSourceTrigger=PropertyChanged}"
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBox Text="{Binding EditorText, UpdateSourceTrigger=PropertyChanged}"
                      ToolTip="{Binding EditorTooltip}"
                      AutomationProperties.Name="{Binding AutomationName}">
                 <TextBox.InputBindings>
@@ -164,13 +513,14 @@
                     <KeyBinding Key="Back" Modifiers="Control" Command="{Binding DeleteCommand}" />
                 </TextBox.InputBindings>
             </TextBox>
-            <Button Margin="6,0,0,0"
+            <Button Grid.Column="1"
+                    Margin="6,0,0,0"
                     Padding="8,2"
                     Content="Pick…"
                     Command="{Binding DataContext.Workspace.PickWikilinkTargetCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                     CommandParameter="{Binding}"
                     AutomationProperties.Name="{Binding PickerLabel}" />
-        </StackPanel>
+        </Grid>
     </DataTemplate>
 
     <DataTemplate x:Key="PropertyListEditorTemplate"
@@ -186,12 +536,15 @@
                                       IsTabStop="False">
                 <local:LayoutItemsControl.ItemTemplate>
                     <DataTemplate DataType="{x:Type panels:PropertyListItemViewModel}">
-                        <StackPanel Margin="0,2" Orientation="Horizontal">
+                        <Grid Margin="0,2">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
                             <!-- Enter commits the ROW (contract 2 —
                                  lists have the same commit triggers
                                  as scalars), Esc reverts it. -->
-                            <TextBox MinWidth="140"
-                                     Text="{Binding Text, UpdateSourceTrigger=PropertyChanged}"
+                            <TextBox Text="{Binding Text, UpdateSourceTrigger=PropertyChanged}"
                                      AutomationProperties.Name="{Binding ItemLabel}">
                                 <TextBox.InputBindings>
                                     <KeyBinding Key="Return" Command="{Binding CommitCommand}" />
@@ -199,12 +552,13 @@
                                     <KeyBinding Key="Back" Modifiers="Control" Command="{Binding DeleteCommand}" />
                                 </TextBox.InputBindings>
                             </TextBox>
-                            <Button Margin="6,0,0,0"
+                            <Button Grid.Column="1"
+                                    Margin="6,0,0,0"
                                     Padding="8,2"
                                     Content="Remove"
                                     Command="{Binding RemoveCommand}"
                                     AutomationProperties.Name="{Binding RemoveLabel}" />
-                        </StackPanel>
+                        </Grid>
                     </DataTemplate>
                 </local:LayoutItemsControl.ItemTemplate>
             </local:LayoutItemsControl>
@@ -219,13 +573,15 @@
 
     <DataTemplate x:Key="PropertyRowTemplate"
                   DataType="{x:Type panels:PropertyRowViewModel}">
-        <Grid Margin="0,3">
+        <local:PropertyRowGrid Margin="0,3">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="150" />
+                <ColumnDefinition Width="*" MaxWidth="150" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
@@ -264,18 +620,18 @@
                     </Style>
                 </ContentControl.Style>
             </ContentControl>
-            <StackPanel Grid.Column="2"
-                        Margin="8,0,0,0"
-                        Orientation="Horizontal"
-                        VerticalAlignment="Center">
+            <WrapPanel Grid.Column="2"
+                       Margin="8,0,0,0"
+                       VerticalAlignment="Center">
                 <!-- Row traversal: editor → Save → Revert (dirty
                      only) → Delete → validation error (§2.3). -->
-                <Button Padding="8,2"
+                <Button Margin="0,0,6,2"
+                        Padding="8,2"
                         Content="Save"
                         Command="{Binding CommitCommand}"
                         AutomationProperties.Name="{Binding SaveLabel}">
                     <Button.Style>
-                        <Style TargetType="Button">
+                        <Style TargetType="Button" BasedOn="{StaticResource Slate.ButtonBase}">
                             <Setter Property="IsEnabled" Value="False" />
                             <Style.Triggers>
                                 <DataTrigger Binding="{Binding IsDirty}" Value="True">
@@ -288,20 +644,20 @@
                         </Style>
                     </Button.Style>
                 </Button>
-                <Button Margin="6,0,0,0"
+                <Button Margin="0,0,6,2"
                         Padding="8,2"
                         Content="Revert"
                         Command="{Binding RevertCommand}"
                         Visibility="{Binding IsDirty, Converter={StaticResource BooleanToVisibilityConverter}}"
                         AutomationProperties.Name="{Binding RevertLabel}"
                         AutomationProperties.HelpText="{Binding RevertHint}" />
-                <Button Margin="6,0,0,0"
+                <Button Margin="0,0,0,2"
                         Padding="8,2"
                         Content="Delete"
                         Command="{Binding DeleteCommand}"
                         AutomationProperties.Name="{Binding DeleteLabel}">
                     <Button.Style>
-                        <Style TargetType="Button">
+                        <Style TargetType="Button" BasedOn="{StaticResource Slate.ButtonBase}">
                             <Style.Triggers>
                                 <!-- Delete is disabled while the draft
                                      is dirty; the reason is exposed as
@@ -315,7 +671,7 @@
                         </Style>
                     </Button.Style>
                 </Button>
-            </StackPanel>
+            </WrapPanel>
             <TextBlock Grid.Row="1"
                        Grid.Column="1"
                        Grid.ColumnSpan="2"
@@ -325,7 +681,7 @@
                        TextWrapping="Wrap"
                        Visibility="{Binding ValidationError, Converter={StaticResource NullToVisibilityConverter}}"
                        AutomationProperties.Name="{Binding ValidationLabel}" />
-        </Grid>
+        </local:PropertyRowGrid>
     </DataTemplate>
 
     <DataTemplate x:Key="WorkspaceTabContentTemplate"
@@ -338,44 +694,67 @@
               KeyboardNavigation.DirectionalNavigation="Contained">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
+            <!-- DS-15 (#1816): the note's header, for Markdown tabs: its folders and name, the
+                 Source and Reading switch, and the note's actions. -->
+            <local:NoteHeaderView Grid.Row="0"
+                                  Visibility="{Binding IsMarkdown, Converter={StaticResource BooleanToVisibilityConverter}}" />
             <!-- W4-4 (#736): the in-note properties header — above the
                  editor host, OUTSIDE its scroll viewer (UIA reads
                  Properties before content, where frontmatter lives in
                  the file). Shown in editing and reading modes;
                  collapsed until the per-tab VM attaches (markdown tabs
                  only). -->
-            <Expander Grid.Row="0"
-                      Margin="12,8,12,0"
+            <!-- DS-5: the card scrolls past what leaves the note a few lines of its own.
+                 Those lines and the tab strip are text, so the room follows the text's size. -->
+            <ScrollViewer Grid.Row="1"
+                          Focusable="False"
+                          VerticalScrollBarVisibility="Auto"
+                          local:WheelChain.IsEnabled="True"
+                          Visibility="{Binding Properties, Converter={StaticResource NullToVisibilityConverter}}">
+                <ScrollViewer.MaxHeight>
+                    <MultiBinding Converter="{StaticResource PropertiesCardMaxHeightConverter}" FallbackValue="395">
+                        <Binding Path="ActualHeight" RelativeSource="{RelativeSource AncestorType=TabControl}" />
+                        <Binding Path="FontSize" RelativeSource="{RelativeSource AncestorType=TabControl}" />
+                    </MultiBinding>
+                </ScrollViewer.MaxHeight>
+            <Expander Margin="12,8,12,0"
                       IsExpanded="{Binding Properties.IsExpanded, Mode=TwoWay}"
                       Visibility="{Binding Properties, Converter={StaticResource NullToVisibilityConverter}}"
                       AutomationProperties.AutomationId="PropertiesHeader"
                       AutomationProperties.Name="{Binding Properties.HeaderGroupName}">
                 <Expander.Header>
-                    <DockPanel LastChildFill="False">
+                    <!-- #1778: wraps, because a half-width split pane can't fit all three.
+                         Tab order is unchanged, and the buttons now draw in that order. -->
+                    <WrapPanel>
                         <TextBlock VerticalAlignment="Center"
+                                   Margin="0,0,16,0"
                                    FontWeight="SemiBold"
+                                   TextWrapping="Wrap"
                                    Text="{Binding Properties.HeaderText}"
                                    AutomationProperties.HeadingLevel="Level2" />
-                        <Button DockPanel.Dock="Right"
-                                Margin="8,0,0,0"
+                        <Button Margin="0,2,8,2"
                                 MinHeight="28"
                                 Padding="8,2"
-                                Content="Rename property across the vault"
+                                AutomationProperties.Name="Rename property across the vault"
                                 AutomationProperties.AutomationId="PropertiesBulkRenameButton"
-                                Command="{Binding DataContext.Workspace.OpenBulkRenameSheetCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
-                        <Button DockPanel.Dock="Right"
-                                Margin="16,0,0,0"
+                                local:PaneActivation.ActivatesOwnPane="True"
+                                Command="{Binding DataContext.Workspace.OpenBulkRenameSheetCommand, RelativeSource={RelativeSource AncestorType=Window}}">
+                            <TextBlock Text="Rename property across the vault" TextWrapping="Wrap" />
+                        </Button>
+                        <Button Margin="0,2,8,2"
                                 MinHeight="28"
                                 Padding="8,2"
                                 Content="Add property"
                                 AutomationProperties.AutomationId="PropertiesAddButton"
                                 AutomationProperties.HelpText="Add a property to this note."
+                                local:PaneActivation.ActivatesOwnPane="True"
                                 Command="{Binding DataContext.Workspace.OpenAddPropertySheetCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
-                    </DockPanel>
+                    </WrapPanel>
                 </Expander.Header>
                 <StackPanel Margin="4,4,4,8">
                     <TextBlock Text="Loading properties"
@@ -386,15 +765,24 @@
                                TextWrapping="Wrap"
                                Visibility="{Binding Properties.LoadError, Converter={StaticResource NullToVisibilityConverter}}" />
                     <TextBlock Text="{Binding Properties.EmptyStateText}"
+                               TextWrapping="Wrap"
                                Foreground="{DynamicResource Slate.SecondaryTextBrush}"
                                Visibility="{Binding Properties.ShowEmptyState, Converter={StaticResource BooleanToVisibilityConverter}}"
                                AutomationProperties.Name="{Binding Properties.EmptyStateText}" />
                     <!-- Hugs small sets, scrolls internally past
-                         ~280px (mac parity). -->
-                    <ScrollViewer Focusable="False" MaxHeight="280"
+                         ~280px (mac parity), or past what a short pane
+                         leaves once the note has room for its text (#1795).
+                         The room is text, so it follows the text's size. -->
+                    <ScrollViewer Focusable="False"
                                   VerticalScrollBarVisibility="Auto"
                                   HorizontalScrollBarVisibility="Disabled"
                                   Visibility="{Binding Properties.HasRows, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <ScrollViewer.MaxHeight>
+                            <MultiBinding Converter="{StaticResource PropertyRowsMaxHeightConverter}" FallbackValue="280">
+                                <Binding Path="ActualHeight" RelativeSource="{RelativeSource AncestorType=TabControl}" />
+                                <Binding Path="FontSize" RelativeSource="{RelativeSource AncestorType=TabControl}" />
+                            </MultiBinding>
+                        </ScrollViewer.MaxHeight>
                         <!-- W7-7 PR 3 (#1246, R-4's one-stop rule): a row's
                              container is layout. As a plain ItemsControl
                              container NVDA read "SlateWindows.Panels.
@@ -402,7 +790,10 @@
                              named by the editor's label it was a second stop
                              reading the editor's own name; the editor and its
                              buttons already carry the key. -->
+                        <!-- #1795: the margin keeps Delete out from under the
+                             scroll bar, which draws over its content. -->
                         <local:LayoutItemsControl ItemsSource="{Binding Properties.Rows}"
+                                      Margin="0,0,12,0"
                                       ItemTemplate="{StaticResource PropertyRowTemplate}"
                                       Focusable="False"
                                       IsTabStop="False"
@@ -412,8 +803,9 @@
                     </ScrollViewer>
                 </StackPanel>
             </Expander>
+            </ScrollViewer>
             <local:SlateTextEditor x:Name="MarkdownEditor"
-                                   Grid.Row="1"
+                                   Grid.Row="2"
                                    Margin="12"
                                    Padding="12"
                                    Document="{Binding EditorDocument}"
@@ -424,8 +816,7 @@
                                    ShowLineNumbers="False"
                                    VerticalScrollBarVisibility="Auto"
                                    HorizontalScrollBarVisibility="Auto"
-                                   FontFamily="Consolas"
-                                   FontSize="{Binding EditorPreferences.FontSize}"
+                                   FontSize="{Binding EditorPreferences.EffectiveFontSize}"
                                    SpellingPreferences="{Binding EditorPreferences}"
                                    Background="{DynamicResource Slate.WindowBackgroundBrush}"
                                    Foreground="{DynamicResource Slate.TextBrush}"
@@ -455,39 +846,39 @@
                  on the persisted per-tab mode. Same grid cell — one of
                  the two is always collapsed, so UIA never sees both. -->
             <reading:ReadingSurface x:Name="ReadingSurface"
-                                    Grid.Row="1"
+                                    Grid.Row="2"
                                     Margin="12"
                                     Padding="12"
                                     Model="{Binding Reading}"
-                                    FontSize="{Binding EditorPreferences.FontSize}"
+                                    FontSize="{Binding EditorPreferences.EffectiveFontSize}"
                                     Visibility="{Binding IsReadingVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
             <!-- W4-6 (#738): the .base tab body — same shared cell,
                  collapsed unless this tab IS a base, so UIA only ever
                  sees the one live document surface. -->
-            <bases:BaseSurfaceView Grid.Row="1"
+            <bases:BaseSurfaceView Grid.Row="2"
                                    Tab="{Binding}"
                                    Model="{Binding Base}"
                                    Visibility="{Binding IsBaseVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
-            <bases:DashboardSurfaceView Grid.Row="1"
+            <bases:DashboardSurfaceView Grid.Row="2"
                                         Model="{Binding Dashboard}"
                                         Visibility="{Binding IsDashboardVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
             <!-- W6-1 PR A (#745): the .canvas tab body — same shared
                  cell and the same visibility discipline, so UIA only
                  ever sees the one live document surface. -->
-            <canvas:CanvasSurfaceView Grid.Row="1"
+            <canvas:CanvasSurfaceView Grid.Row="2"
                                       Model="{Binding Canvas}"
                                       Visibility="{Binding IsCanvasVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
             <!-- W6-2 PR A (#746): the graph tab body — the placeholder
                  retired for Graph; the same shared cell and visibility
                  discipline as the canvas. -->
-            <graph:GraphSurfaceView Grid.Row="1"
+            <graph:GraphSurfaceView Grid.Row="2"
                                     Model="{Binding Graph}"
                                     Visibility="{Binding IsGraphVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
             <!-- Keep the modal interaction surface in the tab's presentation
                  source so UIA ownership is stable across providers. The
                  transparent layer intentionally makes Close/Escape the only
                  dismissal paths and prevents pointer input reaching the editor. -->
-            <local:AutomationLandmarkGrid Grid.RowSpan="4"
+            <local:AutomationLandmarkGrid Grid.RowSpan="5"
                                           Panel.ZIndex="100"
                                           Background="Transparent"
                                           Visibility="{Binding EditorInteractions.IsPopoverOpen, Converter={StaticResource BooleanToVisibilityConverter}, FallbackValue=Collapsed}"
@@ -514,8 +905,7 @@
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
                         <TextBlock Text="{Binding EditorInteractions.PopoverTitle}"
-                                   FontSize="16"
-                                   FontWeight="SemiBold"
+                                   Style="{DynamicResource Slate.BodyStrongTextBlockStyle}"
                                    AutomationProperties.HeadingLevel="Level2" />
                         <StackPanel Grid.Row="1" Margin="0,10,0,10">
                             <!-- W7-7 (#1251, R-8): not a focus stop of its own. Its
@@ -555,32 +945,31 @@
                                          AutomationProperties.Name="Preview content" />
                             </StackPanel>
                         </StackPanel>
-                        <StackPanel Grid.Row="2"
-                                    HorizontalAlignment="Right"
-                                    Orientation="Horizontal">
-                            <Button Margin="0,0,8,0"
+                        <WrapPanel Grid.Row="2"
+                                   HorizontalAlignment="Right">
+                            <Button Margin="0,0,8,4"
                                     Content="Open source"
                                     KeyboardNavigation.TabIndex="1"
                                     AutomationProperties.AutomationId="EditorPopoverOpenSource"
                                     Command="{Binding EditorInteractions.OpenPopoverSourceCommand}"
                                     Visibility="{Binding EditorInteractions.CanOpenPopoverSource, Converter={StaticResource BooleanToVisibilityConverter}}" />
-                            <Button Content="Close"
+                            <Button Margin="0,0,0,4"
+                                    Content="Close"
                                     KeyboardNavigation.TabIndex="0"
                                     AutomationProperties.AutomationId="EditorPopoverClose"
                                     Command="{Binding EditorInteractions.ClosePopoverCommand}" />
-                        </StackPanel>
+                        </WrapPanel>
                     </Grid>
                     </Border>
                 </local:EditorInteractionPopoverHost>
             </local:AutomationLandmarkGrid>
-            <StackPanel Grid.Row="1"
+            <StackPanel Grid.Row="2"
                         Margin="32"
                         HorizontalAlignment="Center"
                         VerticalAlignment="Center"
                         Visibility="{Binding IsPlaceholder, Converter={StaticResource BooleanToVisibilityConverter}}">
                 <TextBlock Text="{Binding KindLabel}"
-                           FontSize="22"
-                           FontWeight="SemiBold"
+                           Style="{DynamicResource Slate.SubtitleTextBlockStyle}"
                            HorizontalAlignment="Center"
                            AutomationProperties.HeadingLevel="Level2" />
                 <TextBlock Margin="0,8,0,0"
@@ -594,11 +983,11 @@
                  never their child (the editor's Document peer keeps its atomic
                  text, w_c_matrix row 17); its Escape never reaches the text and
                  the text's never reaches it. -->
-            <local:FindInNoteBar Grid.Row="2"
+            <local:FindInNoteBar Grid.Row="3"
                                  DataContext="{Binding FindInNote}"
                                  Editor="{Binding ElementName=MarkdownEditor}"
                                  ReadingSurface="{Binding ElementName=ReadingSurface}" />
-            <TextBlock Grid.Row="3"
+            <TextBlock Grid.Row="4"
                        Margin="12,0,12,8"
                        Text="{Binding Status}"
                        Foreground="{DynamicResource Slate.SecondaryTextBrush}"
@@ -627,7 +1016,10 @@
                  menu bar. Focusable and IsTabStop follow HasItems, so focus
                  requests fail closed and the window's fallback seats the
                  Files tree instead. -->
+            <Grid>
             <TabControl ItemsSource="{Binding Tabs}"
+                        Background="{DynamicResource Slate.SurfaceBrush}"
+                        BorderBrush="{DynamicResource Slate.SubtleBorderBrush}"
                         SelectedItem="{Binding ActiveTab, Mode=TwoWay}"
                         Focusable="{Binding HasItems, RelativeSource={RelativeSource Self}}"
                         IsTabStop="{Binding HasItems, RelativeSource={RelativeSource Self}}"
@@ -645,6 +1037,46 @@
                         <MenuItem Header="Close Pane" Command="{Binding Owner.ClosePaneCommand}" />
                     </ContextMenu>
                 </TabControl.ContextMenu>
+                <!-- DS-8: the strip is 36: 4 above the tabs, 32 of tab, and a foot that overlaps
+                     the rule under it by one, so the open tab, drawn over the rule, joins the
+                     note. The strip shows the window behind it, and an empty pane has none. -->
+                <TabControl.Template>
+                    <ControlTemplate TargetType="TabControl">
+                        <Grid KeyboardNavigation.TabNavigation="Local" SnapsToDevicePixels="True">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <local:TabStripPanel x:Name="HeaderPanel"
+                                      Grid.Row="0"
+                                      MinHeight="32"
+                                      Margin="8,4,8,-1"
+                                      Panel.ZIndex="1"
+                                      Background="Transparent"
+                                      IsItemsHost="True"
+                                      KeyboardNavigation.TabIndex="1" />
+                            <Border Grid.Row="1"
+                                    Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="0,1,0,0"
+                                    KeyboardNavigation.TabIndex="2"
+                                    KeyboardNavigation.TabNavigation="Local"
+                                    KeyboardNavigation.DirectionalNavigation="Contained">
+                                <ContentPresenter x:Name="PART_SelectedContentHost"
+                                                  ContentSource="SelectedContent"
+                                                  Margin="{TemplateBinding Padding}"
+                                                  HorizontalAlignment="Stretch"
+                                                  VerticalAlignment="Stretch"
+                                                  TextElement.Foreground="{TemplateBinding Foreground}" />
+                            </Border>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="HasItems" Value="False">
+                                <Setter TargetName="HeaderPanel" Property="Visibility" Value="Collapsed" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </TabControl.Template>
                 <TabControl.ItemContainerStyle>
                     <Style TargetType="TabItem">
                         <!-- W7-7 PR 3 (#1246, R-4; codex PR 3 round 5): the name
@@ -656,6 +1088,91 @@
                              only the status. -->
                         <Setter Property="AutomationProperties.Name" Value="{Binding RelativeSource={RelativeSource Self}, Converter={x:Static local:SiblingNames.Converter}}" />
                         <Setter Property="AutomationProperties.ItemStatus" Value="Saved" />
+                        <!-- #1758: WPF's classic TabItem template hard-codes a white
+                             selected tab, so this style has to bring its own. -->
+                        <Setter Property="Foreground" Value="{DynamicResource Slate.SecondaryTextBrush}" />
+                        <Setter Property="Background" Value="Transparent" />
+                        <Setter Property="BorderBrush" Value="Transparent" />
+                        <Setter Property="FocusVisualStyle" Value="{DynamicResource DefaultControlFocusVisualStyle}" />
+                        <!-- DS-8: 32 high and up to 240 wide. The floor of 100 is the strip's
+                             panel's, because a narrow split has to be able to lower it. -->
+                        <Setter Property="MinHeight" Value="32" />
+                        <Setter Property="MaxWidth" Value="240" />
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="TabItem">
+                                    <Grid>
+                                        <Border x:Name="Chrome"
+                                                CornerRadius="8,8,0,0"
+                                                Background="{TemplateBinding Background}"
+                                                BorderBrush="{TemplateBinding BorderBrush}"
+                                                BorderThickness="1,1,1,0" />
+                                        <!-- Beside the border, not in it, so its top edge doesn't
+                                             add to the close button's 32. -->
+                                        <ContentPresenter ContentSource="Header"
+                                                          RecognizesAccessKey="True"
+                                                          HorizontalAlignment="Stretch"
+                                                          VerticalAlignment="Center" />
+                                        <!-- On the left edge, overlapping the neighbour by one: the open
+                                             tab is drawn above its neighbours, so it covers the ones
+                                             beside it, and a row's first tab has nothing to its left. -->
+                                        <Border x:Name="Divider"
+                                                Width="1"
+                                                Height="16"
+                                                Margin="-1,0,0,0"
+                                                HorizontalAlignment="Left"
+                                                VerticalAlignment="Center"
+                                                Background="{DynamicResource Slate.SubtleBorderBrush}" />
+                                        <!-- Selection is a shape too, not colour and tone alone. -->
+                                        <Border x:Name="Indicator"
+                                                Height="2"
+                                                Margin="8,0"
+                                                VerticalAlignment="Top"
+                                                Background="{DynamicResource Slate.AccentIndicatorBrush}"
+                                                Visibility="Collapsed" />
+                                        <Path x:Name="FlareLeft"
+                                              Width="4"
+                                              Height="4"
+                                              Margin="-4,0,0,0"
+                                              HorizontalAlignment="Left"
+                                              VerticalAlignment="Bottom"
+                                              Data="M4,0 L4,4 L0,4 A4,4 0 0 0 4,0 Z"
+                                              Fill="{DynamicResource Slate.SurfaceBrush}"
+                                              IsHitTestVisible="False"
+                                              Visibility="Collapsed" />
+                                        <Path x:Name="FlareRight"
+                                              Width="4"
+                                              Height="4"
+                                              Margin="0,0,-4,0"
+                                              HorizontalAlignment="Right"
+                                              VerticalAlignment="Bottom"
+                                              Data="M0,0 L0,4 L4,4 A4,4 0 0 1 0,0 Z"
+                                              Fill="{DynamicResource Slate.SurfaceBrush}"
+                                              IsHitTestVisible="False"
+                                              Visibility="Collapsed" />
+                                    </Grid>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="local:TabStripPanel.IsRowStart" Value="True">
+                                            <Setter TargetName="Divider" Property="Visibility" Value="Collapsed" />
+                                        </Trigger>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter Property="Background" Value="{DynamicResource Slate.HoverOverlayBrush}" />
+                                            <Setter TargetName="Divider" Property="Visibility" Value="Collapsed" />
+                                        </Trigger>
+                                        <Trigger Property="IsSelected" Value="True">
+                                            <Setter Property="Panel.ZIndex" Value="1" />
+                                            <Setter Property="Background" Value="{DynamicResource Slate.SurfaceBrush}" />
+                                            <Setter Property="Foreground" Value="{DynamicResource Slate.TextBrush}" />
+                                            <Setter Property="BorderBrush" Value="{DynamicResource Slate.SubtleBorderBrush}" />
+                                            <Setter TargetName="Divider" Property="Visibility" Value="Collapsed" />
+                                            <Setter TargetName="Indicator" Property="Visibility" Value="Visible" />
+                                            <Setter TargetName="FlareLeft" Property="Visibility" Value="Visible" />
+                                            <Setter TargetName="FlareRight" Property="Visibility" Value="Visible" />
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
                         <Style.Triggers>
                             <DataTrigger Binding="{Binding IsDirty}" Value="True">
                                 <Setter Property="AutomationProperties.ItemStatus"
@@ -677,6 +1194,79 @@
                     </Style>
                 </TabControl.ItemContainerStyle>
             </TabControl>
+            <!-- DS-19 (EmptyStateLauncher.prompt.md): with no tabs, the logo, "No note open" and
+                 the next actions, each with its chord from the table, as the menus show it. The
+                 logo and the title stay out of the tree: a reader hears the empty pane's own line
+                 when they land on it (#1774). The actions are Tab stops after the pane's stop,
+                 and count as the empty pane for F6 (MainWindow.ShellRegions.cs). -->
+            <!-- In a short pane at a large text size the launcher is taller than the pane, so it
+                 scrolls, and an action brought the keys scrolls into view. Not a stop itself. -->
+            <local:AutomationPresentationScrollViewer x:Name="EmptyPaneLauncherScroll"
+                          Focusable="False"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          local:WheelChain.IsEnabled="True"
+                          Visibility="{Binding Visibility, ElementName=EmptyPaneLauncher}">
+            <StackPanel x:Name="EmptyPaneLauncher"
+                        Margin="24"
+                        MaxWidth="320"
+                        HorizontalAlignment="Stretch"
+                        VerticalAlignment="Center">
+                <StackPanel.Style>
+                    <Style TargetType="StackPanel">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding Tabs.Count}" Value="0">
+                                <Setter Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </StackPanel.Style>
+                <!-- An image brush, not an Image: a brush has no peer. -->
+                <Border Width="48" Height="48" Margin="0,0,0,16" HorizontalAlignment="Center">
+                    <Border.Background>
+                        <!-- #1862: decoded at 144 (48 at 300%), as the app menu's logo is at
+                             64: the PNG is 1800 square, about 13 MB a pane decoded whole. -->
+                        <ImageBrush Stretch="Uniform">
+                            <ImageBrush.ImageSource>
+                                <BitmapImage UriSource="pack://application:,,,/SlateWindows;component/Assets/slate-gold.png" DecodePixelWidth="144" />
+                            </ImageBrush.ImageSource>
+                        </ImageBrush>
+                    </Border.Background>
+                </Border>
+                <local:AutomationPresentationTextBlock Text="No note open"
+                                                       Margin="0,0,0,16"
+                                                       HorizontalAlignment="Center"
+                                                       TextAlignment="Center"
+                                                       TextWrapping="Wrap"
+                                                       Style="{DynamicResource Slate.SubtitleTextBlockStyle}" />
+                <Button Style="{StaticResource Slate.LauncherRowStyle}"
+                        Content="Quick Open…"
+                        local:LauncherRowPanel.Glyph="&#xE8E5;"
+                        Tag="{cmd:ChordText slate.workspace.quickOpen}"
+                        AutomationProperties.AutomationId="EmptyPaneQuickOpen"
+                        AutomationProperties.Name="Quick Open…"
+                        AutomationProperties.AcceleratorKey="{Binding Tag, RelativeSource={RelativeSource Self}}"
+                        Command="{Binding DataContext.QuickSwitcher.OpenCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
+                <Button Style="{StaticResource Slate.LauncherRowStyle}"
+                        Content="New Note from Template…"
+                        local:LauncherRowPanel.Glyph="&#xE710;"
+                        Tag="{cmd:ChordText slate.file.newFromTemplate}"
+                        AutomationProperties.AutomationId="EmptyPaneNewFromTemplate"
+                        AutomationProperties.Name="New Note from Template…"
+                        AutomationProperties.AcceleratorKey="{Binding Tag, RelativeSource={RelativeSource Self}}"
+                        Command="{Binding DataContext.Workspace.NewFromTemplateCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
+                <Button Style="{StaticResource Slate.LauncherRowStyle}"
+                        Content="Search Vault…"
+                        local:LauncherRowPanel.Glyph="&#xE721;"
+                        Tag="{cmd:ChordText slate.view.toggleSearch}"
+                        AutomationProperties.AutomationId="EmptyPaneSearchVault"
+                        AutomationProperties.Name="Search Vault…"
+                        AutomationProperties.AcceleratorKey="{Binding Tag, RelativeSource={RelativeSource Self}}"
+                        Command="{Binding DataContext.ToggleSearchCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
+            </StackPanel>
+            </local:AutomationPresentationScrollViewer>
+            </Grid>
         </local:AutomationLandmarkBorder>
     </DataTemplate>
 
@@ -705,6 +1295,9 @@
                    AutomationProperties.HelpText="{x:Static cmd:NavigationHelp.HorizontalSplitter}">
                 <Thumb.Style>
                     <Style TargetType="Thumb">
+                        <Setter Property="Background" Value="Transparent" />
+                        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                        <Setter Property="Template" Value="{StaticResource Slate.SplitHandleTemplate}" />
                         <Setter Property="Visibility" Value="Collapsed" />
                         <Style.Triggers>
                             <DataTrigger Binding="{Binding DataContext.Axis, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
@@ -731,6 +1324,9 @@
                    AutomationProperties.HelpText="{x:Static cmd:NavigationHelp.VerticalSplitter}">
                 <Thumb.Style>
                     <Style TargetType="Thumb">
+                        <Setter Property="Background" Value="Transparent" />
+                        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                        <Setter Property="Template" Value="{StaticResource Slate.SplitHandleTemplate}" />
                         <Setter Property="Visibility" Value="Collapsed" />
                         <Style.Triggers>
                             <DataTrigger Binding="{Binding DataContext.Axis, RelativeSource={RelativeSource AncestorType=ItemsControl}}"

@@ -810,6 +810,7 @@ public sealed class ChordTableTests
             [ChordScope.Graph] = GraphChords(),
             [ChordScope.FilesTree] = FilesTreeChords(),
             [ChordScope.SidebarFilter] = KeyRouteChords("SidebarFilterTextBox_PreviewKeyDown"),
+            [ChordScope.TabStrip] = KeyRouteChords("TabStrip_PreviewKeyDown"),
             [ChordScope.FindInNote] = FindInNoteChords(),
         };
 

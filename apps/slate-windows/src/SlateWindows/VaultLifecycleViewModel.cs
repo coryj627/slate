@@ -400,7 +400,13 @@ internal sealed partial class VaultLifecycleViewModel
     public string VaultDisplayName
     {
         get => _vaultDisplayName;
-        private set => SetField(ref _vaultDisplayName, value);
+        private set
+        {
+            if (SetField(ref _vaultDisplayName, value))
+            {
+                OnPropertyChanged(nameof(WindowTitle));
+            }
+        }
     }
 
     public string VaultPath
@@ -418,20 +424,37 @@ internal sealed partial class VaultLifecycleViewModel
     public double ProgressMaximum
     {
         get => _progressMaximum;
-        private set => SetField(ref _progressMaximum, value);
+        private set
+        {
+            SetField(ref _progressMaximum, value);
+            OnPropertyChanged(nameof(IsProgressActive));
+        }
     }
 
     public double ProgressValue
     {
         get => _progressValue;
-        private set => SetField(ref _progressValue, value);
+        private set
+        {
+            SetField(ref _progressValue, value);
+            OnPropertyChanged(nameof(IsProgressActive));
+        }
     }
 
     public bool IsProgressIndeterminate
     {
         get => _isProgressIndeterminate;
-        private set => SetField(ref _isProgressIndeterminate, value);
+        private set
+        {
+            SetField(ref _isProgressIndeterminate, value);
+            OnPropertyChanged(nameof(IsProgressActive));
+        }
     }
+
+    /// <summary>#1773: whether the status bar's progress is showing work now, rather
+    /// than nothing yet or how the last scan ended.</summary>
+    public bool IsProgressActive =>
+        _isProgressIndeterminate || (_progressValue > 0 && _progressValue < _progressMaximum);
 
     public FilesSidebarViewModel? FileSidebar
     {
@@ -442,7 +465,14 @@ internal sealed partial class VaultLifecycleViewModel
     public WorkspaceViewModel? Workspace
     {
         get => _workspace;
-        private set => SetField(ref _workspace, value);
+        private set
+        {
+            WorkspaceViewModel? previous = _workspace;
+            if (SetField(ref _workspace, value))
+            {
+                ObserveWorkspaceTitle(previous, value);
+            }
+        }
     }
 
     public QuickSwitcherViewModel? QuickSwitcher
@@ -552,6 +582,9 @@ internal sealed partial class VaultLifecycleViewModel
         // the user cancels, an import in flight — left the vault open with
         // the palette already gone.
         _palette?.Dismiss();
+        // DS-10: Settings doesn't hold the keys through a transition either. A theme applies
+        // at once, so closing it loses nothing, and the welcome view is about to take focus.
+        CloseSettings();
         // The W5-1 vault-transition precedent, extended to search: a
         // direct A→B open bypasses CloseVault, and mac routes exactly
         // this path through closeSearchOverlay too (AppState.swift:9761,
@@ -786,6 +819,7 @@ internal sealed partial class VaultLifecycleViewModel
         // next vault open auto-presents it. Dismissed BEFORE the session
         // goes away, so the overlay cannot survive the gap.
         _palette?.Dismiss();
+        CloseSettings();
         // Search joins the same teardown (mac closeVault,
         // AppState.swift:11016-11017): overlay closed, retained query
         // cleared, while the session still exists.

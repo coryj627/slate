@@ -539,6 +539,16 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         SidebarWriteJournal? writeJournal = null,
         Func<Action, CancellationToken, Task>? pinPruneWorker = null)
     {
+        // DS-17: the Sort and group button's name says the order; every write
+        // of either raises its own change.
+        PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName is nameof(SortMode) or nameof(GroupByDate))
+            {
+                OnPropertyChanged(nameof(SortButtonName));
+            }
+        };
+
         _session = session;
         _announce = announce;
         _copyText = copyText ?? (_ => { });
@@ -598,9 +608,9 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         // one change — and is available exactly while a filter or tag scope
         // is active: the Clear filter button's enabled state and Escape's
         // route both read it (codex PR 2 round 4).
-        ClearFilterCommand = new RelayCommand(_ => ClearFilter(), _ => IsFilterActive);
-        ToggleTagsCommand = new RelayCommand(_ => ShowTags = !ShowTags, _ => true);
-        ToggleDualPaneCommand = new RelayCommand(_ => IsDualPaneEnabled = !IsDualPaneEnabled, _ => true);
+        ClearFilterCommand = new RelayCommand(_ => InThePane(ClearFilter), _ => IsFilterActive);
+        ToggleTagsCommand = new RelayCommand(_ => InThePane(() => ShowTags = !ShowTags), _ => true);
+        ToggleDualPaneCommand = new RelayCommand(_ => InThePane(() => IsDualPaneEnabled = !IsDualPaneEnabled), _ => true);
         AddTagCommand = new RelayCommand(_ => EditTag(add: true), _ => !IsImporting && !IsTrashing && BatchSelectionCount > 0 && TagInput.Length > 0);
         RemoveTagCommand = new RelayCommand(_ => EditTag(add: false), _ => !IsImporting && !IsTrashing && BatchSelectionCount > 0 && TagInput.Length > 0);
         // W5-4 F1/F2: the creates are auto-named and selection-
@@ -643,12 +653,12 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             _ => !IsImporting && !IsTrashing
                 && (BatchSelectionCount > 0
                     || SelectedNode is { IsPlaceholder: false, IsGroupHeader: false }));
-        PinCommand = new RelayCommand(_ => PinSelected(), _ => SelectedNode is { IsDirectory: false });
-        UnpinCommand = new RelayCommand(_ => UnpinSelected(), _ => SelectedNode is { IsDirectory: false });
-        UnpinAllCommand = new RelayCommand(_ => UnpinAllInFolder(), _ => _pinned.Count > 0);
-        AddShortcutCommand = new RelayCommand(_ => AddShortcut(), _ => SelectedNode is { IsPlaceholder: false, IsGroupHeader: false });
-        RemoveShortcutCommand = new RelayCommand(_ => RemoveShortcut(), _ => SelectedShortcut is not null);
-        UseVaultDefaultSortCommand = new RelayCommand(_ => UseVaultDefaultSort(), _ => SortMode != SidebarSortMode.NameAscending || GroupByDate);
+        PinCommand = new RelayCommand(_ => InThePane(PinSelected), _ => SelectedNode is { IsDirectory: false });
+        UnpinCommand = new RelayCommand(_ => InThePane(UnpinSelected), _ => SelectedNode is { IsDirectory: false });
+        UnpinAllCommand = new RelayCommand(_ => InThePane(UnpinAllInFolder), _ => _pinned.Count > 0);
+        AddShortcutCommand = new RelayCommand(_ => InThePane(AddShortcut), _ => SelectedNode is { IsPlaceholder: false, IsGroupHeader: false });
+        RemoveShortcutCommand = new RelayCommand(_ => InThePane(RemoveShortcut), _ => SelectedShortcut is not null);
+        UseVaultDefaultSortCommand = new RelayCommand(_ => InThePane(UseVaultDefaultSort), _ => SortMode != SidebarSortMode.NameAscending || GroupByDate);
         OpenCurrentCommand = new RelayCommand(_ => OpenSelected(WorkspaceOpenTarget.CurrentTab), _ => CanOpenSelected());
         OpenNewTabCommand = new RelayCommand(_ => OpenSelected(WorkspaceOpenTarget.NewTab), _ => CanOpenSelected());
         OpenSplitCommand = new RelayCommand(_ => OpenSelected(WorkspaceOpenTarget.SplitRight), _ => CanOpenSelected());
@@ -663,10 +673,14 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
             () => StructuralMutationBlocked);
         CancelImportCommand = new RelayCommand(_ => CancelImport(), _ => IsImporting);
         CancelTrashCommand = new RelayCommand(_ => CancelTrash(), _ => CanCancelTrash);
-        ClearRecentsCommand = new RelayCommand(_ => ClearRecents(), _ => _recents.Count > 0);
-        CollapseAllCommand = new RelayCommand(_ => CollapseAll(), _ => true);
+        ClearRecentsCommand = new RelayCommand(_ => InThePane(ClearRecents), _ => _recents.Count > 0);
+        CollapseAllCommand = new RelayCommand(_ => InThePane(CollapseAll), _ => true);
         ExpandLoadedCommand = new AsyncRelayCommand(
-            _ => _expandLoadedCompletion = ExpandLoadedAsync(),
+            _ =>
+            {
+                FilesPaneNeeded?.Invoke();
+                return _expandLoadedCompletion = ExpandLoadedAsync();
+            },
             () => true);
         HistoryBackCommand = new RelayCommand(_ => History(-1), _ => _historyIndex > 0);
         HistoryForwardCommand = new RelayCommand(_ => History(1), _ => _historyIndex >= 0 && _historyIndex < _history.Count - 1);
@@ -691,6 +705,21 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     public ObservableCollection<SidebarTagViewModel> Tags { get; } = [];
     public ObservableCollection<SidebarShortcutViewModel> Shortcuts { get; } = [];
     public IReadOnlyList<SidebarSortMode> SortModes { get; } = Enum.GetValues<SidebarSortMode>();
+
+    /// <summary>DS-17 (DSD12): the Sort and group button's name, from core, with the
+    /// value the combo box said on focus: "Sort and group, Name (A to Z)".</summary>
+    public string SortButtonName => SlateUniffiMethods.SidebarSortButtonName(ToCore(SortMode), GroupByDate);
+
+    /// <summary>The order as core knows it.</summary>
+    internal static SidebarSortOrder ToCore(SidebarSortMode mode) => mode switch
+    {
+        SidebarSortMode.NameDescending => SidebarSortOrder.NameDescending,
+        SidebarSortMode.ModifiedNewest => SidebarSortOrder.ModifiedNewest,
+        SidebarSortMode.ModifiedOldest => SidebarSortOrder.ModifiedOldest,
+        SidebarSortMode.CreatedNewest => SidebarSortOrder.CreatedNewest,
+        SidebarSortMode.CreatedOldest => SidebarSortOrder.CreatedOldest,
+        _ => SidebarSortOrder.NameAscending,
+    };
 
     public SidebarSortMode SortMode
     {
@@ -1026,6 +1055,17 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         }
 
         Refresh(reportCount: true);
+    }
+
+    /// <summary>DS-7: shows a hidden Files pane, for a command whose result is only
+    /// there: from the palette or a menu it would otherwise do something nobody can see.
+    /// The window installs it.</summary>
+    internal Action? FilesPaneNeeded { get; set; }
+
+    private void InThePane(Action run)
+    {
+        FilesPaneNeeded?.Invoke();
+        run();
     }
 
     public ICommand RetrySettingsCommand { get; }

@@ -85,7 +85,9 @@ public partial class MainWindow : IShellRegionHost
             // (final review, #1240): with tabs open it is just the content
             // pane's own chrome, and calling that EmptyEditor made the ring
             // believe the tabless shape while a note was open.
-            if (ReferenceEquals(focused, ContentPaneBorder)
+            // DS-19: the launcher's actions are the empty pane too, so F6 from one
+            // moves on rather than re-landing on the pane.
+            if ((ReferenceEquals(focused, ContentPaneBorder) || IsInEmptyPaneLauncher(focused))
                 && _viewModel.Workspace is WorkspaceViewModel { } w
                 && w.ActiveGroup.Tabs.Count == 0)
             {
@@ -99,7 +101,7 @@ public partial class MainWindow : IShellRegionHost
 
         if (IsWithin(focused, RightPaneBorder))
         {
-            return IsWithin(focused, RightPaneLeavesList)
+            return IsWithin(focused, RightPaneRailStrip)
                 ? ShellRegionKind.RightPaneRail
                 : ShellRegionKind.RightPaneContent;
         }
@@ -151,6 +153,11 @@ public partial class MainWindow : IShellRegionHost
                 first.Focus();
                 break;
             case ShellRegionKind.Files:
+                if (!workspace.IsFilesSidebarVisible)
+                {
+                    return ShellRegionLanding.Refused;
+                }
+
                 // R-5 (#1247): the filter's results land on a result row,
                 // or on the list itself when it is empty (AR-6); a row that
                 // cannot be landed yet leaves the keys to the tree's own
@@ -225,7 +232,7 @@ public partial class MainWindow : IShellRegionHost
                 // R-5 (#1247): the shown leaf's row (the first row if the
                 // rail names none), never the bare list, from which Down
                 // walked into the menu bar.
-                _ = SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList);
+                _ = LandOnRail();
                 break;
             case ShellRegionKind.StatusBar:
                 ShellStatusBar.Focus();
@@ -253,11 +260,51 @@ public partial class MainWindow : IShellRegionHost
     {
         bool open = OpenModalSurface is not null;
         bool opened = open && !_modalSurfaceWasOpen;
+        bool changed = open != _modalSurfaceWasOpen;
         _modalSurfaceWasOpen = open;
         if (opened)
         {
             _editorLandings.ModalOpened();
         }
+
+        if (changed)
+        {
+            IsModalSurfaceOpen = open;
+            Canvas.CanvasSurfaceView.RaiseShellOverlayChanged();
+        }
+
+        bool sheet = open
+            && OpenModalSurface is not (ModalSurface.QuickOpen or ModalSurface.SearchOverlay or ModalSurface.CommandPalette);
+        if (sheet != IsModalSheetOpen)
+        {
+            IsModalSheetOpen = sheet;
+        }
+    }
+
+    public static readonly DependencyProperty IsModalSheetOpenProperty = DependencyProperty.Register(
+        nameof(IsModalSheetOpen), typeof(bool), typeof(MainWindow), new PropertyMetadata(false));
+
+    /// <summary>#1690: whether the open modal surface is a sheet rather than Quick Open,
+    /// search or the palette. Those three take the keys in the turn they open
+    /// (<see cref="LandInOpeningOverlay"/>), so what holds the keys under them can stay on
+    /// until then; a sheet's field takes them in a queued landing, and what's under it goes
+    /// off at once.</summary>
+    public bool IsModalSheetOpen
+    {
+        get => (bool)GetValue(IsModalSheetOpenProperty);
+        private set => SetValue(IsModalSheetOpenProperty, value);
+    }
+
+    public static readonly DependencyProperty IsModalSurfaceOpenProperty = DependencyProperty.Register(
+        nameof(IsModalSurfaceOpen), typeof(bool), typeof(MainWindow), new PropertyMetadata(false));
+
+    /// <summary>DS-6: what the scrim over the menu and status rows follows. The sheets'
+    /// own layers are in the Grid between those rows, and a flat 30% black blends across
+    /// the three, so it reads as one scrim.</summary>
+    public bool IsModalSurfaceOpen
+    {
+        get => (bool)GetValue(IsModalSurfaceOpenProperty);
+        private set => SetValue(IsModalSurfaceOpenProperty, value);
     }
 
     /// <summary>Whether a modal surface was open at the last report (the
@@ -743,7 +790,7 @@ public partial class MainWindow : IShellRegionHost
     /// <summary>W7-7 PR 4b (#1247, AR-38): the row the sidebars and the
     /// editor share tells the workspace how much room a sidebar resize
     /// step has.</summary>
-    private void WorkspaceColumns_SizeChanged(object sender, SizeChangedEventArgs e)
+    private void WorkspaceRow_SizeChanged(object sender, SizeChangedEventArgs e)
     {
         if (_viewModel.Workspace is WorkspaceViewModel workspace)
         {
@@ -850,7 +897,8 @@ public partial class MainWindow : IShellRegionHost
         RegionFocusGuard.SetLanding(WorkspaceColumns, EditorRegionLanding);
         RegionFocusGuard.SetLanding(FilesPaneBorder, () => LandRegion(ShellRegionKind.Files));
         RegionFocusGuard.SetLanding(ContentPaneBorder, EditorRegionLanding);
-        RegionFocusGuard.SetLanding(RightPaneLeavesList, () => SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList));
+        RegionFocusGuard.SetLanding(RightPaneLeavesList, LandOnRail);
+        RegionFocusGuard.SetLanding(RightPaneMorePanelsButton, LandOnRail);
         // The leaves' host: a leaf switched under the keys (a command, a
         // reveal, the model) collapses the leaf they were in; they land in
         // the leaf now shown — its first stop, else the rail's row — not out
@@ -1171,14 +1219,14 @@ public partial class MainWindow : IShellRegionHost
         // The leaf has no stop, or its stop took nothing (a list whose row
         // cannot be landed yet among them): the pane's stable stop, the
         // rail's row.
-        _ = SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList);
+        _ = LandOnRail();
     }
 
     /// <summary>A leaf's own landing — the reveal's and the ring's: its
     /// first stop, else the pane's stable stop, the rail's row.</summary>
     private bool LandInLeaf(FrameworkElement body) =>
         (body.IsVisible && FirstFocusable(body) is { } stop && SelectorFocus.LandOnStop(stop))
-        || SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList);
+        || LandOnRail();
 
     /// <summary>
     /// W7-7 PR 4 (#1247, R-5, spec §5.2.2; codex round 5): the leaves'
@@ -1290,6 +1338,21 @@ public partial class MainWindow : IShellRegionHost
         for (DependencyObject? current = element; current is not null; current = ParentOf(current))
         {
             if (ReferenceEquals(current, scope))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>DS-19: whether <paramref name="element"/> is the empty pane's launcher or
+    /// inside it (WorkspaceTemplates.xaml, <c>EmptyPaneLauncher</c>).</summary>
+    private static bool IsInEmptyPaneLauncher(DependencyObject element)
+    {
+        for (DependencyObject? current = element; current is not null; current = ParentOf(current))
+        {
+            if (current is FrameworkElement { Name: "EmptyPaneLauncher" })
             {
                 return true;
             }

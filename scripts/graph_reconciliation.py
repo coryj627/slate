@@ -48,6 +48,8 @@ from collections import Counter
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 DOC = os.path.join(ROOT, "docs", "plans", "35_graph_contracts.md")
 SHELL = os.path.join(ROOT, "apps", "slate-windows")
+# ContractsCitationCensus.RetiredNames, whose fact holds that each is gone.
+RETIRED_NAMES = {"CanvasTextScaleService"}
 # The pinned total: a document that lost a head does not regenerate a
 # smaller table and bless it; it fails here until the pin is bumped on
 # purpose. GraphReconciliationCensus carries the same constant.
@@ -164,8 +166,9 @@ def declared_names() -> set[str]:
     """Every long PascalCase identifier DECLARED in the Windows tree — the
     shell, the generated bindings, the tests, the tools, the benchmarks —
     read syntactically with comments stripped; GraphContractsCitationCensus
-    remains the authority for the document's own citations."""
-    names: set[str] = set()
+    remains the authority for the document's own citations. The frozen
+    records keep RETIRED_NAMES after the code moved on."""
+    names: set[str] = set(RETIRED_NAMES)
     for base, dirs, files in os.walk(SHELL):
         dirs[:] = [d for d in dirs if d not in ("bin", "obj", ".vs")]
         for name in files:

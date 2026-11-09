@@ -194,7 +194,8 @@ public sealed partial class ShellAccessibilityTests
                 window,
                 "WorkspaceView",
                 TimeSpan.FromSeconds(30));
-            Assert.Equal("Slate", window.Title);
+            // DS-12 (DSD9): the title is core's, and no note is open yet.
+            Assert.Equal("Accessible Vault — Slate", window.Title);
             AssertTrashProgressAbsent(window, automation);
             Assert.NotNull(workspace.FindFirstDescendant(
                 automation.ConditionFactory.ByAutomationId("FilesPane")));
@@ -229,41 +230,17 @@ public sealed partial class ShellAccessibilityTests
             Assert.Equal(ControlType.Button, sidebarRefresh.ControlType);
             Assert.True(sidebarRefresh.Patterns.Invoke.IsSupported);
 
-            AutomationElement sortOrder = WaitForElement(
+            // DS-17 (DSD12): the sort is Sort and group's menu now, and the button's
+            // name says the order the combo box said on focus, from core.
+            AutomationElement sortAndGroup = WaitForElement(
                 window,
-                "SidebarSortOrder",
+                "SidebarSortAndGroup",
                 TimeSpan.FromSeconds(10));
-            Assert.Equal(ControlType.ComboBox, sortOrder.ControlType);
-            Assert.True(sortOrder.Patterns.Selection.IsSupported);
-            // W7-7 PR 3 (#1246, R-4): NVDA reads a combo's value from its
-            // selected item's name — the label, never the enum member
-            // ("NameAscending"), which no type/record census pattern sees.
+            Assert.Equal(ControlType.Button, sortAndGroup.ControlType);
             Assert.Equal(
-                "Name (A to Z)",
-                Assert.Single(sortOrder.Patterns.Selection.Pattern.Selection.Value).Name);
+                uniffi.slate_uniffi.SlateUniffiMethods.SidebarSortButtonName(uniffi.slate_uniffi.SidebarSortOrder.NameAscending, false),
+                sortAndGroup.Name);
 
-            AutomationElement groupDates = WaitForElement(
-                window,
-                "SidebarGroupDates",
-                TimeSpan.FromSeconds(10));
-            Assert.Equal(ControlType.CheckBox, groupDates.ControlType);
-            Assert.True(groupDates.Patterns.Toggle.IsSupported);
-
-            foreach (string automationId in new[]
-            {
-                "SidebarShowTags",
-                "SidebarDualPaneToggle",
-            })
-            {
-                AutomationElement toggle = WaitForElement(
-                    window,
-                    automationId,
-                    TimeSpan.FromSeconds(10));
-                Assert.Equal(ControlType.Button, toggle.ControlType);
-                Assert.True(
-                    toggle.Patterns.Toggle.IsSupported,
-                    $"{automationId} does not expose Toggle.");
-            }
 
             // W7-5 (#1239): a vault that restores no tabs lands its launch
             // focus on the Files tree, never on the empty TabControl (which
@@ -282,6 +259,32 @@ public sealed partial class ShellAccessibilityTests
                 automation,
                 WaitForElement(window, "FilesTree", TimeSpan.FromSeconds(10)),
                 "Opening a vault with no restored tabs did not focus the Files tree.");
+
+            // DS-17: after launch focus is checked, Sort and group's menu: its current
+            // order checked, every setting a checkable row, and Escape back to the button.
+            AutomationElement nameOrder = OpenSortAndGroupRow(window, automation, "SidebarSort.NameAscending");
+            Assert.Equal(ControlType.MenuItem, nameOrder.ControlType);
+            Assert.Equal("Name (A to Z)", nameOrder.Name);
+            Assert.Equal(ToggleState.On, nameOrder.Patterns.Toggle.Pattern.ToggleState.Value);
+            foreach (string automationId in new[]
+            {
+                "SidebarGroupDates",
+                "SidebarShowTags",
+                "SidebarDualPaneToggle",
+            })
+            {
+                AutomationElement toggle = WaitForSortRowInOpenMenu(automation, window, automationId);
+                Assert.Equal(ControlType.MenuItem, toggle.ControlType);
+                Assert.True(
+                    toggle.Patterns.Toggle.IsSupported,
+                    $"{automationId} does not expose Toggle.");
+            }
+
+            PressKey(VirtualKeyShort.ESCAPE);
+            Assert.True(
+                SpinWait.SpinUntil(() => !SortAndGroupIsOpen(window, automation), TimeSpan.FromSeconds(5)),
+                "Escape didn't close Sort and group.");
+            AssertEventuallyFocused(sortAndGroup, "Escape from Sort and group did not return to its button.");
 
             AssertActionButtonCensus(
                 WaitForElement(window, "SidebarBatchActions", TimeSpan.FromSeconds(10)),
@@ -676,13 +679,14 @@ public sealed partial class ShellAccessibilityTests
             AssertItemNamesAreSpeakable(process, "sidebar-filter-results");
             sidebarFilter.Patterns.Value.Pattern.SetValue(string.Empty);
 
-            AutomationElement tagToggle = WaitForNamedElement(
-                window,
-                automation,
-                "Show tag tree",
-                TimeSpan.FromSeconds(10));
+            // DS-17: Show tag tree is a checkable row of Sort and group now.
+            AutomationElement tagToggle = OpenSortAndGroupRow(window, automation, "SidebarShowTags");
+            Assert.Equal("Show tag tree", tagToggle.Name);
             Assert.True(tagToggle.Patterns.Toggle.IsSupported);
             tagToggle.Patterns.Toggle.Pattern.Toggle();
+            Assert.True(
+                SpinWait.SpinUntil(() => !SortAndGroupIsOpen(window, automation), TimeSpan.FromSeconds(5)),
+                "Toggling Show tag tree didn't close Sort and group.");
             AutomationElement tagTree = WaitForElement(
                 window,
                 "SidebarTagTree",
@@ -727,11 +731,15 @@ public sealed partial class ShellAccessibilityTests
                 TimeSpan.FromSeconds(10));
             Assert.Equal(ControlType.List, rightPaneLeaves.ControlType);
             Assert.True(rightPaneLeaves.Patterns.Selection.IsSupported);
-            // W6-2 PR E (Term I1): the seventeenth leaf is the graph inspector's.
+            // DS-16 (DSD8): the strip holds five, the graph inspector's last (W6-2 PR E,
+            // Term I1), and More panels the other twelve.
             Assert.Equal(
-                17,
+                5,
                 rightPaneLeaves.FindAllDescendants(
                     automation.ConditionFactory.ByControlType(ControlType.ListItem)).Length);
+            Assert.Equal(
+                "More panels",
+                WaitForElement(window, "RightPaneMorePanels", TimeSpan.FromSeconds(10)).Name);
 
             AutomationElement splitRight = WaitForMenuItem(
                 window,
@@ -1075,6 +1083,7 @@ public sealed partial class ShellAccessibilityTests
         ControlType.ComboBox,
         ControlType.Custom,
         ControlType.Group,
+        ControlType.MenuItem,
     ];
 
     /// <summary>A .NET type name as <c>ToString()</c> prints one: ROOTED in a
@@ -1191,52 +1200,57 @@ public sealed partial class ShellAccessibilityTests
             + string.Join(Environment.NewLine + "  ", offenders));
     }
 
-    private static string[] UnspeakableItemNames(UIA3Automation automation, Process process)
+    /// <summary>What the census judges: the named items of every window of the process,
+    /// an open menu's popup among them.</summary>
+    private static IEnumerable<AutomationElement> NamedItems(UIA3Automation automation, Process process)
     {
         var factory = automation.ConditionFactory;
         var condition = new FlaUI.Core.Conditions.OrCondition(
             NamedItemControlTypes.Select(type => (FlaUI.Core.Conditions.ConditionBase)factory.ByControlType(type)).ToArray());
+        return automation.GetDesktop()
+            .FindAllChildren(factory.ByProcessId(process.Id))
+            .SelectMany(window => window.FindAllDescendants(condition));
+    }
+
+    private static string[] UnspeakableItemNames(UIA3Automation automation, Process process)
+    {
         var offenders = new List<string>();
-        foreach (AutomationElement window in automation.GetDesktop()
-            .FindAllChildren(factory.ByProcessId(process.Id)))
+        foreach (AutomationElement element in NamedItems(automation, process))
         {
-            foreach (AutomationElement element in window.FindAllDescendants(condition))
+            string? name = element.Properties.Name.ValueOrDefault;
+            // The HelpText is read only for a name the patterns flag.
+            if (IsUnspeakableItemName(name)
+                && IsUnspeakableItemName(name, element.Properties.HelpText.ValueOrDefault))
             {
-                string? name = element.Properties.Name.ValueOrDefault;
-                // The HelpText is read only for a name the patterns flag.
-                if (IsUnspeakableItemName(name)
-                    && IsUnspeakableItemName(name, element.Properties.HelpText.ValueOrDefault))
+                offenders.Add(ElementPath(automation, element));
+            }
+            if (element.Properties.ControlType.ValueOrDefault != ControlType.ComboBox)
+            {
+                continue;
+            }
+            if (element.Patterns.Selection.PatternOrDefault is { } selection)
+            {
+                foreach (AutomationElement selected in selection.Selection.ValueOrDefault ?? [])
                 {
-                    offenders.Add(ElementPath(automation, element));
-                }
-                if (element.Properties.ControlType.ValueOrDefault != ControlType.ComboBox)
-                {
-                    continue;
-                }
-                if (element.Patterns.Selection.PatternOrDefault is { } selection)
-                {
-                    foreach (AutomationElement selected in selection.Selection.ValueOrDefault ?? [])
+                    // A transient fault here propagates: the whole
+                    // state is re-read, never judged as "no name".
+                    string? value = selected.Properties.Name.ValueOrDefault;
+                    if (string.IsNullOrWhiteSpace(value))
                     {
-                        // A transient fault here propagates: the whole
-                        // state is re-read, never judged as "no name".
-                        string? value = selected.Properties.Name.ValueOrDefault;
-                        if (string.IsNullOrWhiteSpace(value))
-                        {
-                            offenders.Add($"{ElementPath(automation, element)} → a selected item with no name");
-                        }
-                        else if (IsUnspeakableItemName(value)
-                            && IsUnspeakableItemName(value, selected.Properties.HelpText.ValueOrDefault))
-                        {
-                            offenders.Add($"{ElementPath(automation, element)} → selected item '{value}'");
-                        }
+                        offenders.Add($"{ElementPath(automation, element)} → a selected item with no name");
+                    }
+                    else if (IsUnspeakableItemName(value)
+                        && IsUnspeakableItemName(value, selected.Properties.HelpText.ValueOrDefault))
+                    {
+                        offenders.Add($"{ElementPath(automation, element)} → selected item '{value}'");
                     }
                 }
-                if (element.Patterns.Value.PatternOrDefault is { } valuePattern
-                    && valuePattern.Value.ValueOrDefault is { } text
-                    && IsUnspeakableItemName(text))
-                {
-                    offenders.Add($"{ElementPath(automation, element)} → value '{text}'");
-                }
+            }
+            if (element.Patterns.Value.PatternOrDefault is { } valuePattern
+                && valuePattern.Value.ValueOrDefault is { } text
+                && IsUnspeakableItemName(text))
+            {
+                offenders.Add($"{ElementPath(automation, element)} → value '{text}'");
             }
         }
         return [.. offenders];
@@ -2734,29 +2748,7 @@ public sealed partial class ShellAccessibilityTests
 
             AutomationElement leaves = WaitForElement(
                 window, "RightPaneLeaves", TimeSpan.FromSeconds(10));
-            void SelectLeaf(string title)
-            {
-                // Retried: the rail's ListItems materialize lazily on
-                // the gate runner (the W4-1 playbook — one-shot
-                // enumeration races composition).
-                AutomationElement? entry = null;
-                Assert.True(
-                    SpinWait.SpinUntil(
-                        () =>
-                        {
-                            entry = leaves
-                                .FindAllDescendants(
-                                    automation.ConditionFactory.ByControlType(
-                                        ControlType.ListItem))
-                                .FirstOrDefault(item =>
-                                    (item.Properties.Name.ValueOrDefault ?? "")
-                                        == title);
-                            return entry is not null;
-                        },
-                        TimeSpan.FromSeconds(15)),
-                    $"No rail entry named {title}.");
-                entry!.Patterns.SelectionItem.Pattern.Select();
-            }
+            void SelectLeaf(string title) => OpenRailPanel(window, automation, title);
             AutomationElement WaitForRow(
                 AutomationElement list, Func<string, bool> match, string description)
             {
@@ -2934,26 +2926,7 @@ public sealed partial class ShellAccessibilityTests
 
             AutomationElement leaves = WaitForElement(
                 window, "RightPaneLeaves", TimeSpan.FromSeconds(10));
-            void SelectLeaf(string title)
-            {
-                AutomationElement? entry = null;
-                Assert.True(
-                    SpinWait.SpinUntil(
-                        () =>
-                        {
-                            entry = leaves
-                                .FindAllDescendants(
-                                    automation.ConditionFactory.ByControlType(
-                                        ControlType.ListItem))
-                                .FirstOrDefault(item =>
-                                    (item.Properties.Name.ValueOrDefault ?? "")
-                                        == title);
-                            return entry is not null;
-                        },
-                        TimeSpan.FromSeconds(15)),
-                    $"No rail entry named {title}.");
-                entry!.Patterns.SelectionItem.Pattern.Select();
-            }
+            void SelectLeaf(string title) => OpenRailPanel(window, automation, title);
             AutomationElement WaitForRow(
                 string listId, Func<string, bool> match, string description)
             {
@@ -3443,25 +3416,7 @@ public sealed partial class ShellAccessibilityTests
 
             AutomationElement leaves = WaitForElement(
                 window, "RightPaneLeaves", TimeSpan.FromSeconds(10));
-            void SelectLeaf(string title)
-            {
-                AutomationElement? entry = null;
-                Assert.True(
-                    SpinWait.SpinUntil(
-                        () =>
-                        {
-                            entry = leaves
-                                .FindAllDescendants(
-                                    automation.ConditionFactory.ByControlType(
-                                        ControlType.ListItem))
-                                .FirstOrDefault(item =>
-                                    (item.Properties.Name.ValueOrDefault ?? "") == title);
-                            return entry is not null;
-                        },
-                        TimeSpan.FromSeconds(15)),
-                    $"No rail entry named {title}.");
-                entry!.Patterns.SelectionItem.Pattern.Select();
-            }
+            void SelectLeaf(string title) => OpenRailPanel(window, automation, title);
 
             // ---- The citations leaf ------------------------------
             SelectLeaf("Citations");
@@ -3730,11 +3685,7 @@ public sealed partial class ShellAccessibilityTests
                     () => mainMenu.Properties.IsEnabled.ValueOrDefault,
                     TimeSpan.FromSeconds(10)),
                 "the menu did not re-enable after the sheet closed");
-            AutomationElement editMenu = mainMenu
-                .FindAllChildren(
-                    automation.ConditionFactory.ByControlType(ControlType.MenuItem))
-                .First(item => (item.Properties.Name.ValueOrDefault ?? "")
-                    .Contains("Edit", StringComparison.OrdinalIgnoreCase));
+            AutomationElement editMenu = WaitForAppMenu(window, "EditorMenu", TimeSpan.FromSeconds(10));
             editMenu.Patterns.ExpandCollapse.Pattern.Expand();
             AutomationElement jumpItem = WaitForElement(
                 window, "JumpToBibliographyMenuItem", TimeSpan.FromSeconds(10));
@@ -3744,7 +3695,7 @@ public sealed partial class ShellAccessibilityTests
                 + "expanded — the command has no key to jump to, and "
                 + "invoking it here would be the W4-5 disabled-state "
                 + "defect reborn.");
-            editMenu.Patterns.ExpandCollapse.Pattern.Collapse();
+            WaitForElement(window, "AppMenu", TimeSpan.FromSeconds(10)).Patterns.ExpandCollapse.Pattern.Collapse();
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(300));
 
             // ---- Ctrl+J: the landing, not just the announcement -----
@@ -4080,21 +4031,7 @@ public sealed partial class ShellAccessibilityTests
 
             AutomationElement leaves = WaitForElement(
                 window, "RightPaneLeaves", TimeSpan.FromSeconds(30));
-            AutomationElement? bibliographyEntry = null;
-            Assert.True(
-                SpinWait.SpinUntil(
-                    () =>
-                    {
-                        bibliographyEntry = leaves
-                            .FindAllDescendants(
-                                automation.ConditionFactory.ByControlType(ControlType.ListItem))
-                            .FirstOrDefault(item =>
-                                (item.Properties.Name.ValueOrDefault ?? "") == "Bibliography");
-                        return bibliographyEntry is not null;
-                    },
-                    TimeSpan.FromSeconds(15)),
-                "no Bibliography rail entry.");
-            bibliographyEntry!.Patterns.SelectionItem.Pattern.Select();
+            OpenRailPanel(window, automation, "Bibliography");
 
             // The reason is on screen, verbatim, naming the source.
             AutomationElement? notice = null;
@@ -4415,21 +4352,7 @@ public sealed partial class ShellAccessibilityTests
             // The Queries leaf renders and scans clean.
             AutomationElement leaves = WaitForElement(
                 window, "RightPaneLeaves", TimeSpan.FromSeconds(10));
-            AutomationElement? queriesLeaf = null;
-            Assert.True(
-                SpinWait.SpinUntil(
-                    () =>
-                    {
-                        queriesLeaf = leaves
-                            .FindAllDescendants(automation.ConditionFactory
-                                .ByControlType(ControlType.ListItem))
-                            .FirstOrDefault(item => string.Equals(
-                                item.Name, "Queries", StringComparison.Ordinal));
-                        return queriesLeaf is not null;
-                    },
-                    TimeSpan.FromSeconds(10)),
-                "the Queries leaf option never appeared");
-            queriesLeaf!.Patterns.SelectionItem.Pattern.Select();
+            OpenRailPanel(window, automation, "Queries");
             // The leaf BODY is a WPF Panel — no automation peer, no id
             // in the tree (the W4-5 lesson); presence is asserted via
             // its peered children.
@@ -4524,7 +4447,7 @@ public sealed partial class ShellAccessibilityTests
             // clean. The list collapses when EMPTY, so its absence is
             // ambiguous — the failure message distinguishes "leaf
             // never revealed" from "save never landed".
-            queriesLeaf!.Patterns.SelectionItem.Pattern.Select();
+            OpenRailPanel(window, automation, "Queries");
             AutomationElement? savedList = null;
             if (!SpinWait.SpinUntil(
                 () =>
@@ -4583,7 +4506,7 @@ public sealed partial class ShellAccessibilityTests
             // The dashboard editor overlay and the dashboard TAB
             // (contract C12): create one section over the saved query,
             // save, open, and scan both surfaces.
-            queriesLeaf!.Patterns.SelectionItem.Pattern.Select();
+            OpenRailPanel(window, automation, "Queries");
             AutomationElement newDashboard = WaitForElement(
                 window, "QueriesNewDashboard", TimeSpan.FromSeconds(10));
             newDashboard.Patterns.Invoke.Pattern.Invoke();
@@ -5135,26 +5058,12 @@ public sealed partial class ShellAccessibilityTests
             window.SetForeground();
             window.Focus();
 
-            // The RAIL is the reveal route: SD7 registers no showPanel
+            // The rail is the reveal route, through More panels (DS-16): SD7 registers no showPanel
             // command for this leaf on either platform, so there is no
             // menu path to the surface — only the refresh below.
             AutomationElement leaves = WaitForElement(
                 window, "RightPaneLeaves", TimeSpan.FromSeconds(30));
-            AutomationElement? syncLeaf = null;
-            Assert.True(
-                SpinWait.SpinUntil(
-                    () =>
-                    {
-                        syncLeaf = leaves
-                            .FindAllDescendants(automation.ConditionFactory
-                                .ByControlType(ControlType.ListItem))
-                            .FirstOrDefault(item => string.Equals(
-                                item.Name, "Sync", StringComparison.Ordinal));
-                        return syncLeaf is not null;
-                    },
-                    TimeSpan.FromSeconds(10)),
-                "the Sync leaf option never appeared");
-            syncLeaf!.Patterns.SelectionItem.Pattern.Select();
+            OpenRailPanel(window, automation, "Sync");
 
             // Every publish CLEARS and rebuilds the surface, so every
             // element handle held across one is dead. Each probe below
@@ -7356,7 +7265,7 @@ public sealed partial class ShellAccessibilityTests
             AutomationElement newCardMenuItem = WaitForMenuItem(
                 window, "CanvasMenu", "CanvasNewCardMenuItem", TimeSpan.FromSeconds(10));
             Assert.Equal("Ctrl+Alt+T", newCardMenuItem.Properties.AcceleratorKey.Value);
-            WaitForElement(window, "CanvasMenu", TimeSpan.FromSeconds(10))
+            WaitForElement(window, "AppMenu", TimeSpan.FromSeconds(10))
                 .Patterns.ExpandCollapse.Pattern.Collapse();
 
             // ---- The first card, by chord (E19) ---------------------
@@ -11344,7 +11253,7 @@ public sealed partial class ShellAccessibilityTests
     /// CheckMenuItem peer).</summary>
     private static void SelectGraphVerbosity(Window window, UIA3Automation automation, string tag)
     {
-        AutomationElement menu = WaitForElement(window, "GraphMenu", TimeSpan.FromSeconds(10));
+        AutomationElement menu = WaitForAppMenu(window, "GraphMenu", TimeSpan.FromSeconds(10));
         menu.Patterns.ExpandCollapse.Pattern.Expand();
         AutomationElement submenu = WaitForElement(window, "GraphVerbosityMenu", TimeSpan.FromSeconds(10));
         submenu.Patterns.ExpandCollapse.Pattern.Expand();
@@ -12304,13 +12213,26 @@ public sealed partial class ShellAccessibilityTests
         return tree!;
     }
 
+    /// <summary>DS-13 (#1814): a menu, File to Graph, under the logo. Its element exists once
+    /// the logo's popup has opened, so the logo is expanded first.</summary>
+    private static AutomationElement WaitForAppMenu(Window window, string menuAutomationId, TimeSpan timeout)
+    {
+        AutomationElement logo = WaitForElement(window, "AppMenu", timeout);
+        if (logo.Patterns.ExpandCollapse.Pattern.ExpandCollapseState.Value != ExpandCollapseState.Expanded)
+        {
+            logo.Patterns.ExpandCollapse.Pattern.Expand();
+        }
+
+        return WaitForElement(window, menuAutomationId, timeout);
+    }
+
     private static AutomationElement WaitForMenuItem(
         Window window,
         string menuAutomationId,
         string itemAutomationId,
         TimeSpan timeout)
     {
-        AutomationElement menu = WaitForElement(window, menuAutomationId, timeout);
+        AutomationElement menu = WaitForAppMenu(window, menuAutomationId, timeout);
         Assert.True(
             menu.Patterns.ExpandCollapse.IsSupported,
             $"Menu {menuAutomationId} does not expose ExpandCollapse.");

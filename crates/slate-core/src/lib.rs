@@ -73,6 +73,7 @@ pub mod link_rewrite;
 pub mod links;
 pub mod links_db;
 pub mod math;
+mod more_panels;
 pub mod oplog;
 pub mod oplog_compaction;
 pub(crate) mod oplog_events;
@@ -82,6 +83,7 @@ pub mod reading;
 pub mod search_db;
 pub mod session;
 pub mod sidebar_filter;
+mod sidebar_sort;
 pub mod structural;
 pub mod structural_batch;
 pub mod structured_diff;
@@ -96,6 +98,7 @@ pub mod text_buffer;
 pub mod trash_confirmation;
 pub mod vault;
 mod vault_config;
+mod window_title;
 
 pub use search_db::{
     QueryHit, QueryResultSet, SNIPPET_HIT_END, SNIPPET_HIT_START, SearchScope, full_text_search,
@@ -164,6 +167,7 @@ pub use templates::{
 };
 pub use text_buffer::TextBuffer;
 
+pub use more_panels::more_panels_name;
 pub use session::{
     BaseFileSummary, BaseViewStatus, BaseViewSummary, BasesColumn, BasesGroup, BasesResultSet,
     BasesRow, BasesSummaryCell, BasesValue, CancelToken, CanvasApplyResult, CanvasEditorSeed,
@@ -191,12 +195,16 @@ pub use sidebar_filter::{
     sidebar_filter_audio_summary, sidebar_filter_date_requirements, sidebar_tag_filter_activation,
     validate_date_windows,
 };
+pub use sidebar_sort::{
+    SIDEBAR_SORT_ORDERS, SidebarSortOrder, sidebar_sort_button_name, sidebar_sort_order_label,
+};
 pub use tag_tree::{TagTree, TagTreeNode, TagTreePage, TagTreePageEntry};
 pub use vault::{
     DirEntry, EntryKind, FileEvent, FileEventSink, FileStat, FsVaultProvider, VaultProvider,
     WatchEnd, WatchHandle, content_hash, route_trash_to_scratch_bin_for_tests,
     scratch_trash_bin_for_tests,
 };
+pub use window_title::window_title;
 
 use std::path::Path;
 use thiserror::Error;

@@ -142,6 +142,9 @@ internal sealed class ConnectionsRowViewModel : BindableBase
 /// <see cref="ConnectionsTreeItem"/> carrying Invoke (B-9, B-13).</summary>
 internal sealed class ConnectionsTree : LandingTreeView
 {
+    // #1781: rows wrap to the pane; they ran under its edge.
+    public ConnectionsTree() => ScrollViewer.SetHorizontalScrollBarVisibility(this, ScrollBarVisibility.Disabled);
+
     protected override DependencyObject GetContainerForItemOverride() => new ConnectionsTreeItem();
 
     protected override bool IsItemItsOwnContainerOverride(object item) => item is ConnectionsTreeItem;
@@ -209,6 +212,13 @@ internal sealed class ConnectionsAnchorAutomationPeer : FrameworkElementAutomati
 
 internal sealed class ConnectionsTreeItem : LandingTreeViewItem
 {
+    // #1781: as CanvasOutlineItem, whose style is built in code too.
+    protected override void OnVisualParentChanged(DependencyObject oldParent)
+    {
+        base.OnVisualParentChanged(oldParent);
+        ClassicRows.TakeTreeRow(this);
+    }
+
     protected override DependencyObject GetContainerForItemOverride() => new ConnectionsTreeItem();
 
     protected override bool IsItemItsOwnContainerOverride(object item) => item is ConnectionsTreeItem;
@@ -258,7 +268,10 @@ internal sealed class ConnectionsLeafView : UserControl
 
     private readonly ConnectionsTree _tree;
     private readonly ContextMenu _rowMenu = new();
-    private readonly TextBlock _heading;
+    /// <summary>DS-18: the leaf's toolbar, its title the heading.</summary>
+    private readonly PanelToolbarView _toolbar = new();
+
+    private TextBlock _heading => _toolbar.TitleBlock;
     private readonly TextBlock _summary;
     private readonly ComboBox _depth;
     private readonly TextBlock _state;
@@ -285,12 +298,6 @@ internal sealed class ConnectionsLeafView : UserControl
 
     public ConnectionsLeafView()
     {
-        _heading = new TextBlock
-        {
-            FontSize = 16,
-            FontWeight = FontWeights.SemiBold,
-        };
-        AutomationProperties.SetHeadingLevel(_heading, AutomationHeadingLevel.Level2);
         AutomationProperties.SetAutomationId(_heading, "ConnectionsHeading");
 
         _summary = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) };
@@ -361,11 +368,11 @@ internal sealed class ConnectionsLeafView : UserControl
         SelectorFocus.SetOwnLanding(_tree, LandOnRow);
 
         var panel = new DockPanel();
-        DockPanel.SetDock(_heading, Dock.Top);
+        DockPanel.SetDock(_toolbar, Dock.Top);
         DockPanel.SetDock(_summary, Dock.Top);
         DockPanel.SetDock(_depth, Dock.Top);
         DockPanel.SetDock(_anchor, Dock.Top);
-        panel.Children.Add(_heading);
+        panel.Children.Add(_toolbar);
         panel.Children.Add(_summary);
         panel.Children.Add(_depth);
         panel.Children.Add(_anchor);
@@ -688,7 +695,7 @@ internal sealed class ConnectionsLeafView : UserControl
         ConnectionsLeafViewModel? model = Model;
         if (model is null)
         {
-            _heading.Text = ConnectionsPhrase.Title;
+            _toolbar.Title = ConnectionsPhrase.Title;
             _summary.Visibility = Visibility.Collapsed;
             _depth.IsEnabled = false;
             ShowState(ConnectionsPhrase.NoNote, ConnectionsPhrase.NoNote);
@@ -696,7 +703,7 @@ internal sealed class ConnectionsLeafView : UserControl
         }
         SyncDepthControl(model);
         ConnectionsPublication publication = model.Publication;
-        _heading.Text = model.Root is { } root ? System.IO.Path.GetFileName(root) : ConnectionsPhrase.Title;
+        _toolbar.Title = model.Root is { } root ? System.IO.Path.GetFileName(root) : ConnectionsPhrase.Title;
         _depth.IsEnabled = model.Root is not null;
         if (model.Root is null || publication.State == ConnectionsLoadState.NoNote)
         {
@@ -1212,10 +1219,12 @@ internal sealed class ConnectionsLeafView : UserControl
         var factory = new FrameworkElementFactory(typeof(StackPanel));
         var name = new FrameworkElementFactory(typeof(TextBlock));
         name.SetBinding(TextBlock.TextProperty, new Binding(nameof(ConnectionsRowViewModel.Display)));
+        name.SetValue(TextBlock.TextWrappingProperty, TextWrapping.Wrap);
         factory.AppendChild(name);
         var snippet = new FrameworkElementFactory(typeof(TextBlock));
         snippet.SetBinding(TextBlock.TextProperty, new Binding(nameof(ConnectionsRowViewModel.Snippet)));
-        snippet.SetValue(TextBlock.FontSizeProperty, 11.0);
+        snippet.SetResourceReference(StyleProperty, TypeRamp.Caption.StyleKey);
+        snippet.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis);
         snippet.SetValue(OpacityProperty, 0.75);
         snippet.SetBinding(VisibilityProperty, new Binding(nameof(ConnectionsRowViewModel.Snippet))
         {
@@ -1232,6 +1241,8 @@ internal sealed class ConnectionsLeafView : UserControl
     private static Style RowContainerStyle()
     {
         var style = new Style(typeof(ConnectionsTreeItem));
+        style.Setters.Add(new Setter(PaddingProperty, new Thickness(8, 2, 8, 2)));
+        style.Setters.Add(new Setter(FocusVisualStyleProperty, null));
         style.Setters.Add(new Setter(TreeViewItem.IsExpandedProperty, new Binding(nameof(ConnectionsRowViewModel.IsExpanded)) { Mode = BindingMode.TwoWay }));
         style.Setters.Add(new Setter(TreeViewItem.IsSelectedProperty, new Binding(nameof(ConnectionsRowViewModel.IsSelected)) { Mode = BindingMode.TwoWay }));
         style.Setters.Add(new Setter(AutomationProperties.NameProperty, SiblingNames.ContainerNameBinding()));

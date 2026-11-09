@@ -1,0 +1,423 @@
+<!--
+    DS-4: one template for every menu row. Fluent's has no check column on a row that
+    opens a submenu, so labels start in two places. It draws a shortcut at 11 in the
+    disabled brush, and puts the popup's shadow on the border holding the items, which
+    turns ClearType off. Derived from Fluent's MenuItem.xaml and ContextMenu.xaml in
+    dotnet/wpf release/10.0 (MIT, Copyright (C) Leszek Pomianowski and WPF UI Contributors).
+-->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:local="clr-namespace:SlateWindows">
+
+    <local:MenuPlacementRectangleConverter x:Key="Slate.MenuBarPlacement" />
+    <local:MenuPlacementRectangleConverter x:Key="Slate.MenuRowPlacement" IsRow="True" />
+
+    <!-- The same 2px ring as rows elsewhere, on the inset highlight: its inner edge sits
+         1 out from the highlight, and its outer edge stays inside the row. -->
+    <Style x:Key="Slate.MenuRowFocusVisual">
+        <Setter Property="Control.Template">
+            <Setter.Value>
+                <ControlTemplate>
+                    <Border Margin="2,0"
+                            BorderBrush="{DynamicResource Slate.FocusBrush}"
+                            BorderThickness="2"
+                            CornerRadius="6"
+                            SnapsToDevicePixels="True" />
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- A bar item sits against the window's top edge, so its ring stays inside it. -->
+    <Style x:Key="Slate.MenuBarItemFocusVisual">
+        <Setter Property="Control.Template">
+            <Setter.Value>
+                <ControlTemplate>
+                    <Border Margin="0,0,2,0"
+                            BorderBrush="{DynamicResource Slate.FocusBrush}"
+                            BorderThickness="2"
+                            CornerRadius="4"
+                            SnapsToDevicePixels="True" />
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- The surface every menu opens on. The shadow is on a sibling that draws only a
+         background, because an Effect on the border holding the items turns ClearType
+         off for their text. The margin is the room the shadow takes, and MenuPlacement
+         allows for it.
+
+         The hint is here and again on each items host, below the scroller. The surface's
+         hint doesn't reach the text through the scroller's clip: at 200%, menus measured
+         no colour fringes at all until the hosts had it, and about 70% of their text
+         pixels after. A host mustn't clip either, which is why the context menu's panel
+         has dropped the ClipToBounds Fluent gives it. -->
+    <ControlTemplate x:Key="Slate.MenuSurfaceTemplate" TargetType="ContentControl">
+        <Grid Margin="{TemplateBinding Padding}">
+            <Border x:Name="Shadow"
+                    Background="{DynamicResource FlyoutBackground}"
+                    CornerRadius="8"
+                    Effect="{DynamicResource Slate.Shadow16}" />
+            <Border x:Name="Surface"
+                    Padding="0,3"
+                    Background="{DynamicResource FlyoutBackground}"
+                    BorderBrush="{DynamicResource FlyoutBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    RenderOptions.ClearTypeHint="Enabled"
+                    SnapsToDevicePixels="True">
+                <ContentPresenter />
+            </Border>
+        </Grid>
+    </ControlTemplate>
+
+    <!-- Bar items: TopLevelHeader and TopLevelItem. -->
+    <ControlTemplate x:Key="Slate.MenuBarItemTemplate" TargetType="MenuItem">
+        <Border x:Name="Highlight"
+                MinHeight="32"
+                Margin="0,0,2,0"
+                Padding="10,0"
+                Background="Transparent"
+                CornerRadius="4"
+                SnapsToDevicePixels="True">
+            <Grid>
+                <ContentPresenter x:Name="HeaderHost"
+                                  VerticalAlignment="Center"
+                                  ContentSource="Header"
+                                  RecognizesAccessKey="True"
+                                  SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}"
+                                  TextElement.Foreground="{TemplateBinding Foreground}" />
+                <Popup x:Name="PART_Popup"
+                       AllowsTransparency="True"
+                       Focusable="False"
+                       IsOpen="{TemplateBinding IsSubmenuOpen}"
+                       Placement="Bottom"
+                       PlacementTarget="{Binding ElementName=Highlight}"
+                       PopupAnimation="None">
+                    <Popup.PlacementRectangle>
+                        <MultiBinding Converter="{StaticResource Slate.MenuBarPlacement}">
+                            <Binding ElementName="Highlight" Path="ActualWidth" />
+                            <Binding ElementName="Highlight" Path="ActualHeight" />
+                        </MultiBinding>
+                    </Popup.PlacementRectangle>
+                    <ContentControl x:Name="MenuSurface"
+                                    Focusable="False"
+                                    IsTabStop="False"
+                                    Padding="{x:Static local:MenuPlacement.BarSurfaceMargin}"
+                                    Template="{StaticResource Slate.MenuSurfaceTemplate}">
+                        <ContentControl.RenderTransform>
+                            <TranslateTransform />
+                        </ContentControl.RenderTransform>
+                        <ScrollViewer CanContentScroll="True"
+                                      Focusable="False"
+                                      HorizontalScrollBarVisibility="Disabled"
+                                      VerticalScrollBarVisibility="Auto">
+                            <ItemsPresenter x:Name="ItemsPresenter" RenderOptions.ClearTypeHint="Enabled"
+                                            Grid.IsSharedSizeScope="True"
+                                            KeyboardNavigation.DirectionalNavigation="Cycle"
+                                            KeyboardNavigation.TabNavigation="Cycle"
+                                            SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}" />
+                        </ScrollViewer>
+                    </ContentControl>
+                </Popup>
+            </Grid>
+        </Border>
+        <ControlTemplate.Triggers>
+            <Trigger Property="IsHighlighted" Value="True">
+                <Setter TargetName="Highlight" Property="Background" Value="{DynamicResource Slate.HoverOverlayBrush}" />
+            </Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Foreground" Value="{DynamicResource Slate.DisabledTextBrush}" />
+            </Trigger>
+            <MultiDataTrigger>
+                <MultiDataTrigger.Conditions>
+                    <Condition Binding="{Binding IsSubmenuOpen, RelativeSource={RelativeSource Self}}" Value="True" />
+                    <Condition Binding="{Binding Animates, Source={x:Static local:ShellMotion.Current}}" Value="True" />
+                </MultiDataTrigger.Conditions>
+                <MultiDataTrigger.EnterActions>
+                    <BeginStoryboard>
+                        <Storyboard>
+                            <DoubleAnimation Storyboard.TargetName="MenuSurface"
+                                             Storyboard.TargetProperty="(UIElement.RenderTransform).(TranslateTransform.Y)"
+                                             From="-90"
+                                             To="0"
+                                             Duration="00:00:00.167"
+                                             FillBehavior="Stop">
+                                <DoubleAnimation.EasingFunction>
+                                    <CircleEase EasingMode="EaseOut" />
+                                </DoubleAnimation.EasingFunction>
+                            </DoubleAnimation>
+                        </Storyboard>
+                    </BeginStoryboard>
+                </MultiDataTrigger.EnterActions>
+            </MultiDataTrigger>
+        </ControlTemplate.Triggers>
+    </ControlTemplate>
+
+    <!-- Popup rows: SubmenuItem and SubmenuHeader, in one grid, so a label starts in one
+         column whatever its row carries. The outer height sets the 40 pitch; the highlight
+         is inset 5,3, and the label sits 11 inside it, so 16 from the edge when no row in
+         the menu has a check or an icon. MinHeight throughout, because text size grows
+         these rows. -->
+    <ControlTemplate x:Key="Slate.MenuRowTemplate" TargetType="MenuItem">
+        <Grid x:Name="Row" MinHeight="40" Background="Transparent">
+            <Border x:Name="Highlight"
+                    MinHeight="34"
+                    Margin="5,3"
+                    Background="Transparent"
+                    CornerRadius="3"
+                    SnapsToDevicePixels="True">
+                <Grid Margin="11,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" SharedSizeGroup="SlateMenuLeading" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" SharedSizeGroup="SlateMenuEnd" />
+                    </Grid.ColumnDefinitions>
+                    <ContentPresenter x:Name="HeaderHost"
+                                      Grid.Column="1"
+                                      VerticalAlignment="Center"
+                                      ContentSource="Header"
+                                      RecognizesAccessKey="True"
+                                      SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}"
+                                      TextElement.Foreground="{TemplateBinding Foreground}" />
+                    <Grid x:Name="Leading"
+                          Grid.Column="0"
+                          Width="16"
+                          Margin="0,0,8,0"
+                          VerticalAlignment="Center">
+                        <ContentPresenter x:Name="Icon"
+                                          Width="16"
+                                          Height="16"
+                                          Content="{TemplateBinding Icon}"
+                                          SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}" />
+                        <TextBlock x:Name="Check"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   FontFamily="{DynamicResource SymbolThemeFontFamily}"
+                                   FontSize="12"
+                                   Foreground="{DynamicResource Slate.TextBrush}"
+                                   Text="&#xE73E;"
+                                   Visibility="Hidden" />
+                    </Grid>
+                    <TextBlock x:Name="InputGestureText"
+                               Grid.Column="2"
+                               Margin="24,0,0,0"
+                               VerticalAlignment="Center"
+                               FontSize="{TemplateBinding FontSize}"
+                               Foreground="{DynamicResource Slate.SecondaryTextBrush}"
+                               Text="{TemplateBinding InputGestureText}" />
+                    <TextBlock x:Name="Chevron"
+                               Grid.Column="2"
+                               Margin="24,0,0,0"
+                               HorizontalAlignment="Right"
+                               VerticalAlignment="Center"
+                               FontFamily="{DynamicResource SymbolThemeFontFamily}"
+                               FontSize="12"
+                               Foreground="{TemplateBinding Foreground}"
+                               Text="&#xE76C;"
+                               Visibility="Collapsed" />
+                </Grid>
+            </Border>
+            <Popup x:Name="PART_Popup"
+                   AllowsTransparency="True"
+                   Focusable="False"
+                   IsOpen="{TemplateBinding IsSubmenuOpen}"
+                   Placement="Right"
+                   PlacementTarget="{Binding ElementName=Highlight}"
+                   PopupAnimation="None">
+                <Popup.PlacementRectangle>
+                    <MultiBinding Converter="{StaticResource Slate.MenuRowPlacement}">
+                        <Binding ElementName="Highlight" Path="ActualWidth" />
+                        <Binding ElementName="Highlight" Path="ActualHeight" />
+                    </MultiBinding>
+                </Popup.PlacementRectangle>
+                <ContentControl x:Name="MenuSurface"
+                                Focusable="False"
+                                IsTabStop="False"
+                                Padding="{x:Static local:MenuPlacement.RowSurfaceMargin}"
+                                Template="{StaticResource Slate.MenuSurfaceTemplate}">
+                    <ContentControl.RenderTransform>
+                        <TranslateTransform />
+                    </ContentControl.RenderTransform>
+                    <ScrollViewer CanContentScroll="True"
+                                  Focusable="False"
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  VerticalScrollBarVisibility="Auto">
+                        <ItemsPresenter x:Name="ItemsPresenter" RenderOptions.ClearTypeHint="Enabled"
+                                        Grid.IsSharedSizeScope="True"
+                                        KeyboardNavigation.DirectionalNavigation="Cycle"
+                                        KeyboardNavigation.TabNavigation="Cycle"
+                                        SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}" />
+                    </ScrollViewer>
+                </ContentControl>
+            </Popup>
+        </Grid>
+        <ControlTemplate.Triggers>
+            <!-- Nothing to lead with: the column is zero wide unless a row in this menu
+                 has one. A checkable row keeps it while unchecked. -->
+            <MultiTrigger>
+                <MultiTrigger.Conditions>
+                    <Condition Property="Icon" Value="{x:Null}" />
+                    <Condition Property="IsCheckable" Value="False" />
+                    <Condition Property="IsChecked" Value="False" />
+                </MultiTrigger.Conditions>
+                <Setter TargetName="Leading" Property="Visibility" Value="Collapsed" />
+            </MultiTrigger>
+            <Trigger Property="IsChecked" Value="True">
+                <Setter TargetName="Check" Property="Visibility" Value="Visible" />
+                <Setter TargetName="Icon" Property="Visibility" Value="Collapsed" />
+            </Trigger>
+            <Trigger Property="Role" Value="SubmenuHeader">
+                <Setter TargetName="InputGestureText" Property="Visibility" Value="Collapsed" />
+                <Setter TargetName="Chevron" Property="Visibility" Value="Visible" />
+            </Trigger>
+            <Trigger Property="InputGestureText" Value="">
+                <Setter TargetName="InputGestureText" Property="Visibility" Value="Collapsed" />
+            </Trigger>
+            <Trigger Property="IsHighlighted" Value="True">
+                <Setter TargetName="Highlight" Property="Background" Value="{DynamicResource Slate.HoverOverlayBrush}" />
+            </Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Foreground" Value="{DynamicResource Slate.DisabledTextBrush}" />
+                <Setter TargetName="InputGestureText" Property="Foreground" Value="{DynamicResource Slate.DisabledTextBrush}" />
+                <Setter TargetName="Check" Property="Foreground" Value="{DynamicResource Slate.DisabledTextBrush}" />
+            </Trigger>
+            <MultiDataTrigger>
+                <MultiDataTrigger.Conditions>
+                    <Condition Binding="{Binding IsSubmenuOpen, RelativeSource={RelativeSource Self}}" Value="True" />
+                    <Condition Binding="{Binding Animates, Source={x:Static local:ShellMotion.Current}}" Value="True" />
+                </MultiDataTrigger.Conditions>
+                <MultiDataTrigger.EnterActions>
+                    <BeginStoryboard>
+                        <Storyboard>
+                            <DoubleAnimation Storyboard.TargetName="MenuSurface"
+                                             Storyboard.TargetProperty="(UIElement.RenderTransform).(TranslateTransform.Y)"
+                                             From="-90"
+                                             To="0"
+                                             Duration="00:00:00.167"
+                                             FillBehavior="Stop">
+                                <DoubleAnimation.EasingFunction>
+                                    <CircleEase EasingMode="EaseOut" />
+                                </DoubleAnimation.EasingFunction>
+                            </DoubleAnimation>
+                        </Storyboard>
+                    </BeginStoryboard>
+                </MultiDataTrigger.EnterActions>
+            </MultiDataTrigger>
+        </ControlTemplate.Triggers>
+    </ControlTemplate>
+
+    <Style x:Key="Slate.MenuItemStyle" TargetType="MenuItem">
+        <Setter Property="HorizontalContentAlignment" Value="{Binding HorizontalContentAlignment, RelativeSource={RelativeSource AncestorType={x:Type ItemsControl}}}" />
+        <Setter Property="VerticalContentAlignment" Value="{Binding VerticalContentAlignment, RelativeSource={RelativeSource AncestorType={x:Type ItemsControl}}}" />
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource Slate.MenuRowFocusVisual}" />
+        <Setter Property="KeyboardNavigation.IsTabStop" Value="True" />
+        <Setter Property="Focusable" Value="True" />
+        <Setter Property="OverridesDefaultStyle" Value="True" />
+        <Setter Property="Template" Value="{StaticResource Slate.MenuRowTemplate}" />
+        <Style.Triggers>
+            <Trigger Property="Role" Value="TopLevelHeader">
+                <Setter Property="Template" Value="{StaticResource Slate.MenuBarItemTemplate}" />
+                <Setter Property="FocusVisualStyle" Value="{DynamicResource Slate.MenuBarItemFocusVisual}" />
+            </Trigger>
+            <Trigger Property="Role" Value="TopLevelItem">
+                <Setter Property="Template" Value="{StaticResource Slate.MenuBarItemTemplate}" />
+                <Setter Property="FocusVisualStyle" Value="{DynamicResource Slate.MenuBarItemFocusVisual}" />
+            </Trigger>
+            <Trigger Property="Role" Value="SubmenuHeader">
+                <Setter Property="Template" Value="{StaticResource Slate.MenuRowTemplate}" />
+            </Trigger>
+            <Trigger Property="Role" Value="SubmenuItem">
+                <Setter Property="Template" Value="{StaticResource Slate.MenuRowTemplate}" />
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
+    <Style BasedOn="{StaticResource Slate.MenuItemStyle}" TargetType="MenuItem" />
+
+    <!-- An implicit style reaches only its exact type, so without this every checkable row would take WPF's classic style. -->
+    <Style BasedOn="{StaticResource Slate.MenuItemStyle}" TargetType="local:CheckMenuItem" />
+
+    <Style x:Key="{x:Static MenuItem.SeparatorStyleKey}" TargetType="Separator">
+        <Setter Property="OverridesDefaultStyle" Value="True" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Separator">
+                    <Border Height="1"
+                            Margin="0,2"
+                            Background="{DynamicResource Slate.SubtleBorderBrush}" />
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Neither is in the window's tree, so the window's size can't reach a context menu. -->
+    <Style x:Key="Slate.ContextMenuStyle" TargetType="ContextMenu">
+        <Setter Property="FontFamily" Value="{DynamicResource Slate.FontFamilyText}" />
+        <Setter Property="FontSize" Value="{DynamicResource Slate.FontSizeBody}" />
+        <Setter Property="Foreground" Value="{DynamicResource ContextMenuForeground}" />
+        <Setter Property="TextElement.Foreground" Value="{DynamicResource ContextMenuForeground}" />
+        <Setter Property="MinWidth" Value="140" />
+        <Setter Property="HasDropShadow" Value="False" />
+        <!-- The surface's own corner opens where the menu was asked to, past the shadow's room. -->
+        <Setter Property="HorizontalOffset" Value="-24" />
+        <Setter Property="VerticalOffset" Value="-16" />
+        <Setter Property="Grid.IsSharedSizeScope" Value="True" />
+        <Setter Property="Popup.PopupAnimation" Value="None" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
+        <Setter Property="OverridesDefaultStyle" Value="True" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ContextMenu">
+                    <ContentControl x:Name="MenuSurface"
+                                    Focusable="False"
+                                    IsTabStop="False"
+                                    Padding="{x:Static local:MenuPlacement.RowSurfaceMargin}"
+                                    Template="{StaticResource Slate.MenuSurfaceTemplate}">
+                        <ContentControl.RenderTransform>
+                            <TranslateTransform />
+                        </ContentControl.RenderTransform>
+                        <ScrollViewer CanContentScroll="True"
+                                      Focusable="False"
+                                      HorizontalScrollBarVisibility="Disabled"
+                                      VerticalScrollBarVisibility="Auto">
+                            <StackPanel RenderOptions.ClearTypeHint="Enabled"
+                                        IsItemsHost="True"
+                                        KeyboardNavigation.DirectionalNavigation="Cycle"
+                                        Orientation="Vertical" />
+                        </ScrollViewer>
+                    </ContentControl>
+                    <ControlTemplate.Triggers>
+                        <MultiDataTrigger>
+                            <MultiDataTrigger.Conditions>
+                                <Condition Binding="{Binding IsOpen, RelativeSource={RelativeSource Self}}" Value="True" />
+                                <Condition Binding="{Binding Animates, Source={x:Static local:ShellMotion.Current}}" Value="True" />
+                            </MultiDataTrigger.Conditions>
+                            <MultiDataTrigger.EnterActions>
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <DoubleAnimation Storyboard.TargetName="MenuSurface"
+                                                         Storyboard.TargetProperty="(UIElement.RenderTransform).(TranslateTransform.Y)"
+                                                         From="-90"
+                                                         To="0"
+                                                         Duration="00:00:00.167"
+                                             FillBehavior="Stop">
+                                            <DoubleAnimation.EasingFunction>
+                                                <CircleEase EasingMode="EaseOut" />
+                                            </DoubleAnimation.EasingFunction>
+                                        </DoubleAnimation>
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </MultiDataTrigger.EnterActions>
+                        </MultiDataTrigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style BasedOn="{StaticResource Slate.ContextMenuStyle}" TargetType="ContextMenu" />
+
+</ResourceDictionary>

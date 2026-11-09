@@ -71,7 +71,7 @@ public sealed class RegionGuardCensus
     /// the constructed window by the same rules.</summary>
     private static IEnumerable<UIElement> RuntimeRoots(MainWindow shell)
     {
-        foreach (string name in new[] { "FilesPaneBorder", "ContentPaneBorder", "RightPaneLeavesList", "WelcomeRoot" })
+        foreach (string name in new[] { "FilesPaneBorder", "ContentPaneBorder", "RightPaneLeavesList", "RightPaneMorePanelsButton", "WelcomeRoot" })
         {
             yield return (UIElement)(shell.FindName(name) ?? throw new Xunit.Sdk.XunitException($"{name} is gone"));
         }

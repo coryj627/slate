@@ -111,6 +111,7 @@ export function NavSubItem(_p = {}) {
   const __body1 = () => (
     <div className={props.className} style={{
       width: 260,
+      height: 32,
       display: "flex",
       flexDirection: "row",
       gap: "calc(var(--horizontal-xxs) * 1px)",

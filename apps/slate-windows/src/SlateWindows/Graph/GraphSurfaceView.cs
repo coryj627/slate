@@ -49,6 +49,12 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
     internal const string WhereAmIHeading = GraphPhrase.WhereAmIHeading;
     internal const string WhereAmICloseLabel = GraphPhrase.WhereAmICloseLabel;
 
+    /// <summary>#1795: the narrowest the filter's region goes beside the title and the
+    /// switcher, which still shows the field's prompt.</summary>
+    private const double FilterRegionFloor = 170;
+
+    private readonly WrapPanel _headerRow;
+    private readonly Grid _filterRegion;
     private readonly TextBlock _title;
     private readonly TextBox _filterField;
     private readonly TextBlock _filterSummary;
@@ -83,22 +89,23 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         _title = new TextBlock
         {
             Text = "Graph",
-            FontSize = 16,
-            FontWeight = FontWeights.SemiBold,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(12, 8, 12, 8),
         };
+        _title.SetResourceReference(StyleProperty, TypeRamp.Subtitle.StyleKey);
         AutomationProperties.SetHeadingLevel(_title, AutomationHeadingLevel.Level2);
 
         // C-5: the FIELD — an Edit peer with the mac's label and hint.
         _filterField = new TextBox
         {
-            Width = 220,
+            MinWidth = 80,
             Margin = new Thickness(0, 0, 6, 0),
             VerticalAlignment = VerticalAlignment.Center,
             TabIndex = 1,
         };
         AutomationProperties.SetAutomationId(_filterField, "GraphFilterField");
+        FieldPrompt.SetIsEnabled(_filterField, true);
+        SearchGlyph.SetIsEnabled(_filterField, true);
         AutomationProperties.SetName(_filterField, FilterFieldName);
         AutomationProperties.SetHelpText(_filterField, FilterFieldHint);
         _filterField.TextChanged += OnFilterTextChanged;
@@ -237,22 +244,30 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
         AutomationProperties.SetAutomationId(_whereAmIPanel, "GraphWhereAmIPanel");
         AutomationProperties.SetName(_whereAmIPanel, WhereAmIHeading);
 
-        var filterRegion = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        filterRegion.Children.Add(_filterField);
-        filterRegion.Children.Add(_filterSummary);
-        filterRegion.Children.Add(_clearFilter);
+        // #1773: the field takes the room that's left, so nothing beside it cuts it
+        // off. Tab order comes from the TabIndexes above, not from this order.
+        _filterRegion = new Grid { VerticalAlignment = VerticalAlignment.Center };
+        _filterRegion.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MaxWidth = 226 });
+        _filterRegion.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        _filterRegion.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        Grid.SetColumn(_filterSummary, 1);
+        Grid.SetColumn(_clearFilter, 2);
+        _filterRegion.Children.Add(_filterField);
+        _filterRegion.Children.Add(_filterSummary);
+        _filterRegion.Children.Add(_clearFilter);
+
+        // #1795: wraps, and below its floor the field takes a line of its own, so a
+        // narrow pane keeps the title and the field whole.
+        _headerRow = new WrapPanel();
+        _headerRow.Children.Add(_title);
+        _headerRow.Children.Add(_filterRegion);
+        _headerRow.Children.Add(_switcher);
+        _headerRow.SizeChanged += (_, _) => SizeFilterRegion();
 
         var header = new DockPanel();
         DockPanel.SetDock(_inspectorToggle, Dock.Right);
         header.Children.Add(_inspectorToggle);
-        DockPanel.SetDock(_switcher, Dock.Right);
-        header.Children.Add(_switcher);
-        header.Children.Add(_title);
-        header.Children.Add(filterRegion);
+        header.Children.Add(_headerRow);
 
         var layout = new DockPanel();
         DockPanel.SetDock(header, Dock.Top);
@@ -322,6 +337,17 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
     {
         get => (GraphDocumentViewModel?)GetValue(ModelProperty);
         set => SetValue(ModelProperty, value);
+    }
+
+    /// <summary>The filter's region takes the line's spare room, which leaves the
+    /// switcher at the end of it. The pixel keeps layout rounding from wrapping it.</summary>
+    private void SizeFilterRegion()
+    {
+        double beside = _headerRow.ActualWidth - _title.DesiredSize.Width - _switcher.DesiredSize.Width - 1;
+        bool ownLine = beside < FilterRegionFloor;
+        _filterRegion.Margin = ownLine ? new Thickness(12, 0, 0, 6) : default;
+        _filterRegion.Width = Math.Max(0, ownLine ? _headerRow.ActualWidth - 12 : beside);
+        _inspectorToggle.VerticalAlignment = ownLine ? VerticalAlignment.Top : VerticalAlignment.Center;
     }
 
     internal GraphTableView TableForTests => _table;
@@ -614,6 +640,7 @@ internal sealed class GraphSurfaceView : UserControl, IGraphSurfacePresenter
                 {
                     Content = spec.Title,
                     GroupName = "GraphSurfaceMode",
+                    MinWidth = 0,
                     Margin = new Thickness(0, 0, 8, 0),
                     IsChecked = spec.Mode == model.ViewState.Mode,
                     // W6-2 PR D (rule M, Term M2): both modes live — A-11's

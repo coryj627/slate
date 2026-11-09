@@ -53,6 +53,7 @@ public partial class MainWindow : Window
         VaultOpenSeams? openSeams = null)
     {
         InitializeComponent();
+        InitializeTitleBar();
         // R-5 (#1247, as the owner amended it): a landing in the Files tree —
         // a restore's, Tab's, a click's — lands as the region does: its
         // selected row, else its first row unselected, whose focus opens
@@ -76,7 +77,10 @@ public partial class MainWindow : Window
         ListBox dualPane = FindWithAutomationId<ListBox>(FilesPaneBorder, "SidebarDualPane")
             ?? throw new InvalidOperationException("SidebarDualPane is not in the shell's XAML.");
         SelectorFocus.SetOwnLanding(dualPane, () => SelectorFocus.FocusFirstOrSelectedItem(dualPane) || LandOnFilesTree());
-        SelectorFocus.SetOwnLanding(RightPaneLeavesList, () => SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList));
+        // DS-16: a restore onto the strip or More panels lands where the rail does now:
+        // the open panel's row, or More panels when the menu holds it (Codex round 1).
+        SelectorFocus.SetOwnLanding(RightPaneLeavesList, LandOnRail);
+        SelectorFocus.SetOwnLanding(RightPaneMorePanelsButton, LandOnRail);
         KeepLeafKeysThroughPublications();
         GuardRegions();
         WatchRailArrows();
@@ -136,6 +140,7 @@ public partial class MainWindow : Window
         _viewModel.QuickSwitcherDismissed += ViewModel_QuickSwitcherDismissed;
         _viewModel.WorkspaceFocusBoundaryRequested += ViewModel_WorkspaceFocusBoundaryRequested;
         _viewModel.PropertyChanged += ViewModel_PropertyChanged;
+        _viewModel.SettingsOpenAdmission = TryClearTheWayForSettings;
         // WB-9 (#1296, the owner's call): a handoff parked behind a close
         // runs once the close has decided.
         _viewModel.WorkspaceCloseDecided += ExternalActivationHold_Ended;
@@ -508,6 +513,18 @@ public partial class MainWindow : Window
         {
             ObserveFileSidebar(_viewModel.FileSidebar);
         }
+        else if (eventArgs.PropertyName == nameof(VaultLifecycleViewModel.SettingsSheet))
+        {
+            SettingsSheet_Changed();
+        }
+        else
+        {
+            return;
+        }
+
+        // DS-6: what held a surface's flag can go without a word from it, when a vault
+        // closes with a surface open, so a replaced source is a change to what's open too.
+        ModalSource_PropertyChanged(sender, eventArgs);
     }
 
     private void ObserveFileSidebar(FilesSidebarViewModel? sidebar)
@@ -519,6 +536,7 @@ public partial class MainWindow : Window
 
         if (_observedFileSidebar is not null)
         {
+            _observedFileSidebar.FilesPaneNeeded = null;
             _observedFileSidebar.InlineRenameRequested -= ArmSidebarRename;
             _observedFileSidebar.TreeSelectionRestored -=
                 FileSidebar_TreeSelectionRestored;
@@ -534,6 +552,7 @@ public partial class MainWindow : Window
             // W5-4 F1/F2: a create's hand-off re-arms the F2 rename
             // flow programmatically once the new node is selected.
             sidebar.InlineRenameRequested += ArmSidebarRename;
+            sidebar.FilesPaneNeeded = RevealFilesSidebar;
             // W5-4 (red team, a11y 2): a mutation's publication
             // re-seats selection and asks the window to restore
             // keyboard focus to the tree.
@@ -611,6 +630,7 @@ public partial class MainWindow : Window
             return;
         }
 
+        RevealFilesSidebar();
         SidebarFileActionsExpander.IsExpanded = true;
         _ = Dispatcher.InvokeAsync(() =>
         {
@@ -648,7 +668,10 @@ public partial class MainWindow : Window
         _observedWorkspace = workspace;
         if (workspace is not null)
         {
-            workspace.WorkspaceRowWidth = WorkspaceColumns.ActualWidth;
+            // DS-14: a pane that steps aside with the keys in it says so.
+            workspace.KeysAreInPane = pane =>
+                (pane == ShellSidebar.Files ? (UIElement)FilesPaneBorder : RightPaneBorder).IsKeyboardFocusWithin;
+            workspace.WorkspaceRowWidth = ((FrameworkElement)WorkspaceColumns.Parent).ActualWidth;
             workspace.IsChoosingLeafByArrow = () => _railArrow;
             workspace.EditorPaneFocusRequested += Workspace_EditorPaneFocusRequested;
             workspace.CanvasNodeLandingRequested += Workspace_CanvasNodeLandingRequested;
@@ -816,11 +839,9 @@ public partial class MainWindow : Window
 
             _focusBeforeSwitcher ??= Keyboard.FocusedElement;
             _quickSwitcherCommitted = false;
-            _ = Dispatcher.InvokeAsync(() =>
-            {
-                QuickSwitcherSearchTextBox.Focus();
-                QuickSwitcherSearchTextBox.SelectAll();
-            }, DispatcherPriority.Input);
+            // #1690: in the same turn, with a queued fallback only for a
+            // field not yet able to take the keys (LandInOpeningOverlay).
+            LandInOpeningOverlay(QuickSwitcherOverlay, QuickSwitcherSearchTextBox, () => _observedQuickSwitcher?.IsOpen == true);
         }
     }
 
@@ -946,6 +967,7 @@ public partial class MainWindow : Window
         {
             if (boundary == WorkspaceFocusBoundary.Files)
             {
+                WorkspaceColumns.UpdateLayout();
                 _ = LandOnFilesTree();
             }
             else if (_viewModel.Workspace is WorkspaceViewModel workspace
@@ -975,7 +997,7 @@ public partial class MainWindow : Window
                     Graph.GraphInspectorView.LandBoundary(
                         _viewModel.Workspace is WorkspaceViewModel current && current.IsGraphInspectorShown,
                         GraphInspectorSurface.FocusFirstStop,
-                        () => _ = SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList)));
+                        () => _ = LandOnRail()));
             }
             else if (boundary == WorkspaceFocusBoundary.RightPaneEdge)
             {
@@ -983,7 +1005,7 @@ public partial class MainWindow : Window
                 // (W7-6 §6: Ctrl+Alt+Arrow's semantics unchanged) — on the
                 // shown leaf's row, never the bare rail, from which Down
                 // walked into the menu bar (W7-7 PR 4, #1247, R-5).
-                _ = SelectorFocus.FocusFirstOrSelectedItem(RightPaneLeavesList);
+                _ = LandOnRail();
             }
             else
             {
@@ -1016,6 +1038,24 @@ public partial class MainWindow : Window
         }
 
         ModifierKeys modifiers = Keyboard.Modifiers;
+
+        // DS-8 (#1809): a tab's close chords are bare KeyBindings, which no surface stops by
+        // itself, so a clean tab would close, or a dirty tab prompt, behind it. Ahead of the
+        // surfaces' own routes, some of which return without looking at a modified key, and
+        // closing the tab would retire the document a canvas card editor holds a draft for.
+        if (OpenModalSurface is not null && modifiers == ModifierKeys.Control && e.Key is Key.W or Key.F4)
+        {
+            e.Handled = true;
+            return;
+        }
+
+        // DS-13 (#1814): Alt and a menu's letter, or F10, opens the logo's menu, whose rows'
+        // letters aren't live while it's closed (MainWindow.AppMenu.cs).
+        if (e.Key == Key.System && TryOpenAppMenu(e.SystemKey, modifiers))
+        {
+            e.Handled = true;
+            return;
+        }
 
         // The palette is modal: while it is open it owns the keyboard, so
         // no shell chord fires underneath it. Placed ahead of Quick Open
@@ -1064,6 +1104,18 @@ public partial class MainWindow : Window
             // only for UNHANDLED key events.
             e.Handled = IsUnderlyingShellShortcut(e.Key, modifiers)
                 || (modifiers is not ModifierKeys.None
+                    && !TextEditingChords.Allows(e.Key, modifiers));
+            return;
+        }
+
+        // DS-10 (#1811): nothing with Control held acts beneath Settings, which holds no
+        // text a chord could edit yet, and the sheet's own Esc comes on the way back up.
+        // Alt stays out of it: Alt+Down opens a combo box's list.
+        if (_viewModel.SettingsSheet is not null)
+        {
+            e.Handled = IsUnderlyingShellShortcut(e.Key, modifiers)
+                || (modifiers.HasFlag(ModifierKeys.Control)
+                    && e.Key != Key.Tab
                     && !TextEditingChords.Allows(e.Key, modifiers));
             return;
         }
@@ -1348,6 +1400,7 @@ public partial class MainWindow : Window
                 return;
             }
 
+            RevealFilesSidebar();
             SidebarFilterTextBox.Focus();
             SidebarFilterTextBox.SelectAll();
             e.Handled = true;
@@ -1374,6 +1427,12 @@ public partial class MainWindow : Window
             }
 
             e.Handled = true;
+            return;
+        }
+
+        TabStrip_PreviewKeyDown(e);
+        if (e.Handled)
+        {
             return;
         }
 
@@ -1565,7 +1624,7 @@ public partial class MainWindow : Window
         return (key, modifiers) switch
         {
             (Key.O, ModifierKeys.Control or ModifierKeys.Control | ModifierKeys.Shift) => true,
-            (Key.S or Key.W or Key.T, ModifierKeys.Control) => true,
+            (Key.S or Key.W or Key.T or Key.F4, ModifierKeys.Control) => true,
             (Key.T, ModifierKeys.Control | ModifierKeys.Shift) => true,
             (Key.Oem5, ModifierKeys.Control or ModifierKeys.Control | ModifierKeys.Alt) => true,
             (Key.OemOpenBrackets or Key.OemCloseBrackets,
@@ -1590,6 +1649,8 @@ public partial class MainWindow : Window
             // spec §4 makes them a no-op under any modal surface — so the
             // sheet layer suppresses them on the way down.
             (Key.F6, ModifierKeys.None or ModifierKeys.Shift) => true,
+            // DS-10 (#1811): Settings is a KeyBinding, and opens over nothing but the shell.
+            (Key.OemComma, ModifierKeys.Control) => true,
             _ => false,
         };
     }
@@ -1698,6 +1759,22 @@ public partial class MainWindow : Window
     /// Escape. The <c>windows.sidebarFilter.clear</c> chord row
     /// (<c>ChordScope.SidebarFilter</c>); the field's HelpText speaks it
     /// (contract 39 N-1).</summary>
+    private void TabStrip_PreviewKeyDown(KeyEventArgs e)
+    {
+        // DS-8 (#1809): Delete on a focused tab closes it, through the close button's
+        // command, so an unsaved tab's prompt runs the same way. Imperative for the same
+        // reason as the Files tree's: a KeyBinding would eat Delete in the editor.
+        ModifierKeys modifiers = Keyboard.Modifiers;
+        if (e.Key == Key.Delete && modifiers == ModifierKeys.None
+            && OpenModalSurface is null
+            && Keyboard.FocusedElement is TabItem { DataContext: WorkspaceTabViewModel focused }
+            && _viewModel.Workspace is WorkspaceViewModel workspace)
+        {
+            workspace.CloseTabCommand.Execute(focused);
+            e.Handled = true;
+        }
+    }
+
     private void SidebarFilterTextBox_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         ModifierKeys modifiers = Keyboard.Modifiers;
@@ -2114,8 +2191,20 @@ public partial class MainWindow : Window
 
     private void FocusFilter_Click(object sender, RoutedEventArgs e)
     {
+        RevealFilesSidebar();
         SidebarFilterTextBox.Focus();
         SidebarFilterTextBox.SelectAll();
+    }
+
+    /// <summary>DS-7: a route that needs the Files pane shows it first, laid out so that
+    /// it can take the keys. A fallback doesn't: it isn't what the reader asked for.</summary>
+    private void RevealFilesSidebar()
+    {
+        if (_viewModel.Workspace is { IsFilesSidebarVisible: false } workspace)
+        {
+            workspace.IsFilesSidebarVisible = true;
+            WorkspaceColumns.UpdateLayout();
+        }
     }
 
     private void QuickOpen_Click(object sender, RoutedEventArgs e)

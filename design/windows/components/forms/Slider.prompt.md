@@ -18,6 +18,6 @@ Notes: generated from the Fluent 2 Web Figma kit; each variant renders the exact
 
 - **Build as:** `Slider`.
 - **Rating:** Native: the Fluent style ships, so override resource keys only.
-- The Fluent `Slider` style ships. The track fill and thumb use the accent brushes. Accent brushes are gold by default and switch to the user's Windows accent when they have set a custom one (falling back to gold if it fails contrast).
+- The Fluent `Slider` style ships. The track fill and thumb use the accent brushes. Accent brushes are gold by default and switch to the user's Windows accent when they have set a custom one (as Windows gives it, whatever its contrast: plan 46, DSD16).
 
 Ratings and theme setup: `wpf-feasibility.md`.

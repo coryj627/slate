@@ -24,7 +24,7 @@ Short values are accepted everywhere: `appearance` (alias of `style2`), sizes `s
 
 Notes: generated from the Fluent 2 Web Figma kit; each variant renders the exact Figma geometry. Brand colours resolve through `--brand-*` tokens, which tokens/brand.css re-keys to Slate gold. Set `data-theme="dark"` on <html> for the dark mode.
 
-- `appearance="subtle" layout="icon only"` at medium size follows the Windows UI kit: a 40 × 40 target with a 30 × 30 fill and a 16 px glyph. Other variants are the Fluent 2 Web design.
+- `appearance="subtle" layout="icon only"` at medium size follows the Windows UI kit: a 40 × 40 target with a 30 × 30 fill and a 16 px glyph, for the title bar. Panel toolbars and the note header use 32 × 32 (`winui-review.md`). Other variants are the Fluent 2 Web design.
 - Heights are small 24, medium 32 and large 40, borders included, for every appearance. Icon and label buttons are the same height as text-only ones.
 
 ## WPF
@@ -32,7 +32,7 @@ Notes: generated from the Fluent 2 Web Figma kit; each variant renders the exact
 - **Build as:** `Button`.
 - **Rating:** Native: the Fluent style ships, so override resource keys only.
 - Primary is `AccentButtonStyle`. Subtle and transparent are Slate styles `BasedOn` the Fluent button.
-- Accent brushes are gold by default and switch to the user's Windows accent when they have set a custom one (falling back to gold if it fails contrast).
+- Accent brushes are gold by default and switch to the user's Windows accent when they have set a custom one (as Windows gives it, whatever its contrast: plan 46, DSD16).
 - Icon-only versions need `AutomationProperties.Name`; otherwise Narrator reads the icon glyph.
 
 Ratings and theme setup: `wpf-feasibility.md`.

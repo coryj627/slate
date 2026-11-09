@@ -141,6 +141,8 @@ internal sealed class GraphInspectorView : UserControl
         _root.Children.Add(_groups);
         _root.Children.Add(_display);
         _root.Children.Add(_forces);
+        // #1778: Fluent's scrollbar overlays its content, so the fields stop short of it.
+        _root.Margin = new Thickness(_root.Margin.Left, _root.Margin.Top, _root.Margin.Right + 12, _root.Margin.Bottom);
         Content = new ScrollViewer { Focusable = false, Content = _root, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
         Loaded += (_, _) => Observe(Model);
         Unloaded += (_, _) => StopObserving();
@@ -487,7 +489,8 @@ internal sealed class GraphInspectorView : UserControl
     {
         int index = row.Index - 1;
         var panel = new DockPanel { Margin = new Thickness(0, 2, 0, 2), LastChildFill = true };
-        var remove = new Button { Content = "\u2715", Padding = new Thickness(6, 0, 6, 0), Margin = new Thickness(4, 0, 0, 0) };
+        var remove = new Button { Content = "\uE711", Margin = new Thickness(4, 0, 0, 0) };
+        remove.SetResourceReference(StyleProperty, "Slate.SubtleIconButtonStyle");
         // The ids are literal prefixes + the 1-based index (the evidence
         // census reads the prefixes as the shell's literals).
         AutomationProperties.SetAutomationId(remove, "GraphInspectorRemoveGroup:" + row.Index.ToString(System.Globalization.CultureInfo.InvariantCulture));
@@ -553,7 +556,7 @@ internal sealed class GraphInspectorView : UserControl
     {
         var style = new Style(typeof(ComboBoxItem));
         style.Setters.Add(new Setter(AutomationProperties.NameProperty, SiblingNames.ContainerNameBinding()));
-        return style;
+        return ClassicRows.Apply(style);
     }
 
     private void SyncRow(Panel panel, GraphInspectorGroupRow row)

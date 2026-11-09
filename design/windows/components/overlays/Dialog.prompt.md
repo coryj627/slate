@@ -26,7 +26,7 @@ Notes: generated from the Fluent 2 Web Figma kit; each variant renders the exact
 
 - **Build as:** Owned `Window` (`ShowDialog`) or an in-window overlay.
 - **Rating:** Build: needs code or a custom control.
-- In-window: 20% scrim, `KeyboardNavigation.TabNavigation="Cycle"`, `AutomationProperties.IsDialog`, Esc closes and focus returns to the trigger.
+- In-window: 30% scrim, `KeyboardNavigation.TabNavigation="Cycle"`, `AutomationProperties.IsDialog`, Esc closes and focus returns to the trigger.
 - Radius 8, shadow 64 (one WPF shadow, `Direction="270"`).
 
 Ratings and theme setup: `wpf-feasibility.md`.

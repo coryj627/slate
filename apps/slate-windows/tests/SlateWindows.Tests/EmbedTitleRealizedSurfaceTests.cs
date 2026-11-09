@@ -664,7 +664,7 @@ public sealed class EmbedTitleRealizedSurfaceTests
         }
         Walk(root);
         return string.Concat(parts.Where(part => !part.All(character =>
-            char.IsWhiteSpace(character) || character is >= '' and <= '')));
+            char.IsWhiteSpace(character) || character is >= '\uE000' and <= '\uF8FF')));
     }
 
     private static IEnumerable<DependencyObject> VisualDescendants(DependencyObject root)

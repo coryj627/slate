@@ -25,7 +25,7 @@
                                   AutomationProperties.Name="Find in note"
                                   Margin="12,0,12,4">
         <WrapPanel Orientation="Horizontal">
-            <TextBox x:Name="QueryBox"
+            <TextBox x:Name="QueryBox" local:FieldPrompt.IsEnabled="True"
                      MinWidth="200"
                      Margin="0,0,8,4"
                      VerticalContentAlignment="Center"
@@ -72,7 +72,7 @@
                       VerticalAlignment="Center"
                       IsChecked="{Binding WholeWord}"
                       AutomationProperties.AutomationId="FindInNoteWholeWord" />
-            <TextBox x:Name="ReplaceBox"
+            <TextBox x:Name="ReplaceBox" local:FieldPrompt.IsEnabled="True"
                      MinWidth="140"
                      Margin="0,0,4,4"
                      VerticalContentAlignment="Center"

@@ -28,7 +28,7 @@ Reviewed on 2 November 2026: "Windows UI kit (Community).fig" against this desig
 | Elevation | Card: 1px stroke + `0 2 4` at 4% (dark 13%). Tooltip: stroke + `0 2 4` at 10% (26%). Flyout: stroke + `0 8 16` at 14% (26%). Dialog: stroke + `0 32 64` at 24% (48%) + `0 0 8` at 20% (32%) | Six levels (2, 4, 8, 16, 28, 64), one layer, 18% (dark 36%) | Use WinUI's four levels and opacities. Drop the dialog's second layer for WPF. The command palette moves from 28 to the flyout or dialog level |
 | Modal scrim | 30% black in both themes (WPF `SmokeFillColorDefault` is also 30%) | 20% | 30% |
 | Focus ring | 2px outer ring in the primary text colour, plus a 1px inner ring (white in light, 70% black in dark), 1px outside the control | 2px ring in the text colour, 1px outside | Add the 1px inner ring. It keeps focus visible on gold fills |
-| Corners | Controls 4 (the fill inside the 1px border is 3), overlays 8, compact controls 3 | 4 and 8, tabs 6 | No change |
+| Corners | Controls 4 (the fill inside the 1px border is 3), overlays 8, compact controls 3 | 4 and 8, tabs 8 (TabView) | No change |
 | Colour | Windows default blue accent. Translucent fills designed for Mica (control fill 70% white, text 89.56% / 60.63% black) | Slate's opaque neutrals from the app's theme files (APCA-gated), gold accent | No change. The translucent fills assume Mica, which Slate doesn't use |
 | Dialog width | 448 (320 minimum, 520 maximum) | Web Dialog: 600 (480 minimum), small 320 | 448, 320 to 520 |
 
@@ -74,7 +74,7 @@ These exist in Web form and are close enough to keep: Expander (Accordion), Info
 - A 30% modal scrim (`--scrim`).
 - Dialog width 448 (320 to 520).
 - Menu rows at a 40 px pitch with a 34 px highlight inset 5 px, radius 3.
-- Subtle icon buttons at 40 × 40 with a 30 × 30 fill.
+- Subtle icon buttons at 40 × 40 with a 30 × 30 fill in the title bar, and 32 × 32 in panel toolbars and the note header, where the rows are 40 (settled 3 November 2026, plan 46, DSD6).
 
 **Not adopted:**
 - WinUI shadows: Slate keeps one layer per level at 18% (36% dark).

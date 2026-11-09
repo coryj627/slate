@@ -11,6 +11,7 @@
 // write to the storage is the FFI clamp's result, and only the named
 // producers reach the clamp's argument.
 
+using System.Xml.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.FlowAnalysis;
@@ -568,6 +569,132 @@ public sealed class ConnectionsLeafCensus
         Assert.True(offenders.Count == 0, "a pane reveal reaches no consume:\n" + string.Join("\n", offenders));
         Assert.True(seeded, "the constructor does not seed the initial mount (Term 3(a), IGH-7)");
     }
+
+    /// <summary>DS-14 (#1815): a narrow window suspends a pane through one private path,
+    /// which skips Term 2's collapse and Term 3(a)'s arm. Each pane's field is written by its
+    /// setter, the reader's ask, and by that path alone, so a second writer, which would skip
+    /// the ask and the lifecycle both, fails here.</summary>
+    [Fact]
+    public void EachPanesFieldIsWrittenByItsSetterAndTheNarrowWindowsStepAlone()
+    {
+        var writers = new Dictionary<string, List<string>>(StringComparer.Ordinal)
+        {
+            ["_isRightPaneVisible"] = [],
+            ["_isFilesSidebarVisible"] = [],
+        };
+        foreach ((string relative, CSharpSource source) in ShellCompilation.Sources)
+        {
+            SemanticModel model = ShellCompilation.ModelFor(source);
+            foreach (IdentifierNameSyntax name in source.Root.DescendantNodes().OfType<IdentifierNameSyntax>())
+            {
+                if (writers.TryGetValue(name.Identifier.ValueText, out List<string>? found)
+                    && IsAWrite(name)
+                    && model.GetSymbolInfo(name).Symbol is IFieldSymbol field
+                    && field.ContainingType.ToDisplayString() == "SlateWindows.WorkspaceViewModel")
+                {
+                    found.Add($"{relative}:{OwnerOf(name)}");
+                }
+            }
+        }
+
+        Assert.Equal(
+            ["WorkspaceViewModel.cs:IsRightPaneVisible", "WorkspaceViewModel.cs:StepRightPane"],
+            writers["_isRightPaneVisible"].Order(StringComparer.Ordinal).ToArray());
+        Assert.Equal(
+            ["WorkspaceViewModel.SidebarWidths.cs:IsFilesSidebarVisible", "WorkspaceViewModel.SidebarWidths.cs:StepFilesSidebar"],
+            writers["_isFilesSidebarVisible"].Order(StringComparer.Ordinal).ToArray());
+    }
+
+    /// <summary>An assignment's target, or a <c>ref</c> or <c>out</c> argument such as
+    /// <c>SetField</c>'s, bare or through <c>this.</c>.</summary>
+    private static bool IsAWrite(IdentifierNameSyntax name)
+    {
+        ExpressionSyntax target = name.Parent is MemberAccessExpressionSyntax access && access.Name == name ? access : name;
+        return target.Parent switch
+        {
+            AssignmentExpressionSyntax assignment => assignment.Left == target,
+            ArgumentSyntax argument => argument.RefKindKeyword.ValueText is "ref" or "out",
+            _ => false,
+        };
+    }
+
+    /// <summary>DS-7: the census above reads C#, and a XAML binding can write a pane's
+    /// visibility too, skipping the route that finishes a reveal. A toggle binds to
+    /// <c>RightPaneToggle</c> or <c>FilesSidebarToggle</c>, whose setters are the route.</summary>
+    [Fact]
+    public void NoBindingWritesAPanesVisibility()
+    {
+        string[] offenders = Directory.EnumerateFiles(ShellRoot, "*.xaml", SearchOption.AllDirectories)
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                && !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .SelectMany(path => WritingPaneBindings(XDocument.Load(path).Root!))
+            .ToArray();
+        Assert.True(offenders.Length == 0, "a XAML binding can write a pane's visibility:\n" + string.Join("\n", offenders));
+
+        // Planted: what it has to catch, and what it has to leave.
+        Assert.Single(WritingPaneBindings(XElement.Parse("""<T IsChecked="{Binding Workspace.IsRightPaneVisible}" />""")));
+        Assert.Single(WritingPaneBindings(XElement.Parse("""<T IsChecked="{Binding Workspace.IsFilesSidebarVisible, Converter={StaticResource C}}" />""")));
+        Assert.Single(WritingPaneBindings(XElement.Parse("""<T Tag="{Binding IsRightPaneVisible, Mode=TwoWay}" />""")));
+        Assert.Single(WritingPaneBindings(XElement.Parse("""<T Tag="{Binding Path=IsFilesSidebarVisible, Mode=OneWayToSource}" />""")));
+        Assert.Single(WritingPaneBindings(XElement.Parse("""<S><Setter Property="IsChecked" Value="{Binding Workspace.IsRightPaneVisible}" /></S>""")));
+        Assert.Single(WritingPaneBindings(XElement.Parse("""<T><T.IsChecked><Binding Path="Workspace.IsFilesSidebarVisible" /></T.IsChecked></T>""")));
+        Assert.Single(WritingPaneBindings(XElement.Parse("""<T IsChecked="{Binding Workspace.IsRightPaneVisible, Mode=Default}" />""")));
+        Assert.Single(WritingPaneBindings(XElement.Parse("""<T><T.IsChecked><Binding Path="Workspace.IsRightPaneVisible" Mode="Default" /></T.IsChecked></T>""")));
+        Assert.Empty(WritingPaneBindings(XElement.Parse("""<T Tag="{Binding Workspace.IsRightPaneVisible, Mode=Default}" />""")));
+        Assert.Empty(WritingPaneBindings(XElement.Parse("""<T IsChecked="{Binding Workspace.IsRightPaneVisible, Mode=OneWay}" />""")));
+        Assert.Empty(WritingPaneBindings(XElement.Parse("""<T Visibility="{Binding Workspace.IsFilesSidebarVisible, Converter={StaticResource C}}" />""")));
+        Assert.Empty(WritingPaneBindings(XElement.Parse("""<T IsChecked="{Binding Workspace.RightPaneToggle}" />""")));
+    }
+
+    /// <summary>The properties WPF binds both ways unless told otherwise.</summary>
+    private static readonly HashSet<string> TwoWayByDefault = new(StringComparer.Ordinal)
+    {
+        "IsChecked", "IsSelected", "IsExpanded", "IsSubmenuOpen", "IsDropDownOpen", "IsOpen",
+        "Text", "Value", "SelectedItem", "SelectedValue", "SelectedIndex", "SelectedDate", "Password",
+    };
+
+    private static IEnumerable<string> WritingPaneBindings(XElement root)
+    {
+        foreach (XElement element in root.DescendantsAndSelf())
+        {
+            foreach (XAttribute attribute in element.Attributes())
+            {
+                string value = attribute.Value;
+                if (!value.StartsWith("{Binding", StringComparison.Ordinal) || !NamesAPanesVisibility(value))
+                {
+                    continue;
+                }
+
+                string target = attribute.Name.LocalName == "Value" && element.Name.LocalName == "Setter"
+                    ? (string?)element.Attribute("Property") ?? string.Empty
+                    : attribute.Name.LocalName;
+                if (BindingWrites(target, value))
+                {
+                    yield return $"{target}=\"{value}\"";
+                }
+            }
+
+            if (element.Name.LocalName == "Binding" && NamesAPanesVisibility((string?)element.Attribute("Path") ?? string.Empty))
+            {
+                string target = element.Parent?.Name.LocalName.Split('.')[^1] ?? string.Empty;
+                string mode = (string?)element.Attribute("Mode") is { } written ? $"Mode={written}" : string.Empty;
+                if (BindingWrites(target, mode))
+                {
+                    yield return $"{target}: {element}";
+                }
+            }
+        }
+    }
+
+    private static bool NamesAPanesVisibility(string text) =>
+        text.Contains("IsRightPaneVisible", StringComparison.Ordinal)
+        || text.Contains("IsFilesSidebarVisible", StringComparison.Ordinal);
+
+    private static bool BindingWrites(string target, string binding) =>
+        binding.Contains("Mode=TwoWay", StringComparison.Ordinal)
+        || binding.Contains("Mode=OneWayToSource", StringComparison.Ordinal)
+        || (TwoWayByDefault.Contains(target)
+            && (!binding.Contains("Mode=", StringComparison.Ordinal) || binding.Contains("Mode=Default", StringComparison.Ordinal)));
 
     /// <summary>Term 10 / B-19 (iii): the graph document enqueues its filter
     /// count through the relay's GATED entry, with the effective predicate,

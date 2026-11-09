@@ -408,7 +408,9 @@ internal sealed partial class WorkspaceViewModel
 
     /// <summary>Term 3(f): the lifecycle's file-change and scan-finished
     /// arms — the probe at EVERY level. Called from
-    /// <see cref="NotifyGraphOfVaultChange"/>.</summary>
+    /// <see cref="NotifyGraphOfVaultChange"/>, and from
+    /// <see cref="StepRightPane"/> as a suspended pane comes back (DS-14), so
+    /// the leaf is current and nothing is spoken.</summary>
     private void ProbeConnections(CancellationToken cancellation = default) => Connections.Probe(cancellation);
 
     // --- The seams ----------------------------------------------------------------------
@@ -425,9 +427,14 @@ internal sealed partial class WorkspaceViewModel
         {
             return false;
         }
+        IsFilesSidebarVisible = true;
         reveal(path);
         return true;
     }
+
+    /// <summary>DS-15 (#1816): a note header's folder segment reveals its folder in Files,
+    /// showing the sidebar first (DS-7), through the same seam as a row's reveal.</summary>
+    internal bool RevealFolderFromHeader(string folder) => RevealConnectionsRowFromSurface(folder);
 
     /// <summary>B-9: open a row's note in the ACTIVE pane; on success the
     /// shell's <c>OpenedFile</c> posts through the workspace's announcer.</summary>

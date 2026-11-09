@@ -617,6 +617,7 @@ internal sealed partial class WorkspaceViewModel
         {
             return false;
         }
+        IsFilesSidebarVisible = true;
         GraphRevealInSidebar?.Invoke(path);
         return true;
     }

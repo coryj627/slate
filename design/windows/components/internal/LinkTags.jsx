@@ -52,9 +52,8 @@ export function LinkTags(_p = {}) {
             style={{
               position: "relative",
               width: 28,
+              height: 28,
               flexShrink: 0,
-              alignSelf: "stretch",
-              height: "auto",
             }}
             layout={"image"}
             size={"28"}
@@ -144,9 +143,8 @@ export function LinkTags(_p = {}) {
             style={{
               position: "relative",
               width: 28,
+              height: 28,
               flexShrink: 0,
-              alignSelf: "stretch",
-              height: "auto",
             }}
             layout={"icon"}
             size={"28"}
@@ -512,21 +510,19 @@ export function LinkTags(_p = {}) {
       <div style={{
         position: "relative",
         width: 16,
+        height: 31,
         overflow: "hidden",
         flexShrink: 0,
-        alignSelf: "stretch",
       }}>
-        <svg width={23} height={0} viewBox="0 0 23 0" fill="none" style={{
+        <div style={{
           position: "absolute",
-          left: 0,
-          top: 0,
-          transform: "matrix(0,1,-1,0,8,4)",
-          transformOrigin: "0 0",
-          width: 23,
-          height: 1.1524090837156109e-7,
-        }}>
-          <path d={"M 0 -0.5 C -0.276 -0.5 -0.5 -0.276 -0.5 0 C -0.5 0.276 -0.276 0.5 0 0.5 L 0 0 L 0 -0.5 Z M 23 0.5 C 23.276 0.5 23.5 0.276 23.5 0 C 23.5 -0.276 23.276 -0.5 23 -0.5 L 23 0 L 23 0.5 Z M 0 0 L 0 0.5 L 23 0.5 L 23 0 L 23 -0.5 L 0 -0.5 L 0 0 Z"} fill="currentColor" fillRule="nonzero" />
-        </svg>
+          left: 7.5,
+          top: 3.5,
+          width: 1,
+          height: 24,
+          borderRadius: 0.5,
+          backgroundColor: "currentColor",
+        }} />
       </div>
     </div>
   );

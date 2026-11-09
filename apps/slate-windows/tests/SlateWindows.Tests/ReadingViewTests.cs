@@ -1545,12 +1545,12 @@ public sealed partial class ReadingViewTests
         {
             FlowDocument built = BuildSource("```rust\nfn f() {}\n```\n");
             var surface = new ReadingSurface();
+            surface.Resources.MergedDictionaries.Add(TypeRamp.DictionaryFor());
             surface.ApplyBuiltDocument(built);
             Hyperlink copy = FindCopyLinks(surface.Document).Single();
             var paragraph = Assert.IsType<Paragraph>(copy.Parent);
-            Assert.Equal(
-                ReadingDocumentBuilder.PreambleCaptionFontSize,
-                paragraph.FontSize);
+            Assert.Equal(TypeRamp.ReaderSmall.Size, paragraph.FontSize);
+            Assert.Equal(TypeRamp.ReaderSmall.LineHeight, paragraph.LineHeight);
             Assert.Equal(2, paragraph.Margin.Top);
         });
     }

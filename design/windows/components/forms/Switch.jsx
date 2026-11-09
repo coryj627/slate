@@ -193,6 +193,7 @@ export function Switch(_p = {}) {
   );
   const __body3 = () => (
     <div className={props.className} style={{
+      margin: "-2px -2px",
       width: "fit-content",
       borderRadius: 4,
       boxShadow: "inset 0 0 0 3px var(--neutral-stroke-focus-1-rest)",
@@ -387,6 +388,7 @@ export function Switch(_p = {}) {
   );
   const __body6 = () => (
     <div className={props.className} style={{
+      margin: "-2px -2px",
       width: "fit-content",
       borderRadius: 4,
       boxShadow: "inset 0 0 0 3px var(--neutral-stroke-focus-1-rest)",
@@ -601,6 +603,7 @@ export function Switch(_p = {}) {
   );
   const __body9 = () => (
     <div className={props.className} style={{
+      margin: "-2px -2px",
       width: "fit-content",
       borderRadius: 4,
       boxShadow: "inset 0 0 0 3px var(--neutral-stroke-focus-1-rest)",
@@ -824,6 +827,7 @@ export function Switch(_p = {}) {
   );
   const __body12 = () => (
     <div className={props.className} style={{
+      margin: "-2px -2px",
       width: "fit-content",
       borderRadius: 4,
       boxShadow: "inset 0 0 0 3px var(--neutral-stroke-focus-1-rest)",
@@ -1162,6 +1166,7 @@ export function Switch(_p = {}) {
   );
   const __body17 = () => (
     <div className={props.className} style={{
+      margin: "-2px -2px",
       width: "fit-content",
       borderRadius: 4,
       boxShadow: "inset 0 0 0 3px var(--neutral-stroke-focus-1-rest)",
@@ -1398,6 +1403,7 @@ export function Switch(_p = {}) {
   );
   const __body20 = () => (
     <div className={props.className} style={{
+      margin: "-2px -2px",
       width: "fit-content",
       borderRadius: 4,
       boxShadow: "inset 0 0 0 3px var(--neutral-stroke-focus-1-rest)",
@@ -1735,6 +1741,7 @@ export function Switch(_p = {}) {
   );
   const __body23 = () => (
     <div className={props.className} style={{
+      margin: "-2px -2px",
       width: "fit-content",
       borderRadius: 4,
       boxShadow: "inset 0 0 0 3px var(--neutral-stroke-focus-1-rest)",
@@ -2079,6 +2086,7 @@ export function Switch(_p = {}) {
   );
   const __body26 = () => (
     <div className={props.className} style={{
+      margin: "-2px -2px",
       width: "fit-content",
       borderRadius: 4,
       boxShadow: "inset 0 0 0 3px var(--neutral-stroke-focus-1-rest)",

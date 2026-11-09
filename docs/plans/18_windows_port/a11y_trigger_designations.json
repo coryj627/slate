@@ -223,6 +223,46 @@
       }
     },
     "Mac": {
+      "SettingsSheetShown": {
+        "reason": "DS-10: on the Mac, Settings is a window of its own, whose title VoiceOver reads; the Windows sheet is a pane NVDA doesn't read.",
+        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
+        "status": "recorded"
+      },
+      "PaletteChoiceFilterCount": {
+        "reason": "DS-10: Switch Theme… is Windows only; the Mac has no palette level of choices and no theme setting.",
+        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
+        "status": "recorded"
+      },
+      "PaletteChoiceSelected": {
+        "reason": "DS-10: Switch Theme… is Windows only; the Mac has no palette level of choices and no theme setting.",
+        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
+        "status": "recorded"
+      },
+      "PaletteChoicesOpened": {
+        "reason": "DS-10: Switch Theme… is Windows only; the Mac has no palette level of choices and no theme setting.",
+        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
+        "status": "recorded"
+      },
+      "ThemeChosen": {
+        "reason": "DS-10: Switch Theme… is Windows only; the Mac has no palette level of choices and no theme setting.",
+        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
+        "status": "recorded"
+      },
+      "AccentChosen": {
+        "reason": "DS-11: the accent setting is Windows only; the Mac has no accent setting.",
+        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
+        "status": "recorded"
+      },
+      "FilesSidebarHidden": {
+        "reason": "DS-7: the Files sidebar's toggle is Windows only; the Mac's sidebar has no such state, and AppState.toggleRightPane is only its right pane.",
+        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
+        "status": "recorded"
+      },
+      "FilesSidebarShown": {
+        "reason": "DS-7: the Files sidebar's toggle is Windows only; the Mac's sidebar has no such state, and AppState.toggleRightPane is only its right pane.",
+        "decision": "docs/plans/38_notification_dispatcher_contracts.md",
+        "status": "recorded"
+      },
       "QuickSwitcherCount": {
         "reason": "Mac constructs SwitcherRecentCount, SwitcherNoMatches and SwitcherMatchCount in QuickSwitcherModel.publishAnnouncement; Windows QuickSwitcherCount renders the same three state templates.",
         "decision": "docs/plans/18_windows_port/specs/w1_spec.md",

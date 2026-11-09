@@ -36,7 +36,8 @@ internal enum ShellRegionLanding
 internal readonly record struct ShellRegionLayout(
     bool HasTabs,
     bool RightPaneVisible,
-    bool RightPaneHasContentStop);
+    bool RightPaneHasContentStop,
+    bool FilesVisible = true);
 
 /// <summary>The F6 ring as a pure function: no window, no focus, no
 /// timing — <c>ShellRegionRingTests</c> pins every layout shape.</summary>
@@ -94,6 +95,7 @@ internal static class ShellRegionRing
 
     private static bool IsPresent(ShellRegionKind region, ShellRegionLayout layout) => region switch
     {
+        ShellRegionKind.Files => layout.FilesVisible,
         ShellRegionKind.TabBar or ShellRegionKind.Editor => layout.HasTabs,
         ShellRegionKind.EmptyEditor => !layout.HasTabs,
         ShellRegionKind.RightPaneContent => layout.RightPaneVisible && layout.RightPaneHasContentStop,
