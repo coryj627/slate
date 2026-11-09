@@ -116,10 +116,10 @@ internal sealed partial class WorkspaceTabViewModel
             MarkPropertyStale(announce);
             return true;
         }
-        string fresh;
+        IdentifiedText read;
         try
         {
-            fresh = _session.ReadText(Path);
+            read = _session.ReadTextIdentified(Path);
         }
         catch (VaultException)
         {
@@ -128,6 +128,7 @@ internal sealed partial class WorkspaceTabViewModel
             MarkPropertyStale(announce);
             return false;
         }
+        string fresh = read.Text;
         if (_editorSession is not null)
         {
             _editorSession.ReplaceAll(fresh);
@@ -135,6 +136,8 @@ internal sealed partial class WorkspaceTabViewModel
         }
         _text = fresh;
         _contentHash = SlateUniffiMethods.EditorTextContentHash(fresh);
+        FileIdentity = read.FileIdentity;
+        EnforcesFileIdentity = false;
         IsDirty = false;
         IsExternallyStale = false;
         _editorInteractions?.InvalidateExternalState();

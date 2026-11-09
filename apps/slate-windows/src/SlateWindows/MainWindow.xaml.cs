@@ -115,6 +115,7 @@ public partial class MainWindow : Window
             announce: _announcer.Post,
             copyText: CopyText,
             confirmUnsavedClose: ConfirmUnsavedClose,
+            confirmDiscardPending: ConfirmDiscardPending,
             confirmDirtyNavigation: ConfirmDirtyNavigation,
             confirmDirtyClose: ConfirmDirtyClose,
             confirmDestructive: ConfirmDestructive,
@@ -366,6 +367,30 @@ public partial class MainWindow : Window
     /// </summary>
     internal Func<Window, string, string, MessageBoxButton, MessageBoxImage, MessageBoxResult, MessageBoxResult> ShowUnsavedClosePrompt { get; set; } =
         MessageBox.Show;
+
+    /// <summary>WB-29 §4 (owner call D-1): core's message and core's sentence
+    /// for what each button does, on the close prompt's own seam.</summary>
+    private DiscardPendingDecision ConfirmDiscardPending()
+    {
+        string message = SlateUniffiMethods.A11yRender(new A11yEvent.UnsavedNotesNotDiscarded()).Text;
+        string choices = SlateUniffiMethods.HotExitDiscardPendingChoices().YesNoCancelInstruction;
+        MessageBoxResult result = ShowUnsavedClosePrompt(
+            this,
+            $"{message}\n\n{choices}",
+            "Close Vault",
+            MessageBoxButton.YesNoCancel,
+            MessageBoxImage.Warning,
+            MessageBoxResult.Cancel);
+        return result switch
+        {
+            MessageBoxResult.Yes => DiscardPendingDecision.TryAgain,
+            MessageBoxResult.No => DiscardPendingDecision.CloseKeepingCopies,
+            _ => DiscardPendingDecision.Cancel,
+        };
+    }
+
+    /// <summary>WB-29 §4: Windows is ending the session.</summary>
+    internal void FlushHotExitForSessionEnd() => _viewModel.FlushHotExitForSessionEnd();
 
     private VaultCloseDecision ConfirmUnsavedClose()
     {

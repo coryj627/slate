@@ -35,8 +35,8 @@ internal static class ShellLaunch
     private static readonly Lazy<string> RunRoot = new(CreateRoot, LazyThreadSafetyMode.ExecutionAndPublication);
 
     /// <summary>The variable when the run already sets it, else a
-    /// <c>%TEMP%\slate-gate-&lt;pid&gt;-&lt;guid&gt;</c> folder made on first
-    /// use and removed when the run ends.</summary>
+    /// <c>%TEMP%\slate-gate-&lt;pid&gt;-&lt;guid&gt;\device</c> folder made on
+    /// first use and removed, with its run folder, when the run ends.</summary>
     internal static string Root => RunRoot.Value;
 
     /// <summary>Points a shell launch's device state at <see cref="Root"/>, whose accent is
@@ -58,9 +58,14 @@ internal static class ShellLaunch
             StartGold(resolved);
             return resolved;
         }
-        string root = Path.Combine(
+        string run = Path.Combine(
             Path.GetTempPath(),
             $"slate-gate-{Environment.ProcessId}-{Guid.NewGuid():N}");
+        // WB-29: the device root sits inside the run's own folder. Hot exit
+        // flushes the root's parent before it keeps anything (§1), and Windows
+        // refuses a flush of %TEMP% itself (access denied) on some desktops,
+        // which would leave every launch with no hot exit.
+        string root = Path.Combine(run, "device");
         Directory.CreateDirectory(root);
         Environment.SetEnvironmentVariable(Variable, root);
         StartGold(root);
@@ -68,7 +73,7 @@ internal static class ShellLaunch
         {
             try
             {
-                Directory.Delete(root, recursive: true);
+                Directory.Delete(run, recursive: true);
             }
             catch (IOException)
             {

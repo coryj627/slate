@@ -77,7 +77,11 @@ internal sealed partial class WorkspaceViewModel
                     _announce,
                     EditorPreferences,
                     startInteractionBackgroundWork: _startInteractionBackgroundWork,
-                    interactionBackgroundFaultForTests: InteractionBackgroundFaultForTests)
+                    interactionBackgroundFaultForTests: InteractionBackgroundFaultForTests,
+                    // WB-29 §5: a kept note whose file is no longer the
+                    // baseline reads nothing, so it never reports a failed
+                    // load before its text lands.
+                    preloadedTextForRestore: _hotExitPlan?.PreloadFor(tabState.Id))
                 {
                     TaskRepairs = _taskIndexRepairs,
                     SaveCoordinator = _saves,

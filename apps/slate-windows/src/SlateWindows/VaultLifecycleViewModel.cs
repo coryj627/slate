@@ -37,6 +37,21 @@ internal enum WorkspaceTeardown
 
     /// <summary>The user chose to discard the unsaved edits.</summary>
     ClosedChangesDiscarded,
+
+    /// <summary>WB-29 §4: closed with the dirty buffers kept, not saved.</summary>
+    ClosedKept,
+
+    /// <summary>WB-29 §4 (owner call D-1): the store could not finish, and
+    /// the reader chose to close and keep whatever it still holds.</summary>
+    ClosedCopiesKept,
+}
+
+/// <summary>WB-29 §4 (owner call D-1): the discard-pending prompt's choices.</summary>
+internal enum DiscardPendingDecision
+{
+    TryAgain,
+    CloseKeepingCopies,
+    Cancel,
 }
 
 /// <summary>#1280 (owner decision, codex round 2b): what asked for a
@@ -77,6 +92,7 @@ internal sealed partial class VaultLifecycleViewModel
     private readonly Action<RenderedAnnouncement> _announceRendered;
     private readonly Action<string> _copyText;
     private readonly Func<VaultCloseDecision> _confirmUnsavedClose;
+    private readonly Func<DiscardPendingDecision> _confirmDiscardPending;
     private readonly Func<WorkspaceTabViewModel, WorkspaceItemState, WorkspaceDirtyNavigationDecision>
         _confirmDirtyNavigation;
     private readonly Func<WorkspaceTabViewModel, WorkspaceDirtyNavigationDecision>
@@ -183,6 +199,7 @@ internal sealed partial class VaultLifecycleViewModel
         Action<A11yEvent>? announce = null,
         Action<string>? copyText = null,
         Func<VaultCloseDecision>? confirmUnsavedClose = null,
+        Func<DiscardPendingDecision>? confirmDiscardPending = null,
         Func<WorkspaceTabViewModel, WorkspaceItemState, WorkspaceDirtyNavigationDecision>?
             confirmDirtyNavigation = null,
         Func<WorkspaceTabViewModel, WorkspaceDirtyNavigationDecision>? confirmDirtyClose = null,
@@ -221,6 +238,7 @@ internal sealed partial class VaultLifecycleViewModel
         _announceRendered = announceRendered ?? (_ => { });
         _copyText = copyText ?? (_ => { });
         _confirmUnsavedClose = confirmUnsavedClose ?? (() => VaultCloseDecision.Cancel);
+        _confirmDiscardPending = confirmDiscardPending ?? (() => DiscardPendingDecision.Cancel);
         _confirmDirtyNavigation = confirmDirtyNavigation
             ?? ((_, _) => WorkspaceDirtyNavigationDecision.Cancel);
         _confirmDirtyClose = confirmDirtyClose
@@ -570,7 +588,7 @@ internal sealed partial class VaultLifecycleViewModel
             return;
         }
 
-        WorkspaceTeardown teardown = TryCloseWorkspace();
+        WorkspaceTeardown teardown = TryCloseWorkspace(TeardownRoute.Switch);
         if (teardown == WorkspaceTeardown.Refused)
         {
             return;
@@ -687,6 +705,7 @@ internal sealed partial class VaultLifecycleViewModel
             UiProgressListener activeProgressListener = _progressListener;
             Action<CancelToken>? scanStarting = OpenScanStartingForTests;
             Func<VaultSession, ulong>? registerChangeFeed = RegisterChangeFeedForTests;
+            Action? hotExitRead = HotExitReadForTests;
             Task<ScanReport> loadTask = _runSessionLoad(() =>
             {
                 // Plan 43 PR 20b (#1267, design §4.3): the vault watcher arms
@@ -702,6 +721,9 @@ internal sealed partial class VaultLifecycleViewModel
                 // WB-10 (#1293, design §6): this session's change-feed cursor,
                 // after the open scan.
                 RegisterChangeFeed(activeSession, registerChangeFeed);
+                // WB-29 §2: what the store kept, before the workspace is built.
+                _hotExitOpenForAssembly = ReadHotExitForOpen(activeSession, activeCancel);
+                hotExitRead?.Invoke();
                 return report;
             });
             _sessionLoadCompletion = loadTask;
@@ -809,7 +831,7 @@ internal sealed partial class VaultLifecycleViewModel
             return;
         }
 
-        WorkspaceTeardown teardown = TryCloseWorkspace();
+        WorkspaceTeardown teardown = TryCloseWorkspace(TeardownRoute.Close);
         if (teardown == WorkspaceTeardown.Refused)
         {
             return;
@@ -849,7 +871,7 @@ internal sealed partial class VaultLifecycleViewModel
             return false;
         }
 
-        WorkspaceTeardown teardown = TryCloseWorkspace();
+        WorkspaceTeardown teardown = TryCloseWorkspace(TeardownRoute.ApplicationClose);
         if (teardown == WorkspaceTeardown.Refused)
         {
             return false;
@@ -1456,6 +1478,13 @@ internal sealed partial class VaultLifecycleViewModel
         _eventListener = null;
         _session?.Dispose();
         _session = null;
+        // WB-29 §1: the hold goes once the vault's obligations resolve.
+        if (_hotExitHeldKey is { } heldKey)
+        {
+            ActiveHotExitHost.ReleaseSession(heldKey);
+            _hotExitHeldKey = null;
+        }
+        _hotExitOpenForAssembly = HotExitOpen.None(null);
         ReopenRescanCoreAdmission();
     }
 
@@ -1576,7 +1605,9 @@ internal sealed partial class VaultLifecycleViewModel
             // are guarded by — handed in at construction because the
             // restore can seat a persisted graph tab and start its first
             // load before the constructor returns.
-            lifecycleGeneration: () => _generation);
+            lifecycleGeneration: () => _generation,
+            hotExitHost: ActiveHotExitHost,
+            hotExitOpen: _hotExitOpenForAssembly);
         // W4-8 (SD6/SDR-5): hand the workspace an admission gate over
         // the LIFECYCLE's per-path set instead of letting it keep its
         // own flag, which would die with it. Installed before the
@@ -1663,6 +1694,11 @@ internal sealed partial class VaultLifecycleViewModel
         sidebar.PropertyChanged += FileSidebar_RescanBlockersChanged;
         QuickSwitcher = switcher;
         WorkspaceReady?.Invoke(this, EventArgs.Empty);
+        // WB-29 §5: the copy, once, after the landing.
+        foreach (A11yEvent restored in assembled.Workspace.HotExitRestoreEvents)
+        {
+            _announce(restored);
+        }
     }
 
     /// <summary>W4-8 test seam: the marker watch currently owned by
@@ -1797,7 +1833,7 @@ internal sealed partial class VaultLifecycleViewModel
     /// production event does.</summary>
     internal VaultSession? SessionForTests => _session;
 
-    private WorkspaceTeardown TryCloseWorkspace()
+    private WorkspaceTeardown TryCloseWorkspace(TeardownRoute route)
     {
         if (_workspaceTeardownInProgress)
         {
@@ -1807,7 +1843,7 @@ internal sealed partial class VaultLifecycleViewModel
         WorkspaceTeardown teardown = WorkspaceTeardown.Refused;
         try
         {
-            teardown = TryCloseWorkspaceCore();
+            teardown = TryCloseWorkspaceCore(route);
             return teardown;
         }
         finally
@@ -1825,6 +1861,173 @@ internal sealed partial class VaultLifecycleViewModel
             }
         }
     }
+
+    /// <summary>WB-29 §4: how long one settle waits, and how long a Discard
+    /// All blocks for its fence (under Windows' 5 s hung-window threshold).
+    /// Facts shorten them.</summary>
+    internal static TimeSpan HotExitSettleBudget { get; set; } = TimeSpan.FromSeconds(4);
+
+    internal static TimeSpan HotExitDiscardBudget { get; set; } = TimeSpan.FromSeconds(4);
+
+    /// <summary>WB-29 §4: how long signing out waits for its flush.</summary>
+    internal static TimeSpan HotExitSessionEndBudget { get; set; } = TimeSpan.FromSeconds(2);
+
+    /// <summary>WB-29 §2: how long a reopen waits for the last session's
+    /// obligations before it goes without hot exit.</summary>
+    internal static TimeSpan HotExitReopenWait { get; set; } = TimeSpan.FromSeconds(4);
+
+    /// <summary>WB-29: a fact runs a route's teardown decision by itself.</summary>
+    internal WorkspaceTeardown TryCloseForTests(TeardownRoute route) => TryCloseWorkspace(route);
+
+    /// <summary>A fact's own store host; production uses the shared one.</summary>
+    internal HotExitStoreHost? HotExitHostForTests { get; set; }
+
+    private HotExitStoreHost ActiveHotExitHost => HotExitHostForTests ?? HotExitStoreHost.Shared;
+
+    /// <summary>The key whose hold this session took, released with it (§1).</summary>
+    private HotExitVaultKey? _hotExitHeldKey;
+
+    private HotExitOpen _hotExitOpenForAssembly = HotExitOpen.None(null);
+
+    private void PostNotKept(string reason)
+    {
+        var notKept = new A11yEvent.UnsavedNotesNotKept(reason);
+        StatusText = SlateUniffiMethods.A11yRender(notKept).Text;
+        _announce(notKept);
+    }
+
+    /// <summary>WB-29 §4: nothing is dirty, so a settle that cannot finish
+    /// means an obligation is unresolved: the discard-pending prompt. Its Try
+    /// again is one more settle, never a round. Null: a frame moved something,
+    /// back to the loop.</summary>
+    private WorkspaceTeardown? SettleCleanClose(
+        WorkspaceViewModel workspace,
+        HotExitWriter writer,
+        bool savedAll)
+    {
+        while (true)
+        {
+            HotExitSettleResult settled = writer.Settle(HotExitSettleBudget, HotExitSettleMode.Normal);
+            if (!workspace.SavesIdle || workspace.HasDirtyTabs)
+            {
+                return null;
+            }
+            if (settled.Kept)
+            {
+                return savedAll ? WorkspaceTeardown.ClosedAllSaved : WorkspaceTeardown.Closed;
+            }
+            switch (AskDiscardPending())
+            {
+                case DiscardPendingDecision.TryAgain:
+                    break;
+                case DiscardPendingDecision.CloseKeepingCopies:
+                    return WorkspaceTeardown.ClosedCopiesKept;
+                default:
+                    return WorkspaceTeardown.Refused;
+            }
+        }
+    }
+
+    /// <summary>WB-29 §4: every Discard All fences, waits without pumping,
+    /// and re-checks after a committed discard's settle. Null: a frame let the
+    /// reader type or save, back to the loop.</summary>
+    private WorkspaceTeardown? CommitDiscardAll(
+        WorkspaceViewModel workspace,
+        HotExitWriter writer,
+        IReadOnlyList<(WorkspaceTabViewModel Tab, int Identity, long Revision)> asked)
+    {
+        HotExitWriter.DiscardWait wait = writer.DiscardAll(HotExitDiscardBudget);
+        while (true)
+        {
+            if (wait == HotExitWriter.DiscardWait.Committed)
+            {
+                HotExitSettleResult settled = writer.Settle(HotExitSettleBudget, HotExitSettleMode.RetireOnly);
+                if (!workspace.SavesIdle || !workspace.DirtyTabsStill(asked))
+                {
+                    return null;
+                }
+                if (settled.Kept)
+                {
+                    return WorkspaceTeardown.ClosedChangesDiscarded;
+                }
+            }
+            switch (AskDiscardPending())
+            {
+                case DiscardPendingDecision.TryAgain:
+                    wait = wait == HotExitWriter.DiscardWait.Committed
+                        ? wait
+                        : writer.RetryDiscard(HotExitDiscardBudget);
+                    break;
+                case DiscardPendingDecision.CloseKeepingCopies:
+                    return WorkspaceTeardown.ClosedCopiesKept;
+                default:
+                    return WorkspaceTeardown.Refused;
+            }
+        }
+    }
+
+    private DiscardPendingDecision AskDiscardPending()
+    {
+        StatusText = SlateUniffiMethods.A11yRender(new A11yEvent.UnsavedNotesNotDiscarded()).Text;
+        return _confirmDiscardPending();
+    }
+
+    /// <summary>WB-29 §2: on the load worker, after the open scan: the hold,
+    /// the wait for this process's last session, the read, the classification.</summary>
+    private HotExitOpen ReadHotExitForOpen(VaultSession session, CancelToken cancel)
+    {
+        HotExitStoreHost host = ActiveHotExitHost;
+        if (!host.HasStore)
+        {
+            return HotExitOpen.None(host.UnavailableReason);
+        }
+        HotExitKeyResult keyResult = session.HotExitKey();
+        if (keyResult is not HotExitKeyResult.Key { KeyValue: { } key })
+        {
+            return keyResult is HotExitKeyResult.Unavailable unavailable
+                ? HotExitOpen.None(unavailable.Reason)
+                : HotExitOpen.None(SlateUniffiMethods.HotExitReasonStoreUnwritable());
+        }
+        HotExitHoldResult hold = host.AcquireHold(key);
+        if (!hold.Held)
+        {
+            return HotExitOpen.None(hold.Reason);
+        }
+        _hotExitHeldKey = key;
+        host.RetryParkedRetirements(key);
+        // A close that cancels this open stops the wait at once: it joins
+        // this load on the dispatcher (red team PR 2).
+        Task settled = host.WhenSettled(key);
+        DateTime until = DateTime.UtcNow + HotExitReopenWait;
+        while (!settled.Wait(TimeSpan.FromMilliseconds(50)))
+        {
+            if (cancel.IsCancelled() || DateTime.UtcNow >= until)
+            {
+                return HotExitOpen.None(SlateUniffiMethods.HotExitReasonEarlierWorkPending());
+            }
+        }
+        HotExitResult<HotExitSnapshot> read = host.ReadAsync(key).GetAwaiter().GetResult();
+        if (read.Damaged)
+        {
+            return HotExitOpen.DamagedVault(key, read.ErrorReason!);
+        }
+        if (read.Value is not { } snapshot)
+        {
+            return HotExitOpen.None(read.ErrorReason);
+        }
+        return new HotExitOpen(
+            key,
+            snapshot.Epoch,
+            snapshot.Entries,
+            session.ClassifyHotExitEntries(snapshot.Entries),
+            snapshot.Claims,
+            null,
+            Damaged: false);
+    }
+
+    /// <summary>WB-29 §4: Windows is ending the session.</summary>
+    internal void FlushHotExitForSessionEnd() =>
+        Workspace?.HotExit?.FlushForSessionEnd(HotExitSessionEndBudget);
 
     /// <summary>XB-11 (#1573, #1590; plan 45 XD1): how long a close waits for
     /// a tree read already in flight before it refuses with the sentence. A
@@ -1887,6 +2090,7 @@ internal sealed partial class VaultLifecycleViewModel
         switch (teardown)
         {
             case WorkspaceTeardown.Closed:
+            case WorkspaceTeardown.ClosedCopiesKept:
                 _announce(new A11yEvent.VaultClosed());
                 break;
             case WorkspaceTeardown.ClosedAllSaved:
@@ -1916,7 +2120,7 @@ internal sealed partial class VaultLifecycleViewModel
     /// while it was up is asked about again (a rename keeps a document). The session is disposed only after
     /// <see cref="WorkspaceViewModel.Dispose"/> has joined every save worker.
     /// </summary>
-    private WorkspaceTeardown TryCloseWorkspaceCore()
+    private WorkspaceTeardown TryCloseWorkspaceCore(TeardownRoute route)
     {
         // XD1: a tree read in flight is cancelled and awaited, bounded; only
         // a read past the bound refuses, with the sentence it always had.
@@ -1982,7 +2186,45 @@ internal sealed partial class VaultLifecycleViewModel
 
             if (Workspace is not WorkspaceViewModel workspace || !workspace.HasDirtyTabs)
             {
-                return savedAll ? WorkspaceTeardown.ClosedAllSaved : WorkspaceTeardown.Closed;
+                if (Workspace is not WorkspaceViewModel settling2 || settling2.HotExit is not { } clean)
+                {
+                    return savedAll ? WorkspaceTeardown.ClosedAllSaved : WorkspaceTeardown.Closed;
+                }
+                // WB-29 §4: every close settles what the vault owes, then
+                // re-checks: a frame that let the reader edit or save goes
+                // back through the loop.
+                WorkspaceTeardown? settled = SettleCleanClose(settling2, clean, savedAll);
+                if (settled is { } done)
+                {
+                    return done;
+                }
+                continue;
+            }
+
+            // WB-29 §4: application close and switch close kept, unasked,
+            // when the settle kept everything and nothing moved in its frames.
+            if (route != TeardownRoute.Close && workspace.HotExit is { } keeping)
+            {
+                IReadOnlyList<(WorkspaceTabViewModel Tab, int Identity, long Revision)> settling3 =
+                    workspace.DirtyTabsForPrompt();
+                HotExitSettleResult kept = keeping.Settle(HotExitSettleBudget, HotExitSettleMode.Normal);
+                if (kept.Kept)
+                {
+                    if (workspace.SavesIdle && workspace.DirtyTabsStill(settling3))
+                    {
+                        return WorkspaceTeardown.ClosedKept;
+                    }
+                    continue;
+                }
+                if (kept.Reason is { } reason)
+                {
+                    PostNotKept(reason);
+                }
+                // The settle pumped: what the prompt asks about is read below.
+                if (!workspace.SavesIdle)
+                {
+                    continue;
+                }
             }
 
             // What the prompt asks about, read BEFORE it opens.
@@ -2018,7 +2260,15 @@ internal sealed partial class VaultLifecycleViewModel
             {
                 continue;
             }
-            return WorkspaceTeardown.ClosedChangesDiscarded;
+            if (discarding.HotExit is not { Key: not null } discardWriter)
+            {
+                return WorkspaceTeardown.ClosedChangesDiscarded;
+            }
+            WorkspaceTeardown? discarded = CommitDiscardAll(discarding, discardWriter, asked);
+            if (discarded is { } finished)
+            {
+                return finished;
+            }
         }
 
         ReportTerminalStatus(
@@ -2197,6 +2447,10 @@ internal sealed partial class VaultLifecycleViewModel
     /// before the open's scan — the load's one core call now that Quick Open
     /// lists nothing — with the open's token. Production never sets it.</summary>
     internal Action<CancelToken>? OpenScanStartingForTests { get; set; }
+
+    /// <summary>Test seam (WB-29): runs on the load's worker right after the
+    /// open's hot-exit read, the vault held. Production never sets it.</summary>
+    internal Action? HotExitReadForTests { get; set; }
 
     private void QuickSwitcher_OpenRequested(
         object? sender,

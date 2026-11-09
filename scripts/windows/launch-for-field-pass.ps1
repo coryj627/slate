@@ -86,7 +86,7 @@ $profileSlate = [IO.Path]::TrimEndingDirectorySeparator([IO.Path]::Combine(
     [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData), 'Slate'))
 $deviceStores = @(
     'recent-vaults.json', 'window-state.json', 'preferences.json', 'command-palette-recents.json',
-    'file-recents', 'sidebar-write-journal', 'logs')
+    'file-recents', 'sidebar-write-journal', 'logs', 'hot-exit')
 $reused = $PSBoundParameters.ContainsKey('Root')
 if ($reused) {
     if ([string]::IsNullOrWhiteSpace($Root)) {

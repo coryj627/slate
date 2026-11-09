@@ -16,6 +16,15 @@ public partial class App : Application
     private SingleInstanceCoordinator? _singleInstanceCoordinator;
     private MainWindow? _mainWindow;
 
+    /// <summary>WB-29 §4: one bounded flush, no prompt, and the session end
+    /// is never cancelled. WPF's own shutdown then raises the window's Closing,
+    /// which runs the ordinary application close.</summary>
+    protected override void OnSessionEnding(SessionEndingCancelEventArgs e)
+    {
+        _mainWindow?.FlushHotExitForSessionEnd();
+        base.OnSessionEnding(e);
+    }
+
     protected override void OnStartup(StartupEventArgs e)
     {
         // W1-1 Mica policy: every text-bearing Slate surface has a solid,
@@ -142,6 +151,8 @@ public partial class App : Application
         // data only here, before any vault opens; any other process (a test
         // host) keeps a private temporary folder.
         SidebarWriteJournal.InstallProductionLocation();
+        // WB-29 §1: the hot-exit store too; a test host keeps today's prompt.
+        HotExitStoreHost.InstallProductionLocation();
         base.OnStartup(e);
         _mainWindow = new MainWindow();
         _themeManager?.WatchSystemAccent(_mainWindow);

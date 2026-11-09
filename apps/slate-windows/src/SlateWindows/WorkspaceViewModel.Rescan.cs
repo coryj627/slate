@@ -98,7 +98,7 @@ internal sealed partial class WorkspaceViewModel
 
     /// <summary>A worker's read of one Markdown path: its text and that
     /// text's content hash — the index's hash function, over the same bytes.</summary>
-    internal readonly record struct RescanRead(string Text, string Hash);
+    internal readonly record struct RescanRead(string Text, string Hash, string? FileIdentity = null);
 
     /// <summary>What the document re-sync did, for the dependents: how many
     /// operations failed, which open paths the index showed changed (a tab
@@ -708,7 +708,11 @@ internal sealed partial class WorkspaceViewModel
                 tab.RetargetPath(stored);
             }
 
-            tab.ReplaceItemWithReadText(tab.Item, probe.Read!.Value.Text, cancellation);
+            tab.ReplaceItemWithReadText(
+                tab.Item,
+                probe.Read!.Value.Text,
+                cancellation,
+                probe.Read!.Value.FileIdentity);
             documents.Add(tab.RescanReadingPublication);
             projections.Add(tab.RescanReadingPublication);
             TrackTabRescanWork(tab);
@@ -825,7 +829,7 @@ internal sealed partial class WorkspaceViewModel
         var projections = new List<Task>();
         foreach (WorkspaceTabViewModel tab in reload)
         {
-            tab.ReloadKeepingCaretLine(read!.Value.Text, cancellation);
+            tab.ReloadKeepingCaretLine(read!.Value.Text, cancellation, read!.Value.FileIdentity);
             projections.Add(tab.RescanReadingPublication);
             TrackTabRescanWork(tab);
         }
@@ -1402,13 +1406,16 @@ internal sealed partial class WorkspaceTabViewModel
     /// bound offset, never a caret-navigation request, which would take
     /// keyboard focus into the editor from wherever the user is.
     /// </summary>
-    internal void ReloadKeepingCaretLine(string text, CancellationToken rescan = default)
+    internal void ReloadKeepingCaretLine(
+        string text,
+        CancellationToken rescan = default,
+        string? fileIdentity = null)
     {
         TextDocument? before = EditorDocument;
         TextLocation caret = before is null
             ? new TextLocation(1, 1)
             : before.GetLocation(Math.Clamp(EditorCaretOffset, 0, before.TextLength));
-        ReplaceItemWithReadText(Item, text, rescan);
+        ReplaceItemWithReadText(Item, text, rescan, fileIdentity);
         if (EditorDocument is TextDocument after)
         {
             int line = Math.Clamp(caret.Line, 1, after.LineCount);

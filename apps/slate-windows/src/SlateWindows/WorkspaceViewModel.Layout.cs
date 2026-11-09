@@ -359,6 +359,7 @@ internal sealed partial class WorkspaceViewModel
         BasesRow? baseSeed = null)
     {
         WorkspaceTabViewModel? peer = FindSamePathTab(item, excluding: tab);
+        _hotExit?.EndEpisodeByReader(tab);
         tab.ReplaceItem(item);
         AttachTabDocumentsIfNeeded(tab, load, canvasSeed, baseSeed);
         ReleaseUnreferencedBaseDocuments();
@@ -390,12 +391,14 @@ internal sealed partial class WorkspaceViewModel
     private WorkspaceTabViewModel AddTab(
         WorkspaceGroupViewModel group,
         WorkspaceItemState item,
-        bool activate)
+        bool activate,
+        Guid? restoredId = null,
+        string? preloadedTextForRestore = null)
     {
         WorkspaceTabViewModel? peer = FindSamePathTab(item);
         var tab = new WorkspaceTabViewModel(
             _session,
-            new WorkspaceTabState(Guid.NewGuid(), item),
+            new WorkspaceTabState(restoredId ?? Guid.NewGuid(), item),
             MirrorSamePathDocumentState,
             OpenEditorNavigation,
             ActivateEditorTag,
@@ -403,7 +406,8 @@ internal sealed partial class WorkspaceViewModel
             _announce,
             EditorPreferences,
             startInteractionBackgroundWork: _startInteractionBackgroundWork,
-            interactionBackgroundFaultForTests: InteractionBackgroundFaultForTests);
+            interactionBackgroundFaultForTests: InteractionBackgroundFaultForTests,
+            preloadedTextForRestore: preloadedTextForRestore);
         tab.TaskRepairs = _taskIndexRepairs;
         tab.SaveCoordinator = _saves;
         AttachTabDocumentsIfNeeded(tab);
@@ -412,13 +416,18 @@ internal sealed partial class WorkspaceViewModel
             tab.MirrorDocumentStateFrom(peer);
         }
 
+        _hotExit?.Attach(tab);
         group.Tabs.Add(tab);
         if (activate)
         {
             group.ActiveTab = tab;
         }
 
-        RaiseCommandStates();
+        // WB-29 §5: a restore adds tabs before the commands exist.
+        if (!_restoring)
+        {
+            RaiseCommandStates();
+        }
         return tab;
     }
 
@@ -524,6 +533,7 @@ internal sealed partial class WorkspaceViewModel
             _closedTabs.RemoveAt(0);
         }
 
+        _hotExit?.EndEpisodeByReader(tab);
         group.Tabs.Remove(tab);
         tab.Dispose();
         ReleaseUnreferencedBaseDocuments();
@@ -685,6 +695,7 @@ internal sealed partial class WorkspaceViewModel
 
         foreach (WorkspaceTabViewModel tab in group.Tabs)
         {
+            _hotExit?.EndEpisodeByReader(tab);
             tab.Dispose();
         }
 
@@ -870,6 +881,9 @@ internal sealed partial class WorkspaceViewModel
         // its source's ONE document (contract C3).
         AttachTabDocumentsIfNeeded(duplicate);
         duplicate.MirrorDocumentStateFrom(tab);
+        // WB-29 (codex PR 2 round 2): a duplicate is a tab the writer keeps,
+        // as AddTab's are.
+        _hotExit?.Attach(duplicate);
         ActiveGroup.Tabs.Insert(index + 1, duplicate);
         ActiveGroup.ActiveTab = duplicate;
         RequestActiveEditorFocus();
