@@ -495,24 +495,15 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
         }
     }
 
-    /// <summary>WPF's line expanded from the start of the line the caret is on. The caret's
-    /// lean picks that line (at a wrap, a caret leaning back is on the line the wrap closes),
-    /// except just after a newline: leaning back, the caret's line start is the line before,
-    /// which ends before the newline and so doesn't hold it, and the caret starts the next
-    /// line. Null when a line can't be placed.</summary>
-    private ITextRangeProvider? LineHolding(TextPointer caret)
-    {
-        ITextRangeProvider? line = LineFrom(caret.GetLineStartPosition(0));
-        if (line is not null
-            && At(caret) is { } point
-            && line.CompareEndpoints(TextPatternRangeEndpoint.End, point, TextPatternRangeEndpoint.Start) < 0)
-        {
-            line = LineFrom(caret.GetPositionAtOffset(0, LogicalDirection.Forward).GetLineStartPosition(0));
-        }
-
-        return line;
-    }
-
+    /// <summary>WPF's line expanded from the start of the line the caret is on. At a wrap the
+    /// caret's lean picks that line: leaning back, it is on the line the wrap closes. Just
+    /// after a newline the caret starts the next line, whichever way it leans; leaning back
+    /// there, WPF puts it on the line before (or a blank line before). After a LineBreak, WPF
+    /// starts the next line either way. Null when a line can't be placed.</summary>
+    private ITextRangeProvider? LineHolding(TextPointer caret) =>
+        LineFrom((caret.GetTextInRun(LogicalDirection.Backward) is [.., '\n']
+            ? caret.GetPositionAtOffset(0, LogicalDirection.Forward)
+            : caret).GetLineStartPosition(0));
     private ITextRangeProvider? LineFrom(TextPointer? start)
     {
         if (start is null || At(start) is not { } line)

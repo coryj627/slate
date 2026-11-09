@@ -255,6 +255,51 @@ public sealed class ReadingLineUnitTests
         Assert.Equal(["alpha", "", "gamma", "", "alpha"], read);
     });
 
+    /// <summary>A caret just after a hard break (a newline, a blank line's newline, a
+    /// LineBreak) starts the next line, whichever way it leans: its Line is that line.</summary>
+    [Theory]
+    [InlineData("newline", "Second line")]
+    [InlineData("blank line", "gamma")]
+    [InlineData("LineBreak", "Beta line")]
+    public void ACaretAfterABreakReadsTheLineItStarts(string after, string expected) => RunSta(() =>
+    {
+        (string Path, string Text)[] notes = after switch
+        {
+            "newline" => [("Cut.md", "# Cut\n\nFirst line  \nSecond line\n")],
+            "blank line" => [("Cut.md", "# Cut\n\n" + Fence)],
+            _ => [("Cut.md", "# Cut\n\n![[Other]]\n"), ("Other.md", EmbeddedLines)],
+        };
+        using var host = new ShownShell(notes);
+        (ReadingSurface surface, ITextProvider provider) = OpenReading(host, "Cut.md", expected);
+        TextPointer? start = null;
+        for (TextPointer? at = surface.Document.ContentStart; at is not null && start is null; at = at.GetNextContextPosition(LogicalDirection.Forward))
+        {
+            if (at.GetPointerContext(LogicalDirection.Forward) == TextPointerContext.Text
+                && at.GetTextInRun(LogicalDirection.Forward) is { } text
+                && text.IndexOf(expected, StringComparison.Ordinal) is int index and >= 0)
+            {
+                start = at.GetPositionAtOffset(index);
+            }
+        }
+
+        Assert.True(start is not null, $"premise: no \"{expected}\" in the reading view");
+        var wrong = new List<string>();
+        foreach (LogicalDirection lean in new[] { LogicalDirection.Backward, LogicalDirection.Forward })
+        {
+            TextPointer caret = start!.GetPositionAtOffset(0, lean);
+            surface.Selection.Select(caret, caret);
+            surface.CaretPosition = caret;
+            host.Settle();
+            string read = LineText(provider);
+            if (read != expected)
+            {
+                wrong.Add($"leaning {lean}: \"{read}\"");
+            }
+        }
+
+        Assert.True(wrong.Count == 0, $"The caret starting \"{expected}\" read another line:\n" + string.Join('\n', wrong));
+    });
+
     /// <summary>From a blank line's Line, the moves land as on any line: on a line is the line
     /// after it, back a line the line before, and End back a line empties it.</summary>
     [Fact]
