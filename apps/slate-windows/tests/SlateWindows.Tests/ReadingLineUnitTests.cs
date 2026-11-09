@@ -75,17 +75,24 @@ public sealed class ReadingLineUnitTests
     });
 
     /// <summary>Every caret position, with either affinity, in a note of headings, list items,
-    /// hard breaks, a wrapped paragraph and a table whose cells wrap unequally: its Line is one
-    /// visual line, holds the caret, and lies inside the caret's paragraph.</summary>
+    /// hard breaks, a wrapped paragraph, a table whose cells wrap unequally and an embed whose
+    /// lines are LineBreaks: its Line is one visual line, holds the caret, and lies inside the
+    /// caret's paragraph; and NVDA's read of the line's last character (collapse to the end,
+    /// back a character, expand to it) is that character, never the break after it.</summary>
     [Fact]
     public void EveryCaretReadsTheOneLineItIsOn() => RunSta(() =>
     {
         string words = string.Join(' ', Enumerable.Range(1, 40).Select(index => $"word{index}"));
         string cell = string.Join(' ', Enumerable.Range(1, 12).Select(index => $"cell{index}"));
         string table = $"| Left | Right |\n| --- | --- |\n| {cell} x y z | Cell two short |\n";
-        using var host = new ShownShell(("Every.md", Note + "\nFirst line  \nSecond line  \nThird line\n\n" + words + "\n\n" + table));
+        using var host = new ShownShell(
+            ("Every.md", Note + "\nFirst line  \nSecond line  \nThird line\n\n" + words + "\n\n" + table + "\n![[Other]]\n"),
+            ("Other.md", EmbeddedLines));
         host.Shell.ContentPaneBorder.Width = 320;
-        (ReadingSurface surface, ITextProvider provider) = OpenReading(host, "Every.md", "Cell two short");
+        (ReadingSurface surface, ITextProvider provider) = OpenReading(host, "Every.md", "Gamma line");
+        Assert.True(
+            Paragraphs(surface.Document).Any(p => p.Inlines.OfType<LineBreak>().Any()),
+            "premise: the embed's lines aren't LineBreaks inside one paragraph");
         Assert.True(
             Paragraphs(surface.Document).Any(p => Text(p).Contains('\n')),
             "premise: the hard breaks aren't newlines inside one paragraph");
@@ -125,6 +132,19 @@ public sealed class ReadingLineUnitTests
                     wrong.Add($"{where}: \"{lineText.Replace("\t", "\\t")}\" reaches past its paragraph");
                 }
 
+                if (lineText.Length > 0)
+                {
+                    ITextRangeProvider last = line.Clone();
+                    last.MoveEndpointByRange(TextPatternRangeEndpoint.Start, last, TextPatternRangeEndpoint.End);
+                    last.Move(TextUnit.Character, -1);
+                    last.ExpandToEnclosingUnit(TextUnit.Character);
+                    string character = last.GetText(-1);
+                    if (character != lineText[^1].ToString())
+                    {
+                        wrong.Add($"{where}: \"{lineText}\" ends on \"{character.Replace("\r", "\\r").Replace("\n", "\\n")}\"");
+                    }
+                }
+
                 checkedCarets++;
             }
         }
@@ -133,20 +153,34 @@ public sealed class ReadingLineUnitTests
         Assert.True(wrong.Count == 0, $"{wrong.Count} of {checkedCarets} carets read wrong:\n" + string.Join('\n', wrong.Take(30)));
     });
 
-    /// <summary>A line cut at a soft wrap moves as WPF's own expansion of that line does: the
-    /// caret at the line's end and the caret at its start give the same line, and each endpoint
-    /// and Line move from it lands in the same place, reporting the same count.</summary>
-    [Fact]
-    public void ALineCutAtAWrapMovesAsWpfsOwnDoes() => RunSta(() =>
+    /// <summary>A line cut where it ends (a soft wrap, a hard break's newline, a LineBreak)
+    /// moves as WPF's own expansion of that line does: the caret at the line's end and the
+    /// caret at its start give the same line, and each endpoint and Line move from it lands
+    /// in the same place, reporting the same count.</summary>
+    [Theory]
+    [InlineData("wrap")]
+    [InlineData("newline")]
+    [InlineData("LineBreak")]
+    public void ALineCutWhereItEndsMovesAsWpfsOwnDoes(string end) => RunSta(() =>
     {
         string words = string.Join(' ', Enumerable.Range(1, 60).Select(index => $"word{index}"));
-        using var host = new ShownShell(("Wrap.md", $"# Wrap\n\n{words}\n"));
+        (string Path, string Text)[] notes = end switch
+        {
+            "wrap" => [("Cut.md", $"# Cut\n\n{words}\n")],
+            "newline" => [("Cut.md", "# Cut\n\nFirst line  \nSecond line  \nThird line  \nFourth line\n")],
+            _ => [("Cut.md", "# Cut\n\n![[Other]]\n"), ("Other.md", EmbeddedLines)],
+        };
+        string first = end switch { "wrap" => "word1 ", "newline" => "First line", _ => "Alpha line" };
+        using var host = new ShownShell(notes);
         host.Shell.ContentPaneBorder.Width = 320;
-        (ReadingSurface surface, ITextProvider provider) = OpenReading(host, "Wrap.md", "word60");
-        Paragraph long_ = Paragraphs(surface.Document).Single(p => Text(p).StartsWith("word1 ", StringComparison.Ordinal));
+        (ReadingSurface surface, ITextProvider provider) = OpenReading(host, "Cut.md", end == "wrap" ? "word60" : end == "newline" ? "Fourth line" : "Gamma line");
+        Paragraph long_ = Paragraphs(surface.Document).Single(p => Text(p).StartsWith(first, StringComparison.Ordinal));
         Assert.True(
-            long_.ContentStart.GetLineStartPosition(3) is not null,
-            "premise: the paragraph doesn't wrap to four lines");
+            long_.ContentStart.GetLineStartPosition(2) is { } third && third.Paragraph == long_,
+            $"premise: the {end} paragraph doesn't run to three lines");
+        Assert.True(
+            end != "LineBreak" || long_.Inlines.OfType<LineBreak>().Any(),
+            "premise: the embed's lines aren't LineBreaks");
 
         ITextRangeProvider LineAt(Action place)
         {
@@ -203,6 +237,8 @@ public sealed class ReadingLineUnitTests
 
         Assert.Equal(raw.GetText(-1), wrapped.GetText(-1));
     });
+
+    private const string EmbeddedLines = "Alpha line\nBeta line\nGamma line\nDelta line\n";
 
     private static (ReadingSurface Surface, ITextProvider Provider) OpenReading(ShownShell host, string path, string lastText)
     {

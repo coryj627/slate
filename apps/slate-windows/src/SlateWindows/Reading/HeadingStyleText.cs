@@ -469,24 +469,23 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
     /// #1687: NVDA reads the caret's line as the caret range expanded to a Line. In this
     /// read-only surface, with the caret at the end of a line (where Up and Down leave it,
     /// keeping its column), WPF's Line expansion reaches into the next line: over a paragraph
-    /// break, a LineBreak or a soft wrap. So every arrow spoke two lines. WPF's expansion
-    /// starts where the caret's line starts (measured at every caret of a mixed note, either
-    /// affinity), so only its end is cut: to where the caret's visual line ends
-    /// (<see cref="LineEnd"/>). A selection is WPF's, unchanged. If the adaptor's pointer
-    /// can't be read or placed, WPF's stands.
+    /// break, a LineBreak, a newline, a soft wrap or a neighbouring table cell (whose text WPF
+    /// lays out on the same rows). So every arrow spoke two lines. Expanded from the start of
+    /// the caret's line instead, WPF's line is the one visual line: it ends before a newline,
+    /// a LineBreak or the paragraph's end, and at a wrap with its end leaning back onto the
+    /// line, so later moves behave as on any WPF line (measured at every caret of a note of
+    /// headings, lists, breaks, a wrap, a table and an embed, either lean). A caret's Line is
+    /// that line (<see cref="LineHolding"/>); a selection's is WPF's, unchanged. If the
+    /// adaptor's pointer can't be read or placed, WPF's stands.
     /// </summary>
     private void KeepTheCaretsLine(TextPointer caret)
     {
         try
         {
-            // The end leans back onto the line it closes, as WPF's own expansion's end does: at
-            // a wrap, a forward-leaning end is the next line's start, and moving it back a
-            // line spends the move on the lean, leaving the range where it was.
-            if (LineEnd(caret)?.GetPositionAtOffset(0, LogicalDirection.Backward) is { } end
-                && At(end) is { } to
-                && _inner.CompareEndpoints(TextPatternRangeEndpoint.End, to, TextPatternRangeEndpoint.Start) > 0)
+            if (LineHolding(caret) is { } line)
             {
-                _inner.MoveEndpointByRange(TextPatternRangeEndpoint.End, to, TextPatternRangeEndpoint.Start);
+                _inner.MoveEndpointByRange(TextPatternRangeEndpoint.End, line, TextPatternRangeEndpoint.End);
+                _inner.MoveEndpointByRange(TextPatternRangeEndpoint.Start, line, TextPatternRangeEndpoint.Start);
             }
         }
         catch (Exception exception) when (exception is InvalidOperationException or ArgumentException)
@@ -496,22 +495,33 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
         }
     }
 
-    /// <summary>Where the caret's visual line ends. A visual line lies inside one paragraph:
-    /// when the next line starts in the caret's paragraph, a wrap or a newline closes this
-    /// one there; otherwise it ends where the caret's paragraph does, so it holds neither
-    /// the paragraph break, the next item's marker, nor a neighbouring table cell (whose text
-    /// WPF lays out on the same rows, though the next line starts past it). Null for a caret
-    /// outside any paragraph: its expansion stays WPF's.</summary>
-    private static TextPointer? LineEnd(TextPointer caret)
+    /// <summary>WPF's line expanded from the start of the line the caret is on. The caret's
+    /// lean picks that line (at a wrap, a caret leaning back is on the line the wrap closes),
+    /// except just after a newline: leaning back, the caret's line start is the line before,
+    /// which ends before the newline and so doesn't hold it, and the caret starts the next
+    /// line. Null when a line can't be placed.</summary>
+    private ITextRangeProvider? LineHolding(TextPointer caret)
     {
-        if (caret.Paragraph is not { } own)
+        ITextRangeProvider? line = LineFrom(caret.GetLineStartPosition(0));
+        if (line is not null
+            && At(caret) is { } point
+            && line.CompareEndpoints(TextPatternRangeEndpoint.End, point, TextPatternRangeEndpoint.Start) < 0)
+        {
+            line = LineFrom(caret.GetPositionAtOffset(0, LogicalDirection.Forward).GetLineStartPosition(0));
+        }
+
+        return line;
+    }
+
+    private ITextRangeProvider? LineFrom(TextPointer? start)
+    {
+        if (start is null || At(start) is not { } line)
         {
             return null;
         }
 
-        return caret.GetLineStartPosition(1) is { } next && ReferenceEquals(next.Paragraph, own)
-            ? next
-            : own.ContentEnd.GetInsertionPosition(LogicalDirection.Backward);
+        line.ExpandToEnclosingUnit(TextUnit.Line);
+        return line;
     }
 
     /// <summary>A degenerate range at <paramref name="position"/>, for moving an endpoint
