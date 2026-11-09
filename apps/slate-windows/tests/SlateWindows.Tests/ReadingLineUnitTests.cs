@@ -75,16 +75,17 @@ public sealed class ReadingLineUnitTests
     });
 
     /// <summary>Every caret position, with either affinity, in a note of headings, list items,
-    /// hard breaks, a wrapped paragraph, a table whose cells wrap unequally, a code block with a
-    /// blank line and an embed whose lines are LineBreaks: its Line is one visual line, holds the caret, and lies inside the
-    /// caret's paragraph; and NVDA's read of the line's last character (collapse to the end,
-    /// back a character, expand to it) is that character, never the break after it.</summary>
+    /// hard breaks, a wrapped paragraph, a table whose cells wrap unequally (and some are
+    /// empty), a code block with a blank line and an embed whose lines are LineBreaks: its
+    /// Line is one visual line, holds the caret, and lies inside the caret's paragraph; and
+    /// NVDA's read of the line's last character (collapse to the end, back a character, expand
+    /// to it) is that character, never the break after it.</summary>
     [Fact]
     public void EveryCaretReadsTheOneLineItIsOn() => RunSta(() =>
     {
         string words = string.Join(' ', Enumerable.Range(1, 40).Select(index => $"word{index}"));
         string cell = string.Join(' ', Enumerable.Range(1, 12).Select(index => $"cell{index}"));
-        string table = $"| Left | Right |\n| --- | --- |\n| {cell} x y z | Cell two short |\n";
+        string table = $"| Left | Right |\n| --- | --- |\n| {cell} x y z | Cell two short |\n|  | neighbour |\n| alone |  |\n";
         using var host = new ShownShell(
             ("Every.md", Note + "\nFirst line  \nSecond line  \nThird line\n\n" + words + "\n\n" + table + "\n" + Fence + "\n![[Other]]\n"),
             ("Other.md", EmbeddedLines));

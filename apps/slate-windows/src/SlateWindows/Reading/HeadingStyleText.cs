@@ -487,6 +487,15 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
                 _inner.MoveEndpointByRange(TextPatternRangeEndpoint.End, line, TextPatternRangeEndpoint.End);
                 _inner.MoveEndpointByRange(TextPatternRangeEndpoint.Start, line, TextPatternRangeEndpoint.Start);
             }
+
+            // An empty table cell: WPF's line from its start takes in the next cell on the
+            // row. A visual line lies inside one paragraph, so it ends by the caret's.
+            if (caret.Paragraph?.ContentEnd.GetInsertionPosition(LogicalDirection.Backward) is { } paragraphEnd
+                && At(paragraphEnd) is { } end
+                && _inner.CompareEndpoints(TextPatternRangeEndpoint.End, end, TextPatternRangeEndpoint.Start) > 0)
+            {
+                _inner.MoveEndpointByRange(TextPatternRangeEndpoint.End, end, TextPatternRangeEndpoint.Start);
+            }
         }
         catch (Exception exception) when (exception is InvalidOperationException or ArgumentException)
         {
