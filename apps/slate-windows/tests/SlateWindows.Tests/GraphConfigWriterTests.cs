@@ -125,7 +125,6 @@ public sealed partial class GraphConfigWriterTests : IDisposable
         {
             HostLog.ObserverForTests = previous;
         }
-
         Assert.Contains("SlateWindows.GraphConfigPersistFailed (DirectoryNotFoundException)", logged);
         Assert.DoesNotContain(logged, line => line.Contains(_root, StringComparison.Ordinal));
         Assert.Equal(1, writer.FailedForTests);
@@ -201,6 +200,86 @@ public sealed partial class GraphConfigWriterTests : IDisposable
         GraphConfig changed = GraphConfigs.WithTheInspectorsFields();
         Assert.True(writer.Enqueue(_root, changed, writer.Reserve(_root)).Wait(TimeSpan.FromSeconds(10)));
         GraphConfigs.AssertEqual(changed, OnDisk());
+    }
+
+    /// <summary>#1865: another process reading <c>graph.json</c> without
+    /// delete sharing (an indexer, a sync client, the shell gate's read
+    /// loop) refuses the rename that replaces it. The write waits for the
+    /// reader and lands. It used to be logged and lost, so a group query
+    /// the reader had typed never reached the file.</summary>
+    [Fact]
+    public void AWriteWhileAnotherReaderHoldsTheFileLandsWhenItLetsGo()
+    {
+        var writer = new GraphConfigWriter();
+        Assert.True(writer.Enqueue(_root, WithDepth(2), writer.Reserve(_root)).Wait(TimeSpan.FromSeconds(10)));
+        Task write;
+        using (new FileStream(new GraphConfigStore(_root).FilePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            write = writer.Enqueue(_root, WithDepth(3), writer.Reserve(_root));
+            Thread.Sleep(300);
+            Assert.False(write.IsCompleted, "the write ended while another reader held the file");
+        }
+
+        Assert.True(write.Wait(TimeSpan.FromSeconds(10)));
+        Assert.Equal(0, writer.FailedForTests);
+        Assert.Equal(3u, OnDisk().ConnectionsDepth);
+    }
+
+    /// <summary>#1865: a process holding the file with no sharing at all
+    /// refuses the write's read of it, and that waits too.</summary>
+    [Fact]
+    public void AWriteWhileAnotherProcessHoldsTheFileUnsharedLandsWhenItLetsGo()
+    {
+        var writer = new GraphConfigWriter();
+        Assert.True(writer.Enqueue(_root, WithDepth(2), writer.Reserve(_root)).Wait(TimeSpan.FromSeconds(10)));
+        Task write;
+        using (new FileStream(new GraphConfigStore(_root).FilePath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            write = writer.Enqueue(_root, WithDepth(3), writer.Reserve(_root));
+            Thread.Sleep(300);
+            Assert.False(write.IsCompleted, "the write ended while another process held the file");
+        }
+
+        Assert.True(write.Wait(TimeSpan.FromSeconds(10)));
+        Assert.Equal(0, writer.FailedForTests);
+        Assert.Equal(3u, OnDisk().ConnectionsDepth);
+    }
+
+    /// <summary>#1865: the wait is bounded. A file that is never let go
+    /// fails the write as any other I/O failure does, and the queue moves
+    /// on.</summary>
+    [Fact]
+    public void AFileThatIsNeverLetGoFailsTheWriteAfterTheWait()
+    {
+        var writer = new GraphConfigWriter();
+        Assert.True(writer.Enqueue(_root, WithDepth(2), writer.Reserve(_root)).Wait(TimeSpan.FromSeconds(10)));
+        using (new FileStream(new GraphConfigStore(_root).FilePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            Assert.True(writer.Enqueue(_root, WithDepth(3), writer.Reserve(_root)).Wait(TimeSpan.FromSeconds(10)));
+            Assert.InRange(clock.Elapsed, GraphConfigWriter.HeldFileWait, TimeSpan.FromSeconds(5));
+        }
+
+        Assert.Equal(1, writer.FailedForTests);
+        Assert.Null(writer.Newest(_root));
+        Assert.Equal(2u, OnDisk().ConnectionsDepth);
+    }
+
+    /// <summary>#1865: only a file another process holds is waited for.
+    /// Any other I/O failure in the write, here an existing file past the
+    /// read bound, fails at once.</summary>
+    [Fact]
+    public void AnotherIoFailureInTheWriteIsNotWaitedFor()
+    {
+        string path = new GraphConfigStore(_root).FilePath;
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllBytes(path, new byte[GraphConfigStore.MaxReadBytes + 1]);
+        var writer = new GraphConfigWriter();
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        Assert.True(writer.Enqueue(_root, WithDepth(3), writer.Reserve(_root)).Wait(TimeSpan.FromSeconds(10)));
+        Assert.True(clock.Elapsed < GraphConfigWriter.HeldFileWait, $"the write waited {clock.Elapsed} before it failed");
+        Assert.Equal(1, writer.FailedForTests);
+        Assert.Equal(GraphConfigStore.MaxReadBytes + 1, new FileInfo(path).Length);
     }
 
     private static GraphConfig WithDepth(uint depth) => SlateUniffiMethods.GraphConfigDefault() with { ConnectionsDepth = depth };
