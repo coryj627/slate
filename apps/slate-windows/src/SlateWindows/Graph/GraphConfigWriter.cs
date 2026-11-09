@@ -164,7 +164,34 @@ internal sealed class GraphConfigWriter
         try
         {
             WriteGateForTests?.Invoke(pinned.Scope, aggregate);
-            StoreFor(pinned).Write(aggregate);
+            GraphConfigStore store = StoreFor(pinned);
+            for (int attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    store.Write(aggregate);
+                    break;
+                }
+                catch (IOException exception) when (attempt < HeldFileBackoff.Length && IsHeld(exception))
+                {
+                    // #1865: another process holds the file; wait and try
+                    // again. The last attempt's failure is any other. A
+                    // newer save of this root carries the whole config, so a
+                    // superseded write stops here rather than spend its own
+                    // budget ahead of it on the shared queue.
+                    HeldAttemptForTests?.Invoke(attempt);
+                    lock (_lock)
+                    {
+                        if (state.Admitted > generation)
+                        {
+                            SupersededForTests++;
+                            _ = state.Outstanding.Remove(generation);
+                            return;
+                        }
+                    }
+                    Thread.Sleep(HeldFileBackoff[attempt]);
+                }
+            }
             lock (_lock)
             {
                 // The outcome and the aggregate's REMOVAL under one lock
@@ -220,6 +247,45 @@ internal sealed class GraphConfigWriter
         }
         return state;
     }
+
+    /// <summary>
+    /// #1865: the waits between attempts while another process holds the
+    /// file. A reader that opens <c>graph.json</c> without delete sharing
+    /// (an indexer, antivirus, a sync client) makes the rename that replaces
+    /// it fail with access denied, and one that shares nothing makes the
+    /// write's own read fail with a sharing violation. Such holds are
+    /// usually brief, so the write tries again after each wait and, after
+    /// the last, fails as any other I/O failure does. It runs on the queue's
+    /// worker, never the UI thread.
+    /// </summary>
+    private static readonly TimeSpan[] HeldFileBackoff =
+    [
+        TimeSpan.FromMilliseconds(25),
+        TimeSpan.FromMilliseconds(50),
+        TimeSpan.FromMilliseconds(100),
+        TimeSpan.FromMilliseconds(200),
+        TimeSpan.FromMilliseconds(400),
+        TimeSpan.FromMilliseconds(800),
+    ];
+
+    /// <summary>The longest a write waits for a held file before it fails.</summary>
+    internal static TimeSpan HeldFileWait { get; } = HeldFileBackoff.Aggregate(TimeSpan.Zero, (total, wait) => total + wait);
+
+    private const int ErrorAccessDenied = 5;
+    private const int ErrorSharingViolation = 32;
+
+    /// <summary>The anchored store reports a refused open or rename with the
+    /// Win32 code inside; any other <see cref="IOException"/> is not a hold.</summary>
+    private static bool IsHeld(IOException exception) =>
+        exception.InnerException is System.ComponentModel.Win32Exception { NativeErrorCode: ErrorAccessDenied or ErrorSharingViolation };
+
+    /// <summary>Test seam: runs on the queue's worker after an attempt found
+    /// the file held, with the attempt's index, before the supersession
+    /// check and the wait. A fact admits a newer save or lets the file go
+    /// there instead of racing the retries' timing.</summary>
+    internal Action<int>? HeldAttemptForTests { get; set; }
+
+    internal int SupersededForTests { get; private set; }
 
     internal int DroppedAtEnqueueForTests { get; private set; }
 
