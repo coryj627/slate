@@ -75,18 +75,24 @@ public sealed class ReadingLineUnitTests
     });
 
     /// <summary>Every caret position, with either affinity, in a note of headings, list items,
-    /// hard breaks and a wrapped paragraph: its Line is one visual line, and holds the caret.</summary>
+    /// hard breaks, a wrapped paragraph and a table whose cells wrap unequally: its Line is one
+    /// visual line, holds the caret, and lies inside the caret's paragraph.</summary>
     [Fact]
     public void EveryCaretReadsTheOneLineItIsOn() => RunSta(() =>
     {
         string words = string.Join(' ', Enumerable.Range(1, 40).Select(index => $"word{index}"));
-        using var host = new ShownShell(("Every.md", Note + "\nFirst line  \nSecond line  \nThird line\n\n" + words + "\n"));
+        string cell = string.Join(' ', Enumerable.Range(1, 12).Select(index => $"cell{index}"));
+        string table = $"| Left | Right |\n| --- | --- |\n| {cell} x y z | Cell two short |\n";
+        using var host = new ShownShell(("Every.md", Note + "\nFirst line  \nSecond line  \nThird line\n\n" + words + "\n\n" + table));
         host.Shell.ContentPaneBorder.Width = 320;
-        (ReadingSurface surface, ITextProvider provider) = OpenReading(host, "Every.md", "word40");
+        (ReadingSurface surface, ITextProvider provider) = OpenReading(host, "Every.md", "Cell two short");
         Assert.True(
             Paragraphs(surface.Document).Any(p => Text(p).Contains('\n')),
             "premise: the hard breaks aren't newlines inside one paragraph");
-
+        Paragraph left = Paragraphs(surface.Document).Single(p => Text(p).StartsWith("cell1 ", StringComparison.Ordinal));
+        Assert.True(
+            left.ContentEnd.GetLineStartPosition(0) is { } lastLine && lastLine.CompareTo(left.ContentStart) > 0,
+            "premise: the table's left cell doesn't wrap");
         var wrong = new List<string>();
         int checkedCarets = 0;
         for (TextPointer? at = surface.Document.ContentStart.GetInsertionPosition(LogicalDirection.Forward);
@@ -108,6 +114,15 @@ public sealed class ReadingLineUnitTests
                     || line.CompareEndpoints(TextPatternRangeEndpoint.End, point, TextPatternRangeEndpoint.End) < 0)
                 {
                     wrong.Add($"{where}: \"{line.GetText(-1)}\" doesn't hold the caret");
+                }
+
+                // A visual line lies inside one paragraph (or one table cell's): its text is
+                // part of the caret's paragraph, never a neighbour's.
+                string lineText = line.GetText(-1).TrimEnd('\r', '\n');
+                if (at.Paragraph is { } own
+                    && !new TextRange(own.ContentStart, own.ContentEnd).Text.Contains(lineText, StringComparison.Ordinal))
+                {
+                    wrong.Add($"{where}: \"{lineText.Replace("\t", "\\t")}\" reaches past its paragraph");
                 }
 
                 checkedCarets++;
@@ -201,6 +216,7 @@ public sealed class ReadingLineUnitTests
         Paragraph paragraph => [paragraph],
         List list => list.ListItems.SelectMany(item => item.Blocks.SelectMany(Paragraphs)),
         Section section => section.Blocks.SelectMany(Paragraphs),
+        Table table => table.RowGroups.SelectMany(group => group.Rows).SelectMany(row => row.Cells).SelectMany(cell => cell.Blocks.SelectMany(Paragraphs)),
         _ => [],
     };
 

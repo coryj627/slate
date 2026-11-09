@@ -479,8 +479,8 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
     {
         try
         {
-            if (caret.GetLineStartPosition(1) is { } next
-                && At(LineEnd(next)) is { } to
+            if (LineEnd(caret) is { } end
+                && At(end) is { } to
                 && _inner.CompareEndpoints(TextPatternRangeEndpoint.End, to, TextPatternRangeEndpoint.Start) > 0)
             {
                 _inner.MoveEndpointByRange(TextPatternRangeEndpoint.End, to, TextPatternRangeEndpoint.Start);
@@ -493,16 +493,23 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
         }
     }
 
-    /// <summary>Where the line before <paramref name="next"/> (a line's start) ends. Within
-    /// a paragraph, at <paramref name="next"/>: a wrap or a newline closes the line there.
-    /// When <paramref name="next"/> opens another paragraph or list item, at the last
-    /// insertion position before it, so the line holds neither the paragraph break nor the
-    /// next item's marker.</summary>
-    private static TextPointer LineEnd(TextPointer next) =>
-        next.GetNextInsertionPosition(LogicalDirection.Backward) is { } last
-            && !ReferenceEquals(last.Paragraph, next.Paragraph)
-            ? last
-            : next;
+    /// <summary>Where the caret's visual line ends. A visual line lies inside one paragraph:
+    /// when the next line starts in the caret's paragraph, a wrap or a newline closes this
+    /// one there; otherwise it ends where the caret's paragraph does, so it holds neither
+    /// the paragraph break, the next item's marker, nor a neighbouring table cell (whose text
+    /// WPF lays out on the same rows, though the next line starts past it). Null for a caret
+    /// outside any paragraph: its expansion stays WPF's.</summary>
+    private static TextPointer? LineEnd(TextPointer caret)
+    {
+        if (caret.Paragraph is not { } own)
+        {
+            return null;
+        }
+
+        return caret.GetLineStartPosition(1) is { } next && ReferenceEquals(next.Paragraph, own)
+            ? next
+            : own.ContentEnd.GetInsertionPosition(LogicalDirection.Backward);
+    }
 
     /// <summary>A degenerate range at <paramref name="position"/>, for moving an endpoint
     /// to it: a clone whose start and end pointers are set by reflection (as the paragraph
