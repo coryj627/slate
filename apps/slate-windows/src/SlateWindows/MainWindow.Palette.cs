@@ -59,7 +59,12 @@ public partial class MainWindow
     /// runs only while the overlay is still open (<paramref name="stillOpen"/>) and its field
     /// doesn't have the keys: a second landing after the first would select what the reader
     /// has typed since, and the next key would replace it. Meanwhile the keys are taken out
-    /// of the view under the overlay, so nothing reaches it there either.
+    /// of the view under the overlay, so nothing reaches it there either, and put on the
+    /// overlay itself, named and a dialog, while it waits: with no element holding them WPF
+    /// delivers no key at all, and Escape would not reach the overlay's route in the
+    /// window's. (The window itself won't hold them: it hands them straight back to its
+    /// focused element, under the overlay.) Only if the overlay can't take them either are
+    /// they cleared.
     /// </para>
     /// </summary>
     private void LandInOpeningOverlay(FrameworkElement overlay, TextBox field, Func<bool> stillOpen)
@@ -78,7 +83,15 @@ public partial class MainWindow
 
         if (WorkspaceRoot.IsKeyboardFocusWithin || WelcomeRoot.IsKeyboardFocusWithin || MainMenu.IsKeyboardFocusWithin)
         {
-            Keyboard.ClearFocus();
+            // A stop only while it holds the keys: it goes back once they leave, for its
+            // field or because it closed.
+            void LetGo(object sender, KeyboardFocusChangedEventArgs e) => SetHoldsTheKeys(overlay, false, LetGo);
+            SetHoldsTheKeys(overlay, true, LetGo);
+            if (!overlay.IsVisible || !SelectorFocus.LandOnStop(overlay))
+            {
+                SetHoldsTheKeys(overlay, false, LetGo);
+                Keyboard.ClearFocus();
+            }
         }
 
         _ = Dispatcher.InvokeAsync(
@@ -90,6 +103,20 @@ public partial class MainWindow
                 }
             },
             DispatcherPriority.Input);
+    }
+
+    /// <summary>Makes <paramref name="overlay"/> a stop that can hold the keys while its
+    /// field's landing waits, and no stop again once it has let them go. Never a Tab stop.</summary>
+    private static void SetHoldsTheKeys(FrameworkElement overlay, bool holds, KeyboardFocusChangedEventHandler letGo)
+    {
+        overlay.LostKeyboardFocus -= letGo;
+        if (holds)
+        {
+            KeyboardNavigation.SetIsTabStop(overlay, false);
+            overlay.LostKeyboardFocus += letGo;
+        }
+
+        overlay.Focusable = holds;
     }
 
     /// <summary>The palette whose seal release the window listens to.</summary>

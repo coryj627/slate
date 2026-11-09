@@ -237,10 +237,13 @@ public sealed partial class CommandPaletteTests
         host.Settle();
         Assert.True(host.Lifecycle.Palette.IsOpen);
         Assert.Same(field, Keyboard.FocusedElement);
+        Assert.False(host.Shell.CommandPaletteOverlay.Focusable, "the palette stayed a stop once its field took the keys");
     });
 
-    /// <summary>Escape still closes the palette while its landing waits: with no element
-    /// holding the keys, it reaches the window's route.</summary>
+    /// <summary>Escape still closes the palette while its landing waits, and if the
+    /// fallback fails too: the keys are on the palette itself, so WPF delivers it, through
+    /// the input pipeline, to the window's route. With no element holding them it delivers
+    /// no key.</summary>
     [Fact]
     public void EscapeBeforeALateLandingStillClosesThePalette() => RunSta(() =>
     {
@@ -253,13 +256,25 @@ public sealed partial class CommandPaletteTests
         TakeTheKeys(editor);
         host.Settle();
 
+        FrameworkElement overlay = host.Shell.CommandPaletteOverlay;
+        Assert.False(overlay.Focusable, "premise: the palette is a stop before it opens");
         host.Shell.CommandPaletteSearchTextBox.Focusable = false;
         host.Lifecycle.Palette.Open();
-        Assert.Null(Keyboard.FocusedElement);
-        _ = Press(host.Shell, Key.Escape);
+        host.Settle();
+        Assert.True(host.Lifecycle.Palette.IsOpen);
+        Assert.True(
+            ReferenceEquals(overlay, Keyboard.FocusedElement),
+            $"while the landing waits, the keys are on {Keyboard.FocusedElement?.ToString() ?? "nothing"}, not the palette");
+        Assert.False(KeyboardNavigation.GetIsTabStop(overlay), "the palette holding the keys is a Tab stop");
+        InputManager.Current.ProcessInput(
+            new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(host.Shell)!, Environment.TickCount, Key.Escape)
+            {
+                RoutedEvent = Keyboard.PreviewKeyDownEvent,
+            });
         host.Settle();
 
         Assert.False(host.Lifecycle.Palette.IsOpen, "Escape before the landing left the palette open");
+        Assert.False(overlay.Focusable, "the palette stayed a stop once it let the keys go");
     });
 
     /// <summary>Whether the keys are on <paramref name="element"/> or inside it, by where
@@ -270,28 +285,6 @@ public sealed partial class CommandPaletteTests
         Keyboard.FocusedElement is DependencyObject keys
         && (ReferenceEquals(keys, element) || (keys is System.Windows.Media.Visual && element.IsAncestorOf(keys)));
 
-    /// <summary>A key as WPF delivers it to the element holding the keys: the preview through
-    /// the window's route, then, if nothing took it, the key itself. Whether the preview was
-    /// taken.</summary>
-    internal static bool Press(UIElement holder, Key key)
-    {
-        PresentationSource source = PresentationSource.FromVisual(holder)
-            ?? throw new InvalidOperationException("the element holding the keys has no presentation source");
-        var preview = new KeyEventArgs(Keyboard.PrimaryDevice, source, Environment.TickCount, key)
-        {
-            RoutedEvent = Keyboard.PreviewKeyDownEvent,
-        };
-        holder.RaiseEvent(preview);
-        if (!preview.Handled)
-        {
-            holder.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, source, Environment.TickCount, key)
-            {
-                RoutedEvent = Keyboard.KeyDownEvent,
-            });
-        }
-
-        return preview.Handled;
-    }
 
     private static Button LauncherAction(PaletteShellHost host, string id) => Assert.Single(
         ShownShell.Descendants(host.Shell.WorkspaceRoot).OfType<Button>(),
