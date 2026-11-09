@@ -179,49 +179,36 @@ public sealed class EmptyPaneLauncherTests
         Assert.False(search.IsEnabled, "Search Vault stayed on under the palette.");
     });
 
-    /// <summary>A sheet's field takes the keys in a queued landing, so the action holding
-    /// them stays on until then, and a key pressed meanwhile would reach it: Space would
-    /// press it under Settings. The window takes it; then the action goes off.</summary>
+    /// <summary>A sheet's field takes the keys in a queued landing, so under a sheet the
+    /// actions go off in the turn it opens, the one holding the keys too: none can be pressed
+    /// or invoked beneath it meanwhile, through the keys or a reader's activate command.
+    /// (Quick Open, search and the palette take the keys in their own turn, so the action
+    /// holding them stays on until then.)</summary>
     [Fact]
-    public void AnActionUnderASheetKeepsTheKeysFromItUntilTheSheetTakesThem() => RunSta(() =>
+    public void UnderASheetEveryActionGoesOffInTheTurnItOpens() => RunSta(() =>
     {
         using var host = new ShownShell(("note.md", "# Note\n"));
         host.Settle();
-        Button template = Launcher(host).Children.OfType<Button>().ElementAt(1);
+        Button[] actions = [.. Launcher(host).Children.OfType<Button>()];
+        Button quickOpen = actions[0];
         host.Shell.Activate();
         host.Settle();
         Assert.True(
-            template.Focus() && ReferenceEquals(template, Keyboard.FocusedElement),
-            $"keyboard premise: New Note from Template could not take the keys (they are on {Keyboard.FocusedElement})");
+            quickOpen.Focus() && ReferenceEquals(quickOpen, Keyboard.FocusedElement),
+            $"keyboard premise: Quick Open could not take the keys (they are on {Keyboard.FocusedElement})");
 
-        var offWithTheKeys = new List<string>();
-        DependencyPropertyChangedEventHandler record = (_, e) =>
-        {
-            if (e.NewValue is false && CommandPaletteTests.TheKeysAreIn(template))
-            {
-                offWithTheKeys.Add(host.Shell.OpenModalSurface?.ToString() ?? "no surface");
-            }
-        };
-        template.IsEnabledChanged += record;
-        bool taken;
-        try
-        {
-            host.Lifecycle.OpenSettingsCommand.Execute(null);
-            Assert.Same(template, Keyboard.FocusedElement);
-            taken = CommandPaletteTests.Press(template, Key.Space);
-            host.Settle();
-        }
-        finally
-        {
-            template.IsEnabledChanged -= record;
-        }
+        host.Lifecycle.OpenSettingsCommand.Execute(null);
 
-        Assert.True(offWithTheKeys.Count == 0, $"New Note from Template went off holding the keys under {string.Join(", ", offWithTheKeys)}.");
-        Assert.True(taken, "Space reached New Note from Template under Settings.");
-        Assert.False(template.IsPressed, "New Note from Template was pressed under Settings.");
         Assert.Equal(ModalSurface.Settings, host.Shell.OpenModalSurface);
+        Assert.All(actions, action =>
+        {
+            Assert.False(action.IsEnabled, $"{AutomationProperties.GetName(action)} is on in the turn Settings opened.");
+            var invoke = (System.Windows.Automation.Provider.IInvokeProvider)new ButtonAutomationPeer(action)
+                .GetPattern(PatternInterface.Invoke);
+            _ = Assert.Throws<ElementNotEnabledException>(invoke.Invoke);
+        });
+        host.Settle();
         Assert.True(host.Shell.SettingsOverlay.IsKeyboardFocusWithin, $"the keys are on {Keyboard.FocusedElement}, outside Settings.");
-        Assert.False(template.IsEnabled, "New Note from Template stayed on under Settings.");
     });
 
     /// <summary>The workspace host leaves the Tab order only while the pane is empty: with

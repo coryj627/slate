@@ -207,10 +207,11 @@
          on the left and its chord (Tag) on the right in secondary text. Whole, on Slate.ButtonBase.
          The launcher caps the width, so in a narrow pane a row narrows, and where its label and
          chord don't fit on one line the chord goes under the label (LauncherRowPanel) and the
-         row grows. Off under every modal surface, as the menus are, once the keys have left
-         the row for the surface (#1690). IsModalSurfaceOpen can change before the surface's
-         field takes the keys, and off while it held them, the row said "unavailable" in NVDA.
-         Until they leave, the window's key route takes the keys (KeysAreStillUnderAnOpenSurface). -->
+         row grows. Off under every modal surface, as the menus are: at once under a sheet,
+         and under Quick Open, search or the palette once the keys have left the row for the
+         overlay's field, which takes them in the turn it opens (#1690). IsModalSurfaceOpen
+         can change just before that, and off while it held the keys, the row said
+         "unavailable" in NVDA. -->
     <Style x:Key="Slate.LauncherRowStyle" TargetType="Button" BasedOn="{StaticResource Slate.ButtonBase}">
         <Setter Property="HorizontalAlignment" Value="Stretch" />
         <Setter Property="HorizontalContentAlignment" Value="Stretch" />
@@ -267,6 +268,9 @@
                 </MultiDataTrigger.Conditions>
                 <Setter Property="IsEnabled" Value="False" />
             </MultiDataTrigger>
+            <DataTrigger Binding="{Binding IsModalSheetOpen, RelativeSource={RelativeSource AncestorType=Window}}" Value="True">
+                <Setter Property="IsEnabled" Value="False" />
+            </DataTrigger>
         </Style.Triggers>
     </Style>
     <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />

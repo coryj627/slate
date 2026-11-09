@@ -49,6 +49,31 @@ public sealed partial class CommandPaletteTests
         Assert.False(root.IsEnabled, "the workspace stayed enabled under the open overlay");
     });
 
+    /// <summary>#1690 as the field pass heard it: the keys on a canvas outline row, then
+    /// Ctrl+Shift+P. The row's canvas goes off only once the palette's field has the keys,
+    /// in the turn the palette opens.</summary>
+    [Fact]
+    public void ACanvasOutlineRowIsDisabledOnlyAfterThePaletteTakesTheKeys() => RunSta(() =>
+    {
+        using var delete = new PaletteCanvasDelete();
+        IInputElement row = Keyboard.FocusedElement;
+        Assert.Equal("beta", RowIdOf(row));
+        FrameworkElement root = delete.Host.Shell.WorkspaceRoot;
+
+        IInputElement? atOnce = null;
+        List<string> disabledUnder = DisabledWithTheKeysInside(root, () =>
+        {
+            delete.Host.Palette.Open();
+            atOnce = Keyboard.FocusedElement;
+            delete.Host.Settle();
+        });
+
+        Assert.True(disabledUnder.Count == 0, $"the canvas went off with the keys on {string.Join(", ", disabledUnder)}");
+        Assert.Same(delete.Host.Shell.CommandPaletteSearchTextBox, atOnce);
+        delete.Host.AssertFocusIsOn(delete.Host.Shell.CommandPaletteSearchTextBox);
+        Assert.False(((UIElement)row).IsEnabled, "Beta's row stayed on under the palette");
+    });
+
     /// <summary>The empty pane's action that opens an overlay, activated as a reader's
     /// activate command does, through its peer, goes off only once the overlay's field has
     /// taken the keys. Quick Open's action runs the switcher's own command, which goes off as
@@ -152,14 +177,15 @@ public sealed partial class CommandPaletteTests
         Assert.False(holder.IsEnabled, $"the {under} was still on in the turn the palette opened");
     });
 
-    /// <summary>When the field can't take the keys in that turn, the view under the palette
-    /// keeps them, and stays on, until the queued landing runs. A key pressed meanwhile would
-    /// reach it: Delete would edit the note, Down would open the menu. The window takes it.
-    /// The field refuses the keys here until the fact lets it.</summary>
+    /// <summary>When the field can't take the keys in that turn, they're taken out of the
+    /// view under the palette rather than left in it until the queued landing runs, so no
+    /// key, text or composition reaches the note, or the menu, under the palette meanwhile.
+    /// The view goes off with nothing in it holding the keys, so NVDA hears no
+    /// "unavailable". The field refuses the keys here until the fact lets it.</summary>
     [Theory]
     [InlineData("editor")]
     [InlineData("menu")]
-    public void AKeyPressedBeforeALateLandingDoesNotReachTheViewUnderThePalette(string under) => RunSta(() =>
+    public void ALateLandingTakesTheKeysOutOfTheViewUnderThePalette(string under) => RunSta(() =>
     {
         using var host = new ShownShell(("a.md", "# A\n"));
         host.Workspace.OpenPath("a.md");
@@ -171,27 +197,23 @@ public sealed partial class CommandPaletteTests
         host.Settle();
         TakeTheKeys(holder);
         host.Settle();
-        string before = editor.Document.Text;
         TextBox field = host.Shell.CommandPaletteSearchTextBox;
 
         field.Focusable = false;
-        host.Lifecycle.Palette.Open();
-        Assert.Same(holder, Keyboard.FocusedElement);
-        Assert.True(holder.IsEnabled, $"premise: the {under} went off with the keys");
-        bool taken = Press(holder, under == "editor" ? Key.Delete : Key.Down);
+        List<string> offUnder = DisabledWithTheKeysInside(holder, () => host.Lifecycle.Palette.Open());
+
+        Assert.True(offUnder.Count == 0, $"the {under} went off with the keys on {string.Join(", ", offUnder)}");
+        Assert.False(TheKeysAreIn(holder), $"the keys stayed on the {under} under the palette: {Keyboard.FocusedElement}");
+        Assert.False(holder.IsEnabled, $"the {under} stayed on under the palette");
+
         field.Focusable = true;
         host.Settle();
-
-        Assert.True(taken, $"the key reached the {under} under the palette");
-        Assert.Equal(before, editor.Document.Text);
-        Assert.False(top.IsSubmenuOpen, "the menu opened under the palette");
         Assert.True(host.Lifecycle.Palette.IsOpen);
         Assert.Same(field, Keyboard.FocusedElement);
-        Assert.False(holder.IsEnabled, $"the {under} stayed on under the palette");
     });
 
-    /// <summary>Escape isn't taken: it goes on to the palette's own route, so a landing that
-    /// never came would still leave a way out.</summary>
+    /// <summary>Escape still closes the palette while its landing waits: with no element
+    /// holding the keys, it reaches the window's route.</summary>
     [Fact]
     public void EscapeBeforeALateLandingStillClosesThePalette() => RunSta(() =>
     {
@@ -206,8 +228,8 @@ public sealed partial class CommandPaletteTests
 
         host.Shell.CommandPaletteSearchTextBox.Focusable = false;
         host.Lifecycle.Palette.Open();
-        Assert.Same(editor, Keyboard.FocusedElement);
-        _ = Press(editor, Key.Escape);
+        Assert.Null(Keyboard.FocusedElement);
+        _ = Press(host.Shell, Key.Escape);
         host.Settle();
 
         Assert.False(host.Lifecycle.Palette.IsOpen, "Escape before the landing left the palette open");
@@ -283,7 +305,7 @@ public sealed partial class CommandPaletteTests
 
     /// <summary>Runs <paramref name="open"/> and returns the element that held the keys each
     /// time <paramref name="root"/> was disabled with the keys still inside it.</summary>
-    private static List<string> DisabledWithTheKeysInside(FrameworkElement root, Action open)
+    private static List<string> DisabledWithTheKeysInside(UIElement root, Action open)
     {
         var disabledUnder = new List<string>();
         DependencyPropertyChangedEventHandler record = (_, e) =>

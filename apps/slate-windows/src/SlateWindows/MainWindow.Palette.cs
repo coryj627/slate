@@ -54,8 +54,8 @@ public partial class MainWindow
     /// pane's action) goes off only once the keys have left it, so NVDA never hears it go
     /// unavailable; landing here, in the same turn, leaves no time in which a key, text or a
     /// click already queued reaches it under the overlay. The queued landing each caller
-    /// keeps is the fallback for a field that can't take the keys yet, and the window's key
-    /// route holds keys meanwhile.
+    /// keeps is the fallback for a field that can't take the keys yet; meanwhile the keys
+    /// are taken out of the view under the overlay, so nothing reaches it there either.
     /// </summary>
     private bool LandInOpeningOverlay(FrameworkElement overlay, TextBox field)
     {
@@ -67,6 +67,11 @@ public partial class MainWindow
         overlay.UpdateLayout();
         if (!field.IsVisible || !field.Focus())
         {
+            if (WorkspaceRoot.IsKeyboardFocusWithin || WelcomeRoot.IsKeyboardFocusWithin || MainMenu.IsKeyboardFocusWithin)
+            {
+                Keyboard.ClearFocus();
+            }
+
             return false;
         }
 
