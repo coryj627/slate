@@ -355,10 +355,11 @@ public sealed partial class CommandPaletteTests
         }
     }
 
+    [System.Diagnostics.CodeAnalysis.DoesNotReturn]
     private static MenuItem SkipWhereTheDesktopRefusesTheMenu(string what)
     {
         Assert.Skip($"this desktop refused the menu the keys (#1680): {what}, so what an overlay does to the menu holding them wasn't measured on it");
-        return null!;
+        throw new System.Diagnostics.UnreachableException("Assert.Skip returned instead of ending the fact");
     }
 
     /// <summary>The welcome view does the same under the palette, which opens over it for
