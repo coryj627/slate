@@ -795,9 +795,11 @@ public sealed class HotExitTests
     /// reaches a new peer with nothing in its document or undo history: Undo
     /// in the peer neither inserts text nor reads saved.</summary>
     [Theory]
-    [InlineData("split")]
-    [InlineData("duplicate")]
-    public void AnEqualTextRestoreStaysUnsavedInAPeerAfterUndo(string route)
+    [InlineData("split", false)]
+    [InlineData("duplicate", false)]
+    [InlineData("split", true)]
+    [InlineData("duplicate", true)]
+    public void AnEqualTextRestoreStaysUnsavedInAPeerAfterUndo(string route, bool editedFirst)
     {
         using var host = new HotExitHost();
         host.Open();
@@ -811,6 +813,12 @@ public sealed class HotExitTests
         host.AssertRead();
         WorkspaceTabViewModel back = host.TabOn("a.md");
         Assert.True(back.IsDirty, "premise: the equal-text restore came back clean");
+        if (editedFirst)
+        {
+            // The peer then starts from text that differs from the baseline.
+            back.Text += "x";
+            PumpedDispatcher.Drain();
+        }
 
         if (route == "split")
         {
@@ -830,9 +838,12 @@ public sealed class HotExitTests
         }
         PumpedDispatcher.Drain();
 
-        Assert.DoesNotContain('￾', peer.Text);
-        Assert.DoesNotContain('￾', back.Text);
-        Assert.Equal(kept, peer.Text);
+        Assert.DoesNotContain('\uFFFE', peer.Text);
+        Assert.DoesNotContain('\uFFFE', back.Text);
+        if (!editedFirst)
+        {
+            Assert.Equal(kept, peer.Text);
+        }
         Assert.True(peer.IsDirty, "Undo made the restored peer read saved");
         Assert.True(back.IsDirty, "Undo made the restored tab read saved");
     }
