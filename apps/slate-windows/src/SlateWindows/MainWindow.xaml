@@ -219,6 +219,14 @@
                         <DataTrigger Binding="{Binding SettingsSheet, Converter={StaticResource IsNotNullConverter}}" Value="True">
                             <Setter Property="IsEnabled" Value="False" />
                         </DataTrigger>
+                        <!-- #1690: last, so it wins over the triggers above. A chord pressed
+                             with the keys in the menu opens its surface over it, and the
+                             surface's field takes the keys in a queued landing. Until then
+                             the menu stays on: off while it held the keys, NVDA said
+                             "unavailable" before the field. -->
+                        <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                            <Setter Property="IsEnabled" Value="True" />
+                        </Trigger>
                     </Style.Triggers>
                 </Style>
             </Menu.Style>

@@ -74,6 +74,48 @@ public sealed partial class CommandPaletteTests
         Assert.False(action.IsEnabled, $"{id} stayed on under the open overlay");
     });
 
+    /// <summary>The menu is off under every modal surface. A chord pressed with the keys in
+    /// the menu, on its bar or on an item of an open menu, opens an overlay over it: the menu
+    /// stays on until the overlay's field takes the keys out of it.</summary>
+    [Theory]
+    [InlineData("QuickOpen", false)]
+    [InlineData("Search", false)]
+    [InlineData("Palette", false)]
+    [InlineData("QuickOpen", true)]
+    [InlineData("Search", true)]
+    [InlineData("Palette", true)]
+    public void TheMenuIsDisabledOnlyAfterTheKeysLeaveIt(string overlay, bool inAnOpenMenu) => RunSta(() =>
+    {
+        using var host = new PaletteShellHost();
+        _ = host.AttachDirtyWorkspace();
+        host.Settle();
+        Menu menu = host.Shell.MainMenu;
+        MenuItem top = menu.Items.OfType<MenuItem>().First();
+        MenuItem item = top;
+        if (inAnOpenMenu)
+        {
+            top.IsSubmenuOpen = true;
+            host.Settle();
+            item = top.Items.OfType<MenuItem>().First(candidate => candidate.IsEnabled && candidate.IsVisible);
+        }
+
+        TakeTheKeys(item);
+        host.Settle();
+        Assert.True(menu.IsEnabled, "premise: the menu is on with no overlay open");
+
+        TextBox? field = null;
+        List<string> disabledUnder = DisabledWithTheKeysInside(item, () =>
+        {
+            field = OpenTheOverlay(host, overlay);
+            host.Settle();
+        });
+
+        Assert.True(disabledUnder.Count == 0, $"the menu went off with the keys on {string.Join(", ", disabledUnder)}");
+        host.AssertFocusIsOn(field!);
+        Assert.False(menu.IsEnabled, "the menu stayed on under the open overlay");
+        Assert.False(top.IsSubmenuOpen, "the menu stayed open under the overlay");
+    });
+
     private static Button LauncherAction(PaletteShellHost host, string id) => Assert.Single(
         ShownShell.Descendants(host.Shell.WorkspaceRoot).OfType<Button>(),
         button => System.Windows.Automation.AutomationProperties.GetAutomationId(button) == id && button.IsVisible);
