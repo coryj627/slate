@@ -588,7 +588,7 @@ public sealed class HotExitTests
             if (call.Kind == HotExitCallKind.Claim && Interlocked.Increment(ref beforeClaims) == 1)
             {
                 Assert.True(gate.Wait(Patience), "the first claim was never released");
-                return new HotExitFault.Refused(HotExitRefusal.VaultFull);
+                return new HotExitFault.ClaimRefused(HotExitRefusal.VaultFull);
             }
             return null;
         };
@@ -603,7 +603,8 @@ public sealed class HotExitTests
         tab.Text = original;
         host.PumpFor(TimeSpan.FromMilliseconds(50));
         tab.Text += "two";
-        host.PumpFor(TimeSpan.FromMilliseconds(50));
+        // Past the debounce: episode two's claim is issued, queued behind one.
+        host.PumpFor(HotExitWriter.DebounceDelay + TimeSpan.FromMilliseconds(500));
         gate.Set();
         host.PumpUntil(() => Volatile.Read(ref afterClaims) >= 1, "the second claim never reached the store");
         host.PumpFor(TimeSpan.FromMilliseconds(200));
@@ -625,7 +626,7 @@ public sealed class HotExitTests
         bool refuse = true;
         host.Store.BeforeCallForTests = call =>
             call.Kind == HotExitCallKind.Claim && Volatile.Read(ref refuse)
-                ? new HotExitFault.Refused(HotExitRefusal.VaultFull)
+                ? new HotExitFault.ClaimRefused(HotExitRefusal.VaultFull)
                 : null;
         tab.Text += "typed";
         host.PumpFor(TimeSpan.FromMilliseconds(200));
@@ -1652,7 +1653,7 @@ public sealed class HotExitTests
                 bool paired = lines
                     .Skip(Math.Max(0, index - 3))
                     .Take(7)
-                    .Any(line => line.Contains("FileIdentity = ", StringComparison.Ordinal));
+                    .Any(line => System.Text.RegularExpressions.Regex.IsMatch(line, @"(?<![A-Za-z])FileIdentity = "));
                 Assert.True(paired, $"{Path.GetFileName(file)}:{index + 1} sets a baseline hash with no identity beside it");
             }
         }

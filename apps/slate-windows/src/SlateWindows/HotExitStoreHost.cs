@@ -38,6 +38,10 @@ internal abstract record HotExitFault
     internal sealed record Damaged : HotExitFault;
 
     internal sealed record Refused(HotExitRefusal Refusal) : HotExitFault;
+
+    /// <summary>Core's own refused claim outcome (the vault cap), not an
+    /// error: a claim call answers <see cref="HotExitClaimOutcome.Refused"/>.</summary>
+    internal sealed record ClaimRefused(HotExitRefusal Refusal) : HotExitFault;
 }
 
 /// <summary>How a store call resolved. The task carrying it never faults: a
@@ -605,6 +609,9 @@ internal sealed class HotExitStoreHost
             damaged: true),
         HotExitFault.Refused refused => HotExitResult<T>.Failed(
             SlateUniffiMethods.HotExitRefusalReason(refused.Refusal)),
+        HotExitFault.ClaimRefused claimRefused when typeof(T) == typeof(HotExitClaimOutcome) =>
+            (HotExitResult<T>)(object)HotExitResult<HotExitClaimOutcome>.Ok(
+                new HotExitClaimOutcome.Refused(claimRefused.Refusal)),
         _ => HotExitResult<T>.Failed(SlateUniffiMethods.HotExitReasonStoreUnwritable()),
     };
 
