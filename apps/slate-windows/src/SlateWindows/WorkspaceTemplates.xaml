@@ -207,7 +207,8 @@
          on the left and its chord (Tag) on the right in secondary text. Whole, on Slate.ButtonBase.
          The launcher caps the width, so in a narrow pane a row narrows, and where its label and
          chord don't fit on one line the chord goes under the label (LauncherRowPanel) and the
-         row grows. Off under every modal surface, as the menus are. -->
+         row grows. Off under every modal surface, as the menus are, once the keys have left
+         the row for the surface (#1690): off while it held them, NVDA said "unavailable". -->
     <Style x:Key="Slate.LauncherRowStyle" TargetType="Button" BasedOn="{StaticResource Slate.ButtonBase}">
         <Setter Property="HorizontalAlignment" Value="Stretch" />
         <Setter Property="HorizontalContentAlignment" Value="Stretch" />
@@ -257,9 +258,13 @@
             </Setter.Value>
         </Setter>
         <Style.Triggers>
-            <DataTrigger Binding="{Binding IsModalSurfaceOpen, RelativeSource={RelativeSource AncestorType=Window}}" Value="True">
+            <MultiDataTrigger>
+                <MultiDataTrigger.Conditions>
+                    <Condition Binding="{Binding IsModalSurfaceOpen, RelativeSource={RelativeSource AncestorType=Window}}" Value="True" />
+                    <Condition Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource Self}}" Value="False" />
+                </MultiDataTrigger.Conditions>
                 <Setter Property="IsEnabled" Value="False" />
-            </DataTrigger>
+            </MultiDataTrigger>
         </Style.Triggers>
     </Style>
     <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
@@ -1234,7 +1239,7 @@
                         AutomationProperties.AutomationId="EmptyPaneQuickOpen"
                         AutomationProperties.Name="Quick Open…"
                         AutomationProperties.AcceleratorKey="{Binding Tag, RelativeSource={RelativeSource Self}}"
-                        Command="{Binding DataContext.QuickSwitcher.OpenCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
+                        Command="{Binding DataContext.OpenClosedQuickSwitcherCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
                 <Button Style="{StaticResource Slate.LauncherRowStyle}"
                         Content="New Note from Template…"
                         local:LauncherRowPanel.Glyph="&#xE710;"

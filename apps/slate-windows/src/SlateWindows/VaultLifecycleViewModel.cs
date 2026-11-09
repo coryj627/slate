@@ -142,6 +142,7 @@ internal sealed partial class VaultLifecycleViewModel
     private readonly AsyncRelayCommand _openRecentCommand;
     private readonly RelayCommand _closeVaultCommand;
     private readonly RelayCommand _toggleSearchCommand;
+    private readonly RelayCommand _openClosedQuickSwitcherCommand;
     private readonly RelayCommand _findInNoteCommand;
     private readonly RelayCommand _findInNoteChordCommand;
 
@@ -272,6 +273,18 @@ internal sealed partial class VaultLifecycleViewModel
         // lives inside Toggle() → Open(), which announces
         // SearchNeedsVault — mac's exact posture.
         _toggleSearchCommand = new RelayCommand(_ => Search.Toggle(), _ => true);
+        // #1690: always on, so the empty pane's Quick Open action stays enabled while it
+        // holds the keys. The switcher's own OpenCommand goes off the moment Quick Open
+        // opens, before its field takes the keys, and NVDA said "unavailable".
+        _openClosedQuickSwitcherCommand = new RelayCommand(
+            _ =>
+            {
+                if (QuickSwitcher is { IsOpen: false } switcher)
+                {
+                    switcher.Open();
+                }
+            },
+            _ => true);
         // WB-22 (#1112): Ctrl+F. Owned here, not by the workspace, because
         // the welcome view has no workspace and Ctrl+F must still reach
         // vault search there (mac's never-inert rule). A Base or canvas
@@ -319,6 +332,11 @@ internal sealed partial class VaultLifecycleViewModel
     /// Workspace ▸ Search Vault… menu item both run it. See the
     /// constructor note for why it is unguarded.</summary>
     public ICommand ToggleSearchCommand => _toggleSearchCommand;
+
+    /// <summary>#1690: opens Quick Open when it's closed, and is never off. The empty pane's
+    /// Quick Open action runs it; the chord, menu and palette keep the switcher's own
+    /// <see cref="QuickSwitcherViewModel.OpenCommand"/>.</summary>
+    public ICommand OpenClosedQuickSwitcherCommand => _openClosedQuickSwitcherCommand;
 
     /// <summary>WB-22 (#1112): Ctrl+F — the active note's find bar, else
     /// vault search.</summary>

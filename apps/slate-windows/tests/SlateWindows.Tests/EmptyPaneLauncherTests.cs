@@ -37,10 +37,11 @@ public sealed class EmptyPaneLauncherTests
         Assert.All(actions, button => Assert.Contains(
             ShownShell.Descendants(button).OfType<TextBlock>(),
             text => text.Text == LauncherRowPanel.GetGlyph(button) && text.IsVisible));
-        // Each bound to the command its menu item and chord run (the hosted shell has no
-        // Quick Open switcher, so that one is read as its binding).
+        // Each bound to the command its menu item and chord run, read as its binding. Quick
+        // Open's is the lifecycle's always-on opener of the same switcher (#1690), so the
+        // action holding the keys never goes off as Quick Open opens.
         Assert.Equal(
-            ["DataContext.QuickSwitcher.OpenCommand", "DataContext.Workspace.NewFromTemplateCommand", "DataContext.ToggleSearchCommand"],
+            ["DataContext.OpenClosedQuickSwitcherCommand", "DataContext.Workspace.NewFromTemplateCommand", "DataContext.ToggleSearchCommand"],
             actions.Select(button => BindingOperations.GetBinding(button, Button.CommandProperty)!.Path.Path));
         Assert.All(actions, button =>
         {
@@ -138,6 +139,56 @@ public sealed class EmptyPaneLauncherTests
         var focused = Assert.IsAssignableFrom<UIElement>(Keyboard.FocusedElement);
         Assert.True(host.Shell.SettingsOverlay.IsKeyboardFocusWithin, $"the keys are on a {focused.GetType().Name} outside Settings.");
         Assert.True(focused.IsVisible && focused.IsEnabled, $"the keys are on an unusable {focused.GetType().Name}.");
+    });
+
+    /// <summary>#1690: an action that holds the keys as a modal surface opens goes off only
+    /// once the keys have left it for the surface. Off while it held them, NVDA said
+    /// "unavailable" before the surface's field.</summary>
+    [Theory]
+    [InlineData("Palette")]
+    [InlineData("Settings")]
+    public void AnActionGoesOffOnlyAfterTheKeysLeaveIt(string surface) => RunSta(() =>
+    {
+        using var host = new ShownShell(("note.md", "# Note\n"));
+        host.Settle();
+        Button search = Launcher(host).Children.OfType<Button>().Last();
+        host.Shell.Activate();
+        host.Settle();
+        Assert.True(
+            search.Focus() && ReferenceEquals(search, Keyboard.FocusedElement),
+            $"keyboard premise: Search Vault could not take the keys (they are on {Keyboard.FocusedElement})");
+
+        var offWithTheKeys = new List<string>();
+        DependencyPropertyChangedEventHandler record = (_, e) =>
+        {
+            if (e.NewValue is false && search.IsKeyboardFocusWithin)
+            {
+                offWithTheKeys.Add(host.Shell.OpenModalSurface?.ToString() ?? "no surface");
+            }
+        };
+        search.IsEnabledChanged += record;
+        try
+        {
+            if (surface == "Palette")
+            {
+                host.Lifecycle.Palette.Open();
+            }
+            else
+            {
+                host.Lifecycle.OpenSettingsCommand.Execute(null);
+            }
+
+            host.Settle();
+        }
+        finally
+        {
+            search.IsEnabledChanged -= record;
+        }
+
+        Assert.True(offWithTheKeys.Count == 0, $"Search Vault went off holding the keys under {string.Join(", ", offWithTheKeys)}.");
+        Assert.NotNull(host.Shell.OpenModalSurface);
+        Assert.False(search.IsKeyboardFocused, "the keys stayed on the action.");
+        Assert.False(search.IsEnabled, "Search Vault stayed on under the surface.");
     });
 
     /// <summary>The workspace host leaves the Tab order only while the pane is empty: with

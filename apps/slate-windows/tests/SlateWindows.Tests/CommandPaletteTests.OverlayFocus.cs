@@ -42,6 +42,46 @@ public sealed partial class CommandPaletteTests
         Assert.False(root.IsEnabled, "the workspace stayed enabled under the open overlay");
     });
 
+    /// <summary>The empty pane's action that opens an overlay, activated as a reader's
+    /// activate command does, through its peer, stays on until the keys have left it. Quick
+    /// Open's action ran the switcher's own command, which goes off as Quick Open opens, so
+    /// it went off under its own keys. (This host's window isn't a MainWindow, so the
+    /// launcher style's modal trigger is EmptyPaneLauncherTests' to prove.)</summary>
+    [Theory]
+    [InlineData("EmptyPaneQuickOpen")]
+    [InlineData("EmptyPaneSearchVault")]
+    public void ALauncherActionThatOpensAnOverlayIsDisabledOnlyAfterTheKeysLeaveIt(string id) => RunSta(() =>
+    {
+        using var host = new PaletteShellHost();
+        _ = host.AttachEmptyWorkspace();
+        host.Settle();
+        Button action = LauncherAction(host, id);
+        TakeTheKeys(action);
+        host.Settle();
+        bool quickOpen = id == "EmptyPaneQuickOpen";
+
+        List<string> disabledUnder = DisabledWithTheKeysInside(action, () =>
+        {
+            var invoke = (System.Windows.Automation.Provider.IInvokeProvider)new System.Windows.Automation.Peers.ButtonAutomationPeer(action)
+                .GetPattern(System.Windows.Automation.Peers.PatternInterface.Invoke);
+            invoke.Invoke();
+            host.Settle();
+        });
+
+        Assert.True(disabledUnder.Count == 0, $"{id} went off with the keys on {string.Join(", ", disabledUnder)}");
+        host.AssertTheOneOpenModalIs(quickOpen ? ModalSurface.QuickOpen : ModalSurface.SearchOverlay);
+        host.AssertFocusIsOn(quickOpen ? host.Shell.QuickSwitcherSearchTextBox : host.Shell.SearchOverlaySearchTextBox);
+        Assert.False(action.IsEnabled, $"{id} stayed on under the open overlay");
+    });
+
+    private static Button LauncherAction(PaletteShellHost host, string id) => Assert.Single(
+        ShownShell.Descendants(host.Shell.WorkspaceRoot).OfType<Button>(),
+        button => System.Windows.Automation.AutomationProperties.GetAutomationId(button) == id && button.IsVisible);
+
+    private static void TakeTheKeys(UIElement element) => Assert.True(
+        element.Focus() && ReferenceEquals(element, Keyboard.FocusedElement),
+        $"keyboard premise: {element} could not take the keys (they are on {Keyboard.FocusedElement})");
+
     /// <summary>The welcome view does the same under the palette, which opens over it for
     /// Switch Theme.</summary>
     [Fact]
