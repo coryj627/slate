@@ -187,10 +187,11 @@ public sealed partial class CommandPaletteTests
         {
             top.IsSubmenuOpen = true;
             host.Settle();
-            item = top.Items.OfType<MenuItem>().First(candidate => candidate.IsEnabled && candidate.IsVisible);
+            item = top.Items.OfType<MenuItem>().FirstOrDefault(candidate => candidate.IsEnabled && candidate.IsVisible)
+                ?? SkipWhereTheDesktopRefusesTheMenu("no item of the open menu is on screen");
         }
 
-        TakeTheKeys(item);
+        TakeTheMenuKeys(item);
         host.Settle();
         Assert.True(menu.IsEnabled, "premise: the menu is on with no overlay open");
 
@@ -223,7 +224,15 @@ public sealed partial class CommandPaletteTests
         UIElement holder = under == "editor" ? editor : top;
         host.Shell.Activate();
         host.Settle();
-        TakeTheKeys(holder);
+        if (under == "menu")
+        {
+            TakeTheMenuKeys(holder);
+        }
+        else
+        {
+            TakeTheKeys(holder);
+        }
+
         host.Settle();
 
         host.Lifecycle.Palette.Open();
@@ -255,7 +264,15 @@ public sealed partial class CommandPaletteTests
         UIElement holder = under == "editor" ? editor : top;
         host.Shell.Activate();
         host.Settle();
-        TakeTheKeys(holder);
+        if (under == "menu")
+        {
+            TakeTheMenuKeys(holder);
+        }
+        else
+        {
+            TakeTheKeys(holder);
+        }
+
         host.Settle();
         TextBox field = host.Shell.CommandPaletteSearchTextBox;
 
@@ -326,6 +343,23 @@ public sealed partial class CommandPaletteTests
     private static void TakeTheKeys(UIElement element) => Assert.True(
         element.Focus() && ReferenceEquals(element, Keyboard.FocusedElement),
         $"keyboard premise: {element} could not take the keys (they are on {Keyboard.FocusedElement})");
+
+    /// <summary>The keys onto a menu item. A desktop whose session has no foreground window
+    /// (the hosted runners, #1680) lets no menu keep the keys or open its popup: there the
+    /// fact says it measured nothing rather than passing.</summary>
+    private static void TakeTheMenuKeys(UIElement item)
+    {
+        if (!item.Focus() || !ReferenceEquals(item, Keyboard.FocusedElement))
+        {
+            _ = SkipWhereTheDesktopRefusesTheMenu($"the keys stayed on {Keyboard.FocusedElement}");
+        }
+    }
+
+    private static MenuItem SkipWhereTheDesktopRefusesTheMenu(string what)
+    {
+        Assert.Skip($"this desktop refused the menu the keys (#1680): {what}, so what an overlay does to the menu holding them wasn't measured on it");
+        return null!;
+    }
 
     /// <summary>The welcome view does the same under the palette, which opens over it for
     /// Switch Theme.</summary>
