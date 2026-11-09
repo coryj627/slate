@@ -765,6 +765,78 @@ public sealed class HotExitTests
             entry => entry.Text == "# a\nolder" && entry.EntryId != recovered.RecoveryEntryId);
     }
 
+    /// <summary>Codex PR 2 round 2: a duplicated tab is one the writer keeps.
+    /// The original closes; the duplicate's edits survive a crash.</summary>
+    [Fact]
+    public void ADuplicatedTabIsKeptAfterItsOriginalCloses()
+    {
+        using var host = new HotExitHost();
+        host.Open();
+        WorkspaceTabViewModel original = host.OpenNote("a.md");
+        host.Workspace.DuplicateTabCommand.Execute(null);
+        PumpedDispatcher.Drain();
+        WorkspaceTabViewModel duplicate = host.Workspace.ActiveGroup.ActiveTab!;
+        Assert.NotSame(original, duplicate);
+        host.CloseTab(original);
+
+        duplicate.Text += "typed";
+        string kept = duplicate.Text;
+        host.PumpUntil(() => host.StoredText(duplicate) == kept, "the duplicate was never kept");
+        host.Crash();
+        host.Open();
+        host.AssertRead();
+
+        WorkspaceTabViewModel back = host.TabOn("a.md");
+        Assert.True(back.IsDirty);
+        Assert.Equal(kept, back.Text);
+    }
+
+    /// <summary>Codex PR 2 round 2: an equal-text restore's unsaved state
+    /// reaches a new peer with nothing in its document or undo history: Undo
+    /// in the peer neither inserts text nor reads saved.</summary>
+    [Theory]
+    [InlineData("split")]
+    [InlineData("duplicate")]
+    public void AnEqualTextRestoreStaysUnsavedInAPeerAfterUndo(string route)
+    {
+        using var host = new HotExitHost();
+        host.Open();
+        WorkspaceTabViewModel tab = host.OpenNote("a.md");
+        tab.Text += "typed";
+        string kept = tab.Text;
+        Assert.Equal(WorkspaceTeardown.ClosedKept, host.Close(TeardownRoute.ApplicationClose));
+        host.Crash();
+        File.WriteAllText(Path.Combine(host.Root, "a.md"), kept);
+        host.Open();
+        host.AssertRead();
+        WorkspaceTabViewModel back = host.TabOn("a.md");
+        Assert.True(back.IsDirty, "premise: the equal-text restore came back clean");
+
+        if (route == "split")
+        {
+            host.Workspace.OpenPath("a.md", WorkspaceOpenTarget.SplitRight);
+        }
+        else
+        {
+            host.Workspace.DuplicateTabCommand.Execute(null);
+        }
+        PumpedDispatcher.Drain();
+        WorkspaceTabViewModel peer = host.Workspace.ActiveGroup.ActiveTab!;
+        Assert.NotSame(back, peer);
+        Assert.True(peer.IsDirty, "the peer did not take the restored unsaved state");
+        while (peer.EditorDocument!.UndoStack.CanUndo)
+        {
+            peer.EditorDocument.UndoStack.Undo();
+        }
+        PumpedDispatcher.Drain();
+
+        Assert.DoesNotContain('￾', peer.Text);
+        Assert.DoesNotContain('￾', back.Text);
+        Assert.Equal(kept, peer.Text);
+        Assert.True(peer.IsDirty, "Undo made the restored peer read saved");
+        Assert.True(back.IsDirty, "Undo made the restored tab read saved");
+    }
+
     [Fact]
     public void EveryStoreCallIsRecordedBeforeItIsIssued()
     {

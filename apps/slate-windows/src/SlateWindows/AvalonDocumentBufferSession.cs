@@ -105,8 +105,25 @@ internal sealed class AvalonDocumentBufferSession : IDisposable
                 return new EditorSavedBaseline(
                     _savedBaselineText,
                     _savedLengthUtf16,
-                    _savedContentHash);
+                    _savedContentHash,
+                    _restoredUnsaved);
             }
+        }
+    }
+
+    /// <summary>WB-29 (codex PR 2 round 2): a restored hot-exit buffer is
+    /// unsaved whatever its text, until a save or a peer's clean baseline
+    /// says otherwise. Nothing is written into the document or its undo
+    /// history for it.</summary>
+    private bool _restoredUnsaved;
+
+    internal void MarkRestoredUnsaved()
+    {
+        ThrowIfDisposed();
+        Document.VerifyAccess();
+        lock (_gate)
+        {
+            _restoredUnsaved = true;
         }
     }
     public bool IsAtSavedBaseline
@@ -115,6 +132,13 @@ internal sealed class AvalonDocumentBufferSession : IDisposable
         {
             ThrowIfDisposed();
             Document.VerifyAccess();
+            lock (_gate)
+            {
+                if (_restoredUnsaved)
+                {
+                    return false;
+                }
+            }
             if (Document.UndoStack.IsOriginalFile)
             {
                 return true;
@@ -358,6 +382,10 @@ internal sealed class AvalonDocumentBufferSession : IDisposable
             {
                 AdoptSavedBaseline(savedBaseline);
             }
+            lock (_gate)
+            {
+                _restoredUnsaved = savedBaseline.RestoredUnsaved;
+            }
         }
         finally
         {
@@ -564,6 +592,7 @@ internal sealed class AvalonDocumentBufferSession : IDisposable
             _savedBaselineText = savedBaseline.Text;
             _savedLengthUtf16 = savedBaseline.Utf16Length;
             _savedContentHash = savedBaseline.ContentHash;
+            _restoredUnsaved = savedBaseline.RestoredUnsaved;
         }
 
         // The CURRENT text is not what is on disk: no undo position is the
@@ -595,6 +624,7 @@ internal sealed class AvalonDocumentBufferSession : IDisposable
             _savedBaselineText = savedBaseline.Text;
             _savedLengthUtf16 = savedBaseline.Utf16Length;
             _savedContentHash = savedBaseline.ContentHash;
+            _restoredUnsaved = savedBaseline.RestoredUnsaved;
         }
 
         Document.UndoStack.MarkAsOriginalFile();
@@ -759,7 +789,13 @@ internal sealed class AvalonDocumentBufferSession : IDisposable
 
 internal sealed record EditorSaveSnapshot(string Text, long Revision);
 
-internal sealed record EditorSavedBaseline(string Text, uint Utf16Length, string ContentHash);
+/// <param name="RestoredUnsaved">WB-29: the buffer is a restored hot-exit
+/// entry, unsaved whatever its text (codex PR 2 round 2).</param>
+internal sealed record EditorSavedBaseline(
+    string Text,
+    uint Utf16Length,
+    string ContentHash,
+    bool RestoredUnsaved = false);
 
 internal sealed record EditorSemanticSpan(
     int StartUtf16,

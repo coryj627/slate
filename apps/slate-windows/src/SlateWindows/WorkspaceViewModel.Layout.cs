@@ -881,6 +881,9 @@ internal sealed partial class WorkspaceViewModel
         // its source's ONE document (contract C3).
         AttachTabDocumentsIfNeeded(duplicate);
         duplicate.MirrorDocumentStateFrom(tab);
+        // WB-29 (codex PR 2 round 2): a duplicate is a tab the writer keeps,
+        // as AddTab's are.
+        _hotExit?.Attach(duplicate);
         ActiveGroup.Tabs.Insert(index + 1, duplicate);
         ActiveGroup.ActiveTab = duplicate;
         RequestActiveEditorFocus();

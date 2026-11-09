@@ -345,14 +345,14 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         EnforcesFileIdentity = baselineHash is not null && baselineFileIdentity is not null;
         IsExternallyStale = externallyStale;
         // A kept entry is unsaved even when its text is what the tab loaded
-        // (codex PR 2 round 1): an emptied note now gone, a stale entry the
-        // file has caught up with. The editor's baseline then answers by
-        // comparison with text no document holds.
+        // (codex PR 2 rounds 1 and 2): an emptied note now gone, a stale
+        // entry the file has caught up with. The session says so itself;
+        // nothing enters the document or its undo history.
         if (_editorSession is { } session)
         {
             if (session.IsAtSavedBaseline)
             {
-                session.MarkSavedBehindEdits(RestoredNoBaselinePrefix + text);
+                session.MarkRestoredUnsaved();
             }
             IsDirty = !session.IsAtSavedBaseline;
         }
@@ -362,10 +362,6 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         }
         BumpContentGeneration();
     }
-
-    /// <summary>Makes a restored buffer's editor baseline differ from its
-    /// text, so equal text still reads unsaved.</summary>
-    private const string RestoredNoBaselinePrefix = "￾";
     internal string? LoadFailure { get; private set; }
 
     /// <summary>#1266: the event a failed load renders in the tab's status
