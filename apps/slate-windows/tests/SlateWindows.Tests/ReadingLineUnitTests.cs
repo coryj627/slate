@@ -257,17 +257,24 @@ public sealed class ReadingLineUnitTests
     });
 
     /// <summary>A caret just after a hard break (a newline, a blank line's newline, a
-    /// LineBreak) starts the next line, whichever way it leans: its Line is that line.</summary>
+    /// LineBreak, or in a code block a lone carriage return, a line or a paragraph separator)
+    /// starts the next line, whichever way it leans: its Line is that line.</summary>
     [Theory]
     [InlineData("newline", "Second line")]
     [InlineData("blank line", "gamma")]
     [InlineData("LineBreak", "Beta line")]
+    [InlineData("carriage return", "Second line")]
+    [InlineData("line separator", "Second line")]
+    [InlineData("paragraph separator", "Second line")]
     public void ACaretAfterABreakReadsTheLineItStarts(string after, string expected) => RunSta(() =>
     {
         (string Path, string Text)[] notes = after switch
         {
             "newline" => [("Cut.md", "# Cut\n\nFirst line  \nSecond line\n")],
             "blank line" => [("Cut.md", "# Cut\n\n" + Fence)],
+            "carriage return" => [("Cut.md", "# Cut\n\n```\nFirst line\rSecond line\n```\n")],
+            "line separator" => [("Cut.md", "# Cut\n\n```\nFirst line\u2028Second line\n```\n")],
+            "paragraph separator" => [("Cut.md", "# Cut\n\n```\nFirst line\u2029Second line\n```\n")],
             _ => [("Cut.md", "# Cut\n\n![[Other]]\n"), ("Other.md", EmbeddedLines)],
         };
         using var host = new ShownShell(notes);
