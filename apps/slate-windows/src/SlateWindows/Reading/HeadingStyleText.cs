@@ -452,7 +452,115 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
         TextPatternRangeEndpoint targetEndpoint) =>
         _inner.CompareEndpoints(endpoint, Unwrap(targetRange), targetEndpoint);
 
-    public void ExpandToEnclosingUnit(TextUnit unit) => _inner.ExpandToEnclosingUnit(unit);
+    public void ExpandToEnclosingUnit(TextUnit unit)
+    {
+        TextPointer? caret = unit == TextUnit.Line
+            && _inner.CompareEndpoints(TextPatternRangeEndpoint.Start, _inner, TextPatternRangeEndpoint.End) == 0
+            ? StartPointerOf(_inner)
+            : null;
+        _inner.ExpandToEnclosingUnit(unit);
+        if (caret is not null)
+        {
+            KeepTheCaretsLine(caret);
+        }
+    }
+
+    /// <summary>
+    /// #1687: NVDA reads the caret's line as the caret range expanded to a Line. In this
+    /// read-only surface, with the caret at the end of a line (where Up and Down leave it,
+    /// keeping its column), WPF's Line expansion reaches into the next line: over a paragraph
+    /// break, a LineBreak, a newline, a soft wrap or a neighbouring table cell (whose text WPF
+    /// lays out on the same rows). So every arrow spoke two lines. Expanded from the start of
+    /// the caret's line instead, WPF's line is the one visual line: it ends before a newline,
+    /// a LineBreak or the paragraph's end, and at a wrap with its end leaning back onto the
+    /// line, so later moves behave as on any WPF line (measured at every caret of a note of
+    /// headings, lists, breaks, a wrap, a table and an embed, either lean). A caret's Line is
+    /// that line (<see cref="LineHolding"/>); a selection's is WPF's, unchanged. If the
+    /// adaptor's pointer can't be read or placed, WPF's stands.
+    /// </summary>
+    private void KeepTheCaretsLine(TextPointer caret)
+    {
+        try
+        {
+            if (LineHolding(caret) is { } line)
+            {
+                _inner.MoveEndpointByRange(TextPatternRangeEndpoint.End, line, TextPatternRangeEndpoint.End);
+                _inner.MoveEndpointByRange(TextPatternRangeEndpoint.Start, line, TextPatternRangeEndpoint.Start);
+            }
+
+            // An empty table cell: WPF's line from its start takes in the next cell on the
+            // row. A visual line lies inside one paragraph, so it ends by the caret's.
+            if (caret.Paragraph?.ContentEnd.GetInsertionPosition(LogicalDirection.Backward) is { } paragraphEnd
+                && At(paragraphEnd) is { } end
+                && _inner.CompareEndpoints(TextPatternRangeEndpoint.End, end, TextPatternRangeEndpoint.Start) > 0)
+            {
+                _inner.MoveEndpointByRange(TextPatternRangeEndpoint.End, end, TextPatternRangeEndpoint.Start);
+            }
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or ArgumentException)
+        {
+            // Layout not valid for the pointer, or a pointer from another container: the
+            // expansion stays WPF's rather than throwing into UIA.
+        }
+    }
+
+    /// <summary>WPF's line expanded from the start of the line the caret is on. At a wrap the
+    /// caret's lean picks that line: leaning back, it is on the line the wrap closes. Just
+    /// after a mandatory break (Unicode's: a line feed, or in a code block a lone carriage
+    /// return, a line or paragraph separator, a next line, a vertical tab or a form feed) the
+    /// caret starts the next line, whichever way it leans; leaning back there, WPF puts it on
+    /// the line before (or a blank line before). After a LineBreak, WPF starts the next line
+    /// either way. Null when a line can't be placed.</summary>
+    private ITextRangeProvider? LineHolding(TextPointer caret) =>
+        LineFrom((caret.GetTextInRun(LogicalDirection.Backward) is [.., '\n' or '\r' or '\u2028' or '\u2029' or '\u0085' or '\v' or '\f']
+            ? caret.GetPositionAtOffset(0, LogicalDirection.Forward)
+            : caret).GetLineStartPosition(0));
+    private ITextRangeProvider? LineFrom(TextPointer? start)
+    {
+        if (start is null || At(start) is not { } line)
+        {
+            return null;
+        }
+
+        line.ExpandToEnclosingUnit(TextUnit.Line);
+
+        // A blank line (two newlines in a row, as a code block keeps them): WPF's expansion
+        // from its start runs on over the next line, so it ends where the next line starts.
+        if (start.GetLineStartPosition(1) is { } next
+            && At(next) is { } nextStart
+            && line.CompareEndpoints(TextPatternRangeEndpoint.End, nextStart, TextPatternRangeEndpoint.Start) > 0)
+        {
+            line.MoveEndpointByRange(TextPatternRangeEndpoint.End, nextStart, TextPatternRangeEndpoint.Start);
+        }
+
+        return line;
+    }
+
+    /// <summary>A degenerate range at <paramref name="position"/>, for moving an endpoint
+    /// to it: a clone whose start and end pointers are set by reflection (as the paragraph
+    /// query sets its start), then cloned again so WPF owns unfrozen copies before any
+    /// public call normalizes them. Null when the adaptor's shape isn't the one expected.</summary>
+    private ITextRangeProvider? At(TextPointer position)
+    {
+        ITextRangeProvider probe = _inner.Clone();
+        try
+        {
+            if (StartPointerField.ForType(probe.GetType()) is not { } start
+                || start.DeclaringType?.GetField("_end", BindingFlags.Instance | BindingFlags.NonPublic) is not { } end
+                || end.FieldType != start.FieldType)
+            {
+                return null;
+            }
+
+            start.SetValue(probe, position);
+            end.SetValue(probe, position);
+            return probe.Clone();
+        }
+        catch
+        {
+            return null;
+        }
+    }
 
     public ITextRangeProvider? FindAttribute(int attribute, object value, bool backward)
     {
