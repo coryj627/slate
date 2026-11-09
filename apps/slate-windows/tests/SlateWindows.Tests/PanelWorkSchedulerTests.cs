@@ -280,7 +280,9 @@ public sealed class PanelWorkSchedulerTests
         probe.BeforeUntrackForTests = ended =>
         {
             Volatile.Write(ref listed, ended);
-            _ = untrack.Wait(TimeSpan.FromSeconds(30));
+            // Unbounded: the `finally` below releases it on every path, and a
+            // timer here would let a stalled runner end the hold (#1851).
+            untrack.Wait();
         };
         try
         {
@@ -506,7 +508,10 @@ public sealed class PanelWorkSchedulerTests
         public override void Post(SendOrPostCallback d, object? state)
         {
             Posting.Set();
-            _ = Release.Wait(TimeSpan.FromSeconds(10));
+            // Unbounded: the fact's `finally` releases it on every path. A
+            // timer here let a runner stalled past it run the callback before
+            // the shutdown, so the apply landed (#1851, #1765).
+            Release.Wait();
             d(state);
         }
     }
@@ -516,8 +521,9 @@ public sealed class PanelWorkSchedulerTests
     {
         var context = new BlockingContext();
         var probe = new Probe(context);
-        probe.Run();
-        Assert.True(context.Posting.Wait(TimeSpan.FromSeconds(10)), "the post never started");
+        // These bounds only spend time on a failing run: a passing one moves on
+        // the moment each step is done (#1851).
+        TimeSpan patience = TimeSpan.FromSeconds(60);
         // The post is parked. A shutdown on a DEDICATED thread must reach
         // and finish its work — the lock it takes is not held across the
         // post (IPF-4: a dedicated thread, an entered barrier and a release
@@ -533,17 +539,22 @@ public sealed class PanelWorkSchedulerTests
         });
         try
         {
+            probe.Run();
+            Assert.True(context.Posting.Wait(patience), "the post never started");
             shutdown.Start();
-            Assert.True(entered.Wait(TimeSpan.FromSeconds(10)), "the shutdown thread never started");
-            Assert.True(shutdownReturned.Wait(TimeSpan.FromSeconds(5)), "the shutdown blocked behind the parked post");
+            Assert.True(entered.Wait(patience), "the shutdown thread never started");
+            Assert.True(shutdownReturned.Wait(patience), "the shutdown blocked behind the parked post");
         }
         finally
         {
             context.Release.Set();
-            Assert.True(shutdown.Join(TimeSpan.FromSeconds(10)), "the shutdown thread never ended");
+            if (shutdown.ThreadState != ThreadState.Unstarted)
+            {
+                Assert.True(shutdown.Join(patience), "the shutdown thread never ended");
+            }
         }
         Task drain = probe.DrainAll();
-        Assert.True(await Task.WhenAny(drain, Task.Delay(TimeSpan.FromSeconds(10))) == drain, "the drain never completed");
+        Assert.True(await Task.WhenAny(drain, Task.Delay(patience)) == drain, "the drain never completed");
         await drain;
         // The released callback fails to claim the settled promise.
         Assert.Equal(0, probe.Applies);
@@ -595,7 +606,8 @@ public sealed class PanelWorkSchedulerTests
                 new Action(() =>
                 {
                     insideOperation.Set();
-                    _ = releaseOperation.Wait(TimeSpan.FromSeconds(10));
+                    // Unbounded: the `finally` below releases it on every path.
+                    releaseOperation.Wait();
                     dispatcher.InvokeShutdown();
                 }));
             Assert.True(insideOperation.Wait(TimeSpan.FromSeconds(10)), "the dispatcher never entered the blocking operation");
