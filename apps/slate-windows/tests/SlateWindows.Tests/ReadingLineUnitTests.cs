@@ -133,6 +133,59 @@ public sealed class ReadingLineUnitTests
         Assert.True(wrong.Count == 0, $"{wrong.Count} of {checkedCarets} carets read wrong:\n" + string.Join('\n', wrong.Take(30)));
     });
 
+    /// <summary>A line cut at a soft wrap moves as WPF's own expansion of that line does: the
+    /// caret at the line's end and the caret at its start give the same line, and each endpoint
+    /// and Line move from it lands in the same place, reporting the same count.</summary>
+    [Fact]
+    public void ALineCutAtAWrapMovesAsWpfsOwnDoes() => RunSta(() =>
+    {
+        string words = string.Join(' ', Enumerable.Range(1, 60).Select(index => $"word{index}"));
+        using var host = new ShownShell(("Wrap.md", $"# Wrap\n\n{words}\n"));
+        host.Shell.ContentPaneBorder.Width = 320;
+        (ReadingSurface surface, ITextProvider provider) = OpenReading(host, "Wrap.md", "word60");
+        Paragraph long_ = Paragraphs(surface.Document).Single(p => Text(p).StartsWith("word1 ", StringComparison.Ordinal));
+        Assert.True(
+            long_.ContentStart.GetLineStartPosition(3) is not null,
+            "premise: the paragraph doesn't wrap to four lines");
+
+        ITextRangeProvider LineAt(Action place)
+        {
+            surface.CaretPosition = long_.ContentStart;
+            host.Settle();
+            EditingCommands.MoveDownByLine.Execute(null, surface);
+            host.Settle();
+            place();
+            host.Settle();
+            ITextRangeProvider line = provider.GetSelection()[0];
+            line.ExpandToEnclosingUnit(TextUnit.Line);
+            return line;
+        }
+
+        var wrong = new List<string>();
+        var moves = new (string Name, Func<ITextRangeProvider, int> Move)[]
+        {
+            ("End back a line", range => range.MoveEndpointByUnit(TextPatternRangeEndpoint.End, TextUnit.Line, -1)),
+            ("End on a line", range => range.MoveEndpointByUnit(TextPatternRangeEndpoint.End, TextUnit.Line, 1)),
+            ("Start back a line", range => range.MoveEndpointByUnit(TextPatternRangeEndpoint.Start, TextUnit.Line, -1)),
+            ("back a line", range => range.Move(TextUnit.Line, -1)),
+            ("on a line", range => range.Move(TextUnit.Line, 1)),
+        };
+        foreach ((string name, Func<ITextRangeProvider, int> move) in moves)
+        {
+            ITextRangeProvider fromEnd = LineAt(() => EditingCommands.MoveToLineEnd.Execute(null, surface));
+            ITextRangeProvider fromStart = LineAt(() => EditingCommands.MoveToLineStart.Execute(null, surface));
+            Assert.Equal(fromStart.GetText(-1), fromEnd.GetText(-1));
+            int movedFromEnd = move(fromEnd);
+            int movedFromStart = move(fromStart);
+            if (movedFromEnd != movedFromStart || fromEnd.GetText(-1) != fromStart.GetText(-1))
+            {
+                wrong.Add($"{name}: from the end moved {movedFromEnd} to \"{fromEnd.GetText(-1)}\"; from the start {movedFromStart} to \"{fromStart.GetText(-1)}\"");
+            }
+        }
+
+        Assert.True(wrong.Count == 0, "The cut line moved unlike WPF's:\n" + string.Join('\n', wrong));
+    });
+
     /// <summary>A selection's Line expansion is WPF's own: only a caret's is cut.</summary>
     [Fact]
     public void ASelectionExpandsAsWpfDoes() => RunSta(() =>

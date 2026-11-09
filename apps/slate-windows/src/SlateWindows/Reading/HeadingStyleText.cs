@@ -479,7 +479,10 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
     {
         try
         {
-            if (LineEnd(caret) is { } end
+            // The end leans back onto the line it closes, as WPF's own expansion's end does: at
+            // a wrap, a forward-leaning end is the next line's start, and moving it back a
+            // line spends the move on the lean, leaving the range where it was.
+            if (LineEnd(caret)?.GetPositionAtOffset(0, LogicalDirection.Backward) is { } end
                 && At(end) is { } to
                 && _inner.CompareEndpoints(TextPatternRangeEndpoint.End, to, TextPatternRangeEndpoint.Start) > 0)
             {
