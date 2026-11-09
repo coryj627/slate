@@ -17,6 +17,13 @@ public sealed class PanelWorkSchedulerTests
 {
     /// <summary>A scheduler that exposes the primitive and records
     /// where each half ran.</summary>
+    /// <summary>How long a fact's parked work waits for a release that its
+    /// `finally` always makes (#1851). Longer than every bound in those facts
+    /// put together, so a stalled runner fails a fact's own assert before the
+    /// hold can end; finite, so a release that never comes fails the fact
+    /// instead of hanging the job.</summary>
+    private static readonly TimeSpan ParkedWorkSafetyNet = TimeSpan.FromMinutes(5);
+
     private sealed class Probe : PanelWorkScheduler
     {
         public Probe(bool synchronousForTests)
@@ -280,9 +287,8 @@ public sealed class PanelWorkSchedulerTests
         probe.BeforeUntrackForTests = ended =>
         {
             Volatile.Write(ref listed, ended);
-            // Unbounded: the `finally` below releases it on every path, and a
-            // timer here would let a stalled runner end the hold (#1851).
-            untrack.Wait();
+            // The `finally` below releases it on every path (#1851).
+            _ = untrack.Wait(ParkedWorkSafetyNet);
         };
         try
         {
@@ -508,10 +514,10 @@ public sealed class PanelWorkSchedulerTests
         public override void Post(SendOrPostCallback d, object? state)
         {
             Posting.Set();
-            // Unbounded: the fact's `finally` releases it on every path. A
-            // timer here let a runner stalled past it run the callback before
-            // the shutdown, so the apply landed (#1851, #1765).
-            Release.Wait();
+            // The fact's `finally` releases it on every path. A 10 s timer here
+            // let a runner stalled past it run the callback before the shutdown,
+            // so the apply landed (#1851, #1765).
+            _ = Release.Wait(ParkedWorkSafetyNet);
             d(state);
         }
     }
@@ -610,8 +616,8 @@ public sealed class PanelWorkSchedulerTests
                 new Action(() =>
                 {
                     insideOperation.Set();
-                    // Unbounded: the `finally` below releases it on every path.
-                    releaseOperation.Wait();
+                    // The `finally` below releases it on every path (#1851).
+                    _ = releaseOperation.Wait(ParkedWorkSafetyNet);
                     dispatcher.InvokeShutdown();
                 }));
             Assert.True(insideOperation.Wait(TimeSpan.FromSeconds(10)), "the dispatcher never entered the blocking operation");
