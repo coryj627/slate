@@ -265,6 +265,37 @@ public sealed partial class GraphConfigWriterTests : IDisposable
         Assert.Equal(2u, OnDisk().ConnectionsDepth);
     }
 
+    /// <summary>#1865 (Codex): the waits don't add up. Under a long hold,
+    /// a held write that a newer save of the same vault has superseded
+    /// stops waiting, because the newer save carries the whole config. So
+    /// only the newest waits out the budget, and a healthy vault's save
+    /// queued behind them isn't held for one budget per edit.</summary>
+    [Fact]
+    public void AHeldWriteThatANewerSaveSupersedesStopsWaiting()
+    {
+        string other = Path.Combine(_root, "Other vault");
+        Directory.CreateDirectory(other);
+        var writer = new GraphConfigWriter();
+        Assert.True(writer.Enqueue(_root, WithDepth(2), writer.Reserve(_root)).Wait(TimeSpan.FromSeconds(10)));
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        Task healthy;
+        using (new FileStream(new GraphConfigStore(_root).FilePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            Task first = writer.Enqueue(_root, WithDepth(3), writer.Reserve(_root));
+            Thread.Sleep(100);
+            Task second = writer.Enqueue(_root, WithDepth(1), writer.Reserve(_root));
+            healthy = writer.Enqueue(other, WithDepth(3), writer.Reserve(other));
+            Assert.True(Task.WaitAll([first, second, healthy], TimeSpan.FromSeconds(10)));
+        }
+
+        Assert.True(clock.Elapsed < GraphConfigWriter.HeldFileWait * 2, $"the queue waited {clock.Elapsed}, a budget per held write");
+        Assert.Equal(1, writer.SupersededForTests);
+        Assert.Equal(1, writer.FailedForTests);
+        Assert.Null(writer.Newest(_root));
+        Assert.Equal(2u, OnDisk().ConnectionsDepth);
+        Assert.Equal(3u, new GraphConfigStore(other).Read().Config.ConnectionsDepth);
+    }
+
     /// <summary>#1865: only a file another process holds is waited for.
     /// Any other I/O failure in the write, here an existing file past the
     /// read bound, fails at once.</summary>

@@ -175,7 +175,19 @@ internal sealed class GraphConfigWriter
                 catch (IOException exception) when (attempt < HeldFileBackoff.Length && IsHeld(exception))
                 {
                     // #1865: another process holds the file; wait and try
-                    // again. The last attempt's failure is any other.
+                    // again. The last attempt's failure is any other. A
+                    // newer save of this root carries the whole config, so a
+                    // superseded write stops here rather than spend its own
+                    // budget ahead of it on the shared queue.
+                    lock (_lock)
+                    {
+                        if (state.Admitted > generation)
+                        {
+                            SupersededForTests++;
+                            _ = state.Outstanding.Remove(generation);
+                            return;
+                        }
+                    }
                     Thread.Sleep(HeldFileBackoff[attempt]);
                 }
             }
@@ -265,6 +277,8 @@ internal sealed class GraphConfigWriter
     /// Win32 code inside; any other <see cref="IOException"/> is not a hold.</summary>
     private static bool IsHeld(IOException exception) =>
         exception.InnerException is System.ComponentModel.Win32Exception { NativeErrorCode: ErrorAccessDenied or ErrorSharingViolation };
+
+    internal int SupersededForTests { get; private set; }
 
     internal int DroppedAtEnqueueForTests { get; private set; }
 
