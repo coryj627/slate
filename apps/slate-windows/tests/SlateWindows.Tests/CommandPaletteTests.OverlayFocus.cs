@@ -76,6 +76,39 @@ public sealed partial class CommandPaletteTests
         Assert.Equal(1, field.CaretIndex);
     });
 
+    /// <summary>The palette's field takes the keys in the turn the palette opens, so what it
+    /// is named and helped by then is what a reader hears first. Opened for Switch Theme,
+    /// that's the choice's prompt and help, published after IsOpen; not the commands'
+    /// "Search commands".</summary>
+    [Fact]
+    public void ThePaletteFieldSaysItsChoicesAsItTakesTheKeys() => RunSta(() =>
+    {
+        using var host = new ShownShell();
+        host.ShowWelcomeWithoutAWorkspace();
+        host.Shell.Activate();
+        host.Settle();
+        TextBox field = host.Shell.CommandPaletteSearchTextBox;
+        var heard = new List<string>();
+        KeyboardFocusChangedEventHandler took = (_, _) => heard.Add(
+            $"{System.Windows.Automation.AutomationProperties.GetName(field)} | {System.Windows.Automation.AutomationProperties.GetHelpText(field)}");
+        field.GotKeyboardFocus += took;
+        try
+        {
+            host.Lifecycle.SwitchThemeCommand.Execute(null);
+            Assert.True(
+                PumpedDispatcher.PumpUntil(() => host.Lifecycle.Palette.Rows.Count == 3, TimeSpan.FromSeconds(10)),
+                "the themes never published");
+            host.Settle();
+        }
+        finally
+        {
+            field.GotKeyboardFocus -= took;
+        }
+
+        Assert.NotEmpty(heard);
+        Assert.Equal($"Select a theme | {host.Lifecycle.Palette.SearchFieldHelp}", heard[0]);
+    });
+
     /// <summary>#1690 as the field pass heard it: the keys on a canvas outline row, then
     /// Ctrl+Shift+P. The row's canvas goes off only once the palette's field has the keys,
     /// in the turn the palette opens.</summary>

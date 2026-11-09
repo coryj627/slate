@@ -74,6 +74,15 @@ public partial class MainWindow
             BindingOperations.GetBindingExpressionBase(up, VisibilityProperty)?.UpdateTarget();
         }
 
+        // What the field says as it takes the keys is what a reader hears first, and its
+        // name and help can change in notifications after IsOpen's (the palette's choices),
+        // so every binding on it reads its source now.
+        LocalValueEnumerator values = field.GetLocalValueEnumerator();
+        while (values.MoveNext())
+        {
+            BindingOperations.GetBindingExpressionBase(field, values.Current.Property)?.UpdateTarget();
+        }
+
         overlay.UpdateLayout();
         if (field.IsVisible && field.Focus())
         {
