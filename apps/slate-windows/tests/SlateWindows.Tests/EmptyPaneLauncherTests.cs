@@ -140,6 +140,77 @@ public sealed class EmptyPaneLauncherTests
         Assert.True(focused.IsVisible && focused.IsEnabled, $"the keys are on an unusable {focused.GetType().Name}.");
     });
 
+    /// <summary>#1690: an action that holds the keys as the palette opens goes off only once
+    /// the palette's field has taken them, and that's in the same turn the palette opens, so
+    /// no key pressed meanwhile reaches the action under it. Off while it held them, NVDA said
+    /// "unavailable" before the field.</summary>
+    [Fact]
+    public void AnActionGoesOffOnlyAfterThePaletteTakesTheKeys() => RunSta(() =>
+    {
+        using var host = new ShownShell(("note.md", "# Note\n"));
+        host.Settle();
+        Button search = Launcher(host).Children.OfType<Button>().Last();
+        host.Shell.Activate();
+        host.Settle();
+        Assert.True(
+            search.Focus() && ReferenceEquals(search, Keyboard.FocusedElement),
+            $"keyboard premise: Search Vault could not take the keys (they are on {Keyboard.FocusedElement})");
+
+        var offWithTheKeys = new List<string>();
+        DependencyPropertyChangedEventHandler record = (_, e) =>
+        {
+            if (e.NewValue is false && CommandPaletteTests.TheKeysAreIn(search))
+            {
+                offWithTheKeys.Add(host.Shell.OpenModalSurface?.ToString() ?? "no surface");
+            }
+        };
+        search.IsEnabledChanged += record;
+        try
+        {
+            host.Lifecycle.Palette.Open();
+        }
+        finally
+        {
+            search.IsEnabledChanged -= record;
+        }
+
+        Assert.True(offWithTheKeys.Count == 0, $"Search Vault went off holding the keys under {string.Join(", ", offWithTheKeys)}.");
+        Assert.Same(host.Shell.CommandPaletteSearchTextBox, Keyboard.FocusedElement);
+        Assert.False(search.IsEnabled, "Search Vault stayed on under the palette.");
+    });
+
+    /// <summary>A sheet's field takes the keys in a queued landing, so under a sheet the
+    /// actions go off in the turn it opens, the one holding the keys too: none can be pressed
+    /// or invoked beneath it meanwhile, through the keys or a reader's activate command.
+    /// (Quick Open, search and the palette take the keys in their own turn, so the action
+    /// holding them stays on until then.)</summary>
+    [Fact]
+    public void UnderASheetEveryActionGoesOffInTheTurnItOpens() => RunSta(() =>
+    {
+        using var host = new ShownShell(("note.md", "# Note\n"));
+        host.Settle();
+        Button[] actions = [.. Launcher(host).Children.OfType<Button>()];
+        Button quickOpen = actions[0];
+        host.Shell.Activate();
+        host.Settle();
+        Assert.True(
+            quickOpen.Focus() && ReferenceEquals(quickOpen, Keyboard.FocusedElement),
+            $"keyboard premise: Quick Open could not take the keys (they are on {Keyboard.FocusedElement})");
+
+        host.Lifecycle.OpenSettingsCommand.Execute(null);
+
+        Assert.Equal(ModalSurface.Settings, host.Shell.OpenModalSurface);
+        Assert.All(actions, action =>
+        {
+            Assert.False(action.IsEnabled, $"{AutomationProperties.GetName(action)} is on in the turn Settings opened.");
+            var invoke = (System.Windows.Automation.Provider.IInvokeProvider)new ButtonAutomationPeer(action)
+                .GetPattern(PatternInterface.Invoke);
+            _ = Assert.Throws<ElementNotEnabledException>(invoke.Invoke);
+        });
+        host.Settle();
+        Assert.True(host.Shell.SettingsOverlay.IsKeyboardFocusWithin, $"the keys are on {Keyboard.FocusedElement}, outside Settings.");
+    });
+
     /// <summary>The workspace host leaves the Tab order only while the pane is empty: with
     /// a note open, Tab from the pane and Shift+Tab back pass through it as they did.</summary>
     [Fact]

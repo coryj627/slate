@@ -4,6 +4,7 @@
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -45,6 +46,93 @@ public partial class MainWindow
         _paletteResults = new CommandPaletteResultsPresenter(CommandPaletteResultsList, palette);
     }
 
+    /// <summary>
+    /// #1690: the keys go to an opening overlay's field in the same turn it opens. The
+    /// visibility bindings on IsOpen, the overlay's and the field's own, may not have run yet
+    /// when the window hears it, so each from the field up is brought up to date and laid out
+    /// first. The view under the overlay (the workspace, the welcome view, the menu, an empty
+    /// pane's action) goes off only once the keys have left it, so NVDA never hears it go
+    /// unavailable; landing here, in the same turn, leaves no time in which a key, text or a
+    /// click already queued reaches it under the overlay.
+    /// <para>
+    /// Only a field that can't take the keys yet gets a queued landing, the fallback, and it
+    /// runs only while the overlay is still open (<paramref name="stillOpen"/>) and its field
+    /// doesn't have the keys: a second landing after the first would select what the reader
+    /// has typed since, and the next key would replace it. Meanwhile the keys are taken out
+    /// of the view under the overlay, so nothing reaches it there either, and put on the
+    /// overlay itself, named and a dialog, while it waits: with no element holding them WPF
+    /// delivers no key at all, and Escape would not reach the overlay's route in the
+    /// window's. (The window itself won't hold them: it hands them straight back to its
+    /// focused element, under the overlay.) Only if the overlay can't take them either are
+    /// they cleared.
+    /// </para>
+    /// </summary>
+    private void LandInOpeningOverlay(FrameworkElement overlay, TextBox field, Func<bool> stillOpen)
+    {
+        for (DependencyObject? up = field; up is not null; up = VisualTreeHelper.GetParent(up))
+        {
+            BindingOperations.GetBindingExpressionBase(up, VisibilityProperty)?.UpdateTarget();
+        }
+
+        // What the field says as it takes the keys is what a reader hears first, and its
+        // name and help can change in notifications after IsOpen's (the palette's choices),
+        // so every binding on it reads its source now.
+        LocalValueEnumerator values = field.GetLocalValueEnumerator();
+        while (values.MoveNext())
+        {
+            BindingOperations.GetBindingExpressionBase(field, values.Current.Property)?.UpdateTarget();
+        }
+
+        overlay.UpdateLayout();
+        if (field.IsVisible && field.Focus())
+        {
+            field.SelectAll();
+            return;
+        }
+
+        if (WorkspaceRoot.IsKeyboardFocusWithin || WelcomeRoot.IsKeyboardFocusWithin || MainMenu.IsKeyboardFocusWithin)
+        {
+            // A stop only while it holds the keys: it goes back once they leave, for its
+            // field or because it closed.
+            void LetGo(object sender, KeyboardFocusChangedEventArgs e) => SetHoldsTheKeys(overlay, false, LetGo);
+            SetHoldsTheKeys(overlay, true, LetGo);
+            if (!overlay.IsVisible || !SelectorFocus.LandOnStop(overlay))
+            {
+                // Neither the field nor the overlay can take the keys: an overlay that isn't
+                // on screen. Nothing holds them, so nothing under it gets a key, text or a
+                // click; Escape is lost too, until the queued landing below gives the field
+                // the keys. It's the least bad state: the alternative is a focused, enabled
+                // view taking input under an open overlay.
+                SetHoldsTheKeys(overlay, false, LetGo);
+                Keyboard.ClearFocus();
+            }
+        }
+
+        _ = Dispatcher.InvokeAsync(
+            () =>
+            {
+                if (stillOpen() && !field.IsKeyboardFocused && field.Focus())
+                {
+                    field.SelectAll();
+                }
+            },
+            DispatcherPriority.Input);
+    }
+
+    /// <summary>Makes <paramref name="overlay"/> a stop that can hold the keys while its
+    /// field's landing waits, and no stop again once it has let them go. Never a Tab stop.</summary>
+    private static void SetHoldsTheKeys(FrameworkElement overlay, bool holds, KeyboardFocusChangedEventHandler letGo)
+    {
+        overlay.LostKeyboardFocus -= letGo;
+        if (holds)
+        {
+            KeyboardNavigation.SetIsTabStop(overlay, false);
+            overlay.LostKeyboardFocus += letGo;
+        }
+
+        overlay.Focusable = holds;
+    }
+
     /// <summary>The palette whose seal release the window listens to.</summary>
     private CommandPaletteViewModel? _sealReleaseSource;
 
@@ -60,13 +148,7 @@ public partial class MainWindow
                     // toggle) cannot overwrite the pre-palette focus with an
                     // element inside the palette itself.
                     _focusBeforePalette ??= Keyboard.FocusedElement;
-                    _ = Dispatcher.InvokeAsync(
-                        () =>
-                        {
-                            CommandPaletteSearchTextBox.Focus();
-                            CommandPaletteSearchTextBox.SelectAll();
-                        },
-                        DispatcherPriority.Input);
+                    LandInOpeningOverlay(CommandPaletteOverlay, CommandPaletteSearchTextBox, () => _viewModel.Palette.IsOpen);
                 }
                 else
                 {

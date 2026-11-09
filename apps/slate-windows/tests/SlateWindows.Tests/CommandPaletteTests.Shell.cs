@@ -225,6 +225,21 @@ public sealed partial class CommandPaletteTests
             return _workspace;
         }
 
+        /// <summary>A workspace with no tab open, attached through the lifecycle's own setter,
+        /// so the shell shows the empty pane's launcher.</summary>
+        public WorkspaceViewModel AttachEmptyWorkspace()
+        {
+            _workspace = new WorkspaceViewModel(
+                _session,
+                _fixture.Root,
+                () => [],
+                _ => { },
+                startInteractionBackgroundWork: false,
+                preferencesStore: new AppPreferencesStore(Path.Combine(_fixture.Root, "preferences.json")));
+            SetProperty(nameof(VaultLifecycleViewModel.Workspace), _workspace);
+            return _workspace;
+        }
+
         /// <summary>A workspace with the canvas at <paramref name="path"/> open
         /// as the active tab — its document synchronous, as a workspace
         /// without interaction background work makes it — attached through

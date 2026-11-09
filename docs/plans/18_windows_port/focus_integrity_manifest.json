@@ -160,6 +160,7 @@
     "ui-state SlateWindows.Grids.AccessibleDataGrid.BuildRowActionsMenu item IsEnabled": "exempt: a context menu's items, built as it opens (its opening handler) — before the keys can be in it; an open menu is a popup of its own, out of the region",
     "ui-state SlateWindows.MainWindow.QueriesRenameBox_KeyDown QueriesRenameRow Visibility": "guard: QueriesLeafBody",
     "ui-state SlateWindows.MainWindow.QueriesRename_Click QueriesRenameRow Visibility": "guard: QueriesLeafBody",
+    "ui-state SlateWindows.MainWindow.SetHoldsTheKeys overlay Focusable": "CommandPaletteTests.EscapeBeforeALateLandingStillClosesThePalette",
     "ui-state SlateWindows.Panels.HistorySurfaceView.CaptionText block Focusable": "guard: HistoryLeafBody",
     "ui-state SlateWindows.Panels.HistorySurfaceView.SwitchSegment _deletedScroll Visibility": "guard: HistoryLeafBody",
     "ui-state SlateWindows.Panels.HistorySurfaceView.SwitchSegment _thisNoteScroll Visibility": "guard: HistoryLeafBody",

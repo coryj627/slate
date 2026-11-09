@@ -839,11 +839,9 @@ public partial class MainWindow : Window
 
             _focusBeforeSwitcher ??= Keyboard.FocusedElement;
             _quickSwitcherCommitted = false;
-            _ = Dispatcher.InvokeAsync(() =>
-            {
-                QuickSwitcherSearchTextBox.Focus();
-                QuickSwitcherSearchTextBox.SelectAll();
-            }, DispatcherPriority.Input);
+            // #1690: in the same turn, with a queued fallback only for a
+            // field not yet able to take the keys (LandInOpeningOverlay).
+            LandInOpeningOverlay(QuickSwitcherOverlay, QuickSwitcherSearchTextBox, () => _observedQuickSwitcher?.IsOpen == true);
         }
     }
 
