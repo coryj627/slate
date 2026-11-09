@@ -71,6 +71,9 @@ public sealed partial class ShellAccessibilityTests
             string relaunchLog = Path.Combine(relaunchLogDirectory, "slate-windows.log");
             Window window = WaitForMainWindow(process, automation, relaunchLog, TimeSpan.FromSeconds(30));
             AssertTheNoteCameBackDirty(window, automation, typed);
+            // R-4's runtime witness at this journey's representative state:
+            // the restored, unsaved tab (AnnouncementNameCensus).
+            AssertItemNamesAreSpeakable(process, "hot-exit-close-restored");
 
             RenderedAnnouncement opened = SlateUniffiMethods.A11yRender(
                 new A11yEvent.VaultOpened(vaultName, string.Empty));
@@ -137,6 +140,8 @@ public sealed partial class ShellAccessibilityTests
             Window window = WaitForMainWindow(
                 process, automation, Path.Combine(relaunchLogDirectory, "slate-windows.log"), TimeSpan.FromSeconds(30));
             AssertTheNoteCameBackDirty(window, automation, typed);
+            // R-4's runtime witness at the restored, unsaved tab.
+            AssertItemNamesAreSpeakable(process, "hot-exit-kill-restored");
             Assert.Equal(onDisk, File.ReadAllText(notePath));
         }
         finally
