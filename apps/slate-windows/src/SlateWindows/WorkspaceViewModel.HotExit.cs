@@ -57,6 +57,11 @@ internal sealed class HotExitRestorePlan
     /// <summary>Current claims with no payload (§2).</summary>
     internal List<HotExitCurrentClaim> OrphanClaims { get; } = [];
 
+    /// <summary>Peers' entries whose text another peer's recovered note
+    /// already carries (red team PR 2: one recovered note per distinct text);
+    /// retired at the landing.</summary>
+    internal List<(string EntryId, List<string> Incarnations)> Redundant { get; } = [];
+
     internal IReadOnlyDictionary<Guid, Planned> ByLayoutTab => _byLayoutTab;
 
     /// <summary>What a kept note's tab loads instead of reading disk: nothing
@@ -67,8 +72,14 @@ internal sealed class HotExitRestorePlan
             ? string.Empty
             : null;
 
-    internal static HotExitRestorePlan For(HotExitOpen open, WorkspaceSnapshot? layout)
+    /// <param name="occupied">Whether a vault-relative path already holds a
+    /// file: a recovered note's name never lands on one (red team PR 2).</param>
+    internal static HotExitRestorePlan For(
+        HotExitOpen open,
+        WorkspaceSnapshot? layout,
+        Func<string, bool>? occupied = null)
     {
+        occupied ??= static _ => false;
         var plan = new HotExitRestorePlan(layout);
         if (open.IsInert)
         {
@@ -106,6 +117,7 @@ internal sealed class HotExitRestorePlan
             string latest = peers
                 .OrderBy(peer => peer.Entry.WrittenAt, StringComparer.Ordinal)
                 .Last().Entry.Text;
+            var recoveredByText = new Dictionary<string, string>(StringComparer.Ordinal);
             foreach ((HotExitEntry Entry, HotExitRestore Decision, string Path) peer in peers)
             {
                 if (string.Equals(peer.Entry.Text, latest, StringComparison.Ordinal))
@@ -121,7 +133,20 @@ internal sealed class HotExitRestorePlan
                     }
                     continue;
                 }
-                string name = FreeRecoveredName(peer.Path, taken);
+                bool redundant = recoveredByText.ContainsKey(peer.Entry.Text);
+                if (redundant)
+                {
+                    List<string> incarnations = [peer.Entry.Incarnation];
+                    if (ObservedClaim(peer.Entry) is { } observed && observed != peer.Entry.Incarnation)
+                    {
+                        incarnations.Add(observed);
+                    }
+                    plan.Redundant.Add((peer.Entry.EntryId, incarnations));
+                }
+                string name = redundant
+                    ? recoveredByText[peer.Entry.Text]
+                    : FreeRecoveredName(peer.Path, taken, occupied);
+                recoveredByText[peer.Entry.Text] = name;
                 taken.Add(name);
                 recovered.Add(peer.Entry.EntryId);
                 if (layoutTabs.TryGetValue(peer.Entry.EntryId, out WorkspaceTabState? holder))
@@ -136,6 +161,10 @@ internal sealed class HotExitRestorePlan
                         null,
                         latest);
                     layoutTabs.Remove(peer.Entry.EntryId);
+                }
+                if (redundant)
+                {
+                    continue;
                 }
                 plan.AddNewTab(
                     peer.Entry,
@@ -190,14 +219,15 @@ internal sealed class HotExitRestorePlan
         _ => throw new InvalidOperationException("unknown restore decision"),
     };
 
-    /// <summary>{stem} (recovered).md, numbered when taken.</summary>
-    private static string FreeRecoveredName(string path, HashSet<string> taken)
+    /// <summary>{stem} (recovered).md, numbered when taken by this restore
+    /// or by a file already in the vault.</summary>
+    private static string FreeRecoveredName(string path, HashSet<string> taken, Func<string, bool> occupied)
     {
         string directory = System.IO.Path.GetDirectoryName(path)?.Replace('\\', '/') ?? string.Empty;
         string stem = System.IO.Path.GetFileNameWithoutExtension(path);
         string prefix = directory.Length == 0 ? string.Empty : directory + "/";
         string candidate = $"{prefix}{stem} (recovered).md";
-        for (int number = 2; taken.Contains(candidate); number++)
+        for (int number = 2; taken.Contains(candidate) || occupied(candidate); number++)
         {
             candidate = $"{prefix}{stem} (recovered {number}).md";
         }
@@ -349,6 +379,15 @@ internal sealed class HotExitWriter
     }
 
     /// <summary>§2: a current claim with no payload that no tab holds.</summary>
+    /// <summary>A peer's entry whose text a recovered note already carries.</summary>
+    internal void RetireRedundantEntry(string entryId, IReadOnlyList<string> incarnations)
+    {
+        if (ActiveKey is { } key && !_detached)
+        {
+            _ = _host.RetireAsync(key, entryId, incarnations, _epoch);
+        }
+    }
+
     internal void RetireOrphanClaim(string entryId, string incarnation)
     {
         if (ActiveKey is { } key && !_detached)
@@ -521,8 +560,10 @@ internal sealed class HotExitWriter
                 Evaluate(state.Tab);
                 break;
             case HotExitClaimOutcome.Superseded superseded:
+                // Only this call's own incarnation: a newer episode's pending
+                // claim survives an older one's outcome (red team PR 2).
                 state.HeldIncarnations.Remove(incarnation);
-                state.ClaimIncarnation = null;
+                ForgetClaimIncarnation(state, incarnation);
                 if (current)
                 {
                     OnSuperseded(state, superseded.By, isClaim: true);
@@ -530,12 +571,20 @@ internal sealed class HotExitWriter
                 break;
             case HotExitClaimOutcome.Refused refused:
                 state.HeldIncarnations.Remove(incarnation);
-                state.ClaimIncarnation = null;
+                ForgetClaimIncarnation(state, incarnation);
                 if (current)
                 {
                     state.NotKeptReason = SlateUniffiMethods.HotExitRefusalReason(refused.Refusal);
                 }
                 break;
+        }
+    }
+
+    private static void ForgetClaimIncarnation(TabState state, string incarnation)
+    {
+        if (string.Equals(state.ClaimIncarnation, incarnation, StringComparison.Ordinal))
+        {
+            state.ClaimIncarnation = null;
         }
     }
 
@@ -804,6 +853,10 @@ internal sealed class HotExitWriter
             _dispatcher,
             _dispatcher.InvokeAsync(static () => { }, DispatcherPriority.Background).Task);
         bool epochChecked = false;
+        // A kept snapshot counts only under an epoch this settle read back
+        // (codex PR 2 round 1): a failed or unfinished check keeps nothing.
+        bool epochConfirmed = false;
+        string? epochFailure = null;
         int attempt = ++_settleAttempt;
         while (true)
         {
@@ -821,24 +874,32 @@ internal sealed class HotExitWriter
                 if (!epochChecked)
                 {
                     epochChecked = true;
+                    // Nothing to keep, nothing to confirm (red team PR 2).
+                    if (!AnyDirtyToKeep())
+                    {
+                        continue;
+                    }
                     Task<HotExitResult<ulong>> read = _host.EpochAsync(key);
                     PumpBounded(read, deadline);
                     if (read.IsCompleted && read.Result is { Succeeded: true } answered)
                     {
+                        epochConfirmed = true;
                         OnEpochMoved(answered.Value);
+                    }
+                    else if (read.IsCompleted && read.Result is { ErrorReason: { } why })
+                    {
+                        epochFailure = why;
                     }
                     continue;
                 }
                 // Each failed call had its one try: nothing further can
                 // change, so the settle says so now.
-                return AllDirtyKept()
-                    ? new HotExitSettleResult(true, null)
-                    : new HotExitSettleResult(false, FirstReason(key));
+                return Decide();
             }
             if (DateTime.UtcNow >= deadline)
             {
-                return mode == HotExitSettleMode.Normal && !_host.HasUnresolved(key) && AllDirtyKept()
-                    ? new HotExitSettleResult(true, null)
+                return mode == HotExitSettleMode.Normal && !_host.HasUnresolved(key)
+                    ? Decide()
                     : new HotExitSettleResult(false, FirstReason(key));
             }
             // Always a real frame: a posted outcome runs in it.
@@ -848,12 +909,32 @@ internal sealed class HotExitWriter
                     : Task.Delay(TimeSpan.FromMilliseconds(5)),
                 deadline);
         }
+
+        HotExitSettleResult Decide()
+        {
+            if (!AllDirtyKept())
+            {
+                return new HotExitSettleResult(false, FirstReason(key));
+            }
+            if (epochConfirmed || !AnyDirtyToKeep())
+            {
+                return new HotExitSettleResult(true, null);
+            }
+            return new HotExitSettleResult(
+                false,
+                _host.HasUnresolvedDiscard(key)
+                    ? SlateUniffiMethods.HotExitReasonDiscardPending()
+                    : epochFailure ?? SlateUniffiMethods.HotExitReasonTimedOut());
+        }
     }
+
+    private bool AnyDirtyToKeep() =>
+        _tabs().Any(tab => !tab.IsDisposed && tab.IsDirty && tab.IsMarkdown);
 
     private int _settleAttempt;
 
     private bool AnyCallInFlight() =>
-        _states.Values.Any(state => state.ClaimInFlight || state.WriteInFlight);
+        _liftingFence || _states.Values.Any(state => state.ClaimInFlight || state.WriteInFlight);
 
     private HotExitSettleResult SettleInert(HotExitSettleMode mode)
     {
@@ -929,16 +1010,6 @@ internal sealed class HotExitWriter
             .All(tab => StateFor(tab) is { DiscardedUnkept: false, ClaimLost: false, LiveClaim: not null } state
                 && state.LastKept == SnapshotOf(tab));
 
-    /// <summary>A reason no further waiting can change: a lost claim or a
-    /// discarded-unkept buffer.</summary>
-    private string? HopelessReason() =>
-        _tabs()
-            .Where(tab => !tab.IsDisposed && tab.IsDirty && tab.IsMarkdown)
-            .Select(StateFor)
-            .Where(state => state.DiscardedUnkept || state.ClaimLost)
-            .Select(state => state.NotKeptReason)
-            .FirstOrDefault(reason => reason is not null);
-
     private string FirstReason(HotExitVaultKey key)
     {
         if (_host.HasUnresolvedDiscard(key))
@@ -977,6 +1048,8 @@ internal sealed class HotExitWriter
             CoverDirtyTabs();
         }
         _fenced = true;
+        _fenceLift++;
+        _liftingFence = false;
         _discardTask = _host.HasUnresolvedDiscard(key) && _discardTask is not null
             ? _discardTask
             : IssueDiscard(key);
@@ -991,6 +1064,9 @@ internal sealed class HotExitWriter
         {
             return DiscardWait.Committed;
         }
+        _fenced = true;
+        _fenceLift++;
+        _liftingFence = false;
         _discardTask = _host.HasUnresolvedDiscard(key) && _discardTask is not null
             ? _discardTask
             : IssueDiscard(key);
@@ -1044,17 +1120,35 @@ internal sealed class HotExitWriter
         {
             return;
         }
-        _fenced = false;
+        // The fence holds until the covered tabs are classified, in the same
+        // dispatcher turn as the lift (codex PR 2 round 1): nothing covered is
+        // claimed or written while the epoch read is out. A newer discard
+        // makes this lift stale.
+        int lift = ++_fenceLift;
+        _liftingFence = true;
         // An uncommitted discard may still have advanced the visible epoch.
         PostResult(_host.EpochAsync(key), epoch =>
         {
+            if (lift != _fenceLift || _detached || _host.HasUnresolvedDiscard(key))
+            {
+                return;
+            }
             if (epoch is { Succeeded: true } read && read.Value > _epoch)
             {
                 _epoch = read.Value;
             }
+            _liftingFence = false;
+            _fenced = false;
             ReevaluateAfterFence();
         });
     }
+
+    /// <summary>Counts fence lifts; a lift whose epoch read returns after a
+    /// newer discard began is stale.</summary>
+    private int _fenceLift;
+
+    /// <summary>A lift's epoch read is out: a settle waits for it.</summary>
+    private bool _liftingFence;
 
     private void ReevaluateAfterFence()
     {
@@ -1114,9 +1208,18 @@ internal sealed class HotExitWriter
             }
             else
             {
-                string incarnation = state.ClaimIncarnation ?? SlateUniffiMethods.NewHotExitIncarnation();
-                chains.Add(_host
-                    .ClaimAsync(key, _epoch, tab.RecoveryEntryId, state.ExpectedClaim, incarnation)
+                // The tab's own claim, recorded as IssueClaim records it, so
+                // the close after the flush knows it (red team PR 2): an
+                // unrecorded one superseded the settle's and was never retired.
+                state.ClaimIncarnation ??= SlateUniffiMethods.NewHotExitIncarnation();
+                state.HeldIncarnations.Add(state.ClaimIncarnation);
+                string incarnation = state.ClaimIncarnation;
+                int token = state.Token;
+                state.ClaimInFlight = true;
+                Task<HotExitResult<HotExitClaimOutcome>> claiming =
+                    _host.ClaimAsync(key, _epoch, tab.RecoveryEntryId, state.ExpectedClaim, incarnation);
+                PostResult(claiming, result => OnClaimResolved(state, token, incarnation, result));
+                chains.Add(claiming
                     .ContinueWith(
                         claimed => claimed.Result.Value is HotExitClaimOutcome.Claimed granted
                             ? _host.WriteAsync(key, granted.Claim, generation, entry)
@@ -1313,6 +1416,10 @@ internal sealed partial class WorkspaceViewModel
                 _hotExit.RetireOrphanClaim(orphan.EntryId, orphan.Incarnation);
             }
         }
+        foreach ((string entryId, List<string> incarnations) in plan.Redundant)
+        {
+            _hotExit.RetireRedundantEntry(entryId, incarnations);
+        }
         foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs).ToList())
         {
             _hotExit.Attach(tab);
@@ -1353,6 +1460,10 @@ internal sealed partial class WorkspaceViewModel
                 notices.Add(new A11yEvent.RestoredNoteRecovered(name));
                 break;
         }
+        // Every same-path peer takes the whole restored state, its baseline,
+        // guard and staleness included (codex PR 2 round 1): the text alone
+        // reached them before the guard was set, or not at all when equal.
+        MirrorSamePathDocumentState(tab, null);
         // §5: it adopts the observed claim and carries both the claim's and
         // the payload's incarnations until the reader ends it.
         _hotExit!.InstallRestored(

@@ -245,6 +245,16 @@ internal sealed class HotExitStoreHost
         }
     }
 
+    /// <summary>Whether any call of the key, a read included, is recorded and
+    /// unresolved (O1).</summary>
+    internal bool HasRecordedCallForTests(HotExitVaultKey key)
+    {
+        lock (_gate)
+        {
+            return LedgerFor(key).HasRecorded;
+        }
+    }
+
     /// <summary>Whether any vault discard of the key is unresolved (O6).</summary>
     internal bool HasUnresolvedDiscard(HotExitVaultKey key)
     {
@@ -740,7 +750,14 @@ internal sealed class HotExitStoreHost
 
         internal TaskCompletionSource? Settled { get; set; }
 
-        internal bool HasUnresolved => Unresolved.Count > 0;
+        /// <summary>A call that can change the store is still out. A read
+        /// (Epoch, Read) is recorded (O1) but changes nothing, so no settle,
+        /// reopen wait or hold waits on it (red team PR 2: a stalled read made
+        /// a clean close ask).</summary>
+        internal bool HasUnresolved =>
+            Unresolved.Any(obligation => obligation.Kind is not (HotExitCallKind.Epoch or HotExitCallKind.Read));
+
+        internal bool HasRecorded => Unresolved.Count > 0;
 
         internal void Add(Obligation obligation) => Unresolved.Add(obligation);
 

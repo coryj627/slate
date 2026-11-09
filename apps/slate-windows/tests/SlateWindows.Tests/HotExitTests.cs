@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Diagnostics;
 using System.IO;
 using System.Threading;
 using System.Windows.Threading;
@@ -129,6 +130,101 @@ public sealed class HotExitTests
         Assert.Equal(SlateUniffiMethods.HotExitRefusalReason(HotExitRefusal.VaultFull), notKept.Reason);
         Assert.Contains(notKept.Reason, host.Lifecycle.StatusText, StringComparison.Ordinal);
         Assert.Equal("# a\ntyped", tab.Text);
+    }
+
+    /// <summary>Codex PR 2 round 1: a kept snapshot is kept only under an
+    /// epoch the settle read back; a check that fails says so and asks.</summary>
+    [Theory]
+    [InlineData("Io")]
+    [InlineData("Damaged")]
+    public void AFailedEpochCheckNeverClosesKept(string faultName)
+    {
+        using var host = new HotExitHost { ClosePrompt = () => VaultCloseDecision.Cancel };
+        host.Open();
+        WorkspaceTabViewModel tab = host.OpenNote("a.md");
+        tab.Text += "typed";
+        PumpedDispatcher.Drain();
+        HotExitFault fault = faultName == "Io" ? new HotExitFault.Io() : new HotExitFault.Damaged();
+        host.Store.AfterCallForTests = call => call.Kind == HotExitCallKind.Epoch ? fault : null;
+
+        Assert.Equal(WorkspaceTeardown.Refused, host.Close(TeardownRoute.ApplicationClose));
+
+        Assert.Equal(1, host.ClosePrompts);
+        A11yEvent.UnsavedNotesNotKept notKept =
+            Assert.IsType<A11yEvent.UnsavedNotesNotKept>(
+                host.Announced.Single(item => item is A11yEvent.UnsavedNotesNotKept));
+        Assert.Equal(SlateUniffiMethods.HotExitReasonStoreUnwritable(), notKept.Reason);
+    }
+
+    /// <summary>Codex PR 2 round 1: an epoch check still out when the settle's
+    /// budget ends is not a kept close.</summary>
+    [Fact]
+    public void AnEpochCheckThatOutlivesTheSettleNeverClosesKept()
+    {
+        using var host = new HotExitHost { ClosePrompt = () => VaultCloseDecision.Cancel };
+        host.ShortenBudgets();
+        host.Open();
+        WorkspaceTabViewModel tab = host.OpenNote("a.md");
+        tab.Text += "typed";
+        PumpedDispatcher.Drain();
+        using var release = new ManualResetEventSlim(false);
+        host.Store.BeforeCallForTests = call =>
+        {
+            if (call.Kind == HotExitCallKind.Epoch)
+            {
+                _ = release.Wait(TimeSpan.FromSeconds(10));
+            }
+            return null;
+        };
+        try
+        {
+            Assert.Equal(WorkspaceTeardown.Refused, host.Close(TeardownRoute.ApplicationClose));
+
+            Assert.Equal(1, host.ClosePrompts);
+            A11yEvent.UnsavedNotesNotKept notKept =
+                Assert.IsType<A11yEvent.UnsavedNotesNotKept>(
+                    host.Announced.Single(item => item is A11yEvent.UnsavedNotesNotKept));
+            Assert.Equal(SlateUniffiMethods.HotExitReasonTimedOut(), notKept.Reason);
+        }
+        finally
+        {
+            release.Set();
+        }
+    }
+
+    /// <summary>Red team PR 2: a read changes nothing in the store, so a
+    /// stalled one never makes a clean close ask, whatever route.</summary>
+    [Theory]
+    [InlineData("ApplicationClose")]
+    [InlineData("Close")]
+    public void AStalledReadNeverMakesACleanCloseAsk(string routeName)
+    {
+        var route = Enum.Parse<TeardownRoute>(routeName);
+        using var host = new HotExitHost { DiscardPrompt = () => DiscardPendingDecision.Cancel };
+        host.ShortenBudgets();
+        host.Open();
+        _ = host.OpenNote("a.md");
+        using var gate = new ManualResetEventSlim();
+        host.Store.BeforeCallForTests = call =>
+        {
+            if (call.Kind is HotExitCallKind.Epoch or HotExitCallKind.Read)
+            {
+                Assert.True(gate.Wait(Patience), "the read was never released");
+            }
+            return null;
+        };
+        try
+        {
+            _ = host.Store.EpochAsync(host.Key);
+
+            Assert.Equal(WorkspaceTeardown.Closed, host.Close(route));
+
+            Assert.Equal(0, host.DiscardPrompts);
+        }
+        finally
+        {
+            gate.Set();
+        }
     }
 
     [Fact]
@@ -303,6 +399,371 @@ public sealed class HotExitTests
         Assert.False(host.TabOn("a.md").IsDirty, "the discarded text came back");
     }
 
+    /// <summary>Codex PR 2 round 1: the fence holds until the covered tabs are
+    /// classified. A late discard commits; while its epoch read is still out,
+    /// another close settles with writes accepted again. Nothing covered is
+    /// claimed or written in that window, so a crash brings nothing back.</summary>
+    [Fact]
+    public void AFenceHoldsUntilTheCoveredTabsAreClassified()
+    {
+        using var host = new HotExitHost
+        {
+            ClosePrompt = () => VaultCloseDecision.Discard,
+            DiscardPrompt = () => DiscardPendingDecision.Cancel,
+        };
+        host.ShortenBudgets();
+        host.Open();
+        WorkspaceTabViewModel tab = host.OpenNote("a.md");
+        tab.Text += "typed";
+        host.PumpUntil(() => host.StoredText(tab) == tab.Text, "never kept");
+        using var discardGate = new ManualResetEventSlim();
+        using var epochGate = new ManualResetEventSlim();
+        bool refuseWrites = true;
+        bool holdEpoch = false;
+        host.Store.BeforeCallForTests = call =>
+        {
+            if (call.Kind == HotExitCallKind.Write && Volatile.Read(ref refuseWrites))
+            {
+                return new HotExitFault.Refused(HotExitRefusal.VaultFull);
+            }
+            if (call.Kind == HotExitCallKind.Discard)
+            {
+                Assert.True(discardGate.Wait(Patience), "the discard was never released");
+            }
+            if (call.Kind == HotExitCallKind.Epoch && Volatile.Read(ref holdEpoch))
+            {
+                Assert.True(epochGate.Wait(Patience), "the epoch read was never released");
+            }
+            return null;
+        };
+        tab.Text += "more";
+        Assert.Equal(WorkspaceTeardown.Refused, host.Close(TeardownRoute.ApplicationClose));
+        Assert.Equal(1, host.DiscardPrompts);
+
+        // The discard commits; the fence's epoch read is held.
+        Volatile.Write(ref refuseWrites, false);
+        Volatile.Write(ref holdEpoch, true);
+        discardGate.Set();
+        host.PumpUntil(() => !host.Store.HasUnresolvedDiscard(host.Key), "the discard never resolved");
+        host.PumpFor(TimeSpan.FromMilliseconds(100));
+
+        host.ClosePrompt = () => VaultCloseDecision.Cancel;
+        Assert.Equal(WorkspaceTeardown.Refused, host.Close(TeardownRoute.ApplicationClose));
+        Assert.Null(host.StoredText(tab));
+
+        Volatile.Write(ref holdEpoch, false);
+        epochGate.Set();
+        host.PumpFor(TimeSpan.FromMilliseconds(200));
+        Assert.Null(host.StoredText(tab));
+        host.Crash();
+        host.Open();
+        host.AssertRead();
+        Assert.False(host.TabOn("a.md").IsDirty, "the discarded text came back");
+    }
+
+    /// <summary>Codex PR 2 round 1: an entry whose text equals what its tab
+    /// loaded is still unsaved. A gone note's emptied text restores dirty, and
+    /// its save creates the note.</summary>
+    [Fact]
+    public void AnEmptiedGoneNoteRestoresUnsavedAndItsSaveCreatesIt()
+    {
+        using var host = new HotExitHost();
+        host.Open();
+        WorkspaceTabViewModel tab = host.OpenNote("a.md");
+        tab.Text = string.Empty;
+        Assert.Equal(WorkspaceTeardown.ClosedKept, host.Close(TeardownRoute.ApplicationClose));
+        host.Crash();
+        File.Delete(Path.Combine(host.Root, "a.md"));
+
+        host.Open();
+        host.AssertRead();
+        WorkspaceTabViewModel back = host.TabOn("a.md");
+
+        Assert.True(back.IsDirty, "the restored entry came back clean");
+        Assert.Equal(string.Empty, back.Text);
+        Assert.True(back.Save());
+        host.PumpUntil(() => !back.HasPendingSaves, "the save never settled");
+        Assert.True(File.Exists(Path.Combine(host.Root, "a.md")), "the save did not create the note");
+        Assert.Equal(string.Empty, host.Disk("a.md"));
+    }
+
+    /// <summary>Codex PR 2 round 1, red team 6: a stale entry whose text is
+    /// now the file's text restores dirty, and stays kept across opens until
+    /// the reader ends it.</summary>
+    [Fact]
+    public void AStaleEntryEqualToTheFileRestoresUnsavedAndStaysKept()
+    {
+        using var host = new HotExitHost();
+        host.Open();
+        WorkspaceTabViewModel tab = host.OpenNote("a.md");
+        tab.Text += "typed";
+        string kept = tab.Text;
+        Assert.Equal(WorkspaceTeardown.ClosedKept, host.Close(TeardownRoute.ApplicationClose));
+        host.Crash();
+        File.WriteAllText(Path.Combine(host.Root, "a.md"), kept);
+
+        host.Open();
+        host.AssertRead();
+        WorkspaceTabViewModel back = host.TabOn("a.md");
+        Assert.True(back.IsDirty, "the restored entry came back clean");
+        Assert.True(back.IsExternallyStale);
+        Assert.Equal(kept, back.Text);
+        host.PumpFor(TimeSpan.FromMilliseconds(200));
+        Assert.Equal(kept, host.StoredText(back));
+
+        host.Crash();
+        host.Open();
+        host.AssertRead();
+        Assert.True(host.TabOn("a.md").IsDirty, "the kept entry was retired");
+    }
+
+    /// <summary>Codex PR 2 round 1: a crash between two peers' writes leaves
+    /// one entry. The peer without one takes the restored tab's whole state,
+    /// its file-identity guard included, so a save through it never
+    /// overwrites a same-bytes replacement.</summary>
+    [Fact]
+    public void APeerWithoutAnEntryTakesTheRestoredGuard()
+    {
+        using var host = new HotExitHost();
+        host.Open();
+        WorkspaceTabViewModel left = host.OpenNote("a.md");
+        host.Workspace.OpenPath("a.md", WorkspaceOpenTarget.SplitRight);
+        PumpedDispatcher.Drain();
+        WorkspaceTabViewModel right = host.Workspace.Groups.SelectMany(group => group.Tabs)
+            .First(tab => tab.Path == "a.md" && !ReferenceEquals(tab, left));
+        left.Text += "typed";
+        string kept = left.Text;
+        Assert.Equal(WorkspaceTeardown.ClosedKept, host.Close(TeardownRoute.ApplicationClose));
+        host.Crash();
+        // The crash between the two peers' writes: only one entry is left.
+        HotExitSnapshot snapshot = host.Snapshot();
+        string rightId = right.RecoveryEntryId;
+        using (HotExitStore store = HotExitStore.Open(host.DeviceRoot))
+        {
+            store.RetireEntry(
+                host.Key,
+                rightId,
+                [
+                    .. snapshot.Entries.Where(entry => entry.EntryId == rightId).Select(entry => entry.Incarnation),
+                    .. snapshot.Claims.Where(claim => claim.EntryId == rightId).Select(claim => claim.Incarnation),
+                ]);
+        }
+
+        host.Open();
+        host.AssertRead();
+        WorkspaceTabViewModel[] peers = [.. host.Workspace.Groups.SelectMany(group => group.Tabs)
+            .Where(tab => tab.Path == "a.md")];
+        Assert.Equal(2, peers.Length);
+        WorkspaceTabViewModel bare = peers.Single(tab => tab.RecoveryEntryId == rightId);
+        Assert.True(bare.IsDirty);
+        Assert.Equal(kept, bare.Text);
+        Assert.True(bare.EnforcesFileIdentity, "the peer without an entry lost the restored guard");
+        string path = Path.Combine(host.Root, "a.md");
+        string bytes = File.ReadAllText(path);
+        File.Delete(path);
+        File.WriteAllText(path, bytes);
+
+        _ = bare.Save();
+        host.PumpUntil(() => !bare.HasPendingSaves, "the save never settled");
+
+        Assert.Equal(bytes, host.Disk("a.md"));
+    }
+
+    /// <summary>Red team PR 2: an older episode's late claim outcome never
+    /// forgets the newer episode's pending claim. Episode one's claim is held
+    /// and then refused; episode two's claim reaches the disk and errors; the
+    /// settle's retry is that same claim, so the close keeps.</summary>
+    [Fact]
+    public void AnOlderClaimsOutcomeNeverForgetsTheNewerClaim()
+    {
+        using var host = new HotExitHost { ClosePrompt = () => VaultCloseDecision.Cancel };
+        host.Open();
+        WorkspaceTabViewModel tab = host.OpenNote("a.md");
+        string original = tab.Text;
+        using var gate = new ManualResetEventSlim();
+        int beforeClaims = 0;
+        int afterClaims = 0;
+        host.Store.BeforeCallForTests = call =>
+        {
+            if (call.Kind == HotExitCallKind.Claim && Interlocked.Increment(ref beforeClaims) == 1)
+            {
+                Assert.True(gate.Wait(Patience), "the first claim was never released");
+                return new HotExitFault.Refused(HotExitRefusal.VaultFull);
+            }
+            return null;
+        };
+        host.Store.AfterCallForTests = call =>
+            call.Kind == HotExitCallKind.Claim && Interlocked.Increment(ref afterClaims) == 1
+                ? new HotExitFault.Io()
+                : null;
+
+        tab.Text += "one";
+        host.PumpUntil(() => Volatile.Read(ref beforeClaims) == 1, "the first claim never started");
+        // The reader ends episode one, then starts episode two.
+        tab.Text = original;
+        host.PumpFor(TimeSpan.FromMilliseconds(50));
+        tab.Text += "two";
+        host.PumpFor(TimeSpan.FromMilliseconds(50));
+        gate.Set();
+        host.PumpUntil(() => Volatile.Read(ref afterClaims) >= 1, "the second claim never reached the store");
+        host.PumpFor(TimeSpan.FromMilliseconds(200));
+
+        Assert.Equal(WorkspaceTeardown.ClosedKept, host.Close(TeardownRoute.ApplicationClose));
+        Assert.Equal(0, host.ClosePrompts);
+        Assert.Equal(tab.Text, host.StoredText(tab));
+    }
+
+    /// <summary>Red team PR 2: the session-end flush claims as the tab's own
+    /// claim. After a refused claim, the flush's claim lands; WPF's Closing
+    /// then keeps under it instead of finding it a stranger's.</summary>
+    [Fact]
+    public void ASessionEndFlushClaimsAsTheTabsOwnClaim()
+    {
+        using var host = new HotExitHost { ClosePrompt = () => VaultCloseDecision.Cancel };
+        host.Open();
+        WorkspaceTabViewModel tab = host.OpenNote("a.md");
+        bool refuse = true;
+        host.Store.BeforeCallForTests = call =>
+            call.Kind == HotExitCallKind.Claim && Volatile.Read(ref refuse)
+                ? new HotExitFault.Refused(HotExitRefusal.VaultFull)
+                : null;
+        tab.Text += "typed";
+        host.PumpFor(TimeSpan.FromMilliseconds(200));
+        Assert.Null(host.StoredText(tab));
+        Volatile.Write(ref refuse, false);
+
+        host.Lifecycle.FlushHotExitForSessionEnd();
+        Assert.Equal(tab.Text, host.StoredText(tab));
+
+        Assert.Equal(WorkspaceTeardown.ClosedKept, host.Close(TeardownRoute.ApplicationClose));
+        Assert.Equal(0, host.ClosePrompts);
+    }
+
+    /// <summary>Red team PR 2: a close that cancels an open stops the open's
+    /// wait for the last session's obligations at once, instead of blocking
+    /// the dispatcher for the rest of the wait.</summary>
+    [Fact]
+    public void AClosedOpenStopsWaitingForTheLastSession()
+    {
+        using var host = new HotExitHost
+        {
+            DiscardPrompt = () => DiscardPendingDecision.CloseKeepingCopies,
+            ClosePrompt = () => VaultCloseDecision.Cancel,
+        };
+        host.ShortenBudgets();
+        VaultLifecycleViewModel.HotExitReopenWait = TimeSpan.FromSeconds(4);
+        host.Open();
+        WorkspaceTabViewModel tab = host.OpenNote("a.md");
+        tab.Text += "typed";
+        host.PumpUntil(() => host.StoredText(tab) == tab.Text, "never kept");
+        using var gate = new ManualResetEventSlim();
+        host.Store.BeforeCallForTests = call =>
+        {
+            if (call.Kind == HotExitCallKind.Retire)
+            {
+                Assert.True(gate.Wait(Patience), "the retirement was never released");
+            }
+            return null;
+        };
+        try
+        {
+            Assert.True(tab.Save());
+            host.PumpUntil(() => !tab.HasPendingSaves, "the save never settled");
+            Assert.Equal(WorkspaceTeardown.ClosedCopiesKept, host.Close(TeardownRoute.ApplicationClose));
+            host.Crash();
+
+            Task open = host.BeginOpen();
+            host.PumpFor(TimeSpan.FromSeconds(1));
+            Assert.False(open.IsCompleted, "premise: the open did not wait for the held retirement");
+            var clock = Stopwatch.StartNew();
+            host.Lifecycle.Dispose();
+            TimeSpan blocked = clock.Elapsed;
+            _ = PumpedDispatcher.PumpUntil(() => open.IsCompleted, TimeSpan.FromSeconds(10));
+
+            Assert.True(blocked < TimeSpan.FromSeconds(1.5), $"the close blocked {blocked} on the open's wait");
+        }
+        finally
+        {
+            gate.Set();
+        }
+    }
+
+    /// <summary>Red team PR 2: Try again is the reader's answer, never one of
+    /// the close's admission rounds. Nine answers past the round limit, the
+    /// retirement lands and the close finishes.</summary>
+    [Fact]
+    public void TryAgainNeverCountsAsAnAdmissionRound()
+    {
+        using var host = new HotExitHost();
+        host.ShortenBudgets();
+        host.Open();
+        WorkspaceTabViewModel tab = host.OpenNote("a.md");
+        tab.Text += "typed";
+        host.PumpUntil(() => host.StoredText(tab) == tab.Text, "never kept");
+        using var gate = new ManualResetEventSlim();
+        host.Store.BeforeCallForTests = call =>
+        {
+            if (call.Kind == HotExitCallKind.Retire)
+            {
+                Assert.True(gate.Wait(Patience), "the retirement was never released");
+            }
+            return null;
+        };
+        Assert.True(tab.Save());
+        host.PumpUntil(() => !tab.HasPendingSaves, "the save never settled");
+        int answers = 0;
+        int lastHeld = WorkspaceViewModel.MaxPumpedAdmissionRounds + 1;
+        host.DiscardPrompt = () =>
+        {
+            if (++answers > lastHeld)
+            {
+                gate.Set();
+            }
+            return DiscardPendingDecision.TryAgain;
+        };
+
+        WorkspaceTeardown outcome = host.Close(TeardownRoute.ApplicationClose);
+
+        Assert.Equal(WorkspaceTeardown.Closed, outcome);
+        Assert.Equal(lastHeld + 1, host.DiscardPrompts);
+    }
+
+    /// <summary>Red team PR 2: peers reconcile into one recovered note per
+    /// distinct older text, under a name no file in the vault holds; a peer
+    /// whose text that note already carries is retired.</summary>
+    [Fact]
+    public void PeersSharingAnOlderTextMakeOneRecoveredNoteUnderAFreeName()
+    {
+        using var host = new HotExitHost();
+        host.Open();
+        host.Crash();
+        string baseline = SlateUniffiMethods.EditorTextContentHash("# a\n");
+        string first = Guid.NewGuid().ToString("D");
+        string second = Guid.NewGuid().ToString("D");
+        string latest = Guid.NewGuid().ToString("D");
+        host.Keep(first, "a.md", "# a\nolder", baseline, null);
+        Thread.Sleep(20);
+        host.Keep(second, "a.md", "# a\nolder", baseline, null);
+        Thread.Sleep(20);
+        host.Keep(latest, "a.md", "# a\nlatest", baseline, null);
+        File.WriteAllText(Path.Combine(host.Root, "a (recovered).md"), "# someone else's\n");
+        host.ForgetLayout();
+
+        host.Open();
+        host.AssertRead();
+
+        WorkspaceTabViewModel[] tabs = [.. host.Workspace.Groups.SelectMany(group => group.Tabs)];
+        WorkspaceTabViewModel recovered = Assert.Single(tabs, tab => tab.Path.StartsWith("a (recovered", StringComparison.Ordinal));
+        Assert.Equal("a (recovered 2).md", recovered.Path);
+        Assert.Equal("# a\nolder", recovered.Text);
+        Assert.Equal("# someone else's\n", host.Disk("a (recovered).md"));
+        Assert.All(tabs.Where(tab => tab.Path == "a.md"), tab => Assert.Equal("# a\nlatest", tab.Text));
+        host.PumpUntil(() => host.Snapshot().Entries.Length == 2, "the redundant peer's entry was not retired");
+        Assert.DoesNotContain(
+            host.Snapshot().Entries,
+            entry => entry.Text == "# a\nolder" && entry.EntryId != recovered.RecoveryEntryId);
+    }
+
     [Fact]
     public void EveryStoreCallIsRecordedBeforeItIsIssued()
     {
@@ -312,7 +773,7 @@ public sealed class HotExitTests
         int checkedCalls = 0;
         host.Store.BeforeCallForTests = _ =>
         {
-            Assert.True(host.Store.HasUnresolved(host.Key), "a call ran with no obligation");
+            Assert.True(host.Store.HasRecordedCallForTests(host.Key), "a call ran with no obligation");
             Interlocked.Increment(ref checkedCalls);
             return null;
         };
@@ -970,8 +1431,10 @@ public sealed class HotExitTests
         host.PumpUntil(() => host.StoredText(tab) == final, "the later edit was never kept");
     }
 
-    [Fact]
-    public void ACoveredTabSavedWhileTheDiscardIsPendingStaysRetired()
+    [Theory]
+    [InlineData("saved")]
+    [InlineData("closed")]
+    public void ACoveredTabSavedOrClosedWhileTheDiscardIsPendingStaysRetired(string route)
     {
         using var host = new HotExitHost
         {
@@ -994,14 +1457,27 @@ public sealed class HotExitTests
             return new HotExitFault.Io();
         };
         Assert.Equal(WorkspaceTeardown.Refused, host.Close(TeardownRoute.Close));
-        Assert.True(tab.Save());
-        host.PumpUntil(() => !tab.HasPendingSaves, "the save never settled");
+        if (route == "saved")
+        {
+            Assert.True(tab.Save());
+            host.PumpUntil(() => !tab.HasPendingSaves, "the save never settled");
+        }
+        else
+        {
+            // Red team PR 2: the spec's other arm, the tab closed answering
+            // Discard while the discard is pending.
+            host.TabPrompt = _ => WorkspaceDirtyNavigationDecision.Discard;
+            host.CloseTab(tab);
+        }
         gate.Set();
         host.PumpUntil(() => !host.Store.HasUnresolved(host.Key), "never resolved");
         host.NewProcess();
         host.Open();
         host.AssertRead();
-        Assert.False(host.TabOn("a.md").IsDirty, "the saved note's old copy came back");
+        Assert.DoesNotContain(
+            host.Workspace.Groups.SelectMany(group => group.Tabs),
+            open => open.Path == "a.md" && open.IsDirty);
+        Assert.DoesNotContain(host.Announced, item => item is A11yEvent.UnsavedNotesRestored);
     }
 
     [Theory]
@@ -1163,7 +1639,86 @@ public sealed class HotExitTests
             }
             string text = File.ReadAllText(file);
             Assert.DoesNotContain(".NoteFileIdentity(", text, StringComparison.Ordinal);
+            // Red team PR 2 (the spec's statement-level rule): every baseline
+            // hash a tab takes sets its identity beside it, in the same few
+            // statements, from the same read, save or source.
+            string[] lines = text.Split('\n');
+            for (int index = 0; index < lines.Length; index++)
+            {
+                if (!lines[index].Contains("_contentHash = ", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                bool paired = lines
+                    .Skip(Math.Max(0, index - 3))
+                    .Take(7)
+                    .Any(line => line.Contains("FileIdentity = ", StringComparison.Ordinal));
+                Assert.True(paired, $"{Path.GetFileName(file)}:{index + 1} sets a baseline hash with no identity beside it");
+            }
         }
+    }
+
+    /// <summary>Red team PR 2: the facts drive the lifecycle's flush; this
+    /// census holds the wiring a fact cannot reach. Windows' session end runs
+    /// the flush, never cancels the session end, and hands on to WPF.</summary>
+    [Fact]
+    public void TheSessionEndingHandlerFlushesAndNeverCancels()
+    {
+        string source = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "src", "SlateWindows"));
+        string app = File.ReadAllText(Path.Combine(source, "App.xaml.cs"));
+        System.Text.RegularExpressions.Match handler = System.Text.RegularExpressions.Regex.Match(
+            app,
+            @"override void OnSessionEnding\(SessionEndingCancelEventArgs e\)\s*\{(?<body>[^}]*)\}");
+        Assert.True(handler.Success, "App has no OnSessionEnding override");
+        string body = handler.Groups["body"].Value;
+        Assert.Contains("FlushHotExitForSessionEnd()", body, StringComparison.Ordinal);
+        Assert.Contains("base.OnSessionEnding(e);", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("Cancel", body.Replace("SessionEndingCancelEventArgs", string.Empty, StringComparison.Ordinal), StringComparison.Ordinal);
+        string window = File.ReadAllText(Path.Combine(source, "MainWindow.xaml.cs"));
+        Assert.Matches(
+            @"void FlushHotExitForSessionEnd\(\)\s*(=>|\{)[^;]*\.FlushHotExitForSessionEnd\(\)",
+            window);
+    }
+
+    /// <summary>The spec's Tests table: a session end whose cancel Windows
+    /// ignores. The store fails the flush's write, the close's prompt is
+    /// answered Cancel, and the window closes anyway: disposal abandons the
+    /// episode, retiring nothing, so the last kept text comes back.</summary>
+    [Fact]
+    public void ASessionEndThatIgnoresCancelAbandons()
+    {
+        using var host = new HotExitHost { ClosePrompt = () => VaultCloseDecision.Cancel };
+        host.Open();
+        WorkspaceTabViewModel tab = host.OpenNote("a.md");
+        tab.Text += "one";
+        string kept = tab.Text;
+        host.PumpUntil(() => host.StoredText(tab) == kept, "never kept");
+        int retirements = 0;
+        host.Store.BeforeCallForTests = call =>
+        {
+            if (call.Kind == HotExitCallKind.Retire)
+            {
+                Interlocked.Increment(ref retirements);
+            }
+            return call.Kind == HotExitCallKind.Write ? new HotExitFault.Io() : null;
+        };
+        tab.Text += "two";
+
+        host.Lifecycle.FlushHotExitForSessionEnd();
+        Assert.Equal(WorkspaceTeardown.Refused, host.Close(TeardownRoute.ApplicationClose));
+        Assert.Equal(1, host.ClosePrompts);
+        // Windows ends the session regardless: the window goes.
+        host.Crash();
+        host.PumpFor(TimeSpan.FromMilliseconds(200));
+
+        Assert.Equal(0, Volatile.Read(ref retirements));
+        host.Store.BeforeCallForTests = null;
+        host.NewProcess();
+        host.Open();
+        host.AssertRead();
+        WorkspaceTabViewModel back = host.TabOn("a.md");
+        Assert.True(back.IsDirty);
+        Assert.Equal(kept, back.Text);
     }
 
     [Fact]
@@ -1876,6 +2431,19 @@ public sealed class HotExitTests
         host.Open();
         host.Crash();
         Assert.False(host.Store.HoldsVaultForTests(host.Key), "a closed session kept the hold");
+        // Codex PR 2 round 1: an open that fails after it took the hold.
+        bool held = false;
+        Task open = host.BeginOpen(configure: lifecycle => lifecycle.HotExitReadForTests = () =>
+        {
+            held = host.Store.HoldsVaultForTests(host.Key);
+            throw new InvalidOperationException("the open fails after its hold");
+        });
+        host.PumpUntil(() => open.IsCompleted, "the failed open never ended");
+        PumpedDispatcher.Drain();
+
+        Assert.True(held, "premise: the open failed before it held the vault");
+        Assert.False(host.Lifecycle.IsVaultOpen);
+        Assert.False(host.Store.HoldsVaultForTests(host.Key), "the failed open kept the hold");
         using HotExitStore other = HotExitStore.Open(host.DeviceRoot);
         using HotExitVaultHold hold = other.HoldVault(host.Key);
     }
@@ -1998,6 +2566,30 @@ public sealed class HotExitTests
 
         private void OpenCore(Action<IReadOnlyList<A11yEvent>>? onReady, bool expectKey)
         {
+            Task open = BeginOpen(onReady);
+            Assert.True(PumpedDispatcher.PumpUntil(() => open.IsCompleted, TimeSpan.FromSeconds(60)), "never opened");
+            open.GetAwaiter().GetResult();
+            Assert.True(
+                PumpedDispatcher.PumpUntil(
+                    () => Lifecycle.FileSidebar is { } sidebar
+                        && sidebar.TreeRefreshCompletion.IsCompleted
+                        && !sidebar.IsLoadingChildren
+                        && !sidebar.IsExpandingLoaded,
+                    TimeSpan.FromSeconds(30)),
+                "the sidebar never settled");
+            if (expectKey)
+            {
+                Key = Assert.IsType<HotExitKeyResult.Key>(Lifecycle.SessionForTests!.HotExitKey()).KeyValue;
+            }
+            PumpedDispatcher.Drain();
+        }
+
+        /// <summary>A new lifecycle's open of the vault, started and not
+        /// waited for.</summary>
+        internal Task BeginOpen(
+            Action<IReadOnlyList<A11yEvent>>? onReady = null,
+            Action<VaultLifecycleViewModel>? configure = null)
+        {
             Announced.Clear();
             Lifecycle = new VaultLifecycleViewModel(
                 pickVault: () => Task.FromResult<string?>(Root),
@@ -2019,26 +2611,12 @@ public sealed class HotExitTests
             {
                 HotExitHostForTests = Store,
             };
+            configure?.Invoke(Lifecycle);
             if (onReady is not null)
             {
                 Lifecycle.WorkspaceReady += (_, _) => onReady([.. Announced]);
             }
-            Task open = Lifecycle.OpenVaultAsync(Root);
-            Assert.True(PumpedDispatcher.PumpUntil(() => open.IsCompleted, TimeSpan.FromSeconds(60)), "never opened");
-            open.GetAwaiter().GetResult();
-            Assert.True(
-                PumpedDispatcher.PumpUntil(
-                    () => Lifecycle.FileSidebar is { } sidebar
-                        && sidebar.TreeRefreshCompletion.IsCompleted
-                        && !sidebar.IsLoadingChildren
-                        && !sidebar.IsExpandingLoaded,
-                    TimeSpan.FromSeconds(30)),
-                "the sidebar never settled");
-            if (expectKey)
-            {
-                Key = Assert.IsType<HotExitKeyResult.Key>(Lifecycle.SessionForTests!.HotExitKey()).KeyValue;
-            }
-            PumpedDispatcher.Drain();
+            return Lifecycle.OpenVaultAsync(Root);
         }
 
         /// <summary>An entry as an earlier process left it.</summary>

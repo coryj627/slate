@@ -705,6 +705,7 @@ internal sealed partial class VaultLifecycleViewModel
             UiProgressListener activeProgressListener = _progressListener;
             Action<CancelToken>? scanStarting = OpenScanStartingForTests;
             Func<VaultSession, ulong>? registerChangeFeed = RegisterChangeFeedForTests;
+            Action? hotExitRead = HotExitReadForTests;
             Task<ScanReport> loadTask = _runSessionLoad(() =>
             {
                 // Plan 43 PR 20b (#1267, design §4.3): the vault watcher arms
@@ -721,7 +722,8 @@ internal sealed partial class VaultLifecycleViewModel
                 // after the open scan.
                 RegisterChangeFeed(activeSession, registerChangeFeed);
                 // WB-29 §2: what the store kept, before the workspace is built.
-                _hotExitOpenForAssembly = ReadHotExitForOpen(activeSession);
+                _hotExitOpenForAssembly = ReadHotExitForOpen(activeSession, activeCancel);
+                hotExitRead?.Invoke();
                 return report;
             });
             _sessionLoadCompletion = loadTask;
@@ -1972,7 +1974,7 @@ internal sealed partial class VaultLifecycleViewModel
 
     /// <summary>WB-29 §2: on the load worker, after the open scan: the hold,
     /// the wait for this process's last session, the read, the classification.</summary>
-    private HotExitOpen ReadHotExitForOpen(VaultSession session)
+    private HotExitOpen ReadHotExitForOpen(VaultSession session, CancelToken cancel)
     {
         HotExitStoreHost host = ActiveHotExitHost;
         if (!host.HasStore)
@@ -1993,9 +1995,16 @@ internal sealed partial class VaultLifecycleViewModel
         }
         _hotExitHeldKey = key;
         host.RetryParkedRetirements(key);
-        if (!host.WhenSettled(key).Wait(HotExitReopenWait))
+        // A close that cancels this open stops the wait at once: it joins
+        // this load on the dispatcher (red team PR 2).
+        Task settled = host.WhenSettled(key);
+        DateTime until = DateTime.UtcNow + HotExitReopenWait;
+        while (!settled.Wait(TimeSpan.FromMilliseconds(50)))
         {
-            return HotExitOpen.None(SlateUniffiMethods.HotExitReasonEarlierWorkPending());
+            if (cancel.IsCancelled() || DateTime.UtcNow >= until)
+            {
+                return HotExitOpen.None(SlateUniffiMethods.HotExitReasonEarlierWorkPending());
+            }
         }
         HotExitResult<HotExitSnapshot> read = host.ReadAsync(key).GetAwaiter().GetResult();
         if (read.Damaged)
@@ -2438,6 +2447,10 @@ internal sealed partial class VaultLifecycleViewModel
     /// before the open's scan — the load's one core call now that Quick Open
     /// lists nothing — with the open's token. Production never sets it.</summary>
     internal Action<CancelToken>? OpenScanStartingForTests { get; set; }
+
+    /// <summary>Test seam (WB-29): runs on the load's worker right after the
+    /// open's hot-exit read, the vault held. Production never sets it.</summary>
+    internal Action? HotExitReadForTests { get; set; }
 
     private void QuickSwitcher_OpenRequested(
         object? sender,

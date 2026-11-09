@@ -344,8 +344,28 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         FileIdentity = baselineFileIdentity;
         EnforcesFileIdentity = baselineHash is not null && baselineFileIdentity is not null;
         IsExternallyStale = externallyStale;
+        // A kept entry is unsaved even when its text is what the tab loaded
+        // (codex PR 2 round 1): an emptied note now gone, a stale entry the
+        // file has caught up with. The editor's baseline then answers by
+        // comparison with text no document holds.
+        if (_editorSession is { } session)
+        {
+            if (session.IsAtSavedBaseline)
+            {
+                session.MarkSavedBehindEdits(RestoredNoBaselinePrefix + text);
+            }
+            IsDirty = !session.IsAtSavedBaseline;
+        }
+        else
+        {
+            IsDirty = true;
+        }
         BumpContentGeneration();
     }
+
+    /// <summary>Makes a restored buffer's editor baseline differ from its
+    /// text, so equal text still reads unsaved.</summary>
+    private const string RestoredNoBaselinePrefix = "￾";
     internal string? LoadFailure { get; private set; }
 
     /// <summary>#1266: the event a failed load renders in the tab's status
@@ -2608,7 +2628,10 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // success and failure — the leaf's notice region is the
         // surface (W4-5 contract 5).
         SeedBibliographySources(synchronousForTests: !_startInteractionBackgroundWork);
-        HotExitRestorePlan hotExitPlan = HotExitRestorePlan.For(_hotExitOpen, _persistence.Load());
+        HotExitRestorePlan hotExitPlan = HotExitRestorePlan.For(
+            _hotExitOpen,
+            _persistence.Load(),
+            relative => File.Exists(System.IO.Path.Combine(_vaultRoot, relative)));
         _hotExitPlan = hotExitPlan;
         (_root, _activeGroup) = Restore(hotExitPlan.Layout);
         _hotExitPlan = null;
