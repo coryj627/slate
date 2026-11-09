@@ -75,8 +75,8 @@ public sealed class ReadingLineUnitTests
     });
 
     /// <summary>Every caret position, with either affinity, in a note of headings, list items,
-    /// hard breaks, a wrapped paragraph, a table whose cells wrap unequally and an embed whose
-    /// lines are LineBreaks: its Line is one visual line, holds the caret, and lies inside the
+    /// hard breaks, a wrapped paragraph, a table whose cells wrap unequally, a code block with a
+    /// blank line and an embed whose lines are LineBreaks: its Line is one visual line, holds the caret, and lies inside the
     /// caret's paragraph; and NVDA's read of the line's last character (collapse to the end,
     /// back a character, expand to it) is that character, never the break after it.</summary>
     [Fact]
@@ -86,7 +86,7 @@ public sealed class ReadingLineUnitTests
         string cell = string.Join(' ', Enumerable.Range(1, 12).Select(index => $"cell{index}"));
         string table = $"| Left | Right |\n| --- | --- |\n| {cell} x y z | Cell two short |\n";
         using var host = new ShownShell(
-            ("Every.md", Note + "\nFirst line  \nSecond line  \nThird line\n\n" + words + "\n\n" + table + "\n![[Other]]\n"),
+            ("Every.md", Note + "\nFirst line  \nSecond line  \nThird line\n\n" + words + "\n\n" + table + "\n" + Fence + "\n![[Other]]\n"),
             ("Other.md", EmbeddedLines));
         host.Shell.ContentPaneBorder.Width = 320;
         (ReadingSurface surface, ITextProvider provider) = OpenReading(host, "Every.md", "Gamma line");
@@ -96,6 +96,9 @@ public sealed class ReadingLineUnitTests
         Assert.True(
             Paragraphs(surface.Document).Any(p => Text(p).Contains('\n')),
             "premise: the hard breaks aren't newlines inside one paragraph");
+        Assert.True(
+            Paragraphs(surface.Document).Any(HasABlankLine),
+            "premise: the code block's blank line isn't inside one paragraph");
         Paragraph left = Paragraphs(surface.Document).Single(p => Text(p).StartsWith("cell1 ", StringComparison.Ordinal));
         Assert.True(
             left.ContentEnd.GetLineStartPosition(0) is { } lastLine && lastLine.CompareTo(left.ContentStart) > 0,
@@ -220,6 +223,76 @@ public sealed class ReadingLineUnitTests
         Assert.True(wrong.Count == 0, "The cut line moved unlike WPF's:\n" + string.Join('\n', wrong));
     });
 
+    /// <summary>Down and Up through a code block with a blank line read each line once: the
+    /// blank line reads as blank, not as the line after it.</summary>
+    [Fact]
+    public void ABlankLineReadsAsItselfFromTheKeys() => RunSta(() =>
+    {
+        using var host = new ShownShell(("Fence.md", "# Fence\n\n" + Fence));
+        (ReadingSurface surface, ITextProvider provider) = OpenReading(host, "Fence.md", "gamma");
+        Paragraph code = Paragraphs(surface.Document).Single(HasABlankLine);
+        var read = new List<string>();
+        var wrong = new List<string>();
+        surface.CaretPosition = code.ContentStart;
+        host.Settle();
+        for (int press = 0; press < 3; press++)
+        {
+            read.Add(LineText(provider));
+            Check(provider, $"Down {press}", wrong);
+            EditingCommands.MoveDownByLine.Execute(null, surface);
+            host.Settle();
+        }
+
+        for (int press = 0; press < 2; press++)
+        {
+            EditingCommands.MoveUpByLine.Execute(null, surface);
+            host.Settle();
+            read.Add(LineText(provider));
+            Check(provider, $"Up {press}", wrong);
+        }
+
+        Assert.True(wrong.Count == 0, "Lines read as more than one line:\n" + string.Join('\n', wrong));
+        Assert.Equal(["alpha", "", "gamma", "", "alpha"], read);
+    });
+
+    /// <summary>From a blank line's Line, the moves land as on any line: on a line is the line
+    /// after it, back a line the line before, and End back a line empties it.</summary>
+    [Fact]
+    public void ABlankLineMovesAsAnyLineDoes() => RunSta(() =>
+    {
+        using var host = new ShownShell(("Fence.md", "# Fence\n\n" + Fence));
+        (ReadingSurface surface, ITextProvider provider) = OpenReading(host, "Fence.md", "gamma");
+        Paragraph code = Paragraphs(surface.Document).Single(HasABlankLine);
+
+        ITextRangeProvider Blank()
+        {
+            surface.CaretPosition = code.ContentStart;
+            host.Settle();
+            EditingCommands.MoveDownByLine.Execute(null, surface);
+            host.Settle();
+            ITextRangeProvider line = provider.GetSelection()[0];
+            line.ExpandToEnclosingUnit(TextUnit.Line);
+            Assert.Equal(string.Empty, line.GetText(-1).Trim('\r', '\n'));
+            return line;
+        }
+
+        string Read(ITextRangeProvider range)
+        {
+            range.ExpandToEnclosingUnit(TextUnit.Line);
+            return range.GetText(-1).Trim('\r', '\n');
+        }
+
+        ITextRangeProvider on = Blank();
+        Assert.Equal(1, on.Move(TextUnit.Line, 1));
+        Assert.Equal("gamma", Read(on));
+        ITextRangeProvider back = Blank();
+        Assert.Equal(-1, back.Move(TextUnit.Line, -1));
+        Assert.Equal("alpha", Read(back));
+        ITextRangeProvider shrunk = Blank();
+        Assert.Equal(-1, shrunk.MoveEndpointByUnit(TextPatternRangeEndpoint.End, TextUnit.Line, -1));
+        Assert.Equal(string.Empty, shrunk.GetText(-1));
+    });
+
     /// <summary>A selection's Line expansion is WPF's own: only a caret's is cut.</summary>
     [Fact]
     public void ASelectionExpandsAsWpfDoes() => RunSta(() =>
@@ -237,6 +310,21 @@ public sealed class ReadingLineUnitTests
 
         Assert.Equal(raw.GetText(-1), wrapped.GetText(-1));
     });
+
+    private const string Fence = "```\nalpha\n\ngamma\n```\n";
+
+    private static bool HasABlankLine(Paragraph paragraph)
+    {
+        string text = new TextRange(paragraph.ContentStart, paragraph.ContentEnd).Text.Replace("\r\n", "\n");
+        return text.Contains("alpha\n\ngamma", StringComparison.Ordinal);
+    }
+
+    private static string LineText(ITextProvider provider)
+    {
+        ITextRangeProvider line = provider.GetSelection()[0];
+        line.ExpandToEnclosingUnit(TextUnit.Line);
+        return line.GetText(-1).Trim('\r', '\n');
+    }
 
     private const string EmbeddedLines = "Alpha line\nBeta line\nGamma line\nDelta line\n";
 

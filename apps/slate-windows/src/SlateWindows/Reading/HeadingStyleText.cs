@@ -521,6 +521,16 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
         }
 
         line.ExpandToEnclosingUnit(TextUnit.Line);
+
+        // A blank line (two newlines in a row, as a code block keeps them): WPF's expansion
+        // from its start runs on over the next line, so it ends where the next line starts.
+        if (start.GetLineStartPosition(1) is { } next
+            && At(next) is { } nextStart
+            && line.CompareEndpoints(TextPatternRangeEndpoint.End, nextStart, TextPatternRangeEndpoint.Start) > 0)
+        {
+            line.MoveEndpointByRange(TextPatternRangeEndpoint.End, nextStart, TextPatternRangeEndpoint.Start);
+        }
+
         return line;
     }
 
