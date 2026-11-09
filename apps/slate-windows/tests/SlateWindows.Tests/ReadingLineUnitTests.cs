@@ -257,8 +257,8 @@ public sealed class ReadingLineUnitTests
     });
 
     /// <summary>A caret just after a hard break (a newline, a blank line's newline, a
-    /// LineBreak, or in a code block a lone carriage return, a line or a paragraph separator)
-    /// starts the next line, whichever way it leans: its Line is that line.</summary>
+    /// LineBreak, or in a code block any other mandatory break: a lone carriage return, a line
+    /// or paragraph separator, a next line, a vertical tab or a form feed) starts the next line, whichever way it leans: its Line is that line.</summary>
     [Theory]
     [InlineData("newline", "Second line")]
     [InlineData("blank line", "gamma")]
@@ -266,6 +266,9 @@ public sealed class ReadingLineUnitTests
     [InlineData("carriage return", "Second line")]
     [InlineData("line separator", "Second line")]
     [InlineData("paragraph separator", "Second line")]
+    [InlineData("next line", "Second line")]
+    [InlineData("vertical tab", "Second line")]
+    [InlineData("form feed", "Second line")]
     public void ACaretAfterABreakReadsTheLineItStarts(string after, string expected) => RunSta(() =>
     {
         (string Path, string Text)[] notes = after switch
@@ -275,6 +278,9 @@ public sealed class ReadingLineUnitTests
             "carriage return" => [("Cut.md", "# Cut\n\n```\nFirst line\rSecond line\n```\n")],
             "line separator" => [("Cut.md", "# Cut\n\n```\nFirst line\u2028Second line\n```\n")],
             "paragraph separator" => [("Cut.md", "# Cut\n\n```\nFirst line\u2029Second line\n```\n")],
+            "next line" => [("Cut.md", "# Cut\n\n```\nFirst line\u0085Second line\n```\n")],
+            "vertical tab" => [("Cut.md", "# Cut\n\n```\nFirst line\vSecond line\n```\n")],
+            "form feed" => [("Cut.md", "# Cut\n\n```\nFirst line\fSecond line\n```\n")],
             _ => [("Cut.md", "# Cut\n\n![[Other]]\n"), ("Other.md", EmbeddedLines)],
         };
         using var host = new ShownShell(notes);

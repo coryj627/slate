@@ -506,13 +506,13 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
 
     /// <summary>WPF's line expanded from the start of the line the caret is on. At a wrap the
     /// caret's lean picks that line: leaning back, it is on the line the wrap closes. Just
-    /// after a newline (a line feed, or in a code block a lone carriage return, a line or a
-    /// paragraph separator) the caret starts the next line, whichever way it leans; leaning
-    /// back there, WPF puts it on the line before (or a blank line before). After a
-    /// LineBreak, WPF starts the next line either way. Null when a line can't be
-    /// placed.</summary>
+    /// after a mandatory break (Unicode's: a line feed, or in a code block a lone carriage
+    /// return, a line or paragraph separator, a next line, a vertical tab or a form feed) the
+    /// caret starts the next line, whichever way it leans; leaning back there, WPF puts it on
+    /// the line before (or a blank line before). After a LineBreak, WPF starts the next line
+    /// either way. Null when a line can't be placed.</summary>
     private ITextRangeProvider? LineHolding(TextPointer caret) =>
-        LineFrom((caret.GetTextInRun(LogicalDirection.Backward) is [.., '\n' or '\r' or '\u2028' or '\u2029']
+        LineFrom((caret.GetTextInRun(LogicalDirection.Backward) is [.., '\n' or '\r' or '\u2028' or '\u2029' or '\u0085' or '\v' or '\f']
             ? caret.GetPositionAtOffset(0, LogicalDirection.Forward)
             : caret).GetLineStartPosition(0));
     private ITextRangeProvider? LineFrom(TextPointer? start)
