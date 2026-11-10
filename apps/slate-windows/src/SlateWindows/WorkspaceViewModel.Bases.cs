@@ -929,7 +929,7 @@ internal sealed partial class WorkspaceViewModel
         }
         catch (VaultException failure)
         {
-            return (null, failure.Message);
+            return (null, BasePhrase.ErrorDetail(failure));
         }
         catch (ObjectDisposedException)
         {
@@ -968,7 +968,7 @@ internal sealed partial class WorkspaceViewModel
         }
         catch (VaultException failure)
         {
-            return failure.Message;
+            return BasePhrase.ErrorDetail(failure);
         }
         catch (ObjectDisposedException)
         {

@@ -632,7 +632,7 @@ internal sealed class BaseQueryBuilderViewModel : PanelWorkScheduler
                     return;
                 }
                 PreviewState = BuilderPreviewState.Failed;
-                PreviewMessage = failure.Message;
+                PreviewMessage = BasePhrase.ErrorDetail(failure);
                 PreviewResult = null;
                 AnnouncePreview();
                 PreviewPublished?.Invoke(this, EventArgs.Empty);
@@ -724,7 +724,7 @@ internal sealed class BaseQueryBuilderViewModel : PanelWorkScheduler
         {
             SaveError = failure is VaultException.DestinationExists
                 ? $"A file already exists at {trimmed}. Choose a different Base path."
-                : $"Base file could not be saved: {failure.Message}";
+                : $"Base file could not be saved: {BasePhrase.ErrorDetail(failure)}";
             return false;
         }
         SaveError = string.Empty;

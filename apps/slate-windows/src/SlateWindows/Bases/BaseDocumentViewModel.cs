@@ -816,7 +816,7 @@ internal sealed class BaseDocumentViewModel : PanelWorkScheduler
             }
             catch (VaultException failure)
             {
-                failureMessage = failure.Message;
+                failureMessage = BasePhrase.ErrorDetail(failure);
             }
             Post(() =>
             {
