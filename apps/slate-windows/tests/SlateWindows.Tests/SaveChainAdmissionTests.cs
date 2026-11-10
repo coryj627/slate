@@ -508,74 +508,30 @@ public sealed class SaveChainAdmissionTests
 
     /// <summary>The cell edit waits behind another admitted operation on the
     /// note (a History restore, say) while the reader closes both tabs on
-    /// it: when its turn comes it takes the tabless write, and that worker
-    /// is the save coordinator's to join at teardown, as the open-tab
-    /// write's is (codex round 1).</summary>
-    [Fact]
-    public void ABasesCellEditWhoseTabsCloseWhileItWaitsWritesTablessUnderTheSaveChain() => RunSta(() =>
-    {
-        using var peers = new Peers("bases-tabs-closed", ("Notes.base", NotesBase));
-        (BaseDocumentViewModel document, BasesRow row, BasesColumn column) = StatusCell(peers);
-        using var tablessParked = new ManualResetEventSlim(false);
-        using var tablessRelease = new ManualResetEventSlim(false);
-        peers.H.Workspace.BasesTablessWriteHookForTests = () =>
-        {
-            tablessParked.Set();
-            _ = tablessRelease.Wait(TimeSpan.FromSeconds(30));
-        };
-        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        Task<bool> held = peers.H.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
-        try
-        {
-            document.ApplyPropertyEdit!(row, column, new PropertyValue.Text("done"));
-            peers.H.Workspace.CloseTabCommand.Execute(peers.A);
-            peers.H.Workspace.CloseTabCommand.Execute(peers.B);
-            peers.H.Settle();
-            Assert.DoesNotContain(peers.H.Workspace.Groups.SelectMany(group => group.Tabs), tab => tab.Path == "a.md");
-            Assert.Equal(0, peers.Writes);
-
-            ahead.SetResult();
-            peers.H.Wait(tablessParked, "the tabless write never started");
-            Assert.Equal(1, peers.H.Workspace.SavesForTests.TrackedWorkersForTests);
-
-            tablessRelease.Set();
-            // The file is read once the write has ended: the session holds it
-            // while it writes.
-            peers.H.PumpUntil(
-                () => peers.H.Workspace.SavesIdle && !peers.H.Workspace.PropertyWriteInFlightFor("a.md"),
-                "the tabless cell write");
-            Assert.Contains("status: done", peers.H.Read("a.md"), StringComparison.Ordinal);
-            Assert.True(held.Result);
-        }
-        finally
-        {
-            _ = ahead.TrySetResult();
-            tablessRelease.Set();
-            peers.H.Workspace.BasesTablessWriteHookForTests = null;
-        }
-    });
-
-    /// <summary>The cell edit waits behind another admitted operation while
-    /// the reader closes both tabs, and the note's file is replaced on disk
-    /// (a rename away and a new note at the path, or an outside write): the
-    /// tabless write runs on the hash the edit was made against, refuses as
-    /// a conflict and leaves the replacement's bytes alone (codex round
-    /// 2), and so does a replacement reopened before the write's turn,
-    /// whether in a tab of its own (codex round 3) or in the original tab
-    /// re-pointed away and back (codex round 4): neither shows the
-    /// document the edit was made on.</summary>
+    /// it, and the note's file is left as it was, replaced on disk, or
+    /// replaced byte for byte (a note renamed away and copied back), or a
+    /// replacement is reopened before the write's turn, in a tab of its own
+    /// or in the original tab re-pointed away and back. None of those shows
+    /// the document the edit was made on, so the write refuses and the file
+    /// keeps its bytes (codex rounds 2 to 5).</summary>
     [Theory]
     [InlineData("closed")]
+    [InlineData("replaced")]
+    [InlineData("replaced byte for byte")]
     [InlineData("reopened in a new tab")]
     [InlineData("reopened in the original tab")]
-    public void ABasesCellEditWhoseNoteIsReplacedWhileItWaitsWritesNothing(string replacement) => RunSta(() =>
+    public void ABasesCellEditWhoseNoteLosesItsTabsWhileItWaitsWritesNothing(string what) => RunSta(() =>
     {
-        using var peers = new Peers("bases-replaced", ("Notes.base", NotesBase));
-        bool keepA = replacement == "reopened in the original tab";
+        using var peers = new Peers("bases-tabs-lost", ("Notes.base", NotesBase));
         (BaseDocumentViewModel document, BasesRow row, BasesColumn column) = StatusCell(peers);
         var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Task<bool> held = peers.H.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
-        const string Replacement = "---\nstatus: someone else's\n---\n\nA different note.\n";
+        string onDisk = what switch
+        {
+            "closed" or "replaced byte for byte" => Note,
+            _ => "---\nstatus: someone else's\n---\n\nA different note.\n",
+        };
+        bool keepA = what == "reopened in the original tab";
         try
         {
             document.ApplyPropertyEdit!(row, column, new PropertyValue.Text("done"));
@@ -594,11 +550,14 @@ public sealed class SaveChainAdmissionTests
             peers.H.Workspace.CloseTabCommand.Execute(peers.B);
             peers.H.Settle();
             Assert.DoesNotContain(peers.H.Workspace.Groups.SelectMany(group => group.Tabs), tab => tab.Path == "a.md");
-            File.WriteAllText(Path.Combine(peers.H.Root, "a.md"), Replacement);
-            if (replacement == "reopened in a new tab")
+            if (what != "closed")
+            {
+                File.WriteAllText(Path.Combine(peers.H.Root, "a.md"), onDisk);
+            }
+            if (what == "reopened in a new tab")
             {
                 WorkspaceTabViewModel shown = peers.H.Open("a.md");
-                Assert.Equal(Replacement, shown.Text);
+                Assert.Equal(onDisk, shown.Text);
                 Assert.False(shown.IsDirty);
             }
             else if (keepA)
@@ -607,7 +566,7 @@ public sealed class SaveChainAdmissionTests
                 peers.H.Workspace.OpenPath("a.md", WorkspaceOpenTarget.CurrentTab);
                 peers.H.Settle();
                 Assert.Equal("a.md", peers.A.Path);
-                Assert.Equal(Replacement, peers.A.Text);
+                Assert.Equal(onDisk, peers.A.Text);
                 Assert.False(peers.A.IsDirty);
             }
             peers.H.Events.Clear();
@@ -615,11 +574,15 @@ public sealed class SaveChainAdmissionTests
             ahead.SetResult();
             peers.H.PumpUntil(
                 () => peers.H.Workspace.SavesIdle && !peers.H.Workspace.PropertyWriteInFlightFor("a.md"),
-                "the tabless cell write's end");
+                "the cell write's end");
             Assert.True(held.Result);
-            Assert.Equal(Replacement, peers.H.Read("a.md"));
-            _ = Assert.Single(peers.H.Events, e => e is A11yEvent.PropertyEditConflict);
-            Assert.DoesNotContain(peers.H.Events, e => e is A11yEvent.BasesCellEditFailed);
+            Assert.Equal(onDisk, peers.H.Read("a.md"));
+            Assert.Equal(0, peers.Writes);
+            A11yEvent refusal = Assert.Single(
+                peers.H.Events, e => e is A11yEvent.PropertyEditConflict or A11yEvent.BasesCellEditFailed);
+            Assert.Equal(
+                what is "closed" or "replaced" or "replaced byte for byte",
+                refusal is A11yEvent.BasesCellEditFailed);
         }
         finally
         {

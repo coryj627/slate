@@ -1879,14 +1879,13 @@ internal sealed partial class WorkspaceViewModel
             // the whole operation (one write per path at a time, any
             // origin).
             string path = row.FilePath;
-            string? requested = tab.SavedContentHash;
             (WorkspaceTabViewModel Tab, int Identity)[] requestTabs = [.. Groups
                 .SelectMany(group => group.Tabs)
                 .Where(candidate => string.Equals(candidate.Path, path, StringComparison.Ordinal))
                 .Select(candidate => (candidate, candidate.ItemIdentity))];
             AdmitPropertyWrite(
                 path,
-                () => BasesCellWriteAdmitted(document, row, column, key, value, requested, requestTabs),
+                () => BasesCellWriteAdmitted(document, row, column, key, value, requestTabs),
                 () => ReleasePropertyWriteLease(path));
             return;
         }
@@ -1916,63 +1915,51 @@ internal sealed partial class WorkspaceViewModel
     /// and stale gates then, and takes its CAS token from the tab's saved
     /// hash, which the save it waited for has published (the W4-4 seam:
     /// CAS and rebaseline live in the tab; the completion routes into the
-    /// one funnel). A note whose tabs all closed while it waited takes the
-    /// tabless write, on the hash the edit was made against
-    /// (<paramref name="requested"/>, codex round 2): a note renamed away
-    /// and replaced at its path, or changed on disk, refuses as a conflict
-    /// and keeps its bytes. Only a tab that was on the note when the edit
-    /// was requested, still showing the document it showed then
+    /// one funnel). It writes only through a tab that was on the note when
+    /// the edit was asked and still shows the document it showed then
     /// (<paramref name="requestTabs"/>: the tab and its
-    /// <see cref="WorkspaceTabViewModel.ItemIdentity"/>), lends its saved
-    /// hash: a tab opened since, or one re-pointed away and back, may show
-    /// a different note at the path (a replacement reopened, codex rounds 3
-    /// and 4), so the write refuses as a conflict there. The operation ends with the write's completion, or
-    /// with the refusal that wrote nothing.</summary>
+    /// <see cref="WorkspaceTabViewModel.ItemIdentity"/>). Without one, the
+    /// note the edit was made on can't be told from another at its path (a
+    /// note renamed away and replaced there, even byte for byte; a
+    /// replacement reopened in a tab: codex rounds 2 to 5), so the write
+    /// refuses and writes nothing. The operation ends with the write's
+    /// completion, or with the refusal.</summary>
     private Task BasesCellWriteAdmitted(
         BaseDocumentViewModel document,
         BasesRow row,
         BasesColumn column,
         string key,
         PropertyValue? value,
-        string? requested,
         IReadOnlyCollection<(WorkspaceTabViewModel Tab, int Identity)> requestTabs)
     {
         string path = row.FilePath;
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void EndUnwritten(A11yEvent? spoken)
+        {
+            ReleasePropertyWriteLease(path);
+            if (spoken is not null)
+            {
+                _announce(spoken);
+            }
+            done.TrySetResult();
+        }
         try
         {
             if (_workspaceDisposed || _saves.IsClosed)
             {
-                ReleasePropertyWriteLease(path);
-                done.TrySetResult();
+                EndUnwritten(null);
                 return done.Task;
             }
+            string fileName = System.IO.Path.GetFileName(path);
             if (FindTabForPath(path) is not { IsMarkdown: true } tab)
             {
-                if (!_startInteractionBackgroundWork)
-                {
-                    BasesTablessWriteBody(document, row, column, key, value, requested);
-                    done.TrySetResult();
-                    return done.Task;
-                }
-                Task body = Task.Run(() => BasesTablessWriteBody(document, row, column, key, value, requested));
-                // The admitted write's teardown join (codex round 1): the
-                // save coordinator's workers are joined before the session
-                // goes, not only waited out a while as retired Bases work.
-                _saves.TrackWorker(body);
-                TrackRetiredBasesWork(body);
-                _ = body.ContinueWith(
-                    _ => done.TrySetResult(),
-                    CancellationToken.None,
-                    TaskContinuationOptions.ExecuteSynchronously,
-                    TaskScheduler.Default);
+                EndUnwritten(new A11yEvent.BasesCellEditFailed(
+                    $"{fileName} closed before the edit was written. Edit the cell again."));
                 return done.Task;
             }
             if (!requestTabs.Contains((tab, tab.ItemIdentity)))
             {
-                ReleasePropertyWriteLease(path);
-                _announce(new A11yEvent.PropertyEditConflict(System.IO.Path.GetFileName(tab.Path)));
-                done.TrySetResult();
+                EndUnwritten(new A11yEvent.PropertyEditConflict(fileName));
                 return done.Task;
             }
             if (tab.IsDirty)
@@ -1984,9 +1971,7 @@ internal sealed partial class WorkspaceViewModel
             }
             if (tab.IsExternallyStale)
             {
-                ReleasePropertyWriteLease(path);
-                _announce(new A11yEvent.PropertyEditConflict(System.IO.Path.GetFileName(tab.Path)));
-                done.TrySetResult();
+                EndUnwritten(new A11yEvent.PropertyEditConflict(fileName));
                 return done.Task;
             }
             _saves.TrackWorker(tab.WriteProperty(
@@ -2018,28 +2003,22 @@ internal sealed partial class WorkspaceViewModel
         return done.Task;
     }
 
-    /// <summary>Test seam (#1657): runs first in a tabless cell write's
-    /// body, on its worker in production, so a fact can hold it.</summary>
-    internal Action? BasesTablessWriteHookForTests { get; set; }
-
     private void BasesTablessWriteBody(
         BaseDocumentViewModel document,
         BasesRow row,
         BasesColumn column,
         string key,
-        PropertyValue? value,
-        string? expectedContentHash = null)
+        PropertyValue? value)
     {
-        BasesTablessWriteHookForTests?.Invoke();
         try
         {
             if (value is null)
             {
-                _ = _session.DeleteProperty(row.FilePath, key, expectedContentHash);
+                _ = _session.DeleteProperty(row.FilePath, key, expectedContentHash: null);
             }
             else
             {
-                _ = _session.SetProperty(row.FilePath, key, value, expectedContentHash);
+                _ = _session.SetProperty(row.FilePath, key, value, expectedContentHash: null);
             }
         }
         catch (Exception failure) when (failure
@@ -2057,11 +2036,7 @@ internal sealed partial class WorkspaceViewModel
                 _ = _propertyWritePaths.Remove(row.FilePath);
                 if (!_workspaceDisposed)
                 {
-                    // #1657: a write on a hash the note no longer has wrote
-                    // nothing; it is the property family's conflict.
-                    _announce(failure is VaultException.WriteConflict
-                        ? new A11yEvent.PropertyEditConflict(System.IO.Path.GetFileName(row.FilePath))
-                        : new A11yEvent.BasesCellEditFailed(failure.Message));
+                    _announce(new A11yEvent.BasesCellEditFailed(failure.Message));
                 }
             });
             return;
