@@ -506,6 +506,54 @@ public sealed class SaveChainAdmissionTests
         }
     });
 
+    /// <summary>The cell edit waits behind another admitted operation on the
+    /// note (a History restore, say) while the reader closes both tabs on
+    /// it: when its turn comes it takes the tabless write, and that worker
+    /// is the save coordinator's to join at teardown, as the open-tab
+    /// write's is (codex round 1).</summary>
+    [Fact]
+    public void ABasesCellEditWhoseTabsCloseWhileItWaitsWritesTablessUnderTheSaveChain() => RunSta(() =>
+    {
+        using var peers = new Peers("bases-tabs-closed", ("Notes.base", NotesBase));
+        (BaseDocumentViewModel document, BasesRow row, BasesColumn column) = StatusCell(peers);
+        using var tablessParked = new ManualResetEventSlim(false);
+        using var tablessRelease = new ManualResetEventSlim(false);
+        peers.H.Workspace.BasesTablessWriteHookForTests = () =>
+        {
+            tablessParked.Set();
+            _ = tablessRelease.Wait(TimeSpan.FromSeconds(30));
+        };
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = peers.H.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        try
+        {
+            document.ApplyPropertyEdit!(row, column, new PropertyValue.Text("done"));
+            peers.H.Workspace.CloseTabCommand.Execute(peers.A);
+            peers.H.Workspace.CloseTabCommand.Execute(peers.B);
+            peers.H.Settle();
+            Assert.DoesNotContain(peers.H.Workspace.Groups.SelectMany(group => group.Tabs), tab => tab.Path == "a.md");
+            Assert.Equal(0, peers.Writes);
+
+            ahead.SetResult();
+            peers.H.Wait(tablessParked, "the tabless write never started");
+            Assert.Equal(1, peers.H.Workspace.SavesForTests.TrackedWorkersForTests);
+
+            tablessRelease.Set();
+            peers.H.PumpUntil(
+                () => peers.H.Read("a.md").Contains("status: done", StringComparison.Ordinal)
+                    && peers.H.Workspace.SavesIdle
+                    && !peers.H.Workspace.PropertyWriteInFlightFor("a.md"),
+                "the tabless cell write");
+            Assert.True(held.Result);
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            tablessRelease.Set();
+            peers.H.Workspace.BasesTablessWriteHookForTests = null;
+        }
+    });
+
     private static (BaseDocumentViewModel Document, BasesRow Row, BasesColumn Column) StatusCell(Peers peers)
     {
         BaseDocumentViewModel document = peers.H.Workspace.BaseDocumentFor("Notes.base");

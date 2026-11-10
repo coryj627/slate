@@ -1940,6 +1940,10 @@ internal sealed partial class WorkspaceViewModel
                     return done.Task;
                 }
                 Task body = Task.Run(() => BasesTablessWriteBody(document, row, column, key, value));
+                // The admitted write's teardown join (codex round 1): the
+                // save coordinator's workers are joined before the session
+                // goes, not only waited out a while as retired Bases work.
+                _saves.TrackWorker(body);
                 TrackRetiredBasesWork(body);
                 _ = body.ContinueWith(
                     _ => done.TrySetResult(),
@@ -1991,6 +1995,10 @@ internal sealed partial class WorkspaceViewModel
         return done.Task;
     }
 
+    /// <summary>Test seam (#1657): runs first in a tabless cell write's
+    /// body, on its worker in production, so a fact can hold it.</summary>
+    internal Action? BasesTablessWriteHookForTests { get; set; }
+
     private void BasesTablessWriteBody(
         BaseDocumentViewModel document,
         BasesRow row,
@@ -1998,6 +2006,7 @@ internal sealed partial class WorkspaceViewModel
         string key,
         PropertyValue? value)
     {
+        BasesTablessWriteHookForTests?.Invoke();
         try
         {
             if (value is null)
