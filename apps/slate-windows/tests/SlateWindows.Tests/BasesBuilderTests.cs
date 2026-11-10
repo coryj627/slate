@@ -213,6 +213,24 @@ public sealed class BasesBuilderTests : IDisposable
         builder.Shutdown();
     }
 
+    /// <summary>#1697: a vault failure is spoken in core's words, not the
+    /// binding's field dump ("@message=...").</summary>
+    [Fact]
+    public void ADuplicateSavedQueryNameIsSpokenInCoresWords()
+    {
+        BaseQueryBuilderViewModel builder = NewBuilder();
+        Assert.True(builder.SaveAsSavedQuery("Draft", null));
+        _announced.Clear();
+
+        Assert.False(builder.SaveAsSavedQuery("Draft", null));
+
+        var failed = Assert.IsType<A11yEvent.BasesSavedQueryCreateFailed>(Assert.Single(_announced));
+        Assert.Equal(
+            "Saved query could not be created: saved query name \"Draft\" already exists",
+            SlateUniffiMethods.A11yRender(failed).Text);
+        builder.Shutdown();
+    }
+
     [Fact]
     public void SavedQueryFlowsAnnounceCanonically()
     {

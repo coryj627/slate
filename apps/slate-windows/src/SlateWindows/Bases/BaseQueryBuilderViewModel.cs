@@ -752,7 +752,7 @@ internal sealed class BaseQueryBuilderViewModel : PanelWorkScheduler
         }
         catch (VaultException failure)
         {
-            _announce(new A11yEvent.BasesSavedQueryCreateFailed(failure.Message));
+            _announce(new A11yEvent.BasesSavedQueryCreateFailed(BasePhrase.ErrorDetail(failure)));
             return false;
         }
         _announce(new A11yEvent.BasesSavedQueryCreated(SavedQuerySpokenName(created, trimmed)));
@@ -777,7 +777,7 @@ internal sealed class BaseQueryBuilderViewModel : PanelWorkScheduler
         }
         catch (VaultException failure)
         {
-            _announce(new A11yEvent.BasesSavedQueryUpdateFailed(failure.Message));
+            _announce(new A11yEvent.BasesSavedQueryUpdateFailed(BasePhrase.ErrorDetail(failure)));
             return false;
         }
         // Its name now, not the one it had when the builder opened (WB-16

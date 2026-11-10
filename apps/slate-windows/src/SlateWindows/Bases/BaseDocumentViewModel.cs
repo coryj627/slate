@@ -1751,6 +1751,12 @@ internal static class BasePhrase
     /// field label (WB-14: <c>Message</c> was "@message=…").</summary>
     private static string Message(VaultException exception) =>
         SlateUniffiMethods.VaultErrorDetail(exception);
+
+    /// <summary>#1697: the detail a Bases failure sentence speaks: core's
+    /// rendering for a vault error, never the binding's field dump
+    /// ("@message=..."), and any other exception's own message.</summary>
+    internal static string ErrorDetail(Exception failure) =>
+        failure is VaultException vault ? SlateUniffiMethods.VaultErrorDetail(vault) : failure.Message;
 }
 
 /// <summary>W7-7 PR 7 (codex PR 7 round 5, fix 1): an awaited base

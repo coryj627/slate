@@ -162,7 +162,7 @@ internal sealed class DashboardViewModel : PanelWorkScheduler
                     return;
                 }
                 Sections.Clear();
-                var failedEvent = new A11yEvent.BasesDashboardLoadFailed(Name, failure.Message);
+                var failedEvent = new A11yEvent.BasesDashboardLoadFailed(Name, BasePhrase.ErrorDetail(failure));
                 var failed = new DashboardSectionViewModel(
                     new DashboardSectionStatus(string.Empty, null, null, null, false))
                 {
