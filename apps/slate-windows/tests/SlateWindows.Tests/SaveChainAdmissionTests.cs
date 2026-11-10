@@ -26,6 +26,8 @@ public sealed class SaveChainAdmissionTests
     private const string Note = "---\nstatus: draft\n---\n\nBody.\n";
     private const string NoteEdited = "---\nstatus: draft\n---\n\nBody.\nAn edit on its way to disk.\n";
     private static readonly TimeSpan Hold = TimeSpan.FromSeconds(10);
+    private const string TaskNote = "---\nstatus: draft\n---\n\n- [ ] the task\n";
+    private const string TaskNoteEdited = "---\nstatus: draft\n---\n\n- [ ] the task\nAn edit on its way to disk.\n";
     private const string NotesBase =
         "views:\n  - type: table\n    name: Main\n    order:\n      - file.name\n      - note.status\n";
 
@@ -431,6 +433,209 @@ public sealed class SaveChainAdmissionTests
             ghost.SaveWriteHookForTests = null;
         }
     });
+
+    // ---- Task toggles (#1658) -------------------------------------------------
+
+    /// <summary>A task toggle on an open note waits behind an operation admitted
+    /// into the note's chain before it (a History restore, say), and toggles once
+    /// when that ends, on the note's saved hash.</summary>
+    [Fact]
+    public void ATaskToggleBehindAnAdmittedOperationWaitsThenTogglesOnce() => RunSta(() =>
+    {
+        using var peers = new Peers("toggle-behind-op", TaskNote);
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = peers.H.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        var events = new List<A11yEvent>();
+        try
+        {
+            Assert.Equal(TabTaskToggle.Started, peers.A.ToggleTask(TheTask(peers), events.Add));
+            peers.H.Settle();
+            Assert.Equal(TaskNote, peers.H.Read("a.md"));
+            Assert.Empty(events);
+
+            ahead.SetResult();
+            peers.H.PumpUntil(
+                () => !peers.A.IsTaskToggleInFlight && peers.H.Workspace.SavesIdle,
+                "the toggle after the operation ahead of it");
+            Assert.True(held.Result);
+            Assert.Contains("- [x] the task", peers.H.Read("a.md"), StringComparison.Ordinal);
+            _ = Assert.Single(events, e => e is A11yEvent.TaskToggled);
+            Assert.DoesNotContain(events, e => e is A11yEvent.TaskToggleConflict);
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+        }
+    });
+
+    /// <summary>#1658's window: B's save parks; the reader takes the edit back
+    /// (both tabs clean, so the toggle's request gates pass); A toggles a task,
+    /// admitted behind the save; the edit is retyped. The save publishes first,
+    /// and it changed the note, so the toggle's task (an ordinal in the text it
+    /// was asked on) can't be trusted: it refuses as stale, and the save keeps
+    /// its bytes.</summary>
+    [Fact]
+    public void ATaskToggleWhoseNoteASaveChangedWhileItWaitedRefusesAsStale() => RunSta(() =>
+    {
+        using var peers = new Peers("toggle-behind-save", TaskNote);
+        TaskItem task = TheTask(peers);
+        var events = new List<A11yEvent>();
+        Task<bool> save = peers.ParkBsSave(TaskNoteEdited);
+        try
+        {
+            peers.TakeBack(TaskNote);
+            Assert.Equal(TabTaskToggle.Started, peers.A.ToggleTask(task, events.Add));
+            peers.Retype(TaskNoteEdited);
+            peers.H.Settle();
+            Assert.DoesNotContain("- [x]", peers.H.Read("a.md"), StringComparison.Ordinal);
+
+            peers.ReleaseSave();
+            peers.H.PumpUntil(
+                () => save.IsCompleted && !peers.A.IsTaskToggleInFlight && peers.H.Workspace.SavesIdle,
+                "the save and then the toggle's refusal");
+            Assert.True(save.Result);
+            Assert.Equal(TaskNoteEdited, peers.H.Read("a.md"));
+            _ = Assert.Single(events, e => e is A11yEvent.TaskToggleConflict);
+            Assert.DoesNotContain(events, e => e is A11yEvent.TaskToggled);
+        }
+        finally
+        {
+            peers.ReleaseSave();
+        }
+    });
+
+    /// <summary>The toggle waits behind an admitted operation; the reader types
+    /// in the note meanwhile, so it is dirty when the toggle's turn comes: the
+    /// toggle refuses with the unsaved-note sentence and writes nothing.</summary>
+    [Fact]
+    public void ATaskToggleThatFindsItsNoteDirtyWhenItStartsRefusesAndWritesNothing() => RunSta(() =>
+    {
+        using var peers = new Peers("toggle-dirty-at-start", TaskNote);
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = peers.H.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        var events = new List<A11yEvent>();
+        try
+        {
+            Assert.Equal(TabTaskToggle.Started, peers.A.ToggleTask(TheTask(peers), events.Add));
+            peers.A.Text = TaskNote + "An unsaved line.\n";
+            Assert.True(peers.A.IsDirty);
+
+            ahead.SetResult();
+            peers.H.PumpUntil(
+                () => !peers.A.IsTaskToggleInFlight && peers.H.Workspace.SavesIdle,
+                "the toggle's refusal");
+            Assert.True(held.Result);
+            Assert.Equal(TaskNote, peers.H.Read("a.md"));
+            _ = Assert.Single(events, e => e is A11yEvent.TaskToggleUnsaved);
+            Assert.DoesNotContain(events, e => e is A11yEvent.TaskToggled);
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+        }
+    });
+
+    /// <summary>A toggle whose worker throws something other than a vault
+    /// error (a panic surfacing through the binding), before its write or after
+    /// it, still ends: the in-flight flag goes, the note's chain is freed, and
+    /// the note's next save runs to its end (codex round 1).</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ATaskToggleWhoseWorkerThrowsEndsAndFreesTheNotesChain(bool afterTheWrite) => RunSta(() =>
+    {
+        using var peers = new Peers(afterTheWrite ? "toggle-throws-after" : "toggle-throws-before", TaskNote);
+        Action thrower = () => throw new IOException("a panic surfacing through the binding (test seam)");
+        if (afterTheWrite)
+        {
+            peers.A.TaskToggleFaultForTests = thrower;
+        }
+        else
+        {
+            peers.A.TaskToggleBeforeWriteForTests = thrower;
+        }
+        var events = new List<A11yEvent>();
+        try
+        {
+            Assert.Equal(TabTaskToggle.Started, peers.A.ToggleTask(TheTask(peers), events.Add));
+            peers.H.PumpUntil(
+                () => !peers.A.IsTaskToggleInFlight && peers.H.Workspace.SavesIdle,
+                "the throwing toggle's end");
+            Assert.DoesNotContain(events, e => e is A11yEvent.TaskToggled);
+
+            peers.A.TaskToggleFaultForTests = null;
+            peers.A.TaskToggleBeforeWriteForTests = null;
+            peers.A.Text = peers.A.Text + "A later edit.\n";
+            Task<bool> save = peers.A.SaveAsync();
+            peers.H.PumpUntil(() => save.IsCompleted && peers.H.Workspace.SavesIdle, "the next save");
+        }
+        finally
+        {
+            peers.A.TaskToggleFaultForTests = null;
+            peers.A.TaskToggleBeforeWriteForTests = null;
+        }
+    });
+
+    /// <summary>A toggle refused when its turn comes, dirty or stale, whose
+    /// refusal sentence throws on its way out (the announcer reaches UIA): the
+    /// toggle still ends, so the tab's next toggle starts rather than being
+    /// refused as busy (codex round 2).</summary>
+    [Theory]
+    [InlineData("dirty")]
+    [InlineData("stale")]
+    public void ATaskToggleRefusedAtItsTurnEndsEvenWhenItsSentenceThrows(string refusal) => RunSta(() =>
+    {
+        using var peers = new Peers("toggle-refusal-throws-" + refusal, TaskNote);
+        TaskItem task = TheTask(peers);
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool>? held = null;
+        Task<bool>? save = null;
+        void Throwing(A11yEvent spoken)
+        {
+            if (spoken is A11yEvent.TaskToggleUnsaved or A11yEvent.TaskToggleConflict)
+            {
+                throw new System.Runtime.InteropServices.COMException("the announcer failed (test seam)");
+            }
+        }
+        try
+        {
+            if (refusal == "dirty")
+            {
+                held = peers.H.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+                Assert.Equal(TabTaskToggle.Started, peers.A.ToggleTask(task, Throwing));
+                peers.A.Text = TaskNote + "An unsaved line.\n";
+                ahead.SetResult();
+            }
+            else
+            {
+                save = peers.ParkBsSave(TaskNoteEdited);
+                peers.TakeBack(TaskNote);
+                Assert.Equal(TabTaskToggle.Started, peers.A.ToggleTask(task, Throwing));
+                peers.Retype(TaskNoteEdited);
+                peers.ReleaseSave();
+            }
+            peers.H.PumpUntil(
+                () => !peers.A.IsTaskToggleInFlight && peers.H.Workspace.SavesIdle,
+                "the refused toggle's end");
+            if (refusal == "dirty")
+            {
+                peers.A.Text = TaskNote;
+            }
+            Assert.False(peers.A.IsDirty, "premise: the tab is clean for the next toggle");
+            TaskItem next = peers.H.Session.TasksForFile("a.md")[0];
+            Assert.Equal(TabTaskToggle.Started, peers.A.ToggleTask(next, _ => { }));
+            peers.H.PumpUntil(
+                () => !peers.A.IsTaskToggleInFlight && peers.H.Workspace.SavesIdle,
+                "the next toggle");
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            peers.ReleaseSave();
+        }
+    });
+
+    private static TaskItem TheTask(Peers peers) => peers.H.Session.TasksForFile("a.md")[0];
 
     // ---- Bases cell writes (#1657) -------------------------------------------
 
@@ -1124,6 +1329,8 @@ public sealed class SaveChainAdmissionTests
 
         public string Root => _fixture.Root;
 
+        public VaultSession Session => _session;
+
         public WorkspaceViewModel Workspace { get; }
 
         public List<A11yEvent> Events { get; } = [];
@@ -1216,8 +1423,14 @@ public sealed class SaveChainAdmissionTests
         private int _writes;
 
         public Peers(string label, params (string Path, string Text)[] extra)
+            : this(label, Note, extra)
         {
-            H = new Vault(label, [("a.md", Note), ("b.md", "# B\n"), .. extra]);
+        }
+
+        /// <summary>With a.md holding <paramref name="note"/>.</summary>
+        public Peers(string label, string note, params (string Path, string Text)[] extra)
+        {
+            H = new Vault(label, [("a.md", note), ("b.md", "# B\n"), .. extra]);
             A = H.Open("a.md");
             _groupA = H.Workspace.ActiveGroup;
             H.Workspace.OpenPath("a.md", WorkspaceOpenTarget.SplitRight);
