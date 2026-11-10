@@ -4724,6 +4724,11 @@ final para
             large();
             larges.push(started.elapsed());
         }
+        scaling_ratio(&smalls, &larges)
+    }
+
+    /// The ratio [`paired_scaling_ratio`] reports from its samples.
+    fn scaling_ratio(smalls: &[std::time::Duration], larges: &[std::time::Duration]) -> f64 {
         let fastest_small = smalls.iter().min().copied().unwrap_or_default();
         let fastest_large = larges.iter().min().copied().unwrap_or_default();
         // A baseline small enough to be dominated by timer noise makes the
@@ -4750,41 +4755,33 @@ final para
         );
     }
 
-    /// Busy for `span`: a stand-in workload whose cost is CPU time.
-    fn spin(span: std::time::Duration) {
-        let started = std::time::Instant::now();
-        while started.elapsed() < span {
-            std::hint::spin_loop();
-        }
+    fn millis(values: &[u64]) -> Vec<std::time::Duration> {
+        values
+            .iter()
+            .map(|&value| std::time::Duration::from_millis(value))
+            .collect()
     }
 
     /// #1323: contention landing on most of the large arm's samples does
-    /// not fail the guard. Here a burst adds 12 ms to four of the seven
-    /// timed large runs of a workload that doubles from 4 ms to 8 ms:
-    /// the median of the paired ratios reads 5x, each arm's fastest run
-    /// still reads 2x.
+    /// not fail the guard. A workload that doubles from 4 ms to 8 ms, with
+    /// a burst adding 12 ms to four of the seven large samples: the median
+    /// of the paired ratios reads 4x, each arm's fastest run reads 2x.
     #[test]
     fn contention_on_most_large_samples_does_not_fail_the_scaling_guard() {
-        let mut large_runs = 0;
-        let ratio = paired_scaling_ratio(
-            || spin(std::time::Duration::from_millis(4)),
-            || {
-                large_runs += 1;
-                // Run 1 is the warm-up; runs 2 to 5 are timed and land in the burst.
-                let burst = if (2..=5).contains(&large_runs) { 12 } else { 0 };
-                spin(std::time::Duration::from_millis(8 + burst));
-            },
-        );
+        let smalls = millis(&[4, 4, 5, 4, 4, 6, 4]);
+        let larges = millis(&[8, 20, 20, 20, 20, 9, 8]);
+        let ratio = scaling_ratio(&smalls, &larges);
         assert_subquadratic("a doubling workload under a burst", ratio);
+        assert!((ratio - 2.0).abs() < 1e-9, "the fastest runs read {ratio}");
     }
 
-    /// And a cost that quadruples when the input doubles still fails it.
+    /// And a cost that quadruples when the input doubles still fails it,
+    /// whichever samples a burst lands on.
     #[test]
     fn a_quadratic_cost_still_fails_the_scaling_guard() {
-        let ratio = paired_scaling_ratio(
-            || spin(std::time::Duration::from_millis(4)),
-            || spin(std::time::Duration::from_millis(16)),
-        );
+        let smalls = millis(&[4, 9, 4, 4, 12, 4, 5]);
+        let larges = millis(&[16, 16, 30, 17, 16, 40, 16]);
+        let ratio = scaling_ratio(&smalls, &larges);
         assert!(ratio >= 3.0, "a quadrupling cost measured only {ratio:.1}x");
     }
 
