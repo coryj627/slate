@@ -816,6 +816,65 @@ public sealed partial class RescanTests
         Assert.Contains("new.md", h.QuickOpen.RankedPathsForTests());
     });
 
+    /// <summary>#1882: the cancel seam cancels the run's native token while
+    /// the run still holds it. The worker holds the seam's cancel until the
+    /// run has disposed its token (or two seconds pass), as an unordered pool
+    /// can: a seam that let the run end first cancelled a disposed
+    /// token.</summary>
+    [Fact]
+    public void TheCancelSeamCancelsTheTokenBeforeTheRunCanDisposeIt() => RunSta(() =>
+    {
+        using var h = new Harness("feed-cancel-order", ("alpha.md", "# Alpha\n"));
+        using (VaultSession other = VaultSession.OpenFilesystem(h.Root))
+        {
+            _ = other.CreateExclusive("new.md", "# New\n");
+        }
+
+        var parked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        bool started = false;
+        h.Workspace.RescanPublicationForTests = async (kind, _, publish) =>
+        {
+            if (kind == "graph" && !started)
+            {
+                started = true;
+                await parked.Task;
+            }
+
+            await publish();
+        };
+        using var disposed = new ManualResetEventSlim(false);
+        h.AfterCoreCall = operation =>
+        {
+            if (operation == "dispose")
+            {
+                disposed.Set();
+            }
+        };
+        h.BeforeCoreCall = operation =>
+        {
+            if (operation == "cancel")
+            {
+                _ = disposed.Wait(TimeSpan.FromSeconds(2));
+            }
+        };
+        h.CoreCalls.Clear();
+
+        Task run = h.Lifecycle.RescanAsync(RescanReason.Explicit);
+        h.PumpUntil(() => started, "the run's graph publication parking");
+        h.Context.Await(h.Lifecycle.CancelRunningRescanForTests());
+        parked.SetResult();
+        h.Context.Await(run);
+
+        Assert.DoesNotContain(
+            h.CoreCallOutcomes,
+            outcome => outcome.Operation == "cancel" && outcome.Failure is not null);
+        string[] ended = [.. h.CoreCallOutcomes.Select(outcome => outcome.Operation)];
+        int cancelled = Array.IndexOf(ended, "cancel");
+        Assert.True(
+            cancelled >= 0 && cancelled < Array.IndexOf(ended, "dispose"),
+            "the seam's cancel did not end before the run disposed its token: " + string.Join(", ", ended));
+    });
+
     /// <summary>The retry set (design §4.3 :662-673): a tree refresh or a
     /// Quick Open reload that fails counts one error and enters the set; the
     /// window is still acknowledged. The next run — a foreground one, which

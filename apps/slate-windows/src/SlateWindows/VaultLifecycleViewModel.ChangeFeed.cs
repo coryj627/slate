@@ -91,22 +91,35 @@ internal sealed partial class VaultLifecycleViewModel
     /// cache would.</summary>
     internal Func<string, bool>? ChangeFeedFaultForTests { get; set; }
 
-    /// <summary>Test seam: cancel the running rescan in place — its managed
-    /// twin, then its native token through the rescan core seam, as a close
-    /// cancels it — with the lifecycle and the session kept.</summary>
-    internal Task CancelRunningRescanForTests()
+    /// <summary>Test seam: cancel the running rescan in place, with the
+    /// lifecycle and the session kept — its native token through the
+    /// rescan core seam, then its managed twin (#1882). The native cancel
+    /// goes first and is awaited: cancelling the managed twin ends the run,
+    /// and the run's end disposes its token through the same seam, whose
+    /// calls are not ordered, so a native cancel queued after it could reach
+    /// a disposed token. A close keeps the managed-first order: it takes the
+    /// token out of <c>_rescanCancel</c> first, so the run's end leaves it
+    /// alone.</summary>
+    internal async Task CancelRunningRescanForTests()
     {
-        _rescanCancellation?.Cancel();
-        CancelToken? cancel = _rescanCancel;
-        return cancel is null
-            ? Task.CompletedTask
-            : StartRescanCoreCall(
-                "cancel",
-                () =>
-                {
-                    cancel.Cancel();
-                    return true;
-                });
+        try
+        {
+            if (_rescanCancel is { } cancel)
+            {
+                _ = await StartRescanCoreCall(
+                    "cancel",
+                    () =>
+                    {
+                        cancel.Cancel();
+                        return true;
+                    });
+            }
+        }
+        finally
+        {
+            // The managed twin is cancelled even when the native cancel fails.
+            _rescanCancellation?.Cancel();
+        }
     }
 
     /// <summary>
