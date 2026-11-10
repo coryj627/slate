@@ -64,9 +64,12 @@ public sealed class AvalonDocumentBufferCensus
     }
 
     /// <summary>#1839: another process takes the clipboard between the set and
-    /// the paste. The paste is retried and applies once.</summary>
-    [Fact]
-    public void APasteWhoseClipboardAnotherProcessTookIsRetried()
+    /// the paste: before the census checks the clipboard, or after the check
+    /// and before the editor's own. The paste is retried and applies once.</summary>
+    [Theory]
+    [InlineData("after the set")]
+    [InlineData("before the paste")]
+    public void APasteWhoseClipboardAnotherProcessTookIsRetried(string when)
     {
         RunOnSta(() =>
         {
@@ -77,7 +80,12 @@ public sealed class AvalonDocumentBufferCensus
             IDataObject? previousClipboard = TryGetClipboardData();
             try
             {
-                PasteThroughTheClipboard(editor, session, "pasted", afterSetForTests: Clipboard.Clear);
+                PasteThroughTheClipboard(
+                    editor,
+                    session,
+                    "pasted",
+                    afterSetForTests: when == "after the set" ? Clipboard.Clear : null,
+                    beforePasteForTests: when == "before the paste" ? Clipboard.Clear : null);
             }
             finally
             {
@@ -827,9 +835,15 @@ public sealed class AvalonDocumentBufferCensus
     /// That attempt is retried. A clipboard that still holds the text and a
     /// paste that applies nothing fails at once: that is the editor's
     /// defect, not the desktop's. <paramref name="afterSetForTests"/> runs
-    /// once, after the first set, standing in for that other process.</summary>
+    /// once, after the first set, and <paramref name="beforePasteForTests"/>
+    /// once, after the first check that the clipboard holds the text, each
+    /// standing in for that other process.</summary>
     private static void PasteThroughTheClipboard(
-        TextEditor editor, AvalonDocumentBufferSession session, string text, Action? afterSetForTests = null)
+        TextEditor editor,
+        AvalonDocumentBufferSession session,
+        string text,
+        Action? afterSetForTests = null,
+        Action? beforePasteForTests = null)
     {
         const int Attempts = 5;
         long before = session.AppliedDeltaCount;
@@ -842,8 +856,19 @@ public sealed class AvalonDocumentBufferCensus
             bool held = ClipboardHolds(text);
             if (held)
             {
-                Assert.True(ApplicationCommands.Paste.CanExecute(null, editor.TextArea), "the editor refused a paste the clipboard can serve");
-                ApplicationCommands.Paste.Execute(null, editor.TextArea);
+                beforePasteForTests?.Invoke();
+                beforePasteForTests = null;
+                if (ApplicationCommands.Paste.CanExecute(null, editor.TextArea))
+                {
+                    ApplicationCommands.Paste.Execute(null, editor.TextArea);
+                }
+                else
+                {
+                    // The editor asks the clipboard itself: it refused because
+                    // the text went (retried below), or it refused a paste the
+                    // clipboard could serve (its defect).
+                    Assert.False(ClipboardHolds(text), "the editor refused a paste the clipboard can serve");
+                }
             }
 
             if (session.AppliedDeltaCount != before)
