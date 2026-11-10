@@ -4699,21 +4699,44 @@ final para
     // its ranges, so n log n is the real bound and the tests are named
     // for what they actually establish.
 
-    /// The fastest large run over the fastest small run.
+    /// The doubling ratio that fails [`assert_subquadratic`].
+    const QUADRATIC_RATIO: f64 = 3.0;
+
+    /// The doubling ratio, confirmed: the lowest of up to three rounds of
+    /// [`paired_ratio`], stopping at the first round under
+    /// [`QUADRATIC_RATIO`].
     ///
-    /// Small and large are measured alternately inside one loop, so
-    /// neither arm's samples all fall in one quiet or one busy stretch.
-    /// Contention on a shared host only ever ADDS time, so each arm's
-    /// fastest run is its closest to the uncontended cost, and a burst
-    /// moves the ratio only if it covers every sample of one arm. The
-    /// median of the paired ratios this replaced did not hold under load
-    /// (#1323): the large arm runs twice as long, so it soaked up more of
-    /// the contention, and a CI run measured 3.3x for code that measures
-    /// ~1.94x.
+    /// A round reads the median of paired ratios, which a real quadratic
+    /// cannot slip under: that would take lulls on most of its large runs
+    /// while their paired small runs were busy. A burst on a shared host
+    /// can push one round over the threshold, though (#1323: the large
+    /// arm runs twice as long and soaks up more of it, and a CI run
+    /// measured 3.3x for code that measures ~1.94x), so a reading over the
+    /// threshold is measured again, and the guard fails only when every
+    /// round agrees. Passing code pays for one round.
     fn paired_scaling_ratio(mut small: impl FnMut(), mut large: impl FnMut()) -> f64 {
-        const SAMPLES: usize = 7;
         small();
         large();
+        confirmed_ratio(|| paired_ratio(&mut small, &mut large))
+    }
+
+    /// The lowest of up to three rounds, stopping at the first under
+    /// [`QUADRATIC_RATIO`].
+    fn confirmed_ratio(mut round: impl FnMut() -> f64) -> f64 {
+        const ROUNDS: usize = 3;
+        let mut lowest = f64::INFINITY;
+        for _ in 0..ROUNDS {
+            lowest = lowest.min(round());
+            if lowest < QUADRATIC_RATIO {
+                break;
+            }
+        }
+        lowest
+    }
+
+    /// One round: small and large measured alternately, seven times.
+    fn paired_ratio(small: &mut impl FnMut(), large: &mut impl FnMut()) -> f64 {
+        const SAMPLES: usize = 7;
         let mut smalls: Vec<std::time::Duration> = Vec::with_capacity(SAMPLES);
         let mut larges: Vec<std::time::Duration> = Vec::with_capacity(SAMPLES);
         for _ in 0..SAMPLES {
@@ -4724,20 +4747,32 @@ final para
             large();
             larges.push(started.elapsed());
         }
-        scaling_ratio(&smalls, &larges)
+        median_paired_ratio(&smalls, &larges)
     }
 
-    /// The ratio [`paired_scaling_ratio`] reports from its samples.
-    fn scaling_ratio(smalls: &[std::time::Duration], larges: &[std::time::Duration]) -> f64 {
-        let fastest_small = smalls.iter().min().copied().unwrap_or_default();
-        let fastest_large = larges.iter().min().copied().unwrap_or_default();
+    /// The median of the pairs' large/small ratios.
+    ///
+    /// Small and large are measured alternately, so a stretch of
+    /// contention lands on both arms of a pair instead of inflating one
+    /// phase: measuring all smalls and then all larges makes the ratio a
+    /// hostage to when the noise arrives.
+    fn median_paired_ratio(smalls: &[std::time::Duration], larges: &[std::time::Duration]) -> f64 {
+        let mut ordered = smalls.to_vec();
+        ordered.sort_unstable();
+        let median_small = ordered[ordered.len() / 2];
         // A baseline small enough to be dominated by timer noise makes the
         // ratio meaningless. The fixtures here run tens of milliseconds.
         assert!(
-            fastest_small >= std::time::Duration::from_millis(1),
-            "baseline {fastest_small:?} is too small to measure a ratio against"
+            median_small >= std::time::Duration::from_millis(1),
+            "baseline {median_small:?} is too small to measure a ratio against"
         );
-        fastest_large.as_secs_f64() / fastest_small.as_secs_f64()
+        let mut ratios: Vec<f64> = smalls
+            .iter()
+            .zip(larges)
+            .map(|(small, large)| large.as_secs_f64() / small.as_secs_f64().max(f64::EPSILON))
+            .collect();
+        ratios.sort_by(f64::total_cmp);
+        ratios[ratios.len() / 2]
     }
 
     /// Doubling the input must not more than triple the cost.
@@ -4749,7 +4784,7 @@ final para
     /// room for the n log n that sorting contributes.
     fn assert_subquadratic(label: &str, ratio: f64) {
         assert!(
-            ratio < 3.0,
+            ratio < QUADRATIC_RATIO,
             "{label}: doubling the input multiplied the cost by {ratio:.1} — \
              that is worse than the n log n this path is allowed"
         );
@@ -4762,27 +4797,57 @@ final para
             .collect()
     }
 
-    /// #1323: contention landing on most of the large arm's samples does
-    /// not fail the guard. A workload that doubles from 4 ms to 8 ms, with
-    /// a burst adding 12 ms to four of the seven large samples: the median
-    /// of the paired ratios reads 4x, each arm's fastest run reads 2x.
+    /// #1323: a burst that pushes one round of a doubling workload over the
+    /// threshold does not fail the guard when the next round reads true.
+    /// The round below is the CI failure's shape: 4 ms doubling to 8 ms,
+    /// with 12 ms added to four of the seven large runs.
     #[test]
-    fn contention_on_most_large_samples_does_not_fail_the_scaling_guard() {
-        let smalls = millis(&[4, 4, 5, 4, 4, 6, 4]);
-        let larges = millis(&[8, 20, 20, 20, 20, 9, 8]);
-        let ratio = scaling_ratio(&smalls, &larges);
-        assert_subquadratic("a doubling workload under a burst", ratio);
-        assert!((ratio - 2.0).abs() < 1e-9, "the fastest runs read {ratio}");
+    fn a_burst_in_one_round_does_not_fail_the_scaling_guard() {
+        let burst = median_paired_ratio(
+            &millis(&[4, 4, 5, 4, 4, 6, 4]),
+            &millis(&[8, 20, 20, 20, 20, 9, 8]),
+        );
+        assert!(
+            burst >= QUADRATIC_RATIO,
+            "premise: the burst round reads {burst:.1}x"
+        );
+        let quiet = median_paired_ratio(&millis(&[4; 7]), &millis(&[8, 8, 9, 8, 8, 8, 8]));
+        let mut rounds = [burst, quiet].into_iter();
+        let ratio = confirmed_ratio(|| rounds.next().expect("a third round"));
+        assert_subquadratic("a doubling workload with one burst round", ratio);
     }
 
-    /// And a cost that quadruples when the input doubles still fails it,
-    /// whichever samples a burst lands on.
+    /// A round under the threshold ends the measurement.
+    #[test]
+    fn a_round_under_the_threshold_is_not_measured_again() {
+        let mut rounds = 0;
+        let ratio = confirmed_ratio(|| {
+            rounds += 1;
+            2.0
+        });
+        assert_eq!((ratio, rounds), (2.0, 1));
+    }
+
+    /// A quadratic cost fails the guard in every round, so it still fails
+    /// it, including the round a lull spares one large run while every
+    /// small run is busy (6 ms for a 4 ms cost), which an estimator taking
+    /// each arm's fastest run would read as 2.7x.
     #[test]
     fn a_quadratic_cost_still_fails_the_scaling_guard() {
-        let smalls = millis(&[4, 9, 4, 4, 12, 4, 5]);
-        let larges = millis(&[16, 16, 30, 17, 16, 40, 16]);
-        let ratio = scaling_ratio(&smalls, &larges);
-        assert!(ratio >= 3.0, "a quadrupling cost measured only {ratio:.1}x");
+        let rounds = [
+            median_paired_ratio(&millis(&[6; 7]), &millis(&[24, 24, 24, 16, 24, 24, 24])),
+            median_paired_ratio(
+                &millis(&[4, 9, 4, 4, 12, 4, 5]),
+                &millis(&[16, 16, 30, 17, 16, 40, 16]),
+            ),
+            median_paired_ratio(&millis(&[4; 7]), &millis(&[16; 7])),
+        ];
+        let mut next = rounds.into_iter();
+        let ratio = confirmed_ratio(|| next.next().expect("a fourth round"));
+        assert!(
+            ratio >= QUADRATIC_RATIO,
+            "a quadrupling cost measured only {ratio:.1}x"
+        );
     }
 
     /// Marker-dense input must cost a fixed-size mask per authored scalar
