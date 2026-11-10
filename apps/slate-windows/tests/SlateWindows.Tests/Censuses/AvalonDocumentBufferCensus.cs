@@ -65,10 +65,12 @@ public sealed class AvalonDocumentBufferCensus
 
     /// <summary>#1839: another process takes the clipboard between the set and
     /// the paste: before the census checks the clipboard, or after the check
-    /// and before the editor's own. The paste is retried and applies once.</summary>
+    /// and before the editor's own, clearing it or putting its own text there.
+    /// The paste is retried and applies once, with the census's text.</summary>
     [Theory]
     [InlineData("after the set")]
     [InlineData("before the paste")]
+    [InlineData("replaced before the paste")]
     public void APasteWhoseClipboardAnotherProcessTookIsRetried(string when)
     {
         RunOnSta(() =>
@@ -85,7 +87,12 @@ public sealed class AvalonDocumentBufferCensus
                     session,
                     "pasted",
                     afterSetForTests: when == "after the set" ? Clipboard.Clear : null,
-                    beforePasteForTests: when == "before the paste" ? Clipboard.Clear : null);
+                    beforePasteForTests: when switch
+                    {
+                        "before the paste" => Clipboard.Clear,
+                        "replaced before the paste" => () => Clipboard.SetText("another process's text"),
+                        _ => null,
+                    });
             }
             finally
             {
@@ -847,38 +854,63 @@ public sealed class AvalonDocumentBufferCensus
     {
         const int Attempts = 5;
         long before = session.AppliedDeltaCount;
-        for (int attempt = 1; ; attempt++)
+        // The paste the editor is about to make: one carrying another
+        // process's text is cancelled before it edits, and retried.
+        bool foreign = false;
+        void OnlyOurs(object sender, DataObjectPastingEventArgs args)
         {
-            Clipboard.SetText(text);
-            afterSetForTests?.Invoke();
-            afterSetForTests = null;
-            editor.TextArea.Caret.Offset = session.Document.TextLength;
-            bool held = ClipboardHolds(text);
-            if (held)
+            if (args.DataObject.GetData(DataFormats.UnicodeText) as string != text)
             {
-                beforePasteForTests?.Invoke();
-                beforePasteForTests = null;
-                if (ApplicationCommands.Paste.CanExecute(null, editor.TextArea))
-                {
-                    ApplicationCommands.Paste.Execute(null, editor.TextArea);
-                }
-                else
-                {
-                    // The editor asks the clipboard itself: it refused because
-                    // the text went (retried below), or it refused a paste the
-                    // clipboard could serve (its defect).
-                    Assert.False(ClipboardHolds(text), "the editor refused a paste the clipboard can serve");
-                }
+                foreign = true;
+                args.CancelCommand();
             }
+        }
+        DataObject.AddPastingHandler(editor.TextArea, OnlyOurs);
+        try
+        {
+            PasteUntilApplied();
+        }
+        finally
+        {
+            DataObject.RemovePastingHandler(editor.TextArea, OnlyOurs);
+        }
 
-            if (session.AppliedDeltaCount != before)
+        void PasteUntilApplied()
+        {
+            for (int attempt = 1; ; attempt++)
             {
-                return;
-            }
+                foreign = false;
+                Clipboard.SetText(text);
+                afterSetForTests?.Invoke();
+                afterSetForTests = null;
+                editor.TextArea.Caret.Offset = session.Document.TextLength;
+                bool held = ClipboardHolds(text);
+                if (held)
+                {
+                    beforePasteForTests?.Invoke();
+                    beforePasteForTests = null;
+                    if (ApplicationCommands.Paste.CanExecute(null, editor.TextArea))
+                    {
+                        ApplicationCommands.Paste.Execute(null, editor.TextArea);
+                    }
+                    else
+                    {
+                        // The editor asks the clipboard itself: it refused because
+                        // the text went (retried below), or it refused a paste the
+                        // clipboard could serve (its defect).
+                        Assert.False(ClipboardHolds(text), "the editor refused a paste the clipboard can serve");
+                    }
+                }
 
-            Assert.False(held && ClipboardHolds(text), "the paste applied nothing, though the clipboard held its text throughout");
-            Assert.True(attempt < Attempts, $"another process kept the clipboard through {Attempts} pastes");
-            Thread.Sleep(TimeSpan.FromMilliseconds(100 * attempt));
+                if (session.AppliedDeltaCount != before)
+                {
+                    return;
+                }
+
+                Assert.False(held && !foreign && ClipboardHolds(text), "the paste applied nothing, though the clipboard held its text throughout");
+                Assert.True(attempt < Attempts, $"another process kept the clipboard through {Attempts} pastes");
+                Thread.Sleep(TimeSpan.FromMilliseconds(100 * attempt));
+            }
         }
     }
 
