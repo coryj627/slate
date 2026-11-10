@@ -65,12 +65,14 @@ public sealed class AvalonDocumentBufferCensus
 
     /// <summary>#1839: another process takes the clipboard between the set and
     /// the paste: before the census checks the clipboard, or after the check
-    /// and before the editor's own, clearing it or putting its own text there.
-    /// The paste is retried and applies once, with the census's text.</summary>
+    /// and before the editor's own, clearing it or putting its own text there,
+    /// or after the editor's paste has been checked and before it reads the
+    /// text. The paste applies once, with the census's text.</summary>
     [Theory]
     [InlineData("after the set")]
     [InlineData("before the paste")]
     [InlineData("replaced before the paste")]
+    [InlineData("replaced after the check")]
     public void APasteWhoseClipboardAnotherProcessTookIsRetried(string when)
     {
         RunOnSta(() =>
@@ -92,7 +94,10 @@ public sealed class AvalonDocumentBufferCensus
                         "before the paste" => Clipboard.Clear,
                         "replaced before the paste" => () => Clipboard.SetText("another process's text"),
                         _ => null,
-                    });
+                    },
+                    afterTheCheckForTests: when == "replaced after the check"
+                        ? () => Clipboard.SetText("another process's text")
+                        : null);
             }
             finally
             {
@@ -842,15 +847,17 @@ public sealed class AvalonDocumentBufferCensus
     /// That attempt is retried. A clipboard that still holds the text and a
     /// paste that applies nothing fails at once: that is the editor's
     /// defect, not the desktop's. <paramref name="afterSetForTests"/> runs
-    /// once, after the first set, and <paramref name="beforePasteForTests"/>
-    /// once, after the first check that the clipboard holds the text, each
-    /// standing in for that other process.</summary>
+    /// once, after the first set, <paramref name="beforePasteForTests"/> once,
+    /// after the first check that the clipboard holds the text, and
+    /// <paramref name="afterTheCheckForTests"/> once, after the editor's paste
+    /// has been checked, each standing in for that other process.</summary>
     private static void PasteThroughTheClipboard(
         TextEditor editor,
         AvalonDocumentBufferSession session,
         string text,
         Action? afterSetForTests = null,
-        Action? beforePasteForTests = null)
+        Action? beforePasteForTests = null,
+        Action? afterTheCheckForTests = null)
     {
         const int Attempts = 5;
         long before = session.AppliedDeltaCount;
@@ -863,7 +870,16 @@ public sealed class AvalonDocumentBufferCensus
             {
                 foreign = true;
                 args.CancelCommand();
+                return;
             }
+
+            // The clipboard's data object is live and the editor reads it again
+            // after this event, so it pastes a copy of the text just checked.
+            var checkedText = new DataObject();
+            checkedText.SetData(DataFormats.UnicodeText, text);
+            args.DataObject = checkedText;
+            afterTheCheckForTests?.Invoke();
+            afterTheCheckForTests = null;
         }
         DataObject.AddPastingHandler(editor.TextArea, OnlyOurs);
         try
