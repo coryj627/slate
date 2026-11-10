@@ -110,7 +110,9 @@ public sealed class BasesErrorDetailCensus
     [InlineData("List<Exception> failures = [thrown]; detail = string.Join(\", \", failures.OfType<object>());", "failures.OfType<object>")]
     [InlineData("List<Exception> failures = [thrown]; detail = string.Join(\", \", failures.Select(failure => (object)failure));", "(object)failure")]
     [InlineData("List<Exception> failures = [thrown]; detail = string.Join(\", \", failures.Select(Convert.ToString));", "failures.Select")]
+    [InlineData("List<Exception> failures = [thrown]; detail = string.Join(\", \", failures.Select<object, string>(failure => failure.ToString() ?? \"\"));", "failures.Select<object, string>")]
     [InlineData("List<Exception> failures = [thrown]; detail = string.Join(\", \", failures.Select(failure => BasePhrase.ErrorDetail(failure)));", "")]
+    [InlineData("List<Exception> failures = [thrown]; detail = string.Join(\", \", failures.Select(BasePhrase.ErrorDetail));", "")]
     [InlineData("List<Exception> failures = [thrown]; detail = BasePhrase.ErrorDetail(failures.First());", "")]
     [InlineData("List<Exception> failures = [thrown]; detail = failures.Where(failure => failure is VaultException).Count().ToString();", "")]
     [InlineData("if (thrown is { HResult: var code }) { detail = code.ToString(); }", "")]
@@ -340,10 +342,10 @@ public sealed class BasesErrorDetailCensus
             InitializerExpressionSyntax { Parent: BaseObjectCreationExpressionSyntax creation } =>
                 model.GetTypeInfo(creation).Type is { } created && CarriesExceptions(created, exception),
             MemberAccessExpressionSyntax access when access.Expression == expression =>
-                AllowedMember(model, access.Name, exception, isACollection),
+                AllowedMember(model, access.Name, exception, isACollection, censused),
             ConditionalAccessExpressionSyntax conditional when conditional.Expression == expression
                 && conditional.WhenNotNull.DescendantNodesAndSelf().OfType<MemberBindingExpressionSyntax>().FirstOrDefault() is { } binding =>
-                AllowedMember(model, binding.Name, exception, isACollection),
+                AllowedMember(model, binding.Name, exception, isACollection, censused),
             _ => false,
         };
     }
@@ -357,16 +359,29 @@ public sealed class BasesErrorDetailCensus
     /// census reads. <c>Cast&lt;object&gt;()</c>, <c>OfType&lt;object&gt;()</c>
     /// and a method group erase the type unread, so they are named (codex
     /// round 7).</summary>
-    private static bool AllowedMember(SemanticModel model, SimpleNameSyntax name, INamedTypeSymbol exception, bool onACollection) =>
+    private static bool AllowedMember(
+        SemanticModel model, SimpleNameSyntax name, INamedTypeSymbol exception, bool onACollection, IReadOnlySet<SyntaxTree> censused) =>
         model.GetSymbolInfo(name).Symbol switch
         {
             IMethodSymbol { Name: "GetType" } when !onACollection => true,
             IMethodSymbol method => HoldsNoText(method.ReturnType, exception)
-                || (onACollection && name.Parent?.Parent is InvocationExpressionSyntax { ArgumentList.Arguments: { Count: > 0 } arguments }
-                    && arguments.All(argument => argument.Expression is AnonymousFunctionExpressionSyntax)),
+                || (onACollection && KeepsItsElements(method, exception)
+                    && name.Parent?.Parent is InvocationExpressionSyntax { ArgumentList.Arguments: { Count: > 0 } arguments }
+                    && arguments.All(argument => argument.Expression is AnonymousFunctionExpressionSyntax
+                        || (model.GetSymbolInfo(argument.Expression).Symbol is IMethodSymbol group
+                            && group.Parameters.Any(parameter => CarriesExceptions(parameter.Type, exception))
+                            && IsConsumer(group, exception, censused)))),
             IPropertySymbol property => HoldsNoText(property.Type, exception),
             _ => false,
         };
+
+    /// <summary>Codex round 8: a call whose receiver is converted before
+    /// the call (<c>failures.Select&lt;object, string&gt;(…)</c> widens
+    /// the elements by covariance) hands its lambda <c>object</c>s the
+    /// census can't follow. The receiver it binds (an extension's
+    /// <c>this</c> parameter) must still carry exceptions.</summary>
+    private static bool KeepsItsElements(IMethodSymbol method, INamedTypeSymbol exception) =>
+        method.ReceiverType is { } receiver && CarriesExceptions(receiver, exception);
 
     /// <summary>An exception argument is fine where its parameter is an
     /// exception and the callee is core's renderer, a TaskCompletionSource,
@@ -384,18 +399,20 @@ public sealed class BasesErrorDetailCensus
                 && index < method.Parameters.Length
                 ? method.Parameters[index]
                 : null;
-        if (parameter is null || !CarriesExceptions(parameter.Type, exception))
-        {
-            return false;
-        }
-        return method switch
+        return parameter is not null && CarriesExceptions(parameter.Type, exception) && IsConsumer(method, exception, censused);
+    }
+
+    /// <summary>A method an exception may be handed to: core's renderer, a
+    /// TaskCompletionSource, an exception's constructor, or a method the
+    /// census reads (BasePhrase.ErrorDetail among them).</summary>
+    private static bool IsConsumer(IMethodSymbol method, INamedTypeSymbol exception, IReadOnlySet<SyntaxTree> censused) =>
+        (method.ReducedFrom ?? method) switch
         {
             { Name: "VaultErrorDetail", ContainingType.Name: "SlateUniffiMethods" } => true,
             { Name: "SetException" or "TrySetException", ContainingType.Name: "TaskCompletionSource" } => true,
             { MethodKind: MethodKind.Constructor } => DerivesFrom(method.ContainingType, exception),
-            _ => method.DeclaringSyntaxReferences.Any(reference => censused.Contains(reference.SyntaxTree)),
+            var declared => declared.DeclaringSyntaxReferences.Any(reference => censused.Contains(reference.SyntaxTree)),
         };
-    }
 
     private static bool DerivesFrom(ITypeSymbol type, INamedTypeSymbol exception)
     {
