@@ -3,11 +3,17 @@
 
 // #1697: a Bases failure is spoken in core's words. A VaultException's
 // Message is the binding's field rendering ("@message=..."), not the error's
-// text; every announcement the Bases sources build from a caught failure goes
+// text; every sentence the Bases sources build from a caught failure goes
 // through BasePhrase.ErrorDetail, which is core's VaultErrorDetail for a
-// vault error and the exception's own message otherwise. This census reads
-// every A11yEvent construction in those sources and names any argument that
-// reads a Message.
+// vault error and the exception's own message otherwise.
+//
+// The census is fail-closed (codex round 2): a source scrape cannot tell an
+// exception's type through an alias or a conditional access, so every
+// Message read in the Bases sources, plain or null-conditional, is named
+// unless its receiver is a local or parameter the same member declares with
+// one of the model types below, whose Message is already a composed
+// sentence. BasePhrase.ErrorDetail, the one place a non-vault exception's
+// message is read on purpose, is exempt.
 
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -18,6 +24,15 @@ namespace SlateWindows.Tests.Censuses;
 [Trait("census", "bases-error-detail")]
 public sealed class BasesErrorDetailCensus
 {
+    /// <summary>The types whose <c>Message</c> is not an exception's: core's
+    /// expression validation result, and a dashboard section whose message is
+    /// the sentence the dashboard already composed.</summary>
+    private static readonly HashSet<string> MessageModels =
+    [
+        "BaseExpressionValidation",
+        "DashboardSectionViewModel",
+    ];
+
     /// <summary>The Bases sources: the workspace's Bases half and every file
     /// in the Bases folder.</summary>
     private static IEnumerable<string> BasesSources()
@@ -34,99 +49,76 @@ public sealed class BasesErrorDetailCensus
     public void NoBasesAnnouncementReadsAnExceptionsMessage()
     {
         string[] failures = [.. BasesSources()
-            .SelectMany(path => MessageReads(CSharpSource.LoadPath(path).Root, Path.GetFileName(path)))];
+            .SelectMany(path => AnnouncementMessageReads(CSharpSource.LoadPath(path).Root, Path.GetFileName(path)))];
         Assert.True(failures.Length == 0, string.Join("\n", failures));
     }
 
-    /// <summary>Codex round 1: a caught exception's Message never leaves the
-    /// catch as text either (a local, a return, a property the sentence
-    /// reads later), outside the helper itself.</summary>
+    /// <summary>A caught exception's Message never leaves the catch as text
+    /// either (a local, a return, a property the sentence reads later), by any
+    /// name or through a conditional access (codex rounds 1 and 2).</summary>
     [Fact]
-    public void NoBasesExceptionMessageIsReadOutsideTheHelper()
+    public void NoBasesMessageIsReadExceptFromAModel()
     {
         string[] failures = [.. BasesSources()
-            .SelectMany(path => ExceptionMessageReads(CSharpSource.LoadPath(path).Root, Path.GetFileName(path)))];
+            .SelectMany(path => UnmodelledMessageReads(CSharpSource.LoadPath(path).Root, Path.GetFileName(path)))];
         Assert.True(failures.Length == 0, string.Join("\n", failures));
     }
 
-    /// <summary>The teeth of the wider rule: a caught exception's Message
-    /// stored, returned or patterned is named; a model's own Message property
-    /// is not.</summary>
+    /// <summary>The fail-closed rule's teeth: a caught, patterned, aliased,
+    /// null-conditional or task exception's Message is named, as is an
+    /// exception that borrows a model's name; a model's own Message and the
+    /// helper are clean.</summary>
     [Theory]
     [InlineData("try { Work(); } catch (VaultException failure) { detail = failure.Message; }", "failure.Message")]
     [InlineData("try { Work(); } catch (VaultException failure) { return failure.Message; }", "failure.Message")]
     [InlineData("if (thrown is VaultException vault) { detail = vault.Message; }", "vault.Message")]
+    [InlineData("try { Work(); } catch (VaultException failure) { _announce(new A11yEvent.BasesViewExportFailed(failure?.Message ?? \"Unknown failure\")); }", "failure?.Message")]
+    [InlineData("var error = thrown; detail = error.Message;", "error.Message")]
+    [InlineData("detail = work.Exception?.Message ?? \"\";", "work.Exception?.Message")]
+    [InlineData("var validation = thrown; detail = validation.Message;", "validation.Message")]
     [InlineData("try { Work(); } catch (VaultException failure) { detail = BasePhrase.ErrorDetail(failure); }", "")]
-    [InlineData("detail = validation.Message ?? \"Expression invalid\";", "")]
-    public void TheCensusNamesACaughtMessageWhereverItGoes(string body, string named)
+    [InlineData("BaseExpressionValidation validation = Validate(); detail = validation.Message ?? \"Expression invalid\";", "")]
+    [InlineData("var section = new DashboardSectionViewModel(status); section.Message = BasePhrase.ErrorDetail(thrown);", "")]
+    [InlineData("foreach (DashboardSectionViewModel section in Sections) { detail = section.Message; }", "")]
+    public void TheCensusNamesEveryMessageReadOutsideAModel(string body, string named)
     {
         SyntaxNode root = CSharpSyntaxTree.ParseText(
-            "class C { string M(Exception thrown) { string detail; " + body + " return detail; } }").GetRoot();
-        string[] failures = [.. ExceptionMessageReads(root, "planted.cs")];
-        if (named.Length == 0)
-        {
-            Assert.Empty(failures);
-        }
-        else
-        {
-            Assert.Contains(failures, failure => failure.Contains(named, StringComparison.Ordinal));
-        }
+            "class C { string M(Exception thrown, Task work) { string detail = \"\"; " + body + " return detail; } }").GetRoot();
+        AssertNamed([.. UnmodelledMessageReads(root, "planted.cs")], named);
     }
 
-    /// <summary>Every <c>x.Message</c> read where <c>x</c> is declared in the
-    /// same member as an exception: a catch variable, a
-    /// <c>is SomeException x</c> pattern or an exception-typed parameter.
-    /// <c>BasePhrase.ErrorDetail</c>, the one place a non-vault message is
-    /// read on purpose, is exempt.</summary>
-    internal static IEnumerable<string> ExceptionMessageReads(SyntaxNode root, string file)
+    /// <summary>The helper's own read is exempt; the same read in any other
+    /// member is not.</summary>
+    [Theory]
+    [InlineData("ErrorDetail", "")]
+    [InlineData("Describe", "failure.Message")]
+    public void OnlyTheHelperReadsAnExceptionsMessage(string member, string named)
     {
-        foreach (MemberDeclarationSyntax member in root.DescendantNodes().OfType<MemberDeclarationSyntax>()
-            .Where(candidate => candidate is BaseMethodDeclarationSyntax or PropertyDeclarationSyntax))
-        {
-            if (member is MethodDeclarationSyntax { Identifier.ValueText: "ErrorDetail" })
-            {
-                continue;
-            }
-            HashSet<string> exceptions = [.. member.DescendantNodes().SelectMany(ExceptionNames)];
-            foreach (MemberAccessExpressionSyntax access in member.DescendantNodes().OfType<MemberAccessExpressionSyntax>())
-            {
-                if (access.Name.Identifier.ValueText == "Message"
-                    && access.Expression is IdentifierNameSyntax { Identifier.ValueText: var target }
-                    && exceptions.Contains(target))
-                {
-                    yield return $"{file} line {access.GetLocation().GetLineSpan().StartLinePosition.Line + 1}: "
-                        + $"{access} reads a caught exception's message; use BasePhrase.ErrorDetail.";
-                }
-            }
-        }
+        SyntaxNode root = CSharpSyntaxTree.ParseText(
+            "static class BasePhrase { internal static string " + member + "(Exception failure) =>"
+            + " failure is VaultException vault ? SlateUniffiMethods.VaultErrorDetail(vault) : failure.Message; }").GetRoot();
+        AssertNamed([.. UnmodelledMessageReads(root, "planted.cs")], named);
     }
 
-    private static IEnumerable<string> ExceptionNames(SyntaxNode node) => node switch
-    {
-        CatchDeclarationSyntax { Identifier.ValueText: { Length: > 0 } name } => [name],
-        DeclarationPatternSyntax { Designation: SingleVariableDesignationSyntax designation } pattern
-            when IsException(pattern.Type) => [designation.Identifier.ValueText],
-        ParameterSyntax { Type: { } type } parameter when IsException(type) => [parameter.Identifier.ValueText],
-        _ => [],
-    };
-
-    private static bool IsException(TypeSyntax type) =>
-        CSharpSource.Normalize(type).TrimEnd('?').EndsWith("Exception", StringComparison.Ordinal);
-
-    /// <summary>The census's teeth: a Message read in the constructor's
-    /// argument, bare or interpolated, is named; core's rendering through
-    /// the helper is clean.</summary>
+    /// <summary>The announcement rule's teeth: a Message read in the
+    /// constructor's argument, bare, interpolated, named or null-conditional,
+    /// is named; core's rendering through the helper is clean.</summary>
     [Theory]
     [InlineData("_announce(new A11yEvent.BasesCellEditFailed(failure.Message));", "failure.Message")]
     [InlineData("_announce(new A11yEvent.BasesViewExportFailed($\"Export failed: {failure.Message}\"));", "failure.Message")]
     [InlineData("_announce(new A11yEvent.BasesSavedQueryCreateFailed(Detail: failure.Message));", "failure.Message")]
+    [InlineData("_announce(new A11yEvent.BasesViewExportFailed(failure?.Message ?? \"Unknown failure\"));", "failure?.Message")]
     [InlineData("_announce(new A11yEvent.BasesCellEditFailed(BasePhrase.ErrorDetail(failure)));", "")]
     [InlineData("_announce(new A11yEvent.BasesCellEditFailed(SlateUniffiMethods.VaultErrorDetail(failure)));", "")]
     public void TheCensusNamesAMessageRead(string body, string named)
     {
         SyntaxNode root = CSharpSyntaxTree.ParseText(
             "class C { void M(VaultException failure) { " + body + " } }").GetRoot();
-        string[] failures = [.. MessageReads(root, "planted.cs")];
+        AssertNamed([.. AnnouncementMessageReads(root, "planted.cs")], named);
+    }
+
+    private static void AssertNamed(string[] failures, string named)
+    {
         if (named.Length == 0)
         {
             Assert.Empty(failures);
@@ -137,14 +129,93 @@ public sealed class BasesErrorDetailCensus
         }
     }
 
-    internal static IEnumerable<string> MessageReads(SyntaxNode root, string file) =>
+    /// <summary>A Message read inside an A11yEvent construction's
+    /// arguments.</summary>
+    internal static IEnumerable<string> AnnouncementMessageReads(SyntaxNode root, string file) =>
         root.DescendantNodes()
             .OfType<ObjectCreationExpressionSyntax>()
             .Where(creation => CSharpSource.Normalize(creation.Type).StartsWith("A11yEvent.", StringComparison.Ordinal))
             .SelectMany(creation => (creation.ArgumentList?.Arguments ?? default)
-                .SelectMany(argument => argument.DescendantNodesAndSelf().OfType<MemberAccessExpressionSyntax>())
-                .Where(access => access.Name.Identifier.ValueText == "Message")
-                .Select(access =>
+                .SelectMany(argument => MessageReads(argument))
+                .Select(read =>
                     $"{file} line {creation.GetLocation().GetLineSpan().StartLinePosition.Line + 1}: "
-                    + $"{CSharpSource.Normalize(creation.Type)} reads {access}; use BasePhrase.ErrorDetail."));
+                    + $"{CSharpSource.Normalize(creation.Type)} reads {read.Text}; use BasePhrase.ErrorDetail."));
+
+    /// <summary>Every Message read outside <c>ErrorDetail</c> whose receiver
+    /// is not a local, foreach variable or parameter the enclosing member
+    /// declares with a <see cref="MessageModels"/> type.</summary>
+    internal static IEnumerable<string> UnmodelledMessageReads(SyntaxNode root, string file)
+    {
+        foreach ((SyntaxNode node, ExpressionSyntax receiver, string text) in MessageReads(root))
+        {
+            MemberDeclarationSyntax? member = node.FirstAncestorOrSelf<MemberDeclarationSyntax>(
+                candidate => candidate is BaseMethodDeclarationSyntax or BasePropertyDeclarationSyntax or FieldDeclarationSyntax);
+            if (member is MethodDeclarationSyntax { Identifier.ValueText: "ErrorDetail" })
+            {
+                continue;
+            }
+            if (receiver is IdentifierNameSyntax { Identifier.ValueText: var name }
+                && member is not null
+                && DeclaresAModel(member, name))
+            {
+                continue;
+            }
+            yield return $"{file} line {node.GetLocation().GetLineSpan().StartLinePosition.Line + 1}: "
+                + $"{text} is not read from a known model; use BasePhrase.ErrorDetail, "
+                + "or add the receiver's type to MessageModels with its reason.";
+        }
+    }
+
+    /// <summary>Every <c>x.Message</c> and <c>x?.Message</c> under
+    /// <paramref name="scope"/>, with its receiver.</summary>
+    private static IEnumerable<(SyntaxNode Node, ExpressionSyntax Receiver, string Text)> MessageReads(SyntaxNode scope)
+    {
+        foreach (SyntaxNode node in scope.DescendantNodesAndSelf())
+        {
+            switch (node)
+            {
+                case MemberAccessExpressionSyntax { Name.Identifier.ValueText: "Message" } access:
+                    yield return (access, access.Expression, $"{access.Expression}.Message");
+                    break;
+                case MemberBindingExpressionSyntax { Name.Identifier.ValueText: "Message" } binding
+                    when binding.FirstAncestorOrSelf<ConditionalAccessExpressionSyntax>() is { } conditional:
+                    yield return (binding, conditional.Expression, $"{conditional.Expression}?.Message");
+                    break;
+            }
+        }
+    }
+
+    /// <summary>Whether <paramref name="member"/> declares <paramref name="name"/>
+    /// with a model type: a typed local, <c>var x = new Model(...)</c>, a
+    /// typed foreach variable or a typed parameter. Any other declaration of
+    /// the name in the member (an alias of an exception) disqualifies it.</summary>
+    private static bool DeclaresAModel(MemberDeclarationSyntax member, string name)
+    {
+        bool modelled = false;
+        foreach (SyntaxNode node in member.DescendantNodesAndSelf())
+        {
+            bool? declared = node switch
+            {
+                VariableDeclaratorSyntax declarator when declarator.Identifier.ValueText == name
+                    && declarator.Parent is VariableDeclarationSyntax declaration =>
+                    IsModel(declaration.Type)
+                    || (declaration.Type.IsVar && declarator.Initializer?.Value is ObjectCreationExpressionSyntax creation
+                        && IsModel(creation.Type)),
+                ForEachStatementSyntax loop when loop.Identifier.ValueText == name => IsModel(loop.Type),
+                ParameterSyntax { Type: { } type } parameter when parameter.Identifier.ValueText == name => IsModel(type),
+                SingleVariableDesignationSyntax designation when designation.Identifier.ValueText == name => false,
+                CatchDeclarationSyntax catchDeclaration when catchDeclaration.Identifier.ValueText == name => false,
+                _ => null,
+            };
+            if (declared == false)
+            {
+                return false;
+            }
+            modelled |= declared == true;
+        }
+        return modelled;
+    }
+
+    private static bool IsModel(TypeSyntax type) =>
+        MessageModels.Contains(CSharpSource.Normalize(type).TrimEnd('?'));
 }
