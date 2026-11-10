@@ -332,23 +332,10 @@ public sealed partial class ShellAccessibilityTests
         Assert.True(
             SpinWait.SpinUntil(() => focusIsOnRow() == true, TimeSpan.FromSeconds(10)),
             $"{message} Focused: {DescribeFocus(automation)}. {FocusDiagnosis()}");
-        var clock = Stopwatch.StartNew();
-        int observed = 0;
-        while (clock.Elapsed < FocusSettle)
-        {
-            // A transient UIA fault is no observation either way.
-            if (focusIsOnRow() is bool onRow)
-            {
-                Assert.True(
-                    onRow,
-                    $"{message} Focus left the row after {clock.ElapsedMilliseconds} ms for {DescribeFocus(automation)}.");
-                observed++;
-            }
-
-            Thread.Sleep(100);
-        }
-
-        Assert.True(observed >= 5, $"{message} Focus could be read only {observed} times in the settle window.");
+        // #1611: a transient UIA fault is no observation either way, and the
+        // watch counts reads rather than wall time.
+        string? why = FocusSettleWatch.Watch(focusIsOnRow, FocusSettle);
+        Assert.True(why is null, $"{message} {why} Focused: {DescribeFocus(automation)}.");
     }
 
     private static bool? FocusIsOnRow(UIA3Automation automation, AutomationElement container, string prefix)
