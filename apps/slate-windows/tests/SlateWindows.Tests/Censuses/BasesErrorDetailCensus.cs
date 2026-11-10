@@ -121,6 +121,11 @@ public sealed class BasesErrorDetailCensus
     [InlineData("List<Exception> failures = [thrown]; detail = failures.Any(failure => failure is VaultException) ? \"x\" : \"\";", "")]
     [InlineData("detail = thrown.HResult.ToString();", "")]
     [InlineData("_announce(new A11yEvent.BasesViewExportFailed(Format(thrown)));", "Format(thrown)")]
+    [InlineData("thrown?.Tap(Report);", "thrown?.Tap(Report)")]
+    [InlineData("_last = thrown?.Tap(Report);", "thrown?.Tap(Report)")]
+    [InlineData("thrown.Tap(Report);", "thrown.Tap")]
+    [InlineData("Exception[] failures = [thrown]; detail = BasePhrase.ErrorDetail(failures[0]);", "")]
+    [InlineData("detail = BasePhrase.ErrorDetail(thrown?.InnerException ?? thrown);", "")]
     [InlineData("work.Exception!.Handle(Handled);", "Handle")]
     [InlineData("work.Exception?.Handle(Handled);", "Handle")]
     [InlineData("work.Exception!.Handle(failure => { _announce(new A11yEvent.BasesViewExportFailed(BasePhrase.ErrorDetail(failure))); return true; });", "")]
@@ -193,6 +198,12 @@ public sealed class BasesErrorDetailCensus
                     internal static void Shout(this object value) => Console.WriteLine(value);
 
                     internal static string Spell<T>(this T value) => value?.ToString() ?? "";
+
+                    internal static T Tap<T>(this T value, Action<T> callback)
+                    {
+                        callback(value);
+                        return value;
+                    }
                 }
             }
             """);
@@ -395,8 +406,24 @@ public sealed class BasesErrorDetailCensus
     /// <c>!</c>, <c>??</c>, <c>?:</c>, a cast or <c>as</c>, an assignment into
     /// an exception slot, <c>.InnerException</c>, a conditional access that
     /// yields one.</summary>
+    /// <remarks>Codex round 13: only pure value flow carries a value on. A
+    /// member call or indexer whose result is still an exception
+    /// (<c>thrown?.Tap(Report)</c>) hands the receiver to code first, so its
+    /// receiver is judged by the member rules, never skipped.</remarks>
     private static bool CarriedOn(SemanticModel model, ExpressionSyntax expression, INamedTypeSymbol exception) =>
-        expression.Parent is ExpressionSyntax outer && IsExceptionValue(model, outer, exception);
+        expression.Parent switch
+        {
+            MemberAccessExpressionSyntax access => access.Name == expression,
+            MemberBindingExpressionSyntax binding => binding.Name == expression,
+            ParenthesizedExpressionSyntax or CastExpressionSyntax or AssignmentExpressionSyntax
+                or PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression }
+                or BinaryExpressionSyntax { RawKind: (int)SyntaxKind.CoalesceExpression or (int)SyntaxKind.AsExpression } =>
+                IsExceptionValue(model, (ExpressionSyntax)expression.Parent, exception),
+            ConditionalExpressionSyntax choice when choice.Condition != expression => IsExceptionValue(model, choice, exception),
+            ConditionalAccessExpressionSyntax conditional when conditional.WhenNotNull == expression =>
+                IsExceptionValue(model, conditional, exception),
+            _ => false,
+        };
 
     /// <summary>The uses that never make an exception text.</summary>
     private static bool AllowedUse(
@@ -428,6 +455,15 @@ public sealed class BasesErrorDetailCensus
                 model.GetTypeInfo(creation).Type is { } created && CarriesExceptions(created, exception),
             MemberAccessExpressionSyntax access when access.Expression == expression =>
                 AllowedMember(model, access.Name, exception, isACollection, censused),
+            ElementAccessExpressionSyntax element when element.Expression == expression =>
+                model.GetSymbolInfo(element).Symbol switch
+                {
+                    IPropertySymbol indexer => (indexer.ContainingNamespace?.ToDisplayString() is "System.Collections.Generic"
+                        or "System.Collections.Immutable" or "System.Collections.ObjectModel")
+                        && HoldsNoText(indexer.Type, exception),
+                    null => model.GetTypeInfo(expression).Type is IArrayTypeSymbol,
+                    _ => false,
+                },
             ConditionalAccessExpressionSyntax conditional when conditional.Expression == expression
                 && conditional.WhenNotNull.DescendantNodesAndSelf().OfType<MemberBindingExpressionSyntax>().FirstOrDefault() is { } binding =>
                 AllowedMember(model, binding.Name, exception, isACollection, censused),
