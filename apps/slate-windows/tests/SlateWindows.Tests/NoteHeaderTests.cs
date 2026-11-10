@@ -599,7 +599,69 @@ public sealed class NoteHeaderTests
 
         Assert.Equal(!fromReading, host.Workspace.ActiveGroup.ActiveTab!.IsReadingMode);
         Assert.False(IsInside(Keyboard.FocusedElement as DependencyObject, leaving), $"the keys stayed in the hidden surface, on {Keyboard.FocusedElement}.");
-        Assert.True(IsInside(Keyboard.FocusedElement as DependencyObject, content), $"the keys left the note for {Keyboard.FocusedElement}.");
+        // #1884: a reading view still projecting holds the landing, the keys
+        // waiting on the tab's item, so the fact waits for it to land.
+        Assert.True(
+            PumpedDispatcher.PumpUntil(
+                () => IsInside(Keyboard.FocusedElement as DependencyObject, content), TimeSpan.FromSeconds(10)),
+            $"the keys left the note for {Keyboard.FocusedElement}.");
+    });
+
+    /// <summary>#1884: a flip from the editor whose reading view is still
+    /// projecting (the reader edited the note since its last visit, and the
+    /// fetch is slow) holds the landing until the projection arrives: the keys
+    /// leave the hidden editor at once and land in the reading view when it
+    /// does. A fact that looks once, before the projection, finds them
+    /// waiting.</summary>
+    [Fact]
+    public void AFlipFromTheEditorWhileTheReadingViewProjectsLandsWhenItArrives() => StaThread.RunPumped(() =>
+    {
+        using var host = new ShownShell(("Lecture.md", "# Lecture\n\nSee [[Other]].\n"), ("Other.md", "# Other\n"));
+        host.Workspace.OpenPath("Lecture.md");
+        host.Settle();
+        NoteHeaderView header = HeaderOf(host, "Lecture.md");
+        FrameworkElement content = ContentOf(header);
+        WorkspaceTabViewModel tab = host.Workspace.ActiveGroup.ActiveTab!;
+        // A first visit makes the reading view; an edit makes the next one project again.
+        host.Workspace.ToggleReadingModeCommand.Execute(null);
+        _ = FirstReadingLink(host, content);
+        host.Workspace.ToggleReadingModeCommand.Execute(null);
+        host.Settle();
+        tab.Text += "\nAn edit since the last visit.\n";
+        using var gate = new ManualResetEventSlim(false);
+        tab.Reading!.FetchFaultForTests = () =>
+        {
+            _ = gate.Wait(TimeSpan.FromSeconds(30));
+            return null;
+        };
+        Assert.True(EditorOf(content).Focus());
+        FrameworkElement leaving = EditorHostOf(content);
+        try
+        {
+            Select(Choice(header, "NoteHeaderReading"));
+            host.Settle();
+
+            Assert.True(tab.IsReadingMode);
+            Assert.True(tab.Reading.RefreshInFlight, "premise: the reading view is still projecting");
+            Assert.False(IsInside(Keyboard.FocusedElement as DependencyObject, leaving), $"the keys stayed in the hidden editor, on {Keyboard.FocusedElement}.");
+            // They wait on the tab's own item, as the CI failure found them
+            // (the landing's park while the reading view projects).
+            Assert.IsType<TabItem>(Keyboard.FocusedElement);
+            string waiting = Keyboard.FocusedElement?.ToString() ?? "nothing";
+
+            gate.Set();
+            RichTextBox surface = ReadingSurfaceOf(content);
+            Assert.True(
+                PumpedDispatcher.PumpUntil(
+                    () => IsInside(Keyboard.FocusedElement as DependencyObject, surface),
+                    TimeSpan.FromSeconds(10)),
+                $"the keys waited on {waiting} and never landed in the reading view; they are on {Keyboard.FocusedElement}.");
+        }
+        finally
+        {
+            gate.Set();
+            tab.Reading.FetchFaultForTests = null;
+        }
     });
 
     [Theory]
