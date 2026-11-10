@@ -1879,9 +1879,10 @@ internal sealed partial class WorkspaceViewModel
             // the whole operation (one write per path at a time, any
             // origin).
             string path = row.FilePath;
+            string? requested = tab.SavedContentHash;
             AdmitPropertyWrite(
                 path,
-                () => BasesCellWriteAdmitted(document, row, column, key, value),
+                () => BasesCellWriteAdmitted(document, row, column, key, value, requested),
                 () => ReleasePropertyWriteLease(path));
             return;
         }
@@ -1911,15 +1912,19 @@ internal sealed partial class WorkspaceViewModel
     /// and stale gates then, and takes its CAS token from the tab's saved
     /// hash, which the save it waited for has published (the W4-4 seam:
     /// CAS and rebaseline live in the tab; the completion routes into the
-    /// one funnel). A note whose tab closed while it waited takes the
-    /// tabless write. The operation ends with the write's completion, or
-    /// with the refusal that wrote nothing.</summary>
+    /// one funnel). A note whose tabs all closed while it waited takes the
+    /// tabless write, on the hash the edit was made against
+    /// (<paramref name="requested"/>, codex round 2): a note renamed away
+    /// and replaced at its path, or changed on disk, refuses as a conflict
+    /// and keeps its bytes. The operation ends with the write's
+    /// completion, or with the refusal that wrote nothing.</summary>
     private Task BasesCellWriteAdmitted(
         BaseDocumentViewModel document,
         BasesRow row,
         BasesColumn column,
         string key,
-        PropertyValue? value)
+        PropertyValue? value,
+        string? requested)
     {
         string path = row.FilePath;
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1935,11 +1940,11 @@ internal sealed partial class WorkspaceViewModel
             {
                 if (!_startInteractionBackgroundWork)
                 {
-                    BasesTablessWriteBody(document, row, column, key, value);
+                    BasesTablessWriteBody(document, row, column, key, value, requested);
                     done.TrySetResult();
                     return done.Task;
                 }
-                Task body = Task.Run(() => BasesTablessWriteBody(document, row, column, key, value));
+                Task body = Task.Run(() => BasesTablessWriteBody(document, row, column, key, value, requested));
                 // The admitted write's teardown join (codex round 1): the
                 // save coordinator's workers are joined before the session
                 // goes, not only waited out a while as retired Bases work.
@@ -2004,18 +2009,19 @@ internal sealed partial class WorkspaceViewModel
         BasesRow row,
         BasesColumn column,
         string key,
-        PropertyValue? value)
+        PropertyValue? value,
+        string? expectedContentHash = null)
     {
         BasesTablessWriteHookForTests?.Invoke();
         try
         {
             if (value is null)
             {
-                _ = _session.DeleteProperty(row.FilePath, key, expectedContentHash: null);
+                _ = _session.DeleteProperty(row.FilePath, key, expectedContentHash);
             }
             else
             {
-                _ = _session.SetProperty(row.FilePath, key, value, expectedContentHash: null);
+                _ = _session.SetProperty(row.FilePath, key, value, expectedContentHash);
             }
         }
         catch (Exception failure) when (failure
@@ -2033,7 +2039,11 @@ internal sealed partial class WorkspaceViewModel
                 _ = _propertyWritePaths.Remove(row.FilePath);
                 if (!_workspaceDisposed)
                 {
-                    _announce(new A11yEvent.BasesCellEditFailed(failure.Message));
+                    // #1657: a write on a hash the note no longer has wrote
+                    // nothing; it is the property family's conflict.
+                    _announce(failure is VaultException.WriteConflict
+                        ? new A11yEvent.PropertyEditConflict(System.IO.Path.GetFileName(row.FilePath))
+                        : new A11yEvent.BasesCellEditFailed(failure.Message));
                 }
             });
             return;

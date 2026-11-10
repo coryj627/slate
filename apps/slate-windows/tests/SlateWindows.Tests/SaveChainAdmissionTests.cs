@@ -539,11 +539,12 @@ public sealed class SaveChainAdmissionTests
             Assert.Equal(1, peers.H.Workspace.SavesForTests.TrackedWorkersForTests);
 
             tablessRelease.Set();
+            // The file is read once the write has ended: the session holds it
+            // while it writes.
             peers.H.PumpUntil(
-                () => peers.H.Read("a.md").Contains("status: done", StringComparison.Ordinal)
-                    && peers.H.Workspace.SavesIdle
-                    && !peers.H.Workspace.PropertyWriteInFlightFor("a.md"),
+                () => peers.H.Workspace.SavesIdle && !peers.H.Workspace.PropertyWriteInFlightFor("a.md"),
                 "the tabless cell write");
+            Assert.Contains("status: done", peers.H.Read("a.md"), StringComparison.Ordinal);
             Assert.True(held.Result);
         }
         finally
@@ -551,6 +552,45 @@ public sealed class SaveChainAdmissionTests
             _ = ahead.TrySetResult();
             tablessRelease.Set();
             peers.H.Workspace.BasesTablessWriteHookForTests = null;
+        }
+    });
+
+    /// <summary>The cell edit waits behind another admitted operation while
+    /// the reader closes both tabs, and the note's file is replaced on disk
+    /// (a rename away and a new note at the path, or an outside write): the
+    /// tabless write runs on the hash the edit was made against, refuses as
+    /// a conflict and leaves the replacement's bytes alone (codex round
+    /// 2).</summary>
+    [Fact]
+    public void ABasesCellEditWhoseNoteIsReplacedWhileItWaitsWritesNothing() => RunSta(() =>
+    {
+        using var peers = new Peers("bases-replaced", ("Notes.base", NotesBase));
+        (BaseDocumentViewModel document, BasesRow row, BasesColumn column) = StatusCell(peers);
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = peers.H.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        const string Replacement = "---\nstatus: someone else's\n---\n\nA different note.\n";
+        try
+        {
+            document.ApplyPropertyEdit!(row, column, new PropertyValue.Text("done"));
+            peers.H.Workspace.CloseTabCommand.Execute(peers.A);
+            peers.H.Workspace.CloseTabCommand.Execute(peers.B);
+            peers.H.Settle();
+            Assert.DoesNotContain(peers.H.Workspace.Groups.SelectMany(group => group.Tabs), tab => tab.Path == "a.md");
+            File.WriteAllText(Path.Combine(peers.H.Root, "a.md"), Replacement);
+            peers.H.Events.Clear();
+
+            ahead.SetResult();
+            peers.H.PumpUntil(
+                () => peers.H.Workspace.SavesIdle && !peers.H.Workspace.PropertyWriteInFlightFor("a.md"),
+                "the tabless cell write's end");
+            Assert.True(held.Result);
+            Assert.Equal(Replacement, peers.H.Read("a.md"));
+            _ = Assert.Single(peers.H.Events, e => e is A11yEvent.PropertyEditConflict);
+            Assert.DoesNotContain(peers.H.Events, e => e is A11yEvent.BasesCellEditFailed);
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
         }
     });
 
