@@ -111,6 +111,15 @@ public sealed class BasesErrorDetailCensus
     [InlineData("List<Exception> failures = [thrown]; detail = string.Join(\", \", failures.Select(failure => (object)failure));", "(object)failure")]
     [InlineData("List<Exception> failures = [thrown]; detail = string.Join(\", \", failures.Select(Convert.ToString));", "failures.Select")]
     [InlineData("List<Exception> failures = [thrown]; detail = string.Join(\", \", failures.Select<object, string>(failure => failure.ToString() ?? \"\"));", "failures.Select<object, string>")]
+    [InlineData("List<Exception> failures = [thrown]; failures.ForEach(Report);", "failures.ForEach")]
+    [InlineData("List<Exception> failures = [thrown]; detail = failures.Count<object>(item => item.ToString() == \"\").ToString();", "failures.Count<object>")]
+    [InlineData("List<Exception> failures = [thrown]; detail = failures.Any<object>(item => item.ToString() == \"\") ? \"x\" : \"\";", "failures.Any<object>")]
+    [InlineData("detail = thrown.Describe();", "thrown.Describe")]
+    [InlineData("thrown.Shout();", "thrown.Shout")]
+    [InlineData("List<Exception> failures = [thrown]; detail = failures.ToString() ?? \"\";", "failures.ToString")]
+    [InlineData("List<Exception> failures = [thrown]; failures.ForEach(failure => _announce(new A11yEvent.BasesCellEditFailed(BasePhrase.ErrorDetail(failure))));", "")]
+    [InlineData("List<Exception> failures = [thrown]; detail = failures.Any(failure => failure is VaultException) ? \"x\" : \"\";", "")]
+    [InlineData("detail = thrown.HResult.ToString();", "")]
     [InlineData("List<Exception> failures = [thrown]; detail = string.Join(\", \", failures.Select(failure => BasePhrase.ErrorDetail(failure)));", "")]
     [InlineData("List<Exception> failures = [thrown]; detail = string.Join(\", \", failures.Select(BasePhrase.ErrorDetail));", "")]
     [InlineData("List<Exception> failures = [thrown]; detail = BasePhrase.ErrorDetail(failures.First());", "")]
@@ -148,12 +157,21 @@ public sealed class BasesErrorDetailCensus
 
                     private static string Render(object value) => value.ToString() ?? "";
 
+                    private void Report(object value) => _announce(new A11yEvent.BasesViewExportFailed(value.ToString() ?? ""));
+
                     private string M(Exception thrown, Task work)
                     {
                         string detail = "";
                         {{body}}
                         return detail;
                     }
+                }
+
+                internal static class PlantedText
+                {
+                    internal static string Describe(this object value) => value.ToString() ?? "";
+
+                    internal static void Shout(this object value) => Console.WriteLine(value);
                 }
             }
             """);
@@ -359,21 +377,58 @@ public sealed class BasesErrorDetailCensus
     /// census reads. <c>Cast&lt;object&gt;()</c>, <c>OfType&lt;object&gt;()</c>
     /// and a method group erase the type unread, so they are named (codex
     /// round 7).</summary>
+    /// <remarks>Codex round 9: the receiver and callback checks stand on
+    /// their own, never behind the return type: <c>failures.ForEach(Report)</c>
+    /// returns void and <c>Count&lt;object&gt;(…)</c> an int, yet each hands
+    /// the elements to code the census does not read. On an exception, only
+    /// the exception's own members pass (an extension on <c>object</c> widens
+    /// the receiver), or a censused method that still binds an exception.</remarks>
     private static bool AllowedMember(
-        SemanticModel model, SimpleNameSyntax name, INamedTypeSymbol exception, bool onACollection, IReadOnlySet<SyntaxTree> censused) =>
-        model.GetSymbolInfo(name).Symbol switch
+        SemanticModel model, SimpleNameSyntax name, INamedTypeSymbol exception, bool onACollection, IReadOnlySet<SyntaxTree> censused)
+    {
+        ISymbol? symbol = model.GetSymbolInfo(name).Symbol;
+        if (!onACollection)
         {
-            IMethodSymbol { Name: "GetType" } when !onACollection => true,
-            IMethodSymbol method => HoldsNoText(method.ReturnType, exception)
-                || (onACollection && KeepsItsElements(method, exception)
-                    && name.Parent?.Parent is InvocationExpressionSyntax { ArgumentList.Arguments: { Count: > 0 } arguments }
-                    && arguments.All(argument => argument.Expression is AnonymousFunctionExpressionSyntax
-                        || (model.GetSymbolInfo(argument.Expression).Symbol is IMethodSymbol group
-                            && group.Parameters.Any(parameter => CarriesExceptions(parameter.Type, exception))
-                            && IsConsumer(group, exception, censused)))),
+            return symbol switch
+            {
+                IMethodSymbol method when KeepsItsElements(method, exception) && IsConsumer(method, exception, censused)
+                    && CallbacksAreRead(model, name, exception, censused) => true,
+                IMethodSymbol { Name: "GetType", MethodKind: MethodKind.Ordinary } => true,
+                IMethodSymbol { MethodKind: MethodKind.Ordinary } method => DerivesFrom(method.ContainingType, exception)
+                    && HoldsNoText(method.ReturnType, exception),
+                IPropertySymbol property => DerivesFrom(property.ContainingType, exception) && HoldsNoText(property.Type, exception),
+                _ => false,
+            };
+        }
+        return symbol switch
+        {
             IPropertySymbol property => HoldsNoText(property.Type, exception),
+            IMethodSymbol method => KeepsItsElements(method, exception)
+                && (IsConsumer(method, exception, censused) || IsCollectionLibrary(method))
+                && CallbacksAreRead(model, name, exception, censused),
             _ => false,
         };
+    }
+
+    /// <summary>LINQ and the collection types never make an element text
+    /// themselves; whatever reaches text does it in a callback.</summary>
+    private static bool IsCollectionLibrary(IMethodSymbol method) =>
+        (method.ReducedFrom ?? method).ContainingNamespace?.ToDisplayString() is "System.Linq" or "System.Collections.Generic"
+            or "System.Collections.Immutable" or "System.Collections.ObjectModel";
+
+    /// <summary>Every delegate argument of the call is a lambda (whose body
+    /// the census reads) or a method group naming a trusted consumer that
+    /// takes exceptions. A method group or delegate variable the census
+    /// cannot read is not.</summary>
+    private static bool CallbacksAreRead(
+        SemanticModel model, SimpleNameSyntax name, INamedTypeSymbol exception, IReadOnlySet<SyntaxTree> censused) =>
+        name.Parent?.Parent is InvocationExpressionSyntax invocation
+        && invocation.ArgumentList.Arguments.All(argument =>
+            model.GetTypeInfo(argument.Expression).ConvertedType is not { TypeKind: TypeKind.Delegate }
+            || argument.Expression is AnonymousFunctionExpressionSyntax
+            || (model.GetSymbolInfo(argument.Expression).Symbol is IMethodSymbol group
+                && group.Parameters.Any(parameter => CarriesExceptions(parameter.Type, exception))
+                && IsConsumer(group, exception, censused)));
 
     /// <summary>Codex round 8: a call whose receiver is converted before
     /// the call (<c>failures.Select&lt;object, string&gt;(…)</c> widens
