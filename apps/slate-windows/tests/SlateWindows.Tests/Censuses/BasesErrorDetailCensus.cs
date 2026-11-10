@@ -402,6 +402,54 @@ public sealed class BasesErrorDetailCensus
         Assert.DoesNotContain(failures, failure => failure.Contains("safe.Say(thrown)", StringComparison.Ordinal));
     }
 
+    /// <summary>Codex round 17: a partial method declared in Bases is trusted
+    /// only when its implementation, the body that runs, is in Bases too.</summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void APartialConsumerIsTrustedOnlyByItsImplementation(bool implementedInBases)
+    {
+        const string implementation = """
+                internal static partial class PartialPhrase
+                {
+                    internal static partial string Detail(Exception failure) => IMPLEMENTATION;
+                }
+            """;
+        string inBases = implementation.Replace("IMPLEMENTATION", "BasePhrase.ErrorDetail(failure)", StringComparison.Ordinal);
+        string elsewhere = implementation.Replace("IMPLEMENTATION", "failure.Message", StringComparison.Ordinal);
+        string[] failures = PlantedViolations(
+            $$"""
+            namespace SlateWindows.Bases.Planted
+            {
+                internal static partial class PartialPhrase
+                {
+                    internal static partial string Detail(Exception failure);
+                }
+
+            {{(implementedInBases ? inBases : "")}}
+
+                internal static class Planted
+                {
+                    internal static string Speak(Exception thrown) => PartialPhrase.Detail(thrown);
+                }
+            }
+            """,
+            outsideBases: implementedInBases ? null : $$"""
+            namespace SlateWindows.Bases.Planted
+            {
+            {{elsewhere}}
+            }
+            """);
+        if (implementedInBases)
+        {
+            Assert.Empty(failures);
+        }
+        else
+        {
+            Assert.Contains(failures, failure => failure.Contains("PartialPhrase.Detail(thrown)", StringComparison.Ordinal));
+        }
+    }
+
     /// <summary>A censused consumer's own body is held to the rule.</summary>
     [Fact]
     public void ACensusedConsumersBodyIsCheckedToo()
@@ -754,11 +802,33 @@ public sealed class BasesErrorDetailCensus
             // unseen (Render<T>(T failure) => failure.ToString()). Only a
             // non-generic censused method, whose body sees the types its
             // callers pass, is trusted.
-            var declared => declared.DeclaringSyntaxReferences.Any(reference => censused.Contains(reference.SyntaxTree))
+            var declared => HasACensusedBody(declared, censused)
                 && declared.OriginalDefinition.TypeParameters.IsEmpty
                 && declared.ContainingType is not { IsGenericType: true }
                 && DispatchesOnlyToThisBody(declared),
         };
+
+    /// <summary>Codex round 17: the body a call runs is what is trusted. For
+    /// a partial method that is its implementation part, which may sit in
+    /// another file; every declaration of it must be in the censused sources
+    /// and carry a body (a bodiless declaration is never trusted).</summary>
+    private static bool HasACensusedBody(IMethodSymbol method, IReadOnlySet<SyntaxTree> censused)
+    {
+        IMethodSymbol implementation = method.PartialImplementationPart ?? method;
+        if (implementation.IsPartialDefinition)
+        {
+            return false;
+        }
+        SyntaxReference[] declarations = [.. implementation.DeclaringSyntaxReferences];
+        return declarations.Length > 0
+            && declarations.All(reference => censused.Contains(reference.SyntaxTree))
+            && declarations.All(reference => reference.GetSyntax() switch
+            {
+                BaseMethodDeclarationSyntax body => body.Body is not null || body.ExpressionBody is not null,
+                LocalFunctionStatementSyntax local => local.Body is not null || local.ExpressionBody is not null,
+                _ => false,
+            });
+    }
 
     /// <summary>Codex round 16: trusting a declaration means trusting the
     /// body the census reads, so the call must reach no other: not an
