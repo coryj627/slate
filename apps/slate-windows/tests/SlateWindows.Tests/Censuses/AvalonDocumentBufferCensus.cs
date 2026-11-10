@@ -105,7 +105,7 @@ public sealed class AvalonDocumentBufferCensus
                         _ => null,
                     },
                     afterTheCheckForTests: when == "replaced after the check"
-                        ? () => SetTheClipboard(TextData("another process's text"))
+                        ? _ => SetTheClipboard(TextData("another process's text"))
                         : null,
                     beforeTheEditorReadsForTests: when == "replaced with files before the editor reads it"
                         ? ReplaceTheClipboardWithFiles
@@ -119,6 +119,46 @@ public sealed class AvalonDocumentBufferCensus
 
             Assert.Equal(before + 1, session.AppliedDeltaCount);
             Assert.Equal("prefix pasted", session.Document.Text);
+        });
+    }
+
+    /// <summary>#1839: an editor that drops a paste of the census's text after
+    /// accepting it fails the census at once, with no retry, even though
+    /// another process replaces the clipboard meanwhile: the editor had its own
+    /// copy of the text, so the clipboard cannot explain the missing
+    /// edit.</summary>
+    [Fact]
+    public void APasteTheEditorDropsAfterAcceptingItFailsAtOnce()
+    {
+        RunOnSta(() =>
+        {
+            using var session = new AvalonDocumentBufferSession("prefix ", _ => { });
+            var editor = new TextEditor { Document = session.Document };
+            using var surface = new EditorSurface(editor);
+            long before = session.AppliedDeltaCount;
+            IDataObject? previousClipboard = TryGetClipboardData();
+            Exception? failure;
+            try
+            {
+                failure = Record.Exception(() => PasteThroughTheClipboard(
+                    editor,
+                    session,
+                    "pasted",
+                    afterTheCheckForTests: args =>
+                    {
+                        // Stands in for an editor defect: the accepted paste is dropped.
+                        args.CancelCommand();
+                        SetTheClipboard(TextData("another process's text"));
+                    }));
+            }
+            finally
+            {
+                RestoreClipboard(previousClipboard);
+            }
+
+            Assert.NotNull(failure);
+            Assert.Contains("it had accepted", failure.Message, StringComparison.Ordinal);
+            Assert.Equal(before, session.AppliedDeltaCount);
         });
     }
 
@@ -863,7 +903,7 @@ public sealed class AvalonDocumentBufferCensus
     /// once, after the first set, <paramref name="beforePasteForTests"/> once,
     /// after the first check that the clipboard holds the text,
     /// <paramref name="afterTheCheckForTests"/> once, after the editor's paste
-    /// has been checked, <paramref name="beforeTheEditorReadsForTests"/>
+    /// has been checked and accepted, with that paste, <paramref name="beforeTheEditorReadsForTests"/>
     /// once, between the editor's own check and its read, and
     /// <paramref name="afterThePostForTests"/> once, after the first set has
     /// posted the text and before it is flushed, each standing in for that
@@ -874,15 +914,17 @@ public sealed class AvalonDocumentBufferCensus
         string text,
         Action? afterSetForTests = null,
         Action? beforePasteForTests = null,
-        Action? afterTheCheckForTests = null,
+        Action<DataObjectPastingEventArgs>? afterTheCheckForTests = null,
         Action? beforeTheEditorReadsForTests = null,
         Action? afterThePostForTests = null)
     {
         const int Attempts = 5;
         long before = session.AppliedDeltaCount;
         // The paste the editor is about to make: one carrying another
-        // process's text is cancelled before it edits, and retried.
+        // process's text is cancelled before it edits, and retried. One
+        // carrying the census's text is accepted, and must then apply.
         bool foreign = false;
+        bool accepted = false;
         void OnlyOurs(object sender, DataObjectPastingEventArgs args)
         {
             if (args.DataObject.GetData(DataFormats.UnicodeText) as string != text)
@@ -892,12 +934,14 @@ public sealed class AvalonDocumentBufferCensus
                 return;
             }
 
+            accepted = true;
+
             // The clipboard's data object is live and the editor reads it again
             // after this event, so it pastes a copy of the text just checked.
             var checkedText = new DataObject();
             checkedText.SetData(DataFormats.UnicodeText, text);
             args.DataObject = checkedText;
-            afterTheCheckForTests?.Invoke();
+            afterTheCheckForTests?.Invoke(args);
             afterTheCheckForTests = null;
         }
         DataObject.AddPastingHandler(editor.TextArea, OnlyOurs);
@@ -915,6 +959,7 @@ public sealed class AvalonDocumentBufferCensus
             for (int attempt = 1; ; attempt++)
             {
                 foreign = false;
+                accepted = false;
                 SetTheClipboard(TextData(text), afterThePostForTests);
                 afterThePostForTests = null;
                 afterSetForTests?.Invoke();
@@ -945,6 +990,9 @@ public sealed class AvalonDocumentBufferCensus
                     return;
                 }
 
+                // The editor was handed its own copy of the census's text, so
+                // nothing another process did to the clipboard explains this.
+                Assert.False(accepted, "the editor applied nothing from a paste of the census's text it had accepted");
                 Assert.False(held && !foreign && ClipboardHolds(text), "the paste applied nothing, though the clipboard held its text throughout");
                 Assert.True(attempt < Attempts, $"another process kept the clipboard through {Attempts} pastes");
                 Thread.Sleep(TimeSpan.FromMilliseconds(100 * attempt));
@@ -1154,7 +1202,7 @@ public sealed class AvalonDocumentBufferCensus
     /// clipboard, which by the time it is restored reads the census's own text,
     /// and setting it back makes the clipboard serve itself, which can keep it
     /// locked through every retry. Each format that can be read is copied; one
-    /// that cannot be read is left out.</summary>
+    /// that still cannot be read after a few tries is left out.</summary>
     private static IDataObject? TryGetClipboardData()
     {
         IDataObject live;
@@ -1185,18 +1233,28 @@ public sealed class AvalonDocumentBufferCensus
 
         foreach (string format in formats)
         {
-            try
+            for (int attempt = 1; attempt <= 3; attempt++)
             {
-                object? data = live.GetData(format, autoConvert: false);
-                if (data is not null)
+                try
                 {
-                    copy.SetData(format, data, autoConvert: false);
+                    object? data = live.GetData(format, autoConvert: false);
+                    if (data is not null)
+                    {
+                        copy.SetData(format, data, autoConvert: false);
+                    }
+
+                    break;
                 }
-            }
-            catch (System.Runtime.InteropServices.ExternalException)
-            {
-                // A format another process renders on demand and cannot render
-                // now is left out of the copy.
+                catch (System.Runtime.InteropServices.ExternalException) when (attempt < 3)
+                {
+                    RunDispatcherFor(TimeSpan.FromMilliseconds(50 * attempt));
+                }
+                catch (System.Runtime.InteropServices.ExternalException)
+                {
+                    // A format another process renders on demand and still
+                    // cannot render is left out: failing the census on the
+                    // reader's clipboard would be the desktop flake #1839 removes.
+                }
             }
         }
 
