@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Windows.Threading;
+using SlateWindows.Bases;
 using SlateWindows.Panels;
 using SlateWindows.Templates;
 using uniffi.slate_uniffi;
@@ -25,6 +26,8 @@ public sealed class SaveChainAdmissionTests
     private const string Note = "---\nstatus: draft\n---\n\nBody.\n";
     private const string NoteEdited = "---\nstatus: draft\n---\n\nBody.\nAn edit on its way to disk.\n";
     private static readonly TimeSpan Hold = TimeSpan.FromSeconds(10);
+    private const string NotesBase =
+        "views:\n  - type: table\n    name: Main\n    order:\n      - file.name\n      - note.status\n";
 
     // The app's mode (#1129): background interaction work, published on
     // this fact's pumped dispatcher, so a parked worker never blocks the
@@ -428,6 +431,176 @@ public sealed class SaveChainAdmissionTests
             ghost.SaveWriteHookForTests = null;
         }
     });
+
+    // ---- Bases cell writes (#1657) -------------------------------------------
+
+    /// <summary>B's save parks; the reader takes the edit back (both tabs
+    /// clean: the window); a Bases cell edit of a.md's status is admitted
+    /// behind the save; the edit is retyped. No write until release; then
+    /// NoteSaved, then one cell write on the saved hash, over the saved
+    /// bytes.</summary>
+    [Fact]
+    public void ABasesCellEditWaitsForTheNotesAdmittedSaveAndWritesOnce() => RunSta(() =>
+    {
+        using var peers = new Peers("bases-behind-save", ("Notes.base", NotesBase));
+        (BaseDocumentViewModel document, BasesRow row, BasesColumn column) = StatusCell(peers);
+        Task<bool> save = peers.ParkBsSave(NoteEdited);
+        try
+        {
+            peers.TakeBack(Note);
+            document.ApplyPropertyEdit!(row, column, new PropertyValue.Text("done"));
+            peers.Retype(NoteEdited);
+            peers.H.Settle();
+            Assert.Equal(0, peers.Writes);
+            Assert.DoesNotContain("status: done", peers.H.Read("a.md"), StringComparison.Ordinal);
+
+            peers.ReleaseSave();
+            peers.H.PumpUntil(
+                () => save.IsCompleted && peers.Writes == 1 && peers.H.Workspace.SavesIdle,
+                "the save and then the cell write");
+            Assert.True(save.Result);
+            _ = Assert.Single(peers.H.Events, e => e is A11yEvent.NoteSaved);
+            Assert.DoesNotContain(peers.H.Events, e => e is A11yEvent.BasesCellEditFailed or A11yEvent.PropertyEditConflict);
+            Assert.Equal(1, peers.Writes);
+            string saved = peers.H.Read("a.md");
+            Assert.Contains("An edit on its way to disk.", saved, StringComparison.Ordinal);
+            Assert.Contains("status: done", saved, StringComparison.Ordinal);
+            Assert.False(peers.H.Workspace.PropertyWriteInFlightFor("a.md"));
+        }
+        finally
+        {
+            peers.ReleaseSave();
+        }
+    });
+
+    /// <summary>The cell edit waits behind the save; the reader's take-back
+    /// is not retyped, so the save leaves the note dirty: when the cell
+    /// write's turn comes it refuses with the dirty-note sentence and writes
+    /// nothing, and its lease is released.</summary>
+    [Fact]
+    public void ABasesCellEditThatFindsItsNoteDirtyWhenItStartsRefusesAndWritesNothing() => RunSta(() =>
+    {
+        using var peers = new Peers("bases-dirty-at-start", ("Notes.base", NotesBase));
+        (BaseDocumentViewModel document, BasesRow row, BasesColumn column) = StatusCell(peers);
+        Task<bool> save = peers.ParkBsSave(NoteEdited);
+        try
+        {
+            peers.TakeBack(Note);
+            document.ApplyPropertyEdit!(row, column, new PropertyValue.Text("done"));
+            peers.H.Settle();
+            Assert.Equal(0, peers.Writes);
+
+            peers.ReleaseSave();
+            peers.H.PumpUntil(
+                () => save.IsCompleted && peers.H.Workspace.SavesIdle && !peers.H.Workspace.PropertyWriteInFlightFor("a.md"),
+                "the save and then the cell write's refusal");
+            Assert.True(save.Result);
+            Assert.Equal(0, peers.Writes);
+            Assert.DoesNotContain("status: done", peers.H.Read("a.md"), StringComparison.Ordinal);
+            Assert.Contains(peers.H.Events, e => e is A11yEvent.HostComposed composed
+                && composed.Text.StartsWith("Save the note before editing properties.", StringComparison.Ordinal));
+        }
+        finally
+        {
+            peers.ReleaseSave();
+        }
+    });
+
+    /// <summary>The cell edit waits behind another admitted operation on the
+    /// note (a History restore, say) while the reader closes both tabs on
+    /// it, and the note's file is left as it was, replaced on disk, or
+    /// replaced byte for byte (a note renamed away and copied back), or a
+    /// replacement is reopened before the write's turn, in a tab of its own
+    /// or in the original tab re-pointed away and back. None of those shows
+    /// the document the edit was made on, so the write refuses and the file
+    /// keeps its bytes (codex rounds 2 to 5).</summary>
+    [Theory]
+    [InlineData("closed")]
+    [InlineData("replaced")]
+    [InlineData("replaced byte for byte")]
+    [InlineData("reopened in a new tab")]
+    [InlineData("reopened in the original tab")]
+    public void ABasesCellEditWhoseNoteLosesItsTabsWhileItWaitsWritesNothing(string what) => RunSta(() =>
+    {
+        using var peers = new Peers("bases-tabs-lost", ("Notes.base", NotesBase));
+        (BaseDocumentViewModel document, BasesRow row, BasesColumn column) = StatusCell(peers);
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> held = peers.H.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+        string onDisk = what switch
+        {
+            "closed" or "replaced byte for byte" => Note,
+            _ => "---\nstatus: someone else's\n---\n\nA different note.\n",
+        };
+        bool keepA = what == "reopened in the original tab";
+        try
+        {
+            document.ApplyPropertyEdit!(row, column, new PropertyValue.Text("done"));
+            if (keepA)
+            {
+                // A goes to another note in place; B closes.
+                peers.ActivateA();
+                peers.H.Workspace.OpenPath("b.md", WorkspaceOpenTarget.CurrentTab);
+                peers.H.Settle();
+                Assert.Equal("b.md", peers.A.Path);
+            }
+            else
+            {
+                peers.H.Workspace.CloseTabCommand.Execute(peers.A);
+            }
+            peers.H.Workspace.CloseTabCommand.Execute(peers.B);
+            peers.H.Settle();
+            Assert.DoesNotContain(peers.H.Workspace.Groups.SelectMany(group => group.Tabs), tab => tab.Path == "a.md");
+            if (what != "closed")
+            {
+                File.WriteAllText(Path.Combine(peers.H.Root, "a.md"), onDisk);
+            }
+            if (what == "reopened in a new tab")
+            {
+                WorkspaceTabViewModel shown = peers.H.Open("a.md");
+                Assert.Equal(onDisk, shown.Text);
+                Assert.False(shown.IsDirty);
+            }
+            else if (keepA)
+            {
+                peers.ActivateA();
+                peers.H.Workspace.OpenPath("a.md", WorkspaceOpenTarget.CurrentTab);
+                peers.H.Settle();
+                Assert.Equal("a.md", peers.A.Path);
+                Assert.Equal(onDisk, peers.A.Text);
+                Assert.False(peers.A.IsDirty);
+            }
+            peers.H.Events.Clear();
+
+            ahead.SetResult();
+            peers.H.PumpUntil(
+                () => peers.H.Workspace.SavesIdle && !peers.H.Workspace.PropertyWriteInFlightFor("a.md"),
+                "the cell write's end");
+            Assert.True(held.Result);
+            Assert.Equal(onDisk, peers.H.Read("a.md"));
+            Assert.Equal(0, peers.Writes);
+            A11yEvent refusal = Assert.Single(
+                peers.H.Events, e => e is A11yEvent.PropertyEditConflict or A11yEvent.BasesCellEditFailed);
+            Assert.Equal(
+                what is "closed" or "replaced" or "replaced byte for byte",
+                refusal is A11yEvent.BasesCellEditFailed);
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+        }
+    });
+
+    private static (BaseDocumentViewModel Document, BasesRow Row, BasesColumn Column) StatusCell(Peers peers)
+    {
+        BaseDocumentViewModel document = peers.H.Workspace.BaseDocumentFor("Notes.base");
+        peers.H.PumpUntil(
+            () => document.Result?.Rows.Any(row => row.FilePath == "a.md") == true,
+            "the base's rows");
+        BasesRow row = document.Result!.Rows.Single(candidate => candidate.FilePath == "a.md");
+        BasesColumn column = document.Result.Columns.Single(candidate => candidate.Id == "note.status");
+        peers.H.Events.Clear();
+        return (document, row, column);
+    }
 
     // ---- Property writes (#1325) --------------------------------------------
 
@@ -1042,9 +1215,9 @@ public sealed class SaveChainAdmissionTests
         private readonly WorkspaceGroupViewModel _groupB;
         private int _writes;
 
-        public Peers(string label)
+        public Peers(string label, params (string Path, string Text)[] extra)
         {
-            H = new Vault(label, ("a.md", Note), ("b.md", "# B\n"));
+            H = new Vault(label, [("a.md", Note), ("b.md", "# B\n"), .. extra]);
             A = H.Open("a.md");
             _groupA = H.Workspace.ActiveGroup;
             H.Workspace.OpenPath("a.md", WorkspaceOpenTarget.SplitRight);

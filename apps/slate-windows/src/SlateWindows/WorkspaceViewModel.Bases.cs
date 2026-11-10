@@ -1872,30 +1872,21 @@ internal sealed partial class WorkspaceViewModel
                 AnnounceWriteInFlightRefusal();
                 return;
             }
-            // The W4-4 seam: CAS + rebaseline live in the tab; the
-            // note-scoped lease brackets the whole write (same
-            // exclusion as the panel rows — one write per path at a
-            // time, any origin); the completion routes into the one
-            // funnel.
-            tab.WriteProperty(
-                tab.SavedContentHash,
-                expectedHash => value is null
-                    ? _session.DeleteProperty(row.FilePath, key, expectedHash)
-                    : _session.SetProperty(row.FilePath, key, value, expectedHash),
-                WithLeaseRelease(row.FilePath, (report, failure, _postFailureDiskHash) =>
-                {
-                    if (failure is not null)
-                    {
-                        _announce(new A11yEvent.BasesCellEditFailed(failure.Message));
-                        return;
-                    }
-                    if (report is not null)
-                    {
-                        _ = tab.RebaselineAfterPropertyWrite(
-                            report.NewContentHash, _announce);
-                    }
-                    CompleteBasesWrite(document, row, column, value);
-                }));
+            // #1657: the cell write joins the note's save chain, as the
+            // properties header's writes do (WB-2, #1325): it never writes
+            // beside a save admitted before it, and a save requested after
+            // it waits for its publication. The note-scoped lease brackets
+            // the whole operation (one write per path at a time, any
+            // origin).
+            string path = row.FilePath;
+            (WorkspaceTabViewModel Tab, int Identity)[] requestTabs = [.. Groups
+                .SelectMany(group => group.Tabs)
+                .Where(candidate => string.Equals(candidate.Path, path, StringComparison.Ordinal))
+                .Select(candidate => (candidate, candidate.ItemIdentity))];
+            AdmitPropertyWrite(
+                path,
+                () => BasesCellWriteAdmitted(document, row, column, key, value, requestTabs),
+                () => ReleasePropertyWriteLease(path));
             return;
         }
         // Tabless: direct write, no expected hash (mac parity), but
@@ -1917,6 +1908,99 @@ internal sealed partial class WorkspaceViewModel
         // session touch out before disposal (codex round 5).
         TrackRetiredBasesWork(
             Task.Run(() => BasesTablessWriteBody(document, row, column, key, value)));
+    }
+
+    /// <summary>#1657: the admitted cell write on an open note, run once
+    /// every save admitted before it has published. It re-checks the dirty
+    /// and stale gates then, and takes its CAS token from the tab's saved
+    /// hash, which the save it waited for has published (the W4-4 seam:
+    /// CAS and rebaseline live in the tab; the completion routes into the
+    /// one funnel). It writes only through a tab that was on the note when
+    /// the edit was asked and still shows the document it showed then
+    /// (<paramref name="requestTabs"/>: the tab and its
+    /// <see cref="WorkspaceTabViewModel.ItemIdentity"/>). Without one, the
+    /// note the edit was made on can't be told from another at its path (a
+    /// note renamed away and replaced there, even byte for byte; a
+    /// replacement reopened in a tab: codex rounds 2 to 5), so the write
+    /// refuses and writes nothing. The operation ends with the write's
+    /// completion, or with the refusal.</summary>
+    private Task BasesCellWriteAdmitted(
+        BaseDocumentViewModel document,
+        BasesRow row,
+        BasesColumn column,
+        string key,
+        PropertyValue? value,
+        IReadOnlyCollection<(WorkspaceTabViewModel Tab, int Identity)> requestTabs)
+    {
+        string path = row.FilePath;
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void EndUnwritten(A11yEvent? spoken)
+        {
+            ReleasePropertyWriteLease(path);
+            if (spoken is not null)
+            {
+                _announce(spoken);
+            }
+            done.TrySetResult();
+        }
+        try
+        {
+            if (_workspaceDisposed || _saves.IsClosed)
+            {
+                EndUnwritten(null);
+                return done.Task;
+            }
+            string fileName = System.IO.Path.GetFileName(path);
+            if (FindTabForPath(path) is not { IsMarkdown: true } tab)
+            {
+                EndUnwritten(new A11yEvent.BasesCellEditFailed(
+                    $"{fileName} closed before the edit was written. Edit the cell again."));
+                return done.Task;
+            }
+            if (!requestTabs.Contains((tab, tab.ItemIdentity)))
+            {
+                EndUnwritten(new A11yEvent.PropertyEditConflict(fileName));
+                return done.Task;
+            }
+            if (tab.IsDirty)
+            {
+                ReleasePropertyWriteLease(path);
+                AnnounceDirtyTabPropertyRefusal(tab);
+                done.TrySetResult();
+                return done.Task;
+            }
+            if (tab.IsExternallyStale)
+            {
+                EndUnwritten(new A11yEvent.PropertyEditConflict(fileName));
+                return done.Task;
+            }
+            _saves.TrackWorker(tab.WriteProperty(
+                tab.SavedContentHash,
+                expectedHash => value is null
+                    ? _session.DeleteProperty(path, key, expectedHash)
+                    : _session.SetProperty(path, key, value, expectedHash),
+                WithLeaseRelease(path, EndingWith(
+                    (report, failure, _postFailureDiskHash) =>
+                    {
+                        if (failure is not null)
+                        {
+                            _announce(new A11yEvent.BasesCellEditFailed(failure.Message));
+                            return;
+                        }
+                        if (report is not null)
+                        {
+                            _ = tab.RebaselineAfterPropertyWrite(report.NewContentHash, _announce);
+                        }
+                        CompleteBasesWrite(document, row, column, value);
+                    },
+                    done))));
+        }
+        catch (Exception exception)
+        {
+            ReleasePropertyWriteLease(path);
+            _ = done.TrySetException(exception);
+        }
+        return done.Task;
     }
 
     private void BasesTablessWriteBody(
