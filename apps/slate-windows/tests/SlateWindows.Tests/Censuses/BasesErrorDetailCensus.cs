@@ -120,6 +120,9 @@ public sealed class BasesErrorDetailCensus
     [InlineData("List<Exception> failures = [thrown]; failures.ForEach(failure => _announce(new A11yEvent.BasesCellEditFailed(BasePhrase.ErrorDetail(failure))));", "")]
     [InlineData("List<Exception> failures = [thrown]; detail = failures.Any(failure => failure is VaultException) ? \"x\" : \"\";", "")]
     [InlineData("detail = thrown.HResult.ToString();", "")]
+    [InlineData("_announce(new A11yEvent.BasesViewExportFailed(Format(thrown)));", "Format(thrown)")]
+    [InlineData("detail = thrown.Spell();", "thrown.Spell")]
+    [InlineData("List<Exception> failures = [thrown]; detail = string.Join(\", \", failures.Select(Format));", "failures.Select")]
     [InlineData("List<Exception> failures = [thrown]; detail = string.Join(\", \", failures.Select(failure => BasePhrase.ErrorDetail(failure)));", "")]
     [InlineData("List<Exception> failures = [thrown]; detail = string.Join(\", \", failures.Select(BasePhrase.ErrorDetail));", "")]
     [InlineData("List<Exception> failures = [thrown]; detail = BasePhrase.ErrorDetail(failures.First());", "")]
@@ -159,6 +162,7 @@ public sealed class BasesErrorDetailCensus
 
                     private void Report(object value) => _announce(new A11yEvent.BasesViewExportFailed(value.ToString() ?? ""));
 
+                    private static string Format<T>(T failure) => failure?.ToString() ?? "";
                     private string M(Exception thrown, Task work)
                     {
                         string detail = "";
@@ -172,6 +176,8 @@ public sealed class BasesErrorDetailCensus
                     internal static string Describe(this object value) => value.ToString() ?? "";
 
                     internal static void Shout(this object value) => Console.WriteLine(value);
+
+                    internal static string Spell<T>(this T value) => value?.ToString() ?? "";
                 }
             }
             """);
@@ -210,6 +216,31 @@ public sealed class BasesErrorDetailCensus
             """);
         Assert.Contains(failures, failure => failure.Contains("line 14", StringComparison.Ordinal));
         Assert.DoesNotContain(failures, failure => failure.Contains("line 8", StringComparison.Ordinal));
+    }
+
+    /// <summary>Codex round 10: a generic helper is never a trusted consumer,
+    /// and a body over a type parameter constrained to an exception is held
+    /// to the rules like one over the exception itself.</summary>
+    [Fact]
+    public void AGenericHelperIsNeverTrustedAndAConstrainedBodyIsChecked()
+    {
+        string[] failures = PlantedViolations("""
+            namespace SlateWindows.Bases.Planted
+            {
+                using uniffi.slate_uniffi;
+
+                internal static class Planted
+                {
+                    internal static string Unconstrained(VaultException thrown) => Format(thrown);
+
+                    private static string Format<T>(T failure) => failure?.ToString() ?? "";
+
+                    internal static string Constrained<T>(T failure) where T : Exception => failure.ToString();
+                }
+            }
+            """);
+        Assert.Contains(failures, failure => failure.Contains("Format(thrown)", StringComparison.Ordinal));
+        Assert.Contains(failures, failure => failure.Contains("failure.ToString", StringComparison.Ordinal));
     }
 
     /// <summary>A censused consumer's own body is held to the rule.</summary>
@@ -466,11 +497,22 @@ public sealed class BasesErrorDetailCensus
             { Name: "VaultErrorDetail", ContainingType.Name: "SlateUniffiMethods" } => true,
             { Name: "SetException" or "TrySetException", ContainingType.Name: "TaskCompletionSource" } => true,
             { MethodKind: MethodKind.Constructor } => DerivesFrom(method.ContainingType, exception),
-            var declared => declared.DeclaringSyntaxReferences.Any(reference => censused.Contains(reference.SyntaxTree)),
+            // Codex round 10: a generic method is checked against its
+            // declared T, not the call's Exception, so its body can stringify
+            // unseen (Render<T>(T failure) => failure.ToString()). Only a
+            // non-generic censused method, whose body sees the types its
+            // callers pass, is trusted.
+            var declared => declared.DeclaringSyntaxReferences.Any(reference => censused.Contains(reference.SyntaxTree))
+                && declared.OriginalDefinition.TypeParameters.IsEmpty
+                && declared.ContainingType is not { IsGenericType: true },
         };
 
     private static bool DerivesFrom(ITypeSymbol type, INamedTypeSymbol exception)
     {
+        if (type is ITypeParameterSymbol parameter)
+        {
+            return parameter.ConstraintTypes.Any(constraint => DerivesFrom(constraint, exception));
+        }
         for (ITypeSymbol? current = type; current is not null; current = current.BaseType)
         {
             if (SymbolEqualityComparer.Default.Equals(current.OriginalDefinition, exception))
