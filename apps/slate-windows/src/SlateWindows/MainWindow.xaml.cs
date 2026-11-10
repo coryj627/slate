@@ -747,6 +747,11 @@ public partial class MainWindow : Window
             _cardEditorAwaitingKeys = cardEditor;
             QueueCardEditorLanding();
         }
+        else if (e.PropertyName == nameof(WorkspaceViewModel.CanvasCardEditorSheet))
+        {
+            // Closed before it had the keys: nothing waits for it.
+            _cardEditorAwaitingKeys = null;
+        }
     }
 
     /// <summary>#1666: the card editor sheet that has not had the keys yet.
@@ -755,6 +760,9 @@ public partial class MainWindow : Window
     /// and lands when the surface above it closes
     /// (<see cref="ModalSource_PropertyChanged"/>).</summary>
     private Canvas.CanvasCardEditorViewModel? _cardEditorAwaitingKeys;
+
+    /// <summary>Whether a card editor still waits to take the keys.</summary>
+    internal bool CardEditorAwaitingKeysForTests => _cardEditorAwaitingKeys is not null;
 
     private void QueueCardEditorLanding() =>
         _ = Dispatcher.InvokeAsync(LandCardEditor, DispatcherPriority.Input);

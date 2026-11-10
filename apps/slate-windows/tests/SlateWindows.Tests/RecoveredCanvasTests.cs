@@ -509,6 +509,31 @@ public sealed class RecoveredCanvasTests : IDisposable
         Assert.Same(field, FocusManager.GetFocusedElement(overlay));
     });
 
+    /// <summary>#1666: a card editor that closes while it still waits
+    /// beneath Settings leaves nothing waiting, and Settings closing lands
+    /// nothing in the closed sheet.</summary>
+    [Fact]
+    public void ACardEditorClosedUnderSettingsLeavesNothingWaiting() => RunSta(() =>
+    {
+        JsonNode source = JsonNode.Parse(_recovered)!;
+        source["edges"] = new JsonArray();
+        using var shell = new ShownShell(("board.canvas", source.ToJsonString()));
+        CanvasDocumentViewModel document = OpenTheBoardInTheShell(shell);
+        shell.Lifecycle.OpenSettings(null);
+        shell.Settle();
+        TextBox field = OpenTheTextCardsSheet(shell, document);
+        Assert.True(shell.Shell.CardEditorAwaitingKeysForTests, "premise: the editor under Settings waits for the keys");
+
+        shell.Workspace.CloseCanvasCardEditor();
+        shell.Settle();
+
+        Assert.False(shell.Shell.CardEditorAwaitingKeysForTests, "a closed editor still waits for the keys");
+        shell.Lifecycle.CloseSettings();
+        shell.Settle();
+        Assert.Null(shell.Shell.OpenModalSurface);
+        Assert.NotSame(field, FocusManager.GetFocusedElement(shell.Body("CanvasCardEditorOverlay")));
+    });
+
     private static CanvasDocumentViewModel OpenTheBoardInTheShell(ShownShell shell)
     {
         shell.Workspace.OpenPath("board.canvas");
