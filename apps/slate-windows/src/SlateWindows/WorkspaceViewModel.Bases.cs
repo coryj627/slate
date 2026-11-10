@@ -1880,9 +1880,12 @@ internal sealed partial class WorkspaceViewModel
             // origin).
             string path = row.FilePath;
             string? requested = tab.SavedContentHash;
+            WorkspaceTabViewModel[] requestTabs = [.. Groups
+                .SelectMany(group => group.Tabs)
+                .Where(candidate => string.Equals(candidate.Path, path, StringComparison.Ordinal))];
             AdmitPropertyWrite(
                 path,
-                () => BasesCellWriteAdmitted(document, row, column, key, value, requested),
+                () => BasesCellWriteAdmitted(document, row, column, key, value, requested, requestTabs),
                 () => ReleasePropertyWriteLease(path));
             return;
         }
@@ -1916,15 +1919,20 @@ internal sealed partial class WorkspaceViewModel
     /// tabless write, on the hash the edit was made against
     /// (<paramref name="requested"/>, codex round 2): a note renamed away
     /// and replaced at its path, or changed on disk, refuses as a conflict
-    /// and keeps its bytes. The operation ends with the write's
-    /// completion, or with the refusal that wrote nothing.</summary>
+    /// and keeps its bytes. Only a tab that was on the note when the edit
+    /// was requested (<paramref name="requestTabs"/>) lends its saved hash:
+    /// one opened since may show a different note at the path (a
+    /// replacement reopened, codex round 3), so the write refuses as a
+    /// conflict there. The operation ends with the write's completion, or
+    /// with the refusal that wrote nothing.</summary>
     private Task BasesCellWriteAdmitted(
         BaseDocumentViewModel document,
         BasesRow row,
         BasesColumn column,
         string key,
         PropertyValue? value,
-        string? requested)
+        string? requested,
+        IReadOnlyCollection<WorkspaceTabViewModel> requestTabs)
     {
         string path = row.FilePath;
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1955,6 +1963,13 @@ internal sealed partial class WorkspaceViewModel
                     CancellationToken.None,
                     TaskContinuationOptions.ExecuteSynchronously,
                     TaskScheduler.Default);
+                return done.Task;
+            }
+            if (!requestTabs.Contains(tab))
+            {
+                ReleasePropertyWriteLease(path);
+                _announce(new A11yEvent.PropertyEditConflict(System.IO.Path.GetFileName(tab.Path)));
+                done.TrySetResult();
                 return done.Task;
             }
             if (tab.IsDirty)

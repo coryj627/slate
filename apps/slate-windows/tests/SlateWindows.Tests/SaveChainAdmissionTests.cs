@@ -560,11 +560,15 @@ public sealed class SaveChainAdmissionTests
     /// (a rename away and a new note at the path, or an outside write): the
     /// tabless write runs on the hash the edit was made against, refuses as
     /// a conflict and leaves the replacement's bytes alone (codex round
-    /// 2).</summary>
-    [Fact]
-    public void ABasesCellEditWhoseNoteIsReplacedWhileItWaitsWritesNothing() => RunSta(() =>
+    /// 2), and so does a replacement reopened in a tab of its own before
+    /// the write's turn: that tab was not on the note the edit was made
+    /// on (codex round 3).</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ABasesCellEditWhoseNoteIsReplacedWhileItWaitsWritesNothing(bool reopened) => RunSta(() =>
     {
-        using var peers = new Peers("bases-replaced", ("Notes.base", NotesBase));
+        using var peers = new Peers(reopened ? "bases-replaced-reopened" : "bases-replaced", ("Notes.base", NotesBase));
         (BaseDocumentViewModel document, BasesRow row, BasesColumn column) = StatusCell(peers);
         var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Task<bool> held = peers.H.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
@@ -577,6 +581,12 @@ public sealed class SaveChainAdmissionTests
             peers.H.Settle();
             Assert.DoesNotContain(peers.H.Workspace.Groups.SelectMany(group => group.Tabs), tab => tab.Path == "a.md");
             File.WriteAllText(Path.Combine(peers.H.Root, "a.md"), Replacement);
+            if (reopened)
+            {
+                WorkspaceTabViewModel replacement = peers.H.Open("a.md");
+                Assert.Equal(Replacement, replacement.Text);
+                Assert.False(replacement.IsDirty);
+            }
             peers.H.Events.Clear();
 
             ahead.SetResult();
