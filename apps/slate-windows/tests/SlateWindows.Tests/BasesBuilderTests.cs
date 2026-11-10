@@ -231,6 +231,23 @@ public sealed class BasesBuilderTests : IDisposable
         builder.Shutdown();
     }
 
+    /// <summary>#1697 (Codoki review): ErrorDetail renders a vault error in
+    /// core's words and passes any other exception's own message through
+    /// unchanged.</summary>
+    [Fact]
+    public void ErrorDetailSpeaksCoresWordsForAVaultErrorAndPassesAnyOtherMessageThrough()
+    {
+        var other = new System.Runtime.InteropServices.ExternalException("the handle was refused");
+        Assert.Equal("the handle was refused", BasePhrase.ErrorDetail(other));
+
+        var vault = new VaultException.InvalidArgument("preview refused");
+        Assert.Contains("@message", vault.Message, StringComparison.Ordinal);
+        string detail = BasePhrase.ErrorDetail(vault);
+        Assert.Equal(SlateUniffiMethods.VaultErrorDetail(vault), detail);
+        Assert.Contains("preview refused", detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("@message", detail, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void SavedQueryFlowsAnnounceCanonically()
     {
