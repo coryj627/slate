@@ -1610,7 +1610,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         long revision = _editorSession.Revision;
         EditorSavedBaseline baseline = _editorSession.SavedBaseline;
         var published = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        Saves.TrackWorker(Task.Run(() => PerformTaskToggle(
+        Task worker = Task.Run(() => PerformTaskToggle(
             generation,
             path,
             expectedHash,
@@ -1620,7 +1620,39 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             nextStatus,
             announce,
             completion,
-            published)));
+            published));
+        Saves.TrackWorker(worker);
+        // The backstop: a worker that faults anyway (outside the worker's own
+        // catches) still ends the toggle and frees the note's chain.
+        _ = worker.ContinueWith(
+            faulted => _dispatcher.BeginInvoke(
+                DispatcherPriority.Normal,
+                new Action(() =>
+                {
+                    if (published.Task.IsCompleted)
+                    {
+                        return;
+                    }
+                    if (generation == _taskToggleGeneration)
+                    {
+                        _taskToggleInFlight = false;
+                    }
+                    try
+                    {
+                        completion?.Invoke(
+                            null,
+                            new VaultException.InvalidArgument(faulted.Exception!.GetBaseException().Message),
+                            null,
+                            false);
+                    }
+                    finally
+                    {
+                        _ = published.TrySetResult();
+                    }
+                })),
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted,
+            TaskScheduler.Default);
         return published.Task;
     }
 
@@ -1743,8 +1775,14 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
                     outcome = new TaskToggleOutcome(report, null, updatedText);
                 }
                 catch (Exception inner) when (
-                    inner is VaultException or InvalidOperationException)
+                    inner is not OutOfMemoryException
+                        and not StackOverflowException
+                        and not AccessViolationException)
                 {
+                    // #1658 (codex round 1): any failure here, a panic
+                    // surfacing through the binding included, is the
+                    // toggle's failed outcome, never a faulted worker: the
+                    // admitted ticket waits for this toggle's publication.
                     repairs?.EndMutation(
                         path, indexConsistent: inner is VaultException.WriteConflict);
                     leaseSettled = true;

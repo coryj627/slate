@@ -535,6 +535,47 @@ public sealed class SaveChainAdmissionTests
         }
     });
 
+    /// <summary>A toggle whose worker throws something other than a vault
+    /// error (a panic surfacing through the binding), before its write or after
+    /// it, still ends: the in-flight flag goes, the note's chain is freed, and
+    /// the note's next save runs to its end (codex round 1).</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ATaskToggleWhoseWorkerThrowsEndsAndFreesTheNotesChain(bool afterTheWrite) => RunSta(() =>
+    {
+        using var peers = new Peers(afterTheWrite ? "toggle-throws-after" : "toggle-throws-before", TaskNote);
+        Action thrower = () => throw new IOException("a panic surfacing through the binding (test seam)");
+        if (afterTheWrite)
+        {
+            peers.A.TaskToggleFaultForTests = thrower;
+        }
+        else
+        {
+            peers.A.TaskToggleBeforeWriteForTests = thrower;
+        }
+        var events = new List<A11yEvent>();
+        try
+        {
+            Assert.Equal(TabTaskToggle.Started, peers.A.ToggleTask(TheTask(peers), events.Add));
+            peers.H.PumpUntil(
+                () => !peers.A.IsTaskToggleInFlight && peers.H.Workspace.SavesIdle,
+                "the throwing toggle's end");
+            Assert.DoesNotContain(events, e => e is A11yEvent.TaskToggled);
+
+            peers.A.TaskToggleFaultForTests = null;
+            peers.A.TaskToggleBeforeWriteForTests = null;
+            peers.A.Text = peers.A.Text + "A later edit.\n";
+            Task<bool> save = peers.A.SaveAsync();
+            peers.H.PumpUntil(() => save.IsCompleted && peers.H.Workspace.SavesIdle, "the next save");
+        }
+        finally
+        {
+            peers.A.TaskToggleFaultForTests = null;
+            peers.A.TaskToggleBeforeWriteForTests = null;
+        }
+    });
+
     private static TaskItem TheTask(Peers peers) => peers.H.Session.TasksForFile("a.md")[0];
 
     // ---- Bases cell writes (#1657) -------------------------------------------
