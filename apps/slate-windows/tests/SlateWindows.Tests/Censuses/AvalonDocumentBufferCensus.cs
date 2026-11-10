@@ -67,7 +67,8 @@ public sealed class AvalonDocumentBufferCensus
     /// the paste: before the census checks the clipboard, or after the check
     /// and before the editor's own, clearing it or putting its own text there,
     /// after the editor's paste has been checked and before it reads the text,
-    /// or with files, which leave the editor nothing to paste; or a process
+    /// or with files, which leave the editor nothing to paste, before the
+    /// editor's own last check or after it; or a process
     /// watching the clipboard reads the text before the set has flushed it,
     /// holding the clipboard open until the census's thread renders the text.
     /// The paste applies once, with the census's text.</summary>
@@ -78,6 +79,7 @@ public sealed class AvalonDocumentBufferCensus
     [InlineData("replaced before the paste")]
     [InlineData("replaced after the check")]
     [InlineData("replaced with files before the editor reads it")]
+    [InlineData("replaced with files after the editor's last check")]
     public void APasteWhoseClipboardAnotherProcessTookIsRetried(string when)
     {
         RunOnSta(() =>
@@ -88,6 +90,7 @@ public sealed class AvalonDocumentBufferCensus
             long before = session.AppliedDeltaCount;
             IDataObject? previousClipboard = TryGetClipboardData();
             Thread? watcher = null;
+            Func<bool>? lateFiles = null;
             try
             {
                 PasteThroughTheClipboard(
@@ -107,9 +110,14 @@ public sealed class AvalonDocumentBufferCensus
                     afterTheCheckForTests: when == "replaced after the check"
                         ? _ => SetTheClipboard(TextData("another process's text"))
                         : null,
-                    beforeTheEditorReadsForTests: when == "replaced with files before the editor reads it"
-                        ? ReplaceTheClipboardWithFiles
-                        : null);
+                    beforeTheEditorReadsForTests: when switch
+                    {
+                        "replaced with files before the editor reads it" => ReplaceTheClipboardWithFiles,
+                        "replaced with files after the editor's last check" =>
+                            () => lateFiles = ReplaceTheClipboardWithFilesAfterTheEditorChecks(editor),
+                        _ => null,
+                    });
+                Assert.True(lateFiles?.Invoke() ?? true, "premise: files replaced the text after the editor's last check");
                 Assert.True(watcher?.Join(TimeSpan.FromSeconds(5)) ?? true, "the watcher's read was never served");
             }
             finally
@@ -974,7 +982,17 @@ public sealed class AvalonDocumentBufferCensus
                     {
                         beforeTheEditorReadsForTests?.Invoke();
                         beforeTheEditorReadsForTests = null;
-                        ApplicationCommands.Paste.Execute(null, editor.TextArea);
+                        try
+                        {
+                            ApplicationCommands.Paste.Execute(null, editor.TextArea);
+                        }
+                        catch (ArgumentException) when (!accepted && session.AppliedDeltaCount == before && !ClipboardHolds(text))
+                        {
+                            // The clipboard lost its text after the editor's own last check
+                            // and before it read the clipboard, and WPF refused to build a
+                            // paste of text that was not there, before anything was edited.
+                            foreign = true;
+                        }
                     }
                     else
                     {
@@ -1009,6 +1027,36 @@ public sealed class AvalonDocumentBufferCensus
         Assert.True(
             Clipboard.ContainsFileDropList() && !Clipboard.ContainsText(),
             "premise: the clipboard holds files and no text");
+    }
+
+    /// <summary>Another process copies files just after the editor's own last
+    /// check that the clipboard holds text, which its Paste binding makes as
+    /// the command runs, and before the editor reads the clipboard. Returns
+    /// whether that happened.</summary>
+    private static Func<bool> ReplaceTheClipboardWithFilesAfterTheEditorChecks(TextEditor editor)
+    {
+        CommandBinding paste = editor.TextArea.CommandBindings
+            .OfType<CommandBinding>()
+            .Single(binding => binding.Command == ApplicationCommands.Paste);
+        bool replaced = false;
+        void AfterTheCheck(object sender, CanExecuteRoutedEventArgs args)
+        {
+            if (replaced || !args.CanExecute)
+            {
+                return;
+            }
+
+            replaced = true;
+            paste.CanExecute -= AfterTheCheck;
+            ReplaceTheClipboardWithFiles();
+        }
+
+        paste.CanExecute += AfterTheCheck;
+        return () =>
+        {
+            paste.CanExecute -= AfterTheCheck;
+            return replaced;
+        };
     }
 
     /// <summary>#1839: puts <paramref name="data"/> on the system clipboard,
