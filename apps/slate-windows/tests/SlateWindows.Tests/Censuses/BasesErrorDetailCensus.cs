@@ -80,6 +80,15 @@ public sealed class BasesErrorDetailCensus
     [InlineData("BaseExpressionValidation validation = Validate(); detail = validation.Message ?? \"Expression invalid\";", "")]
     [InlineData("var section = new DashboardSectionViewModel(status); section.Message = BasePhrase.ErrorDetail(thrown);", "")]
     [InlineData("foreach (DashboardSectionViewModel section in Sections) { detail = section.Message; }", "")]
+    [InlineData("if (thrown is { Message: var text }) { _announce(new A11yEvent.BasesViewExportFailed(text)); }", "thrown is { Message: … }")]
+    [InlineData("if (thrown is VaultException { Message: var text }) { detail = text; }", "thrown is { Message: … }")]
+    [InlineData("if (thrown is not null and { Message: var text }) { detail = text; }", "thrown is { Message: … }")]
+    [InlineData("detail = thrown switch { { Message: var text } => text, _ => \"\" };", "thrown is { Message: … }")]
+    [InlineData("switch (thrown) { case { Message: var text }: detail = text; break; }", "thrown is { Message: … }")]
+    [InlineData("if (thrown is { InnerException.Message: var text }) { detail = text; }", "thrown is { InnerException.Message: … }")]
+    [InlineData("if (thrown is { InnerException: { Message: var text } }) { detail = text; }", "a nested pattern is { Message: … }")]
+    [InlineData("foreach (DashboardSectionViewModel section in Sections) { if (section is { Message: { Length: > 0 } text }) { detail = text; } }", "")]
+    [InlineData("if (Current is DashboardSectionViewModel { Message: var text }) { detail = text; }", "")]
     public void TheCensusNamesEveryMessageReadOutsideAModel(string body, string named)
     {
         SyntaxNode root = CSharpSyntaxTree.ParseText(
@@ -146,11 +155,15 @@ public sealed class BasesErrorDetailCensus
     /// declares with a <see cref="MessageModels"/> type.</summary>
     internal static IEnumerable<string> UnmodelledMessageReads(SyntaxNode root, string file)
     {
-        foreach ((SyntaxNode node, ExpressionSyntax receiver, string text) in MessageReads(root))
+        foreach ((SyntaxNode node, ExpressionSyntax? receiver, string text, TypeSyntax? patternType) in MessageReads(root))
         {
             MemberDeclarationSyntax? member = node.FirstAncestorOrSelf<MemberDeclarationSyntax>(
                 candidate => candidate is BaseMethodDeclarationSyntax or BasePropertyDeclarationSyntax or FieldDeclarationSyntax);
             if (member is MethodDeclarationSyntax { Identifier.ValueText: "ErrorDetail" })
+            {
+                continue;
+            }
+            if (patternType is not null && IsModel(patternType))
             {
                 continue;
             }
@@ -166,23 +179,65 @@ public sealed class BasesErrorDetailCensus
         }
     }
 
-    /// <summary>Every <c>x.Message</c> and <c>x?.Message</c> under
-    /// <paramref name="scope"/>, with its receiver.</summary>
-    private static IEnumerable<(SyntaxNode Node, ExpressionSyntax Receiver, string Text)> MessageReads(SyntaxNode scope)
+    /// <summary>Every <c>x.Message</c>, <c>x?.Message</c> and property
+    /// pattern on <c>Message</c> (<c>x is { Message: var m }</c>, an extended
+    /// <c>{ Inner.Message: … }</c>, a switch arm; codex round 3) under
+    /// <paramref name="scope"/>, with its receiver when one is known and the
+    /// pattern's type when it names one.</summary>
+    private static IEnumerable<(SyntaxNode Node, ExpressionSyntax? Receiver, string Text, TypeSyntax? PatternType)> MessageReads(
+        SyntaxNode scope)
     {
         foreach (SyntaxNode node in scope.DescendantNodesAndSelf())
         {
             switch (node)
             {
-                case MemberAccessExpressionSyntax { Name.Identifier.ValueText: "Message" } access:
-                    yield return (access, access.Expression, $"{access.Expression}.Message");
+                case MemberAccessExpressionSyntax { Name.Identifier.ValueText: "Message" } access
+                    when access.Parent is not SubpatternSyntax and not ExpressionColonSyntax:
+                    yield return (access, access.Expression, $"{access.Expression}.Message", null);
                     break;
                 case MemberBindingExpressionSyntax { Name.Identifier.ValueText: "Message" } binding
                     when binding.FirstAncestorOrSelf<ConditionalAccessExpressionSyntax>() is { } conditional:
-                    yield return (binding, conditional.Expression, $"{conditional.Expression}?.Message");
+                    yield return (binding, conditional.Expression, $"{conditional.Expression}?.Message", null);
+                    break;
+                case SubpatternSyntax { ExpressionColon.Expression: var colon } subpattern when NamesMessage(colon):
+                    var recursive = subpattern.Parent?.Parent as RecursivePatternSyntax;
+                    ExpressionSyntax? governing = PatternReceiver(recursive);
+                    bool extended = colon is MemberAccessExpressionSyntax;
+                    yield return (
+                        subpattern,
+                        extended ? null : governing,
+                        $"{governing?.ToString() ?? "a nested pattern"} is {{ {colon}: … }}",
+                        extended ? null : recursive?.Type);
                     break;
             }
         }
+    }
+
+    private static bool NamesMessage(ExpressionSyntax colon) => colon switch
+    {
+        IdentifierNameSyntax { Identifier.ValueText: "Message" } => true,
+        MemberAccessExpressionSyntax { Name.Identifier.ValueText: "Message" } => true,
+        _ => false,
+    };
+
+    /// <summary>The expression a recursive pattern tests: the left of an
+    /// <c>is</c>, a switch expression's or statement's governing expression,
+    /// through <c>and</c>/<c>or</c>/<c>not</c> and parentheses. Null for a
+    /// nested pattern, whose receiver is a member the census can't type.</summary>
+    private static ExpressionSyntax? PatternReceiver(RecursivePatternSyntax? pattern)
+    {
+        SyntaxNode? node = pattern;
+        while (node?.Parent is BinaryPatternSyntax or UnaryPatternSyntax or ParenthesizedPatternSyntax)
+        {
+            node = node.Parent;
+        }
+        return node?.Parent switch
+        {
+            IsPatternExpressionSyntax test => test.Expression,
+            SwitchExpressionArmSyntax { Parent: SwitchExpressionSyntax switchExpression } => switchExpression.GoverningExpression,
+            CasePatternSwitchLabelSyntax { Parent.Parent: SwitchStatementSyntax switchStatement } => switchStatement.Expression,
+            _ => null,
+        };
     }
 
     /// <summary>Whether <paramref name="member"/> declares <paramref name="name"/>
