@@ -496,6 +496,65 @@ public sealed class BasesErrorDetailCensus
         }
     }
 
+    /// <summary>Codex round 19: a delegate that returns a failure carries it.
+    /// Handed to a helper outside Bases, as a lambda, a delegate local or a
+    /// method group, it is named; LINQ may take one.</summary>
+    [Fact]
+    public void AFailureReturningDelegateIsFollowed()
+    {
+        string[] failures = PlantedViolations("""
+            namespace SlateWindows.Bases.Planted
+            {
+                internal static class Planted
+                {
+                    internal static string ByLambda(Exception thrown) =>
+                        SlateWindows.Elsewhere.SharedPhrase.Detail(() => thrown);
+
+                    internal static string ByLocal(Exception thrown)
+                    {
+                        Func<Exception> get = () => thrown;
+                        return SlateWindows.Elsewhere.SharedPhrase.Detail(get);
+                    }
+
+                    internal static string ByGroup(Exception thrown)
+                    {
+                        Exception Get() => thrown;
+                        return SlateWindows.Elsewhere.SharedPhrase.Detail(Get);
+                    }
+
+                    internal static string ByInvoking(Exception thrown)
+                    {
+                        Func<Exception> get = () => thrown;
+                        string direct = BasePhrase.ErrorDetail(get());
+                        return get?.Invoke() is { } fault ? direct + BasePhrase.ErrorDetail(fault) : direct;
+                    }
+
+                    internal static string ByLinq(Exception thrown)
+                    {
+                        List<Exception> failures = [thrown];
+                        return string.Join(", ", failures.Select(failure => failure.InnerException ?? failure)
+                            .Select(BasePhrase.ErrorDetail));
+                    }
+                }
+            }
+            """,
+            outsideBases: """
+            namespace SlateWindows.Elsewhere
+            {
+                internal static class SharedPhrase
+                {
+                    internal static string Detail(Func<Exception> get) => get().Message;
+                }
+            }
+            """);
+        Assert.Contains(failures, failure => failure.Contains("Detail(() => thrown)", StringComparison.Ordinal));
+        Assert.Contains(failures, failure => failure.Contains("Detail(get)", StringComparison.Ordinal));
+        Assert.Contains(failures, failure => failure.Contains("Detail(Get)", StringComparison.Ordinal));
+        Assert.DoesNotContain(failures, failure => failure.Contains("failures.Select", StringComparison.Ordinal));
+        Assert.DoesNotContain(failures, failure => failure.Contains("get()", StringComparison.Ordinal)
+            || failure.Contains("get?.Invoke()", StringComparison.Ordinal));
+    }
+
     /// <summary>A censused consumer's own body is held to the rule.</summary>
     [Fact]
     public void ACensusedConsumersBodyIsCheckedToo()
@@ -577,10 +636,19 @@ public sealed class BasesErrorDetailCensus
     /// <summary>An expression whose value is an exception, or a collection
     /// of them; a type name (the <c>VaultException</c> in a catch or pattern)
     /// is not a value.</summary>
-    private static bool IsExceptionValue(SemanticModel model, ExpressionSyntax expression, INamedTypeSymbol exception) =>
-        model.GetTypeInfo(expression).Type is { } type
-        && CarriesExceptions(type, exception)
-        && model.GetSymbolInfo(expression).Symbol is not ITypeSymbol;
+    private static bool IsExceptionValue(SemanticModel model, ExpressionSyntax expression, INamedTypeSymbol exception)
+    {
+        TypeInfo info = model.GetTypeInfo(expression);
+        // A lambda or method group has no type of its own; the delegate it
+        // becomes is what carries a failure on.
+        ITypeSymbol? type = info.Type
+            ?? (expression is AnonymousFunctionExpressionSyntax || model.GetSymbolInfo(expression).Symbol is IMethodSymbol
+                ? info.ConvertedType
+                : null);
+        return type is not null
+            && CarriesExceptions(type, exception)
+            && model.GetSymbolInfo(expression).Symbol is not ITypeSymbol;
+    }
 
     /// <summary>An exception, or an array or sequence of them (codex round 6:
     /// <c>string.Join</c> and a typed foreach erase a collection's element
@@ -611,6 +679,11 @@ public sealed class BasesErrorDetailCensus
         {
             // A delegate's type arguments are its signature, not values it
             // holds: an Action<VaultException?> callback carries no failure.
+            // One that RETURNS a failure does (codex round 19: a helper
+            // outside Bases handed () => failure calls it and reads the
+            // Message).
+            INamedTypeSymbol { TypeKind: TypeKind.Delegate, DelegateInvokeMethod: { } invoke } =>
+                CarriesExceptions(invoke.ReturnType, exception, visited),
             INamedTypeSymbol { TypeKind: TypeKind.Delegate } => false,
             IArrayTypeSymbol array => CarriesExceptions(array.ElementType, exception, visited),
             INamedTypeSymbol named => named.TypeArguments.Any(argument => CarriesExceptions(argument, exception, visited))
@@ -668,6 +741,9 @@ public sealed class BasesErrorDetailCensus
         return expression.Parent switch
         {
             ArgumentSyntax argument => AllowedArgument(model, argument, exception, censused),
+            // get(): a failure-returning delegate invoked directly.
+            InvocationExpressionSyntax invocation when invocation.Expression == expression =>
+                model.GetSymbolInfo(invocation).Symbol is IMethodSymbol { MethodKind: MethodKind.DelegateInvoke },
             ThrowStatementSyntax or ThrowExpressionSyntax or ExpressionStatementSyntax => true,
             IsPatternExpressionSyntax test => test.Expression == expression
                 && CapturesHoldNoText(model, test.Pattern, exception),
@@ -762,6 +838,9 @@ public sealed class BasesErrorDetailCensus
         return symbol switch
         {
             IPropertySymbol property => HoldsNoText(property.Type, exception),
+            // Invoking a failure-returning delegate yields the failure,
+            // typed, and the census follows it from there.
+            IMethodSymbol { MethodKind: MethodKind.DelegateInvoke } => CallbacksAreRead(model, name, exception, censused),
             IMethodSymbol method => KeepsItsElements(method, exception)
                 && (IsConsumer(method, exception, censused)
                     || (IsCollectionLibrary(method) && (HoldsNoText(method.ReturnType, exception) || HasACallback(model, name))))
@@ -831,7 +910,18 @@ public sealed class BasesErrorDetailCensus
                 && index < method.Parameters.Length
                 ? method.Parameters[index]
                 : null;
-        return parameter is not null && CarriesExceptions(parameter.Type, exception) && IsConsumer(method, exception, censused);
+        if (parameter is null || !CarriesExceptions(parameter.Type, exception))
+        {
+            return false;
+        }
+        // LINQ and the collection types call a failure-returning callback
+        // and hand its result on in a typed value the census follows
+        // (Select(f => f.InnerException)).
+        if (parameter.Type.TypeKind == TypeKind.Delegate && IsCollectionLibrary(method))
+        {
+            return true;
+        }
+        return IsConsumer(method, exception, censused);
     }
 
     /// <summary>A method an exception may be handed to: core's renderer, a
