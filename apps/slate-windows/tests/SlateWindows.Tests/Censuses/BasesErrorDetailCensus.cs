@@ -17,7 +17,8 @@
 // - No Bases member outside BasePhrase.ErrorDetail reads Exception.Message
 //   (member access, conditional access, property or extended pattern).
 // - An expression whose type is an exception only flows on as an exception
-//   (a local, field, return or parameter of an exception type), into core's
+//   (a local, return or parameter of an exception type; never a field or
+//   property, where code the census does not read could reach it), into core's
 //   renderer, a censused Bases method that takes an exception (whose own
 //   body this census checks), a TaskCompletionSource, an exception's
 //   constructor, a throw, or a type, pattern or null test. Anything else
@@ -147,7 +148,13 @@ public sealed class BasesErrorDetailCensus
     [InlineData("detail = BasePhrase.ErrorDetail(thrown);", "")]
     [InlineData("if (thrown is VaultException vault) { detail = SlateUniffiMethods.VaultErrorDetail(vault); }", "")]
     [InlineData("var error = work.Exception?.GetBaseException(); if (error is not null) { detail = BasePhrase.ErrorDetail(error); }", "")]
-    [InlineData("if (thrown == null) { return \"\"; } _last = thrown; throw thrown;", "")]
+    [InlineData("if (thrown == null) { return \"\"; } Exception? kept = thrown; kept ??= thrown; _ = kept; throw kept;", "")]
+    [InlineData("_last = thrown;", "_last = thrown")]
+    [InlineData("_last ??= thrown;", "_last ??= thrown")]
+    [InlineData("var info = new FailureInfo(); info.Error = thrown; _announce(new A11yEvent.BasesViewExportFailed($\"{info}\"));", "info.Error = thrown")]
+    [InlineData("var info = new FailureInfo { Error = thrown }; detail = $\"{info}\";", "Error = thrown")]
+    [InlineData("var info = new FailureInfo() with { Error = thrown }; detail = $\"{info}\";", "Error = thrown")]
+    [InlineData("var info = new { Error = thrown }; detail = $\"{info}\";", "Error = thrown")]
     [InlineData("if (thrown is VaultException vault) { detail = Describe(vault); }", "")]
     [InlineData("Callback((text, failure) => { if (failure is not null) { detail = BasePhrase.ErrorDetail(failure); } });", "")]
     [InlineData("detail = new Note(\"x\").Message;", "")]
@@ -167,6 +174,11 @@ public sealed class BasesErrorDetailCensus
                     private readonly Action<A11yEvent> _announce = _ => { };
 
                     private sealed record Note(string Message);
+
+                    private sealed record FailureInfo
+                    {
+                        public Exception? Error { get; set; }
+                    }
 
                     private static void Callback(Action<string?, VaultException?> done) => done(null, null);
 
@@ -415,7 +427,7 @@ public sealed class BasesErrorDetailCensus
         {
             MemberAccessExpressionSyntax access => access.Name == expression,
             MemberBindingExpressionSyntax binding => binding.Name == expression,
-            ParenthesizedExpressionSyntax or CastExpressionSyntax or AssignmentExpressionSyntax
+            ParenthesizedExpressionSyntax or CastExpressionSyntax
                 or PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression }
                 or BinaryExpressionSyntax { RawKind: (int)SyntaxKind.CoalesceExpression or (int)SyntaxKind.AsExpression } =>
                 IsExceptionValue(model, (ExpressionSyntax)expression.Parent, exception),
@@ -447,8 +459,18 @@ public sealed class BasesErrorDetailCensus
                 && model.GetDeclaredSymbol(loop) is { } variable && HoldsNoText(variable.Type, exception),
             BinaryExpressionSyntax binary => binary.Kind() is SyntaxKind.EqualsExpression or SyntaxKind.NotEqualsExpression
                 or SyntaxKind.IsExpression,
-            EqualsValueClauseSyntax or ReturnStatementSyntax or ArrowExpressionClauseSyntax or LambdaExpressionSyntax
-                or AssignmentExpressionSyntax => staysAnException,
+            // Codex round 14: an exception is kept only in a local or a
+            // parameter. Stored in a field or property (an assignment, an
+            // object or `with` initializer, a field initializer), it is
+            // reachable by code the census does not read: a record's
+            // generated ToString, a holder's own ToString, anything handed
+            // the holder.
+            AssignmentExpressionSyntax assignment => assignment.Left == expression
+                || (staysAnException && IsLocalStorage(model, assignment.Left)),
+            EqualsValueClauseSyntax { Parent: VariableDeclaratorSyntax declarator } =>
+                staysAnException && model.GetDeclaredSymbol(declarator) is ILocalSymbol,
+            EqualsValueClauseSyntax => false,
+            ReturnStatementSyntax or ArrowExpressionClauseSyntax or LambdaExpressionSyntax => staysAnException,
             ExpressionElementSyntax { Parent: CollectionExpressionSyntax collection } =>
                 model.GetTypeInfo(collection).ConvertedType is { } target && CarriesExceptions(target, exception),
             InitializerExpressionSyntax { Parent: BaseObjectCreationExpressionSyntax creation } =>
@@ -470,6 +492,12 @@ public sealed class BasesErrorDetailCensus
             _ => false,
         };
     }
+
+    /// <summary>A local, a parameter or a discard: storage only this member
+    /// can reach.</summary>
+    private static bool IsLocalStorage(SemanticModel model, ExpressionSyntax target) =>
+        target is IdentifierNameSyntax { Identifier.ValueText: "_" }
+        || model.GetSymbolInfo(target).Symbol is ILocalSymbol or IParameterSymbol or IDiscardSymbol;
 
     /// <summary>A member whose value holds no text: <c>HResult</c>,
     /// <c>InnerException</c>, <c>GetBaseException()</c>, a collection's
