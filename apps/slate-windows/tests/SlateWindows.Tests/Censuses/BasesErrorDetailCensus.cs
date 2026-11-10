@@ -121,6 +121,9 @@ public sealed class BasesErrorDetailCensus
     [InlineData("List<Exception> failures = [thrown]; detail = failures.Any(failure => failure is VaultException) ? \"x\" : \"\";", "")]
     [InlineData("detail = thrown.HResult.ToString();", "")]
     [InlineData("_announce(new A11yEvent.BasesViewExportFailed(Format(thrown)));", "Format(thrown)")]
+    [InlineData("work.Exception!.Handle(Handled);", "Handle")]
+    [InlineData("work.Exception?.Handle(Handled);", "Handle")]
+    [InlineData("work.Exception!.Handle(failure => { _announce(new A11yEvent.BasesViewExportFailed(BasePhrase.ErrorDetail(failure))); return true; });", "")]
     [InlineData("List<Exception> failures = [thrown]; System.Collections.IEnumerator cursor = failures.GetEnumerator(); while (cursor.MoveNext()) { detail += $\"{cursor.Current}\"; }", "failures.GetEnumerator()")]
     [InlineData("List<Exception> failures = [thrown]; var cursor = failures.GetEnumerator(); while (cursor.MoveNext()) { detail += $\"{cursor.Current}\"; }", "{cursor.Current}")]
     [InlineData("List<Exception> failures = [thrown]; var byCode = failures.ToDictionary(failure => failure.HResult); detail = string.Join(\", \", byCode);", "string.Join")]
@@ -167,6 +170,12 @@ public sealed class BasesErrorDetailCensus
                     private static string Render(object value) => value.ToString() ?? "";
 
                     private void Report(object value) => _announce(new A11yEvent.BasesViewExportFailed(value.ToString() ?? ""));
+
+                    private bool Handled(object value)
+                    {
+                        Report(value);
+                        return true;
+                    }
 
                     private static string Format<T>(T failure) => failure?.ToString() ?? "";
                     private string M(Exception thrown, Task work)
@@ -452,8 +461,12 @@ public sealed class BasesErrorDetailCensus
                 IMethodSymbol method when KeepsItsElements(method, exception) && IsConsumer(method, exception, censused)
                     && CallbacksAreRead(model, name, exception, censused) => true,
                 IMethodSymbol { Name: "GetType", MethodKind: MethodKind.Ordinary } => true,
+                // Codex round 12: an exception's own method with a callback
+                // (AggregateException.Handle) hands the failures to it, so
+                // the callback is read here too.
                 IMethodSymbol { MethodKind: MethodKind.Ordinary } method => DerivesFrom(method.ContainingType, exception)
-                    && HoldsNoText(method.ReturnType, exception),
+                    && HoldsNoText(method.ReturnType, exception)
+                    && CallbacksAreRead(model, name, exception, censused),
                 IPropertySymbol property => DerivesFrom(property.ContainingType, exception) && HoldsNoText(property.Type, exception),
                 _ => false,
             };
