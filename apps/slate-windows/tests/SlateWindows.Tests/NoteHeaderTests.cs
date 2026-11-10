@@ -646,7 +646,7 @@ public sealed class NoteHeaderTests
             Assert.False(IsInside(Keyboard.FocusedElement as DependencyObject, leaving), $"the keys stayed in the hidden editor, on {Keyboard.FocusedElement}.");
             // They wait on the tab's own item, as the CI failure found them
             // (the landing's park while the reading view projects).
-            Assert.IsType<TabItem>(Keyboard.FocusedElement);
+            _ = Assert.IsAssignableFrom<TabItem>(Keyboard.FocusedElement);
             string waiting = Keyboard.FocusedElement?.ToString() ?? "nothing";
 
             gate.Set();
