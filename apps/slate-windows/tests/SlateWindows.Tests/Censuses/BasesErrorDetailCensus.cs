@@ -334,6 +334,74 @@ public sealed class BasesErrorDetailCensus
         Assert.Contains(failures, failure => failure.Contains("cell = thrown", StringComparison.Ordinal));
     }
 
+    /// <summary>Codex round 16: an interface, abstract or virtual method
+    /// declared in Bases is not a trusted consumer, since an implementation
+    /// outside Bases can read the Message; a sealed override is.</summary>
+    [Fact]
+    public void AnOverridableConsumerIsNeverTrusted()
+    {
+        string[] failures = PlantedViolations("""
+            namespace SlateWindows.Bases.Planted
+            {
+                internal interface IErrorFormatter
+                {
+                    string Format(Exception failure);
+                }
+
+                internal abstract class ErrorShaper
+                {
+                    public abstract string Shape(Exception failure);
+                }
+
+                internal class Phrasing
+                {
+                    public virtual string Say(Exception failure) => BasePhrase.ErrorDetail(failure);
+                }
+
+                internal sealed class SafePhrasing : Phrasing
+                {
+                    public override string Say(Exception failure) => BasePhrase.ErrorDetail(failure);
+                }
+
+                internal static class Planted
+                {
+                    internal static string ByInterface(IErrorFormatter formatter, Exception thrown) => formatter.Format(thrown);
+
+                    internal static string ByAbstract(ErrorShaper shaper, Exception thrown) => shaper.Shape(thrown);
+
+                    internal static string ByVirtual(Phrasing phrasing, Exception thrown) => phrasing.Say(thrown);
+
+                    internal static string BySealed(SafePhrasing safe, Exception thrown) => safe.Say(thrown);
+                }
+            }
+            """,
+            outsideBases: """
+            namespace SlateWindows.Elsewhere
+            {
+                using SlateWindows.Bases.Planted;
+
+                internal sealed class LeakyFormatter : IErrorFormatter
+                {
+                    public string Format(Exception failure) => failure.Message;
+                }
+
+                internal sealed class LeakyShaper : ErrorShaper
+                {
+                    public override string Shape(Exception failure) => failure.ToString();
+                }
+
+                internal sealed class LeakyPhrasing : Phrasing
+                {
+                    public override string Say(Exception failure) => failure.Message;
+                }
+            }
+            """);
+        Assert.Contains(failures, failure => failure.Contains("formatter.Format(thrown)", StringComparison.Ordinal));
+        Assert.Contains(failures, failure => failure.Contains("shaper.Shape(thrown)", StringComparison.Ordinal));
+        Assert.Contains(failures, failure => failure.Contains("phrasing.Say(thrown)", StringComparison.Ordinal));
+        Assert.DoesNotContain(failures, failure => failure.Contains("safe.Say(thrown)", StringComparison.Ordinal));
+    }
+
     /// <summary>A censused consumer's own body is held to the rule.</summary>
     [Fact]
     public void ACensusedConsumersBodyIsCheckedToo()
@@ -358,11 +426,17 @@ public sealed class BasesErrorDetailCensus
     /// <summary>Binds <paramref name="source"/> as one more Bases tree beside
     /// the shell's, and returns its violations; the planted source must bind
     /// cleanly or the case proves nothing.</summary>
-    private static string[] PlantedViolations(string source)
+    private static string[] PlantedViolations(string source, string? outsideBases = null)
     {
         var options = (CSharpParseOptions)ShellCompilation.Compilation.SyntaxTrees.First().Options;
         SyntaxTree tree = CSharpSyntaxTree.ParseText(source, options, path: "Planted.cs");
         CSharpCompilation compilation = ShellCompilation.Compilation.AddSyntaxTrees(tree);
+        if (outsideBases is not null)
+        {
+            // Bound beside the planted tree, never censused: code elsewhere
+            // in the shell.
+            compilation = compilation.AddSyntaxTrees(CSharpSyntaxTree.ParseText(outsideBases, options, path: "Elsewhere.cs"));
+        }
         SemanticModel model = compilation.GetSemanticModel(tree);
         Diagnostic[] errors = [.. model.GetDiagnostics().Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)];
         Assert.True(errors.Length == 0, "premise: the planted source binds. " + string.Join("\n", errors));
@@ -682,8 +756,21 @@ public sealed class BasesErrorDetailCensus
             // callers pass, is trusted.
             var declared => declared.DeclaringSyntaxReferences.Any(reference => censused.Contains(reference.SyntaxTree))
                 && declared.OriginalDefinition.TypeParameters.IsEmpty
-                && declared.ContainingType is not { IsGenericType: true },
+                && declared.ContainingType is not { IsGenericType: true }
+                && DispatchesOnlyToThisBody(declared),
         };
+
+    /// <summary>Codex round 16: trusting a declaration means trusting the
+    /// body the census reads, so the call must reach no other: not an
+    /// interface or abstract member (its implementation can live outside
+    /// Bases), not virtual, and an override only when sealed or in a sealed
+    /// type.</summary>
+    private static bool DispatchesOnlyToThisBody(IMethodSymbol method) =>
+        method.ContainingType.TypeKind != TypeKind.Interface
+        && !method.IsAbstract
+        && !method.IsVirtual
+        && !method.IsExtern
+        && (!method.IsOverride || method.IsSealed || method.ContainingType.IsSealed);
 
     private static bool DerivesFrom(ITypeSymbol type, INamedTypeSymbol exception)
     {
