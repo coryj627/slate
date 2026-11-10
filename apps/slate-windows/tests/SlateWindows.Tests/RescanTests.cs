@@ -2048,6 +2048,7 @@ public sealed partial class RescanTests
             return ThreadPoolRescanCoreWorker.Instance.Run(operation, () =>
             {
                 harness.RecordCoreCall(operation);
+                harness.BeforeCoreCall?.Invoke(operation);
                 T result;
                 try
                 {
@@ -2157,6 +2158,10 @@ public sealed partial class RescanTests
         /// <summary>Every rescan core call's operation, on its worker, after
         /// the call returned and before its continuation is queued.</summary>
         public Action<string>? AfterCoreCall { get; set; }
+
+        /// <summary>Every rescan core call's operation, on its worker, just
+        /// before the call runs.</summary>
+        public Action<string>? BeforeCoreCall { get; set; }
 
         /// <summary>While set, what the lifecycle enqueues for the UI —
         /// file-change events, progress — is held instead of posted (the
