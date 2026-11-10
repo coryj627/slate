@@ -65,6 +65,16 @@ public sealed class StaThreadCensus
         Assert.True(stale.Length == 0, "Allow-list entries that no longer start an STA thread: " + string.Join(", ", stale));
     }
 
+    /// <summary>#1855: the runner frees each thread's text services and
+    /// render context by reading WPF's private members. A framework change
+    /// that moves them fails here instead of silently bringing the GDI
+    /// exhaustion back.</summary>
+    [Fact]
+    public void TheRunnerReadsTheTextServicesWpfKeeps() =>
+        Assert.True(
+            StaThread.TextServicesHookReadable,
+            "WPF's private text-services members moved: fact threads keep their GDI handles until StaThread is taught the new ones.");
+
     [Fact]
     public void TheLeakGuardReadsTheDispatcherRegistryWpfKeeps()
     {

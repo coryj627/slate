@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Globalization;
+using System.Reflection;
 using System.Runtime.ExceptionServices;
 using System.Windows.Threading;
 
@@ -118,6 +119,88 @@ internal static class StaThread
             timeoutMessage,
             unwindGrace);
 
+    // #1855: WPF's text services on this thread, read as WPF keeps them.
+    private const BindingFlags HiddenInstance = BindingFlags.NonPublic | BindingFlags.Instance;
+
+    private static readonly PropertyInfo? TextEditorStore = typeof(System.Windows.FrameworkElement).Assembly
+        .GetType("System.Windows.Documents.TextEditor")
+        ?.GetProperty("_ThreadLocalStore", BindingFlags.NonPublic | BindingFlags.Static);
+
+    private static readonly PropertyInfo? StoreTextServicesHost =
+        TextEditorStore?.PropertyType.GetProperty("TextServicesHost", HiddenInstance | BindingFlags.Public);
+
+    private static readonly FieldInfo? HostWinEvent = StoreTextServicesHost?.PropertyType.GetField("_winEvent", HiddenInstance);
+
+    private static readonly FieldInfo? HookTextStores = HostWinEvent?.FieldType.GetField("_arTextStore", HiddenInstance);
+
+    private static readonly MethodInfo? HostUnregisterTextStore =
+        StoreTextServicesHost?.PropertyType.GetMethod("UnregisterTextStore", HiddenInstance | BindingFlags.Public);
+
+    private static readonly FieldInfo? DispatcherShutdownFinished =
+        typeof(Dispatcher).GetField(nameof(Dispatcher.ShutdownFinished), HiddenInstance);
+
+    /// <summary>The handlers of a dispatcher's shutdown that free WPF's text
+    /// services and render context on its thread, by the type each lives on.</summary>
+    private static readonly HashSet<string> TextServicesCleanup =
+    [
+        "System.Windows.Documents.TextServicesHost",
+        "System.Windows.Input.TextServicesContext+TextServicesContextShutDownListener",
+        "System.Windows.Documents.WinEventHandler+WinEventHandlerShutDownListener",
+        "System.Windows.Media.MediaContext",
+    ];
+
+    /// <summary>Whether WPF's text services are where this runner reads them.
+    /// <c>StaThreadCensus</c> asserts it, so a framework change fails one census
+    /// instead of silently bringing the leak back.</summary>
+    internal static bool TextServicesHookReadable =>
+        DispatcherShutdownFinished is not null && HookTextStores is not null && HostUnregisterTextStore is not null;
+
+    /// <summary>The text-services host of the calling thread, when the thread
+    /// has a dispatcher and WPF has made one: reading a store on a thread
+    /// with no dispatcher would give it one.</summary>
+    private static object? CurrentTextServicesHost() =>
+        Dispatcher.FromThread(Thread.CurrentThread) is not null
+            && TextEditorStore?.GetValue(null) is { } store
+            ? StoreTextServicesHost?.GetValue(store)
+            : null;
+
+    /// <summary>#1855: runs WPF's own teardown of text services and the render
+    /// context for the calling thread, and only that. WPF runs it from a
+    /// dispatcher shutdown, which a fact's thread never has (the remarks above
+    /// say why). Without it a strong handle from the text-services hook, COM
+    /// references from native text services and WPF's static list of render
+    /// contexts each keep the thread's resources for the rest of the run:
+    /// about 7 GDI handles a fact, which reached the process's limit of
+    /// 10,000. The window and layout handlers are left alone, so no window is
+    /// taken down and the foreground stays where it was.</summary>
+    private static void ReleaseTextServices()
+    {
+        if (Dispatcher.FromThread(Thread.CurrentThread) is not { } dispatcher
+            || DispatcherShutdownFinished?.GetValue(dispatcher) is not EventHandler handlers)
+        {
+            return;
+        }
+        // Each text store first, as WPF does when an editor detaches: the last
+        // one out stops the hook and its strong handle.
+        if (CurrentTextServicesHost() is { } host
+            && HostWinEvent?.GetValue(host) is { } hook
+            && HookTextStores?.GetValue(hook) is System.Collections.ArrayList stores)
+        {
+            foreach (object store in stores.ToArray())
+            {
+                _ = HostUnregisterTextStore?.Invoke(host, [store, false]);
+            }
+        }
+        foreach (EventHandler handler in handlers.GetInvocationList().Cast<EventHandler>())
+        {
+            if ((handler.Target?.GetType() ?? handler.Method.DeclaringType)?.FullName is { } owner
+                && TextServicesCleanup.Contains(owner))
+            {
+                handler(dispatcher, EventArgs.Empty);
+            }
+        }
+    }
+
     /// <summary><see cref="Run(Action, TimeSpan?, string?, TimeSpan?)"/> under
     /// <see cref="PumpedDispatcher.Run"/>: the body's documents capture the
     /// thread's dispatcher as their owner context.</summary>
@@ -158,6 +241,17 @@ internal static class StaThread
             catch (Exception exception)
             {
                 failure = ExceptionDispatchInfo.Capture(exception);
+            }
+            finally
+            {
+                try
+                {
+                    ReleaseTextServices();
+                }
+                catch (Exception exception)
+                {
+                    failure ??= ExceptionDispatchInfo.Capture(exception);
+                }
             }
         })
         {
