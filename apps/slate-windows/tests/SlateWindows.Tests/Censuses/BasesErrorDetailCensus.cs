@@ -99,6 +99,16 @@ public sealed class BasesErrorDetailCensus
     [InlineData("if (thrown is { } error) { detail = $\"{error}\"; }", "{error}")]
     [InlineData("detail = thrown.StackTrace ?? \"\";", "thrown.StackTrace")]
     [InlineData("object boxed = thrown; detail = boxed.ToString() ?? \"\";", "= thrown")]
+    [InlineData("if (thrown is object boxed) { detail = $\"{boxed}\"; }", "thrown is object boxed")]
+    [InlineData("detail = thrown switch { object boxed => $\"{boxed}\", _ => \"\" };", "object boxed =>")]
+    [InlineData("switch (thrown) { case object boxed: detail = $\"{boxed}\"; break; }", "case object boxed")]
+    [InlineData("List<Exception> failures = [thrown]; detail = string.Join(\", \", failures);", "string.Join")]
+    [InlineData("List<Exception> failures = [thrown]; foreach (object boxed in failures) { detail = $\"{boxed}\"; }", "foreach (object boxed")]
+    [InlineData("List<Exception> failures = [thrown]; detail = string.Join(\", \", failures.Select(failure => failure.ToString()));", "failure.ToString")]
+    [InlineData("List<object> boxes = [thrown]; detail = $\"{boxes[0]}\";", "[thrown]")]
+    [InlineData("if (thrown is { HResult: var code }) { detail = code.ToString(); }", "")]
+    [InlineData("List<Exception> failures = [thrown]; foreach (var failure in failures) { detail = BasePhrase.ErrorDetail(failure); }", "")]
+    [InlineData("List<Exception> failures = new() { thrown }; detail = failures.Count.ToString();", "")]
     [InlineData("detail = BasePhrase.ErrorDetail(thrown);", "")]
     [InlineData("if (thrown is VaultException vault) { detail = SlateUniffiMethods.VaultErrorDetail(vault); }", "")]
     [InlineData("var error = work.Exception?.GetBaseException(); if (error is not null) { detail = BasePhrase.ErrorDetail(error); }", "")]
@@ -247,12 +257,44 @@ public sealed class BasesErrorDetailCensus
             Parent: ClassDeclarationSyntax { Identifier.ValueText: "BasePhrase" },
         };
 
-    /// <summary>An expression whose value is an exception; a type name (the
-    /// <c>VaultException</c> in a catch or pattern) is not a value.</summary>
+    /// <summary>An expression whose value is an exception, or a collection
+    /// of them; a type name (the <c>VaultException</c> in a catch or pattern)
+    /// is not a value.</summary>
     private static bool IsExceptionValue(SemanticModel model, ExpressionSyntax expression, INamedTypeSymbol exception) =>
         model.GetTypeInfo(expression).Type is { } type
-        && DerivesFrom(type, exception)
+        && CarriesExceptions(type, exception)
         && model.GetSymbolInfo(expression).Symbol is not ITypeSymbol;
+
+    /// <summary>An exception, or an array or sequence of them (codex round 6:
+    /// <c>string.Join</c> and a typed foreach erase a collection's element
+    /// type the way a capture erases a value's).</summary>
+    private static bool CarriesExceptions(ITypeSymbol type, INamedTypeSymbol exception) => type switch
+    {
+        _ when DerivesFrom(type, exception) => true,
+        IArrayTypeSymbol array => CarriesExceptions(array.ElementType, exception),
+        INamedTypeSymbol named => SequenceElement(named) is { } element && CarriesExceptions(element, exception),
+        _ => false,
+    };
+
+    private static ITypeSymbol? SequenceElement(INamedTypeSymbol type) =>
+        (type.OriginalDefinition.SpecialType == SpecialType.System_Collections_Generic_IEnumerable_T
+            ? type
+            : type.AllInterfaces.FirstOrDefault(candidate =>
+                candidate.OriginalDefinition.SpecialType == SpecialType.System_Collections_Generic_IEnumerable_T))
+        ?.TypeArguments[0];
+
+    /// <summary>A type a captured value can't speak the dump through: an
+    /// exception or a collection of them (the census follows it), a value
+    /// type, or <c>System.Type</c>.</summary>
+    private static bool HoldsNoText(ITypeSymbol type, INamedTypeSymbol exception) =>
+        CarriesExceptions(type, exception) || type.IsValueType || type.ToDisplayString() == "System.Type";
+
+    /// <summary>Codex round 6: a pattern on an exception may capture
+    /// (<c>is object boxed</c>, a switch arm, a case label); every variable
+    /// it declares must keep a type that holds no text.</summary>
+    private static bool CapturesHoldNoText(SemanticModel model, PatternSyntax pattern, INamedTypeSymbol exception) =>
+        pattern.DescendantNodesAndSelf().OfType<SingleVariableDesignationSyntax>().All(designation =>
+            model.GetDeclaredSymbol(designation) is ILocalSymbol local && HoldsNoText(local.Type, exception));
 
     /// <summary>Whether the parent expression is itself an exception, so the
     /// value is judged where that larger expression goes: parentheses,
@@ -266,35 +308,50 @@ public sealed class BasesErrorDetailCensus
     private static bool AllowedUse(
         SemanticModel model, ExpressionSyntax expression, INamedTypeSymbol exception, IReadOnlySet<SyntaxTree> censused)
     {
-        bool staysAnException = model.GetTypeInfo(expression).ConvertedType is { } converted && DerivesFrom(converted, exception);
+        bool staysAnException = model.GetTypeInfo(expression).ConvertedType is { } converted
+            && CarriesExceptions(converted, exception);
+        bool isACollection = model.GetTypeInfo(expression).Type is { } type && !DerivesFrom(type, exception);
         return expression.Parent switch
         {
             ArgumentSyntax argument => AllowedArgument(model, argument, exception, censused),
             ThrowStatementSyntax or ThrowExpressionSyntax or ExpressionStatementSyntax => true,
-            IsPatternExpressionSyntax test => test.Expression == expression,
-            SwitchExpressionSyntax switchExpression => switchExpression.GoverningExpression == expression,
-            SwitchStatementSyntax switchStatement => switchStatement.Expression == expression,
+            IsPatternExpressionSyntax test => test.Expression == expression
+                && CapturesHoldNoText(model, test.Pattern, exception),
+            SwitchExpressionSyntax switchExpression => switchExpression.GoverningExpression == expression
+                && switchExpression.Arms.All(arm => CapturesHoldNoText(model, arm.Pattern, exception)),
+            SwitchStatementSyntax switchStatement => switchStatement.Expression == expression
+                && switchStatement.Sections.SelectMany(section => section.Labels).OfType<CasePatternSwitchLabelSyntax>()
+                    .All(label => CapturesHoldNoText(model, label.Pattern, exception)),
+            ForEachStatementSyntax loop => loop.Expression == expression
+                && model.GetDeclaredSymbol(loop) is { } variable && HoldsNoText(variable.Type, exception),
             BinaryExpressionSyntax binary => binary.Kind() is SyntaxKind.EqualsExpression or SyntaxKind.NotEqualsExpression
                 or SyntaxKind.IsExpression,
             EqualsValueClauseSyntax or ReturnStatementSyntax or ArrowExpressionClauseSyntax or LambdaExpressionSyntax
                 or AssignmentExpressionSyntax => staysAnException,
-            MemberAccessExpressionSyntax access when access.Expression == expression => AllowedMember(model, access.Name, exception),
+            ExpressionElementSyntax { Parent: CollectionExpressionSyntax collection } =>
+                model.GetTypeInfo(collection).ConvertedType is { } target && CarriesExceptions(target, exception),
+            InitializerExpressionSyntax { Parent: BaseObjectCreationExpressionSyntax creation } =>
+                model.GetTypeInfo(creation).Type is { } created && CarriesExceptions(created, exception),
+            MemberAccessExpressionSyntax access when access.Expression == expression =>
+                AllowedMember(model, access.Name, exception, isACollection),
             ConditionalAccessExpressionSyntax conditional when conditional.Expression == expression
                 && conditional.WhenNotNull.DescendantNodesAndSelf().OfType<MemberBindingExpressionSyntax>().FirstOrDefault() is { } binding =>
-                AllowedMember(model, binding.Name, exception),
+                AllowedMember(model, binding.Name, exception, isACollection),
             _ => false,
         };
     }
 
-    /// <summary><c>GetType</c>, or a member that hands on another exception
-    /// (<c>InnerException</c>, <c>GetBaseException()</c>), which the census
-    /// then follows.</summary>
-    private static bool AllowedMember(SemanticModel model, SimpleNameSyntax name, INamedTypeSymbol exception) =>
-        model.GetSymbolInfo(name).Symbol switch
+    /// <summary>On an exception: <c>GetType</c>, or a member whose value
+    /// holds no text (<c>HResult</c>, <c>InnerException</c>,
+    /// <c>GetBaseException()</c>, which the census then follows). On a
+    /// collection of exceptions, any member: its elements reach text only
+    /// through a lambda or an argument, which the census reads.</summary>
+    private static bool AllowedMember(SemanticModel model, SimpleNameSyntax name, INamedTypeSymbol exception, bool onACollection) =>
+        onACollection || model.GetSymbolInfo(name).Symbol switch
         {
             IMethodSymbol { Name: "GetType" } => true,
-            IMethodSymbol method => DerivesFrom(method.ReturnType, exception),
-            IPropertySymbol property => DerivesFrom(property.Type, exception),
+            IMethodSymbol method => HoldsNoText(method.ReturnType, exception),
+            IPropertySymbol property => HoldsNoText(property.Type, exception),
             _ => false,
         };
 
@@ -314,7 +371,7 @@ public sealed class BasesErrorDetailCensus
                 && index < method.Parameters.Length
                 ? method.Parameters[index]
                 : null;
-        if (parameter is null || !DerivesFrom(parameter.Type, exception))
+        if (parameter is null || !CarriesExceptions(parameter.Type, exception))
         {
             return false;
         }
@@ -357,8 +414,12 @@ public sealed class BasesErrorDetailCensus
 
     /// <summary>The construct that consumes the exception: the call an
     /// argument goes to, otherwise the parent.</summary>
-    private static string Snippet(ExpressionSyntax expression) =>
-        Shorten(expression.Parent is ArgumentSyntax { Parent.Parent: { } call } ? call : expression.Parent!);
+    private static string Snippet(ExpressionSyntax expression) => Shorten(expression.Parent switch
+    {
+        ArgumentSyntax { Parent.Parent: { } call } => call,
+        ExpressionElementSyntax { Parent: { } collection } => collection,
+        var parent => parent!,
+    });
 
     private static string Shorten(SyntaxNode node)
     {
