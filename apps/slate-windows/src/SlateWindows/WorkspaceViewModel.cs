@@ -1591,18 +1591,32 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             return Task.CompletedTask;
         }
         string fileName = System.IO.Path.GetFileName(path);
+        // A refusal ends the toggle even when its sentence throws on the way
+        // out (codex round 2): no worker follows to end it.
         if (IsDirty)
         {
-            announce(new A11yEvent.TaskToggleUnsaved(fileName));
-            EndUnstartedTaskToggle(generation, completion, publishedThroughTab: true);
+            try
+            {
+                announce(new A11yEvent.TaskToggleUnsaved(fileName));
+            }
+            finally
+            {
+                EndUnstartedTaskToggle(generation, completion, publishedThroughTab: true);
+            }
             return Task.CompletedTask;
         }
         if (!string.Equals(Path, path, StringComparison.Ordinal)
             || !string.Equals(_contentHash, requestedHash, StringComparison.Ordinal)
             || IsExternallyStale)
         {
-            announce(new A11yEvent.TaskToggleConflict(fileName));
-            EndUnstartedTaskToggle(generation, completion, publishedThroughTab: true);
+            try
+            {
+                announce(new A11yEvent.TaskToggleConflict(fileName));
+            }
+            finally
+            {
+                EndUnstartedTaskToggle(generation, completion, publishedThroughTab: true);
+            }
             return Task.CompletedTask;
         }
 

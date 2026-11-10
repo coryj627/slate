@@ -576,6 +576,65 @@ public sealed class SaveChainAdmissionTests
         }
     });
 
+    /// <summary>A toggle refused when its turn comes, dirty or stale, whose
+    /// refusal sentence throws on its way out (the announcer reaches UIA): the
+    /// toggle still ends, so the tab's next toggle starts rather than being
+    /// refused as busy (codex round 2).</summary>
+    [Theory]
+    [InlineData("dirty")]
+    [InlineData("stale")]
+    public void ATaskToggleRefusedAtItsTurnEndsEvenWhenItsSentenceThrows(string refusal) => RunSta(() =>
+    {
+        using var peers = new Peers("toggle-refusal-throws-" + refusal, TaskNote);
+        TaskItem task = TheTask(peers);
+        var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool>? held = null;
+        Task<bool>? save = null;
+        void Throwing(A11yEvent spoken)
+        {
+            if (spoken is A11yEvent.TaskToggleUnsaved or A11yEvent.TaskToggleConflict)
+            {
+                throw new System.Runtime.InteropServices.COMException("the announcer failed (test seam)");
+            }
+        }
+        try
+        {
+            if (refusal == "dirty")
+            {
+                held = peers.H.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
+                Assert.Equal(TabTaskToggle.Started, peers.A.ToggleTask(task, Throwing));
+                peers.A.Text = TaskNote + "An unsaved line.\n";
+                ahead.SetResult();
+            }
+            else
+            {
+                save = peers.ParkBsSave(TaskNoteEdited);
+                peers.TakeBack(TaskNote);
+                Assert.Equal(TabTaskToggle.Started, peers.A.ToggleTask(task, Throwing));
+                peers.Retype(TaskNoteEdited);
+                peers.ReleaseSave();
+            }
+            peers.H.PumpUntil(
+                () => !peers.A.IsTaskToggleInFlight && peers.H.Workspace.SavesIdle,
+                "the refused toggle's end");
+            if (refusal == "dirty")
+            {
+                peers.A.Text = TaskNote;
+            }
+            Assert.False(peers.A.IsDirty, "premise: the tab is clean for the next toggle");
+            TaskItem next = peers.H.Session.TasksForFile("a.md")[0];
+            Assert.Equal(TabTaskToggle.Started, peers.A.ToggleTask(next, _ => { }));
+            peers.H.PumpUntil(
+                () => !peers.A.IsTaskToggleInFlight && peers.H.Workspace.SavesIdle,
+                "the next toggle");
+        }
+        finally
+        {
+            _ = ahead.TrySetResult();
+            peers.ReleaseSave();
+        }
+    });
+
     private static TaskItem TheTask(Peers peers) => peers.H.Session.TasksForFile("a.md")[0];
 
     // ---- Bases cell writes (#1657) -------------------------------------------
