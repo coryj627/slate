@@ -1533,11 +1533,84 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         _taskToggleInFlight = true;
         int generation = ++_taskToggleGeneration;
         string path = Path;
-        string? expectedHash = _contentHash;
-        long revision = _editorSession!.Revision;
-        EditorSavedBaseline baseline = _editorSession.SavedBaseline;
+        string? requestedHash = _contentHash;
         string nextStatus = task.Completed ? " " : "x";
-        _ = Task.Run(() => PerformTaskToggle(
+        // #1658: the toggle rewrites the note, so it joins the note's save
+        // chain (WB-2's rule): it never writes beside a save admitted before
+        // it, and a save requested after it waits for its publication.
+        bool started = false;
+        Task<bool> admitted = Saves.Admit(path, _ =>
+        {
+            started = true;
+            return StartAdmittedTaskToggle(
+                generation, path, requestedHash, task, nextStatus, announce, completion);
+        });
+        void Abandoned()
+        {
+            // The coordinator closed before the toggle's turn: it never ran.
+            if (!started)
+            {
+                EndUnstartedTaskToggle(generation, completion, publishedThroughTab: false);
+            }
+        }
+        if (admitted.IsCompleted)
+        {
+            Abandoned();
+        }
+        else
+        {
+            _ = admitted.ContinueWith(
+                _ => _dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(Abandoned)),
+                CancellationToken.None,
+                TaskContinuationOptions.None,
+                TaskScheduler.Default);
+        }
+        return TabTaskToggle.Started;
+    }
+
+    /// <summary>#1658: the admitted toggle, on the dispatcher, once every save
+    /// admitted before it has published. It reads the tab's saved state now.
+    /// A note that turned dirty refuses as at request; one whose saved bytes
+    /// moved since the request (a save it waited for, an outside write, a
+    /// rename) refuses as stale, because the task is an ordinal and offsets
+    /// in the text it was asked on, which a moved note may no longer hold.
+    /// The ticket ends with the toggle's publication, or with the
+    /// refusal.</summary>
+    private Task StartAdmittedTaskToggle(
+        int generation,
+        string path,
+        string? requestedHash,
+        TaskItem task,
+        string nextStatus,
+        Action<A11yEvent> announce,
+        Action<SaveReport?, VaultException?, string?, bool>? completion)
+    {
+        if (_disposed || generation != _taskToggleGeneration || _editorSession is null)
+        {
+            EndUnstartedTaskToggle(generation, completion, publishedThroughTab: false);
+            return Task.CompletedTask;
+        }
+        string fileName = System.IO.Path.GetFileName(path);
+        if (IsDirty)
+        {
+            announce(new A11yEvent.TaskToggleUnsaved(fileName));
+            EndUnstartedTaskToggle(generation, completion, publishedThroughTab: true);
+            return Task.CompletedTask;
+        }
+        if (!string.Equals(Path, path, StringComparison.Ordinal)
+            || !string.Equals(_contentHash, requestedHash, StringComparison.Ordinal)
+            || IsExternallyStale)
+        {
+            announce(new A11yEvent.TaskToggleConflict(fileName));
+            EndUnstartedTaskToggle(generation, completion, publishedThroughTab: true);
+            return Task.CompletedTask;
+        }
+
+        string? expectedHash = _contentHash;
+        long revision = _editorSession.Revision;
+        EditorSavedBaseline baseline = _editorSession.SavedBaseline;
+        var published = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Saves.TrackWorker(Task.Run(() => PerformTaskToggle(
             generation,
             path,
             expectedHash,
@@ -1546,8 +1619,29 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
             task,
             nextStatus,
             announce,
-            completion));
-        return TabTaskToggle.Started;
+            completion,
+            published)));
+        return published.Task;
+    }
+
+    /// <summary>A toggle that never wrote ends: the in-flight flag goes (when
+    /// it is still this toggle's), and the caller's completion hears a
+    /// refusal before any write, the one no-write outcome that is certain, so
+    /// a review route disarms its refresh.</summary>
+    private void EndUnstartedTaskToggle(
+        int generation,
+        Action<SaveReport?, VaultException?, string?, bool>? completion,
+        bool publishedThroughTab)
+    {
+        if (generation == _taskToggleGeneration)
+        {
+            _taskToggleInFlight = false;
+        }
+        completion?.Invoke(
+            null,
+            new VaultException.WriteConflict(_contentHash ?? "", _contentHash ?? "", 0),
+            null,
+            publishedThroughTab);
     }
 
     private sealed record TaskToggleOutcome(
@@ -1614,7 +1708,8 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         TaskItem task,
         string nextStatus,
         Action<A11yEvent> announce,
-        Action<SaveReport?, VaultException?, string?, bool>? completion = null)
+        Action<SaveReport?, VaultException?, string?, bool>? completion = null,
+        TaskCompletionSource? published = null)
     {
         TaskToggleOutcome outcome;
         Panels.TaskIndexRepairCoordinator? repairs = TaskRepairs;
@@ -1686,6 +1781,7 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
 
         if (_dispatcher.HasShutdownStarted || _dispatcher.HasShutdownFinished)
         {
+            _ = published?.TrySetResult();
             return;
         }
 
@@ -1700,7 +1796,8 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
                 nextStatus,
                 announce,
                 outcome,
-                completion)));
+                completion,
+                published)));
     }
 
     private void PublishTaskToggle(
@@ -1712,7 +1809,31 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
         string nextStatus,
         Action<A11yEvent> announce,
         TaskToggleOutcome outcome,
-        Action<SaveReport?, VaultException?, string?, bool>? completion = null)
+        Action<SaveReport?, VaultException?, string?, bool>? completion = null,
+        TaskCompletionSource? published = null)
+    {
+        try
+        {
+            PublishTaskToggleOutcome(
+                generation, path, expectedHash, revision, task, nextStatus, announce, outcome, completion);
+        }
+        finally
+        {
+            // #1658: the admitted toggle's ticket ends with its publication.
+            _ = published?.TrySetResult();
+        }
+    }
+
+    private void PublishTaskToggleOutcome(
+        int generation,
+        string path,
+        string? expectedHash,
+        long revision,
+        TaskItem task,
+        string nextStatus,
+        Action<A11yEvent> announce,
+        TaskToggleOutcome outcome,
+        Action<SaveReport?, VaultException?, string?, bool>? completion)
     {
         // The completion outlives THIS TAB deliberately (adversarial
         // round 3): the dispatcher belongs to the app, so a caller
