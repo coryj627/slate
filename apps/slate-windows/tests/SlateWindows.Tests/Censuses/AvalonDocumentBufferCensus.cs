@@ -1211,7 +1211,8 @@ public sealed class AvalonDocumentBufferCensus
         string name;
         try
         {
-            name = System.Diagnostics.Process.GetProcessById((int)pid).ProcessName;
+            using var process = System.Diagnostics.Process.GetProcessById((int)pid);
+            name = process.ProcessName;
         }
         catch (ArgumentException)
         {
