@@ -106,6 +106,13 @@ public sealed class BasesErrorDetailCensus
     [InlineData("List<Exception> failures = [thrown]; foreach (object boxed in failures) { detail = $\"{boxed}\"; }", "foreach (object boxed")]
     [InlineData("List<Exception> failures = [thrown]; detail = string.Join(\", \", failures.Select(failure => failure.ToString()));", "failure.ToString")]
     [InlineData("List<object> boxes = [thrown]; detail = $\"{boxes[0]}\";", "[thrown]")]
+    [InlineData("List<Exception> failures = [thrown]; detail = string.Join(\", \", failures.Cast<object>());", "failures.Cast<object>")]
+    [InlineData("List<Exception> failures = [thrown]; detail = string.Join(\", \", failures.OfType<object>());", "failures.OfType<object>")]
+    [InlineData("List<Exception> failures = [thrown]; detail = string.Join(\", \", failures.Select(failure => (object)failure));", "(object)failure")]
+    [InlineData("List<Exception> failures = [thrown]; detail = string.Join(\", \", failures.Select(Convert.ToString));", "failures.Select")]
+    [InlineData("List<Exception> failures = [thrown]; detail = string.Join(\", \", failures.Select(failure => BasePhrase.ErrorDetail(failure)));", "")]
+    [InlineData("List<Exception> failures = [thrown]; detail = BasePhrase.ErrorDetail(failures.First());", "")]
+    [InlineData("List<Exception> failures = [thrown]; detail = failures.Where(failure => failure is VaultException).Count().ToString();", "")]
     [InlineData("if (thrown is { HResult: var code }) { detail = code.ToString(); }", "")]
     [InlineData("List<Exception> failures = [thrown]; foreach (var failure in failures) { detail = BasePhrase.ErrorDetail(failure); }", "")]
     [InlineData("List<Exception> failures = new() { thrown }; detail = failures.Count.ToString();", "")]
@@ -341,16 +348,22 @@ public sealed class BasesErrorDetailCensus
         };
     }
 
-    /// <summary>On an exception: <c>GetType</c>, or a member whose value
-    /// holds no text (<c>HResult</c>, <c>InnerException</c>,
-    /// <c>GetBaseException()</c>, which the census then follows). On a
-    /// collection of exceptions, any member: its elements reach text only
-    /// through a lambda or an argument, which the census reads.</summary>
+    /// <summary>A member whose value holds no text: <c>HResult</c>,
+    /// <c>InnerException</c>, <c>GetBaseException()</c>, a collection's
+    /// <c>Count</c>, <c>First()</c> or <c>Where(…)</c> (which the census then
+    /// follows), and an exception's <c>GetType</c>. On a collection, a call
+    /// whose arguments are all lambdas (<c>Select(f => …)</c>) also passes:
+    /// each element reaches text only inside the lambda, whose body the
+    /// census reads. <c>Cast&lt;object&gt;()</c>, <c>OfType&lt;object&gt;()</c>
+    /// and a method group erase the type unread, so they are named (codex
+    /// round 7).</summary>
     private static bool AllowedMember(SemanticModel model, SimpleNameSyntax name, INamedTypeSymbol exception, bool onACollection) =>
-        onACollection || model.GetSymbolInfo(name).Symbol switch
+        model.GetSymbolInfo(name).Symbol switch
         {
-            IMethodSymbol { Name: "GetType" } => true,
-            IMethodSymbol method => HoldsNoText(method.ReturnType, exception),
+            IMethodSymbol { Name: "GetType" } when !onACollection => true,
+            IMethodSymbol method => HoldsNoText(method.ReturnType, exception)
+                || (onACollection && name.Parent?.Parent is InvocationExpressionSyntax { ArgumentList.Arguments: { Count: > 0 } arguments }
+                    && arguments.All(argument => argument.Expression is AnonymousFunctionExpressionSyntax)),
             IPropertySymbol property => HoldsNoText(property.Type, exception),
             _ => false,
         };
