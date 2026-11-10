@@ -1872,30 +1872,17 @@ internal sealed partial class WorkspaceViewModel
                 AnnounceWriteInFlightRefusal();
                 return;
             }
-            // The W4-4 seam: CAS + rebaseline live in the tab; the
-            // note-scoped lease brackets the whole write (same
-            // exclusion as the panel rows — one write per path at a
-            // time, any origin); the completion routes into the one
-            // funnel.
-            tab.WriteProperty(
-                tab.SavedContentHash,
-                expectedHash => value is null
-                    ? _session.DeleteProperty(row.FilePath, key, expectedHash)
-                    : _session.SetProperty(row.FilePath, key, value, expectedHash),
-                WithLeaseRelease(row.FilePath, (report, failure, _postFailureDiskHash) =>
-                {
-                    if (failure is not null)
-                    {
-                        _announce(new A11yEvent.BasesCellEditFailed(failure.Message));
-                        return;
-                    }
-                    if (report is not null)
-                    {
-                        _ = tab.RebaselineAfterPropertyWrite(
-                            report.NewContentHash, _announce);
-                    }
-                    CompleteBasesWrite(document, row, column, value);
-                }));
+            // #1657: the cell write joins the note's save chain, as the
+            // properties header's writes do (WB-2, #1325): it never writes
+            // beside a save admitted before it, and a save requested after
+            // it waits for its publication. The note-scoped lease brackets
+            // the whole operation (one write per path at a time, any
+            // origin).
+            string path = row.FilePath;
+            AdmitPropertyWrite(
+                path,
+                () => BasesCellWriteAdmitted(document, row, column, key, value),
+                () => ReleasePropertyWriteLease(path));
             return;
         }
         // Tabless: direct write, no expected hash (mac parity), but
@@ -1917,6 +1904,91 @@ internal sealed partial class WorkspaceViewModel
         // session touch out before disposal (codex round 5).
         TrackRetiredBasesWork(
             Task.Run(() => BasesTablessWriteBody(document, row, column, key, value)));
+    }
+
+    /// <summary>#1657: the admitted cell write on an open note, run once
+    /// every save admitted before it has published. It re-checks the dirty
+    /// and stale gates then, and takes its CAS token from the tab's saved
+    /// hash, which the save it waited for has published (the W4-4 seam:
+    /// CAS and rebaseline live in the tab; the completion routes into the
+    /// one funnel). A note whose tab closed while it waited takes the
+    /// tabless write. The operation ends with the write's completion, or
+    /// with the refusal that wrote nothing.</summary>
+    private Task BasesCellWriteAdmitted(
+        BaseDocumentViewModel document,
+        BasesRow row,
+        BasesColumn column,
+        string key,
+        PropertyValue? value)
+    {
+        string path = row.FilePath;
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            if (_workspaceDisposed || _saves.IsClosed)
+            {
+                ReleasePropertyWriteLease(path);
+                done.TrySetResult();
+                return done.Task;
+            }
+            if (FindTabForPath(path) is not { IsMarkdown: true } tab)
+            {
+                if (!_startInteractionBackgroundWork)
+                {
+                    BasesTablessWriteBody(document, row, column, key, value);
+                    done.TrySetResult();
+                    return done.Task;
+                }
+                Task body = Task.Run(() => BasesTablessWriteBody(document, row, column, key, value));
+                TrackRetiredBasesWork(body);
+                _ = body.ContinueWith(
+                    _ => done.TrySetResult(),
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+                return done.Task;
+            }
+            if (tab.IsDirty)
+            {
+                ReleasePropertyWriteLease(path);
+                AnnounceDirtyTabPropertyRefusal(tab);
+                done.TrySetResult();
+                return done.Task;
+            }
+            if (tab.IsExternallyStale)
+            {
+                ReleasePropertyWriteLease(path);
+                _announce(new A11yEvent.PropertyEditConflict(System.IO.Path.GetFileName(tab.Path)));
+                done.TrySetResult();
+                return done.Task;
+            }
+            _saves.TrackWorker(tab.WriteProperty(
+                tab.SavedContentHash,
+                expectedHash => value is null
+                    ? _session.DeleteProperty(path, key, expectedHash)
+                    : _session.SetProperty(path, key, value, expectedHash),
+                WithLeaseRelease(path, EndingWith(
+                    (report, failure, _postFailureDiskHash) =>
+                    {
+                        if (failure is not null)
+                        {
+                            _announce(new A11yEvent.BasesCellEditFailed(failure.Message));
+                            return;
+                        }
+                        if (report is not null)
+                        {
+                            _ = tab.RebaselineAfterPropertyWrite(report.NewContentHash, _announce);
+                        }
+                        CompleteBasesWrite(document, row, column, value);
+                    },
+                    done))));
+        }
+        catch (Exception exception)
+        {
+            ReleasePropertyWriteLease(path);
+            _ = done.TrySetException(exception);
+        }
+        return done.Task;
     }
 
     private void BasesTablessWriteBody(
