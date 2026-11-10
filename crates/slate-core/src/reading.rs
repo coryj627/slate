@@ -4699,42 +4699,40 @@ final para
     // its ranges, so n log n is the real bound and the tests are named
     // for what they actually establish.
 
-    /// Median of the PAIRED small/large ratio.
+    /// The fastest large run over the fastest small run.
     ///
-    /// Small and large are measured alternately inside one loop, so a
-    /// burst of contention on a shared CI runner lands on both arms of
-    /// each pair instead of inflating one phase — measuring all smalls
-    /// and then all larges makes the ratio a hostage to when the noise
-    /// arrives.
+    /// Small and large are measured alternately inside one loop, so
+    /// neither arm's samples all fall in one quiet or one busy stretch.
+    /// Contention on a shared host only ever ADDS time, so each arm's
+    /// fastest run is its closest to the uncontended cost, and a burst
+    /// moves the ratio only if it covers every sample of one arm. The
+    /// median of the paired ratios this replaced did not hold under load
+    /// (#1323): the large arm runs twice as long, so it soaked up more of
+    /// the contention, and a CI run measured 3.3x for code that measures
+    /// ~1.94x.
     fn paired_scaling_ratio(mut small: impl FnMut(), mut large: impl FnMut()) -> f64 {
+        const SAMPLES: usize = 7;
         small();
         large();
-        let mut smalls: Vec<std::time::Duration> = Vec::with_capacity(7);
-        let mut ratios: Vec<f64> = (0..7)
-            .map(|_| {
-                let started = std::time::Instant::now();
-                small();
-                let small_elapsed = started.elapsed();
-                let started = std::time::Instant::now();
-                large();
-                let large_elapsed = started.elapsed();
-                smalls.push(small_elapsed);
-                large_elapsed.as_secs_f64() / small_elapsed.as_secs_f64().max(f64::EPSILON)
-            })
-            .collect();
-        ratios.sort_by(f64::total_cmp);
-        smalls.sort_unstable();
-        // Guard restored (it was dropped in the round-6 rewrite to paired
-        // sampling): a baseline small enough to be dominated by timer
-        // noise makes the ratio meaningless, and `.max(EPSILON)` below
-        // would turn that into an absurd number rather than a clear
-        // failure. The fixtures here run tens of milliseconds.
+        let mut smalls: Vec<std::time::Duration> = Vec::with_capacity(SAMPLES);
+        let mut larges: Vec<std::time::Duration> = Vec::with_capacity(SAMPLES);
+        for _ in 0..SAMPLES {
+            let started = std::time::Instant::now();
+            small();
+            smalls.push(started.elapsed());
+            let started = std::time::Instant::now();
+            large();
+            larges.push(started.elapsed());
+        }
+        let fastest_small = smalls.iter().min().copied().unwrap_or_default();
+        let fastest_large = larges.iter().min().copied().unwrap_or_default();
+        // A baseline small enough to be dominated by timer noise makes the
+        // ratio meaningless. The fixtures here run tens of milliseconds.
         assert!(
-            smalls[smalls.len() / 2] >= std::time::Duration::from_millis(1),
-            "baseline {:?} is too small to measure a ratio against",
-            smalls[smalls.len() / 2]
+            fastest_small >= std::time::Duration::from_millis(1),
+            "baseline {fastest_small:?} is too small to measure a ratio against"
         );
-        ratios[ratios.len() / 2]
+        fastest_large.as_secs_f64() / fastest_small.as_secs_f64()
     }
 
     /// Doubling the input must not more than triple the cost.
@@ -4750,6 +4748,44 @@ final para
             "{label}: doubling the input multiplied the cost by {ratio:.1} — \
              that is worse than the n log n this path is allowed"
         );
+    }
+
+    /// Busy for `span`: a stand-in workload whose cost is CPU time.
+    fn spin(span: std::time::Duration) {
+        let started = std::time::Instant::now();
+        while started.elapsed() < span {
+            std::hint::spin_loop();
+        }
+    }
+
+    /// #1323: contention landing on most of the large arm's samples does
+    /// not fail the guard. Here a burst adds 12 ms to four of the seven
+    /// timed large runs of a workload that doubles from 4 ms to 8 ms:
+    /// the median of the paired ratios reads 5x, each arm's fastest run
+    /// still reads 2x.
+    #[test]
+    fn contention_on_most_large_samples_does_not_fail_the_scaling_guard() {
+        let mut large_runs = 0;
+        let ratio = paired_scaling_ratio(
+            || spin(std::time::Duration::from_millis(4)),
+            || {
+                large_runs += 1;
+                // Run 1 is the warm-up; runs 2 to 5 are timed and land in the burst.
+                let burst = if (2..=5).contains(&large_runs) { 12 } else { 0 };
+                spin(std::time::Duration::from_millis(8 + burst));
+            },
+        );
+        assert_subquadratic("a doubling workload under a burst", ratio);
+    }
+
+    /// And a cost that quadruples when the input doubles still fails it.
+    #[test]
+    fn a_quadratic_cost_still_fails_the_scaling_guard() {
+        let ratio = paired_scaling_ratio(
+            || spin(std::time::Duration::from_millis(4)),
+            || spin(std::time::Duration::from_millis(16)),
+        );
+        assert!(ratio >= 3.0, "a quadrupling cost measured only {ratio:.1}x");
     }
 
     /// Marker-dense input must cost a fixed-size mask per authored scalar
