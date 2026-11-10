@@ -63,6 +63,113 @@ public sealed class AvalonDocumentBufferCensus
         });
     }
 
+    /// <summary>#1839: another process takes the clipboard between the set and
+    /// the paste: before the census checks the clipboard, or after the check
+    /// and before the editor's own, clearing it or putting its own text there,
+    /// after the editor's paste has been checked and before it reads the text,
+    /// or with files, which leave the editor nothing to paste, before the
+    /// editor's own last check or after it; or a process
+    /// watching the clipboard reads the text before the set has flushed it,
+    /// holding the clipboard open until the census's thread renders the text.
+    /// The paste applies once, with the census's text.</summary>
+    [Theory]
+    [InlineData("read by a watcher before the flush")]
+    [InlineData("after the set")]
+    [InlineData("before the paste")]
+    [InlineData("replaced before the paste")]
+    [InlineData("replaced after the check")]
+    [InlineData("replaced with files before the editor reads it")]
+    [InlineData("replaced with files after the editor's last check")]
+    public void APasteWhoseClipboardAnotherProcessTookIsRetried(string when)
+    {
+        RunOnSta(() =>
+        {
+            using var session = new AvalonDocumentBufferSession("prefix ", _ => { });
+            var editor = new TextEditor { Document = session.Document };
+            using var surface = new EditorSurface(editor);
+            long before = session.AppliedDeltaCount;
+            IDataObject? previousClipboard = TryGetClipboardData();
+            Thread? watcher = null;
+            Func<bool>? lateFiles = null;
+            try
+            {
+                PasteThroughTheClipboard(
+                    editor,
+                    session,
+                    "pasted",
+                    afterThePostForTests: when == "read by a watcher before the flush"
+                        ? () => watcher = ReadByAWatcher()
+                        : null,
+                    afterSetForTests: when == "after the set" ? () => WriteTheClipboard(Clipboard.Clear) : null,
+                    beforePasteForTests: when switch
+                    {
+                        "before the paste" => () => WriteTheClipboard(Clipboard.Clear),
+                        "replaced before the paste" => () => SetTheClipboard(TextData("another process's text")),
+                        _ => null,
+                    },
+                    afterTheCheckForTests: when == "replaced after the check"
+                        ? _ => SetTheClipboard(TextData("another process's text"))
+                        : null,
+                    beforeTheEditorReadsForTests: when switch
+                    {
+                        "replaced with files before the editor reads it" => ReplaceTheClipboardWithFiles,
+                        "replaced with files after the editor's last check" =>
+                            () => lateFiles = ReplaceTheClipboardWithFilesAfterTheEditorChecks(editor),
+                        _ => null,
+                    });
+                Assert.True(lateFiles?.Invoke() ?? true, "premise: files replaced the text after the editor's last check");
+                Assert.True(watcher?.Join(TimeSpan.FromSeconds(5)) ?? true, "the watcher's read was never served");
+            }
+            finally
+            {
+                RestoreClipboard(previousClipboard);
+            }
+
+            Assert.Equal(before + 1, session.AppliedDeltaCount);
+            Assert.Equal("prefix pasted", session.Document.Text);
+        });
+    }
+
+    /// <summary>#1839: an editor that drops a paste of the census's text after
+    /// accepting it fails the census at once, with no retry, even though
+    /// another process replaces the clipboard meanwhile: the editor had its own
+    /// copy of the text, so the clipboard cannot explain the missing
+    /// edit.</summary>
+    [Fact]
+    public void APasteTheEditorDropsAfterAcceptingItFailsAtOnce()
+    {
+        RunOnSta(() =>
+        {
+            using var session = new AvalonDocumentBufferSession("prefix ", _ => { });
+            var editor = new TextEditor { Document = session.Document };
+            using var surface = new EditorSurface(editor);
+            long before = session.AppliedDeltaCount;
+            IDataObject? previousClipboard = TryGetClipboardData();
+            Exception? failure;
+            try
+            {
+                failure = Record.Exception(() => PasteThroughTheClipboard(
+                    editor,
+                    session,
+                    "pasted",
+                    afterTheCheckForTests: args =>
+                    {
+                        // Stands in for an editor defect: the accepted paste is dropped.
+                        args.CancelCommand();
+                        SetTheClipboard(TextData("another process's text"));
+                    }));
+            }
+            finally
+            {
+                RestoreClipboard(previousClipboard);
+            }
+
+            Assert.NotNull(failure);
+            Assert.Contains("it had accepted", failure.Message, StringComparison.Ordinal);
+            Assert.Equal(before, session.AppliedDeltaCount);
+        });
+    }
+
     [Fact]
     public void ImeCompositionLifecycleAndClipboardPaste_CommitOnlyThroughInputCommands()
     {
@@ -99,10 +206,7 @@ public sealed class AvalonDocumentBufferCensus
             IDataObject? previousClipboard = TryGetClipboardData();
             try
             {
-                Clipboard.SetText("\r\npasted 😀");
-                editor.TextArea.Caret.Offset = session.Document.TextLength;
-                Assert.True(ApplicationCommands.Paste.CanExecute(null, editor.TextArea));
-                ApplicationCommands.Paste.Execute(null, editor.TextArea);
+                PasteThroughTheClipboard(editor, session, "\r\npasted 😀");
                 Assert.Equal(beforePaste + 1, session.AppliedDeltaCount);
             }
             finally
@@ -798,27 +902,423 @@ public sealed class AvalonDocumentBufferCensus
             [data, DragDropKeyStates.None, DragDropEffects.Copy, target, point]);
     }
 
-    private static IDataObject? TryGetClipboardData()
+    /// <summary>#1839: one paste of <paramref name="text"/> through the real
+    /// system clipboard, which another process on a busy desktop can take or
+    /// change between the set and the paste; the paste then applies nothing.
+    /// That attempt is retried. A clipboard that still holds the text and a
+    /// paste that applies nothing fails at once: that is the editor's
+    /// defect, not the desktop's. <paramref name="afterSetForTests"/> runs
+    /// once, after the first set, <paramref name="beforePasteForTests"/> once,
+    /// after the first check that the clipboard holds the text,
+    /// <paramref name="afterTheCheckForTests"/> once, after the editor's paste
+    /// has been checked and accepted, with that paste, <paramref name="beforeTheEditorReadsForTests"/>
+    /// once, between the editor's own check and its read, and
+    /// <paramref name="afterThePostForTests"/> once, after the first set has
+    /// posted the text and before it is flushed, each standing in for that
+    /// other process.</summary>
+    private static void PasteThroughTheClipboard(
+        TextEditor editor,
+        AvalonDocumentBufferSession session,
+        string text,
+        Action? afterSetForTests = null,
+        Action? beforePasteForTests = null,
+        Action<DataObjectPastingEventArgs>? afterTheCheckForTests = null,
+        Action? beforeTheEditorReadsForTests = null,
+        Action? afterThePostForTests = null)
+    {
+        const int Attempts = 5;
+        long before = session.AppliedDeltaCount;
+        // The paste the editor is about to make: one carrying another
+        // process's text is cancelled before it edits, and retried. One
+        // carrying the census's text is accepted, and must then apply.
+        bool foreign = false;
+        bool accepted = false;
+        void OnlyOurs(object sender, DataObjectPastingEventArgs args)
+        {
+            if (args.DataObject.GetData(DataFormats.UnicodeText) as string != text)
+            {
+                foreign = true;
+                args.CancelCommand();
+                return;
+            }
+
+            accepted = true;
+
+            // The clipboard's data object is live and the editor reads it again
+            // after this event, so it pastes a copy of the text just checked.
+            var checkedText = new DataObject();
+            checkedText.SetData(DataFormats.UnicodeText, text);
+            args.DataObject = checkedText;
+            afterTheCheckForTests?.Invoke(args);
+            afterTheCheckForTests = null;
+        }
+        DataObject.AddPastingHandler(editor.TextArea, OnlyOurs);
+        try
+        {
+            PasteUntilApplied();
+        }
+        finally
+        {
+            DataObject.RemovePastingHandler(editor.TextArea, OnlyOurs);
+        }
+
+        void PasteUntilApplied()
+        {
+            for (int attempt = 1; ; attempt++)
+            {
+                foreign = false;
+                accepted = false;
+                SetTheClipboard(TextData(text), afterThePostForTests);
+                afterThePostForTests = null;
+                afterSetForTests?.Invoke();
+                afterSetForTests = null;
+                editor.TextArea.Caret.Offset = session.Document.TextLength;
+                bool held = ClipboardHolds(text);
+                if (held)
+                {
+                    beforePasteForTests?.Invoke();
+                    beforePasteForTests = null;
+                    if (ApplicationCommands.Paste.CanExecute(null, editor.TextArea))
+                    {
+                        beforeTheEditorReadsForTests?.Invoke();
+                        beforeTheEditorReadsForTests = null;
+                        try
+                        {
+                            ApplicationCommands.Paste.Execute(null, editor.TextArea);
+                        }
+                        catch (ArgumentException) when (!accepted && session.AppliedDeltaCount == before && !ClipboardHolds(text))
+                        {
+                            // The clipboard lost its text after the editor's own last check
+                            // and before it read the clipboard, and WPF refused to build a
+                            // paste of text that was not there, before anything was edited.
+                            foreign = true;
+                        }
+                    }
+                    else
+                    {
+                        // The editor asks the clipboard itself: it refused because
+                        // the text went (retried below), or it refused a paste the
+                        // clipboard could serve (its defect).
+                        Assert.False(ClipboardHolds(text), "the editor refused a paste the clipboard can serve");
+                    }
+                }
+
+                if (session.AppliedDeltaCount != before)
+                {
+                    return;
+                }
+
+                // The editor was handed its own copy of the census's text, so
+                // nothing another process did to the clipboard explains this.
+                Assert.False(accepted, "the editor applied nothing from a paste of the census's text it had accepted");
+                Assert.False(held && !foreign && ClipboardHolds(text), "the paste applied nothing, though the clipboard held its text throughout");
+                Assert.True(attempt < Attempts, $"another process kept the clipboard through {Attempts} pastes");
+                Thread.Sleep(TimeSpan.FromMilliseconds(100 * attempt));
+            }
+        }
+    }
+
+    /// <summary>Another process copies files: the clipboard holds no text at all.</summary>
+    private static void ReplaceTheClipboardWithFiles()
+    {
+        var files = new DataObject();
+        files.SetFileDropList([Environment.ProcessPath!]);
+        SetTheClipboard(files);
+        Assert.True(
+            Clipboard.ContainsFileDropList() && !Clipboard.ContainsText(),
+            "premise: the clipboard holds files and no text");
+    }
+
+    /// <summary>Another process copies files just after the editor's own last
+    /// check that the clipboard holds text, which its Paste binding makes as
+    /// the command runs, and before the editor reads the clipboard. Returns
+    /// whether that happened.</summary>
+    private static Func<bool> ReplaceTheClipboardWithFilesAfterTheEditorChecks(TextEditor editor)
+    {
+        CommandBinding paste = editor.TextArea.CommandBindings
+            .OfType<CommandBinding>()
+            .Single(binding => binding.Command == ApplicationCommands.Paste);
+        bool replaced = false;
+        void AfterTheCheck(object sender, CanExecuteRoutedEventArgs args)
+        {
+            if (replaced || !args.CanExecute)
+            {
+                return;
+            }
+
+            replaced = true;
+            paste.CanExecute -= AfterTheCheck;
+            ReplaceTheClipboardWithFiles();
+        }
+
+        paste.CanExecute += AfterTheCheck;
+        return () =>
+        {
+            paste.CanExecute -= AfterTheCheck;
+            return replaced;
+        };
+    }
+
+    /// <summary>#1839: puts <paramref name="data"/> on the system clipboard,
+    /// to stay there once this thread is gone. WPF's copying set
+    /// (<see cref="Clipboard.SetText(string)"/>, or
+    /// <see cref="Clipboard.SetDataObject(object, bool)"/> with copy) posts the
+    /// data and flushes it in one call, retrying the flush while it sleeps. A
+    /// process that watches the clipboard (seen here: a remote desktop's
+    /// clipboard sync) can open it to read the posted data before the flush, and
+    /// that read waits for this thread to render the data, which it cannot do
+    /// while it sleeps, so every flush fails with CLIPBRD_E_CANT_OPEN. So the
+    /// data is posted without the flush, and the flush is retried here while
+    /// this thread's messages run.</summary>
+    private static void SetTheClipboard(IDataObject data, Action? afterThePostForTests = null)
+    {
+        WriteTheClipboard(() => Clipboard.SetDataObject(data, copy: false));
+        afterThePostForTests?.Invoke();
+        WriteTheClipboard(Clipboard.Flush);
+    }
+
+    /// <summary>A process that watches the clipboard reads the text just
+    /// posted, before it is flushed: it opens the clipboard and asks for it,
+    /// which keeps the clipboard open until this thread renders it. It asks for
+    /// <see cref="WatchedFormat"/>, which only it reads, since a format a real
+    /// watcher has already had rendered no longer waits on this thread.
+    /// Returns the watcher, to be joined once the census is done.</summary>
+    private static Thread ReadByAWatcher()
+    {
+        uint watched = RegisterClipboardFormat(WatchedFormat);
+        Assert.True(watched != 0, "premise: the watched format is registered");
+        bool openedIt = false;
+        int tried = 0;
+        var watcher = new Thread(() =>
+        {
+            for (int attempt = 0; attempt < 250 && !openedIt; attempt++)
+            {
+                openedIt = OpenClipboard(IntPtr.Zero);
+                if (!openedIt)
+                {
+                    Thread.Sleep(20);
+                }
+            }
+
+            Volatile.Write(ref tried, 1);
+            if (!openedIt)
+            {
+                return;
+            }
+
+            try
+            {
+                _ = GetClipboardData(watched);
+            }
+            finally
+            {
+                _ = CloseClipboard();
+            }
+        })
+        {
+            IsBackground = true,
+        };
+        watcher.Start();
+        // A wait on this thread that runs its messages would serve the
+        // watcher's read here, before the flush meets it, so this one sleeps,
+        // except while a real watcher (a window: this one opens with none) has
+        // the clipboard open, waiting the same way for this thread to render.
+        var clock = Stopwatch.StartNew();
+        while (Volatile.Read(ref tried) == 0 && clock.Elapsed < TimeSpan.FromSeconds(10))
+        {
+            if (GetOpenClipboardWindow() != IntPtr.Zero)
+            {
+                RunDispatcherFor(TimeSpan.FromMilliseconds(10));
+            }
+            else
+            {
+                Thread.Sleep(1);
+            }
+        }
+
+        Assert.True(Volatile.Read(ref tried) == 1 && openedIt, "premise: the watcher opened the clipboard");
+        return watcher;
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool OpenClipboard(IntPtr owner);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool CloseClipboard();
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr GetClipboardData(uint format);
+
+    /// <summary>A format of the census's own, posted with its text, that only
+    /// <see cref="ReadByAWatcher"/> asks for.</summary>
+    private const string WatchedFormat = "SlateWindows.Tests.AvalonDocumentBufferCensus.Watched";
+
+    private static DataObject TextData(string text)
+    {
+        var data = new DataObject();
+        data.SetData(DataFormats.UnicodeText, text, autoConvert: true);
+        data.SetData(WatchedFormat, text, autoConvert: false);
+        return data;
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern uint RegisterClipboardFormat(string format);
+
+    /// <summary>#1839: one write to the system clipboard. Another process can
+    /// hold it open for longer than WPF's own retries (seen here: the desktop's
+    /// clipboard history reading each write), and the write then fails with
+    /// CLIPBRD_E_CANT_OPEN, so it is tried again a few times, with this thread's
+    /// messages running in between so a read waiting on this thread can
+    /// finish.</summary>
+    private static void WriteTheClipboard(Action write)
+    {
+        const int Attempts = 10;
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                write();
+                return;
+            }
+            catch (System.Runtime.InteropServices.ExternalException) when (attempt < Attempts)
+            {
+                RunDispatcherFor(TimeSpan.FromMilliseconds(50 * attempt));
+            }
+            catch (System.Runtime.InteropServices.ExternalException e)
+            {
+                throw new InvalidOperationException($"the clipboard stayed open: {ClipboardHolder()}", e);
+            }
+        }
+    }
+
+    /// <summary>Who has the clipboard open now, for a failure message.</summary>
+    private static string ClipboardHolder()
+    {
+        return $"open by {WindowsProcess(GetOpenClipboardWindow())}, owned by {WindowsProcess(GetClipboardOwner())}"
+            + $" (this is process {Environment.ProcessId}, thread {GetCurrentThreadId()})";
+    }
+
+    private static string WindowsProcess(IntPtr window)
+    {
+        if (window == IntPtr.Zero)
+        {
+            return "no window";
+        }
+
+        uint thread = GetWindowThreadProcessId(window, out uint pid);
+        string name;
+        try
+        {
+            using var process = System.Diagnostics.Process.GetProcessById((int)pid);
+            name = process.ProcessName;
+        }
+        catch (ArgumentException)
+        {
+            name = "(exited)";
+        }
+
+        return $"process {pid} {name}, thread {thread}";
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr GetClipboardOwner();
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr GetOpenClipboardWindow();
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
+
+    private static bool ClipboardHolds(string text)
     {
         try
         {
-            return Clipboard.GetDataObject();
+            return Clipboard.ContainsText() && Clipboard.GetText() == text;
         }
         catch (System.Runtime.InteropServices.COMException)
         {
+            return false;
+        }
+    }
+
+    /// <summary>#1839: a copy of the reader's clipboard, taken before the census
+    /// writes to it. <see cref="Clipboard.GetDataObject"/> hands back the live
+    /// clipboard, which by the time it is restored reads the census's own text,
+    /// and setting it back makes the clipboard serve itself, which can keep it
+    /// locked through every retry. Each format that can be read is copied; one
+    /// that still cannot be read after a few tries is left out.</summary>
+    private static IDataObject? TryGetClipboardData()
+    {
+        IDataObject live;
+        try
+        {
+            live = Clipboard.GetDataObject();
+        }
+        catch (System.Runtime.InteropServices.ExternalException)
+        {
             return null;
         }
+
+        if (live is null)
+        {
+            return null;
+        }
+
+        var copy = new DataObject();
+        string[] formats;
+        try
+        {
+            formats = live.GetFormats(autoConvert: false);
+        }
+        catch (System.Runtime.InteropServices.ExternalException)
+        {
+            return null;
+        }
+
+        foreach (string format in formats)
+        {
+            for (int attempt = 1; attempt <= 3; attempt++)
+            {
+                try
+                {
+                    object? data = live.GetData(format, autoConvert: false);
+                    if (data is not null)
+                    {
+                        copy.SetData(format, data, autoConvert: false);
+                    }
+
+                    break;
+                }
+                catch (System.Runtime.InteropServices.ExternalException) when (attempt < 3)
+                {
+                    RunDispatcherFor(TimeSpan.FromMilliseconds(50 * attempt));
+                }
+                catch (System.Runtime.InteropServices.ExternalException)
+                {
+                    // A format another process renders on demand and still
+                    // cannot render is left out: failing the census on the
+                    // reader's clipboard would be the desktop flake #1839 removes.
+                }
+            }
+        }
+
+        return copy.GetFormats(autoConvert: false).Length == 0 ? null : copy;
     }
 
     private static void RestoreClipboard(IDataObject? previous)
     {
         if (previous is null)
         {
-            Clipboard.Clear();
+            WriteTheClipboard(Clipboard.Clear);
             return;
         }
 
-        Clipboard.SetDataObject(previous);
+        SetTheClipboard(previous);
     }
 
     private static int NearestProseOffset(string document)
