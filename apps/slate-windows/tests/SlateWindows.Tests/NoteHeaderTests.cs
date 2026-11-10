@@ -585,8 +585,7 @@ public sealed class NoteHeaderTests
         if (fromReading)
         {
             host.Workspace.ToggleReadingModeCommand.Execute(null);
-            host.Settle();
-            System.Windows.Documents.Hyperlink link = ReadingLinks(content).First();
+            System.Windows.Documents.Hyperlink link = FirstReadingLink(host, content);
             Assert.True(((IInputElement)link).Focus());
         }
         else
@@ -899,6 +898,27 @@ public sealed class NoteHeaderTests
 
     private static RichTextBox ReadingSurfaceOf(FrameworkElement content) =>
         ShownShell.Descendants(content).OfType<SlateWindows.Reading.ReadingSurface>().First();
+
+    /// <summary>#1859: the reading view projects its document asynchronously, so
+    /// one settle can come before it on a slow runner and leave no link yet. This
+    /// settles until the first link is there.</summary>
+    private static System.Windows.Documents.Hyperlink FirstReadingLink(ShownShell host, FrameworkElement content)
+    {
+        System.Windows.Documents.Hyperlink? link = null;
+        Assert.True(
+            SpinWait.SpinUntil(
+                () =>
+                {
+                    host.Settle();
+                    link = ShownShell.Descendants(content).OfType<SlateWindows.Reading.ReadingSurface>().Any()
+                        ? ReadingLinks(content).FirstOrDefault()
+                        : null;
+                    return link is not null;
+                },
+                TimeSpan.FromSeconds(10)),
+            "the reading view never projected the note's link");
+        return link!;
+    }
 
     private static IEnumerable<System.Windows.Documents.Hyperlink> ReadingLinks(FrameworkElement content) =>
         ReadingSurfaceOf(content).Document.Blocks.SelectMany(Inlines).OfType<System.Windows.Documents.Hyperlink>();
