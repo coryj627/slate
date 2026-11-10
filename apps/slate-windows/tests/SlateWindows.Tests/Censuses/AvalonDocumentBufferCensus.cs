@@ -63,6 +63,32 @@ public sealed class AvalonDocumentBufferCensus
         });
     }
 
+    /// <summary>#1839: another process takes the clipboard between the set and
+    /// the paste. The paste is retried and applies once.</summary>
+    [Fact]
+    public void APasteWhoseClipboardAnotherProcessTookIsRetried()
+    {
+        RunOnSta(() =>
+        {
+            using var session = new AvalonDocumentBufferSession("prefix ", _ => { });
+            var editor = new TextEditor { Document = session.Document };
+            using var surface = new EditorSurface(editor);
+            long before = session.AppliedDeltaCount;
+            IDataObject? previousClipboard = TryGetClipboardData();
+            try
+            {
+                PasteThroughTheClipboard(editor, session, "pasted", afterSetForTests: Clipboard.Clear);
+            }
+            finally
+            {
+                RestoreClipboard(previousClipboard);
+            }
+
+            Assert.Equal(before + 1, session.AppliedDeltaCount);
+            Assert.Equal("prefix pasted", session.Document.Text);
+        });
+    }
+
     [Fact]
     public void ImeCompositionLifecycleAndClipboardPaste_CommitOnlyThroughInputCommands()
     {
@@ -99,10 +125,7 @@ public sealed class AvalonDocumentBufferCensus
             IDataObject? previousClipboard = TryGetClipboardData();
             try
             {
-                Clipboard.SetText("\r\npasted 😀");
-                editor.TextArea.Caret.Offset = session.Document.TextLength;
-                Assert.True(ApplicationCommands.Paste.CanExecute(null, editor.TextArea));
-                ApplicationCommands.Paste.Execute(null, editor.TextArea);
+                PasteThroughTheClipboard(editor, session, "\r\npasted 😀");
                 Assert.Equal(beforePaste + 1, session.AppliedDeltaCount);
             }
             finally
@@ -796,6 +819,54 @@ public sealed class AvalonDocumentBufferCensus
                 modifiers: null));
         return (DragEventArgs)constructor.Invoke(
             [data, DragDropKeyStates.None, DragDropEffects.Copy, target, point]);
+    }
+
+    /// <summary>#1839: one paste of <paramref name="text"/> through the real
+    /// system clipboard, which another process on a busy desktop can take or
+    /// change between the set and the paste; the paste then applies nothing.
+    /// That attempt is retried. A clipboard that still holds the text and a
+    /// paste that applies nothing fails at once: that is the editor's
+    /// defect, not the desktop's. <paramref name="afterSetForTests"/> runs
+    /// once, after the first set, standing in for that other process.</summary>
+    private static void PasteThroughTheClipboard(
+        TextEditor editor, AvalonDocumentBufferSession session, string text, Action? afterSetForTests = null)
+    {
+        const int Attempts = 5;
+        long before = session.AppliedDeltaCount;
+        for (int attempt = 1; ; attempt++)
+        {
+            Clipboard.SetText(text);
+            afterSetForTests?.Invoke();
+            afterSetForTests = null;
+            editor.TextArea.Caret.Offset = session.Document.TextLength;
+            bool held = ClipboardHolds(text);
+            if (held)
+            {
+                Assert.True(ApplicationCommands.Paste.CanExecute(null, editor.TextArea), "the editor refused a paste the clipboard can serve");
+                ApplicationCommands.Paste.Execute(null, editor.TextArea);
+            }
+
+            if (session.AppliedDeltaCount != before)
+            {
+                return;
+            }
+
+            Assert.False(held && ClipboardHolds(text), "the paste applied nothing, though the clipboard held its text throughout");
+            Assert.True(attempt < Attempts, $"another process kept the clipboard through {Attempts} pastes");
+            Thread.Sleep(TimeSpan.FromMilliseconds(100 * attempt));
+        }
+    }
+
+    private static bool ClipboardHolds(string text)
+    {
+        try
+        {
+            return Clipboard.ContainsText() && Clipboard.GetText() == text;
+        }
+        catch (System.Runtime.InteropServices.COMException)
+        {
+            return false;
+        }
     }
 
     private static IDataObject? TryGetClipboardData()
