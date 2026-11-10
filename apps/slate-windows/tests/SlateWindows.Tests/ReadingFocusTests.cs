@@ -953,6 +953,11 @@ public sealed class ReadingFocusTests
         Assert.Equal(0, spoken);
         if (refresh == "edited while it fetched")
         {
+            // #1766: the first fetch takes its gate before the next one is
+            // added. A fetch takes the newest gate when it reaches the seam,
+            // so on a slow runner it took the retry's gate instead and the
+            // release below freed nobody.
+            host.WaitForTheHeldFetch();
             // The note changes under the fetch: its publish finds the tuple
             // drifted and refreshes again, and the landing waits through that
             // retry instead of landing on the projection the edit obsoleted.
