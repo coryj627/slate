@@ -159,7 +159,9 @@ public sealed class BasesErrorDetailCensus
     [InlineData("Callback((text, failure) => { if (failure is not null) { detail = BasePhrase.ErrorDetail(failure); } });", "")]
     [InlineData("detail = new Note(\"x\").Message;", "")]
     [InlineData("var completion = new TaskCompletionSource(); completion.TrySetException(thrown);", "")]
-    [InlineData("throw new InvalidOperationException(\"wrapped\", thrown);", "")]
+    [InlineData("throw new InvalidOperationException(\"wrapped\", thrown);", "new InvalidOperationException(\"wrapped\", thrown)")]
+    [InlineData("detail = BasePhrase.ErrorDetail(new AggregateException(thrown));", "new AggregateException(thrown)")]
+    [InlineData("throw new InvalidOperationException(\"no failure attached\");", "")]
     [InlineData("detail = thrown.GetType().Name;", "")]
     public void TheCensusNamesEveryWayAFailureBecomesText(string body, string named)
     {
@@ -447,6 +449,50 @@ public sealed class BasesErrorDetailCensus
         else
         {
             Assert.Contains(failures, failure => failure.Contains("PartialPhrase.Detail(thrown)", StringComparison.Ordinal));
+        }
+    }
+
+    /// <summary>Codex round 18: an exception's constructor is trusted with a
+    /// failure only when its body is in Bases, where the census reads it.</summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AnExceptionConstructorIsTrustedOnlyByACensusedBody(bool declaredInBases)
+    {
+        const string reporter = """
+                internal sealed class FailureReporter : Exception
+                {
+                    public FailureReporter(Exception failure, Action<string> announce)
+                    {
+                        announce(SPOKEN);
+                    }
+                }
+            """;
+        string[] failures = PlantedViolations(
+            $$"""
+            namespace SlateWindows.Bases.Planted
+            {
+            {{(declaredInBases ? reporter.Replace("SPOKEN", "BasePhrase.ErrorDetail(failure)", StringComparison.Ordinal) : "")}}
+
+                internal static class Planted
+                {
+                    internal static Exception Speak(Exception thrown, Action<string> announce) => new FailureReporter(thrown, announce);
+                }
+            }
+            """,
+            outsideBases: declaredInBases ? null : $$"""
+            namespace SlateWindows.Bases.Planted
+            {
+            {{reporter.Replace("SPOKEN", "failure.Message", StringComparison.Ordinal)}}
+            }
+            """);
+        if (declaredInBases)
+        {
+            Assert.Empty(failures);
+        }
+        else
+        {
+            Assert.Contains(failures, failure => failure.Contains("new FailureReporter(thrown, announce)", StringComparison.Ordinal));
         }
     }
 
@@ -796,7 +842,14 @@ public sealed class BasesErrorDetailCensus
         {
             { Name: "VaultErrorDetail", ContainingType.Name: "SlateUniffiMethods" } => true,
             { Name: "SetException" or "TrySetException", ContainingType.Name: "TaskCompletionSource" } => true,
-            { MethodKind: MethodKind.Constructor } => DerivesFrom(method.ContainingType, exception),
+            // Codex round 18: a constructor runs a body like any other call
+            // (a custom exception's constructor can announce the Message),
+            // and a framework wrapper's Message can embed its inner one
+            // (AggregateException's does). A constructor is trusted only on
+            // the same terms as a method: a censused body.
+            { MethodKind: MethodKind.Constructor } => DerivesFrom(method.ContainingType, exception)
+                && HasACensusedBody(method, censused)
+                && method.ContainingType is not { IsGenericType: true },
             // Codex round 10: a generic method is checked against its
             // declared T, not the call's Exception, so its body can stringify
             // unseen (Render<T>(T failure) => failure.ToString()). Only a
