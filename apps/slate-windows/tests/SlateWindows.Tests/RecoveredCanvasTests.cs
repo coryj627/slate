@@ -8,6 +8,7 @@ using System.Windows.Automation.Peers;
 using System.Windows.Automation.Provider;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Documents;
 using System.Windows.Input;
 using SlateWindows.Canvas;
 using uniffi.slate_uniffi;
@@ -432,6 +433,76 @@ public sealed class RecoveredCanvasTests : IDisposable
             window.Close();
         }
     });
+
+    /// <summary>#1666: the card inspection sheet takes the keys on its field
+    /// as it opens, and the read-only field keeps its caret, so caret
+    /// navigation reads the card's text: the field answers Down, and its
+    /// caret moves to the next line. The sheet opened with the keys left on
+    /// the row behind it, and a read-only field with its caret hidden
+    /// declines every caret command (since WB-5 the sheet's fence refuses
+    /// them at its edge), so nothing read the text.</summary>
+    [Fact]
+    public void TheInspectionFieldsCaretMovesThroughTheCardsText() => RunSta(() =>
+    {
+        JsonNode source = JsonNode.Parse(_recovered)!;
+        JsonNode card = source["nodes"]!.AsArray().Single(node => (string?)node!["id"] == "recovered-text")!;
+        card["text"] = "First line of the card\nSecond line of the card";
+        using var shell = new ShownShell(("board.canvas", source.ToJsonString()));
+        CanvasDocumentViewModel document = OpenTheBoardInTheShell(shell);
+        Assert.True(document.IsRecoveredReadOnly, $"premise: the canvas loads recovered, read-only ({document.State})");
+        TextBox field = OpenTheTextCardsSheet(shell, document);
+        Assert.True(Assert.IsType<CanvasCardEditorViewModel>(shell.Workspace.CanvasCardEditorSheet).InspectionOnly);
+        Assert.True(field.IsReadOnly, "premise: inspection's field is read-only");
+        // The sheet takes the keys on its field as it opens.
+        Assert.Same(field, FocusManager.GetFocusedElement(shell.Body("CanvasCardEditorOverlay")));
+        Assert.Equal(2, field.LineCount);
+        field.CaretIndex = 0;
+
+        Assert.True(EditingCommands.MoveDownByLine.CanExecute(null, field), "the field answers Down");
+        EditingCommands.MoveDownByLine.Execute(null, field);
+
+        Assert.Equal(1, field.GetLineIndexFromCharacterIndex(field.CaretIndex));
+        Assert.True(field.IsReadOnlyCaretVisible, "the read-only field shows its caret");
+    });
+
+    /// <summary>#1666: the card editor sheet takes the keys on its field when
+    /// it opens to edit too, on the repaired board.</summary>
+    [Fact]
+    public void AnEditableCardsSheetTakesTheKeysOnItsField() => RunSta(() =>
+    {
+        JsonNode source = JsonNode.Parse(_recovered)!;
+        source["edges"] = new JsonArray();
+        using var shell = new ShownShell(("board.canvas", source.ToJsonString()));
+        CanvasDocumentViewModel document = OpenTheBoardInTheShell(shell);
+        Assert.False(document.IsReadOnly, $"premise: the repaired canvas is editable ({document.State})");
+        TextBox field = OpenTheTextCardsSheet(shell, document);
+        Assert.False(Assert.IsType<CanvasCardEditorViewModel>(shell.Workspace.CanvasCardEditorSheet).InspectionOnly);
+        Assert.False(field.IsReadOnly, "premise: the editing field is writable");
+        Assert.Same(field, FocusManager.GetFocusedElement(shell.Body("CanvasCardEditorOverlay")));
+    });
+
+    private static CanvasDocumentViewModel OpenTheBoardInTheShell(ShownShell shell)
+    {
+        shell.Workspace.OpenPath("board.canvas");
+        CanvasDocumentViewModel document = Assert.IsType<CanvasDocumentViewModel>(
+            Assert.IsType<WorkspaceTabViewModel>(shell.Workspace.ActiveGroup.ActiveTab).Canvas);
+        var loading = System.Diagnostics.Stopwatch.StartNew();
+        while (document.State != CanvasLoadState.Ready && loading.Elapsed < TimeSpan.FromSeconds(10))
+        {
+            shell.Settle();
+        }
+
+        Assert.Equal(CanvasLoadState.Ready, document.State);
+        return document;
+    }
+
+    private static TextBox OpenTheTextCardsSheet(ShownShell shell, CanvasDocumentViewModel document)
+    {
+        document.SeatSelectionSilently("recovered-text");
+        shell.Workspace.OpenCanvasCardEditor();
+        shell.Settle();
+        return Assert.IsType<TextBox>(shell.Body("CanvasCardEditorText"));
+    }
 
     [Fact]
     public void AcceptedRecoveredLeaseStaysOwnedUntilReplacementAndTeardown()

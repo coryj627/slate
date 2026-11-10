@@ -4852,8 +4852,10 @@
                     <TextBlock Text="{Binding Title}" TextWrapping="Wrap"
                                FontWeight="SemiBold"
                                Margin="0,0,0,8" />
-                    <TextBox local:FieldPrompt.IsEnabled="True" Text="{Binding Draft, UpdateSourceTrigger=PropertyChanged}"
+                    <TextBox x:Name="CanvasCardEditorTextBox"
+                             local:FieldPrompt.IsEnabled="True" Text="{Binding Draft, UpdateSourceTrigger=PropertyChanged}"
                              IsReadOnly="{Binding InspectionOnly}"
+                             IsReadOnlyCaretVisible="True"
                              AcceptsReturn="True"
                              MinHeight="120"
                              TextWrapping="Wrap"

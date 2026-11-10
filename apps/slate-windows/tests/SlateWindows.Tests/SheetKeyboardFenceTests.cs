@@ -358,9 +358,9 @@ public sealed class SheetKeyboardFenceTests
     /// moves nothing: the note's caret stays where it was, and focus stays
     /// on the field, though a control sits below it in the sheet's
     /// contained directional scope (measured: the refused key does not move
-    /// focus). The canvas card inspection sheet's read-only field is the
-    /// shipped case; its hidden caret, which no route makes readable, is
-    /// #1666.
+    /// focus). The canvas card inspection sheet's read-only field was the
+    /// shipped case until #1666 gave it a caret
+    /// (<c>RecoveredCanvasTests.TheInspectionFieldsCaretMovesThroughTheCardsText</c>).
     /// </summary>
     [Theory]
     [InlineData(true)]

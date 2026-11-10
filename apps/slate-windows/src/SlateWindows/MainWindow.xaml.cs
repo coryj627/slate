@@ -739,6 +739,16 @@ public partial class MainWindow : Window
             _ = Dispatcher.InvokeAsync(
                 () => _ = TryFocus(CanvasCardPickerFilterBox), DispatcherPriority.Input);
         }
+        else if (e.PropertyName == nameof(WorkspaceViewModel.CanvasCardEditorSheet)
+            && workspace.CanvasCardEditorSheet is not null)
+        {
+            // #1666: the card editor's text, editing or inspecting. The sheet
+            // opened with the keys left on the row behind it.
+            _ = Dispatcher.InvokeAsync(
+                () => _ = _viewModel.Workspace?.CanvasCardEditorSheet is not null
+                    && TryFocus(CanvasCardEditorTextBox),
+                DispatcherPriority.Input);
+        }
     }
 
     private void FocusCanvasPromptSheet()
