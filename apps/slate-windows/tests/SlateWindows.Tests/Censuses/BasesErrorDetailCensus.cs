@@ -281,6 +281,59 @@ public sealed class BasesErrorDetailCensus
         Assert.Contains(failures, failure => failure.Contains("failure.ToString", StringComparison.Ordinal));
     }
 
+    /// <summary>Codex round 15: an exception written through a <c>ref</c> or
+    /// <c>out</c> parameter or a <c>ref</c> local lands in its caller's
+    /// storage, a record field here; the call site, the helper's write and
+    /// the ref local are each named.</summary>
+    [Fact]
+    public void AnExceptionWrittenThroughARefIsNamed()
+    {
+        string[] failures = PlantedViolations("""
+            namespace SlateWindows.Bases.Planted
+            {
+                using uniffi.slate_uniffi;
+
+                internal sealed class Planted
+                {
+                    private sealed record FailureSlot
+                    {
+                        public Exception? Error;
+                    }
+
+                    private static void Remember(ref Exception? target, Exception failure) => target = failure;
+
+                    private static void Capture(out Exception? target, Exception failure) => target = failure;
+
+                    internal string ByRef(Exception thrown)
+                    {
+                        var slot = new FailureSlot();
+                        Remember(ref slot.Error, thrown);
+                        return $"{slot}";
+                    }
+
+                    internal string ByOut(Exception thrown)
+                    {
+                        var slot = new FailureSlot();
+                        Capture(out slot.Error, thrown);
+                        return $"{slot}";
+                    }
+
+                    internal string ByRefLocal(Exception thrown)
+                    {
+                        var slot = new FailureSlot();
+                        ref Exception? cell = ref slot.Error;
+                        cell = thrown;
+                        return $"{slot}";
+                    }
+                }
+            }
+            """);
+        Assert.Contains(failures, failure => failure.Contains("Remember(ref slot.Error, thrown)", StringComparison.Ordinal));
+        Assert.Contains(failures, failure => failure.Contains("Capture(out slot.Error, thrown)", StringComparison.Ordinal));
+        Assert.Contains(failures, failure => failure.Contains("target = failure", StringComparison.Ordinal));
+        Assert.Contains(failures, failure => failure.Contains("cell = thrown", StringComparison.Ordinal));
+    }
+
     /// <summary>A censused consumer's own body is held to the rule.</summary>
     [Fact]
     public void ACensusedConsumersBodyIsCheckedToo()
@@ -494,10 +547,13 @@ public sealed class BasesErrorDetailCensus
     }
 
     /// <summary>A local, a parameter or a discard: storage only this member
-    /// can reach.</summary>
+    /// can reach. Codex round 15: a <c>ref</c> or <c>out</c> parameter or
+    /// <c>ref</c> local aliases its caller's storage (a record's field
+    /// through <c>Remember(ref info.Error, …)</c>), so it is not local.</summary>
     private static bool IsLocalStorage(SemanticModel model, ExpressionSyntax target) =>
         target is IdentifierNameSyntax { Identifier.ValueText: "_" }
-        || model.GetSymbolInfo(target).Symbol is ILocalSymbol or IParameterSymbol or IDiscardSymbol;
+        || model.GetSymbolInfo(target).Symbol is ILocalSymbol { RefKind: RefKind.None }
+            or IParameterSymbol { RefKind: RefKind.None } or IDiscardSymbol;
 
     /// <summary>A member whose value holds no text: <c>HResult</c>,
     /// <c>InnerException</c>, <c>GetBaseException()</c>, a collection's
@@ -590,6 +646,13 @@ public sealed class BasesErrorDetailCensus
     private static bool AllowedArgument(
         SemanticModel model, ArgumentSyntax argument, INamedTypeSymbol exception, IReadOnlySet<SyntaxTree> censused)
     {
+        // A ref or out argument hands the callee storage to write: it must be
+        // a plain local, or the callee could park the exception in a field.
+        if (!argument.RefKindKeyword.IsKind(SyntaxKind.None) && !argument.RefKindKeyword.IsKind(SyntaxKind.InKeyword)
+            && !IsLocalStorage(model, argument.Expression))
+        {
+            return false;
+        }
         if (argument.Parent?.Parent is not { } call || model.GetSymbolInfo(call).Symbol is not IMethodSymbol method)
         {
             return false;
