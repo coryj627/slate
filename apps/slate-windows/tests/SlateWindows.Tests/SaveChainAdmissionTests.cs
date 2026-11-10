@@ -560,15 +560,18 @@ public sealed class SaveChainAdmissionTests
     /// (a rename away and a new note at the path, or an outside write): the
     /// tabless write runs on the hash the edit was made against, refuses as
     /// a conflict and leaves the replacement's bytes alone (codex round
-    /// 2), and so does a replacement reopened in a tab of its own before
-    /// the write's turn: that tab was not on the note the edit was made
-    /// on (codex round 3).</summary>
+    /// 2), and so does a replacement reopened before the write's turn,
+    /// whether in a tab of its own (codex round 3) or in the original tab
+    /// re-pointed away and back (codex round 4): neither shows the
+    /// document the edit was made on.</summary>
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void ABasesCellEditWhoseNoteIsReplacedWhileItWaitsWritesNothing(bool reopened) => RunSta(() =>
+    [InlineData("closed")]
+    [InlineData("reopened in a new tab")]
+    [InlineData("reopened in the original tab")]
+    public void ABasesCellEditWhoseNoteIsReplacedWhileItWaitsWritesNothing(string replacement) => RunSta(() =>
     {
-        using var peers = new Peers(reopened ? "bases-replaced-reopened" : "bases-replaced", ("Notes.base", NotesBase));
+        using var peers = new Peers("bases-replaced", ("Notes.base", NotesBase));
+        bool keepA = replacement == "reopened in the original tab";
         (BaseDocumentViewModel document, BasesRow row, BasesColumn column) = StatusCell(peers);
         var ahead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Task<bool> held = peers.H.Workspace.SavesForTests.Admit("a.md", _ => ahead.Task);
@@ -576,16 +579,36 @@ public sealed class SaveChainAdmissionTests
         try
         {
             document.ApplyPropertyEdit!(row, column, new PropertyValue.Text("done"));
-            peers.H.Workspace.CloseTabCommand.Execute(peers.A);
+            if (keepA)
+            {
+                // A goes to another note in place; B closes.
+                peers.ActivateA();
+                peers.H.Workspace.OpenPath("b.md", WorkspaceOpenTarget.CurrentTab);
+                peers.H.Settle();
+                Assert.Equal("b.md", peers.A.Path);
+            }
+            else
+            {
+                peers.H.Workspace.CloseTabCommand.Execute(peers.A);
+            }
             peers.H.Workspace.CloseTabCommand.Execute(peers.B);
             peers.H.Settle();
             Assert.DoesNotContain(peers.H.Workspace.Groups.SelectMany(group => group.Tabs), tab => tab.Path == "a.md");
             File.WriteAllText(Path.Combine(peers.H.Root, "a.md"), Replacement);
-            if (reopened)
+            if (replacement == "reopened in a new tab")
             {
-                WorkspaceTabViewModel replacement = peers.H.Open("a.md");
-                Assert.Equal(Replacement, replacement.Text);
-                Assert.False(replacement.IsDirty);
+                WorkspaceTabViewModel shown = peers.H.Open("a.md");
+                Assert.Equal(Replacement, shown.Text);
+                Assert.False(shown.IsDirty);
+            }
+            else if (keepA)
+            {
+                peers.ActivateA();
+                peers.H.Workspace.OpenPath("a.md", WorkspaceOpenTarget.CurrentTab);
+                peers.H.Settle();
+                Assert.Equal("a.md", peers.A.Path);
+                Assert.Equal(Replacement, peers.A.Text);
+                Assert.False(peers.A.IsDirty);
             }
             peers.H.Events.Clear();
 

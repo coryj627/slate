@@ -1880,9 +1880,10 @@ internal sealed partial class WorkspaceViewModel
             // origin).
             string path = row.FilePath;
             string? requested = tab.SavedContentHash;
-            WorkspaceTabViewModel[] requestTabs = [.. Groups
+            (WorkspaceTabViewModel Tab, int Identity)[] requestTabs = [.. Groups
                 .SelectMany(group => group.Tabs)
-                .Where(candidate => string.Equals(candidate.Path, path, StringComparison.Ordinal))];
+                .Where(candidate => string.Equals(candidate.Path, path, StringComparison.Ordinal))
+                .Select(candidate => (candidate, candidate.ItemIdentity))];
             AdmitPropertyWrite(
                 path,
                 () => BasesCellWriteAdmitted(document, row, column, key, value, requested, requestTabs),
@@ -1920,10 +1921,12 @@ internal sealed partial class WorkspaceViewModel
     /// (<paramref name="requested"/>, codex round 2): a note renamed away
     /// and replaced at its path, or changed on disk, refuses as a conflict
     /// and keeps its bytes. Only a tab that was on the note when the edit
-    /// was requested (<paramref name="requestTabs"/>) lends its saved hash:
-    /// one opened since may show a different note at the path (a
-    /// replacement reopened, codex round 3), so the write refuses as a
-    /// conflict there. The operation ends with the write's completion, or
+    /// was requested, still showing the document it showed then
+    /// (<paramref name="requestTabs"/>: the tab and its
+    /// <see cref="WorkspaceTabViewModel.ItemIdentity"/>), lends its saved
+    /// hash: a tab opened since, or one re-pointed away and back, may show
+    /// a different note at the path (a replacement reopened, codex rounds 3
+    /// and 4), so the write refuses as a conflict there. The operation ends with the write's completion, or
     /// with the refusal that wrote nothing.</summary>
     private Task BasesCellWriteAdmitted(
         BaseDocumentViewModel document,
@@ -1932,7 +1935,7 @@ internal sealed partial class WorkspaceViewModel
         string key,
         PropertyValue? value,
         string? requested,
-        IReadOnlyCollection<WorkspaceTabViewModel> requestTabs)
+        IReadOnlyCollection<(WorkspaceTabViewModel Tab, int Identity)> requestTabs)
     {
         string path = row.FilePath;
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1965,7 +1968,7 @@ internal sealed partial class WorkspaceViewModel
                     TaskScheduler.Default);
                 return done.Task;
             }
-            if (!requestTabs.Contains(tab))
+            if (!requestTabs.Contains((tab, tab.ItemIdentity)))
             {
                 ReleasePropertyWriteLease(path);
                 _announce(new A11yEvent.PropertyEditConflict(System.IO.Path.GetFileName(tab.Path)));
