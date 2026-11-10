@@ -279,6 +279,13 @@ public partial class MainWindow : IShellRegionHost
         {
             IsModalSheetOpen = sheet;
         }
+
+        // #1666: a card editor that opened beneath another surface takes the
+        // keys once it is the topmost.
+        if (_cardEditorAwaitingKeys is not null && OpenModalSurface is ModalSurface.CanvasCardEditor)
+        {
+            QueueCardEditorLanding();
+        }
     }
 
     public static readonly DependencyProperty IsModalSheetOpenProperty = DependencyProperty.Register(
